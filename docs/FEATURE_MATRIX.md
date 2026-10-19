@@ -24,9 +24,10 @@ Fabric have much less or no evidence.
 | L4 | The effect was seen: a log line or a screenshot from a real run |
 | L5 | Confirmed by the project owner |
 
-The "Evidence" column names where the level comes from (autotest log, screenshot, unit check). Levels were taken from the project's
-own test records up to October 2026 and are **not re-measured for every build**; the final alpha build is smoke-tested before release
-(see `docs/RELEASE_CHECKLIST.md`). Quality of the image (versus other upscalers, or noise levels) has not been evaluated.
+The "Evidence" column names where the level comes from (autotest log, screenshot, unit check). Levels reflect project test records
+through October 2026 and are **not re-measured for every build**. The current release artifacts passed a clean build and archive
+inspection, but have not yet had final live-game smoke acceptance (see `docs/RELEASE_CHECKLIST.md`). Quality of the image (versus
+other upscalers, or noise levels) has not been evaluated.
 
 ## Platform
 
