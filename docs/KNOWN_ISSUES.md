@@ -12,7 +12,8 @@ more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc 
 
 ## Image
 
-* Path Tracing is **EXPERIMENTAL**. "Ray Tracing (Fast)" is in development and hidden in this release (`experimental_rays` in bedray.toml unlocks it for developers; unsupported). Expect expect noise, flicker, ghosting while moving, and wrong lighting in some places.
+* Path Tracing is **EXPERIMENTAL**. "Ray Tracing (Fast)" is in development and hidden in this release (`experimental_rays` in bedray.toml unlocks it for developers; unsupported). Expect noise, flicker, ghosting while moving, and wrong lighting in some places.
+* Redstone dust can show a blocky gray fringe from alpha coverage in the traced image; the fix is not yet confirmed in a final live run.
 * Reflections stay noisy with the NRD denoiser (no specular denoiser input yet).
 * Animated textures (fire, lava, portals) bake only their first frame into the materials, so glow and roughness can mismatch.
 * Particles do not (fully) take part in ray tracing: they may cast no shadow and be missing in reflections. Entities, items and the

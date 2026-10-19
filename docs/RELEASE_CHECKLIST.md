@@ -5,17 +5,18 @@ Update this file for every release. Publishing is being done at the owner's requ
 
 ## Build and metadata
 
-- [ ] Run the full clean public checkout build on the exact release source commit: `clean :core:test :common:test :common:runShimTests :neoforge:jar :fabric:jar`
-- [x] Baseline suite: 462 passed, 0 failed, 1 optional shader-pack test skipped; focused `SlNativeTest` for the optional shim export passed
+- [x] Full clean public checkout build on release source commit `cc6236679ed9af804c99e6a7216d67dbde06f6d6`: `clean :core:test :common:test :common:runShimTests :neoforge:jar :fabric:jar` succeeds (11m57s)
+- [x] Unit tests: 463 passed, 0 failed, 1 optional shader-pack test skipped; shim tests: 33 passed, 0 failed
 - [x] Jar names: `bedray-neoforge-mc26.3.0-0.1.0-alpha.1.jar`, `bedray-fabric-mc26.3-0.1.0-alpha.1.jar`
 - [x] Exact licensed runtime set only: `amd_fidelityfx_vk.dll` and `libxess.dll`, with AMD `LICENSE.txt`, Intel `LICENSE.txt`
       and `third-party-programs.txt`; no other native binaries, SDKs, NVIDIA files or wrappers
 - [x] `neoforge.mods.toml`: mod id `bedray`, version `0.1.0-alpha.1`, mixin config `mixins.bedray.json` present in the jar
 - [x] `fabric.mod.json`: id `bedray`, depends on fabricloader >= 0.19.5, minecraft ~26.3, java >= 25, sodium >= 0.9; mixin config present
 - [x] Both loaders: the language file `assets/bedray/lang/en_us.json` is in the jar
-- [ ] Both release JARs have `Git-Dirty: false`, valid loader metadata, zero test classes, and pass the JAR inspector
-- [ ] Both JAR SHA-256 values are listed in the GitHub release description
-- [x] `tools/public_scan.ps1` passes on the public repository (684 allowlisted tracked files): `https://github.com/bnfe12/bedray`
+- [x] Both release JARs have `Git-Dirty: false`, valid loader metadata, zero test classes, and pass the JAR inspector
+- [x] NeoForge SHA-256: `5dcbe64b959cd32784f1a629308354ece3e6e6cdf0a198cf42a276203becfd56`; Fabric SHA-256: `98eb6aa2660fc250500ef2adc1adb98ff6a1b05235bea1ba088a5dcbe8a55b74`
+- [x] Both JAR SHA-256 values are listed in the GitHub release description
+- [x] `tools/public_scan.ps1` passes on the public repository (685 allowlisted tracked files): `https://github.com/bnfe12/bedray`
 - [x] Release docs describe the current bundle: `docs/FEATURE_MATRIX.md`, `docs/KNOWN_ISSUES.md`, `CHANGELOG.md`
 
 ## Smoke tests in the game (final jars, clean instances)
@@ -36,9 +37,9 @@ Log evidence: the latest Testbed run reaches `world_ready`, but FG was off and F
 
 ## Publishing (owner)
 
-- [ ] GitHub pre-release `0.1.0-alpha.1`, title with "ALPHA"
-- [ ] Attach the two loader jars only (NeoForge and Fabric); both contain only the reviewed AMD and Intel runtime DLLs and notices
-- [ ] Release description: ALPHA warning, requirements, SHA-256 of both jars, known issues, link to `docs/INSTALL.md`,
+- [x] GitHub pre-release `0.1.0-alpha.1`, title with "ALPHA": https://github.com/bnfe12/bedray/releases/tag/v0.1.0-alpha.1
+- [x] Attach the two loader jars only (NeoForge and Fabric); both contain only the reviewed AMD and Intel runtime DLLs and notices
+- [x] Release description: ALPHA warning, requirements, SHA-256 of both jars, known issues, link to `docs/INSTALL.md`,
       "tested only on RTX 5060 Ti", call for AMD / Intel testers
-- [ ] Issue forms work (Bug report, GPU test report); `.github/ISSUE_TEMPLATE/config.yml` points to `bnfe12/bedray`; change it if the public repository has another name
+- [x] Issue forms are present (Bug report, GPU test report); `.github/ISSUE_TEMPLATE/config.yml` points to `bnfe12/bedray`
 - [ ] Screenshots from `docs/images/` added to the README (list in the private notes)
