@@ -45,7 +45,8 @@ public final class SlNative {
             JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
         dlssgOptions = bind(l, lookup, "vkb_sl_dlssg_options", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT,
             JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
-        focusWindow = bind(l, lookup, "vkb_focus_game_window", FunctionDescriptor.of(JAVA_INT));
+        // This is an optional unattended-autotest helper. Older user-built shims must still load for normal Streamline use.
+        focusWindow = bindOptional(l, lookup, "vkb_focus_game_window", FunctionDescriptor.of(JAVA_INT));
         reflexLatency = bind(l, lookup, "vkb_sl_reflex_latency", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         dlssgState = bind(l, lookup, "vkb_sl_dlssg_state", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
         shutdown = bind(l, lookup, "vkb_sl_shutdown", FunctionDescriptor.of(JAVA_INT));
@@ -63,6 +64,10 @@ public final class SlNative {
     private static MethodHandle bind(Linker l, SymbolLookup lookup, String name, FunctionDescriptor fd) {
         MemorySegment s = lookup.find(name).orElseThrow(() -> new IllegalStateException("vkb_sl.dll has no export " + name));
         return l.downcallHandle(s, fd);
+    }
+
+    static MethodHandle bindOptional(Linker l, SymbolLookup lookup, String name, FunctionDescriptor fd) {
+        return lookup.find(name).map(symbol -> l.downcallHandle(symbol, fd)).orElse(null);
     }
 
     private static int call(MethodHandle h, Object... args) {
@@ -189,7 +194,7 @@ public final class SlNative {
 
     /** Autotest helper: foreground the game window; 1 = focused, 0 = refused by Windows, -1 = no window. */
     public int focusGameWindow() {
-        return call(focusWindow);
+        return focusWindow == null ? -1 : call(focusWindow);
     }
 
     public int shutdown() {

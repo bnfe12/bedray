@@ -5,16 +5,16 @@ Update this file for every release. Publishing is being done at the owner's requ
 
 ## Build and metadata
 
-- [x] Clean public checkout run: `clean :core:test :common:test :common:runShimTests :neoforge:jar :fabric:jar` succeeds; the release notes name the exact source commit
-- [x] Unit tests: 462 passed, 0 failed, 1 optional shader-pack test skipped; shim tests: 33 passed, 0 failed
+- [ ] Run the full clean public checkout build on the exact release source commit: `clean :core:test :common:test :common:runShimTests :neoforge:jar :fabric:jar`
+- [x] Baseline suite: 462 passed, 0 failed, 1 optional shader-pack test skipped; focused `SlNativeTest` for the optional shim export passed
 - [x] Jar names: `bedray-neoforge-mc26.3.0-0.1.0-alpha.1.jar`, `bedray-fabric-mc26.3-0.1.0-alpha.1.jar`
 - [x] Exact licensed runtime set only: `amd_fidelityfx_vk.dll` and `libxess.dll`, with AMD `LICENSE.txt`, Intel `LICENSE.txt`
       and `third-party-programs.txt`; no other native binaries, SDKs, NVIDIA files or wrappers
 - [x] `neoforge.mods.toml`: mod id `bedray`, version `0.1.0-alpha.1`, mixin config `mixins.bedray.json` present in the jar
 - [x] `fabric.mod.json`: id `bedray`, depends on fabricloader >= 0.19.5, minecraft ~26.3, java >= 25, sodium >= 0.9; mixin config present
 - [x] Both loaders: the language file `assets/bedray/lang/en_us.json` is in the jar
-- [x] Both release JARs have `Git-Dirty: false`, valid loader metadata, zero test classes, and pass the JAR inspector
-- [x] Both JAR SHA-256 values are listed in the GitHub release description
+- [ ] Both release JARs have `Git-Dirty: false`, valid loader metadata, zero test classes, and pass the JAR inspector
+- [ ] Both JAR SHA-256 values are listed in the GitHub release description
 - [x] `tools/public_scan.ps1` passes on the public repository (684 allowlisted tracked files): `https://github.com/bnfe12/bedray`
 - [x] Release docs describe the current bundle: `docs/FEATURE_MATRIX.md`, `docs/KNOWN_ISSUES.md`, `CHANGELOG.md`
 
