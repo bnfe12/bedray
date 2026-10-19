@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.github.andrexarlay.vulkanbridge.neoforge.mixin",
+  "plugin": "io.github.andrexarlay.vulkanbridge.neoforge.mixin.NeoForgeMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [],
+  "client": [
+    "MixinClientHooks"
+  ]
+}

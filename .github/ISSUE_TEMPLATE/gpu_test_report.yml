@@ -1,0 +1,83 @@
+name: GPU test report
+description: Tell us how Bedray ran on your GPU (works or not, with numbers)
+labels: ["test-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing. Bedray is an **alpha** and has only been tested on an NVIDIA GeForce RTX 5060 Ti (8 GB).
+        **AMD Radeon (RDNA 2 or newer) and Intel Arc reports are especially wanted.** The checklist is in `docs/TESTING.md`.
+        Remove personal paths from logs before attaching them.
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and VRAM
+      placeholder: "AMD Radeon RX 6800 XT 16 GB"
+    validations:
+      required: true
+  - type: input
+    id: driver
+    attributes:
+      label: Driver version and Windows version
+    validations:
+      required: true
+  - type: input
+    id: mod
+    attributes:
+      label: Bedray version, loader (NeoForge or Fabric), Sodium version
+    validations:
+      required: true
+  - type: dropdown
+    id: starts
+    attributes:
+      label: Game starts with the Vulkan backend and the Bedray page is visible
+      options: ["Yes", "No", "Not tested"]
+    validations:
+      required: true
+  - type: dropdown
+    id: rayquery
+    attributes:
+      label: Ray tracing can be switched on (Path Tracing)
+      options: ["Works", "Option missing or greyed out", "Crash or errors", "Not tested"]
+    validations:
+      required: true
+  - type: dropdown
+    id: fsr
+    attributes:
+      label: FSR 3.1/2.x (needs the AMD library)
+      options: ["Works", "Does not work", "Library not installed", "Not tested"]
+  - type: dropdown
+    id: xess
+    attributes:
+      label: XeSS (needs libxess.dll)
+      options: ["Works", "Does not work", "Library not installed", "Not tested"]
+  - type: dropdown
+    id: builtin
+    attributes:
+      label: Built-in upscalers (Bilinear, FSR 1, NIS)
+      options: ["All work", "Some do not work", "Not tested"]
+  - type: dropdown
+    id: nrd
+    attributes:
+      label: Path Tracing with the NRD denoiser (needs the NRD libraries)
+      options: ["Works", "Does not work", "Libraries not installed", "Not tested"]
+  - type: textarea
+    id: fps
+    attributes:
+      label: FPS numbers
+      description: "Scene, resolution, render distance, mode, upscaler, FPS (from the Bedray F3 block). Example: 1920x1080, 12 chunks, Rays High, FSR Quality: 62 fps."
+  - type: textarea
+    id: notes
+    attributes:
+      label: Problems, artifacts, anything else
+  - type: textarea
+    id: report
+    attributes:
+      label: Paste output of /bedray report
+      description: "NeoForge: /bedray report in the chat. NeoForge and Fabric: Video Settings, page Advanced and Experimental, button Copy diagnostics report. Technical data only, nothing is sent."
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: latest.log (optional, personal paths removed)
+      render: text

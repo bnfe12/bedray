@@ -1,0 +1,16 @@
+Bedray
+Copyright (c) bnfe12. Licensed under the GNU Lesser General Public License v3.0 or later (see LICENSE).
+
+Bedray is an unofficial project. It is not affiliated with, endorsed by or sponsored by Mojang Studios, Microsoft, NVIDIA,
+AMD or Intel. Minecraft is a trademark of Mojang Studios. NVIDIA, RTX, DLSS, Streamline and NRD are trademarks of NVIDIA
+Corporation. AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc. Intel and XeSS are trademarks of Intel
+Corporation.
+
+Third-party code and licences are listed in THIRD_PARTY_NOTICES.md. The source repository contains no vendor binaries.
+The release jars may include only the unmodified AMD FidelityFX SDK v1.1.4 Vulkan DLL and Intel XeSS SDK 3.0.2 DLL,
+with their required license and third-party notices. No NVIDIA vendor binaries or native wrappers are included.
+
+Bedray Core (directory core/, Java packages io.github.andrexarlay.vulkanbridge.*) is the internal platform layer of the mod:
+device-requirement registry, backend guard, native-library resolver, frame phases, GL overlay layer, autotest harness and Iris
+GUI compatibility. It is by the same author, was vendored from an earlier standalone library of the author, and is licensed
+under the same LGPL-3.0-or-later as the rest of this repository. A Bedray jar contains this code, so its source is published with it.

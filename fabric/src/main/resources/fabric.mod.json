@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${mod_version}",
+  "name": "${mod_name}",
+  "description": "${mod_description}",
+  "authors": ["bnfe12"],
+  "license": "LGPL-3.0-or-later",
+  "environment": "client",
+  "entrypoints": {
+    "preLaunch": ["io.github.andrexarlay.vulkancompat.fabric.VulkanRtxFabricPreLaunch"],
+    "client": ["io.github.andrexarlay.vulkancompat.fabric.BedrayFabricClient"],
+    "sodium:config_api_user": ["io.github.andrexarlay.vulkancompat.sodium.VulkanSodiumConfig"]
+  },
+  "mixins": [
+    { "config": "mixins.bedray_core.json", "environment": "client" },
+    { "config": "mixins.bedray.json", "environment": "client" }
+  ],
+  "depends": {
+    "fabricloader": ">=${fabric_loader_version}",
+    "minecraft": "~${fabric_minecraft_range}",
+    "java": ">=25",
+    "sodium": ">=0.9"
+  },
+  "breaks": {
+    "${old_core_mod_id}": "*"
+  }
+}

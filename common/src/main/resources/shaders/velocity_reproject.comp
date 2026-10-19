@@ -1,0 +1,181 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Binding 0: depth, sampled with nearest filtering. camDelta.w selects the convention (2 = RT outDepth: positive distance
+// along the primary ray in blocks, sky 1e6; temporal upscalers over the RT image):
+//   0 = hardware depth (NDC z of the same unjittered projection as invViewProj; sky = 0 or >= 1.0e5),
+//   1 = linear view Z of the RT G-buffer (rt_path/rt_rays: viewZ = -dot(hitPosRel - cameraBobOrigin, forward), i.e. NEGATIVE
+//       in front of the effective camera; sky = |viewZ| >= 1.0e5). It is NOT an NDC depth and must not go through invViewProj as z.
+layout(set = 0, binding = 0) uniform sampler2D depthTexture;
+
+// Binding 1: output motion vectors in PIXELS of the render (input) resolution, RG16F
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D outMotionVectors;
+
+// Binding 2: per-frame reprojection uniforms (one buffer per frame in flight)
+layout(set = 0, binding = 2, std140) uniform FrameUniforms {
+    mat4 invViewProj;          // inverse of the current UNJITTERED (currProj * currViewRotation)
+    mat4 prevViewProj;         // previous frame UNJITTERED (prevProj * prevViewRotation)
+    vec4 camDelta;             // xyz = currCameraPos - prevCameraPos, w = depth convention (0 = hardware NDC, 1 = linear view Z)
+    vec4 cameraBobOrigin;      // current effective camera origin in raw-camera-relative world coordinates
+    vec4 renderResolution;     // xy = (width, height), zw = (1.0/width, 1.0/height)
+    mat4 entityCurrTransform;  // current transform of entity
+    mat4 entityPrevTransform;  // previous transform of entity
+    vec4 entityControl;        // x = hasEntity (1.0/0.0), y = entityCustomIndex, z = historyReset (1.0/0.0), w = teleportThreshold (default 16.0)
+    uvec4 entityMotion;        // xy = address of the per-pixel entity motion (rt_path: vec4 xyz = prev - cur world, w = 1 entity), 0 = none;
+                               // zw = address of the per-pixel disocclusion mask output (float, 1 = no valid history), 0 = none
+    uvec4 prevDepth;           // xy = address of the PREVIOUS frame's linear view Z (float per pixel, same layout as the G-buffer), 0 = none
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MotionBuf { vec4 v[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer MaskBuf { float v[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer DepthBuf { float v[]; };
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(renderResolution.xy);
+
+    if (pixelCoord.x >= size.x || pixelCoord.y >= size.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixelCoord) + vec2(0.5)) * renderResolution.zw;
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 depthSample = texture(depthTexture, uv);
+    float depth = depthSample.r;
+
+    bool isSky = false;
+    vec4 prevClip;
+    float dynamicObjectMask = 0.0;
+    float disocclusionMask = 0.0;
+
+    bool linearViewZ = camDelta.w > 0.5 && camDelta.w < 1.5;
+    bool rayDistance = camDelta.w > 1.5;
+    bool skyPixel = (linearViewZ || rayDistance) ? !(abs(depth) < 1.0e5) : (depth >= 1.0e5 || depth <= 1.0e-7);
+    if (skyPixel) {
+        isSky = true;
+        vec4 rayW = invViewProj * vec4(ndc, 0.5, 1.0);
+        vec3 rayDir = normalize(rayW.xyz / rayW.w - cameraBobOrigin.xyz);
+        prevClip = prevViewProj * vec4(rayDir, 0.0);
+    } else {
+        // Honest mathematical back-projection:
+        vec4 worldPosRel4;
+        vec3 worldPosRel;
+        if (linearViewZ) {
+            // pixel-centre ray (unjittered) scaled from the effective bobbed origin so its projection on the view axis is |viewZ|
+            vec4 rayW = invViewProj * vec4(ndc, 0.5, 1.0);
+            vec3 origin = cameraBobOrigin.xyz;
+            vec3 dir = normalize(rayW.xyz / rayW.w - origin);
+            vec4 fwdW = invViewProj * vec4(0.0, 0.0, 0.5, 1.0);
+            vec3 fwd = normalize(fwdW.xyz / fwdW.w - origin);
+            worldPosRel = origin + dir * (abs(depth) / max(dot(dir, fwd), 1.0e-4));
+            worldPosRel4 = vec4(worldPosRel, 1.0);
+        } else if (rayDistance) {
+            // RT outDepth: distance along the unjittered pixel-centre ray from the effective bobbed camera origin.
+            vec4 rayW = invViewProj * vec4(ndc, 0.5, 1.0);
+            worldPosRel = cameraBobOrigin.xyz + normalize(rayW.xyz / rayW.w - cameraBobOrigin.xyz) * depth;
+            worldPosRel4 = vec4(worldPosRel, 1.0);
+        } else {
+            worldPosRel4 = invViewProj * vec4(ndc.x, ndc.y, depth, 1.0);
+            worldPosRel = worldPosRel4.xyz / worldPosRel4.w;
+        }
+
+        bool isEntity = false;
+        if (entityControl.x > 0.5) {
+            uint customIndex = uint(depthSample.g * 65535.0 + 0.5);
+            if (customIndex == uint(entityControl.y) && customIndex > 0u) {
+                isEntity = true;
+            } else {
+                vec3 entityPos = entityCurrTransform[3].xyz;
+                if (length(worldPosRel - entityPos) < 2.5) {
+                    isEntity = true;
+                }
+            }
+        }
+
+        if (isEntity) {
+            float moveDist = length(entityCurrTransform[3].xyz - entityPrevTransform[3].xyz);
+            float teleportThreshold = entityControl.w > 0.0 ? entityControl.w : 16.0;
+            bool teleported = (entityControl.z > 0.5) || (moveDist > teleportThreshold);
+
+            dynamicObjectMask = moveDist > 1.0e-4 ? 1.0 : 0.0;
+            // Rigid motion supported; skinned deformation motion is absent (marked disoccluded/reactive)
+            disocclusionMask = 0.0;
+
+            if (teleported) {
+                disocclusionMask = 1.0;
+                prevClip = vec4(ndc * worldPosRel4.w, 0.5, 1.0);
+            } else {
+                mat4 invCurr = inverse(entityCurrTransform);
+                vec4 localPos = invCurr * vec4(worldPosRel, 1.0);
+                vec4 prevPosRel = entityPrevTransform * localPos;
+                prevClip = prevViewProj * vec4(prevPosRel.xyz, 1.0);
+            }
+        } else {
+            vec3 objectMotion = vec3(0.0);
+            if (entityMotion.x != 0u || entityMotion.y != 0u) {
+                // moving entity (RT primary hit): per-vertex previous position, interpolated at the hit, world blocks
+                vec4 m = MotionBuf(entityMotion.xy).v[pixelCoord.y * size.x + pixelCoord.x];
+                if (m.w > 0.5 && m.x > 1.0e29) {
+                    disocclusionMask = 1.0;   // entity without a previous-frame match (new / changed mesh): no history
+                } else if (m.w > 0.5) {
+                    objectMotion = m.xyz;
+                    dynamicObjectMask = dot(m.xyz, m.xyz) > 1.0e-8 ? 1.0 : 0.0;
+                }
+            }
+            vec4 prevPosRel = vec4(worldPosRel + objectMotion + camDelta.xyz, 1.0);
+            prevClip = prevViewProj * prevPosRel;
+        }
+    }
+
+    vec2 prevUv = uv;
+    if (prevClip.w > 1e-6) {
+        prevUv = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
+    } else {
+        disocclusionMask = 1.0;
+    }
+
+    if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
+        disocclusionMask = 1.0;
+    } else if (!isSky && linearViewZ && (prevDepth.x != 0u || prevDepth.y != 0u) && abs(prevClip.w) > 1e-7) {
+        // depth test against the previous frame: the reprojected point must be the surface seen there. For a perspective
+        // projection clip.w = distance along the view axis = |viewZ| (the G-buffer stores -dot(pos, forward)).
+        ivec2 q = clamp(ivec2(prevUv * renderResolution.xy), ivec2(0), size - 1);
+        float prevZ = abs(DepthBuf(prevDepth.xy).v[q.y * size.x + q.x]);
+        float expected = abs(prevClip.w);
+        if (!(prevZ < 1.0e5) || abs(prevZ - expected) > 0.03 * expected + 0.1) {
+            disocclusionMask = 1.0;
+        }
+    } else if (isSky && linearViewZ && (prevDepth.x != 0u || prevDepth.y != 0u) && prevClip.w > 1e-6) {
+        ivec2 q = clamp(ivec2(prevUv * renderResolution.xy), ivec2(0), size - 1);
+        float prevZ = abs(DepthBuf(prevDepth.xy).v[q.y * size.x + q.x]);
+        if (prevZ < 1.0e5) {
+            disocclusionMask = 1.0;
+        }
+    }
+
+    vec2 motionVector = (prevUv - uv) * renderResolution.xy;
+
+    float maxMotion = max(renderResolution.x, renderResolution.y) * 0.5;
+    if (length(motionVector) > maxMotion) {
+        motionVector = normalize(motionVector) * maxMotion;
+    }
+
+    // Protection against NaN, Inf
+    if (isnan(motionVector.x) || isnan(motionVector.y) || isinf(motionVector.x) || isinf(motionVector.y)) {
+        motionVector = vec2(0.0);
+        disocclusionMask = 1.0;
+    }
+    if (isnan(dynamicObjectMask) || isinf(dynamicObjectMask)) {
+        dynamicObjectMask = 0.0;
+    }
+    if (isnan(disocclusionMask) || isinf(disocclusionMask)) {
+        disocclusionMask = 1.0;
+    }
+
+    imageStore(outMotionVectors, pixelCoord, vec4(motionVector, dynamicObjectMask, disocclusionMask));
+    if (entityMotion.z != 0u || entityMotion.w != 0u) {
+        MaskBuf(entityMotion.zw).v[pixelCoord.y * size.x + pixelCoord.x] = disocclusionMask;
+    }
+}

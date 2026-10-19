@@ -1,0 +1,74 @@
+apply from: rootProject.file('gradle/loader-module.gradle')
+
+base {
+    archivesName = "${rootProject.artifact_base}-neoforge-mc${rootProject.minecraft_version}"
+}
+
+dependencies {
+    compileOnly project(':common')
+    compileOnly project(':core')
+
+    // NeoForge classes (@Mod, event bus) from the launcher's own libraries. compileOnly: never packaged.
+    def nfLibs = [
+        "${rootProject.neoforge_libs_dir}/neoforge/${rootProject.neoforge_runtime_version}/neoforge-${rootProject.neoforge_runtime_version}-universal.jar",
+        "${rootProject.neoforge_libs_dir}/fancymodloader/loader/${rootProject.fml_loader_version}/loader-${rootProject.fml_loader_version}.jar",
+        "${rootProject.neoforge_libs_dir}/bus/${rootProject.nf_bus_version}/bus-${rootProject.nf_bus_version}.jar",
+        "${rootProject.neoforge_libs_dir}/mergetool/${rootProject.nf_mergetool_version}/mergetool-${rootProject.nf_mergetool_version}-api.jar"
+    ]
+    def missingNfLibs = nfLibs.findAll { !file(it).isFile() }
+    if (!missingNfLibs.isEmpty()) {
+        throw new GradleException("NeoForge launcher jars not found (set BEDRAY_LAUNCHER_LIBRARIES or neoforge_libs_dir, see docs/BUILDING.md): " + missingNfLibs.join(", "))
+    }
+    compileOnly files(nfLibs)
+    compileOnly 'com.mojang:brigadier:1.3.10'   // client command registration (RegisterClientCommandsEvent)
+}
+
+// Mod id of the older separate build of the platform layer, declared incompatible (two copies of one code must never load).
+def oldCoreModId = 'vulkan_' + 'bridge'
+
+processResources {
+    inputs.property 'mod_id', rootProject.mod_id
+    inputs.property 'mod_name', rootProject.mod_name
+    inputs.property 'mod_version', rootProject.mod_version
+    inputs.property 'mod_description', rootProject.mod_description
+    inputs.property 'minecraft_version', rootProject.minecraft_version
+    inputs.property 'neoforge_version', rootProject.neoforge_version
+    inputs.property 'old_core_mod_id', oldCoreModId
+
+    filesMatching(['META-INF/neoforge.mods.toml']) {
+        expand(
+            'mod_id': rootProject.mod_id,
+            'mod_name': rootProject.mod_name,
+            'mod_version': rootProject.mod_version,
+            'mod_description': rootProject.mod_description,
+            'minecraft_version': rootProject.minecraft_version,
+            'neoforge_version': rootProject.neoforge_version,
+            'old_core_mod_id': oldCoreModId,
+        )
+    }
+}
+
+jar {
+    bundleCommon(it)
+    manifest {
+        attributes([
+            'Specification-Title'     : rootProject.mod_name,
+            'Specification-Vendor'    : 'bnfe12',
+            'Specification-Version'   : '1',
+            'Implementation-Title'    : "${rootProject.artifact_base}-neoforge",
+            'Implementation-Version'  : rootProject.mod_version,
+            'Implementation-Vendor'   : 'bnfe12',
+            'MixinConfigs'            : 'mixins.bedray_core.json,mixins.bedray_core_neoforge.json,mixins.bedray.json',
+            'FMLModType'              : 'MOD'
+        ])
+    }
+}
+
+publishing {
+    publications {
+        create('mavenJava', MavenPublication) {
+            from components.java
+            artifactId = "${rootProject.artifact_base}-neoforge"
+        }
+    }
+}

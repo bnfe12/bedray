@@ -1,0 +1,88 @@
+name: Bug report
+description: Something does not work, crashes or looks wrong (Bedray is an ALPHA)
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bedray is an **alpha**. Please check `docs/KNOWN_ISSUES.md` first.
+        Only an NVIDIA GeForce RTX 5060 Ti has been tested. Reports from other GPUs are very welcome; use the "GPU test report" form for a plain test result.
+        **Before you attach a log, remove personal data** (see `docs/TESTING.md`, "Sharing logs safely").
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Bedray version and jar name
+      placeholder: bedray-neoforge-mc26.3.0-0.1.0-alpha.1.jar
+    validations:
+      required: true
+  - type: dropdown
+    id: loader
+    attributes:
+      label: Loader
+      options: [NeoForge, Fabric]
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Minecraft, loader, Sodium and Bedray versions
+      placeholder: "MC 26.3, NeoForge 26.3.0.x, Sodium 0.9.2, Bedray 0.1.0-alpha.1"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU, VRAM, driver version, Windows version
+      placeholder: "NVIDIA GeForce RTX 5060 Ti 8 GB, driver 617.42, Windows 11"
+    validations:
+      required: true
+  - type: dropdown
+    id: rt
+    attributes:
+      label: Tracing mode
+      options: ["Off", "Path Tracing"]
+    validations:
+      required: true
+  - type: input
+    id: upscaler
+    attributes:
+      label: Upscaler, quality mode, frame generation setting
+      placeholder: "DLSS Quality, frame generation off"
+  - type: input
+    id: libs
+    attributes:
+      label: Vendor libraries installed
+      placeholder: "nvngx_dlss.dll, vkb_dlss.dll, libxess.dll, none"
+  - type: textarea
+    id: report
+    attributes:
+      label: Paste output of /bedray report
+      description: "NeoForge: type /bedray report in the chat. NeoForge and Fabric: Video Settings, page Advanced and Experimental, button Copy diagnostics report, then paste. Technical data only, personal data is removed, nothing is sent; please read it first (see PRIVACY.md)."
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: latest.log (optional, personal paths removed)
+      description: Attach the file, or paste the lines containing "Bedray", "VKB", ERROR and the crash report if there is one.
+      render: text
+  - type: textarea
+    id: shots
+    attributes:
+      label: Screenshots and FPS
+      description: Drag images here. Say which F3 line shows the FPS if you include numbers.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I reproduced it with only Sodium and Bedray installed
+        - label: I removed personal paths and names from the files I attached

@@ -1,0 +1,36 @@
+#version 450
+// FSR 1 EASU (edge adaptive spatial upsampling) pass. Host file of this mod; the algorithm is AMD FidelityFX ffx_fsr1.h
+// (MIT), appended after this prologue by SpatialShaderSource together with ffx_glsl_shim.glsl.
+// One invocation per output pixel. Input: world colour (render size), sampled with a LINEAR / CLAMP sampler for
+// textureGather. Output: RGBA8 storage image (display size). Constants: ffxFsrPopulateEasuConstants (Fsr1Constants.java).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D vkbInput;
+layout(binding = 1, rgba8) uniform writeonly image2D vkbOutput;
+
+layout(push_constant) uniform VkbEasuConstants {
+    uvec4 con0;
+    uvec4 con1;
+    uvec4 con2;
+    uvec4 con3;
+    uvec4 outSize; // x, y = output size in pixels
+} vkbPc;
+
+#define FFX_FSR_EASU_FLOAT 1
+
+//@@SHIM@@
+//@@FFX_FSR1@@
+
+vec4 FsrEasuRF(vec2 p) { return textureGather(vkbInput, p, 0); }
+vec4 FsrEasuGF(vec2 p) { return textureGather(vkbInput, p, 1); }
+vec4 FsrEasuBF(vec2 p) { return textureGather(vkbInput, p, 2); }
+
+void main() {
+    uvec2 ip = gl_GlobalInvocationID.xy;
+    if (ip.x >= vkbPc.outSize.x || ip.y >= vkbPc.outSize.y) {
+        return;
+    }
+    vec3 c;
+    ffxFsrEasuFloat(c, ip, vkbPc.con0, vkbPc.con1, vkbPc.con2, vkbPc.con3);
+    imageStore(vkbOutput, ivec2(ip), vec4(c, 1.0));
+}

@@ -1,0 +1,40 @@
+#version 450
+// FSR 1 RCAS (robust contrast adaptive sharpening) pass, run on the EASU output at display size. Host file of this mod;
+// the algorithm is AMD FidelityFX ffx_fsr1.h (MIT), appended by SpatialShaderSource. Constants: FsrRcasCon
+// (Fsr1Constants.java): con.x = exp2(-stops) as float bits.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D vkbInput;
+layout(binding = 1, rgba8) uniform writeonly image2D vkbOutput;
+
+layout(push_constant) uniform VkbRcasConstants {
+    uvec4 con;
+    uvec4 size; // x, y = image size in pixels
+} vkbPc;
+
+#define FSR_RCAS_F 1
+
+//@@SHIM@@
+//@@FFX_FSR1@@
+
+vec4 FsrRcasLoadF(ivec2 p) {
+    // ffx_fsr1.h reads the 3x3 cross around each pixel; the border is clamped (texelFetch outside the image is undefined).
+    ivec2 q = clamp(p, ivec2(0), ivec2(vkbPc.size.xy) - ivec2(1));
+    return texelFetch(vkbInput, q, 0);
+}
+
+void FsrRcasInputF(inout float r, inout float g, inout float b) {
+    // Input is already perceptual (RGBA8 UNORM world colour): no conversion.
+}
+
+void main() {
+    uvec2 ip = gl_GlobalInvocationID.xy;
+    if (ip.x >= vkbPc.size.x || ip.y >= vkbPc.size.y) {
+        return;
+    }
+    float r;
+    float g;
+    float b;
+    FsrRcasF(r, g, b, ip, vkbPc.con);
+    imageStore(vkbOutput, ivec2(ip), vec4(r, g, b, 1.0));
+}

@@ -1,0 +1,16 @@
+# Copy the lines you need to ~/.gradle/gradle.properties (your user Gradle home, outside the repository).
+# Paths use forward slashes, also on Windows.
+
+# Folder "libraries" of your Minecraft launcher (contains net/neoforged, net/fabricmc, org/lwjgl).
+# Alternative: set the environment variable BEDRAY_LAUNCHER_LIBRARIES to the same folder and skip the three lines below.
+neoforge_libs_dir=C:/path/to/launcher/libraries/net/neoforged
+fabric_libs_dir=C:/path/to/launcher/libraries/net/fabricmc
+lwjgl_libs_dir=C:/path/to/launcher/libraries/org/lwjgl
+
+# Optional: mods folders of test instances for the deploy tasks (deployTestbed, deployFabricTestbed, deployUser)
+# testbed_dir=C:/path/to/instance/minecraft/mods
+# fabric_testbed_dir=C:/path/to/fabric-instance/minecraft/mods
+# user_dir=C:/path/to/other-instance/minecraft/mods
+
+# Optional: folder with DLLs you built yourself (syncDlssNatives). Never commit DLLs.
+# local_natives_dir=C:/path/to/local-natives

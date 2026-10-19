@@ -1,0 +1,148 @@
+// Applied by every module (common, neoforge, fabric); plus shaderc/spvc for the RT shader compiler: Java 25, repositories, compile-only game classpath.
+apply plugin: 'java-library'
+apply plugin: 'maven-publish'
+
+group = rootProject.mod_group
+version = rootProject.mod_version
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 25
+    options.compilerArgs += ['-parameters']
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'NeoForged'
+        url = 'https://maven.neoforged.net/releases'
+    }
+    maven {
+        name = 'Minecraft Libraries'
+        url = 'https://libraries.minecraft.net/'
+    }
+    maven {
+        name = 'SpongePowered'
+        url = 'https://repo.spongepowered.org/repository/maven-public/'
+    }
+}
+
+dependencies {
+    // Local Minecraft 26.3 client jar (RenderPearl Vulkan classes) and Sodium. libs/ is gitignored (jars are not redistributed).
+    compileOnly fileTree(dir: rootProject.file('libs'), include: ['*.jar'])
+
+    // LWJGL core, OpenGL, Vulkan bindings
+    compileOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"
+    compileOnly "org.lwjgl:lwjgl-opengl:${rootProject.lwjgl_version}"
+    compileOnly "org.lwjgl:lwjgl-vulkan:${rootProject.lwjgl_version}"
+    compileOnly "org.lwjgl:lwjgl-shaderc:${rootProject.lwjgl_version}"
+    compileOnly "org.lwjgl:lwjgl-spvc:${rootProject.lwjgl_version}"
+
+    // Mixin framework & ASM
+    compileOnly "org.spongepowered:mixin:${rootProject.mixin_version}"
+    compileOnly 'org.ow2.asm:asm:9.7.1'
+    compileOnly 'org.ow2.asm:asm-tree:9.7.1'
+
+    // Utilities the game classes on the compile classpath refer to
+    compileOnly 'org.joml:joml:1.10.8'
+    compileOnly 'com.mojang:brigadier:1.3.10'
+    compileOnly 'com.google.code.gson:gson:2.11.0'
+    compileOnly 'org.apache.commons:commons-lang3:3.17.0'
+    compileOnly 'io.netty:netty-codec:4.2.16.Final'
+    compileOnly 'io.netty:netty-common:4.2.16.Final'
+    compileOnly 'io.netty:netty-buffer:4.2.16.Final'
+    compileOnly 'it.unimi.dsi:fastutil:8.5.15'
+    compileOnly 'com.google.guava:guava:33.3.1-jre'
+    compileOnly 'org.apache.logging.log4j:log4j-api:2.24.1'
+    compileOnly 'org.apache.logging.log4j:log4j-core:2.24.1'
+    compileOnly 'org.apache.maven:maven-artifact:3.9.9'
+    compileOnly "org.slf4j:slf4j-api:${rootProject.slf4j_version}"
+}
+
+// Loader jars bundle the common classes and resources (no shadow plugin: the jar task copies the common output).
+// Each loader jar is complete on its own; a user installs exactly one.
+ext.bundleCommon = { Jar jarTask ->
+    apply from: rootProject.file('gradle/build-provenance.gradle')
+    def commonOut = project(':common').sourceSets.main.output
+    def coreOut = project(':core').sourceSets.main.output
+    jarTask.from(coreOut)
+    jarTask.from(commonOut)
+    jarTask.from(rootProject.file('LICENSE'))
+    jarTask.from(rootProject.file('NOTICE'))
+    jarTask.from(rootProject.file('COPYING'))
+    jarTask.from(rootProject.file('THIRD_PARTY_NOTICES.md'))
+
+    // AMD FSR and Intel XeSS permit redistribution of these exact, unmodified DLLs with their notices.
+    // They are absent from the default build. A release build opts in explicitly and supplies official
+    // files outside the source tree via -PredistributableNativesDir (see docs/BUILDING.md).
+    def bundleMode = String.valueOf(rootProject.findProperty('bundleNatives') ?: 'none').toLowerCase()
+    if (!(bundleMode in ['none', 'licensed'])) {
+        throw new GradleException("bundleNatives must be 'none' or 'licensed', got: " + bundleMode)
+    }
+    if (bundleMode == 'licensed') {
+        def nativesDirValue = rootProject.findProperty('redistributableNativesDir') ?: System.getenv('BEDRAY_REDISTRIBUTABLE_NATIVES_DIR')
+        if (nativesDirValue == null || String.valueOf(nativesDirValue).trim().isEmpty()) {
+            throw new GradleException('Licensed native bundling requires -PredistributableNativesDir=<folder> or BEDRAY_REDISTRIBUTABLE_NATIVES_DIR')
+        }
+        def nativesDir = rootProject.file(String.valueOf(nativesDirValue))
+        def sha256 = { File inputFile ->
+            def md = java.security.MessageDigest.getInstance('SHA-256')
+            inputFile.withInputStream { stream ->
+                byte[] buffer = new byte[64 * 1024]
+                int count
+                while ((count = stream.read(buffer)) != -1) {
+                    md.update(buffer, 0, count)
+                }
+            }
+            md.digest().encodeHex().toString()
+        }
+        def bundles = [
+            [name: 'amd_fidelityfx_vk.dll', sha: 'a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78',
+             license: 'amd_fidelityfx_vk.LICENSE.txt', licenseSha: 'c93d509cd69d50698796c9c3274247352736ef122a3197ace2010f0978e21aa6',
+             thirdParty: null, thirdPartySha: null],
+            [name: 'libxess.dll', sha: '251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7',
+             license: 'libxess.LICENSE.txt', licenseSha: '784be42c39a4a4d03cf85d88e15e59d75828fca773ce45b8dbfffbd7eaf208df',
+             thirdParty: 'libxess.third-party-programs.txt', thirdPartySha: 'e8d8899dbfc4de0e8ca25560be9358e03c1405d7c956d20a1838c3c709b9b51c']
+        ]
+        bundles.each { bundle ->
+            def binary = new File(nativesDir, bundle.name)
+            def license = new File(nativesDir, bundle.license)
+            if (!binary.isFile() || !license.isFile()) {
+                throw new GradleException("Licensed native bundle is incomplete: expected ${bundle.name} and ${bundle.license} in ${nativesDir}")
+            }
+            def digest = sha256(binary)
+            if (digest != bundle.sha) {
+                throw new GradleException("Refusing to bundle ${bundle.name}: SHA-256 ${digest} does not match the reviewed official binary ${bundle.sha}")
+            }
+            def licenseDigest = sha256(license)
+            if (licenseDigest != bundle.licenseSha) {
+                throw new GradleException("Refusing to bundle ${bundle.name}: license SHA-256 ${licenseDigest} does not match the reviewed license ${bundle.licenseSha}")
+            }
+            jarTask.from(binary) { into 'META-INF/natives/windows-x64' }
+            jarTask.from(license) {
+                into "META-INF/licenses/natives/${bundle.name}"
+                rename { 'LICENSE.txt' }
+            }
+            if (bundle.thirdParty != null) {
+                def thirdParty = new File(nativesDir, bundle.thirdParty)
+                if (!thirdParty.isFile()) {
+                    throw new GradleException("Licensed native bundle is incomplete: expected ${bundle.thirdParty} in ${nativesDir}")
+                }
+                def thirdPartyDigest = sha256(thirdParty)
+                if (thirdPartyDigest != bundle.thirdPartySha) {
+                    throw new GradleException("Refusing to bundle ${bundle.name}: third-party notice SHA-256 ${thirdPartyDigest} does not match the reviewed notice ${bundle.thirdPartySha}")
+                }
+                jarTask.from(thirdParty) {
+                    into "META-INF/licenses/natives/${bundle.name}"
+                    rename { 'third-party-programs.txt' }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,28 @@
+// Resolve only this checkout: source archives inside another repository must not inherit its HEAD.
+def gitValue = { List<String> arguments ->
+    if (!rootProject.file('.git').exists()) return null
+    try {
+        def execution = rootProject.providers.exec {
+            workingDir rootProject.rootDir
+            commandLine(['git'] + arguments)
+            ignoreExitValue = true
+        }
+        execution.result.get().exitValue == 0 ? execution.standardOutput.asText.get().trim() : null
+    } catch (Exception ignored) {
+        null // Git is optional when compiling a downloaded source archive.
+    }
+}
+
+def commit = gitValue(['rev-parse', '--verify', 'HEAD'])
+def status = commit == null ? null : gitValue(['status', '--porcelain', '--untracked-files=normal'])
+def provenance = [
+    'Git-Commit': commit ?: 'unknown',
+    'Git-Dirty': status == null ? 'unknown' : String.valueOf(!status.isEmpty()),
+    'Build-Source': commit == null ? 'source-archive' : 'git-checkout'
+]
+
+tasks.named('jar', Jar) {
+    // Changes to HEAD or the worktree must invalidate an otherwise up-to-date archive.
+    inputs.properties(provenance)
+    manifest.attributes(provenance)
+}

@@ -1,0 +1,442 @@
+#version 460
+// Path Tracing mode (RtPathTracerPass): unidirectional path tracer over the TLAS of Sodium sections and entities (mask 0x03: MASK_WORLD | MASK_ENTITIES).
+//  - camera ray jittered inside the pixel (anti-aliasing through accumulation);
+//  - at every vertex: emission of the surface (emissive blocks light the scene by being hit), next event estimation of the
+//    sun/moon (one shadow ray inside the sun cone);
+//  - continuation: specular lobe (metals always; smooth dielectrics with probability ~ Fresnel) or cosine-weighted diffuse
+//    lobe; early probabilistic path termination from the 3rd vertex on;
+//  - misses return the sky radiance (sun disk only after a specular bounce: the diffuse sun is already sampled by NEE);
+//  - temporal accumulation into accumImage while the camera and the scene stand still (accumCount from RtPathTracerPass).
+// Scene access and sunDisk live in rt_common.glsl. Compiled with "#define VKB_ACCUM 1".
+#include "rt_common.glsl"
+
+struct PathResult {
+    vec3 radiance;     // full estimate
+    vec3 indirect;     // contributions of vertices after the first (debug view gi)
+    vec3 firstEmission;
+    float pathLength;  // vertices visited
+    vec3 direct0;      // first vertex: emission + sun NEE (kept out of NRD; sun NEE joins DLSS-RR when requested)
+    float bounceDist;  // length of the first bounce ray (NRD hit distance), reach when it missed
+    float waterSeen;   // 1 when the path started in or crossed a water boundary (temporal history of water is capped)
+    float firstDist;   // distance to first hit (interface or solid) from camera
+};
+
+uint gSunSub = 0u;   // sample index inside the frame (spp loop)
+uint gSunSpp = 1u;
+
+PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, out Surface first, out bool firstHit) {
+    PathResult res;
+    res.radiance = vec3(0.0);
+    res.indirect = vec3(0.0);
+    res.firstEmission = vec3(0.0);
+    res.pathLength = 0.0;
+    res.direct0 = vec3(0.0);
+    res.bounceDist = rayDistance();
+    res.firstDist = 1.0e6;
+    res.waterSeen = med.inside ? 1.0 : 0.0;
+    vec3 thr = vec3(1.0);
+    vec3 o = origin;
+    vec3 d = dir;
+    bool specularBefore = true;   // the camera ray sees the sun disk
+    uint bounces = max(1u, maxBounces());
+    float reach = rayDistance();
+    firstHit = false;
+    uint transCount = 0u;
+    float firstDist = 1.0e6;
+    bool hadFirst = false;
+    for (uint b = 0u; b <= bounces; b++) {
+        Surface s;
+        bool hitHere = traceSurface(o, d, b == 0u ? 0.001 : 0.0, b == 0u ? 4096.0 : reach, false, s);
+        if (med.inside) {
+            // water body: depth absorption of the segment and the light scattered towards the eye (rt_common.glsl waterSegment)
+            vec3 T;
+            vec3 ins;
+            waterSegment(med, o, d, hitHere ? s.t : min(reach, 48.0), T, ins);
+            vec3 e = thr * ins;
+            res.radiance += e;
+            if (b == 0u) {
+                res.direct0 += e;
+            } else {
+                res.indirect += e;
+            }
+            thr *= T;
+        }
+        if (hitHere && ((b > 0u && s.isOutline) || (!s.translucent && s.alpha < 0.5) || s.alpha < 0.05)) {
+            // Cutout transparent pixel or secondary ray hitting selection outline ribbon - pass through!
+            o = s.pos + d * 0.002;
+            b--;
+            continue;
+        }
+        if (hitHere && !hadFirst) {
+            firstDist = s.t;
+            hadFirst = true;
+            res.firstDist = firstDist;
+        }
+        if (b == 1u && hitHere) {
+            res.bounceDist = s.t;
+        }
+        if (!hitHere) {
+            vec3 sky = b == 0u ? skyAt(d) : (specularBefore ? skyRadiance(d) + sunDisk(d) : skyRadiance(d));
+            vec3 c = thr * sky;
+            res.radiance += c;
+            if (b > 0u) {
+                res.indirect += c;
+            }
+            break;
+        }
+
+        // Thin dielectric interface (glass, stained glass, water, ice; rt_common.glsl interface*), handled without random
+        // choices: the path always continues straight through with weight (1 - F) * absorption. The mirror reflection of the
+        // FIRST interface seen from the camera is added once, estimated with one deterministic ray (mirrorRadiance), to direct0
+        // (the channel the denoisers pass through unchanged, so glass does not smear into the diffuse signal). Reflections of
+        // deeper interfaces (back faces, panes behind panes; F = 2..8 %) are dropped: sampling them by Fresnel was the
+        // per-pixel sparkle on stained glass.
+        if (isInterface(s) && transCount < 24u) {
+            transCount++;
+            float F = interfaceReflectance(s, d);
+            bool volume = s.isWater && waterVolumeStyle() && isWaterBoundary(s);
+            if (b == 0u && transCount == 1u) {
+                vec3 rdir = bendHorizon(reflect(d, s.ns), s.ng);
+                if (volume && s.roughness > 0.03) {
+                    rdir = bendHorizon(coneAround(rdir, s.roughness * s.roughness, seed), s.ng);   // far sheen: waves below the pixel
+                }
+                vec3 refl = interfaceMirror(volume && F < 0.05, offsetOrigin(s), rdir, reach, true, med);
+                vec3 e = thr * F * refl;
+                res.radiance += e;
+                res.direct0 += e;
+            }
+            if (volume) {
+                bool entering = d.y < 0.0;
+                if (b > 0u && F > 0.999) {
+                    // total internal reflection of a secondary ray keeps the light inside the pool; the partial reflection is not
+                    // sampled (a random Fresnel split made the floor under water grainy)
+                    d = bendHorizon(reflect(d, s.ns), s.ng);
+                    o = s.pos + s.ng * 0.002;
+                    b--;
+                    continue;
+                }
+                vec3 rd = refract(d, s.ns, entering ? 1.0 / WATER_IOR : WATER_IOR);
+                if (dot(rd, rd) < 0.5) {
+                    break;   // total internal reflection on the camera path: the mirror estimate above carries it
+                }
+                thr *= interfaceTransmittance(s, F);
+                crossWaterBoundary(med, s, d);
+                res.waterSeen = 1.0;
+                d = normalize(rd);
+                o = s.pos + d * 0.002;
+                b--;
+                continue;
+            }
+            if (s.isWater && !volume) {
+                // vanilla style: the animated water sprite (biome tint) is blended over the scene behind it
+                vec3 e = thr * ((1.0 - F) * VANILLA_WATER_ALPHA) * vanillaWaterSurface(s, d);
+                res.radiance += e;
+                if (b == 0u) {
+                    res.direct0 += e;
+                } else {
+                    res.indirect += e;
+                }
+                crossWaterBoundary(med, s, d);
+                res.waterSeen = 1.0;
+            }
+            thr *= interfaceTransmittance(s, F);
+            if (max(thr.r, max(thr.g, thr.b)) < 0.004) {
+                break;   // nothing is left of the light behind this layer
+            }
+            o = s.pos + d * 0.002;
+            b--;
+            continue;
+        }
+
+        res.pathLength += 1.0;
+        if (b == 0u) {
+            first = s;
+            firstHit = true;
+        }
+        // Emission seen by the camera or through a mirror-like bounce; after a diffuse bounce the emitters were already
+        // sampled by NEE at the previous vertex (adding them again would count them twice).
+        if (b == 0u || specularBefore) {
+            vec3 e = thr * emitted(s);
+            res.radiance += e;
+            if (b == 0u) {
+                res.firstEmission = e;
+                res.direct0 += e;
+            } else {
+                res.indirect += e;
+            }
+        }
+        if (b == bounces) {
+            break;
+        }
+        vec3 so = offsetOrigin(s);
+        float cosV = max(dot(-d, s.ns), 0.0);
+        float baseF0 = s.metal > 0.5 ? 1.0 : s.f0;
+        vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(baseF0);
+        vec3 F = fresnelSchlick(f0, cosV);
+        float Fsc = clamp(max(F.r, max(F.g, F.b)), 0.0, 1.0);
+        float gloss = clamp(1.0 - s.roughness, 0.0, 1.0);
+        // probability of the specular lobe: balanced baseline so reflections are clear even looking head-on
+        float ps = s.metal > 0.5 ? 1.0 : (s.roughness < 0.6 ? clamp(max(Fsc, 0.45 * gloss), 0.05, 0.95) : 0.0);
+
+        // NEE of the sun/moon for the diffuse lobe (the specular lobe sees the sun disk through the sky instead)
+        // first hit: low-discrepancy sample of the sun disk; deeper vertices keep the random cone sample
+        vec3 L = b == 0u ? sunShadowDirection(pc.keyDir.xyz, sunRadius(), gSunSub, gSunSpp) : coneAround(pc.keyDir.xyz, sunRadius(), seed);
+        if (s.metal < 0.5 && keyLightOn()) {
+            vec3 Ls = L;
+            vec3 tr = vec3(0.0);
+            bool lit = false;
+            float ndotl = 0.0;
+            float ngdotl = 0.0;
+            vec3 shOrigin = so;
+            vec3 shDir = L;
+            vec3 gain = vec3(1.0);
+            if (med.inside) {
+                // sun under water: refracted shadow ray, absorption, Fresnel and the analytic caustic (rt_common.glsl waterSunBeam)
+                lit = waterSunBeam(so, s.worldPos.xz, L, med, Ls, shOrigin, shDir, gain);
+            } else {
+                lit = true;
+            }
+            ndotl = max(dot(s.ns, Ls), 0.0);
+            ngdotl = dot(s.ng, Ls);
+            if (lit && ndotl > 0.0 && ngdotl > 0.0) {
+                tr = traceTransmittance(shOrigin, shDir, 2048.0) * gain;   // the only visibility ray of this vertex
+            } else {
+                lit = false;
+            }
+            if (lit && ndotl > 0.0 && ngdotl > 0.0) {
+                float terminator = smoothstep(0.0, 0.08, ngdotl);
+                vec3 c = thr * s.albedoLit * (1.0 - Fsc) * pc.keyColor.rgb * ndotl * tr * s.mapAo * terminator;
+                if (s.isFoliage) {
+                    float backScatter = max(dot(-s.ns, Ls), 0.0);
+                    if (backScatter > 0.0) {
+                        c += thr * s.albedoLit * (1.0 - Fsc) * pc.keyColor.rgb * (backScatter * 0.42) * tr * s.mapAo * vec3(1.05, 1.25, 0.75);
+                    }
+                }
+                res.radiance += c;
+                if (b > 0u) {
+                    res.indirect += c;
+                } else if (!hasFlag(FLAG_SUN_DENOISED)) {
+                    // DLSS-RR, and optionally NRD for a more stable soft sun, denoise first-hit sun visibility. Leaving
+                    // this flag clear keeps the low-noise pass-through when preserving a sharper sun-shadow boundary.
+                    res.direct0 += c;
+                }
+            }
+        }
+        // NEE of the emissive surfaces (light list), diffuse lobe only
+        if (s.metal < 0.5 && hasFlag(FLAG_EMISSIVE)) {
+            vec3 c = thr * (1.0 - Fsc) * s.mapAo * sampleEmitters(s, s.albedoLit, reach, seed);
+            res.radiance += c;
+            if (b > 0u) {
+                res.indirect += c;
+            }
+        }
+        // Outdoor canopy / multi-bounce sky fill on primary hit: prevents ground under dense foliage from crushing to black
+        // while keeping caves and enclosed rooms (s.light.y == 0) completely dark.
+        if (b == 0u && s.metal < 0.5 && s.light.y > 0.05) {
+            float skyVis = clamp(s.light.y, 0.0, 1.0);
+            vec3 canopyFill = thr * s.albedoLit * (1.0 - Fsc) * hemisphereAmbient(s.ns.y, pc.keyDir.w) * (0.28 * skyVis * skyVis) * s.mapAo;
+            res.radiance += canopyFill;
+            res.indirect += canopyFill;
+        }
+        // continuation
+        if (rand01(seed) < ps) {
+            vec3 r = reflect(d, s.ns);
+            float spread = s.roughness * s.roughness;
+            if (spread > 0.001) {
+                r = coneAround(r, spread, seed);
+            }
+            r = bendHorizon(r, s.ng);
+            d = r;
+            thr *= (s.metal > 0.5 ? F : F / max(ps, 1.0e-3));
+            specularBefore = spread < 0.05;
+        } else {
+            d = cosineAround(s.ns, seed);
+            if (dot(d, s.ng) < 0.015) {
+                d = normalize(d + s.ng * 0.03);
+            }
+            // lambert: diffuse weight ensures exact unbiased balance with specular lobe probability
+            float diffuseWeight = (1.0 - Fsc) / max(1.0 - ps, 1.0e-3);
+            thr *= s.albedoLit * s.mapAo * diffuseWeight;
+            specularBefore = false;
+        }
+        o = so;
+        // Probabilistic path termination from the 2nd bounce on (unbiased Monte Carlo reweighting by 1/q).
+        // A bounce off a surface carries a fraction of the incoming energy; dim paths terminate early
+        // instead of spending full vertex traversals. The 0.5 floor bounds the energy reweighting at 2x (0.2 = 5x gave fireflies on dark albedo, which NRD smears into blotches).
+        if (b >= 1u) {
+            float q = clamp(max(thr.r, max(thr.g, thr.b)), 0.5, 0.95);
+            if (rand01(seed) > q) {
+                break;
+            }
+            thr /= q;
+        }
+    }
+    return res;
+}
+
+void main() {
+    WaterMedium med0 = cameraWaterMediumShared(cameraOrigin());   // camera under water: one ray per subgroup
+    ivec2 size = imageSize(outImage);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= size.x || p.y >= size.y) {
+        return;
+    }
+    uint mode = viewMode();
+    uint seed = pcgHash(uint(p.x) * 1973u + uint(p.y) * 9277u + pc.frame * 26699u + 7u);
+    uint spp = sppCount();
+    gSunPixel = p;
+    gSunIndex = pc.frame;
+    gSunSpp = spp;
+    vec3 sum = vec3(0.0);
+    bool anyHit = false;
+    float waterSeen = 0.0;
+    bool accHit = false;
+    Surface accFirst;
+    float accFirstDist = 1.0e6;
+#ifdef VKB_GBUFFER
+    vec3 gbDirectSum = vec3(0.0);
+    vec3 gbRestSum = vec3(0.0);
+    float gbDist = 0.0;
+    Surface gbFirst;
+    bool gbHit = false;
+#endif
+    vec2 camJitter = getCameraJitter();
+    bool hasJitter = (dot(camJitter, camJitter) > 1.0e-10);
+    for (uint i = 0u; i < spp; i++) {
+        vec2 jitter;
+        if (hasJitter) {
+            jitter = (i == 0u)
+                ? (vec2(0.5) + camJitter)
+                : fract(vec2(0.5) + camJitter + vec2(rand01(seed), rand01(seed)) - 0.5);
+        } else {
+#ifdef VKB_GBUFFER
+            jitter = (mode == MODE_LIT && i == 0u) ? vec2(0.5) : vec2(rand01(seed), rand01(seed));
+#else
+            jitter = vec2(rand01(seed), rand01(seed));
+#endif
+        }
+        gSunSub = i;
+        vec3 dir = cameraRay(p, size, jitter);
+        Surface first;
+        bool firstHit;
+        vec3 origin = cameraOrigin();
+        PathResult r = tracePath(origin, dir, med0, seed, first, firstHit);
+        waterSeen = max(waterSeen, r.waterSeen);
+        anyHit = anyHit || firstHit;
+        if (i == 0u) {
+            accHit = firstHit;
+            accFirst = first;
+            accFirstDist = r.firstDist;
+        }
+#ifdef VKB_GBUFFER
+        if (i == 0u) {
+            gbHit = firstHit;
+            gbFirst = first;
+            gbDist = r.bounceDist;
+        }
+        gbDirectSum += r.direct0;
+        gbRestSum += r.radiance - r.direct0;
+#endif
+        vec3 v;
+        if (mode == MODE_GI) {
+            v = r.indirect;
+        } else if (mode == MODE_EMISSION) {
+            v = r.firstEmission;
+        } else if (mode == MODE_BOUNCES) {
+            float k = r.pathLength / float(max(1u, maxBounces()) + 1u);
+            v = vec3(k, 1.0 - abs(k * 2.0 - 1.0), 1.0 - k);   // blue = short paths, red = long
+        } else if (mode == MODE_ALBEDO) {
+            v = firstHit ? first.albedo : skyAt(dir);
+        } else if (mode == MODE_NORMALS) {
+            v = firstHit ? first.ns * 0.5 + 0.5 : vec3(0.0);
+        } else if (mode == MODE_MATERIAL) {
+            v = firstHit ? vec3(first.roughness, first.metal > 0.5 ? 1.0 : first.f0 * 4.0, first.emission) : vec3(0.0);
+        } else {
+            v = r.radiance;
+            gSectionFade = firstHit ? sectionFade(first.slot) : 0.0;
+            v = applyVolumetricAtmosphere(v, origin, dir, firstHit ? first.t : 1.0e6, firstHit);
+        }
+        // clamp fireflies of a single sample (emitters seen through a diffuse bounce)
+        if (isnan(v.r) || isinf(v.r)) v.r = 0.0;
+        if (isnan(v.g) || isinf(v.g)) v.g = 0.0;
+        if (isnan(v.b) || isinf(v.b)) v.b = 0.0;
+        v = max(v, vec3(0.0));
+        float m = max(v.r, max(v.g, v.b));
+        if (m > 16.0) {
+            v *= 16.0 / m;
+        }
+        sum += v;
+    }
+    vec3 sampleValue = sum / float(spp);
+    if (isnan(sampleValue.r) || isinf(sampleValue.r)) sampleValue.r = 0.0;
+    if (isnan(sampleValue.g) || isinf(sampleValue.g)) sampleValue.g = 0.0;
+    if (isnan(sampleValue.b) || isinf(sampleValue.b)) sampleValue.b = 0.0;
+    sampleValue = clamp(sampleValue, vec3(0.0), vec3(16.0));
+
+    vec3 mean = sampleValue;
+    if (waterSeen > 0.5) {
+        gHistoryLimit = 8.0;   // moving waves: a long history would freeze the animation into a smear
+    }
+#ifdef VKB_ACCUM
+    if (hasFlag(FLAG_ACCUMULATE)) {
+        if (hasJitter && accHit && mode == MODE_LIT) {
+            // Demodulate primary albedo when subpixel jitter is active so low-res temporalAccumulate never blurs
+            // the 16x16 block texture across jittered positions before DLSS/FSR/XeSS reconstructs the frame.
+            vec3 alb = max(accFirst.albedoLit, vec3(0.02));
+            vec3 eAcc = sampleValue / alb;
+            mean = temporalAccumulate(p, size, eAcc, vec3(0.0), accHit, accFirst.pos,
+                accFirst.ng, accFirst.t, alb, true);
+        } else {
+            // path tracing without upscaler jitter: the whole sample is one signal
+            mean = temporalAccumulate(p, size, sampleValue, vec3(0.0), accHit, accHit ? accFirst.pos : vec3(0.0),
+                accHit ? accFirst.ng : vec3(0.0), accHit ? accFirst.t : 0.0, vec3(1.0), true);
+        }
+    }
+#endif
+    if (((p.x | p.y) & 3) == 0) {
+        float lum = dot(mean, vec3(0.2126, 0.7152, 0.0722));
+        if (!isnan(lum) && !isinf(lum) && lum > 0.0) {
+            // metering window [0.02, 6]: black voids and the sun disk do not drag the average
+            atomicAdd(StatsBuf(pc.statsAddr).lumLogSum, uint(clamp((log2(clamp(lum, 0.02, 6.0)) + 16.0) * 64.0, 0.0, 4095.0)));
+        }
+    }
+    vec3 color = (mode == MODE_BOUNCES || mode == MODE_NORMALS || mode == MODE_MATERIAL || mode == MODE_ALBEDO) ? mean : finishColor(mean);
+    countSample(p, anyHit);
+    imageStore(outDepth, p, vec4(accFirstDist < 1.0e5 ? accFirstDist : (accHit ? accFirst.t : 1.0e6), 0.0, 0.0, 0.0));
+    imageStore(outImage, p, vec4(clamp(color, 0.0, 1.0), 1.0));
+#ifdef VKB_GBUFFER
+    // NRD input (lit view only): albedo-demodulated per-frame signals; rt_pack_nrd.comp composes albedo * (direct + denoised)
+    // and overwrites outImage on geometry pixels. Sky pixels: viewZ beyond the denoising range, NRD and compose skip them.
+    if (mode == MODE_LIT && gbHit) {
+        vec3 a = max(gbFirst.albedoLit, vec3(0.02));
+        // NRD and DLSS-RR receive the effective bobbed camera pose, so IN_VIEWZ uses that same view space.
+        float viewZ = -dot(gbFirst.pos - cameraOrigin(), bobCameraForward());
+        imageStore(gbViewZ, p, vec4(viewZ, 0.0, 0.0, 0.0));
+        if (StatsBuf(pc.statsAddr).motionAddr != uvec2(0u)) {
+            Vec4Buf(StatsBuf(pc.statsAddr).motionAddr).v[p.y * size.x + p.x] = vec4(gbFirst.motion, (isEntityHit(gbFirst.slot) || dot(gbFirst.motion, gbFirst.motion) > 1.0e-8) ? 1.0 : 0.0);
+        }
+        vec3 nOut = hasFlag(FLAG_GEOMETRIC_NORMALS) ? gbFirst.ng : gbFirst.ns;
+        vec3 n = length(nOut) > 1.0e-4 ? normalize(nOut) : vec3(0.0, 0.0, 1.0);
+        float r = clamp(gbFirst.roughness, 0.0, 1.0);
+        imageStore(gbNormalRough, p, vec4(n, r));
+        imageStore(gbDiffuse, p, vec4(gbRestSum / float(spp) / a, gbDist));
+        imageStore(gbAlbedo, p, vec4(clamp(a, 0.0, 1.0), 1.0));
+        imageStore(gbDirect, p, vec4(gbDirectSum / float(spp), 0.0));
+    } else {
+        imageStore(gbViewZ, p, vec4(1.0e6, 0.0, 0.0, 0.0));
+        StatsBuf fb = StatsBuf(pc.statsAddr);
+        if (fb.motionAddr != uvec2(0u)) {
+            vec4 prevClipDir = pc.invViewProj * vec4(((vec2(p) + 0.5) / vec2(size)) * 2.0 - 1.0, 0.5, 1.0);
+            vec3 skyDir = normalize(prevClipDir.xyz / prevClipDir.w);
+            vec4 pClip = fb.prevViewProj * vec4(skyDir, 0.0);
+            vec2 pUv = pClip.w > 1e-6 ? (pClip.xy / pClip.w) * 0.5 + 0.5 : ((vec2(p) + 0.5) / vec2(size));
+            vec2 mv = (pUv - ((vec2(p) + 0.5) / vec2(size))) * vec2(size);
+            Vec4Buf(fb.motionAddr).v[p.y * size.x + p.x] = vec4(mv, 0.0, 0.0);
+        }
+        imageStore(gbNormalRough, p, vec4(0.0, 0.0, 1.0, 1.0));
+        imageStore(gbDiffuse, p, vec4(0.0));
+        imageStore(gbAlbedo, p, vec4(0.0));
+        imageStore(gbDirect, p, vec4(0.0));
+    }
+#endif
+}

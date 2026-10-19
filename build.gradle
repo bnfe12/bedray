@@ -1,0 +1,109 @@
+// Machine-specific settings are NOT stored in the repository. Put them in ~/.gradle/gradle.properties or pass -P..., or set the
+// environment variable BEDRAY_LAUNCHER_LIBRARIES to the "libraries" folder of your Minecraft launcher (see docs/BUILDING.md):
+//   neoforge_libs_dir, fabric_libs_dir, lwjgl_libs_dir  (default: derived from BEDRAY_LAUNCHER_LIBRARIES)
+//   testbed_dir, fabric_testbed_dir, user_dir           (mods folders for the optional deploy tasks)
+//   local_natives_dir                                    (folder with locally built DLLs, optional)
+def launcherLibraries = System.getenv('BEDRAY_LAUNCHER_LIBRARIES')
+[neoforge_libs_dir: 'net/neoforged', fabric_libs_dir: 'net/fabricmc', lwjgl_libs_dir: 'org/lwjgl'].each { key, sub ->
+    if (!project.hasProperty(key)) {
+        ext.set(key, launcherLibraries ? "${launcherLibraries}/${sub}".toString() : "")
+    }
+}
+def requireProp = { String key ->
+    if (!project.hasProperty(key) || String.valueOf(project.property(key)).isEmpty()) {
+        throw new GradleException("Property '${key}' is not set. Add it to ~/.gradle/gradle.properties (see gradle.properties.example) or pass -P${key}=<path>.")
+    }
+    String.valueOf(project.property(key))
+}
+
+// Multi-loader root project: core (internal platform layer "Bedray Core"), common (all mod logic, no loader API),
+// neoforge and fabric (entry point, descriptor; each jar contains core + common, one jar per loader).
+// The root project builds nothing itself; it hosts the deploy tasks.
+
+// Optional deploy tasks for developers: they copy the single mod jar into the mods folder of a test instance
+// (testbed_dir / fabric_testbed_dir / user_dir, set in your user Gradle home, see gradle.properties.example).
+// Older Bedray jars are removed; a leftover jar of an earlier prototype (vulkan_compat_shim*.jar) is removed
+// only after its neoforge.mods.toml proves it is our old mod.
+// -PdryRun=true: only prints what would be copied/deleted, changes nothing.
+def isDryRun = { -> 'true' == String.valueOf(project.findProperty('dryRun')) }
+
+// Files of earlier Bedray builds that must not stay next to the new jar (a second copy of the same code must never load).
+def staleJars = ['vulkan-rtx*.jar', 'bedray*.jar', 'vulkan-' + 'bridge*.jar'] // last: jar of the older separate component
+
+def deployJar = { File dir, String taskName, String loaderProject ->
+    if (!dir.isDirectory()) {
+        throw new GradleException("[${taskName}] mods folder does not exist: ${dir}")
+    }
+    def rtxJar = project(loaderProject).tasks.named('jar').get().archiveFile.get().asFile
+    def dry = isDryRun()
+    fileTree(dir: dir, include: 'vulkan_compat_shim*.jar').each { old ->
+        def isOurs = zipTree(old).matching { include 'META-INF/neoforge.mods.toml' }.files.any { it.text.contains('modId="vulkan_compat_shim"') }
+        if (!isOurs) {
+            throw new GradleException("${old} does not contain modId=\"vulkan_compat_shim\" in neoforge.mods.toml; refusing to delete it")
+        }
+        logger.lifecycle("${dry ? '[dry-run] would remove' : 'Removed'} old prototype jar ${old.name}")
+        if (!dry) {
+            delete old
+        }
+    }
+    def stale = fileTree(dir: dir, include: staleJars).files
+    stale.each { logger.lifecycle("${dry ? '[dry-run] would delete' : 'Deleting'} ${it.name}") }
+    if (dry) {
+        logger.lifecycle("[dry-run] would copy ${rtxJar.name} -> ${dir}")
+        return
+    }
+    delete stale
+    copy {
+        from rtxJar
+        into dir
+    }
+    logger.lifecycle("Deployed ${rtxJar.name} -> ${dir}")
+}
+
+// Local DLLs (never committed, project rules): vkb_dlss.dll (our NGX wrapper, native/dlss_bridge/build.bat) and
+// nvngx_dlss.dll (NVIDIA, SDK DLSS 310.9.1) go to <instance>/bedray/natives, where Bedray Core's NativeLibraries
+// looks for them (docs/experiments/dlss.md). Only the DLSS pair is synced here.
+tasks.register('syncDlssNatives') {
+    group = 'deployment'
+    description = 'Copies vkb_dlss.dll and nvngx_dlss.dll from local_natives_dir into <test instance>/bedray/natives (-PdryRun=true: list only)'
+    doLast {
+        def target = file("${file(requireProp('testbed_dir')).parentFile}/bedray/natives")
+        def dry = isDryRun()
+        ['vkb_dlss.dll', 'nvngx_dlss.dll'].each { name ->
+            def src = file("${requireProp('local_natives_dir')}/${name}")
+            if (!src.isFile()) {
+                throw new GradleException("[syncDlssNatives] ${src} not found (build native/dlss_bridge/build.bat and copy nvngx_dlss.dll from the SDK; see docs/experiments/dlss.md)")
+            }
+            logger.lifecycle("${dry ? '[dry-run] would copy' : 'Copying'} ${src} -> ${target}")
+            if (!dry) {
+                target.mkdirs()
+                copy {
+                    from src
+                    into target
+                }
+            }
+        }
+    }
+}
+
+tasks.register('deployTestbed') {
+    group = 'deployment'
+    description = 'Deploys the Bedray NeoForge jar (the only jar needed) into the test instance mods folder (autotests); -PdryRun=true lists only'
+    dependsOn project(':neoforge').tasks.named('jar'), tasks.named('syncDlssNatives')
+    doLast { deployJar(file(requireProp('testbed_dir')), 'deployTestbed', ':neoforge') }
+}
+
+// Fabric test instance (fabric_testbed_dir): only our jar is replaced; sodium-fabric and anything else in the folder stay.
+tasks.register('deployFabricTestbed') {
+    group = 'deployment'
+    description = 'Deploys the Bedray Fabric jar into the Fabric test instance mods folder (autotests); -PdryRun=true lists only'
+    dependsOn project(':fabric').tasks.named('jar')
+    doLast { deployJar(file(requireProp('fabric_testbed_dir')), 'deployFabricTestbed', ':fabric') }
+}
+
+tasks.register('deployUser') {
+    group = 'deployment'
+    description = 'Deploys the Bedray NeoForge jar into the user_dir mods folder (run only on request)'
+    dependsOn project(':neoforge').tasks.named('jar')
+    doLast { deployJar(file(requireProp('user_dir')), 'deployUser', ':neoforge') }
+}

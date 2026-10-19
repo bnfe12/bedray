@@ -1,0 +1,124 @@
+package io.github.andrexarlay.vulkancompat.rt.world;
+
+import org.joml.Matrix4f;
+
+import java.nio.ByteBuffer;
+
+/**
+ * Push constants of rt_rays.comp / rt_path.comp (exactly 128 bytes, the guaranteed minimum of maxPushConstantsSize):
+ * <pre>
+ *   0  mat4  invViewProj
+ *  64  uvec2 statsAddr
+ *  72  uint  modeBits   view (bits 0-7) | aoSamples (8-15) | flipY (16) | tonemap (17) | accumCount (18-31)
+ *  76  uint  frame
+ *  80  vec4  keyDir (xyz towards the light, w = day factor)
+ *  96  vec4  keyColor (rgb); w = uint flags (FLAG_*, read with floatBitsToUint)
+ * 112  vec4  skyColor (rgb); w = uint params2: path: quality (0-7) | bounces (8-15) | spp (16-23) | rayDistance/4 (24-31);
+ *                                             rays: shadow, emissive, GI, reflection rays (4 bits each, 0-15) | reflDistance/4 (24-31)
+ * </pre>
+ */
+public final class RtFrameParams {
+    public static final int BYTES = 128;
+
+    public static final int FLAG_SHADOWS = 1;
+    public static final int FLAG_SOFT_SHADOWS = 1 << 1;
+    public static final int FLAG_REFLECTIONS = 1 << 2;
+    public static final int FLAG_AO = 1 << 3;
+    public static final int FLAG_EMISSIVE = 1 << 4;
+    /** The material/normal atlases hold baked data (else the shader uses defaults). */
+    public static final int FLAG_MATERIALS = 1 << 5;
+    /** Path tracing: accumulate into the accumulation image (else every frame is shown alone). */
+    public static final int FLAG_ACCUMULATE = 1 << 6;
+    /** Normal maps from the LabPBR _n atlas. */
+    public static final int FLAG_NORMAL_MAPS = 1 << 7;
+    /** Path tracing: tone mapping uses the auto exposure from the frame slot (see RtExposure). */
+    public static final int FLAG_AUTO_EXPOSURE = 1 << 8;
+    /** Ray mode: one-bounce ray traced global illumination. */
+    public static final int FLAG_GI = 1 << 9;
+    /** Generated normal maps (sprites without LabPBR _n), strength in the frame slot. */
+    public static final int FLAG_AUTO_NORMALS = 1 << 10;
+    /** DLSS-RR: feed flat voxel geometric normals (ng) instead of perturbed shading normals (ns). */
+    public static final int FLAG_GEOMETRIC_NORMALS = 1 << 11;
+    /** Volumetric fog and atmospheric haze. */
+    public static final int FLAG_VOLUMETRIC_FOG = 1 << 12;
+    /** Water style: 1 = Realistic (wave normals, caustics, refraction), 0 = Vanilla (classic clear). */
+    public static final int FLAG_WATER_REALISTIC = 1 << 13;
+    /** Vibrant Visuals tone mapping and color grade mode. */
+    public static final int FLAG_VIBRANT_VISUALS = 1 << 14;
+    /** Path tracing water caustics simulation. */
+    public static final int FLAG_CAUSTICS = 1 << 15;
+    /** First-hit sun NEE is included in the denoised radiance rather than passed through raw. */
+    public static final int FLAG_SUN_DENOISED = 1 << 16;
+    /** Temporal accumulation stores irradiance (colour / primary albedo) and remodulates with the CURRENT albedo (sharp textures). */
+    public static final int FLAG_DEMODULATE = 1 << 24;
+    /** Low-discrepancy spatio-temporal sample sequence of the ray shaders (rt_noise.glsl); {@code -Dvkrtx.rt.lowDisc=off} for A/B runs. */
+    public static final int FLAG_LOWDISC = 1 << 25;
+    public static final int MAX_ACCUM = (1 << 14) - 1;
+
+    public final Matrix4f invViewProj = new Matrix4f();
+    /** CPU only: inverse view-projection without the upscaler jitter (accumulation reset decision). */
+    public final Matrix4f invViewProjStable = new Matrix4f();
+    public long statsAddress;
+    public int mode;
+    public int aoSamples;
+    public boolean flipY;
+    public boolean tonemap;
+    /** Samples already in the accumulation image (0 = reset); path tracing only. */
+    public int accumCount;
+    public int frame;
+    public int flags;
+    public int quality = 1;
+    public int bounces;
+    public int spp = 1;
+    public int rayDistance = 128;
+    /** Ray mode: rays per pixel nibbles (RtRayEffectsPass.packQualities) replacing quality/bounces/spp in params2; -1 = path layout. */
+    public int rayQualities = -1;
+    /** Ray mode spatial filter (rt_atrous.comp): iteration index (params2 bits 16-19) and iteration count (20-23). */
+    public int filterIter;
+    public int filterIters;
+    // ---- written to the per-frame slot (RtFrameRenderer), not pushed ----
+    public float giDistance = 64f;
+    public float emissiveDistance = 32f;
+    public float aoRadius = 2.5f;
+    /** Longest temporal history the shader may use this frame (RtAccumulation.cap). */
+    public int historyCap = MAX_ACCUM;
+    public boolean volumetricFogEnabled = true;
+    public float fogDensity = 1.0f;
+    public float fogInScattering = 1.0f;
+    public float fogDistanceScale = 1.0f;
+    // ---- CPU-only frame state (not pushed): camera position and geometry change, for the accumulation decision ----
+    public double cameraX;
+    public double cameraY;
+    public double cameraZ;
+    public boolean sceneChanged;
+    public final RtSky.Key key = new RtSky.Key();
+    public final float[] skyColor = {0.47f, 0.65f, 1.0f};
+
+    public int modeBits() {
+        return (mode & 0xFF) | ((aoSamples & 0xFF) << 8) | (flipY ? 1 << 16 : 0) | (tonemap ? 1 << 17 : 0)
+            | ((Math.min(accumCount, MAX_ACCUM) & 0x3FFF) << 18);
+    }
+
+    public int params2() {
+        if (filterIters > 0) {
+            int base = rayQualities >= 0 ? (rayQualities & 0xFFFF) : ((quality & 0xFF) | ((bounces & 0xFF) << 8));
+            return (base & 0xFFFF) | ((filterIter & 15) << 16) | ((filterIters & 15) << 20)
+                | ((Math.min(1020, rayDistance) / 4 & 0xFF) << 24);
+        }
+        if (rayQualities >= 0) {
+            return (rayQualities & 0xFFFF) | ((filterIter & 15) << 16) | ((filterIters & 15) << 20) | ((Math.min(1020, rayDistance) / 4 & 0xFF) << 24);
+        }
+        return (quality & 0xFF) | ((bounces & 0xFF) << 8) | ((spp & 0xFF) << 16) | ((Math.min(1020, rayDistance) / 4 & 0xFF) << 24);
+    }
+
+    /** Writes the 128 bytes at absolute offset 0 (position and limit of {@code b} are not changed). */
+    public void write(ByteBuffer b) {
+        invViewProj.get(0, b);
+        b.putLong(64, statsAddress);
+        b.putInt(72, modeBits());
+        b.putInt(76, frame);
+        b.putFloat(80, key.dir[0]).putFloat(84, key.dir[1]).putFloat(88, key.dir[2]).putFloat(92, key.day);
+        b.putFloat(96, key.color[0]).putFloat(100, key.color[1]).putFloat(104, key.color[2]).putInt(108, flags);
+        b.putFloat(112, skyColor[0]).putFloat(116, skyColor[1]).putFloat(120, skyColor[2]).putInt(124, params2());
+    }
+}

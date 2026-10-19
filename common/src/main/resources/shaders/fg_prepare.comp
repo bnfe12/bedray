@@ -1,0 +1,31 @@
+#version 450
+
+// Frame generation input preparation (DLSS-G / Streamline): the engine keeps every render target upside down (row 0 = bottom of
+// the screen, the swapchain blit flips it back, VulkanGpuSurface.blitFromTexture dstOffsets), but the back buffer that
+// Streamline sees is upright. Depth and motion vectors must be in the same orientation as the back buffer, so this pass writes
+// vertically flipped copies:
+//   depth: copied as is (reverse-Z NDC depth of the world raster pass),
+//   motion vectors: rows flipped and y negated (pixels, previous minus current, render resolution) because the row index
+//   direction changes sign.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D depthTexture;                         // D32 depth copy of the world pass
+layout(set = 0, binding = 1, rg16f) uniform readonly image2D inMotionVectors;       // velocity_reproject.comp output
+layout(set = 0, binding = 2, r32f) uniform writeonly image2D outDepth;
+layout(set = 0, binding = 3, rg16f) uniform writeonly image2D outMotionVectors;
+
+layout(push_constant) uniform PC {
+    ivec2 size;
+} pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.size.x || p.y >= pc.size.y) {
+        return;
+    }
+    ivec2 src = ivec2(p.x, pc.size.y - 1 - p.y);
+    float d = texelFetch(depthTexture, src, 0).r;
+    vec2 mv = imageLoad(inMotionVectors, src).rg;
+    imageStore(outDepth, p, vec4(d, 0.0, 0.0, 0.0));
+    imageStore(outMotionVectors, p, vec4(mv.x, -mv.y, 0.0, 0.0));
+}

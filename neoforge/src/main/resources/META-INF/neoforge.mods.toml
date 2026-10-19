@@ -1,0 +1,53 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="LGPL-3.0-or-later"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+description="${mod_description}"
+authors="bnfe12"
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="[${neoforge_version},)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="[${minecraft_version},)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="sodium"
+    type="required"
+    versionRange="[0.9,)"
+    ordering="AFTER"
+    side="CLIENT"
+
+# The platform layer (Bedray Core) is bundled in this jar. A second copy of the same code from an
+# older separate build must not load next to it.
+[[dependencies.${mod_id}]]
+    modId="${old_core_mod_id}"
+    type="incompatible"
+    reason="Bedray already contains this component. Remove the separate older jar of it from the mods folder."
+    versionRange="[0,)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[mixins]]
+config="mixins.bedray_core.json"
+
+[[mixins]]
+config="mixins.bedray_core_neoforge.json"
+
+[[mixins]]
+config="mixins.bedray.json"
+
+[modproperties.${mod_id}]
+"sodium:config_api_user" = "io.github.andrexarlay.vulkancompat.sodium.VulkanSodiumConfig"

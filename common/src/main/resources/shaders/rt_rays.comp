@@ -1,0 +1,402 @@
+#version 460
+// Ray Tracing mode (RtRayEffectsPass): primary rays from the camera through the TLAS of Sodium section BLASes and entity BLASes
+// (mask 0x03: MASK_WORLD | MASK_ENTITIES), block atlas albedo, alpha-tested cutout, procedural sky, plus ray traced effects,
+// each switched by its own flag with its own rays per pixel (params2 nibbles) and distance (frame slot):
+//  - sun/moon shadows: hard (one ray) or soft (rays jittered inside a widened sun cone);
+//  - ambient occlusion (cosine rays inside the AO radius) of the vanilla sky-light ambient;
+//  - emissive lighting: self glow + next event estimation over the emitter list (RIS, one shadow ray per sample);
+//  - one-bounce global illumination: cosine rays, the hit is shaded with sun + shadow, vanilla ambient and emission (replaces
+//    the vanilla sky-light ambient);
+//  - reflections: roughness-jittered mirror rays with Schlick Fresnel, metals tinted by albedo;
+//  - temporal accumulation of all of it while the camera and the scene stand still (VKB_ACCUM, RtAccumulation).
+// Scene access lives in rt_common.glsl.
+#include "rt_common.glsl"
+
+
+uint shadowRays() { return max(1u, params2() & 15u); }
+uint emissiveRays() { return max(1u, (params2() >> 4u) & 15u); }
+uint giRays() { return max(1u, (params2() >> 8u) & 15u); }
+uint reflectionRays() { return max(1u, (params2() >> 12u) & 15u); }
+float giDistance() { return StatsBuf(pc.statsAddr).giDist; }
+float emissiveDistance() { return StatsBuf(pc.statsAddr).emisDist; }
+float aoRadius() { return StatsBuf(pc.statsAddr).aoRadius; }
+
+// Secondary rays (reflection / GI) pass interfaces deterministically and are shaded by rt_common.glsl shadeSimple.
+bool traceSecondary(vec3 origin, vec3 dir, float reach, inout uint seed, out Surface hitSurface, out vec3 hitFilter) {
+    return traceThroughInterfaces(origin, dir, reach, hitSurface, hitFilter);
+}
+
+vec3 shadeSecondary(Surface s, vec3 dir) {
+    return shadeSimple(s, dir, hasFlag(FLAG_SHADOWS));
+}
+
+vec3 shadeSecondary(Surface s) {
+    return shadeSimple(s, vec3(0.0), hasFlag(FLAG_SHADOWS));
+}
+
+void main() {
+    WaterMedium camMed = cameraWaterMediumShared(cameraOrigin());   // camera under water: one ray per subgroup
+    ivec2 size = imageSize(outImage);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= size.x || p.y >= size.y) {
+        return;
+    }
+    uint mode = viewMode();
+    vec2 camJitter = getCameraJitter();
+    vec3 dir = cameraRay(p, size, vec2(0.5) + camJitter);
+    uint seed = uint(p.x) * 1973u + uint(p.y) * 9277u + pc.frame * 26699u + 1u;
+    gSunPixel = p;
+    gSunIndex = pc.frame;
+
+    Surface s;
+    vec3 rayOrig = cameraOrigin();
+    vec3 rayDir = dir;
+    vec3 thr = vec3(1.0);
+    bool hit = false;
+    // Interfaces in front of the shaded surface (rt_common.glsl interface*): deterministic split, the mirror reflection of each
+    // is added with weight F (glassRefl), the ray continues behind it with (1 - F) * tint. No random choice, so glass and water
+    // do not flicker between "opaque" and "transparent" per pixel and frame.
+    vec3 glassRefl = vec3(0.0);
+    WaterMedium med = camMed;
+    bool sawWater = med.inside;
+    float firstDist = 1.0e6;
+    bool hadFirst = false;
+    for (uint step = 0u; step < 16u; step++) {
+        if (!traceSurface(rayOrig, rayDir, 0.001, 4096.0, false, s)) {
+            if (med.inside) {
+                vec3 T;
+                vec3 ins;
+                waterSegment(med, rayOrig, rayDir, 48.0, T, ins);
+                glassRefl += thr * ins;
+                thr *= T;
+            }
+            hit = false;
+            break;
+        }
+        if (med.inside) {
+            vec3 T;
+            vec3 ins;
+            waterSegment(med, rayOrig, rayDir, s.t, T, ins);
+            glassRefl += thr * ins;
+            thr *= T;
+        }
+        if ((!s.translucent && s.alpha < 0.5) || s.alpha < 0.05) {
+            // Cutout transparent pixel (e.g. empty space of redstone wire quad) - pass through!
+            rayOrig = s.pos + rayDir * 0.002;
+            continue;
+        }
+        hit = true;
+        if (!hadFirst) {
+            firstDist = s.t;
+            hadFirst = true;
+        }
+        if (isInterface(s)) {
+            float F = interfaceReflectance(s, rayDir);
+            bool volume = s.isWater && waterVolumeStyle() && isWaterBoundary(s);
+            if (hasFlag(FLAG_REFLECTIONS) && step < 2u) {
+                vec3 rdir = bendHorizon(reflect(rayDir, s.ns), s.ng);
+                if (volume && s.roughness > 0.03) {
+                    rdir = bendHorizon(coneAround(rdir, s.roughness * s.roughness, seed), s.ng);   // far sheen: waves below the pixel
+                }
+                vec3 refl = interfaceMirror(volume && F < 0.05, offsetOrigin(s), rdir, rayDistance(), hasFlag(FLAG_SHADOWS), med);
+                glassRefl += thr * F * refl;
+            }
+            if (s.isWater && !volume) {
+                // vanilla style: the animated water sprite (biome tint) is blended over the scene behind it
+                glassRefl += thr * ((1.0 - F) * VANILLA_WATER_ALPHA) * vanillaWaterSurface(s, rayDir);
+                crossWaterBoundary(med, s, rayDir);
+                sawWater = true;
+            }
+            thr *= interfaceTransmittance(s, F);
+            if (volume) {
+                vec3 rd = refract(rayDir, s.ns, rayDir.y < 0.0 ? 1.0 / WATER_IOR : WATER_IOR);
+                crossWaterBoundary(med, s, rayDir);
+                sawWater = true;
+                if (dot(rd, rd) > 0.5) {
+                    rayDir = normalize(rd);   // Snell refraction through the wavy surface
+                } else {
+                    thr = vec3(0.0);          // total internal reflection: the mirror ray above carries the light
+                }
+            }
+            if (max(thr.r, max(thr.g, thr.b)) < 0.004) {
+                hit = false;   // nothing is left of the light behind this layer
+                break;
+            }
+            rayOrig = s.pos + rayDir * 0.002;
+            continue;
+        }
+        break;
+    }
+    vec3 color = skyDisplay(rayDir);   // display space: the miss is not tone mapped below (rt_sky.glsl)
+    vec3 diffE = vec3(0.0);    // lit view: diffuse light reaching the eye (x thr), before the albedo
+    bool tonemapped = false;   // lit / reflection views are tone mapped after the accumulation
+    if (hit) {
+        float t = s.t;
+        if (mode == MODE_NORMALS) {
+            color = s.ns * 0.5 + 0.5;
+        } else if (mode == MODE_DEPTH) {
+            color = vec3(1.0 - clamp(t / 128.0, 0.0, 1.0));
+        } else if (mode == MODE_UV) {
+            color = vec3(fract(s.uv * 64.0), 0.25);
+        } else if (mode == MODE_SECTION) {
+            color = hashColor(s.slot);
+        } else if (mode == MODE_ALBEDO) {
+            color = s.albedo * thr;
+        } else if (mode == MODE_SKY) {
+            color = s.albedo * thr * 0.25;   // geometry dimmed; the sky with the sun/moon disk is drawn where nothing is hit
+        } else if (mode == MODE_MATERIAL) {
+            color = vec3(s.roughness, s.metal > 0.5 ? 1.0 : s.f0 * 4.0, s.emission);
+        } else if (mode == MODE_EMISSION) {
+            color = emitted(s) * thr;
+        } else {
+            vec3 o = offsetOrigin(s);
+            vec3 L = pc.keyDir.xyz;
+            bool underwater = med.inside && waterVolumeStyle();
+            vec3 vis = vec3(0.0);
+            vec3 uwOrigin = o;
+            vec3 uwDir = L;
+            vec3 uwGain = vec3(1.0);
+            bool uwLit = true;
+            if (underwater) {
+                // sun under water: refracted shadow ray + absorption + Fresnel + analytic caustic (rt_common.glsl waterSunBeam)
+                vec3 Lw;
+                vec3 Ls = hasFlag(FLAG_SOFT_SHADOWS) ? coneAround(L, sunRadius(), seed) : L;
+                uwLit = waterSunBeam(o, s.worldPos.xz, Ls, med, Lw, uwOrigin, uwDir, uwGain);
+                L = Lw;
+            }
+            float ndotl = max(dot(s.ns, L), 0.0);
+            float ngdotl = dot(s.ng, L);
+            // Direct light of the sun/moon: hard shadow ray, or shadowRays() rays jittered inside the sun cone (soft shadows).
+            if (underwater) {
+                if (uwLit && keyLightOn() && ndotl > 0.0 && ngdotl > 0.0) {
+                    vis = hasFlag(FLAG_SHADOWS) ? traceTransmittance(uwOrigin, uwDir, 2048.0) * uwGain : vec3(1.0);
+                }
+            } else if (keyLightOn() && ndotl > 0.0 && ngdotl > 0.0) {
+                if (!hasFlag(FLAG_SHADOWS)) {
+                    vis = vec3(1.0);
+                } else if (hasFlag(FLAG_SOFT_SHADOWS)) {
+                    if (dot(camJitter, camJitter) > 1.0e-10) {
+                        gSunPixel = ivec2(floor((s.worldPos.xz + vec2(s.worldPos.y * 0.5)) * 16.0)) & ivec2(1023);
+                    }
+                    uint n = shadowRays();
+                    for (uint i = 0u; i < n; i++) {
+                        vis += traceTransmittance(o, sunShadowDirection(L, sunRadius(), i, n), 2048.0);
+                    }
+                    vis /= float(n);
+                } else {
+                    vis = traceTransmittance(o, L, 2048.0);
+                }
+            }
+            // Ambient occlusion: cosine-weighted rays inside the AO radius, raw (noisy) result.
+            float ao = 1.0;
+            float radius = aoRadius();
+#ifdef VKB_GBUFFER
+            float gbHitDist = radius;
+#endif
+            uint aoSamples = aoSampleCount();
+            if (aoSamples > 0u && (mode == MODE_LIT || mode == MODE_AO || mode == MODE_REFLECTION || mode == MODE_GI)) {
+                vec3 tangent;
+                vec3 bitangent;
+                basisAround(s.ng, tangent, bitangent);
+                uint aoSeed = uint(p.x) * 1973u + uint(p.y) * 9277u + pc.frame * 26699u + 1u;
+                float open = 0.0;
+                for (uint i = 0u; i < aoSamples; i++) {
+                    vec3 h = cosineHemisphere(hasFlag(FLAG_LOWDISC) ? noise2D(p, pc.frame, i, aoSamples, 1u) : vec2(rand01(aoSeed), rand01(aoSeed)));
+                    vec3 d = tangent * h.x + bitangent * h.y + s.ng * h.z;
+#ifdef VKB_GBUFFER
+                    // Only the first ray reports its hit distance to the denoiser (closest hit); the others need a yes/no
+                    // answer, which a terminate-on-first-hit query gives for a fraction of the traversal cost.
+                    if (i == 0u) {
+                        float aoT = traceDist(o, d, radius);
+                        open += aoT >= radius ? 1.0 : 0.0;
+                        gbHitDist = aoT;
+                    } else {
+                        open += traceVisibility(o, d, radius);
+                    }
+#else
+                    open += traceVisibility(o, d, radius);
+#endif
+                }
+                ao = open / float(aoSamples);
+            }
+            ao *= s.mapAo;
+            if (mode == MODE_SHADOW) {
+                color = vec3(vis);
+            } else if (mode == MODE_AO) {
+                color = vec3(ao);
+            } else {
+                float day = pc.keyDir.w;
+                // Block light only through the emitter list: emissiveRays() NEE samples (RIS over the emitters, one visibility
+                // ray each). No baked vanilla block light (vertex light.x) is mixed in anywhere.
+                vec3 emissiveLight = vec3(0.0);
+                if (hasFlag(FLAG_EMISSIVE) && hasFlag(FLAG_MATERIALS) && emitterCount() > 0u) {
+                    uint n = emissiveRays();
+                    float reach = emissiveDistance();
+                    for (uint i = 0u; i < n; i++) {
+                        emissiveLight += sampleEmitters(s, vec3(1.0), reach, seed);
+                    }
+                    emissiveLight /= float(n);
+                }
+                // Indirect light: traced sky light (cosine rays towards the sky) with contact AO, or one traced bounce (GI).
+                vec3 indirect;
+                if (hasFlag(FLAG_GI)) {
+                    uint n = giRays();
+                    float reach = giDistance();
+                    vec3 gi = vec3(0.0);
+                    for (uint i = 0u; i < n; i++) {
+                        vec3 d = hasFlag(FLAG_LOWDISC) ? cosineAroundU(s.ns, noise2D(p, pc.frame, i, n, 2u)) : cosineAround(s.ns, seed);
+                        if (dot(d, s.ng) < 0.015) {
+                            d = normalize(d + s.ng * 0.03);
+                        }
+                        Surface r;
+                        vec3 fCol;
+                        gi += traceSecondary(o, d, reach, seed, r, fCol) ? fCol * shadeSecondary(r, d) : fCol * skyRadiance(d);
+                    }
+                    // estimator of the Lambert-reflected bounce light: albedo * mean(L); AO of the map texture only
+                    float skyVis = clamp(s.light.y, 0.0, 1.0);
+                    vec3 canopyFill = hemisphereAmbient(s.ns.y, day) * (0.26 * skyVis * skyVis);
+                    indirect = (gi / float(n) + canopyFill) * s.mapAo;
+                } else {
+                    uint skySeed = pcgHash(uint(p.x) * 2654435761u + uint(p.y) * 40503u + pc.frame * 48271u + 5u);
+                    indirect = applyBakedSky(tracedSkyLight(s, max(aoSamples, 1u), skySeed), s) * ao;
+                }
+                float terminator = smoothstep(0.0, 0.08, ngdotl);
+                vec3 directSun = pc.keyColor.rgb * ndotl * vis * terminator;
+                if (s.isFoliage && keyLightOn()) {
+                    float backScatter = max(dot(-s.ns, L), 0.0);
+                    if (backScatter > 0.0) {
+                        directSun += pc.keyColor.rgb * (backScatter * 0.42) * vis * vec3(1.05, 1.25, 0.75);
+                    }
+                }
+                vec3 direct = directSun + bakedBlockFill(s);
+                vec3 diffuseLight = direct + indirect + emissiveLight;
+                vec3 diffuse = s.albedoLit * diffuseLight;
+                color = (diffuse + emitted(s)) * thr;
+                // Reflections: smooth dielectrics (water, glass, polished stone) and metals.
+                vec3 refl = vec3(0.0);
+                vec3 directScale = s.metal > 0.5 ? vec3(0.15) : vec3(1.0);
+                vec3 diffK = vec3(1.0);                                  // factor of the diffuse term in the colour below
+                if (hasFlag(FLAG_REFLECTIONS) && (s.metal > 0.5 || s.roughness < 0.6)) {
+                    float cosV = max(dot(-rayDir, s.ns), 0.0);
+                    float baseF0 = s.metal > 0.5 ? 1.0 : s.f0;
+                    vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(baseF0);
+                    vec3 F = fresnelSchlick(f0, cosV);
+                    float spread = s.roughness * s.roughness;
+                    uint n = spread > 0.001 ? reflectionRays() : 1u;
+                    vec3 incoming = vec3(0.0);
+                    for (uint i = 0u; i < n; i++) {
+                        vec3 rdir = reflect(rayDir, s.ns);
+                        if (spread > 0.001) {
+                            rdir = hasFlag(FLAG_LOWDISC) ? coneAroundU(rdir, spread, noise2D(p, pc.frame, i, n, 3u)) : coneAround(rdir, spread, seed);
+                        }
+                        rdir = bendHorizon(rdir, s.ng);
+                        Surface r;
+                        vec3 fCol;
+                        incoming += traceSecondary(o, rdir, rayDistance(), seed, r, fCol)
+                            ? fCol * shadeReflectionHit(r, rdir, hasFlag(FLAG_SHADOWS))
+                            : fCol * (spread < 0.05 ? skyAt(rdir) : skyRadiance(rdir));
+                    }
+                    incoming /= float(n);
+                    float gloss = 1.0 - s.roughness;
+                    refl = incoming * F * gloss;
+                    // Specular sun highlight with Cook-Torrance GGX microfacet BRDF
+                    if (keyLightOn() && ndotl > 0.0 && length(vis) > 0.001) {
+                        vec3 V = -rayDir;
+                        vec3 specGGX = brdfSpecularGGX(s.ns, V, L, max(s.roughness, 0.04), f0);
+                        refl += pc.keyColor.rgb * vis * specGGX * ndotl;
+                    }
+                    if (s.metal > 0.5) {
+                        diffK = vec3(0.15);
+                        color = (diffuse * 0.15 + refl + emitted(s)) * thr;   // metals: almost no diffuse
+                    } else {
+                        directScale = 1.0 - F * gloss;
+                        diffK = directScale;
+                        color = (diffuse * directScale + refl + emitted(s)) * thr;
+                    }
+                }
+#ifdef VKB_GBUFFER
+                if (mode == MODE_LIT) {
+                    // NRD and DLSS-RR receive the effective bobbed camera pose, so IN_VIEWZ uses that same view space.
+                    float viewZ = -dot(s.pos - cameraOrigin(), bobCameraForward());
+                    imageStore(gbViewZ, p, vec4(viewZ, 0.0, 0.0, 0.0));
+                    vec3 nOut = hasFlag(FLAG_GEOMETRIC_NORMALS) ? s.ng : s.ns;
+                    vec3 n = length(nOut) > 1.0e-4 ? normalize(nOut) : vec3(0.0, 0.0, 1.0);
+                    float r = clamp(s.roughness, 0.0, 1.0);
+                    imageStore(gbNormalRough, p, vec4(n, r));
+                    imageStore(gbDiffuse, p, vec4(indirect + emissiveLight, gbHitDist));
+                    imageStore(gbAlbedo, p, vec4(clamp(s.albedoLit, 0.0, 1.0), 1.0));
+                    vec3 directOut = (s.albedoLit * direct * directScale + refl + emitted(s)) * thr + glassRefl;
+                    imageStore(gbDirect, p, vec4(directOut, 0.0));
+                }
+#endif
+                if (mode == MODE_REFLECTION) {
+                    color = refl * thr;
+                } else if (mode == MODE_GI) {
+                    color = s.albedoLit * indirect * thr;
+                }
+                if (mode == MODE_LIT) {
+                    // When hard shadows or temporal upscaler jitter are active, keep directSun in the unfiltered rAcc channel
+                    // so the 17x17 a-trous spatial filter and low-res temporal reprojection do not blur or wobble shadow edges.
+                    bool keepSunSharp = !hasFlag(FLAG_SOFT_SHADOWS) || (dot(camJitter, camJitter) > 1.0e-10);
+                    vec3 filteredDiff = keepSunSharp ? (bakedBlockFill(s) + indirect + emissiveLight) : diffuseLight;
+                    diffE = filteredDiff * diffK * thr;
+                }
+                tonemapped = true;
+            }
+        }
+    } else {
+#ifdef VKB_GBUFFER
+        if (mode == MODE_LIT) {
+            imageStore(gbViewZ, p, vec4(1.0e6, 0.0, 0.0, 0.0));   // beyond CommonSettings.denoisingRange: NRD ignores the pixel
+            imageStore(gbNormalRough, p, vec4(0.0, 0.0, 1.0, 1.0));
+            imageStore(gbDiffuse, p, vec4(0.0));
+            imageStore(gbAlbedo, p, vec4(0.0));
+            imageStore(gbDirect, p, vec4(0.0));
+        }
+#endif
+    }
+    if (mode == MODE_LIT) {
+        if (!hit) {
+            color *= thr;                // sky seen through glass / water keeps their tint and (1 - F)
+        }
+        color += glassRefl;              // mirror reflections of the interfaces in front (deterministic)
+    }
+    // distance fog / god rays are linear: out = T * color + A (rt_common.glsl atmosphereTransmittance)
+    float atmT = 1.0;
+    vec3 atmA = vec3(0.0);
+    gSectionFade = hit ? sectionFade(s.slot) : 0.0;
+    if (mode == MODE_LIT || mode == MODE_REFLECTION || mode == MODE_GI || mode == MODE_ALBEDO || !hit) {
+        atmA = applyVolumetricAtmosphere(vec3(0.0), vec3(0.0), dir, hit ? s.t : 1.0e6, hit);
+        atmT = atmosphereTransmittance(vec3(0.0), dir, hit ? s.t : 1.0e6, hit);
+    }
+    vec3 colorPre = color;
+    color = colorPre * atmT + atmA;
+    vec3 mean = color;
+    if (sawWater) {
+        gHistoryLimit = 8.0;   // moving waves: a long history would freeze the animation into a smear
+    }
+#ifdef VKB_ACCUM
+    if (hasFlag(FLAG_ACCUMULATE)) {
+        // two signals: diffuse irradiance (remodulated with this frame's albedo) and the rest (reflections, emission, fog, glass)
+        bool split = hit && hasFlag(FLAG_DEMODULATE) && mode == MODE_LIT && tonemapped;
+        vec3 eAcc = split ? diffE * atmT : vec3(0.0);
+        vec3 alb = split ? s.albedoLit : vec3(1.0);
+        vec3 rAcc = split ? max(colorPre - alb * diffE, vec3(0.0)) * atmT + atmA : color;
+        bool hasJitter = (dot(camJitter, camJitter) > 1.0e-10);
+        if (hasJitter && split) {
+            // Temporal upscaler (DLSS/FSR/XeSS) reconstructs subpixel detail at native resolution; do not average rAcc across
+            // low-res jittered frames before the upscaler runs, or sharp edges/shadows/reflections smear into a box blur.
+            mean = temporalAccumulate(p, size, eAcc, vec3(0.0), hit, hit ? s.pos : vec3(0.0), hit ? s.ng : vec3(0.0), hit ? s.t : 0.0,
+                alb, split) + rAcc;
+            int cur = int(pc.frame & 1u);
+            imageStore(accumImage, ivec2(p.x, p.y + (7 + cur) * size.y), vec4(rAcc, 0.0));
+        } else {
+            mean = temporalAccumulate(p, size, eAcc, rAcc, hit, hit ? s.pos : vec3(0.0), hit ? s.ng : vec3(0.0), hit ? s.t : 0.0,
+                alb, split);
+        }
+    }
+#endif
+    countSample(p, hit);
+    imageStore(outDepth, p, vec4(hadFirst ? firstDist : (hit ? s.t : 1.0e6), 0.0, 0.0, 0.0));
+    imageStore(outImage, p, vec4(clamp(tonemapped ? finishColor(mean) : mean, 0.0, 1.0), 1.0));
+}

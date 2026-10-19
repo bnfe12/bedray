@@ -1,0 +1,18 @@
+Third-party notice: nvpro-samples/vk_denoise_nrd
+
+Files in this directory (nrd_wrapper.cpp, nrd_wrapper.hpp, LICENSE) are UNMODIFIED copies from
+  https://github.com/nvpro-samples/vk_denoise_nrd
+  commit 67f28c7c6a7bd2495bd6382dac8cffbf85673858 (RealtimeDenoiser/src/, LICENSE)
+Copyright (c) 2024-2025 NVIDIA CORPORATION. Licensed under the Apache License, Version 2.0 (see LICENSE).
+They are kept for attribution and as the reference for our adaptation; they are not compiled.
+
+Derived work: ../../src/vkb_nrd.cpp is adapted from nrd_wrapper.cpp / nrd_wrapper.hpp. Changes (Apache-2.0 section 4(b)):
+  - removed the nvpro_core2 / nvvk dependency (raw Vulkan helpers instead);
+  - VK_KHR_push_descriptor replaced by descriptor-set pools (one pool per frame slot);
+  - the empty image-barrier list of denoise()/dispatch() replaced by a global memory barrier between dispatches;
+  - assert() replaced by explicit error returns; flat C API (include/vkb_nrd.h) added;
+  - NRD is loaded at runtime from a user-supplied NRD.dll (no static linking, nothing from NRD is embedded);
+  - added SIGMA_SHADOW support and a dynamic-offset constant buffer.
+
+NRD itself (NVIDIA Real-Time Denoisers) is NOT part of this repository and is covered by the NVIDIA RTX SDKs LICENSE;
+see docs/LICENSING.md.

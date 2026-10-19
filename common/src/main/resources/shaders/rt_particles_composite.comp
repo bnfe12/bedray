@@ -1,0 +1,37 @@
+#version 460
+
+// Particle layer composite: lays the vanilla particle layer (drawn by the game itself into its own colour target, depth tested
+// against the world depth of the raster pass) over the final ray traced image.
+//
+// The layer is cleared to (0,0,0,0) and the game's particle pipelines blend into it with their own blend functions, so a pixel
+// holds premultiplied colour (translucent particles: src.rgb * src.a, opaque / cutout particles: rgb with alpha 1) and the
+// coverage in alpha. The ray traced image is tone mapped RGBA8 in the same display space as the vanilla colour, so the
+// "over" operator needs no conversion:
+//     out.rgb = layer.rgb + rt.rgb * (1 - layer.a)
+// rt_output keeps its alpha. Runs in place on rt_output between the denoiser and bloom / god rays (flames and magic bloom).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D particleLayer;
+layout(set = 0, binding = 1, rgba8) uniform image2D rtImage;
+
+layout(push_constant) uniform PC {
+    uvec2 size;
+    float strength;   // 1.0 = vanilla particle colour; < 1 dims the layer (debug / future lighting hook)
+    float pad;
+} pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.size.x) || p.y >= int(pc.size.y)) {
+        return;
+    }
+    vec4 layer = texelFetch(particleLayer, p, 0);
+    if (layer.a <= 0.0 && dot(layer.rgb, vec3(1.0)) <= 0.0) {
+        return; // untouched pixel: no read / write of the RT image
+    }
+    vec4 rt = imageLoad(rtImage, p);
+    float a = clamp(layer.a, 0.0, 1.0);
+    vec3 outRgb = layer.rgb * pc.strength + rt.rgb * (1.0 - a);
+    imageStore(rtImage, p, vec4(clamp(outRgb, 0.0, 1.0), rt.a));
+}

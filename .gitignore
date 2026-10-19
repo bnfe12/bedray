@@ -1,0 +1,45 @@
+.gradle/
+build/
+bin/
+out/
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+run/
+
+# Proprietary / binary artefacts are never committed (docs/LICENSING in the RTX repo, project rules)
+libs/
+/vulkan_rtx/
+.vulkan_rtx_cache/
+/bedray/
+/.bedray_cache/
+local.properties
+*.log
+*.dll
+*.exe
+*.lib
+*.pdb
+*.obj
+*.jar
+# the Gradle wrapper jar is the only jar that is committed
+!gradle/wrapper/gradle-wrapper.jar
+
+testpacks/
+!common/src/test/resources/testpacks/
+
+# native/*_bridge: sources only. No binaries, NGX/XeSS/FSR SDKs, or NRD sources/binaries (see docs/LICENSING.md)
+native/**/build/
+*.ilk
+*.exp
+*.so
+*.dylib
+logs/
+**/sdk/
+*.nupkg
+*.zip
+/config/
+common/config/

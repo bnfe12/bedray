@@ -1,0 +1,69 @@
+apply from: rootProject.file('gradle/loader-module.gradle')
+
+// Toolchain decision: plain java-library + compileOnly of the launcher's
+// fabric-loader jar instead of Fabric Loom (MC 26.x is unobfuscated, nothing to remap; the test instance is a launcher instance).
+base {
+    archivesName = "${rootProject.artifact_base}-fabric-mc${rootProject.fabric_minecraft_range}"
+}
+
+dependencies {
+    compileOnly project(':common')
+    compileOnly project(':core')
+
+    def fabricLibs = [
+        "${rootProject.fabric_libs_dir}/fabric-loader/${rootProject.fabric_loader_version}/fabric-loader-${rootProject.fabric_loader_version}.jar"
+    ]
+    def missingFabricLibs = fabricLibs.findAll { !file(it).isFile() }
+    if (!missingFabricLibs.isEmpty()) {
+        throw new GradleException("Fabric launcher jars not found (set BEDRAY_LAUNCHER_LIBRARIES or fabric_libs_dir, see docs/BUILDING.md): " + missingFabricLibs.join(", "))
+    }
+    compileOnly files(fabricLibs)
+}
+
+// Mod id of the older separate build of the platform layer, declared as breaking (two copies of one code must never load).
+def oldCoreModId = 'vulkan_' + 'bridge'
+
+processResources {
+    inputs.property 'mod_id', rootProject.mod_id
+    inputs.property 'mod_name', rootProject.mod_name
+    inputs.property 'mod_version', rootProject.mod_version
+    inputs.property 'mod_description', rootProject.mod_description
+    inputs.property 'fabric_minecraft_range', rootProject.fabric_minecraft_range
+    inputs.property 'fabric_loader_version', rootProject.fabric_loader_version
+    inputs.property 'old_core_mod_id', oldCoreModId
+
+    filesMatching(['fabric.mod.json']) {
+        expand(
+            'mod_id': rootProject.mod_id,
+            'mod_name': rootProject.mod_name,
+            'mod_version': rootProject.mod_version,
+            'mod_description': rootProject.mod_description,
+            'fabric_minecraft_range': rootProject.fabric_minecraft_range,
+            'fabric_loader_version': rootProject.fabric_loader_version,
+            'old_core_mod_id': oldCoreModId
+        )
+    }
+}
+
+jar {
+    bundleCommon(it)
+    manifest {
+        attributes([
+            'Specification-Title'     : rootProject.mod_name,
+            'Specification-Vendor'    : 'bnfe12',
+            'Specification-Version'   : '1',
+            'Implementation-Title'    : "${rootProject.artifact_base}-fabric",
+            'Implementation-Version'  : rootProject.mod_version,
+            'Implementation-Vendor'   : 'bnfe12'
+        ])
+    }
+}
+
+publishing {
+    publications {
+        create('mavenJava', MavenPublication) {
+            from components.java
+            artifactId = "${rootProject.artifact_base}-fabric"
+        }
+    }
+}

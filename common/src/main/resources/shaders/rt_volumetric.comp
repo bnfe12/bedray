@@ -1,0 +1,209 @@
+#version 460
+// Volumetric light shafts ("god rays") of the key light (sun / moon) as a post pass after the denoiser (RtVolumetricPass).
+// Compiled with VKB_POST, VKB_ACCUM and VOL_STAGE:
+//  VOL_STAGE 0  half resolution: ray marches the view ray up to the primary hit (or the shaft range on sky pixels), one shadow
+//               ray (traceVisibility: TLAS, cutout leaves alpha-tested) per step, single scattering with a two lobe
+//               Henyey-Greenstein phase, jittered steps (interleaved gradient noise + per frame golden ratio offset), then
+//               reprojected temporal accumulation (history = same image, rows [(1-cur)*hh, +hh), disocclusion by hit distance).
+//  VOL_STAGE 1  full resolution: depth aware bilateral upsample of the accumulated scattering and addition to the final image.
+//
+// Image layout of the accumulation image (binding 11, RGBA32F, hw x 2*hh, hw = ceil(W/2), hh = ceil(H/2)):
+//   rows [cur*hh, +hh) : rgb scattered radiance (before the exposure, same units as the surface radiance), a = shaft range used
+//   rows [prv*hh, +hh) : the same of the previous frame; cur = frame & 1.
+//
+// Because the final image is already tone mapped (RGBA8), the addition is done in scene space: tonemapInverse() -> add -> tonemapColor()
+// and only the DIFFERENCE is added to the stored colour (so a pixel without scattering is bit identical and the emission /
+// highlights are never re-quantised). The shaft is therefore compressed by the same shoulder as the rest of the image.
+//
+// Push constants are the RtFrameParams of the frame, with the fields of the post pass overridden (see RtVolumetricPass):
+//   skyColor.x = strength, skyColor.y = shaft range (blocks), skyColor.z = unused
+//   params2() bits 0-7 = ray march steps, bit 8 = history valid
+#include "rt_common.glsl"
+
+const float SIGMA_S = 0.012;            // scattering per block at full density (Bedrock air: 0.006), x fogDensity x height profile
+
+float gradientNoise(vec2 p, uint f) {
+    // Jimenez 2014 interleaved gradient noise, shifted by a golden ratio sequence per frame
+    p += 5.588238 * float(f & 63u);
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+
+float volStrength() { return pc.skyColor.x; }
+float volRange() { return max(pc.skyColor.y, 8.0); }
+uint volSteps() { return clamp(params2() & 255u, 2u, 48u); }
+bool volHistoryValid() { return ((params2() >> 8u) & 1u) != 0u; }
+
+// Phase of the air: forward Mie lobe (g 0.75, Bedrock default for air) plus a weak back lobe, so the haze does not vanish when looking away
+float volPhase(float cosTheta, float dark) {
+    float hg = mix(phaseHenyeyGreenstein(cosTheta, 0.78), phaseHenyeyGreenstein(cosTheta, -0.25), 0.12);
+    // dark places: subtle isotropic boost so shafts remain readable from the side without washing out the screen
+    return mix(hg, 0.0795775, 0.18 * dark);
+}
+
+// Density multiplier of the weather and the time of day: thicker air in rain and with a low sun (long optical path, Bedrock RTX
+// raises its fog at sunrise / sunset in the same way)
+float volWeather(float keyY) {
+    float rain = clamp(1.0 - StatsBuf(pc.statsAddr).skyMisc.w, 0.0, 1.0);
+    float lowSun = 1.0 - smoothstep(0.0, 0.45, keyY);
+    return (1.0 + 1.2 * lowSun) * (1.0 + 1.4 * rain);
+}
+
+#if VOL_STAGE == 0
+void main() {
+    ivec2 full = imageSize(outImage);
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 half_ = ivec2(imageSize(accumImage).x, imageSize(accumImage).y / 2);
+    if (q.x >= half_.x || q.y >= half_.y) {
+        return;
+    }
+    int hh = half_.y;
+    int cur = int(pc.frame & 1u);
+    int prv = cur ^ 1;
+    StatsBuf sb = StatsBuf(pc.statsAddr);
+
+    // one of the four full resolution pixels of the 2x2 block per frame (rotating), so the accumulation sees all hit distances
+    uint cell = uint(q.x + q.y) + pc.frame;
+    ivec2 pf = min(q * 2 + ivec2(int(cell & 1u), int((cell >> 1u) & 1u)), full - 1);
+    float depth = imageLoad(outDepth, pf).x;
+    if (isnan(depth) || depth <= 0.0) {
+        depth = 1.0e6;
+    }
+    float range = volRange();
+    float tEnd = min(depth, range);
+    vec3 ro = cameraOrigin();
+    vec3 dir = cameraRay(pf, full, vec2(0.5) + getCameraJitter());
+
+    vec3 L = pc.keyDir.xyz;
+    vec3 Lc = pc.keyColor.rgb;
+    vec3 scatter = vec3(0.0);
+    // Gentle adaptation in dark rooms/forests without exploding volumetric fog density by 26x under tree shade
+    float expo = hasFlag(FLAG_AUTO_EXPOSURE) ? sb.exposure : 1.1;
+    float dark = isnan(expo) ? 0.0 : smoothstep(1.8, 4.0, expo);
+    float densMul = sb.fogDensity * volWeather(L.y) * (1.0 + 2.2 * dark);
+    if (max(Lc.r, max(Lc.g, Lc.b)) > 1.0e-4 && L.y > -0.02 && tEnd > 0.5 && densMul > 0.0) {
+        uint n = volSteps();
+        float dt = tEnd / float(n);
+        float jitter = gradientNoise(vec2(pf), pc.frame);
+        float trans = 1.0;
+        float acc = 0.0;
+        for (uint i = 0u; i < n; i++) {
+            float t = (float(i) + jitter) * dt;
+            vec3 p = ro + dir * t;
+            float dens = SIGMA_S * densMul * fogHeightProfile(sb.skyCamY + p.y);
+            trans *= exp(-dens * dt);
+            if (dens > 1.0e-5) {
+                acc += traceVisibility(p, L, 512.0) * dens * trans * dt;
+            }
+        }
+        // 4 pi x 0.25 = pi: same normalisation as the former in-shader god rays (applyVolumetricAtmosphere), so the settings keep their look
+        scatter = Lc * (acc * volPhase(dot(dir, L), dark) * PI) * sb.fogInscattering * volStrength();
+    }
+    if (isnan(scatter.r) || isnan(scatter.g) || isnan(scatter.b) || isinf(scatter.r) || isinf(scatter.g) || isinf(scatter.b)) {
+        scatter = vec3(0.0);
+    }
+
+    // temporal accumulation: reproject the end point of the ray into the previous frame, 4 bilinear taps validated by the shaft range
+    float alpha = 1.0;
+    vec3 hist = vec3(0.0);
+    if (volHistoryValid()) {
+        vec3 pos = ro + dir * tEnd;
+        vec2 pix = vec2(q);
+        bool ok = true;
+        if (sb.camDelta.w != 0.0) {
+            vec4 clip = sb.prevViewProj * vec4(pos + sb.camDelta.xyz, 1.0);
+            if (clip.w > 1.0e-4) {
+                vec2 ndc = clip.xy / clip.w;
+                if (((pc.modeBits >> 16u) & 1u) != 0u) {
+                    ndc.y = -ndc.y;
+                }
+                pix = (ndc * 0.5 + 0.5) * vec2(full) * 0.5 - 0.5;   // half resolution texel units, centres at integers
+            } else {
+                ok = false;
+            }
+        }
+        if (ok) {
+            vec2 f = fract(pix);
+            ivec2 b = ivec2(floor(pix));
+            float wSum = 0.0;
+            for (int j = 0; j < 4; j++) {
+                ivec2 o = ivec2(j & 1, j >> 1);
+                ivec2 t = b + o;
+                if (t.x < 0 || t.y < 0 || t.x >= half_.x || t.y >= half_.y) {
+                    continue;
+                }
+                float w = (o.x == 0 ? 1.0 - f.x : f.x) * (o.y == 0 ? 1.0 - f.y : f.y);
+                vec4 h = imageLoad(accumImage, ivec2(t.x, t.y + prv * hh));
+                float tol = 0.08 * tEnd + 0.4;
+                if (abs(h.a - tEnd) > tol) {
+                    continue;
+                }
+                hist += h.rgb * w;
+                wSum += w;
+            }
+            if (wSum > 0.25) {
+                hist /= wSum;
+                alpha = 0.10;
+            }
+        }
+    }
+    vec3 outScatter = mix(hist, scatter, alpha);
+    imageStore(accumImage, ivec2(q.x, q.y + cur * hh), vec4(outScatter, tEnd));
+}
+#else
+void main() {
+    ivec2 full = imageSize(outImage);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= full.x || p.y >= full.y) {
+        return;
+    }
+    ivec2 half_ = ivec2(imageSize(accumImage).x, imageSize(accumImage).y / 2);
+    int hh = half_.y;
+    int cur = int(pc.frame & 1u);
+    float depth = imageLoad(outDepth, p).x;
+    if (isnan(depth) || depth <= 0.0) {
+        depth = 1.0e6;
+    }
+    float tEnd = min(depth, volRange());
+    if (tEnd <= 0.5) {
+        return;
+    }
+    // bilateral upsample: bilinear weights x similarity of the shaft range
+    vec2 hp = (vec2(p) + 0.5) * 0.5 - 0.5;
+    ivec2 b = ivec2(floor(hp));
+    vec2 f = fract(hp);
+    vec3 sum = vec3(0.0);
+    float wSum = 0.0;
+    vec3 nearest = vec3(0.0);
+    float nearestDiff = 1.0e9;
+    for (int j = 0; j < 4; j++) {
+        ivec2 o = ivec2(j & 1, j >> 1);
+        ivec2 t = clamp(b + o, ivec2(0), half_ - 1);
+        vec4 h = imageLoad(accumImage, ivec2(t.x, t.y + cur * hh));
+        float diff = abs(h.a - tEnd);
+        float w = (o.x == 0 ? 1.0 - f.x : f.x) * (o.y == 0 ? 1.0 - f.y : f.y) * exp(-diff / (0.06 * tEnd + 0.25));
+        sum += h.rgb * w;
+        wSum += w;
+        if (diff < nearestDiff) {
+            nearestDiff = diff;
+            nearest = h.rgb;
+        }
+    }
+    vec3 scatter = wSum > 1.0e-3 ? sum / wSum : nearest;
+    if (max(scatter.r, max(scatter.g, scatter.b)) <= 1.0e-5) {
+        return;
+    }
+    float exposure = StatsBuf(pc.statsAddr).exposure;
+    if (isnan(exposure) || isinf(exposure) || exposure <= 0.0) {
+        exposure = 1.1;
+    }
+    vec4 c = imageLoad(outImage, p);
+    vec3 delta;
+    if (((pc.modeBits >> 17u) & 1u) != 0u) {
+        vec3 lin = tonemapInverse(c.rgb);
+        delta = tonemapColor(lin + scatter * exposure) - tonemapColor(lin);
+    } else {
+        delta = scatter * exposure;   // image without tone mapping (-Dvkbridge.rt.tonemap=none)
+    }
+    imageStore(outImage, p, vec4(clamp(c.rgb + delta, 0.0, 1.0), c.a));
+}
+#endif

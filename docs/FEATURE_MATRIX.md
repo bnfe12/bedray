@@ -1,0 +1,90 @@
+# Feature matrix (0.1.0-alpha.1)
+
+**Bedray is an alpha. Nothing below is marked STABLE.** The statuses are based on the code and on the developer's own test runs.
+Tests were made only on **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, driver 617.42**, mostly with NeoForge. Other GPUs and
+Fabric have much less or no evidence.
+
+## Status words
+
+| Status | Meaning |
+|---|---|
+| STABLE | Proven over time and on several systems. **None in this release.** |
+| BETA | Seen working in the game by the developer; may still have bugs. |
+| EXPERIMENTAL | Implemented, expect visual errors, crashes or high cost, or little proof. |
+| NOT_IMPLEMENTED | No working code. Hidden or shown as a disabled line. |
+
+## Evidence levels
+
+| Level | Meaning |
+|---|---|
+| L0 | Code written |
+| L1 | Builds |
+| L2 | Unit-level check passes (no GPU, **not** proof the feature works in the game) |
+| L3 | The game starts and the feature initialises without a crash (log) |
+| L4 | The effect was seen: a log line or a screenshot from a real run |
+| L5 | Confirmed by the project owner |
+
+The "Evidence" column names where the level comes from (autotest log, screenshot, unit check). Levels were taken from the project's
+own test records up to October 2026 and are **not re-measured for every build**; the final alpha build is smoke-tested before release
+(see `docs/RELEASE_CHECKLIST.md`). Quality of the image (versus other upscalers, or noise levels) has not been evaluated.
+
+## Platform
+
+| Feature | Status | Level | Evidence | Requirements |
+|---|---|---|---|---|
+| Vulkan backend, NeoForge | BETA | L4 | autotest runs on RTX 5060 Ti: menu, world, inventory screenshots; a soak of about 150 s without crash (5 minutes not confirmed) | Windows, MC 26.3, Sodium 0.9.x |
+| Vulkan backend, Fabric | EXPERIMENTAL | L1 | jar builds, metadata checked; no recorded in-game run in this repository | fabric-loader 0.19.5+ |
+| NVIDIA GPUs other than RTX 5060 Ti | EXPERIMENTAL | none | not tested | |
+| AMD Radeon (RDNA 2+) | EXPERIMENTAL | none | **not tested, testers wanted** | ray query |
+| Intel Arc | EXPERIMENTAL | none | **not tested, testers wanted** | ray query |
+| Settings pages in Sodium Video Settings | BETA | L3 | page builds, upscaler selection logged; reset buttons and collapsible sections seen in game | Sodium 0.9.x |
+| F3 "Bedray" sections (overview, load, quality, libraries; timing and diagnostics off by default), real and generated FPS | BETA | L3 | present in autotest runs | |
+| Settings file `config/bedray.toml`, migration from the old name | BETA | L2 | unit check for migration; round trip checked in tests | |
+
+## Upscalers
+
+| Feature | Status | Level | Evidence | Requirements |
+|---|---|---|---|---|
+| Bilinear + 3D Scale | BETA | L4 | `world_target=640x360 main=1280x720` and screenshot at 50% | none |
+| FSR 1 (built-in) | EXPERIMENTAL | L2 | shaders compile in tests; no recorded in-game image check | none |
+| NIS (built-in) | EXPERIMENTAL | L2 | same | none |
+| FSR 3.1 / 2.x | BETA | L4 | autotest PASS: `fsr=dispatch ok`, all quality modes, version switch, runtime switch, screenshots | release jar includes official `amd_fidelityfx_vk.dll`; only tested on NVIDIA |
+| XeSS | BETA | L4 | `xess=dispatch ok ... input=854x480 output=1280x720`; quality vs other upscalers not assessed | release jar includes `libxess.dll`; only tested on NVIDIA |
+| DLSS Super Resolution | BETA | L4 | `ngx_init code=0`, dispatch ok; also with ray tracing (`temporal_upscaler active=true backend=DLSS`) | NVIDIA RTX, `nvngx_dlss.dll`, self-built `vkb_dlss.dll` |
+| Runtime switching of upscaler / mode | BETA | L4 for FSR (autotest `upscaler_switch`), L2 for others | log `upscaler_reconfigure ... phase=done` | |
+| Texture LOD bias with upscaling | BETA | L2 | unit checks | |
+| DLSS frame generation (2x, 3x, 4x) | BETA | L4 (developer run, no recorded benchmark in the repository) | status "Active" requires presented = multiplier x rendered for 30 frames; F3 shows real and generated FPS | RTX 40/50, Streamline files, restart |
+| NVIDIA Reflex | BETA | L4 (developer run) | same | Streamline files |
+| DLSS SR / Ray Reconstruction through Streamline plugins (when frame generation is on) | BETA | L3 | code path in `vkb_sl.dll`; reported working by the developer | Streamline plugins, self-built `vkb_sl.dll` |
+| AMD FSR frame generation | NOT_IMPLEMENTED | L0 | design notes only | |
+| FSR 4 | NOT_IMPLEMENTED | | not available on Vulkan | |
+| DLSS 5 / neural rendering | NOT_IMPLEMENTED | | disabled line in the settings page | |
+
+## Ray tracing
+
+| Feature | Status | Level | Evidence | Requirements |
+|---|---|---|---|---|
+| Chunk geometry capture, acceleration structures | BETA | L4 | `blas built=... tlas instances=... failed=0`, screenshots | ray query |
+| Ray Tracing (Fast) mode (simplified: shadows, soft sun/moon, AO, reflections, block light, basic 1-bounce GI) | IN DEVELOPMENT, hidden in the release UI (`experimental_rays`) | L4 | mode logs, screenshots of test scenes | ray query |
+| Path Tracing mode (recommended; main quality mode: GI, bounces, accumulation, auto exposure) | EXPERIMENTAL, available | L4 | accumulated frames logged, screenshots | ray query |
+| AO / Direct modes | IN DEVELOPMENT, hidden | L2 | only with `experimental_rays`; less tested | ray query |
+| LabPBR `_s` / `_n`, auto PBR, auto normals | EXPERIMENTAL | L4 | `materials baked ... labpbr_s=...`, normals debug view | |
+| Emissive block light (next-event estimation) | EXPERIMENTAL | L4 | emitter log lines, night-scene screenshots | |
+| NRD denoiser for Path Tracing | EXPERIMENTAL | L4 for diffuse light | `denoiser_ready mode=nrd_reblur`; reflections are still blurred (no specular input) | `NRD.dll` + `vkb_nrd.dll` |
+| DLSS Ray Reconstruction | EXPERIMENTAL | L5 (author) | confirmed by the owner on the RTX 5060 Ti; not re-verified on other systems | NVIDIA RTX, `nvngx_dlssd.dll` |
+| Accumulation-only fallback (no denoiser library) | BETA | L4 | used when libraries are missing | |
+| Volumetric / distance fog | EXPERIMENTAL | L2 | | |
+| Entities, items, hand in the traced scene | EXPERIMENTAL | L1 | code and unit checks only; no recorded in-game image check | |
+| Particles in the traced scene | EXPERIMENTAL | L1 | partial; particles may not cast shadows or appear in reflections | |
+| Water and glass | EXPERIMENTAL | L4 | thin-surface model: reflection and tint, no refraction | |
+| Animated block textures in materials | EXPERIMENTAL | L4 | only the first frame is baked | |
+| RT debug buffers | EXPERIMENTAL | L4 | normals, depth, albedo views | |
+
+## Not included
+
+| Feature | Status | Notes |
+|---|---|---|
+| Iris / "Dirt RT" shader-pack host | NOT_IMPLEMENTED | scaffold only; its F3 line is hidden unless a Dirt RT pack is selected |
+| Linux, macOS | NOT_IMPLEMENTED | Windows only |
+
+This table is updated for every release. If the table and the settings page disagree, the table is wrong; please file an issue.

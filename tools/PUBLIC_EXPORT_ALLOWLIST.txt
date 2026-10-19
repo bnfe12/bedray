@@ -1,0 +1,55 @@
+# Files that are exported to the public repository. ONLY paths matching a line here are exported (allowlist, not denylist).
+# Patterns are relative to the repository root, forward slashes; "**" matches any depth, "*" matches inside one folder.
+# Lines starting with # and empty lines are ignored. Check with: powershell -File tools/public_scan.ps1
+
+# top level
+README.md
+LICENSE
+COPYING
+NOTICE
+THIRD_PARTY_NOTICES.md
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md
+PRIVACY.md
+.gitignore
+build.gradle
+settings.gradle
+gradle.properties
+gradle.properties.example
+gradlew
+gradlew.bat
+gradle/**
+
+# issue templates
+.github/ISSUE_TEMPLATE/*
+
+# user documentation (explicit list: new files are NOT exported until they are added here)
+docs/INSTALL.md
+docs/INSTALL_NATIVES_WITH_AI.md
+docs/USER_GUIDE.md
+docs/SETTINGS_AUDIT.md
+docs/SETTINGS_REFERENCE.md
+docs/UPSCALERS.md
+docs/FRAME_GENERATION.md
+docs/TROUBLESHOOTING.md
+docs/FAQ.md
+docs/KNOWN_ISSUES.md
+docs/BUILDING.md
+docs/FEATURE_MATRIX.md
+docs/TESTING.md
+docs/RELEASE_CHECKLIST.md
+docs/images/*.png
+
+# source code
+core/**
+common/**
+neoforge/**
+fabric/**
+native/**
+scripts/**
+
+# export tooling
+tools/PUBLIC_EXPORT_ALLOWLIST.txt
+tools/make_preview_assets.py
+tools/public_scan.ps1

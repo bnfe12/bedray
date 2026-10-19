@@ -1,0 +1,14 @@
+pluginManagement {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+        maven {
+            name = 'NeoForged'
+            url = 'https://maven.neoforged.net/releases'
+        }
+    }
+}
+
+rootProject.name = 'bedray'
+// core: internal platform layer ("Bedray Core"), packaged into the loader jars. common: all mod logic. neoforge / fabric: entry points.
+include 'core', 'common', 'neoforge', 'fabric'
