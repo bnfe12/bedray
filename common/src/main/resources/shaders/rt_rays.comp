@@ -251,10 +251,15 @@ void main() {
                 if (hasFlag(FLAG_EMISSIVE) && hasFlag(FLAG_MATERIALS) && emitterCount() > 0u) {
                     uint n = emissiveRays();
                     float reach = emissiveDistance();
-                    for (uint i = 0u; i < n; i++) {
-                        emissiveLight += sampleEmitters(s, vec3(1.0), reach, seed);
+                    if (StatsBuf(pc.statsAddr).reservoirAddr.x != 0u) {
+                        // ReSTIR DI: one reservoir per pixel, merging this frame's candidates with the reprojected sample.
+                        emissiveLight = sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES);
+                    } else {
+                        for (uint i = 0u; i < n; i++) {
+                            emissiveLight += sampleEmitters(s, vec3(1.0), reach, seed);
+                        }
+                        emissiveLight /= float(n);
                     }
-                    emissiveLight /= float(n);
                 }
                 // Indirect light: traced sky light (cosine rays towards the sky) with contact AO, or one traced bounce (GI).
                 vec3 indirect;

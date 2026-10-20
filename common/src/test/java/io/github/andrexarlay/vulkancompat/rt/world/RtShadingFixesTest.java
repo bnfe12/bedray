@@ -441,6 +441,47 @@ public class RtShadingFixesTest {
             "RELAX specular is read in linear RGB, REBLUR in YCoCg");
     }
 
+    /**
+     * Stage E contract: the ray pass reuses one emitter sample per pixel through a two-parity reservoir, while the path
+     * tracer keeps plain RIS. The history is validated before reuse and the world state invalidates it.
+     */
+    @Test
+    public void testRestirTemporalReuse() {
+        String common = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+
+        assertTrue(common.contains("uvec2 reservoirAddr;"), "StatsBuf publishes the reservoir buffer address");
+        assertTrue(common.contains("struct Reservoir {"), "one packed reservoir record");
+        assertTrue(common.contains("buffer ReservoirBuf { Reservoir r[]; }"), "the reservoir is a device-address buffer");
+        int resStart = common.indexOf("struct Reservoir {");
+        assertEquals(4, count(common.substring(resStart, common.indexOf("};", resStart)), "vec4 "),
+            "Reservoir is 4 x vec4 = 64 B, matching RESERVOIR_BYTES in RtFrameRenderer");
+        assertTrue(common.contains("float emitterPhat(vec3 y, float texEm, vec3 en, bool openSource, Surface s, float maxDist)"),
+            "the RIS target is shared by candidates and reused history");
+        assertTrue(common.contains("prev.leWsum.w * (mPrev / max(prev.meta.x, 1.0))"),
+            "the stored weight is scaled to the clamped sample count that is added to M (no unbounded ramp)");
+        assertTrue(common.contains("(phatHist / max(prev.enPhat.w, 1.0e-8))"),
+            "the stored RIS weight is rescaled to the current receiver");
+        assertTrue(common.contains("float mPrev = min(prev.meta.x, 20.0);"), "the history sample count is clamped");
+        assertTrue(common.contains("normalDot > (isStatic ? 0.8 : 0.6)"), "a normal mismatch rejects the history");
+        assertTrue(common.contains("abs(prev.meta.w - prevDist) < tol"), "a depth mismatch rejects the history");
+        assertTrue(common.contains("prev.yTexEm.xyz - (isStatic ? vec3(0.0) : fb.camDelta.xyz)"),
+            "a stored camera-relative sample follows the camera: camDelta = current - previous");
+        assertTrue(common.contains("(uint(prev.meta.y) & 2u)") && common.contains("(recvN.z < 0.0 ? 2 : 0)"),
+            "the sign of the receiver normal z survives the snorm packing");
+        assertTrue(count(common, "storeEmptyReservoir(writeSlot);") == 3, "no candidate, a degenerate point and no emitters all clear it");
+        assertTrue(common.contains("uint((pc.frame & 1u) ^ 1u) * pixels"), "the previous parity half is read");
+        assertTrue(common.contains("ReservoirBuf(fb.reservoirAddr).r[writeSlot] = outR;"), "the current parity half is written");
+        assertTrue(common.contains("traceTransmittance(shadowOrigin, rayDir / rayDist, rayDist)"),
+            "the reused sample still gets exactly one visibility ray");
+
+        assertTrue(rays.contains("sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES)"),
+            "the ray pass merges the history once per pixel");
+        assertEquals(0, count(path, "sampleEmittersTemporal"), "the path tracer keeps plain RIS");
+        assertEquals(0, count(path, "sampleEmittersImpl"), "the path tracer keeps plain RIS");
+    }
+
     private static int count(String haystack, String needle) {
         int n = 0;
         for (int i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {

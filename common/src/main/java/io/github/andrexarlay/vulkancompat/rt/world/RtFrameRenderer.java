@@ -65,6 +65,8 @@ public final class RtFrameRenderer {
      * view-Z guide (StatsBuf cameraBobOrigin/cameraForward).
      */
     private static final int STATS_STRIDE = 512;
+    /** Bytes per pixel of one ReSTIR parity half (Reservoir in rt_common.glsl). */
+    private static final int RESERVOIR_BYTES = 64;
     /** Rebuilt sections closer than this (squared section distance, ~2 sections) reset the path tracing accumulation. */
     static final long SCENE_CHANGE_RADIUS_SQ = 8;
 
@@ -103,6 +105,11 @@ public final class RtFrameRenderer {
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtMemory.Buf entityMotionBuf;
+    /** ReSTIR DI reservoirs of rt_rays.comp: two parity halves of 64 B per pixel (ReservoirBuf in rt_common.glsl). */
+    private static RtMemory.Buf reservoirBuf;
+    private static long reservoirPixels = -1L;
+    private static long reservoirSceneVersion = Long.MIN_VALUE;
+    private static boolean reservoirResetRequested = true;
     private static final boolean[] statsWritten = new boolean[STATS_SLOTS];
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
@@ -331,6 +338,7 @@ public final class RtFrameRenderer {
         }
         exposure.reset();
         atmosphere.resetHistory();
+        reservoirResetRequested = true;
         lastHistPct = -1.0;
     }
 
@@ -698,6 +706,44 @@ public final class RtFrameRenderer {
                 || denoiseMode.isNrd() && NRD_DENOISE_SUN) ? RtFrameParams.FLAG_SUN_DENOISED : 0)
             | (DEMODULATE ? RtFrameParams.FLAG_DEMODULATE : 0)
             | (LOW_DISC ? RtFrameParams.FLAG_LOWDISC : 0);
+        // ReSTIR DI: one reservoir per pixel, two parity halves. Only the ray pass reads it; path tracing keeps plain RIS.
+        long reservoirAddr = 0L;
+        if (pass.mode() == RtMode.RAY_TRACED && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {
+            long pixels = (long) w * h;
+            long need = pixels * 2L * RESERVOIR_BYTES;
+            boolean reset = false;
+            if (reservoirBuf == null || reservoirBuf.size < need) {
+                if (reservoirBuf != null) {
+                    VK10.vkDeviceWaitIdle(device);
+                    world.memory().destroy(reservoirBuf);
+                }
+                reservoirBuf = world.memory().createBuffer("rt_restir", need,
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                        | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+                reset = true;
+                LOGGER.info("[VKB-RT] ReSTIR reservoirs {}x{} x2 = {} KiB", w, h, need / 1024);
+            }
+            if (pixels != reservoirPixels) {
+                // A different resolution moves every pixel: the old records sit at other indices and must not be read.
+                reservoirPixels = pixels;
+                reset = true;
+            }
+            long sceneVersion = world.structureVersion();
+            if (sceneVersion != reservoirSceneVersion) {
+                reservoirSceneVersion = sceneVersion;
+                reset = true;
+            }
+            if (reservoirResetRequested) {
+                reset = true;
+                reservoirResetRequested = false;
+            }
+            reservoirAddr = reservoirBuf.address;
+            if (reset) {
+                // A removed torch must not keep contributing through a stored sample: the world changed, drop all history.
+                VK10.vkCmdFillBuffer(cmd, reservoirBuf.handle, 0L, reservoirBuf.size, 0);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
+        }
         pass.configure(params, useDenoiser);
         MemoryUtil.memPutFloat(hdr + 48, params.giDistance);
         MemoryUtil.memPutFloat(hdr + 52, params.emissiveDistance);
@@ -707,6 +753,8 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + 68, params.historyCap);
         // StatsBuf.shadowPixel: edge of a pixelated-shadow cell in blocks, 0 = the option is off
         MemoryUtil.memPutFloat(hdr + 480, pixelShadowStatsValue());
+        // StatsBuf.reservoirAddr (488): ReSTIR parity buffer of the ray pass; 0 disables temporal reuse
+        MemoryUtil.memPutLong(hdr + 488, reservoirAddr);
         // Temporal reprojection uses the full pose in both projections. Hit positions include the current bob origin, while
         // camDelta remains the raw camera-position delta; the prior full projection already carries the previous bob origin.
         curViewProj.set(frameProjection).mul(camera.viewRotationMatrix);
@@ -1285,6 +1333,9 @@ public final class RtFrameRenderer {
             if (entityMotionBuf != null) {
                 w.memory().destroy(entityMotionBuf);
             }
+            if (reservoirBuf != null) {
+                w.memory().destroy(reservoirBuf);
+            }
             w.destroy();
             LOGGER.info("[VKB-RT] world_destroyed reason={}", reason);
         } catch (RuntimeException | LinkageError e) {
@@ -1303,6 +1354,10 @@ public final class RtFrameRenderer {
             outputDepth = null;
             compositeOutput = null;
             entityMotionBuf = null;
+            reservoirBuf = null;
+            reservoirPixels = -1L;
+            reservoirSceneVersion = Long.MIN_VALUE;
+            reservoirResetRequested = true;
             statsBuf = null;
             skyTextures = null;
             outputReady = false;
