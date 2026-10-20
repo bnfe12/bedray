@@ -1315,16 +1315,16 @@ vec3 shadowLayerTransmittance(Surface s, vec3 d) {
         return vec3(1.0 - s.f0);   // exit face: tinted at the entry face
     }
     vec3 c = clamp(s.albedoLit, vec3(0.001), vec3(1.0));
-    vec3 tint = c;
     if (!s.isWater && !s.isIce) {
-        float maxC = max(c.r, max(c.g, c.b));
-        vec3 normC = c / max(maxC, 0.01);
-        tint = max(pow(normC, vec3(2.2)), vec3(0.16)) * maxC;
+        // Thin pane: Beer-Lambert absorption by the texel colour with the texel alpha as thickness, no 1/cos grazing term
+        // (the slab is thin and vanilla does not darken its shadows towards grazing). Same model as interfaceTransmittance.
+        float power = s.alpha < 0.1 ? 0.0 : clamp(s.alpha, 0.0, 1.0);
+        return (1.0 - s.f0) * pow(c, vec3(power));
     }
     float cosIncidence = max(abs(dot(s.ng, d)), 0.05);
-    float effAlpha = (s.isWater || s.isIce) ? clamp(s.alpha < 0.99 ? s.alpha : 0.65, 0.5, 0.9) : clamp(s.alpha, 0.0, 1.0);
+    float effAlpha = clamp(s.alpha < 0.99 ? s.alpha : 0.65, 0.5, 0.9);
     float power = s.alpha < 0.1 ? 0.0 : max(1.0, effAlpha * 2.0) / cosIncidence;
-    return (1.0 - s.f0) * pow(tint, vec3(power));
+    return (1.0 - s.f0) * pow(c, vec3(power));
 }
 
 // RGB transmittance along a shadow ray in ONE traversal (was: a visibility ray plus up to 8 closest-hit walks, one traversal per
@@ -1951,8 +1951,9 @@ float interfaceReflectance(Surface s, vec3 d) {
 }
 
 vec3 interfaceTransmittance(Surface s, float F) {
-    // Beer-Lambert style absorption: colour^(2 alpha). Clear glass centre (alpha 0) passes unchanged, stained glass (alpha ~0.5)
-    // filters by its full colour, water (alpha ~0.7, grey texture * biome tint from the vertex colour) gets its biome blue.
+    // Beer-Lambert style absorption: colour^thickness, the glass tint is the texel colour and its alpha the thickness (ice 1.3).
+    // Clear glass centre (alpha 0) passes unchanged, stained glass (alpha 0.4) filters by its own dye colour, water (alpha ~0.7,
+    // grey texture * biome tint from the vertex colour) keeps its biome blue.
     // Ice / blue_ice transmits tinted with its ice albedo.
     if (s.isWater && waterVolumeStyle() && isWaterBoundary(s)) {
         return vec3(1.0 - F);   // the colour of the water comes from the depth absorption of the medium (waterSegment)
@@ -1973,15 +1974,13 @@ vec3 interfaceTransmittance(Surface s, float F) {
     } else if (s.isWater) {
         // Vanilla style: the vanilla water sprite (water_still / water_flow of the live, animated block atlas) x biome tint is the
         // look of this style, as in the game; c stays the texel colour s.albedoLit
-    } else if (!s.isIce) {
-        float maxC = max(c.r, max(c.g, c.b));
-        vec3 normC = c / max(maxC, 0.01);
-        // saturate the hue but keep every channel above 0.16: deep blue / red glass tinted down to (0.03, 0.07, 1) and a few layers
-        // of it turned the room behind into black voids (owner screenshot 37, PT Quality)
-        c = max(pow(normC, vec3(2.2)), vec3(0.16)) * maxC;
     }
+    // Glass and ice: Beer-Lambert absorption by the texel colour, the texel alpha is the optical thickness. No hue remap: the
+    // texel already is the dye colour. The real 26.1 stained glass is (153,51,51) / (51,76,178) at alpha 0.4, so two blue panes
+    // keep about (0.25, 0.35, 0.69) and the room behind stays readable; the old hue saturation (normC^2.2, exponent 2 alpha)
+    // left ~1 % of red through two panes and turned the room into black / blue voids (owner screenshot 37, PT Quality).
     float effAlpha = s.isIce ? clamp(s.alpha < 0.99 ? s.alpha : 0.65, 0.0, 1.0) : clamp(s.alpha, 0.0, 1.0);
-    float power = s.alpha < 0.1 ? 0.0 : (s.isIce ? 1.3 : max(1.0, effAlpha * 2.0));
+    float power = s.alpha < 0.1 ? 0.0 : (s.isIce ? 1.3 : effAlpha);
     return (1.0 - F) * pow(c, vec3(power));
 }
 
