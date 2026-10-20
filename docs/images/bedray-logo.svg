@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Bedray</title>
+  <desc id="desc">A vanilla-style block with a warm light ray that bounces across its surface.</desc>
+  <g stroke="#26262b" stroke-width="12" stroke-linejoin="round" stroke-linecap="square">
+    <path d="M256 42 456 153 256 265 56 153Z" fill="#79a94d"/>
+    <path d="M56 153 256 265V468L56 356Z" fill="#76543b"/>
+    <path d="M456 153 256 265V468L456 356Z" fill="#68727d"/>
+  </g>
+  <g fill="#8db85a">
+    <path d="m104 122 37-21 30 17-37 21z"/>
+    <path d="m342 104 39 22-27 15-39-22z"/>
+    <path d="m200 79 28-16 21 12-28 16z"/>
+  </g>
+  <g fill="#59402f">
+    <path d="m75 196 22 12v31l-22-12z"/>
+    <path d="m158 246 22 12v31l-22-12z"/>
+    <path d="m77 313 24 13v16l-24-13z"/>
+    <path d="m184 361 24 13v20l-24-13z"/>
+  </g>
+  <g fill="#78838e">
+    <path d="m408 201 24-13v31l-24 13z"/>
+    <path d="m330 255 24-13v31l-24 13z"/>
+    <path d="m407 312 25-14v17l-25 14z"/>
+    <path d="m285 379 25-14v21l-25 14z"/>
+  </g>
+  <g fill="none" stroke="#3b3025" stroke-width="7" stroke-linecap="square">
+    <path d="m58 221 196 109M58 289l196 109"/>
+  </g>
+  <g fill="none" stroke="#424950" stroke-width="7" stroke-linecap="square">
+    <path d="m454 221-196 109M454 289l-196 109"/>
+  </g>
+  <path d="m105 107 151 84 106-59" fill="none" stroke="#f4d477" stroke-width="13" stroke-linecap="square" stroke-linejoin="miter"/>
+  <path d="m362 132 18-2-8 17" fill="none" stroke="#f4d477" stroke-width="10" stroke-linecap="square" stroke-linejoin="miter"/>
+  <rect x="247" y="181" width="18" height="18" fill="#fff0ad" stroke="#26262b" stroke-width="5"/>
+</svg>

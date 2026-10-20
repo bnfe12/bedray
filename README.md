@@ -1,6 +1,8 @@
+<p align="center"><a href="docs/images/bedray-logo.svg"><img src="docs/images/bedray-logo.png" alt="Bedray logo" width="160"></a></p>
+
 # Bedray
 
-> **ALPHA 0.1.0-alpha.1. Expect bugs, crashes, visual artifacts and a heavy GPU load.**
+> **EARLY ALPHA 0.1.0-alpha.1 — this is an evolving project, not a finished version. Major renderer, settings, configuration and compatibility changes are expected; bugs, crashes, visual artifacts and high GPU load are possible. Back up worlds/configuration and test in a separate instance. See the [roadmap](ROADMAP.md).**
 > Tested only on an **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, NVIDIA driver 617.42**. Other graphics cards have not been checked.
 > **Looking for testers with AMD Radeon (RDNA 2 or newer) and Intel Arc GPUs.** See [Help us test](#help-us-test).
 
@@ -73,6 +75,7 @@ Do it by hand with [docs/INSTALL.md](docs/INSTALL.md), or let an AI assistant do
 | [UPSCALERS](docs/UPSCALERS.md) | Which upscaler to choose |
 | [FRAME_GENERATION](docs/FRAME_GENERATION.md) | DLSS frame generation and Reflex |
 | [TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [FAQ](docs/FAQ.md), [KNOWN_ISSUES](docs/KNOWN_ISSUES.md) | When something is wrong |
+| [ROADMAP](ROADMAP.md) | Long-term plan, priorities and acceptance gates |
 | [FEATURE_MATRIX](docs/FEATURE_MATRIX.md) | Status and evidence level of every feature |
 | [TESTING](docs/TESTING.md) | How to test and report |
 | [BUILDING](docs/BUILDING.md) | Build from source |
