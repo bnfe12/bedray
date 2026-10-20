@@ -747,7 +747,7 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutLong(hdr + 216, eg.atlasAddress());
         MemoryUtil.memPutLong(hdr + 224, eg.rectAddress());
         long motionAddr = 0L;
-        if (dlssRrDenoiser != null && useDenoiser && !Boolean.getBoolean("vkrtx.entityMotion.off")) {
+        if (useDenoiser && (dlssRrDenoiser != null || denoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off")) {
             long need = (long) w * h * 16L;
             if (entityMotionBuf == null || entityMotionBuf.size < need) {
                 if (entityMotionBuf != null) {
@@ -758,7 +758,12 @@ public final class RtFrameRenderer {
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
             }
             motionAddr = entityMotionBuf.address;
-            dlssRrDenoiser.entityMotionAddress = motionAddr;
+            if (dlssRrDenoiser != null) {
+                dlssRrDenoiser.entityMotionAddress = motionAddr;
+            }
+            if (denoiser != null) {
+                denoiser.entityMotionAddress = motionAddr;
+            }
         }
         MemoryUtil.memPutLong(hdr + 232, motionAddr);
         MemoryUtil.memPutInt(hdr + 240, eg.atlasAddress() != 0L ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0);
@@ -1048,12 +1053,10 @@ public final class RtFrameRenderer {
     }
 
     /**
-     * Whether the pass of {@code mode} is built with the G-buffer: false for Ray Tracing, denoiseMode != OFF for Path Tracing.
+     * Whether the pass of {@code mode} is built with the G-buffer: true for both ray tracing and path tracing whenever a
+     * denoiser is selected (the denoiser needs the raw radiance, guide and motion channels of the G-buffer).
      */
     private static boolean wantGbuffer(RtMode mode) {
-        if (mode != RtMode.PATH_TRACED) {
-            return false;
-        }
         return denoiseMode != DenoiserMode.OFF;
     }
 

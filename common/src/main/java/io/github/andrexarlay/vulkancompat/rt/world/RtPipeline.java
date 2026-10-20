@@ -29,7 +29,7 @@ import java.util.List;
 /**
  * Compute pipeline of an RT shader ({@code rt_rays.comp}, {@code rt_path.comp}; both include {@code rt_common.glsl}).
  * Set 0: TLAS (0), output storage image RGBA8 (1), section table SSBO (2), block atlas (3), [gbuffer variant: G-buffer storage
- * images 4..8], material atlas (9), normal atlas (10), [accum variant: RGBA32F accumulation storage image (11)];
+ * images 4..8 and 13..14], material atlas (9), normal atlas (10), [accum variant: RGBA32F accumulation storage image (11)];
  * 128 bytes of push constants ({@link RtFrameParams}).
  *
  * <p>One descriptor set, rewritten only when a view changes, after {@code vkDeviceWaitIdle} (rewriting a set that in-flight
@@ -43,6 +43,12 @@ public final class RtPipeline {
     public static final String PATH_SHADER_PATH = "/shaders/rt_path.comp";
     /** Number of G-buffer storage images (bindings 4..8) of the denoiser variant: viewZ, normal+roughness, diffuse, albedo, direct. */
     public static final int GBUFFER_IMAGES = 5;
+    /** Specular radiance + hit distance of the denoiser variant (binding 13, after the material/normal/accum/depth slots). */
+    public static final int BINDING_GBUFFER_SPECULAR = 13;
+    /** Specular albedo (F0) guide of the denoiser variant (binding 14). */
+    public static final int BINDING_GBUFFER_SPEC_ALBEDO = 14;
+    /** Views the denoiser variant needs: the five contiguous images plus specular radiance and specular albedo. */
+    public static final int GBUFFER_VIEWS = GBUFFER_IMAGES + 2;
     public static final String GBUFFER_DEFINE = "#define VKB_GBUFFER 1" + (char) 10;
     public static final int BINDING_MATERIAL = 9;
     public static final int BINDING_NORMAL = 10;
@@ -104,6 +110,8 @@ public final class RtPipeline {
             for (int i = 0; i < GBUFFER_IMAGES; i++) {
                 bindings.add(new int[] {4 + i, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
             }
+            bindings.add(new int[] {BINDING_GBUFFER_SPECULAR, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
+            bindings.add(new int[] {BINDING_GBUFFER_SPEC_ALBEDO, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
         }
         bindings.add(new int[] {BINDING_MATERIAL, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER});
         bindings.add(new int[] {BINDING_NORMAL, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER});
@@ -111,7 +119,7 @@ public final class RtPipeline {
             bindings.add(new int[] {BINDING_ACCUM, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
         }
         bindings.add(new int[] {BINDING_DEPTH, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
-        int storageImages = 1 + (gbuffer ? GBUFFER_IMAGES : 0) + (accum ? 1 : 0) + 1;
+        int storageImages = 1 + (gbuffer ? GBUFFER_VIEWS : 0) + (accum ? 1 : 0) + 1;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             // Nearest, clamp, level 0 only: pixel-art look of the block atlas and exact material texels.
             VkSamplerCreateInfo samplerInfo = VkSamplerCreateInfo.calloc(stack).sType$Default()
@@ -178,8 +186,8 @@ public final class RtPipeline {
 
     /** Points the descriptor set at {@code v} (no-op when unchanged). */
     public void bind(Views v) {
-        if (gbuffer != (v.gbuffer() != null) || (v.gbuffer() != null && v.gbuffer().length != GBUFFER_IMAGES)) {
-            throw new IllegalArgumentException("gbuffer views must be given exactly for the gbuffer variant (" + GBUFFER_IMAGES + " views)");
+        if (gbuffer != (v.gbuffer() != null) || (v.gbuffer() != null && v.gbuffer().length != GBUFFER_VIEWS)) {
+            throw new IllegalArgumentException("gbuffer views must be given exactly for the gbuffer variant (" + GBUFFER_VIEWS + " views)");
         }
         if (accum != (v.accum() != 0L)) {
             throw new IllegalArgumentException("accum view must be given exactly for the accum variant");
@@ -191,7 +199,7 @@ public final class RtPipeline {
             VK10.vkDeviceWaitIdle(device); // the set may be in use by frames in flight
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            int count = 6 + (gbuffer ? GBUFFER_IMAGES : 0) + (accum ? 1 : 0) + 1;
+            int count = 6 + (gbuffer ? GBUFFER_VIEWS : 0) + (accum ? 1 : 0) + 1;
             VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(count, stack);
             int w = 0;
             VkWriteDescriptorSetAccelerationStructureKHR as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
@@ -208,6 +216,8 @@ public final class RtPipeline {
                 for (int i = 0; i < GBUFFER_IMAGES; i++) {
                     storage(writes.get(w++), stack, 4 + i, v.gbuffer()[i]);
                 }
+                storage(writes.get(w++), stack, BINDING_GBUFFER_SPECULAR, v.gbuffer()[GBUFFER_IMAGES]);
+                storage(writes.get(w++), stack, BINDING_GBUFFER_SPEC_ALBEDO, v.gbuffer()[GBUFFER_IMAGES + 1]);
             }
             sampled(writes.get(w++), stack, BINDING_MATERIAL, v.material());
             sampled(writes.get(w++), stack, BINDING_NORMAL, v.normal());

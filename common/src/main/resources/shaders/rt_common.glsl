@@ -43,9 +43,11 @@ const uint MATERIAL_SOURCE_REDSTONE = 4u;
 #ifdef VKB_GBUFFER
 layout(set = 0, binding = 4, r32f) uniform writeonly image2D gbViewZ;        // view-space Z (right-handed: negative in front), sky = +1e6
 layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D gbNormalRough; // xyz world normal facing the viewer, w linear roughness
-layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D gbDiffuse;     // rgb noisy radiance (no albedo), a hit distance in blocks
-layout(set = 0, binding = 7, rgba8) uniform writeonly image2D gbAlbedo;        // albedo used by the lit view
+layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D gbDiffuse;     // rgb noisy diffuse radiance * albedo (raw), a hit distance in blocks
+layout(set = 0, binding = 7, rgba8) uniform writeonly image2D gbAlbedo;        // rgb diffuse albedo guide (0 for metals), a = 1 on geometry
 layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D gbDirect;      // rgb noise-free term added after the denoiser
+layout(set = 0, binding = 13, rgba16f) uniform writeonly image2D gbSpecular;   // rgb noisy specular radiance, a hit distance in blocks
+layout(set = 0, binding = 14, rgba8) uniform writeonly image2D gbSpecAlbedo;   // rgb specular reflectance F0 guide (0 = no specular lobe)
 #endif
 
 // Accumulation image of the path tracer (RtPipeline accum variant, "#define VKB_ACCUM 1"): rgb running mean, a sample count.

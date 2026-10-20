@@ -1,7 +1,14 @@
 #version 460
+#extension GL_EXT_buffer_reference : require     // Vec4Buf: per-pixel world-space motion written by the ray shader
+#extension GL_EXT_buffer_reference_uvec2 : require
 // NRD input packing (VKB_PASS_PACK) and result composition (VKB_PASS_COMPOSE) for the RT lit view. One source, two pipelines:
-// RtPipeline writes the raw G-buffer (rt_rays.comp, VKB_GBUFFER); this shader converts it to the NRD formats, and after NRD
-// has run, adds the noise-free light back and writes the final RGBA8 image.
+// RtPipeline writes the raw G-buffer (rt_rays.comp / rt_path.comp, VKB_GBUFFER); this shader converts it to the denoiser
+// formats, and after the denoiser has run, adds the noise-free light back and writes the final RGBA8 image.
+//
+// Two denoisers share the pass: NRD (0 REBLUR, 1 RELAX) takes separate diffuse and specular radiance with hit distances and
+// world-space motion; DLSS-RR (2) takes one raw HDR colour, the two albedo guides and screen-space motion from the velocity
+// pass (so the pack does not touch IN_MV for it). The G-buffer channels are raw radiance (fog included): NRD is demodulated
+// by the diffuse albedo here and remodulated in compose, DLSS-RR demodulates internally.
 //
 // The numeric formats are written independently from the documentation of NVIDIA NRD 4.18 (Shaders/NRD.hlsli, functions
 // NRD_FrontEnd_PackNormalAndRoughness, _NRD_EncodeNormalRoughness101010, _NRD_LinearToYCoCg, _NRD_YCoCgToLinear,
@@ -18,22 +25,30 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, r32f) uniform readonly image2D gbViewZ;
 layout(set = 0, binding = 1, rgba16f) uniform readonly image2D gbNormalRough;
-layout(set = 0, binding = 2, rgba16f) uniform readonly image2D gbDiffuse;
+layout(set = 0, binding = 2, rgba16f) uniform readonly image2D gbDiffuse;        // raw diffuse radiance, a = hit distance
 layout(set = 0, binding = 3, rgba8) uniform readonly image2D gbAlbedo;
 layout(set = 0, binding = 4, rgba16f) uniform readonly image2D gbDirect;
-layout(set = 0, binding = 5) uniform writeonly image2D nrdInNormalRough;           // format from NRD LibraryDesc
+layout(set = 0, binding = 5) uniform writeonly image2D nrdInNormalRough;         // format from NRD LibraryDesc
 layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D nrdInDiffuse;
 layout(set = 0, binding = 7, rgba16f) uniform readonly image2D nrdOutDiffuse;
 layout(set = 0, binding = 8, rgba8) uniform writeonly image2D rtOutput;
+layout(set = 0, binding = 9, rgba16f) uniform readonly image2D gbSpecular;       // raw specular radiance, a = hit distance
+layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D nrdInSpecular;  // NRD: specular radiance; RR: specular albedo
+layout(set = 0, binding = 11, rgba16f) uniform readonly image2D nrdOutSpecular;
+layout(set = 0, binding = 12, rgba16f) uniform writeonly image2D nrdInMotion;    // NRD world-space motion (xyz)
+layout(set = 0, binding = 13, rgba8) uniform readonly image2D gbSpecAlbedo;      // F0 guide (DLSS-RR specular albedo)
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer Vec4Buf { vec4 v[]; };
 
 layout(push_constant) uniform PC {
     uint normalEncoding;     // nrd::NormalEncoding: 0 RGBA8_UNORM 1 RGBA8_SNORM 2 R10G10B10A2_UNORM 3 RGBA16_UNORM 4 RGBA16_SNORM
     uint roughnessEncoding;  // nrd::RoughnessEncoding: 0 SQ_LINEAR 1 LINEAR 2 SQRT_LINEAR
-    uint denoiser;           // 0 REBLUR, 1 RELAX
+    uint denoiser;           // 0 REBLUR, 1 RELAX, 2 DLSS-RR
     uint flags;              // bit 0 tonemap (rt_tonemap.glsl, as rt_rays.comp), bit 1 split view (left half stays raw/noisy)
     vec4 hitDist;            // x,y,z = REBLUR hit distance parameters A,B,C (must equal ReblurSettings), w = denoisingRange
     uvec2 size;
     float exposure;          // tone mapping exposure: 1.1 for the ray mode (RtLighting.EXPOSURE), the auto exposure for path tracing
+    uvec2 motionAddr;        // Vec4Buf of rt_rays.comp / rt_path.comp: xyz prev - cur world motion of the primary hit, w = entity
 } pc;
 
 const float FP16_MAX = 65504.0;
@@ -101,22 +116,55 @@ void main() {
     if (ignored) {
         imageStore(nrdInNormalRough, p, packNormalRoughness(vec3(0.0, 0.0, 1.0), 1.0));
         imageStore(nrdInDiffuse, p, vec4(0.0));
+        imageStore(nrdInSpecular, p, vec4(0.0));
+        if (pc.denoiser != 2u) {
+            imageStore(nrdInMotion, p, vec4(0.0));
+        }
         return;
     }
     vec4 nr = imageLoad(gbNormalRough, p);
     vec3 n = nr.xyz * inversesqrt(dot(nr.xyz, nr.xyz) + 1e-9);
     imageStore(nrdInNormalRough, p, packNormalRoughness(n, nr.w));
+    float roughness = clamp(nr.w, 0.0, 1.0);
 
     vec4 d = imageLoad(gbDiffuse, p);
     vec3 radiance = invalid3(d.rgb) ? vec3(0.0) : clamp(d.rgb, 0.0, FP16_MAX);
     float dist = (isnan(d.a) || isinf(d.a)) ? 0.0 : max(d.a, 0.0);
+    vec4 sd = imageLoad(gbSpecular, p);
+    vec3 specRadiance = invalid3(sd.rgb) ? vec3(0.0) : clamp(sd.rgb, 0.0, FP16_MAX);
+    float specDist = (isnan(sd.a) || isinf(sd.a)) ? 0.0 : max(sd.a, 0.0);
+
+    if (pc.denoiser == 2u) {
+        // DLSS-RR: one raw HDR colour and the two albedo guides, RR demodulates internally; its motion comes from the
+        // velocity pass, so IN_MV is left untouched here.
+        imageStore(nrdInDiffuse, p, vec4(clamp(radiance + specRadiance, 0.0, FP16_MAX), 1.0));
+        imageStore(nrdInSpecular, p, vec4(clamp(imageLoad(gbSpecAlbedo, p).rgb, 0.0, 1.0), 1.0));
+        return;
+    }
+
+    // NRD IN_MV: 3D world-space motion of the primary hit (FRAME_MV_WORLD_SPACE), zero for the static world.
+    vec3 motion = vec3(0.0);
+    if (pc.motionAddr.x != 0u || pc.motionAddr.y != 0u) {
+        vec4 m = Vec4Buf(pc.motionAddr).v[p.y * pc.size.x + p.x];
+        if (m.w > 0.5 && !(m.x > 1.0e29)) {
+            motion = m.xyz;
+        }
+    }
+    imageStore(nrdInMotion, p, vec4(motion, 0.0));
+
+    // Demodulate the raw diffuse radiance by the albedo guide: NRD smooths lighting, not texture, and compose remodulates.
+    vec3 albedo = max(imageLoad(gbAlbedo, p).rgb, vec3(0.02));
+    vec3 ambient = radiance / albedo;
     if (pc.denoiser == 0u) {
         // REBLUR_FrontEnd_PackRadianceAndNormHitDist: YCoCg radiance + normalised hit distance (diffuse: roughness 1)
         float normHit = clamp(dist / hitDistanceNormalization(viewZ, pc.hitDist.xyz, 1.0), 0.0, 1.0);
-        imageStore(nrdInDiffuse, p, vec4(linearToYCoCg(radiance), normHit));
+        imageStore(nrdInDiffuse, p, vec4(linearToYCoCg(ambient), normHit));
+        float normHitSpec = clamp(specDist / hitDistanceNormalization(viewZ, pc.hitDist.xyz, roughness), 0.0, 1.0);
+        imageStore(nrdInSpecular, p, vec4(linearToYCoCg(specRadiance), normHitSpec));
     } else {
         // RELAX_FrontEnd_PackRadianceAndHitDist: plain radiance + hit distance in world units
-        imageStore(nrdInDiffuse, p, vec4(radiance, min(dist, FP16_MAX)));
+        imageStore(nrdInDiffuse, p, vec4(ambient, min(dist, FP16_MAX)));
+        imageStore(nrdInSpecular, p, vec4(specRadiance, min(specDist, FP16_MAX)));
     }
 #else
     if (ignored) {
@@ -126,10 +174,17 @@ void main() {
         return;                                      // split view: the left half keeps the raw (noisy) RT image
     }
     vec4 den = imageLoad(nrdOutDiffuse, p);
-    vec3 ambient = pc.denoiser == 0u ? yCoCgToLinear(den.xyz) : max(den.xyz, 0.0);
-    vec3 albedo = imageLoad(gbAlbedo, p).rgb;
-    vec3 direct = imageLoad(gbDirect, p).rgb;
-    vec3 color = albedo * ambient + direct;
+    vec3 color;
+    if (pc.denoiser == 2u) {
+        color = max(den.xyz, 0.0);                   // RR output is the final radiance: direct light is already in its input
+    } else {
+        vec4 denSpec = imageLoad(nrdOutSpecular, p);
+        vec3 ambient = pc.denoiser == 0u ? yCoCgToLinear(den.xyz) : max(den.xyz, 0.0);
+        vec3 specular = pc.denoiser == 0u ? yCoCgToLinear(denSpec.xyz) : max(denSpec.xyz, 0.0);
+        vec3 albedo = imageLoad(gbAlbedo, p).rgb;
+        vec3 direct = imageLoad(gbDirect, p).rgb;
+        color = albedo * ambient + specular + direct;
+    }
     if ((pc.flags & 1u) != 0u) {
         color = tonemapColor(color * pc.exposure);   // same as rt_rays.comp / rt_path.comp finishColor
     }

@@ -22,16 +22,18 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
 /**
- * The two compute pipelines of {@code rt_pack_nrd.comp} (pack: raw G-buffer to NRD inputs; compose: NRD output plus noise-free light to
- * the final image) with ONE shared descriptor set of 9 storage images:
- * 0 viewZ, 1 normal+roughness, 2 diffuse+hit distance, 3 albedo, 4 direct light, 5 NRD in normal/roughness, 6 NRD in diffuse,
- * 7 NRD out diffuse, 8 RT output. The set is written when the images change (after a device-idle wait by the caller).
+ * The two compute pipelines of {@code rt_pack_nrd.comp} (pack: raw G-buffer to denoiser inputs; compose: denoiser output plus
+ * noise-free light to the final image) with ONE shared descriptor set of 14 storage images:
+ * 0 viewZ, 1 normal+roughness, 2 diffuse+hit distance, 3 albedo, 4 direct light, 5 denoiser in normal/roughness, 6 denoiser in
+ * diffuse, 7 denoiser out diffuse, 8 RT output, 9 specular+hit distance, 10 denoiser in specular (NRD specular radiance / RR
+ * specular albedo), 11 denoiser out specular, 12 denoiser in motion (NRD only; DLSS-RR takes screen-space motion from the
+ * velocity pass), 13 specular albedo (F0) guide. The set is written when the images change (after a device-idle wait by the caller).
  */
 final class NrdPackPipeline {
     static final String SHADER_PATH = "/shaders/rt_pack_nrd.comp";
-    static final int BINDINGS = 9;
-    /** 4 uint + vec4 + uvec2, see the PC block of the shader. */
-    static final int PUSH_BYTES = 44;
+    static final int BINDINGS = 14;
+    /** 4 uint + vec4 + uvec2 + float + vec2 (motion address), see the PC block of the shader. */
+    static final int PUSH_BYTES = 56;
 
     private final VkDevice device;
     private long packModule;
@@ -94,7 +96,7 @@ final class NrdPackPipeline {
         return p.get(0);
     }
 
-    /** Writes the 9 views (all in GENERAL). The caller guarantees no frame in flight uses the set. */
+    /** Writes the 14 views (all in GENERAL). The caller guarantees no frame in flight uses the set. */
     void writeViews(long[] views) {
         if (views.length != BINDINGS) {
             throw new IllegalArgumentException("need " + BINDINGS + " views, got " + views.length);
@@ -111,12 +113,16 @@ final class NrdPackPipeline {
         }
     }
 
-    /** Push constants of the shader (layout in {@link #PUSH_BYTES}). */
+    /**
+     * Push constants of the shader (layout in {@link #PUSH_BYTES}). {@code motionAddr} is the Vec4Buf of the ray shader
+     * (xyz = prev - cur world motion of the primary hit, w = 1 for an entity); 0 disables the NRD motion input.
+     */
     static void writePush(ByteBuffer b, int normalEncoding, int roughnessEncoding, int denoiser, int flags,
-                          NrdReblurParams p, float denoisingRange, int width, int height, float exposure) {
+                          NrdReblurParams p, float denoisingRange, int width, int height, float exposure, long motionAddr) {
         b.putInt(0, normalEncoding).putInt(4, roughnessEncoding).putInt(8, denoiser).putInt(12, flags);
         b.putFloat(16, p.hitDistA()).putFloat(20, p.hitDistB()).putFloat(24, p.hitDistC()).putFloat(28, denoisingRange);
         b.putInt(32, width).putInt(36, height).putFloat(40, exposure);
+        b.putLong(48, motionAddr);
     }
 
     void recordPack(VkCommandBuffer cmd, ByteBuffer push, int width, int height) {

@@ -47,6 +47,11 @@ public class RtShadingFixesTest {
         runRtPresetChecks();
     }
 
+    @Test
+    public void testDenoisedSpecularContract() {
+        runDenoisedSpecularChecks();
+    }
+
     public static void runAll() {
         RtShadingFixesTest test = new RtShadingFixesTest();
         test.testReflectionEnergySplit();
@@ -55,6 +60,7 @@ public class RtShadingFixesTest {
         test.testVoxelEdgeBleedingAndNormalSmoothing();
         test.testPixelShadows();
         test.testRtPresetLighting();
+        test.testDenoisedSpecularContract();
     }
 
     private static float fresnelSchlick(float f0, float cosTheta) {
@@ -97,8 +103,8 @@ public class RtShadingFixesTest {
             "the VNDF reflection path is not cone-jittered (the water far-sheen keeps its own coneAround)");
         assertTrue(rays.contains("vec3 kD = s.metal > 0.5 ? vec3(0.0) : vec3(1.0) - fresnelSchlick(f0, cosV);"),
             "kD is computed before the reflections gate");
-        assertTrue(rays.contains("imageStore(gbDiffuse, p, vec4((indirect + emissiveLight) * kD, gbHitDist));"),
-            "the NRD/DLSS-RR diffuse guide carries kD (metals have no diffuse)");
+        assertTrue(rays.contains("imageStore(gbDiffuse, p, vec4((indirect + emissiveLight) * diffK * thr * atmT, gbHitDist));"),
+            "the denoiser diffuse channel carries the raw kD lighting (metals have no diffuse), fog included");
         assertTrue(rays.contains("sampleGgxVndf(s.ns, V, alpha, u, vdotH)"), "rt_rays.comp samples the GGX VNDF");
         assertTrue(rays.contains("smithG2OverG1(cosV, dot(rdir, s.ns), alphaSq)"),
             "rt_rays.comp weights VNDF samples by F(V.H) * G2/G1");
@@ -379,6 +385,60 @@ public class RtShadingFixesTest {
             RtSettings.raysPixelShadowSize = savedSize;
             RtSettings.preset = savedPreset;
         }
+    }
+
+    /**
+     * Stage C contract: the G-buffer carries the specular radiance and its F0 guide, NRD gets a real specular lane and
+     * world-space motion, and DLSS-RR gets one combined raw colour (no direct-light double add).
+     */
+    private static void runDenoisedSpecularChecks() {
+        assertEquals(7, RtPipeline.GBUFFER_VIEWS, "gbuffer = viewZ, normal, diffuse, albedo, direct, specular, spec albedo");
+        assertEquals(13, RtPipeline.BINDING_GBUFFER_SPECULAR, "specular radiance is binding 13");
+        assertEquals(14, RtPipeline.BINDING_GBUFFER_SPEC_ALBEDO, "F0 guide is binding 14");
+
+        String common = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+        String pack = RtShaderCompiler.loadSource("/shaders/rt_pack_nrd.comp");
+
+        assertTrue(common.contains("binding = 13, rgba16f) uniform writeonly image2D gbSpecular"), "binding 13 declared");
+        assertTrue(common.contains("binding = 14, rgba8) uniform writeonly image2D gbSpecAlbedo"), "binding 14 declared");
+
+        // Ray mode: the traced radiance is raw (denoised later), the analytic GGX sun highlight is noise-free and goes into gbDirect.
+        assertTrue(rays.contains("imageStore(gbSpecular, p, vec4(refl * thr * atmT, reflDist));"),
+            "rt_rays.comp stores the raw traced reflection radiance with its hit distance");
+        assertTrue(rays.contains("imageStore(gbSpecAlbedo, p, vec4(clamp(wantsRefl ? f0 : vec3(0.0), 0.0, 1.0), 1.0));"),
+            "the F0 guide is zero when there is no specular lobe");
+        assertTrue(rays.contains("specSun = pc.keyColor.rgb * vis * specGGX * ndotl;"), "sun highlight is analytic");
+        assertTrue(rays.contains("directOut = (s.albedoLit * direct * directScale + specSun + emitted(s)) * thr + glassRefl;"),
+            "the noise-free sun highlight is composed after the denoiser (gbDirect)");
+        assertTrue(count(rays, "vec4(s.motion,") == 1 && rays.contains("dot(s.motion, s.motion) > 1.0e-8"),
+            "entity/world motion is written for the NRD motion input");
+        assertFalse(rays.contains("gbAlbedo, p, vec4((indirect"), "the diffuse channel is no longer pre-demodulated in the ray shader");
+
+        // Path mode: raw radiance, zero specular radiance (no PT specular lane yet), F0 guide for RR.
+        assertTrue(path.contains("imageStore(gbSpecular, p, vec4(0.0));"), "path tracing keeps an empty specular lane");
+        assertTrue(path.contains("imageStore(gbSpecAlbedo, p, vec4(clamp(specAlb, 0.0, 1.0), 1.0));"),
+            "path tracing writes the F0/albedo specular guide for DLSS-RR");
+
+        // Pack: NRD motion, demodulation, separate specular; RR early-returns without touching IN_MV.
+        assertTrue(pack.contains("Vec4Buf(pc.motionAddr).v[p.y * pc.size.x + p.x]"), "pack reads the world-space motion buffer");
+        assertTrue(pack.contains("imageStore(nrdInMotion, p, vec4(motion, 0.0));"), "pack writes the NRD motion input");
+        assertTrue(pack.contains("vec3 ambient = radiance / albedo;"), "diffuse radiance is demodulated for NRD");
+        assertTrue(pack.contains("imageStore(nrdInSpecular, p, vec4(linearToYCoCg(specRadiance), normHitSpec));"),
+            "REBLUR gets a real specular lane");
+        assertTrue(pack.contains("imageStore(nrdInSpecular, p, vec4(specRadiance, min(specDist, FP16_MAX)));"),
+            "RELAX gets a real specular lane");
+        assertTrue(pack.contains("if (pc.denoiser != 2u) {") && pack.contains("imageStore(nrdInMotion, p, vec4(0.0));"),
+            "DLSS-RR leaves IN_MV to the velocity pass");
+        assertTrue(pack.contains("vec4(clamp(radiance + specRadiance, 0.0, FP16_MAX), 1.0)"),
+            "DLSS-RR receives one combined raw colour");
+
+        // Compose: RR output is final; NRD is remodulated and the specular lane added.
+        assertTrue(pack.contains("color = max(den.xyz, 0.0);"), "RR compose adds no direct light twice");
+        assertTrue(pack.contains("color = albedo * ambient + specular + direct;"), "NRD compose remodulates and adds both lanes");
+        assertTrue(pack.contains("vec3 specular = pc.denoiser == 0u ? yCoCgToLinear(denSpec.xyz) : max(denSpec.xyz, 0.0);"),
+            "RELAX specular is read in linear RGB, REBLUR in YCoCg");
     }
 
     private static int count(String haystack, String needle) {

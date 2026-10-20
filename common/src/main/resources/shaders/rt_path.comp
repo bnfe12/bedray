@@ -441,12 +441,13 @@ void main() {
     imageStore(outDepth, p, vec4(accFirstDist < 1.0e5 ? accFirstDist : (accHit ? accFirst.t : 1.0e6), 0.0, 0.0, 0.0));
     imageStore(outImage, p, vec4(clamp(color, 0.0, 1.0), 1.0));
 #ifdef VKB_GBUFFER
-    // NRD input (lit view only): albedo-demodulated per-frame signals; rt_pack_nrd.comp composes albedo * (denoised) + direct
-    // and overwrites outImage on geometry pixels. Sky pixels: viewZ beyond the denoising range, NRD and compose skip them.
+    // NRD input (lit view only): raw per-frame radiance; rt_pack_nrd.comp demodulates it for NRD (albedo * denoised + direct)
+    // and hands it to DLSS-RR unchanged (RR demodulates internally from the two albedo guides). Sky pixels are beyond the
+    // denoising range and are skipped by the denoiser and the compose.
     // A camera ray that starts on a thin interface (glass, stained glass, tinted glass, ice) has no solid first hit of its own:
     // before this branch such a pixel was written as sky and skipped by NRD / DLSS-RR, leaving 1 ssp noise on every pane and on
     // everything seen through it. It is denoised at the pane now, with the pane's depth / normal and the whole transmitted +
-    // reflected signal (the tint is a colour filter, so the signal is stored at albedo 1 rather than divided by a dark albedo).
+    // reflected signal.
     if (mode == MODE_LIT && (gbHit || gbInterface)) {
         Surface gbSurf = gbFirst;
         if (!gbHit) {
@@ -462,15 +463,22 @@ void main() {
         vec3 n = length(nOut) > 1.0e-4 ? normalize(nOut) : vec3(0.0, 0.0, 1.0);
         float r = clamp(gbSurf.roughness, 0.0, 1.0);
         imageStore(gbNormalRough, p, vec4(n, r));
+        // The path tracer sums diffuse and specular per sample: the split G-buffer channels stay empty and the whole
+        // signal goes through the colour input as raw radiance (specular albedo is a material guide only).
+        imageStore(gbSpecular, p, vec4(0.0));
         if (gbHit) {
             vec3 a = max(gbFirst.albedoLit, vec3(0.02));
-            imageStore(gbDiffuse, p, vec4(gbRestSum / float(spp) / a, gbDist));
+            vec3 specAlb = (gbFirst.metal > 0.5 || gbFirst.roughness < 0.6)
+                ? (gbFirst.metal > 0.5 ? gbFirst.albedoTex : vec3(gbFirst.f0)) : vec3(0.0);
+            imageStore(gbDiffuse, p, vec4(gbRestSum / float(spp), gbDist));
             imageStore(gbAlbedo, p, vec4(clamp(a, 0.0, 1.0), 1.0));
             imageStore(gbDirect, p, vec4(gbDirectSum / float(spp), 0.0));
+            imageStore(gbSpecAlbedo, p, vec4(clamp(specAlb, 0.0, 1.0), 1.0));
         } else {
             imageStore(gbDiffuse, p, vec4((gbDirectSum + gbRestSum) / float(spp), gbDist));
             imageStore(gbAlbedo, p, vec4(1.0));
             imageStore(gbDirect, p, vec4(0.0));
+            imageStore(gbSpecAlbedo, p, vec4(0.0));
         }
     } else {
         imageStore(gbViewZ, p, vec4(1.0e6, 0.0, 0.0, 0.0));
@@ -487,6 +495,8 @@ void main() {
         imageStore(gbDiffuse, p, vec4(0.0));
         imageStore(gbAlbedo, p, vec4(0.0));
         imageStore(gbDirect, p, vec4(0.0));
+        imageStore(gbSpecular, p, vec4(0.0));
+        imageStore(gbSpecAlbedo, p, vec4(0.0));
     }
 #endif
 }

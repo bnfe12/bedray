@@ -32,11 +32,14 @@ import java.util.Objects;
  * (NVSDK_NGX_DLSS_Denoise_Mode_DLUnified).
  *
  * <p>Owns the G-buffer images that {@code rt_rays.comp} / {@code rt_path.comp} write
- * ({@code VKB_GBUFFER}), the auxiliary motion/specular textures, and the native DLSS-RR feature handle.
+ * ({@code VKB_GBUFFER}), the pack targets (combined raw radiance plus the specular-albedo guide), the auxiliary motion
+ * texture and the native DLSS-RR feature handle.
  *
- * <p>During {@link #record}, G-buffer textures are transitioned from {@code VK_IMAGE_LAYOUT_GENERAL}
- * to {@code VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, camera matrices and eval parameters are populated,
- * {@link DlssRayReconstruction#evaluate} is executed, and images are transitioned back to {@code GENERAL}.
+ * <p>During {@link #record}, the pack shader (rt_pack_nrd.comp, DLSS-RR mode) folds the raw diffuse and specular G-buffer
+ * channels into one noisy colour and writes the F0 guide; the G-buffer textures are then transitioned from
+ * {@code VK_IMAGE_LAYOUT_GENERAL} to {@code VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, camera matrices and eval parameters
+ * are populated, {@link DlssRayReconstruction#evaluate} is executed, and images are transitioned back to {@code GENERAL}.
+ * Screen-space motion (camera + entities) comes from the velocity pass. Level L2 until a run in game.
  */
 public final class DlssRrDenoiser {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/DlssRrDenoiser");
@@ -66,6 +69,10 @@ public final class DlssRrDenoiser {
     private RtMemory.Img gbDiffuse;
     private RtMemory.Img gbAlbedo;
     private RtMemory.Img gbDirect;
+    private RtMemory.Img gbSpecular;
+    private RtMemory.Img gbSpecAlbedo;
+    private RtMemory.Img inNormalRough;
+    private RtMemory.Img inDiffuse;
     private RtMemory.Img inMotion;
     private RtMemory.Img inSpecular;
     private RtMemory.Img outDiffuse;
@@ -212,9 +219,14 @@ public final class DlssRrDenoiser {
         gbDiffuse = memory.createImage("dlss_rr_gb_diffuse", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         gbAlbedo = memory.createImage("dlss_rr_gb_albedo", w, h, FMT_RGBA8, USAGE_STORAGE_SAMPLED);
         gbDirect = memory.createImage("dlss_rr_gb_direct", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
+        gbSpecular = memory.createImage("dlss_rr_gb_spec", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
+        gbSpecAlbedo = memory.createImage("dlss_rr_gb_spec_albedo", w, h, FMT_RGBA8, USAGE_STORAGE_SAMPLED);
+        inNormalRough = memory.createImage("dlss_rr_in_normal", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
+        inDiffuse = memory.createImage("dlss_rr_in_color", w, h, FMT_RGBA16F,
+            USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         inMotion = memory.createImage("dlss_rr_in_mv", w, h, FMT_RG16F,
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-        inSpecular = memory.createImage("dlss_rr_in_spec", w, h, FMT_RGBA16F,
+        inSpecular = memory.createImage("dlss_rr_in_spec_albedo", w, h, FMT_RGBA16F,
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         outDiffuse = memory.createImage("dlss_rr_out_diffuse", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         inDisocc = memory.createImage("dlss_rr_in_disocc", w, h, FMT_R32F,
@@ -239,15 +251,18 @@ public final class DlssRrDenoiser {
     void writeSet(long outputView) {
         this.boundOutputView = outputView;
         if (packPipeline != null && boundOutputView != 0L) {
+            // RR never reads bindings 11/12 (compose reads the RR result from 7, motion comes from the velocity pass).
             packPipeline.writeViews(new long[] {
                 gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view,
-                gbNormalRough.view, gbDiffuse.view, outDiffuse.view, boundOutputView
+                inNormalRough.view, inDiffuse.view, outDiffuse.view, boundOutputView,
+                gbSpecular.view, inSpecular.view, outDiffuse.view, inMotion.view, gbSpecAlbedo.view
             });
         }
     }
 
     private void initImages(VkCommandBuffer cmd) {
-        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inMotion, inSpecular, outDiffuse, inDisocc};
+        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
+            inDiffuse, inMotion, inSpecular, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
             VkBarriers.transition(cmd, i.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
                 VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
@@ -256,7 +271,6 @@ public final class DlssRrDenoiser {
             VkClearColorValue zero = VkClearColorValue.calloc(stack);
             VkImageSubresourceRange.Buffer range = VkImageSubresourceRange.calloc(1, stack);
             range.get(0).aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            VK10.vkCmdClearColorImage(cmd, inSpecular.image, VK10.VK_IMAGE_LAYOUT_GENERAL, zero, range);
             VK10.vkCmdClearColorImage(cmd, inMotion.image, VK10.VK_IMAGE_LAYOUT_GENERAL, zero, range);
             VK10.vkCmdClearColorImage(cmd, outDiffuse.image, VK10.VK_IMAGE_LAYOUT_GENERAL, zero, range);
         }
@@ -530,7 +544,21 @@ public final class DlssRrDenoiser {
             VkBarriers.fullMemoryBarrier(cmd);
         }
 
-        RtMemory.Img[] gbuffers = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inMotion, inSpecular, inDisocc};
+        // DLSS-RR takes one noisy colour plus the two albedo guides: fold the raw diffuse and specular G-buffer channels
+        // (fog included) and write the F0 guide. IN_MV is left alone: the velocity pass above produced screen-space motion.
+        if (packPipeline != null) {
+            ByteBuffer packPc = MemoryUtil.memAlloc(NrdPackPipeline.PUSH_BYTES);
+            try {
+                NrdPackPipeline.writePush(packPc, 0, 0, 2 /* DLSS-RR */, 0, NrdReblurParams.defaults(),
+                    DenoiserConfig.DENOISING_RANGE, width, height, exposure, 0L);
+                packPipeline.recordPack(cmd, packPc, width, height);
+            } finally {
+                MemoryUtil.memFree(packPc);
+            }
+            VkBarriers.fullMemoryBarrier(cmd);
+        }
+
+        RtMemory.Img[] gbuffers = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inDiffuse, inMotion, inSpecular, inDisocc};
 
         // 1. Transition G-buffer textures from GENERAL to SHADER_READ_ONLY_OPTIMAL, and output to GENERAL
         VkBarriers.fullMemoryBarrier(cmd);
@@ -547,7 +575,7 @@ public final class DlssRrDenoiser {
 
         // 2. Build EvalInfo (output in GENERAL with storage usage readWrite=true)
         DlssRrParams.Image color = new DlssRrParams.Image(
-            gbDiffuse.image, gbDiffuse.view, FMT_RGBA16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
+            inDiffuse.image, inDiffuse.view, FMT_RGBA16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
         DlssRrParams.Image out = new DlssRrParams.Image(
             outDiffuse.image, outDiffuse.view, FMT_RGBA16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, true);
         DlssRrParams.Image depth = new DlssRrParams.Image(
@@ -604,13 +632,12 @@ public final class DlssRrDenoiser {
             VkBarriers.fullMemoryBarrier(cmd);
         }
 
-        // 4. Compose DLSS-RR indirect diffuse radiance with direct light, albedo and tonemapping
+        // 4. Compose the DLSS-RR result (final radiance: direct light is already in its input) and tone map
         if (packPipeline != null && boundOutputView != 0L) {
             ByteBuffer pc = MemoryUtil.memAlloc(NrdPackPipeline.PUSH_BYTES);
             try {
-                pc.putInt(0, 0).putInt(4, 0).putInt(8, 1 /* linear RGB mode */).putInt(12, tonemap ? 1 : 0);
-                pc.putFloat(16, 0f).putFloat(20, 0f).putFloat(24, 0f).putFloat(28, DenoiserConfig.DENOISING_RANGE);
-                pc.putInt(32, width).putInt(36, height).putFloat(40, exposure);
+                NrdPackPipeline.writePush(pc, 0, 0, 2 /* DLSS-RR */, tonemap ? 1 : 0, NrdReblurParams.defaults(),
+                    DenoiserConfig.DENOISING_RANGE, width, height, exposure, 0L);
                 packPipeline.recordCompose(cmd, pc, width, height);
             } finally {
                 MemoryUtil.memFree(pc);
@@ -620,13 +647,15 @@ public final class DlssRrDenoiser {
     }
 
     private void destroyImages() {
-        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inMotion, inSpecular, outDiffuse};
+        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
+            inDiffuse, inMotion, inSpecular, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
             if (i != null) {
                 memory.destroy(i);
             }
         }
-        gbViewZ = gbNormalRough = gbDiffuse = gbAlbedo = gbDirect = inMotion = inSpecular = outDiffuse = inDisocc = null;
+        gbViewZ = gbNormalRough = gbDiffuse = gbAlbedo = gbDirect = gbSpecular = gbSpecAlbedo = inNormalRough = inDiffuse =
+            inMotion = inSpecular = outDiffuse = inDisocc = null;
         if (disoccBuf != null) {
             memory.destroy(disoccBuf);
             disoccBuf = null;

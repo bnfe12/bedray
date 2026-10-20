@@ -131,6 +131,16 @@ void main() {
     vec3 color = skyDisplay(rayDir);   // display space: the miss is not tone mapped below (rt_sky.glsl)
     vec3 diffE = vec3(0.0);    // lit view: diffuse light reaching the eye (x thr), before the albedo
     bool tonemapped = false;   // lit / reflection views are tone mapped after the accumulation
+    // distance fog / god rays are linear: out = T * color + A (rt_common.glsl atmosphereTransmittance).
+    // Computed before the shading branch so the denoiser G-buffer channels carry the fog as well: the compose pass
+    // (rt_pack_nrd.comp) rebuilds the exact final colour from them and never re-applies the atmosphere.
+    float atmT = 1.0;
+    vec3 atmA = vec3(0.0);
+    gSectionFade = hit ? sectionFade(s.slot) : 0.0;
+    if (mode == MODE_LIT || mode == MODE_REFLECTION || mode == MODE_GI || mode == MODE_ALBEDO || !hit) {
+        atmA = applyVolumetricAtmosphere(vec3(0.0), vec3(0.0), dir, hit ? s.t : 1.0e6, hit);
+        atmT = atmosphereTransmittance(vec3(0.0), dir, hit ? s.t : 1.0e6, hit);
+    }
     if (hit) {
         float t = s.t;
         if (mode == MODE_NORMALS) {
@@ -282,22 +292,27 @@ void main() {
                 vec3 diffuse = s.albedoLit * diffuseLight;
                 color = (diffuse + emitted(s)) * thr;
                 // Reflections: smooth dielectrics (water, glass, polished stone) and metals.
-                vec3 refl = vec3(0.0);
+                bool wantsRefl = hasFlag(FLAG_REFLECTIONS) && (s.metal > 0.5 || s.roughness < 0.6);
+                vec3 refl = vec3(0.0);        // traced specular radiance (noisy, denoised by NRD / DLSS-RR)
+                vec3 specSun = vec3(0.0);     // analytic GGX sun/moon highlight (noise-free, stays in gbDirect)
+                float reflDist = rayDistance();   // mean reflection hit distance for the specular denoiser
                 // kD is the diffuse share of the energy and applies even when reflections are switched off: a metal has no
                 // diffuse exitance at all, it must not become a diffuse surface just because the reflection rays are off.
                 vec3 V = -rayDir;
                 float cosV = max(dot(V, s.ns), 0.0);
                 vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(s.f0);
                 vec3 kD = s.metal > 0.5 ? vec3(0.0) : vec3(1.0) - fresnelSchlick(f0, cosV);
-                vec3 directScale = kD;          // kD: the diffuse share of the energy
-                vec3 diffK = kD;                // factor of the diffuse term in the colour below
-                if (hasFlag(FLAG_REFLECTIONS) && (s.metal > 0.5 || s.roughness < 0.6)) {
+                // Without traced reflections the whole energy stays in the diffuse channel, and the G-buffer says so too.
+                vec3 directScale = wantsRefl ? kD : vec3(1.0);
+                vec3 diffK = directScale;
+                if (wantsRefl) {
                     float alpha = max(s.roughness * s.roughness, 1.0e-3);
                     float alphaSq = alpha * alpha;
                     // Below ~2 degrees of roughness the VNDF is a mirror: one exact reflect, no sampling noise.
                     bool mirror = alpha <= 1.0e-3 || cosV <= 1.0e-3;
                     uint n = mirror ? 1u : reflectionRays();
                     vec3 incoming = vec3(0.0);
+                    float distSum = 0.0;
                     for (uint i = 0u; i < n; i++) {
                         vec3 rdir;
                         vec3 weight;
@@ -325,19 +340,21 @@ void main() {
                         // The key light is sampled explicitly by the GGX lobe below; only the mirror case takes the sun/moon
                         // body from the reflected sky, otherwise the light would be counted twice.
                         vec3 env = mirror ? skyAt(rdir) : skyEnvRadiance(rdir, s.roughness);
-                        incoming += weight * (traceSecondary(o, rdir, rayDistance(), seed, r, fCol)
-                            ? fCol * shadeReflectionHit(r, rdir, hasFlag(FLAG_SHADOWS))
-                            : fCol * env);
+                        bool hitRefl = traceSecondary(o, rdir, rayDistance(), seed, r, fCol);
+                        distSum += hitRefl ? r.t : rayDistance();
+                        incoming += weight * (hitRefl ? fCol * shadeReflectionHit(r, rdir, hasFlag(FLAG_SHADOWS)) : fCol * env);
                     }
                     // A single VNDF sample of a just-above-mirror lobe can hit the sun disk at full weight; cap the radiance
                     // so that one unlucky sample cannot become a persistent firefly after accumulation.
                     refl = min(incoming / float(n), vec3(256.0));
-                    // Specular sun highlight with Cook-Torrance GGX microfacet BRDF (mirror: the disk is in skyAt above)
+                    reflDist = distSum / float(n);
+                    // Specular sun highlight with Cook-Torrance GGX microfacet BRDF (mirror: the disk is in skyAt above).
+                    // Noise-free, so it goes to gbDirect and the denoiser cannot blur the glint.
                     if (!mirror && keyLightOn() && ndotl > 0.0 && length(vis) > 0.001) {
                         vec3 specGGX = brdfSpecularGGX(s.ns, V, L, max(s.roughness, 0.04), f0);
-                        refl += pc.keyColor.rgb * vis * specGGX * ndotl;
+                        specSun = pc.keyColor.rgb * vis * specGGX * ndotl;
                     }
-                    color = (diffuse * kD + refl + emitted(s)) * thr;
+                    color = (diffuse * kD + refl + specSun + emitted(s)) * thr;
                 }
 #ifdef VKB_GBUFFER
                 if (mode == MODE_LIT) {
@@ -348,10 +365,18 @@ void main() {
                     vec3 n = length(nOut) > 1.0e-4 ? normalize(nOut) : vec3(0.0, 0.0, 1.0);
                     float r = clamp(s.roughness, 0.0, 1.0);
                     imageStore(gbNormalRough, p, vec4(n, r));
-                    imageStore(gbDiffuse, p, vec4((indirect + emissiveLight) * kD, gbHitDist));
-                    imageStore(gbAlbedo, p, vec4(clamp(s.albedoLit, 0.0, 1.0), 1.0));
-                    vec3 directOut = (s.albedoLit * direct * directScale + refl + emitted(s)) * thr + glassRefl;
-                    imageStore(gbDirect, p, vec4(directOut, 0.0));
+                    // Raw (not divided by the albedo) radiance: NRD demodulates it in rt_pack_nrd.comp, DLSS-RR takes it as is.
+                    imageStore(gbDiffuse, p, vec4((indirect + emissiveLight) * diffK * thr * atmT, gbHitDist));
+                    imageStore(gbAlbedo, p, vec4((wantsRefl && s.metal > 0.5) ? vec3(0.0) : clamp(s.albedoLit, 0.0, 1.0), 1.0));
+                    imageStore(gbSpecular, p, vec4(refl * thr * atmT, reflDist));
+                    imageStore(gbSpecAlbedo, p, vec4(clamp(wantsRefl ? f0 : vec3(0.0), 0.0, 1.0), 1.0));
+                    vec3 directOut = (s.albedoLit * direct * directScale + specSun + emitted(s)) * thr + glassRefl;
+                    imageStore(gbDirect, p, vec4(directOut * atmT + atmA, 0.0));
+                    StatsBuf fb = StatsBuf(pc.statsAddr);
+                    if (fb.motionAddr != uvec2(0u)) {
+                        Vec4Buf(fb.motionAddr).v[p.y * size.x + p.x] = vec4(s.motion,
+                            (isEntityHit(s.slot) || dot(s.motion, s.motion) > 1.0e-8) ? 1.0 : 0.0);
+                    }
                 }
 #endif
                 if (mode == MODE_REFLECTION) {
@@ -377,6 +402,12 @@ void main() {
             imageStore(gbDiffuse, p, vec4(0.0));
             imageStore(gbAlbedo, p, vec4(0.0));
             imageStore(gbDirect, p, vec4(0.0));
+            imageStore(gbSpecular, p, vec4(0.0));
+            imageStore(gbSpecAlbedo, p, vec4(0.0));
+            StatsBuf fb = StatsBuf(pc.statsAddr);
+            if (fb.motionAddr != uvec2(0u)) {
+                Vec4Buf(fb.motionAddr).v[p.y * size.x + p.x] = vec4(0.0);
+            }
         }
 #endif
     }
@@ -386,14 +417,7 @@ void main() {
         }
         color += glassRefl;              // mirror reflections of the interfaces in front (deterministic)
     }
-    // distance fog / god rays are linear: out = T * color + A (rt_common.glsl atmosphereTransmittance)
-    float atmT = 1.0;
-    vec3 atmA = vec3(0.0);
-    gSectionFade = hit ? sectionFade(s.slot) : 0.0;
-    if (mode == MODE_LIT || mode == MODE_REFLECTION || mode == MODE_GI || mode == MODE_ALBEDO || !hit) {
-        atmA = applyVolumetricAtmosphere(vec3(0.0), vec3(0.0), dir, hit ? s.t : 1.0e6, hit);
-        atmT = atmosphereTransmittance(vec3(0.0), dir, hit ? s.t : 1.0e6, hit);
-    }
+    // distance fog / god rays were applied above, before the shading branch (gbuffer channels carry them too)
     vec3 colorPre = color;
     color = colorPre * atmT + atmA;
     vec3 mean = color;
