@@ -7,9 +7,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * L2 JUnit tests verifying:
- * 1. Glass transparency and Fresnel-weighted transmission.
- * 2. Enhanced specular baseline (dielectricF0) and lobe probability (ps) balancing.
- * 3. 2.8x power boost of torch, soul torch, campfire, and candle emitters in RtEmitters.
+ * 1. Energy-conserving reflection split: metals have no diffuse exitance, dielectrics keep (1 - F).
+ * 2. GGX VNDF sampling: the white-furnace estimator F(V.H) * G2/G1 matches the brute-force single-scattering BRDF integral.
+ * 3. Power-based emitter boost of torches and small cutout emitters in RtEmitters.
  * 4. Voxel edge bleeding prevention (bounded shadowBias) and normal map terminator smoothing.
  */
 public class RtShadingFixesTest {
@@ -17,13 +17,13 @@ public class RtShadingFixesTest {
     private static final float EPSILON = 1e-4f;
 
     @Test
-    public void testGlassTransparencyAndFresnel() {
-        runGlassTransparencyChecks();
+    public void testReflectionEnergySplit() {
+        runReflectionEnergyChecks();
     }
 
     @Test
-    public void testSpecularReflectionsBaseline() {
-        runSpecularBaselineChecks();
+    public void testGgxVndfEnergy() {
+        runGgxVndfChecks();
     }
 
     @Test
@@ -38,8 +38,8 @@ public class RtShadingFixesTest {
 
     public static void runAll() {
         RtShadingFixesTest test = new RtShadingFixesTest();
-        test.testGlassTransparencyAndFresnel();
-        test.testSpecularReflectionsBaseline();
+        test.testReflectionEnergySplit();
+        test.testGgxVndfEnergy();
         test.testTorchAndEmitterBoost();
         test.testVoxelEdgeBleedingAndNormalSmoothing();
     }
@@ -51,85 +51,170 @@ public class RtShadingFixesTest {
         return f0 + (1.0f - f0) * inv5;
     }
 
-    private static float dielectricF0(float f0, float roughness) {
-        float gloss = Math.max(0.0f, Math.min(1.0f, 1.0f - roughness));
-        return Math.max(f0, f0 + (0.22f - f0) * (float) Math.pow(gloss, 1.8));
-    }
-
     private static float smoothstep(float edge0, float edge1, float x) {
         float t = Math.max(0.0f, Math.min(1.0f, (x - edge0) / (edge1 - edge0)));
         return t * t * (3.0f - 2.0f * t);
     }
 
-    private static void runGlassTransparencyChecks() {
-        // Clear glass (alpha = 0.0, roughness = 0.02, f0 = 0.04)
-        float roughness = 0.02f;
-        float f0 = 0.04f;
-        float baseF0 = dielectricF0(f0, roughness);
-        assertTrue(baseF0 > 0.20f, "dielectricF0 for smooth glass must be > 0.20 for clear reflections");
+    private static void runReflectionEnergyChecks() {
+        // Dielectric: the diffuse share falls monotonically from 1 - f0 at normal incidence as the Fresnel reflectance
+        // rises towards grazing; the two shares stay within [0,1] (no negative or over-unity energy).
+        for (float f0 : new float[] {0.02f, 0.04f}) {
+            float previous = 2.0f;
+            for (float cosV : new float[] {1.0f, 0.7f, 0.3f, 0.05f, 0.0f}) {
+                float f = fresnelSchlick(f0, cosV);
+                float kD = 1.0f - f;
+                assertTrue(kD >= 0.0f && kD <= 1.0f, "kD in [0,1] at cosV=" + cosV);
+                assertTrue(kD <= previous + EPSILON, "kD does not rise towards grazing at cosV=" + cosV);
+                previous = kD;
+                assertTrue(f >= f0 - EPSILON, "reflectance never falls below F0 at cosV=" + cosV);
+            }
+            assertTrue(Math.abs(fresnelSchlick(f0, 0.0f) - 1.0f) < 1.0e-4f, "grazing reflectance is 1");
+            assertTrue(Math.abs(fresnelSchlick(f0, 1.0f) - f0) < 1.0e-6f, "normal reflectance is F0");
+        }
 
-        // Perpendicular view (cosTheta = 1.0): Fresnel reflectance is baseF0
-        float fNormal = fresnelSchlick(baseF0, 1.0f);
-        assertEquals(baseF0, fNormal, EPSILON, "At cosTheta=1, F must equal baseF0");
-
-        // Clear glass transmission probability: pTrans = (1 - F) * (1 - alpha)
-        float alphaClear = 0.0f;
-        float pTransClearNormal = (1.0f - fNormal) * (1.0f - alphaClear);
-        assertTrue(pTransClearNormal > 0.75f, "Clear glass at normal view must have > 75% transmission probability");
-        assertTrue(pTransClearNormal < 0.85f, "Clear glass must reserve remainder for specular reflection");
-
-        // Tinted glass (alpha = 0.3)
-        float alphaTinted = 0.3f;
-        float pTransTintedNormal = (1.0f - fNormal) * (1.0f - alphaTinted);
-        assertEquals((1.0f - fNormal) * 0.7f, pTransTintedNormal, EPSILON, "Tinted glass transmission scales with (1 - alpha)");
-
-        // Grazing view (cosTheta = 0.0): total reflection, zero transmission
-        float fGrazing = fresnelSchlick(baseF0, 0.0f);
-        assertEquals(1.0f, fGrazing, EPSILON, "At grazing angle, Fresnel reflectance must be 1.0");
-        float pTransGrazing = (1.0f - fGrazing) * (1.0f - alphaClear);
-        assertEquals(0.0f, pTransGrazing, EPSILON, "At grazing angle, transmission must be 0");
-
-        // Opaque surface (alpha >= 0.99): pTrans must be 0
-        float alphaOpaque = 1.0f;
-        float pTransOpaque = (1.0f - fNormal) * (1.0f - alphaOpaque);
-        assertEquals(0.0f, pTransOpaque, EPSILON, "Opaque block has 0 transmission");
+        // The old non-physical shortcuts (15 % metal diffuse, Fresnel scaled by gloss) must stay gone, the diffuse share
+        // must apply to metals even with reflections off, and the sampled reflection must be the VNDF estimator.
+        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String common = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        assertFalse(rays.contains("diffuse * 0.15"), "no 15% metal diffuse in rt_rays.comp");
+        assertFalse(common.contains("diffuse * 0.15"), "no 15% metal diffuse in rt_common.glsl");
+        assertFalse(rays.contains("* F * gloss"), "reflection is no longer scaled by gloss");
+        assertFalse(rays.contains("coneAround(rdir, spread"),
+            "the VNDF reflection path is not cone-jittered (the water far-sheen keeps its own coneAround)");
+        assertTrue(rays.contains("vec3 kD = s.metal > 0.5 ? vec3(0.0) : vec3(1.0) - fresnelSchlick(f0, cosV);"),
+            "kD is computed before the reflections gate");
+        assertTrue(rays.contains("imageStore(gbDiffuse, p, vec4((indirect + emissiveLight) * kD, gbHitDist));"),
+            "the NRD/DLSS-RR diffuse guide carries kD (metals have no diffuse)");
+        assertTrue(rays.contains("sampleGgxVndf(s.ns, V, alpha, u, vdotH)"), "rt_rays.comp samples the GGX VNDF");
+        assertTrue(rays.contains("smithG2OverG1(cosV, dot(rdir, s.ns), alphaSq)"),
+            "rt_rays.comp weights VNDF samples by F(V.H) * G2/G1");
+        assertTrue(rays.contains("skyEnvRadiance(rdir, s.roughness)"),
+            "rough reflections keep clouds and stars through skyEnvRadiance");
+        assertTrue(common.contains("vec3 sampleGgxVndf(vec3 n, vec3 v, float alpha, vec2 u, out float vdotH)"),
+            "rt_common.glsl defines the VNDF sampler");
+        assertTrue(common.contains("vec3 skyEnvRadiance(vec3 dir, float roughness)"),
+            "rt_common.glsl defines the cloud-aware environment radiance");
     }
 
-    private static void runSpecularBaselineChecks() {
-        // Water (f0 = 0.02, roughness = 0.02)
-        float waterF0 = dielectricF0(0.02f, 0.02f);
-        assertTrue(waterF0 > 0.20f, "Water baseline F0 must be boosted > 0.20 so reflections are visible from above");
+    // ---- GGX VNDF white-furnace model (double precision port of rt_common.glsl sampleGgxVndf) ----------------------------
 
-        // Glass (f0 = 0.04, roughness = 0.02)
-        float glassF0 = dielectricF0(0.04f, 0.02f);
-        assertTrue(glassF0 > 0.21f, "Glass baseline F0 must be boosted > 0.21");
+    private static double dot(double[] a, double[] b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    }
 
-        // Polished stone (f0 = 0.04, roughness = 0.35)
-        float polishedF0 = dielectricF0(0.04f, 0.35f);
-        assertTrue(polishedF0 > 0.10f && polishedF0 < 0.16f, "Polished stone has moderate reflection boost (0.10..0.16)");
+    private static double[] cross(double[] a, double[] b) {
+        return new double[] {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+    }
 
-        // Rough stone (f0 = 0.04, roughness = 0.90)
-        float roughF0 = dielectricF0(0.04f, 0.90f);
-        assertEquals(0.04f, roughF0, 0.01f, "Rough stone keeps default 0.04 baseline");
+    private static double[] normalize(double[] v) {
+        double len = Math.sqrt(dot(v, v));
+        return new double[] {v[0] / len, v[1] / len, v[2] / len};
+    }
 
-        // Specular lobe probability ps balancing
-        float glossWater = 1.0f - 0.02f;
-        float fWaterNormal = fresnelSchlick(waterF0, 1.0f);
-        float psWaterNormal = Math.max(0.05f, Math.min(0.95f, Math.max(fWaterNormal, 0.45f * glossWater)));
-        assertTrue(psWaterNormal >= 0.40f, "Smooth water must sample specular lobe with probability >= 0.40 at normal incidence");
+    private static double smithLambda(double cosTheta, double alphaSq) {
+        double c2 = Math.max(cosTheta * cosTheta, 1.0e-8);
+        double tan2 = Math.max(1.0 - c2, 0.0) / c2;
+        return 0.5 * (Math.sqrt(1.0 + alphaSq * tan2) - 1.0);
+    }
 
-        // Grazing angle ps
-        float fWaterGrazing = fresnelSchlick(waterF0, 0.1f);
-        float psWaterGrazing = Math.max(0.05f, Math.min(0.95f, Math.max(fWaterGrazing, 0.45f * glossWater)));
-        assertTrue(psWaterGrazing > 0.65f, "Grazing angle specular lobe probability must increase towards 0.95");
+    private static double smithG2OverG1(double cosV, double cosL, double alphaSq) {
+        double lv = smithLambda(Math.max(cosV, 0.0), alphaSq);
+        double ll = smithLambda(Math.max(cosL, 0.0), alphaSq);
+        return (1.0 + lv) / (1.0 + lv + ll);
+    }
 
-        // Energy conservation check between diffuse and specular lobes
-        float F = fWaterNormal;
-        float ps = psWaterNormal;
-        float diffuseWeight = (1.0f - F) / (1.0f - ps);
-        float specularWeight = F / ps;
-        float totalEnergy = ps * specularWeight + (1.0f - ps) * diffuseWeight;
-        assertEquals(1.0f, totalEnergy, EPSILON, "Monte Carlo lobe splitting must satisfy exact energy conservation");
+    /** Mean, min and max of the white-metal (F = 1) VNDF estimator over an n x n stratified sample grid. */
+    private static double[] vndfEstimator(double cosV, double roughness, int n) {
+        double alpha = Math.max(roughness * roughness, 1.0e-3);
+        double alphaSq = alpha * alpha;
+        double sinV = Math.sqrt(Math.max(0.0, 1.0 - cosV * cosV));
+        double[] v = {sinV, 0.0, cosV};   // N = +Z; basisAround(N) gives t = +X, b = +Y
+        double[] vh = normalize(new double[] {alpha * v[0], alpha * v[1], Math.max(v[2], 1.0e-6)});
+        double lensq = vh[0] * vh[0] + vh[1] * vh[1];
+        double[] t1 = lensq > 1.0e-12 ? normalize(new double[] {-vh[1], vh[0], 0.0}) : new double[] {1.0, 0.0, 0.0};
+        double[] t2 = cross(vh, t1);
+        double sum = 0.0;
+        double minW = Double.MAX_VALUE;
+        double maxW = -Double.MAX_VALUE;
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                double r = Math.sqrt((i + 0.5) / n);
+                double phi = 2.0 * Math.PI * ((j + 0.5) / n);
+                double p1 = r * Math.cos(phi);
+                double p2 = r * Math.sin(phi);
+                double s = 0.5 * (1.0 + vh[2]);
+                p2 = (1.0 - s) * Math.sqrt(Math.max(0.0, 1.0 - p1 * p1)) + s * p2;
+                double pz = Math.sqrt(Math.max(0.0, 1.0 - p1 * p1 - p2 * p2));
+                double[] nh = {
+                    p1 * t1[0] + p2 * t2[0] + pz * vh[0],
+                    p1 * t1[1] + p2 * t2[1] + pz * vh[1],
+                    p1 * t1[2] + p2 * t2[2] + pz * vh[2]
+                };
+                double[] h = normalize(new double[] {alpha * nh[0], alpha * nh[1], Math.max(nh[2], 1.0e-6)});
+                double vdotH = dot(v, h);
+                double cosL = 2.0 * vdotH * h[2] - v[2];   // L = reflect(-V, H) = 2 (V.H) H - V
+                double w = smithG2OverG1(cosV, cosL, alphaSq);
+                sum += w;
+                minW = Math.min(minW, w);
+                maxW = Math.max(maxW, w);
+            }
+        }
+        return new double[] {sum / (double) (n * n), minW, maxW};
+    }
+
+    /**
+     * Directional albedo of the single-scattering GGX BRDF (F = 1) by quadrature in the half-vector domain:
+     * integral of D(h) * G2(V,L) * (V.H) / (N.V) over the hemisphere of h, with L = reflect(-V, h). The change of
+     * variables dω_L = 4 (V.H) dω_h removes the 1/(V.H) of the BRDF, and the tan-warped theta keeps the samples inside
+     * the D lobe, so the reference stays accurate at grazing view angles where a uniform L-domain grid under-resolves it.
+     */
+    private static double bruteForceAlbedo(double cosV, double roughness, int nTheta, int nPhi) {
+        double alpha = Math.max(roughness * roughness, 1.0e-3);
+        double alphaSq = alpha * alpha;
+        double sinV = Math.sqrt(Math.max(0.0, 1.0 - cosV * cosV));
+        double dPhi = (2.0 * Math.PI) / nPhi;
+        double lambdaV = smithLambda(cosV, alphaSq);
+        double sum = 0.0;
+        for (int i = 0; i < nTheta; i++) {
+            double u = (i + 0.5) / nTheta;
+            double tanT = Math.tan(Math.PI * 0.5 * u);
+            double theta = Math.atan(alpha * tanT);
+            double dTheta = alpha * (Math.PI * 0.5) * (1.0 + tanT * tanT) / (1.0 + alpha * alpha * tanT * tanT) / nTheta;
+            double sinT = Math.sin(theta);
+            double cosT = Math.cos(theta);
+            for (int j = 0; j < nPhi; j++) {
+                double phi = (j + 0.5) * dPhi;
+                double hx = sinT * Math.cos(phi);
+                double hy = sinT * Math.sin(phi);
+                double vdotH = sinV * hx + cosV * cosT;
+                if (vdotH <= 0.0) {
+                    continue;
+                }
+                double cosL = 2.0 * vdotH * cosT - cosV;
+                if (cosL <= 0.0) {
+                    continue;
+                }
+                double g2 = 1.0 / (1.0 + lambdaV + smithLambda(cosL, alphaSq));
+                double d2 = cosT * cosT * (alphaSq - 1.0) + 1.0;
+                double d = alphaSq / (Math.PI * d2 * d2);
+                sum += d * g2 * vdotH / cosV * sinT * dTheta * dPhi;
+            }
+        }
+        return sum;
+    }
+
+    private static void runGgxVndfChecks() {
+        for (double roughness : new double[] {0.2, 0.5, 0.8}) {
+            for (double cosV : new double[] {1.0, 0.5, 0.1}) {
+                double[] est = vndfEstimator(cosV, roughness, 192);
+                double ref = bruteForceAlbedo(cosV, roughness, 256, 512);
+                assertEquals(ref, est[0], 0.008, String.format(java.util.Locale.ROOT,
+                    "white furnace roughness=%.2f cosV=%.2f: estimator %.4f, reference %.4f", roughness, cosV, est[0], ref));
+                assertTrue(est[1] >= 0.0, "VNDF weight is never negative");
+                assertTrue(est[2] <= 1.0 + 1.0e-9, "VNDF weight never exceeds 1 (G2/G1 <= 1), was " + est[2]);
+            }
+        }
     }
 
     private static void runTorchBoostChecks() {

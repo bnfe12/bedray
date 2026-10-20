@@ -7,7 +7,8 @@
 //  - emissive lighting: self glow + next event estimation over the emitter list (RIS, one shadow ray per sample);
 //  - one-bounce global illumination: cosine rays, the hit is shaded with sun + shadow, vanilla ambient and emission (replaces
 //    the vanilla sky-light ambient);
-//  - reflections: roughness-jittered mirror rays with Schlick Fresnel, metals tinted by albedo;
+//  - reflections: GGX VNDF sampled rays weighted by F(V.H) * G2/G1, energy-conserving diffuse/specular split, metals
+//    tinted by their albedo and without diffuse exitance;
 //  - temporal accumulation of all of it while the camera and the scene stand still (VKB_ACCUM, RtAccumulation).
 // Scene access lives in rt_common.glsl.
 #include "rt_common.glsl"
@@ -274,45 +275,61 @@ void main() {
                 color = (diffuse + emitted(s)) * thr;
                 // Reflections: smooth dielectrics (water, glass, polished stone) and metals.
                 vec3 refl = vec3(0.0);
-                vec3 directScale = s.metal > 0.5 ? vec3(0.15) : vec3(1.0);
-                vec3 diffK = vec3(1.0);                                  // factor of the diffuse term in the colour below
+                // kD is the diffuse share of the energy and applies even when reflections are switched off: a metal has no
+                // diffuse exitance at all, it must not become a diffuse surface just because the reflection rays are off.
+                vec3 V = -rayDir;
+                float cosV = max(dot(V, s.ns), 0.0);
+                vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(s.f0);
+                vec3 kD = s.metal > 0.5 ? vec3(0.0) : vec3(1.0) - fresnelSchlick(f0, cosV);
+                vec3 directScale = kD;          // kD: the diffuse share of the energy
+                vec3 diffK = kD;                // factor of the diffuse term in the colour below
                 if (hasFlag(FLAG_REFLECTIONS) && (s.metal > 0.5 || s.roughness < 0.6)) {
-                    float cosV = max(dot(-rayDir, s.ns), 0.0);
-                    float baseF0 = s.metal > 0.5 ? 1.0 : s.f0;
-                    vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(baseF0);
-                    vec3 F = fresnelSchlick(f0, cosV);
-                    float spread = s.roughness * s.roughness;
-                    uint n = spread > 0.001 ? reflectionRays() : 1u;
+                    float alpha = max(s.roughness * s.roughness, 1.0e-3);
+                    float alphaSq = alpha * alpha;
+                    // Below ~2 degrees of roughness the VNDF is a mirror: one exact reflect, no sampling noise.
+                    bool mirror = alpha <= 1.0e-3 || cosV <= 1.0e-3;
+                    uint n = mirror ? 1u : reflectionRays();
                     vec3 incoming = vec3(0.0);
                     for (uint i = 0u; i < n; i++) {
-                        vec3 rdir = reflect(rayDir, s.ns);
-                        if (spread > 0.001) {
-                            rdir = hasFlag(FLAG_LOWDISC) ? coneAroundU(rdir, spread, noise2D(p, pc.frame, i, n, 3u)) : coneAround(rdir, spread, seed);
+                        vec3 rdir;
+                        vec3 weight;
+                        if (mirror) {
+                            rdir = reflect(rayDir, s.ns);
+                            weight = fresnelSchlick(f0, cosV);
+                        } else {
+                            vec2 u;
+                            if (hasFlag(FLAG_LOWDISC)) {
+                                u = noise2D(p, pc.frame, i, n, 3u);
+                            } else {
+                                float u1 = rand01(seed);
+                                float u2 = rand01(seed);
+                                u = vec2(u1, u2);
+                            }
+                            float vdotH;
+                            vec3 H = sampleGgxVndf(s.ns, V, alpha, u, vdotH);
+                            rdir = reflect(rayDir, H);
+                            // BRDF * cosine / VNDF pdf = F(V.H) * G2 / G1, so D and the pdf cancel exactly.
+                            weight = fresnelSchlick(f0, vdotH) * smithG2OverG1(cosV, dot(rdir, s.ns), alphaSq);
                         }
                         rdir = bendHorizon(rdir, s.ng);
                         Surface r;
                         vec3 fCol;
-                        incoming += traceSecondary(o, rdir, rayDistance(), seed, r, fCol)
+                        // The key light is sampled explicitly by the GGX lobe below; only the mirror case takes the sun/moon
+                        // body from the reflected sky, otherwise the light would be counted twice.
+                        vec3 env = mirror ? skyAt(rdir) : skyEnvRadiance(rdir, s.roughness);
+                        incoming += weight * (traceSecondary(o, rdir, rayDistance(), seed, r, fCol)
                             ? fCol * shadeReflectionHit(r, rdir, hasFlag(FLAG_SHADOWS))
-                            : fCol * (spread < 0.05 ? skyAt(rdir) : skyRadiance(rdir));
+                            : fCol * env);
                     }
-                    incoming /= float(n);
-                    float gloss = 1.0 - s.roughness;
-                    refl = incoming * F * gloss;
-                    // Specular sun highlight with Cook-Torrance GGX microfacet BRDF
-                    if (keyLightOn() && ndotl > 0.0 && length(vis) > 0.001) {
-                        vec3 V = -rayDir;
+                    // A single VNDF sample of a just-above-mirror lobe can hit the sun disk at full weight; cap the radiance
+                    // so that one unlucky sample cannot become a persistent firefly after accumulation.
+                    refl = min(incoming / float(n), vec3(256.0));
+                    // Specular sun highlight with Cook-Torrance GGX microfacet BRDF (mirror: the disk is in skyAt above)
+                    if (!mirror && keyLightOn() && ndotl > 0.0 && length(vis) > 0.001) {
                         vec3 specGGX = brdfSpecularGGX(s.ns, V, L, max(s.roughness, 0.04), f0);
                         refl += pc.keyColor.rgb * vis * specGGX * ndotl;
                     }
-                    if (s.metal > 0.5) {
-                        diffK = vec3(0.15);
-                        color = (diffuse * 0.15 + refl + emitted(s)) * thr;   // metals: almost no diffuse
-                    } else {
-                        directScale = 1.0 - F * gloss;
-                        diffK = directScale;
-                        color = (diffuse * directScale + refl + emitted(s)) * thr;
-                    }
+                    color = (diffuse * kD + refl + emitted(s)) * thr;
                 }
 #ifdef VKB_GBUFFER
                 if (mode == MODE_LIT) {
@@ -323,7 +340,7 @@ void main() {
                     vec3 n = length(nOut) > 1.0e-4 ? normalize(nOut) : vec3(0.0, 0.0, 1.0);
                     float r = clamp(s.roughness, 0.0, 1.0);
                     imageStore(gbNormalRough, p, vec4(n, r));
-                    imageStore(gbDiffuse, p, vec4(indirect + emissiveLight, gbHitDist));
+                    imageStore(gbDiffuse, p, vec4((indirect + emissiveLight) * kD, gbHitDist));
                     imageStore(gbAlbedo, p, vec4(clamp(s.albedoLit, 0.0, 1.0), 1.0));
                     vec3 directOut = (s.albedoLit * direct * directScale + refl + emitted(s)) * thr + glassRefl;
                     imageStore(gbDirect, p, vec4(directOut, 0.0));

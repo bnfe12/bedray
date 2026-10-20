@@ -533,6 +533,15 @@ vec3 skyRadiance(vec3 dir) {
     return mix(l.horizon, l.zenith, pow(h, 0.6));
 }
 
+// Environment radiance of a glossy reflection: the real sky (clouds, stars, moon body) while the lobe is still narrow, the
+// calibrated gradient dome at high roughness. The key body is subtracted because the GGX lobe samples the sun/moon
+// analytically; without the subtraction a rough metal would gain the disk on top of the highlight.
+vec3 skyEnvRadiance(vec3 dir, float roughness) {
+    float w = smoothstep(0.08, 0.35, roughness);
+    vec3 real = max(skyAt(dir) - sunDisk(dir), vec3(0.0));
+    return mix(real, skyRadiance(dir), w);
+}
+
 const float PI = 3.14159265358979323846;
 
 // Henyey-Greenstein anisotropic phase function for Mie in-scattering
@@ -1486,13 +1495,51 @@ float distributionGGX(float NdotH, float roughness) {
     return a2 / (PI * denom * denom);
 }
 
-// Smith Joint Masking-Shadowing Function G2 (Heitz 2014)
+// Smith lambda of the GGX distribution (Heitz 2014): Lambda(c) = (sqrt(1 + alpha^2 tan^2) - 1) / 2.
+// alphaSq is alpha * alpha with alpha = perceptual roughness^2, the same mapping distributionGGX uses.
+float smithLambda(float cosTheta, float alphaSq) {
+    float c2 = max(cosTheta * cosTheta, 1.0e-8);
+    float tan2 = max(1.0 - c2, 0.0) / c2;
+    return 0.5 * (sqrt(1.0 + alphaSq * tan2) - 1.0);
+}
+
+// Smith Joint Masking-Shadowing Function G2 (Heitz 2014), height correlated: G2 = 1 / (1 + Lambda(V) + Lambda(L)).
 float geometrySmith(float NdotV, float NdotL, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    float g1V = NdotV / (NdotV * (1.0 - k) + k);
-    float g1L = NdotL / (NdotL * (1.0 - k) + k);
-    return g1V * g1L;
+    // same floor as distributionGGX (a2 >= 1e-5), so D and G describe the same microsurface at grazing roughness
+    float alpha = max(roughness * roughness, 0.0031622777);
+    float alphaSq = alpha * alpha;
+    return 1.0 / (1.0 + smithLambda(max(NdotV, 0.0), alphaSq) + smithLambda(max(NdotL, 0.0), alphaSq));
+}
+
+// G2 / G1 for a reflected sample. The VNDF pdf of a reflected direction is p_L = D * G1(V) / (4 * N.V), so
+// BRDF * cosine / pdf collapses to F(V.H) * G2 / G1: D and the pdf cancel exactly.
+float smithG2OverG1(float cosV, float cosL, float alphaSq) {
+    float lv = smithLambda(max(cosV, 0.0), alphaSq);
+    float ll = smithLambda(max(cosL, 0.0), alphaSq);
+    return (1.0 + lv) / (1.0 + lv + ll);
+}
+
+// Visible-normal GGX sampling (Heitz 2018, "Sampling the GGX Distribution of Visible Normals"): the microfacet normal H
+// around n for the view direction v, alpha = perceptual roughness^2. u is a 2D uniform sample in [0,1)^2.
+vec3 sampleGgxVndf(vec3 n, vec3 v, float alpha, vec2 u, out float vdotH) {
+    vec3 t;
+    vec3 b;
+    basisAround(n, t, b);
+    vec3 vLocal = vec3(dot(v, t), dot(v, b), dot(v, n));
+    vec3 vh = normalize(vec3(alpha * vLocal.xy, max(vLocal.z, 1.0e-6)));
+    float lensq = vh.x * vh.x + vh.y * vh.y;
+    vec3 t1 = lensq > 1.0e-12 ? vec3(-vh.y, vh.x, 0.0) * inversesqrt(lensq) : vec3(1.0, 0.0, 0.0);
+    vec3 t2 = cross(vh, t1);
+    float r = sqrt(u.x);
+    float phi = 2.0 * PI * u.y;
+    float p1 = r * cos(phi);
+    float p2 = r * sin(phi);
+    float s = 0.5 * (1.0 + vh.z);
+    p2 = (1.0 - s) * sqrt(max(0.0, 1.0 - p1 * p1)) + s * p2;
+    vec3 nh = p1 * t1 + p2 * t2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * vh;
+    vec3 h = normalize(vec3(alpha * nh.xy, max(nh.z, 1.0e-6)));
+    vdotH = dot(vLocal, h);
+    return normalize(t * h.x + b * h.y + n * h.z);
 }
 
 vec3 brdfSpecularGGX(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0) {
@@ -2354,14 +2401,16 @@ vec3 shadeSimple(Surface s, vec3 dir, bool shadowRay) {
     if (dot(dir, dir) > 1.0e-4) {
         vec3 V = -dir;
         float cosV = max(dot(V, s.ns), 0.0);
-        float baseF0 = s.metal > 0.5 ? 1.0 : s.f0;
-        vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(baseF0);
+        vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(s.f0);
         vec3 F = fresnelSchlick(f0, cosV);
-        float gloss = 1.0 - s.roughness;
+        // Energy split: metals have no diffuse exitance, a dielectric keeps (1 - F) of it.
+        vec3 kD = s.metal > 0.5 ? vec3(0.0) : vec3(1.0) - F;
+        bool mirror = s.roughness * s.roughness <= 1.0e-3 || cosV <= 1.0e-3;
 
-        // Specular sun highlight with Cook-Torrance GGX microfacet BRDF
+        // Specular sun highlight with Cook-Torrance GGX microfacet BRDF. A mirror surface gets the sun/moon body from the
+        // reflected sky (skyAt below); adding this lobe on top would count the key light twice.
         vec3 sunSpec = vec3(0.0);
-        if (keyLightOn() && ndotl > 0.0 && length(sunT) > 0.001) {
+        if (!mirror && keyLightOn() && ndotl > 0.0 && length(sunT) > 0.001) {
             vec3 specGGX = brdfSpecularGGX(s.ns, V, L, max(s.roughness, 0.04), f0);
             sunSpec = pc.keyColor.rgb * sunT * specGGX * ndotl;
         }
@@ -2369,22 +2418,13 @@ vec3 shadeSimple(Surface s, vec3 dir, bool shadowRay) {
         // Environment reflection for reflective materials (metals and smooth dielectrics)
         if (s.metal > 0.5 || s.roughness < 0.6) {
             vec3 rdir = bendHorizon(reflect(dir, s.ns), s.ng);
-            vec3 skyRefl = skyAt(rdir);
-            vec3 refl = skyRefl * F * gloss;
-            if (s.metal > 0.5 && s.emission <= 0.1) {
-                return diffuse * 0.15 + refl + sunSpec + emitted(s);   // pure metals: preserve metal color and Fresnel
-            } else {
-                return diffuse * (1.0 - F * gloss) + refl + sunSpec + emitted(s);
-            }
-        } else {
-            return diffuse + sunSpec + emitted(s);
+            vec3 refl = (mirror ? skyAt(rdir) : skyEnvRadiance(rdir, s.roughness)) * F;
+            return diffuse * kD + refl + sunSpec + emitted(s);
         }
+        return diffuse * kD + sunSpec + emitted(s);
     }
 
-    if (s.metal > 0.5 && s.emission <= 0.1) {
-        return diffuse * 0.15 + emitted(s);
-    }
-    return diffuse + emitted(s);
+    return diffuse * (s.metal > 0.5 ? vec3(0.0) : vec3(1.0)) + emitted(s);
 }
 
 vec3 shadeSimple(Surface s, bool shadowRay) {
@@ -2418,31 +2458,23 @@ vec3 shadeReflectionHit(Surface s, vec3 dir, bool shadowRay) {
     vec3 glow = emitted(s);
 
     if (dot(dir, dir) <= 1.0e-4) {
-        return diffuse + glow;
+        return diffuse * (s.metal > 0.5 ? vec3(0.0) : vec3(1.0)) + glow;
     }
     vec3 V = -dir;
     float cosV = max(dot(V, s.ns), 0.0);
-    float baseF0 = s.metal > 0.5 ? 1.0 : s.f0;
-    vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(baseF0);
+    vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(s.f0);
     vec3 F = fresnelSchlick(f0, cosV);
-    float gloss = 1.0 - s.roughness;
+    vec3 kD = s.metal > 0.5 ? vec3(0.0) : vec3(1.0) - F;
+    bool mirror = s.roughness * s.roughness <= 1.0e-3 || cosV <= 1.0e-3;
     vec3 sunSpec = vec3(0.0);
-    if (keyLightOn() && ndotl > 0.0 && length(sunT) > 0.001) {
-        vec3 H = normalize(L + V);
-        float ndoth = max(dot(s.ns, H), 0.0);
-        float specPower = mix(8.0, 512.0, gloss * gloss);
-        sunSpec = pc.keyColor.rgb * sunT * pow(ndoth, specPower) * F * ndotl * (gloss + 0.1);
+    if (!mirror && keyLightOn() && ndotl > 0.0 && length(sunT) > 0.001) {
+        sunSpec = pc.keyColor.rgb * sunT * brdfSpecularGGX(s.ns, V, L, max(s.roughness, 0.04), f0) * ndotl;
     }
-    if (s.metal > 0.5) {
+    if (s.metal > 0.5 || s.roughness < 0.6) {
         vec3 rdir = bendHorizon(reflect(dir, s.ns), s.ng);
-        vec3 reflected = skyAt(rdir) * F * gloss;
-        return (s.emission <= 0.1 ? diffuse * 0.15 : diffuse * (1.0 - F * gloss)) + reflected + sunSpec + glow;
+        return diffuse * kD + (mirror ? skyAt(rdir) : skyEnvRadiance(rdir, s.roughness)) * F + sunSpec + glow;
     }
-    if (s.roughness < 0.6) {
-        vec3 rdir = bendHorizon(reflect(dir, s.ns), s.ng);
-        return diffuse * (1.0 - F * gloss) + skyAt(rdir) * F * gloss + sunSpec + glow;
-    }
-    return diffuse + sunSpec + glow;
+    return diffuse * kD + sunSpec + glow;
 }
 
 // Deterministic radiance arriving along a mirror direction: sky with clouds and the sun/moon disk on a miss, else the lit hit.
