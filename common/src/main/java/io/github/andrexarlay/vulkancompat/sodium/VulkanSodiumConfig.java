@@ -752,14 +752,13 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             }, () -> RtSettings.RAY_PRESETS.contains(RtSettings.preset) ? RtSettings.preset : RtSettings.Preset.CUSTOM)
             .setImpact(OptionImpact.HIGH).setStorageHandler(st);
         g.addOption(track("rt_preset", presetOpt));
-        String[] names = {"rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections", "rays_ao", "rays_gi", "rays_emissive",
-            "rays_accumulate"};
-        boolean[] defs = {true, true, false, true, true, false, true, true};
-        List<Supplier<Boolean>> gets = List.of(() -> RtSettings.raysShadows, () -> RtSettings.raysSoftShadows, () -> RtSettings.raysPixelShadows,
+        String[] names = {"rays_shadows", "rays_soft_shadows", "rays_reflections", "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate"};
+        boolean[] defs = {true, true, true, true, false, true, true};
+        List<Supplier<Boolean>> gets = List.of(() -> RtSettings.raysShadows, () -> RtSettings.raysSoftShadows,
             () -> RtSettings.raysReflections, () -> RtSettings.raysAo, () -> RtSettings.raysGi, () -> RtSettings.raysEmissive,
             () -> RtSettings.raysAccumulate);
         List<Consumer<Boolean>> sets = List.of(v -> RtSettings.raysShadows = v, v -> RtSettings.raysSoftShadows = v,
-            v -> RtSettings.raysPixelShadows = v, v -> RtSettings.raysReflections = v, v -> RtSettings.raysAo = v, v -> RtSettings.raysGi = v,
+            v -> RtSettings.raysReflections = v, v -> RtSettings.raysAo = v, v -> RtSettings.raysGi = v,
             v -> RtSettings.raysEmissive = v, v -> RtSettings.raysAccumulate = v);
         for (int i = 0; i < names.length; i++) {
             g.addOption(boolOpt(builder, names[i], defs[i], sets.get(i), gets.get(i), raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
@@ -783,10 +782,12 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> RtSettings.raysAoRadius = v, v -> RtSettings.raysEmissiveQuality = v, v -> RtSettings.raysEmissiveDistance = v,
             v -> RtSettings.raysGiQuality = v, v -> RtSettings.raysGiDistance = v);
         Identifier pixelShadowsId = id("rays_pixel_shadows");
+        ex.addOption(boolOpt(builder, "rays_pixel_shadows", false, v -> RtSettings.raysPixelShadows = v, () -> RtSettings.raysPixelShadows,
+            anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         for (int i = 0; i < names.length; i++) {
             boolean pixelSize = "rays_pixel_shadow_size".equals(names[i]);
             ex.addOption(intOpt(builder, names[i], r[i][0], r[i][1], r[i][2], r[i][3], unit(units[i]), sets.get(i), gets.get(i),
-                pixelSize ? s -> raysOn.apply(s) && s.readBooleanOption(pixelShadowsId) : raysOn,
+                pixelSize ? s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId) : raysOn,
                 pixelSize ? new Identifier[] {modeId, pixelShadowsId} : dMode, Mark.RT, OptionImpact.HIGH, false, st));
         }
         Identifier distAutoId = id("rt_distance_auto");
