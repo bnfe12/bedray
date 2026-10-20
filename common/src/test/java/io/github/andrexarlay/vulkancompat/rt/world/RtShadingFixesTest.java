@@ -42,6 +42,11 @@ public class RtShadingFixesTest {
         runPixelShadowChecks();
     }
 
+    @Test
+    public void testRtPresetLighting() {
+        runRtPresetChecks();
+    }
+
     public static void runAll() {
         RtShadingFixesTest test = new RtShadingFixesTest();
         test.testReflectionEnergySplit();
@@ -49,6 +54,7 @@ public class RtShadingFixesTest {
         test.testTorchAndEmitterBoost();
         test.testVoxelEdgeBleedingAndNormalSmoothing();
         test.testPixelShadows();
+        test.testRtPresetLighting();
     }
 
     private static float fresnelSchlick(float f0, float cosTheta) {
@@ -286,6 +292,35 @@ public class RtShadingFixesTest {
 
         float tFull = smoothstep(0.0f, 0.08f, 0.10f);
         assertEquals(1.0f, tFull, EPSILON, "Above terminator threshold, full lighting is preserved");
+    }
+
+    private static void runRtPresetChecks() {
+        RtSettings.Preset savedPreset = RtSettings.preset;
+        boolean savedGi = RtSettings.raysGi;
+        int savedQuality = RtSettings.raysGiQuality;
+        int savedDistance = RtSettings.raysGiDistance;
+        boolean savedReflections = RtSettings.raysReflections;
+        try {
+            RtSettings.applyPreset(RtSettings.Preset.LOW);
+            assertFalse(RtSettings.gi(), "LOW stays a shadow/contact/emissive preset without a GI bounce");
+            RtSettings.applyPreset(RtSettings.Preset.MEDIUM);
+            assertTrue(RtSettings.gi(), "MEDIUM traces one GI bounce instead of flat ambient-only interiors");
+            assertEquals(1, RtSettings.giQuality(), "MEDIUM uses one GI ray");
+            assertEquals(48, RtSettings.giDistance(), "MEDIUM keeps the cheap GI reach");
+            assertTrue(RtSettings.reflections(), "MEDIUM keeps reflections");
+            RtSettings.applyPreset(RtSettings.Preset.HIGH);
+            assertTrue(RtSettings.gi(), "HIGH keeps GI");
+            assertEquals(64, RtSettings.giDistance(), "HIGH reaches farther than MEDIUM");
+            RtSettings.applyPreset(RtSettings.Preset.ULTRA);
+            assertTrue(RtSettings.gi(), "ULTRA keeps GI");
+            assertTrue(RtSettings.giQuality() >= 2, "ULTRA traces more than one GI ray");
+        } finally {
+            RtSettings.raysGi = savedGi;
+            RtSettings.raysGiQuality = savedQuality;
+            RtSettings.raysGiDistance = savedDistance;
+            RtSettings.raysReflections = savedReflections;
+            RtSettings.preset = savedPreset;
+        }
     }
 
     private static void runPixelShadowChecks() {

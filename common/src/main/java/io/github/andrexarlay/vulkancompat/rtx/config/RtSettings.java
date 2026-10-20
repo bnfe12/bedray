@@ -587,6 +587,10 @@ public final class RtSettings {
                 raysAo = true;
                 raysAoQuality = 2;
                 raysEmissiveDistance = 32;
+                // one traced bounce: the cheapest light leak that removes the flat "ambient only" look indoors
+                raysGi = true;
+                raysGiQuality = 1;
+                raysGiDistance = 48;
             }
             case HIGH -> {
                 waterStyle = WATER_STYLE_REALISTIC;
