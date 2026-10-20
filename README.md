@@ -13,15 +13,15 @@ Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by
 
 ## Screenshots
 
-![Path Tracing at sunset](docs/images/path-tracing-sunset.png)
+![Volumetric light shafts through a forest canopy](docs/images/god-rays-forest.png)
 
-![Path Tracing at night: glowstone and redstone light](docs/images/path-tracing-night-emissive.png)
+![Path tracing at sunset](docs/images/path-tracing-sunset.png)
 
-![Path Tracing: traced shadows from a pillar and a tree](docs/images/path-tracing-shadows.png)
+![Emissive blocks add warm local light](docs/images/path-tracing-sunset-lights.png)
 
-![F3 screen with Bedray sections, real and generated FPS](docs/images/f3-frame-generation.png)
+![Experimental water surface at sunset](docs/images/path-tracing-water-sunset.png)
 
-*Alpha - work in progress; screenshots taken on NVIDIA GeForce RTX 5060 Ti 8 GB.* More pictures with captions and modes: [docs/GALLERY.md](docs/GALLERY.md).
+*Early alpha captures from one NVIDIA GeForce RTX 5060 Ti 8 GB system; they are not a quality or performance guarantee.* More images, modes and caveats: [docs/GALLERY.md](docs/GALLERY.md).
 
 ## What it does
 
