@@ -752,12 +752,14 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             }, () -> RtSettings.RAY_PRESETS.contains(RtSettings.preset) ? RtSettings.preset : RtSettings.Preset.CUSTOM)
             .setImpact(OptionImpact.HIGH).setStorageHandler(st);
         g.addOption(track("rt_preset", presetOpt));
-        String[] names = {"rays_shadows", "rays_soft_shadows", "rays_reflections", "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate"};
-        boolean[] defs = {true, true, true, true, false, true, true};
-        List<Supplier<Boolean>> gets = List.of(() -> RtSettings.raysShadows, () -> RtSettings.raysSoftShadows, () -> RtSettings.raysReflections,
-            () -> RtSettings.raysAo, () -> RtSettings.raysGi, () -> RtSettings.raysEmissive, () -> RtSettings.raysAccumulate);
+        String[] names = {"rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections", "rays_ao", "rays_gi", "rays_emissive",
+            "rays_accumulate"};
+        boolean[] defs = {true, true, false, true, true, false, true, true};
+        List<Supplier<Boolean>> gets = List.of(() -> RtSettings.raysShadows, () -> RtSettings.raysSoftShadows, () -> RtSettings.raysPixelShadows,
+            () -> RtSettings.raysReflections, () -> RtSettings.raysAo, () -> RtSettings.raysGi, () -> RtSettings.raysEmissive,
+            () -> RtSettings.raysAccumulate);
         List<Consumer<Boolean>> sets = List.of(v -> RtSettings.raysShadows = v, v -> RtSettings.raysSoftShadows = v,
-            v -> RtSettings.raysReflections = v, v -> RtSettings.raysAo = v, v -> RtSettings.raysGi = v,
+            v -> RtSettings.raysPixelShadows = v, v -> RtSettings.raysReflections = v, v -> RtSettings.raysAo = v, v -> RtSettings.raysGi = v,
             v -> RtSettings.raysEmissive = v, v -> RtSettings.raysAccumulate = v);
         for (int i = 0; i < names.length; i++) {
             g.addOption(boolOpt(builder, names[i], defs[i], sets.get(i), gets.get(i), raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
@@ -767,22 +769,25 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private void addExpertOptions(ConfigBuilder builder, OptionGroupBuilder ex, Function<ConfigState, Boolean> raysOn,
                                   Function<ConfigState, Boolean> anyRt, Function<ConfigState, Boolean> pathOn, Identifier[] dMode,
                                   Identifier modeId, Path gameDir, StorageEventHandler st) {
-        String[] names = {"rays_shadow_quality", "rays_reflection_quality", "rays_reflection_distance", "rays_ao_quality", "rays_ao_radius",
-            "rays_emissive_quality", "rays_emissive_distance", "rays_gi_quality", "rays_gi_distance"};
-        int[][] r = {{2, 1, 8, 1}, {1, 1, 4, 1}, {128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {2, 1, 8, 1}, {3, 1, 8, 1},
-            {1, 1, 8, 1}, {32, 8, 64, 8}, {1, 1, 8, 1}, {64, RtSettings.DISTANCE_MIN, 256, 16}};
-        String[] units = {"", "", " blocks", "", " blocks", "", " blocks", "", " blocks"};
-        List<Supplier<Integer>> gets = List.of(() -> RtSettings.raysShadowQuality, () -> RtSettings.raysReflectionQuality,
-            () -> RtSettings.raysReflectionDistance, () -> RtSettings.raysAoQuality, () -> RtSettings.raysAoRadius,
-            () -> RtSettings.raysEmissiveQuality, () -> RtSettings.raysEmissiveDistance, () -> RtSettings.raysGiQuality,
-            () -> RtSettings.raysGiDistance);
-        List<Consumer<Integer>> sets = List.of(v -> RtSettings.raysShadowQuality = v, v -> RtSettings.raysReflectionQuality = v,
-            v -> RtSettings.raysReflectionDistance = v, v -> RtSettings.raysAoQuality = v, v -> RtSettings.raysAoRadius = v,
-            v -> RtSettings.raysEmissiveQuality = v, v -> RtSettings.raysEmissiveDistance = v, v -> RtSettings.raysGiQuality = v,
-            v -> RtSettings.raysGiDistance = v);
+        String[] names = {"rays_shadow_quality", "rays_pixel_shadow_size", "rays_reflection_quality", "rays_reflection_distance", "rays_ao_quality",
+            "rays_ao_radius", "rays_emissive_quality", "rays_emissive_distance", "rays_gi_quality", "rays_gi_distance"};
+        int[][] r = {{2, 1, 8, 1}, {2, 1, 32, 1}, {1, 1, 4, 1}, {128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {2, 1, 8, 1},
+            {3, 1, 8, 1}, {1, 1, 8, 1}, {32, 8, 64, 8}, {1, 1, 8, 1}, {64, RtSettings.DISTANCE_MIN, 256, 16}};
+        String[] units = {"", " blocks", "", " blocks", "", " blocks", "", " blocks", "", " blocks"};
+        List<Supplier<Integer>> gets = List.of(() -> RtSettings.raysShadowQuality, () -> RtSettings.raysPixelShadowSize,
+            () -> RtSettings.raysReflectionQuality, () -> RtSettings.raysReflectionDistance, () -> RtSettings.raysAoQuality,
+            () -> RtSettings.raysAoRadius, () -> RtSettings.raysEmissiveQuality, () -> RtSettings.raysEmissiveDistance,
+            () -> RtSettings.raysGiQuality, () -> RtSettings.raysGiDistance);
+        List<Consumer<Integer>> sets = List.of(v -> RtSettings.raysShadowQuality = v, v -> RtSettings.raysPixelShadowSize = v,
+            v -> RtSettings.raysReflectionQuality = v, v -> RtSettings.raysReflectionDistance = v, v -> RtSettings.raysAoQuality = v,
+            v -> RtSettings.raysAoRadius = v, v -> RtSettings.raysEmissiveQuality = v, v -> RtSettings.raysEmissiveDistance = v,
+            v -> RtSettings.raysGiQuality = v, v -> RtSettings.raysGiDistance = v);
+        Identifier pixelShadowsId = id("rays_pixel_shadows");
         for (int i = 0; i < names.length; i++) {
+            boolean pixelSize = "rays_pixel_shadow_size".equals(names[i]);
             ex.addOption(intOpt(builder, names[i], r[i][0], r[i][1], r[i][2], r[i][3], unit(units[i]), sets.get(i), gets.get(i),
-                raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
+                pixelSize ? s -> raysOn.apply(s) && s.readBooleanOption(pixelShadowsId) : raysOn,
+                pixelSize ? new Identifier[] {modeId, pixelShadowsId} : dMode, Mark.RT, OptionImpact.HIGH, false, st));
         }
         Identifier distAutoId = id("rt_distance_auto");
         ex.addOption(boolOpt(builder, "rt_distance_auto", true, v -> RtSettings.rtDistanceAuto = v, () -> RtSettings.rtDistanceAuto,

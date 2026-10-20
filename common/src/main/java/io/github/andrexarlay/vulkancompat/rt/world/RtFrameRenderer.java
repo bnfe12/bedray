@@ -705,6 +705,8 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + 60, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoNormalStrengthPercent() / 100f);
         MemoryUtil.memPutFloat(hdr + 64, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.sunRadiusRad());
         MemoryUtil.memPutFloat(hdr + 68, params.historyCap);
+        // StatsBuf.shadowPixel: edge of a pixelated-shadow cell in blocks, 0 = the option is off
+        MemoryUtil.memPutFloat(hdr + 480, pixelShadowStatsValue());
         // Temporal reprojection uses the full pose in both projections. Hit positions include the current bob origin, while
         // camDelta remains the raw camera-position delta; the prior full projection already carries the previous bob origin.
         curViewProj.set(frameProjection).mul(camera.viewRotationMatrix);
@@ -1038,6 +1040,11 @@ public final class RtFrameRenderer {
     /** Ray Tracing unless Path Tracing is selected (also the pass of the legacy debug-view-only runs, mode off). */
     static RtMode passModeFor(RtMode mode) {
         return mode == RtMode.PATH_TRACED ? RtMode.PATH_TRACED : RtMode.RAY_TRACED;
+    }
+
+    /** StatsBuf.shadowPixel: pixelated-shadow cell edge in blocks, 0 when the option is off (the shader reads 0 as disabled). */
+    static float pixelShadowStatsValue() {
+        return RtSettings.pixelShadows() ? RtSettings.pixelShadowSize() : 0f;
     }
 
     /**

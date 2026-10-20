@@ -77,8 +77,8 @@ Every group ends with "Reset this group"; the right-hand panel has "Reset to def
 
 | Option (id) | Decision | Reason |
 |---|---|---|
-| `rt_preset` RT Quality and `rays_shadows`, `rays_soft_shadows`, `rays_reflections`, `rays_ao`, `rays_gi`, `rays_emissive`, `rays_accumulate` | HIDDEN-MODE | only used by Ray Tracing (Fast), hidden in this release; shown in group "Ray Tracing (Fast, experimental)" when unlocked or Expert |
-| `rays_shadow_quality`, `rays_reflection_quality`, `rays_reflection_distance`, `rays_ao_quality`, `rays_ao_radius`, `rays_emissive_quality`, `rays_emissive_distance`, `rays_gi_quality`, `rays_gi_distance` | EXPERT | numbers of the hidden mode |
+| `rt_preset` RT Quality and `rays_shadows`, `rays_soft_shadows`, `rays_pixel_shadows`, `rays_reflections`, `rays_ao`, `rays_gi`, `rays_emissive`, `rays_accumulate` | HIDDEN-MODE | only used by Ray Tracing (Fast), hidden in this release; shown in group "Ray Tracing (Fast, experimental)" when unlocked or Expert. `rays_pixel_shadows` also affects Path Tracing: the sun ray starts at the centre of a `rays_pixel_shadow_size` cell |
+| `rays_shadow_quality`, `rays_pixel_shadow_size`, `rays_reflection_quality`, `rays_reflection_distance`, `rays_ao_quality`, `rays_ao_radius`, `rays_emissive_quality`, `rays_emissive_distance`, `rays_gi_quality`, `rays_gi_distance` | EXPERT | numbers of the hidden mode; the pixel-shadow cell row is only enabled while `rays_pixel_shadows` is on |
 | `rt_distance_auto` | FORCED-ON (true) | "RT Distance: As in Game" has no reason to be off; the manual distance remains in Expert |
 | `rt_distance_chunks` RT Distance (manual) | EXPERT | only meaningful with `rt_distance_auto` off |
 | `path_accumulate` PT Accumulation | FORCED-ON (true) | averaging frames is the safety net when the denoiser is off or missing |

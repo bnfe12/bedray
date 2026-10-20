@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.material.LabPbr;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -36,12 +37,18 @@ public class RtShadingFixesTest {
         runVoxelEdgeBleedingChecks();
     }
 
+    @Test
+    public void testPixelShadows() {
+        runPixelShadowChecks();
+    }
+
     public static void runAll() {
         RtShadingFixesTest test = new RtShadingFixesTest();
         test.testReflectionEnergySplit();
         test.testGgxVndfEnergy();
         test.testTorchAndEmitterBoost();
         test.testVoxelEdgeBleedingAndNormalSmoothing();
+        test.testPixelShadows();
     }
 
     private static float fresnelSchlick(float f0, float cosTheta) {
@@ -279,5 +286,75 @@ public class RtShadingFixesTest {
 
         float tFull = smoothstep(0.0f, 0.08f, 0.10f);
         assertEquals(1.0f, tFull, EPSILON, "Above terminator threshold, full lighting is preserved");
+    }
+
+    private static void runPixelShadowChecks() {
+        // Java port of the GLSL snap in rt_common.glsl pixelShadowOrigin: centre of the horizontal cell.
+        float cell = 2.0f;
+        assertEquals(snapCell(0.1f, cell), snapCell(1.9f, cell), EPSILON, "same cell snaps to the same x");
+        assertEquals(snapCell(0.1f, cell), 1.0f, EPSILON, "cell 0 centre is half a cell");
+        assertEquals(snapCell(-0.1f, cell), snapCell(-1.9f, cell), EPSILON, "same negative cell snaps together");
+        assertEquals(snapCell(-0.1f, cell), -1.0f, EPSILON, "cell -1 centre is negative half a cell");
+        for (float x : new float[] {-17.3f, -1.0f, 0.0f, 3.7f, 15.9f, 64.2f}) {
+            float offset = snapCell(x, cell) - x;
+            assertTrue(Math.abs(offset) <= cell * 0.5f + 1.0e-4f, "snap stays within half a cell, offset=" + offset);
+        }
+        // Disabled (shadowPixel = 0): the helper must keep the per-pixel origin untouched.
+        assertEquals(3.7f, snapCell(3.7f, 0.0f), EPSILON, "cell 0 disables the snap");
+
+        // Shaders: both modes route their shadow ray through the snapped origin, and the sun-disk sample is shared per cell.
+        String common = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+        assertTrue(common.contains("float shadowPixel;"), "StatsBuf carries the pixel-shadow cell size");
+        assertTrue(common.contains("vec3 pixelShadowOrigin(Surface s, vec3 o)"), "rt_common.glsl defines the snap");
+        assertTrue(common.contains("vec2 pixelShadowCell(vec3 worldPos)"), "rt_common.glsl defines the cell index");
+        // The snapped origin must stay in the surface plane: a naive world snap into a wall self-shadows the wall.
+        assertTrue(common.contains("lateral -= s.ng * dot(lateral, s.ng);"), "the lateral snap is projected into the surface plane");
+        assertTrue(common.contains("s.ng * min(0.05 + 0.2 * cell, 0.4)"), "the lifted origin clears steps but not a ceiling");
+        // Fast mode: the snap may only feed the sun ray. AO, GI, reflections and gbHitDist keep the exact surface origin.
+        assertTrue(count(rays, "vec3 shadowO = o;") == 1, "rt_rays.comp keeps the exact origin for secondary rays");
+        assertTrue(count(rays, "traceTransmittance(shadowO,") == 2, "both shadow paths trace from the snapped origin");
+        assertEquals(0, count(rays, "traceTransmittance(o,"), "no shadow path keeps the unsnapped origin");
+        assertTrue(count(rays, "o = pixelShadowOrigin") == 0, "the shared origin must never be overwritten by the snap");
+        assertTrue(rays.contains("gSunPixel = ivec2(pixelShadowCell(s.worldPos))"), "rt_rays.comp shares the penumbra sample per cell");
+        assertTrue(path.contains("pixelShadowOrigin(s, so)"), "rt_path.comp snaps the shadow ray origin");
+
+        // Settings: registered, off by default, clamped, and reset by a preset.
+        RtSettings.Preset savedPreset = RtSettings.preset;
+        boolean savedOn = RtSettings.raysPixelShadows;
+        int savedSize = RtSettings.raysPixelShadowSize;
+        try {
+            RtSettings.applyPreset(RtSettings.Preset.MEDIUM);
+            assertFalse(RtSettings.pixelShadows(), "pixel shadows are off in the default preset");
+            assertEquals(2, RtSettings.pixelShadowSize(), "default cell is 2 blocks");
+            assertEquals(0.0f, RtFrameRenderer.pixelShadowStatsValue(), EPSILON, "off writes 0 into StatsBuf.shadowPixel");
+            assertTrue(RtSettings.applyKeyValue("rays_pixel_shadows", "true"), "the option is a known key");
+            assertTrue(RtSettings.pixelShadows(), "the option turns on");
+            RtSettings.applyKeyValue("rays_pixel_shadow_size", "16");
+            assertEquals(16, RtSettings.pixelShadowSize(), "the cell size is settable");
+            assertEquals(16.0f, RtFrameRenderer.pixelShadowStatsValue(), EPSILON, "StatsBuf gets the cell in blocks, not /16");
+            RtSettings.applyKeyValue("rays_pixel_shadow_size", "64");
+            assertEquals(16, RtSettings.pixelShadowSize(), "out-of-range cells are rejected, not clamped silently");
+            RtSettings.applyPreset(RtSettings.Preset.MEDIUM);
+            assertFalse(RtSettings.pixelShadows(), "a preset reset turns pixel shadows off");
+            assertEquals(2, RtSettings.pixelShadowSize(), "a preset reset restores the default cell");
+        } finally {
+            RtSettings.raysPixelShadows = savedOn;
+            RtSettings.raysPixelShadowSize = savedSize;
+            RtSettings.preset = savedPreset;
+        }
+    }
+
+    private static int count(String haystack, String needle) {
+        int n = 0;
+        for (int i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {
+            n++;
+        }
+        return n;
+    }
+
+    private static float snapCell(float x, float cell) {
+        return cell > 0.0f ? (float) (Math.floor(x / cell) + 0.5) * cell : x;
     }
 }

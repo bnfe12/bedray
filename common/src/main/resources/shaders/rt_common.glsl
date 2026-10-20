@@ -107,6 +107,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer StatsBuf {
     vec4 fogMisc;               // 432 x rain 0..1, y medium (0 air, 1 water), z weight of the vanilla fog 0..1, w aerial perspective multiplier
     vec4 fogMedium;             // 448 rgb colour of the water fog (display space)
     vec4 fogFade;               // 464 x clock of the section fade-in (20 ms ticks), y fade length in ticks (0 = off)
+    float shadowPixel;          // 480 edge of a pixelated-shadow world cell in blocks (0 = option off)
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer Vec4Buf { vec4 v[]; };
 // RtEmitters record: p0.xyz corner (relative to the emitter origin), p0.w area; e1, e2 edges; uvc.xy atlas UV of the
@@ -1713,6 +1714,37 @@ vec3 sampleEmitters(vec3 pos, vec3 ns, vec3 albedo, vec3 origin, float maxDist, 
 vec3 offsetOrigin(Surface s) {
     float bias = clamp(0.003 + 0.0001 * s.t, 0.003, 0.015);
     return s.pos + s.ng * bias;
+}
+
+// ---- Pixelated shadows (look option, RtSettings.raysPixelShadows) ----------------------------------------------------------
+// The sun visibility is evaluated once per world-space shadow texel instead of once per pixel: the shadow ray origin is
+// snapped to the centre of a horizontal world cell, so one whole light column shares one sample and the penumbra becomes
+// deliberately blocky, like a low-resolution shadow map. The grid lives in the world, so the pattern is stable while
+// the camera moves and does not swim. shadowPixel = 0 (option off) keeps the exact per-pixel origin.
+float shadowPixelSize() {
+    return pc.statsAddr == uvec2(0u) ? 0.0 : StatsBuf(pc.statsAddr).shadowPixel;
+}
+
+vec3 pixelShadowOrigin(Surface s, vec3 o) {
+    float cell = shadowPixelSize();
+    if (cell <= 0.0) {
+        return o;
+    }
+    // Snap horizontally only: the grid stays parallel to the block grid at any sun height, so a low sun does not shove
+    // the origin vertically into the ground.
+    vec2 w = s.worldPos.xz;
+    vec3 lateral = vec3((floor(w.x / cell) + 0.5) * cell - w.x, 0.0, (floor(w.y / cell) + 0.5) * cell - w.y);
+    // Keep the displacement in the surface plane: a naive world snap pushes wall fragments sideways INTO the wall, and
+    // the whole cell traces out of solid geometry and goes black.
+    lateral -= s.ng * dot(lateral, s.ng);
+    // A cell wider than one block spans steps and slabs: lift the shared origin enough to clear them, but not a ceiling.
+    return o + lateral + s.ng * min(0.05 + 0.2 * cell, 0.4);
+}
+
+// Cell-space index for the sun-disk sample sequence: every pixel of a cell shares the same penumbra sample.
+vec2 pixelShadowCell(vec3 worldPos) {
+    float cell = shadowPixelSize();
+    return cell > 0.0 ? floor(worldPos.xz / cell) : floor(worldPos.xz * 16.0);
 }
 
 bool keyLightOn() {

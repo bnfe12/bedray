@@ -200,7 +200,8 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
             bool lit = false;
             float ndotl = 0.0;
             float ngdotl = 0.0;
-            vec3 shOrigin = so;
+            // Pixel shadows: the shadow ray starts from the centre of the world cell, not from this fragment.
+            vec3 shOrigin = shadowPixelSize() > 0.0 && !med.inside ? pixelShadowOrigin(s, so) : so;
             vec3 shDir = L;
             vec3 gain = vec3(1.0);
             if (med.inside) {

@@ -383,6 +383,7 @@ public final class SettingsCatalog {
         for (String[] e : new String[][] {
             {"rays_shadows", "RT Shadows", "Traced sun and moon shadows (Ray Tracing Fast mode)."},
             {"rays_soft_shadows", "RT Soft Shadows", "Shadows soften with distance from the caster (Ray Tracing Fast mode)."},
+            {"rays_pixel_shadows", "RT Pixel Shadows", "Minecraft-style blocky shadow edges: every fragment of a world cell traces its sun ray from the cell centre (both RT modes)."},
             {"rays_reflections", "RT Reflections", "Traced reflections on water, glass, metals (Ray Tracing Fast mode)."},
             {"rays_ao", "RT Ambient Occlusion", "Traced darkening in corners (Ray Tracing Fast mode)."},
             {"rays_gi", "RT Global Illumination", "One traced bounce of indirect light (Ray Tracing Fast mode)."},
@@ -393,6 +394,7 @@ public final class SettingsCatalog {
         }
         for (String[] e : new String[][] {
             {"rays_shadow_quality", "RT Shadow Rays", "Shadow rays per pixel."},
+            {"rays_pixel_shadow_size", "RT Pixel Shadow Size", "World cell of a pixelated shadow in blocks; larger means chunkier steps. Only used when RT Pixel Shadows is on."},
             {"rays_reflection_quality", "RT Reflection Rays", "Reflection rays per pixel."},
             {"rays_reflection_distance", "RT Reflection Distance", "Longest reflection ray in blocks."},
             {"rays_ao_quality", "RT AO Rays", "Occlusion rays per pixel."},

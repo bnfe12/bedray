@@ -53,6 +53,10 @@ public final class RtSettings {
     /** Shadow rays jittered inside a widened sun disk (soft penumbra), {@link #raysShadowQuality} rays per pixel. */
     public static boolean raysSoftShadows = false;
     public static int raysShadowQuality = 2;
+    /** Stylised retro shadows: the sun visibility is evaluated once per world-space cell, so edges are blocky like a low-res shadow map. */
+    public static boolean raysPixelShadows = false;
+    /** Edge of a pixelated-shadow cell in blocks (2 = chunky, 1 = half-block steps), both modes. */
+    public static int raysPixelShadowSize = 2;
     public static boolean raysReflections = false;
     public static int raysReflectionQuality = 1;
     public static int raysReflectionDistance = 128;
@@ -179,6 +183,8 @@ public final class RtSettings {
         bool("rays_shadows", () -> raysShadows, v -> raysShadows = v);
         bool("rays_soft_shadows", () -> raysSoftShadows, v -> raysSoftShadows = v);
         integer("rays_shadow_quality", () -> raysShadowQuality, v -> raysShadowQuality = v, 1, 8);
+        bool("rays_pixel_shadows", () -> raysPixelShadows, v -> raysPixelShadows = v);
+        integer("rays_pixel_shadow_size", () -> raysPixelShadowSize, v -> raysPixelShadowSize = v, 1, 32);
         bool("rays_reflections", () -> raysReflections, v -> raysReflections = v);
         integer("rays_reflection_quality", () -> raysReflectionQuality, v -> raysReflectionQuality = v, 1, 4);
         integer("rays_reflection_distance", () -> raysReflectionDistance, v -> raysReflectionDistance = v, DISTANCE_MIN, DISTANCE_MAX);
@@ -348,6 +354,8 @@ public final class RtSettings {
     public static boolean shadows() { return b("rays_shadows"); }
     public static boolean softShadows() { return b("rays_soft_shadows"); }
     public static int shadowQuality() { return i("rays_shadow_quality"); }
+    public static boolean pixelShadows() { return b("rays_pixel_shadows"); }
+    public static int pixelShadowSize() { return i("rays_pixel_shadow_size"); }
     public static boolean reflections() { return b("rays_reflections"); }
     public static int reflectionQuality() { return i("rays_reflection_quality"); }
     public static int reflectionDistance() { return i("rays_reflection_distance"); }
@@ -546,6 +554,8 @@ public final class RtSettings {
         raysShadows = true;
         raysSoftShadows = true;
         raysShadowQuality = 1;
+        raysPixelShadows = false;
+        raysPixelShadowSize = 2;
         raysReflections = false;
         raysReflectionQuality = 1;
         raysReflectionDistance = 64;
@@ -618,7 +628,7 @@ public final class RtSettings {
     public enum Level { BASIC, ADVANCED, EXPERT, ALL }
 
     /** Boolean keys shown in the Advanced level (all integer keys belong to Expert). */
-    public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_reflections",
+    public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections",
         "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate", "rt_distance_auto", "auto_normals", "path_accumulate",
         "path_auto_exposure", "dlss_rr_geometric_normals", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
         "waving_foliage");
