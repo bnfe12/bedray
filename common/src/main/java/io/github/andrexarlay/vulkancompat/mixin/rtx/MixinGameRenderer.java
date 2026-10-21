@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.mixin.rtx;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkancompat.compute.ComputeRenderBridge;
 import io.github.andrexarlay.vulkancompat.rtx.GameRendererTargetAccessor;
 import io.github.andrexarlay.vulkancompat.rtx.VulkanRtxManager;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
@@ -78,6 +79,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     private void onRenderBegin(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.frameBegin();
+            ComputeRenderBridge.onFrameBegin(this.minecraft.level != null);
             VulkanRtxManager.processPendingChanges();
             WorldTargetManager.resetPhase((GameRenderer) (Object) this);
             // after resetPhase: the XeSS/DLSS runtimes have applied the current request (the RT block reads their state)
@@ -191,11 +193,15 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     private void onBeforeRender3dHud(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.mark(PerfMonitor.Mark.RASTER_END);
-            // the particles of the world pass are drawn again into their own layer (the RT image replaces the raster colour)
-            io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.replay(this.mainRenderTarget);
-            io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.render(
-                this.gameRenderState.levelRenderState.cameraRenderState, this.mainRenderTarget,
-                this.gameRenderState.levelRenderState);
+            if (ComputeRenderBridge.renderSynthetic(this.mainRenderTarget)) {
+                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.suspendForComputeDemo();
+            } else {
+                // The particles of the world pass are replayed before the hardware RT replacement image.
+                io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.replay(this.mainRenderTarget);
+                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.render(
+                    this.gameRenderState.levelRenderState.cameraRenderState, this.mainRenderTarget,
+                    this.gameRenderState.levelRenderState);
+            }
             PerfMonitor.mark(PerfMonitor.Mark.RT_END);
             WorldTargetManager.copyWorldDepth();
         }

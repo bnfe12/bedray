@@ -1,0 +1,32 @@
+apply from: rootProject.file('gradle/loader-module.gradle')
+base { archivesName = 'bedray-compute-common' }
+java { withSourcesJar() }
+dependencies {
+    compileOnly project(':renderer-api')
+    testImplementation project(':renderer-api')
+    testImplementation "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"
+    testImplementation "org.lwjgl:lwjgl-vulkan:${rootProject.lwjgl_version}"
+    testImplementation "org.lwjgl:lwjgl-shaderc:${rootProject.lwjgl_version}"
+    testRuntimeOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}:natives-windows"
+    testRuntimeOnly "org.lwjgl:lwjgl-shaderc:${rootProject.lwjgl_version}:natives-windows"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+}
+test {
+    useJUnitPlatform()
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    testLogging { events 'passed', 'failed', 'skipped'; exceptionFormat = 'full' }
+}
+tasks.register('vulkanProbe', Test) {
+    group = 'verification'
+    description = 'Offscreen Vulkan 1.0 voxel dispatch with zero enabled device extensions (not in-game validation)'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    filter { includeTestsMatching '*VulkanComputeProbeTest' }
+    systemProperty 'bedray.compute.vulkanProbe', 'true'
+    // LWJGL 3.3.x enumerates driver extensions on its native stack; current drivers exceed 64 KiB.
+    systemProperty 'org.lwjgl.system.stackSize', '256'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    testLogging { events 'passed', 'failed'; showStandardStreams = true; exceptionFormat = 'full' }
+}

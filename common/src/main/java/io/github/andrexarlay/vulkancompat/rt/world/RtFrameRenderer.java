@@ -326,6 +326,14 @@ public final class RtFrameRenderer {
         return RtGeometryGate.enabled();
     }
 
+    /** The synthetic compute scene owns this frame; close capture and retire hardware-only resources. */
+    public static void suspendForComputeDemo() {
+        io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().endFrame();
+        if (world != null) {
+            shutdown("compute_synthetic_scene");
+        }
+    }
+
     public static void render(CameraRenderState camera, RenderTarget target, LevelRenderState levelState) {
         // publish this frame's captured entity geometry (also closes the capture: the hand pass that follows is not world geometry)
         if (io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().isOpen()) {

@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings;
+import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.config.TextureLodBias;
@@ -140,6 +141,21 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     @Override
+    public void tick() {
+        super.tick();
+        if (selectedCategory == 0 && rowButtons.size() >= 2) {
+            // These values change on the render thread after a request, without another settings click.
+            for (int index = 0; index < 2; index++) {
+                String text = currentRows.get(index).valueText.get();
+                Button button = rowButtons.get(index);
+                if (!button.getMessage().getString().equals(text)) {
+                    button.setMessage(Component.literal(text));
+                }
+            }
+        }
+    }
+
+    @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (maxScroll > 0 && mouseY >= listTop && mouseY < height - 42) {
             scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset - (int) (scrollY * 24.0)));
@@ -165,6 +181,17 @@ public final class BedrayConfigScreen extends Screen {
     private void buildCategoryRows() {
         switch (selectedCategory) {
             case 0 -> { // Ray Tracing & Engine
+                currentRows.add(new OptionRow("Compute Synthetic Scene", "Companion diagnostic scene, not the Minecraft world. Disable temporal upscaling and frame generation first.",
+                    () -> GraphicsBackendRegistry.backend() == null ? "Companion not installed"
+                        : GraphicsBackendRegistry.demoEnabled() ? "Requested (synthetic)" : "Off",
+                    () -> {
+                        if (GraphicsBackendRegistry.backend() != null) {
+                            GraphicsBackendRegistry.setDemoEnabled(!GraphicsBackendRegistry.demoEnabled());
+                        }
+                    }));
+                currentRows.add(new OptionRow("Compute Status", "Status of host command recording; live gameplay compatibility still requires a game test.",
+                    GraphicsBackendRegistry::status, () -> {}));
+
                 currentRows.add(new OptionRow("Ray Tracing Mode", "Master renderer switch (Off, Fast Ray Tracing, Path Tracing)",
                     () -> {
                         RtMode m = VulkanRtxConfig.rtMode;

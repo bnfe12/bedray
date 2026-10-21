@@ -39,6 +39,9 @@ docs/BUILDING.md
 docs/FEATURE_MATRIX.md
 docs/TESTING.md
 docs/RELEASE_CHECKLIST.md
+docs/SOFTWARE_RENDERER_MOD_SPEC.md
+docs/COMPUTE.md
+ROADMAP.md
 docs/images/*.png
 
 # source code
@@ -46,6 +49,10 @@ core/**
 common/**
 neoforge/**
 fabric/**
+renderer-api/**
+compute-common/**
+compute-fabric/**
+compute-neoforge/**
 native/**
 scripts/**
 

@@ -1,0 +1,210 @@
+package io.github.andrexarlay.bedray.compute;
+
+import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
+import io.github.andrexarlay.bedray.compute.voxel.VoxelGrid;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.*;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.LongBuffer;
+import java.nio.charset.StandardCharsets;
+
+import static org.lwjgl.vulkan.VK10.*;
+
+/** Owns only compute resources on the host's device. All commands use the host graphics queue. */
+public final class VoxelComputePipeline implements AutoCloseable {
+    private final VkDevice device;
+    private final int width, height, targetFormat;
+    private long gridBuffer, gridMemory, image, imageMemory, view;
+    private long shader, setLayout, pipelineLayout, pipeline, pool, descriptorSet;
+    private boolean initialized;
+
+    public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelGrid grid) {
+        this.device = device;
+        this.width = width;
+        this.height = height;
+        this.targetFormat = targetFormat;
+        try {
+            if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid output dimensions");
+            create(grid);
+        } catch (RuntimeException | Error failure) {
+            destroy();
+            throw failure;
+        }
+    }
+
+    public boolean matches(ComputeFrameContext frame) {
+        return device.address() == frame.device().address() && width == frame.width()
+                && height == frame.height() && targetFormat == frame.targetFormat();
+    }
+
+    public static String shaderSource() {
+        try (var stream = VoxelComputePipeline.class.getResourceAsStream("/assets/bedray_compute/shaders/voxel.comp")) {
+            if (stream == null) throw new IllegalStateException("Missing voxel.comp");
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException failure) {
+            throw new IllegalStateException("Cannot read voxel.comp", failure);
+        }
+    }
+
+    private void create(VoxelGrid grid) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkPhysicalDevice physical = device.getPhysicalDevice();
+            VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
+            vkGetPhysicalDeviceProperties(physical, properties);
+            if (width > properties.limits().maxImageDimension2D() || height > properties.limits().maxImageDimension2D()
+                    || grid.byteSize() > Integer.toUnsignedLong(properties.limits().maxStorageBufferRange())) {
+                throw new IllegalArgumentException("Compute scene exceeds device limits");
+            }
+            VkFormatProperties format = VkFormatProperties.calloc(stack);
+            vkGetPhysicalDeviceFormatProperties(physical, VK_FORMAT_R8G8B8A8_UNORM, format);
+            int required = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT;
+            if ((format.optimalTilingFeatures() & required) != required) throw new IllegalStateException("RGBA8 storage/blit unsupported");
+            vkGetPhysicalDeviceFormatProperties(physical, targetFormat, format);
+            if ((format.optimalTilingFeatures() & VK_FORMAT_FEATURE_BLIT_DST_BIT) == 0) throw new IllegalStateException("Target blit unsupported");
+
+            LongBuffer handle = stack.mallocLong(1);
+            check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default().size(grid.byteSize())
+                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create grid buffer");
+            gridBuffer = handle.get(0);
+            VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
+            vkGetBufferMemoryRequirements(device, gridBuffer, requirements);
+            gridMemory = allocate(requirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stack);
+            check(vkBindBufferMemory(device, gridBuffer, gridMemory, 0), "bind grid memory");
+            var pointer = stack.mallocPointer(1);
+            check(vkMapMemory(device, gridMemory, 0, grid.byteSize(), 0, pointer), "map grid memory");
+            try {
+                grid.writeTo(MemoryUtil.memByteBuffer(pointer.get(0), Math.toIntExact(grid.byteSize())));
+            } finally { vkUnmapMemory(device, gridMemory); }
+
+            VkImageCreateInfo info = VkImageCreateInfo.calloc(stack).sType$Default().imageType(VK_IMAGE_TYPE_2D)
+                    .format(VK_FORMAT_R8G8B8A8_UNORM).mipLevels(1).arrayLayers(1).samples(VK_SAMPLE_COUNT_1_BIT)
+                    .tiling(VK_IMAGE_TILING_OPTIMAL).usage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
+                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            info.extent().set(width, height, 1);
+            check(vkCreateImage(device, info, null, handle), "create output image");
+            image = handle.get(0);
+            vkGetImageMemoryRequirements(device, image, requirements);
+            imageMemory = allocate(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stack);
+            check(vkBindImageMemory(device, image, imageMemory, 0), "bind output memory");
+            VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default().image(image)
+                    .viewType(VK_IMAGE_VIEW_TYPE_2D).format(VK_FORMAT_R8G8B8A8_UNORM);
+            viewInfo.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+            check(vkCreateImageView(device, viewInfo, null, handle), "create output view");
+            view = handle.get(0);
+
+            ByteBuffer spirv = ComputeShaderCompiler.compile(shaderSource(), "bedray_compute/voxel.comp");
+            check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(spirv), null, handle), "create shader");
+            shader = handle.get(0);
+            VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(2, stack);
+            bindings.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            bindings.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings), null, handle), "create descriptor layout");
+            setLayout = handle.get(0);
+            VkPushConstantRange.Buffer push = VkPushConstantRange.calloc(1, stack);
+            push.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(4);
+            check(vkCreatePipelineLayout(device, VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
+                    .pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(push), null, handle), "create pipeline layout");
+            pipelineLayout = handle.get(0);
+            VkComputePipelineCreateInfo.Buffer pipelines = VkComputePipelineCreateInfo.calloc(1, stack);
+            pipelines.get(0).sType$Default().layout(pipelineLayout);
+            pipelines.get(0).stage().sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(shader).pName(stack.UTF8("main"));
+            check(vkCreateComputePipelines(device, VK_NULL_HANDLE, pipelines, null, handle), "create compute pipeline");
+            pipeline = handle.get(0);
+            VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(2, stack);
+            sizes.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1);
+            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1);
+            check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(sizes), null, handle), "create descriptor pool");
+            pool = handle.get(0);
+            check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(pool).pSetLayouts(stack.longs(setLayout)), handle), "allocate descriptors");
+            descriptorSet = handle.get(0);
+            VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack);
+            imageInfo.get(0).imageView(view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack);
+            bufferInfo.get(0).buffer(gridBuffer).offset(0).range(grid.byteSize());
+            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
+            writes.get(0).sType$Default().dstSet(descriptorSet).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(imageInfo);
+            writes.get(1).sType$Default().dstSet(descriptorSet).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(bufferInfo);
+            vkUpdateDescriptorSets(device, writes, null);
+        }
+    }
+
+    private long allocate(VkMemoryRequirements requirements, int flags, MemoryStack stack) {
+        VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack);
+        vkGetPhysicalDeviceMemoryProperties(device.getPhysicalDevice(), memory);
+        for (int i = 0; i < memory.memoryTypeCount(); i++) {
+            if ((requirements.memoryTypeBits() & (1 << i)) != 0 && (memory.memoryTypes(i).propertyFlags() & flags) == flags) {
+                LongBuffer handle = stack.mallocLong(1);
+                check(vkAllocateMemory(device, VkMemoryAllocateInfo.calloc(stack).sType$Default()
+                        .allocationSize(requirements.size()).memoryTypeIndex(i), null, handle), "allocate memory");
+                return handle.get(0);
+            }
+        }
+        throw new IllegalStateException("No compatible compute memory type for flags " + flags);
+    }
+
+    /** Target must be a single-sample color image, TRANSFER_DST usage, in GENERAL on this queue. */
+    public void record(VkCommandBuffer command, long target) {
+        record(command, target, false);
+    }
+
+    void record(VkCommandBuffer command, long target, boolean hitIds) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack);
+            var b = barrier.get(0).sType$Default().image(image).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).oldLayout(initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED)
+                    .newLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(initialized ? VK_ACCESS_TRANSFER_READ_BIT : 0)
+                    .dstAccessMask(VK_ACCESS_SHADER_WRITE_BIT);
+            b.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+            vkCmdPipelineBarrier(command, initialized ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, null, barrier);
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
+            vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, stack.ints(hitIds ? 1 : 0));
+            vkCmdDispatch(command, (width + 7) / 8, (height + 7) / 8, 1);
+            b.oldLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, barrier);
+            VkImageMemoryBarrier.Buffer targetBarrier = VkImageMemoryBarrier.calloc(1, stack);
+            var t = targetBarrier.get(0).sType$Default().image(target).oldLayout(VK_IMAGE_LAYOUT_GENERAL).newLayout(VK_IMAGE_LAYOUT_GENERAL)
+                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .srcAccessMask(VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
+            t.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, targetBarrier);
+            VkImageBlit.Buffer blit = VkImageBlit.calloc(1, stack);
+            blit.get(0).srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            blit.get(0).dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            blit.get(0).srcOffsets(1).set(width, height, 1);
+            blit.get(0).dstOffsets(1).set(width, height, 1);
+            vkCmdBlitImage(command, image, VK_IMAGE_LAYOUT_GENERAL, target, VK_IMAGE_LAYOUT_GENERAL, blit, VK_FILTER_NEAREST);
+            t.srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, null, null, targetBarrier);
+            initialized = true;
+        }
+    }
+
+    @Override public void close() {
+        // Only resize, mode changes and teardown wait; steady-state frames never wait for the CPU.
+        vkDeviceWaitIdle(device);
+        destroy();
+    }
+
+    private void destroy() {
+        if (pool != 0) vkDestroyDescriptorPool(device, pool, null);
+        if (pipeline != 0) vkDestroyPipeline(device, pipeline, null);
+        if (pipelineLayout != 0) vkDestroyPipelineLayout(device, pipelineLayout, null);
+        if (setLayout != 0) vkDestroyDescriptorSetLayout(device, setLayout, null);
+        if (shader != 0) vkDestroyShaderModule(device, shader, null);
+        if (view != 0) vkDestroyImageView(device, view, null);
+        if (image != 0) vkDestroyImage(device, image, null);
+        if (imageMemory != 0) vkFreeMemory(device, imageMemory, null);
+        if (gridBuffer != 0) vkDestroyBuffer(device, gridBuffer, null);
+        if (gridMemory != 0) vkFreeMemory(device, gridMemory, null);
+        pool = pipeline = pipelineLayout = setLayout = shader = view = image = imageMemory = gridBuffer = gridMemory = 0;
+    }
+
+    static void check(int result, String operation) {
+        if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed: VkResult=" + result);
+    }
+}
