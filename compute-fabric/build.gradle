@@ -15,5 +15,6 @@ jar {
     from(rootProject.file('LICENSE'))
     from(rootProject.file('NOTICE'))
     from(rootProject.file('COPYING'))
+    from(rootProject.file('THIRD_PARTY_NOTICES.md'))
     apply from: rootProject.file('gradle/build-provenance.gradle')
 }

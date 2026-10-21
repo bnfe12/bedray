@@ -70,13 +70,13 @@ class GraphicsBackendRegistryTest {
         GraphicsBackendRegistry.setDemoEnabled(false);
         assertEquals(enabledRevision + 1, GraphicsBackendRegistry.requestRevision());
         long modeRevision = GraphicsBackendRegistry.requestRevision();
-        GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.SceneMode.WORLD_OCCUPANCY);
+        GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE);
         assertEquals(modeRevision + 1, GraphicsBackendRegistry.requestRevision());
-        assertEquals("World occupancy diagnostic disabled", GraphicsBackendRegistry.status());
-        GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.SceneMode.WORLD_OCCUPANCY);
+        assertEquals("Live opaque debug requested", GraphicsBackendRegistry.status());
+        GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE);
         assertEquals(modeRevision + 1, GraphicsBackendRegistry.requestRevision());
         GraphicsBackendRegistry.noteRendered(accepted.id());
-        assertEquals("World occupancy diagnostic recorded: " + accepted.id(), GraphicsBackendRegistry.status());
+        assertEquals("Live opaque debug recorded: " + accepted.id(), GraphicsBackendRegistry.status());
         assertDoesNotClaimActive();
         assertThrows(NullPointerException.class,()->GraphicsBackendRegistry.setSceneMode(null));
         GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.SceneMode.SYNTHETIC);

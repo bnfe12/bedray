@@ -1,6 +1,7 @@
 apply from: rootProject.file('gradle/loader-module.gradle')
 base { archivesName = 'bedray-compute-common' }
 java { withSourcesJar() }
+sourceSets.test.java.srcDir(rootProject.file('tools/tests'))
 dependencies {
     compileOnly project(':renderer-api')
     testImplementation project(':renderer-api')
@@ -16,6 +17,20 @@ test {
     useJUnitPlatform()
     jvmArgs '--enable-native-access=ALL-UNNAMED'
     testLogging { events 'passed', 'failed', 'skipped'; exceptionFormat = 'full' }
+}
+tasks.withType(Test).configureEach {
+    // A running game may lock LWJGL's shared user-temp DLL cache on Windows.
+    // Keep each test task's matching natives separate from that process and other worktrees.
+    doFirst {
+        systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', new File(temporaryDir, 'lwjgl-natives').absolutePath
+    }
+}
+tasks.register('worldSnapshotContracts', JavaExec) {
+    group = 'verification'
+    description = 'Runs the loaded-section snapshot/cache CPU contract suite'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'WorldSnapshotContractTest'
 }
 tasks.register('vulkanProbe', Test) {
     group = 'verification'

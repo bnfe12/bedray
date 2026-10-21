@@ -1,13 +1,19 @@
 package io.github.andrexarlay.bedray.compute;
 
-import io.github.andrexarlay.bedray.api.v1.ComputeSceneFrame;
-import io.github.andrexarlay.bedray.api.v1.VoxelSceneSnapshot;
+import io.github.andrexarlay.bedray.api.v1.CameraSnapshot;
+import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
+import io.github.andrexarlay.bedray.api.v1.SectionSnapshot;
+import io.github.andrexarlay.bedray.api.v1.WorldSnapshot;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelDda;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelDemoScene;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelGrid;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelHit;
+import io.github.andrexarlay.bedray.compute.voxel.VoxelGridBuilder;
+import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -20,16 +26,23 @@ import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 /** Explicitly requested native probe: it fails rather than skipping if no suitable device exists. */
 @EnabledIfSystemProperty(named = "bedray.compute.vulkanProbe", matches = "true")
+@Execution(ExecutionMode.SAME_THREAD)
 class VulkanComputeProbeTest {
     private static final int WIDTH = 192;
     private static final int HEIGHT = 128;
     private static final int PIXEL_BYTES = WIDTH * HEIGHT * 4;
+    private static final int WORLD_SIZE = 48;
+    private static final int WORLD_X = 29_999_968;
+    private static final int WORLD_Y = 48;
+    private static final int WORLD_Z = -20_000_032;
 
     @Test void computeTraversalMatchesCpuWithoutEnabledExtensions() throws Exception {
         VoxelGrid grid = VoxelDemoScene.create();
@@ -69,63 +82,157 @@ class VulkanComputeProbeTest {
             assertEquals(0, unexplained, "GPU IDs differ beyond a numerical cell boundary");
             assertTrue(mismatches <= WIDTH * HEIGHT / 1000, "More than 0.1 percent of CPU/GPU rays disagree: " + mismatches);
 
-            byte[] rgba = probe.render(pipeline, false);
-            BufferedImage image = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_ARGB);
-            for (int y = 0; y < HEIGHT; y++) for (int x = 0; x < WIDTH; x++) {
-                int at = (x + WIDTH * y) * 4;
-                int argb = Byte.toUnsignedInt(rgba[at + 3]) << 24
-                        | Byte.toUnsignedInt(rgba[at]) << 16
-                        | Byte.toUnsignedInt(rgba[at + 1]) << 8
-                        | Byte.toUnsignedInt(rgba[at + 2]);
-                image.setRGB(x, y, argb);
-            }
-            Path output = Path.of("build", "reports", "compute", "voxel-vulkan.png");
-            Files.createDirectories(output.getParent());
-            assertTrue(ImageIO.write(image, "png", output.toFile()), "PNG writer is unavailable");
-            System.out.println("[BEDRAY-COMPUTE-PROBE] Offscreen shaded artifact=" + output.toAbsolutePath());
+            writeImage(probe.render(pipeline, false), "voxel-vulkan.png");
         }
     }
 
-    @Test void worldCameraAndSuccessiveSceneRevisionsReachGpu() {
-        VoxelSceneSnapshot firstSnapshot = worldSnapshot(1, 16, false);
-        VoxelSceneSnapshot secondSnapshot = worldSnapshot(2, 20, true);
+    @Test void worldCameraAndSuccessiveSceneRevisionsReachGpu() throws Exception {
+        WorldFixture firstScene = worldScene(1, 40, false, null);
+        WorldFixture secondScene = worldScene(2, 44, true, firstScene);
+        WorldFixture thirdScene = withSingleCube(secondScene);
+        GraphicsBackendRegistry.DebugView previousView = GraphicsBackendRegistry.debugView();
+        GraphicsBackendRegistry.setDebugView(GraphicsBackendRegistry.DebugView.SHADED);
+        try {
+            try (Probe probe = new Probe();
+                 VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.device, WIDTH, HEIGHT,
+                         VK_FORMAT_R8G8B8A8_UNORM, VoxelGrid.builder(WORLD_SIZE, WORLD_SIZE, WORLD_SIZE).build())) {
+                VoxelWorldUpload uploads = new VoxelWorldUpload();
+                List<VoxelWorldUpload.Tile> firstUpdates = uploads.update(firstScene.snapshot());
+                assertEquals(27, firstUpdates.size(), "First residency must initialize loaded and unknown tiles");
+                assertEquals(WORLD_X, uploads.originX());
+                assertEquals(WORLD_Y, uploads.originY());
+                assertEquals(WORLD_Z, uploads.originZ());
+                byte[] first = probe.renderWorld(pipeline, true, firstScene.snapshot().camera(), uploads, firstUpdates);
+                compareWorldIds(firstScene.opaque(), first, "world-revision-1", false);
+                assertTrue(uploads.update(firstScene.snapshot()).isEmpty(), "Unchanged section objects must not upload again");
+
+                List<VoxelWorldUpload.Tile> secondUpdates = uploads.update(secondScene.snapshot());
+                assertTrue(!secondUpdates.isEmpty() && secondUpdates.size() <= 9,
+                        "Only the far layer containing the moved wall may change");
+                byte[] second = probe.renderWorld(pipeline, true, secondScene.snapshot().camera(), uploads, secondUpdates);
+                compareWorldIds(secondScene.opaque(), second, "world-revision-2", false);
+                int changedPixels = changedPixels(first, second);
+                System.out.printf("[BEDRAY-COMPUTE-PROBE] successiveRevisions=1,2 samePipeline=true changedTiles=%d changedPixels=%d%n",
+                        secondUpdates.size(), changedPixels);
+                assertTrue(changedPixels > 500, "Moved/removed/reclassified wall must change the uploaded scene");
+
+                List<VoxelWorldUpload.Tile> oneTile = uploads.update(thirdScene.snapshot());
+                assertEquals(1, oneTile.size(), "A one-cell edit must update one tile, not the entire scene");
+                java.nio.ByteBuffer serialized = java.nio.ByteBuffer.allocate(VoxelWorldUpload.TILE_BYTES);
+                oneTile.getFirst().writeTo(serialized);
+                assertEquals(16 * 1024, serialized.position());
+                assertEquals(0, (oneTile.getFirst().offset() - VoxelGrid.HEADER_BYTES) % VoxelWorldUpload.TILE_BYTES);
+                byte[] third = probe.renderWorld(pipeline, true, thirdScene.snapshot().camera(), uploads, oneTile);
+                compareWorldIds(thirdScene.opaque(), third, "world-revision-3-one-tile", false);
+                assertTrue(changedPixels(second, third) > 0, "The single restored cube must reach the GPU");
+                assertTrue(uploads.update(thirdScene.snapshot()).isEmpty());
+                writeImage(probe.renderWorld(pipeline, false, thirdScene.snapshot().camera(), uploads, List.of()),
+                        "voxel-world-vulkan.png");
+
+                GraphicsBackendRegistry.setDebugView(GraphicsBackendRegistry.DebugView.OCCUPANCY);
+                byte[] markers = probe.renderWorld(pipeline, true, thirdScene.snapshot().camera(), uploads, List.of());
+                compareWorldIds(thirdScene.markers(), markers, "world-marker-view", true);
+                writeImage(probe.renderWorld(pipeline, false, thirdScene.snapshot().camera(), uploads, List.of()),
+                        "voxel-world-markers-vulkan.png");
+            }
+        } finally {
+            GraphicsBackendRegistry.setDebugView(previousView);
+        }
+    }
+
+    private static void writeImage(byte[] rgba, String filename) throws Exception {
+        BufferedImage image = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < HEIGHT; y++) for (int x = 0; x < WIDTH; x++) {
+            int at = (x + WIDTH * y) * 4;
+            int argb = Byte.toUnsignedInt(rgba[at + 3]) << 24
+                    | Byte.toUnsignedInt(rgba[at]) << 16
+                    | Byte.toUnsignedInt(rgba[at + 1]) << 8
+                    | Byte.toUnsignedInt(rgba[at + 2]);
+            image.setRGB(x, y, argb);
+        }
+        Path output = Path.of("build", "reports", "compute", filename);
+        Files.createDirectories(output.getParent());
+        assertTrue(ImageIO.write(image, "png", output.toFile()), "PNG writer is unavailable");
+        System.out.println("[BEDRAY-COMPUTE-PROBE] Offscreen shaded artifact=" + output.toAbsolutePath());
+    }
+
+    private record WorldFixture(WorldSnapshot snapshot, VoxelGrid opaque, VoxelGrid markers) {}
+
+    private static WorldFixture worldScene(long revision, int wallZ, boolean revised, WorldFixture previous) {
+        VoxelGridBuilder opaque = VoxelGrid.builder(WORLD_SIZE, WORLD_SIZE, WORLD_SIZE);
+        VoxelGridBuilder markers = VoxelGrid.builder(WORLD_SIZE, WORLD_SIZE, WORLD_SIZE);
+        List<SectionSnapshot> sections = new ArrayList<>();
+        for (int tz = 0; tz < 3; tz++) for (int ty = 0; ty < 3; ty++) for (int tx = 0; tx < 3; tx++) {
+            // One visible corner remains unloaded. Shaded traversal omits it; occupancy view marks it.
+            if (tx == 0 && ty == 0 && tz == 2) {
+                markers.fillBox(0, 0, 32, 16, 16, 48, 3);
+                continue;
+            }
+            byte[] cells = new byte[SectionSnapshot.CELL_COUNT];
+            for (int z = 0; z < 16; z++) for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+                int gx = tx * 16 + x, gy = ty * 16 + y, gz = tz * 16 + z;
+                int kind = gz == wallZ ? SectionSnapshot.OPAQUE_CUBE : SectionSnapshot.EMPTY;
+                if (gz == wallZ && gx >= 32 && gx < 40 && gy >= 20 && gy < 28) kind = SectionSnapshot.UNSUPPORTED;
+                if (revised && gz == wallZ && gx >= 20 && gx < 28 && gy >= 20 && gy < 28) kind = SectionSnapshot.EMPTY;
+                cells[x + 16 * (y + 16 * z)] = (byte) kind;
+                opaque.set(gx, gy, gz, kind == SectionSnapshot.OPAQUE_CUBE ? 1 : 0);
+                markers.set(gx, gy, gz, kind);
+            }
+            SectionSnapshot section = new SectionSnapshot(WORLD_X / 16 + tx, WORLD_Y / 16 + ty,
+                    WORLD_Z / 16 + tz, revision, cells);
+            if (previous != null) {
+                for (SectionSnapshot old : previous.snapshot().sections()) {
+                    if (old.x() == section.x() && old.y() == section.y() && old.z() == section.z()
+                            && section.hasSameCells(old)) {
+                        section = old;
+                        break;
+                    }
+                }
+            }
+            sections.add(section);
+        }
         float[] identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        ComputeSceneFrame firstFrame = new ComputeSceneFrame(firstSnapshot, identity,
-                16, 12, -10, 0, 0, 0);
-        ComputeSceneFrame secondFrame = new ComputeSceneFrame(secondSnapshot, identity,
-                16, 12, -10, 0, 0, 0);
-        try (Probe probe = new Probe();
-             VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.device, WIDTH, HEIGHT,
-                     VK_FORMAT_R8G8B8A8_UNORM, firstSnapshot)) {
-            byte[] first = probe.render(pipeline, true, firstFrame);
-            compareWorldIds(firstSnapshot, first, "world-revision-1");
-            byte[] second = probe.render(pipeline, true, secondFrame);
-            compareWorldIds(secondSnapshot, second, "world-revision-2");
-            int changedPixels = 0;
-            for (int at = 0; at < first.length; at += 4) {
-                if (first[at] != second[at] || first[at + 1] != second[at + 1]
-                        || first[at + 2] != second[at + 2] || first[at + 3] != second[at + 3]) changedPixels++;
+        CameraSnapshot camera = new CameraSnapshot(WORLD_X + 24.0, WORLD_Y + 24.0, WORLD_Z + 24.0,
+                identity, identity);
+        return new WorldFixture(new WorldSnapshot(47, revision, camera, sections), opaque.build(), markers.build());
+    }
+
+    private static WorldFixture withSingleCube(WorldFixture previous) {
+        VoxelGridBuilder opaque = VoxelGrid.builder(WORLD_SIZE, WORLD_SIZE, WORLD_SIZE);
+        VoxelGridBuilder markers = VoxelGrid.builder(WORLD_SIZE, WORLD_SIZE, WORLD_SIZE);
+        for (int z = 0; z < WORLD_SIZE; z++) for (int y = 0; y < WORLD_SIZE; y++) for (int x = 0; x < WORLD_SIZE; x++) {
+            opaque.set(x, y, z, previous.opaque().material(x, y, z));
+            markers.set(x, y, z, previous.markers().material(x, y, z));
+        }
+        opaque.set(24, 24, 44, 1);
+        markers.set(24, 24, 44, 1);
+        List<SectionSnapshot> sections = new ArrayList<>(previous.snapshot().sections());
+        for (int i = 0; i < sections.size(); i++) {
+            SectionSnapshot old = sections.get(i);
+            if (old.x() == WORLD_X / 16 + 1 && old.y() == WORLD_Y / 16 + 1 && old.z() == WORLD_Z / 16 + 2) {
+                byte[] cells = new byte[SectionSnapshot.CELL_COUNT];
+                for (int z = 0; z < 16; z++) for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+                    cells[x + 16 * (y + 16 * z)] = old.cell(x, y, z);
+                }
+                cells[8 + 16 * (8 + 16 * 12)] = SectionSnapshot.OPAQUE_CUBE;
+                sections.set(i, new SectionSnapshot(old.x(), old.y(), old.z(), 3, cells));
+                break;
             }
-            System.out.printf("[BEDRAY-COMPUTE-PROBE] successiveRevisions=1,2 samePipeline=true changedPixels=%d%n", changedPixels);
-            assertTrue(changedPixels > 500, "Moved/removed/reclassified wall must change the uploaded scene");
         }
+        return new WorldFixture(new WorldSnapshot(47, 3, previous.snapshot().camera(), sections),
+                opaque.build(), markers.build());
     }
 
-    private static VoxelSceneSnapshot worldSnapshot(long revision, int wallZ, boolean revised) {
-        int[] cells = new int[32 * 24 * 32];
-        for (int y = 0; y < 24; y++) for (int x = 0; x < 32; x++) {
-            int kind = 1;
-            if (x >= 8 && x < 12 && y >= 8 && y < 12) kind = revised ? 3 : 2;
-            if (x >= 20 && x < 24 && y >= 10 && y < 14) kind = revised ? 2 : 3;
-            if (revised && x >= 12 && x < 20 && y >= 8 && y < 16) kind = 0;
-            cells[x + 32 * (y + 24 * wallZ)] = kind;
+    private static int changedPixels(byte[] before, byte[] after) {
+        int changed = 0;
+        for (int at = 0; at < before.length; at += 4) {
+            if (before[at] != after[at] || before[at + 1] != after[at + 1]
+                    || before[at + 2] != after[at + 2] || before[at + 3] != after[at + 3]) changed++;
         }
-        // Large world coordinates exercise the API's local-grid convention. The shader sees
-        // local coordinates only; neither the camera nor the grid is narrowed before rebasing.
-        return new VoxelSceneSnapshot(29_999_984, 64, -20_000_016, 32, 24, 32, 47L, revision, cells);
+        return changed;
     }
 
-    private static void compareWorldIds(VoxelSceneSnapshot snapshot, byte[] ids, String phase) {
+    private static void compareWorldIds(VoxelGrid oracle, byte[] ids, String phase, boolean markersExpected) {
         int mismatches = 0;
         int unexplained = 0;
         int cpuHits = 0;
@@ -134,7 +241,7 @@ class VulkanComputeProbeTest {
         int unknownHits = 0;
         for (int y = 0; y < HEIGHT; y++) for (int x = 0; x < WIDTH; x++) {
             int at = (x + WIDTH * y) * 4;
-            VoxelHit expected = worldCpuHit(snapshot, x, y);
+            VoxelHit expected = worldCpuHit(oracle, x, y);
             if (expected != null) cpuHits++;
             int kind = Byte.toUnsignedInt(ids[at + 3]);
             if (kind != 0) gpuHits++;
@@ -145,7 +252,7 @@ class VulkanComputeProbeTest {
                 boolean boundary = false;
                 for (float py : new float[]{-0.001f, 0, 0.001f}) {
                     for (float px : new float[]{-0.001f, 0, 0.001f}) {
-                        boundary |= matches(ids, at, worldCpuHit(snapshot, x + px, y + py));
+                        boundary |= matches(ids, at, worldCpuHit(oracle, x + px, y + py));
                     }
                 }
                 if (!boundary) unexplained++;
@@ -155,18 +262,23 @@ class VulkanComputeProbeTest {
                         + "excludedHits=%d unknownHits=%d mismatches=%d unexplained=%d%n",
                 phase, WIDTH * HEIGHT, cpuHits, gpuHits, excludedHits, unknownHits, mismatches, unexplained);
         assertTrue(gpuHits > 500, "World camera must intersect the uploaded wall");
-        assertTrue(excludedHits > 0, "Excluded cells must remain diagnostic markers rather than empty air");
-        assertTrue(unknownHits > 0, "Unknown cells must remain diagnostic markers rather than empty air");
+        if (markersExpected) {
+            assertTrue(excludedHits > 0, "Occupancy view must expose unsupported markers");
+            assertTrue(unknownHits > 0, "Occupancy view must expose unloaded markers");
+        } else {
+            assertEquals(0, excludedHits, "Shaded opaque traversal must not invent solid unsupported geometry");
+            assertEquals(0, unknownHits, "Shaded opaque traversal must not invent solid unloaded geometry");
+        }
         assertEquals(0, unexplained, "World GPU IDs differ beyond numerical cell boundaries");
         assertTrue(mismatches <= WIDTH * HEIGHT / 1000, "More than 0.1 percent of world rays disagree: " + mismatches);
     }
 
-    private static VoxelHit worldCpuHit(VoxelSceneSnapshot snapshot, float pixelX, float pixelY) {
+    private static VoxelHit worldCpuHit(VoxelGrid oracle, float pixelX, float pixelY) {
         float ndcX = (pixelX + 0.5f) / WIDTH * 2 - 1;
         float ndcY = (pixelY + 0.5f) / HEIGHT * 2 - 1;
         // Identity inverse view-projection and zero bob origin: (ndc.x,ndc.y,0.5,1).
         float[] ray = normalize(ndcX, ndcY, 0.5f);
-        return VoxelDda.trace(snapshot, 16, 12, -10, ray[0], ray[1], ray[2], 0, 160);
+        return VoxelDda.trace(oracle, 24, 24, 24, ray[0], ray[1], ray[2], 0, 160);
     }
 
     private static boolean matches(byte[] ids, int offset, VoxelHit hit) {
@@ -315,10 +427,16 @@ class VulkanComputeProbeTest {
         }
 
         byte[] render(VoxelComputePipeline pipeline, boolean hitIds) {
-            return render(pipeline, hitIds, null);
+            return render(pipeline, hitIds, null, null, List.of());
         }
 
-        byte[] render(VoxelComputePipeline pipeline, boolean hitIds, ComputeSceneFrame scene) {
+        byte[] renderWorld(VoxelComputePipeline pipeline, boolean hitIds, CameraSnapshot camera,
+                           VoxelWorldUpload uploads, List<VoxelWorldUpload.Tile> updates) {
+            return render(pipeline, hitIds, camera, uploads, updates);
+        }
+
+        private byte[] render(VoxelComputePipeline pipeline, boolean hitIds, CameraSnapshot camera,
+                              VoxelWorldUpload uploads, List<VoxelWorldUpload.Tile> updates) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 check(vkResetCommandBuffer(command, 0), "Reset command buffer");
                 check(vkBeginCommandBuffer(command, VkCommandBufferBeginInfo.calloc(stack).sType$Default()
@@ -332,7 +450,8 @@ class VulkanComputeProbeTest {
                     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                             0, null, null, transition);
                 }
-                pipeline.record(command, target, hitIds, scene);
+                if (camera == null) pipeline.record(command, target, hitIds);
+                else pipeline.recordWorld(command, target, hitIds, camera, uploads, updates);
                 VkImageMemoryBarrier.Buffer ready = VkImageMemoryBarrier.calloc(1, stack);
                 ready.get(0).sType$Default().image(target).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).oldLayout(VK_IMAGE_LAYOUT_GENERAL)

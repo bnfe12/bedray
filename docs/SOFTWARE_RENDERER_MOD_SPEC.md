@@ -97,7 +97,7 @@ Bedray's settings and renderer code are currently internal and coupled to the co
 
 The companion compiles against that artifact as provided/compile-only and declares Bedray as a required runtime mod. It must not shade/package a second API copy. Use a Gradle composite build or documented local Maven publication for development; releases use an immutable versioned API artifact.
 
-The broader world-renderer API below remains proposed. The implemented diagnostic seam is `io.github.andrexarlay.bedray.api.v1` with `GraphicsBackend`, `ComputeFrameContext`, `GraphicsBackendRegistry`, `VoxelVolume`, `VoxelSceneSnapshot` and `ComputeSceneFrame`. It carries bounded occupancy classifications and a current camera; full materials, entities and previous-frame history are not part of that seam yet.
+The broader world-renderer API below remains proposed. The implemented diagnostic seam is `io.github.andrexarlay.bedray.api.v1` with `GraphicsBackend`, `ComputeFrameContext`, `GraphicsBackendRegistry`, `VoxelVolume`, `SectionSnapshot`, `WorldSnapshot`, `WorldSnapshotStream` and `CameraSnapshot`. It carries bounded occupancy classifications and a current camera; full materials, entities and temporal reconstruction guides are not part of that seam yet.
 
 Proposed world-renderer package:
 

@@ -181,19 +181,25 @@ public final class BedrayConfigScreen extends Screen {
     private void buildCategoryRows() {
         switch (selectedCategory) {
             case 0 -> { // Ray Tracing & Engine
-                currentRows.add(new OptionRow("Compute Diagnostic", "Companion traversal diagnostic. Disable temporal upscaling and frame generation first.",
+                currentRows.add(new OptionRow("Compute Scene (Experimental)", "Synthetic demo or live opaque occupancy debug. Live mode omits unsupported shapes and textures. Disable temporal upscaling and frame generation first.",
                     () -> GraphicsBackendRegistry.backend() == null ? "Companion not installed"
-                        : GraphicsBackendRegistry.demoEnabled() ? "Requested" : "Off",
+                        : switch (GraphicsBackendRegistry.sceneMode()) {
+                            case OFF -> "Off"; case SYNTHETIC -> "Synthetic"; case LIVE_OPAQUE -> "Live opaque debug";
+                        },
                     () -> {
                         if (GraphicsBackendRegistry.backend() != null) {
-                            GraphicsBackendRegistry.setDemoEnabled(!GraphicsBackendRegistry.demoEnabled());
+                            GraphicsBackendRegistry.cycleSceneMode();
                         }
                     }));
-                currentRows.add(new OptionRow("Compute Scene", "World occupancy traces loaded full-occlusion cubes in a bounded area. Excluded shapes and unloaded cells have diagnostic colors; no texture fidelity is claimed.",
-                    () -> GraphicsBackendRegistry.sceneMode() == GraphicsBackendRegistry.SceneMode.SYNTHETIC
-                            ? "Synthetic scene" : "World occupancy diagnostic",
-                    () -> GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.sceneMode() == GraphicsBackendRegistry.SceneMode.SYNTHETIC
-                            ? GraphicsBackendRegistry.SceneMode.WORLD_OCCUPANCY : GraphicsBackendRegistry.SceneMode.SYNTHETIC)));
+                currentRows.add(new OptionRow("Compute Debug View", "Inspect shaded occupancy, normals, ray distance or occupancy mask.",
+                    () -> GraphicsBackendRegistry.backend()!=null && GraphicsBackendRegistry.backend().supportsDebugViews()
+                        ? GraphicsBackendRegistry.debugView().name() : "Unavailable in this companion", () -> {
+                        if (GraphicsBackendRegistry.backend()==null || !GraphicsBackendRegistry.backend().supportsDebugViews()) return;
+                        var values = GraphicsBackendRegistry.DebugView.values();
+                        GraphicsBackendRegistry.setDebugView(values[(GraphicsBackendRegistry.debugView().ordinal()+1)%values.length]);
+                    }));
+                currentRows.add(new OptionRow("Compute Scene Data", "Bounded loaded sections; unsupported cells are omitted in live debug mode.",
+                    () -> GraphicsBackendRegistry.backend()==null ? "Companion not installed" : GraphicsBackendRegistry.backend().sceneDetail(), () -> {}));
                 currentRows.add(new OptionRow("Compute Status", "Status of host command recording; live gameplay compatibility still requires a game test.",
                     GraphicsBackendRegistry::status, () -> {}));
 

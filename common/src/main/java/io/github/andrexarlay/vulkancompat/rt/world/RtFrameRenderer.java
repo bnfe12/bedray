@@ -326,11 +326,11 @@ public final class RtFrameRenderer {
         return RtGeometryGate.enabled();
     }
 
-    /** The synthetic compute scene owns this frame; close capture and retire hardware-only resources. */
-    public static void suspendForComputeDemo() {
+    /** The compute diagnostic owns this frame; close capture and retire hardware-only resources. */
+    public static void suspendForComputeDiagnostic() {
         io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().endFrame();
         if (world != null) {
-            shutdown("compute_synthetic_scene");
+            shutdown("compute_diagnostic_scene");
         }
     }
 

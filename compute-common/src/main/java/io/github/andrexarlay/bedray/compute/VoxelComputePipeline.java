@@ -1,8 +1,11 @@
 package io.github.andrexarlay.bedray.compute;
 
 import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
-import io.github.andrexarlay.bedray.api.v1.ComputeSceneFrame;
 import io.github.andrexarlay.bedray.api.v1.VoxelVolume;
+import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
+import io.github.andrexarlay.bedray.api.v1.CameraSnapshot;
+import java.nio.ByteOrder;
+import java.util.List;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
@@ -18,19 +21,19 @@ import static org.lwjgl.vulkan.VK10.*;
 public final class VoxelComputePipeline implements AutoCloseable {
     private final VkDevice device;
     private final int width, height, targetFormat;
+    private final boolean liveCapacity;
     private long gridBuffer, gridMemory, image, imageMemory, view;
     private long shader, setLayout, pipelineLayout, pipeline, pool, descriptorSet;
     private boolean initialized;
-    private final long gridBytes;
-    private ByteBuffer uploadScratch;
-    private long uploadedEpoch = Long.MIN_VALUE, uploadedRevision = Long.MIN_VALUE;
+    private ByteBuffer tileScratch;
 
     public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelVolume grid) {
         this.device = device;
         this.width = width;
         this.height = height;
         this.targetFormat = targetFormat;
-        this.gridBytes = grid.byteSize();
+        this.liveCapacity = grid.sizeX() == 48 && grid.sizeY() == 48 && grid.sizeZ() == 48
+                && grid.cellCount() == 48*48*48 && grid.byteSize() == 16L+48L*48*48*4;
         try {
             if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid output dimensions");
             create(grid);
@@ -56,6 +59,10 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
     private void create(VoxelVolume grid) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            if (targetFormat != VK_FORMAT_R8G8B8A8_UNORM && targetFormat != VK_FORMAT_B8G8R8A8_UNORM
+                && targetFormat != VK_FORMAT_R8G8B8A8_SRGB && targetFormat != VK_FORMAT_B8G8R8A8_SRGB) {
+                throw new IllegalArgumentException("Compute diagnostic requires an 8-bit UNORM/sRGB target; HDR integration is pending");
+            }
             VkPhysicalDevice physical = device.getPhysicalDevice();
             VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
             vkGetPhysicalDeviceProperties(physical, properties);
@@ -72,8 +79,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
             LongBuffer handle = stack.mallocLong(1);
             check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default().size(grid.byteSize())
-                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
-                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create grid buffer");
+                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create grid buffer");
             gridBuffer = handle.get(0);
             VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
             vkGetBufferMemoryRequirements(device, gridBuffer, requirements);
@@ -153,31 +159,52 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
     /** Target must be a single-sample color image, TRANSFER_DST usage, in GENERAL on this queue. */
     public void record(VkCommandBuffer command, long target) {
-        record(command, target, false, null);
+        record(command, target, false);
     }
 
     void record(VkCommandBuffer command, long target, boolean hitIds) {
-        record(command, target, hitIds, null);
+        record(command, target, hitIds, null, null, List.of());
     }
 
-    public void record(VkCommandBuffer command, long target, ComputeSceneFrame scene) {
-        record(command, target, false, scene);
+    public void recordWorld(VkCommandBuffer command, long target, CameraSnapshot camera,
+                            VoxelWorldUpload origin, List<VoxelWorldUpload.Tile> updates) {
+        java.util.Objects.requireNonNull(camera);
+        java.util.Objects.requireNonNull(origin);
+        record(command,target,false,camera,origin,updates);
     }
 
-    void record(VkCommandBuffer command, long target, boolean hitIds, ComputeSceneFrame scene) {
-        boolean upload = scene != null && (scene.snapshot().worldEpoch() != uploadedEpoch
-                || scene.snapshot().revision() != uploadedRevision);
-        // Allocate and serialize before recording; vkCmdUpdateBuffer copies its input during recording.
-        // Host-visible memory is never overwritten while queued frames may still read it.
-        if (upload) {
-            if (scene.snapshot().byteSize() != gridBytes) throw new IllegalArgumentException("Voxel buffer extent changed without host cleanup");
-            if (uploadScratch == null) uploadScratch = MemoryUtil.memAlloc(Math.toIntExact(gridBytes));
-            uploadScratch.clear();
-            scene.snapshot().writeTo(uploadScratch);
-            uploadScratch.flip();
+    void recordWorld(VkCommandBuffer command, long target, boolean hitIds, CameraSnapshot camera,
+                     VoxelWorldUpload origin, List<VoxelWorldUpload.Tile> updates) {
+        java.util.Objects.requireNonNull(camera);
+        java.util.Objects.requireNonNull(origin);
+        record(command,target,hitIds,camera,origin,updates);
+    }
+
+    private void record(VkCommandBuffer command, long target, boolean hitIds, CameraSnapshot camera,
+                        VoxelWorldUpload origin, List<VoxelWorldUpload.Tile> updates) {
+        if (camera != null && !liveCapacity) throw new IllegalArgumentException("Live traversal requires a 48 cubed tile buffer");
+        if (!updates.isEmpty()) {
+            // vkCmdUpdateBuffer copies bytes into the command buffer immediately. No persistent mapped
+            // staging range is overwritten while an earlier frame might still be reading it.
+            if (tileScratch == null) tileScratch = MemoryUtil.memAlloc(VoxelWorldUpload.TILE_BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer upload = tileScratch;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1,stack);
+                barrier.get(0).sType$Default().buffer(gridBuffer).offset(0).size(VK_WHOLE_SIZE)
+                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .srcAccessMask(VK_ACCESS_SHADER_READ_BIT).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
+                vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0,null,barrier,null);
+                for (var tile : updates) {
+                    upload.clear(); tile.writeTo(upload); upload.flip();
+                    vkCmdUpdateBuffer(command,gridBuffer,tile.offset(),upload);
+                }
+                barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+                vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    0,null,barrier,null);
+            }
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            if (upload) recordUpload(command, scene, stack);
             VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack);
             var b = barrier.get(0).sType$Default().image(image).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).oldLayout(initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED)
@@ -188,11 +215,14 @@ public final class VoxelComputePipeline implements AutoCloseable {
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, null, barrier);
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
-            ByteBuffer constants = stack.calloc(112);
-            if (scene != null) scene.writeCameraTo(constants);
-            constants.position(96);
-            constants.putInt(hitIds ? 1 : 0).putInt(scene == null ? 0 : 1).putInt(0).putInt(0).flip();
-            vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, constants);
+            ByteBuffer push = stack.calloc(112).order(ByteOrder.LITTLE_ENDIAN);
+            if (camera != null) {
+                camera.writePushConstants(push,origin.originX(),origin.originY(),origin.originZ());
+            }
+            boolean srgbTarget = targetFormat == VK_FORMAT_R8G8B8A8_SRGB || targetFormat == VK_FORMAT_B8G8R8A8_SRGB;
+            push.putInt(80,(hitIds ? 1 : 0) | (camera != null ? 2 : 0) | (srgbTarget ? 4 : 0));
+            push.putInt(84,io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry.debugView().ordinal());
+            vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             vkCmdDispatch(command, (width + 7) / 8, (height + 7) / 8, 1);
             b.oldLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, barrier);
@@ -214,27 +244,9 @@ public final class VoxelComputePipeline implements AutoCloseable {
         }
     }
 
-    private void recordUpload(VkCommandBuffer command, ComputeSceneFrame scene, MemoryStack stack) {
-        VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack);
-        var b = barrier.get(0).sType$Default().buffer(gridBuffer).offset(0).size(gridBytes)
-                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                .srcAccessMask(VK_ACCESS_SHADER_READ_BIT).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                0, null, barrier, null);
-        for (long offset = 0; offset < gridBytes; offset += 65536) {
-            int count = (int) Math.min(65536L, gridBytes - offset);
-            vkCmdUpdateBuffer(command, gridBuffer, offset, uploadScratch.slice(Math.toIntExact(offset), count));
-        }
-        b.srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, null, barrier, null);
-        uploadedEpoch = scene.snapshot().worldEpoch();
-        uploadedRevision = scene.snapshot().revision();
-    }
-
     @Override public void close() {
         // Only resize, mode changes and teardown wait; steady-state frames never wait for the CPU.
-        vkDeviceWaitIdle(device);
+        check(vkDeviceWaitIdle(device), "wait before compute resource retirement");
         destroy();
     }
 
@@ -249,7 +261,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
         if (imageMemory != 0) vkFreeMemory(device, imageMemory, null);
         if (gridBuffer != 0) vkDestroyBuffer(device, gridBuffer, null);
         if (gridMemory != 0) vkFreeMemory(device, gridMemory, null);
-        if (uploadScratch != null) { MemoryUtil.memFree(uploadScratch); uploadScratch = null; }
+        if (tileScratch != null) { MemoryUtil.memFree(tileScratch); tileScratch = null; }
         pool = pipeline = pipelineLayout = setLayout = shader = view = image = imageMemory = gridBuffer = gridMemory = 0;
     }
 
