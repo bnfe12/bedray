@@ -147,7 +147,10 @@ public final class IrisShaderHost implements ShaderHost {
         IrisPassGraph graph = result.graph();
         activeGraph = graph;
         return ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY,
-            "pack " + report.name() + " (" + graph.passCount() + " passes) compiled; in-game execution is not verified");
+            "pack " + report.name() + " (" + graph.passCount() + " passes, " + graph.options().changedOptions()
+                + " changed options, profile=" + (graph.options().matchedProfile() == null ? "custom" : graph.options().matchedProfile())
+                + ") compiled; in-game execution is not verified"
+                + (graph.options().diagnostics().isEmpty() ? "" : "; " + String.join("; ", graph.options().diagnostics())));
     }
 
     @Override

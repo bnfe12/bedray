@@ -11,7 +11,11 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
 - Pack discovery and shaderc preprocessing feed GLSL translation and a Vulkan executor. Includes are
   read only in live branches, with a depth/read/total-source budget and pack-root path confinement.
   Macro-expanded declarations and active draw-buffer directives are analyzed after preprocessing.
-  This uses source defaults; Iris option/profile overrides and conditional renderer properties remain pending.
+  Source options, read-only saved overrides, inherited profiles and conditional renderer properties
+  are resolved before translation; see [the option contract](IRIS_OPTIONS.md).
+- Iris's sibling `<pack filename>.txt` supplies saved overrides. A session profile can be selected with
+  `-Dbedray.iris.profile=NAME`; explicit saved values win. Profile matching and `program.*.enabled`
+  choose the active pass list before compilation; disabled passes create no pipelines and record no draws.
 - Vertex/fragment interfaces are checked together for type, array shape, location and interpolation.
   Matrices and fixed-size arrays reserve their full location span; the post dialect caps it at 16.
   Top-level declarations are read as statements, including multiline and same-line declarations.
@@ -35,11 +39,11 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
   separate from successful pack compilation.
 
 General packs requiring gbuffers, shadow maps, deferred/compute stages, multiple color outputs,
-custom images/textures/SSBO, required Iris features, conditional renderer properties, persistent color
+custom images/textures/SSBO, required Iris features, persistent color
 buffers, mipmap/format directives, world uniforms, fragment coordinate layout overrides/front-face semantics or
 geometry/tessellation are still unsupported.
-Pack property semantics are not silently discarded. Screen/slider metadata is accepted; shader option
-and profile evaluation is pending. Frame generation and temporal upscaling are gated until matching
+Pack property semantics are not silently discarded. Screen/slider/profile metadata and enabled expressions
+are evaluated in the documented post dialect; other active renderer properties are refused. Frame generation and temporal upscaling are gated until matching
 history/guide semantics exist.
 
 ## Future development activation
@@ -75,6 +79,10 @@ callbacks, macro preprocessing, paired translation and SPIR-V compilation. It ad
 GPU work or product JAR. See [the Vitrail source study](VITRAIL_STUDY.md) for the architecture decisions
 and the distinction between this post subset and a complete shader engine.
 
+The options milestone compiled the example with source defaults (one final pass) and its BRIGHT profile
+(composite plus final). Both configurations compiled through properties/option resolution to SPIR-V.
+This is compiler evidence only; it does not establish image correctness or full Iris option parity.
+
 ## Merge into Bedray with the voxel branch
 
 Keep `common/.../shaderhost` as the compatibility/post-processing layer. Voxel traversal remains in
@@ -93,6 +101,6 @@ color-only post packs can compose with those renderers; depth-reading packs stay
 The host owns all target formats, command submission and retirement. Resolve the three shared mixin/UI
 files once; do not retain duplicate frame hooks or a second executor copied from the old development repo.
 
-Next gates are saved shader option/profile and engine-macro semantics, typed world uniforms/guide API, a real multi-target
+Next gates are world/device-aware engine macros and typed world uniforms/guide API, a real multi-target
 resource graph (formats/clear/persistence/mips), then geometry/shadow/deferred integration. They require
 runtime evidence before any supported-pack list or release.

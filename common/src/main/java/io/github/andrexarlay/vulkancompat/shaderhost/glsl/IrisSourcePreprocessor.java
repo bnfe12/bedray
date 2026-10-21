@@ -22,8 +22,8 @@ import java.util.regex.Pattern;
  * No GPU or Vulkan device is involved. All native include allocations belong to one invocation.
  *
  * This is the post-host dialect: GLSL 450 preprocessing, the pack's original numeric __VERSION__,
- * and source-defined defaults. It does not advertise Iris feature macros, driver extensions,
- * profiles, user option overrides or world-dependent engine macros.
+ * and the pack's original numeric __VERSION__. Source option editing happens before this layer.
+ * It does not advertise Iris capabilities or world-dependent engine macros.
  */
 public final class IrisSourcePreprocessor {
     public static final int MAX_INCLUDE_READS = 1024;
@@ -39,21 +39,29 @@ public final class IrisSourcePreprocessor {
     public static String preprocess(String shadersRoot, String entry, IncludeExpander.Reader reader,
                                     IrisGlslTranslator.Stage stage)
         throws IOException, SpirvCompiler.SpirvCompileException {
-        return new Session(shadersRoot, reader).run(entry, stage);
+        return preprocess(shadersRoot, entry, reader, stage, Map.of());
+    }
+
+    public static String preprocess(String shadersRoot, String entry, IncludeExpander.Reader reader,
+                                    IrisGlslTranslator.Stage stage, Map<String, String> environment)
+        throws IOException, SpirvCompiler.SpirvCompileException {
+        return new Session(shadersRoot, reader, environment).run(entry, stage);
     }
 
     private static final class Session {
         private final String root;
         private final IncludeExpander.Reader reader;
+        private final Map<String, String> environment;
         private final Map<Long, NativeInclude> includes = new LinkedHashMap<>();
         private int reads;
         private long sourceChars;
         private int originalVersion = 110;
         private String failure;
 
-        private Session(String root, IncludeExpander.Reader reader) {
+        private Session(String root, IncludeExpander.Reader reader, Map<String, String> environment) {
             this.root = root;
             this.reader = reader;
+            this.environment = Map.copyOf(environment);
         }
 
         private String run(String entry, IrisGlslTranslator.Stage stage)
@@ -82,6 +90,8 @@ public final class IrisSourcePreprocessor {
                 Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan,
                     Shaderc.shaderc_env_version_vulkan_1_2);
                 Shaderc.shaderc_compile_options_set_include_callbacks(options, resolve, release, 0);
+                for (var macro : environment.entrySet())
+                    Shaderc.shaderc_compile_options_add_macro_definition(options, macro.getKey(), macro.getValue());
                 result = Shaderc.shaderc_compile_into_preprocessed_text(compiler, source,
                     SpirvCompiler.toShadercKind(stage), entry, "main", options);
                 if (failure != null) throw new PackScanException(failure);

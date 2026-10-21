@@ -15,7 +15,6 @@ import io.github.andrexarlay.vulkancompat.shaderhost.pack.ShaderpackScanner;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -95,12 +94,20 @@ public final class IrisPassGraph {
     private final String packName;
     private final String shadersRoot;
     private final List<Pass> passes;
+    private final IrisPackOptions.Summary options;
 
     public IrisPassGraph(String packName, String shadersRoot, List<Pass> passes) {
+        this(packName, shadersRoot, passes, IrisPackOptions.Summary.defaults());
+    }
+
+    public IrisPassGraph(String packName, String shadersRoot, List<Pass> passes, IrisPackOptions.Summary options) {
         this.packName = Objects.requireNonNull(packName, "packName");
         this.shadersRoot = Objects.requireNonNull(shadersRoot, "shadersRoot");
         this.passes = List.copyOf(passes);
+        this.options = Objects.requireNonNull(options, "options");
     }
+
+    public IrisPackOptions.Summary options() { return options; }
 
     public String packName() {
         return packName;
@@ -135,8 +142,7 @@ public final class IrisPassGraph {
         Objects.requireNonNull(report, "report");
         List<String> unsupported = new ArrayList<>();
 
-        if (!report.requiredFeatures().isEmpty()) unsupported.add("required Iris features " + report.requiredFeatures());
-        if (report.propertiesConditional()) unsupported.add("conditional shaders.properties (options are not evaluated yet)");
+        if (!report.propertiesConditional() && !report.requiredFeatures().isEmpty()) unsupported.add("required Iris features " + report.requiredFeatures());
 
         // 1. Dimension folders: Step A only supports the root shaders/ folder.
         List<String> nonRootFolders = report.dimensions().keySet().stream().filter(f -> !f.isEmpty()).toList();
@@ -148,18 +154,18 @@ public final class IrisPassGraph {
         if (report.rtModel() != PackReport.RtModel.NONE) {
             unsupported.add("ray tracing (" + report.rtModel() + ")");
         }
-        if (!report.rtDispatch().isEmpty()) {
+        if (!report.propertiesConditional() && !report.rtDispatch().isEmpty()) {
             unsupported.add("vulkanite rt passes " + report.rtDispatch().keySet());
         }
 
         // 3. Storage buffers and custom images/textures.
-        if (!report.bufferObjects().isEmpty() || report.requiredFeatures().contains("SSBO")) {
+        if (!report.propertiesConditional() && (!report.bufferObjects().isEmpty() || report.requiredFeatures().contains("SSBO"))) {
             unsupported.add("SSBO buffer objects " + report.bufferObjects());
         }
-        if (!report.customImages().isEmpty() || report.requiredFeatures().contains("CUSTOM_IMAGES")) {
+        if (!report.propertiesConditional() && (!report.customImages().isEmpty() || report.requiredFeatures().contains("CUSTOM_IMAGES"))) {
             unsupported.add("custom images " + report.customImages());
         }
-        if (!report.customTextures().isEmpty()) {
+        if (!report.propertiesConditional() && !report.customTextures().isEmpty()) {
             unsupported.add("custom textures " + report.customTextures());
         }
 
@@ -214,6 +220,10 @@ public final class IrisPassGraph {
      * Builds and compiles the {@link IrisPassGraph} from a {@link PackSource} and pre-scanned {@link PackReport}.
      */
     public static ParseResult build(PackSource src, PackReport report) throws IOException {
+        return build(src, report, IrisPackOptions.Request.defaults());
+    }
+
+    public static ParseResult build(PackSource src, PackReport report, IrisPackOptions.Request request) throws IOException {
         Objects.requireNonNull(src, "src");
         Objects.requireNonNull(report, "report");
 
@@ -229,13 +239,19 @@ public final class IrisPassGraph {
                 "pack " + report.name() + " has no programs"), null);
         }
 
-        String propertiesPath = report.shadersRoot() + "shaders.properties";
-        if (src.entries().contains(propertiesPath)) {
-            var properties = io.github.andrexarlay.vulkancompat.shaderhost.pack.PackProperties.parse(
-                new String(src.read(propertiesPath),StandardCharsets.UTF_8));
+        IrisPackOptions configuration;
+        try { configuration = IrisPackOptions.resolve(src, report, request); }
+        catch (PackScanException e) { return new ParseResult(false,
+            ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES, "pack options: " + e.getMessage()), null); }
+        catch (SpirvCompiler.SpirvCompileException e) { return new ParseResult(false,
+            ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.COMPILE_FAILED, "pack properties: " + e.errorLog()), null); }
+        {
+            var properties = configuration.properties();
             List<String> unsupportedKeys = properties.keys().stream().filter(key ->
                 !key.equals("screen") && !key.startsWith("screen.") && !key.equals("sliders")
-                && !key.equals("iris.features.optional")).toList();
+                && !key.startsWith("profile.") && !key.equals("iris.features.optional")
+                && !(key.equals("iris.features.required") && properties.all(key).stream().allMatch(String::isBlank))
+                && !(key.startsWith("program.") && key.endsWith(".enabled"))).toList();
             if (!unsupportedKeys.isEmpty()) return new ParseResult(false,
                 ShaderHostStatus.of(ShaderHostKind.IRIS,ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                     "unimplemented shader properties: " + unsupportedKeys),null);
@@ -285,13 +301,14 @@ public final class IrisPassGraph {
 
         List<String> orderedPasses = new ArrayList<>(compositeNames);
         orderedPasses.addAll(finalNames);
+        orderedPasses.removeIf(configuration.summary().disabledPrograms()::contains);
 
         if (orderedPasses.isEmpty()) {
-            return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
-                "pack " + report.name() + " has no composite or final passes"), null);
+            return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.DISABLED_FOR_SESSION,
+                "pack " + report.name() + " has no enabled composite or final passes"), null);
         }
 
-        if (orderedPasses.size() > IrisPostExecutor.MAX_PASS_SETS || finalNames.size() > 1)
+        if (orderedPasses.size() > IrisPostExecutor.MAX_PASS_SETS || orderedPasses.stream().filter(p -> p.startsWith("final")).count() > 1)
             return new ParseResult(false,ShaderHostStatus.of(ShaderHostKind.IRIS,ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                 "post host supports at most 32 passes and one final pass"),null);
 
@@ -312,7 +329,7 @@ public final class IrisPassGraph {
             String expandedFsh;
             try {
                 expandedFsh = IrisSourcePreprocessor.preprocess(report.shadersRoot(), fshPath,
-                    entry -> new String(src.read(entry), StandardCharsets.UTF_8), IrisGlslTranslator.Stage.FRAGMENT);
+                    configuration::readSource, IrisGlslTranslator.Stage.FRAGMENT, IrisPackOptions.ENVIRONMENT);
             } catch (PackScanException e) {
                 return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                     "failed preprocessing " + fshPath + ": " + e.getMessage()), null);
@@ -327,7 +344,7 @@ public final class IrisPassGraph {
             if (src.entries().contains(vshPath)) {
                 try {
                     expandedVsh = IrisSourcePreprocessor.preprocess(report.shadersRoot(), vshPath,
-                        entry -> new String(src.read(entry), StandardCharsets.UTF_8), IrisGlslTranslator.Stage.VERTEX);
+                        configuration::readSource, IrisGlslTranslator.Stage.VERTEX, IrisPackOptions.ENVIRONMENT);
                 } catch (PackScanException e) {
                     return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                         "failed preprocessing " + vshPath + ": " + e.getMessage()), null);
@@ -384,7 +401,7 @@ public final class IrisPassGraph {
                 vResult, fResult, vSpv, fSpv));
         }
 
-        IrisPassGraph graph = new IrisPassGraph(report.name(), report.shadersRoot(), passes);
+        IrisPassGraph graph = new IrisPassGraph(report.name(), report.shadersRoot(), passes, configuration.summary());
         return new ParseResult(true, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY,
             "all " + passes.size() + " passes (" + orderedPasses + ") translated and compiled to SPIR-V"), graph);
     }
@@ -402,7 +419,7 @@ public final class IrisPassGraph {
      */
     public static ParseResult build(Path packPath, ScanLimits limits) throws IOException {
         try (PackSource src = PackSource.open(packPath, limits)) {
-            return build(src);
+            return build(src, ShaderpackScanner.scan(src), IrisPackOptions.readRequest(packPath));
         }
     }
 
