@@ -14,6 +14,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinVulkanDeviceFrameGen {
     @Inject(method = "close", at = @At("HEAD"))
     private void vkb$shutdownStreamline(CallbackInfo ci) {
+        io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onDeviceClose(
+            (com.mojang.renderpearl.backend.vulkan.VulkanDevice)(Object)this);
         FrameGenRuntime.onDeviceClose();
     }
 }

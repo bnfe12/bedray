@@ -96,6 +96,8 @@ public final class IrisPostExecutor implements AutoCloseable {
     private long descriptorPool = 0L;
     private long[][] descriptorSets; // [FRAME_SLOTS][MAX_PASS_SETS]
     private int currentFrameSlot = -1;
+    private final long[][] boundColor = new long[FRAME_SLOTS][MAX_PASS_SETS];
+    private final long[][] boundDepth = new long[FRAME_SLOTS][MAX_PASS_SETS];
 
     private RtMemory.Img colortex0;
     private RtMemory.Img colortex1;
@@ -118,7 +120,8 @@ public final class IrisPostExecutor implements AutoCloseable {
         this.device = Objects.requireNonNull(device, "device");
         this.memory = Objects.requireNonNull(memory, "memory");
         this.colorFormat = colorFormat;
-        initVulkan();
+        try { initVulkan(); }
+        catch (RuntimeException | LinkageError error) { cleanup(); throw error; }
     }
 
     /**
@@ -215,7 +218,7 @@ public final class IrisPostExecutor implements AutoCloseable {
         validateGraph(graph);
 
         if (device != null) {
-            VK10.vkDeviceWaitIdle(device);
+            RtFailure.check(VK10.vkDeviceWaitIdle(device), "iris_pipeline_retirement_wait");
             for (long pipe : this.pipelines.values()) {
                 VK10.vkDestroyPipeline(device, pipe, null);
             }
@@ -327,7 +330,7 @@ public final class IrisPostExecutor implements AutoCloseable {
             return;
         }
         if (device != null && (colortex0 != null || colortex1 != null)) {
-            VK10.vkDeviceWaitIdle(device);
+            RtFailure.check(VK10.vkDeviceWaitIdle(device), "iris_image_retirement_wait");
         }
         if (colortex0 != null) {
             memory.destroy(colortex0);
@@ -346,6 +349,13 @@ public final class IrisPostExecutor implements AutoCloseable {
         imagesInitialized = false;
         LOGGER.info("[IrisPostExecutor] Allocated ping-pong images colortex0/1: {}x{} format={}",
             width, height, colorFormat);
+    }
+
+    /** Host calls before opening its transient command buffer; may allocate pipelines/images. */
+    public void prepare(IrisPassGraph graph, int width, int height) {
+        validateGraph(graph);
+        ensure(width,height);
+        buildPipelines(graph);
     }
 
     /**
@@ -436,7 +446,7 @@ public final class IrisPostExecutor implements AutoCloseable {
 
         int readIndex = 0; // 0 = colortex0, 1 = colortex1
         List<IrisPassGraph.Pass> passes = graph.passes();
-        boolean hasFinalPass = graph.finalPass() != null;
+
 
         for (int passIdx = 0; passIdx < passes.size(); passIdx++) {
             IrisPassGraph.Pass pass = passes.get(passIdx);
@@ -450,8 +460,21 @@ public final class IrisPostExecutor implements AutoCloseable {
 
             RtMemory.Img readImg = (readIndex == 0) ? colortex0 : colortex1;
             RtMemory.Img writeImg = (readIndex == 0) ? colortex1 : colortex0;
-            long targetView = pass.isFinal() ? engineColorView : writeImg.view;
+            // All passes, including final, stay offscreen. Commit to the host image only after all succeed.
+            long targetView = writeImg.view;
             long dSet = descriptorSets[slot][passIdx];
+            // Deterministic contents even when a pack clips vertices or discards fragments.
+            // Keep the preceding color, rather than exposing uninitialized ping-pong pixels.
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkBarriers.fullMemoryBarrier(cmd);
+                VkImageCopy.Buffer preserve = VkImageCopy.calloc(1,stack);
+                preserve.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+                preserve.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+                preserve.get(0).extent().set(width,height,1);
+                VK10.vkCmdCopyImage(cmd,readImg.image,VK10.VK_IMAGE_LAYOUT_GENERAL,
+                    writeImg.image,VK10.VK_IMAGE_LAYOUT_GENERAL,preserve);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
 
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 // 1. Update descriptor set for current pass
@@ -465,7 +488,13 @@ public final class IrisPostExecutor implements AutoCloseable {
                 writes.get(1).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_DEPTHTEX0)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imgInfos.slice(1, 1));
 
-                VK10.vkUpdateDescriptorSets(device, writes, null);
+                if (boundColor[slot][passIdx] != readImg.view || boundDepth[slot][passIdx] != depthView) {
+                    if (boundColor[slot][passIdx] != 0)
+                        throw new IllegalStateException("Host must retire Iris executor before replacing sampled images");
+                    VK10.vkUpdateDescriptorSets(device, writes, null);
+                    boundColor[slot][passIdx] = readImg.view;
+                    boundDepth[slot][passIdx] = depthView;
+                }
 
                 // 2. Bind pipeline
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeHandle);
@@ -485,7 +514,7 @@ public final class IrisPostExecutor implements AutoCloseable {
                 colorAttachment.get(0).sType$Default()
                     .imageView(targetView)
                     .imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                    .loadOp(VK10.VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+                    .loadOp(VK10.VK_ATTACHMENT_LOAD_OP_LOAD)
                     .storeOp(VK10.VK_ATTACHMENT_STORE_OP_STORE);
 
                 VkRenderingInfo renderingInfo = VkRenderingInfo.calloc(stack);
@@ -496,11 +525,11 @@ public final class IrisPostExecutor implements AutoCloseable {
 
                 beginRendering(cmd, renderingInfo);
 
-                // 6. Draw fullscreen triangle (3 vertices)
-                VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
-
-                // 7. End dynamic rendering
-                endRendering(cmd);
+                try {
+                    VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
+                } finally {
+                    endRendering(cmd);
+                }
             }
 
             // 8. Memory barrier and ping-pong switch
@@ -508,8 +537,8 @@ public final class IrisPostExecutor implements AutoCloseable {
             readIndex = 1 - readIndex;
         }
 
-        // Fallback: If no pass was marked final, copy the last rendered ping-pong image to engineColorImage
-        if (!hasFinalPass && !passes.isEmpty()) {
+        // Commit the completed graph to the host image. No earlier pass modifies it.
+        if (!passes.isEmpty()) {
             RtMemory.Img lastWritten = (readIndex == 1) ? colortex1 : colortex0;
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkImageCopy.Buffer copyRegion = VkImageCopy.calloc(1, stack);
@@ -636,7 +665,12 @@ public final class IrisPostExecutor implements AutoCloseable {
         if (graph.passes().isEmpty()) {
             throw new IllegalArgumentException("Pass graph has no passes to execute");
         }
+        if (graph.passCount() > MAX_PASS_SETS) throw new IllegalArgumentException("Too many fullscreen passes");
+        long finals = graph.passes().stream().filter(IrisPassGraph.Pass::isFinal).count();
+        if (finals > 1 || finals == 1 && !graph.passes().getLast().isFinal())
+            throw new IllegalArgumentException("A graph may have one final pass, last in the sequence");
         for (IrisPassGraph.Pass pass : graph.passes()) {
+            if (!pass.drawBuffers().equals(List.of(0))) throw new IllegalArgumentException("Only colortex0 output is supported");
             if (pass.vertexSpirv() == null || pass.fragmentSpirv() == null) {
                 throw new IllegalArgumentException("Pass " + pass.name() + " has null SPIR-V bytecode");
             }
@@ -658,7 +692,7 @@ public final class IrisPostExecutor implements AutoCloseable {
         for (int i = 0; i < graph.passes().size(); i++) {
             IrisPassGraph.Pass pass = graph.passes().get(i);
             String readName = (readIndex == 0) ? "colortex0" : "colortex1";
-            String writeName = pass.isFinal() ? "engineColorView" : ((readIndex == 0) ? "colortex1" : "colortex0");
+            String writeName = (readIndex == 0) ? "colortex1" : "colortex0";
             plan.add(new PassExecutionStep(i, pass.name(), pass.isFinal(), readName, writeName, frameSlot, i));
             readIndex = 1 - readIndex;
         }
@@ -726,7 +760,7 @@ public final class IrisPostExecutor implements AutoCloseable {
 
     public synchronized void cleanup() {
         if (device != null) {
-            VK10.vkDeviceWaitIdle(device);
+            RtFailure.check(VK10.vkDeviceWaitIdle(device), "iris_cleanup_wait");
             for (long pipe : pipelines.values()) {
                 VK10.vkDestroyPipeline(device, pipe, null);
             }

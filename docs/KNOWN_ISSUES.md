@@ -33,7 +33,7 @@ more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc 
 
 * Frame generation (BETA) was run only on one RTX 5060 Ti; there is no benchmark table, and other GPUs are untested ([FRAME_GENERATION.md](FRAME_GENERATION.md)). It needs a restart after the Streamline files are added.
 * DLSS Ray Reconstruction was checked by the author on one machine only.
-* DLSS 5 / neural rendering, AMD frame generation, FSR 4 and the Iris / Dirt RT shader-pack host are not implemented.
+* DLSS 5 / neural rendering, AMD frame generation, FSR 4 and general Iris / Dirt RT shader-pack compatibility are not implemented. The [experimental post subset](IRIS_VULKAN.md) is source-only and unverified in-game.
 * **Fabric:** the jar builds and its metadata is checked, but there is much less in-game evidence than for NeoForge.
 * Some mods that replace the renderer or draw with OpenGL may conflict. Test on a clean instance first.
 

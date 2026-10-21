@@ -135,6 +135,9 @@ public final class IrisPassGraph {
         Objects.requireNonNull(report, "report");
         List<String> unsupported = new ArrayList<>();
 
+        if (!report.requiredFeatures().isEmpty()) unsupported.add("required Iris features " + report.requiredFeatures());
+        if (report.propertiesConditional()) unsupported.add("conditional shaders.properties (options are not evaluated yet)");
+
         // 1. Dimension folders: Step A only supports the root shaders/ folder.
         List<String> nonRootFolders = report.dimensions().keySet().stream().filter(f -> !f.isEmpty()).toList();
         if (!nonRootFolders.isEmpty()) {
@@ -226,6 +229,18 @@ public final class IrisPassGraph {
                 "pack " + report.name() + " has no programs"), null);
         }
 
+        String propertiesPath = report.shadersRoot() + "shaders.properties";
+        if (src.entries().contains(propertiesPath)) {
+            var properties = io.github.andrexarlay.vulkancompat.shaderhost.pack.PackProperties.parse(
+                new String(src.read(propertiesPath),StandardCharsets.UTF_8));
+            List<String> unsupportedKeys = properties.keys().stream().filter(key ->
+                !key.equals("screen") && !key.startsWith("screen.") && !key.equals("sliders")
+                && !key.equals("iris.features.optional")).toList();
+            if (!unsupportedKeys.isEmpty()) return new ParseResult(false,
+                ShaderHostStatus.of(ShaderHostKind.IRIS,ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                    "unimplemented shader properties: " + unsupportedKeys),null);
+        }
+
         // 2. Discover and sort composite and final passes
         List<String> compositeNames = new ArrayList<>();
         List<String> finalNames = new ArrayList<>();
@@ -275,6 +290,10 @@ public final class IrisPassGraph {
             return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                 "pack " + report.name() + " has no composite or final passes"), null);
         }
+
+        if (orderedPasses.size() > IrisPostExecutor.MAX_PASS_SETS || finalNames.size() > 1)
+            return new ParseResult(false,ShaderHostStatus.of(ShaderHostKind.IRIS,ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                "post host supports at most 32 passes and one final pass"),null);
 
         // 3. Translate and compile each pass in sequence
         IncludeExpander expander = new IncludeExpander(report.shadersRoot(), entry -> new String(src.read(entry), StandardCharsets.UTF_8));

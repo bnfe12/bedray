@@ -165,6 +165,8 @@ public final class BedrayConfigScreen extends Screen {
     private void buildCategoryRows() {
         switch (selectedCategory) {
             case 0 -> { // Ray Tracing & Engine
+                currentRows.add(new OptionRow("Iris Vulkan (Experimental)", "Post-only GLSL compatibility host. General shaderpack support is still in development.",
+                    io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge::runtimeStatus, () -> {}));
                 currentRows.add(new OptionRow("Ray Tracing Mode", "Master renderer switch (Off, Fast Ray Tracing, Path Tracing)",
                     () -> {
                         RtMode m = VulkanRtxConfig.rtMode;

@@ -65,7 +65,8 @@ public final class IrisGlslTranslator {
     /** Identifiers that need data a fullscreen pass of step A does not have. */
     private static final List<String> UNSUPPORTED_BUILTINS = List.of("gl_Normal", "gl_NormalMatrix", "gl_MultiTexCoord1",
         "gl_MultiTexCoord2", "gl_LightSource", "gl_Fog", "gl_FogFragCoord", "gl_SecondaryColor", "shadow2D", "shadow2DLod",
-        "imageLoad", "imageStore", "gl_ModelViewProjectionMatrixInverse", "gl_TexCoord");
+        "imageLoad", "imageStore", "gl_ModelViewProjectionMatrixInverse", "gl_TexCoord", "gl_FragDepth",
+        "gl_FragCoord", "gl_FrontFacing", "gl_PointCoord");
 
     private IrisGlslTranslator() {}
 
@@ -75,6 +76,8 @@ public final class IrisGlslTranslator {
      */
     public static Result translate(String expanded, Stage stage, Map<String, Integer> varyingLocations, String displayName) {
         Set<String> unsupported = new TreeSet<>();
+        if (Pattern.compile("\\bcolortex[0-9]+(?:MipmapEnabled|Format|Clear|ClearColor)\\b").matcher(expanded).find())
+            unsupported.add("colortex format/clear/mipmap directives need resource-graph support");
         List<Integer> drawBuffers = new ArrayList<>();
         if (stage == Stage.FRAGMENT) {
             Matcher t = TARGETS.matcher(expanded);

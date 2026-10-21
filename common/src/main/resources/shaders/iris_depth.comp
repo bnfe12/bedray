@@ -1,0 +1,21 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform sampler2D rasterDepth;
+layout(binding=1,r32f) uniform writeonly image2D irisDepth;
+layout(push_constant) uniform Parameters { mat4 inverseProjection; vec4 planes; } pc;
+void main() {
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy), size=imageSize(irisDepth);
+    if(any(greaterThanEqual(pixel,size)))return;
+    float depth=texelFetch(rasterDepth,pixel,0).r;
+    float converted=1.0;
+    if(depth>0.0 && depth<=1.0) {
+        vec2 ndc=(vec2(pixel)+0.5)/vec2(size)*2.0-1.0;
+        vec4 view=pc.inverseProjection*vec4(ndc,depth,1.0);
+        if(abs(view.w)>1e-8) {
+            float distance=abs(view.z/view.w), near=pc.planes.x, far=pc.planes.y;
+            // GL-style window depth, finite near/far, matching the scalar Iris uniform contract.
+            converted=clamp((far/(far-near))*(1.0-near/max(distance,near)),0.0,1.0);
+        }
+    }
+    imageStore(irisDepth,pixel,vec4(converted));
+}
