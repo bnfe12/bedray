@@ -193,6 +193,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     private void onBeforeRender3dHud(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.mark(PerfMonitor.Mark.RASTER_END);
+            ComputeRenderBridge.captureWorld(this.gameRenderState.levelRenderState.cameraRenderState);
             if (ComputeRenderBridge.renderSynthetic(this.mainRenderTarget)) {
                 io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.suspendForComputeDemo();
             } else {

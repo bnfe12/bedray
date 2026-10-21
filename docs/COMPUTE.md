@@ -36,7 +36,40 @@ The offscreen probe uses a separate device because it is an isolated test. The i
 
 ## Next implementation gates
 
-1. Export versioned live-world section/block/material snapshots without depending on the hardware RT geometry gate. Visible captured faces are not sufficient to infer full block occupancy.
+### Live-world CPU input (development)
+
+The host now offers immutable `WorldSnapshot`, `SectionSnapshot` and `CameraSnapshot` data through
+optional API callbacks. Enable collection with `-Dbedray.compute.captureWorld=true` **and** enable
+the synthetic diagnostic normally. This collects CPU input only: it does not change the diagnostic image
+into a live-world render. The existing shader still uses its synthetic scene and fixed camera.
+
+Collection is independent of the hardware RT geometry gate. The host polls a 3×3×3 section window around
+the camera, reads at most two sections per rendered frame and retains at most 27 sections (108 KiB of
+occupancy payload). A stationary window is revisited within 14 frames; block edits therefore have bounded
+polling latency rather than same-frame revision events. Only already loaded chunks are read with creation
+disabled. Unloads and movement outside the window remove resident sections; missing sections are unknown.
+Only conservative opaque full cubes are classified as occupied. Partial shapes, fluids, dynamic shapes and
+other unsupported cells have a separate value, never an invented material ID or solid-cube fallback.
+
+Snapshots carry world session and monotonic content revisions. Their full resident set replaces the prior
+set; section objects are reused when occupancy does not change. The companion cache handles negative
+coordinates and resets previous-camera history between sessions. Camera data preserves a double-precision
+world position and inverse view/projection matrices from the unjittered world pass, including the host's
+bob projection when enabled. No temporal validity or GPU upload is claimed yet.
+
+Run the dependency-free CPU contract suite with JDK 21+ (or set `JAVA_HOME`):
+
+```text
+bash tools/test-world-snapshots.sh
+```
+
+It checks budgets, polling updates, unchanged revisions, unloads, movement, world resets, negative
+coordinates, immutable storage and the companion's distinction between unknown and unsupported cells.
+The Minecraft adapter still requires a full host build and in-game lifecycle validation.
+
+### Remaining gates
+
+1. Validate the new occupancy/camera adapter in-game; extend it with versioned block/material snapshots. Visible captured faces are not sufficient to infer full block occupancy.
 2. Keep unloaded sections empty/unknown without synchronous world generation; handle revisions, unloads and bounded upload budgets.
 3. Add the current/previous camera contract including head bob and origin rebasing, then live opaque full-cube traversal and debug hit views.
 4. Port texture/color/emission/material lookup through the API, with explicit treatment for partial shapes, alpha, fluids, signs and entities.

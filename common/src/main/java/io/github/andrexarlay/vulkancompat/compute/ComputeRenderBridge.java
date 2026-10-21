@@ -32,6 +32,7 @@ public final class ComputeRenderBridge {
     private static boolean computeSupported;
     private static boolean cleanupBroken;
     private static int resourceWidth, resourceHeight, resourceFormat;
+    private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
 
     private ComputeRenderBridge() {}
 
@@ -42,12 +43,29 @@ public final class ComputeRenderBridge {
             return;
         }
         if (!hasWorld || !GraphicsBackendRegistry.demoEnabled()) {
+            worldCapture.clear();
+            if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
             if (!releaseResources()) return;
             if (GraphicsBackendRegistry.backend() != null && hasWorld) {
                 GraphicsBackendRegistry.noteIdle("Synthetic scene disabled");
             } else if (GraphicsBackendRegistry.backend() != null) {
                 GraphicsBackendRegistry.noteIdle("Synthetic scene waiting for a world");
             }
+        }
+    }
+
+    /** Called after the world camera/projection was captured, independently of hardware RT support. */
+    public static void captureWorld(net.minecraft.client.renderer.state.level.CameraRenderState camera) {
+        GraphicsBackend backend = GraphicsBackendRegistry.backend();
+        if (cleanupBroken || backend == null || !GraphicsBackendRegistry.demoEnabled()
+            || !backend.wantsWorldSnapshots() || camera == null
+            || failedRevision == GraphicsBackendRegistry.requestRevision()) return;
+        try {
+            backend.acceptWorldSnapshot(worldCapture.capture(camera));
+        } catch (RuntimeException | LinkageError error) {
+            worldCapture.clear();
+            backend.clearWorldSnapshot();
+            fail("World snapshot capture failed: " + error.getMessage(), error);
         }
     }
 
@@ -139,6 +157,8 @@ public final class ComputeRenderBridge {
 
     /** Device close hook runs before the command encoder and Vulkan device are destroyed. */
     public static void onDeviceClose(VulkanDevice closingDevice) {
+        worldCapture.clear();
+        if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
         if (resourceDevice == closingDevice) {
             releaseResources();
         }
