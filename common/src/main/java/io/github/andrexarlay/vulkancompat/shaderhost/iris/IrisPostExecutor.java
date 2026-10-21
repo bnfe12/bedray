@@ -421,7 +421,7 @@ public final class IrisPostExecutor implements AutoCloseable {
         currentFrameSlot = (currentFrameSlot + 1) % FRAME_SLOTS;
         int slot = currentFrameSlot;
 
-        // Step 1: Copy engineColorImage into colortex0
+        // Minecraft's internal targets retain GL orientation; only presentation flips Y.
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkImageCopy.Buffer copyRegion = VkImageCopy.calloc(1, stack);
             copyRegion.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);

@@ -312,7 +312,8 @@ public final class IrisRenderBridge {
                     }
                     var properties=VkFormatProperties.calloc(stack);
                     VK10.vkGetPhysicalDeviceFormatProperties(device.vkDevice().getPhysicalDevice(),format,properties);
-                    int required=VK10.VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+                    int required=VK10.VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
+                        | VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
                     if ((properties.optimalTilingFeatures() & required)!=required) throw new IllegalStateException("Iris target format unsupported");
                 }
                 executor=new IrisPostExecutor(device.vkDevice(),new RtMemory(device.vkDevice()),format);

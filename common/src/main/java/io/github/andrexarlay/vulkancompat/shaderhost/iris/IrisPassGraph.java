@@ -3,7 +3,7 @@ package io.github.andrexarlay.vulkancompat.shaderhost.iris;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostKind;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostState;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostStatus;
-import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IncludeExpander;
+import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisSourcePreprocessor;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisGlslTranslator;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReport;
@@ -37,7 +37,7 @@ import java.util.regex.Pattern;
  * geometry/tessellation shaders, dimension folders, SSBO, custom images/textures, or ray tracing), validation produces
  * an honest {@link ShaderHostState#UNSUPPORTED_PACK_FEATURES} status with details.
  * <p>
- * For supported packs, this class expands {@code #include}s, translates GLSL to Vulkan GLSL 450 via {@link IrisGlslTranslator},
+ * For supported packs, this class preprocesses live {@code #include}s/branches, translates GLSL to Vulkan GLSL 450 via {@link IrisGlslTranslator},
  * and compiles shaders to SPIR-V bytecode via {@link SpirvCompiler}.
  */
 public final class IrisPassGraph {
@@ -296,7 +296,6 @@ public final class IrisPassGraph {
                 "post host supports at most 32 passes and one final pass"),null);
 
         // 3. Translate and compile each pass in sequence
-        IncludeExpander expander = new IncludeExpander(report.shadersRoot(), entry -> new String(src.read(entry), StandardCharsets.UTF_8));
         List<Pass> passes = new ArrayList<>();
         int passOrder = 0;
 
@@ -309,13 +308,17 @@ public final class IrisPassGraph {
                     "pass " + passName + " is missing required fragment shader " + fshPath), null);
             }
 
-            // Expand fragment shader
+            // Resolve macros/conditions before inspecting declarations or draw-buffer directives.
             String expandedFsh;
             try {
-                expandedFsh = expander.expand(fshPath);
+                expandedFsh = IrisSourcePreprocessor.preprocess(report.shadersRoot(), fshPath,
+                    entry -> new String(src.read(entry), StandardCharsets.UTF_8), IrisGlslTranslator.Stage.FRAGMENT);
             } catch (PackScanException e) {
                 return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
-                    "failed expanding " + fshPath + ": " + e.getMessage()), null);
+                    "failed preprocessing " + fshPath + ": " + e.getMessage()), null);
+            } catch (SpirvCompiler.SpirvCompileException e) {
+                return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.COMPILE_FAILED,
+                    "failed preprocessing " + fshPath + ": " + e.errorLog()), null);
             }
 
             // Expand or synthesize vertex shader
@@ -323,10 +326,14 @@ public final class IrisPassGraph {
             String expandedVsh;
             if (src.entries().contains(vshPath)) {
                 try {
-                    expandedVsh = expander.expand(vshPath);
+                    expandedVsh = IrisSourcePreprocessor.preprocess(report.shadersRoot(), vshPath,
+                        entry -> new String(src.read(entry), StandardCharsets.UTF_8), IrisGlslTranslator.Stage.VERTEX);
                 } catch (PackScanException e) {
                     return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
-                        "failed expanding " + vshPath + ": " + e.getMessage()), null);
+                        "failed preprocessing " + vshPath + ": " + e.getMessage()), null);
+                } catch (SpirvCompiler.SpirvCompileException e) {
+                    return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.COMPILE_FAILED,
+                        "failed preprocessing " + vshPath + ": " + e.errorLog()), null);
                 }
             } else {
                 expandedVsh = defaultFullscreenVertexShader(expandedFsh);
@@ -349,6 +356,11 @@ public final class IrisPassGraph {
                 return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                     passName + ".fsh unsupported features: " + fResult.unsupported()), null);
             }
+
+            Set<String> interfaceErrors = IrisGlslTranslator.validateInterface(vResult, fResult);
+            if (!interfaceErrors.isEmpty()) return new ParseResult(false,
+                ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                    passName + " incompatible stages: " + interfaceErrors), null);
 
             // Compile vertex to SPIR-V
             ByteBuffer vSpv;

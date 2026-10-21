@@ -26,8 +26,9 @@ import java.util.regex.Pattern;
  * Everything else that a fullscreen pass could reference (other uniforms/samplers, uniform/buffer blocks, images, more draw
  * buffers, vertex attributes, shadow samplers) is collected in {@link Result#unsupported()}; the caller then refuses the pack.
  * <p>
- * Coordinate convention: the pass is drawn as one triangle whose corners come from {@code gl_VertexIndex}; texcoord (0,0) is the
- * FIRST ROW of the Vulkan image (top), so a pass-through samples 1:1, but packs that treat texcoord.y as "up" see it mirrored.
+ * Coordinate convention: Minecraft's internal color/depth targets retain GL orientation; its surface presentation flips Y.
+ * This host keeps the same positive viewport and copies image rows unchanged, so texcoord/gl_FragCoord agree with GL window
+ * coordinates. The vertex entry wrapper converts GL clip depth [-w,w] into Vulkan [0,w].
  */
 public final class IrisGlslTranslator {
 
@@ -42,7 +43,12 @@ public final class IrisGlslTranslator {
      * @param samplerBindings sampler bindings referenced
      */
     public record Result(String source, Set<String> unsupported, List<Integer> drawBuffers, Map<String, Integer> varyings,
-                         Set<String> pushUsed, Set<Integer> samplerBindings) {}
+                         Set<String> pushUsed, Set<Integer> samplerBindings, Map<String, InterfaceVariable> stageInterface) {}
+
+    /** A program interface is shared by name AND type; matrices/arrays occupy multiple locations. */
+    public record InterfaceVariable(String type, int arraySize, int location, int locations, String interpolation) {}
+
+    private static final Pattern VARIABLE = Pattern.compile("([A-Za-z_]\\w*)(?:\\s*\\[\\s*(\\d+)\\s*\\])?");
 
     private static final Pattern VERSION_LINE = Pattern.compile("(?m)^[ \\t]*#[ \\t]*version[^\\n]*$");
     private static final Pattern DECL = Pattern.compile(
@@ -66,7 +72,7 @@ public final class IrisGlslTranslator {
     private static final List<String> UNSUPPORTED_BUILTINS = List.of("gl_Normal", "gl_NormalMatrix", "gl_MultiTexCoord1",
         "gl_MultiTexCoord2", "gl_LightSource", "gl_Fog", "gl_FogFragCoord", "gl_SecondaryColor", "shadow2D", "shadow2DLod",
         "imageLoad", "imageStore", "gl_ModelViewProjectionMatrixInverse", "gl_TexCoord", "gl_FragDepth",
-        "gl_FragCoord", "gl_FrontFacing", "gl_PointCoord");
+        "gl_FrontFacing", "gl_PointCoord");
 
     private IrisGlslTranslator() {}
 
@@ -106,6 +112,7 @@ public final class IrisGlslTranslator {
         }
 
         Map<String, String> pushDecl = new LinkedHashMap<>();
+        Map<String, InterfaceVariable> stageInterface = new LinkedHashMap<>();
         Set<Integer> samplerBindings = new TreeSet<>();
         Set<String> pushUsed = new TreeSet<>();
         Map<String, Integer> fragOutputs = new LinkedHashMap<>();
@@ -113,7 +120,7 @@ public final class IrisGlslTranslator {
         boolean usesVaUV0 = false;
         String uncommented = stripCommentsPreservingLines(expanded);
         StringBuilder body = new StringBuilder();
-        for (String line : VERSION_LINE.matcher(uncommented).replaceAll("").split("\n", -1)) {
+        for (String line : topLevelUnits(VERSION_LINE.matcher(uncommented).replaceAll(""))) {
             if (BLOCK.matcher(line).matches()) {
                 unsupported.add("uniform/buffer block: " + line.trim());
                 body.append(line).append('\n');
@@ -136,8 +143,21 @@ public final class IrisGlslTranslator {
             }
             StringBuilder repl = new StringBuilder();
             for (String name : names) {
+                Matcher variable = VARIABLE.matcher(name);
+                if (!variable.matches()) {
+                    unsupported.add("unsupported declaration " + type + " " + name);
+                    continue;
+                }
+                String identifier = variable.group(1);
+                int arraySize = 0;
+                if (variable.group(2) != null) {
+                    try { arraySize = Integer.parseInt(variable.group(2)); }
+                    catch (NumberFormatException e) { unsupported.add("array size " + name); continue; }
+                    if (arraySize < 1 || arraySize > 16) { unsupported.add("array size " + name); continue; }
+                }
                 switch (storage) {
                     case "uniform" -> {
+                        if (arraySize != 0) { unsupported.add("uniform array " + name); continue; }
                         if (type.startsWith("sampler") || type.startsWith("isampler") || type.startsWith("usampler")
                             || type.startsWith("image")) {
                             Integer b = IrisUniforms.SAMPLERS.get(name);
@@ -167,22 +187,27 @@ public final class IrisGlslTranslator {
                                 unsupported.add("vertex input " + type + " " + name);
                             }
                         } else if (stage == Stage.VERTEX) { // varying in the vertex stage = output
-                            int loc = varyingLocations.computeIfAbsent(name, k -> varyingLocations.size());
+                            int loc = addInterface(stageInterface, varyingLocations, identifier, type, arraySize, interp,
+                                true, unsupported);
                             repl.append(declare(loc, interp, "out", type, name));
                         } else {
-                            Integer loc = varyingLocations.get(name);
+                            Integer loc = varyingLocations.get(identifier);
                             if (loc == null) {
                                 unsupported.add("fragment input " + name + " is not written by the vertex stage");
                             } else {
+                                addInterface(stageInterface, varyingLocations, identifier, type, arraySize, interp,
+                                    false, unsupported);
                                 repl.append(declare(loc, interp, "in", type, name));
                             }
                         }
                     }
                     case "out" -> {
                         if (stage == Stage.VERTEX) {
-                            int loc = varyingLocations.computeIfAbsent(name, k -> varyingLocations.size());
+                            int loc = addInterface(stageInterface, varyingLocations, identifier, type, arraySize, interp,
+                                true, unsupported);
                             repl.append(declare(loc, interp, "out", type, name));
                         } else {
+                            if (arraySize != 0) { unsupported.add("fragment output array " + name); continue; }
                             int loc = explicitLocation(layout, fragOutputs.size());
                             fragOutputs.put(name, loc);
                             if (loc != 0) {
@@ -218,6 +243,10 @@ public final class IrisGlslTranslator {
         }
         if (usesVaUV0) {
             code = code.replaceAll("\\bvaUV0\\b", "vkb_corner()");
+        }
+        if (stage == Stage.VERTEX) {
+            code = code.replaceAll("\\bvoid\\s+main\\s*\\(\\s*(?:void\\s*)?\\)", "void vkb_packMain()");
+            code += "\nvoid main() { vkb_packMain(); gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; }\n";
         }
         boolean fragData = false;
         if (stage == Stage.FRAGMENT) {
@@ -263,7 +292,74 @@ public final class IrisGlslTranslator {
         }
         src.append("#line 1 \"").append(displayName).append("\"\n").append(code);
         return new Result(src.toString(), unsupported, List.copyOf(drawBuffers), Map.copyOf(varyingLocations),
-            pushUsed, samplerBindings);
+            pushUsed, samplerBindings, Map.copyOf(stageInterface));
+    }
+
+    /** Validate before either module reaches pipeline creation; successful individual compiles cannot establish this. */
+    public static Set<String> validateInterface(Result vertex, Result fragment) {
+        Set<String> errors = new TreeSet<>();
+        fragment.stageInterface().forEach((name, input) -> {
+            InterfaceVariable output = vertex.stageInterface().get(name);
+            if (output == null) errors.add("fragment input " + name + " has no vertex output");
+            else if (!output.equals(input)) errors.add("stage interface mismatch " + name + ": vertex " + output + ", fragment " + input);
+        });
+        // Push members use the same typed catalogue and explicit offsets in both stages.
+        // Unread vertex outputs are legal: this host submits explicit Vulkan locations without game reflection remapping.
+        return errors;
+    }
+
+    private static int addInterface(Map<String, InterfaceVariable> variables, Map<String, Integer> locations,
+                                    String name, String type, int arraySize, String qualifiers, boolean vertex,
+                                    Set<String> unsupported) {
+        int span = locationSpan(type);
+        if (span == 0) { unsupported.add("interface type " + type + " " + name); span = 1; }
+        span *= Math.max(1, arraySize);
+        int next = variables.values().stream().mapToInt(v -> v.location() + v.locations()).max().orElse(0);
+        int location = vertex ? next : locations.getOrDefault(name, 0);
+        if (location + span > 16) unsupported.add("post interface exceeds 16 locations at " + name);
+        String interpolation = Pattern.compile("\\bflat\\b").matcher(qualifiers).find() ? "flat"
+            : Pattern.compile("\\bnoperspective\\b").matcher(qualifiers).find() ? "noperspective" : "smooth";
+        InterfaceVariable previous = variables.putIfAbsent(name, new InterfaceVariable(type, arraySize, location, span, interpolation));
+        if (previous != null) unsupported.add("duplicate interface variable " + name);
+        if (vertex) locations.put(name, location);
+        return location;
+    }
+
+    private static int locationSpan(String type) {
+        if (type.matches("(?:float|int|uint|bool|double|[biud]?vec[234])"))
+            return type.equals("dvec3") || type.equals("dvec4") ? 2 : 1;
+        Matcher matrix = Pattern.compile("(d?)mat([234])(?:x([234]))?").matcher(type);
+        if (!matrix.matches()) return 0;
+        int columns = Integer.parseInt(matrix.group(2));
+        int rows = matrix.group(3) == null ? columns : Integer.parseInt(matrix.group(3));
+        return columns * (!matrix.group(1).isEmpty() && rows > 2 ? 2 : 1);
+    }
+
+    /** Split at top-level statement boundaries, not physical lines. Functions remain untouched. */
+    private static List<String> topLevelUnits(String source) {
+        List<String> units = new ArrayList<>();
+        int start = 0, braces = 0, parentheses = 0;
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == '#' && source.substring(start, i).isBlank()) {
+                int end = source.indexOf('\n', i);
+                if (end < 0) end = source.length();
+                units.add(source.substring(start, end));
+                start = end;
+                i = end - 1;
+            } else if (c == '(') parentheses++;
+            else if (c == ')') parentheses--;
+            else if (c == '{') {
+                if (braces++ == 0) { units.add(source.substring(start, i + 1)); start = i + 1; }
+            } else if (c == '}') {
+                if (--braces == 0) { units.add(source.substring(start, i + 1)); start = i + 1; }
+            } else if (c == ';' && braces == 0 && parentheses == 0) {
+                units.add(source.substring(start, i + 1));
+                start = i + 1;
+            }
+        }
+        if (start < source.length()) units.add(source.substring(start));
+        return units;
     }
 
     private static String declare(int loc, String interp, String dir, String type, String name) {
