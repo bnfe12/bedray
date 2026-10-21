@@ -5,11 +5,11 @@ license="LGPL-3.0-only"
 modId="bedray_compute"
 version="${version}"
 displayName="Bedray Compute"
-description='''Experimental software voxel traversal on Vulkan compute. Synthetic diagnostic scene only in this milestone; no RT extensions or vendor DLLs required.'''
+description='''Experimental software voxel traversal on Vulkan compute. Synthetic and live opaque diagnostic scenes; not a complete world renderer. No RT extensions or vendor DLLs required.'''
 [[dependencies.bedray_compute]]
 modId="bedray"
 type="required"
-versionRange="[0.1.1-alpha.1,)"
+versionRange="[0.1.1-alpha.2,)"
 ordering="AFTER"
 side="CLIENT"
 [[dependencies.bedray_compute]]

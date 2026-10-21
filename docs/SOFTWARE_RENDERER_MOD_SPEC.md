@@ -1,6 +1,6 @@
 # Bedray Compute — companion mod specification
 
-**Status: staged implementation in development.** The first implemented slice is a bounded synthetic voxel scene, CPU reference traversal, Vulkan compute traversal and optional companion integration. It does not yet trace the live Minecraft world or establish support/performance on non-RT hardware. See [current implementation and build instructions](COMPUTE.md). The remaining sections describe the full target, including work that has not been implemented.
+**Status: staged implementation in development.** The first implemented slice is a bounded synthetic voxel scene, CPU reference traversal, Vulkan compute traversal and optional companion integration. A bounded live opaque occupancy diagnostic now consumes world/camera snapshots and records incremental GPU uploads; materials, full light transport and runtime validation remain pending. This does not establish support/performance on non-RT hardware. See [current implementation and build instructions](COMPUTE.md). The remaining sections describe the full target, including work that has not been implemented.
 
 Working name: **Bedray Compute**
 Working mod ID: `bedray_compute`

@@ -27,6 +27,10 @@ public final class ComputeRenderBridge {
     private static GraphicsBackend resourceOwner;
     private static VulkanDevice resourceDevice;
     private static long frameIndex;
+    private static GraphicsBackendRegistry.SceneRequest appliedRequest = GraphicsBackendRegistry.request();
+    private static boolean enabled() { return appliedRequest.mode() != GraphicsBackendRegistry.SceneMode.OFF; }
+    private static String sceneLabel() { return appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE
+        ? "Live opaque debug" : "Synthetic scene"; }
     private static long failedRevision = Long.MIN_VALUE;
     private static VulkanDevice checkedDevice;
     private static boolean computeSupported;
@@ -38,18 +42,26 @@ public final class ComputeRenderBridge {
 
     public static void onFrameBegin(boolean hasWorld) {
         frameIndex++;
+        var nextRequest = GraphicsBackendRegistry.request();
+        boolean requestChanged = appliedRequest != nextRequest;
+        appliedRequest = nextRequest;
+        if (requestChanged) {
+            if (!releaseResources()) return;
+            worldCapture.clear();
+            if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
+        }
         if (cleanupBroken) {
-            GraphicsBackendRegistry.noteFailure("Cleanup failed; restart the client before retrying");
+            GraphicsBackendRegistry.noteFailure("Cleanup failed; restart the client before retrying", appliedRequest);
             return;
         }
-        if (!hasWorld || !GraphicsBackendRegistry.demoEnabled()) {
+        if (!hasWorld || !enabled()) {
             worldCapture.clear();
             if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
             if (!releaseResources()) return;
             if (GraphicsBackendRegistry.backend() != null && hasWorld) {
-                GraphicsBackendRegistry.noteIdle("Synthetic scene disabled");
+                noteIdle("Synthetic scene disabled");
             } else if (GraphicsBackendRegistry.backend() != null) {
-                GraphicsBackendRegistry.noteIdle("Synthetic scene waiting for a world");
+                noteIdle(sceneLabel() + " waiting for a world");
             }
         }
     }
@@ -57,9 +69,9 @@ public final class ComputeRenderBridge {
     /** Called after the world camera/projection was captured, independently of hardware RT support. */
     public static void captureWorld(net.minecraft.client.renderer.state.level.CameraRenderState camera) {
         GraphicsBackend backend = GraphicsBackendRegistry.backend();
-        if (cleanupBroken || backend == null || !GraphicsBackendRegistry.demoEnabled()
-            || !backend.wantsWorldSnapshots() || camera == null
-            || failedRevision == GraphicsBackendRegistry.requestRevision()) return;
+        if (cleanupBroken || backend == null || !enabled() || !backend.supportsSceneMode(appliedRequest.mode())
+            || (!backend.wantsWorldSnapshots() && appliedRequest.mode() != GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE) || camera == null
+            || failedRevision == appliedRequest.revision()) return;
         try {
             backend.acceptWorldSnapshot(worldCapture.capture(camera));
         } catch (RuntimeException | LinkageError error) {
@@ -70,23 +82,28 @@ public final class ComputeRenderBridge {
     }
 
     /** Called before the hand pass, with no render pass open; false keeps the normal renderer. */
-    public static boolean renderSynthetic(RenderTarget target) {
+    public static boolean renderDiagnostic(RenderTarget target) {
         GraphicsBackend backend = GraphicsBackendRegistry.backend();
-        if (cleanupBroken || !GraphicsBackendRegistry.demoEnabled() || backend == null
-            || failedRevision == GraphicsBackendRegistry.requestRevision()) {
+        if (cleanupBroken || !enabled() || backend == null
+            || failedRevision == appliedRequest.revision()) {
             return false;
         }
-        // The fixed synthetic camera has no world depth/motion signal for temporal reconstruction or FG.
+        if (!backend.supportsSceneMode(appliedRequest.mode())) {
+            if (!releaseResources()) return false;
+            noteIdle("Installed companion does not support " + sceneLabel());
+            return false;
+        }
+        // Neither diagnostic provides matching world depth/motion guides for temporal reconstruction or FG.
         if (TemporalUpscaler.isActive() || FrameGenSettings.mode() != FrameGenSettings.Mode.OFF
             || FrameGenRuntime.isActive()) {
             if (!releaseResources()) return false;
-            GraphicsBackendRegistry.noteIdle("Disable temporal upscaling and frame generation for synthetic demo");
+            noteIdle("Disable temporal upscaling and frame generation for compute diagnostics");
             return false;
         }
         VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null || target == null || target.width <= 0 || target.height <= 0
             || target.getColorTexture() == null || target.getColorTexture().isClosed()) {
-            GraphicsBackendRegistry.noteIdle("Synthetic scene waiting for a Vulkan target");
+            noteIdle("Synthetic scene waiting for a Vulkan target");
             return false;
         }
         if ((target.getColorTexture().usage() & GpuTexture.USAGE_COPY_DST) == 0) {
@@ -136,7 +153,7 @@ public final class ComputeRenderBridge {
         try {
             VkBarriers.fullMemoryBarrier(commandBuffer);
             recorded = backend.render(new ComputeFrameContext(device.vkDevice(), commandBuffer, image,
-                format, target.width, target.height, frameIndex));
+                format, target.width, target.height, frameIndex, appliedRequest.mode()));
         } catch (RuntimeException | LinkageError error) {
             fail(error.getClass().getSimpleName() + ": " + error.getMessage(), error);
         } finally {
@@ -148,9 +165,9 @@ public final class ComputeRenderBridge {
             encoder.execute(commandBuffer);
         }
         if (recorded) {
-            GraphicsBackendRegistry.noteRendered(backend.id());
-        } else if (failedRevision != GraphicsBackendRegistry.requestRevision()) {
-            GraphicsBackendRegistry.noteIdle("Synthetic scene unavailable; normal renderer retained");
+            GraphicsBackendRegistry.noteRendered(backend.id(), appliedRequest);
+        } else if (failedRevision != appliedRequest.revision()) {
+            noteIdle(sceneLabel() + " waiting for scene data; normal renderer retained");
         }
         return recorded;
     }
@@ -186,9 +203,13 @@ public final class ComputeRenderBridge {
         }
     }
 
+    private static void noteIdle(String reason) {
+        GraphicsBackendRegistry.noteIdle(reason, appliedRequest);
+    }
+
     private static void fail(String reason, Throwable error) {
-        failedRevision = GraphicsBackendRegistry.requestRevision();
-        GraphicsBackendRegistry.noteFailure(reason);
+        failedRevision = appliedRequest.revision();
+        GraphicsBackendRegistry.noteFailure(reason, appliedRequest);
         if (error == null) LOGGER.warn("[BEDRAY-COMPUTE] {}", reason);
         else LOGGER.error("[BEDRAY-COMPUTE] {}", reason, error);
     }

@@ -20,8 +20,10 @@ final class ComputeWorldCapture {
         if (level == null) throw new IllegalStateException("World is unavailable");
         var projection = WorldTargetManager.levelProjectionOr(camera.projectionMatrix);
         var inverseView = new Matrix4f(camera.viewRotationMatrix).invert();
+        var bob = WorldTargetManager.levelCameraOriginOr(null);
         CameraSnapshot pose = new CameraSnapshot(camera.pos.x, camera.pos.y, camera.pos.z,
-            new Matrix4f(projection).invert().get(new float[16]), inverseView.get(new float[16]));
+            new Matrix4f(projection).invert().get(new float[16]), inverseView.get(new float[16]),
+            new float[]{bob.x,bob.y,bob.z});
         return stream.capture(level, pose, new WorldSnapshotStream.Source() {
             @Override public boolean loaded(int x, int y, int z) {
                 return y >= level.getMinSectionY() && y < level.getMaxSectionY()

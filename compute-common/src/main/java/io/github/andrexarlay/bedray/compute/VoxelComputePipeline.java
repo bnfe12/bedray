@@ -2,6 +2,11 @@ package io.github.andrexarlay.bedray.compute;
 
 import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelGrid;
+import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
+import io.github.andrexarlay.bedray.api.v1.CameraSnapshot;
+import org.joml.Matrix4f;
+import java.nio.ByteOrder;
+import java.util.List;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
@@ -51,6 +56,10 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
     private void create(VoxelGrid grid) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            if (targetFormat != VK_FORMAT_R8G8B8A8_UNORM && targetFormat != VK_FORMAT_B8G8R8A8_UNORM
+                && targetFormat != VK_FORMAT_R8G8B8A8_SRGB && targetFormat != VK_FORMAT_B8G8R8A8_SRGB) {
+                throw new IllegalArgumentException("Compute diagnostic requires an 8-bit UNORM/sRGB target; HDR integration is pending");
+            }
             VkPhysicalDevice physical = device.getPhysicalDevice();
             VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
             vkGetPhysicalDeviceProperties(physical, properties);
@@ -67,7 +76,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
             LongBuffer handle = stack.mallocLong(1);
             check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default().size(grid.byteSize())
-                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create grid buffer");
+                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create grid buffer");
             gridBuffer = handle.get(0);
             VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
             vkGetBufferMemoryRequirements(device, gridBuffer, requirements);
@@ -104,7 +113,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings), null, handle), "create descriptor layout");
             setLayout = handle.get(0);
             VkPushConstantRange.Buffer push = VkPushConstantRange.calloc(1, stack);
-            push.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(4);
+            push.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(112);
             check(vkCreatePipelineLayout(device, VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
                     .pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(push), null, handle), "create pipeline layout");
             pipelineLayout = handle.get(0);
@@ -151,6 +160,36 @@ public final class VoxelComputePipeline implements AutoCloseable {
     }
 
     void record(VkCommandBuffer command, long target, boolean hitIds) {
+        record(command, target, hitIds, null, null, List.of());
+    }
+
+    public void recordWorld(VkCommandBuffer command, long target, CameraSnapshot camera,
+                            VoxelWorldUpload origin, List<VoxelWorldUpload.Tile> updates) {
+        record(command,target,false,camera,origin,updates);
+    }
+
+    private void record(VkCommandBuffer command, long target, boolean hitIds, CameraSnapshot camera,
+                        VoxelWorldUpload origin, List<VoxelWorldUpload.Tile> updates) {
+        if (!updates.isEmpty()) {
+            // vkCmdUpdateBuffer copies bytes into the command buffer immediately. No persistent mapped
+            // staging range is overwritten while an earlier frame might still be reading it.
+            ByteBuffer upload = MemoryUtil.memAlloc(VoxelWorldUpload.TILE_BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1,stack);
+                barrier.get(0).sType$Default().buffer(gridBuffer).offset(0).size(VK_WHOLE_SIZE)
+                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .srcAccessMask(VK_ACCESS_SHADER_READ_BIT).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
+                vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0,null,barrier,null);
+                for (var tile : updates) {
+                    upload.clear(); tile.writeTo(upload); upload.flip();
+                    vkCmdUpdateBuffer(command,gridBuffer,tile.offset(),upload);
+                }
+                barrier.get(0).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+                vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    0,null,barrier,null);
+            } finally { MemoryUtil.memFree(upload); }
+        }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack);
             var b = barrier.get(0).sType$Default().image(image).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
@@ -162,7 +201,19 @@ public final class VoxelComputePipeline implements AutoCloseable {
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, null, barrier);
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
-            vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, stack.ints(hitIds ? 1 : 0));
+            ByteBuffer push = stack.calloc(112).order(ByteOrder.LITTLE_ENDIAN);
+            if (camera != null) {
+                new Matrix4f().set(camera.inverseView()).mul(new Matrix4f().set(camera.inverseProjection())).get(0,push);
+                push.putFloat(64,(float)(camera.x()-origin.originX()));
+                push.putFloat(68,(float)(camera.y()-origin.originY()));
+                push.putFloat(72,(float)(camera.z()-origin.originZ()));
+                float[] offset = camera.rayOriginOffset();
+                for (int i=0; i<3; i++) push.putFloat(96+i*4,offset[i]);
+            }
+            boolean srgbTarget = targetFormat == VK_FORMAT_R8G8B8A8_SRGB || targetFormat == VK_FORMAT_B8G8R8A8_SRGB;
+            push.putInt(80,(hitIds ? 1 : 0) | (camera != null ? 2 : 0) | (srgbTarget ? 4 : 0));
+            push.putInt(84,io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry.debugView().ordinal());
+            vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             vkCmdDispatch(command, (width + 7) / 8, (height + 7) / 8, 1);
             b.oldLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, barrier);
@@ -186,7 +237,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
     @Override public void close() {
         // Only resize, mode changes and teardown wait; steady-state frames never wait for the CPU.
-        vkDeviceWaitIdle(device);
+        check(vkDeviceWaitIdle(device), "wait before compute resource retirement");
         destroy();
     }
 

@@ -1,79 +1,105 @@
-# Bedray Compute: current development milestone
+# Bedray Compute — source-only development
 
-Bedray Compute is an experimental companion mod. Its first milestone renders a **synthetic 32 x 24 x 32 voxel scene**, with a fixed camera, direct sunlight and traced voxel shadows. It does not replace Minecraft world geometry yet. This is a traversal/integration diagnostic, not a playable software path tracer.
+Branch: `codex/software-voxel-tracing`. This work supplies source code only: no JAR artifacts or releases
+are produced/published. The companion remains a separate module so it can later move into Bedray while
+retaining one host-owned device, queue, configuration and presentation lifecycle.
 
-The shader uses ordinary Vulkan 1.0 compute, storage images and storage buffers. It does not request ray tracing, acceleration structures, ray queries, device addresses, Int64, vendor SDKs or DLLs. This is an API requirement, not a promise that every GPU can run the Minecraft Vulkan backend or achieve usable performance.
+## Current implemented scope
 
-## Install a development candidate
+Two opt-in diagnostic modes share ordinary Vulkan compute; neither requests RT extensions, acceleration
+structures, ray queries, device addresses, Int64, vendor SDKs or native vendor libraries:
 
-Use a matching Bedray host **0.1.1-alpha.1 or newer** and exactly one companion for the same loader. This API is absent from the older 0.1.0-alpha.1 release. Do not install both loader variants or another copy of the API. Default JARs contain no native libraries and perform no binary downloads.
+- **Synthetic**: the existing 32×24×32 scene, fixed camera, direct light and traced shadows.
+- **Live opaque debug**: a 48×48×48 window of real loaded world sections, the current game camera with
+  the host's unjittered/bob projection and effective camera origin, conservative opaque full cubes,
+  constant gray albedo, fixed diagnostic sun/shadows. This is not a textured playable renderer.
 
-In Bedray's own configuration screen, open the Ray Tracing category and enable **Compute Synthetic Scene**. Alternatively set the JVM argument `-Dbedray.compute.demo=true`. The request is session-only; it does not change existing hardware RT configuration. Disable temporal upscaling and Frame Generation before enabling the diagnostic: the fixed synthetic camera has no matching world motion/depth signals. The status row reports disabled, requested, failed or commands recorded; command recording is not proof of presentation.
+Shaded occupancy, surface normals, distance and occupancy-mask views are implemented. CPU diagnostics
+report loaded sections, opaque counts and omitted unsupported cells. Unknown/unloaded sections stay
+unknown and do not become solid. Partial shapes, cutouts, fluids, entities, items and particles are omitted
+from the live replacement image; the later hand/HUD passes remain host-owned. No universal GPU support,
+performance, visual correctness or game compatibility is claimed.
 
-The normal renderer is retained when the companion is absent, disabled, incompatible with the selected temporal features, or cannot initialize. Initialization failures are latched until the request is toggled. A failed cleanup requires restarting the client rather than reusing stale device handles. Resize, world exit, mode changes and device close submit pending host commands before releasing provider resources. The host owns the device, graphics queue, swapchain and command submission.
+The diagnostic currently accepts 8-bit RGBA/BGRA UNORM or sRGB host targets. Destination sRGB encoding
+is accounted for in the shader; floating/HDR target integration is deferred until the shared HDR/tonemap
+contract is defined. Temporal upscaling and Frame Generation remain unavailable for these modes because
+the required matching depth/motion/history guides have not been implemented.
 
-## Build
+## World input and upload
 
-Use the normal [build prerequisites](BUILDING.md), Java 25 and the local game/loader compile libraries. Machine-specific library paths stay outside the repository.
+`renderer-api` major 1/minor 1 publishes immutable `WorldSnapshot`, `SectionSnapshot` and `CameraSnapshot`
+data through optional callbacks. `common` owns all Minecraft access, independently of the hardware RT
+geometry gate. `compute-common` consumes only API snapshots; it imports no game/loader/private Bedray
+implementation classes.
 
-```text
-gradlew :compute-common:test :neoforge:jar :fabric:jar :compute-neoforge:jar :compute-fabric:jar
-```
+The producer polls a 3×3×3 section window around the camera, at most two section reads per rendered
+frame, retaining at most 27 sections (108 KiB occupancy payload). A stationary window is revisited within
+14 frames. Only already loaded chunks are read with creation disabled. Unloads and out-of-window sections
+are removed before publication. World sessions and content revisions prevent cross-world/stale data reuse.
+Unchanged section objects are retained; negative coordinates use floor division.
 
-The host JARs are in `neoforge/build/libs` and `fabric/build/libs`. Companion JARs are in `compute-neoforge/build/libs` and `compute-fabric/build/libs`. The public API is compiled from `renderer-api`; only the host loader JAR includes its classes.
+The GPU representation is a fixed 27-tile storage buffer (432 KiB cells plus a 16-byte header). A changed
+section records one 16 KiB `vkCmdUpdateBuffer`; missing slots explicitly receive unknown values. Camera
+window moves/session changes may update all 27 slots, bounded at 432 KiB. Camera movement inside the
+same section updates push constants, without rebuilding/reallocating the scene. Command-buffer updates
+and transfer/compute barriers avoid overwriting a mapped staging range still used by a previous frame.
+Steady-state block updates do not call device-idle; mode/size/device changes submit pending host work
+before releasing provider resources.
 
-## Focused verification
+## Future development activation
 
-`compute-common:test` checks bounded/immutable grid storage, little endian GPU layout, memory budgets, DDA slabs, exact faces, tied edges/corners, half-open ray bounds and comparison with an independent occupied-box oracle. It also compiles the actual shader for Vulkan 1.0 and rejects SPIR-V capabilities outside Shader/ImageQuery.
+A local development instance must use matching host/companion source revision **0.1.1-alpha.2 or newer**;
+older alpha.1 hosts lack the new scene-mode/diagnostic API. This is a source compatibility requirement,
+not a released build announcement.
 
-```text
-gradlew :compute-common:vulkanProbe
-```
-
-This explicit offscreen GPU probe creates a Vulkan 1.0 device with **zero enabled device extensions and optional features**. It dispatches the actual pipeline, reads 192 x 128 hit IDs back, and compares them with the CPU reference. It allows at most 0.1% numerical boundary mismatches, each requiring a matching nearby CPU ray within 0.001 pixel; exact counts are printed. It then renders the shaded scene to `compute-common/build/reports/compute/voxel-vulkan.png`. It fails if no suitable device exists. This does not launch Minecraft, validate its presentation/lifecycle, or prove acceptable performance on GPUs without RT hardware.
-
-The offscreen probe uses a separate device because it is an isolated test. The in-game companion never creates one. Tests do not deploy JARs into any game instance.
-
-## Next implementation gates
-
-### Live-world CPU input (development)
-
-The host now offers immutable `WorldSnapshot`, `SectionSnapshot` and `CameraSnapshot` data through
-optional API callbacks. Enable collection with `-Dbedray.compute.captureWorld=true` **and** enable
-the synthetic diagnostic normally. This collects CPU input only: it does not change the diagnostic image
-into a live-world render. The existing shader still uses its synthetic scene and fixed camera.
-
-Collection is independent of the hardware RT geometry gate. The host polls a 3×3×3 section window around
-the camera, reads at most two sections per rendered frame and retains at most 27 sections (108 KiB of
-occupancy payload). A stationary window is revisited within 14 frames; block edits therefore have bounded
-polling latency rather than same-frame revision events. Only already loaded chunks are read with creation
-disabled. Unloads and movement outside the window remove resident sections; missing sections are unknown.
-Only conservative opaque full cubes are classified as occupied. Partial shapes, fluids, dynamic shapes and
-other unsupported cells have a separate value, never an invented material ID or solid-cube fallback.
-
-Snapshots carry world session and monotonic content revisions. Their full resident set replaces the prior
-set; section objects are reused when occupancy does not change. The companion cache handles negative
-coordinates and resets previous-camera history between sessions. Camera data preserves a double-precision
-world position and inverse view/projection matrices from the unjittered world pass, including the host's
-bob projection when enabled. No temporal validity or GPU upload is claimed yet.
-
-Run the dependency-free CPU contract suite with JDK 21+ (or set `JAVA_HOME`):
+The existing Bedray graphics page cycles **Compute Scene (Experimental)** through Off, Synthetic and
+Live opaque debug. Debug view and scene-data rows describe the requested mode and available CPU data.
+JVM session alternatives:
 
 ```text
-bash tools/test-world-snapshots.sh
+-Dbedray.compute.demo=true     # synthetic
+-Dbedray.compute.world=true    # live opaque debug; takes precedence
 ```
 
-It checks budgets, polling updates, unchanged revisions, unloads, movement, world resets, negative
-coordinates, immutable storage and the companion's distinction between unknown and unsupported cells.
-The Minecraft adapter still requires a full host build and in-game lifecycle validation.
+`-Dbedray.compute.captureWorld=true` can collect world CPU snapshots while displaying the synthetic mode.
+Requests remain session-only and are applied as one stable request at a frame boundary. Older synthetic-only providers do not expose live/debug modes they cannot execute. Initialization failures latch until the request changes; a failed cleanup
+requires restart. A recorded command is not evidence of successful presentation.
 
-### Remaining gates
+## Compilation and evidence
 
-1. Validate the new occupancy/camera adapter in-game; extend it with versioned block/material snapshots. Visible captured faces are not sufficient to infer full block occupancy.
-2. Keep unloaded sections empty/unknown without synchronous world generation; handle revisions, unloads and bounded upload budgets.
-3. Add the current/previous camera contract including head bob and origin rebasing, then live opaque full-cube traversal and debug hit views.
-4. Port texture/color/emission/material lookup through the API, with explicit treatment for partial shapes, alpha, fluids, signs and entities.
-5. Add world light transport, accumulation, denoising and matching temporal guides before enabling temporal upscaling or FG.
-6. Validate in-game toggles, resize, repeated world entry/exit, device teardown, artifact provenance and NVIDIA/AMD/Intel hardware. Measure memory/frame time and publish an exact compatibility matrix.
+Use JDK 25 and official local compile dependencies from [BUILDING](BUILDING.md). Compile sources only:
 
-See the [full specification](SOFTWARE_RENDERER_MOD_SPEC.md) for the longer roadmap and merge criteria.
+```text
+gradlew :renderer-api:compileJava :common:compileJava :compute-common:compileJava \
+        :fabric:compileJava :neoforge:compileJava :compute-fabric:compileJava :compute-neoforge:compileJava
+```
+
+Compile baseline: JDK 25.0.5, Gradle 9.5.1, Minecraft 26.3, Sodium 0.9.2, Iris 1.11.7, Fabric loader 0.19.5 and NeoForge 26.3.0.57-beta. Local dependency JARs are compile inputs only, excluded from Git and not published as product artifacts.
+
+Both loaders and the companion modules compile. The updated voxel shader compiles to Vulkan 1.0 SPIR-V.
+Per the current source-only request, no tests, GPU dispatch or game sessions were run for the live-GPU
+change. Earlier CPU checks on the snapshot-only commit do not validate this newer implementation.
+The existing optional CPU/GPU regression suites remain in the tree for future validation.
+
+## Remaining implementation gates
+
+1. Exact material/texture/emission snapshots through the host API, with resource reload/version ownership.
+   Do not substitute map colors or guessed PBR values and advertise them as the pack's actual materials.
+2. World light transport, accumulation, denoising and matching temporal guides; define bounded histories
+   and a shared HDR/tonemap contract before enabling temporal upscalers or FG.
+3. Accurate partial shapes/cutouts/fluids, entities and other unsupported geometry, each with an explicit
+   cost/fallback policy. Unknown inputs must never become opaque/emissive cubes.
+4. Event-assisted revision collection and larger hierarchical windows after CPU/upload/GPU profiling;
+   polling and the current 27-tile layout are bounded prototype decisions, not a final optimization claim.
+5. Game lifecycle/camera/resize/failure validation and NVIDIA/AMD/Intel measurements before release.
+
+## Merge with the Iris branch
+
+Bedray stays the sole world-data/device/queue/target owner. One world renderer records its image, followed
+by the Iris post stage, then the host's hand/HUD and later presentation phases. In a combined hook, pass
+`rasterDepthMatchesColor=false` to Iris when compute replaced the world color. Color-only post packs can
+compose independently; depth-reading packs need matching compute guides and must not consume old raster
+world depth. Merge the shared mixin/UI hooks once rather than retaining two frame loops. The companion
+algorithms remain behind `renderer-api`, ready for later incorporation into Bedray shared modules.
+
+The [longer specification](SOFTWARE_RENDERER_MOD_SPEC.md) describes remaining targets, not proof they work.
