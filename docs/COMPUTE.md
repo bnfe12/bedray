@@ -4,6 +4,11 @@ Stage: experimental software voxel traversal. Local candidate JARs can be built 
 or game compatibility is established by a build. The companion remains a separate module so it can later move into Bedray while
 retaining one host-owned device, queue, configuration and presentation lifecycle.
 
+The standalone verification probe targets Vulkan 1.0. In-game use inherits Minecraft 26.3's Vulkan
+backend baseline of Vulkan 1.2 and its normal required device features, plus this provider's compute-queue
+and target-format checks. Hardware RT feature sets are optional in the host; no arbitrary-GPU support
+claim follows from that separation. Devices without a compatible Vulkan backend cannot run this mode.
+
 ## Current implemented scope
 
 Two opt-in diagnostic modes share ordinary Vulkan compute; neither requests RT extensions, acceleration
