@@ -181,14 +181,19 @@ public final class BedrayConfigScreen extends Screen {
     private void buildCategoryRows() {
         switch (selectedCategory) {
             case 0 -> { // Ray Tracing & Engine
-                currentRows.add(new OptionRow("Compute Synthetic Scene", "Companion diagnostic scene, not the Minecraft world. Disable temporal upscaling and frame generation first.",
+                currentRows.add(new OptionRow("Compute Diagnostic", "Companion traversal diagnostic. Disable temporal upscaling and frame generation first.",
                     () -> GraphicsBackendRegistry.backend() == null ? "Companion not installed"
-                        : GraphicsBackendRegistry.demoEnabled() ? "Requested (synthetic)" : "Off",
+                        : GraphicsBackendRegistry.demoEnabled() ? "Requested" : "Off",
                     () -> {
                         if (GraphicsBackendRegistry.backend() != null) {
                             GraphicsBackendRegistry.setDemoEnabled(!GraphicsBackendRegistry.demoEnabled());
                         }
                     }));
+                currentRows.add(new OptionRow("Compute Scene", "World occupancy traces loaded full-occlusion cubes in a bounded area. Excluded shapes and unloaded cells have diagnostic colors; no texture fidelity is claimed.",
+                    () -> GraphicsBackendRegistry.sceneMode() == GraphicsBackendRegistry.SceneMode.SYNTHETIC
+                            ? "Synthetic scene" : "World occupancy diagnostic",
+                    () -> GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.sceneMode() == GraphicsBackendRegistry.SceneMode.SYNTHETIC
+                            ? GraphicsBackendRegistry.SceneMode.WORLD_OCCUPANCY : GraphicsBackendRegistry.SceneMode.SYNTHETIC)));
                 currentRows.add(new OptionRow("Compute Status", "Status of host command recording; live gameplay compatibility still requires a game test.",
                     GraphicsBackendRegistry::status, () -> {}));
 

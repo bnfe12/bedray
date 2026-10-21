@@ -3,9 +3,10 @@ package io.github.andrexarlay.bedray.compute.voxel;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Objects;
+import io.github.andrexarlay.bedray.api.v1.VoxelVolume;
 
 /** Immutable bounded grid. Material zero denotes an empty cell. */
-public final class VoxelGrid {
+public final class VoxelGrid implements VoxelVolume {
     public static final int HEADER_BYTES = 16;
     public static final long DEFAULT_BUDGET_BYTES = 64L * 1024 * 1024;
     private final int sizeX;

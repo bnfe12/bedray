@@ -1,7 +1,8 @@
 package io.github.andrexarlay.bedray.compute;
 
 import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
-import io.github.andrexarlay.bedray.compute.voxel.VoxelGrid;
+import io.github.andrexarlay.bedray.api.v1.ComputeSceneFrame;
+import io.github.andrexarlay.bedray.api.v1.VoxelVolume;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
@@ -20,12 +21,16 @@ public final class VoxelComputePipeline implements AutoCloseable {
     private long gridBuffer, gridMemory, image, imageMemory, view;
     private long shader, setLayout, pipelineLayout, pipeline, pool, descriptorSet;
     private boolean initialized;
+    private final long gridBytes;
+    private ByteBuffer uploadScratch;
+    private long uploadedEpoch = Long.MIN_VALUE, uploadedRevision = Long.MIN_VALUE;
 
-    public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelGrid grid) {
+    public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelVolume grid) {
         this.device = device;
         this.width = width;
         this.height = height;
         this.targetFormat = targetFormat;
+        this.gridBytes = grid.byteSize();
         try {
             if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid output dimensions");
             create(grid);
@@ -49,7 +54,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
         }
     }
 
-    private void create(VoxelGrid grid) {
+    private void create(VoxelVolume grid) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDevice physical = device.getPhysicalDevice();
             VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
@@ -67,7 +72,8 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
             LongBuffer handle = stack.mallocLong(1);
             check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default().size(grid.byteSize())
-                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create grid buffer");
+                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create grid buffer");
             gridBuffer = handle.get(0);
             VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
             vkGetBufferMemoryRequirements(device, gridBuffer, requirements);
@@ -104,7 +110,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings), null, handle), "create descriptor layout");
             setLayout = handle.get(0);
             VkPushConstantRange.Buffer push = VkPushConstantRange.calloc(1, stack);
-            push.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(4);
+            push.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(112);
             check(vkCreatePipelineLayout(device, VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
                     .pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(push), null, handle), "create pipeline layout");
             pipelineLayout = handle.get(0);
@@ -147,11 +153,31 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
     /** Target must be a single-sample color image, TRANSFER_DST usage, in GENERAL on this queue. */
     public void record(VkCommandBuffer command, long target) {
-        record(command, target, false);
+        record(command, target, false, null);
     }
 
     void record(VkCommandBuffer command, long target, boolean hitIds) {
+        record(command, target, hitIds, null);
+    }
+
+    public void record(VkCommandBuffer command, long target, ComputeSceneFrame scene) {
+        record(command, target, false, scene);
+    }
+
+    void record(VkCommandBuffer command, long target, boolean hitIds, ComputeSceneFrame scene) {
+        boolean upload = scene != null && (scene.snapshot().worldEpoch() != uploadedEpoch
+                || scene.snapshot().revision() != uploadedRevision);
+        // Allocate and serialize before recording; vkCmdUpdateBuffer copies its input during recording.
+        // Host-visible memory is never overwritten while queued frames may still read it.
+        if (upload) {
+            if (scene.snapshot().byteSize() != gridBytes) throw new IllegalArgumentException("Voxel buffer extent changed without host cleanup");
+            if (uploadScratch == null) uploadScratch = MemoryUtil.memAlloc(Math.toIntExact(gridBytes));
+            uploadScratch.clear();
+            scene.snapshot().writeTo(uploadScratch);
+            uploadScratch.flip();
+        }
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            if (upload) recordUpload(command, scene, stack);
             VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack);
             var b = barrier.get(0).sType$Default().image(image).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                     .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).oldLayout(initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED)
@@ -162,7 +188,11 @@ public final class VoxelComputePipeline implements AutoCloseable {
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, null, barrier);
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
-            vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, stack.ints(hitIds ? 1 : 0));
+            ByteBuffer constants = stack.calloc(112);
+            if (scene != null) scene.writeCameraTo(constants);
+            constants.position(96);
+            constants.putInt(hitIds ? 1 : 0).putInt(scene == null ? 0 : 1).putInt(0).putInt(0).flip();
+            vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, constants);
             vkCmdDispatch(command, (width + 7) / 8, (height + 7) / 8, 1);
             b.oldLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, barrier);
@@ -184,6 +214,24 @@ public final class VoxelComputePipeline implements AutoCloseable {
         }
     }
 
+    private void recordUpload(VkCommandBuffer command, ComputeSceneFrame scene, MemoryStack stack) {
+        VkBufferMemoryBarrier.Buffer barrier = VkBufferMemoryBarrier.calloc(1, stack);
+        var b = barrier.get(0).sType$Default().buffer(gridBuffer).offset(0).size(gridBytes)
+                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .srcAccessMask(VK_ACCESS_SHADER_READ_BIT).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0, null, barrier, null);
+        for (long offset = 0; offset < gridBytes; offset += 65536) {
+            int count = (int) Math.min(65536L, gridBytes - offset);
+            vkCmdUpdateBuffer(command, gridBuffer, offset, uploadScratch.slice(Math.toIntExact(offset), count));
+        }
+        b.srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, null, barrier, null);
+        uploadedEpoch = scene.snapshot().worldEpoch();
+        uploadedRevision = scene.snapshot().revision();
+    }
+
     @Override public void close() {
         // Only resize, mode changes and teardown wait; steady-state frames never wait for the CPU.
         vkDeviceWaitIdle(device);
@@ -201,6 +249,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
         if (imageMemory != 0) vkFreeMemory(device, imageMemory, null);
         if (gridBuffer != 0) vkDestroyBuffer(device, gridBuffer, null);
         if (gridMemory != 0) vkFreeMemory(device, gridMemory, null);
+        if (uploadScratch != null) { MemoryUtil.memFree(uploadScratch); uploadScratch = null; }
         pool = pipeline = pipelineLayout = setLayout = shader = view = image = imageMemory = gridBuffer = gridMemory = 0;
     }
 

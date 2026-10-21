@@ -193,7 +193,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     private void onBeforeRender3dHud(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.mark(PerfMonitor.Mark.RASTER_END);
-            if (ComputeRenderBridge.renderSynthetic(this.mainRenderTarget)) {
+            if (ComputeRenderBridge.renderDiagnostic(this.mainRenderTarget,
+                    this.gameRenderState.levelRenderState.cameraRenderState)) {
                 io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.suspendForComputeDemo();
             } else {
                 // The particles of the world pass are replayed before the hardware RT replacement image.

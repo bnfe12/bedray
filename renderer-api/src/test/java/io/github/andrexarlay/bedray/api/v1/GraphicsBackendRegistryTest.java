@@ -69,6 +69,18 @@ class GraphicsBackendRegistryTest {
         assertEquals("Synthetic scene disabled", GraphicsBackendRegistry.status());
         GraphicsBackendRegistry.setDemoEnabled(false);
         assertEquals(enabledRevision + 1, GraphicsBackendRegistry.requestRevision());
+        long modeRevision = GraphicsBackendRegistry.requestRevision();
+        GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.SceneMode.WORLD_OCCUPANCY);
+        assertEquals(modeRevision + 1, GraphicsBackendRegistry.requestRevision());
+        assertEquals("World occupancy diagnostic disabled", GraphicsBackendRegistry.status());
+        GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.SceneMode.WORLD_OCCUPANCY);
+        assertEquals(modeRevision + 1, GraphicsBackendRegistry.requestRevision());
+        GraphicsBackendRegistry.noteRendered(accepted.id());
+        assertEquals("World occupancy diagnostic recorded: " + accepted.id(), GraphicsBackendRegistry.status());
+        assertDoesNotClaimActive();
+        assertThrows(NullPointerException.class,()->GraphicsBackendRegistry.setSceneMode(null));
+        GraphicsBackendRegistry.setSceneMode(GraphicsBackendRegistry.SceneMode.SYNTHETIC);
+        assertEquals(modeRevision + 2, GraphicsBackendRegistry.requestRevision());
         assertEquals(0, accepted.renderCalls, "Registration and settings must never render on the caller thread");
         assertEquals(0, accepted.closeCalls, "Only the host render thread may close provider GPU resources");
     }

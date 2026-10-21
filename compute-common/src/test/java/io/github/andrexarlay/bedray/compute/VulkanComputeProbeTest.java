@@ -1,5 +1,7 @@
 package io.github.andrexarlay.bedray.compute;
 
+import io.github.andrexarlay.bedray.api.v1.ComputeSceneFrame;
+import io.github.andrexarlay.bedray.api.v1.VoxelSceneSnapshot;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelDda;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelDemoScene;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelGrid;
@@ -82,6 +84,89 @@ class VulkanComputeProbeTest {
             assertTrue(ImageIO.write(image, "png", output.toFile()), "PNG writer is unavailable");
             System.out.println("[BEDRAY-COMPUTE-PROBE] Offscreen shaded artifact=" + output.toAbsolutePath());
         }
+    }
+
+    @Test void worldCameraAndSuccessiveSceneRevisionsReachGpu() {
+        VoxelSceneSnapshot firstSnapshot = worldSnapshot(1, 16, false);
+        VoxelSceneSnapshot secondSnapshot = worldSnapshot(2, 20, true);
+        float[] identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        ComputeSceneFrame firstFrame = new ComputeSceneFrame(firstSnapshot, identity,
+                16, 12, -10, 0, 0, 0);
+        ComputeSceneFrame secondFrame = new ComputeSceneFrame(secondSnapshot, identity,
+                16, 12, -10, 0, 0, 0);
+        try (Probe probe = new Probe();
+             VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.device, WIDTH, HEIGHT,
+                     VK_FORMAT_R8G8B8A8_UNORM, firstSnapshot)) {
+            byte[] first = probe.render(pipeline, true, firstFrame);
+            compareWorldIds(firstSnapshot, first, "world-revision-1");
+            byte[] second = probe.render(pipeline, true, secondFrame);
+            compareWorldIds(secondSnapshot, second, "world-revision-2");
+            int changedPixels = 0;
+            for (int at = 0; at < first.length; at += 4) {
+                if (first[at] != second[at] || first[at + 1] != second[at + 1]
+                        || first[at + 2] != second[at + 2] || first[at + 3] != second[at + 3]) changedPixels++;
+            }
+            System.out.printf("[BEDRAY-COMPUTE-PROBE] successiveRevisions=1,2 samePipeline=true changedPixels=%d%n", changedPixels);
+            assertTrue(changedPixels > 500, "Moved/removed/reclassified wall must change the uploaded scene");
+        }
+    }
+
+    private static VoxelSceneSnapshot worldSnapshot(long revision, int wallZ, boolean revised) {
+        int[] cells = new int[32 * 24 * 32];
+        for (int y = 0; y < 24; y++) for (int x = 0; x < 32; x++) {
+            int kind = 1;
+            if (x >= 8 && x < 12 && y >= 8 && y < 12) kind = revised ? 3 : 2;
+            if (x >= 20 && x < 24 && y >= 10 && y < 14) kind = revised ? 2 : 3;
+            if (revised && x >= 12 && x < 20 && y >= 8 && y < 16) kind = 0;
+            cells[x + 32 * (y + 24 * wallZ)] = kind;
+        }
+        // Large world coordinates exercise the API's local-grid convention. The shader sees
+        // local coordinates only; neither the camera nor the grid is narrowed before rebasing.
+        return new VoxelSceneSnapshot(29_999_984, 64, -20_000_016, 32, 24, 32, 47L, revision, cells);
+    }
+
+    private static void compareWorldIds(VoxelSceneSnapshot snapshot, byte[] ids, String phase) {
+        int mismatches = 0;
+        int unexplained = 0;
+        int cpuHits = 0;
+        int gpuHits = 0;
+        int excludedHits = 0;
+        int unknownHits = 0;
+        for (int y = 0; y < HEIGHT; y++) for (int x = 0; x < WIDTH; x++) {
+            int at = (x + WIDTH * y) * 4;
+            VoxelHit expected = worldCpuHit(snapshot, x, y);
+            if (expected != null) cpuHits++;
+            int kind = Byte.toUnsignedInt(ids[at + 3]);
+            if (kind != 0) gpuHits++;
+            if (kind == 2) excludedHits++;
+            if (kind == 3) unknownHits++;
+            if (!matches(ids, at, expected)) {
+                mismatches++;
+                boolean boundary = false;
+                for (float py : new float[]{-0.001f, 0, 0.001f}) {
+                    for (float px : new float[]{-0.001f, 0, 0.001f}) {
+                        boundary |= matches(ids, at, worldCpuHit(snapshot, x + px, y + py));
+                    }
+                }
+                if (!boundary) unexplained++;
+            }
+        }
+        System.out.printf("[BEDRAY-COMPUTE-PROBE] phase=%s pixels=%d cpuHits=%d gpuHits=%d "
+                        + "excludedHits=%d unknownHits=%d mismatches=%d unexplained=%d%n",
+                phase, WIDTH * HEIGHT, cpuHits, gpuHits, excludedHits, unknownHits, mismatches, unexplained);
+        assertTrue(gpuHits > 500, "World camera must intersect the uploaded wall");
+        assertTrue(excludedHits > 0, "Excluded cells must remain diagnostic markers rather than empty air");
+        assertTrue(unknownHits > 0, "Unknown cells must remain diagnostic markers rather than empty air");
+        assertEquals(0, unexplained, "World GPU IDs differ beyond numerical cell boundaries");
+        assertTrue(mismatches <= WIDTH * HEIGHT / 1000, "More than 0.1 percent of world rays disagree: " + mismatches);
+    }
+
+    private static VoxelHit worldCpuHit(VoxelSceneSnapshot snapshot, float pixelX, float pixelY) {
+        float ndcX = (pixelX + 0.5f) / WIDTH * 2 - 1;
+        float ndcY = (pixelY + 0.5f) / HEIGHT * 2 - 1;
+        // Identity inverse view-projection and zero bob origin: (ndc.x,ndc.y,0.5,1).
+        float[] ray = normalize(ndcX, ndcY, 0.5f);
+        return VoxelDda.trace(snapshot, 16, 12, -10, ray[0], ray[1], ray[2], 0, 160);
     }
 
     private static boolean matches(byte[] ids, int offset, VoxelHit hit) {
@@ -230,6 +315,10 @@ class VulkanComputeProbeTest {
         }
 
         byte[] render(VoxelComputePipeline pipeline, boolean hitIds) {
+            return render(pipeline, hitIds, null);
+        }
+
+        byte[] render(VoxelComputePipeline pipeline, boolean hitIds, ComputeSceneFrame scene) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 check(vkResetCommandBuffer(command, 0), "Reset command buffer");
                 check(vkBeginCommandBuffer(command, VkCommandBufferBeginInfo.calloc(stack).sType$Default()
@@ -243,7 +332,7 @@ class VulkanComputeProbeTest {
                     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                             0, null, null, transition);
                 }
-                pipeline.record(command, target, hitIds);
+                pipeline.record(command, target, hitIds, scene);
                 VkImageMemoryBarrier.Buffer ready = VkImageMemoryBarrier.calloc(1, stack);
                 ready.get(0).sType$Default().image(target).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).oldLayout(VK_IMAGE_LAYOUT_GENERAL)

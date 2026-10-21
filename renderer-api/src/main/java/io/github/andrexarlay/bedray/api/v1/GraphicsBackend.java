@@ -9,7 +9,8 @@ public interface GraphicsBackend extends AutoCloseable {
     String id();
 
     /**
-     * Records a complete synthetic diagnostic image into the supplied target in GENERAL layout.
+     * Records a complete diagnostic image into the supplied target in GENERAL layout.
+     * A non-null scene contains host-owned immutable occupancy and current camera data.
      * Returns true only after the full image has been recorded; false must leave the target intact.
      * Validate and allocate before recording commands: an exception must not leave a partial image.
      * No hardware ray tracing extensions may be required by this contract.

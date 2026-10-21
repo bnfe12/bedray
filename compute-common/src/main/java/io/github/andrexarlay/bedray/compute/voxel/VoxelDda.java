@@ -1,6 +1,7 @@
 package io.github.andrexarlay.bedray.compute.voxel;
 
 import java.util.Objects;
+import io.github.andrexarlay.bedray.api.v1.VoxelVolume;
 
 /** Allocation-free traversal until a hit is produced, using grid-local unit cells. */
 public final class VoxelDda {
@@ -12,7 +13,7 @@ public final class VoxelDda {
      * boundary. All axes tied at an edge/corner advance together; normals prefer X, then Y, Z.
      * If the segment starts in a solid cell without crossing the grid entry, the normal is zero.
      */
-    public static VoxelHit trace(VoxelGrid grid, double ox, double oy, double oz,
+    public static VoxelHit trace(VoxelVolume grid, double ox, double oy, double oz,
                                  double dx, double dy, double dz, double minT, double maxT) {
         Objects.requireNonNull(grid, "grid");
         if (!Double.isFinite(ox) || !Double.isFinite(oy) || !Double.isFinite(oz)

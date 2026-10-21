@@ -6,6 +6,7 @@ import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanConst;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
+import io.github.andrexarlay.bedray.api.v1.ComputeSceneFrame;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackend;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
@@ -20,8 +21,9 @@ import org.lwjgl.vulkan.VkQueueFamilyProperties;
 import org.lwjgl.system.MemoryStack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 
-/** Host-owned composition point for the optional synthetic voxel diagnostic scene. */
+/** Host-owned composition point for optional software voxel diagnostics. */
 public final class ComputeRenderBridge {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/Compute");
     private static GraphicsBackend resourceOwner;
@@ -32,6 +34,8 @@ public final class ComputeRenderBridge {
     private static boolean computeSupported;
     private static boolean cleanupBroken;
     private static int resourceWidth, resourceHeight, resourceFormat;
+    private static GraphicsBackendRegistry.SceneMode resourceMode;
+    private static final LiveVoxelScene LIVE_SCENE = new LiveVoxelScene();
 
     private ComputeRenderBridge() {}
 
@@ -42,33 +46,35 @@ public final class ComputeRenderBridge {
             return;
         }
         if (!hasWorld || !GraphicsBackendRegistry.demoEnabled()) {
+            LIVE_SCENE.clear();
             if (!releaseResources()) return;
             if (GraphicsBackendRegistry.backend() != null && hasWorld) {
-                GraphicsBackendRegistry.noteIdle("Synthetic scene disabled");
+                GraphicsBackendRegistry.noteIdle(GraphicsBackendRegistry.sceneLabel() + " disabled");
             } else if (GraphicsBackendRegistry.backend() != null) {
-                GraphicsBackendRegistry.noteIdle("Synthetic scene waiting for a world");
+                GraphicsBackendRegistry.noteIdle(GraphicsBackendRegistry.sceneLabel() + " waiting for a world");
             }
         }
     }
 
     /** Called before the hand pass, with no render pass open; false keeps the normal renderer. */
-    public static boolean renderSynthetic(RenderTarget target) {
+    public static boolean renderDiagnostic(RenderTarget target, CameraRenderState camera) {
         GraphicsBackend backend = GraphicsBackendRegistry.backend();
         if (cleanupBroken || !GraphicsBackendRegistry.demoEnabled() || backend == null
             || failedRevision == GraphicsBackendRegistry.requestRevision()) {
             return false;
         }
-        // The fixed synthetic camera has no world depth/motion signal for temporal reconstruction or FG.
+        // Neither diagnostic supplies matching world depth/motion signals for temporal reconstruction or FG.
         if (TemporalUpscaler.isActive() || FrameGenSettings.mode() != FrameGenSettings.Mode.OFF
             || FrameGenRuntime.isActive()) {
             if (!releaseResources()) return false;
-            GraphicsBackendRegistry.noteIdle("Disable temporal upscaling and frame generation for synthetic demo");
+            LIVE_SCENE.clear();
+            GraphicsBackendRegistry.noteIdle("Disable temporal upscaling and frame generation for compute diagnostics");
             return false;
         }
         VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null || target == null || target.width <= 0 || target.height <= 0
             || target.getColorTexture() == null || target.getColorTexture().isClosed()) {
-            GraphicsBackendRegistry.noteIdle("Synthetic scene waiting for a Vulkan target");
+            GraphicsBackendRegistry.noteIdle(GraphicsBackendRegistry.sceneLabel() + " waiting for a Vulkan target");
             return false;
         }
         if ((target.getColorTexture().usage() & GpuTexture.USAGE_COPY_DST) == 0) {
@@ -102,23 +108,40 @@ public final class ComputeRenderBridge {
             return false;
         }
         int format = VulkanConst.toVk(target.getColorTexture().getFormat());
+        GraphicsBackendRegistry.SceneMode mode = GraphicsBackendRegistry.sceneMode();
         if (resourceOwner != null && (resourceWidth != target.width || resourceHeight != target.height
-            || resourceFormat != format)) {
+            || resourceFormat != format || resourceMode != mode)) {
             // Provider resize destroys its previous images. Submit queued uses before allowing that destruction.
             if (!releaseResources()) return false;
+        }
+        ComputeSceneFrame scene = null;
+        if (mode == GraphicsBackendRegistry.SceneMode.WORLD_OCCUPANCY) {
+            try {
+                scene = LIVE_SCENE.capture(camera);
+            } catch (RuntimeException | LinkageError error) {
+                fail("World occupancy capture: " + error.getMessage(), error);
+                return false;
+            }
+            if (scene == null) {
+                GraphicsBackendRegistry.noteIdle(LIVE_SCENE.status());
+                return false;
+            }
+        } else {
+            LIVE_SCENE.clear();
         }
         resourceOwner = backend;
         resourceDevice = device;
         resourceWidth = target.width;
         resourceHeight = target.height;
         resourceFormat = format;
+        resourceMode = mode;
         VulkanCommandEncoder encoder = device.createCommandEncoder();
         VkCommandBuffer commandBuffer = encoder.allocateAndBeginTransientCommandBuffer();
         boolean recorded = false;
         try {
             VkBarriers.fullMemoryBarrier(commandBuffer);
             recorded = backend.render(new ComputeFrameContext(device.vkDevice(), commandBuffer, image,
-                format, target.width, target.height, frameIndex));
+                format, target.width, target.height, frameIndex, scene));
         } catch (RuntimeException | LinkageError error) {
             fail(error.getClass().getSimpleName() + ": " + error.getMessage(), error);
         } finally {
@@ -130,15 +153,17 @@ public final class ComputeRenderBridge {
             encoder.execute(commandBuffer);
         }
         if (recorded) {
-            GraphicsBackendRegistry.noteRendered(backend.id());
+            GraphicsBackendRegistry.noteRendered(backend.id()
+                    + (scene == null ? "" : " | " + LIVE_SCENE.status()));
         } else if (failedRevision != GraphicsBackendRegistry.requestRevision()) {
-            GraphicsBackendRegistry.noteIdle("Synthetic scene unavailable; normal renderer retained");
+            GraphicsBackendRegistry.noteIdle(GraphicsBackendRegistry.sceneLabel() + " unavailable; normal renderer retained");
         }
         return recorded;
     }
 
     /** Device close hook runs before the command encoder and Vulkan device are destroyed. */
     public static void onDeviceClose(VulkanDevice closingDevice) {
+        LIVE_SCENE.clear();
         if (resourceDevice == closingDevice) {
             releaseResources();
         }
@@ -151,6 +176,7 @@ public final class ComputeRenderBridge {
         resourceOwner = null;
         resourceDevice = null;
         resourceWidth = resourceHeight = resourceFormat = 0;
+        resourceMode = null;
         if (owner == null) return true;
         try {
             // execute() queues transient buffers in the host encoder. Flush those before provider.close() waits idle.

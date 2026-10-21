@@ -1,6 +1,6 @@
 # Bedray Compute — companion mod specification
 
-**Status: staged implementation in development.** The first implemented slice is a bounded synthetic voxel scene, CPU reference traversal, Vulkan compute traversal and optional companion integration. It does not yet trace the live Minecraft world or establish support/performance on non-RT hardware. See [current implementation and build instructions](COMPUTE.md). The remaining sections describe the full target, including work that has not been implemented.
+**Status: staged implementation in development.** Implemented slices include the synthetic voxel scene, CPU/Vulkan traversal, companion integration and a bounded loaded-world occupancy diagnostic with current camera data. World capture/presentation has not yet passed in-game acceptance, and support/performance on non-RT hardware is unverified. See [current implementation and build instructions](COMPUTE.md). The remaining sections describe the full target, including work that has not been implemented.
 
 Working name: **Bedray Compute**
 Working mod ID: `bedray_compute`
@@ -97,7 +97,7 @@ Bedray's settings and renderer code are currently internal and coupled to the co
 
 The companion compiles against that artifact as provided/compile-only and declares Bedray as a required runtime mod. It must not shade/package a second API copy. Use a Gradle composite build or documented local Maven publication for development; releases use an immutable versioned API artifact.
 
-The broader world-renderer API below remains proposed. The implemented diagnostic seam is `io.github.andrexarlay.bedray.api.v1` with `GraphicsBackend`, `ComputeFrameContext` and `GraphicsBackendRegistry`; it deliberately carries no live-world snapshot yet.
+The broader world-renderer API below remains proposed. The implemented diagnostic seam is `io.github.andrexarlay.bedray.api.v1` with `GraphicsBackend`, `ComputeFrameContext`, `GraphicsBackendRegistry`, `VoxelVolume`, `VoxelSceneSnapshot` and `ComputeSceneFrame`. It carries bounded occupancy classifications and a current camera; full materials, entities and previous-frame history are not part of that seam yet.
 
 Proposed world-renderer package:
 
