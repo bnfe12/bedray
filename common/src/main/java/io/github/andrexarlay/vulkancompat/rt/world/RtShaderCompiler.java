@@ -158,7 +158,7 @@ public final class RtShaderCompiler {
 
     private static void logCache(String name, double elapsedMs, int bytes, String source) {
         LOGGER.info(String.format(java.util.Locale.ROOT,
-            "[VKB-RT] shader=%s compile_ms=%.1f spv_bytes=%d cached=%s", name, elapsedMs, bytes, source));
+            "[VKB-RT] shader=%s ready_ms=%.1f spv_bytes=%d source=%s", name, elapsedMs, bytes, source));
     }
 
     private static byte[] bytes(ByteBuffer data) {
