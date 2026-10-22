@@ -22,6 +22,8 @@ public final class VoxelComputeBackend implements GraphicsBackend {
 
     private WorldSnapshot snapshot;
     private final VoxelWorldUpload uploads = new VoxelWorldUpload();
+    private final java.util.IdentityHashMap<io.github.andrexarlay.bedray.api.v1.SectionSnapshot, Integer> texturedCounts =
+        new java.util.IdentityHashMap<>();
     private long detailSession = -1, detailRevision = -1;
     @Override public boolean wantsWorldSnapshots() {
         return GraphicsBackendRegistry.liveWorldEnabled() || Boolean.getBoolean("bedray.compute.captureWorld");
@@ -30,15 +32,31 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         world.accept(snapshot);
         this.snapshot = snapshot;
         if (detailSession != snapshot.session() || detailRevision != snapshot.revision()) {
-            int omitted = 0, opaque = 0;
-            for (var section : snapshot.sections()) { omitted += section.unsupportedCount(); opaque += section.opaqueCount(); }
-            detail = snapshot.sections().size()+"/27 sections; "+opaque+" opaque; "+omitted+" unsupported; missing sections unknown";
+            texturedCounts.keySet().removeIf(section -> !snapshot.sections().contains(section));
+            int omitted = 0, opaque = 0, textured = 0;
+            for (var section : snapshot.sections()) {
+                omitted += section.unsupportedCount(); opaque += section.opaqueCount();
+                Integer count = texturedCounts.get(section);
+                if (count == null) {
+                    int references = 0;
+                    if (section.materials() != null) {
+                        for (int index = 0; index < io.github.andrexarlay.bedray.api.v1.SectionSnapshot.CELL_COUNT; index++)
+                            if (section.materials().reference(index) != 0) references++;
+                    }
+                    count = references;
+                    texturedCounts.put(section, count);
+                }
+                textured += count;
+            }
+            detail = snapshot.sections().size()+"/27 sections; "+opaque+" opaque; "+textured+" textured; "
+                +(opaque-textured)+" gray; "+omitted+" unsupported; missing sections unknown";
             detailSession = snapshot.session(); detailRevision = snapshot.revision();
         }
     }
     @Override public void clearWorldSnapshot() {
         if (snapshot == null) return;
         world.clear(); snapshot = null; detail = "Waiting for a world snapshot"; uploads.clear();
+        texturedCounts.clear();
         detailSession = detailRevision = -1;
     }
 
@@ -49,11 +67,14 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         if (frame.width() <= 0 || frame.height() <= 0 || frame.targetImage() == 0) return false;
         boolean live = frame.sceneMode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
         if (live && snapshot == null) return false;
+        if (live && snapshot.materialGeneration() != 0 && (frame.atlas() == null
+                || snapshot.materialGeneration() != frame.atlas().generation())) return false;
         if (pipeline != null && !pipeline.matches(frame))
             throw new IllegalStateException("Host must release compute resources before resize/device change");
         if (pipeline == null) {
             pipeline = new VoxelComputePipeline(frame.device(), frame.width(), frame.height(),
-                    frame.targetFormat(), live ? VoxelGrid.builder(48,48,48).build() : VoxelDemoScene.create());
+                    frame.targetFormat(), live ? VoxelGrid.builder(48,48,48).build() : VoxelDemoScene.create(),
+                    live ? frame.atlas() : null);
         }
         if (live) {
             var changed = uploads.update(snapshot);

@@ -3,6 +3,12 @@
 layout(local_size_x=8, local_size_y=8) in;
 layout(binding=0, rgba8) uniform writeonly image2D outputImage;
 layout(std430, binding=1) readonly buffer Grid { uvec4 dimensions; uint cells[]; } grid;
+#ifdef TEXTURED_CUBES
+// 32-byte face ABI: UV origin/du, dv, packed opaque ARGB tint, reserved.
+struct CubeFace { vec4 originDu; vec2 dv; uint tint; uint reserved; };
+layout(std430, binding=2) readonly buffer CubePalette { CubeFace faces[]; } palette;
+layout(binding=3) uniform sampler2D blockAtlas;
+#endif
 layout(push_constant) uniform Diagnostic {
     mat4 inverseViewProjection;
     vec4 cameraOrigin;
@@ -69,7 +75,8 @@ Hit trace(vec3 origin, vec3 direction, float minT, float maxT) {
         if ((diagnostic.control.x & 2u) != 0u) {
             if (diagnostic.control.y == 3u) {
                 if (material == 0xffffffffu) material = 3u;
-            } else if (material != 1u) material = 0u;
+                else material &= 255u;
+            } else if ((material & 255u) != 1u) material = 0u;
         }
         if (material != 0u && t < min(boundary,leave)) return Hit(true, cell, material, t, normal);
         if (boundary >= leave) break;
@@ -93,6 +100,50 @@ vec3 materialColor(uint id) {
     if (id==3u) return vec3(0.52,0.57,0.62);
     return vec3(0.95,0.66,0.22);
 }
+
+#ifdef TEXTURED_CUBES
+vec3 srgbToLinear(vec3 value) {
+    return mix(value/12.92, pow((value+0.055)/1.055,vec3(2.4)), greaterThan(value,vec3(0.04045)));
+}
+
+vec3 linearToSrgb(vec3 value) {
+    return mix(value*12.92, 1.055*pow(value,vec3(1.0/2.4))-0.055, greaterThan(value,vec3(0.0031308)));
+}
+
+vec3 cubeAlbedo(Hit hit, vec3 point) {
+    uint reference = hit.material >> 8;
+    if (reference == 0u || reference > 128u || dot(hit.normal,hit.normal) < 0.5) return vec3(0.65);
+    vec3 local = clamp(point-vec3(hit.cell),vec3(0),vec3(1));
+    uint face;
+    vec2 coordinates;
+    if (hit.normal.y != 0.0) {
+        face = hit.normal.y < 0.0 ? 0u : 1u;
+        coordinates = local.xz;
+    } else if (hit.normal.z != 0.0) {
+        face = hit.normal.z < 0.0 ? 2u : 3u;
+        coordinates = local.xy;
+    } else {
+        face = hit.normal.x < 0.0 ? 4u : 5u;
+        coordinates = local.zy;
+    }
+    ivec3 tile = hit.cell/16;
+    uint slot = uint(tile.x+3*(tile.y+3*tile.z));
+    uint index = (slot*128u+reference-1u)*6u+face;
+    if (index >= uint(palette.faces.length())) return vec3(0.65);
+    CubeFace surface = palette.faces[index];
+    vec2 uvOrigin = surface.originDu.xy;
+    vec2 du = surface.originDu.zw;
+    vec2 uv = uvOrigin+du*coordinates.x+surface.dv*coordinates.y;
+    vec2 low = min(min(uvOrigin,uvOrigin+du),min(uvOrigin+surface.dv,uvOrigin+du+surface.dv));
+    vec2 high = max(max(uvOrigin,uvOrigin+du),max(uvOrigin+surface.dv,uvOrigin+du+surface.dv));
+    // LOD zero and a per-sprite half-texel inset prevent nearest sampling into adjacent atlas sprites.
+    vec2 inset = min(vec2(0.5)/vec2(textureSize(blockAtlas,0)),(high-low)*0.5);
+    uv = clamp(uv,low+inset,high-inset);
+    vec3 tint = vec3(float((surface.tint>>16)&255u),float((surface.tint>>8)&255u),float(surface.tint&255u))/255.0;
+    // The borrowed RGBA8_UNORM view does not perform hardware sRGB decoding.
+    return srgbToLinear(textureLod(blockAtlas,uv,0.0).rgb)*srgbToLinear(tint);
+}
+#endif
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -127,7 +178,8 @@ void main() {
     Hit hit = trace(origin,ray,0.0,160.0);
     if ((diagnostic.control.x & 1u) != 0u) {
         // Exact byte IDs for CPU/GPU traversal comparison, not shaded color.
-        imageStore(outputImage,pixel,hit.found ? vec4(vec3(hit.cell),float(hit.material))/255.0 : vec4(0));
+        uint id = (diagnostic.control.x & 2u) != 0u ? hit.material & 255u : hit.material;
+        imageStore(outputImage,pixel,hit.found ? vec4(vec3(hit.cell),float(id))/255.0 : vec4(0));
         return;
     }
     vec3 color = mix(vec3(0.40,0.57,0.74),vec3(0.09,0.16,0.28),clamp(ray.y*0.5+0.5,0.0,1.0));
@@ -137,6 +189,9 @@ void main() {
         Hit shadow = trace(p+hit.normal*0.002,sun,0.0,100.0);
         float direct = shadow.found ? 0.0 : max(0.0,dot(hit.normal,sun));
         vec3 albedo = (diagnostic.control.x & 2u) != 0u ? vec3(0.65) : materialColor(hit.material);
+#ifdef TEXTURED_CUBES
+        if ((diagnostic.control.x & 2u) != 0u) albedo = cubeAlbedo(hit,p);
+#endif
         color = albedo*(0.22+0.78*direct);
     }
     if (diagnostic.control.y == 1u) color = hit.found ? hit.normal*0.5+0.5 : vec3(0);
@@ -147,6 +202,12 @@ void main() {
     // Diagnostic LDR output only. The future world renderer will share Bedray's HDR/tonemap contract.
     color = clamp(color,0.0,1.0);
     // Blitting to sRGB performs destination encoding. Avoid applying gamma twice in that case.
-    if ((diagnostic.control.x & 4u) == 0u) color = pow(color,vec3(1.0/2.2));
+    if ((diagnostic.control.x & 4u) == 0u) {
+#ifdef TEXTURED_CUBES
+        color = linearToSrgb(color);
+#else
+        color = pow(color,vec3(1.0/2.2));
+#endif
+    }
     imageStore(outputImage,pixel,vec4(color,1.0));
 }
