@@ -85,6 +85,8 @@ model-set identities are checked alongside the generation. Descriptors are immut
 reload or identity changes flush queued host commands before provider cleanup. Atlas/model epoch
 mismatch skips the compute replacement image. Real Minecraft reload/animation and visual acceptance
 still require matching-version game evidence.
+If compute retirement fails, ordinary atlas replacement is aborted before borrowed handles close;
+final client/device shutdown remains best effort so the device can reclaim the broken state.
 
 ## Activation and shared settings
 

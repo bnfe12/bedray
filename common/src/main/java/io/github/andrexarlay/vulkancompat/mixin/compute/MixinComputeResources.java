@@ -23,4 +23,9 @@ public abstract class MixinComputeResources {
     private void bedray$finishMaterialReload(CallbackInfo ci) {
         ComputeAtlasBridge.onReloadFinished();
     }
+
+    @Inject(method = "close()V", at = @At("HEAD"))
+    private void bedray$beginClientShutdown(CallbackInfo ci) {
+        ComputeAtlasBridge.onShutdownStarted();
+    }
 }

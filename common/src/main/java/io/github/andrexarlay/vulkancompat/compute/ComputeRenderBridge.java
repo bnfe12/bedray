@@ -235,14 +235,16 @@ public final class ComputeRenderBridge {
     }
 
     /** Called before borrowed atlas handles can close or resource/model epochs can be mixed. */
-    static void onMaterialsInvalidated() {
-        releaseResources();
+    static boolean onMaterialsInvalidated() {
+        boolean retired = releaseResources();
         worldCapture.clear();
         if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
         capturedAtlasGeneration = 0;
         cameraPending = appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
         pendingCameraReason = null;
         recordedRevision = Long.MIN_VALUE;
+        // A previous failure remains unsafe even after resourceOwner was detached from its broken handles.
+        return retired && !cleanupBroken;
     }
 
     private static boolean releaseResources() {

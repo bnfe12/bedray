@@ -14,6 +14,7 @@ import org.lwjgl.vulkan.VK10;
 public final class ComputeAtlasBridge {
     private static volatile boolean reloadPending = true;
     private static boolean uploaded;
+    private static boolean finalShutdown, deviceClosing;
     private static long generation = 1;
     private static GpuTexture texture;
     private static GpuTextureView view;
@@ -27,7 +28,7 @@ public final class ComputeAtlasBridge {
         reloadPending = true;
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft != null && !minecraft.isSameThread()) {
-            minecraft.execute(ComputeAtlasBridge::invalidate);
+            minecraft.execute(() -> invalidate());
         } else invalidate();
     }
 
@@ -39,26 +40,40 @@ public final class ComputeAtlasBridge {
     /** Must run before TextureAtlas closes its old view/image, even when dimensions do not change. */
     public static void onAtlasReleased() {
         uploaded = false;
-        invalidate();
+        if (!invalidate() && !finalShutdown && !deviceClosing) {
+            // Abort replacement before vanilla can close a view still referenced by unretired commands.
+            throw new IllegalStateException("Cannot replace block atlas after compute cleanup failure; restart the client");
+        }
     }
 
     public static void onAtlasUploaded() {
-        uploaded = true;
+        if (!finalShutdown) {
+            deviceClosing = false;
+            uploaded = true;
+        }
+    }
+
+    /** Final client teardown must still reach the device's own reclamation after a failed retirement. */
+    public static void onShutdownStarted() {
+        finalShutdown = true;
+        onDeviceClose();
     }
 
     public static void onDeviceClose() {
+        deviceClosing = true;
         uploaded = false;
         invalidate();
     }
 
-    private static void invalidate() {
+    private static boolean invalidate() {
         // Flush queued references and retire provider descriptors before forgetting borrowed handles.
-        ComputeRenderBridge.onMaterialsInvalidated();
+        boolean retired = ComputeRenderBridge.onMaterialsInvalidated();
         texture = null;
         view = null;
         models = null;
         frame = null;
         generation = Math.incrementExact(generation);
+        return retired;
     }
 
     /** Null keeps the normal renderer while atlas and models are unavailable or being replaced. */
@@ -81,7 +96,9 @@ public final class ComputeAtlasBridge {
         if (imageView == 0 || width <= 0 || height <= 0 || format != VK10.VK_FORMAT_R8G8B8A8_UNORM) return null;
         long address = device.vkDevice().address();
         if (frame != null && (texture != nextTexture || view != nextView || models != nextModels
-                || frame.deviceAddress() != address || frame.imageView() != imageView)) invalidate();
+                || frame.deviceAddress() != address || frame.imageView() != imageView)) {
+            if (!invalidate()) return null;
+        }
         if (frame == null) {
             texture = nextTexture;
             view = nextView;
