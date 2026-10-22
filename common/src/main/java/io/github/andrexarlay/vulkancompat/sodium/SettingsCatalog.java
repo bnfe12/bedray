@@ -160,7 +160,24 @@ public final class SettingsCatalog {
     // ---------------------------------------------------------------- the table
 
     static {
-        // ===================== ESSENTIAL (first page, 8 concepts) =====================
+        // ===================== ESSENTIAL =====================
+        putNoImage("renderer", Tier.ESSENTIAL, "World Renderer",
+            "Hardware RT / Raster uses the saved hardware tracing mode. Voxel selects the separate Bedray Compute add-on: gray opaque cubes in a 48-block window with fixed diagnostic sunlight and traced shadows. Full textures, materials and light transport are pending. Frame generation is disabled and scaling becomes bilinear; the hardware RT mode stays saved.",
+            "GPU cost is experimental and has not been measured in gameplay.",
+            "Voxel requires the matching Bedray Compute add-on and the game's Vulkan backend; no RT extensions are required. Experimental.",
+            "No gameplay comparison has been captured for the voxel renderer.");
+        putNoImage("renderer_status", Tier.ESSENTIAL, "Renderer Status",
+            "Reports the requested renderer and host command recording. A recorded frame does not establish gameplay compatibility.",
+            "Read-only status.", "Missing add-ons and initialization failures are shown explicitly.",
+            "Runtime status has no comparison image.");
+        putNoImage("compute_scene", Tier.EXPERT, "Compute Diagnostic Scene",
+            "Session diagnostic preference for the selected voxel renderer. Synthetic replaces the world with a fixed test scene; live mode draws opaque occupancy. World Renderer remains the main hardware/voxel switch. A saved voxel choice starts in live mode on the next launch.",
+            "GPU cost is experimental and has not been measured in gameplay.", "Requires the separate Bedray Compute add-on.",
+            "No live gameplay comparison has been captured.");
+        putNoImage("compute_debug_view", Tier.EXPERT, "Compute Debug View",
+            "Inspect opaque occupancy shading, face normals, ray distance or unsupported and missing cells. These are diagnostic views, without textures or full material lighting.",
+            "Diagnostic shading only.", "Requires a Bedray Compute provider with debug-view support.",
+            "No live gameplay comparison has been captured.");
         put("rt_mode", Tier.ESSENTIAL, "Ray Tracing",
             "Off draws the classic game. Path Tracing replaces its lighting with traced light: real shadows, reflections, bounced light and glowing blocks.",
             "FPS: Path Tracing is the most expensive setting (use an upscaler). VRAM: +0.2-0.5 GB.",

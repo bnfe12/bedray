@@ -9,6 +9,7 @@ import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackend;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
+import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
@@ -21,7 +22,7 @@ import org.lwjgl.system.MemoryStack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Host-owned composition point for the optional synthetic voxel diagnostic scene. */
+/** Host-owned composition point for the optional experimental voxel renderer. */
 public final class ComputeRenderBridge {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/Compute");
     private static GraphicsBackend resourceOwner;
@@ -35,16 +36,26 @@ public final class ComputeRenderBridge {
     private static VulkanDevice checkedDevice;
     private static boolean computeSupported;
     private static boolean cleanupBroken;
+    private static boolean rendererSelectionInitialized;
+    private static boolean hadWorld;
     private static int resourceWidth, resourceHeight, resourceFormat;
     private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
 
     private ComputeRenderBridge() {}
 
     public static void onFrameBegin(boolean hasWorld) {
+        if (!rendererSelectionInitialized) {
+            // Config loading and Vulkan runtime setup have finished before the first rendered frame.
+            VulkanRtxConfig.applyRendererSelection();
+            rendererSelectionInitialized = true;
+        }
         frameIndex++;
         var nextRequest = GraphicsBackendRegistry.request();
         boolean requestChanged = appliedRequest != nextRequest;
+        boolean worldLost = hadWorld && !hasWorld;
+        hadWorld = hasWorld;
         appliedRequest = nextRequest;
+        if (enabled()) VulkanRtxConfig.enforceComputeCompatibility();
         if (requestChanged) {
             if (!releaseResources()) return;
             worldCapture.clear();
@@ -55,11 +66,13 @@ public final class ComputeRenderBridge {
             return;
         }
         if (!hasWorld || !enabled()) {
-            worldCapture.clear();
-            if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
+            if (!requestChanged && worldLost) {
+                worldCapture.clear();
+                if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
+            }
             if (!releaseResources()) return;
-            if (GraphicsBackendRegistry.backend() != null && hasWorld) {
-                noteIdle("Synthetic scene disabled");
+            if (GraphicsBackendRegistry.backend() != null && !enabled()) {
+                noteIdle("Hardware / raster renderer selected");
             } else if (GraphicsBackendRegistry.backend() != null) {
                 noteIdle(sceneLabel() + " waiting for a world");
             }
@@ -92,7 +105,7 @@ public final class ComputeRenderBridge {
         }
         if (!backend.supportsSceneMode(appliedRequest.mode())) {
             if (!releaseResources()) return false;
-            noteIdle("Installed companion does not support " + sceneLabel());
+            noteIdle("Selected renderer does not support " + sceneLabel());
             return false;
         }
         // Neither diagnostic provides matching world depth/motion guides for temporal reconstruction or FG.
@@ -105,7 +118,7 @@ public final class ComputeRenderBridge {
         VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null || target == null || target.width <= 0 || target.height <= 0
             || target.getColorTexture() == null || target.getColorTexture().isClosed()) {
-            noteIdle("Synthetic scene waiting for a Vulkan target");
+            noteIdle(sceneLabel() + " waiting for a Vulkan target");
             return false;
         }
         if ((target.getColorTexture().usage() & GpuTexture.USAGE_COPY_DST) == 0) {

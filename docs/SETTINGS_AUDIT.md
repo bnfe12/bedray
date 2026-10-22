@@ -19,8 +19,19 @@ FPS column: qualitative (none / low / medium / high). "Needed by the user" is th
 
 ## Page 1 "Bedray" (ESSENTIAL)
 
+### Compute interoperability update, 2026-10-22
+
+Bedray and Compute remain separate mods. `renderer` is visible on the main Sodium page and the custom
+Bedray screen, persists in the host configuration and requests the companion through the renderer API.
+The renderer selection, hardware RT mode and read-only `renderer_status` form one renderer concept.
+Missing companion state is explicit. No new preview image or gameplay-support claim is introduced.
+Expert `compute_scene` and `compute_debug_view` expose diagnostics. Hardware-only controls follow the
+pending renderer choice, and voxel mode uses Bilinear with FG off until temporal guides exist.
+This update is source-reviewed/compiled separately; the older test evidence does not validate it.
+
 | Option (id) | What it does | Picture / FPS | Needed by the user? | Decision |
 |---|---|---|---|---|
+| `renderer`, `renderer_status` World Renderer | Hardware/raster or companion voxel diagnostic; status names missing add-on and recorded/failed state | diagnostic scope / cost unmeasured | Yes: the renderer must be selectable without RT hardware | ESSENTIAL, part of the renderer concept |
 | `rt_mode` Ray Tracing | Off / Path Tracing (Ray Tracing Fast, AO, Direct only when unlocked) | the whole look / very high | Yes, the main switch | ESSENTIAL |
 | `path_bounces` Light Quality | light bounces per path (1-8, default 3) | brighter interiors, colour bleeding / about -10% per bounce | Yes, one slider for "light quality" | ESSENTIAL (was Expert "PT Bounces") |
 | `path_auto_exposure` Auto Exposure | exposure follows the scene brightness | brightness / none | Yes: brightness complaints; known to pulse, so it must be switchable. Manual EV is **not available** (needs a renderer change, see "Not solved") | ESSENTIAL |

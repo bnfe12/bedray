@@ -37,6 +37,11 @@ Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by
 
 What works and how well it is proven is in **[docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md)**. Nothing in this alpha is marked stable.
 
+Development alpha.4 also exposes **World Renderer → Voxel (Experimental)** on the main Bedray settings
+page when using the separate Bedray Compute add-on. This is a bounded opaque-world diagnostic, with
+full textures/materials and gameplay acceptance pending. Bedray and Compute remain separate mods;
+use the matching pair for your loader. See [COMPUTE](docs/COMPUTE.md).
+
 ## Requirements
 
 | | |

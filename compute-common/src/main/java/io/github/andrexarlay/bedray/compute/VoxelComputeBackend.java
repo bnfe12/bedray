@@ -21,18 +21,26 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         new io.github.andrexarlay.bedray.compute.voxel.VoxelWorldCache();
 
     private WorldSnapshot snapshot;
-    private VoxelWorldUpload uploads = new VoxelWorldUpload();
+    private final VoxelWorldUpload uploads = new VoxelWorldUpload();
+    private long detailSession = -1, detailRevision = -1;
     @Override public boolean wantsWorldSnapshots() {
         return GraphicsBackendRegistry.liveWorldEnabled() || Boolean.getBoolean("bedray.compute.captureWorld");
     }
     @Override public void acceptWorldSnapshot(io.github.andrexarlay.bedray.api.v1.WorldSnapshot snapshot) {
         world.accept(snapshot);
         this.snapshot = snapshot;
-        int omitted = 0, opaque = 0;
-        for (var section : snapshot.sections()) { omitted += section.unsupportedCount(); opaque += section.opaqueCount(); }
-        detail = snapshot.sections().size()+"/27 sections; "+opaque+" opaque; "+omitted+" unsupported; missing sections unknown";
+        if (detailSession != snapshot.session() || detailRevision != snapshot.revision()) {
+            int omitted = 0, opaque = 0;
+            for (var section : snapshot.sections()) { omitted += section.unsupportedCount(); opaque += section.opaqueCount(); }
+            detail = snapshot.sections().size()+"/27 sections; "+opaque+" opaque; "+omitted+" unsupported; missing sections unknown";
+            detailSession = snapshot.session(); detailRevision = snapshot.revision();
+        }
     }
-    @Override public void clearWorldSnapshot() { world.clear(); snapshot = null; detail = "Waiting for a world snapshot"; uploads = new VoxelWorldUpload(); }
+    @Override public void clearWorldSnapshot() {
+        if (snapshot == null) return;
+        world.clear(); snapshot = null; detail = "Waiting for a world snapshot"; uploads.clear();
+        detailSession = detailRevision = -1;
+    }
 
     @Override public String id() { return "bedray_compute:voxels"; }
 
@@ -58,7 +66,7 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         if (pipeline != null) {
             pipeline.close();
             pipeline = null;
-            uploads = new VoxelWorldUpload();
+            uploads.clear();
         }
     }
 }

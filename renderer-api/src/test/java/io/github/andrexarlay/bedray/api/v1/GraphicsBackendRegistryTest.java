@@ -14,7 +14,7 @@ class GraphicsBackendRegistryTest {
         assertEquals(1, GraphicsBackendRegistry.API_VERSION);
         assertNull(GraphicsBackendRegistry.backend());
         assertEquals(startupRequest, GraphicsBackendRegistry.demoEnabled());
-        assertEquals("Companion not installed", GraphicsBackendRegistry.status());
+        assertEquals("Voxel renderer not initialized", GraphicsBackendRegistry.status());
 
         long originalRevision = GraphicsBackendRegistry.requestRevision();
         GraphicsBackendRegistry.setDemoEnabled(startupRequest);
@@ -25,7 +25,7 @@ class GraphicsBackendRegistryTest {
         assertEquals(originalRevision + 1, GraphicsBackendRegistry.requestRevision());
         GraphicsBackendRegistry.setDemoEnabled(startupRequest);
         assertEquals(originalRevision + 2, GraphicsBackendRegistry.requestRevision());
-        assertEquals("Companion not installed", GraphicsBackendRegistry.status());
+        assertEquals("Voxel renderer not initialized", GraphicsBackendRegistry.status());
 
         assertThrows(NullPointerException.class, () -> GraphicsBackendRegistry.register(null));
         assertThrows(IllegalArgumentException.class, () -> GraphicsBackendRegistry.register(new Backend(null)));
@@ -36,7 +36,7 @@ class GraphicsBackendRegistryTest {
         Backend accepted = new Backend("test:synthetic_voxels");
         GraphicsBackendRegistry.register(accepted);
         assertSame(accepted, GraphicsBackendRegistry.backend());
-        assertEquals(startupRequest ? "Synthetic scene requested" : "Synthetic scene disabled",
+        assertEquals(startupRequest ? "Synthetic scene requested" : "Hardware / raster renderer selected",
             GraphicsBackendRegistry.status());
         long registeredRevision = GraphicsBackendRegistry.requestRevision();
         GraphicsBackendRegistry.register(accepted);
@@ -66,7 +66,7 @@ class GraphicsBackendRegistryTest {
         GraphicsBackendRegistry.setDemoEnabled(false);
         assertFalse(GraphicsBackendRegistry.demoEnabled());
         assertEquals(enabledRevision + 1, GraphicsBackendRegistry.requestRevision());
-        assertEquals("Synthetic scene disabled", GraphicsBackendRegistry.status());
+        assertEquals("Hardware / raster renderer selected", GraphicsBackendRegistry.status());
         GraphicsBackendRegistry.setDemoEnabled(false);
         assertEquals(enabledRevision + 1, GraphicsBackendRegistry.requestRevision());
         long modeRevision = GraphicsBackendRegistry.requestRevision();

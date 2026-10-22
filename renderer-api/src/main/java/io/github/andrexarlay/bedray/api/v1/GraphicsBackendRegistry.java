@@ -2,7 +2,7 @@ package io.github.andrexarlay.bedray.api.v1;
 
 import java.util.Objects;
 
-/** Versioned companion discovery and explicit synthetic-demo request; no GPU calls during registration. */
+/** Versioned renderer registration and frame-boundary requests; no GPU calls during registration. */
 public final class GraphicsBackendRegistry {
     public static final int API_VERSION = 1;
     public static final int API_MINOR_VERSION = 2;
@@ -19,7 +19,7 @@ public final class GraphicsBackendRegistry {
         Boolean.getBoolean("bedray.compute.world") ? SceneMode.LIVE_OPAQUE
             : Boolean.getBoolean("bedray.compute.demo") ? SceneMode.SYNTHETIC : SceneMode.OFF, 0);
     public static SceneRequest request() { return request; }
-    private static volatile String status = "Companion not installed";
+    private static volatile String status = "Voxel renderer not initialized";
 
     private GraphicsBackendRegistry() {}
 
@@ -32,7 +32,7 @@ public final class GraphicsBackendRegistry {
             throw new IllegalStateException("A compute diagnostic backend is already registered: " + backend.id());
         }
         backend = candidate;
-        status = sceneMode() == SceneMode.OFF ? "Synthetic scene disabled" : sceneLabel() + " requested";
+        status = sceneMode() == SceneMode.OFF ? "Hardware / raster renderer selected" : sceneLabel() + " requested";
     }
 
     public static GraphicsBackend backend() { return backend; }
@@ -53,8 +53,8 @@ public final class GraphicsBackendRegistry {
         SceneRequest previous = request;
         if (previous.mode() != mode) {
             request = new SceneRequest(mode, previous.revision()+1);
-            status = backend == null ? "Companion not installed" : sceneMode() == SceneMode.OFF
-                ? "Synthetic scene disabled" : sceneLabel() + " requested";
+            status = backend == null ? "Voxel renderer not initialized" : sceneMode() == SceneMode.OFF
+                ? "Hardware / raster renderer selected" : sceneLabel() + " requested";
         }
     }
 

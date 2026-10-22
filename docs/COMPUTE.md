@@ -57,14 +57,22 @@ Capture requires the client owning thread and uses cached static occlusion prope
 collision callbacks. The top build section is included. Steady-state block updates do not call device-idle; mode/size/device changes submit pending host work
 before releasing provider resources.
 
-## Future development activation
+## Activation and shared settings
 
-A local development instance must use matching host/companion source revision **0.1.1-alpha.3 or newer**;
-older alpha.1 hosts lack the new scene-mode/diagnostic API. This is a source compatibility requirement,
-not a released build announcement.
+A local development instance should use the matching **Bedray and Bedray Compute alpha.4 pair** for
+the persistent shared selector. The mods remain separate: install both JARs for one matching loader.
+Older alpha.1 hosts lack the live scene API; an older host cannot acquire the new UI by updating only
+the companion. This is a development compatibility requirement, not a stable-release announcement.
 
-The existing Bedray graphics page cycles **Compute Scene (Experimental)** through Off, Synthetic and
-Live opaque debug. Debug view and scene-data rows describe the requested mode and available CPU data.
+Open Sodium Video Settings, the main **Bedray** page and **World Renderer**, then choose
+**Voxel (Experimental)**. The main page also shows renderer status, including a missing Compute add-on.
+This option is independent of hardware RT capability. The hardware RT mode preference is preserved
+when changing renderer. The renderer choice is saved as `renderer` in `config/bedray.toml`.
+
+Voxel diagnostics currently select Bilinear and switch off frame generation, because matching temporal
+guides are absent. These changes are explicit in the setting tooltip. The separate Bedray configuration
+screen uses the same selection API. Expert diagnostics expose synthetic/live scenes and shaded,
+normals, distance and occupancy views. Debug scene/view choices remain session controls.
 JVM session alternatives:
 
 ```text
@@ -73,8 +81,14 @@ JVM session alternatives:
 ```
 
 `-Dbedray.compute.captureWorld=true` can collect world CPU snapshots while displaying the synthetic mode.
-Requests remain session-only and are applied as one stable request at a frame boundary. Older synthetic-only providers do not expose live/debug modes they cannot execute. Initialization failures latch until the request changes; a failed cleanup
+JVM diagnostic overrides remain session-only until an explicit UI renderer choice. Requests are applied
+as one stable request at a frame boundary. Initialization failures latch until the request changes; a failed cleanup
 requires restart. A recorded command is not evidence of successful presentation.
+
+With an unchanged section window/content revision, the uploader returns without building new slot
+arrays or update lists. Scene counters are rebuilt on content revisions rather than camera-only frames.
+Clearing residency reuses its fixed arrays; the host clears snapshots on mode/world transitions instead
+of every hardware-rendered frame. These are source-level allocation reductions, not measured FPS claims.
 
 ## Compilation and evidence
 
