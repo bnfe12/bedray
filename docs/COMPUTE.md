@@ -16,11 +16,11 @@ structures, ray queries, device addresses, Int64, vendor SDKs or native vendor l
 
 - **Synthetic**: the existing 32×24×32 scene, fixed camera, direct light and traced shadows.
 - **Live opaque debug**: a 48×48×48 window of real loaded world sections, the current game camera with
-  the host's unjittered/bob projection and effective camera origin, conservative opaque full cubes,
-  constant gray albedo, fixed diagnostic sun/shadows. This is not a textured playable renderer.
+  the host's current-frame unjittered/bob projection and effective camera origin, exact opaque full-cube
+  baked faces, albedo sampled from the live block atlas, and fixed diagnostic sun/shadows.
 
 Shaded occupancy, surface normals, distance and occupancy-mask views are implemented. CPU diagnostics
-report loaded sections, opaque counts and omitted unsupported cells. Shaded/normal/distance views omit
+report loaded sections, textured/opaque counts and omitted unsupported cells. Shaded/normal/distance views omit
 unknown/unloaded and unsupported cells. The occupancy view shows unsupported cells as magenta markers
 and unloaded sections as blue markers. These diagnostic bounds are separate from shaded geometry.
 Partial shapes, cutouts, fluids, entities, items and particles are omitted
@@ -34,13 +34,14 @@ the required matching depth/motion/history guides have not been implemented.
 
 ## World input and upload
 
-`renderer-api` major 1/minor 2 publishes immutable `WorldSnapshot`, `SectionSnapshot` and `CameraSnapshot`
+`renderer-api` major 1/minor 3 publishes immutable `WorldSnapshot`, `SectionSnapshot` and `CameraSnapshot`
 data through optional callbacks. `common` owns all Minecraft access, independently of the hardware RT
 geometry gate. `compute-common` consumes only API snapshots; it imports no game/loader/private Bedray
 implementation classes.
 
 The producer polls a 3×3×3 section window around the camera, at most two section reads per rendered
-frame, retaining at most 27 sections (108 KiB occupancy payload). A stationary window is revisited within
+frame, retaining at most 27 sections (108 KiB occupancy payload; up to 972 KiB raw occupancy, material
+references and palettes, excluding Java object overhead). A stationary window is revisited within
 14 frames. Only already loaded chunks are read with creation disabled. Unloads and out-of-window sections
 are removed before publication. World sessions and content revisions prevent cross-world/stale data reuse.
 Unchanged section objects are retained; negative coordinates use floor division.
@@ -48,21 +49,49 @@ An external snapshot producer must keep section instance identity and list order
 and revision stay unchanged; camera-only changes may reuse that revision. Changed content, membership
 or order requires a newer revision. Section content/coordinates must never change behind an existing revision.
 
-The GPU representation is a fixed 27-tile storage buffer (432 KiB cells plus a 16-byte header). A changed
-section records one 16 KiB `vkCmdUpdateBuffer`; missing slots explicitly receive unknown values. Camera
-window moves/session changes may update all 27 slots, bounded at 432 KiB. Camera movement inside the
+The GPU representation is a fixed 27-tile storage buffer (432 KiB cells plus a 16-byte header), plus
+648 KiB of face-material palettes in the textured pipeline. A changed section records one 16 KiB cell
+update and at most one 24 KiB palette update; missing slots explicitly receive unknown values. Camera
+window moves/session changes may update all 27 slots, bounded at 1080 KiB. Camera movement inside the
 same section updates push constants, without rebuilding/reallocating the scene. Command-buffer updates
 and transfer/compute barriers avoid overwriting a mapped staging range still used by a previous frame.
 Capture requires the client owning thread and uses cached static occlusion properties without world-aware
 collision callbacks. The top build section is included. Steady-state block updates do not call device-idle; mode/size/device changes submit pending host work
 before releasing provider resources.
 
+### Full-cube albedo materials
+
+The host accepts a model only when its selected, position-seeded baked variant contains exactly six
+opaque SOLID quads on the six unit-cube boundary faces. UV transforms come from the quad geometry and
+its actual UVs, preserving rotated/reversed faces; particle icons and guessed sprite rectangles are not
+substitutes. Extra overlays, nonaffine UVs, partial shapes, cutouts and fluids remain unsupported.
+Tint is the game's block tint-source result at that position, applied uniformly per face. This does not
+implement Sodium's four-vertex smooth biome blending.
+
+Each section has at most 128 immutable six-face materials and 4096 one-based references. Reference zero
+retains gray shading for a proven opaque cube when no material fits the bounded palette. The F3 data
+distinguishes textured cells from all opaque cells. Material-only edits such as stone to dirt, changes
+of UV/tint, and resource-generation changes update content revisions even when occupancy is unchanged.
+Model caches are bounded by resident sections and cleared on world/resource changes.
+
+`AtlasFrame` borrows the host's current animated block atlas, in GENERAL layout and RGBA8 UNORM with
+sRGB-encoded texels. The provider owns its nearest/LOD-zero sampler and descriptors; it never owns the
+atlas view/image. The shader decodes atlas and tint sRGB once before fixed lighting, then encodes for
+the destination target. PBR, normal maps, emission and physical light transport are separate future work.
+
+The host blocks capture throughout resource reload, retires provider resources before atlas handles
+close, and clears old section snapshots before publishing a new generation. Actual texture, view and
+model-set identities are checked alongside the generation. Descriptors are immutable within an epoch;
+reload or identity changes flush queued host commands before provider cleanup. Atlas/model epoch
+mismatch skips the compute replacement image. Real Minecraft reload/animation and visual acceptance
+still require matching-version game evidence.
+
 ## Activation and shared settings
 
-A local development instance should use the matching **Bedray and Bedray Compute alpha.5 pair** for
+A local development instance should use the matching **Bedray and Bedray Compute alpha.6 pair** for
 the persistent shared selector. The mods remain separate: install both JARs for one matching loader.
-Older alpha.1 hosts lack the live scene API; an older host cannot acquire the new UI by updating only
-the companion. This is a development compatibility requirement, not a stable-release announcement.
+Compute alpha.6 requires host alpha.6 or newer for material API minor 3; updating only the companion
+cannot add the required host hooks. This is a development compatibility requirement, not a stable-release announcement.
 
 Open Sodium Video Settings, the main **Bedray** page and **World Renderer**, then choose
 **Voxel (Experimental)**. The main page also shows renderer status, including a missing Compute add-on.
@@ -103,6 +132,11 @@ snapshot is never rendered while capture is pending. Matrix diagnostics are logg
 reason changes, with a recovery marker when a valid snapshot arrives. Structural/provider/GPU failures
 remain latched and produce a one-time on-screen message.
 
+Alpha.6 also invalidates the retained world projection and bob origin at the start of each world frame.
+When bob projection is enabled, capture waits until the current frame's world projection hook runs;
+it cannot combine a previous frame's projection/bob with the new camera. This closes a source-level
+stale-pose path; it does not establish the upstream cause of the alpha.4 nonfinite matrix.
+
 F3 now includes `Voxel` status and `Voxel data` when the mode is selected. Renderer Status has the full
 runtime detail in its tooltip. `scene_recorded` means that the host accepted a diagnostic command buffer;
 it does not prove presentation. The readiness fix still requires fresh matching-version Minecraft
@@ -139,8 +173,8 @@ hit fails the probe. Neither passing this tolerance nor producing an offscreen i
 
 ## Remaining implementation gates
 
-1. Exact material/texture/emission snapshots through the host API, with resource reload/version ownership.
-   Do not substitute map colors or guessed PBR values and advertise them as the pack's actual materials.
+1. Validate the first full-cube albedo/material epoch path in game, then extend exact snapshots to layered
+   materials, PBR/normal maps and emission. Do not advertise guessed PBR values as actual pack materials.
 2. World light transport, accumulation, denoising and matching temporal guides; define bounded histories
    and a shared HDR/tonemap contract before enabling temporal upscalers or FG.
 3. Accurate partial shapes/cutouts/fluids, entities and other unsupported geometry, each with an explicit

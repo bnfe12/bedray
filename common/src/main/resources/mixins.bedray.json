@@ -27,6 +27,8 @@
     "rtx.MixinVulkanGpuSampler",
     "rtx.MixinOptions",
     "rtx.MixinMinecraft",
+    "compute.MixinComputeResources",
+    "compute.MixinComputeAtlas",
     "rt.MixinEntityRenderDispatcher",
     "rt.MixinSubmitNodeCollection",
     "rt.MixinGameRendererHand",

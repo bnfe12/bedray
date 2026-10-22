@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanConst;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.bedray.api.v1.AtlasFrame;
 import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackend;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
@@ -42,6 +43,7 @@ public final class ComputeRenderBridge {
     private static String pendingCameraReason;
     private static long recordedRevision = Long.MIN_VALUE;
     private static int resourceWidth, resourceHeight, resourceFormat;
+    private static long capturedAtlasGeneration, resourceAtlasGeneration;
     private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
 
     private ComputeRenderBridge() {}
@@ -96,19 +98,18 @@ public final class ComputeRenderBridge {
         if (!Boolean.getBoolean("bedray.compute.captureWorld") && (TemporalUpscaler.isActive()
             || FrameGenSettings.mode() != FrameGenSettings.Mode.OFF || FrameGenRuntime.isActive())) return;
         try {
-            var snapshot = worldCapture.capture(camera);
+            AtlasFrame atlas = ComputeAtlasBridge.current();
+            if (atlas == null) {
+                notePendingCamera("Waiting for block atlas and baked models", camera);
+                return;
+            }
+            var snapshot = worldCapture.capture(camera, atlas);
             if (snapshot == null) {
-                String reason = worldCapture.pendingReason();
-                if (!java.util.Objects.equals(pendingCameraReason, reason)) {
-                    LOGGER.warn("[BEDRAY-COMPUTE] camera_pending reason={} retry=next_frame projection={} view={}", reason,
-                        WorldTargetManager.levelProjectionOr(camera == null ? null : camera.projectionMatrix),
-                        camera == null ? null : camera.viewRotationMatrix);
-                    pendingCameraReason = reason;
-                }
-                noteIdle(reason);
+                notePendingCamera(worldCapture.pendingReason(), camera);
                 return;
             }
             backend.acceptWorldSnapshot(snapshot);
+            capturedAtlasGeneration = atlas.generation();
             cameraPending = false;
             if (pendingCameraReason != null) {
                 LOGGER.info("[BEDRAY-COMPUTE] camera_ready session={} revision={} sections={}",
@@ -141,8 +142,13 @@ public final class ComputeRenderBridge {
             noteIdle("Disable temporal upscaling and frame generation for compute diagnostics");
             return false;
         }
-        // A pending camera may leave an older snapshot in the provider. Never draw that stale pose.
-        if (appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE && cameraPending) return false;
+        boolean live = appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
+        // current() may invalidate stale scene data after detecting an unexpected atlas/model identity change.
+        AtlasFrame atlas = live ? ComputeAtlasBridge.current() : null;
+        if (live && (cameraPending || atlas == null || capturedAtlasGeneration != atlas.generation())) {
+            if (!cameraPending) noteIdle("Waiting for matching block atlas and world materials");
+            return false;
+        }
         VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null || target == null || target.width <= 0 || target.height <= 0
             || target.getColorTexture() == null || target.getColorTexture().isClosed()) {
@@ -180,8 +186,9 @@ public final class ComputeRenderBridge {
             return false;
         }
         int format = VulkanConst.toVk(target.getColorTexture().getFormat());
+        long atlasGeneration = atlas == null ? 0 : atlas.generation();
         if (resourceOwner != null && (resourceWidth != target.width || resourceHeight != target.height
-            || resourceFormat != format)) {
+            || resourceFormat != format || resourceAtlasGeneration != atlasGeneration)) {
             // Provider resize destroys its previous images. Submit queued uses before allowing that destruction.
             if (!releaseResources()) return false;
         }
@@ -190,13 +197,14 @@ public final class ComputeRenderBridge {
         resourceWidth = target.width;
         resourceHeight = target.height;
         resourceFormat = format;
+        resourceAtlasGeneration = atlasGeneration;
         VulkanCommandEncoder encoder = device.createCommandEncoder();
         VkCommandBuffer commandBuffer = encoder.allocateAndBeginTransientCommandBuffer();
         boolean recorded = false;
         try {
             VkBarriers.fullMemoryBarrier(commandBuffer);
             recorded = backend.render(new ComputeFrameContext(device.vkDevice(), commandBuffer, image,
-                format, target.width, target.height, frameIndex, appliedRequest.mode()));
+                format, target.width, target.height, frameIndex, appliedRequest.mode(), atlas));
         } catch (RuntimeException | LinkageError error) {
             fail(error.getClass().getSimpleName() + ": " + error.getMessage(), error);
         } finally {
@@ -222,12 +230,19 @@ public final class ComputeRenderBridge {
 
     /** Device close hook runs before the command encoder and Vulkan device are destroyed. */
     public static void onDeviceClose(VulkanDevice closingDevice) {
+        ComputeAtlasBridge.onDeviceClose();
+        if (checkedDevice == closingDevice) checkedDevice = null;
+    }
+
+    /** Called before borrowed atlas handles can close or resource/model epochs can be mixed. */
+    static void onMaterialsInvalidated() {
+        releaseResources();
         worldCapture.clear();
         if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
-        if (resourceDevice == closingDevice) {
-            releaseResources();
-        }
-        if (checkedDevice == closingDevice) checkedDevice = null;
+        capturedAtlasGeneration = 0;
+        cameraPending = appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
+        pendingCameraReason = null;
+        recordedRevision = Long.MIN_VALUE;
     }
 
     private static boolean releaseResources() {
@@ -236,6 +251,7 @@ public final class ComputeRenderBridge {
         resourceOwner = null;
         resourceDevice = null;
         resourceWidth = resourceHeight = resourceFormat = 0;
+        resourceAtlasGeneration = 0;
         if (owner == null) return true;
         try {
             // execute() queues transient buffers in the host encoder. Flush those before provider.close() waits idle.
@@ -253,6 +269,17 @@ public final class ComputeRenderBridge {
 
     private static void noteIdle(String reason) {
         GraphicsBackendRegistry.noteIdle(reason, appliedRequest);
+    }
+
+    private static void notePendingCamera(String reason,
+            net.minecraft.client.renderer.state.level.CameraRenderState camera) {
+        if (!java.util.Objects.equals(pendingCameraReason, reason)) {
+            LOGGER.warn("[BEDRAY-COMPUTE] camera_pending reason={} retry=next_frame projection={} view={}", reason,
+                WorldTargetManager.levelProjectionOr(camera == null ? null : camera.projectionMatrix),
+                camera == null ? null : camera.viewRotationMatrix);
+            pendingCameraReason = reason;
+        }
+        noteIdle(reason);
     }
 
     private static void fail(String reason, Throwable error) {

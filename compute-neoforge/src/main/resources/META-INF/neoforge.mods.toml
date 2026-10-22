@@ -9,7 +9,7 @@ description='''Experimental software voxel traversal on Vulkan compute. Syntheti
 [[dependencies.bedray_compute]]
 modId="bedray"
 type="required"
-versionRange="[0.1.1-alpha.3,)"
+versionRange="[0.1.1-alpha.6,)"
 ordering="AFTER"
 side="CLIENT"
 [[dependencies.bedray_compute]]
