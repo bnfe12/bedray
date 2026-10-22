@@ -29,6 +29,10 @@ Expert `compute_scene` and `compute_debug_view` expose diagnostics. Hardware-onl
 pending renderer choice, and voxel mode uses Bilinear with FG off until temporal guides exist.
 This update is source-reviewed/compiled separately; the older test evidence does not validate it.
 
+Alpha.5 adds current Compute status/data to F3, full Renderer Status details in the Sodium tooltip,
+and a one-time fatal renderer message. Transient camera readiness no longer latches a permanent
+failure. These diagnostics describe current capture/command recording, not visual acceptance.
+
 | Option (id) | What it does | Picture / FPS | Needed by the user? | Decision |
 |---|---|---|---|---|
 | `renderer`, `renderer_status` World Renderer | Hardware/raster or companion voxel diagnostic; status names missing add-on and recorded/failed state | diagnostic scope / cost unmeasured | Yes: the renderer must be selectable without RT hardware | ESSENTIAL, part of the renderer concept |

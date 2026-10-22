@@ -305,7 +305,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setImpact(OptionImpact.HIGH).setStorageHandler(st);
         rt.addOption(track("renderer", renderer));
         EnumOptionBuilder<RendererStatus> rendererStatus = builder.createEnumOption(id("renderer_status"), RendererStatus.class);
-        rendererStatus.setName(nameOf("renderer_status")).setTooltip(v -> tipOf("renderer_status"))
+        rendererStatus.setName(nameOf("renderer_status")).setTooltip(v -> Component.empty()
+            .append(tipOf("renderer_status")).append("\n").append(rendererStatus()))
             .setDefaultValue(RendererStatus.STATUS).setElementNameProvider(v -> Component.literal(rendererStatus()))
             .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
             .setBinding(v -> {}, () -> RendererStatus.STATUS).setStorageHandler(st);

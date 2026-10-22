@@ -59,7 +59,7 @@ before releasing provider resources.
 
 ## Activation and shared settings
 
-A local development instance should use the matching **Bedray and Bedray Compute alpha.4 pair** for
+A local development instance should use the matching **Bedray and Bedray Compute alpha.5 pair** for
 the persistent shared selector. The mods remain separate: install both JARs for one matching loader.
 Older alpha.1 hosts lack the live scene API; an older host cannot acquire the new UI by updating only
 the companion. This is a development compatibility requirement, not a stable-release announcement.
@@ -89,6 +89,24 @@ With an unchanged section window/content revision, the uploader returns without 
 arrays or update lists. Scene counters are rebuilt on content revisions rather than camera-only frames.
 Clearing residency reuses its fixed arrays; the host clears snapshots on mode/world transitions instead
 of every hardware-rendered frame. These are source-level allocation reductions, not measured FPS claims.
+
+### Camera readiness and failure diagnostics
+
+A live alpha.4 run selected Voxel but failed while constructing the first camera snapshot: the inverse
+projection contained nonfinite values. The host treated this as a permanent failure of that scene
+request, so later frames could not recover. The original projection values were not logged; the upstream
+source of the invalid camera has not been established.
+
+Alpha.5 checks initialized camera state, finite origin/matrices and invertibility before publishing a
+snapshot. An unavailable camera skips only that frame and retries on the next one. The previous camera
+snapshot is never rendered while capture is pending. Matrix diagnostics are logged when the pending
+reason changes, with a recovery marker when a valid snapshot arrives. Structural/provider/GPU failures
+remain latched and produce a one-time on-screen message.
+
+F3 now includes `Voxel` status and `Voxel data` when the mode is selected. Renderer Status has the full
+runtime detail in its tooltip. `scene_recorded` means that the host accepted a diagnostic command buffer;
+it does not prove presentation. The readiness fix still requires fresh matching-version Minecraft
+capture/presentation evidence; compilation and archive inspection cannot establish that outcome.
 
 ## Compilation and evidence
 

@@ -38,6 +38,9 @@ public final class ComputeRenderBridge {
     private static boolean cleanupBroken;
     private static boolean rendererSelectionInitialized;
     private static boolean hadWorld;
+    private static boolean cameraPending;
+    private static String pendingCameraReason;
+    private static long recordedRevision = Long.MIN_VALUE;
     private static int resourceWidth, resourceHeight, resourceFormat;
     private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
 
@@ -55,11 +58,14 @@ public final class ComputeRenderBridge {
         boolean worldLost = hadWorld && !hasWorld;
         hadWorld = hasWorld;
         appliedRequest = nextRequest;
+        cameraPending = appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
         if (enabled()) VulkanRtxConfig.enforceComputeCompatibility();
         if (requestChanged) {
             if (!releaseResources()) return;
             worldCapture.clear();
             if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
+            pendingCameraReason = null;
+            recordedRevision = Long.MIN_VALUE;
         }
         if (cleanupBroken) {
             GraphicsBackendRegistry.noteFailure("Cleanup failed; restart the client before retrying", appliedRequest);
@@ -69,6 +75,8 @@ public final class ComputeRenderBridge {
             if (!requestChanged && worldLost) {
                 worldCapture.clear();
                 if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
+                pendingCameraReason = null;
+                recordedRevision = Long.MIN_VALUE;
             }
             if (!releaseResources()) return;
             if (GraphicsBackendRegistry.backend() != null && !enabled()) {
@@ -83,12 +91,30 @@ public final class ComputeRenderBridge {
     public static void captureWorld(net.minecraft.client.renderer.state.level.CameraRenderState camera) {
         GraphicsBackend backend = GraphicsBackendRegistry.backend();
         if (cleanupBroken || backend == null || !enabled() || !backend.supportsSceneMode(appliedRequest.mode())
-            || (!backend.wantsWorldSnapshots() && appliedRequest.mode() != GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE) || camera == null
+            || (!backend.wantsWorldSnapshots() && appliedRequest.mode() != GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE)
             || failedRevision == appliedRequest.revision()) return;
         if (!Boolean.getBoolean("bedray.compute.captureWorld") && (TemporalUpscaler.isActive()
             || FrameGenSettings.mode() != FrameGenSettings.Mode.OFF || FrameGenRuntime.isActive())) return;
         try {
-            backend.acceptWorldSnapshot(worldCapture.capture(camera));
+            var snapshot = worldCapture.capture(camera);
+            if (snapshot == null) {
+                String reason = worldCapture.pendingReason();
+                if (!java.util.Objects.equals(pendingCameraReason, reason)) {
+                    LOGGER.warn("[BEDRAY-COMPUTE] camera_pending reason={} retry=next_frame projection={} view={}", reason,
+                        WorldTargetManager.levelProjectionOr(camera == null ? null : camera.projectionMatrix),
+                        camera == null ? null : camera.viewRotationMatrix);
+                    pendingCameraReason = reason;
+                }
+                noteIdle(reason);
+                return;
+            }
+            backend.acceptWorldSnapshot(snapshot);
+            cameraPending = false;
+            if (pendingCameraReason != null) {
+                LOGGER.info("[BEDRAY-COMPUTE] camera_ready session={} revision={} sections={}",
+                    snapshot.session(), snapshot.revision(), snapshot.sections().size());
+                pendingCameraReason = null;
+            }
         } catch (RuntimeException | LinkageError error) {
             worldCapture.clear();
             backend.clearWorldSnapshot();
@@ -115,6 +141,8 @@ public final class ComputeRenderBridge {
             noteIdle("Disable temporal upscaling and frame generation for compute diagnostics");
             return false;
         }
+        // A pending camera may leave an older snapshot in the provider. Never draw that stale pose.
+        if (appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE && cameraPending) return false;
         VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null || target == null || target.width <= 0 || target.height <= 0
             || target.getColorTexture() == null || target.getColorTexture().isClosed()) {
@@ -181,6 +209,11 @@ public final class ComputeRenderBridge {
         }
         if (recorded) {
             GraphicsBackendRegistry.noteRendered(backend.id(), appliedRequest);
+            if (recordedRevision != appliedRequest.revision()) {
+                LOGGER.info("[BEDRAY-COMPUTE] scene_recorded mode={} backend={} target={}x{} detail={}",
+                    appliedRequest.mode(), backend.id(), target.width, target.height, backend.sceneDetail());
+                recordedRevision = appliedRequest.revision();
+            }
         } else if (failedRevision != appliedRequest.revision()) {
             noteIdle(sceneLabel() + " waiting for scene data; normal renderer retained");
         }
@@ -223,9 +256,17 @@ public final class ComputeRenderBridge {
     }
 
     private static void fail(String reason, Throwable error) {
+        boolean firstFailure = failedRevision != appliedRequest.revision();
         failedRevision = appliedRequest.revision();
         GraphicsBackendRegistry.noteFailure(reason, appliedRequest);
         if (error == null) LOGGER.warn("[BEDRAY-COMPUTE] {}", reason);
         else LOGGER.error("[BEDRAY-COMPUTE] {}", reason, error);
+        if (firstFailure) {
+            var minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (minecraft != null && minecraft.gui != null && minecraft.gui.hud != null) {
+                minecraft.gui.hud.setOverlayMessage(net.minecraft.network.chat.Component.translatable(
+                    "bedray.compute.failure", reason), false);
+            }
+        }
     }
 }

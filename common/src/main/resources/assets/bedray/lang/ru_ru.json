@@ -23,6 +23,7 @@
   "bedray.opt.compute_debug_view.req": "Требуется Bedray Compute с поддержкой отладочных видов.",
   "bedray.compute.data": "Данные сцены Compute",
   "bedray.compute.data.desc": "Окно 48 блоков из загруженных секций. Неподдерживаемые формы и текстуры пропускаются.",
+  "bedray.compute.failure": "Воксельный рендер остановлен: %s. Подробнее в состоянии рендера или журнале.",
   "bedray.compute.scene.off": "Аппаратный RT / растр",
   "bedray.compute.scene.synthetic": "Синтетическая сцена",
   "bedray.compute.scene.live": "Живая сцена кубов",

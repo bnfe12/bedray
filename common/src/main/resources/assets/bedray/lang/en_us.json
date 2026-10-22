@@ -23,6 +23,7 @@
   "bedray.opt.compute_debug_view.req": "Requires a Bedray Compute provider with debug-view support.",
   "bedray.compute.data": "Compute Scene Data",
   "bedray.compute.data.desc": "A 48-block window of loaded sections. Unsupported shapes and textures are omitted.",
+  "bedray.compute.failure": "Voxel renderer stopped: %s. See Renderer Status or the log.",
   "bedray.compute.scene.off": "Hardware / Raster",
   "bedray.compute.scene.synthetic": "Synthetic diagnostic",
   "bedray.compute.scene.live": "Live opaque debug",
