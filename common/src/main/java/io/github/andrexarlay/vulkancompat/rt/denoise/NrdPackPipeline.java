@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.denoise;
 
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFailure;
 import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
 import org.lwjgl.system.MemoryStack;
@@ -90,7 +91,7 @@ final class NrdPackPipeline {
         pi.get(0).sType$Default().layout(pipelineLayout);
         pi.get(0).stage().sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(module).pName(stack.UTF8("main"));
         LongBuffer p = stack.mallocLong(1);
-        RtFailure.check(VK10.vkCreateComputePipelines(device, VK10.VK_NULL_HANDLE, pi, null, p), stage);
+        RtFailure.check(RtVulkanPipelineCache.createCompute(device, pi, null, p), stage);
         return p.get(0);
     }
 

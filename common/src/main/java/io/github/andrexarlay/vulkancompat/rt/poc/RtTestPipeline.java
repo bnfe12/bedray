@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.poc;
 
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.shaderc.Shaderc;
@@ -151,7 +152,7 @@ public final class RtTestPipeline implements AutoCloseable {
                 .pName(stack.UTF8("main"));
 
             LongBuffer pPipeline = stack.mallocLong(1);
-            err = VK10.vkCreateComputePipelines(device, VK10.VK_NULL_HANDLE, pipeCreateInfo, null, pPipeline);
+            err = RtVulkanPipelineCache.createCompute(device, pipeCreateInfo, null, pPipeline);
             if (err != VK10.VK_SUCCESS) {
                 throw new RuntimeException("vkCreateComputePipelines failed: " + err);
             }

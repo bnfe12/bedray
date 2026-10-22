@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler;
 
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 import org.lwjgl.BufferUtils;
@@ -151,7 +152,7 @@ public final class VelocityPipeline implements AutoCloseable {
                     .pName(stack.UTF8("main"));
             compPipeInfo.get(0).layout(this.pipelineLayout);
             LongBuffer pComputePipeline = stack.mallocLong(1);
-            check(VK10.vkCreateComputePipelines(device, 0L, compPipeInfo, null, pComputePipeline), "vkCreateComputePipelines");
+            check(RtVulkanPipelineCache.createCompute(device, compPipeInfo, null, pComputePipeline), "vkCreateComputePipelines");
             this.computePipeline = pComputePipeline.get(0);
 
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(3, stack);

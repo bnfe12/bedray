@@ -49,8 +49,10 @@
     "framegen.MixinVulkanBackendStreamline",
     "framegen.MixinVulkanGpuSurfaceInfo",
     "framegen.MixinMinecraftFrameGen",
+    "framegen.MixinMinecraftDxgiPresent",
     "framegen.MixinGameRendererFrameGen",
     "framegen.MixinVulkanDeviceFrameGen",
+    "framegen.MixinVulkanDevicePipelineCache",
     "framegen.MixinVulkanPhysicalDeviceFgQueues",
     "framegen.MixinVulkanGpuSurfaceFsr3",
     "framegen.MixinDebugEntryFps"

@@ -100,7 +100,7 @@ final class RtBloomPass {
                 VkComputePipelineCreateInfo.Buffer ci = VkComputePipelineCreateInfo.calloc(1, stack);
                 ci.get(0).sType$Default().layout(pipelineLayout);
                 ci.get(0).stage().sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModules[s]).pName(stack.UTF8("main"));
-                RtFailure.check(VK10.vkCreateComputePipelines(device, VK10.VK_NULL_HANDLE, ci, null, p), "create_bloom_pipeline");
+                RtFailure.check(RtVulkanPipelineCache.createCompute(device, ci, null, p), "create_bloom_pipeline");
                 pipelines[s] = p.get(0);
             }
         }
