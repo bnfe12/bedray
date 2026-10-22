@@ -5,13 +5,19 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.Objects;
 
-/** Render-thread producer: at most two section reads/frame and 27 resident sections (~108 KiB).
+/** Render-thread producer: at most two section reads/frame and 27 resident sections (108 KiB occupancy;
+ * at most 972 KiB occupancy/references/palette payload together, excluding immutable object overhead).
  * Polls revisions over successive frames; does not promise same-frame edits. Source never generates chunks.
  */
 public final class WorldSnapshotStream {
     public interface Source {
         /** Null means unloaded/outside world. Returns exactly 4096 occupancy bytes otherwise. */
         byte[] readSection(int x, int y, int z);
+        /** Unified immutable payload, captured in the same bounded read. Legacy sources remain occupancy-only. */
+        default SectionSnapshot readSectionSnapshot(int x, int y, int z, long revision) {
+            byte[] cells = readSection(x, y, z);
+            return cells == null ? null : new SectionSnapshot(x, y, z, revision, cells);
+        }
         /** Cheap loaded check, performed on every resident section to evict unloads immediately. */
         boolean loaded(int x, int y, int z);
     }
@@ -36,11 +42,13 @@ public final class WorldSnapshotStream {
         for (int n = 0; n < 2; n++) {
             int slot = cursor; cursor = (cursor + 1) % 27;
             Key key = new Key(cx + slot % 3 - 1, cy + slot / 3 % 3 - 1, cz + slot / 9 - 1);
-            byte[] cells = source.readSection(key.x,key.y,key.z);
-            if (cells == null) { if (resident.remove(key) != null) revision++; continue; }
-            SectionSnapshot candidate = new SectionSnapshot(key.x,key.y,key.z,revision + 1,cells);
+            SectionSnapshot candidate = source.readSectionSnapshot(key.x,key.y,key.z,revision + 1);
+            if (candidate == null) { if (resident.remove(key) != null) revision++; continue; }
+            if (candidate.x() != key.x || candidate.y() != key.y || candidate.z() != key.z
+                    || candidate.revision() != revision + 1)
+                throw new IllegalArgumentException("Section source returned mismatched coordinates or revision");
             SectionSnapshot old = resident.get(key);
-            if (old == null || !candidate.hasSameCells(old)) { revision++; resident.put(key,candidate); }
+            if (old == null || !candidate.hasSameContent(old)) { revision++; resident.put(key,candidate); }
         }
         return new WorldSnapshot(session,revision,camera,new ArrayList<>(resident.values()));
     }

@@ -11,5 +11,17 @@ public record WorldSnapshot(long session, long revision, CameraSnapshot camera,
         if (session <= 0 || revision < 0 || camera == null || sections.size() > 27)
             throw new IllegalArgumentException("Invalid world snapshot");
         sections = List.copyOf(sections);
+        long generation = 0;
+        for (SectionSnapshot section : sections) {
+            if (section.materials() == null) continue;
+            long next = section.materials().generation();
+            if (generation != 0 && generation != next)
+                throw new IllegalArgumentException("Mixed material resource generations");
+            generation = next;
+        }
+    }
+    public long materialGeneration() {
+        for (SectionSnapshot section : sections) if (section.materials() != null) return section.materials().generation();
+        return 0;
     }
 }
