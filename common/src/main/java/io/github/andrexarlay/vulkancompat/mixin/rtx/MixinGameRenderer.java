@@ -78,6 +78,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     private void onRenderBegin(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.frameBegin();
+            io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.beginFrame(this.minecraft.level);
             io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onFrameBegin(this.minecraft.level);
             VulkanRtxManager.processPendingChanges();
             WorldTargetManager.resetPhase((GameRenderer) (Object) this);
@@ -200,7 +201,9 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
             // One host-owned post stage after the world renderer and before the hand/HUD.
             io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.renderFrame(
                 this.mainRenderTarget, this.gameRenderState.levelRenderState.cameraRenderState,
-                !io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.enabled());
+                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.displayedThisFrame(this.mainRenderTarget)
+                    ? io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.HARDWARE_RT
+                    : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.RASTER);
             PerfMonitor.mark(PerfMonitor.Mark.RT_END);
             WorldTargetManager.copyWorldDepth();
         }

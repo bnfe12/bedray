@@ -10,6 +10,7 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDescriptorImageInfo;
+import org.lwjgl.vulkan.VkDescriptorBufferInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolSize;
 import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
@@ -101,6 +102,7 @@ public final class IrisPostExecutor implements AutoCloseable {
 
     private RtMemory.Img colortex0;
     private RtMemory.Img colortex1;
+    private RtMemory.Buf frameUniforms;
     private boolean imagesInitialized = false;
 
     private final Map<String, Long> pipelines = new LinkedHashMap<>();
@@ -140,6 +142,8 @@ public final class IrisPostExecutor implements AutoCloseable {
     private void initVulkan() {
         LOGGER.info("[IrisPostExecutor] Initializing Vulkan runtime resources (format={})...", colorFormat);
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            frameUniforms = memory.createBuffer("iris_frame", IrisUniforms.FRAME_BYTES,
+                VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             LongBuffer p = stack.mallocLong(1);
 
             // 1. Color sampler: bilinear clamp to edge
@@ -177,9 +181,10 @@ public final class IrisPostExecutor implements AutoCloseable {
 
             // 5. Descriptor pool and sets
             int totalSets = FRAME_SLOTS * MAX_PASS_SETS;
-            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
             poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                 .descriptorCount(totalSets * IrisUniforms.SAMPLER_BINDINGS);
+            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(totalSets);
             VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
                 .maxSets(totalSets)
                 .pPoolSizes(poolSizes);
@@ -388,6 +393,15 @@ public final class IrisPostExecutor implements AutoCloseable {
         float far,
         float frameTime
     ) {
+        record(cmd, graph, engineColorImage, engineColorView, depthView, width, height, frameTimeCounter,
+            frameCounter, near, far, frameTime, null, null);
+    }
+
+    public void record(VkCommandBuffer cmd, IrisPassGraph graph, long engineColorImage, long engineColorView,
+                       long depthView, int width, int height, float frameTimeCounter, int frameCounter,
+                       float near, float far, float frameTime,
+                       io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Camera camera,
+                       io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Camera previousCamera) {
         if (cmd == null) {
             throw new IllegalArgumentException("cmd must not be null");
         }
@@ -407,6 +421,20 @@ public final class IrisPostExecutor implements AutoCloseable {
 
         if (device == null || memory == null) {
             return;
+        }
+
+        if (camera == null && graph.passes().stream().anyMatch(pass -> !pass.allFrameUsed().isEmpty()))
+            throw new IllegalArgumentException("Frame uniforms need a captured current camera");
+        if (previousCamera == null && graph.passes().stream().flatMap(pass -> pass.allFrameUsed().stream())
+            .anyMatch(name -> name.startsWith("gbufferPrevious") || name.equals("previousCameraPosition")))
+            throw new IllegalArgumentException("Previous-frame uniforms need continuous camera history");
+        // Device-local UBO updates participate in queue ordering. No mapped ring is overwritten while in flight.
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var bytes = stack.malloc(IrisUniforms.FRAME_BYTES);
+            IrisFrameUniforms.write(bytes, camera, previousCamera);
+            VkBarriers.fullMemoryBarrier(cmd);
+            VK10.vkCmdUpdateBuffer(cmd, frameUniforms.handle, 0, bytes);
+            VkBarriers.fullMemoryBarrier(cmd);
         }
 
         // Transition ping-pong images from UNDEFINED to GENERAL on first use or resize
@@ -482,11 +510,15 @@ public final class IrisPostExecutor implements AutoCloseable {
                 imgInfos.get(0).sampler(colorSampler).imageView(readImg.view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 imgInfos.get(1).sampler(depthSampler).imageView(depthView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
 
-                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
+                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(3, stack);
                 writes.get(0).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_COLORTEX0)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imgInfos.slice(0, 1));
                 writes.get(1).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_DEPTHTEX0)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imgInfos.slice(1, 1));
+                VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack);
+                bufferInfo.get(0).buffer(frameUniforms.handle).offset(0).range(IrisUniforms.FRAME_BYTES);
+                writes.get(2).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_FRAME)
+                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfo);
 
                 if (boundColor[slot][passIdx] != readImg.view || boundDepth[slot][passIdx] != depthView) {
                     if (boundColor[slot][passIdx] != 0)
@@ -575,7 +607,7 @@ public final class IrisPostExecutor implements AutoCloseable {
     // --- Static Builders, Validators and Utilities ---
 
     public static VkDescriptorSetLayoutBinding.Buffer createDescriptorBindings(MemoryStack stack) {
-        VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(2, stack);
+        VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(3, stack);
         bindings.get(0).binding(IrisUniforms.BINDING_COLORTEX0)
             .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             .descriptorCount(1)
@@ -584,6 +616,8 @@ public final class IrisPostExecutor implements AutoCloseable {
             .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
             .descriptorCount(1)
             .stageFlags(VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT);
+        bindings.get(2).binding(IrisUniforms.BINDING_FRAME).descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+            .descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT);
         return bindings;
     }
 
@@ -788,6 +822,7 @@ public final class IrisPostExecutor implements AutoCloseable {
             }
         }
         if (memory != null) {
+            if (frameUniforms != null) { memory.destroy(frameUniforms); frameUniforms = null; }
             if (colortex0 != null) {
                 memory.destroy(colortex0);
                 colortex0 = null;

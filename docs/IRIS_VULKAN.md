@@ -25,8 +25,13 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
 - Actual target format is used for ping-pong images and pipelines. The host color image is updated
   only after the entire graph records successfully. Runtime code never substitutes a mock executor.
 - Reverse-Z raster depth is converted to conventional 0-near/1-far depth in an R32F compute image.
-  A caller must declare whether raster depth matches the current color renderer. Depth-reading packs
-  are suspended for nonmatching world renderers; no stale raster depth is advertised as RT/voxel depth.
+  A typed world frame identifies actual producer, world/frame stamp, device, camera and optional depth
+  encoding. Depth-reading packs are suspended without a matching guide; raster depth is never substituted
+  for RT/voxel depth. See [the frame/guide contract](IRIS_FRAME_GUIDES.md).
+- Current and previous gbuffer projection/model-view matrices, their current inverses, and camera
+  positions use a 416-byte std140 UBO updated once in ordered GPU commands. Continuous CPU camera
+  history is invalidated on world/device/producer/extent changes, skipped frames and camera cuts.
+  Shaders reading unavailable camera/history fields wait for data; no identity/zero stand-ins are advertised.
 - Native internal targets already retain GL's Y orientation: Minecraft flips Y on presentation.
   Post images keep their rows unchanged. A vertex entry wrapper converts GL clip Z `[-w,w]` to
   Vulkan `[0,w]`, including early returns from pack main; ordinary `gl_FragCoord` is available.
@@ -40,7 +45,7 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
 
 General packs requiring gbuffers, shadow maps, deferred/compute stages, multiple color outputs,
 custom images/textures/SSBO, required Iris features, persistent color
-buffers, mipmap/format directives, world uniforms, fragment coordinate layout overrides/front-face semantics or
+buffers, mipmap/format directives, other world/lighting/material uniforms, fragment coordinate layout overrides/front-face semantics or
 geometry/tessellation are still unsupported.
 Pack property semantics are not silently discarded. Screen/slider/profile metadata and enabled expressions
 are evaluated in the documented post dialect; other active renderer properties are refused. Frame generation and temporal upscaling are gated until matching
@@ -83,6 +88,11 @@ The options milestone compiled the example with source defaults (one final pass)
 (composite plus final). Both configurations compiled through properties/option resolution to SPIR-V.
 This is compiler evidence only; it does not establish image correctness or full Iris option parity.
 
+The typed-frame milestone compiled the depth source example in DISTANCE and MOTION configurations,
+including all eight frame UBO fields. The updated depth compute shader compiled with its 128-byte
+push layout. Hardware RT publishes color provenance only after recording/submission, while raster
+depth conversion uses the exact current projection. No GPU correctness result is claimed.
+
 ## Merge into Bedray with the voxel branch
 
 Keep `common/.../shaderhost` as the compatibility/post-processing layer. Voxel traversal remains in
@@ -94,13 +104,15 @@ After the branches are reviewed, merge the frame hooks in this exact order:
 3. Iris fullscreen post stage over the producer's completed image.
 4. Hand/HUD, upscaling/presentation in their existing host phases.
 
-The merged hook must pass `rasterDepthMatchesColor=false` when compute recorded the world image,
-and whenever hardware RT replaced raster color. A future shared frame/guide API can supply matching
-linear depth, motion and source-renderer identity without introducing another capture owner. Until then,
-color-only post packs can compose with those renderers; depth-reading packs stay explicitly unavailable.
+The merged hook begins `WorldFrames` once, then selects an explicit producer from the result of
+`ComputeRenderBridge.renderDiagnostic()` or `RtFrameRenderer.displayedThisFrame(target)`. Pass
+`VOXEL_COMPUTE` for a successful live compute image, `SYNTHETIC` for its artificial scene, `HARDWARE_RT`
+for an actually copied RT image, and `RASTER` otherwise. Requested settings are not provenance.
+The typed `renderFrame(WorldFrame)` seam can consume explicitly supplied matching guides. Current
+native RT/voxel adapters remain color-only, so depth-reading post packs stay unavailable on them.
 The host owns all target formats, command submission and retirement. Resolve the three shared mixin/UI
 files once; do not retain duplicate frame hooks or a second executor copied from the old development repo.
 
-Next gates are world/device-aware engine macros and typed world uniforms/guide API, a real multi-target
+Next gates are world/device-aware engine macros and additional world uniforms, a real multi-target
 resource graph (formats/clear/persistence/mips), then geometry/shadow/deferred integration. They require
 runtime evidence before any supported-pack list or release.

@@ -12,6 +12,9 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostKind;
 import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHosts;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisUniforms;
+import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
+import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames;
+import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrameCapture;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkFormatProperties;
@@ -54,6 +57,7 @@ public final class IrisRenderBridge {
      * Shuts down and releases the active {@link IrisPostExecutor} instance.
      */
     public static synchronized void teardown() {
+        if (owner != null) { retire(); return; }
         if (executor != null) {
             executor.close();
             executor = null;
@@ -187,6 +191,9 @@ public final class IrisRenderBridge {
         if (graph == null || graph.passes().isEmpty()) {
             return false;
         }
+        // Legacy raw-handle callers have no provenance/conversion or frame history contract.
+        if (graph.passes().stream().anyMatch(pass -> !pass.allFrameUsed().isEmpty()
+            || pass.allSamplerBindings().contains(IrisUniforms.BINDING_DEPTHTEX0))) return false;
         if (engineColorImage == 0L || engineColorView == 0L || depthView == 0L) {
             return false;
         }
@@ -226,6 +233,7 @@ public final class IrisRenderBridge {
     private static IrisDepthConverter depthConverter;
     private static int ownedWidth, ownedHeight, ownedFormat;
     private static long ownedDepthView;
+    private static WorldFrame.DepthEncoding ownedDepthEncoding;
     private static Object worldIdentity;
     private static boolean failed, cleanupBroken;
     private static String runtimeStatus = "Experimental post host disabled";
@@ -248,26 +256,65 @@ public final class IrisRenderBridge {
 
     public static void onDeviceClose(VulkanDevice device) {
         if (owner == device) retire();
+        WorldFrames.invalidateDevice(device);
     }
 
-    /** Fullscreen post-only seam. The host owns device, target, queue and command submission. */
+    /** Compatibility wrapper. New producers must report their actual completed image, not their selected mode. */
     public static boolean renderFrame(RenderTarget target, CameraRenderState camera,
                                       boolean rasterDepthMatchesColor) {
+        var renderer = io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.displayedThisFrame(target)
+            ? WorldFrame.Renderer.HARDWARE_RT : rasterDepthMatchesColor ? WorldFrame.Renderer.RASTER : WorldFrame.Renderer.SYNTHETIC;
+        return renderFrame(target, camera, renderer);
+    }
+
+    public static boolean renderFrame(RenderTarget target, CameraRenderState camera, WorldFrame.Renderer renderer) {
+        if (failed || cleanupBroken || !Boolean.getBoolean("bedray.iris.post") || ShaderHosts.active() != ShaderHostKind.IRIS) return false;
+        var device = VulkanCapabilityChecker.getVulkanDevice();
+        if (device == null) return false;
+        try { return renderFrame(WorldFrameCapture.capture(device, target, camera, renderer)); }
+        catch (IllegalArgumentException | IllegalStateException error) {
+            runtimeStatus = "World frame unavailable: " + error.getMessage(); return false;
+        }
+    }
+
+    /** Fullscreen seam for current-frame borrowed color/guides on the existing host device and queue. */
+    public static boolean renderFrame(WorldFrame frame) {
         if (failed || cleanupBroken || !Boolean.getBoolean("bedray.iris.post")
             || ShaderHosts.active()
                 != ShaderHostKind.IRIS) return false;
         IrisShaderHost host = ShaderHosts.iris();
         IrisPassGraph graph = host == null ? null : host.activeGraph();
-        if (graph == null || camera == null || target == null || target.width <= 0 || target.height <= 0) return false;
+        if (graph == null || frame == null) return false;
+        var device = VulkanCapabilityChecker.getVulkanDevice();
+        if (device == null || frame.deviceIdentity() != device || !WorldFrames.isCurrent(frame.stamp())) {
+            runtimeStatus = "Iris rejected stale frame or foreign device"; return false;
+        }
+        if (frame.color().origin() != WorldFrame.Origin.BOTTOM_LEFT) {
+            runtimeStatus = "Iris needs native GL-oriented color and guides"; return false;
+        }
+        try { WorldFrames.publish(frame); }
+        catch (IllegalArgumentException | IllegalStateException error) { runtimeStatus = "Iris frame publication: " + error.getMessage(); return false; }
+        var camera = frame.camera();
+        var previousCamera = WorldFrames.previousCamera(frame);
         boolean readsDepth = graph.passes().stream().anyMatch(pass -> pass.allSamplerBindings().contains(
             IrisUniforms.BINDING_DEPTHTEX0));
-        if (readsDepth && !rasterDepthMatchesColor) {
-            retire(); runtimeStatus="Depth-reading Iris post needs depth guides matching the current world renderer";
+        boolean readsCamera = readsDepth || graph.passes().stream().anyMatch(pass -> !pass.allFrameUsed().isEmpty()
+            || pass.allPushUsed().contains("near") || pass.allPushUsed().contains("far"));
+        if (readsCamera && camera == null) {
+            runtimeStatus = "Iris is waiting for current-frame camera/projection"; return false;
+        }
+        if (previousCamera == null && graph.passes().stream().flatMap(pass -> pass.allFrameUsed().stream())
+            .anyMatch(name -> name.startsWith("gbufferPrevious") || name.equals("previousCameraPosition"))) {
+            runtimeStatus = "Iris is waiting for continuous previous-frame camera data"; return false;
+        }
+        if (readsDepth && frame.depth() == null) {
+            retire(); runtimeStatus="No matching depth guide from " + frame.renderer();
             return false;
         }
-        var device = VulkanCapabilityChecker.getVulkanDevice();
-        if (device == null || target.getColorTexture() == null || target.getDepthTexture() == null
-            || target.getColorTexture().isClosed() || target.getDepthTexture().isClosed()) return false;
+        var encoding = readsDepth ? frame.depth().encoding() : null;
+        if (readsDepth && !supportedDepth(frame.depth(), camera)) {
+            runtimeStatus = "Unsupported depth format/projection for " + encoding; return false;
+        }
         // Until temporal guides include pack-specific history/depth, do not combine incompatible pipelines.
         if (TemporalUpscaler.isActive()
             || FrameGenRuntime.isActive()
@@ -275,32 +322,28 @@ public final class IrisRenderBridge {
                 != FrameGenSettings.Mode.OFF) {
             retire(); runtimeStatus = "Disable temporal upscaling and frame generation for Iris post"; return false;
         }
-        long colorImage=WorldTargetManager.extractVkImage(target);
-        long colorView=WorldTargetManager.extractVkImageView(target.getColorTextureView());
-        long depthView=WorldTargetManager.extractVkImageView(target.getDepthTextureView());
-        int format=VulkanConst.toVk(target.getColorTexture().getFormat());
-        int copies=GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_COPY_DST;
-        if (colorImage==0 || colorView==0 || depthView==0 || (target.getColorTexture().usage() & copies)!=copies
-            || (target.getDepthTexture().usage() & GpuTexture.USAGE_TEXTURE_BINDING)==0) {
-            runtimeStatus="Iris target is missing copy/sample usage or Vulkan views"; return false;
-        }
+        long colorImage=frame.color().image(), colorView=frame.color().view();
+        // An unused binding still gets a valid descriptor; color-only packs do not require a depth allocation.
+        long depthView=readsDepth ? frame.depth().image().view() : colorView;
+        int format=frame.color().format(), width=frame.color().width(), height=frame.color().height();
+        boolean convertsDepth = readsDepth && encoding != WorldFrame.DepthEncoding.OPENGL_WINDOW_Z;
         if (owner != null && owner != device) {
             failed=true; runtimeStatus="Device changed without Iris cleanup; restart required";
             ShaderHosts.noteIrisFailure(runtimeStatus); return false;
         }
-        if (owner != null && (ownedGraph != graph || ownedWidth != target.width || ownedHeight != target.height
-            || ownedFormat != format || ownedDepthView != depthView)) {
+        if (owner != null && (ownedGraph != graph || ownedWidth != width || ownedHeight != height
+            || ownedFormat != format || ownedDepthView != depthView || ownedDepthEncoding != encoding)) {
             if (!retire()) return false;
         }
         try {
             if (executor == null) {
-                owner=device; ownedGraph=graph; ownedWidth=target.width; ownedHeight=target.height;
-                ownedFormat=format; ownedDepthView=depthView;
+                owner=device; ownedGraph=graph; ownedWidth=width; ownedHeight=height;
+                ownedFormat=format; ownedDepthView=depthView; ownedDepthEncoding=encoding;
                 var capabilities=device.vkDevice().getCapabilities();
                 if (capabilities.vkCmdBeginRendering==0 && capabilities.vkCmdBeginRenderingKHR==0)
                     throw new IllegalStateException("Dynamic rendering is unavailable");
                 try (var stack=MemoryStack.stackPush()) {
-                    if (readsDepth) {
+                    if (convertsDepth) {
                         var count=stack.mallocInt(1);
                         VK10.vkGetPhysicalDeviceQueueFamilyProperties(device.vkDevice().getPhysicalDevice(),count,null);
                         var families=VkQueueFamilyProperties.calloc(count.get(0),stack);
@@ -315,11 +358,16 @@ public final class IrisRenderBridge {
                     int required=VK10.VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
                         | VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
                     if ((properties.optimalTilingFeatures() & required)!=required) throw new IllegalStateException("Iris target format unsupported");
+                    if (readsDepth) {
+                        VK10.vkGetPhysicalDeviceFormatProperties(device.vkDevice().getPhysicalDevice(), frame.depth().image().format(), properties);
+                        if ((properties.optimalTilingFeatures() & VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0)
+                            throw new IllegalStateException("Depth guide format cannot be sampled");
+                    }
                 }
                 executor=new IrisPostExecutor(device.vkDevice(),new RtMemory(device.vkDevice()),format);
                 activePackName=graph.packName();
-                executor.prepare(graph,target.width,target.height);
-                if(readsDepth)depthConverter=new IrisDepthConverter(device.vkDevice(),target.width,target.height,depthView);
+                executor.prepare(graph,width,height);
+                if(convertsDepth)depthConverter=new IrisDepthConverter(device.vkDevice(),width,height,depthView);
             }
         } catch (RuntimeException | LinkageError error) {
             failed=true;runtimeStatus="Iris preparation failed: "+error.getMessage();
@@ -332,10 +380,10 @@ public final class IrisRenderBridge {
         boolean recorded=false;
         try {
             VkBarriers.fullMemoryBarrier(command);
-            float near=0.05f, far=Float.isFinite(camera.depthFar) && camera.depthFar>near ? camera.depthFar : 256f;
-            if(depthConverter!=null)depthConverter.record(command,camera.projectionMatrix,near,far);
-            executor.record(command,graph,colorImage,colorView,depthConverter!=null ? depthConverter.view() : depthView,target.width,target.height,
-                frameTimeCounter(),frameCounter(),near,far,frameTime());
+            float near=camera == null ? 0.05f : camera.near(), far=camera == null ? 256f : camera.far();
+            if(depthConverter!=null)depthConverter.record(command,camera,encoding);
+            executor.record(command,graph,colorImage,colorView,depthConverter!=null ? depthConverter.view() : depthView,width,height,
+                frameTimeCounter(),frameCounter(),near,far,frameTime(),camera,previousCamera);
             recorded=true;
         } catch (RuntimeException | LinkageError error) {
             failed=true;runtimeStatus="Iris recording failed: "+error.getMessage();
@@ -351,6 +399,25 @@ public final class IrisRenderBridge {
         return recorded;
     }
 
+    private static boolean supportedDepth(WorldFrame.Depth depth, WorldFrame.Camera camera) {
+        int format = depth.image().format();
+        boolean floating = format == VK10.VK_FORMAT_R32_SFLOAT;
+        boolean deviceDepth = format == VK10.VK_FORMAT_D32_SFLOAT || format == VK10.VK_FORMAT_D16_UNORM
+            || format == VK10.VK_FORMAT_X8_D24_UNORM_PACK32 || format == VK10.VK_FORMAT_D24_UNORM_S8_UINT
+            || format == VK10.VK_FORMAT_D32_SFLOAT_S8_UINT;
+        if (depth.encoding() == WorldFrame.DepthEncoding.REVERSE_DEVICE_Z || depth.encoding() == WorldFrame.DepthEncoding.OPENGL_WINDOW_Z)
+            return floating || deviceDepth;
+        if (!floating || camera == null) return false;
+        var p = camera.projection(); var v = camera.modelView();
+        float expected22 = -(camera.far()+camera.near())/(camera.far()-camera.near());
+        float expected32 = -2*camera.far()*camera.near()/(camera.far()-camera.near());
+        return Math.abs(p.m22()-expected22) < 1e-4f && Math.abs(p.m32()-expected32) < 1e-4f
+            && Math.abs(p.m02()) < 1e-5f && Math.abs(p.m12()) < 1e-5f
+            && Math.abs(p.m03()) < 1e-5f && Math.abs(p.m13()) < 1e-5f
+            && Math.abs(p.m23()+1) < 1e-5f && Math.abs(p.m33()) < 1e-5f
+            && Math.abs(v.m03()) < 1e-5f && Math.abs(v.m13()) < 1e-5f && Math.abs(v.m23()) < 1e-5f && Math.abs(v.m33()-1) < 1e-5f;
+    }
+
     private static boolean retire() {
         if (cleanupBroken) return false;
         if (owner == null) return true;
@@ -360,7 +427,7 @@ public final class IrisRenderBridge {
             if (waitResult != VK10.VK_SUCCESS) throw new IllegalStateException("Iris retirement wait failed: " + waitResult);
             if(depthConverter!=null) {depthConverter.close();depthConverter=null;}
             if(executor!=null) {executor.close();executor=null;}
-            activePackName=null; owner=null;ownedGraph=null;ownedDepthView=0;
+            activePackName=null; owner=null;ownedGraph=null;ownedDepthView=0;ownedDepthEncoding=null;
             resetTiming();
             return true;
         } catch (RuntimeException | LinkageError error) {

@@ -77,6 +77,12 @@ public final class RtMemory {
         this.device = device;
         this.memProps = VkPhysicalDeviceMemoryProperties.calloc();
         VK10.vkGetPhysicalDeviceMemoryProperties(device.getPhysicalDevice(), memProps);
+        // Buffers/images (including Iris post) also run on graphics-only devices. Do not query
+        // acceleration-structure properties unless that extension was actually enabled.
+        if (!device.getCapabilities().VK_KHR_acceleration_structure) {
+            this.scratchAlignment = 1;
+            return;
+        }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps =
                 VkPhysicalDeviceAccelerationStructurePropertiesKHR.calloc(stack).sType$Default();

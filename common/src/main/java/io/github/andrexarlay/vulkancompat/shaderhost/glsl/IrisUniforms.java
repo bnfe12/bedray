@@ -5,12 +5,12 @@ import java.util.Map;
 
 /**
  * Minimal Iris uniform model of step A. Plain uniforms become members of one push-constant block with FIXED offsets (so every
- * stage and every pass shares one push range and the executor writes one 32-byte block per pass); samplers become
- * push-descriptor bindings. Anything outside these tables makes the program unsupported (reported by name), never a silent 0.
+ * stage and pass shares one push range); camera matrices/positions use a fixed-offset std140 frame UBO.
+ * Samplers use stable descriptor bindings. Anything outside these tables makes the program unsupported, never a silent 0.
  * <p>
  * Semantics follow Iris: viewWidth/viewHeight = size of the target being shaded, aspectRatio = w/h, frameTimeCounter = seconds
  * (wraps at 3600), frameCounter = frames (wraps at 720720), frameTime = seconds of the last frame, near = 0.05, far = render
- * distance in blocks.
+ * distance in blocks. The typed frame path derives near/far from the current projection instead of hardcoded planes.
  */
 public final class IrisUniforms {
     public record Member(String glslType, int offset) {}
@@ -24,6 +24,9 @@ public final class IrisUniforms {
     public static final int BINDING_COLORTEX0 = 0;
     public static final int BINDING_DEPTHTEX0 = 1;
     public static final int SAMPLER_BINDINGS = 2;
+    public static final int BINDING_FRAME = 2;
+    public static final int FRAME_BYTES = 416;
+    public static final Map<String, Member> FRAME;
 
     static {
         Map<String, Member> p = new LinkedHashMap<>();
@@ -36,6 +39,17 @@ public final class IrisUniforms {
         p.put("far", new Member("float", 24));
         p.put("frameTime", new Member("float", 28));
         PUSH = java.util.Collections.unmodifiableMap(p);
+
+        Map<String, Member> frame = new LinkedHashMap<>();
+        frame.put("gbufferProjection", new Member("mat4", 0));
+        frame.put("gbufferProjectionInverse", new Member("mat4", 64));
+        frame.put("gbufferModelView", new Member("mat4", 128));
+        frame.put("gbufferModelViewInverse", new Member("mat4", 192));
+        frame.put("gbufferPreviousProjection", new Member("mat4", 256));
+        frame.put("gbufferPreviousModelView", new Member("mat4", 320));
+        frame.put("cameraPosition", new Member("vec3", 384));
+        frame.put("previousCameraPosition", new Member("vec3", 400));
+        FRAME = java.util.Collections.unmodifiableMap(frame);
 
         Map<String, Integer> s = new LinkedHashMap<>();
         s.put("colortex0", BINDING_COLORTEX0);

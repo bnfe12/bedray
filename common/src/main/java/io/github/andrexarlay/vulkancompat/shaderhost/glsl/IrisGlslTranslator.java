@@ -43,7 +43,8 @@ public final class IrisGlslTranslator {
      * @param samplerBindings sampler bindings referenced
      */
     public record Result(String source, Set<String> unsupported, List<Integer> drawBuffers, Map<String, Integer> varyings,
-                         Set<String> pushUsed, Set<Integer> samplerBindings, Map<String, InterfaceVariable> stageInterface) {}
+                         Set<String> pushUsed, Set<Integer> samplerBindings, Map<String, InterfaceVariable> stageInterface,
+                         Set<String> frameUsed) {}
 
     /** A program interface is shared by name AND type; matrices/arrays occupy multiple locations. */
     public record InterfaceVariable(String type, int arraySize, int location, int locations, String interpolation) {}
@@ -115,6 +116,7 @@ public final class IrisGlslTranslator {
         Map<String, InterfaceVariable> stageInterface = new LinkedHashMap<>();
         Set<Integer> samplerBindings = new TreeSet<>();
         Set<String> pushUsed = new TreeSet<>();
+        Set<String> frameUsed = new TreeSet<>();
         Map<String, Integer> fragOutputs = new LinkedHashMap<>();
         boolean usesVaPosition = false;
         boolean usesVaUV0 = false;
@@ -170,6 +172,8 @@ public final class IrisGlslTranslator {
                         } else if (IrisUniforms.PUSH.containsKey(name) && IrisUniforms.PUSH.get(name).glslType().equals(type)) {
                             pushDecl.put(name, type);
                             pushUsed.add(name);
+                        } else if (IrisUniforms.FRAME.containsKey(name) && IrisUniforms.FRAME.get(name).glslType().equals(type)) {
+                            frameUsed.add(name);
                         } else if (IrisUniforms.CONSTANT_MATRICES.contains(name) && type.equals("mat4")) {
                             // replaced by constants below
                         } else {
@@ -290,9 +294,17 @@ public final class IrisGlslTranslator {
         if (fragData) {
             src.append("layout(location = 0) out vec4 vkb_FragData0;\n");
         }
+        if (!frameUsed.isEmpty()) {
+            src.append("layout(std140, set = 0, binding = ").append(IrisUniforms.BINDING_FRAME).append(") uniform VkbIrisFrame {\n");
+            IrisUniforms.FRAME.forEach((name, member) -> {
+                if (frameUsed.contains(name)) src.append("    layout(offset = ").append(member.offset()).append(") ")
+                    .append(member.glslType()).append(' ').append(name).append(";\n");
+            });
+            src.append("};\n");
+        }
         src.append("#line 1 \"").append(displayName).append("\"\n").append(code);
         return new Result(src.toString(), unsupported, List.copyOf(drawBuffers), Map.copyOf(varyingLocations),
-            pushUsed, samplerBindings, Map.copyOf(stageInterface));
+            pushUsed, samplerBindings, Map.copyOf(stageInterface), Set.copyOf(frameUsed));
     }
 
     /** Validate before either module reaches pipeline creation; successful individual compiles cannot establish this. */

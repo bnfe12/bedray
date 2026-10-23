@@ -4,6 +4,7 @@ import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
 import org.joml.Matrix4f;
+import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 import java.nio.ByteOrder;
@@ -41,7 +42,7 @@ final class IrisDepthConverter implements AutoCloseable {
             bindings.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             bindings.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
             check(vkCreateDescriptorSetLayout(device,VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings),null,handle)); setLayout=handle.get(0);
-            var range=VkPushConstantRange.calloc(1,stack);range.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(80);
+            var range=VkPushConstantRange.calloc(1,stack);range.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(128);
             check(vkCreatePipelineLayout(device,VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(range),null,handle));pipelineLayout=handle.get(0);
             String source;
             try(var stream=IrisDepthConverter.class.getResourceAsStream("/shaders/iris_depth.comp")) {
@@ -71,12 +72,20 @@ final class IrisDepthConverter implements AutoCloseable {
         }
     }
     long view() {return output.view;}
-    void record(VkCommandBuffer command,Matrix4f projection,float near,float far) {
+    void record(VkCommandBuffer command,WorldFrame.Camera camera,WorldFrame.DepthEncoding encoding) {
         try(MemoryStack stack=MemoryStack.stackPush()) {
             if(!initialized)VkBarriers.transition(command,output.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL);
             VkBarriers.fullMemoryBarrier(command);
-            var push=stack.calloc(80).order(ByteOrder.nativeOrder());
-            new Matrix4f(projection).invert().get(0,push);push.putFloat(64,near);push.putFloat(68,far);
+            var push=stack.calloc(128).order(ByteOrder.nativeOrder());
+            camera.inverseProjection().get(0,push);
+            Matrix4f inverseView=camera.inverseModelView();
+            push.putFloat(64,inverseView.m00()).putFloat(68,inverseView.m01()).putFloat(72,inverseView.m02());
+            push.putFloat(80,inverseView.m10()).putFloat(84,inverseView.m11()).putFloat(88,inverseView.m12());
+            push.putFloat(96,inverseView.m20()).putFloat(100,inverseView.m21()).putFloat(104,inverseView.m22());
+            push.putFloat(76,switch (encoding) {
+                case REVERSE_DEVICE_Z -> 0; case OPENGL_WINDOW_Z -> 1; case LINEAR_VIEW_Z -> 2; case RAY_DISTANCE -> 3;
+            });
+            push.putFloat(112,camera.near()).putFloat(116,camera.far()).putFloat(120,camera.depthScale()).putFloat(124,camera.depthBias());
             vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);
             vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipelineLayout,0,stack.longs(set),null);
             vkCmdPushConstants(command,pipelineLayout,VK_SHADER_STAGE_COMPUTE_BIT,0,push);

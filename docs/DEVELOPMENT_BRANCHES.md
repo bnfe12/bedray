@@ -7,10 +7,11 @@ of the same renderer. Local linked Git worktrees share the repository history an
 | Branch | Responsibility | Current scope |
 |---|---|---|
 | `main` | Published Bedray baseline | Kept separate from the experimental branches |
-| `codex/software-voxel-tracing` | Software traversal/companion API | Bounded live opaque diagnostic and synthetic scene; full materials/light transport pending |
-| `codex/iris-vulkan` | Iris GLSL compatibility/post layer | Opt-in fullscreen post subset; general shaderpack compatibility pending |
+| `codex/software-voxel-tracing` | Software traversal/companion API | Bounded live full cubes with atlas albedo and synthetic scene; general shapes/light transport pending |
+| `codex/iris-vulkan` | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth contract; general shaderpack compatibility pending |
+| `codex/vulkan-cache-dxgi-present` | Shared shader/pipeline caches and presentation compatibility | Independent source work; stage-aware Iris SPIR-V caching and LWJGL compatibility require integration |
 
-Both development branches are source-only. No JAR, release, shaderpack ZIP or tested-support claim is
+The voxel and Iris work here is source-only. No JAR, release, shaderpack ZIP or tested-support claim is
 published for this work. Compile-only checks describe compilation; they do not establish gameplay.
 Runtime tests remain future gates rather than being silently treated as passed.
 

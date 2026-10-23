@@ -80,6 +80,12 @@ public final class IrisPassGraph {
             set.addAll(fragmentTranslation.samplerBindings());
             return Collections.unmodifiableSet(set);
         }
+
+        public Set<String> allFrameUsed() {
+            Set<String> set = new TreeSet<>(vertexTranslation.frameUsed());
+            set.addAll(fragmentTranslation.frameUsed());
+            return Collections.unmodifiableSet(set);
+        }
     }
 
     /**
