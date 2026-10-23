@@ -2,7 +2,7 @@ diff --git a/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/Rt
 --- a/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtVulkanPipelineCache.java
 +++ b/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtVulkanPipelineCache.java
 @@ -2,6 +2,7 @@
- 
+
  import io.github.andrexarlay.vulkanbridge.platform.Platforms;
  import org.lwjgl.BufferUtils;
 +import org.lwjgl.PointerBuffer;
@@ -10,7 +10,7 @@ diff --git a/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/Rt
  import org.lwjgl.vulkan.KHRRayTracingPipeline;
  import org.lwjgl.vulkan.VK10;
 @@ -17,7 +18,6 @@
- 
+
  import java.io.IOException;
  import java.nio.ByteBuffer;
 -import java.nio.IntBuffer;
@@ -39,7 +39,7 @@ diff --git a/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/Rt
              uuid.get(0, uuidBytes);
              String key = String.format(java.util.Locale.ROOT, "v%08x-d%08x-r%08x-%s",
 @@ -153,18 +152,18 @@
- 
+
      private static void persist(VkDevice device, Entry entry) {
          try (MemoryStack stack = MemoryStack.stackPush()) {
 -            IntBuffer size = stack.mallocInt(1);

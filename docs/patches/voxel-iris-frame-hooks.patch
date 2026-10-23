@@ -3,9 +3,9 @@ index 4af2c1f..0d6b01a 100644
 --- a/common/src/main/java/io/github/andrexarlay/vulkancompat/compute/ComputeRenderBridge.java
 +++ b/common/src/main/java/io/github/andrexarlay/vulkancompat/compute/ComputeRenderBridge.java
 @@ -48,6 +48,9 @@ public final class ComputeRenderBridge {
- 
+
      private ComputeRenderBridge() {}
- 
+
 +    /** Render-thread scene applied at this frame's boundary; pair with a successful renderDiagnostic result. */
 +    public static GraphicsBackendRegistry.SceneMode appliedSceneMode() { return appliedRequest.mode(); }
 +
@@ -85,11 +85,11 @@ index 24edb3b..7029415 100644
 @@ -1,21 +1,19 @@
 -# Development branches
 +# Development branches (source only)
- 
+
  The canonical source repository for current renderer work is [Bedray](https://github.com/bnfe12/bedray).
  Keep unfinished work in branches of this repository rather than creating another repository or a copy
  of the same renderer. Local linked Git worktrees share the repository history and are not independent forks.
- 
+
 -| Workstream | Responsibility | Current scope |
 +| Branch | Responsibility | Current scope |
  |---|---|---|
@@ -99,7 +99,7 @@ index 24edb3b..7029415 100644
 +| `codex/software-voxel-tracing` | Software traversal/companion API | Bounded live full cubes with atlas albedo and synthetic scene; general shapes/light transport pending |
 +| `codex/iris-vulkan` | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth contract; general shaderpack compatibility pending |
 +| `codex/vulkan-cache-dxgi-present` | Shared shader/pipeline caches and presentation compatibility | Independent source work; stage-aware Iris SPIR-V caching and LWJGL compatibility require integration |
- 
+
 -Current branch names and commit activity are listed on the repository's [branches page](https://github.com/bnfe12/bedray/branches).
 -
 -These are development branches. Local candidate builds and named tests are distinct from published
@@ -109,6 +109,6 @@ index 24edb3b..7029415 100644
 +The voxel and Iris work here is source-only. No JAR, release, shaderpack ZIP or tested-support claim is
 +published for this work. Compile-only checks describe compilation; they do not establish gameplay.
 +Runtime tests remain future gates rather than being silently treated as passed.
- 
+
  All branches are protected against force-push and deletion. The default branch requires pull requests
  with resolved review conversations. No bypass actors are configured; ordinary commits to development
