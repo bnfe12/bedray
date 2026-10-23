@@ -90,8 +90,8 @@ graphics queue only when it has compute capability. The typed seam enables futur
 guides, but does not claim that those producers currently supply them or their sampling/jitter contract.
 
 Graph/device/extent/format/depth-view/encoding changes retire queued references before replacing
-images, descriptors or pipelines. World transitions do likewise. Color-only packs bind a valid unused
-color descriptor in the depth slot and require no depth allocation. Graphics-only Vulkan devices no
+images, descriptors or pipelines. World transitions do likewise. Color-only packs bind an owned sampled
+color image in the unused depth slot and require no depth allocation. Graphics-only Vulkan devices no
 longer query acceleration-structure properties merely to allocate Iris images/buffers.
 
 ## New branch compatibility and evidence
@@ -100,6 +100,8 @@ Voxel API minor 3 adds borrowed atlas/material state but still exposes color onl
 model lives in the host: compute algorithms continue using renderer-api and importing no Iris/private
 host classes. The atlas/session may reset without a world transition; that does not create a new Iris
 world epoch. Merge the existing frame/device/UI hooks once, preserving the successful producer result.
+The [integration notes and hook patch](IRIS_VOXEL_MERGE.md) record a temporary combined Java compilation
+against voxel `24d721a`; neither development branch was merged into the other.
 
 The independent cache/DXGI branch is not merged here. Its shared graphics/compute pipeline-cache seam
 can be reused on integration. Its SPIR-V disk cache is compute-only; vertex/fragment reuse needs stage

@@ -15,6 +15,10 @@ The voxel and Iris work here is source-only. No JAR, release, shaderpack ZIP or 
 published for this work. Compile-only checks describe compilation; they do not establish gameplay.
 Runtime tests remain future gates rather than being silently treated as passed.
 
+All branches are protected against force-push and deletion. The default branch requires pull requests
+with resolved review conversations. No bypass actors are configured; ordinary commits to development
+branches remain available. Deliberate branch retirement requires an explicit rules change.
+
 For eventual integration, preserve one host/device/queue/target/config owner. The world renderer records
 one color result; Iris is a subsequent optional post stage. A depth-reading post pack requires depth
 guides matching that exact color producer. Shared mixin/UI hooks must be reconciled once on merge.
