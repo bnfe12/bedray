@@ -283,6 +283,19 @@ public final class RtFrameRenderer {
      * {@code -Dvkrtx.rt.bobProjection=off} restores the old behaviour for A/B runs.
      */
     private static org.joml.Matrix4f frameProjection;
+    private static io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Stamp displayedStamp;
+    private static RenderTarget displayedTarget, pendingDisplayedTarget;
+    private static org.joml.Matrix4f displayedProjection;
+
+    /** Current-frame color provenance; old output allocations are not evidence that RT replaced this frame. */
+    public static boolean displayedThisFrame(RenderTarget target) {
+        return displayedStamp != null && displayedTarget == target
+            && io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.isCurrent(displayedStamp);
+    }
+
+    public static org.joml.Matrix4f displayedProjection(RenderTarget target) {
+        return displayedThisFrame(target) && displayedProjection != null ? new org.joml.Matrix4f(displayedProjection) : null;
+    }
     private static final boolean BOB_PROJECTION = io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.bobProjectionEnabled();
 
     /** Albedo demodulation of the temporal history; {@code -Dvkrtx.rt.demodulate=off} restores the old behaviour for A/B runs. */
@@ -327,6 +340,7 @@ public final class RtFrameRenderer {
     }
 
     public static void render(CameraRenderState camera, RenderTarget target, LevelRenderState levelState) {
+        displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
         // publish this frame's captured entity geometry (also closes the capture: the hand pass that follows is not world geometry)
         if (io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().isOpen()) {
             io.github.andrexarlay.vulkancompat.rt.entity.OffscreenBlockEntities.captureMissing(camera);
@@ -470,6 +484,12 @@ public final class RtFrameRenderer {
         VkBarriers.fullMemoryBarrier(cmd);
         RtFailure.check(VK10.vkEndCommandBuffer(cmd), "end_command_buffer");
         encoder.execute(cmd);
+        if (pendingDisplayedTarget == target && frameProjection != null) {
+            displayedStamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
+            displayedTarget = target;
+            displayedProjection = RtConfig.FLIP_Y
+                ? new org.joml.Matrix4f().scaling(1, -1, 1).mul(frameProjection) : new org.joml.Matrix4f(frameProjection);
+        }
         if (traced) {
             passFrames++;
             passFramesInWindow++;
@@ -855,6 +875,7 @@ public final class RtFrameRenderer {
                 region.get(0).extent().width(w).height(h).depth(1);
                 VK10.vkCmdCopyImage(cmd, output.image, VK10.VK_IMAGE_LAYOUT_GENERAL, dst, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
             }
+            pendingDisplayedTarget = target;
         }
     }
 
@@ -1196,6 +1217,7 @@ public final class RtFrameRenderer {
     }
 
     private static void shutdown(String reason) {
+        displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
         io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.release(reason);
         RtPass pl = pass;
         RtWorld w = world;

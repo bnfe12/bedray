@@ -200,14 +200,26 @@ public final class WorldTargetManager {
 
     /** Arms {@link #noteLevelProjection}: called before {@code renderLevel} of every Vulkan frame. */
     public static void beginLevelProjectionFrame() {
+        haveLevelProjection = false;
+        levelCameraOrigin.zero();
         awaitingLevelProjection = true;
     }
 
     private static boolean awaitingLevelProjection;
 
-    /** The full, unjittered world projection including bobbing, or {@code fallback} before the first frame. */
+    /** True only after the world projection hook has run in the current renderLevel invocation. */
+    public static boolean hasCurrentLevelProjection() {
+        return haveLevelProjection;
+    }
+
+    /** The current frame's full, unjittered world projection including bobbing, or {@code fallback}. */
     public static Matrix4f levelProjectionOr(Matrix4f fallback) {
         return BOB_PROJECTION && haveLevelProjection ? new Matrix4f(levelProjection) : fallback;
+    }
+
+    /** Exact raster projection, irrespective of the optional RT/compute bob approximation setting. */
+    public static Matrix4f currentLevelProjection() {
+        return haveLevelProjection ? new Matrix4f(levelProjection) : null;
     }
 
     /** Camera origin offset caused by the view-bob transform, in coordinates relative to the base camera. */

@@ -85,7 +85,7 @@ other upscalers, or noise levels) has not been evaluated.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Iris / "Dirt RT" shader-pack host | NOT_IMPLEMENTED | scaffold only; its F3 line is hidden unless a Dirt RT pack is selected |
+| General Iris / "Dirt RT" shader-pack compatibility | NOT_IMPLEMENTED | [Source-only post subset](IRIS_VULKAN.md) is implemented experimentally; no game/GPU validation or released support claim |
 | Linux, macOS | NOT_IMPLEMENTED | Windows only |
 
 This table is updated for every release. If the table and the settings page disagree, the table is wrong; please file an issue.
