@@ -408,7 +408,8 @@ public final class IrisPostExecutor implements AutoCloseable {
         if (graph == null || graph.passes().isEmpty()) {
             return;
         }
-        if (engineColorImage == 0L || engineColorView == 0L || depthView == 0L) {
+        boolean readsDepth = graph.passes().stream().anyMatch(pass -> pass.allSamplerBindings().contains(IrisUniforms.BINDING_DEPTHTEX0));
+        if (engineColorImage == 0L || engineColorView == 0L || (readsDepth && depthView == 0L)) {
             throw new IllegalArgumentException("Invalid image handles: engineColorImage=" + engineColorImage
                 + " engineColorView=" + engineColorView + " depthView=" + depthView);
         }
@@ -488,6 +489,9 @@ public final class IrisPostExecutor implements AutoCloseable {
 
             RtMemory.Img readImg = (readIndex == 0) ? colortex0 : colortex1;
             RtMemory.Img writeImg = (readIndex == 0) ? colortex1 : colortex0;
+            // Even an unused descriptor must have valid SAMPLED usage. Borrowed color only requires copy usage.
+            long sampledDepthView = pass.allSamplerBindings().contains(IrisUniforms.BINDING_DEPTHTEX0)
+                ? depthView : readImg.view;
             // All passes, including final, stay offscreen. Commit to the host image only after all succeed.
             long targetView = writeImg.view;
             long dSet = descriptorSets[slot][passIdx];
@@ -508,7 +512,7 @@ public final class IrisPostExecutor implements AutoCloseable {
                 // 1. Update descriptor set for current pass
                 VkDescriptorImageInfo.Buffer imgInfos = VkDescriptorImageInfo.calloc(2, stack);
                 imgInfos.get(0).sampler(colorSampler).imageView(readImg.view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-                imgInfos.get(1).sampler(depthSampler).imageView(depthView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                imgInfos.get(1).sampler(depthSampler).imageView(sampledDepthView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
 
                 VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(3, stack);
                 writes.get(0).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_COLORTEX0)
@@ -520,12 +524,12 @@ public final class IrisPostExecutor implements AutoCloseable {
                 writes.get(2).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_FRAME)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfo);
 
-                if (boundColor[slot][passIdx] != readImg.view || boundDepth[slot][passIdx] != depthView) {
+                if (boundColor[slot][passIdx] != readImg.view || boundDepth[slot][passIdx] != sampledDepthView) {
                     if (boundColor[slot][passIdx] != 0)
                         throw new IllegalStateException("Host must retire Iris executor before replacing sampled images");
                     VK10.vkUpdateDescriptorSets(device, writes, null);
                     boundColor[slot][passIdx] = readImg.view;
-                    boundDepth[slot][passIdx] = depthView;
+                    boundDepth[slot][passIdx] = sampledDepthView;
                 }
 
                 // 2. Bind pipeline

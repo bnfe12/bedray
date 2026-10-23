@@ -323,8 +323,8 @@ public final class IrisRenderBridge {
             retire(); runtimeStatus = "Disable temporal upscaling and frame generation for Iris post"; return false;
         }
         long colorImage=frame.color().image(), colorView=frame.color().view();
-        // An unused binding still gets a valid descriptor; color-only packs do not require a depth allocation.
-        long depthView=readsDepth ? frame.depth().image().view() : colorView;
+        // The executor fills unused depth bindings from its owned sampled color image.
+        long depthView=readsDepth ? frame.depth().image().view() : 0;
         int format=frame.color().format(), width=frame.color().width(), height=frame.color().height();
         boolean convertsDepth = readsDepth && encoding != WorldFrame.DepthEncoding.OPENGL_WINDOW_Z;
         if (owner != null && owner != device) {
