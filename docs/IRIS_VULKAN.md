@@ -19,8 +19,10 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
 - Vertex/fragment interfaces are checked together for type, array shape, location and interpolation.
   Matrices and fixed-size arrays reserve their full location span; the post dialect caps it at 16.
   Top-level declarations are read as statements, including multiline and same-line declarations.
-- Root `composite*.vsh/fsh` and one last `final.vsh/fsh`, at most 32 passes, one colortex0 output.
-- Legacy fullscreen GLSL inputs, colortex0/gcolor and depthtex0/gdepthtex aliases, and the existing
+- Root `composite*.vsh/fsh` and one last `final.vsh/fsh`, at most 32 passes. Composite passes can write
+  up to four distinct targets among `colortex0..7`; final has one presentation output. Logical targets,
+  output locations and physical image banks are separate. See [the resource graph](IRIS_RESOURCE_GRAPH.md).
+- Legacy fullscreen GLSL inputs, colortex0..7, gcolor and depthtex0/gdepthtex aliases, and the existing
   scalar timing/size/near/far uniform contract. Unknown uniforms/features are rejected by name.
 - Actual target format is used for ping-pong images and pipelines. The host color image is updated
   only after the entire graph records successfully. Runtime code never substitutes a mock executor.
@@ -43,7 +45,7 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
   latch to a native fallback for the session; cleanup failures require restart. Runtime status is
   separate from successful pack compilation.
 
-General packs requiring gbuffers, shadow maps, deferred/compute stages, multiple color outputs,
+General packs requiring gbuffers, shadow maps, deferred/compute stages, more than four simultaneous color outputs,
 custom images/textures/SSBO, required Iris features, persistent color
 buffers, mipmap/format directives, other world/lighting/material uniforms, fragment coordinate layout overrides/front-face semantics or
 geometry/tessellation are still unsupported.
@@ -93,6 +95,11 @@ including all eight frame UBO fields. The updated depth compute shader compiled 
 push layout. Hardware RT publishes color provenance only after recording/submission, while raster
 depth conversion uses the exact current projection. No GPU correctness result is claimed.
 
+The current-frame resource milestone compiled an original three-pass MRT example through the real
+scanner/preprocessor/translator and SPIR-V compiler. It routes output locations into logical targets
+3 and 2, recombines them into 0, then records a separate final output. Existing color NORMAL/BRIGHT,
+depth DISTANCE/MOTION and the depth compute source also compiled. No tests or GPU/game runs were made.
+
 ## Merge into Bedray with the voxel branch
 
 Keep `common/.../shaderhost` as the compatibility/post-processing layer. Voxel traversal remains in
@@ -113,6 +120,6 @@ native RT/voxel adapters remain color-only, so depth-reading post packs stay una
 The host owns all target formats, command submission and retirement. Resolve the three shared mixin/UI
 files once; do not retain duplicate frame hooks or a second executor copied from the old development repo.
 
-Next gates are world/device-aware engine macros and additional world uniforms, a real multi-target
-resource graph (formats/clear/persistence/mips), then geometry/shadow/deferred integration. They require
+Next gates are target formats/clear controls/persistence/mips, world/device-aware engine macros and
+additional world uniforms, then geometry/shadow/deferred integration. They require
 runtime evidence before any supported-pack list or release.

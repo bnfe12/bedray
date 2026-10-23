@@ -19,12 +19,12 @@ import java.util.regex.Pattern;
  *   <li>varyings ({@code varying}/{@code in}/{@code out}) -> explicit {@code layout(location)} matched BY NAME between stages;</li>
  *   <li>compatibility built-ins of a fullscreen pass: {@code gl_Vertex}, {@code gl_MultiTexCoord0}, {@code ftransform()},
  *       {@code gl_ModelViewProjectionMatrix}, {@code gl_ProjectionMatrix}, {@code gl_ModelViewMatrix}, {@code gl_TextureMatrix[0]},
- *       {@code gl_Color}, core-profile {@code vaPosition}/{@code vaUV0}, {@code gl_FragColor}/{@code gl_FragData[0]},
+ *       {@code gl_Color}, core-profile {@code vaPosition}/{@code vaUV0}, constant-index {@code gl_FragData},
  *       {@code texture2D}/{@code texture2DLod};</li>
- *   <li>{@code RENDERTARGETS}/{@code DRAWBUFFERS} directive; only colortex0 is a target in step A.</li>
+ *   <li>{@code RENDERTARGETS}/{@code DRAWBUFFERS}: up to four output locations mapped to colortex0..7.</li>
  * </ul>
- * Everything else that a fullscreen pass could reference (other uniforms/samplers, uniform/buffer blocks, images, more draw
- * buffers, vertex attributes, shadow samplers) is collected in {@link Result#unsupported()}; the caller then refuses the pack.
+ * Everything else that a fullscreen pass could reference (other uniforms/samplers, uniform/buffer blocks, images,
+ * vertex attributes, shadow samplers) is collected in {@link Result#unsupported()}; the caller then refuses the pack.
  * <p>
  * Coordinate convention: Minecraft's internal color/depth targets retain GL orientation; its surface presentation flips Y.
  * This host keeps the same positive viewport and copies image rows unchanged, so texcoord/gl_FragCoord agree with GL window
@@ -56,7 +56,7 @@ public final class IrisGlslTranslator {
         "^\\s*(?:layout\\s*\\(([^)]*)\\)\\s*)?((?:(?:flat|smooth|noperspective|centroid|invariant)\\s+)*)"
             + "(uniform|in|out|varying|attribute)\\s+(?:(?:lowp|mediump|highp)\\s+)?(\\w+)\\s+([\\w\\s,\\[\\]]+?)\\s*;\\s*$");
     private static final Pattern BLOCK = Pattern.compile("^\\s*(?:layout\\s*\\([^)]*\\)\\s*)?(?:uniform|buffer|readonly\\s+buffer|writeonly\\s+buffer)\\s+\\w+\\s*\\{?\\s*$");
-    private static final Pattern TARGETS = Pattern.compile("/\\*\\s*(RENDERTARGETS|DRAWBUFFERS)\\s*:\\s*([0-9, ]+?)\\s*\\*/");
+    private static final Pattern TARGETS = Pattern.compile("/\\*\\s*(RENDERTARGETS|DRAWBUFFERS)\\b((?:(?!\\*/).)*)\\*/", Pattern.DOTALL);
     private static final Pattern FRAGDATA = Pattern.compile("\\bgl_FragData\\s*\\[\\s*(\\d+)\\s*\\]");
 
     private static final String VERTEX_PRELUDE = String.join("\n",
@@ -83,33 +83,15 @@ public final class IrisGlslTranslator {
      */
     public static Result translate(String expanded, Stage stage, Map<String, Integer> varyingLocations, String displayName) {
         Set<String> unsupported = new TreeSet<>();
-        if (Pattern.compile("\\bcolortex[0-9]+(?:MipmapEnabled|Format|Clear|ClearColor)\\b").matcher(expanded).find())
-            unsupported.add("colortex format/clear/mipmap directives need resource-graph support");
+        if (Pattern.compile("\\b(?:colortex[0-9]+|gcolor|gdepth|gnormal|composite|gaux[1-4])(?:MipmapEnabled|Format|Clear|ClearColor)\\b").matcher(expanded).find()
+            || Pattern.compile("/\\*\\s*GAUX4FORMAT\\b").matcher(expanded).find())
+            unsupported.add("target format/clear/mipmap directives are outside this bounded resource graph");
         List<Integer> drawBuffers = new ArrayList<>();
         if (stage == Stage.FRAGMENT) {
-            Matcher t = TARGETS.matcher(expanded);
-            String spec = null;
-            boolean drawbuffers = false;
-            while (t.find()) {
-                spec = t.group(2);
-                drawbuffers = t.group(1).equals("DRAWBUFFERS");
-            }
-            if (spec == null) {
-                drawBuffers.add(0);
-            } else if (drawbuffers) {
-                for (char c : spec.replace(" ", "").toCharArray()) {
-                    drawBuffers.add(c - '0');
-                }
-            } else {
-                for (String s : spec.split(",")) {
-                    if (!s.isBlank()) {
-                        drawBuffers.add(Integer.parseInt(s.trim()));
-                    }
-                }
-            }
-            if (!drawBuffers.equals(List.of(0))) {
-                unsupported.add("draw buffers " + drawBuffers + " (step A writes colortex0 only)");
-            }
+            drawBuffers.addAll(parseDrawBuffers(expanded, unsupported));
+            if (displayName.replace('\\', '/').matches("(?:.*/)?final(?:_[a-z])?\\.fsh")
+                && !drawBuffers.equals(List.of(0)))
+                unsupported.add("final writes one presentation output at location 0 (draw buffers must be [0])");
         }
 
         Map<String, String> pushDecl = new LinkedHashMap<>();
@@ -212,11 +194,13 @@ public final class IrisGlslTranslator {
                             repl.append(declare(loc, interp, "out", type, name));
                         } else {
                             if (arraySize != 0) { unsupported.add("fragment output array " + name); continue; }
-                            int loc = explicitLocation(layout, fragOutputs.size());
+                            int loc = outputLocation(layout, fragOutputs, unsupported);
+                            if (!type.equals("vec4")) unsupported.add("fragment output " + type + " " + name + " requires vec4 color");
+                            if (fragOutputs.containsKey(name)) unsupported.add("duplicate fragment output " + name);
+                            if (fragOutputs.containsValue(loc)) unsupported.add("duplicate fragment output location " + loc);
                             fragOutputs.put(name, loc);
-                            if (loc != 0) {
-                                unsupported.add("fragment output " + name + " at location " + loc + " (step A writes colortex0 only)");
-                            }
+                            if (loc < 0 || loc >= drawBuffers.size())
+                                unsupported.add("fragment output " + name + " at location " + loc + " exceeds draw buffers " + drawBuffers);
                             repl.append("layout(location = ").append(loc).append(") out ").append(type).append(' ').append(name).append(";\n");
                         }
                     }
@@ -252,22 +236,36 @@ public final class IrisGlslTranslator {
             code = code.replaceAll("\\bvoid\\s+main\\s*\\(\\s*(?:void\\s*)?\\)", "void vkb_packMain()");
             code += "\nvoid main() { vkb_packMain(); gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; }\n";
         }
-        boolean fragData = false;
+        Set<Integer> legacyOutputs = new TreeSet<>();
         if (stage == Stage.FRAGMENT) {
             Matcher fd = FRAGDATA.matcher(code);
+            StringBuilder replaced = new StringBuilder();
             while (fd.find()) {
-                if (!fd.group(1).equals("0")) {
-                    unsupported.add("gl_FragData[" + fd.group(1) + "] (step A writes colortex0 only)");
-                }
-                fragData = true;
+                int location;
+                try { location = Integer.parseInt(fd.group(1)); }
+                catch (NumberFormatException e) { location = -1; }
+                if (location < 0 || location >= drawBuffers.size())
+                    unsupported.add("gl_FragData[" + fd.group(1) + "] exceeds draw buffers " + drawBuffers);
+                else legacyOutputs.add(location);
+                fd.appendReplacement(replaced, "vkb_FragData" + Math.max(0, location));
             }
-            if (fragData || code.matches("(?s).*\\bgl_FragColor\\b.*")) {
-                code = FRAGDATA.matcher(code).replaceAll("vkb_FragData0").replaceAll("\\bgl_FragColor\\b", "vkb_FragData0");
-                fragData = true;
+            fd.appendTail(replaced);
+            code = replaced.toString();
+            if (Pattern.compile("\\bgl_FragData\\b").matcher(code).find())
+                unsupported.add("gl_FragData needs a constant nonnegative output location");
+            boolean fragColor = Pattern.compile("\\bgl_FragColor\\b").matcher(code).find();
+            if (fragColor) {
+                if (!legacyOutputs.isEmpty()) unsupported.add("gl_FragColor mixed with gl_FragData");
+                legacyOutputs.add(0);
+                code = code.replaceAll("\\bgl_FragColor\\b", "vkb_FragData0");
             }
-            if (fragData && !fragOutputs.isEmpty()) {
+            if (!legacyOutputs.isEmpty() && !fragOutputs.isEmpty()) {
                 unsupported.add("gl_FragColor/gl_FragData mixed with declared outputs");
             }
+            Set<Integer> outputs = new TreeSet<>(fragOutputs.values());
+            outputs.addAll(legacyOutputs);
+            for (int location = 0; location < drawBuffers.size(); location++)
+                if (!outputs.contains(location)) unsupported.add("draw-buffer location " + location + " has no fragment output");
         }
         String stripped = stripComments(code);
         for (String id : UNSUPPORTED_BUILTINS) {
@@ -291,9 +289,8 @@ public final class IrisGlslTranslator {
             }
             src.append("};\n");
         }
-        if (fragData) {
-            src.append("layout(location = 0) out vec4 vkb_FragData0;\n");
-        }
+        for (int location : legacyOutputs)
+            src.append("layout(location = ").append(location).append(") out vec4 vkb_FragData").append(location).append(";\n");
         if (!frameUsed.isEmpty()) {
             src.append("layout(std140, set = 0, binding = ").append(IrisUniforms.BINDING_FRAME).append(") uniform VkbIrisFrame {\n");
             IrisUniforms.FRAME.forEach((name, member) -> {
@@ -378,14 +375,50 @@ public final class IrisGlslTranslator {
         return "layout(location = " + loc + ") " + (interp.isEmpty() ? "" : interp + " ") + dir + " " + type + " " + name + ";\n";
     }
 
-    private static int explicitLocation(String layout, int fallback) {
+    private static int outputLocation(String layout, Map<String, Integer> outputs, Set<String> unsupported) {
         if (layout != null) {
-            Matcher m = Pattern.compile("location\\s*=\\s*(\\d+)").matcher(layout);
-            if (m.find()) {
-                return Integer.parseInt(m.group(1));
+            Matcher m = Pattern.compile("\\s*location\\s*=\\s*(\\d+)\\s*").matcher(layout);
+            if (m.matches()) {
+                try { return Integer.parseInt(m.group(1)); }
+                catch (NumberFormatException e) { /* Diagnosed below instead of failing translation. */ }
             }
+            unsupported.add("fragment output layout " + layout + " needs one integer location");
+            return -1;
         }
-        return fallback;
+        int free = 0;
+        while (outputs.containsValue(free)) free++;
+        return free;
+    }
+
+    private static List<Integer> parseDrawBuffers(String expanded, Set<String> unsupported) {
+        Matcher targets = TARGETS.matcher(expanded);
+        List<Integer> result = null;
+        while (targets.find()) {
+            if (result != null) unsupported.add("multiple active draw-buffer directives");
+            result = new ArrayList<>();
+            String name = targets.group(1);
+            String body = targets.group(2).strip();
+            if (!body.startsWith(":")) {
+                unsupported.add("malformed " + name + " directive: missing colon");
+                continue;
+            }
+            String spec = body.substring(1).strip();
+            if (name.equals("DRAWBUFFERS")) {
+                String digits = spec.replaceAll("\\s", "");
+                if (!digits.matches("[0-7]+")) unsupported.add("malformed DRAWBUFFERS " + spec + " (expected digits 0..7)");
+                else for (char digit : digits.toCharArray()) result.add(digit - '0');
+            } else {
+                if (!spec.matches("[0-7](?:\\s*,\\s*[0-7])*"))
+                    unsupported.add("malformed RENDERTARGETS " + spec + " (expected comma-separated targets 0..7)");
+                else for (String target : spec.split(",")) result.add(Integer.parseInt(target.strip()));
+            }
+            if (result.isEmpty() || result.size() > IrisUniforms.MAX_DRAW_BUFFERS)
+                unsupported.add("draw buffers need 1.." + IrisUniforms.MAX_DRAW_BUFFERS + " color attachments: " + result);
+            if (new TreeSet<>(result).size() != result.size()) unsupported.add("duplicate draw-buffer targets " + result);
+        }
+        if (result == null) return List.of(0);
+        // Unsupported directives are refused by the caller; keep generated diagnostics bounded and valid.
+        return result.isEmpty() ? List.of(0) : List.copyOf(result);
     }
 
     static String stripComments(String s) {

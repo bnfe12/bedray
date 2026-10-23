@@ -1,6 +1,8 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.glsl;
 
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -23,7 +25,10 @@ public final class IrisUniforms {
     public static final Map<String, Integer> SAMPLERS;
     public static final int BINDING_COLORTEX0 = 0;
     public static final int BINDING_DEPTHTEX0 = 1;
-    public static final int SAMPLER_BINDINGS = 2;
+    public static final int COLOR_TARGETS = 8;
+    /** Portable bounded post stage; Vulkan guarantees at least four simultaneous color attachments. */
+    public static final int MAX_DRAW_BUFFERS = 4;
+    public static final int SAMPLER_BINDINGS = COLOR_TARGETS + 1;
     public static final int BINDING_FRAME = 2;
     public static final int FRAME_BYTES = 416;
     public static final Map<String, Member> FRAME;
@@ -52,7 +57,7 @@ public final class IrisUniforms {
         FRAME = java.util.Collections.unmodifiableMap(frame);
 
         Map<String, Integer> s = new LinkedHashMap<>();
-        s.put("colortex0", BINDING_COLORTEX0);
+        for (int i = 0; i < COLOR_TARGETS; i++) s.put("colortex" + i, colorBinding(i));
         s.put("gcolor", BINDING_COLORTEX0);
         s.put("depthtex0", BINDING_DEPTHTEX0);
         s.put("gdepthtex", BINDING_DEPTHTEX0);
@@ -62,6 +67,26 @@ public final class IrisUniforms {
     /** Fixed matrices of a fullscreen pass (Iris draws composite/final with an orthographic 0..1 projection). */
     public static final java.util.Set<String> CONSTANT_MATRICES = java.util.Set.of("modelViewMatrix", "projectionMatrix",
         "modelViewMatrixInverse", "projectionMatrixInverse", "textureMatrix");
+
+    /** Stable bindings preserve the original color/depth/frame ABI. */
+    public static int colorBinding(int index) {
+        if (index < 0 || index >= COLOR_TARGETS) throw new IllegalArgumentException("Color target index " + index);
+        return index == 0 ? BINDING_COLORTEX0 : index + 2;
+    }
+
+    public static int colorIndex(int binding) {
+        if (binding == BINDING_COLORTEX0) return 0;
+        return binding >= 3 && binding < COLOR_TARGETS + 2 ? binding - 2 : -1;
+    }
+
+    /** Descriptor bindings in ascending order, excluding the frame UBO at binding 2. */
+    public static List<Integer> samplerBindings() {
+        List<Integer> bindings = new ArrayList<>(SAMPLER_BINDINGS);
+        bindings.add(BINDING_COLORTEX0);
+        bindings.add(BINDING_DEPTHTEX0);
+        for (int i = 1; i < COLOR_TARGETS; i++) bindings.add(colorBinding(i));
+        return List.copyOf(bindings);
+    }
 
     private IrisUniforms() {}
 }

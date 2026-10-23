@@ -10,6 +10,8 @@ import org.lwjgl.util.shaderc.ShadercIncludeResultRelease;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -29,10 +31,11 @@ public final class IrisSourcePreprocessor {
     public static final int MAX_INCLUDE_READS = 1024;
     public static final int MAX_SOURCE_CHARS = 16 << 20;
     private static final Pattern VERSION = Pattern.compile("(?m)^[ \\t]*#[ \\t]*version[ \\t]+(\\d+)([^\\n]*)");
+    // Preserve malformed active directives too: otherwise preprocessing erases them and translation silently defaults to 0.
     private static final Pattern TARGET_COMMENT = Pattern.compile(
-        "/\\*\\s*(DRAWBUFFERS|RENDERTARGETS)\\s*:\\s*([0-9, \\t]+)\\s*\\*/");
+        "/\\*\\s*(?:DRAWBUFFERS|RENDERTARGETS|GAUX4FORMAT)\\b[\\s\\S]*?\\*/");
     private static final Pattern TARGET_PRAGMA = Pattern.compile(
-        "(?m)^[ \\t]*#[ \\t]*pragma[ \\t]+bedray_iris_(DRAWBUFFERS|RENDERTARGETS)_([0-9_]+)[ \\t]*$");
+        "(?m)^[ \\t]*#[ \\t]*pragma[ \\t]+bedray_iris_target_([0-9a-f]+)[ \\t]*$");
 
     private IrisSourcePreprocessor() {}
 
@@ -106,8 +109,12 @@ public final class IrisSourcePreprocessor {
                 // Restore the target comments for the translator; the compiler never saw them as code.
                 Matcher targets = TARGET_PRAGMA.matcher(MemoryUtil.memUTF8(bytes));
                 StringBuilder restored = new StringBuilder();
-                while (targets.find()) targets.appendReplacement(restored, Matcher.quoteReplacement(
-                    "/* " + targets.group(1) + ":" + targets.group(2).replace('_', ',') + " */"));
+                while (targets.find()) {
+                    String comment;
+                    try { comment = new String(HexFormat.of().parseHex(targets.group(1)), StandardCharsets.UTF_8); }
+                    catch (IllegalArgumentException e) { throw new PackScanException("invalid preserved Iris target directive"); }
+                    targets.appendReplacement(restored, Matcher.quoteReplacement(comment));
+                }
                 targets.appendTail(restored);
                 return restored.toString();
             } finally {
@@ -164,8 +171,8 @@ public final class IrisSourcePreprocessor {
                     i = end < 0 ? source.length() : end + 2;
                     Matcher target = TARGET_COMMENT.matcher(source.substring(start, i));
                     if (target.matches()) {
-                        String spec = target.group(2).replaceAll("[ \\t]", "").replace(',', '_');
-                        out.append("\n#pragma bedray_iris_").append(target.group(1)).append('_').append(spec)
+                        String encoded = HexFormat.of().formatHex(source.substring(start, i).getBytes(StandardCharsets.UTF_8));
+                        out.append("\n#pragma bedray_iris_target_").append(encoded)
                             .append("\n#line ").append(line).append('\n');
                         for (int p = start; p < i; p++) if (source.charAt(p) == '\n') { out.append('\n'); line++; }
                         continue;

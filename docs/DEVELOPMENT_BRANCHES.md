@@ -8,7 +8,7 @@ of the same renderer. Local linked Git worktrees share the repository history an
 |---|---|---|
 | `main` | Published Bedray baseline | Kept separate from the experimental branches |
 | `codex/software-voxel-tracing` | Software traversal/companion API | Bounded live full cubes with atlas albedo and synthetic scene; general shapes/light transport pending |
-| `codex/iris-vulkan` | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth contract; general shaderpack compatibility pending |
+| `codex/iris-vulkan` | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth, current-frame MRT; general shaderpack compatibility pending |
 | `codex/vulkan-cache-dxgi-present` | Shared shader/pipeline caches and presentation compatibility | Independent source work; stage-aware Iris SPIR-V caching and LWJGL compatibility require integration |
 
 The voxel and Iris work here is source-only. No JAR, release, shaderpack ZIP or tested-support claim is

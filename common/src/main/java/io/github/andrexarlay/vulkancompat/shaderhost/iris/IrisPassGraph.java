@@ -408,6 +408,11 @@ public final class IrisPassGraph {
         }
 
         IrisPassGraph graph = new IrisPassGraph(report.name(), report.shadersRoot(), passes, configuration.summary());
+        try { IrisResourcePlan.build(graph); }
+        catch (IllegalArgumentException error) {
+            return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS,
+                ShaderHostState.UNSUPPORTED_PACK_FEATURES, error.getMessage()), null);
+        }
         return new ParseResult(true, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY,
             "all " + passes.size() + " passes (" + orderedPasses + ") translated and compiled to SPIR-V"), graph);
     }
