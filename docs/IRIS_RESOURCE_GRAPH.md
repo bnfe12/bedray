@@ -87,3 +87,6 @@ MRT example compiled through the actual Java frontend to SPIR-V: composite 1212/
 composite1 1212/676 bytes and final 1212/804 bytes (vertex/fragment). Existing color NORMAL/BRIGHT,
 depth DISTANCE/MOTION and the depth compute source compiled as well. Source review covered bank
 routing, descriptor lifetime and unsupported legacy directives; these checks do not verify GPU behavior.
+The MRT baseline also compiled with voxel `24d721a` in a temporary linked worktree: renderer-api,
+common, compute-common, Fabric, NeoForge and both compute companions. No development branches were
+merged into one another; the existing shared hooks and applied-scene accessor were preserved.

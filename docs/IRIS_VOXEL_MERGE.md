@@ -2,7 +2,7 @@
 
 Source baselines checked on 2026-10-23:
 
-- Iris `2b7b7d5a370d4a1031b7bfa1539a10162e8602d3` (typed frames, camera/depth uniforms and owned sampled fallback).
+- Iris `db01cc8c1348fbce80e190d3e723d0826f3e13ce` (typed frames, camera/depth uniforms and current-frame MRT graph).
 - Voxel `24d721a272295be99ffc0b70aec2ae7ae8340ff7` (atlas albedo and guarded material retirement).
 
 A temporary detached linked worktree successfully compiled the combined sources for common, renderer-api,
@@ -58,6 +58,6 @@ Fabric loader 0.19.5, NeoForge 26.3.0.57-beta. Dependencies remain ignored/local
 
 Only raster currently publishes matching depth. RT and voxel color-only post remains possible;
 depth-reading packs wait for guides from the same producer/frame. Camera history here contains CPU
-matrices and positions, not object motion or previous color. MRT/resource graphs and broader Iris
-shaderpack compatibility remain subsequent work. The independent cache/DXGI branch was reviewed
+matrices and positions, not object motion or previous color. The current-frame MRT graph is covered in
+[the resource contract](IRIS_RESOURCE_GRAPH.md); target formats, persistence and broader Iris compatibility remain subsequent work. The independent cache/DXGI branch was reviewed
 separately; its LWJGL source patch is described in [the frame contract](IRIS_FRAME_GUIDES.md).
