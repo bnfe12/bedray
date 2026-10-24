@@ -9,6 +9,23 @@ No RT extensions, acceleration structures, ray queries, device addresses, Int64,
 vendor DLLs are required by the Compute provider. In-game use still requires Minecraft 26.3's Vulkan
 backend baseline and the provider's queue/format/descriptor checks. This is not an arbitrary-GPU claim.
 
+## Alpha.10 activation fix
+
+A matching alpha.9 game launch selected Voxel, captured its camera and still displayed raster. The
+lighting collector required `GameRenderState.readyForLevelRendering`, a field that Minecraft 26.3
+declares but never populates, including the inspected NeoForge 26.3.0.76 runtime. Its default false
+value prevented every lighting snapshot and therefore every compute dispatch in game.
+
+Alpha.10 uses the actual `shouldRenderLevel` world-pass condition while retaining the existing current
+camera/projection and finite lightmap/sky checks. Pending lighting and raster inputs now have separate,
+specific status messages and a transition-only `frame_pending` log. `frame_inputs_ready` reports
+recovery; `scene_recorded` still means command recording, not visual acceptance. The fix needs a fresh
+matching-version game run; earlier offscreen probes did not exercise this host readiness check.
+
+Vanilla's boss-overlay fade can also retain a small negative value after subtraction. The collector
+accepts a finite boss factor and clamps the published value to [0,1], so that ordinary fade-out does
+not disable Compute. Nonfinite input still keeps raster and reports a pending reason.
+
 ## Alpha.8 visual pass
 
 Ordered by visible effect per unit of work. Each step stays bounded and keeps the raster fallback.

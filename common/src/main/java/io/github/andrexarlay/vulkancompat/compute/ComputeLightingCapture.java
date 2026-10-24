@@ -14,26 +14,43 @@ import org.joml.Vector3fc;
  * Block/sky factors remain separate; the consumer applies each exactly once.
  */
 final class ComputeLightingCapture {
+    private static String pendingReason;
     private ComputeLightingCapture() {}
+
+    static String pendingReason() { return pendingReason; }
+
+    private static LightingFrame pending(String reason) {
+        pendingReason = reason;
+        return null;
+    }
 
     /** Null means that current-frame lighting is unavailable or invalid; do not reuse an older frame. */
     static LightingFrame collect(GameRenderState state) {
-        if (state == null || !state.shouldRenderLevel || !state.readyForLevelRendering
-            || state.levelRenderState == null || state.lightmapRenderState == null) return null;
+        pendingReason = null;
+        // Minecraft 26.3 declares readyForLevelRendering but never populates it. The actual world
+        // pass uses shouldRenderLevel; camera/projection readiness is checked by ComputeWorldCapture.
+        if (state == null || !state.shouldRenderLevel || state.levelRenderState == null)
+            return pending("Waiting for current world render state");
+        if (state.lightmapRenderState == null) return pending("Waiting for current lightmap state");
         var light = state.lightmapRenderState;
         var sky = state.levelRenderState.skyRenderState;
-        if (sky == null || sky.skybox == null
-            || !validColor(light.blockLightTint) || !validColor(light.skyLightColor)
-            || !validColor(light.ambientColor) || !validColor(light.nightVisionColor)
-            || !validScalar(light.blockFactor) || !validScalar(light.skyFactor)
+        if (sky == null || sky.skybox == null) return pending("Waiting for current dimension sky state");
+        if (!validColor(light.blockLightTint) || !validColor(light.skyLightColor)
+            || !validColor(light.ambientColor) || !validColor(light.nightVisionColor))
+            return pending("Waiting for finite nonnegative lightmap colors");
+        if (!validScalar(light.blockFactor) || !validScalar(light.skyFactor)
             || !validScalar(light.brightness) || !validScalar(light.darknessEffectScale)
             || !validScalar(light.nightVisionEffectIntensity)
-            || !validScalar(light.bossOverlayWorldDarkening)) return null;
+            || !Float.isFinite(light.bossOverlayWorldDarkening))
+            return pending("Invalid lightmap factors: block=" + light.blockFactor + " sky=" + light.skyFactor
+                + " brightness=" + light.brightness + " darkness=" + light.darknessEffectScale
+                + " nightVision=" + light.nightVisionEffectIntensity + " boss=" + light.bossOverlayWorldDarkening);
 
         boolean overworld = sky.skybox == DimensionType.Skybox.OVERWORLD;
         if (overworld && (!validColor(sky.skyColor) || !Float.isFinite(sky.sunAngle)
             || !Float.isFinite(sky.moonAngle) || !validScalar(sky.rainBrightness)
-            || sky.moonPhase == null || sky.moonPhase.index() < 0 || sky.moonPhase.index() >= 8)) return null;
+            || sky.moonPhase == null || sky.moonPhase.index() < 0 || sky.moonPhase.index() >= 8))
+            return pending("Waiting for finite overworld sky color, angles, weather and moon phase");
 
         float[] values = new float[LightingFrame.FLOAT_COUNT];
         values[1] = 1; // A finite unit direction is also provided when the directional source is disabled.
@@ -43,7 +60,9 @@ final class ComputeLightingCapture {
         values[19] = light.brightness;
         values[20] = light.darknessEffectScale;
         values[21] = light.nightVisionEffectIntensity;
-        values[22] = light.bossOverlayWorldDarkening;
+        // Vanilla's boss fade subtracts without clamping and can retain a small negative value.
+        // Treat that legitimate state as no darkening, matching the consumer's [0,1] factor.
+        values[22] = Math.clamp(light.bossOverlayWorldDarkening, 0, 1);
         putLinearColor(values, 12, light.blockLightTint);
 
         // Preserve vanilla's actual ambient/night-vision color choice before display-to-linear conversion.
@@ -77,7 +96,7 @@ final class ComputeLightingCapture {
             }
         }
         // Non-overworld analytic sky is disabled; the host's raster image supplies its actual sky.
-        for (float value : values) if (!Float.isFinite(value)) return null;
+        for (float value : values) if (!Float.isFinite(value)) return pending("Nonfinite converted world lighting");
         return new LightingFrame(values);
     }
 
