@@ -5,6 +5,7 @@ import io.github.andrexarlay.bedray.api.v1.CubeFaceMaterial;
 import io.github.andrexarlay.bedray.api.v1.CubeMaterial;
 import io.github.andrexarlay.bedray.api.v1.CubeSectionMaterials;
 import io.github.andrexarlay.bedray.api.v1.SectionSnapshot;
+import io.github.andrexarlay.bedray.api.v1.SectionLightData;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.geom.builders.UVPair;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -20,6 +21,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.LightLayer;
 import org.joml.Vector3fc;
 
 import java.util.ArrayList;
@@ -28,8 +30,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Render-thread extraction of proven full cubes. Only immutable UV/tint values leave this class.
- * Unknown geometry stays unsupported; palette overflow retains a proven cube with reference zero.
+/** Render-thread extraction of exact full cubes and optional bounded baked models/light.
+ * Only immutable data leaves this class. Unsupported geometry is never replaced with guessed cubes.
  */
 final class ComputeBlockMaterials {
     private static final int WHITE = 0xFFFFFFFF;
@@ -48,6 +50,7 @@ final class ComputeBlockMaterials {
         final BlockState[] states = new BlockState[SectionSnapshot.CELL_COUNT];
         final Geometry[] geometry = new Geometry[SectionSnapshot.CELL_COUNT];
         Map<AppearanceKey, PaletteEntry> appearances = Map.of();
+        final ComputeModelMaterials.SectionCache models = new ComputeModelMaterials.SectionCache();
     }
 
     /** The reusable lookup is never inserted. Stored keys own their six colors. */
@@ -84,6 +87,7 @@ final class ComputeBlockMaterials {
     private final BlockPos.MutableBlockPos position = new BlockPos.MutableBlockPos();
     private final int[] tintColors = new int[CubeMaterial.FACE_COUNT];
     private final AppearanceKey lookup = new AppearanceKey(tintColors);
+    private final ComputeModelMaterials modelMaterials = new ComputeModelMaterials();
     private Minecraft minecraft;
     private ClientLevel level;
     private BlockStateModelSet models;
@@ -91,7 +95,7 @@ final class ComputeBlockMaterials {
     private boolean sessionChanged;
 
     void clear() {
-        sections.clear(); variants.clear(); parts.clear();
+        sections.clear(); variants.clear(); parts.clear(); modelMaterials.clear();
         minecraft = null; level = null; models = null; generation = 0;
         sessionChanged = false;
     }
@@ -106,6 +110,7 @@ final class ComputeBlockMaterials {
             clear();
             this.minecraft = minecraft; this.level = level; this.models = current;
             generation = atlas.generation();
+            modelMaterials.prepare(minecraft, level, current, generation);
             sessionChanged = true;
         } else if (models != current) {
             return "Waiting for matching block model and atlas generation";
@@ -131,6 +136,10 @@ final class ComputeBlockMaterials {
     }
 
     SectionSnapshot captureSection(int x, int y, int z, long revision) {
+        return captureSection(x, y, z, revision, true);
+    }
+
+    SectionSnapshot captureSection(int x, int y, int z, long revision, boolean extended) {
         if (!loaded(x,y,z)) return null;
         var chunk = level.getChunkSource().getChunk(x,z,ChunkStatus.FULL,false);
         if (chunk == null) return null;
@@ -142,19 +151,30 @@ final class ComputeBlockMaterials {
         short[] references = new short[SectionSnapshot.CELL_COUNT];
         List<CubeMaterial> palette = new ArrayList<>();
         Map<AppearanceKey, PaletteEntry> appearances = new LinkedHashMap<>();
+        ComputeModelMaterials.SectionCapture modelCapture = extended ? modelMaterials.begin(cached.models) : null;
+        short[] light = extended ? new short[SectionSnapshot.CELL_COUNT] : null;
+        var blockLight = extended ? level.getLightEngine().getLayerListener(LightLayer.BLOCK) : null;
+        var skyLight = extended ? level.getLightEngine().getLayerListener(LightLayer.SKY) : null;
         int originX = Math.multiplyExact(x,16), originY = Math.multiplyExact(y,16), originZ = Math.multiplyExact(z,16);
         for (int bz=0; bz<16; bz++) for (int by=0; by<16; by++) for (int bx=0; bx<16; bx++) {
             int index = bx + 16 * (by + 16 * bz);
             BlockState state = section.getBlockState(bx,by,bz);
             position.set(originX+bx,originY+by,originZ+bz);
+            if (extended) {
+                // Listener lookup preserves implicit skylight values when no explicit nibble layer exists.
+                int block = Math.clamp(blockLight.getLightValue(position), 0, 15);
+                int sky = Math.clamp(skyLight.getLightValue(position), 0, 15);
+                int emission = Math.clamp(state.getLightEmission(), 0, 15);
+                light[index] = (short)(block | (sky << 4) | (emission << 8));
+            }
             if (cached.states[index] != state) {
                 cached.states[index] = state;
                 cached.geometry[index] = eligibleState(state) ? geometry(state) : UNSUPPORTED;
             }
-            if (state.isAir()) continue;
+            if (state.isAir() && state.getFluidState().isEmpty()) continue;
             Geometry geometry = cached.geometry[index];
             if (geometry == UNSUPPORTED) {
-                cells[index] = SectionSnapshot.UNSUPPORTED;
+                cells[index] = extended ? modelCapture.captureCell(state, position, index) : SectionSnapshot.UNSUPPORTED;
                 continue;
             }
             cells[index] = SectionSnapshot.OPAQUE_CUBE;
@@ -173,7 +193,8 @@ final class ComputeBlockMaterials {
         }
         cached.appearances = appearances;
         CubeSectionMaterials materialData = new CubeSectionMaterials(generation,palette,references);
-        return new SectionSnapshot(x,y,z,revision,cells,materialData);
+        return new SectionSnapshot(x,y,z,revision,cells,materialData,
+            extended ? modelCapture.finish() : null, extended ? new SectionLightData(light) : null);
     }
 
     private static boolean eligibleState(BlockState state) {
