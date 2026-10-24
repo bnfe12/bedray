@@ -269,7 +269,9 @@ vec3 skyFogColor(vec3 d) {
         if ((skyFlags() & 32u) != 0u) {
             sunX = -sunX;
         }
-        vec2 hz = normalize(vec2(d.x, d.z) + vec2(1.0e-6, 0.0));
+        vec2 hz = vec2(d.x, d.z);
+        float hz2 = dot(hz, hz);
+        hz = hz2 > 1.0e-12 ? hz * inversesqrt(hz2) : vec2(1.0, 0.0);   // straight down/up: any horizon direction is a stand-in
         float look = max(0.0, hz.x * sunX);
         fog = mix(fog, ss.rgb, look * ss.a);
     }

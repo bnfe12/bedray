@@ -208,6 +208,13 @@ const uint MASK_HERMETIC = MASK_WORLD | MASK_ENTITIES; // 0x03u
 
 uint rtFlags() { return floatBitsToUint(pc.keyColor.w); }
 bool hasFlag(uint f) { return (rtFlags() & f) != 0u; }
+// normalize() of a zero vector is NaN in GLSL, and a voxel mesh can carry one: a quad stored as (A, B, C, C) turns its second
+// triangle into (C, C, A), a zero-area sliver nobody sees but every traversal hits. NaN then survives clamp() and denoising.
+// Callers that derive a direction from geometry use this and pass a direction they already trust as the fallback.
+vec3 normalizeOr(vec3 v, vec3 fallback) {
+    float len2 = dot(v, v);
+    return len2 > 1.0e-12 ? v * inversesqrt(len2) : fallback;
+}
 const float EMISSIVE_GAIN = 3.0;      // emission 1.0 -> radiance 3 x albedo (pre-exposure; RtLighting.EXPOSURE 1.1, ACES)
 const float EMISSIVE_FLUX_GAIN = 2.2; // was 4.5, then 2.6: surfaces near torches / lanterns were flooded (owner screens 30-31, lighting-fix)
 float sunRadius() { return StatsBuf(pc.statsAddr).sunRadius; }   // RtSettings.sunRadiusRad (real sun ~0.0046)

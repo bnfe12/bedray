@@ -404,6 +404,11 @@ void main() {
                     imageStore(gbSpecular, p, vec4(refl * thr * atmT, reflDist));
                     imageStore(gbSpecAlbedo, p, vec4(clamp(wantsRefl ? f0 : vec3(0.0), 0.0, 1.0), 1.0));
                     vec3 directOut = (s.albedoLit * direct * directScale + specSun + selfEmission) * thr + glassRefl;
+                    // NRD / DLSS-RR demodulate this channel later and their history keeps a bad value alive far longer than one
+                    // frame, so a non-finite direct term is dropped here, where the main output is sanitised too.
+                    if (isnan(directOut.r) || isinf(directOut.r)) directOut.r = 0.0;
+                    if (isnan(directOut.g) || isinf(directOut.g)) directOut.g = 0.0;
+                    if (isnan(directOut.b) || isinf(directOut.b)) directOut.b = 0.0;
                     imageStore(gbDirect, p, vec4(directOut * atmT + atmA, 0.0));
                     StatsBuf fb = StatsBuf(pc.statsAddr);
                     if (fb.motionAddr != uvec2(0u)) {
@@ -482,6 +487,11 @@ void main() {
     }
 #endif
     countSample(p, hit);
+    // clamp() of NaN is undefined, so the frame is sanitised the way the path tracer does it: one non-finite value (a degenerate
+    // triangle, a camera-ray w, a bad normal map) would otherwise be written out and then kept alive by the temporal history.
+    if (isnan(mean.r) || isinf(mean.r)) mean.r = 0.0;
+    if (isnan(mean.g) || isinf(mean.g)) mean.g = 0.0;
+    if (isnan(mean.b) || isinf(mean.b)) mean.b = 0.0;
     imageStore(outDepth, p, vec4(hadFirst ? firstDist : (hit ? s.t : 1.0e6), 0.0, 0.0, 0.0));
     imageStore(outImage, p, vec4(clamp(tonemapped ? finishColor(mean) : mean, 0.0, 1.0), 1.0));
 }

@@ -55,10 +55,19 @@ vec3 rawCameraForward() {
     return pc.statsAddr == uvec2(0u) ? vec3(0.0, 0.0, -1.0) : StatsBuf(pc.statsAddr).cameraForward.xyz;
 }
 
+// pc.invViewProj can return a zero homogeneous w for a degenerate projection; dividing by it makes the direction Inf and then
+// NaN, and every pixel of the frame is built from the same matrix.
+float safeW(float w) {
+    return abs(w) < 1.0e-6 ? (w < 0.0 ? -1.0e-6 : 1.0e-6) : w;
+}
+
 // Camera forward derived from the current projection (including bob), matching the effective ray origin.
 vec3 bobCameraForward() {
     vec4 centerW = pc.invViewProj * vec4(0.0, 0.0, 0.5, 1.0);
-    return normalize(centerW.xyz / centerW.w - cameraOrigin());
+    // Clamping the divisor alone is not enough: a fully degenerate inverse projection gives xyz = 0 as well, and cameraOrigin()
+    // is the bob offset, so 0 - 0 is still a zero vector. The fallback is a real direction, so a bad matrix costs one wrong
+    // frame, not NaN.
+    return normalizeOr(centerW.xyz / safeW(centerW.w) - cameraOrigin(), rawCameraForward());
 }
 
 // Camera ray of pixel p for the image size; sub-pixel offset jitter in 0..1.
@@ -69,7 +78,7 @@ vec3 cameraRay(ivec2 p, ivec2 size, vec2 jitter) {
     }
     // Any depth strictly inside the frustum lies on the ray through the camera; 0.5 is inside for [0,1] and [-1,1] clip depth.
     vec4 w = pc.invViewProj * vec4(ndc, 0.5, 1.0);
-    return normalize(w.xyz / w.w - cameraOrigin());
+    return normalizeOr(w.xyz / safeW(w.w) - cameraOrigin(), rawCameraForward());
 }
 
 float gHistoryLimit = 1.0e9;   // longest temporal history for this pixel (frames): water keeps its animation alive
@@ -124,7 +133,9 @@ vec3 temporalAccumulate(ivec2 p, ivec2 size, vec3 e, vec3 r, bool hit, vec3 pos,
             // (noise crawling over the floor).
             vec4 c0 = pc.invViewProj * vec4(0.0, 0.0, 0.5, 1.0);
             vec4 c1 = pc.invViewProj * vec4(0.0, 2.0 / float(size.y), 0.5, 1.0);
-            float pixAngle = length(normalize(c1.xyz / c1.w) - normalize(c0.xyz / c0.w));
+            float pixAngle = length(normalizeOr(c1.xyz / safeW(c1.w), rawCameraForward())
+                                  - normalizeOr(c0.xyz / safeW(c0.w), rawCameraForward()));
+            pixAngle = min(pixAngle, 0.25);   // only one corner clamped would leave an angle of up to 2 and a tolerance that accepts all history
             float cosInc = abs(dot(pos, nrm)) / max(dist, 1.0e-4);
             float tol = 0.02 * prevDist + 0.05 + 1.5 * prevDist * pixAngle / max(cosInc, 0.08);
             // bilinear history: 4 taps around the reprojected point, each validated (distance + normal), weights renormalised
