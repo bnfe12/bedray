@@ -31,7 +31,7 @@ visible populated output are separate acceptance requirements; this decision doe
 checks have already passed.
 
 Stage: bounded software voxel rendering on ordinary Vulkan compute. Bedray owns the game data,
-device, queue, targets and settings; Bedray Compute remains a separate companion JAR. Development
+device, queue, targets and settings; Bedray Compute is a separate provider nested in the player JAR. Development
 candidates are for focused personal checks. Compilation and archive inspection do not establish
 presentation, stability, performance or compatibility in Minecraft.
 
@@ -50,7 +50,8 @@ the current query origin after skipping glass or ice.
 The newer Iris post graph adds target formats, clearing, image history and mipmaps. Its borrowed-target
 identity is adopted only when preparing an accepted frame, before allocations/recording can fail.
 Early rejection keeps the previous owner, and image/view identity changes retire its resources first.
-Bedray and Compute still ship separately; the alpha.10 activation fixes below are retained.
+This historical checkpoint shipped Bedray and Compute separately; alpha.13 includes the provider.
+The alpha.10 activation fixes below are retained.
 
 Hardware Path Tracing still has distinct optical limits: realistic water/glass primarily receive the
 sun through the reflected environment, without a separate rough-interface solar estimate. Water-volume
@@ -129,7 +130,7 @@ Ordered by visible effect per unit of work. Each step stays bounded and keeps th
 - Normals, distance and occupancy debug views isolate the compute scene. CPU counters expose accepted cubes,
   models, light and omitted cells. Recording counters do not prove presentation.
 
-The resident window remains **3×3×3 loaded sections (48 blocks per axis)**. Capture polls two sections
+In the legacy snapshot path, the resident window is **3×3×3 loaded sections (48 blocks per axis)**. Capture polls two sections
 per rendered frame, so a stationary window is revisited within 14 rendered frames. Membership follows
 camera section coordinates and includes valid world build sections; 27 residents are not always possible.
 Only already loaded chunks are read, with creation disabled. Missing cells remain unknown.
@@ -161,7 +162,11 @@ transparent composition remain open.
 
 ## Public data contract
 
-`renderer-api` major 1/minor 5 keeps prior constructors and callbacks. Providers explicitly opt into
+`renderer-api` major 1/minor 6 adds opt-in streamed section deltas, render-quality input and immutable
+coverage status. Prior constructors and callbacks remain available. The following describes the retained
+minor 5 payload format; the fixed GPU slab layout applies only to the legacy snapshot path.
+
+Providers explicitly opt into
 `supportsModelGeometry()`; older providers continue receiving the cube-only representation. Minor 5 adds
 `supportsCellTint()`: only opted-in providers receive `SectionTintData`, `CubeFaceMaterial.cellTint` and
 `ModelQuad.CELL_TINT`; others keep tints baked into every palette entry. Minor 5 also adds
@@ -261,8 +266,11 @@ and colored emitter spectra (emitters use the game's block-light tint).
 
 ## Activation
 
-Install the matching **Bedray + Bedray Compute alpha.8 pair**, for the same loader. The companion requires
-host alpha.8 or newer for API minor 5. Updating only one JAR cannot supply the other side's contracts.
+Install the **Bedray alpha.13 player JAR** for the appropriate loader. It includes the matching Compute
+provider and host API 1.6. Remove older external `bedray-compute-*.jar` files to avoid duplicate mod IDs.
+For development, `-host-only.jar` plus the matching separate Compute artifact remains available. The nested
+provider can be extracted from `META-INF/jars/` (Fabric) or `META-INF/jarjar/` (NeoForge); use it with the
+matching host-only artifact, replacing the included-provider JAR. Do not install both distributions together.
 
 Open Sodium Video Settings → **Bedray** → **World Renderer** → **Voxel (Experimental)**.
 The missing add-on and initialization failures appear in Renderer Status. The saved hardware RT mode

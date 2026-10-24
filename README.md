@@ -2,12 +2,13 @@
 
 # Bedray
 
-> **EARLY ALPHA 0.1.0-alpha.1 — this is an evolving project, not a finished version. Major renderer, settings, configuration and compatibility changes are expected; bugs, crashes, visual artifacts and high GPU load are possible. Back up worlds/configuration and test in a separate instance. See the [roadmap](ROADMAP.md).**
+> **EARLY ALPHA — this is an evolving project, not a finished version. Major renderer, settings, configuration and compatibility changes are expected; bugs, crashes, visual artifacts and high GPU load are possible. Back up worlds/configuration and test in a separate instance. See the [roadmap](ROADMAP.md).**
 > Tested only on an **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, NVIDIA driver 617.42**. Other graphics cards have not been checked.
 > **Looking for testers with AMD Radeon (RDNA 2 or newer) and Intel Arc GPUs.** See [Help us test](#help-us-test).
 
 Bedrock RTX-style ray tracing and path tracing for **Minecraft Java Edition**, running on the game's **native Vulkan backend**, as a
-Sodium add-on with its own pages in Sodium Video Settings. It also adds temporal upscalers (DLSS, XeSS, FSR) and denoisers.
+Sodium add-on with a dedicated Bedray settings screen opened from Video Settings. It also adds temporal upscalers
+(DLSS, XeSS, FSR), denoisers and an experimental software voxel provider.
 
 Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by Mojang, Microsoft, NVIDIA, AMD or Intel.
 
@@ -37,11 +38,12 @@ Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by
 
 What works and how well it is proven is in **[docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md)**. Nothing in this alpha is marked stable.
 
-Development alpha.6 also exposes **World Renderer → Voxel (Experimental)** on the main Bedray settings
-page when using the separate Bedray Compute add-on. This is a bounded full-cube diagnostic with baked
-albedo textures and fixed sunlight. Complete materials/light transport and gameplay acceptance remain pending.
-Bedray and Compute remain separate mods;
-use the matching pair for your loader. See [COMPUTE](docs/COMPUTE.md).
+Development alpha.13 includes **Voxel (Experimental)** in the Bedray player JAR. The provider keeps its own
+mod ID and API, nested inside the loader artifact; do not install an additional external Compute JAR.
+It uses ordinary Vulkan compute for textured block models, cutouts and bounded world lighting, with raster
+preservation where representation is incomplete. Its requested coverage follows Minecraft render distance,
+while actual residency is limited by scene memory and incremental loading. Full material/light transport,
+multi-GPU performance and fresh live-game acceptance remain pending. See [COMPUTE](docs/COMPUTE.md).
 
 ## Requirements
 
@@ -63,7 +65,8 @@ Short version (full guide: **[docs/INSTALL.md](docs/INSTALL.md)**):
 
 1. Use a clean instance: Minecraft 26.3 with NeoForge or Fabric.
 2. Put these files into `mods/`: Sodium 0.9.x and the Bedray jar for your loader (one jar, no extra library mod).
-3. Start the game, open **Options, Video Settings** and find the **Bedray ALPHA** pages (Upscaling, Ray Tracing, Advanced and Experimental).
+3. Start the game, open **Options, Video Settings → Bedray Settings** and choose the renderer. The development
+   screen separates renderer, lighting, materials, upscaling, presets and diagnostics; pending changes require Apply.
 
 The release jars include the exact redistributable AMD FidelityFX Vulkan runtime and Intel XeSS runtime, and extract them on first start.
 Without extra files, the built-in upscalers (Bilinear, FSR 1, NIS), XeSS, FSR 3.1 and ray / path tracing with accumulation work.

@@ -89,8 +89,12 @@ def deployJar = { File dir, String taskName, String loaderProject ->
     def pending = new File(dir, ".${rtxJar.name}.pending")
     def target = new File(dir, rtxJar.name)
     def moved = []
+    boolean installed = false
     try {
         java.nio.file.Files.copy(rtxJar.toPath(), pending.toPath())
+        if (java.nio.file.Files.mismatch(rtxJar.toPath(), pending.toPath()) != -1L) {
+            throw new GradleException("[${taskName}] Prepared JAR differs from the source artifact")
+        }
         // Recheck after preparing the copy, immediately before changing installed files.
         requireClosedGame(taskName)
         backupDir.mkdirs()
@@ -99,7 +103,14 @@ def deployJar = { File dir, String taskName, String loaderProject ->
             moved.add(old.name)
         }
         java.nio.file.Files.move(pending.toPath(), target.toPath())
+        installed = true
+        if (java.nio.file.Files.mismatch(rtxJar.toPath(), target.toPath()) != -1L) {
+            throw new GradleException("[${taskName}] Installed JAR differs from the source artifact")
+        }
     } catch (Exception failure) {
+        if (installed) {
+            java.nio.file.Files.move(target.toPath(), pending.toPath())
+        }
         java.nio.file.Files.deleteIfExists(pending.toPath())
         moved.reverseEach { name ->
             java.nio.file.Files.move(new File(backupDir, name).toPath(), new File(dir, name).toPath())
@@ -118,6 +129,7 @@ tasks.register('syncDlssNatives') {
     doLast {
         def target = file("${file(requireProp('testbed_dir')).parentFile}/bedray/natives")
         def dry = isDryRun()
+        if (!dry) requireClosedGame('syncDlssNatives')
         ['vkb_dlss.dll', 'nvngx_dlss.dll'].each { name ->
             def src = file("${requireProp('local_natives_dir')}/${name}")
             if (!src.isFile()) {
@@ -138,7 +150,7 @@ tasks.register('syncDlssNatives') {
 tasks.register('deployTestbed') {
     group = 'deployment'
     description = 'Deploys the Bedray NeoForge jar (the only jar needed) into the test instance mods folder (autotests); -PdryRun=true lists only'
-    dependsOn project(':neoforge').tasks.named('combinedJar'), tasks.named('syncDlssNatives')
+    dependsOn project(':neoforge').tasks.named('combinedJar')
     doLast { deployJar(file(requireProp('testbed_dir')), 'deployTestbed', ':neoforge') }
 }
 
