@@ -79,8 +79,14 @@ public final class RtEmitters {
     private float curRange2;
     private MaterialAtlasBaker.Result currentMat;
     private long lastVersion = -1;
-    /** Hash of the in-range block emitters in world space; ReSTIR history may only survive while it is unchanged. */
+    /**
+     * Hash of the published list's in-range block emitters in world space; ReSTIR history may only survive while it is
+     * unchanged. It is assigned when a pass publishes, not while it walks: the GPU still reads the previous list until then, so
+     * a hash of a half-built scan would reset the reservoirs (a full buffer fill) on every frame of the pass.
+     */
     private long fingerprint = FINGERPRINT_SEED;
+    /** Fingerprint of the pass in progress, folded into {@link #fingerprint} when it publishes. */
+    private long scanFingerprint = FINGERPRINT_SEED;
     private Object lastMaterials;
     private int segment = -1;
     private int count;
@@ -109,10 +115,28 @@ public final class RtEmitters {
     private long lastLogNs;
     /** CPU budget of one frame of the light-list scan: a cold scan (pack switch, world change) spans several frames. */
     static final long SCAN_BUDGET_NS = 4_000_000L;
+
+    /**
+     * Camera movement (blocks) that invalidates a scan in progress: half the scan range, so a pass only restarts for a teleport
+     * or a respawn. The snapshot reaches {@code range} blocks around the camera it was taken with, so after half a range the
+     * near field of the new position is still its content; anything that keeps moving slower than that (sprinting, flying, even
+     * elytra, over the few frames a pass lasts) keeps its progress. A smaller fixed threshold would restart the pass on every
+     * frame of a long flight, and a restart publishes nothing, which is the delay this pass exists to remove.
+     */
+    static double passAbortDistance(float range) {
+        return Math.max(16.0, 0.5 * range);
+    }
     /** Non-null while a section scan is in progress (spread over frames); the GPU keeps the previous list meanwhile. */
-    private java.util.ArrayList<DecodedSection> scanList;
-    private int scanCursor;
-    private long scanVersion = -1;
+    private ScanPass<DecodedSection> scan;
+    /** Per-section step of the pass, hoisted so a frame of the scan allocates nothing. */
+    private final java.util.function.Consumer<DecodedSection> scanStep = this::processSection;
+    /**
+     * Whether the snapshot behind the published list was superseded while it was being scanned. Only diagnostic: the list is
+     * published either way, and a fresh pass replaces it as soon as the scan budget allows.
+     */
+    private boolean scanStale;
+    /** Wall time of that scan, so a republish of the same static selection does not report an ever-growing rebuild time. */
+    private double scanMs;
     private long scanStartNs;
     /** Snapshot of the static (section) selection, so a frame where only entity lights changed skips the section scan. */
     private float[][] staticHeap = new float[64][FLOATS + 1];
@@ -278,7 +302,7 @@ public final class RtEmitters {
                 continue;
             }
             inRangeCounter++;
-            fingerprint = mixEmitter(fingerprint, r, o, dx + originX, dy + originY, dz + originZ);
+            scanFingerprint = mixEmitter(scanFingerprint, r, o, dx + originX, dy + originY, dz + originZ);
             if (targetBudget <= 0) {
                 continue;
             }
@@ -339,17 +363,16 @@ public final class RtEmitters {
     public void update(RtWorld world, MaterialAtlasBaker.Result mat, double camX, double camY, double camZ, float range, int budget,
                        float[] entityQuads, int entityCount) {
         long version = world.structureVersion();
-        if (scanList != null) {
-            if (version == scanVersion) {
-                continueScan(entityQuads, entityCount);
-            } else {
-                scanList = null; // sections changed mid-scan: restart from scratch on this frame
-                scanCursor = 0;
-                startScan(world, mat, camX, camY, camZ, range, budget, version);
-                continueScan(entityQuads, entityCount);
-            }
+        if (scan != null && scan.usableFor(camX, camY, camZ)) {
+            // Sections streaming in must not restart the pass: a restart publishes nothing, and while chunks load the version
+            // changes every frame, so the list would stay at its pre-cave content and a freshly placed torch would light
+            // nothing (owner report 2026-10-24). The pass keeps its progress, publishes its slightly stale result, and the
+            // next update starts a fresh pass because the version moved on.
+            scan.noteVersion(version);
+            continueScan(entityQuads, entityCount);
             return; // the previous light list stays on the GPU until the scan finishes
         }
+        scan = null; // no pass in flight, or the camera left the frame its distance selection was computed in (teleport)
         double moved = Double.isNaN(lastCamX) ? Double.MAX_VALUE
             : Math.max(Math.abs(camX - lastCamX), Math.max(Math.abs(camY - lastCamY), Math.abs(camZ - lastCamZ)));
         if (version == lastVersion && mat == lastMaterials && moved <= MOVE_REBUILD && range == lastRange && budget == lastBudget) {
@@ -405,14 +428,14 @@ public final class RtEmitters {
         inRangeCounter = 0;
         entityInRange = 0;
         seen.clear();
-        fingerprint = FINGERPRINT_SEED;
+        scanFingerprint = FINGERPRINT_SEED;
         staticHeapSize = -1;
         scanStartNs = System.nanoTime();
-        scanVersion = version;
-        scanList = new java.util.ArrayList<>();
-        world.forEachBuiltSection(scanList::add);
+        java.util.ArrayList<DecodedSection> list = new java.util.ArrayList<>();
+        world.forEachBuiltSection(list::add);
         // nearest first: after a cold invalidate (pack switch, world change) the world lights up from the camera outwards
-        scanList.sort(java.util.Comparator.comparingLong(this::sectionDistance2));
+        list.sort(java.util.Comparator.comparingLong(this::sectionDistance2));
+        scan = new ScanPass<>(list, version, camX, camY, camZ, passAbortDistance(range));
     }
 
     private long sectionDistance2(DecodedSection d) {
@@ -423,22 +446,79 @@ public final class RtEmitters {
     }
 
     private void continueScan(float[] entityQuads, int entityCount) {
-        long deadline = System.nanoTime() + SCAN_BUDGET_NS;
-        while (scanCursor < scanList.size()) {
-            processSection(scanList.get(scanCursor));
-            scanCursor++;
-            if (System.nanoTime() > deadline) {
-                return;
-            }
+        if (!scan.advance(System.nanoTime() + SCAN_BUDGET_NS, scanStep)) {
+            return;
         }
-        scanList = null;
-        scanCursor = 0;
+        scanStale = scan.stale();
+        scanMs = (System.nanoTime() - scanStartNs) / 1.0e6;
+        scan = null;
         lastEntityCount = entityCount;
         publish(entityQuads, entityCount);
     }
 
+    /**
+     * One walk over a snapshot of the built sections, spread over frames by a time budget. The world keeps changing under it
+     * ({@link #noteVersion}), and that only marks the result stale: the snapshot sections are immutable, so the pass finishes,
+     * publishes what it saw, and the next frame starts a fresh pass. Restarting on a change would starve the list — sections
+     * stream in during the whole load, no pass would ever reach its end, and nothing new would ever be published.
+     */
+    static final class ScanPass<T> {
+        private final java.util.List<T> items;
+        private final long version;
+        private final double camX;
+        private final double camY;
+        private final double camZ;
+        private final double abortDistance;
+        private int cursor;
+        private boolean stale;
+
+        ScanPass(java.util.List<T> items, long version, double camX, double camY, double camZ, double abortDistance) {
+            this.items = items;
+            this.version = version;
+            this.camX = camX;
+            this.camY = camY;
+            this.camZ = camZ;
+            this.abortDistance = abortDistance;
+        }
+
+        /** World version of this frame: a different one marks the pass stale without throwing its progress away. */
+        void noteVersion(long current) {
+            if (current != version) {
+                stale = true;
+            }
+        }
+
+        /** True when the world changed after the pass started: its result is published anyway, then superseded. */
+        boolean stale() {
+            return stale;
+        }
+
+        /**
+         * False once the camera left the frame the snapshot's distance selection was computed in (a teleport, a respawn): the
+         * pass would publish a list weighted around a place the player is no longer at, so the caller starts a new one.
+         */
+        boolean usableFor(double x, double y, double z) {
+            return Math.max(Math.abs(x - camX), Math.max(Math.abs(y - camY), Math.abs(z - camZ))) <= abortDistance;
+        }
+
+        /**
+         * Processes items until the snapshot is exhausted (true) or the deadline passes (false). A frame always processes at
+         * least one item, so a snapshot larger than the whole budget cannot stall the pass.
+         */
+        boolean advance(long deadlineNs, java.util.function.Consumer<T> step) {
+            while (cursor < items.size()) {
+                step.accept(items.get(cursor));
+                cursor++;
+                if (System.nanoTime() > deadlineNs) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     private void publish(float[] entityQuads, int entityCount) {
-        fingerprint = mix(fingerprint, inRangeCounter);
+        fingerprint = mix(scanFingerprint, inRangeCounter);
         cache.keySet().retainAll(seen);
         // snapshot the static selection: a frame where only entity lights changed skips the whole section scan
         ensureStaticHeapCapacity(Math.max(targetBudget, heapSize));
@@ -512,9 +592,9 @@ public final class RtEmitters {
         if (now - lastLogNs > 5_000_000_000L) {
             lastLogNs = now;
             LOGGER.info(String.format(java.util.Locale.ROOT,
-                "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f origin=(%d,%d,%d)",
+                "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b origin=(%d,%d,%d)",
                 count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), seen.size(),
-                (now - scanStartNs) / 1.0e6, originX, originY, originZ));
+                scanMs, scanStale, originX, originY, originZ));
         }
     }
 
@@ -831,5 +911,6 @@ public final class RtEmitters {
         cache.clear();
         seen.clear();
         currentMat = null;
+        scan = null; // the snapshot would otherwise keep every decoded section of the pass alive
     }
 }
