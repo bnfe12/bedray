@@ -234,6 +234,8 @@ public final class IrisRenderBridge {
     private static int ownedWidth, ownedHeight, ownedFormat;
     private static long ownedDepthView;
     private static WorldFrame.DepthEncoding ownedDepthEncoding;
+    /** Target whose views the owned graph borrows; null means unknown, so any target closing retires. */
+    private static RenderTarget ownedTarget;
     private static Object worldIdentity;
     private static boolean failed, cleanupBroken;
     private static String runtimeStatus = "Experimental post host disabled";
@@ -259,8 +261,12 @@ public final class IrisRenderBridge {
         WorldFrames.invalidateDevice(device);
     }
 
-    /** Retire borrowed target descriptors before vanilla closes target views, not at the next frame. */
-    public static boolean onTargetClosing() {
+    /**
+     * Retire borrowed target descriptors before vanilla closes target views, not at the next frame.
+     * Pooled and auxiliary targets close during normal play; they are not borrowed and must not retire the graph.
+     */
+    public static boolean onTargetClosing(RenderTarget target) {
+        if (ownedTarget != null && ownedTarget != target) return true;
         var device = owner;
         boolean retired = retire();
         if (device != null) WorldFrames.invalidateDevice(device);
@@ -279,7 +285,11 @@ public final class IrisRenderBridge {
         if (failed || cleanupBroken || !Boolean.getBoolean("bedray.iris.post") || ShaderHosts.active() != ShaderHostKind.IRIS) return false;
         var device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null) return false;
-        try { return renderFrame(WorldFrameCapture.capture(device, target, camera, renderer)); }
+        try {
+            boolean rendered = renderFrame(WorldFrameCapture.capture(device, target, camera, renderer));
+            ownedTarget = owner != null ? target : null;
+            return rendered;
+        }
         catch (IllegalArgumentException | IllegalStateException error) {
             runtimeStatus = "World frame unavailable: " + error.getMessage(); return false;
         }
@@ -435,7 +445,7 @@ public final class IrisRenderBridge {
             if (waitResult != VK10.VK_SUCCESS) throw new IllegalStateException("Iris retirement wait failed: " + waitResult);
             if(depthConverter!=null) {depthConverter.close();depthConverter=null;}
             if(executor!=null) {executor.close();executor=null;}
-            activePackName=null; owner=null;ownedGraph=null;ownedDepthView=0;ownedDepthEncoding=null;
+            activePackName=null; owner=null;ownedGraph=null;ownedDepthView=0;ownedDepthEncoding=null;ownedTarget=null;
             resetTiming();
             return true;
         } catch (RuntimeException | LinkageError error) {

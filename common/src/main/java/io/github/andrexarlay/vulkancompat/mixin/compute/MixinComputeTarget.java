@@ -17,7 +17,7 @@ public abstract class MixinComputeTarget {
     private void bedray$retireTargetConsumers(CallbackInfo ci) {
         if (!VulkanBridge.isVulkan()) return;
         boolean compute = ComputeRenderBridge.onTargetClosing((RenderTarget)(Object)this);
-        boolean iris = IrisRenderBridge.onTargetClosing();
+        boolean iris = IrisRenderBridge.onTargetClosing((RenderTarget)(Object)this);
         if ((!compute || !iris) && !ComputeAtlasBridge.isClosing())
             throw new IllegalStateException("Cannot replace world target after renderer cleanup failure; restart the client");
     }
