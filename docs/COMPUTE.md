@@ -1,5 +1,35 @@
 # Bedray Compute — experimental development
 
+## Architecture decision: streamed coverage and one settings owner (2026-10-25)
+
+The current distribution includes the Compute provider as a nested mod inside Bedray. Its mod ID,
+registration and versioned host API remain separate; installing an additional external companion is
+not part of that distribution. Preserve existing hardware RT and Iris functionality while extending
+the software renderer.
+
+Requested horizontal coverage follows Minecraft's effective render distance. Read loaded chunks
+only, across the world's valid section-height range. Use bounded incremental capture and section
+deltas, compact GPU pages and a small section directory. Do not grow the old fixed 27-section model
+slabs into a render-distance-sized dense allocation. Unknown, queued, empty and resident sections
+are distinct states; incomplete coverage retains raster and reports its actual residency and memory
+pressure. CPU capture, retained caches, upload bytes and GPU scene storage all require explicit bounds.
+Queue barriers order in-place page reuse; resource destruction retains the host completion rules.
+
+An additive streaming API keeps the legacy bounded snapshot path for existing providers. The host
+owns loaded-world capture and requested settings; the provider owns residency and publishes immutable
+coverage statistics. No RT extension, buffer device address or assumed frame-completion offset is
+introduced by this decision.
+
+The existing Bedray settings screen becomes the primary interface. Sodium links to that screen.
+Fresh per-screen options reuse the existing definitions and validators, keeping a private draft until
+Apply. Revert and Cancel do not mutate renderer state or a parent Sodium draft. Search, localization,
+renderer-relevant controls, and requested-versus-active status belong in this one interface. Avoid
+per-frame schema rebuilding, file scanning and unmeasured performance promises.
+
+Compilation and packaging verify implementation contracts. A fresh matching-version game run and
+visible populated output are separate acceptance requirements; this decision does not claim those
+checks have already passed.
+
 Stage: bounded software voxel rendering on ordinary Vulkan compute. Bedray owns the game data,
 device, queue, targets and settings; Bedray Compute remains a separate companion JAR. Development
 candidates are for focused personal checks. Compilation and archive inspection do not establish
