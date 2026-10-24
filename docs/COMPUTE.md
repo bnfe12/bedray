@@ -22,6 +22,10 @@ specific status messages and a transition-only `frame_pending` log. `frame_input
 recovery; `scene_recorded` still means command recording, not visual acceptance. The fix needs a fresh
 matching-version game run; earlier offscreen probes did not exercise this host readiness check.
 
+Vanilla's boss-overlay fade can also retain a small negative value after subtraction. The collector
+accepts a finite boss factor and clamps the published value to [0,1], so that ordinary fade-out does
+not disable Compute. Nonfinite input still keeps raster and reports a pending reason.
+
 ## Alpha.8 visual pass
 
 Ordered by visible effect per unit of work. Each step stays bounded and keeps the raster fallback.

@@ -41,7 +41,7 @@ final class ComputeLightingCapture {
         if (!validScalar(light.blockFactor) || !validScalar(light.skyFactor)
             || !validScalar(light.brightness) || !validScalar(light.darknessEffectScale)
             || !validScalar(light.nightVisionEffectIntensity)
-            || !validScalar(light.bossOverlayWorldDarkening))
+            || !Float.isFinite(light.bossOverlayWorldDarkening))
             return pending("Invalid lightmap factors: block=" + light.blockFactor + " sky=" + light.skyFactor
                 + " brightness=" + light.brightness + " darkness=" + light.darknessEffectScale
                 + " nightVision=" + light.nightVisionEffectIntensity + " boss=" + light.bossOverlayWorldDarkening);
@@ -60,7 +60,9 @@ final class ComputeLightingCapture {
         values[19] = light.brightness;
         values[20] = light.darknessEffectScale;
         values[21] = light.nightVisionEffectIntensity;
-        values[22] = light.bossOverlayWorldDarkening;
+        // Vanilla's boss fade subtracts without clamping and can retain a small negative value.
+        // Treat that legitimate state as no darkening, matching the consumer's [0,1] factor.
+        values[22] = Math.clamp(light.bossOverlayWorldDarkening, 0, 1);
         putLinearColor(values, 12, light.blockLightTint);
 
         // Preserve vanilla's actual ambient/night-vision color choice before display-to-linear conversion.
