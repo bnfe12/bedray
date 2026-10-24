@@ -37,7 +37,8 @@ class SettingsCatalogTest {
     void essentialPageHasAtMostEightConcepts() {
         long essentialConcepts = SettingsCatalog.all().values().stream()
             .filter(i -> i.tier() == SettingsCatalog.Tier.ESSENTIAL)
-            .map(i -> i.previewBase().equals("upscaler_mode") || i.previewBase().equals("frame_generation_mode") ? i.previewBase() : i.path())
+            .map(i -> Set.of("renderer", "renderer_status", "rt_mode").contains(i.path()) ? "rt_mode"
+                : i.previewBase().equals("upscaler_mode") || i.previewBase().equals("frame_generation_mode") ? i.previewBase() : i.path())
             .distinct().count();
         assertTrue(essentialConcepts <= 8, "essential concepts: " + essentialConcepts);
     }

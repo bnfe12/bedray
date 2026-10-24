@@ -1,0 +1,22 @@
+apply from: rootProject.file('gradle/loader-module.gradle')
+evaluationDependsOn(':compute-common')
+base { archivesName = 'bedray-compute-neoforge-mc26.3.0' }
+dependencies {
+    compileOnly project(':renderer-api')
+    compileOnly project(':compute-common')
+    compileOnly files("${rootProject.neoforge_libs_dir}/fancymodloader/loader/${rootProject.fml_loader_version}/loader-${rootProject.fml_loader_version}.jar")
+    compileOnly files("${rootProject.neoforge_libs_dir}/mergetool/${rootProject.nf_mergetool_version}/mergetool-${rootProject.nf_mergetool_version}-api.jar")
+}
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('META-INF/neoforge.mods.toml') { expand(version: project.version) }
+}
+jar {
+    from project(':compute-common').sourceSets.main.output
+    from(rootProject.file('LICENSE'))
+    from(rootProject.file('NOTICE'))
+    from(rootProject.file('COPYING'))
+    from(rootProject.file('THIRD_PARTY_NOTICES.md'))
+    apply from: rootProject.file('gradle/build-provenance.gradle')
+    manifest { attributes 'FMLModType': 'MOD' }
+}

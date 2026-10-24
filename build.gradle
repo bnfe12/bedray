@@ -46,7 +46,8 @@ def deployJar = { File dir, String taskName, String loaderProject ->
             delete old
         }
     }
-    def stale = fileTree(dir: dir, include: staleJars).files
+    // Compute is a separate optional mod, not another copy of the host.
+    def stale = fileTree(dir: dir, include: staleJars, exclude: 'bedray-compute*.jar').files
     stale.each { logger.lifecycle("${dry ? '[dry-run] would delete' : 'Deleting'} ${it.name}") }
     if (dry) {
         logger.lifecycle("[dry-run] would copy ${rtxJar.name} -> ${dir}")

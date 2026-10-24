@@ -12,7 +12,8 @@ import java.nio.file.Path;
  * Session state of the shader-host selector. {@link #bootstrap} runs once from RtxBootstrap's early hook (before device
  * creation, no Minecraft class touched) and logs the decision:
  * <pre>[VKB-SHADERHOST] host=native state=READY requested=native detail="..."</pre>
- * Today nothing reads {@link #active()} in the render path: native is the only executor and rt/world runs unchanged.
+ * The selected Iris host supplies an optional fullscreen post stage after the world renderer.
+ * A READY pack probe means compilation succeeded; runtime command/presentation state is separate.
  */
 @Experimental("I0")
 public final class ShaderHosts {
@@ -61,6 +62,16 @@ public final class ShaderHosts {
 
     public static synchronized ShaderHostSelector selector() {
         return selector;
+    }
+
+    /** A compiled graph is not an active renderer after a runtime failure. Preserve the reason on fallback. */
+    public static synchronized void noteIrisFailure(String reason) {
+        if (selector == null || selection == null) return;
+        selector.disableForSession(ShaderHostKind.IRIS, reason);
+        ShaderHostStatus failure = ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.DISABLED_FOR_SESSION, reason);
+        selection = new ShaderHostSelector.Selection(selection.requested(), failure, ShaderHostKind.NATIVE,
+            ShaderHostStatus.of(ShaderHostKind.NATIVE, ShaderHostState.READY, "Native image retained after Iris failure"));
+        LOGGER.warn(selection.logLine());
     }
 
     public static synchronized void setSelectorForTesting(ShaderHostSelector sel, ShaderHostSelector.Selection seln) {

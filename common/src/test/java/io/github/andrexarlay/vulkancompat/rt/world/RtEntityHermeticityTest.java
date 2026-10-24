@@ -5,9 +5,7 @@ import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
 import org.joml.Vector3f;
 import org.junit.jupiter.api.Test;
 
-import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -75,12 +73,8 @@ public class RtEntityHermeticityTest {
     }
 
     @Test
-    public void testShaderSourceRayMasksAndTransmittanceContract() throws Exception {
-        String glsl;
-        try (InputStream is = getClass().getResourceAsStream("/shaders/rt_common.glsl")) {
-            assertNotNull(is, "/shaders/rt_common.glsl must be present on classpath");
-            glsl = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-        }
+    public void testShaderSourceRayMasksAndTransmittanceContract() {
+        String glsl = RtWorldChecks.rtCommon();
 
         assertTrue(glsl.contains("const uint MASK_HERMETIC = MASK_WORLD | MASK_ENTITIES; // 0x03u"),
             "rt_common.glsl must define MASK_HERMETIC = MASK_WORLD | MASK_ENTITIES (0x03)");

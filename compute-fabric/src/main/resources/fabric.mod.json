@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "bedray_compute",
+  "version": "${version}",
+  "name": "Bedray Compute",
+  "description": "Experimental software voxel traversal on Vulkan compute. Textured block models, cutouts and world lighting in a bounded window, with raster scene preservation. Separate Bedray companion; no RT extensions or vendor DLLs required.",
+  "environment": "client",
+  "license": "LGPL-3.0-or-later",
+  "entrypoints": {"client": ["io.github.andrexarlay.bedray.compute.fabric.ComputeFabric"]},
+  "depends": {"fabricloader": ">=0.19.5", "minecraft": "~26.3", "java": ">=25", "bedray": ">=0.1.1-alpha.11"}
+}

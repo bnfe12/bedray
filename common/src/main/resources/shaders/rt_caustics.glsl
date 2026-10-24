@@ -15,14 +15,15 @@ const float WATER_PIXEL_ANGLE = 0.0016;   // radians per pixel of the 3D view (a
 const int WATER_WAVES = 6;
 
 // direction (unit xz), wave number k (rad/block), peak slope, phase offset. Wavelengths 6.3, 3.7, 2.2, 1.4, 0.86, 0.55 blocks.
-// The slope amplitudes are tuned so the sum stays below the 0.15 clamp of the previous model (ripples, not a storm).
+// Slope amplitudes: a calm lake reads as flat glass from a player's viewing angle, so the long swells carry ~0.05 slope
+// (a ~6 deg tilt each, clearly moving highlights) while the short ripples stay small enough not to shimmer.
 const vec4 WATER_WAVE_A[WATER_WAVES] = vec4[WATER_WAVES](
-    vec4(0.800, 0.600, 1.00, 0.024),
-    vec4(-0.700, 0.714, 1.70, 0.024),
-    vec4(0.312, -0.950, 2.90, 0.022),
-    vec4(-0.911, -0.412, 4.60, 0.019),
-    vec4(0.550, 0.835, 7.30, 0.014),
-    vec4(-0.200, -0.980, 11.5, 0.010));
+    vec4(0.800, 0.600, 1.00, 0.050),
+    vec4(-0.700, 0.714, 1.70, 0.048),
+    vec4(0.312, -0.950, 2.90, 0.036),
+    vec4(-0.911, -0.412, 4.60, 0.030),
+    vec4(0.550, 0.835, 7.30, 0.018),
+    vec4(-0.200, -0.980, 11.5, 0.012));
 const float WATER_WAVE_PHASE[WATER_WAVES] = float[WATER_WAVES](0.0, 1.3, 2.9, 4.1, 5.2, 0.7);
 
 // Gradient of the height field (d h/d x, d h/d z) at world xz. footprint: blocks covered by one pixel on the surface (0 = full

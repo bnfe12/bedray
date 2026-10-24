@@ -5,6 +5,7 @@ import io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.EXTOpacityMicromap;
 import org.lwjgl.vulkan.KHRAccelerationStructure;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
@@ -14,10 +15,12 @@ import org.lwjgl.vulkan.VkAccelerationStructureBuildSizesInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
+import org.lwjgl.vulkan.VkAccelerationStructureTrianglesOpacityMicromapEXT;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkMemoryBarrier;
+import org.lwjgl.vulkan.VkMicromapUsageEXT;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +58,20 @@ public final class RtWorld {
     /** Bytes of geometry per quad: positions 48, uvs 32, colours 16, light 16. */
     static final long GEOM_BYTES_PER_QUAD = 112L;
     static final int MAX_SLOTS = 65536;
+    /**
+     * Bit 24 of a vertex light word: the cutout quad belongs to a plant or a leaf (GLSL {@code VERT_FLAG_VEGETATION}).
+     * Byte 3 of a Sodium light word holds the region-local section index, which the decoder drops, so the byte is free.
+     */
+    public static final int VEGETATION_BIT = 1 << 24;
+    /**
+     * Bit 25: the vegetation quad is a face of a full leaf cube, not a thin card (GLSL {@code VERT_FLAG_LEAF_CUBE}). Only a
+     * cube needs the one-block shadow-ray step along its normal; a card, a vine or a pane is cleared by 1 cm.
+     */
+    public static final int LEAF_CUBE_BIT = 1 << 25;
+    /** {@link BlockLookup} answers: not vegetation, a thin plant card, or a face of a full leaf cube. */
+    public static final int FOLIAGE_NONE = 0;
+    public static final int FOLIAGE_CARD = 1;
+    public static final int FOLIAGE_CUBE = 2;
     static final int INSTANCE_BYTES = RtInstanceWriter.SIZEOF;
     static final int DEFER_FRAMES = 3;
     static final long BLOCK_ALIGN = 256L;
@@ -84,9 +101,18 @@ public final class RtWorld {
         final int slot;
         /** {@link #nowTick()} when this section first appeared (kept over rebuilds): drives the fade-in from the haze. */
         int birthTick;
+        /** OMM epoch at build (-1 = built without micromap indexes, e.g. no cutout quads). */
+        final long ommStamp;
+        final long ommGen;
+        final boolean ommRetry;
+        /** Micromap object the BLAS references (0 = none); refcounted in the cache. */
+        final long ommObject;
+        /** {@link #lightHash} of the light words staged into the arena: the vegetation bits, which {@code src.light} lacks. */
+        final long tagHash;
 
         SectionGpu(long key, DecodedSection src, RtArena.Block geom, RtArena.Block blasBlock, long blasHandle,
-                   long blasAddress, int slot) {
+                   long blasAddress, int slot, long ommStamp, long ommGen, boolean ommRetry, long ommObject,
+                   long tagHash) {
             this.key = key;
             this.src = src;
             this.geom = geom;
@@ -94,10 +120,25 @@ public final class RtWorld {
             this.blasHandle = blasHandle;
             this.blasAddress = blasAddress;
             this.slot = slot;
+            this.ommStamp = ommStamp;
+            this.ommGen = ommGen;
+            this.ommRetry = ommRetry;
+            this.ommObject = ommObject;
+            this.tagHash = tagHash;
         }
     }
 
     private record Deferred(long frame, SectionGpu section) {
+    }
+
+    /**
+     * Block-state query that tags the cutout quads with {@link #VEGETATION_BIT} (and {@link #LEAF_CUBE_BIT} for a full
+     * cube) while a section is staged. Called on the render thread, once per cutout quad of a section build. Returns one of
+     * {@link #FOLIAGE_NONE}, {@link #FOLIAGE_CARD}, {@link #FOLIAGE_CUBE}.
+     */
+    @FunctionalInterface
+    public interface BlockLookup {
+        int foliageKind(int x, int y, int z);
     }
 
     private final VkDevice device;
@@ -114,6 +155,7 @@ public final class RtWorld {
     private final long tlasAddress;
     private final long scratchBase;
     private final RtEntityBlas entityBlas;
+    private final OpacityMicromapCache omm;
 
     private final Map<Long, SectionGpu> gpu = new HashMap<>();
     /** Incremented whenever a section enters, leaves or is replaced in {@link #gpu} (emitter list rebuilds key off it). */
@@ -138,6 +180,11 @@ public final class RtWorld {
     private long failedSections = 0;
     private boolean vramBudgetLogged = false;
     private final float[] tmpTransform = new float[12];
+    /** See {@link #setBlockLookup}: null while no world is bound, which leaves every cutout quad untagged. */
+    private BlockLookup blockLookup;
+    private int[] taggedLightScratch = new int[0];
+    private long vegetationQuads;
+    private long vegetationSections;
 
     public RtWorld(VkDevice device) {
         this.device = device;
@@ -158,6 +205,7 @@ public final class RtWorld {
         this.instances = mem.createBuffer("instances", (long) INSTANCE_BYTES * RtConfig.MAX_INSTANCES * STAGING_SEGMENTS,
             RtMemory.USAGE_AS_INPUT, true);
         this.entityBlas = new RtEntityBlas(device, mem);
+        this.omm = OpacityMicromapCache.create(mem);
 
         long tlasSize;
         long tlasScratch;
@@ -194,8 +242,9 @@ public final class RtWorld {
             this.tlasHandle = p.get(0);
             this.tlasAddress = asAddress(stack, tlasHandle);
         }
-        LOGGER.info("[VKB-RT] world_init tlas_bytes={} tlas_scratch_bytes={} scratch_bytes={} scratch_align={} max_instances={} radius_xz={} radius_y={}",
-            tlasSize, tlasScratch, scratchBytes, mem.scratchAlignment, RtConfig.MAX_INSTANCES, "dynamic", "dynamic");
+        LOGGER.info("[VKB-RT] world_init tlas_bytes={} tlas_scratch_bytes={} scratch_bytes={} scratch_align={} max_instances={} radius_xz={} radius_y={} omm={}",
+            tlasSize, tlasScratch, scratchBytes, mem.scratchAlignment, RtConfig.MAX_INSTANCES, "dynamic", "dynamic",
+            omm != null ? "on" : "off");
     }
 
     private long asAddress(MemoryStack stack, long handle) {
@@ -266,6 +315,9 @@ public final class RtWorld {
         }
 
         nearestBuiltSq = Long.MAX_VALUE;
+        if (omm != null) {
+            omm.beforeBuild(cmd, frameIndex); // micromap flips must be recorded before the BLAS builds that reference them
+        }
         boolean copied = uploadIndexBufferIfNeeded(cmd);
         int built = buildPending(cmd, reg, copied);
         long t1 = System.nanoTime();
@@ -306,6 +358,128 @@ public final class RtWorld {
 
     public long identicalSkipped() {
         return identicalSkipped;
+    }
+
+    /** Cutout quads tagged as vegetation since start (cumulative; a rebuild tags again). Zero means the classifier is dead. */
+    public long vegetationQuads() {
+        return vegetationQuads;
+    }
+
+    /** Sections whose build tagged at least one vegetation quad (cumulative). */
+    public long vegetationSections() {
+        return vegetationSections;
+    }
+
+    /**
+     * Installs the vegetation query used while staging cutout quads. Set it before the first {@link #update}: sections
+     * staged without it keep their quads untagged until Sodium re-meshes them.
+     */
+    public void setBlockLookup(BlockLookup lookup) {
+        this.blockLookup = lookup;
+    }
+
+    /** Quads tagged by the last {@link #taggedLight} call (0 when it returned null); feeds the {@code veg=} log line. */
+    private int lastTaggedQuads;
+
+    /**
+     * Light words of the section with {@link #VEGETATION_BIT} (plus {@link #LEAF_CUBE_BIT} on a full leaf cube) set on the
+     * cutout quads whose block is a plant or a leaf, or null when nothing is tagged (the caller then stages
+     * {@code d.light}). The shared scratch array is safe because the caller copies the result into the staging buffer
+     * immediately; {@link #lastTaggedQuads} is only valid until the next call.
+     */
+    int[] taggedLight(DecodedSection d) {
+        lastTaggedQuads = 0;
+        if (blockLookup == null || d.quadsInPass(DecodedSection.PASS_CUTOUT) == 0) {
+            return null;
+        }
+        int words = d.totalQuads() * 4;
+        if (taggedLightScratch.length < words) {
+            taggedLightScratch = new int[words];
+        }
+        lastTaggedQuads = tagVegetation(d, taggedLightScratch, blockLookup);
+        return lastTaggedQuads > 0 ? taggedLightScratch : null;
+    }
+
+    /**
+     * Copies the light words of the cutout pass into {@code out} and sets {@link #VEGETATION_BIT} on the quads of plants
+     * and leaves, adding {@link #LEAF_CUBE_BIT} when the block is a full cube. Returns the number of tagged quads.
+     *
+     * <p>The block of a quad is the quad centre stepped 1 cm against its geometric normal: a full-block face (leaves)
+     * has its centre exactly on a cell boundary, where a plain floor() could resolve to the neighbouring cell.
+     */
+    static int tagVegetation(DecodedSection d, int[] out, BlockLookup lookup) {
+        int words = d.totalQuads() * 4;
+        if (out.length < words) {
+            throw new IllegalArgumentException("out too small: " + out.length + " < " + words);
+        }
+        System.arraycopy(d.light, 0, out, 0, words);
+        int cutout = d.quadsInPass(DecodedSection.PASS_CUTOUT);
+        int first = d.passQuadStart(DecodedSection.PASS_CUTOUT);
+        int tagged = 0;
+        // The faces of one block are usually adjacent in the buffer, and a level lookup is not free: ask once per cell.
+        int lastX = Integer.MIN_VALUE;
+        int lastY = 0;
+        int lastZ = 0;
+        int kind = FOLIAGE_NONE;
+        for (int q = first; q < first + cutout; q++) {
+            int p = q * 12;
+            int n = q * 3;
+            float nx = d.normals[n];
+            float ny = d.normals[n + 1];
+            float nz = d.normals[n + 2];
+            float cx = (d.positions[p] + d.positions[p + 3] + d.positions[p + 6] + d.positions[p + 9]) * 0.25f;
+            float cy = (d.positions[p + 1] + d.positions[p + 4] + d.positions[p + 7] + d.positions[p + 10]) * 0.25f;
+            float cz = (d.positions[p + 2] + d.positions[p + 5] + d.positions[p + 8] + d.positions[p + 11]) * 0.25f;
+            int bx = (int) Math.floor(d.sectionX * 16 + cx - nx * 0.01f);
+            int by = (int) Math.floor(d.sectionY * 16 + cy - ny * 0.01f);
+            int bz = (int) Math.floor(d.sectionZ * 16 + cz - nz * 0.01f);
+            if (bx != lastX || by != lastY || bz != lastZ) {
+                kind = lookup.foliageKind(bx, by, bz);
+                lastX = bx;
+                lastY = by;
+                lastZ = bz;
+            }
+            if (kind == FOLIAGE_NONE) {
+                continue;
+            }
+            int bits = VEGETATION_BIT;
+            if (kind == FOLIAGE_CUBE && axisAligned(nx, ny, nz)) {
+                bits |= LEAF_CUBE_BIT;
+            }
+            int v = q * 4;
+            out[v] |= bits;
+            out[v + 1] |= bits;
+            out[v + 2] |= bits;
+            out[v + 3] |= bits;
+            tagged++;
+        }
+        return tagged;
+    }
+
+    /**
+     * A full leaf cube always shows an axis-aligned face. A resource pack or a modded {@code LeavesBlock} drawn as a cross
+     * is a card: the one-block step along a diagonal normal would leave the caster cell on the wrong side.
+     */
+    private static boolean axisAligned(float nx, float ny, float nz) {
+        return Math.abs(nx) > 0.99f || Math.abs(ny) > 0.99f || Math.abs(nz) > 0.99f;
+    }
+
+    /**
+     * Hash of the light words a build would stage. The section identity test compares {@code d.light}, which does not carry
+     * the vegetation bits, so a re-mesh with the same geometry but a different block classification would otherwise keep the
+     * tags of the previous build.
+     */
+    private long stagedLightHash(DecodedSection d) {
+        int[] tagged = taggedLight(d);
+        return lightHash(tagged != null ? tagged : d.light, d.totalQuads() * 4);
+    }
+
+    private static long lightHash(int[] words, int count) {
+        long h = 0xcbf29ce484222325L;
+        for (int i = 0; i < count; i++) {
+            h = (h ^ (words[i] & 0xFFFFFFFFL)) * 0x100000001b3L;
+        }
+        return h;
     }
 
     static boolean sameGeometry(DecodedSection a, DecodedSection b) {
@@ -359,7 +533,8 @@ public final class RtWorld {
             if (InstanceMath.inRadius(d.sectionX, d.sectionY, d.sectionZ, camSx, camSy, camSz,
                 radiusXz, radiusY)) {
                 SectionGpu g = gpu.get(d.key);
-                if (g == null || g.src != d) {
+                if (g == null || g.src != d
+                    || (omm != null && omm.needsRebuild(g.ommStamp, g.ommGen, g.ommRetry))) {
                     list.add(d);
                 }
             }
@@ -431,6 +606,8 @@ public final class RtWorld {
     private static final class BuildItem {
         VkAccelerationStructureGeometryKHR.Buffer geometries;
         VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges;
+        VkAccelerationStructureTrianglesOpacityMicromapEXT ommStruct;
+        VkMicromapUsageEXT.Buffer ommUsage;
         long dstHandle;
         long scratchAddress;
 
@@ -440,6 +617,12 @@ public final class RtWorld {
             }
             if (ranges != null) {
                 ranges.free();
+            }
+            if (ommStruct != null) {
+                ommStruct.free();
+            }
+            if (ommUsage != null) {
+                ommUsage.free();
             }
         }
     }
@@ -458,10 +641,13 @@ public final class RtWorld {
                     continue;
                 }
                 SectionGpu prev = gpu.get(d.key);
-                if (prev != null && sameGeometry(prev.src, d)) {
+                if (prev != null && sameGeometry(prev.src, d)
+                    && prev.tagHash == stagedLightHash(d)
+                    && (omm == null || !omm.needsRebuild(prev.ommStamp, prev.ommGen, prev.ommRetry))) {
                     // Sodium re-meshed the section with identical output (block/light updates elsewhere in it): keep the BLAS,
                     // swap the source only. No rebuild, and no reason to reset the temporal accumulation.
-                    gpu.put(d.key, new SectionGpu(d.key, d, prev.geom, prev.blasBlock, prev.blasHandle, prev.blasAddress, prev.slot));
+                    gpu.put(d.key, new SectionGpu(d.key, d, prev.geom, prev.blasBlock, prev.blasHandle, prev.blasAddress,
+                        prev.slot, prev.ommStamp, prev.ommGen, prev.ommRetry, prev.ommObject, prev.tagHash));
                     identicalSkipped++;
                     pendingIdx++;
                     continue;
@@ -545,14 +731,69 @@ public final class RtWorld {
             return null;
         }
 
+        // Opacity micromaps: intern the UV triangles of the cutout pass BEFORE the size query, so the geometry's
+        // pNext chain (and therefore the reported sizes) matches the build.
+        int cutoutQuads = d.quadsInPass(DecodedSection.PASS_CUTOUT);
+        int[] ommIdx = null;
+        boolean ommRetry = false;
+        int ommReal = 0;
+        if (omm != null && omm.enabled() && cutoutQuads > 0) {
+            ommIdx = new int[cutoutQuads * 2];
+            int cutoutStart = d.passQuadStart(DecodedSection.PASS_CUTOUT);
+            for (int i = 0; i < cutoutQuads; i++) {
+                int b = (cutoutStart + i) * 8;
+                float u0 = d.uvs[b], v0 = d.uvs[b + 1];
+                float u1 = d.uvs[b + 2], v1 = d.uvs[b + 3];
+                float u2 = d.uvs[b + 4], v2 = d.uvs[b + 5];
+                float u3 = d.uvs[b + 6], v3 = d.uvs[b + 7];
+                int r0 = omm.intern(u0, v0, u1, v1, u2, v2);   // triangle (0,1,2)
+                int r1 = omm.intern(u2, v2, u3, v3, u0, v0);   // triangle (2,3,0)
+                ommIdx[2 * i] = (r0 & 3) == OpacityMicromapCache.ST_OK ? (r0 >> 2) : OpacityMicromapCache.SPECIAL_UNKNOWN;
+                ommIdx[2 * i + 1] = (r1 & 3) == OpacityMicromapCache.ST_OK ? (r1 >> 2) : OpacityMicromapCache.SPECIAL_UNKNOWN;
+                if ((r0 & 3) == OpacityMicromapCache.ST_OK) {
+                    ommReal++;
+                } else if ((r0 & 3) == OpacityMicromapCache.ST_RETRY) {
+                    ommRetry = true;
+                }
+                if ((r1 & 3) == OpacityMicromapCache.ST_OK) {
+                    ommReal++;
+                } else if ((r1 & 3) == OpacityMicromapCache.ST_RETRY) {
+                    ommRetry = true;
+                }
+            }
+        }
+
         long geomBytes = GEOM_BYTES_PER_QUAD * quads; // [positions][uvs][colours][light]
+        if (ommIdx != null) {
+            geomBytes += 8L * cutoutQuads;            // uint32 micromap index per cutout triangle
+        }
+        // One micromap handle for the size query, the build record and the section entry: a flip cannot happen inside a
+        // build today, and reading it three times would silently break the day one can.
+        long ommObject = ommIdx != null && ommReal > 0 ? omm.currentObjectHandle() : 0L;
+        if (geomBytes > STAGING_SEGMENT_BYTES) {
+            failedSections++;
+            LOGGER.error("[VKB-RT] FAILED stage=section_staging result=need={} segment={} section=({},{},{}) (section skipped)",
+                geomBytes, STAGING_SEGMENT_BYTES, d.sectionX, d.sectionY, d.sectionZ);
+            return SKIP;
+        }
         long blasSize;
         long buildScratch;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureGeometryKHR.Buffer g = VkAccelerationStructureGeometryKHR.calloc(geomCount, stack);
             int[] primCounts = new int[geomCount];
             for (int i = 0; i < geomCount; i++) {
-                fillTriangleGeometry(g.get(i), passId[i], passCount[i], 0L, 0L);
+                fillTriangleGeometry(g.get(i), passId[i], passCount[i], 0L, 0L, 0L);
+                if (ommObject != 0L && passId[i] == DecodedSection.PASS_CUTOUT) {
+                    VkMicromapUsageEXT.Buffer usage = VkMicromapUsageEXT.calloc(1, stack).count(ommReal)
+                        .subdivisionLevel(OpacityMicromapCache.LEVEL)
+                        .format(EXTOpacityMicromap.VK_OPACITY_MICROMAP_FORMAT_4_STATE_EXT);
+                    VkAccelerationStructureTrianglesOpacityMicromapEXT ommStruct =
+                        VkAccelerationStructureTrianglesOpacityMicromapEXT.calloc(stack).sType$Default()
+                            .indexType(VK10.VK_INDEX_TYPE_UINT32).indexStride(4)
+                            .usageCountsCount(1).pUsageCounts(usage)
+                            .micromap(ommObject);
+                    g.get(i).geometry().triangles().pNext(ommStruct.address());
+                }
                 primCounts[i] = passCount[i] * 2;
             }
             VkAccelerationStructureBuildGeometryInfoKHR info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(stack)
@@ -590,14 +831,23 @@ public final class RtWorld {
         long blasHandle = 0L;
         BuildItem item = new BuildItem();
         try {
-            // Stage [positions][uvs] and copy to the arena block.
+            // Stage [positions][uvs][colours][light] (+ the micromap index buffer of the cutout pass) and copy to the arena block.
             long tc = RtTimings.start();
             FloatBuffer fb = MemoryUtil.memFloatBuffer(staging.mapped + stagingOffset, quads * 20);
             fb.put(d.positions, 0, quads * 12);
             fb.put(d.uvs, 0, quads * 8);
             java.nio.IntBuffer ib = MemoryUtil.memIntBuffer(staging.mapped + stagingOffset + 80L * quads, quads * 8);
             ib.put(d.colors, 0, quads * 4);
-            ib.put(d.light, 0, quads * 4);
+            int[] tagged = taggedLight(d);
+            ib.put(tagged != null ? tagged : d.light, 0, quads * 4);
+            long tagHash = lightHash(tagged != null ? tagged : d.light, quads * 4);
+            if (lastTaggedQuads > 0) {
+                vegetationQuads += lastTaggedQuads;
+                vegetationSections++;
+            }
+            if (ommIdx != null) {
+                MemoryUtil.memIntBuffer(staging.mapped + stagingOffset + 112L * quads, ommIdx.length).put(ommIdx);
+            }
             copyBuffer(cmd, staging.handle, stagingOffset, geomBlock.buffer(), geomBlock.offset, geomBytes);
             RtTimings.stop(RtTimings.Phase.STAGE_COPY, tc);
 
@@ -616,8 +866,20 @@ public final class RtWorld {
                 item.geometries = VkAccelerationStructureGeometryKHR.calloc(geomCount);
                 item.ranges = VkAccelerationStructureBuildRangeInfoKHR.calloc(geomCount);
                 for (int i = 0; i < geomCount; i++) {
+                    long opacityPNext = 0L;
+                    if (ommObject != 0L && passId[i] == DecodedSection.PASS_CUTOUT) {
+                        item.ommUsage = VkMicromapUsageEXT.calloc(1).count(ommReal)
+                            .subdivisionLevel(OpacityMicromapCache.LEVEL)
+                            .format(EXTOpacityMicromap.VK_OPACITY_MICROMAP_FORMAT_4_STATE_EXT);
+                        item.ommStruct = VkAccelerationStructureTrianglesOpacityMicromapEXT.calloc().sType$Default()
+                            .indexType(VK10.VK_INDEX_TYPE_UINT32).indexStride(4)
+                            .usageCountsCount(1).pUsageCounts(item.ommUsage)
+                            .micromap(ommObject)
+                            .indexBuffer(a -> a.deviceAddress(geomBlock.address() + GEOM_BYTES_PER_QUAD * quads));
+                        opacityPNext = item.ommStruct.address();
+                    }
                     fillTriangleGeometry(item.geometries.get(i), passId[i], passCount[i],
-                        geomBlock.address() + (long) passStart[i] * 48L, indexBuf.address);
+                        geomBlock.address() + (long) passStart[i] * 48L, indexBuf.address, opacityPNext);
                     item.ranges.get(i).primitiveCount(passCount[i] * 2).primitiveOffset(0).firstVertex(0).transformOffset(0);
                 }
                 item.dstHandle = blasHandle;
@@ -632,7 +894,12 @@ public final class RtWorld {
                 int birth = previous != null ? previous.birthTick : nowTick();   // a rebuild (block change) does not fade again
                 writeTableEntry(slot, geomBlock.address(), quads, passStart, geomCount, passBits | (birth << 8),
                     d.sectionX, d.sectionY, d.sectionZ);
-                SectionGpu entry = new SectionGpu(d.key, d, geomBlock, blasBlock, blasHandle, blasAddress, slot);
+                if (omm != null && ommObject != 0L) {
+                    omm.addRef(ommObject);
+                }
+                SectionGpu entry = new SectionGpu(d.key, d, geomBlock, blasBlock, blasHandle, blasAddress, slot,
+                    omm != null && cutoutQuads > 0 ? omm.currentEpoch() : -1L,
+                    omm != null ? omm.currentGen() : 0L, ommRetry, ommObject, tagHash);
                 entry.birthTick = birth;
                 SectionGpu old = gpu.put(d.key, entry);
                 structureVersion++;
@@ -654,17 +921,20 @@ public final class RtWorld {
     }
 
     private static void fillTriangleGeometry(VkAccelerationStructureGeometryKHR geom, int pass, int quadCount,
-                                             long vertexAddress, long indexAddress) {
+                                             long vertexAddress, long indexAddress, long opacityMicromapPNext) {
         geom.sType$Default()
             .geometryType(KHRAccelerationStructure.VK_GEOMETRY_TYPE_TRIANGLES_KHR)
             .flags(pass == DecodedSection.PASS_SOLID ? KHRAccelerationStructure.VK_GEOMETRY_OPAQUE_BIT_KHR : 0);
-        geom.geometry().triangles().sType$Default()
+        var triangles = geom.geometry().triangles().sType$Default()
             .vertexFormat(VK10.VK_FORMAT_R32G32B32_SFLOAT)
             .vertexStride(12)
             .maxVertex(quadCount * 4 - 1)
             .indexType(VK10.VK_INDEX_TYPE_UINT32);
-        geom.geometry().triangles().vertexData().deviceAddress(vertexAddress);
-        geom.geometry().triangles().indexData().deviceAddress(indexAddress);
+        if (opacityMicromapPNext != 0L) {
+            triangles.pNext(opacityMicromapPNext);
+        }
+        triangles.vertexData().deviceAddress(vertexAddress);
+        triangles.indexData().deviceAddress(indexAddress);
     }
 
     /**
@@ -804,6 +1074,9 @@ public final class RtWorld {
             KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, g.blasHandle, null);
             blasArena.free(g.blasBlock);
             geomArena.free(g.geom);
+            if (omm != null) {
+                omm.releaseRef(g.ommObject);
+            }
             freeSlots.push(g.slot);
         }
     }
@@ -826,11 +1099,19 @@ public final class RtWorld {
         geomArena.destroy();
         blasArena.destroy();
         entityBlas.close();
+        if (omm != null) {
+            omm.destroy();
+        }
         RtEntityGeometryManager.INSTANCE.closeAll(mem);
         mem.close();
     }
 
     public RtEntityBlas entityBlas() {
         return entityBlas;
+    }
+
+    /** Opacity micromap cache of this world (null when the session gate failed; also the material atlas sink). */
+    public OpacityMicromapCache ommCache() {
+        return omm;
     }
 }

@@ -1,12 +1,14 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings;
+import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.config.TextureLodBias;
 import io.github.andrexarlay.vulkancompat.rtx.config.UpscalerMode;
 import io.github.andrexarlay.vulkancompat.rtx.config.UpscalerModes;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
+import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -101,9 +103,14 @@ public final class BedrayConfigScreen extends Screen {
                 row.onClick.run();
                 // Presets and resets can change several rows at once.
                 for (int index = 0; index < rowButtons.size(); index++) {
-                    rowButtons.get(index).setMessage(Component.literal(currentRows.get(index).valueText.get()));
+                    OptionRow changed = currentRows.get(index);
+                    String value = changed.valueText.get();
+                    rowButtons.get(index).setMessage(Component.literal(value));
+                    rowButtons.get(index).setTooltip(net.minecraft.client.gui.components.Tooltip.create(Component.literal(changed.hint + "\n" + value)));
                 }
-            }).bounds(btnX, rowY, btnW, 20).build();
+            }).bounds(btnX, rowY, btnW, 20)
+                .tooltip(net.minecraft.client.gui.components.Tooltip.create(Component.literal(row.hint + "\n" + row.valueText.get())))
+                .build();
 
             rowButtons.add(btn);
             addRenderableWidget(btn);
@@ -140,6 +147,22 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     @Override
+    public void tick() {
+        super.tick();
+        if (selectedCategory == 0) {
+            // These values change on the render thread after a request, without another settings click.
+            for (int index = 0; index < rowButtons.size(); index++) {
+                String text = currentRows.get(index).valueText.get();
+                Button button = rowButtons.get(index);
+                if (!button.getMessage().getString().equals(text)) {
+                    button.setMessage(Component.literal(text));
+                    button.setTooltip(net.minecraft.client.gui.components.Tooltip.create(Component.literal(currentRows.get(index).hint + "\n" + text)));
+                }
+            }
+        }
+    }
+
+    @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (maxScroll > 0 && mouseY >= listTop && mouseY < height - 42) {
             scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset - (int) (scrollY * 24.0)));
@@ -165,8 +188,47 @@ public final class BedrayConfigScreen extends Screen {
     private void buildCategoryRows() {
         switch (selectedCategory) {
             case 0 -> { // Ray Tracing & Engine
+                currentRows.add(new OptionRow("Iris Vulkan (Experimental)", "Post-only GLSL compatibility host. General shaderpack support is still in development.",
+                    io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge::runtimeStatus, () -> {}));
+                currentRows.add(new OptionRow(text("bedray.opt.renderer", "World Renderer"),
+                    text("bedray.opt.renderer.desc", "Hardware RT or experimental voxel diagnostics. Voxel requires the Bedray Compute add-on; it uses bilinear scaling and disables frame generation."),
+                    () -> VulkanSodiumConfig.rendererName(VulkanRtxConfig.selectedRenderer()).getString(),
+                    () -> {
+                        VulkanSodiumConfig.applyRendererFromUi(next(VulkanRtxConfig.selectedRenderer(), VulkanRtxConfig.RendererSelection.values()));
+                        VulkanRtxConfig.save();
+                    }));
+                currentRows.add(new OptionRow(text("bedray.opt.renderer_status", "Renderer Status"),
+                    text("bedray.opt.renderer_status.desc", "Reports the requested renderer and host command recording. A recorded frame does not establish gameplay compatibility."),
+                    VulkanSodiumConfig::rendererStatus, () -> {}));
+                currentRows.add(new OptionRow(text("bedray.compute.data", "Compute Scene Data"),
+                    text("bedray.compute.data.desc", "A 48-block window of loaded sections. Unsupported shapes and textures are omitted."),
+                    () -> GraphicsBackendRegistry.backend()==null
+                        ? text("bedray.renderer.status.missing", "Unavailable: install the matching Bedray Compute add-on")
+                        : GraphicsBackendRegistry.backend().sceneDetail(), () -> {}));
+                if (SettingsCatalog.expertUi()) {
+                    currentRows.add(new OptionRow(text("bedray.opt.compute_scene", "Compute Diagnostic Scene"),
+                        text("bedray.opt.compute_scene.desc", "Session diagnostic scene for the selected voxel renderer. Synthetic uses a fixed test scene; live mode draws opaque occupancy."),
+                        () -> VulkanRtxConfig.voxelRendererSelected()
+                            ? VulkanSodiumConfig.computeSceneName(VulkanRtxConfig.computeDiagnosticScene()).getString()
+                            : text("bedray.compute.select_voxel", "Select Voxel first"),
+                        () -> {
+                            if (!VulkanRtxConfig.voxelRendererSelected()) return;
+                            GraphicsBackendRegistry.SceneMode[] scenes = {GraphicsBackendRegistry.SceneMode.SYNTHETIC, GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE};
+                            VulkanSodiumConfig.applyComputeSceneFromUi(next(VulkanRtxConfig.computeDiagnosticScene(), scenes));
+                            VulkanRtxConfig.save();
+                        }));
+                    currentRows.add(new OptionRow(text("bedray.opt.compute_debug_view", "Compute Debug View"),
+                        text("bedray.opt.compute_debug_view.desc", "Inspect opaque occupancy shading, normals, ray distance or unsupported and missing cells."),
+                        () -> text("bedray.compute.view." + GraphicsBackendRegistry.debugView().name().toLowerCase(java.util.Locale.ROOT), GraphicsBackendRegistry.debugView().name()),
+                        () -> {
+                            if (GraphicsBackendRegistry.backend()==null || !GraphicsBackendRegistry.backend().supportsDebugViews()) return;
+                            GraphicsBackendRegistry.setDebugView(next(GraphicsBackendRegistry.debugView(), GraphicsBackendRegistry.DebugView.values()));
+                        }));
+                }
+
                 currentRows.add(new OptionRow("Ray Tracing Mode", "Master renderer switch (Off, Fast Ray Tracing, Path Tracing)",
                     () -> {
+                        if (VulkanRtxConfig.voxelRendererSelected()) return text("bedray.renderer.hardware_inactive", "Saved hardware mode (inactive)");
                         RtMode m = VulkanRtxConfig.rtMode;
                         if (m == RtMode.OFF) return "Off";
                         if (m == RtMode.PATH_TRACED) return "Path Tracing (Full)";
@@ -174,10 +236,11 @@ public final class BedrayConfigScreen extends Screen {
                         return m.logName().toUpperCase(java.util.Locale.ROOT);
                     },
                     () -> {
+                        if (VulkanRtxConfig.voxelRendererSelected()) return;
                         RtMode[] modes = VulkanRtxConfig.raysUnlocked()
                             ? new RtMode[]{RtMode.OFF, RtMode.PATH_TRACED, RtMode.RAY_TRACED}
                             : new RtMode[]{RtMode.OFF, RtMode.PATH_TRACED};
-                        VulkanRtxConfig.setRtMode(next(VulkanRtxConfig.rtMode, modes));
+                        VulkanSodiumConfig.applyRtModeFromUi(next(VulkanRtxConfig.rtMode, modes));
                         VulkanRtxConfig.save();
                     }));
 
@@ -421,11 +484,13 @@ public final class BedrayConfigScreen extends Screen {
                         VulkanRtxConfig.save();
                     }));
 
-                currentRows.add(new OptionRow("Frame Generation", "NVIDIA Streamline DLSS-G / AMD FSR 3 frame generator",
-                    () -> VulkanRtxConfig.frameGenerationSetting.getLabel(),
+                currentRows.add(new OptionRow("Frame Generation", "NVIDIA Streamline DLSS-G / AMD FSR 3 frame generator. Disabled for voxel diagnostics.",
+                    () -> FrameGenSettings.mode().name(),
                     () -> {
-                        VulkanRtxConfig.frameGenerationSetting = next(VulkanRtxConfig.frameGenerationSetting,
-                            VulkanRtxConfig.FrameGenerationSetting.values());
+                        if (VulkanRtxConfig.voxelRendererSelected()) return;
+                        FrameGenOptions.UiMode current = FrameGenOptions.UiMode.valueOf(FrameGenSettings.mode().name());
+                        FrameGenOptions.UiMode[] modes = FrameGenOptions.allowedModes().toArray(FrameGenOptions.UiMode[]::new);
+                        FrameGenSettings.setMode(FrameGenSettings.Mode.valueOf(next(current, modes).name()));
                         VulkanRtxConfig.save();
                     }));
             }
@@ -516,6 +581,10 @@ public final class BedrayConfigScreen extends Screen {
             }
         }
         return array[0];
+    }
+
+    private static String text(String key, String fallback) {
+        return Component.translatableWithFallback(key, fallback).getString();
     }
 
     private static int next(int current, int[] array) {

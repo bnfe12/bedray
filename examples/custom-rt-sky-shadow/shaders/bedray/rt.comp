@@ -1,0 +1,72 @@
+#version 460
+// Minimal Bedray custom RT stage (contract: docs/CUSTOM_RT_SHADERS.md).
+// For every pixel it rebuilds the primary ray from the BedrayFrame camera, finds the first opaque hit in the
+// Bedray scene TLAS with a ray query, then casts one shadow ray toward a fixed sky direction and darkens the
+// world color where that ray is blocked. Its only purpose is to prove the host path: TLAS + camera + color +
+// depth in, one RGBA16F image out.
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT bedrayScene;
+
+layout(std140, set = 0, binding = 1) uniform BedrayFrame {
+    mat4 projection;         // GL convention (z in [-w, w]), no view bobbing
+    mat4 projectionInverse;
+    mat4 modelView;          // camera-relative: bobbing * view rotation, no world translation
+    mat4 modelViewInverse;
+    vec4 cameraPosition;     // xyz: world position of the camera (float); the scene TLAS is relative to it
+    vec4 viewSize;           // width, height, 1/width, 1/height
+    vec4 timing;             // frameTimeCounter (s, wraps at 3600), frameTime (s), frameCounter, 0
+    vec4 depthInfo;          // near, far, depthAvailable (1/0), 0
+} frame;
+
+layout(set = 0, binding = 2) uniform sampler2D bedraySceneColor;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D bedrayOutput;
+layout(set = 0, binding = 4) uniform sampler2D bedrayDepth; // RT primary-ray distance, 1e6 = no hit
+
+const uint MASK_SECTIONS = 0x01u;
+const vec3 SKY_DIRECTION = vec3(0.32, 0.90, 0.28);
+
+// Distance to the first opaque triangle, or -1 when nothing is hit within tMax.
+float traceFirstHit(vec3 origin, vec3 direction, float tMin, float tMax) {
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, bedrayScene, gl_RayFlagsOpaqueEXT, MASK_SECTIONS, origin, tMin, direction, tMax);
+    while (rayQueryProceedEXT(query)) { }
+    if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        return rayQueryGetIntersectionTEXT(query, true);
+    }
+    return -1.0;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(frame.viewSize.xy);
+    if (pixel.x >= size.x || pixel.y >= size.y) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) * frame.viewSize.zw;
+    vec4 color = texture(bedraySceneColor, uv);
+
+    // Row 0 is the bottom row (GL orientation), so texel coordinates map to NDC directly.
+    vec4 clip = vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    vec4 view = frame.projectionInverse * clip;
+    vec3 viewDir = normalize(view.xyz / view.w);
+    vec3 origin = (frame.modelViewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    vec3 direction = normalize((frame.modelViewInverse * vec4(viewDir, 0.0)).xyz);
+
+    float t;
+    if (frame.depthInfo.z > 0.5) {
+        float d = texture(bedrayDepth, uv).r;
+        t = d < 1.0e5 ? d : -1.0;
+    } else {
+        t = traceFirstHit(origin, direction, frame.depthInfo.x, 512.0);
+    }
+
+    if (t > 0.0) {
+        // Step back toward the camera so the shadow ray does not start inside the surface it left.
+        vec3 hit = origin + direction * max(t - 0.02, 0.0);
+        bool blocked = traceFirstHit(hit, normalize(SKY_DIRECTION), 0.01, 256.0) > 0.0;
+        if (blocked) color.rgb *= 0.65;
+    }
+    imageStore(bedrayOutput, pixel, color);
+}

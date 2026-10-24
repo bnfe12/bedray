@@ -55,16 +55,19 @@ import java.util.Locale;
 public final class RtFrameRenderer {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     private static final int STATS_SLOTS = 3;
+    // GPU spans of the RT command buffer, logged by RtGpuTimer (-Dvkrtx.rt.gpuTimers=false disables it)
+    private static final int SPAN_WORLD = 0;
+    private static final int SPAN_RAYS = 1;
+    private static final int SPAN_DENOISE = 2;
+    private static final int SPAN_ATMO = 3;
     /**
-     * Per-frame slot (host visible, read by the shaders through pc.statsAddr): 0 hits, 4 samples, 8 log-luminance sum (zeroed
-     * on the GPU), 16 vec3 camera position relative to the emitter origin, 32 uint64 emitter buffer address, 40 emitter count,
-     * 44 float auto exposure, 48 GI distance, 52 emissive distance, 56 AO radius (ray mode, blocks), 60 auto-normal strength,
-     * 64 sun angular radius, 68 history cap, 80 mat4 previous view-projection, 144 vec3 camera move since the previous frame,
-     * 160..247 fog / entity fields, 256..383 the vanilla sky block (RtSkyState, StatsBuf sky* in rt_common.glsl),
-     * 384..399 the bobbed camera origin relative to the raw camera position; 400..415 the raw camera-forward axis for NRD's
-     * view-Z guide (StatsBuf cameraBobOrigin/cameraForward).
+     * Per-frame slot layout is {@link RtStatsLayout} (offsets shared with buffer StatsBuf in rt_common.glsl and verified
+     * against the GLSL declaration by RtStatsLayoutTest); this renderer writes hits/samples/camera/emitter/exposure fields,
+     * RtSkyState the sky block, RtFogState the fog block.
      */
-    private static final int STATS_STRIDE = 512;
+    private static final int STATS_STRIDE = RtStatsLayout.SLOT_STRIDE;
+    /** Bytes per pixel of one ReSTIR parity half (Reservoir in rt_common.glsl, cross-checked by RtStatsLayoutTest). */
+    static final int RESERVOIR_BYTES = 64;
     /** Rebuilt sections closer than this (squared section distance, ~2 sections) reset the path tracing accumulation. */
     static final long SCENE_CHANGE_RADIUS_SQ = 8;
 
@@ -98,15 +101,24 @@ public final class RtFrameRenderer {
     private static RtMemory.Img compositeOutput;
     private static boolean outputReady = false;
     private static RtMemory.Buf statsBuf;
+    /** GPU timestamp spans of the RT frame; on by default, disabled with -Dvkrtx.rt.gpuTimers=false. */
+    private static RtGpuTimer gpuTimer;
     /** God rays, bloom and sun glare post passes (Bedray atmosphere), run on the final image after the denoiser. */
     private static final RtAtmosphere atmosphere = new RtAtmosphere();
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtMemory.Buf entityMotionBuf;
+    /** ReSTIR DI reservoirs of rt_rays.comp: two parity halves of 64 B per pixel (ReservoirBuf in rt_common.glsl). */
+    private static RtMemory.Buf reservoirBuf;
+    private static long reservoirPixels = -1L;
+    private static long reservoirLightFingerprint = Long.MIN_VALUE;
+    private static boolean reservoirResetRequested = true;
     private static final boolean[] statsWritten = new boolean[STATS_SLOTS];
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
     private static double lastHitPct = -1.0;
+    /** Share of the hit pixels whose key light reached them through a leaf card (1-in-16 mask, like hist_pct). */
+    private static double lastLeafPct = -1.0;
     private static double passMsInWindow = 0.0;
     private static int passFramesInWindow = 0;
     private static final RtFrameParams params = new RtFrameParams();
@@ -141,6 +153,8 @@ public final class RtFrameRenderer {
     private static volatile String denoiserResolutionReason = "not_resolved";
     /** Last native create/record failure for the current world; retained for F3 after fallback/drop. */
     private static volatile String denoiserRuntimeFailure;
+    /** Set when this frame's RT colour was resolved by a same-resolution temporal denoiser (NRD / DLSS-RR). */
+    private static volatile boolean frameColorTemporallyResolved = false;
 
     private static long windowStartNs = 0L;
     private static int builtInWindow = 0;
@@ -272,6 +286,19 @@ public final class RtFrameRenderer {
         return outputDepth != null ? outputDepth.image : 0L;
     }
 
+    /**
+     * Motion vectors the denoiser itself reprojected with (RG16F, render resolution, GENERAL layout), 0 = none.
+     * DLSS-RR derives them from the RT linear view Z with per-pixel entity motion, so a following DLSS-SR pass must reuse
+     * them instead of a raster-depth pass that only knows camera motion.
+     */
+    public static long activeMotionVectorView() {
+        return dlssRrDenoiser != null && dlssRrDenoiser.inMotion() != null ? dlssRrDenoiser.inMotion().view : 0L;
+    }
+
+    public static long activeMotionVectorImage() {
+        return dlssRrDenoiser != null && dlssRrDenoiser.inMotion() != null ? dlssRrDenoiser.inMotion().image : 0L;
+    }
+
     /** Memory allocator of the RT world (null without a world); MotionProbe readback only. */
     public static RtMemory probeMemory() {
         return world != null ? world.memory() : null;
@@ -283,6 +310,33 @@ public final class RtFrameRenderer {
      * {@code -Dvkrtx.rt.bobProjection=off} restores the old behaviour for A/B runs.
      */
     private static org.joml.Matrix4f frameProjection;
+    private static io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Stamp displayedStamp;
+    private static RenderTarget displayedTarget, pendingDisplayedTarget;
+    private static org.joml.Matrix4f displayedProjection;
+
+    /** Current-frame color provenance; old output allocations are not evidence that RT replaced this frame. */
+    public static boolean displayedThisFrame(RenderTarget target) {
+        return displayedStamp != null && displayedTarget == target
+            && io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.isCurrent(displayedStamp);
+    }
+
+    public static org.joml.Matrix4f displayedProjection(RenderTarget target) {
+        return displayedThisFrame(target) && displayedProjection != null ? new org.joml.Matrix4f(displayedProjection) : null;
+    }
+
+    /**
+     * Scene TLAS of the frame RT displayed into {@code target} (instances are camera-relative: origin = camera position;
+     * section instances mask 0x01, the entity instance 0x02), or 0 when RT did not replace this frame. Read-only consumers record
+     * after this pass on the same host queue in the same frame; they never keep the handle across frames.
+     */
+    public static long sceneTlas(RenderTarget target) {
+        return displayedThisFrame(target) && world != null ? world.tlasHandle() : 0L;
+    }
+
+    /** RT primary-ray distance image (R32F, GENERAL, 1e6 = no hit) of the frame RT displayed into {@code target}, or null. */
+    public static RtMemory.Img rayDistance(RenderTarget target) {
+        return displayedThisFrame(target) ? outputDepth : null;
+    }
     private static final boolean BOB_PROJECTION = io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.bobProjectionEnabled();
 
     /** Albedo demodulation of the temporal history; {@code -Dvkrtx.rt.demodulate=off} restores the old behaviour for A/B runs. */
@@ -318,7 +372,9 @@ public final class RtFrameRenderer {
         }
         exposure.reset();
         atmosphere.resetHistory();
+        reservoirResetRequested = true;
         lastHistPct = -1.0;
+        lastLeafPct = -1.0;
     }
 
     /** True when this path owns the Hardware RT toggle, so the old PoC overlay must not run. */
@@ -326,10 +382,22 @@ public final class RtFrameRenderer {
         return RtGeometryGate.enabled();
     }
 
+    /** The compute diagnostic owns this frame; close capture and retire hardware-only resources. */
+    public static void suspendForComputeDiagnostic() {
+        io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().endFrame();
+        if (world != null) {
+            shutdown("compute_diagnostic_scene");
+        }
+    }
+
     public static void render(CameraRenderState camera, RenderTarget target, LevelRenderState levelState) {
+        displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
         // publish this frame's captured entity geometry (also closes the capture: the hand pass that follows is not world geometry)
         if (io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().isOpen()) {
             io.github.andrexarlay.vulkancompat.rt.entity.OffscreenBlockEntities.captureMissing(camera);
+            // the first-person camera never draws the player's own model; without it a reflection has nothing to show
+            io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().captureSelfAvatar(camera,
+                levelState != null ? levelState.playerRenderState : null);
         }
         io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().endFrame();
         if (RtGeometryGate.failure() != null) {
@@ -374,6 +442,16 @@ public final class RtFrameRenderer {
         if (world == null) {
             requireRayTracingDevice(device);
             world = new RtWorld(device);
+            // The leaf transmission is a plant property, not a render-pass one: tag the cutout quads while they are staged.
+            world.setBlockLookup(VegetationBlocks::foliageKindAt);
+            if (RtGpuTimer.ENABLED) {
+                try {
+                    gpuTimer = new RtGpuTimer(device, "VKB-RT-GPU", "world", "rays", "denoise", "atmo");
+                } catch (RuntimeException e) {
+                    // A device without timestamp queries must lose the timings, not the whole RT frame.
+                    LOGGER.warn("[VKB-RT] gpu timers unavailable: {}", e.getMessage());
+                }
+            }
             selectDenoiser();
             pass = createPass(device, passModeFor(RtConfig.mode()), wantGbuffer(passModeFor(RtConfig.mode())));
             LOGGER.info("[VKB-RT] world_ready debug_mode={}", RtConfig.DEBUG_NAME.isEmpty() ? "none" : RtConfig.DEBUG_NAME);
@@ -454,11 +532,20 @@ public final class RtFrameRenderer {
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
         VkBarriers.fullMemoryBarrier(cmd);
+        if (gpuTimer != null) {
+            gpuTimer.beginFrame(cmd);
+        }
         int radiusXz = RtConfig.radiusXz(Minecraft.getInstance().options.getEffectiveRenderDistance());
         int radiusY = RtConfig.radiusY(radiusXz);
         lastRadiusXz = radiusXz;
         lastRadiusY = radiusY;
+        if (gpuTimer != null) {
+            gpuTimer.stamp(cmd, SPAN_WORLD, false);
+        }
         RtWorld.FrameStats stats = world.update(cmd, camera.pos.x, camera.pos.y, camera.pos.z, radiusXz, radiusY);
+        if (gpuTimer != null) {
+            gpuTimer.stamp(cmd, SPAN_WORLD, true);
+        }
         lastStats = stats;
         blasBuiltTotal += stats.builtThisFrame();
         boolean traced = false;
@@ -470,6 +557,12 @@ public final class RtFrameRenderer {
         VkBarriers.fullMemoryBarrier(cmd);
         RtFailure.check(VK10.vkEndCommandBuffer(cmd), "end_command_buffer");
         encoder.execute(cmd);
+        if (pendingDisplayedTarget == target && frameProjection != null) {
+            displayedStamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
+            displayedTarget = target;
+            displayedProjection = RtConfig.FLIP_Y
+                ? new org.joml.Matrix4f().scaling(1, -1, 1).mul(frameProjection) : new org.joml.Matrix4f(frameProjection);
+        }
         if (traced) {
             passFrames++;
             passFramesInWindow++;
@@ -541,6 +634,14 @@ public final class RtFrameRenderer {
         }
         int atlasW = atlasTexture.getTexture().getWidth(0);
         int atlasH = atlasTexture.getTexture().getHeight(0);
+        // The vanilla lightmap (16x16, block light x sky light) colours the baked light fill and the vanilla water sheet
+        // with the real tint of the pack, dimension and effects; 0 binds the atlas as a benign fallback.
+        long lightmapView = 0L;
+        try {
+            lightmapView = WorldTargetManager.extractVkImageView(Minecraft.getInstance().gameRenderer.lightmap());
+        } catch (RuntimeException | LinkageError e) {
+            LOGGER.debug("[VKB-RT] lightmap view unavailable: {}", e.toString());
+        }
         if (denoiseMode == DenoiserMode.DLSS_RR) {
             // [DLSS-RR]
             if (pass.usesGbuffer() && dlssRrDenoiser == null) {
@@ -560,6 +661,11 @@ public final class RtFrameRenderer {
         boolean useDenoiser = pass.usesGbuffer() && (denoiser != null || dlssRrDenoiser != null);
         if (materials == null) {
             materials = new RtMaterialAtlas(world.memory());
+            // Without this the atlas keeps no texel states, intern() returns ST_RETRY forever and the micromaps are
+            // inert: the feature reports "enabled" while every BLAS triangle stays fully unknown.
+            if (world.ommCache() != null) {
+                materials.setMicromapSink(world.ommCache());
+            }
         }
         materials.ensure(cmd, (TextureAtlas) atlasTexture, atlasW, atlasH, Minecraft.getInstance().getResourceManager());
         pass.prepare(cmd, world.memory(), w, h);
@@ -572,33 +678,38 @@ public final class RtFrameRenderer {
             }
         }
         pass.bind(new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
-            materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L));
+            materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L, lightmapView));
 
         // The slot read now was written by the dispatch two frames ago (the engine keeps at most 2 submissions in flight).
         int writeSlot = (int) (dispatchCounter % STATS_SLOTS);
         int readSlot = (writeSlot + 1) % STATS_SLOTS;
         if (statsWritten[readSlot]) {
             long base = statsBuf.mapped + (long) readSlot * STATS_STRIDE;
-            int hits = MemoryUtil.memGetInt(base);
-            int samples = MemoryUtil.memGetInt(base + 4);
+            int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
+            int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
             if (hits > 0) {
-                lastHistPct = 100.0 * MemoryUtil.memGetInt(base + 12) / hits;
+                lastHistPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED) / hits;
+                // Both counters use the same 1-in-16 pixel mask as countSample, so this is a true share of the hit pixels.
+                lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT) / hits;
             }
             if (samples > 0) {
                 lastHitPct = 100.0 * hits / samples;
                 exposure.setMax(RtSkyState.maxExposure(params.key.day));
                 long expNow = System.nanoTime();
-                exposure.observe(Integer.toUnsignedLong(MemoryUtil.memGetInt(base + 8)), samples,
+                exposure.observe(Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM)), samples,
                     lastExposureNanos == 0L ? 1.0f / 60.0f : (float) ((expNow - lastExposureNanos) / 1.0e9));
                 lastExposureNanos = expNow;
                 lastExposureValue = exposure.value();
-                long sumLog = Integer.toUnsignedLong(MemoryUtil.memGetInt(base + 8));
+                long sumLog = Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM));
                 lastAvgLum = sumLog == 0L ? 0.0 : Math.pow(2.0, sumLog / 64.0 / samples - 16.0);
             }
             statsWritten[readSlot] = false;
         }
         long writeOffset = (long) writeSlot * STATS_STRIDE;
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset, 16, 0);
+        // leafBacklit sits far past the four head counters, so the 16-byte fill above does not reach it: without its own
+        // zeroing the slot would keep the count of the frame that used it three slots ago.
+        VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.LEAF_BACKLIT, 4, 0);
         if (emitters == null) {
             emitters = new RtEmitters(world.memory());
         }
@@ -614,13 +725,13 @@ public final class RtFrameRenderer {
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.lightBudget(), entityEmitters,
             entityEmitters.length / RtEmitters.FLOATS);
         long hdr = statsBuf.mapped + writeOffset;
-        MemoryUtil.memPutInt(hdr + 40, emitters.count());
-        MemoryUtil.memPutFloat(hdr + 44, exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
+        MemoryUtil.memPutInt(hdr + RtStatsLayout.EMITTER_COUNT, emitters.count());
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.EXPOSURE, exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths()));
-        MemoryUtil.memPutFloat(hdr + 16, (float) (camera.pos.x - emitters.originX()));
-        MemoryUtil.memPutFloat(hdr + 20, (float) (camera.pos.y - emitters.originY()));
-        MemoryUtil.memPutFloat(hdr + 24, (float) (camera.pos.z - emitters.originZ()));
-        MemoryUtil.memPutLong(hdr + 32, emitters.address());
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL, (float) (camera.pos.x - emitters.originX()));
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 4, (float) (camera.pos.y - emitters.originY()));
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 8, (float) (camera.pos.z - emitters.originZ()));
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.EMITTER_ADDR, emitters.address());
         VkBarriers.fullMemoryBarrier(cmd);
 
         // stable (unjittered) matrix for both rays and accumulation decision:
@@ -670,13 +781,59 @@ public final class RtFrameRenderer {
                 || denoiseMode.isNrd() && NRD_DENOISE_SUN) ? RtFrameParams.FLAG_SUN_DENOISED : 0)
             | (DEMODULATE ? RtFrameParams.FLAG_DEMODULATE : 0)
             | (LOW_DISC ? RtFrameParams.FLAG_LOWDISC : 0);
+        // ReSTIR DI: one reservoir per pixel, two parity halves. Only the ray pass reads it; path tracing keeps plain RIS.
+        long reservoirAddr = 0L;
+        if (pass.mode() == RtMode.RAY_TRACED && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {
+            long pixels = (long) w * h;
+            long need = pixels * 2L * RESERVOIR_BYTES;
+            boolean reset = false;
+            if (reservoirBuf == null || reservoirBuf.size < need) {
+                if (reservoirBuf != null) {
+                    VK10.vkDeviceWaitIdle(device);
+                    world.memory().destroy(reservoirBuf);
+                }
+                reservoirBuf = world.memory().createBuffer("rt_restir", need,
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                        | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+                reset = true;
+                LOGGER.info("[VKB-RT] ReSTIR reservoirs {}x{} x2 = {} KiB", w, h, need / 1024);
+            }
+            if (pixels != reservoirPixels) {
+                // A different resolution moves every pixel: the old records sit at other indices and must not be read.
+                reservoirPixels = pixels;
+                reset = true;
+            }
+            // Only a change of the lights themselves invalidates a stored sample (a removed torch would otherwise keep
+            // glowing through history forever). A streaming section or a camera re-anchor leaves the history valid, and
+            // rebuilding the whole buffer for those would cost hundreds of MB of fill per frame while moving.
+            long lightFingerprint = emitters.fingerprint();
+            if (lightFingerprint != reservoirLightFingerprint) {
+                reservoirLightFingerprint = lightFingerprint;
+                reset = true;
+            }
+            if (reservoirResetRequested) {
+                reset = true;
+                reservoirResetRequested = false;
+            }
+            reservoirAddr = reservoirBuf.address;
+            if (reset) {
+                // A removed torch must not keep contributing through a stored sample: the world changed, drop all history.
+                VK10.vkCmdFillBuffer(cmd, reservoirBuf.handle, 0L, reservoirBuf.size, 0);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
+        }
         pass.configure(params, useDenoiser);
-        MemoryUtil.memPutFloat(hdr + 48, params.giDistance);
-        MemoryUtil.memPutFloat(hdr + 52, params.emissiveDistance);
-        MemoryUtil.memPutFloat(hdr + 56, params.aoRadius);
-        MemoryUtil.memPutFloat(hdr + 60, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoNormalStrengthPercent() / 100f);
-        MemoryUtil.memPutFloat(hdr + 64, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.sunRadiusRad());
-        MemoryUtil.memPutFloat(hdr + 68, params.historyCap);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.GI_DIST, params.giDistance);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.EMIS_DIST, params.emissiveDistance);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.AO_RADIUS, params.aoRadius);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.AUTO_NORMAL_STRENGTH,
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoNormalStrengthPercent() / 100f);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.SUN_RADIUS, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.sunRadiusRad());
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.HISTORY_CAP, params.historyCap);
+        // StatsBuf.shadowPixel: pixelated-shadow cell edge in texture pixels (1/16 block), 0 = the option is off
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.SHADOW_PIXEL, pixelShadowStatsValue());
+        // StatsBuf.reservoirAddr (488): ReSTIR parity buffer of the ray pass; 0 disables temporal reuse
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, reservoirAddr);
         // Temporal reprojection uses the full pose in both projections. Hit positions include the current bob origin, while
         // camDelta remains the raw camera-position delta; the prior full projection already carries the previous bob origin.
         curViewProj.set(frameProjection).mul(camera.viewRotationMatrix);
@@ -687,37 +844,43 @@ public final class RtFrameRenderer {
             prevCamZ = camera.pos.z;
             havePrevCamera = true;
         }
-        prevViewProj.get(80, MemoryUtil.memByteBuffer(hdr, STATS_STRIDE));
+        prevViewProj.get(RtStatsLayout.PREV_VIEW_PROJ, MemoryUtil.memByteBuffer(hdr, STATS_STRIDE));
         float dx = (float) (camera.pos.x - prevCamX);
         float dy = (float) (camera.pos.y - prevCamY);
         float dz = (float) (camera.pos.z - prevCamZ);
         boolean camMoved = Math.abs(dx) > 1.0e-7f || Math.abs(dy) > 1.0e-7f || Math.abs(dz) > 1.0e-7f
             || !prevViewProj.equals(curViewProj, 1.0e-7f);
-        MemoryUtil.memPutFloat(hdr + 144, dx);
-        MemoryUtil.memPutFloat(hdr + 148, dy);
-        MemoryUtil.memPutFloat(hdr + 152, dz);
-        MemoryUtil.memPutFloat(hdr + 156, camMoved ? 1.0f : 0.0f);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_DELTA, dx);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_DELTA + 4, dy);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_DELTA + 8, dz);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_DELTA + 12, camMoved ? 1.0f : 0.0f);
         float baseDistance = (float) Math.max(32, params.rayDistance);
         float fogDistance = baseDistance * params.fogDistanceScale;
-        MemoryUtil.memPutFloat(hdr + 160, params.fogDensity);
-        MemoryUtil.memPutFloat(hdr + 164, params.fogInScattering);
-        MemoryUtil.memPutFloat(hdr + 168, fogDistance);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.FOG_DENSITY, params.fogDensity);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.FOG_INSCATTERING, params.fogInScattering);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.FOG_DISTANCE, fogDistance);
         // 2 = distance fog + the former in-shader god rays, 1 = distance fog only (the light shafts come from RtAtmosphere)
-        MemoryUtil.memPutInt(hdr + 172, params.volumetricFogEnabled
+        MemoryUtil.memPutInt(hdr + RtStatsLayout.FOG_MODE, params.volumetricFogEnabled
             ? (RtAtmosphereSettings.godRays() == RtAtmosphereSettings.GodRays.INLINE ? 2 : 1) : 0);
-        MemoryUtil.memPutFloat(hdr + 176, params.fogDistanceScale);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.FOG_DISTANCE_SCALE, params.fogDistanceScale);
         // entity geometry of this frame (RtEntityGeometryManager ring slice; the same slice the entity BLAS was built from)
         RtEntityGeometryManager eg = RtEntityGeometryManager.INSTANCE;
         boolean entOk = world.entityBlas().getPrimitiveCount() > 0;
-        MemoryUtil.memPutInt(hdr + 180, entOk ? eg.frameTriangles() : 0);
-        MemoryUtil.memPutLong(hdr + 184, entOk ? eg.framePosAddress() : 0L);
-        MemoryUtil.memPutLong(hdr + 192, entOk ? eg.frameIndexAddress() : 0L);
-        MemoryUtil.memPutLong(hdr + 200, entOk ? eg.frameAttrAddress() : 0L);
-        MemoryUtil.memPutLong(hdr + 208, entOk ? eg.framePrevAddress() : 0L);
-        MemoryUtil.memPutLong(hdr + 216, eg.atlasAddress());
-        MemoryUtil.memPutLong(hdr + 224, eg.rectAddress());
+        MemoryUtil.memPutInt(hdr + RtStatsLayout.ENTITY_TRIS, entOk ? eg.frameTriangles() : 0);
+        // Triangle range of the local player's body captured for this frame: the primary rays skip it (an inside face of the
+        // avatar at 0.001 from the eye is what the first-person screen would otherwise show).
+        io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager capture =
+            io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance();
+        MemoryUtil.memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_START, entOk ? capture.selfAvatarTriStart() : 0);
+        MemoryUtil.memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_COUNT, entOk ? capture.selfAvatarTriCount() : 0);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_POS_ADDR, entOk ? eg.framePosAddress() : 0L);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_IDX_ADDR, entOk ? eg.frameIndexAddress() : 0L);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_ATTR_ADDR, entOk ? eg.frameAttrAddress() : 0L);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_PREV_ADDR, entOk ? eg.framePrevAddress() : 0L);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_ATLAS_ADDR, eg.atlasAddress());
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_RECT_ADDR, eg.rectAddress());
         long motionAddr = 0L;
-        if (dlssRrDenoiser != null && useDenoiser && !Boolean.getBoolean("vkrtx.entityMotion.off")) {
+        if (useDenoiser && (dlssRrDenoiser != null || denoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off")) {
             long need = (long) w * h * 16L;
             if (entityMotionBuf == null || entityMotionBuf.size < need) {
                 if (entityMotionBuf != null) {
@@ -728,10 +891,15 @@ public final class RtFrameRenderer {
                     VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
             }
             motionAddr = entityMotionBuf.address;
-            dlssRrDenoiser.entityMotionAddress = motionAddr;
+            if (dlssRrDenoiser != null) {
+                dlssRrDenoiser.entityMotionAddress = motionAddr;
+            }
+            if (denoiser != null) {
+                denoiser.entityMotionAddress = motionAddr;
+            }
         }
-        MemoryUtil.memPutLong(hdr + 232, motionAddr);
-        MemoryUtil.memPutInt(hdr + 240, eg.atlasAddress() != 0L ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.MOTION_ADDR, motionAddr);
+        MemoryUtil.memPutInt(hdr + RtStatsLayout.ENT_ATLAS_SIZE, eg.atlasAddress() != 0L ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0);
         float jitterPxX = 0.0f;
         float jitterPxY = 0.0f;
         if (io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
@@ -740,19 +908,19 @@ public final class RtFrameRenderer {
             jitterPxX = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterX();
             jitterPxY = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterY();
         }
-        MemoryUtil.memPutFloat(hdr + 248, jitterPxX);
-        MemoryUtil.memPutFloat(hdr + 252, jitterPxY);
-        MemoryUtil.memPutFloat(hdr + 384, bobOrigin.x);
-        MemoryUtil.memPutFloat(hdr + 388, bobOrigin.y);
-        MemoryUtil.memPutFloat(hdr + 392, bobOrigin.z);
-        MemoryUtil.memPutFloat(hdr + 396, 0.0f);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_JITTER, jitterPxX);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_JITTER + 4, jitterPxY);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_BOB_ORIGIN, bobOrigin.x);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_BOB_ORIGIN + 4, bobOrigin.y);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_BOB_ORIGIN + 8, bobOrigin.z);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_BOB_ORIGIN + 12, 0.0f);
         org.joml.Vector3f rawForward = io.github.andrexarlay.vulkancompat.rt.world.CameraBobPose.rawForward(
             camera.viewRotationMatrix, new org.joml.Vector3f());
-        MemoryUtil.memPutFloat(hdr + 400, rawForward.x);
-        MemoryUtil.memPutFloat(hdr + 404, rawForward.y);
-        MemoryUtil.memPutFloat(hdr + 408, rawForward.z);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_FORWARD, rawForward.x);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_FORWARD + 4, rawForward.y);
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_FORWARD + 8, rawForward.z);
         // StatsBuf.cameraForward.w: strength of the optional baked vanilla light fill (RtSettings.bakedLightFill, rays mode)
-        MemoryUtil.memPutFloat(hdr + 412, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.bakedLightFill());
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_FORWARD + 12, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.bakedLightFill());
         org.joml.Matrix4f probePrev = io.github.andrexarlay.vulkancompat.rt.denoise.StabilityProbe.recording() ? new org.joml.Matrix4f(prevViewProj) : null;
         prevViewProj.set(curViewProj);
         prevCamX = camera.pos.x;
@@ -763,7 +931,13 @@ public final class RtFrameRenderer {
         logShading(atlasW, atlasH, hasSky, sky);
         skyState.log(params.key, exposure.value(), skyTextures.loadedMask());
         logPass(pass.describe(params));
+        if (gpuTimer != null) {
+            gpuTimer.stamp(cmd, SPAN_RAYS, false);
+        }
         pass.dispatch(cmd, params, w, h);
+        if (gpuTimer != null) {
+            gpuTimer.stamp(cmd, SPAN_RAYS, true);
+        }
         statsWritten[writeSlot] = true;
         dispatchCounter++;
         VkBarriers.fullMemoryBarrier(cmd);
@@ -773,6 +947,9 @@ public final class RtFrameRenderer {
             VkBarriers.fullMemoryBarrier(cmd);
         }
         io.github.andrexarlay.vulkancompat.rt.denoise.StabilityProbe.tick();
+        if (gpuTimer != null) {
+            gpuTimer.stamp(cmd, SPAN_DENOISE, false);
+        }
         if (useDenoiser) {
             if (dlssRrDenoiser != null) {
                 // [DLSS-RR] Record DLSS Ray Reconstruction
@@ -795,6 +972,7 @@ public final class RtFrameRenderer {
                         : 0.0f;
                     dlssRrDenoiser.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY);
+                    frameColorTemporallyResolved = true;
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (Exception e) {
                     denoiserRuntimeFailure = "dlss_rr_record: " + String.valueOf(e.getMessage());
@@ -821,6 +999,7 @@ public final class RtFrameRenderer {
                     denoiser.record(cmd, camera.projectionMatrix, frameProjection, camera.viewRotationMatrix,
                         camera.pos.x, camera.pos.y, camera.pos.z, params.tonemap, composeExposure,
                         nrdJitterX, nrdJitterY, nrdJitterPrevX, nrdJitterPrevY);
+                    frameColorTemporallyResolved = true;
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (NrdException e) {
                     denoiserRuntimeFailure = "nrd_record " + e.stage() + ": " + String.valueOf(e.getMessage());
@@ -833,15 +1012,24 @@ public final class RtFrameRenderer {
                 }
             }
         }
+        if (gpuTimer != null) {
+            gpuTimer.stamp(cmd, SPAN_DENOISE, true);
+        }
 
         // particles of the game (drawn into their own layer by RtParticleLayer.replay) over the denoised image, before bloom / god rays
         io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, device, output.view, w, h);
 
         // god rays + bloom + sun glare on the denoised final image (reads the ray distance, writes only rt_output)
+        if (gpuTimer != null) {
+            gpuTimer.stamp(cmd, SPAN_ATMO, false);
+        }
         atmosphere.record(cmd, device, world.memory(), params, curViewProj,
             new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
-                materials.normalView(), 0L, null, outputDepth.view),
+                materials.normalView(), 0L, null, outputDepth.view, lightmapView),
             w, h, bobOrigin.x, bobOrigin.y, bobOrigin.z);
+        if (gpuTimer != null) {
+            gpuTimer.stamp(cmd, SPAN_ATMO, true);
+        }
 
         if (RtConfig.displayed()) {
             long dst = WorldTargetManager.extractVkImage(target);
@@ -855,6 +1043,7 @@ public final class RtFrameRenderer {
                 region.get(0).extent().width(w).height(h).depth(1);
                 VK10.vkCmdCopyImage(cmd, output.image, VK10.VK_IMAGE_LAYOUT_GENERAL, dst, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
             }
+            pendingDisplayedTarget = target;
         }
     }
 
@@ -1011,13 +1200,16 @@ public final class RtFrameRenderer {
         return mode == RtMode.PATH_TRACED ? RtMode.PATH_TRACED : RtMode.RAY_TRACED;
     }
 
+    /** StatsBuf.shadowPixel: pixelated-shadow cell edge in texture pixels (1 = one 16x16 block-texture pixel), 0 = off. */
+    static float pixelShadowStatsValue() {
+        return RtSettings.pixelShadows() ? RtSettings.pixelShadowSize() : 0f;
+    }
+
     /**
-     * Whether the pass of {@code mode} is built with the G-buffer: false for Ray Tracing, denoiseMode != OFF for Path Tracing.
+     * Whether the pass of {@code mode} is built with the G-buffer: true for both ray tracing and path tracing whenever a
+     * denoiser is selected (the denoiser needs the raw radiance, guide and motion channels of the G-buffer).
      */
     private static boolean wantGbuffer(RtMode mode) {
-        if (mode != RtMode.PATH_TRACED) {
-            return false;
-        }
         return denoiseMode != DenoiserMode.OFF;
     }
 
@@ -1093,6 +1285,20 @@ public final class RtFrameRenderer {
         return lastPassMode;
     }
 
+    /**
+     * True when the colour that reached the world target this frame has already been temporally resolved at render
+     * resolution by NRD or DLSS-RR. Such an image is back on the pixel grid, so a following DLSS-SR pass must not apply
+     * the camera jitter a second time.
+     */
+    public static boolean frameColorTemporallyResolved() {
+        return frameColorTemporallyResolved;
+    }
+
+    /** Clears the resolved-colour flag at the start of a world phase; called once per frame. */
+    public static void resetFrameColorTemporallyResolved() {
+        frameColorTemporallyResolved = false;
+    }
+
     /** Frames averaged into the last path traced image (1 for the ray mode or a reset frame); autotests. */
     public static int lastAccumulatedFrames() {
         RtFrameParams p = lastParams;
@@ -1162,19 +1368,27 @@ public final class RtFrameRenderer {
         }
         if (changed) {
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] blas built=%d total=%d build_ms=%.2f tlas instances=%d tlas_ms=%.2f vram_mb=%d pending=%d failed=%d identical_skipped=%d",
+                "[VKB-RT] blas built=%d total=%d build_ms=%.2f tlas instances=%d tlas_ms=%.2f vram_mb=%d pending=%d failed=%d identical_skipped=%d veg_sections=%d veg_quads=%d",
                 builtInWindow, s.totalSections(), buildMsInWindow, s.instances(), s.tlasMs(), s.vramBytes() >> 20,
-                s.pending(), s.failedSections(), world != null ? world.identicalSkipped() : 0L));
+                s.pending(), s.failedSections(), world != null ? world.identicalSkipped() : 0L,
+                world != null ? world.vegetationSections() : 0L, world != null ? world.vegetationQuads() : 0L));
         }
         if (passFramesInWindow > 0) {
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s hist_pct=%s ms=%.2f displayed=%s mode=%s",
+                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f displayed=%s mode=%s",
                 passFrames, target != null ? (long) target.width * target.height : 0L,
                 lastHitPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHitPct),
                 lastHistPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHistPct),
+                lastLeafPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastLeafPct),
                 passMsInWindow / passFramesInWindow, RtConfig.displayed(), RtConfig.effectiveModeName()));
         } else if (s.instances() == 0 && s.pending() > 0) {
             LOGGER.info("[VKB-RT] rt_pass waiting instances=0 pending={}", s.pending());
+        }
+        if (world != null) {
+            OpacityMicromapCache omm = world.ommCache();
+            if (omm != null) {
+                omm.logStatsIfDue(now);
+            }
         }
         passMsInWindow = 0.0;
         passFramesInWindow = 0;
@@ -1196,6 +1410,7 @@ public final class RtFrameRenderer {
     }
 
     private static void shutdown(String reason) {
+        displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
         io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.release(reason);
         RtPass pl = pass;
         RtWorld w = world;
@@ -1211,6 +1426,9 @@ public final class RtFrameRenderer {
                 pl.destroy(); // waits for the device to go idle first
             }
             atmosphere.destroy();
+            if (gpuTimer != null) {
+                gpuTimer.destroy();
+            }
             if (denoiser != null) {
                 denoiser.destroy();
             }
@@ -1245,12 +1463,16 @@ public final class RtFrameRenderer {
             if (entityMotionBuf != null) {
                 w.memory().destroy(entityMotionBuf);
             }
+            if (reservoirBuf != null) {
+                w.memory().destroy(reservoirBuf);
+            }
             w.destroy();
             LOGGER.info("[VKB-RT] world_destroyed reason={}", reason);
         } catch (RuntimeException | LinkageError e) {
             LOGGER.error("[VKB-RT] FAILED stage=destroy result={} reason={}", e.getMessage(), reason, e);
         } finally {
             denoiser = null;
+            gpuTimer = null;
             // [DLSS-RR]
             dlssRrDenoiser = null;
             dropDlssRrDenoiserNext = false;
@@ -1263,6 +1485,10 @@ public final class RtFrameRenderer {
             outputDepth = null;
             compositeOutput = null;
             entityMotionBuf = null;
+            reservoirBuf = null;
+            reservoirPixels = -1L;
+            reservoirLightFingerprint = Long.MIN_VALUE;
+            reservoirResetRequested = true;
             statsBuf = null;
             skyTextures = null;
             outputReady = false;

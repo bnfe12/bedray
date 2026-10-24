@@ -37,6 +37,12 @@ Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by
 
 What works and how well it is proven is in **[docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md)**. Nothing in this alpha is marked stable.
 
+Development alpha.6 also exposes **World Renderer → Voxel (Experimental)** on the main Bedray settings
+page when using the separate Bedray Compute add-on. This is a bounded full-cube diagnostic with baked
+albedo textures and fixed sunlight. Complete materials/light transport and gameplay acceptance remain pending.
+Bedray and Compute remain separate mods;
+use the matching pair for your loader. See [COMPUTE](docs/COMPUTE.md).
+
 ## Requirements
 
 | | |
@@ -76,6 +82,8 @@ Do it by hand with [docs/INSTALL.md](docs/INSTALL.md), or let an AI assistant do
 | [FRAME_GENERATION](docs/FRAME_GENERATION.md) | DLSS frame generation and Reflex |
 | [TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [FAQ](docs/FAQ.md), [KNOWN_ISSUES](docs/KNOWN_ISSUES.md) | When something is wrong |
 | [ROADMAP](ROADMAP.md) | Long-term plan, priorities and acceptance gates |
+| [SHADER_CACHE](docs/SHADER_CACHE.md) | SPIR-V warmup and Vulkan pipeline-cache behavior |
+| [DXGI_PRESENT](docs/DXGI_PRESENT.md) | Minecraft's native DXGI presentation option and Bedray compatibility |
 | [FEATURE_MATRIX](docs/FEATURE_MATRIX.md) | Status and evidence level of every feature |
 | [TESTING](docs/TESTING.md) | How to test and report |
 | [BUILDING](docs/BUILDING.md) | Build from source |

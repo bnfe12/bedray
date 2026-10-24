@@ -68,11 +68,13 @@ dependencies {
 // Loader jars bundle the common classes and resources (no shadow plugin: the jar task copies the common output).
 // Each loader jar is complete on its own; a user installs exactly one.
 ext.bundleCommon = { Jar jarTask ->
+    evaluationDependsOn(':renderer-api')
     apply from: rootProject.file('gradle/build-provenance.gradle')
     def commonOut = project(':common').sourceSets.main.output
     def coreOut = project(':core').sourceSets.main.output
     jarTask.from(coreOut)
     jarTask.from(commonOut)
+    jarTask.from(project(':renderer-api').sourceSets.main.output)
     jarTask.from(rootProject.file('LICENSE'))
     jarTask.from(rootProject.file('NOTICE'))
     jarTask.from(rootProject.file('COPYING'))

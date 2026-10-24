@@ -55,6 +55,8 @@ Only Minecraft and the mods you download yourself from their official pages belo
 | `core` | Bedray Core: device-requirement registry, backend guard, native-library resolver (`<game>/bedray/natives`), frame phases, GL overlay layer, autotest harness, Iris GUI compatibility. No loader API. |
 | `common` | All mod logic (rendering, ray tracing, upscalers, settings). No loader API. |
 | `neoforge`, `fabric` | Entry point and descriptor. Each loader jar contains `core` + `common` + its own classes, so a user installs exactly one jar. |
+| `renderer-api` | Host-owned versioned companion API, included only in host loader JARs. |
+| `compute-common`, `compute-neoforge`, `compute-fabric` | Optional software voxel diagnostic and separate companion JARs. See [COMPUTE](COMPUTE.md). |
 
 ## 4. Build and test
 

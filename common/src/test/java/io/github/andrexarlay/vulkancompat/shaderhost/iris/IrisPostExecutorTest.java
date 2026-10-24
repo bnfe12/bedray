@@ -77,7 +77,7 @@ class IrisPostExecutorTest {
     void descriptorSetLayoutBindings() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDescriptorSetLayoutBinding.Buffer bindings = IrisPostExecutor.createDescriptorBindings(stack);
-            assertEquals(2, bindings.remaining(), "Must have exactly 2 sampler bindings");
+            assertEquals(IrisUniforms.SAMPLER_BINDINGS + 1, bindings.remaining(), "colortex0..15 and depthtex0 samplers plus the frame uniform buffer");
 
             VkDescriptorSetLayoutBinding b0 = bindings.get(0);
             assertEquals(IrisUniforms.BINDING_COLORTEX0, b0.binding(), "Binding 0 index");
@@ -163,23 +163,23 @@ class IrisPostExecutorTest {
         List<IrisPostExecutor.PassExecutionStep> plan = IrisPostExecutor.planPassExecution(graph, 0);
         assertEquals(2, plan.size(), "tiny-testpack has 2 passes");
 
-        // Pass 0: composite (reads colortex0, writes colortex1)
+        // Pass 0: composite toggles the physical bank of logical colortex0.
         IrisPostExecutor.PassExecutionStep step0 = plan.get(0);
         assertEquals(0, step0.passIndex());
         assertEquals("composite", step0.passName());
         assertFalse(step0.isFinal());
-        assertEquals("colortex0", step0.readTarget());
-        assertEquals("colortex1", step0.writeTarget());
+        assertEquals("colortex0[0]", step0.readTarget());
+        assertEquals("colortex0[1]", step0.writeTarget());
         assertEquals(0, step0.slot());
         assertEquals(0, step0.setIndex());
 
-        // Pass 1: final (reads colortex1, writes engineColorView)
+        // Final reads the current logical color and writes separate presentation scratch.
         IrisPostExecutor.PassExecutionStep step1 = plan.get(1);
         assertEquals(1, step1.passIndex());
         assertEquals("final", step1.passName());
         assertTrue(step1.isFinal());
-        assertEquals("colortex1", step1.readTarget());
-        assertEquals("engineColorView", step1.writeTarget());
+        assertEquals("colortex0[1]", step1.readTarget());
+        assertEquals("presentation", step1.writeTarget());
         assertEquals(0, step1.slot());
         assertEquals(1, step1.setIndex());
     }
@@ -197,23 +197,23 @@ class IrisPostExecutorTest {
         assertEquals(4, plan.size());
 
         // Pass 0: read colortex0, write colortex1
-        assertEquals("colortex0", plan.get(0).readTarget());
-        assertEquals("colortex1", plan.get(0).writeTarget());
+        assertEquals("colortex0[0]", plan.get(0).readTarget());
+        assertEquals("colortex0[1]", plan.get(0).writeTarget());
         assertFalse(plan.get(0).isFinal());
 
         // Pass 1: read colortex1, write colortex0
-        assertEquals("colortex1", plan.get(1).readTarget());
-        assertEquals("colortex0", plan.get(1).writeTarget());
+        assertEquals("colortex0[1]", plan.get(1).readTarget());
+        assertEquals("colortex0[0]", plan.get(1).writeTarget());
         assertFalse(plan.get(1).isFinal());
 
         // Pass 2: read colortex0, write colortex1
-        assertEquals("colortex0", plan.get(2).readTarget());
-        assertEquals("colortex1", plan.get(2).writeTarget());
+        assertEquals("colortex0[0]", plan.get(2).readTarget());
+        assertEquals("colortex0[1]", plan.get(2).writeTarget());
         assertFalse(plan.get(2).isFinal());
 
-        // Pass 3 (final): read colortex1, write engineColorView
-        assertEquals("colortex1", plan.get(3).readTarget());
-        assertEquals("engineColorView", plan.get(3).writeTarget());
+        // Final reads bank1 of logical color0 and writes presentation scratch.
+        assertEquals("colortex0[1]", plan.get(3).readTarget());
+        assertEquals("presentation", plan.get(3).writeTarget());
         assertTrue(plan.get(3).isFinal());
     }
 
@@ -265,7 +265,11 @@ class IrisPostExecutorTest {
         return new IrisPassGraph.Pass(
             name, family, order,
             name + ".vsh", name + ".fsh", "", "",
-            null, null, dummySpv, dummySpv
+            new io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisGlslTranslator.Result("", java.util.Set.of(),
+                List.of(), java.util.Map.of(), java.util.Set.of(), java.util.Set.of(), java.util.Map.of(), java.util.Set.of()),
+            new io.github.andrexarlay.vulkancompat.shaderhost.glsl.IrisGlslTranslator.Result("", java.util.Set.of(),
+                List.of(0), java.util.Map.of(), java.util.Set.of(), java.util.Set.of(0), java.util.Map.of(), java.util.Set.of()),
+            dummySpv, dummySpv
         );
     }
 }

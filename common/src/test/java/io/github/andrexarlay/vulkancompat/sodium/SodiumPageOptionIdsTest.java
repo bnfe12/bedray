@@ -27,7 +27,8 @@ class SodiumPageOptionIdsTest {
     @Test
     void everyOptionIdOnTheVulkanPageIsUnique() {
         List<Identifier> created = new ArrayList<>();
-        ConfigBuilder builder = recorder(ConfigBuilder.class, created);
+        List<Identifier> dependencies = new ArrayList<>();
+        ConfigBuilder builder = recorder(ConfigBuilder.class, created, dependencies);
         new VulkanSodiumConfig().registerConfigLate(builder);
 
         assertFalse(created.isEmpty(), "the recording builder saw no create*Option(Identifier) calls");
@@ -36,12 +37,18 @@ class SodiumPageOptionIdsTest {
             .map(e -> e.getKey() + " x" + e.getValue()).sorted().toList();
         assertTrue(dups.isEmpty(), "duplicate Sodium option ids (Sodium drops the second option -> NPE in its control): " + dups);
 
+        List<String> dangling = dependencies.stream().filter(d -> !created.contains(d)).distinct()
+            .map(Object::toString).sorted().toList();
+        assertTrue(dangling.isEmpty(),
+            "options depend on ids that are not registered (Sodium crashes with Config.validateDependencies): " + dangling);
+
         List<String> required = List.of(
             "upscaler_backend", "quality_preset", "dlss_mode", "xess_mode", "fsr_mode", "frame_generation_mode",
             "rt_mode", "path_bounces", "path_auto_exposure", "water_style", "atm_godrays",
             "pt_preset", "path_spp", "path_distance", "path_denoiser", "path_caustics",
             "atm_bloom", "atm_sunglare", "rt_fog", "rt_fog_density", "auto_normals", "debug_overlay", "reset_all_defaults",
-            "presets_open", "natives_manager_open", "reset_page_main", "reset_group_adv_pt"
+            "presets_open", "natives_manager_open", "reset_page_main", "reset_group_adv_pt",
+            "rays_pixel_shadows", "rays_pixel_shadow_size"
         );
         for (String req : required) {
             assertTrue(counts.containsKey(Identifier.fromNamespaceAndPath("bedray", req)),
@@ -50,7 +57,7 @@ class SodiumPageOptionIdsTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static <T> T recorder(Class<T> type, List<Identifier> created) {
+    private static <T> T recorder(Class<T> type, List<Identifier> created, List<Identifier> dependencies) {
         InvocationHandler h = (proxy, method, args) -> {
             if (method.getDeclaringClass() == Object.class) {
                 return switch (method.getName()) {
@@ -62,6 +69,9 @@ class SodiumPageOptionIdsTest {
             if (method.getName().startsWith("create") && args != null && args.length > 0 && args[0] instanceof Identifier id) {
                 created.add(id);
             }
+            if ("setEnabledProvider".equals(method.getName()) && args != null && args.length == 2 && args[1] instanceof Identifier[] deps) {
+                dependencies.addAll(java.util.Arrays.asList(deps));
+            }
             Class<?> rt = method.getReturnType();
             if (rt == void.class) return null;
             if (rt == boolean.class) return false;
@@ -69,7 +79,7 @@ class SodiumPageOptionIdsTest {
             if (rt == float.class) return 0f;
             if (rt == double.class) return 0d;
             if (rt.isInstance(proxy)) return proxy;
-            if (rt.isInterface()) return recorder(rt, created);
+            if (rt.isInterface()) return recorder(rt, created, dependencies);
             return null;
         };
         return (T) Proxy.newProxyInstance(SodiumPageOptionIdsTest.class.getClassLoader(), new Class<?>[] {type}, h);

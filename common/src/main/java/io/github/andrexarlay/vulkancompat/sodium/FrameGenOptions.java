@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.sodium;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.Availability;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
+import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import net.caffeinemc.mods.sodium.api.config.StorageEventHandler;
 import net.caffeinemc.mods.sodium.api.config.option.OptionFlag;
 import net.caffeinemc.mods.sodium.api.config.option.OptionImpact;
@@ -69,18 +70,21 @@ public final class FrameGenOptions {
         mode.setName(tr("bedray.option.frame_generation", "Frame Generation"))
             .setTooltip(val -> modeTooltip())
             .setDefaultValue(UiMode.OFF)
-            .setAllowedValuesProvider(state -> allowedModes())
+            .setAllowedValuesProvider(state -> state.readEnumOption(id("renderer"), VulkanRtxConfig.RendererSelection.class)
+                == VulkanRtxConfig.RendererSelection.HARDWARE_RT ? allowedModes() : EnumSet.of(UiMode.OFF), id("renderer"))
             .setElementNameProvider(val -> switch (val) {
                 case OFF -> tr("bedray.fg.off", "Off");
                 case X2 -> tr("bedray.fg.x2", "2x");
                 case X3 -> tr("bedray.fg.x3", "3x (Multi Frame Generation)");
                 case X4 -> tr("bedray.fg.x4", "4x (Multi Frame Generation)");
             })
-            .setEnabledProvider(state -> FrameGenRuntime.availability() == Availability.READY
-                || FrameGenRuntime.availability() == Availability.NEEDS_RESTART)
+            .setEnabledProvider(state -> state.readEnumOption(id("renderer"), VulkanRtxConfig.RendererSelection.class)
+                == VulkanRtxConfig.RendererSelection.HARDWARE_RT && (FrameGenRuntime.availability() == Availability.READY
+                || FrameGenRuntime.availability() == Availability.NEEDS_RESTART), id("renderer"))
             .setControlHiddenWhenDisabled(false)
             .setBinding(val -> {
-                FrameGenSettings.Mode m = FrameGenSettings.Mode.valueOf(val.name());
+                FrameGenSettings.Mode m = VulkanRtxConfig.voxelRendererSelected() ? FrameGenSettings.Mode.OFF
+                    : FrameGenSettings.Mode.valueOf(val.name());
                 FrameGenSettings.setMode(m);
                 io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig.save();
                 LOGGER.info("[VKB-AUTOTEST] ui_frame_generation mode={} availability={}", m, FrameGenRuntime.availability());
@@ -184,6 +188,9 @@ public final class FrameGenOptions {
     }
 
     private static Component modeTooltip() {
+        if (VulkanRtxConfig.voxelRendererSelected()) {
+            return tr("bedray.fg.voxel_unavailable", "Disabled for voxel diagnostics: matching depth and motion guides are not implemented.");
+        }
         String base = "Frame Generation inserts generated frames between rendered ones (2x with AMD FSR 3 or NVIDIA DLSS-G; 3x/4x Multi Frame Generation on RTX 50). "
             + "Choose the method (Auto / NVIDIA DLSS-G / AMD FSR 3) in the row above. Needs a temporal upscaler (FSR, DLSS or XeSS); it switches off in menus, while loading and when the window loses focus. ";
         String extra = switch (FrameGenRuntime.availability()) {

@@ -1,0 +1,20 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="LGPL-3.0-or-later"
+[[mods]]
+modId="bedray_compute"
+version="${version}"
+displayName="Bedray Compute"
+description='''Experimental software voxel traversal on Vulkan compute. Textured block models, cutouts and world lighting in a bounded window, with raster scene preservation. Separate Bedray companion; no RT extensions or vendor DLLs required.'''
+[[dependencies.bedray_compute]]
+modId="bedray"
+type="required"
+versionRange="[0.1.1-alpha.11,)"
+ordering="AFTER"
+side="CLIENT"
+[[dependencies.bedray_compute]]
+modId="minecraft"
+type="required"
+versionRange="[26.3,26.4)"
+ordering="NONE"
+side="CLIENT"

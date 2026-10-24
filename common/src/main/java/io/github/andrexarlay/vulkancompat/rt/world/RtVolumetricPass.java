@@ -73,7 +73,7 @@ final class RtVolumetricPass {
         }
         boolean valid = historyReady && consecutive(lastFrame, p.frame);
         RtPipeline.Views v = new RtPipeline.Views(views.tlas(), views.table(), views.output(), views.atlas(), views.material(),
-            views.normal(), history.view, null, views.depth());
+            views.normal(), history.view, null, views.depth(), views.lightmap());
         march.bind(v);
         apply.bind(v);
 

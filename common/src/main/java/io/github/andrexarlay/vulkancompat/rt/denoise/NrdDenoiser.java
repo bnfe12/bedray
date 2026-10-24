@@ -6,11 +6,9 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VkClearColorValue;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkFormatProperties;
-import org.lwjgl.vulkan.VkImageSubresourceRange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,16 +21,17 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * NRD denoising of the ambient (sky light * AO) term of the RT lit view. Owns the G-buffer images that rt_rays.comp writes
+ * NRD denoising of the RT lit view, diffuse and specular. Owns the G-buffer images that rt_rays.comp / rt_path.comp write
  * (VKB_GBUFFER), the NRD input/output images, the pack/compose pipelines and the native denoiser handle.
  *
  * <p>Per frame ({@link #record}), inside the RT command buffer after the primary-ray dispatch: pack (rt_pack_nrd.comp) ->
  * vkb_nrd_dispatch (REBLUR or RELAX diffuse+specular) -> compose (adds sun and block light, writes the RT output image).
  * Every image stays in VK_IMAGE_LAYOUT_GENERAL; passes are separated by full memory barriers.
  *
- * <p>STUBs (honest, not wired to fake values): the specular input is a constant zero image (no specular/reflection path yet, step N5);
- * IN_MV is a zero image with {@code isMotionVectorInWorldSpace}, i.e. static-world motion only (entities, hand and moving blocks
- * ghost, step N3); SIGMA shadows are not used (the sun shadow is a hard ray and is composed after the denoiser). Level L2 until a run in game.
+ * <p>The specular lane carries the traced reflection radiance with its own hit distance. IN_MV is the per-pixel world-space
+ * motion of the primary hit from the ray shader's Vec4Buf (entities and moving blocks included, zero for the static world),
+ * matching {@code FRAME_MV_WORLD_SPACE}. SIGMA shadows are not used (the sun shadow is a hard ray composed after the
+ * denoiser). Level L2 until a run in game.
  */
 public final class NrdDenoiser {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-NRD");
@@ -65,6 +64,8 @@ public final class NrdDenoiser {
     private RtMemory.Img gbDiffuse;
     private RtMemory.Img gbAlbedo;
     private RtMemory.Img gbDirect;
+    private RtMemory.Img gbSpecular;
+    private RtMemory.Img gbSpecAlbedo;
     private RtMemory.Img inNormalRough;
     private RtMemory.Img inDiffuse;
     private RtMemory.Img inSpecular;
@@ -72,6 +73,8 @@ public final class NrdDenoiser {
     private RtMemory.Img outDiffuse;
     private RtMemory.Img outSpecular;
     private long boundOutputView;
+    /** Per-pixel entity motion Vec4Buf of the ray shader (device address, 0 = none, then IN_MV is static-world only). */
+    public long entityMotionAddress;
     private boolean imagesReady;
     private boolean restartNext;
     private boolean havePrev;
@@ -143,9 +146,10 @@ public final class NrdDenoiser {
         }
     }
 
-    /** Views of the five G-buffer images rt_rays.comp writes (bindings 4..8 of the gbuffer RtPipeline). */
+    /** Views of the seven G-buffer images rt_rays.comp / rt_path.comp write (bindings 4..8 and 13..14 of the gbuffer RtPipeline). */
     public long[] gbufferViews() {
-        return new long[] {gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view};
+        return new long[] {gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view,
+            gbSpecular.view, gbSpecAlbedo.view};
     }
 
     public int width() {
@@ -168,10 +172,12 @@ public final class NrdDenoiser {
         gbDiffuse = memory.createImage("nrd_gb_diffuse", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         gbAlbedo = memory.createImage("nrd_gb_albedo", w, h, FMT_RGBA8, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         gbDirect = memory.createImage("nrd_gb_direct", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+        gbSpecular = memory.createImage("nrd_gb_spec", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+        gbSpecAlbedo = memory.createImage("nrd_gb_spec_albedo", w, h, FMT_RGBA8, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         inNormalRough = memory.createImage("nrd_in_normal", w, h, info.normalRoughnessVkFormat(), USAGE_STORAGE_SAMPLED);
         inDiffuse = memory.createImage("nrd_in_diffuse", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
-        inSpecular = memory.createImage("nrd_in_spec", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        inMotion = memory.createImage("nrd_in_mv", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        inSpecular = memory.createImage("nrd_in_spec", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
+        inMotion = memory.createImage("nrd_in_mv", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         outDiffuse = memory.createImage("nrd_out_diffuse", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         outSpecular = memory.createImage("nrd_out_spec", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         handle = nat.createDenoiser(w, h, mode.nativeModeMask(), 3);
@@ -206,7 +212,8 @@ public final class NrdDenoiser {
 
     private void writeSet(long outputView) {
         packPipeline.writeViews(new long[] {gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view,
-            inNormalRough.view, inDiffuse.view, outDiffuse.view, outputView});
+            inNormalRough.view, inDiffuse.view, outDiffuse.view, outputView,
+            gbSpecular.view, inSpecular.view, outSpecular.view, inMotion.view, gbSpecAlbedo.view});
         boundOutputView = outputView;
     }
 
@@ -263,7 +270,7 @@ public final class NrdDenoiser {
         ByteBuffer pc = org.lwjgl.system.MemoryUtil.memAlloc(NrdPackPipeline.PUSH_BYTES);
         try {
             NrdPackPipeline.writePush(pc, info.normalEncoding(), info.roughnessEncoding(), mode.packShaderCode(), flags, reblur,
-                DenoiserConfig.DENOISING_RANGE, width, height, exposure);
+                DenoiserConfig.DENOISING_RANGE, width, height, exposure, entityMotionAddress);
             packPipeline.recordPack(cmd, pc, width, height);
             VkBarriers.fullMemoryBarrier(cmd);
             lastStats = nat.dispatch(handle, cmd.address(), mode.nativeModeMask(), resources);
@@ -335,20 +342,12 @@ public final class NrdDenoiser {
         frame.denoisingRange = DenoiserConfig.DENOISING_RANGE;
     }
 
-    /** First frame: UNDEFINED -> GENERAL for every image, zero the constant inputs. */
+    /** First frame: UNDEFINED -> GENERAL for every image. */
     private void initImages(VkCommandBuffer cmd) {
-        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inNormalRough, inDiffuse, inSpecular, inMotion,
-            outDiffuse, outSpecular};
+        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
+            inDiffuse, inSpecular, inMotion, outDiffuse, outSpecular};
         for (RtMemory.Img i : all) {
             VkBarriers.transition(cmd, i.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT, VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
-        }
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkClearColorValue zero = VkClearColorValue.calloc(stack);
-            VkImageSubresourceRange.Buffer range = VkImageSubresourceRange.calloc(1, stack);
-            range.get(0).aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            // STUB inputs: zero specular radiance (no specular path) and zero motion (static world), see the class comment.
-            VK10.vkCmdClearColorImage(cmd, inSpecular.image, VK10.VK_IMAGE_LAYOUT_GENERAL, zero, range);
-            VK10.vkCmdClearColorImage(cmd, inMotion.image, VK10.VK_IMAGE_LAYOUT_GENERAL, zero, range);
         }
         VkBarriers.fullMemoryBarrier(cmd);
     }
@@ -372,14 +371,15 @@ public final class NrdDenoiser {
     }
 
     private void destroyImages() {
-        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inNormalRough, inDiffuse, inSpecular, inMotion,
-            outDiffuse, outSpecular};
+        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
+            inDiffuse, inSpecular, inMotion, outDiffuse, outSpecular};
         for (RtMemory.Img i : all) {
             if (i != null) {
                 memory.destroy(i);
             }
         }
-        gbViewZ = gbNormalRough = gbDiffuse = gbAlbedo = gbDirect = inNormalRough = inDiffuse = inSpecular = inMotion = outDiffuse = outSpecular = null;
+        gbViewZ = gbNormalRough = gbDiffuse = gbAlbedo = gbDirect = gbSpecular = gbSpecAlbedo = inNormalRough = inDiffuse =
+            inSpecular = inMotion = outDiffuse = outSpecular = null;
     }
 
     private void destroyAll() {

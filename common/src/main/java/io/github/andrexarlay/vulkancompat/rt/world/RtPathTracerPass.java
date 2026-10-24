@@ -160,7 +160,7 @@ public final class RtPathTracerPass implements RtPass {
     @Override
     public void bind(RtPipeline.Views c) {
         RtPipeline.Views views = new RtPipeline.Views(c.tlas(), c.table(), c.output(), c.atlas(), c.material(), c.normal(), accum.view(),
-            c.gbuffer(), c.depth());
+            c.gbuffer(), c.depth(), c.lightmap());
         pipeline.bind(views);
         if (filter != null) {
             filter.bind(views);

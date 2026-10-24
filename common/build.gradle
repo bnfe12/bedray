@@ -10,6 +10,8 @@ java {
 }
 
 dependencies {
+    compileOnly project(':renderer-api')
+    testImplementation project(':renderer-api')
     // Bedray Core (internal platform layer, vendored in this repository): device-requirement registry, native-library resolver, autotest harness.
     compileOnly project(':core')
     testImplementation project(':core')

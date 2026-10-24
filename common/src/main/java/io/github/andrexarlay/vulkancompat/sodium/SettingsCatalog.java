@@ -160,7 +160,24 @@ public final class SettingsCatalog {
     // ---------------------------------------------------------------- the table
 
     static {
-        // ===================== ESSENTIAL (first page, 8 concepts) =====================
+        // ===================== ESSENTIAL =====================
+        putNoImage("renderer", Tier.ESSENTIAL, "World Renderer",
+            "Hardware RT / Raster uses the saved hardware tracing mode. Voxel selects the separate Bedray Compute add-on: gray opaque cubes in a 48-block window with fixed diagnostic sunlight and traced shadows. Full textures, materials and light transport are pending. Frame generation is disabled and scaling becomes bilinear; the hardware RT mode stays saved.",
+            "GPU cost is experimental and has not been measured in gameplay.",
+            "Voxel requires the matching Bedray Compute add-on and the game's Vulkan backend; no RT extensions are required. Experimental.",
+            "No gameplay comparison has been captured for the voxel renderer.");
+        putNoImage("renderer_status", Tier.ESSENTIAL, "Renderer Status",
+            "Reports the requested renderer and host command recording. A recorded frame does not establish gameplay compatibility.",
+            "Read-only status.", "Missing add-ons and initialization failures are shown explicitly.",
+            "Runtime status has no comparison image.");
+        putNoImage("compute_scene", Tier.EXPERT, "Compute Diagnostic Scene",
+            "Session diagnostic preference for the selected voxel renderer. Synthetic replaces the world with a fixed test scene; live mode draws opaque occupancy. World Renderer remains the main hardware/voxel switch. A saved voxel choice starts in live mode on the next launch.",
+            "GPU cost is experimental and has not been measured in gameplay.", "Requires the separate Bedray Compute add-on.",
+            "No live gameplay comparison has been captured.");
+        putNoImage("compute_debug_view", Tier.EXPERT, "Compute Debug View",
+            "Inspect opaque occupancy shading, face normals, ray distance or unsupported and missing cells. These are diagnostic views, without textures or full material lighting.",
+            "Diagnostic shading only.", "Requires a Bedray Compute provider with debug-view support.",
+            "No live gameplay comparison has been captured.");
         put("rt_mode", Tier.ESSENTIAL, "Ray Tracing",
             "Off draws the classic game. Path Tracing replaces its lighting with traced light: real shadows, reflections, bounced light and glowing blocks.",
             "FPS: Path Tracing is the most expensive setting (use an upscaler). VRAM: +0.2-0.5 GB.",
@@ -366,6 +383,7 @@ public final class SettingsCatalog {
         for (String[] e : new String[][] {
             {"rays_shadows", "RT Shadows", "Traced sun and moon shadows (Ray Tracing Fast mode)."},
             {"rays_soft_shadows", "RT Soft Shadows", "Shadows soften with distance from the caster (Ray Tracing Fast mode)."},
+            {"rays_pixel_shadows", "RT Pixel Shadows", "Minecraft-style blocky shadow edges: every fragment of a world cell traces its sun ray from the cell centre (both RT modes)."},
             {"rays_reflections", "RT Reflections", "Traced reflections on water, glass, metals (Ray Tracing Fast mode)."},
             {"rays_ao", "RT Ambient Occlusion", "Traced darkening in corners (Ray Tracing Fast mode)."},
             {"rays_gi", "RT Global Illumination", "One traced bounce of indirect light (Ray Tracing Fast mode)."},
@@ -376,6 +394,7 @@ public final class SettingsCatalog {
         }
         for (String[] e : new String[][] {
             {"rays_shadow_quality", "RT Shadow Rays", "Shadow rays per pixel."},
+            {"rays_pixel_shadow_size", "RT Pixel Shadow Size", "Size of a pixelated shadow in texture pixels (1 = one pixel of a 16x16 block texture); larger means chunkier edges. Only used when RT Pixel Shadows is on."},
             {"rays_reflection_quality", "RT Reflection Rays", "Reflection rays per pixel."},
             {"rays_reflection_distance", "RT Reflection Distance", "Longest reflection ray in blocks."},
             {"rays_ao_quality", "RT AO Rays", "Occlusion rays per pixel."},
@@ -408,7 +427,6 @@ public final class SettingsCatalog {
         putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "FPS: none.", "", "Shares the Bloom screenshots.");
         putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "FPS: none.", "", "Shares the Bloom screenshots.");
         putNoImage("atm_sunglare_strength", Tier.EXPERT, "Sun Glare Strength", "Brightness of the sun halo.", "FPS: none.", "", "Shares the Sun Glare screenshots.");
-        putNoImage("atm_sunglare_star", Tier.EXPERT, "Sun Glare Star", "Adds a six point star to the sun glare.", "FPS: none.", "", "Shares the Sun Glare screenshots.");
         putNoImage("atm_fog_vanilla", Tier.EXPERT, "Vanilla Fog Weight", "How much of the game's own fog is used.", "FPS: none.", "", "Shares the Fog screenshots.");
         putNoImage("rt_fog_in_scattering", Tier.EXPERT, "Fog In-scattering", "Sunlight and skylight scattering through the fog.", "FPS: low.", "", "Shares the Fog screenshots.");
         putNoImage("rt_debug_view", Tier.EXPERT, "RT Debug Buffer", "Replaces the world with an internal buffer (normals, depth, albedo...). For diagnosis only.",

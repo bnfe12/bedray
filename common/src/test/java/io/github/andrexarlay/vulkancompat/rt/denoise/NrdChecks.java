@@ -33,6 +33,7 @@ public final class NrdChecks {
         packEncodings();
         reblurPacking();
         relaxPacking();
+        packPushLayout();
         cameraMath();
         shaderDefines();
         shadersCompile();
@@ -240,6 +241,21 @@ public final class NrdChecks {
         check(v[0] == 0.2f && v[1] == 0.4f && v[2] == 0.6f && v[3] == 3f, "RELAX keeps radiance and world-unit hit distance");
         float[] bad = NrdPackMath.packRelaxDiffuse(0f, Float.NaN, 0f, 1f);
         check(bad[0] == 0f && bad[1] == 0f && bad[2] == 0f && bad[3] == 1f, "RELAX zeroes invalid radiance, keeps a valid hit distance");
+    }
+
+    /** The descriptor count and push-constant layout of rt_pack_nrd.comp must match the Java side exactly. */
+    private static void packPushLayout() {
+        check(NrdPackPipeline.BINDINGS == 14, "pack set has 14 storage images (5 gb + specular/spec-albedo/guide + 6 denoiser images)");
+        check(NrdPackPipeline.PUSH_BYTES == 56, "pack push constants are 56 bytes");
+        ByteBuffer b = ByteBuffer.allocate(NrdPackPipeline.PUSH_BYTES).order(java.nio.ByteOrder.nativeOrder());
+        NrdPackPipeline.writePush(b, 2, 1, 0, 3, NrdReblurParams.defaults(), 32f, 1920, 1080, 1.1f, 0x1234_5678_9ABC_DEF0L);
+        check(b.getInt(0) == 2 && b.getInt(4) == 1 && b.getInt(8) == 0 && b.getInt(12) == 3, "four uints at 0..12");
+        near(3.0f, b.getFloat(16), 1e-6f, "hit distance A at 16");
+        check(Math.abs(b.getFloat(28) - 32f) < 1e-6f, "denoising range at 28");
+        check(b.getInt(32) == 1920 && b.getInt(36) == 1080, "size at 32");
+        check(Math.abs(b.getFloat(40) - 1.1f) < 1e-6f, "exposure at 40");
+        check(b.getInt(44) == 0, "std430 padding at 44 is zero");
+        check(b.getLong(48) == 0x1234_5678_9ABC_DEF0L, "motion buffer address at 48 (low/high uint pair of uvec2)");
     }
 
     private static void cameraMath() {

@@ -66,9 +66,41 @@ public class RtEmittersStabilityTest {
     }
 
     @Test
-    public void testMoveRebuildConstantIsZero() {
-        assertEquals(0.0, RtEmitters.MOVE_REBUILD, 1e-9,
-            "MOVE_REBUILD must be 0.0 for continuous per-frame coordinate synchronization");
+    public void testMoveRebuildThrottleKeepsCoordinatesExact() {
+        // A zero threshold rescanned every section on every moving frame. The records are stored relative to the emitter
+        // origin and the shader subtracts cam - origin each frame, so positions stay exact between rebuilds; the threshold
+        // only throttles the distance-based re-selection, which is why it may be non-zero.
+        assertTrue(RtEmitters.MOVE_REBUILD > 0.0,
+            "MOVE_REBUILD must be > 0 so a moving camera does not rescan every section each frame");
+        assertTrue(RtEmitters.MOVE_REBUILD <= 0.5,
+            "MOVE_REBUILD must stay sub-block so the distance-based light selection tracks the camera");
+        runCameraInvarianceChecks();
+    }
+
+    @Test
+    public void testFingerprintIgnoresReanchoringButSeesLightChanges() {
+        float[] record = {1f, 2f, 3f, 0.5f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 0f, 1f, 1f, 1f, 1f};
+        long seed = 12345L;
+
+        // The same record anchored to a different origin must hash to the same lights in world space.
+        long a = RtEmitters.mixEmitter(seed, record, 0, 0f, 0f, 0f);
+        long b = RtEmitters.mixEmitter(seed, record, 0, 10f, -4f, 32f);
+        float[] moved = record.clone();
+        moved[0] += 10f;
+        moved[1] += -4f;
+        moved[2] += 32f;
+        long c = RtEmitters.mixEmitter(seed, moved, 0, 0f, 0f, 0f);
+        assertEquals(b, c, "a re-anchored list of the same lights must keep its ReSTIR history");
+
+        float[] brighter = record.clone();
+        brighter[14] *= 2f;
+        assertNotEquals(a, RtEmitters.mixEmitter(seed, brighter, 0, 0f, 0f, 0f),
+            "a changed emission must invalidate the stored samples");
+
+        float[] movedLight = record.clone();
+        movedLight[0] += 1f;
+        assertNotEquals(a, RtEmitters.mixEmitter(seed, movedLight, 0, 0f, 0f, 0f),
+            "a light that moved must invalidate the stored samples");
     }
 
     @Test
@@ -98,7 +130,8 @@ public class RtEmittersStabilityTest {
 
     public static void runAll() {
         RtEmittersStabilityTest test = new RtEmittersStabilityTest();
-        test.testMoveRebuildConstantIsZero();
+        test.testMoveRebuildThrottleKeepsCoordinatesExact();
+        test.testFingerprintIgnoresReanchoringButSeesLightChanges();
         test.testCameraInvarianceAndCoordinatesStability();
         test.testTwoSidedEmitterClassification();
         test.testEmitterOrientationAndCosineCulling();
@@ -320,7 +353,8 @@ public class RtEmittersStabilityTest {
         assertEquals(2 / 16f, rec[16], 1e-4f);
         assertEquals(-2 / 16f, rec[19], 1e-4f);
 
-        // a big solid face (glowstone block face, 65 % mean) is not boosted and stays single-sided for a solid pass quad
+        // a big solid face at an assumed glowstone mean of 65 % (the real mean follows the texture pack) is not boosted and stays
+        // single-sided for a solid pass quad
         float[] facePos = {0f, 0f, 0f, 1f, 0f, 0f, 1f, 0f, 1f, 0f, 0f, 1f};
         float[] faceUv = {0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f};
         RtEmitters.TexelEmission whole = new RtEmitters.TexelEmission() {
@@ -344,6 +378,60 @@ public class RtEmittersStabilityTest {
         assertEquals(1f, face[3], 1e-5f, "whole face area");
         assertEquals(1f, face[7], 1e-5f, "no boost for a big face");
         assertEquals(0f, face[11], 1e-6f, "solid face radiates outward only");
+
+        // Same face, dimmer: the MIN_POWER floor now lifts it too (power 0.5 < 0.6 -> boost 1.2). It must still be single-sided,
+        // otherwise the cos floor 0.25 and the shortened shadow ray leak light through slabs, carpets and panes.
+        RtEmitters.TexelEmission dim = new RtEmitters.TexelEmission() {
+            @Override
+            public int width() {
+                return 16;
+            }
+
+            @Override
+            public int height() {
+                return 16;
+            }
+
+            @Override
+            public float at(int x, int y) {
+                return 0.5f;
+            }
+        };
+        float[] dimFace = new float[RtEmitters.FLOATS];
+        assertTrue(RtEmitters.buildQuadRecord(dimFace, 0, facePos, 0, faceUv, 0, dim, false));
+        assertTrue(dimFace[7] > 1.05f, "the floor lifts a whole face of mean 0.5: boost " + dimFace[7]);
+        assertEquals(0f, dimFace[11], 1e-6f, "a lifted solid face must stay single-sided");
+
+        // The gate is the whole quad, not the shrunk emitter rectangle: a small bright spot on an opaque face (a 2x2 texel spot
+        // of a 16x16 texture over a 1x1 face) is boosted hard, and must still not open the face.
+        float[] faceUvFull = {0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f};
+        float[] spotFace = new float[RtEmitters.FLOATS];
+        assertTrue(RtEmitters.buildQuadRecord(spotFace, 0, facePos, 0, faceUvFull, 0,
+            sprite16(1f, new int[][] {{7, 6}, {8, 6}, {7, 7}, {8, 7}}), false));
+        assertEquals(2f / 16f * 2f / 16f, spotFace[3], 1e-4f, "the emitter shrinks to the spot");
+        assertTrue(spotFace[7] > 1.05f, "the spot is boosted: " + spotFace[7]);
+        assertEquals(0f, spotFace[11], 1e-6f, "but a face with a spot is still an opaque face");
+
+        // A spot too small to reach the floor under the boost cap stops at the cap instead of becoming a floodlight (the javadoc
+        // of MIN_POWER states the area * mean emission that is required: 0.6 / 64 = 0.0094).
+        float tinyBoost = RtEmitters.powerBoost(1.0e-3f, 1f, 1f);
+        assertEquals(RtEmitters.MAX_BOOST, tinyBoost, 1e-5f, "a spot far below the reachable floor stops at the cap");
+        assertTrue(1.0e-3f * 1f * tinyBoost < RtEmitters.MIN_POWER, "and it stays dim, as the documentation says");
+
+        // Owner report 2026-10-24: a cave with a torch in it was pitch black, the flame only lit its own puddle. The emitter
+        // power (area x mean emission x boost) is what a receiver's illuminance is proportional to, and vanilla puts a torch at
+        // light level 14 against glowstone's 15, so the flame must carry 14/15 of a glowstone face. The face here is the assumed
+        // 65 % texture above and not a texture pack mean, so the exact ratio pinned is MIN_POWER / 0.65 = 0.923; the vanilla
+        // anchor 14/15 = 0.933 is asserted separately with the few percent the assumption is worth.
+        float flamePower = rec[3] * rec[14] * rec[7];
+        float facePower = face[3] * face[14] * face[7];
+        assertEquals(0.65f, facePower, 1e-5f, "the assumed face carries its area x mean emission as power");
+        assertEquals(RtEmitters.MIN_POWER / 0.65f, flamePower / facePower, 1e-4f,
+            "flame power " + flamePower + " over face power " + facePower);
+        assertTrue(Math.abs(flamePower / facePower - 14f / 15f) < 0.02f,
+            "and sits within 2 % of vanilla's torch 14 over glowstone 15 = 0.933");
+        assertTrue(rec[7] < RtEmitters.MAX_BOOST,
+            "the flame reaches the floor with headroom under the boost cap: " + rec[7] + " of " + RtEmitters.MAX_BOOST);
 
         // a quad without emissive texels is not an emitter
         assertFalse(RtEmitters.buildQuadRecord(new float[RtEmitters.FLOATS], 0, pos, 0, uv, 0, sprite16(1f, new int[0][]), true));

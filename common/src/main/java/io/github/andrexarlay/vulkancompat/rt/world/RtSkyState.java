@@ -34,8 +34,8 @@ import java.util.Locale;
  */
 public final class RtSkyState {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-SKY");
-    /** Byte offset of the sky block in the per-frame slot. */
-    public static final int OFFSET = 256;
+    /** Byte offset of the sky block in the per-frame slot (StatsBuf.skySunDir in rt_common.glsl, RtStatsLayout). */
+    public static final int OFFSET = RtStatsLayout.SKY_SUN_DIR;
     public static final int BYTES = 128;
     /** Moon light per phase (MoonPhase.index(): full, waning gibbous, third quarter, waning crescent, new, waxing ...). */
     private static final float[] PHASE_LIGHT = {1.0f, 0.75f, 0.5f, 0.25f, 0.08f, 0.25f, 0.5f, 0.75f};
@@ -150,43 +150,42 @@ public final class RtSkyState {
         cameraY = camY;
     }
 
-    /** Writes the sky block at {@code slot + OFFSET} (see StatsBuf in rt_common.glsl). */
+    /** Writes the sky block (StatsBuf sky* members in rt_common.glsl; offsets from {@link RtStatsLayout}). */
     public void write(long slot, long texAddress, boolean flipX) {
-        MemoryUtil.memPutFloat(slot + 244, (float) cameraY);   // StatsBuf.skyCamY
-        long b = slot + OFFSET;
-        MemoryUtil.memPutFloat(b, sunDir[0]);
-        MemoryUtil.memPutFloat(b + 4, sunDir[1]);
-        MemoryUtil.memPutFloat(b + 8, sunDir[2]);
-        MemoryUtil.memPutFloat(b + 12, sunAngle);
-        MemoryUtil.memPutFloat(b + 16, moonDir[0]);
-        MemoryUtil.memPutFloat(b + 20, moonDir[1]);
-        MemoryUtil.memPutFloat(b + 24, moonDir[2]);
-        MemoryUtil.memPutFloat(b + 28, moonAngle);
-        MemoryUtil.memPutFloat(b + 32, fogColor[0]);
-        MemoryUtil.memPutFloat(b + 36, fogColor[1]);
-        MemoryUtil.memPutFloat(b + 40, fogColor[2]);
-        MemoryUtil.memPutFloat(b + 44, starBrightness);
-        MemoryUtil.memPutFloat(b + 48, sunset[0]);
-        MemoryUtil.memPutFloat(b + 52, sunset[1]);
-        MemoryUtil.memPutFloat(b + 56, sunset[2]);
-        MemoryUtil.memPutFloat(b + 60, sunset[3]);
-        MemoryUtil.memPutFloat(b + 64, ((cloudArgb >> 16) & 255) / 255f);
-        MemoryUtil.memPutFloat(b + 68, ((cloudArgb >> 8) & 255) / 255f);
-        MemoryUtil.memPutFloat(b + 72, (cloudArgb & 255) / 255f);
-        MemoryUtil.memPutFloat(b + 76, ((cloudArgb >>> 24) & 255) / 255f);
-        MemoryUtil.memPutFloat(b + 80, (float) cloudX);
-        MemoryUtil.memPutFloat(b + 84, (float) cloudY);
-        MemoryUtil.memPutFloat(b + 88, (float) cloudZ);
-        MemoryUtil.memPutFloat(b + 92, cloudEnd);
-        MemoryUtil.memPutFloat(b + 96, starAngle);
-        MemoryUtil.memPutFloat(b + 100, skyEnd);
-        MemoryUtil.memPutFloat(b + 104, moonLight);
-        MemoryUtil.memPutFloat(b + 108, rainBrightness);
-        MemoryUtil.memPutLong(b + 112, texAddress);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CAM_Y, (float) cameraY);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_SUN_DIR, sunDir[0]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_SUN_DIR + 4, sunDir[1]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_SUN_DIR + 8, sunDir[2]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_SUN_DIR + 12, sunAngle);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MOON_DIR, moonDir[0]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MOON_DIR + 4, moonDir[1]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MOON_DIR + 8, moonDir[2]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MOON_DIR + 12, moonAngle);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_FOG_COLOR, fogColor[0]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_FOG_COLOR + 4, fogColor[1]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_FOG_COLOR + 8, fogColor[2]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_FOG_COLOR + 12, starBrightness);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_SUNSET, sunset[0]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_SUNSET + 4, sunset[1]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_SUNSET + 8, sunset[2]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_SUNSET + 12, sunset[3]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CLOUD_COLOR, ((cloudArgb >> 16) & 255) / 255f);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CLOUD_COLOR + 4, ((cloudArgb >> 8) & 255) / 255f);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CLOUD_COLOR + 8, (cloudArgb & 255) / 255f);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CLOUD_COLOR + 12, ((cloudArgb >>> 24) & 255) / 255f);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CLOUD_POS, (float) cloudX);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CLOUD_POS + 4, (float) cloudY);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CLOUD_POS + 8, (float) cloudZ);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_CLOUD_POS + 12, cloudEnd);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MISC, starAngle);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MISC + 4, skyEnd);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MISC + 8, moonLight);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_MISC + 12, rainBrightness);
+        MemoryUtil.memPutLong(slot + RtStatsLayout.SKY_TEX_ADDR, texAddress);
         int flags = (moonPhase & 7) | (hasSky ? 1 << 4 : 0) | (flipX ? 1 << 5 : 0)
             | (isEnd ? 1 << 6 : 0) | (isNether ? 1 << 7 : 0) | ((cloudStatus & 3) << 8);
-        MemoryUtil.memPutInt(b + 120, flags);
-        MemoryUtil.memPutFloat(b + 124, RtSky.tiltRad);   // StatsBuf.skyTilt
+        MemoryUtil.memPutInt(slot + RtStatsLayout.SKY_TEX_FLAGS, flags);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_TILT, RtSky.tiltRad);   // StatsBuf.skyTilt
     }
 
     /** Longest auto exposure of the path tracer for this day factor: night stays dark (no eye adaptation to daylight). */

@@ -177,10 +177,10 @@ public final class PreviewPanel {
         int screenH = mc != null && mc.getWindow() != null ? mc.getWindow().getGuiScaledHeight() : area.getLimitY();
 
         if (modalOpen) {
-            int mw = Mth.clamp(screenW - 28, 180, MAX_PANEL_W);
+            int mw = Math.max(120, Math.min(screenW - 28, MAX_PANEL_W));
             int mx0 = (screenW - mw) / 2;
             int my0 = 14;
-            int mLimitY = Math.max(my0 + 90, screenH - 14);
+            int mLimitY = Math.min(screenH - 6, Math.max(my0 + 90, screenH - 14));
             g.nextStratum();
             g.fill(0, 0, screenW, screenH, 0xB806060A);
             drawPanelBox(g, font, mx0, my0, mw, mLimitY, option, info, mouseX, mouseY, true);
@@ -206,7 +206,7 @@ public final class PreviewPanel {
     private static void renderCompactButton(GuiGraphicsExtractor g, Font font, Dim2i area, int reservedLimitY, Option option, int mouseX, int mouseY) {
         Minecraft mc = Minecraft.getInstance();
         int screenW = mc != null && mc.getWindow() != null ? mc.getWindow().getGuiScaledWidth() : area.getLimitX();
-        Component btnText = Component.translatableWithFallback("bedray.preview.open_modal", "🔍 Инфо / Скриншоты: %s", option.getName());
+        Component btnText = Component.translatableWithFallback("bedray.preview.open_modal", "Info / Screenshots: %s", option.getName());
         int maxW = Math.min(240, screenW - 16);
         String label = font.plainSubstrByWidth(btnText.getString(), maxW - 12);
         int bw = Math.min(maxW, font.width(label) + 12);
@@ -245,8 +245,8 @@ public final class PreviewPanel {
         int top = y + 4 - scroll;
         int cy = top;
 
-        // title, value, impact
-        g.text(font, option.getName().copy().withStyle(ChatFormatting.BOLD), cx, cy, 0xFFFFFFFF);
+        // title (truncated: a long localized name must not overflow the narrow panel), value, impact
+        g.text(font, font.plainSubstrByWidth(option.getName().copy().withStyle(ChatFormatting.BOLD).getString(), cw), cx, cy, 0xFFFFFFFF);
         cy += 11;
         Object value = option instanceof StatefulOption<?> so ? so.getValidatedValue() : null;
         if (value != null) {
@@ -255,7 +255,8 @@ public final class PreviewPanel {
             cy += 11;
         }
         if (option.getImpact() != null) {
-            g.text(font, Component.translatable("sodium.options.performance_impact_string", option.getImpact().getName()), cx, cy, 0xFFCCCCCC);
+            g.text(font, font.plainSubstrByWidth(Component.translatable("sodium.options.performance_impact_string", option.getImpact().getName()).getString(), cw),
+                cx, cy, 0xFFCCCCCC);
             cy += 11;
         }
         cy += 2;

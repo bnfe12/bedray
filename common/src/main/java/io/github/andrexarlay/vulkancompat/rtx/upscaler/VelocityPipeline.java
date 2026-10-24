@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler;
 
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 import org.lwjgl.BufferUtils;
@@ -55,8 +56,8 @@ public final class VelocityPipeline implements AutoCloseable {
 
     /** Number of ring slots; engine MAX_SUBMITS_IN_FLIGHT is 2, one spare. */
     private static final int SLOTS = 3;
-    /** 2 x mat4 (cam) + 3 x vec4 (cam) + 2 x mat4 (entity) + 2 x vec4 (entity state) (std140). */
-    public static final int UNIFORM_FLOATS = 16 + 16 + 4 + 4 + 4 + 16 + 16 + 4 + 4 + 4;
+    /** 2 x mat4 (cam) + 3 x vec4 (cam) + 2 x mat4 (entity) + 2 x vec4 (entity state) + 1 x vec4 (jitter) (std140). */
+    public static final int UNIFORM_FLOATS = 16 + 16 + 4 + 4 + 4 + 16 + 16 + 4 + 4 + 4 + 4;
     public static final long UNIFORM_BYTES = (long) UNIFORM_FLOATS * Float.BYTES;
 
     public static final String TELEMETRY_LINE =
@@ -151,7 +152,7 @@ public final class VelocityPipeline implements AutoCloseable {
                     .pName(stack.UTF8("main"));
             compPipeInfo.get(0).layout(this.pipelineLayout);
             LongBuffer pComputePipeline = stack.mallocLong(1);
-            check(VK10.vkCreateComputePipelines(device, 0L, compPipeInfo, null, pComputePipeline), "vkCreateComputePipelines");
+            check(RtVulkanPipelineCache.createCompute(device, compPipeInfo, null, pComputePipeline), "vkCreateComputePipelines");
             this.computePipeline = pComputePipeline.get(0);
 
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(3, stack);
@@ -471,7 +472,14 @@ public final class VelocityPipeline implements AutoCloseable {
         data[o++] = Float.intBitsToFloat((int) prevDepthAddress);
         data[o++] = Float.intBitsToFloat((int) (prevDepthAddress >>> 32));
         data[o++] = 0f;
-        data[o] = 0f;
+        data[o++] = 0f;
+        // The depth buffer was rendered with the jittered projection, so the reprojection has to undo that offset. The
+        // world phase is already over when the upscaler runs, so only the advanced-phase flag is a valid gate here.
+        boolean jittered = CameraJitterManager.isActive();
+        data[o++] = jittered ? CameraJitterManager.getCurrentPixelJitterX() : 0.0f;
+        data[o++] = jittered ? CameraJitterManager.getCurrentPixelJitterY() : 0.0f;
+        data[o++] = jittered ? CameraJitterManager.getPrevPixelJitterX() : 0.0f;
+        data[o] = jittered ? CameraJitterManager.getPrevPixelJitterY() : 0.0f;
 
         FloatBuffer fb = MemoryUtil.memFloatBuffer(uniformMapped[s], UNIFORM_FLOATS);
         fb.put(data);
@@ -526,8 +534,39 @@ public final class VelocityPipeline implements AutoCloseable {
         int depthConvention,
         org.joml.Vector3f cameraOrigin
     ) {
-        float ndcX = uvX * 2.0f - 1.0f;
-        float ndcY = uvY * 2.0f - 1.0f;
+        return reprojectCpu(uvX, uvY, depth, width, height, invViewProj, prevViewProj, camDelta, isEntity,
+            entityCurrTransform, entityPrevTransform, entityCustomIndex, historyReset, depthConvention, cameraOrigin,
+            0.0f, 0.0f);
+    }
+
+    /**
+     * CPU reference overload with the sub-pixel jitter of the current projection, in render pixels: the depth of a pixel
+     * belongs to the unjittered pixel {@code p + jitter}, exactly as in {@code velocity_reproject.comp}.
+     */
+    public static ReprojectionResult reprojectCpu(
+        float uvX,
+        float uvY,
+        float depth,
+        int width,
+        int height,
+        Matrix4f invViewProj,
+        Matrix4f prevViewProj,
+        Vec3 camDelta,
+        boolean isEntity,
+        Matrix4f entityCurrTransform,
+        Matrix4f entityPrevTransform,
+        int entityCustomIndex,
+        boolean historyReset,
+        int depthConvention,
+        org.joml.Vector3f cameraOrigin,
+        float jitterX,
+        float jitterY
+    ) {
+        // The jittered projection moved the content by -jitter pixels; this pixel holds the unjittered p + jitter.
+        float sampleUvX = uvX + (width > 0 ? jitterX / width : 0.0f);
+        float sampleUvY = uvY + (height > 0 ? jitterY / height : 0.0f);
+        float ndcX = sampleUvX * 2.0f - 1.0f;
+        float ndcY = sampleUvY * 2.0f - 1.0f;
 
         Matrix4f invVP = invViewProj != null ? invViewProj : new Matrix4f();
         Matrix4f prevVP = prevViewProj != null ? prevViewProj : new Matrix4f();
@@ -593,8 +632,8 @@ public final class VelocityPipeline implements AutoCloseable {
             }
         }
 
-        float prevUvX = uvX;
-        float prevUvY = uvY;
+        float prevUvX = sampleUvX;
+        float prevUvY = sampleUvY;
         if (Math.abs(prevClip.w) > 1e-7f) {
             prevUvX = (prevClip.x / prevClip.w) * 0.5f + 0.5f;
             prevUvY = (prevClip.y / prevClip.w) * 0.5f + 0.5f;
@@ -606,8 +645,8 @@ public final class VelocityPipeline implements AutoCloseable {
             disocclusionMask = 1.0f;
         }
 
-        float mvX = (prevUvX - uvX) * width;
-        float mvY = (prevUvY - uvY) * height;
+        float mvX = (prevUvX - sampleUvX) * width;
+        float mvY = (prevUvY - sampleUvY) * height;
 
         float maxMotion = Math.max(width, height) * 0.5f;
         float len = (float) Math.hypot(mvX, mvY);

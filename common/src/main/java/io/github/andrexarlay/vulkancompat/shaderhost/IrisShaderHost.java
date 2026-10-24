@@ -75,7 +75,11 @@ public final class IrisShaderHost implements ShaderHost {
 
     @Override
     public ShaderHostStatus probe(ShaderHostContext ctx) {
-        lastStatus = doProbe(ctx);
+        try { lastStatus = doProbe(ctx); }
+        catch (RuntimeException | LinkageError error) {
+            activeGraph = null;
+            lastStatus = status(ShaderHostState.COMPILE_FAILED, "Shader host initialization failed: " + error.getMessage());
+        }
         return lastStatus;
     }
 
@@ -120,6 +124,10 @@ public final class IrisShaderHost implements ShaderHost {
             return validation;
         }
 
+        if (!Boolean.getBoolean("bedray.iris.post"))
+            return status(ShaderHostState.DISABLED_FOR_SESSION,
+                "Post-only Vulkan host is opt-in: -Dbedray.iris.post=true; no general Iris compatibility claim");
+
         IrisPassGraph.ParseResult result;
         try {
             result = IrisPassGraph.build(pack, ScanLimits.defaults());
@@ -139,7 +147,10 @@ public final class IrisShaderHost implements ShaderHost {
         IrisPassGraph graph = result.graph();
         activeGraph = graph;
         return ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY,
-            "pack " + report.name() + " (" + graph.passCount() + " passes) ready");
+            "pack " + report.name() + " (" + graph.passCount() + " passes, " + graph.options().changedOptions()
+                + " changed options, profile=" + (graph.options().matchedProfile() == null ? "custom" : graph.options().matchedProfile())
+                + ") compiled; in-game execution is not verified"
+                + (graph.options().diagnostics().isEmpty() ? "" : "; " + String.join("; ", graph.options().diagnostics())));
     }
 
     @Override

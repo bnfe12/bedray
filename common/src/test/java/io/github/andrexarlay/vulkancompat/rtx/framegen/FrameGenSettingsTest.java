@@ -81,6 +81,35 @@ public class FrameGenSettingsTest {
     }
 
     @Test
+    public void statusBadgeFollowsProvenState() throws Exception {
+        String src = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rtx/framegen/FrameGenRuntime.java");
+        int active = src.indexOf("public static boolean isActive()");
+        assertTrue(active > 0, "isActive() must exist");
+        String body = src.substring(active, src.indexOf("\n    }", active));
+        assertTrue(body.contains("return status().state() == State.ACTIVE;"),
+            "isActive() must follow the proven state machine, not the requested mode: " + body);
+        assertTrue(!body.contains("modeOn"), "isActive() must not read modeOn directly: " + body);
+
+        int badge = src.indexOf("public static String statusBadge()");
+        String badgeBody = src.substring(badge, src.indexOf("\n    }", badge));
+        assertTrue(badgeBody.contains("Status st = status();"), "the badge must read the state machine: " + badgeBody);
+        assertTrue(badgeBody.contains("case ACTIVE -> snapshot().multiplier() + \"x\";"), "2x only when proven: " + badgeBody);
+        assertTrue(badgeBody.contains("case ENGAGING -> \"Pending\";"), "engaging must not claim a multiplier: " + badgeBody);
+
+        String fsr = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rtx/framegen/fsr3/Fsr3FrameGen.java");
+        assertTrue(fsr.contains("if (nat == null && (swapchainFailed || resolveDll() == null)) {"),
+            "FSR 3 must not advertise READY before its library resolves");
+    }
+
+    private static String readSource(String relative) throws Exception {
+        java.nio.file.Path p = java.nio.file.Path.of(relative);
+        if (!java.nio.file.Files.isRegularFile(p)) {
+            p = java.nio.file.Path.of("common").resolve(relative);
+        }
+        return java.nio.file.Files.readString(p);
+    }
+
+    @Test
     public void findConfigFileWithSystemProperties(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
         java.nio.file.Path configDir = tempDir.resolve("config");
         java.nio.file.Files.createDirectories(configDir);

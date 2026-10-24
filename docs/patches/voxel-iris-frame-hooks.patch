@@ -1,0 +1,131 @@
+diff --git a/common/src/main/java/io/github/andrexarlay/vulkancompat/compute/ComputeRenderBridge.java b/common/src/main/java/io/github/andrexarlay/vulkancompat/compute/ComputeRenderBridge.java
+index 4af2c1f..0d6b01a 100644
+--- a/common/src/main/java/io/github/andrexarlay/vulkancompat/compute/ComputeRenderBridge.java
++++ b/common/src/main/java/io/github/andrexarlay/vulkancompat/compute/ComputeRenderBridge.java
+@@ -48,6 +48,9 @@ public final class ComputeRenderBridge {
+-
++
+     private ComputeRenderBridge() {}
+-
++
++    /** Render-thread scene applied at this frame's boundary; pair with a successful renderDiagnostic result. */
++    public static GraphicsBackendRegistry.SceneMode appliedSceneMode() { return appliedRequest.mode(); }
++
+     public static void onFrameBegin(boolean hasWorld) {
+         if (!rendererSelectionInitialized) {
+             // Config loading and Vulkan runtime setup have finished before the first rendered frame.
+diff --git a/common/src/main/java/io/github/andrexarlay/vulkancompat/mixin/framegen/MixinVulkanDeviceFrameGen.java b/common/src/main/java/io/github/andrexarlay/vulkancompat/mixin/framegen/MixinVulkanDeviceFrameGen.java
+index 9dd70b8..7de5a01 100644
+--- a/common/src/main/java/io/github/andrexarlay/vulkancompat/mixin/framegen/MixinVulkanDeviceFrameGen.java
++++ b/common/src/main/java/io/github/andrexarlay/vulkancompat/mixin/framegen/MixinVulkanDeviceFrameGen.java
+@@ -14,6 +14,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+ public abstract class MixinVulkanDeviceFrameGen {
+     @Inject(method = "close", at = @At("HEAD"))
+     private void vkb$shutdownStreamline(CallbackInfo ci) {
++        io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onDeviceClose(
++            (com.mojang.renderpearl.backend.vulkan.VulkanDevice)(Object)this);
+         io.github.andrexarlay.vulkancompat.compute.ComputeRenderBridge.onDeviceClose(
+             (com.mojang.renderpearl.backend.vulkan.VulkanDevice) (Object) this);
+         FrameGenRuntime.onDeviceClose();
+diff --git a/common/src/main/java/io/github/andrexarlay/vulkancompat/mixin/rtx/MixinGameRenderer.java b/common/src/main/java/io/github/andrexarlay/vulkancompat/mixin/rtx/MixinGameRenderer.java
+index 23ce06f..a074e55 100644
+--- a/common/src/main/java/io/github/andrexarlay/vulkancompat/mixin/rtx/MixinGameRenderer.java
++++ b/common/src/main/java/io/github/andrexarlay/vulkancompat/mixin/rtx/MixinGameRenderer.java
+@@ -79,6 +79,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
+     private void onRenderBegin(CallbackInfo ci) {
+         if (VulkanBridge.isVulkan()) {
+             PerfMonitor.frameBegin();
++            io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.beginFrame(this.minecraft.level);
++            io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onFrameBegin(this.minecraft.level);
+             ComputeRenderBridge.onFrameBegin(this.minecraft.level != null);
+             VulkanRtxManager.processPendingChanges();
+             WorldTargetManager.resetPhase((GameRenderer) (Object) this);
+@@ -194,7 +196,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
+         if (VulkanBridge.isVulkan()) {
+             PerfMonitor.mark(PerfMonitor.Mark.RASTER_END);
+             ComputeRenderBridge.captureWorld(this.gameRenderState.levelRenderState.cameraRenderState);
+-            if (ComputeRenderBridge.renderDiagnostic(this.mainRenderTarget)) {
++            boolean computeRecorded = ComputeRenderBridge.renderDiagnostic(this.mainRenderTarget);
++            if (computeRecorded) {
+                 io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.suspendForComputeDiagnostic();
+             } else {
+                 // The particles of the world pass are replayed before the hardware RT replacement image.
+@@ -203,6 +206,16 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
+                     this.gameRenderState.levelRenderState.cameraRenderState, this.mainRenderTarget,
+                     this.gameRenderState.levelRenderState);
+             }
++            // The producer follows this frame's accepted commands and applied scene, not a pending UI request.
++            var producer = computeRecorded
++                ? (ComputeRenderBridge.appliedSceneMode() == io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE
++                    ? io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.VOXEL_COMPUTE
++                    : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.SYNTHETIC)
++                : io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.displayedThisFrame(this.mainRenderTarget)
++                    ? io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.HARDWARE_RT
++                    : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.RASTER;
++            io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.renderFrame(
++                this.mainRenderTarget, this.gameRenderState.levelRenderState.cameraRenderState, producer);
+             PerfMonitor.mark(PerfMonitor.Mark.RT_END);
+             WorldTargetManager.copyWorldDepth();
+         }
+diff --git a/common/src/main/java/io/github/andrexarlay/vulkancompat/sodium/BedrayConfigScreen.java b/common/src/main/java/io/github/andrexarlay/vulkancompat/sodium/BedrayConfigScreen.java
+index fdf384a..816db95 100644
+--- a/common/src/main/java/io/github/andrexarlay/vulkancompat/sodium/BedrayConfigScreen.java
++++ b/common/src/main/java/io/github/andrexarlay/vulkancompat/sodium/BedrayConfigScreen.java
+@@ -188,6 +188,8 @@ public final class BedrayConfigScreen extends Screen {
+     private void buildCategoryRows() {
+         switch (selectedCategory) {
+             case 0 -> { // Ray Tracing & Engine
++                currentRows.add(new OptionRow("Iris Vulkan (Experimental)", "Post-only GLSL compatibility host. General shaderpack support is still in development.",
++                    io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge::runtimeStatus, () -> {}));
+                 currentRows.add(new OptionRow(text("bedray.opt.renderer", "World Renderer"),
+                     text("bedray.opt.renderer.desc", "Hardware RT or experimental voxel diagnostics. Voxel requires the Bedray Compute add-on; it uses bilinear scaling and disables frame generation."),
+                     () -> VulkanSodiumConfig.rendererName(VulkanRtxConfig.selectedRenderer()).getString(),
+diff --git a/docs/DEVELOPMENT_BRANCHES.md b/docs/DEVELOPMENT_BRANCHES.md
+index 24edb3b..d044296 100644
+--- a/docs/DEVELOPMENT_BRANCHES.md
++++ b/docs/DEVELOPMENT_BRANCHES.md
+@@ -4,18 +4,18 @@ The canonical source repository for current renderer work is [Bedray](https://gi
+ Keep unfinished work in branches of this repository rather than creating another repository or a copy
+ of the same renderer. Local linked Git worktrees share the repository history and are not independent forks.
+-
++
+-| Workstream | Responsibility | Current scope |
++| Branch | Responsibility | Current scope |
+ |---|---|---|
+ | `main` | Published Bedray baseline | Kept separate from the experimental branches |
+-| Software voxel traversal | Software traversal/companion API | Bounded live opaque diagnostic and synthetic scene; full materials/light transport pending |
+-| Iris Vulkan compatibility | Iris GLSL compatibility/post layer | Opt-in fullscreen post subset; general shaderpack compatibility pending |
++| Software voxel traversal | Software traversal/companion API and integration | Bounded live full cubes with atlas albedo and synthetic scene; Iris source through `086b98a` integrated with one host frame loop; general shapes/light transport pending |
++| Iris Vulkan compatibility | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth, current-frame MRT; general shaderpack compatibility pending |
++| Vulkan cache and DXGI presentation | Shared shader/pipeline caches and presentation compatibility | Independent source work; stage-aware Iris SPIR-V caching and LWJGL compatibility require integration |
+-
++
+-Current branch names and commit activity are listed on the repository's [branches page](https://github.com/bnfe12/bedray/branches).
+-
+-These are development branches. Local candidate builds and named tests are distinct from published
+-releases and live gameplay acceptance. Compute has explicit CPU and offscreen GPU verification commands;
+-game capture/presentation and cross-vendor support remain separate gates. No tested-support claim follows
+-automatically from source compilation.
++These are development branches. The separate Compute alpha.6 host/companion candidates were locally
++built and installed before Iris integration; those artifacts do not contain the combined implementation.
++The combined source still needs its own compilation, package and game evidence. Local candidate builds
++and named checks are distinct from published releases and live gameplay acceptance. Source integration
++does not establish presentation, shaderpack compatibility or cross-vendor support.
+-
++
+ All branches are protected against force-push and deletion. The default branch requires pull requests
+ with resolved review conversations. No bypass actors are configured; ordinary commits to development
+@@ -26,6 +26,12 @@ one color result; Iris is a subsequent optional post stage. A depth-reading post
+ guides matching that exact color producer. Shared mixin/UI hooks must be reconciled once on merge.
+ Companion algorithms stay behind the versioned API instead of importing private host implementation.
+-
++
++Consumers of borrowed host target views require retirement before those views are destroyed or
++replaced. A next-frame extent/view comparison cannot by itself establish that ordering. Shared target
++cleanup must submit queued references and retire dependent descriptors before target closure; a failed
++retirement must stop replacement. This is a required lifecycle gate for depth-reading Iris passes and
++future raster/depth composition in Compute.
++
+ Do not merge historical development repositories wholesale over the public baseline: review their unique
+ changes first and record the source commit when selectively porting useful work. Repository archival and
+ branch deletion are separate maintenance decisions; preserve a private SHA inventory before cleanup.
