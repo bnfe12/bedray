@@ -64,6 +64,7 @@ def modManifestAttributes = [
 ]
 
 jar {
+    archiveClassifier = 'host-only'
     bundleCommon(it)
     manifest {
         attributes(modManifestAttributes)
@@ -73,7 +74,7 @@ jar {
 // Modular combined jar: the Bedray host with the Bedray Compute companion nested as a NeoForge JarJar
 // (META-INF/jarjar/metadata.json). Compute keeps its own mod id (bedray_compute) and descriptor — it
 // still loads as a separate mod, and extracting the nested jar into mods/ detaches it again. The
-// standalone jar above stays exactly as before; the combined jar is an additional artifact.
+// host-only artifact is for developers; the included-provider artifact is the canonical distribution.
 evaluationDependsOn(':compute-neoforge')
 def computeNeoJar = project(':compute-neoforge').tasks.named('jar')
 
@@ -101,7 +102,7 @@ def jarjarMetadata = tasks.register('generateJarJarMetadata') {
 }
 
 tasks.register('combinedJar', Jar) {
-    archiveClassifier = 'combined'
+    archiveClassifier = ''
     group = 'build'
     description = 'Bedray host jar with the Bedray Compute companion nested as a JarJar mod (detachable: extract META-INF/jarjar/*.jar into mods/)'
     // A custom Jar task does not get the java plugin's default main output; the standalone jar does.
@@ -115,10 +116,13 @@ tasks.register('combinedJar', Jar) {
     }
 }
 
+tasks.named('assemble') { dependsOn tasks.named('combinedJar') }
+tasks.named('jar') { finalizedBy tasks.named('combinedJar') }
+
 publishing {
     publications {
         create('mavenJava', MavenPublication) {
-            from components.java
+            artifact tasks.named('combinedJar')
             artifactId = "${rootProject.artifact_base}-neoforge"
         }
     }
