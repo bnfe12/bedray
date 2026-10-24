@@ -21,11 +21,12 @@ public class RtShaderModulesTest {
     public void umbrellaExpandsToModulesInOrder() {
         String umbrella = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
         String expanded = RtShaderCompiler.resolveIncludes(umbrella, "/shaders/rt_common.glsl");
-        // the resolver leaves each include line's terminator unconsumed: one extra byte per include
+        // the resolver leaves each include line's terminator unconsumed: "\n", or "\r\n" in a CRLF checkout
         String[] lines = umbrella.split("\n", -1);
         int nonIncludeBytes = 0;
         for (int i = 0; i < lines.length; i++) {
             if (lines[i].contains("#include")) {
+                nonIncludeBytes += lines[i].endsWith("\r") ? 2 : 1;
                 continue;
             }
             nonIncludeBytes += lines[i].length() + (i < lines.length - 1 ? 1 : 0);
@@ -38,7 +39,7 @@ public class RtShaderModulesTest {
             int at = expanded.indexOf(content, pos + 1);
             assertTrue(at >= 0, m + " is missing from the umbrella expansion or out of order");
             pos = at;
-            sum += content.length() + 1;
+            sum += content.length();
         }
         assertEquals(sum, expanded.length(), "expansion must contain the modules exactly once and nothing else");
     }
