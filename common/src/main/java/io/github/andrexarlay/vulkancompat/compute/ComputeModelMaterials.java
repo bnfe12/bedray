@@ -77,7 +77,9 @@ final class ComputeModelMaterials {
     };
     private final List<BlockStateModelPart> parts = new ArrayList<>();
     private final RandomSource random = RandomSource.create(0);
-    private final int[] colors = new int[BlockModelGeometry.MAX_QUADS];
+    // Per-quad baked colors; the final slot records whether the tinted quads moved to the cell tint.
+    private final int[] colors = new int[BlockModelGeometry.MAX_QUADS + 1];
+    private final boolean[] cellQuads = new boolean[BlockModelGeometry.MAX_QUADS];
     private final AppearanceKey lookup = new AppearanceKey(colors);
     private final BlockPos.MutableBlockPos neighborPosition = new BlockPos.MutableBlockPos();
     private Minecraft minecraft;
@@ -96,7 +98,8 @@ final class ComputeModelMaterials {
         generation = 0;
     }
 
-    SectionCapture begin(SectionCache cache) { return new SectionCapture(cache); }
+    /** {@code cellTints} is null unless the provider accepts API minor 5 cell tint; written for MODEL cells only. */
+    SectionCapture begin(SectionCache cache, int[] cellTints) { return new SectionCapture(cache, cellTints); }
 
     final class SectionCapture {
         private final SectionCache cache;
@@ -105,8 +108,9 @@ final class ComputeModelMaterials {
         private final Map<BlockModelGeometry, Integer> indices = new IdentityHashMap<>();
         private final Map<BlockModelGeometry, BlockModelGeometry> canonical = new LinkedHashMap<>();
         private final Map<AppearanceKey, BlockModelGeometry> appearances = new LinkedHashMap<>();
+        private final int[] cellTints;
 
-        private SectionCapture(SectionCache cache) { this.cache = cache; }
+        private SectionCapture(SectionCache cache, int[] cellTints) { this.cache = cache; this.cellTints = cellTints; }
 
         byte captureCell(BlockState state, BlockPos position, int index) {
             Template template = cache.templates[index];
@@ -120,12 +124,31 @@ final class ComputeModelMaterials {
             if (fluid && !fluidNeighborsLoaded(position)) return SectionSnapshot.UNSUPPORTED;
             int visible = visibility(state, position, template);
             Arrays.fill(colors, WHITE);
+            Arrays.fill(cellQuads, false);
             var tintSources = minecraft.getBlockColors().getTintSources(state);
+            int cellColor = 0;
+            boolean conflict = false;
             for (int i = 0; i < template.quads.size(); i++) {
                 int tint = template.quads.get(i).tintIndex;
-                if (tint >= 0 && tintSources != null && tint < tintSources.size() && tintSources.get(tint) != null)
+                if (tint >= 0 && tintSources != null && tint < tintSources.size() && tintSources.get(tint) != null) {
                     colors[i] = tintSources.get(tint).colorInWorld(state, level, position) | 0xFF000000;
+                    cellQuads[i] = true;
+                    if (cellColor == 0) cellColor = colors[i];
+                    else if (cellColor != colors[i]) conflict = true;
+                }
             }
+            // One cell color can replace the per-position biome tint only when all tinted quads agree.
+            boolean useCell = cellTints != null && cellColor != 0 && !conflict;
+            if (useCell) {
+                for (int i = 0; i < template.quads.size(); i++) if (cellQuads[i]) colors[i] = WHITE;
+            } else {
+                Arrays.fill(cellQuads, false);
+                cellColor = 0;
+            }
+            colors[BlockModelGeometry.MAX_QUADS] = useCell ? 1 : 0;
+            int fluidTint = fluid ? fluids.tint(level, position, state) : WHITE;
+            boolean fluidCell = fluid && cellTints != null && (cellColor == 0 || cellColor == fluidTint);
+            if (fluidCell) cellColor = fluidTint;
             int emission = Math.clamp(state.getLightEmission(), 0, 15);
             lookup.set(template, visible, emission);
             BlockModelGeometry appearance = fluid ? null : appearances.get(lookup);
@@ -139,9 +162,11 @@ final class ComputeModelMaterials {
                 for (int i = 0; i < template.quads.size(); i++) {
                     QuadTemplate quad = template.quads.get(i);
                     if (quad.group < 6 && (visible & (1 << quad.group)) == 0) continue;
-                    quads.add(new ModelQuad(quad.vertices, colors[i], quad.flags, Math.max(quad.emission, emission)));
+                    quads.add(new ModelQuad(quad.vertices, colors[i], quad.flags | (cellQuads[i] ? ModelQuad.CELL_TINT : 0),
+                        Math.max(quad.emission, emission)));
                 }
-                if (fluid && !fluids.append(level, position, state, quads)) return SectionSnapshot.UNSUPPORTED;
+                if (fluid && !fluids.append(level, position, state, quads, fluidCell ? WHITE : fluidTint,
+                    fluidCell ? ModelQuad.CELL_TINT : 0)) return SectionSnapshot.UNSUPPORTED;
                 if (quads.isEmpty()) return SectionSnapshot.EMPTY;
                 if (quads.size() > BlockModelGeometry.MAX_QUADS) return SectionSnapshot.UNSUPPORTED;
                 appearance = new BlockModelGeometry(quads);
@@ -160,6 +185,7 @@ final class ComputeModelMaterials {
             if (!fluid && appearances.size() < SectionModelGeometry.MAX_MODELS && !appearances.containsKey(lookup))
                 appearances.put(lookup.copy(), appearance);
             references[index] = reference.shortValue();
+            if (cellTints != null) cellTints[index] = cellColor;
             return SectionSnapshot.MODEL;
         }
 

@@ -19,6 +19,7 @@ public final class SectionModelGeometry {
     private final List<BlockModelGeometry> palette;
     private final short[] references;
     private final int quadCount;
+    private final boolean[] cellTinted;
 
     public SectionModelGeometry(long generation, List<BlockModelGeometry> palette, short[] references) {
         this.palette = List.copyOf(palette);
@@ -30,7 +31,12 @@ public final class SectionModelGeometry {
                 throw new IllegalArgumentException("Model reference outside palette");
         this.generation = generation;
         this.quadCount = this.palette.stream().mapToInt(model -> model.quads().size()).sum();
+        cellTinted = new boolean[this.palette.size()];
+        for (int model = 0; model < cellTinted.length; model++)
+            for (ModelQuad quad : this.palette.get(model).quads()) cellTinted[model] |= (quad.flags() & ModelQuad.CELL_TINT) != 0;
     }
+    /** True when one-based reference r has a quad multiplied by the cell tint. Zero returns false. */
+    public boolean usesCellTint(int reference) { return reference > 0 && cellTinted[reference - 1]; }
     public long generation() { return generation; }
     public List<BlockModelGeometry> palette() { return palette; }
     public int reference(int index) { return Short.toUnsignedInt(references[index]); }

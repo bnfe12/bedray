@@ -5,7 +5,7 @@ import java.util.Objects;
 /** Versioned renderer registration and frame-boundary requests; no GPU calls during registration. */
 public final class GraphicsBackendRegistry {
     public static final int API_VERSION = 1;
-    public static final int API_MINOR_VERSION = 4;
+    public static final int API_MINOR_VERSION = 5;
 
     /** Runtime handshake; unlike a public constant this call is not inlined into companion bytecode. */
     public static int apiMinorVersion() { return API_MINOR_VERSION; }

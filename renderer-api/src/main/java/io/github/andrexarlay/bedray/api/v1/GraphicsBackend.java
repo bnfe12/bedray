@@ -21,6 +21,10 @@ public interface GraphicsBackend extends AutoCloseable {
     /** Opt-in to API minor 4 model occupancy and per-cell light. Older providers keep cube-only capture. */
     default boolean supportsModelGeometry() { return false; }
 
+    /** Opt-in to API minor 5 per-cell tint (SectionTintData, CubeFaceMaterial.cellTint, ModelQuad.CELL_TINT).
+     * Providers that do not opt in keep receiving palettes with the tint baked into every entry. */
+    default boolean supportsCellTint() { return false; }
+
     /** Opt-in to bounded live-world snapshots. Called on the render thread, before render(). */
     default boolean wantsWorldSnapshots() { return false; }
 

@@ -13,6 +13,7 @@ public final class SectionSnapshot {
     private final CubeSectionMaterials materials;
     private final SectionModelGeometry models;
     private final SectionLightData lighting;
+    private final SectionTintData tints;
     private final int modelCount;
 
     public SectionSnapshot(int x, int y, int z, long revision, byte[] cells) {
@@ -23,6 +24,12 @@ public final class SectionSnapshot {
     }
     public SectionSnapshot(int x, int y, int z, long revision, byte[] cells, CubeSectionMaterials materials,
                            SectionModelGeometry models, SectionLightData lighting) {
+        this(x,y,z,revision,cells,materials,models,lighting,null);
+    }
+    /** API minor 5: optional per-cell tint. A cell whose cube face or model quad requests the cell tint
+     * must carry a nonzero value; a nonzero value requires cube or model occupancy. */
+    public SectionSnapshot(int x, int y, int z, long revision, byte[] cells, CubeSectionMaterials materials,
+                           SectionModelGeometry models, SectionLightData lighting, SectionTintData tints) {
         if (revision < 0 || cells.length != CELL_COUNT) throw new IllegalArgumentException("Invalid section");
         this.cells = cells.clone();
         int opaque=0, unsupported=0, model=0;
@@ -40,12 +47,19 @@ public final class SectionSnapshot {
                 throw new IllegalArgumentException("Model reference requires model occupancy");
             if (materials != null && materials.reference(index) != 0 && cell != OPAQUE_CUBE)
                 throw new IllegalArgumentException("Material reference requires an opaque cube");
+            int tint = tints == null ? 0 : tints.argb(index);
+            if (tint != 0 && cell != OPAQUE_CUBE && cell != MODEL)
+                throw new IllegalArgumentException("Cell tint requires cube or model occupancy");
+            if (tint == 0 && (cell == OPAQUE_CUBE && materials != null && materials.usesCellTint(materials.reference(index))
+                    || cell == MODEL && models.usesCellTint(models.reference(index))))
+                throw new IllegalArgumentException("Cell-tinted appearance requires a cell tint");
         }
         opaqueCount=opaque; unsupportedCount=unsupported;
         this.x = x; this.y = y; this.z = z; this.revision = revision;
         this.materials = materials;
         this.models = models;
         this.lighting = lighting;
+        this.tints = tints;
         this.modelCount = model;
         if (materials != null && models != null && materials.generation() != models.generation())
             throw new IllegalArgumentException("Mixed section material generations");
@@ -59,6 +73,8 @@ public final class SectionSnapshot {
     public CubeSectionMaterials materials() { return materials; }
     public SectionModelGeometry models() { return models; }
     public SectionLightData lighting() { return lighting; }
+    /** Null unless the provider opted into API minor 5 cell tint. */
+    public SectionTintData tints() { return tints; }
     public int modelCount() { return modelCount; }
     public long materialGeneration() {
         return materials != null ? materials.generation() : models != null ? models.generation() : 0;
@@ -70,6 +86,7 @@ public final class SectionSnapshot {
     public boolean hasSameCells(SectionSnapshot other) { return Arrays.equals(cells, other.cells); }
     public boolean hasSameContent(SectionSnapshot other) {
         return hasSameCells(other) && java.util.Objects.equals(materials, other.materials)
-            && java.util.Objects.equals(models, other.models) && java.util.Objects.equals(lighting, other.lighting);
+            && java.util.Objects.equals(models, other.models) && java.util.Objects.equals(lighting, other.lighting)
+            && java.util.Objects.equals(tints, other.tints);
     }
 }
