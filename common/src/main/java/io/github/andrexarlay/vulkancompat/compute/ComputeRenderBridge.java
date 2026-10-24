@@ -121,7 +121,8 @@ public final class ComputeRenderBridge {
                 notePendingCamera("Waiting for block atlas and baked models", camera);
                 return;
             }
-            var snapshot = worldCapture.capture(camera, atlas, backend.supportsModelGeometry());
+            var snapshot = worldCapture.capture(camera, atlas, backend.supportsModelGeometry(),
+                backend.supportsCellTint());
             if (snapshot == null) {
                 notePendingCamera(worldCapture.pendingReason(), camera);
                 return;

@@ -5,14 +5,16 @@ import java.util.Arrays;
 /** Immutable cell-local baked quad. Four vertices contain x,y,z,u,v in source submission order.
  * GPU ABI: 20 little-endian floats followed by tintArgb, flags, emission and reserved zero (96 bytes).
  * Triangles are (0,1,2) and (2,3,0). Later alpha-accepted coplanar quads take precedence.
+ * API minor 5: {@link #CELL_TINT} multiplies the quad by the cell's {@link SectionTintData} value;
+ * {@link #FLUID} marks a fluid surface (a medium boundary rather than a thin layer).
  */
 public final class ModelQuad {
-    public static final int CUTOUT = 1, TRANSLUCENT = 2, BYTES = 96;
+    public static final int CUTOUT = 1, TRANSLUCENT = 2, CELL_TINT = 4, FLUID = 8, BYTES = 96;
     private final float[] vertices;
     private final int tintArgb, flags, emission;
 
     public ModelQuad(float[] vertices, int tintArgb, int flags, int emission) {
-        if (vertices.length != 20 || (flags & ~3) != 0 || emission < 0 || emission > 15)
+        if (vertices.length != 20 || (flags & ~15) != 0 || emission < 0 || emission > 15)
             throw new IllegalArgumentException("Invalid model quad");
         this.vertices = vertices.clone();
         for (int i = 0; i < 20; i++) {

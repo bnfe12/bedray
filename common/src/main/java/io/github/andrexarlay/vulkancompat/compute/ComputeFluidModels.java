@@ -26,15 +26,21 @@ final class ComputeFluidModels {
         this.renderer = models == null ? null : new FluidRenderer(models);
     }
 
-    /** The caller must establish that every surrounding chunk read by vanilla tessellation is loaded. */
-    boolean append(ClientLevel level, BlockPos position, BlockState state, List<ModelQuad> quads) {
+    /** Resolved opaque game tint of the fluid surface, white when the fluid model has no tint source. */
+    int tint(ClientLevel level, BlockPos position, BlockState state) {
+        FluidModel model = models == null ? null : models.get(state.getFluidState());
+        return model == null || model.tintSource() == null ? 0xFFFFFFFF
+            : model.tintSource().colorInWorld(state, level, position) | 0xFF000000;
+    }
+
+    /** The caller must establish that every surrounding chunk read by vanilla tessellation is loaded.
+     * {@code tint} is baked into every quad; {@code extraFlags} may add ModelQuad.CELL_TINT. */
+    boolean append(ClientLevel level, BlockPos position, BlockState state, List<ModelQuad> quads, int tint, int extraFlags) {
         if (renderer == null) return false;
         FluidModel model = models.get(state.getFluidState());
         if (model == null || !blockAtlas(model.stillMaterial()) || !blockAtlas(model.flowingMaterial())
             || model.overlayMaterial() != null && !blockAtlas(model.overlayMaterial())) return false;
-        int tint = model.tintSource() == null ? 0xFFFFFFFF
-            : model.tintSource().colorInWorld(state, level, position) | 0xFF000000;
-        collector.begin(position, quads, tint, Math.clamp(state.getLightEmission(), 0, 15));
+        collector.begin(position, quads, tint, Math.clamp(state.getLightEmission(), 0, 15), extraFlags);
         try {
             renderer.tesselate(level, position, collector, state, state.getFluidState());
             return collector.finish();
@@ -51,20 +57,20 @@ final class ComputeFluidModels {
     private static final class Collector implements FluidRenderer.Output, VertexConsumer {
         private final float[] vertices = new float[20];
         private List<ModelQuad> quads;
-        private int originX, originY, originZ, tint, emission, flags, count;
+        private int originX, originY, originZ, tint, emission, flags, extraFlags, count;
         private boolean failed;
 
-        void begin(BlockPos position, List<ModelQuad> quads, int tint, int emission) {
+        void begin(BlockPos position, List<ModelQuad> quads, int tint, int emission, int extraFlags) {
             originX = position.getX() & 15; originY = position.getY() & 15; originZ = position.getZ() & 15;
-            this.quads = quads; this.tint = tint; this.emission = emission;
+            this.quads = quads; this.tint = tint; this.emission = emission; this.extraFlags = extraFlags;
             count = 0; flags = 0; failed = false;
         }
 
         @Override public VertexConsumer getBuilder(ChunkSectionLayer layer) {
             if (count != 0) flush();
             if (layer == null) failed = true;
-            flags = layer == ChunkSectionLayer.TRANSLUCENT ? ModelQuad.TRANSLUCENT
-                : layer == ChunkSectionLayer.CUTOUT ? ModelQuad.CUTOUT : 0;
+            flags = ModelQuad.FLUID | (layer == ChunkSectionLayer.TRANSLUCENT ? ModelQuad.TRANSLUCENT
+                : layer == ChunkSectionLayer.CUTOUT ? ModelQuad.CUTOUT : 0);
             return this;
         }
 
@@ -95,7 +101,7 @@ final class ComputeFluidModels {
                 if (!Float.isFinite(value) || value < -0.00001f || value > 1.00001f) { failed = true; return; }
                 vertices[i] = Math.clamp(value, 0f, 1f);
             }
-            quads.add(new ModelQuad(vertices, tint, flags, emission));
+            quads.add(new ModelQuad(vertices, tint, flags | extraFlags, emission));
             count = 0;
         }
 

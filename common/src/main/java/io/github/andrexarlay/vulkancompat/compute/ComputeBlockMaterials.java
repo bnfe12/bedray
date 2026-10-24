@@ -6,6 +6,7 @@ import io.github.andrexarlay.bedray.api.v1.CubeMaterial;
 import io.github.andrexarlay.bedray.api.v1.CubeSectionMaterials;
 import io.github.andrexarlay.bedray.api.v1.SectionSnapshot;
 import io.github.andrexarlay.bedray.api.v1.SectionLightData;
+import io.github.andrexarlay.bedray.api.v1.SectionTintData;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.geom.builders.UVPair;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -53,7 +54,7 @@ final class ComputeBlockMaterials {
         final ComputeModelMaterials.SectionCache models = new ComputeModelMaterials.SectionCache();
     }
 
-    /** The reusable lookup is never inserted. Stored keys own their six colors. */
+    /** The reusable lookup is never inserted. Stored keys own their six colors plus the cell-tint face mask. */
     private static final class AppearanceKey {
         Geometry geometry;
         final int[] colors;
@@ -85,7 +86,8 @@ final class ComputeBlockMaterials {
     private final List<BlockStateModelPart> parts = new ArrayList<>();
     private final RandomSource random = RandomSource.create(0);
     private final BlockPos.MutableBlockPos position = new BlockPos.MutableBlockPos();
-    private final int[] tintColors = new int[CubeMaterial.FACE_COUNT];
+    // Six face colors followed by the mask of faces that take the per-cell tint (API minor 5).
+    private final int[] tintColors = new int[CubeMaterial.FACE_COUNT + 1];
     private final AppearanceKey lookup = new AppearanceKey(tintColors);
     private final ComputeModelMaterials modelMaterials = new ComputeModelMaterials();
     private Minecraft minecraft;
@@ -93,6 +95,8 @@ final class ComputeBlockMaterials {
     private BlockStateModelSet models;
     private long generation;
     private boolean sessionChanged;
+    private boolean cellTint;
+    private int overflowCells;
 
     void clear() {
         sections.clear(); variants.clear(); parts.clear(); modelMaterials.clear();
@@ -117,6 +121,17 @@ final class ComputeBlockMaterials {
         }
         return null;
     }
+
+    /** Cell tint changes every appearance key, so cached sections and variants are discarded. */
+    void setCellTint(boolean enabled) {
+        if (cellTint == enabled) return;
+        cellTint = enabled;
+        sections.clear();
+        sessionChanged = true;
+    }
+
+    /** Cubes that did not fit the cube palette in the most recent captured section (diagnostics only). */
+    int lastOverflowCells() { return overflowCells; }
 
     boolean consumeSessionChange() {
         boolean changed = sessionChanged;
@@ -151,7 +166,9 @@ final class ComputeBlockMaterials {
         short[] references = new short[SectionSnapshot.CELL_COUNT];
         List<CubeMaterial> palette = new ArrayList<>();
         Map<AppearanceKey, PaletteEntry> appearances = new LinkedHashMap<>();
-        ComputeModelMaterials.SectionCapture modelCapture = extended ? modelMaterials.begin(cached.models) : null;
+        int[] cellTints = extended && cellTint ? new int[SectionSnapshot.CELL_COUNT] : null;
+        ComputeModelMaterials.SectionCapture modelCapture = extended ? modelMaterials.begin(cached.models, cellTints) : null;
+        overflowCells = 0;
         short[] light = extended ? new short[SectionSnapshot.CELL_COUNT] : null;
         var blockLight = extended ? level.getLightEngine().getLayerListener(LightLayer.BLOCK) : null;
         var skyLight = extended ? level.getLightEngine().getLayerListener(LightLayer.SKY) : null;
@@ -179,6 +196,7 @@ final class ComputeBlockMaterials {
             }
             cells[index] = SectionSnapshot.OPAQUE_CUBE;
             tint(state,geometry);
+            int cellColor = cellTints == null ? 0 : moveTintToCell();
             lookup.setGeometry(geometry);
             PaletteEntry entry = appearances.get(lookup);
             if (entry == null && palette.size() < CubeSectionMaterials.MAX_MATERIALS) {
@@ -189,12 +207,21 @@ final class ComputeBlockMaterials {
                 appearances.put(appearance,entry);
                 palette.add(material);
             }
-            if (entry != null) references[index] = (short)entry.reference;
+            if (entry != null) {
+                references[index] = (short)entry.reference;
+                if (cellColor != 0) cellTints[index] = cellColor;
+            } else {
+                // A full palette must not publish an untextured cube. The model path carries the same baked
+                // quads in its own bounded palette; when that is also full the cell stays explicit unsupported.
+                overflowCells++;
+                cells[index] = extended ? modelCapture.captureCell(state, position, index) : SectionSnapshot.UNSUPPORTED;
+            }
         }
         cached.appearances = appearances;
         CubeSectionMaterials materialData = new CubeSectionMaterials(generation,palette,references);
         return new SectionSnapshot(x,y,z,revision,cells,materialData,
-            extended ? modelCapture.finish() : null, extended ? new SectionLightData(light) : null);
+            extended ? modelCapture.finish() : null, extended ? new SectionLightData(light) : null,
+            cellTints == null ? null : new SectionTintData(cellTints));
     }
 
     private static boolean eligibleState(BlockState state) {
@@ -302,6 +329,8 @@ final class ComputeBlockMaterials {
     }
 
     private void tint(BlockState state, Geometry geometry) {
+        tintedGeometry = geometry;
+        tintColors[CubeMaterial.FACE_COUNT] = 0;
         for (int i=0; i<CubeMaterial.FACE_COUNT; i++) {
             int tintIndex = geometry.faces[i].tintIndex;
             if (tintIndex < 0) {
@@ -315,12 +344,33 @@ final class ComputeBlockMaterials {
         }
     }
 
+    /** When every tinted face resolved to one color, that color moves to the cell and the faces become
+     * white with the cell-tint bit. Faces with different tint sources keep their baked colors. */
+    private int moveTintToCell() {
+        int color = 0, mask = 0;
+        for (int i=0; i<CubeMaterial.FACE_COUNT; i++) {
+            if (lookupTintIndex(i) < 0) continue;
+            if (color == 0) color = tintColors[i];
+            else if (color != tintColors[i]) return 0;
+            mask |= 1 << i;
+        }
+        if (mask == 0) return 0;
+        for (int i=0; i<CubeMaterial.FACE_COUNT; i++) if ((mask & (1 << i)) != 0) tintColors[i] = WHITE;
+        tintColors[CubeMaterial.FACE_COUNT] = mask;
+        return color;
+    }
+
+    private Geometry tintedGeometry;
+    private int lookupTintIndex(int face) { return tintedGeometry.faces[face].tintIndex; }
+
     private CubeMaterial material(Geometry geometry) {
         List<CubeFaceMaterial> faces = new ArrayList<>(CubeMaterial.FACE_COUNT);
+        int mask = tintColors[CubeMaterial.FACE_COUNT];
         for (int i=0; i<CubeMaterial.FACE_COUNT; i++) {
             CubeFaceMaterial uv = geometry.faces[i].uv;
-            faces.add(tintColors[i] == WHITE ? uv : new CubeFaceMaterial(uv.u(),uv.v(),uv.duU(),uv.duV(),
-                uv.dvU(),uv.dvV(),tintColors[i]));
+            boolean cell = (mask & (1 << i)) != 0;
+            faces.add(tintColors[i] == WHITE && !cell ? uv : new CubeFaceMaterial(uv.u(),uv.v(),uv.duU(),uv.duV(),
+                uv.dvU(),uv.dvV(),tintColors[i],cell));
         }
         return new CubeMaterial(faces);
     }

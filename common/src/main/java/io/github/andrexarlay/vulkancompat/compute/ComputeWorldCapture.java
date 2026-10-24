@@ -22,6 +22,11 @@ final class ComputeWorldCapture {
 
     /** Null means that this frame's camera is not usable yet; the next frame must retry. */
     WorldSnapshot capture(CameraRenderState camera, AtlasFrame atlas, boolean extended) {
+        return capture(camera, atlas, extended, false);
+    }
+
+    /** {@code cellTint}: the provider accepts API minor 5 per-cell tint (only meaningful with extended). */
+    WorldSnapshot capture(CameraRenderState camera, AtlasFrame atlas, boolean extended, boolean cellTint) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft == null || !minecraft.isSameThread())
             throw new IllegalStateException("World snapshot requires the client owning thread");
@@ -70,6 +75,7 @@ final class ComputeWorldCapture {
             pendingReason = materialPending;
             return null;
         }
+        materials.setCellTint(extended && cellTint);
         if (materials.consumeSessionChange()) stream.clear();
         materials.retainWindow((int)Math.floor(camera.pos.x / 16.0),
             (int)Math.floor(camera.pos.y / 16.0), (int)Math.floor(camera.pos.z / 16.0));

@@ -9,7 +9,46 @@ No RT extensions, acceleration structures, ray queries, device addresses, Int64,
 vendor DLLs are required by the Compute provider. In-game use still requires Minecraft 26.3's Vulkan
 backend baseline and the provider's queue/format/descriptor checks. This is not an arbitrary-GPU claim.
 
-## Alpha.7 scope
+## Alpha.8 visual pass
+
+Ordered by visible effect per unit of work. Each step stays bounded and keeps the raster fallback.
+
+1. **No gray cubes.** Gray cubes came from cube palette overflow: the appearance key held the
+   per-position biome tint, so biome blends and random rotations exhausted the 128 entries. API minor 5
+   moves a resolved tint into an optional per-cell value when all tinted faces of a cell agree, so the
+   palette holds one entry per geometry. A cube that still does not fit falls back to the model palette.
+   If that palette is also full, the cell becomes explicitly unsupported. A cube without a palette entry
+   is still an occluder, but its raster pixel is kept instead of being shaded gray.
+2. **Emissive blocks light the scene.** The cells inside the window that emit light are listed (up to
+   128, nearest to the window center). Each emitter is a sphere with the surface area of its geometry:
+   the unit cube, or the bounding box of a model's quads. One emitter per pixel is chosen by reservoir
+   sampling, weighted by its unshadowed irradiance bound, and one shadow ray is traced toward it.
+   Emitter radiance is set so that a level-e emitter delivers vanilla's response(e-1) at one block.
+   Beyond that it falls off as 1/d². Vanilla block light is still added where no listed emitter can
+   explain it. A single source of level e at Manhattan distance d gives at most e-d, so a higher vanilla
+   level means a source outside the grid or beyond the list.
+3. **Ambient occlusion, sky light and one bounce** come from one cosine-weighted ray per pixel. A ray
+   that leaves the grid sees the sky, scaled by vanilla sky light at the surface. A ray that hits
+   geometry returns that surface's albedo times its key, sky and block irradiance. The key light is
+   sampled over the Sun's real angular radius.
+4. **Water and translucent blocks** use Schlick Fresnel with one reflection ray and one transmission
+   ray. Water refracts (n = 1.333) and attenuates by Beer-Lambert. Its extinction is chosen so that one
+   block transmits exactly vanilla's blend weight (1-a)+a·c of the surface texel. The medium radiance
+   is c times the irradiance at the surface. Other translucent quads are thin filters (n = 1.5) with
+   no bending. Key-light and bounce rays are filtered by translucent layers, so stained glass casts
+   colored shadows. If the camera is inside a model cell (for example under water), translucent
+   surfaces keep raster. Unresolved transmission also keeps raster.
+5. **Temporal accumulation.** Two RGBA32UI history images store half-precision radiance, a sample
+   count, hit distance and normal. Each surface point is reprojected with the previous frame's camera.
+   A bilinear history tap is accepted only if its distance and normal match. The history window is 64
+   frames while the camera and scene are steady, and 8 frames on any frame with camera motion or a
+   scene upload, so lighting changes fade in within that window.
+6. **Larger region: not in this pass.** The 27-section window is fixed by the stream contract
+   (2 section reads per frame, 14-frame revisit). The model SSBO grows by 786,432 bytes per section,
+   so 5×5×5 sections would need about 98 MB of model slabs and a 63-frame revisit. That needs a
+   streaming design rather than a larger constant.
+
+## Alpha.7 scope (retained)
 
 - Actual block-atlas albedo and uniform game tint, with nearest LOD-zero sampling and animated atlas epochs.
 - Exact six-face opaque cubes retain their fast path. Other accepted cell-local baked models use their
@@ -54,8 +93,11 @@ policy. Physically correct transmission, colored glass shadows and fluid optical
 
 ## Public data contract
 
-`renderer-api` major 1/minor 4 keeps prior constructors and callbacks. Providers explicitly opt into
-`supportsModelGeometry()`; older providers continue receiving the cube-only representation.
+`renderer-api` major 1/minor 5 keeps prior constructors and callbacks. Providers explicitly opt into
+`supportsModelGeometry()`; older providers continue receiving the cube-only representation. Minor 5 adds
+`supportsCellTint()`: only opted-in providers receive `SectionTintData`, `CubeFaceMaterial.cellTint` and
+`ModelQuad.CELL_TINT`; others keep tints baked into every palette entry. Minor 5 also adds
+`ModelQuad.FLUID` (fluid surfaces are medium boundaries, not thin layers).
 `compute-common` imports no Minecraft, loader or private Bedray implementation classes.
 
 `SectionSnapshot` has 4096 cells in x+16*(y+16*z) order:
@@ -77,6 +119,10 @@ Optional immutable payloads:
   are 0/1/2 and 2/3/0. Positions are cell-local and all UVs refer to the matching live block atlas.
 - `SectionLightData`: 4096 shorts, with block light in bits 0..3, sky light 4..7 and intrinsic emission
   8..11, including air cells. Null means unavailable, not darkness.
+- `SectionTintData` (minor 5): 4096 ints, zero or opaque ARGB. It multiplies cube faces whose face word
+  bit 0 is set and model quads flagged `CELL_TINT`. A cell-tinted appearance requires a nonzero value.
+  A nonzero value requires cube or model occupancy. The host uses it only when every tinted face or quad
+  of the cell resolves to one color; otherwise tints stay baked.
 
 Model/cube generations must agree within and across sections. Geometry, tint, UV, light-only and resource
 epoch changes participate in content equality and world revisions. Stable unchanged sections retain
@@ -85,10 +131,15 @@ new revisions.
 
 GPU cells remain one uint: occupancy bits 0..7, cube/model reference 8..15, block light 16..19,
 sky light 20..23, intrinsic emission 24..27, lighting-present bit 28. `0xffffffff` is unknown before
-any decode. The grid is 432 KiB plus its 16-byte header; cube palettes are 648 KiB. One combined model
+any decode. The grid is 432 KiB plus its 16-byte header, followed in the textured pipeline by 432 KiB
+of per-cell tints (zero = none). Cube palettes are 648 KiB; the formerly reserved face word is the flag
+word (bit 0 = cell tint). One combined model
 SSBO has 55,296 bytes of headers followed by 27 fixed 786,432-byte quad slabs (21,288,960 bytes total).
-Only used quad spans are uploaded, in aligned chunks no larger than 65,536 bytes. A small 96-byte
-lighting SSBO keeps the pipeline at four storage buffers; push constants remain 112 bytes.
+Only used quad spans are uploaded, in aligned chunks no larger than 65,536 bytes. The frame SSBO keeps the pipeline at four storage buffers: the 96-byte `LightingFrame`, then the previous
+forward view-projection, previous camera and eye in current grid coordinates, frame info (emitter count,
+history valid, history cap, motion) and 128 emitters of 32 bytes (4,304 bytes). Push constants remain
+112 bytes; control.z carries the frame counter for the random sequence. The raster variant adds two
+RGBA32UI storage images for history (three storage images in total).
 
 Uploads record `vkCmdUpdateBuffer` and transfer/compute barriers on the host queue. No mapped staging
 range is overwritten while prior frames may read it. Camera-only frames do not rebuild scene uploads.
@@ -122,28 +173,56 @@ brightness, darkness, night vision and boss-darkening state. It does not depend 
 RT pipeline or mutable RT sky settings. Game display tints are interpreted as sRGB and decoded for the
 linear Compute path; this is an explicit approximation, not the exact vanilla lightmap equation.
 
-The shader reads propagated light immediately outside a hit surface, separates block illumination
-from sky illumination, and traces one alpha-aware key-light shadow ray. Sealed rooms do not receive
-an unconditional fixed ambient term. The moon uses an explicit illuminated-fraction phase policy.
-Intrinsic block emission is a scalar self-light approximation, not a per-texel emission mask or colored
-physical light transport. PBR roughness/metalness/normals, multiple scattering, GI and reflections remain open.
+The shader reads propagated light immediately outside a hit surface. All terms are linear radiance in
+π-normalized units: outgoing = albedo × (ambient + key + sky/bounce + block) + albedo × emission.
+
+- Key light: one cone sample over the Sun's angular radius (0.2666°), one shadow ray through translucent
+  filters. A ray that leaves the grid is scaled by vanilla sky-light response, so caves deeper than the
+  grid get no sunlight.
+- Sky and bounce: one cosine-weighted ray. On escape it returns the sky color × sky factor, scaled by
+  vanilla sky-light response at the surface. On a hit it returns that surface's albedo × (ambient + vanilla
+  sky + vanilla block + traced key light). The display sky color is interpreted as a uniform sky radiance.
+  The former flat sky ambient with a 0.35 factor is gone.
+- Block light: next-event estimation over listed emitters plus unexplained vanilla light, as described
+  in the alpha.8 pass above. An emitter's own appearance is albedo × response(level) × block color,
+  which matches vanilla's full-bright look.
+- Presentation: brightness/darkness/boss darkening and Reinhard x/(1+x) are applied after accumulation.
+
+Still open: PBR roughness/metalness/normals, multiple bounces, glossy reflections on opaque surfaces,
+and colored emitter spectra (emitters use the game's block-light tint).
 
 ## Activation
 
-Install the matching **Bedray + Bedray Compute alpha.7 pair**, for the same loader. The companion requires
-host alpha.7 or newer for API minor 4. Updating only one JAR cannot supply the other side's contracts.
+Install the matching **Bedray + Bedray Compute alpha.8 pair**, for the same loader. The companion requires
+host alpha.8 or newer for API minor 5. Updating only one JAR cannot supply the other side's contracts.
 
 Open Sodium Video Settings → **Bedray** → **World Renderer** → **Voxel (Experimental)**.
 The missing add-on and initialization failures appear in Renderer Status. The saved hardware RT mode
 is retained for switching back. The selector is stored as `renderer` in `config/bedray.toml`.
 
-Voxel currently selects Bilinear and disables Frame Generation. Matching compute depth/motion/history
-outputs for temporal reconstruction and FG are still absent. Borrowing raster depth for composition
+Voxel currently selects Bilinear and disables Frame Generation. Its own temporal accumulation is internal:
+there are still no matching compute depth/motion outputs for an external upscaler or FG. Borrowing raster depth for composition
 does not make it a matching compute temporal guide.
 
 Expert diagnostics select synthetic/live scenes and shaded/normals/distance/occupancy views.
 Session JVM alternatives remain `-Dbedray.compute.demo=true` and `-Dbedray.compute.world=true`.
 The live override takes precedence. `scene_recorded` means accepted command recording, not presentation.
+
+## Focused personal checks (alpha.8 additions)
+
+F3 shows two lines. `Voxel:` is the request status. `Voxel data:` contains section/cube/model counts,
+`raster cubes` (cubes without a palette entry, kept as raster: expected 0 in ordinary terrain),
+`cell-tinted`, `emitters listed/found` and `accumulation` (`steady, window n/64`, `moving` or
+`scene update` with window 8, or `reset (reason)`).
+
+1. Biome border with grass, leaves and water: no gray cubes; `raster cubes` should stay at 0.
+2. Torch, lantern, glowstone, lava in a dark room: visible light pools with shadows behind blocks,
+   and `emitters` nonzero. Compare brightness against raster by switching renderers.
+3. Stand still after moving: noise should settle within about one second (64 frames). It should
+   reappear briefly while walking (window 8), without long ghost trails.
+4. Water and stained glass from above: reflection at grazing angles, the bottom visible and darker
+   with depth. Under water, the surface keeps raster.
+5. Cave deeper than 48 blocks below the surface: no sunlight on the walls.
 
 ## Focused personal checks
 

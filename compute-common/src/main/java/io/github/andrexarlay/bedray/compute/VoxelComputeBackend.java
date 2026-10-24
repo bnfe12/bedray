@@ -11,17 +11,24 @@ import io.github.andrexarlay.bedray.api.v1.WorldSnapshot;
 /** Opt-in synthetic or bounded live model traversal on the host Vulkan device. */
 public final class VoxelComputeBackend implements GraphicsBackend {
     public VoxelComputeBackend() {
-        if (GraphicsBackendRegistry.apiMinorVersion() < 4)
-            throw new IllegalStateException("Bedray Compute requires renderer API 1.4 or newer");
+        if (GraphicsBackendRegistry.apiMinorVersion() < 5)
+            throw new IllegalStateException("Bedray Compute requires renderer API 1.5 or newer");
     }
     private VoxelComputePipeline pipeline;
     private String detail = "Waiting for a world snapshot";
-    @Override public String sceneDetail() { return detail; }
+    @Override public String sceneDetail() {
+        if (pipeline == null || snapshot == null) return detail;
+        var emitters = uploads.emitters();
+        return detail + "; emitters " + emitters.count() + "/" + emitters.found()
+            + (emitters.found() > emitters.count() ? " (nearest kept, rest via vanilla light)" : "")
+            + "; accumulation " + pipeline.historyStatus();
+    }
     @Override public boolean supportsSceneMode(GraphicsBackendRegistry.SceneMode mode) {
         return mode == GraphicsBackendRegistry.SceneMode.SYNTHETIC || mode == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
     }
     @Override public boolean supportsDebugViews() { return true; }
     @Override public boolean supportsModelGeometry() { return true; }
+    @Override public boolean supportsCellTint() { return true; }
     private final io.github.andrexarlay.bedray.compute.voxel.VoxelWorldCache world =
         new io.github.andrexarlay.bedray.compute.voxel.VoxelWorldCache();
 
@@ -34,16 +41,21 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         return GraphicsBackendRegistry.liveWorldEnabled() || Boolean.getBoolean("bedray.compute.captureWorld");
     }
     @Override public void acceptWorldSnapshot(io.github.andrexarlay.bedray.api.v1.WorldSnapshot snapshot) {
+        if (pipeline != null && (this.snapshot == null || this.snapshot.session() != snapshot.session()))
+            pipeline.invalidateHistory();
         world.accept(snapshot);
         this.snapshot = snapshot;
         if (detailSession != snapshot.session() || detailRevision != snapshot.revision()) {
             texturedCounts.keySet().removeIf(section -> !snapshot.sections().contains(section));
-            int omitted = 0, opaque = 0, textured = 0, models = 0, quads = 0, lightSections = 0;
+            int omitted = 0, opaque = 0, textured = 0, models = 0, quads = 0, lightSections = 0, tinted = 0;
             for (var section : snapshot.sections()) {
                 omitted += section.unsupportedCount(); opaque += section.opaqueCount();
                 models += section.modelCount();
                 if (section.models() != null) quads += section.models().quadCount();
                 if (section.lighting() != null) lightSections++;
+                if (section.tints() != null)
+                    for (int index = 0; index < io.github.andrexarlay.bedray.api.v1.SectionSnapshot.CELL_COUNT; index++)
+                        if (section.tints().argb(index) != 0) tinted++;
                 Integer count = texturedCounts.get(section);
                 if (count == null) {
                     int references = 0;
@@ -56,9 +68,10 @@ public final class VoxelComputeBackend implements GraphicsBackend {
                 }
                 textured += count;
             }
+            // Cubes without a palette entry are never shaded gray: they keep the raster pixel ("raster cubes").
             detail = snapshot.sections().size()+"/27 sections; "+opaque+" cubes; "+textured+" textured; "
-                +(opaque-textured)+" gray; "+models+" model cells; "+quads+" palette quads; "
-                +lightSections+" light sections; "+omitted+" unsupported; missing sections unknown";
+                +(opaque-textured)+" raster cubes; "+models+" model cells; "+quads+" palette quads; "
+                +tinted+" cell-tinted; "+lightSections+" light sections; "+omitted+" unsupported; missing sections unknown";
             detailSession = snapshot.session(); detailRevision = snapshot.revision();
         }
     }

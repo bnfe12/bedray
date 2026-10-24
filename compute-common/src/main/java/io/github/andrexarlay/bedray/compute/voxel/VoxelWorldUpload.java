@@ -17,6 +17,8 @@ import java.util.Arrays;
 public final class VoxelWorldUpload {
     public static final int DIAMETER = 48;
     public static final int TILE_BYTES = 4096 * Integer.BYTES;
+    /** Live textured grids append one ARGB cell tint per cell after the 27 occupancy tiles (API minor 5). */
+    public static final int TINT_BYTES = 27 * TILE_BYTES;
     public static final int PALETTE_BYTES = 27 * CubeSectionMaterials.SECTION_BYTES;
     // A single model SSBO keeps grid/palette/models/lighting within four storage bindings.
     public static final int MODEL_BUFFER_HEADER_BYTES = 27 * SectionModelGeometry.SECTION_HEADER_BYTES;
@@ -29,6 +31,8 @@ public final class VoxelWorldUpload {
     private long revision = -1;
     private int originX, originY, originZ;
     private boolean initialized;
+    private final VoxelEmitters emitters = new VoxelEmitters();
+    private boolean emittersChanged;
     /** Invalidates residency without allocating new arrays on repeated idle/close requests. */
     public void clear() {
         Arrays.fill(previous, null);
@@ -36,6 +40,15 @@ public final class VoxelWorldUpload {
         previousSections = List.of();
         session = revision = -1;
         initialized = false;
+        emitters.clear();
+        emittersChanged = true;
+    }
+    public VoxelEmitters emitters() { return emitters; }
+    /** True once after any rebuild of the emitter list; the recorder uploads it then. */
+    public boolean consumeEmittersChanged() {
+        boolean changed = emittersChanged;
+        emittersChanged = false;
+        return changed;
     }
     public record Tile(int slot, SectionSnapshot section) {
         public Tile { if (slot < 0 || slot >= 27) throw new IllegalArgumentException("Invalid voxel tile slot"); }
@@ -43,6 +56,12 @@ public final class VoxelWorldUpload {
         public long materialOffset() { return (long) slot * CubeSectionMaterials.SECTION_BYTES; }
         public long modelHeaderOffset() { return (long) slot * SectionModelGeometry.SECTION_HEADER_BYTES; }
         public long modelQuadOffset() { return MODEL_BUFFER_HEADER_BYTES + (long) slot * SectionModelGeometry.SECTION_QUAD_BYTES; }
+        public long tintOffset() { return VoxelGrid.HEADER_BYTES + TINT_BYTES + (long) slot * TILE_BYTES; }
+        /** Opaque ARGB per cell or zero; absent tint data uploads zeros so old slot contents cannot leak. */
+        public void writeTintsTo(ByteBuffer target) {
+            var tints = section == null ? null : section.tints();
+            for (int index = 0; index < SectionSnapshot.CELL_COUNT; index++) target.putInt(tints == null ? 0 : tints.argb(index));
+        }
         public void writeTo(ByteBuffer target) {
             CubeSectionMaterials materials = section == null ? null : section.materials();
             SectionModelGeometry models = section == null ? null : section.models();
@@ -87,7 +106,7 @@ public final class VoxelWorldUpload {
                         target.putFloat(surface.u()).putFloat(surface.v())
                             .putFloat(surface.duU()).putFloat(surface.duV())
                             .putFloat(surface.dvU()).putFloat(surface.dvV())
-                            .putInt(surface.tintArgb()).putInt(0);
+                            .putInt(surface.tintArgb()).putInt(surface.cellTint() ? 1 : 0);
                     } else {
                         for (int word = 0; word < CubeSectionMaterials.FACE_BYTES / 4; word++) target.putInt(0);
                     }
@@ -117,6 +136,7 @@ public final class VoxelWorldUpload {
             previous[i]=b;
         }
         session=snapshot.session(); revision=snapshot.revision(); previousSections=snapshot.sections(); initialized=true;
+        if (!updates.isEmpty()) { emitters.rebuild(slots); emittersChanged = true; }
         return List.copyOf(updates);
     }
     public int originX() { return originX; }

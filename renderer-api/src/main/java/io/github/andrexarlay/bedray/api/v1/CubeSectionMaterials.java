@@ -8,7 +8,7 @@ import java.util.Objects;
  * References use x + 16*(y + 16*z). Generation identifies the matching host models and live atlas.
  * A reference must not be published for an EMPTY or UNSUPPORTED occupancy cell.
  * GPU palette ABI: each face is 32 little-endian bytes: float u,v,duU,duV,dvU,dvV,
- * uint tintArgb, uint reserved(0). Six faces are consecutive in CubeMaterial order.
+ * uint tintArgb, uint flags (bit0 = cell tint, minor 5; other bits zero). Six faces are consecutive in CubeMaterial order.
  * One-based reference r addresses (r-1)*MATERIAL_BYTES within its fixed section palette slab.
  */
 public final class CubeSectionMaterials {
@@ -19,6 +19,7 @@ public final class CubeSectionMaterials {
     private final long generation;
     private final List<CubeMaterial> palette;
     private final short[] references;
+    private final boolean[] cellTinted;
 
     public CubeSectionMaterials(long generation, List<CubeMaterial> palette, short[] references) {
         this.palette = List.copyOf(palette);
@@ -31,7 +32,12 @@ public final class CubeSectionMaterials {
                 throw new IllegalArgumentException("Cube material reference outside palette");
         }
         this.generation = generation;
+        cellTinted = new boolean[this.palette.size()];
+        for (int material = 0; material < cellTinted.length; material++)
+            for (CubeFaceMaterial face : this.palette.get(material).faces()) cellTinted[material] |= face.cellTint();
     }
+    /** True when one-based reference r has a face multiplied by the cell tint. Zero returns false. */
+    public boolean usesCellTint(int reference) { return reference > 0 && cellTinted[reference - 1]; }
     public long generation() { return generation; }
     public List<CubeMaterial> palette() { return palette; }
     public int reference(int index) { return Short.toUnsignedInt(references[index]); }
