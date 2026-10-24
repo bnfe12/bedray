@@ -5,7 +5,7 @@ import java.util.Objects;
 /** Versioned renderer registration and frame-boundary requests; no GPU calls during registration. */
 public final class GraphicsBackendRegistry {
     public static final int API_VERSION = 1;
-    public static final int API_MINOR_VERSION = 3;
+    public static final int API_MINOR_VERSION = 4;
     public enum DebugView { SHADED, NORMALS, DISTANCE, OCCUPANCY }
     private static volatile DebugView debugView = DebugView.SHADED;
     public static DebugView debugView() { return debugView; }

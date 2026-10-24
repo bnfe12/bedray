@@ -13,15 +13,15 @@ public record WorldSnapshot(long session, long revision, CameraSnapshot camera,
         sections = List.copyOf(sections);
         long generation = 0;
         for (SectionSnapshot section : sections) {
-            if (section.materials() == null) continue;
-            long next = section.materials().generation();
+            long next = section.materialGeneration();
+            if (next == 0) continue;
             if (generation != 0 && generation != next)
                 throw new IllegalArgumentException("Mixed material resource generations");
             generation = next;
         }
     }
     public long materialGeneration() {
-        for (SectionSnapshot section : sections) if (section.materials() != null) return section.materials().generation();
+        for (SectionSnapshot section : sections) if (section.materialGeneration() != 0) return section.materialGeneration();
         return 0;
     }
 }

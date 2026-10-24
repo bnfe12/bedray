@@ -18,6 +18,9 @@ public interface GraphicsBackend extends AutoCloseable {
 
     default boolean supportsDebugViews() { return false; }
 
+    /** Opt-in to API minor 4 model occupancy and per-cell light. Older providers keep cube-only capture. */
+    default boolean supportsModelGeometry() { return false; }
+
     /** Opt-in to bounded live-world snapshots. Called on the render thread, before render(). */
     default boolean wantsWorldSnapshots() { return false; }
 

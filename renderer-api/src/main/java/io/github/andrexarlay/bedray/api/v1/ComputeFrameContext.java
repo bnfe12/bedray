@@ -7,7 +7,13 @@ import org.lwjgl.vulkan.VkDevice;
 public record ComputeFrameContext(VkDevice device, VkCommandBuffer commandBuffer,
                                   long targetImage, int targetFormat,
                                   int width, int height, long frameIndex, GraphicsBackendRegistry.SceneMode sceneMode,
-                                  AtlasFrame atlas) {
+                                  AtlasFrame atlas, LightingFrame lighting, RasterFrame raster) {
+    /** Compatibility constructor for API minor 3 atlas-aware providers. */
+    public ComputeFrameContext(VkDevice device, VkCommandBuffer commandBuffer, long targetImage, int targetFormat,
+                               int width, int height, long frameIndex, GraphicsBackendRegistry.SceneMode sceneMode,
+                               AtlasFrame atlas) {
+        this(device,commandBuffer,targetImage,targetFormat,width,height,frameIndex,sceneMode,atlas,null,null);
+    }
     /** Compatibility constructor for occupancy-only providers and offscreen callers. */
     public ComputeFrameContext(VkDevice device, VkCommandBuffer commandBuffer, long targetImage, int targetFormat,
                                int width, int height, long frameIndex, GraphicsBackendRegistry.SceneMode sceneMode) {
@@ -25,5 +31,7 @@ public record ComputeFrameContext(VkDevice device, VkCommandBuffer commandBuffer
         }
         if (atlas != null && atlas.deviceAddress() != device.address())
             throw new IllegalArgumentException("Borrowed atlas belongs to another device");
+        if (raster != null && (raster.deviceAddress() != device.address() || raster.width() != width || raster.height() != height))
+            throw new IllegalArgumentException("Borrowed raster must match the target device and extent");
     }
 }
