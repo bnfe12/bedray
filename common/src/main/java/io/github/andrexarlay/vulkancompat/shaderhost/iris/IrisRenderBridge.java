@@ -259,6 +259,14 @@ public final class IrisRenderBridge {
         WorldFrames.invalidateDevice(device);
     }
 
+    /** Retire borrowed target descriptors before vanilla closes target views, not at the next frame. */
+    public static boolean onTargetClosing() {
+        var device = owner;
+        boolean retired = retire();
+        if (device != null) WorldFrames.invalidateDevice(device);
+        return retired;
+    }
+
     /** Compatibility wrapper. New producers must report their actual completed image, not their selected mode. */
     public static boolean renderFrame(RenderTarget target, CameraRenderState camera,
                                       boolean rasterDepthMatchesColor) {

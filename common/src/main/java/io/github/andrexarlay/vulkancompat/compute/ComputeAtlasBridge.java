@@ -23,6 +23,9 @@ public final class ComputeAtlasBridge {
 
     private ComputeAtlasBridge() {}
 
+    /** Final teardown permits the device to reclaim resources after a failed consumer cleanup. */
+    public static boolean isClosing() { return finalShutdown || deviceClosing; }
+
     /** Block capture for the entire asynchronous reload, including the model/atlas apply interval. */
     public static void onReloadStarted() {
         reloadPending = true;

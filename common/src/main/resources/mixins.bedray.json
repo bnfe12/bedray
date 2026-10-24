@@ -29,6 +29,7 @@
     "rtx.MixinMinecraft",
     "compute.MixinComputeResources",
     "compute.MixinComputeAtlas",
+    "compute.MixinComputeTarget",
     "rt.MixinEntityRenderDispatcher",
     "rt.MixinSubmitNodeCollection",
     "rt.MixinGameRendererHand",

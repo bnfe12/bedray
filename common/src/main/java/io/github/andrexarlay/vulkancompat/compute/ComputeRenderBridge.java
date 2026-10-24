@@ -9,6 +9,8 @@ import io.github.andrexarlay.bedray.api.v1.AtlasFrame;
 import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackend;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
+import io.github.andrexarlay.bedray.api.v1.LightingFrame;
+import io.github.andrexarlay.bedray.api.v1.RasterFrame;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
@@ -32,7 +34,7 @@ public final class ComputeRenderBridge {
     private static GraphicsBackendRegistry.SceneRequest appliedRequest = GraphicsBackendRegistry.request();
     private static boolean enabled() { return appliedRequest.mode() != GraphicsBackendRegistry.SceneMode.OFF; }
     private static String sceneLabel() { return appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE
-        ? "Live opaque debug" : "Synthetic scene"; }
+        ? "Live voxel scene" : "Synthetic scene"; }
     private static long failedRevision = Long.MIN_VALUE;
     private static VulkanDevice checkedDevice;
     private static boolean computeSupported;
@@ -44,6 +46,9 @@ public final class ComputeRenderBridge {
     private static long recordedRevision = Long.MIN_VALUE;
     private static int resourceWidth, resourceHeight, resourceFormat;
     private static long capturedAtlasGeneration, resourceAtlasGeneration;
+    private static RenderTarget resourceTarget;
+    private static long resourceColorView, resourceDepthView;
+    private static LightingFrame currentLighting;
     private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
 
     private ComputeRenderBridge() {}
@@ -58,6 +63,7 @@ public final class ComputeRenderBridge {
             rendererSelectionInitialized = true;
         }
         frameIndex++;
+        currentLighting = null;
         var nextRequest = GraphicsBackendRegistry.request();
         boolean requestChanged = appliedRequest != nextRequest;
         boolean worldLost = hadWorld && !hasWorld;
@@ -93,6 +99,15 @@ public final class ComputeRenderBridge {
     }
 
     /** Called after the world camera/projection was captured, independently of hardware RT support. */
+    public static void captureWorld(net.minecraft.client.renderer.state.GameRenderState state) {
+        if (state == null || state.levelRenderState == null) return;
+        GraphicsBackend backend = GraphicsBackendRegistry.backend();
+        if (enabled() && backend != null && backend.supportsModelGeometry())
+            currentLighting = ComputeLightingCapture.collect(state);
+        captureWorld(state.levelRenderState.cameraRenderState);
+    }
+
+    /** Compatibility entry point for callers that do not publish environment data. */
     public static void captureWorld(net.minecraft.client.renderer.state.level.CameraRenderState camera) {
         GraphicsBackend backend = GraphicsBackendRegistry.backend();
         if (cleanupBroken || backend == null || !enabled() || !backend.supportsSceneMode(appliedRequest.mode())
@@ -106,7 +121,7 @@ public final class ComputeRenderBridge {
                 notePendingCamera("Waiting for block atlas and baked models", camera);
                 return;
             }
-            var snapshot = worldCapture.capture(camera, atlas);
+            var snapshot = worldCapture.capture(camera, atlas, backend.supportsModelGeometry());
             if (snapshot == null) {
                 notePendingCamera(worldCapture.pendingReason(), camera);
                 return;
@@ -189,9 +204,16 @@ public final class ComputeRenderBridge {
             return false;
         }
         int format = VulkanConst.toVk(target.getColorTexture().getFormat());
+        RasterFrame raster = live && backend.supportsModelGeometry() ? rasterFrame(device,target) : null;
+        if (live && backend.supportsModelGeometry() && (raster == null || currentLighting == null)) {
+            noteIdle("Waiting for matching raster depth and world lighting; normal renderer retained");
+            return false;
+        }
         long atlasGeneration = atlas == null ? 0 : atlas.generation();
+        long colorView = raster == null ? 0 : raster.colorView(), depthView = raster == null ? 0 : raster.depthView();
         if (resourceOwner != null && (resourceWidth != target.width || resourceHeight != target.height
-            || resourceFormat != format || resourceAtlasGeneration != atlasGeneration)) {
+            || resourceFormat != format || resourceAtlasGeneration != atlasGeneration
+            || resourceColorView != colorView || resourceDepthView != depthView || resourceTarget != target)) {
             // Provider resize destroys its previous images. Submit queued uses before allowing that destruction.
             if (!releaseResources()) return false;
         }
@@ -201,13 +223,16 @@ public final class ComputeRenderBridge {
         resourceHeight = target.height;
         resourceFormat = format;
         resourceAtlasGeneration = atlasGeneration;
+        resourceTarget = target;
+        resourceColorView = colorView;
+        resourceDepthView = depthView;
         VulkanCommandEncoder encoder = device.createCommandEncoder();
         VkCommandBuffer commandBuffer = encoder.allocateAndBeginTransientCommandBuffer();
         boolean recorded = false;
         try {
             VkBarriers.fullMemoryBarrier(commandBuffer);
             recorded = backend.render(new ComputeFrameContext(device.vkDevice(), commandBuffer, image,
-                format, target.width, target.height, frameIndex, appliedRequest.mode(), atlas));
+                format, target.width, target.height, frameIndex, appliedRequest.mode(), atlas, currentLighting, raster));
         } catch (RuntimeException | LinkageError error) {
             fail(error.getClass().getSimpleName() + ": " + error.getMessage(), error);
         } finally {
@@ -237,6 +262,32 @@ public final class ComputeRenderBridge {
         if (checkedDevice == closingDevice) checkedDevice = null;
     }
 
+    /** Called before RenderTarget destroys any image/view, including same-size recreation. */
+    public static boolean onTargetClosing(RenderTarget target) {
+        if (cleanupBroken) return false;
+        if (resourceTarget != target) return true;
+        cameraPending = appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
+        return releaseResources();
+    }
+
+    private static RasterFrame rasterFrame(VulkanDevice device, RenderTarget target) {
+        var color = target.getColorTexture(); var depth = target.getDepthTexture();
+        var colorView = target.getColorTextureView(); var depthView = target.getDepthTextureView();
+        if (color == null || depth == null || colorView == null || depthView == null
+            || color.isClosed() || depth.isClosed() || colorView.isClosed() || depthView.isClosed()
+            || (color.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0
+            || (depth.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0) return null;
+        int format = VulkanConst.toVk(color.getFormat()), depthFormat = VulkanConst.toVk(depth.getFormat());
+        if (depthFormat != VK10.VK_FORMAT_D32_SFLOAT
+            || (format != VK10.VK_FORMAT_R8G8B8A8_UNORM && format != VK10.VK_FORMAT_R8G8B8A8_SRGB
+                && format != VK10.VK_FORMAT_B8G8R8A8_UNORM && format != VK10.VK_FORMAT_B8G8R8A8_SRGB)) return null;
+        long colorHandle = WorldTargetManager.extractVkImageView(colorView);
+        long depthHandle = WorldTargetManager.extractVkImageView(depthView);
+        if (colorHandle == 0 || depthHandle == 0) return null;
+        return new RasterFrame(device.vkDevice().address(), colorHandle, depthHandle, format, depthFormat,
+            target.width,target.height);
+    }
+
     /** Called before borrowed atlas handles can close or resource/model epochs can be mixed. */
     static boolean onMaterialsInvalidated() {
         boolean retired = releaseResources();
@@ -257,6 +308,8 @@ public final class ComputeRenderBridge {
         resourceDevice = null;
         resourceWidth = resourceHeight = resourceFormat = 0;
         resourceAtlasGeneration = 0;
+        resourceTarget = null;
+        resourceColorView = resourceDepthView = 0;
         if (owner == null) return true;
         try {
             // execute() queues transient buffers in the host encoder. Flush those before provider.close() waits idle.

@@ -27,7 +27,7 @@ import java.nio.file.Files;
 public final class VulkanRtxConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/Config");
 
-    /** The voxel option draws gray opaque cubes with fixed diagnostic sunlight and traced shadows. */
+    /** The voxel option uses the separate bounded software renderer with model textures and world light. */
     public enum RendererSelection { HARDWARE_RT, VOXEL_LIVE_DEBUG }
     public static RendererSelection rendererSelection = RendererSelection.HARDWARE_RT;
     private static boolean rendererUiOverride;
@@ -808,7 +808,7 @@ public final class VulkanRtxConfig {
             writer.write("point_sampling_sharpness = " + pointSamplingSharpness + "\n");
             writer.write("resource_pack_resolution = " + resourcePackResolution + "\n");
             writer.write("\n[ray_tracing]\n");
-            writer.write("# HARDWARE_RT keeps the rt_mode preference. VOXEL_LIVE_DEBUG requires the separate Bedray Compute add-on: gray opaque cubes and fixed diagnostic sunlight without RT cores; full materials and light transport are pending.\n");
+            writer.write("# HARDWARE_RT keeps the rt_mode preference. VOXEL_LIVE_DEBUG requires the matching separate Bedray Compute add-on: bounded textured models and world light without RT cores, with raster preservation. Physical GI, reflections and temporal guides remain pending.\n");
             writer.write("renderer = \"" + rendererSelection.name() + "\"\n");
             writer.write("# [EXPERIMENTAL] Hardware ray tracing (requires VK_KHR_ray_query). rt_mode: off, rays (Ray Tracing: shadows, reflections, AO, emissive lights) or path (Path Tracing: full light transport)\n");
             writer.write("rt_mode = \"" + rtModePersisted.logName() + "\"\n");

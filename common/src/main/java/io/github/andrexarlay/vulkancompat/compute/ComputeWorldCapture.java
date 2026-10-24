@@ -16,15 +16,20 @@ final class ComputeWorldCapture {
     private final WorldSnapshotStream stream = new WorldSnapshotStream();
     private final ComputeBlockMaterials materials = new ComputeBlockMaterials();
     private String pendingReason;
+    private boolean extendedGeometry;
     void clear() { stream.clear(); materials.clear(); pendingReason = null; }
     String pendingReason() { return pendingReason; }
 
     /** Null means that this frame's camera is not usable yet; the next frame must retry. */
-    WorldSnapshot capture(CameraRenderState camera, AtlasFrame atlas) {
+    WorldSnapshot capture(CameraRenderState camera, AtlasFrame atlas, boolean extended) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft == null || !minecraft.isSameThread())
             throw new IllegalStateException("World snapshot requires the client owning thread");
         var level = minecraft.level;
+        if (extendedGeometry != extended) {
+            clear();
+            extendedGeometry = extended;
+        }
         pendingReason = null;
         if (level == null || camera == null || !camera.initialized) {
             pendingReason = "Waiting for initialized world camera";
@@ -34,7 +39,7 @@ final class ComputeWorldCapture {
             pendingReason = "Waiting for a live block atlas";
             return null;
         }
-        if (WorldTargetManager.bobProjectionEnabled() && !WorldTargetManager.hasCurrentLevelProjection()) {
+        if ((extended || WorldTargetManager.bobProjectionEnabled()) && !WorldTargetManager.hasCurrentLevelProjection()) {
             pendingReason = "Waiting for current-frame world projection";
             return null;
         }
@@ -43,7 +48,8 @@ final class ComputeWorldCapture {
             pendingReason = "Waiting for finite camera position";
             return null;
         }
-        var projection = WorldTargetManager.levelProjectionOr(camera.projectionMatrix);
+        var projection = extended ? WorldTargetManager.currentLevelProjection()
+            : WorldTargetManager.levelProjectionOr(camera.projectionMatrix);
         var inverseProjection = inverseOrNull(projection);
         var inverseView = inverseOrNull(camera.viewRotationMatrix);
         if (inverseProjection == null || inverseView == null) {
@@ -51,8 +57,8 @@ final class ComputeWorldCapture {
                 : "Waiting for invertible camera view";
             return null;
         }
-        var bob = WorldTargetManager.levelCameraOriginOr(null);
-        if (!bob.isFinite()) {
+        var bob = extended ? WorldTargetManager.currentLevelCameraOrigin() : WorldTargetManager.levelCameraOriginOr(null);
+        if (bob == null || !bob.isFinite()) {
             pendingReason = "Waiting for finite view-bob origin";
             return null;
         }
@@ -81,7 +87,7 @@ final class ComputeWorldCapture {
                 return cells;
             }
             @Override public SectionSnapshot readSectionSnapshot(int x, int y, int z, long revision) {
-                return materials.captureSection(x,y,z,revision);
+                return materials.captureSection(x,y,z,revision,extended);
             }
         });
     }

@@ -222,6 +222,11 @@ public final class WorldTargetManager {
         return haveLevelProjection ? new Matrix4f(levelProjection) : null;
     }
 
+    /** Effective origin of the exact raster camera, independent of hardware RT diagnostic settings. */
+    public static org.joml.Vector3f currentLevelCameraOrigin() {
+        return haveLevelProjection ? new org.joml.Vector3f(levelCameraOrigin) : null;
+    }
+
     /** Camera origin offset caused by the view-bob transform, in coordinates relative to the base camera. */
     public static org.joml.Vector3f levelCameraOriginOr(org.joml.Vector3f fallback) {
         return BOB_PROJECTION && haveLevelProjection ? new org.joml.Vector3f(levelCameraOrigin)

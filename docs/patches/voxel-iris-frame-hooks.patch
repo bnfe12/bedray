@@ -95,9 +95,9 @@ index 24edb3b..d044296 100644
  | `main` | Published Bedray baseline | Kept separate from the experimental branches |
 -| Software voxel traversal | Software traversal/companion API | Bounded live opaque diagnostic and synthetic scene; full materials/light transport pending |
 -| Iris Vulkan compatibility | Iris GLSL compatibility/post layer | Opt-in fullscreen post subset; general shaderpack compatibility pending |
-+| `codex/software-voxel-tracing` | Software traversal/companion API and integration | Bounded live full cubes with atlas albedo and synthetic scene; Iris source through `086b98a` integrated with one host frame loop; general shapes/light transport pending |
-+| `codex/iris-vulkan` | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth, current-frame MRT; general shaderpack compatibility pending |
-+| `codex/vulkan-cache-dxgi-present` | Shared shader/pipeline caches and presentation compatibility | Independent source work; stage-aware Iris SPIR-V caching and LWJGL compatibility require integration |
++| Software voxel traversal | Software traversal/companion API and integration | Bounded live full cubes with atlas albedo and synthetic scene; Iris source through `086b98a` integrated with one host frame loop; general shapes/light transport pending |
++| Iris Vulkan compatibility | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth, current-frame MRT; general shaderpack compatibility pending |
++| Vulkan cache and DXGI presentation | Shared shader/pipeline caches and presentation compatibility | Independent source work; stage-aware Iris SPIR-V caching and LWJGL compatibility require integration |
 -
 +
 -Current branch names and commit activity are listed on the repository's [branches page](https://github.com/bnfe12/bedray/branches).

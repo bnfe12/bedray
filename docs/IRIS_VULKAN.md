@@ -1,7 +1,8 @@
 # Iris/OpenGL GLSL on Bedray Vulkan — source-only development
 
-Branch: `codex/iris-vulkan`. No JAR, shaderpack ZIP, release or published compatibility claim is supplied.
-This branch adds an opt-in **fullscreen post host**, not a replacement for the entire Iris renderer.
+Workstream: Iris Vulkan compatibility. Its source is also integrated into the Compute development branch;
+package compilation does not supply a shaderpack compatibility claim. No shaderpack ZIP is bundled.
+This work adds an opt-in **fullscreen post host**, not a replacement for the entire Iris renderer.
 The native Bedray world renderer remains the source of the color image. The host records Vulkan work
 on Bedray's existing device/queue and before hand/HUD rendering; it never creates another window,
 device or swapchain. The Iris mod itself does not gain a Vulkan renderer by installing its JAR.

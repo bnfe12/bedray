@@ -28,7 +28,7 @@ public final class WorldFrameCapture {
             && WorldTargetManager.hasCurrentLevelProjection()) {
             Matrix4f nativeProjection = renderer == WorldFrame.Renderer.HARDWARE_RT
                 ? RtFrameRenderer.displayedProjection(target) : renderer == WorldFrame.Renderer.VOXEL_COMPUTE
-                    ? WorldTargetManager.levelProjectionOr(camera.projectionMatrix) : WorldTargetManager.currentLevelProjection();
+                    ? computeProjection(camera) : WorldTargetManager.currentLevelProjection();
             if (nativeProjection != null) {
                 try { snapshot = camera(camera, nativeProjection); }
                 catch (IllegalArgumentException ignored) { /* Color-only post can still use this frame. */ }
@@ -46,6 +46,12 @@ public final class WorldFrameCapture {
                 WorldFrame.DepthEncoding.REVERSE_DEVICE_Z);
         }
         return new WorldFrame(stamp, renderer, device, color, snapshot, depth);
+    }
+
+    private static Matrix4f computeProjection(CameraRenderState camera) {
+        var backend = io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry.backend();
+        return backend != null && backend.supportsModelGeometry() ? WorldTargetManager.currentLevelProjection()
+            : WorldTargetManager.levelProjectionOr(camera.projectionMatrix);
     }
 
     private static WorldFrame.Camera camera(CameraRenderState camera, Matrix4f full) {

@@ -6,6 +6,9 @@ import java.util.Objects;
 public final class GraphicsBackendRegistry {
     public static final int API_VERSION = 1;
     public static final int API_MINOR_VERSION = 4;
+
+    /** Runtime handshake; unlike a public constant this call is not inlined into companion bytecode. */
+    public static int apiMinorVersion() { return API_MINOR_VERSION; }
     public enum DebugView { SHADED, NORMALS, DISTANCE, OCCUPANCY }
     private static volatile DebugView debugView = DebugView.SHADED;
     public static DebugView debugView() { return debugView; }
