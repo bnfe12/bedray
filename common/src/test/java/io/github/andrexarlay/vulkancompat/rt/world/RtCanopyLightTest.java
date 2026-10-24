@@ -23,12 +23,12 @@ public class RtCanopyLightTest {
     @Test
     public void primarySkyFillIsTracedNotVertexSquared() {
         String src = RtShaderCompiler.loadSource(PATH_SHADER);
-        assertTrue(src.contains("vec3 primarySkyFill(Surface s) {"), "the fill helper must exist in rt_path.comp");
-        assertTrue(requireBlock(src, "vec3 primarySkyFill(Surface s) {").contains("tracedSkyLight(s, 1u, ss)"),
+        assertTrue(src.contains("vec3 primarySkyFill(Surface s, inout uint seed) {"), "the fill helper must exist in rt_path.comp");
+        assertTrue(requireBlock(src, "vec3 primarySkyFill(Surface s, inout uint seed) {").contains("tracedSkyLight(s, 1u, seed)"),
             "the primary fill must trace its sky occlusion like rays mode and every secondary hit");
         assertFalse(src.contains("0.28 * skyVis * skyVis"),
             "the baked vertex sky light squared crushed every shadow under a tree and under ice to near black");
-        assertTrue(src.contains("primarySkyFill(s) * 0.28 * s.mapAo"),
+        assertTrue(src.contains("primarySkyFill(s, seed) * 0.28 * s.mapAo"),
             "the additive artistic fill keeps the open-sky budget of the old 0.28 term");
         assertFalse(src.contains("gFillSkyReady"),
             "each jittered spp hit needs its own sky visibility; a cached result can leak across an occlusion silhouette");
@@ -37,12 +37,29 @@ public class RtCanopyLightTest {
     @Test
     public void primarySkyFillIsEvaluatedPerSppHit() {
         String src = RtShaderCompiler.loadSource(PATH_SHADER);
-        String helper = requireBlock(src, "vec3 primarySkyFill(Surface s) {");
-        assertTrue(helper.contains("return tracedSkyLight(s, 1u, ss);"),
+        String helper = requireBlock(src, "vec3 primarySkyFill(Surface s, inout uint seed) {");
+        assertTrue(helper.contains("return tracedSkyLight(s, 1u, seed);"),
             "the helper must trace the current hit rather than returning cached radiance");
         assertFalse(src.contains("gFillPos"), "no position-tolerant cross-sample cache");
         assertFalse(src.contains("gFillNormal"), "no normal-tolerant cross-sample cache");
         assertFalse(src.contains("gFillLight"), "no light-tolerant cross-sample cache");
+    }
+
+    @Test
+    public void primarySkyFillSeedIsNotQuantisedToAWorldCell() {
+        // Owner report 2026-10-24: the underside of a beam under a canopy showed a regular grid of lit and dark squares. The
+        // seed was floor(worldPos * 8), so every pixel inside one 1/8-block cell traced the same single visibility ray and
+        // shared its binary result: eight cells per block face, each one entirely lit or entirely dark. The path seed is per
+        // pixel and per frame (tracePath), which the denoiser can average and a quantised grid cannot.
+        String src = RtShaderCompiler.loadSource(PATH_SHADER);
+        String helper = requireBlock(src, "vec3 primarySkyFill(Surface s, inout uint seed) {");
+        assertFalse(helper.contains("floor(s.worldPos"),
+            "a world-space cell seed is what draws the 1/8-block checkerboard under a canopy");
+        assertFalse(helper.contains("pcgHash"), "the fill samples from the path seed, not from a position hash");
+        assertTrue(helper.contains("tracedSkyLight(s, 1u, seed)"), "the per-pixel per-frame path seed drives the sample");
+        assertTrue(src.contains("primarySkyFill(s, seed) * 0.28 * s.mapAo"), "the call site hands the path seed over");
+        assertTrue(src.contains("uint seed = pcgHash(uint(p.x) * 1973u + uint(p.y) * 9277u + pc.frame * 26699u + 7u);"),
+            "the seed the pass hands down is per pixel and per frame, not quantised to a world cell");
     }
 
     @Test

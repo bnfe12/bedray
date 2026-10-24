@@ -43,13 +43,22 @@ public final class RtEmitters {
     /** Texel scan of a quad: at most this many texels per axis (hi-res packs are sampled with a stride). */
     static final int MAX_SCAN = 32;
     /**
-     * Minimum luminous power (area x mean emission x boost, in block faces) of a quad that has any emissive texel: a torch flame
-     * (a few texels of a 2 x 10 texel quad), a candle or a lantern bulb shines like a part of a glowstone face, as the
-     * vanilla light level 14 suggests; without it they light only a few blocks around.
+     * Minimum luminous power (area x mean emission x boost, in block faces) of a quad that has any emissive texel. Vanilla puts a
+     * torch at light level 14 and glowstone at 15, and a glowstone face carries about one block face of power (area 1 x the mean
+     * emission of its texture, around 0.65), so a flame must carry about 14/15 of that: 0.6, not the fifth of a face (0.2) this
+     * floor used to be, which left a torch lighting a puddle and a cave with a torch in it effectively black (owner report
+     * 2026-10-24). The floor is only reachable while {@code area * mean emission >= MIN_POWER / MAX_BOOST = 0.0094}, i.e. a
+     * spot about 0.1 blocks across; a smaller spot stops at the cap and stays dim instead of becoming a floodlight.
      */
-    public static final float MIN_POWER = 0.2f;
+    public static final float MIN_POWER = 0.6f;
     /** Cap of the power boost (a single emissive texel of a big quad must not become a floodlight). */
     public static final float MAX_BOOST = 64f;
+    /**
+     * Largest quad area (blocks^2) whose boost may turn a solid-pass quad into an open (two-sided) source. A torch-size quad is
+     * smaller than this, a block face (1.0) is not, and neither is a face carrying a small emissive spot: the emitter rectangle
+     * shrinks to the spot, but the quad is still an opaque face and light must not leave its back side.
+     */
+    static final float MAX_OPEN_AREA = 0.05f;
     private static final float[] EMPTY = new float[0];
     private static final long FINGERPRINT_SEED = 0x9E3779B97F4A7C15L;
     private static final long FINGERPRINT_PRIME = 0x100000001B3L;
@@ -775,9 +784,13 @@ public final class RtEmitters {
         dst[o + 8] = e2x * db;
         dst[o + 9] = e2y * db;
         dst[o + 10] = e2z * db;
-        // e2.w: open / small sources (torch, lantern, campfire, fire, any boosted quad) radiate to both sides; solid block faces
-        // into their outward hemisphere
-        dst[o + 11] = redstoneSource ? 2.0f : ((twoSidedSource || boost > 1.05f) ? 1.0f : 0.0f);
+        // e2.w: open / small sources (torch, lantern, campfire, fire) radiate to both sides; solid block faces only into their
+        // outward hemisphere. A boost alone does not make a quad open: with MIN_POWER at 0.6 a solid face of mean emission 0.4 to
+        // 0.6 is lifted as well, and an open flag gives it back-hemisphere emission (cos floor 0.25) and a shadow ray that stops
+        // short of the surface, which leaks light through slabs and carpets. The test is the whole quad (a block face is 1.0),
+        // not the shrunk emitter rectangle: a small bright spot on an opaque face must not open the face either.
+        dst[o + 11] = redstoneSource ? 2.0f
+            : ((twoSidedSource || (areaFull < MAX_OPEN_AREA && boost > 1.05f)) ? 1.0f : 0.0f);
         dst[o + 12] = u0 + ax * aMin + bx * bMin;       // uv of the emitter corner
         dst[o + 13] = v0 + ay * aMin + by * bMin;
         dst[o + 14] = mean;                             // mean texel emission of the emitter rectangle

@@ -98,7 +98,9 @@ vec3 shadeSimple(Surface s, vec3 dir, bool shadowRay) {
     vec3 direct = directSun + bakedBlockFill(s) * ao;
     vec3 diffuseLight = direct + ambient;
 
-    // Stratified emitter sampling with stable seed (3 samples) for reflection stability
+    // Stratified emitter sampling with stable seed (3 samples) for reflection stability. These world-cell seeds (ao, sky, em)
+    // belong to secondary reflection shading only: a camera-visible surface is shaded per pixel and per frame by the path
+    // tracer / ray pass, where a quantised seed would draw a grid that the denoiser keeps (see primarySkyFill in rt_path.comp).
     if (hasFlag(FLAG_EMISSIVE) && emitterCount() > 0u) {
         uint emSeed = pcgHash(uint(int(floor(s.worldPos.x * 4.0)) * 73856093 ^ int(floor(s.worldPos.y * 4.0)) * 19349663 ^ int(floor(s.worldPos.z * 4.0)) * 83492791));
         const uint EM_SAMPLES = 3u;

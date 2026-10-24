@@ -31,12 +31,15 @@ bool gLeafBacklit = false;
 // 0.28 * skyVis^2 * hemisphereAmbient term; it is not a split of the independently sampled diffuse-bounce sky. Traced occlusion
 // lets a canopy gap or window fill shade that baked vertex light squared crushed to near black, while a sealed room stays dark.
 // Every jittered spp hit traces its own visibility: reusing even a position/normal-compatible result can leak across a silhouette.
-vec3 primarySkyFill(Surface s) {
+// The sample comes from the path seed, which is per pixel and per frame (tracePath). Seeding it from the world cell
+// floor(worldPos * 8) instead made every pixel of a 1/8-block cell share one visibility ray and its binary open / blocked
+// answer, and under a canopy that drew a regular grid of lit and dark squares eight cells wide per block face: an artifact the
+// denoiser preserves as if it were texture detail, where per-pixel noise is what it is built to average away.
+vec3 primarySkyFill(Surface s, inout uint seed) {
     if (s.light.y <= 0.02) {
         return vec3(0.0);
     }
-    uint ss = pcgHash(uint(int(floor(s.worldPos.x * 8.0)) * 73856093 ^ int(floor(s.worldPos.y * 8.0)) * 19349663 ^ int(floor(s.worldPos.z * 8.0)) * 83492791));
-    return tracedSkyLight(s, 1u, ss);
+    return tracedSkyLight(s, 1u, seed);
 }
 
 // first / firstHit: the first solid surface of the camera ray (albedo, normals, section fade, temporal accumulation).
@@ -282,7 +285,7 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
         // Additive outdoor fill on the primary hit: traced sky occlusion instead of baked vertex sky light squared.
         // Caves and enclosed rooms (s.light.y == 0) stay completely dark.
         if (b == 0u && s.metal < 0.5 && s.light.y > 0.02) {
-            vec3 canopyFill = thr * s.albedoLit * (1.0 - Fsc) * primarySkyFill(s) * 0.28 * s.mapAo;
+            vec3 canopyFill = thr * s.albedoLit * (1.0 - Fsc) * primarySkyFill(s, seed) * 0.28 * s.mapAo;
             res.radiance += canopyFill;
             res.indirect += canopyFill;
         }
