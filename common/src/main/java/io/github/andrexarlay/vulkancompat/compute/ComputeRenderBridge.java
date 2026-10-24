@@ -43,6 +43,7 @@ public final class ComputeRenderBridge {
     private static boolean hadWorld;
     private static boolean cameraPending;
     private static String pendingCameraReason;
+    private static String pendingFrameReason, pendingRasterReason;
     private static long recordedRevision = Long.MIN_VALUE;
     private static int resourceWidth, resourceHeight, resourceFormat;
     private static long capturedAtlasGeneration, resourceAtlasGeneration;
@@ -76,6 +77,7 @@ public final class ComputeRenderBridge {
             worldCapture.clear();
             if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
             pendingCameraReason = null;
+            pendingFrameReason = null;
             recordedRevision = Long.MIN_VALUE;
         }
         if (cleanupBroken) {
@@ -87,6 +89,7 @@ public final class ComputeRenderBridge {
                 worldCapture.clear();
                 if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
                 pendingCameraReason = null;
+                pendingFrameReason = null;
                 recordedRevision = Long.MIN_VALUE;
             }
             if (!releaseResources()) return;
@@ -207,7 +210,15 @@ public final class ComputeRenderBridge {
         int format = VulkanConst.toVk(target.getColorTexture().getFormat());
         RasterFrame raster = live && backend.supportsModelGeometry() ? rasterFrame(device,target) : null;
         if (live && backend.supportsModelGeometry() && (raster == null || currentLighting == null)) {
-            noteIdle("Waiting for matching raster depth and world lighting; normal renderer retained");
+            String reason = raster == null ? "Raster input: " + pendingRasterReason : "";
+            if (currentLighting == null) reason += (reason.isEmpty() ? "" : "; ")
+                + "World lighting: " + ComputeLightingCapture.pendingReason();
+            if (!java.util.Objects.equals(pendingFrameReason, reason)) {
+                LOGGER.warn("[BEDRAY-COMPUTE] frame_pending reason={} target={}x{} format={} retry=next_frame",
+                    reason,target.width,target.height,format);
+                pendingFrameReason = reason;
+            }
+            noteIdle(reason + "; normal renderer retained");
             return false;
         }
         long atlasGeneration = atlas == null ? 0 : atlas.generation();
@@ -245,6 +256,10 @@ public final class ComputeRenderBridge {
             encoder.execute(commandBuffer);
         }
         if (recorded) {
+            if (pendingFrameReason != null) {
+                LOGGER.info("[BEDRAY-COMPUTE] frame_inputs_ready target={}x{}", target.width,target.height);
+                pendingFrameReason = null;
+            }
             GraphicsBackendRegistry.noteRendered(backend.id(), appliedRequest);
             if (recordedRevision != appliedRequest.revision()) {
                 LOGGER.info("[BEDRAY-COMPUTE] scene_recorded mode={} backend={} target={}x{} detail={}",
@@ -272,19 +287,35 @@ public final class ComputeRenderBridge {
     }
 
     private static RasterFrame rasterFrame(VulkanDevice device, RenderTarget target) {
+        pendingRasterReason = null;
         var color = target.getColorTexture(); var depth = target.getDepthTexture();
         var colorView = target.getColorTextureView(); var depthView = target.getDepthTextureView();
-        if (color == null || depth == null || colorView == null || depthView == null
-            || color.isClosed() || depth.isClosed() || colorView.isClosed() || depthView.isClosed()
-            || (color.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0
-            || (depth.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0) return null;
+        if (color == null || depth == null || colorView == null || depthView == null) {
+            pendingRasterReason = "Waiting for world color/depth textures and views";
+            return null;
+        }
+        if (color.isClosed() || depth.isClosed() || colorView.isClosed() || depthView.isClosed()) {
+            pendingRasterReason = "World color/depth texture or view is closed";
+            return null;
+        }
+        if ((color.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0
+            || (depth.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0) {
+            pendingRasterReason = "World inputs lack sampled usage: color=" + color.usage() + " depth=" + depth.usage();
+            return null;
+        }
         int format = VulkanConst.toVk(color.getFormat()), depthFormat = VulkanConst.toVk(depth.getFormat());
         if (depthFormat != VK10.VK_FORMAT_D32_SFLOAT
             || (format != VK10.VK_FORMAT_R8G8B8A8_UNORM && format != VK10.VK_FORMAT_R8G8B8A8_SRGB
-                && format != VK10.VK_FORMAT_B8G8R8A8_UNORM && format != VK10.VK_FORMAT_B8G8R8A8_SRGB)) return null;
+                && format != VK10.VK_FORMAT_B8G8R8A8_UNORM && format != VK10.VK_FORMAT_B8G8R8A8_SRGB)) {
+            pendingRasterReason = "Unsupported sampled world formats: color=" + format + " depth=" + depthFormat;
+            return null;
+        }
         long colorHandle = WorldTargetManager.extractVkImageView(colorView);
         long depthHandle = WorldTargetManager.extractVkImageView(depthView);
-        if (colorHandle == 0 || depthHandle == 0) return null;
+        if (colorHandle == 0 || depthHandle == 0) {
+            pendingRasterReason = "Waiting for Vulkan world image views";
+            return null;
+        }
         return new RasterFrame(device.vkDevice().address(), colorHandle, depthHandle, format, depthFormat,
             target.width,target.height);
     }
