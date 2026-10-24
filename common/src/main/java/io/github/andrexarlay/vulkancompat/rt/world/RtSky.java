@@ -176,12 +176,14 @@ public final class RtSky {
     /**
      * Mirror of {@code skyLight()} in rt_common.glsl. {@code sunY}/{@code moonY} are the vertical components of the sun / moon
      * directions, {@code rain} the vanilla rain brightness (1 clear), {@code keyColor} the key light of the frame.
+     * The GPU path also tints the horizon haze with the biome fog colour; it is the one term this mirror lacks because the
+     * fog colour is not an argument here.
      */
     public static void skyLight(float[] skyColor, float day, float sunY, float moonY, float moonPhaseLight, float rain,
                                 float[] keyColor, boolean hasSky, SkyLight out) {
         float[] skyTint = new float[3];
         for (int i = 0; i < 3; i++) {
-            skyTint[i] = 0.25f * skyColor[i] + 0.75f;
+            skyTint[i] = 0.45f * skyColor[i] + 0.55f;
         }
         if (!hasSky) {
             float scale = 0.65f * ((float) Math.pow(Math.max(0f, day), 1.5) * 0.90f + 0.01f);

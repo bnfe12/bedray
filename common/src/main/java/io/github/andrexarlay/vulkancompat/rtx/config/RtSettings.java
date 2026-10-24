@@ -55,8 +55,8 @@ public final class RtSettings {
     public static int raysShadowQuality = 2;
     /** Stylised retro shadows: the sun visibility is evaluated once per world-space cell, so edges are blocky like a low-res shadow map. */
     public static boolean raysPixelShadows = false;
-    /** Edge of a pixelated-shadow cell in blocks (2 = chunky, 1 = half-block steps), both modes. */
-    public static int raysPixelShadowSize = 2;
+    /** Edge of a pixelated-shadow cell in texture pixels (1 = one pixel of a 16x16 block texture = 1/16 block), both modes. */
+    public static int raysPixelShadowSize = 1;
     public static boolean raysReflections = false;
     public static int raysReflectionQuality = 1;
     public static int raysReflectionDistance = 128;
@@ -184,7 +184,7 @@ public final class RtSettings {
         bool("rays_soft_shadows", () -> raysSoftShadows, v -> raysSoftShadows = v);
         integer("rays_shadow_quality", () -> raysShadowQuality, v -> raysShadowQuality = v, 1, 8);
         bool("rays_pixel_shadows", () -> raysPixelShadows, v -> raysPixelShadows = v);
-        integer("rays_pixel_shadow_size", () -> raysPixelShadowSize, v -> raysPixelShadowSize = v, 1, 32);
+        integer("rays_pixel_shadow_size", () -> raysPixelShadowSize, v -> raysPixelShadowSize = v, 1, 16);
         bool("rays_reflections", () -> raysReflections, v -> raysReflections = v);
         integer("rays_reflection_quality", () -> raysReflectionQuality, v -> raysReflectionQuality = v, 1, 4);
         integer("rays_reflection_distance", () -> raysReflectionDistance, v -> raysReflectionDistance = v, DISTANCE_MIN, DISTANCE_MAX);
@@ -555,7 +555,7 @@ public final class RtSettings {
         raysSoftShadows = true;
         raysShadowQuality = 1;
         raysPixelShadows = false;
-        raysPixelShadowSize = 2;
+        raysPixelShadowSize = 1;
         raysReflections = false;
         raysReflectionQuality = 1;
         raysReflectionDistance = 64;

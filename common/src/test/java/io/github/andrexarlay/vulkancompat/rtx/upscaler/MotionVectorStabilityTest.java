@@ -199,4 +199,97 @@ public class MotionVectorStabilityTest {
         // Erroneously jittering invViewProj causes artificial motion vector smear
         assertTrue(Math.abs(badMvX) > 1e-3f, "Jittering invViewProj would contaminate motion vectors");
     }
+
+    /**
+     * The hardware depth buffer was rendered with the jittered projection, so a pixel's depth belongs to the unjittered
+     * pixel p + jitter. The CPU reference must unproject that point: otherwise a static scene produces a motion vector
+     * that flips with every Halton phase and the temporal reconstruction shakes along block edges.
+     */
+    @Test
+    public void testCpuReferenceJitteredReprojectionStaysStatic() {
+        Matrix4f proj = new Matrix4f().perspective((float) Math.toRadians(70), 16.0f / 9.0f, 0.05f, 1000.0f);
+        Matrix4f invViewProj = new Matrix4f(proj).invert();
+        Matrix4f prevViewProj = new Matrix4f(proj);
+        int width = 1920;
+        int height = 1080;
+        float uvX = (960 + 0.5f) / width;
+        float uvY = (540 + 0.5f) / height;
+
+        float[][] jitters = {{0.0f, 0.0f}, {0.25f, -0.1667f}, {-0.5f, 0.5f}};
+        for (float[] jitter : jitters) {
+            VelocityPipeline.ReprojectionResult r = VelocityPipeline.reprojectCpu(
+                uvX, uvY, 15.0f, width, height, invViewProj, prevViewProj, Vec3.ZERO,
+                false, null, null, 0, false,
+                VelocityPipeline.DEPTH_LINEAR_VIEW_Z, new Vector3f(), jitter[0], jitter[1]);
+            assertTrue(r.valid(), "reprojection is valid");
+            assertEquals(0.0f, r.mvX(), 1e-3f,
+                "static scene must keep zero horizontal motion with jitter " + jitter[0]);
+            assertEquals(0.0f, r.mvY(), 1e-3f,
+                "static scene must keep zero vertical motion with jitter " + jitter[1]);
+        }
+    }
+
+    /** Source contract: the shader and the CPU reference must agree on where the jitter is applied. */
+    @Test
+    public void testVelocityShaderCarriesJitter() throws Exception {
+        String src = readSource("src/main/resources/shaders/velocity_reproject.comp");
+        assertTrue(src.contains("vec4 jitter;"), "FrameUniforms carries the current and previous sub-pixel jitter");
+        assertTrue(src.contains("+ jitter.xy"), "the unprojected sample coordinate must be shifted by the current jitter");
+        assertTrue(src.contains("- jitter.zw"), "the previous-frame disocclusion lookups must undo the previous jitter");
+        assertTrue(src.contains("vec2 motionVector = (prevUv - uv) * renderResolution.xy;"),
+            "motion vectors must be measured from the jitter-free coordinate");
+    }
+
+    /**
+     * The DLSS-RR image is resolved on the render grid and already carries entity and RT-geometry motion. Feeding the
+     * upscaler the raster-depth vectors instead drags moving entities and water across block edges, because that pass
+     * only knows camera motion. The raster pass must still run: frame generation reads its output.
+     */
+    @Test
+    public void testSrReusesDenoiserMotionVectors() throws Exception {
+        String world = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rtx/WorldTargetManager.java");
+        assertTrue(world.contains(
+                "final long resolvedMvView = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorView() : 0L;"),
+            "the upscaler must take the denoiser's motion vectors when the colour is denoiser-resolved");
+        assertTrue(world.contains(
+                "final long resolvedMvImg = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorImage() : 0L;"),
+            "the image handle must come from the same denoiser buffer");
+        assertTrue(world.contains("final long srMvView = reuseDenoiserMotion ? resolvedMvView : mvView;"),
+            "the upscaler input falls back to the raster vectors");
+        assertTrue(world.contains("new FrameContext.ImageRef(srMvImg, srMvView, fmtMv,"),
+            "FrameContext must be built from the resolved-or-raster pair");
+        int ctx = world.indexOf("FrameContext ctx = new FrameContext");
+        assertTrue(world.indexOf("velocityPipeline.dispatch(cmd, rasterDepthView, mvView", 0) < ctx,
+            "the raster pass still feeds frame generation and must run before the upscaler");
+    }
+
+    /**
+     * DLSS needs a measured frame delta to scale its history, and at a non-native scale it is the only stage that can
+     * restore edge contrast: both values used to be the constants 16.6 ms and 0.0.
+     */
+    @Test
+    public void testDlssSharpnessAndMeasuredFrameDelta() throws Exception {
+        String backend = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rtx/upscaler/DlssBackend.java");
+        assertTrue(backend.contains("1.0f, 1.0f, srSharpness(ctx), 1.0f, ctx.exposureScale(),"),
+            "the super-resolution pass must forward the scale-dependent sharpness");
+        assertTrue(backend.contains("return scale > 1.05f ? 0.3f : 0.0f;"),
+            "sharpening only compensates a real downscale, never native DLAA");
+        assertTrue(backend.contains("System.getProperty(\"vkrtx.dlss.sharpness\")"), "the value must stay tunable");
+
+        String rr = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rt/denoise/DlssRrDenoiser.java");
+        assertTrue(rr.contains("float frameDeltaMs = frameDeltaMs();"), "RR must measure its own frame delta");
+        assertTrue(rr.contains("lastRecordNanos == 0L ? 16.6f : (now - lastRecordNanos) / 1.0e6f"),
+            "the constant survives only as the first-frame fallback");
+        assertTrue(rr.contains("1.0f, 1.0f,\n            SHARPNESS,\n            1.0f, exposure,\n            frameDeltaMs,"),
+            "the evaluation must forward the sharpness and the measured delta");
+    }
+
+    private static String readSource(String relative) throws Exception {
+        java.nio.file.Path path = java.nio.file.Path.of(relative);
+        if (!java.nio.file.Files.isRegularFile(path)) {
+            path = java.nio.file.Path.of("common").resolve(relative);
+        }
+        // Normalised: the sources are checked out with CRLF on Windows and the multi-line assertions use \n.
+        return java.nio.file.Files.readString(path, java.nio.charset.StandardCharsets.UTF_8).replace("\r\n", "\n");
+    }
 }

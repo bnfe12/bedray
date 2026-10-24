@@ -50,6 +50,12 @@ public final class DlssRrDenoiser {
     private static final int FMT_RGBA8 = VK10.VK_FORMAT_R8G8B8A8_UNORM;
     private static final int USAGE_STORAGE_SAMPLED = VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT;
     private static final double TELEPORT_BLOCKS = 32.0;
+    /**
+     * NGX sharpness of the RR output (0 = off, the default). Sharpening is left to the upscale pass, which runs at display
+     * resolution and would otherwise compound with this one. {@code -Dvkrtx.dlssrr.sharpness} enables it for A/B runs.
+     */
+    private static final float SHARPNESS = sharpnessSetting();
+    private long lastRecordNanos;
 
     private final VkDevice device;
     private final RtMemory memory;
@@ -190,6 +196,26 @@ public final class DlssRrDenoiser {
 
     public VelocityPipeline velocityPipeline() {
         return velocityPipeline;
+    }
+
+    private static float sharpnessSetting() {
+        String v = System.getProperty("vkrtx.dlssrr.sharpness");
+        if (v != null && !v.isBlank()) {
+            try {
+                return Math.max(0.0f, Math.min(1.0f, Float.parseFloat(v.trim())));
+            } catch (NumberFormatException ignored) {
+                LOGGER.warn("[DLSS-RR] -Dvkrtx.dlssrr.sharpness='{}' is not a number, using 0", v);
+            }
+        }
+        return 0.0f;
+    }
+
+    /** Wall-clock delta of two RR evaluations: NGX uses it to scale its history and anti-ghosting response. */
+    private float frameDeltaMs() {
+        long now = System.nanoTime();
+        float ms = lastRecordNanos == 0L ? 16.6f : (now - lastRecordNanos) / 1.0e6f;
+        lastRecordNanos = now;
+        return Math.max(1.0f, Math.min(100.0f, ms));
     }
 
     private static Path resolveWrapperDll() {
@@ -362,10 +388,13 @@ public final class DlssRrDenoiser {
     }
 
     /**
-     * Views of the five G-buffer images rt_rays.comp / rt_path.comp write (bindings 4..8 of the gbuffer RtPipeline).
+     * Views of the seven G-buffer images rt_rays.comp / rt_path.comp write (bindings 4..8 and 13..14 of the gbuffer
+     * RtPipeline). The count must match {@link io.github.andrexarlay.vulkancompat.rt.world.RtPipeline#GBUFFER_VIEWS}:
+     * a short array fails the bind of the gbuffer variant on the first frame and disables RT for the session.
      */
     public long[] gbufferViews() {
-        return new long[] {gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view};
+        return new long[] {gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view,
+            gbSpecular.view, gbSpecAlbedo.view};
     }
 
     public RtMemory.Img gbViewZ() { return gbViewZ; }
@@ -448,6 +477,7 @@ public final class DlssRrDenoiser {
         }
         ensureFeature(cmd);
         MotionProbe.tick();
+        float frameDeltaMs = frameDeltaMs();
 
         boolean teleport = havePrev && Math.hypot(camX - prevX, Math.hypot(camY - prevY, camZ - prevZ)) > TELEPORT_BLOCKS;
         boolean reset = restartNext || teleport;
@@ -602,9 +632,9 @@ public final class DlssRrDenoiser {
                 : new DlssRrParams.Image(inDisocc.image, inDisocc.view, FMT_R32F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false),
             jitterPixelsX, jitterPixelsY,
             1.0f, 1.0f,
-            0.0f,
+            SHARPNESS,
             1.0f, exposure,
-            16.6f,
+            frameDeltaMs,
             width, height,
             worldToViewMatrix, viewToClipMatrix
         );

@@ -6,7 +6,6 @@ import net.minecraft.client.model.Model;
 import net.minecraft.client.renderer.SubmitNodeCollection;
 import net.minecraft.client.renderer.item.ItemStackRenderState;
 import net.minecraft.client.renderer.rendertype.RenderType;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.UvMapping;
 import net.minecraft.client.resources.model.geometry.ItemQuads;
 import net.minecraft.world.item.ItemDisplayContext;
@@ -22,20 +21,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class MixinSubmitNodeCollection {
 
     private static boolean isWaterMask(RenderType renderType) {
-        if (renderType == null) {
-            return true;
-        }
-        String s = renderType.toString();
-        if (s.contains("water_mask") || s.contains("waterMask") || s.toLowerCase(java.util.Locale.ROOT).contains("watermask")) {
-            return true;
-        }
-        try {
-            if (renderType.equals(RenderTypes.waterMask())) {
-                return true;
-            }
-        } catch (Throwable ignored) {
-        }
-        return false;
+        return io.github.andrexarlay.vulkancompat.rt.entity.RtCaptureCollector.isWaterMask(renderType);
     }
 
     @Inject(method = "submitModel", at = @At("HEAD"))
@@ -48,7 +34,11 @@ public class MixinSubmitNodeCollection {
         if (isWaterMask(renderType)) {
             return;
         }
-        EntityCaptureManager.getInstance().captureModel(model, state, poseStack, renderType, light, overlay, color, uvMapping);
+        EntityCaptureManager capture = EntityCaptureManager.getInstance();
+        if (capture.inHandPass()) {
+            capture.noteHandSubmit("model", model.getClass().getSimpleName() + " uv=" + (uvMapping != null), renderType, light, overlay, poseStack);
+        }
+        capture.captureModel(model, state, poseStack, renderType, light, overlay, color, uvMapping);
     }
 
     /** True while the full-light resubmit of an emissive hand item runs (it must not be captured twice). */
@@ -63,6 +53,9 @@ public class MixinSubmitNodeCollection {
         if (vkb$resubmit) return;
 
         EntityCaptureManager capture = EntityCaptureManager.getInstance();
+        if (capture.inHandPass()) {
+            capture.noteHandSubmit("item", "quads=" + (itemQuads == null ? "null" : itemQuads.all().size()), null, light, overlay, poseStack);
+        }
         EntityCaptureManager.HandItemSplit split = capture.captureHandItem(poseStack, itemQuads, tintColors);
         if (split != null) {
             if (!split.emissive().isEmpty()) {

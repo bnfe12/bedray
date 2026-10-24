@@ -51,6 +51,8 @@ public final class RtEmitters {
     /** Cap of the power boost (a single emissive texel of a big quad must not become a floodlight). */
     public static final float MAX_BOOST = 64f;
     private static final float[] EMPTY = new float[0];
+    private static final long FINGERPRINT_SEED = 0x9E3779B97F4A7C15L;
+    private static final long FINGERPRINT_PRIME = 0x100000001B3L;
 
     private record Entry(DecodedSection src, float[] records) {
     }
@@ -67,8 +69,9 @@ public final class RtEmitters {
     private float curCx, curCy, curCz;
     private float curRange2;
     private MaterialAtlasBaker.Result currentMat;
-    private final java.util.function.Consumer<DecodedSection> sectionProcessor = this::processSection;
     private long lastVersion = -1;
+    /** Hash of the in-range block emitters in world space; ReSTIR history may only survive while it is unchanged. */
+    private long fingerprint = FINGERPRINT_SEED;
     private Object lastMaterials;
     private int segment = -1;
     private int count;
@@ -88,9 +91,26 @@ public final class RtEmitters {
     private int entityUsed;
     private int inRange;
     private int totalEmitters;
-    /** Camera movement (blocks) that triggers a re-selection of the light list (0 = continuous every moving frame). */
-    public static final double MOVE_REBUILD = 0.0;
+    /**
+     * Camera movement (blocks) that triggers a re-selection of the light list. Records are stored relative to the emitter
+     * origin and the shader receives the camera position relative to that same origin every frame, so positions stay exact
+     * between rebuilds; the threshold only delays the distance-based re-selection, which does not need sub-block precision.
+     */
+    public static final double MOVE_REBUILD = 0.5;
     private long lastLogNs;
+    /** CPU budget of one frame of the light-list scan: a cold scan (pack switch, world change) spans several frames. */
+    static final long SCAN_BUDGET_NS = 4_000_000L;
+    /** Non-null while a section scan is in progress (spread over frames); the GPU keeps the previous list meanwhile. */
+    private java.util.ArrayList<DecodedSection> scanList;
+    private int scanCursor;
+    private long scanVersion = -1;
+    private long scanStartNs;
+    /** Snapshot of the static (section) selection, so a frame where only entity lights changed skips the section scan. */
+    private float[][] staticHeap = new float[64][FLOATS + 1];
+    private int staticHeapSize = -1;
+    private int staticTotal;
+    private int staticInRange;
+    private long staticFingerprint;
 
     public RtEmitters(RtMemory memory) {
         this.memory = memory;
@@ -98,6 +118,9 @@ public final class RtEmitters {
             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
         for (int i = 0; i < heap.length; i++) {
             heap[i] = new float[FLOATS + 1];
+        }
+        for (int i = 0; i < staticHeap.length; i++) {
+            staticHeap[i] = new float[FLOATS + 1];
         }
     }
 
@@ -110,6 +133,18 @@ public final class RtEmitters {
                 newHeap[i] = new float[FLOATS + 1];
             }
             heap = newHeap;
+        }
+    }
+
+    private void ensureStaticHeapCapacity(int capacity) {
+        if (staticHeap.length < capacity) {
+            int newCap = Math.max(capacity, staticHeap.length * 2);
+            float[][] newHeap = new float[newCap][];
+            System.arraycopy(staticHeap, 0, newHeap, 0, staticHeap.length);
+            for (int i = staticHeap.length; i < newCap; i++) {
+                newHeap[i] = new float[FLOATS + 1];
+            }
+            staticHeap = newHeap;
         }
     }
 
@@ -193,6 +228,24 @@ public final class RtEmitters {
         sortHeapDescending(heap, heapSize);
     }
 
+    /**
+     * Mixes one emitter record into the light-list fingerprint. The position is hashed in world space (origin offset added),
+     * so a re-anchored list with the same lights hashes identically and its ReSTIR history can be kept.
+     */
+    static long mixEmitter(long h, float[] r, int o, float ox, float oy, float oz) {
+        h = mix(h, Float.floatToIntBits(r[o] + ox));
+        h = mix(h, Float.floatToIntBits(r[o + 1] + oy));
+        h = mix(h, Float.floatToIntBits(r[o + 2] + oz));
+        for (int i = 3; i <= 19; i++) {
+            h = mix(h, Float.floatToIntBits(r[o + i]));
+        }
+        return h;
+    }
+
+    private static long mix(long h, int v) {
+        return (h ^ v) * FINGERPRINT_PRIME;
+    }
+
     private void processSection(DecodedSection d) {
         seen.add(d.key);
         Entry e = cache.get(d.key);
@@ -216,6 +269,7 @@ public final class RtEmitters {
                 continue;
             }
             inRangeCounter++;
+            fingerprint = mixEmitter(fingerprint, r, o, dx + originX, dy + originY, dz + originZ);
             if (targetBudget <= 0) {
                 continue;
             }
@@ -229,6 +283,15 @@ public final class RtEmitters {
 
     public int count() {
         return count;
+    }
+
+    /**
+     * Hash of the block emitters within range of the last rebuild, in world space. Changes only when the lights themselves
+     * change (a torch placed or broken, a material or a section edit), not when a distant section streams in or the camera
+     * re-anchors the list: the ReSTIR reservoir reset keys off this instead of the world structure version.
+     */
+    public long fingerprint() {
+        return fingerprint;
     }
 
     /** Device address of the current segment (valid when {@link #count()} > 0). */
@@ -267,11 +330,44 @@ public final class RtEmitters {
     public void update(RtWorld world, MaterialAtlasBaker.Result mat, double camX, double camY, double camZ, float range, int budget,
                        float[] entityQuads, int entityCount) {
         long version = world.structureVersion();
+        if (scanList != null) {
+            if (version == scanVersion) {
+                continueScan(entityQuads, entityCount);
+            } else {
+                scanList = null; // sections changed mid-scan: restart from scratch on this frame
+                scanCursor = 0;
+                startScan(world, mat, camX, camY, camZ, range, budget, version);
+                continueScan(entityQuads, entityCount);
+            }
+            return; // the previous light list stays on the GPU until the scan finishes
+        }
         double moved = Double.isNaN(lastCamX) ? Double.MAX_VALUE
             : Math.max(Math.abs(camX - lastCamX), Math.max(Math.abs(camY - lastCamY), Math.abs(camZ - lastCamZ)));
-        if (version == lastVersion && mat == lastMaterials && moved <= MOVE_REBUILD && range == lastRange && budget == lastBudget && entityCount == 0 && lastEntityCount == 0) {
-            return;
+        if (version == lastVersion && mat == lastMaterials && moved <= MOVE_REBUILD && range == lastRange && budget == lastBudget) {
+            if (entityCount == 0 && lastEntityCount == 0) {
+                return;
+            }
+            if (staticHeapSize >= 0) {
+                // only the entity lights can have changed: restore the static selection and merge them again
+                lastCamX = camX;
+                lastCamY = camY;
+                lastCamZ = camZ;
+                lastEntityCount = entityCount;
+                curCx = (float) (camX - originX);
+                curCy = (float) (camY - originY);
+                curCz = (float) (camZ - originZ);
+                restoreStatic();
+                processEntities(entityQuads, entityCount);
+                writeSegment();
+                return;
+            }
         }
+        startScan(world, mat, camX, camY, camZ, range, budget, version);
+        continueScan(entityQuads, entityCount);
+    }
+
+    private void startScan(RtWorld world, MaterialAtlasBaker.Result mat, double camX, double camY, double camZ, float range,
+                           int budget, long version) {
         if (mat != lastMaterials) {
             cache.clear();
         }
@@ -282,8 +378,7 @@ public final class RtEmitters {
         lastCamZ = camZ;
         lastRange = range;
         lastBudget = budget;
-        lastEntityCount = entityCount;
-        long t0 = System.nanoTime();
+        lastEntityCount = -1; // scan in progress: publish decides the next-step state
         originX = (int) Math.floor(camX);
         originY = (int) Math.floor(camY);
         originZ = (int) Math.floor(camZ);
@@ -299,12 +394,57 @@ public final class RtEmitters {
         heapSize = 0;
         totalCounter = 0;
         inRangeCounter = 0;
-        seen.clear();
-
-        world.forEachBuiltSection(sectionProcessor);
-        cache.keySet().retainAll(seen);
-
         entityInRange = 0;
+        seen.clear();
+        fingerprint = FINGERPRINT_SEED;
+        staticHeapSize = -1;
+        scanStartNs = System.nanoTime();
+        scanVersion = version;
+        scanList = new java.util.ArrayList<>();
+        world.forEachBuiltSection(scanList::add);
+        // nearest first: after a cold invalidate (pack switch, world change) the world lights up from the camera outwards
+        scanList.sort(java.util.Comparator.comparingLong(this::sectionDistance2));
+    }
+
+    private long sectionDistance2(DecodedSection d) {
+        long dx = (long) d.sectionX * 16 - originX;
+        long dy = (long) d.sectionY * 16 - originY;
+        long dz = (long) d.sectionZ * 16 - originZ;
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    private void continueScan(float[] entityQuads, int entityCount) {
+        long deadline = System.nanoTime() + SCAN_BUDGET_NS;
+        while (scanCursor < scanList.size()) {
+            processSection(scanList.get(scanCursor));
+            scanCursor++;
+            if (System.nanoTime() > deadline) {
+                return;
+            }
+        }
+        scanList = null;
+        scanCursor = 0;
+        lastEntityCount = entityCount;
+        publish(entityQuads, entityCount);
+    }
+
+    private void publish(float[] entityQuads, int entityCount) {
+        fingerprint = mix(fingerprint, inRangeCounter);
+        cache.keySet().retainAll(seen);
+        // snapshot the static selection: a frame where only entity lights changed skips the whole section scan
+        ensureStaticHeapCapacity(Math.max(targetBudget, heapSize));
+        for (int i = 0; i < heapSize; i++) {
+            System.arraycopy(heap[i], 0, staticHeap[i], 0, FLOATS + 1);
+        }
+        staticHeapSize = heapSize;
+        staticTotal = totalCounter;
+        staticInRange = inRangeCounter;
+        staticFingerprint = fingerprint;
+        processEntities(entityQuads, entityCount);
+        writeSegment();
+    }
+
+    private void processEntities(float[] entityQuads, int entityCount) {
         for (int i = 0; i < entityCount; i++) {
             int o = i * FLOATS;
             totalCounter++;
@@ -327,7 +467,19 @@ public final class RtEmitters {
             }
             addCandidate(entityQuads, o, curCx, curCy, curCz, importance);
         }
+    }
 
+    private void restoreStatic() {
+        heapSize = staticHeapSize;
+        for (int i = 0; i < heapSize; i++) {
+            System.arraycopy(staticHeap[i], 0, heap[i], 0, FLOATS + 1);
+        }
+        totalCounter = staticTotal;
+        inRangeCounter = staticInRange;
+        fingerprint = staticFingerprint;
+    }
+
+    private void writeSegment() {
         sortHeapDescending();
         int n = Math.min(heapSize, MAX_EMITTERS);
         segment = (segment + 1) % SEGMENTS;
@@ -352,7 +504,8 @@ public final class RtEmitters {
             lastLogNs = now;
             LOGGER.info(String.format(java.util.Locale.ROOT,
                 "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f origin=(%d,%d,%d)",
-                count, inRange, totalEmitters, entityUsed, entityInRange, budget, range, seen.size(), (now - t0) / 1.0e6, originX, originY, originZ));
+                count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), seen.size(),
+                (now - scanStartNs) / 1.0e6, originX, originY, originZ));
         }
     }
 

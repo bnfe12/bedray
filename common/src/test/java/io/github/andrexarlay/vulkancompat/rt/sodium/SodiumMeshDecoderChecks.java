@@ -89,8 +89,8 @@ public final class SodiumMeshDecoderChecks {
 
     private static void uvColorLightWords() {
         ByteBuffer b = quadBuffer(1);
-        int w3a = 0xC000;                 // u15 = 0x4000 (0.5), bias bit set; v = 0
-        int w3b = 0x7FFF0000 | 0x0001;    // v15 = 32767, u15 = 1
+        int w3a = 0x8000C000;             // u15 = 0x4000 (0.5) with bias bit; v = 0 with bias bit (sprite min edge)
+        int w3b = 0x7FFF0000 | 0x0001;    // v15 = 32767, u15 = 1, no bias bits (max edge / interior)
         int color = 0x44332211;           // memory order: R=0x11 G=0x22 B=0x33 A=0x44
         int w4 = 0xAA073010;              // block 0x10, sky 0x30, material 0x07, section index 0xAA (dropped)
         putVertex(b, 0, 0, 0, color, w3a, w4);
@@ -98,10 +98,10 @@ public final class SodiumMeshDecoderChecks {
         putVertex(b, 1, 1, 0, color, w3a, w4);
         putVertex(b, 0, 1, 0, color, w3b, w4);
         DecodedSection s = SodiumMeshDecoder.decode(1L, 0, 0, 0, single(0, b));
-        near(0.5f, s.uvs[0], 0f, "u bias bit ignored");
-        near(0.0f, s.uvs[1], 0f, "v");
-        near(1.0f / 32768.0f, s.uvs[2], 0f, "u15=1");
-        near(32767.0f / 32768.0f, s.uvs[3], 0f, "v15=32767");
+        near(0.5f + SodiumMeshDecoder.TEX_COORD_SHRINK, s.uvs[0], 0f, "u bias bit pulls inward");
+        near(SodiumMeshDecoder.TEX_COORD_SHRINK, s.uvs[1], 0f, "v bias bit pulls inward");
+        near(0.0f, s.uvs[2], 1e-9f, "u interior nudged to 0");
+        near(32766.0f / 32768.0f, s.uvs[3], 0f, "v max edge pulled inward");
         check(s.colors[0] == color, "color word kept");
         check((s.colors[0] & 0xFF) == 0x11, "R is byte 0");
         check(s.light[0] == 0x073010, "light word without section index: " + Integer.toHexString(s.light[0]));
@@ -165,8 +165,10 @@ public final class SodiumMeshDecoderChecks {
         near(24.0f - 32.0f / (1 << 20), max, 1e-5f, "q=2^20-1");
         check(max < 24.0f, "below 24");
         check(SodiumMeshDecoder.quantizedPosition(allOnes, allOnes, 1) == (1 << 20) - 1, "20 bits");
-        near(32767.0f / 32768.0f, SodiumMeshDecoder.decodeU(0xFFFF), 0f, "u max, bias bit dropped");
-        near(32767.0f / 32768.0f, SodiumMeshDecoder.decodeV(0xFFFF0000), 0f, "v max, bias bit dropped");
+        near(SodiumMeshDecoder.TEX_COORD_SHRINK, SodiumMeshDecoder.decodeU(0x8000), 0f, "u min edge + bit");
+        near(32766.0f / 32768.0f, SodiumMeshDecoder.decodeU(0x7FFF), 0f, "u max edge, no bit");
+        near(SodiumMeshDecoder.TEX_COORD_SHRINK, SodiumMeshDecoder.decodeV(0x80000000), 0f, "v min edge + bit");
+        near(32766.0f / 32768.0f, SodiumMeshDecoder.decodeV(0x7FFF0000), 0f, "v max edge, no bit");
     }
 
     private static void randomRoundTrip() {

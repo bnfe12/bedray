@@ -9,7 +9,7 @@ import java.util.Locale;
  * package depending on them; every value is clamped by its setter. Initial values come from JVM flags
  * ({@code -Dvkrtx.rt.godrays=off|post|inline}, {@code -Dvkrtx.rt.godrays.quality=0..3}, {@code ...strength=0..2},
  * {@code ...range=32..256}, {@code -Dvkrtx.rt.bloom=on|off}, {@code ...bloom.strength=0..2}, {@code ...bloom.threshold}, {@code ...bloom.scatter},
- * {@code -Dvkrtx.rt.sunglare=on|off}, {@code ...sunglare.strength}, {@code ...sunglare.star=on|off}).
+ * {@code -Dvkrtx.rt.sunglare=on|off}, {@code ...sunglare.strength}).
  *
  * <p>{@link #options()} describes every option for the settings page (key, label, description, Basic/Advanced tier, range); the page
  * reads and writes through {@link #get(String)} / {@link #set(String, double)}.
@@ -37,7 +37,6 @@ public final class RtAtmosphereSettings {
     private static volatile float bloomScatter = (float) clamp(num("vkrtx.rt.bloom.scatter", 0.62), 0.3, 0.95);
     private static volatile boolean sunGlare = flag("vkrtx.rt.sunglare", true);
     private static volatile float sunGlareStrength = (float) clamp(num("vkrtx.rt.sunglare.strength", 1.0), 0, 2);
-    private static volatile boolean sunGlareStar = flag("vkrtx.rt.sunglare.star", false);
     private static volatile float fogVanilla = (float) clamp(num("vkrtx.rt.fog.vanilla", 1.0), 0, 1);
     private static volatile float chunkFade = (float) clamp(num("vkrtx.rt.chunkfade", 1.5), 0, 4);
     private static volatile float fogAerial = (float) clamp(num("vkrtx.rt.fog.aerial", 1.0), 0, 2);
@@ -97,10 +96,6 @@ public final class RtAtmosphereSettings {
         return sunGlareStrength;
     }
 
-    public static boolean sunGlareStar() {
-        return sunGlareStar;
-    }
-
     /** Weight of the vanilla fog of the game (render distance edge, biome / weather / water fog) in the ray traced image, 0..1. */
     public static float fogVanilla() {
         return fogVanilla;
@@ -147,8 +142,6 @@ public final class RtAtmosphereSettings {
             new Option("bloom_scatter", "Bloom spread", "Balance between a tight and a wide glow.", Tier.ADVANCED, Kind.SLIDER,
                 0.3, 0.95, 0.62, List.of()),
             new Option("sunglare_strength", "Sun glare strength", "Brightness of the sun halo.", Tier.ADVANCED, Kind.SLIDER, 0, 2, 1.0,
-                List.of()),
-            new Option("sunglare_star", "Sun glare star", "Adds a six point star to the sun glare.", Tier.ADVANCED, Kind.TOGGLE, 0, 1, 0,
                 List.of()));
     }
 
@@ -165,7 +158,6 @@ public final class RtAtmosphereSettings {
             case "bloom_scatter" -> bloomScatter;
             case "sunglare" -> sunGlare ? 1 : 0;
             case "sunglare_strength" -> sunGlareStrength;
-            case "sunglare_star" -> sunGlareStar ? 1 : 0;
             case "fog_vanilla" -> fogVanilla;
             case "fog_aerial" -> fogAerial;
             case "chunk_fade" -> chunkFade;
@@ -189,7 +181,6 @@ public final class RtAtmosphereSettings {
             case "bloom_scatter" -> bloomScatter = (float) clamp(v, 0.3, 0.95);
             case "sunglare" -> sunGlare = v >= 0.5;
             case "sunglare_strength" -> sunGlareStrength = (float) clamp(v, 0, 2);
-            case "sunglare_star" -> sunGlareStar = v >= 0.5;
             case "fog_vanilla" -> fogVanilla = (float) clamp(v, 0, 1);
             case "fog_aerial" -> fogAerial = (float) clamp(v, 0, 2);
             case "chunk_fade" -> chunkFade = (float) clamp(v, 0, 4);
@@ -203,8 +194,8 @@ public final class RtAtmosphereSettings {
     /** One line for the log. */
     public static String describe() {
         return String.format(Locale.ROOT, "godrays=%s steps=%d strength=%.2f range=%d bloom=%s strength=%.2f threshold=%.2f scatter=%.2f "
-                + "sunglare=%s strength=%.2f star=%s fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
-            bloom(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, sunGlareStar, fogVanilla, fogAerial, chunkFade);
+                + "sunglare=%s strength=%.2f fog_vanilla=%.2f fog_aerial=%.2f chunk_fade=%.2f", godRays, godRaySteps(), godRayStrength, godRayRange,
+            bloom(), bloomStrength, bloomThreshold, bloomScatter, sunGlare(), sunGlareStrength, fogVanilla, fogAerial, chunkFade);
     }
 
     static GodRays parseGodRays(String s, GodRays def) {

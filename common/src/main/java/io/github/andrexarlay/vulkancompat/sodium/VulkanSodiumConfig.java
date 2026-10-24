@@ -608,6 +608,12 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         look.addOption(atmSlider(builder, "atm_fog_aerial", "fog_aerial", 100, 0, 200, 5,
             s -> s.readBooleanOption(fogId) && anyRt.apply(s), new Identifier[] {id("renderer"), modeId, fogId}, true, st));
         Identifier waveId = id("waving_foliage");
+        Identifier pixelShadowsId = id("rays_pixel_shadows");
+        look.addOption(boolOpt(builder, "rays_pixel_shadows", false, v -> RtSettings.raysPixelShadows = v, () -> RtSettings.raysPixelShadows,
+            anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
+        look.addOption(intOpt(builder, "rays_pixel_shadow_size", 1, 1, 16, 1, unit(" texels"), v -> RtSettings.raysPixelShadowSize = v,
+            () -> RtSettings.raysPixelShadowSize,
+            s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId), new Identifier[] {modeId, pixelShadowsId}, Mark.RT, OptionImpact.HIGH, false, st));
         look.addOption(boolOpt(builder, "waving_foliage", true, v -> RtSettings.wavingFoliage = v, () -> RtSettings.wavingFoliage,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(intOpt(builder, "waving_foliage_strength", 100, 0, 200, 5, percent(),
@@ -661,10 +667,12 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             endGroup(builder, page, rays, "adv_rays");
         }
 
-        // ---- Fine-tuning & expert numbers (always available in Bedray Advanced so everything is configurable in-game)
-        OptionGroupBuilder ex = collapsible(builder, CollapsibleGroups.RT_EXPERT, "Fine-Tuning & Budgets", "expert");
-        addExpertOptions(builder, ex, raysOn, anyRt, pathOn, dMode, modeId, gameDir, st);
-        endGroup(builder, page, ex, "expert");
+        // ---- Fine-tuning & expert numbers: dev knobs, only with expert UI (-Dvkrtx.ui.expert=true / ui_expert in bedray.toml)
+        if (expert) {
+            OptionGroupBuilder ex = collapsible(builder, CollapsibleGroups.RT_EXPERT, "Fine-Tuning & Budgets", "expert");
+            addExpertOptions(builder, ex, raysOn, anyRt, pathOn, dMode, modeId, gameDir, st);
+            endGroup(builder, page, ex, "expert");
+        }
 
         // ---- Diagnostics
         OptionGroupBuilder diag = collapsible(builder, CollapsibleGroups.ADV_DIAG, "Diagnostics & Reset", "adv_diag");
@@ -691,14 +699,16 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         }
         diag.addOption(boolOpt(builder, "debug_overlay", true, VulkanSodiumConfig::setDebugOverlay, VulkanSodiumConfig::debugOverlayOn,
             null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
-        Identifier viewId = id("rt_debug_view");
-        EnumOptionBuilder<RtDebugView> dv = builder.createEnumOption(viewId, RtDebugView.class);
-        dv.setName(nameOf("rt_debug_view")).setTooltip(v -> tipOf("rt_debug_view")).setDefaultValue(RtDebugView.OFF)
-            .setAllowedValues(EnumSet.allOf(RtDebugView.class))
-            .setElementNameProvider(val -> tr("bedray.debug_view." + val.name().toLowerCase(Locale.ROOT), val.name()))
-            .setBinding(val -> RtConfig.setDebugView(val.viewName()), () -> RtDebugView.fromViewName(RtConfig.currentDebugView()))
-            .setImpact(OptionImpact.LOW).setStorageHandler(st);
-        diag.addOption(track("rt_debug_view", dv));
+        if (expert) {
+            Identifier viewId = id("rt_debug_view");
+            EnumOptionBuilder<RtDebugView> dv = builder.createEnumOption(viewId, RtDebugView.class);
+            dv.setName(nameOf("rt_debug_view")).setTooltip(v -> tipOf("rt_debug_view")).setDefaultValue(RtDebugView.OFF)
+                .setAllowedValues(EnumSet.allOf(RtDebugView.class))
+                .setElementNameProvider(val -> tr("bedray.debug_view." + val.name().toLowerCase(Locale.ROOT), val.name()))
+                .setBinding(val -> RtConfig.setDebugView(val.viewName()), () -> RtDebugView.fromViewName(RtConfig.currentDebugView()))
+                .setImpact(OptionImpact.LOW).setStorageHandler(st);
+            diag.addOption(track("rt_debug_view", dv));
+        }
         var diagBtn = builder.createExternalButtonOption(id("copy_diagnostics"));
         diagBtn.setName(tr("bedray.option.copy_diagnostics", "Copy diagnostics report"))
             .setTooltip(tr("bedray.option.copy_diagnostics.tooltip",
@@ -768,27 +778,22 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private void addExpertOptions(ConfigBuilder builder, OptionGroupBuilder ex, Function<ConfigState, Boolean> raysOn,
                                   Function<ConfigState, Boolean> anyRt, Function<ConfigState, Boolean> pathOn, Identifier[] dMode,
                                   Identifier modeId, Path gameDir, StorageEventHandler st) {
-        String[] names = {"rays_shadow_quality", "rays_pixel_shadow_size", "rays_reflection_quality", "rays_reflection_distance", "rays_ao_quality",
+        String[] names = {"rays_shadow_quality", "rays_reflection_quality", "rays_reflection_distance", "rays_ao_quality",
             "rays_ao_radius", "rays_emissive_quality", "rays_emissive_distance", "rays_gi_quality", "rays_gi_distance"};
-        int[][] r = {{2, 1, 8, 1}, {2, 1, 32, 1}, {1, 1, 4, 1}, {128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {2, 1, 8, 1},
+        int[][] r = {{2, 1, 8, 1}, {1, 1, 4, 1}, {128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {2, 1, 8, 1},
             {3, 1, 8, 1}, {1, 1, 8, 1}, {32, 8, 64, 8}, {1, 1, 8, 1}, {64, RtSettings.DISTANCE_MIN, 256, 16}};
-        String[] units = {"", " blocks", "", " blocks", "", " blocks", "", " blocks", "", " blocks"};
-        List<Supplier<Integer>> gets = List.of(() -> RtSettings.raysShadowQuality, () -> RtSettings.raysPixelShadowSize,
+        String[] units = {"", "", " blocks", "", " blocks", "", " blocks", "", " blocks"};
+        List<Supplier<Integer>> gets = List.of(() -> RtSettings.raysShadowQuality,
             () -> RtSettings.raysReflectionQuality, () -> RtSettings.raysReflectionDistance, () -> RtSettings.raysAoQuality,
             () -> RtSettings.raysAoRadius, () -> RtSettings.raysEmissiveQuality, () -> RtSettings.raysEmissiveDistance,
             () -> RtSettings.raysGiQuality, () -> RtSettings.raysGiDistance);
-        List<Consumer<Integer>> sets = List.of(v -> RtSettings.raysShadowQuality = v, v -> RtSettings.raysPixelShadowSize = v,
+        List<Consumer<Integer>> sets = List.of(v -> RtSettings.raysShadowQuality = v,
             v -> RtSettings.raysReflectionQuality = v, v -> RtSettings.raysReflectionDistance = v, v -> RtSettings.raysAoQuality = v,
             v -> RtSettings.raysAoRadius = v, v -> RtSettings.raysEmissiveQuality = v, v -> RtSettings.raysEmissiveDistance = v,
             v -> RtSettings.raysGiQuality = v, v -> RtSettings.raysGiDistance = v);
-        Identifier pixelShadowsId = id("rays_pixel_shadows");
-        ex.addOption(boolOpt(builder, "rays_pixel_shadows", false, v -> RtSettings.raysPixelShadows = v, () -> RtSettings.raysPixelShadows,
-            anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         for (int i = 0; i < names.length; i++) {
-            boolean pixelSize = "rays_pixel_shadow_size".equals(names[i]);
             ex.addOption(intOpt(builder, names[i], r[i][0], r[i][1], r[i][2], r[i][3], unit(units[i]), sets.get(i), gets.get(i),
-                pixelSize ? s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId) : raysOn,
-                pixelSize ? new Identifier[] {modeId, pixelShadowsId} : dMode, Mark.RT, OptionImpact.HIGH, false, st));
+                raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
         }
         Identifier distAutoId = id("rt_distance_auto");
         ex.addOption(boolOpt(builder, "rt_distance_auto", true, v -> RtSettings.rtDistanceAuto = v, () -> RtSettings.rtDistanceAuto,
@@ -816,8 +821,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         ex.addOption(atmSlider(builder, "atm_bloom_scatter", "bloom_scatter", 70, 30, 95, 5, anyRt, dMode, false, st));
         ex.addOption(atmSlider(builder, "atm_sunglare_strength", "sunglare_strength", 100, 0, 200, 5, anyRt, dMode, false, st));
         ex.addOption(atmSlider(builder, "atm_fog_vanilla", "fog_vanilla", 100, 0, 100, 5, anyRt, dMode, false, st));
-        ex.addOption(boolOpt(builder, "atm_sunglare_star", false, v -> RtAtmosphereSettings.set("sunglare_star", v ? 1 : 0),
-            () -> RtAtmosphereSettings.get("sunglare_star") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         ex.addOption(intOpt(builder, "rt_fog_in_scattering", 100, 0, 200, 5, percent(), v -> {
             RtSettings.rtFogInScattering = v;
             RtSettings.fogInScattering = RtSettings.clampFloat(v / 100f, 0.0f, 2.0f);
@@ -1275,11 +1278,16 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             // no table: the render size comes from NGX at runtime
             return Component.translatableWithFallback(mode.translationKey(), mode.englishName());
         }
+        return Component.empty().append(Component.translatableWithFallback(mode.translationKey(), mode.englishName()))
+            .append(ratioSuffix(backend, mode));
+    }
+
+    /** " (1.5x, 67.0%)": the table ratio of the mode and the render scale it implies; CUSTOM is the user's percent. */
+    static String ratioSuffix(UpscalerBackend backend, UpscalerMode mode) {
         double ratio = mode == UpscalerMode.CUSTOM
             ? UpscalerModes.customRatio(VulkanRtxConfig.customPercent(backend))
             : UpscalerModes.ratio(backend, mode);
-        String suffix = String.format(Locale.ROOT, " (%.1fx, %.1f%%)", ratio, 100.0 / ratio);
-        return Component.empty().append(Component.translatableWithFallback(mode.translationKey(), mode.englishName()))
-            .append(suffix);
+        return String.format(Locale.ROOT, " (%.1fx, %.1f%%)", ratio, 100.0 / ratio);
     }
+
 }

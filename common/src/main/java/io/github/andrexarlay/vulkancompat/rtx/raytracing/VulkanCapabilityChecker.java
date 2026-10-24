@@ -2,10 +2,14 @@ package io.github.andrexarlay.vulkancompat.rtx.raytracing;
 
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.EXTOpacityMicromap;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkPhysicalDevice;
+import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
+import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +46,8 @@ public final class VulkanCapabilityChecker {
     public static final String EXT_RAY_QUERY = "VK_KHR_ray_query";
     public static final String EXT_BUFFER_DEVICE_ADDRESS = "VK_KHR_buffer_device_address";
     public static final String EXT_DEFERRED_HOST_OPERATIONS = "VK_KHR_deferred_host_operations";
+    public static final String EXT_OPACITY_MICROMAP = "VK_EXT_opacity_micromap";
+    public static final String EXT_SYNCHRONIZATION2 = "VK_KHR_synchronization2";
 
     public static final List<String> REQUIRED_RT_EXTENSIONS = List.of(
         EXT_ACCELERATION_STRUCTURE,
@@ -55,6 +61,8 @@ public final class VulkanCapabilityChecker {
     private static volatile Integer cachedVendorId = null;
     private static volatile Boolean overrideForTesting = null;
     private static volatile Boolean overrideNvidiaForTesting = null;
+    private static volatile Boolean cachedOpacityMicromap = null;
+    private static volatile Boolean overrideOpacityMicromapForTesting = null;
 
     private VulkanCapabilityChecker() {}
 
@@ -106,7 +114,75 @@ public final class VulkanCapabilityChecker {
         }
 
         LOGGER.info("[VulkanCapabilityChecker] Hardware Ray Tracing supported: all required device extensions present ({})", REQUIRED_RT_EXTENSIONS);
+        // Discarded result on purpose: the probe logs its verdict once, evidence for the cutout-leaf OMM roadmap.
+        isOpacityMicromapSupported();
         return true;
+    }
+
+    /**
+     * Spike probe for {@code VK_EXT_opacity_micromap} (extension + {@code opacityMicromap} device feature).
+     * OMM is not yet wired into BLAS builds; this only records device capability for the roadmap decision.
+     */
+    public static boolean isOpacityMicromapSupported() {
+        if (overrideOpacityMicromapForTesting != null) {
+            return overrideOpacityMicromapForTesting;
+        }
+        if (cachedOpacityMicromap != null && cachedOpacityMicromap) {
+            return true;
+        }
+        synchronized (VulkanCapabilityChecker.class) {
+            if (cachedOpacityMicromap != null && cachedOpacityMicromap) {
+                return true;
+            }
+            boolean supported = checkOpacityMicromapInternal();
+            if (supported) {
+                cachedOpacityMicromap = true;
+            }
+            return supported;
+        }
+    }
+
+    private static boolean checkOpacityMicromapInternal() {
+        if (!VulkanBridge.isVulkan()) {
+            LOGGER.info("[VulkanCapabilityChecker] Opacity micromap probe: backend is not Vulkan; unavailable.");
+            return false;
+        }
+        if (!hasExtension(EXT_OPACITY_MICROMAP)) {
+            LOGGER.info("[VulkanCapabilityChecker] Opacity micromap probe: extension {} absent; unavailable.", EXT_OPACITY_MICROMAP);
+            return false;
+        }
+        if (!hasExtension(EXT_SYNCHRONIZATION2)) {
+            LOGGER.info("[VulkanCapabilityChecker] Opacity micromap probe: extension {} absent; unavailable.", EXT_SYNCHRONIZATION2);
+            return false;
+        }
+        VkPhysicalDevice physicalDevice = getVkPhysicalDevice();
+        if (physicalDevice == null) {
+            LOGGER.info("[VulkanCapabilityChecker] Opacity micromap probe: physical device not resolvable; unavailable.");
+            return false;
+        }
+        Boolean feature = queryOpacityMicromapFeature(physicalDevice);
+        if (feature == null) {
+            LOGGER.info("[VulkanCapabilityChecker] Opacity micromap probe: feature query failed; unavailable.");
+            return false;
+        }
+        LOGGER.info("[VulkanCapabilityChecker] Opacity micromap probe: extension present, opacityMicromap feature={}.", feature);
+        return feature;
+    }
+
+    private static Boolean queryOpacityMicromapFeature(VkPhysicalDevice physicalDevice) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkPhysicalDeviceOpacityMicromapFeaturesEXT omm = VkPhysicalDeviceOpacityMicromapFeaturesEXT.calloc(stack)
+                    .sType(EXTOpacityMicromap.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT);
+            VkPhysicalDeviceFeatures2 features2 = VkPhysicalDeviceFeatures2.calloc(stack)
+                    .sType(VK11.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+                    .pNext(omm);
+            VK11.vkGetPhysicalDeviceFeatures2(physicalDevice, features2);
+            // LWJGL 3.3.3 names this accessor micromap(); it is opacityMicromap() only in 3.3.4+.
+            return omm.micromap();
+        } catch (Throwable t) {
+            LOGGER.info("[VulkanCapabilityChecker] vkGetPhysicalDeviceFeatures2 note: {}", t.getMessage());
+            return null;
+        }
     }
 
     // Reflection handles are resolved once (this is called every frame from the render thread).
@@ -278,11 +354,17 @@ public final class VulkanCapabilityChecker {
         overrideForTesting = override;
     }
 
+    public static void setOverrideOpacityMicromapForTesting(Boolean override) {
+        overrideOpacityMicromapForTesting = override;
+    }
+
     public static void reset() {
         cachedSupported = null;
         cachedDeviceExtensions = null;
         cachedVendorId = null;
         overrideForTesting = null;
         overrideNvidiaForTesting = null;
+        cachedOpacityMicromap = null;
+        overrideOpacityMicromapForTesting = null;
     }
 }

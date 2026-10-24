@@ -169,7 +169,7 @@ public final class RtRayEffectsPass implements RtPass {
     @Override
     public void bind(RtPipeline.Views c) {
         RtPipeline.Views v = new RtPipeline.Views(c.tlas(), c.table(), c.output(), c.atlas(), c.material(), c.normal(), accum.view(),
-            c.gbuffer(), c.depth());
+            c.gbuffer(), c.depth(), c.lightmap());
         pipeline.bind(v);
         if (filter != null) {
             filter.bind(v);

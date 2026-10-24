@@ -54,17 +54,23 @@ public final class RtPipeline {
     public static final int BINDING_NORMAL = 10;
     public static final int BINDING_ACCUM = 11;
     public static final int BINDING_DEPTH = 12;
+    public static final int BINDING_LIGHTMAP = 15;
 
     /** Views bound for one frame; {@code gbuffer} non-null exactly for the gbuffer variant, {@code accum} != 0 exactly for accum. */
-    public record Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum, long[] gbuffer, long depth) {
+    public record Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum, long[] gbuffer,
+                        long depth, long lightmap) {
         public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum, long[] gbuffer) {
-            this(tlas, table, output, atlas, material, normal, accum, gbuffer, 0L);
+            this(tlas, table, output, atlas, material, normal, accum, gbuffer, 0L, 0L);
+        }
+
+        public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum, long[] gbuffer, long depth) {
+            this(tlas, table, output, atlas, material, normal, accum, gbuffer, depth, 0L);
         }
 
         boolean sameAs(Views o) {
             return o != null && tlas == o.tlas && table.handle == o.table.handle && output == o.output && atlas == o.atlas
                 && material == o.material && normal == o.normal && accum == o.accum && java.util.Arrays.equals(gbuffer, o.gbuffer)
-                && depth == o.depth;
+                && depth == o.depth && lightmap == o.lightmap;
         }
     }
 
@@ -78,6 +84,7 @@ public final class RtPipeline {
     private long pipeline;
     private long pool;
     private long sampler;
+    private long lightmapSampler;
     private long descriptorSet;
     private Views bound;
 
@@ -119,6 +126,7 @@ public final class RtPipeline {
             bindings.add(new int[] {BINDING_ACCUM, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
         }
         bindings.add(new int[] {BINDING_DEPTH, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
+        bindings.add(new int[] {BINDING_LIGHTMAP, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER});
         int storageImages = 1 + (gbuffer ? GBUFFER_VIEWS : 0) + (accum ? 1 : 0) + 1;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             // Nearest, clamp, level 0 only: pixel-art look of the block atlas and exact material texels.
@@ -133,6 +141,18 @@ public final class RtPipeline {
             LongBuffer p = stack.mallocLong(1);
             RtFailure.check(VK10.vkCreateSampler(device, samplerInfo, null, p), "create_sampler");
             sampler = p.get(0);
+            // The lightmap is sampled at texel centres, but its texels are gradients: LINEAR so a night-vision or
+            // gamma transition does not step between discrete light levels.
+            VkSamplerCreateInfo lmInfo = VkSamplerCreateInfo.calloc(stack).sType$Default()
+                .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
+                .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
+                .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                .mipLodBias(0f)
+                .minLod(0f).maxLod(0f).unnormalizedCoordinates(false);
+            RtFailure.check(VK10.vkCreateSampler(device, lmInfo, null, p), "create_lightmap_sampler");
+            lightmapSampler = p.get(0);
 
             VkShaderModuleCreateInfo moduleInfo = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(spirv);
             RtFailure.check(VK10.vkCreateShaderModule(device, moduleInfo, null, p), "create_shader_module");
@@ -164,7 +184,7 @@ public final class RtPipeline {
             sizes.get(0).type(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
             sizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(storageImages);
             sizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1);
-            sizes.get(3).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(3);
+            sizes.get(3).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(4);
             VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(sizes);
             RtFailure.check(VK10.vkCreateDescriptorPool(device, poolInfo, null, p), "create_descriptor_pool");
             pool = p.get(0);
@@ -199,7 +219,7 @@ public final class RtPipeline {
             VK10.vkDeviceWaitIdle(device); // the set may be in use by frames in flight
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            int count = 6 + (gbuffer ? GBUFFER_VIEWS : 0) + (accum ? 1 : 0) + 1;
+            int count = 7 + (gbuffer ? GBUFFER_VIEWS : 0) + (accum ? 1 : 0) + 1;
             VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(count, stack);
             int w = 0;
             VkWriteDescriptorSetAccelerationStructureKHR as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
@@ -225,6 +245,8 @@ public final class RtPipeline {
                 storage(writes.get(w++), stack, BINDING_ACCUM, v.accum());
             }
             storage(writes.get(w++), stack, BINDING_DEPTH, v.depth() != 0L ? v.depth() : v.output());
+            sampled(writes.get(w++), stack, BINDING_LIGHTMAP, v.lightmap() != 0L ? v.lightmap() : v.atlas(),
+                v.lightmap() != 0L ? lightmapSampler : sampler);
             VK10.vkUpdateDescriptorSets(device, writes, null);
         }
         bound = v;
@@ -238,8 +260,12 @@ public final class RtPipeline {
     }
 
     private void sampled(VkWriteDescriptorSet write, MemoryStack stack, int binding, long view) {
+        sampled(write, stack, binding, view, sampler);
+    }
+
+    private void sampled(VkWriteDescriptorSet write, MemoryStack stack, int binding, long view, long samplerHandle) {
         VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
-        info.get(0).sampler(sampler).imageView(view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+        info.get(0).sampler(samplerHandle).imageView(view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
         write.sType$Default().dstSet(descriptorSet).dstBinding(binding).descriptorCount(1)
             .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(info);
     }
@@ -259,6 +285,7 @@ public final class RtPipeline {
     public void destroy() {
         VK10.vkDeviceWaitIdle(device);
         VK10.vkDestroySampler(device, sampler, null);
+        VK10.vkDestroySampler(device, lightmapSampler, null);
         VK10.vkDestroyPipeline(device, pipeline, null);
         VK10.vkDestroyPipelineLayout(device, pipelineLayout, null);
         VK10.vkDestroyDescriptorPool(device, pool, null);

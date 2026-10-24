@@ -13,6 +13,12 @@ public final class RtWorldChecks {
     private RtWorldChecks() {
     }
 
+    /** Full expansion of the rt_common.glsl umbrella (the modules in umbrella order) for shader source checks. */
+    public static String rtCommon() {
+        return RtShaderCompiler.resolveIncludes(
+            RtShaderCompiler.loadSource("/shaders/rt_common.glsl"), "/shaders/rt_common.glsl");
+    }
+
     public static void runAll() {
         allocatorBasics();
         allocatorCoalescing();

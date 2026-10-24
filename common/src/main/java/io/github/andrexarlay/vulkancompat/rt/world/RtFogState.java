@@ -30,7 +30,8 @@ import java.util.Locale;
  */
 public final class RtFogState {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
-    public static final int OFFSET = 416;
+    /** Byte offset of the fog block in the per-frame slot (StatsBuf.fogVanilla in rt_common.glsl, RtStatsLayout). */
+    public static final int OFFSET = RtStatsLayout.FOG_VANILLA;
 
     public float envStart = 0f;
     public float envEnd = 1.0e6f;
@@ -114,29 +115,28 @@ public final class RtFogState {
         }
     }
 
-    /** Writes the frame slot fields (offset {@link #OFFSET} of {@code slot}). */
+    /** Writes the frame slot fields (StatsBuf fogVanilla / fogMisc / fogMedium / fogFade; offsets from {@link RtStatsLayout}). */
     public void write(long slot, float vanillaWeight, float aerial, float fadeSeconds) {
-        long b = slot + OFFSET;
-        MemoryUtil.memPutFloat(b, envStart);
-        MemoryUtil.memPutFloat(b + 4, envEnd);
-        MemoryUtil.memPutFloat(b + 8, rdStart);
-        MemoryUtil.memPutFloat(b + 12, rdEnd);
-        MemoryUtil.memPutFloat(b + 16, rain);
-        MemoryUtil.memPutFloat(b + 20, medium);
-        MemoryUtil.memPutFloat(b + 24, vanillaWeight);
-        MemoryUtil.memPutFloat(b + 28, aerial);
-        MemoryUtil.memPutFloat(b + 32, mediumColor[0]);
-        MemoryUtil.memPutFloat(b + 36, mediumColor[1]);
-        MemoryUtil.memPutFloat(b + 40, mediumColor[2]);
-        MemoryUtil.memPutFloat(b + 44, 0f);
-        // fogFade (offset 464): x = clock of the section fade-in (RtWorld.nowTick), y = fade length in ticks (0 = off)
-        MemoryUtil.memPutFloat(b + 48, RtWorld.nowTick());
-        MemoryUtil.memPutFloat(b + 52, fadeSeconds * 1000f / RtWorld.TICK_MS);
-        MemoryUtil.memPutFloat(b + 56, (float) RtWorld.nowTick());
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_VANILLA, envStart);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_VANILLA + 4, envEnd);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_VANILLA + 8, rdStart);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_VANILLA + 12, rdEnd);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_MISC, rain);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_MISC + 4, medium);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_MISC + 8, vanillaWeight);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_MISC + 12, aerial);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_MEDIUM, mediumColor[0]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_MEDIUM + 4, mediumColor[1]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_MEDIUM + 8, mediumColor[2]);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_MEDIUM + 12, 0f);
+        // fogFade: x = clock of the section fade-in (RtWorld.nowTick), y = fade length in ticks (0 = off), w = waving foliage
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_FADE, RtWorld.nowTick());
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_FADE + 4, fadeSeconds * 1000f / RtWorld.TICK_MS);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_FADE + 8, (float) RtWorld.nowTick());
         float waving = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.wavingFoliage()
             ? (float) io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.wavingFoliageStrength()
             : 0f;
-        MemoryUtil.memPutFloat(b + 60, waving);
+        MemoryUtil.memPutFloat(slot + RtStatsLayout.FOG_FADE + 12, waving);
         long now = System.nanoTime();
         if (now - lastLogNs > 2_000_000_000L) {
             lastLogNs = now;

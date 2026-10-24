@@ -46,6 +46,24 @@ public class DlssBackend implements IUpscalerBackend {
      *
      * @return true if DLSS recorded successfully; false on any error (logged as {@code stage=execute}; DLSS is then disabled)
      */
+    /**
+     * NGX sharpening of the super-resolution pass. Below native the upscaler is the only stage that can restore edge
+     * contrast, and DLSS at 0 leaves block edges soft; at native (DLAA) there is no upscale to compensate.
+     * {@code -Dvkrtx.dlss.sharpness} overrides the default.
+     */
+    private static float srSharpness(FrameContext ctx) {
+        String v = System.getProperty("vkrtx.dlss.sharpness");
+        if (v != null && !v.isBlank()) {
+            try {
+                return Math.max(0.0f, Math.min(1.0f, Float.parseFloat(v.trim())));
+            } catch (NumberFormatException ignored) {
+                LOGGER.warn("[DLSS] -Dvkrtx.dlss.sharpness='{}' is not a number, using the default", v);
+            }
+        }
+        float scale = ctx.renderWidth() > 0 ? (float) ctx.targetWidth() / ctx.renderWidth() : 1.0f;
+        return scale > 1.05f ? 0.3f : 0.0f;
+    }
+
     @Override
     public boolean dispatch(FrameContext ctx) {
         if (!DlssRuntime.isReady()) {
@@ -75,7 +93,7 @@ public class DlssBackend implements IUpscalerBackend {
                     ctx.resetHistory(),
                     image(color, false), image(out, true), image(depth, false), image(mv, false), DlssNative.Image.NONE,
                     ctx.jitterPixelsX() * DlssConfig.jitterSignX(), ctx.jitterPixelsY() * DlssConfig.jitterSignY(),
-                    1.0f, 1.0f, 0.0f, 1.0f, ctx.exposureScale(),
+                    1.0f, 1.0f, srSharpness(ctx), 1.0f, ctx.exposureScale(),
                     ctx.renderWidth(), ctx.renderHeight());
                 status = DlssRuntime.nativeLib().evaluate(cmd.address(), DlssRuntime.feature(), info);
             }

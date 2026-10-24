@@ -52,6 +52,16 @@ public class RtShadingFixesTest {
         runDenoisedSpecularChecks();
     }
 
+    @Test
+    public void testRoughSurfaceEnergySplit() {
+        runRoughEnergySplitChecks();
+    }
+
+    @Test
+    public void testBiomeAmbientVariation() {
+        runBiomeAmbientChecks();
+    }
+
     public static void runAll() {
         RtShadingFixesTest test = new RtShadingFixesTest();
         test.testReflectionEnergySplit();
@@ -61,6 +71,8 @@ public class RtShadingFixesTest {
         test.testPixelShadows();
         test.testRtPresetLighting();
         test.testDenoisedSpecularContract();
+        test.testRoughSurfaceEnergySplit();
+        test.testBiomeAmbientVariation();
     }
 
     private static float fresnelSchlick(float f0, float cosTheta) {
@@ -95,7 +107,7 @@ public class RtShadingFixesTest {
         // The old non-physical shortcuts (15 % metal diffuse, Fresnel scaled by gloss) must stay gone, the diffuse share
         // must apply to metals even with reflections off, and the sampled reflection must be the VNDF estimator.
         String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
-        String common = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        String common = RtWorldChecks.rtCommon();
         assertFalse(rays.contains("diffuse * 0.15"), "no 15% metal diffuse in rt_rays.comp");
         assertFalse(common.contains("diffuse * 0.15"), "no 15% metal diffuse in rt_common.glsl");
         assertFalse(rays.contains("* F * gloss"), "reflection is no longer scaled by gloss");
@@ -116,8 +128,45 @@ public class RtShadingFixesTest {
             "rt_common.glsl defines the cloud-aware environment radiance");
     }
 
-    // ---- GGX VNDF white-furnace model (double precision port of rt_common.glsl sampleGgxVndf) ----------------------------
+    /**
+     * The owner-visible radial darkening (report 2026-10-21: "if you stand close to a wall the far part of the wall is
+     * darkened, same for the blocks you stand on"). Above ROUGH_SPLIT no specular lobe is sampled, so splitting the diffuse
+     * by the grazing Schlick reflectance deleted energy that nothing reflected back: at 84 degrees a stone-like F0 of 0.04
+     * keeps only 39% of the diffuse, which is a vignette around the point of the surface nearest the camera. A rough
+     * dielectric must split with the constant F0 instead.
+     */
+    private static void runRoughEnergySplitChecks() {
+        float f0 = 0.04f;
+        float split = 1.0f - f0;
+        for (float cosV : new float[] {1.0f, 0.5f, 0.25f, 0.1f, 0.0f}) {
+            float full = 1.0f - fresnelSchlick(f0, cosV);
+            assertTrue(split >= full - EPSILON, "the rough split never removes more energy than the full curve, cosV=" + cosV);
+        }
+        assertTrue(1.0f - fresnelSchlick(f0, 0.1f) < 0.45f,
+            "the guarded bug: the full Schlick curve keeps under 45% of the diffuse at 84 degrees");
 
+        String common = RtWorldChecks.rtCommon();
+        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+        assertTrue(common.contains("const float ROUGH_SPLIT = 0.6;"),
+            "one roughness threshold shared by the energy split and the specular lobe probability");
+        assertTrue(common.contains("vec3 fresnelEnergySplit(vec3 f0, float cosTheta, float roughness, bool metal)"),
+            "rt_common.glsl defines the split");
+        assertTrue(common.contains("(metal || roughness < ROUGH_SPLIT) ? fresnelSchlick(f0, cosTheta) : f0;"),
+            "traced-specular surfaces keep the Fresnel curve, rough dielectrics keep F0");
+        assertEquals(2, count(common, "vec3 F = fresnelEnergySplit(f0, cosV, s.roughness, s.metal > 0.5);"),
+            "both secondary-hit shading paths use the split");
+        assertTrue(path.contains("vec3 F = fresnelEnergySplit(f0, cosV, s.roughness, s.metal > 0.5);"),
+            "the path tracer primary hit uses the split");
+        assertEquals(0, count(path, "vec3 F = fresnelSchlick(f0, cosV);"),
+            "no primary-hit path keeps the full grazing Fresnel on the diffuse share");
+        assertTrue(path.contains("s.roughness < ROUGH_SPLIT ? clamp(max(Fsc, 0.45 * gloss), 0.05, 0.95) : 0.0"),
+            "the specular lobe is sampled only below the same threshold");
+        // The sun / emitter NEE, the foliage back scatter, the canopy fill and the diffuse weight all read the split value.
+        assertEquals(5, count(path.substring(path.indexOf("vec3 F = fresnelEnergySplit")), "(1.0 - Fsc)"),
+            "sun NEE, foliage back scatter, emitter NEE, canopy fill and the diffuse continuation share the split");
+    }
+
+    // ---- GGX VNDF white-furnace model (double precision port of rt_common.glsl sampleGgxVndf) ----------------------------
     private static double dot(double[] a, double[] b) {
         return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     }
@@ -344,7 +393,7 @@ public class RtShadingFixesTest {
         assertEquals(3.7f, snapCell(3.7f, 0.0f), EPSILON, "cell 0 disables the snap");
 
         // Shaders: both modes route their shadow ray through the snapped origin, and the sun-disk sample is shared per cell.
-        String common = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        String common = RtWorldChecks.rtCommon();
         String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
         String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
         assertTrue(common.contains("float shadowPixel;"), "StatsBuf carries the pixel-shadow cell size");
@@ -368,18 +417,18 @@ public class RtShadingFixesTest {
         try {
             RtSettings.applyPreset(RtSettings.Preset.MEDIUM);
             assertFalse(RtSettings.pixelShadows(), "pixel shadows are off in the default preset");
-            assertEquals(2, RtSettings.pixelShadowSize(), "default cell is 2 blocks");
+            assertEquals(1, RtSettings.pixelShadowSize(), "default cell is 1 texture pixel");
             assertEquals(0.0f, RtFrameRenderer.pixelShadowStatsValue(), EPSILON, "off writes 0 into StatsBuf.shadowPixel");
             assertTrue(RtSettings.applyKeyValue("rays_pixel_shadows", "true"), "the option is a known key");
             assertTrue(RtSettings.pixelShadows(), "the option turns on");
             RtSettings.applyKeyValue("rays_pixel_shadow_size", "16");
             assertEquals(16, RtSettings.pixelShadowSize(), "the cell size is settable");
-            assertEquals(16.0f, RtFrameRenderer.pixelShadowStatsValue(), EPSILON, "StatsBuf gets the cell in blocks, not /16");
+            assertEquals(16.0f, RtFrameRenderer.pixelShadowStatsValue(), EPSILON, "StatsBuf gets the size in texture pixels (shader divides by 16)");
             RtSettings.applyKeyValue("rays_pixel_shadow_size", "64");
             assertEquals(16, RtSettings.pixelShadowSize(), "out-of-range cells are rejected, not clamped silently");
             RtSettings.applyPreset(RtSettings.Preset.MEDIUM);
             assertFalse(RtSettings.pixelShadows(), "a preset reset turns pixel shadows off");
-            assertEquals(2, RtSettings.pixelShadowSize(), "a preset reset restores the default cell");
+            assertEquals(1, RtSettings.pixelShadowSize(), "a preset reset restores the default cell");
         } finally {
             RtSettings.raysPixelShadows = savedOn;
             RtSettings.raysPixelShadowSize = savedSize;
@@ -396,7 +445,14 @@ public class RtShadingFixesTest {
         assertEquals(13, RtPipeline.BINDING_GBUFFER_SPECULAR, "specular radiance is binding 13");
         assertEquals(14, RtPipeline.BINDING_GBUFFER_SPEC_ALBEDO, "F0 guide is binding 14");
 
-        String common = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        // Both denoisers must hand the pipeline exactly GBUFFER_VIEWS images. DLSS-RR kept returning the old five after the
+        // G-buffer gained the specular radiance and F0 lanes, so the first gbuffer bind threw and RT stayed off all session.
+        assertEquals(RtPipeline.GBUFFER_VIEWS, denoiserGbufferViews("DlssRrDenoiser.java"),
+            "DLSS-RR must expose every G-buffer image the shader writes");
+        assertEquals(RtPipeline.GBUFFER_VIEWS, denoiserGbufferViews("NrdDenoiser.java"),
+            "NRD must expose every G-buffer image the shader writes");
+
+        String common = RtWorldChecks.rtCommon();
         String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
         String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
         String pack = RtShaderCompiler.loadSource("/shaders/rt_pack_nrd.comp");
@@ -410,7 +466,7 @@ public class RtShadingFixesTest {
         assertTrue(rays.contains("imageStore(gbSpecAlbedo, p, vec4(clamp(wantsRefl ? f0 : vec3(0.0), 0.0, 1.0), 1.0));"),
             "the F0 guide is zero when there is no specular lobe");
         assertTrue(rays.contains("specSun = pc.keyColor.rgb * vis * specGGX * ndotl;"), "sun highlight is analytic");
-        assertTrue(rays.contains("directOut = (s.albedoLit * direct * directScale + specSun + emitted(s)) * thr + glassRefl;"),
+        assertTrue(rays.contains("directOut = (s.albedoLit * direct * directScale + specSun + selfEmission) * thr + glassRefl;"),
             "the noise-free sun highlight is composed after the denoiser (gbDirect)");
         assertTrue(count(rays, "vec4(s.motion,") == 1 && rays.contains("dot(s.motion, s.motion) > 1.0e-8"),
             "entity/world motion is written for the NRD motion input");
@@ -447,7 +503,7 @@ public class RtShadingFixesTest {
      */
     @Test
     public void testRestirTemporalReuse() {
-        String common = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        String common = RtWorldChecks.rtCommon();
         String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
         String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
 
@@ -482,12 +538,81 @@ public class RtShadingFixesTest {
         assertEquals(0, count(path, "sampleEmittersImpl"), "the path tracer keeps plain RIS");
     }
 
+    /**
+     * Biome lighting: the Overworld ambient mixed the biome sky colour in at 0.25 and then diluted it again by half, so
+     * two biomes under the same sun produced nearly the same ambient. The check pins the new weights and proves that a
+     * biome-tinted sky and fog still move the result by a visible amount.
+     */
+    private static void runBiomeAmbientChecks() {
+        String common = RtWorldChecks.rtCommon();
+        assertTrue(common.contains("vec3 skyTint = 0.45 * pc.skyColor.rgb + 0.55;"),
+            "the biome sky colour must keep close to half of the ambient tint");
+        assertTrue(common.contains("vec3 horizonDay = mix(vec3(1.00, 0.97, 0.92), sb.skyFogColor.rgb * 1.15, 0.30);"),
+            "the horizon band must take the biome fog colour");
+        assertTrue(common.contains("if (skyIsNether()) {") && common.contains("if (skyIsEnd()) {"),
+            "the per-dimension ambient stays intact");
+
+        float[][] skies = {{0.47f, 0.65f, 1.00f}, {0.55f, 0.62f, 0.48f}};   // plains vs a murky, green-shifted biome
+        float oldDelta = relativeDelta(zenithAmbient(skies[0], 0.25f, 0.75f), zenithAmbient(skies[1], 0.25f, 0.75f));
+        float newDelta = relativeDelta(zenithAmbient(skies[0], 0.45f, 0.55f), zenithAmbient(skies[1], 0.45f, 0.55f));
+        assertTrue(newDelta > oldDelta * 1.5f, "the biome share must grow: old=" + oldDelta + " new=" + newDelta);
+        assertTrue(newDelta > 0.04f, "two biomes must differ visibly, got " + newDelta);
+
+        float plainsHorizon = relativeDelta(horizonAmbient(new float[] {0.75f, 0.85f, 1.00f}),
+            horizonAmbient(new float[] {0.45f, 0.50f, 0.32f}));
+        assertTrue(plainsHorizon > 0.08f, "the biome fog colour must move the horizon haze, got " + plainsHorizon);
+    }
+
+    /** rt_common.glsl skyLight(): daylight dome zenith, day factor omitted because it scales both biomes equally. */
+    private static float[] zenithAmbient(float[] skyColor, float biomeWeight, float baseWeight) {
+        float[] neutral = {0.90f, 0.94f, 1.00f};
+        float[] day = new float[3];
+        for (int i = 0; i < 3; i++) {
+            float tint = biomeWeight * skyColor[i] + baseWeight;
+            day[i] = 0.5f * neutral[i] + 0.5f * tint;
+        }
+        return day;
+    }
+
+    /** rt_common.glsl skyLight(): horizon haze after the biome fog mix. */
+    private static float[] horizonAmbient(float[] fogColor) {
+        float[] haze = {1.00f, 0.97f, 0.92f};
+        float[] out = new float[3];
+        for (int i = 0; i < 3; i++) {
+            out[i] = 0.70f * haze[i] + 0.30f * (fogColor[i] * 1.15f);
+        }
+        return out;
+    }
+
+    private static float relativeDelta(float[] a, float[] b) {
+        return Math.max(Math.abs(a[0] - b[0]), Math.max(Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2])));
+    }
+
     private static int count(String haystack, String needle) {
         int n = 0;
         for (int i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {
             n++;
         }
         return n;
+    }
+
+    /** Length of the array returned by {@code gbufferViews()}: it only holds .view fields, so they can be counted. */
+    private static int denoiserGbufferViews(String file) {
+        java.nio.file.Path relative = java.nio.file.Path.of("src", "main", "java",
+            "io", "github", "andrexarlay", "vulkancompat", "rt", "denoise", file);
+        // Gradle forwards the launcher's user.dir, which is the repository root, while the sources live in the common module.
+        java.nio.file.Path path = java.nio.file.Files.isRegularFile(relative)
+            ? relative : java.nio.file.Path.of("common").resolve(relative);
+        String src;
+        try {
+            src = java.nio.file.Files.readString(path);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("cannot read " + file + " at " + path.toAbsolutePath(), e);
+        }
+        int start = src.indexOf("long[] gbufferViews()");
+        int end = src.indexOf(';', start);
+        assertTrue(start > 0 && end > start, file + " must expose gbufferViews()");
+        return count(src.substring(start, end), ".view");
     }
 
     private static float snapCell(float x, float cell) {

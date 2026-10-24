@@ -394,7 +394,7 @@ public final class SettingsCatalog {
         }
         for (String[] e : new String[][] {
             {"rays_shadow_quality", "RT Shadow Rays", "Shadow rays per pixel."},
-            {"rays_pixel_shadow_size", "RT Pixel Shadow Size", "World cell of a pixelated shadow in blocks; larger means chunkier steps. Only used when RT Pixel Shadows is on."},
+            {"rays_pixel_shadow_size", "RT Pixel Shadow Size", "Size of a pixelated shadow in texture pixels (1 = one pixel of a 16x16 block texture); larger means chunkier edges. Only used when RT Pixel Shadows is on."},
             {"rays_reflection_quality", "RT Reflection Rays", "Reflection rays per pixel."},
             {"rays_reflection_distance", "RT Reflection Distance", "Longest reflection ray in blocks."},
             {"rays_ao_quality", "RT AO Rays", "Occlusion rays per pixel."},
@@ -427,7 +427,6 @@ public final class SettingsCatalog {
         putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "FPS: none.", "", "Shares the Bloom screenshots.");
         putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "FPS: none.", "", "Shares the Bloom screenshots.");
         putNoImage("atm_sunglare_strength", Tier.EXPERT, "Sun Glare Strength", "Brightness of the sun halo.", "FPS: none.", "", "Shares the Sun Glare screenshots.");
-        putNoImage("atm_sunglare_star", Tier.EXPERT, "Sun Glare Star", "Adds a six point star to the sun glare.", "FPS: none.", "", "Shares the Sun Glare screenshots.");
         putNoImage("atm_fog_vanilla", Tier.EXPERT, "Vanilla Fog Weight", "How much of the game's own fog is used.", "FPS: none.", "", "Shares the Fog screenshots.");
         putNoImage("rt_fog_in_scattering", Tier.EXPERT, "Fog In-scattering", "Sunlight and skylight scattering through the fog.", "FPS: low.", "", "Shares the Fog screenshots.");
         putNoImage("rt_debug_view", Tier.EXPERT, "RT Debug Buffer", "Replaces the world with an internal buffer (normals, depth, albedo...). For diagnosis only.",

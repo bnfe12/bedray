@@ -275,5 +275,17 @@
   "bedray.preview.mode_flip": "Переключить",
   "bedray.preview.compare_with": "Сравнить с:",
   "bedray.preview.missing": "ЗАГЛУШКА: снимок ещё не сделан",
-  "bedray.preview.no_image": "Для этой настройки нет снимка"
+  "bedray.preview.no_image": "Для этой настройки нет снимка",
+  "bedray.preview.open_modal": "Инфо / Скриншоты: %s",
+  "bedray.preview.close": "Закрыть [Esc]",
+  "bedray.preview.value": "Значение: %s",
+  "bedray.preview.hint_split": "мышь двигает разделитель, клик фиксирует",
+  "bedray.preview.hint_flip": "клик по картинке переключает",
+  "bedray.preview.locked": "клик по картинке отпускает",
+  "bedray.preview.scene.day": "Сцена: пустыня, день",
+  "bedray.preview.scene.sunset": "Сцена: закат",
+  "bedray.preview.scene.forest": "Сцена: лес",
+  "bedray.preview.scene.water": "Сцена: вода",
+  "bedray.preview.scene.interior": "Сцена: комната, одна лампа",
+  "bedray.preview.scene.lava": "Сцена: лава, ночь"
 }

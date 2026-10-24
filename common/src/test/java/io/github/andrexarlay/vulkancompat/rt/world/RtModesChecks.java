@@ -38,6 +38,8 @@ final class RtModesChecks {
         RtVolumetricFogTest.runAll();
         RtAtmosphereTest.runAll();
         RtIceGlassOpticsTest.runAll();
+        RtWaterMediumTest.runAll();
+        RtVanillaWaterLightTest.runAll();
     }
 
     private static void resetLevels() {

@@ -23,12 +23,27 @@ struct PathResult {
 
 uint gSunSub = 0u;   // sample index inside the frame (spp loop)
 uint gSunSpp = 1u;
+// One flag per pixel (globals are per invocation), raised by any spp sample whose key light came through a leaf: the counter is
+// added once per pixel, because the denominator (stats.hits) is also per pixel and spp would otherwise push leaf_pct past 100%.
+bool gLeafBacklit = false;
+
+// Additive artistic sky fill on the primary hit. Its 0.28 factor preserves the open-sky budget of the old
+// 0.28 * skyVis^2 * hemisphereAmbient term; it is not a split of the independently sampled diffuse-bounce sky. Traced occlusion
+// lets a canopy gap or window fill shade that baked vertex light squared crushed to near black, while a sealed room stays dark.
+// Every jittered spp hit traces its own visibility: reusing even a position/normal-compatible result can leak across a silhouette.
+vec3 primarySkyFill(Surface s) {
+    if (s.light.y <= 0.02) {
+        return vec3(0.0);
+    }
+    uint ss = pcgHash(uint(int(floor(s.worldPos.x * 8.0)) * 73856093 ^ int(floor(s.worldPos.y * 8.0)) * 19349663 ^ int(floor(s.worldPos.z * 8.0)) * 83492791));
+    return tracedSkyLight(s, 1u, ss);
+}
 
 // first / firstHit: the first solid surface of the camera ray (albedo, normals, section fade, temporal accumulation).
 // firstVisible / firstVisibleHit: the first non-cutout surface of any kind; for a camera ray that starts on glass, ice or water
 // it is that interface, so the G-buffer can denoise the whole pixel seen through it instead of leaving it at 1 spp.
 PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, out Surface first, out bool firstHit,
-    out Surface firstVisible, out bool firstVisibleHit) {
+    out Surface firstVisible, out bool firstVisibleHit, ivec2 p) {
     PathResult res;
     res.radiance = vec3(0.0);
     res.indirect = vec3(0.0);
@@ -52,7 +67,7 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
     bool hadFirst = false;
     for (uint b = 0u; b <= bounces; b++) {
         Surface s;
-        bool hitHere = traceSurface(o, d, b == 0u ? 0.001 : 0.0, b == 0u ? 4096.0 : reach, false, s);
+        bool hitHere = traceSurface(o, d, b == 0u ? 0.001 : 0.0, b == 0u ? 4096.0 : reach, false, b == 0u, s);
         if (med.inside) {
             // water body: depth absorption of the segment and the light scattered towards the eye (rt_common.glsl waterSegment)
             vec3 T;
@@ -137,7 +152,7 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
             }
             if (s.isWater && !volume) {
                 // vanilla style: the animated water sprite (biome tint) is blended over the scene behind it
-                vec3 e = thr * ((1.0 - F) * VANILLA_WATER_ALPHA) * vanillaWaterSurface(s, d);
+                vec3 e = thr * ((1.0 - F) * VANILLA_WATER_ALPHA) * vanillaWaterSurface(s, d, reach, seed);
                 res.radiance += e;
                 if (b == 0u) {
                     res.direct0 += e;
@@ -185,12 +200,21 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
         float cosV = max(dot(-d, s.ns), 0.0);
         float baseF0 = s.metal > 0.5 ? 1.0 : s.f0;
         vec3 f0 = s.metal > 0.5 ? s.albedoTex : vec3(baseF0);
-        vec3 F = fresnelSchlick(f0, cosV);
+        // Energy split. Above ROUGH_SPLIT a dielectric gets no specular lobe below (ps = 0), so the full grazing Schlick
+        // term removed diffuse energy that nothing reflected back: the far end of a wall next to the player and the floor
+        // away from the crosshair darkened by up to 60% into a radial vignette. Such surfaces keep the constant F0.
+        vec3 F = fresnelEnergySplit(f0, cosV, s.roughness, s.metal > 0.5);
         float Fsc = clamp(max(F.r, max(F.g, F.b)), 0.0, 1.0);
         float gloss = clamp(1.0 - s.roughness, 0.0, 1.0);
         // probability of the specular lobe: balanced baseline so reflections are clear even looking head-on
-        float ps = s.metal > 0.5 ? 1.0 : (s.roughness < 0.6 ? clamp(max(Fsc, 0.45 * gloss), 0.05, 0.95) : 0.0);
+        float ps = s.metal > 0.5 ? 1.0 : (s.roughness < ROUGH_SPLIT ? clamp(max(Fsc, 0.45 * gloss), 0.05, 0.95) : 0.0);
 
+        // Pixel shadows: the whole cell shares one sun-disk sample (pixelShadowCell), the pairing rt_rays.comp makes.
+        // Without it a cell keeps a per-pixel disk sample while its shadow ray starts from the cell centre, so the
+        // deliberately blocky penumbra fills with per-pixel speckle.
+        if (b == 0u && !med.inside && shadowPixelSize() > 0.0) {
+            gSunPixel = ivec2(pixelShadowCell(s.worldPos)) & ivec2(1023);
+        }
         // NEE of the sun/moon for the diffuse lobe (the specular lobe sees the sun disk through the sky instead)
         // first hit: low-discrepancy sample of the sun disk; deeper vertices keep the random cone sample
         vec3 L = b == 0u ? sunShadowDirection(pc.keyDir.xyz, sunRadius(), gSunSub, gSunSpp) : coneAround(pc.keyDir.xyz, sunRadius(), seed);
@@ -212,18 +236,29 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
             }
             ndotl = max(dot(s.ns, Ls), 0.0);
             ngdotl = dot(s.ng, Ls);
+            // Light through a thin leaf card. A plant seen against the sun has ngdotl < 0 and ndotl == 0, so the front-face
+            // branch skipped it entirely: every back-lit plant received no key light at all (dark grass dots on the sunlit
+            // slope ahead of the camera), and the backScatter term that was meant for exactly this case sat inside the
+            // front-face gate, where ndotl > 0 forces it to zero. The shadow ray starts on the sun side of the card so the
+            // blade does not shadow itself.
+            float leafBack = s.isFoliage ? max(dot(-s.ng, Ls), 0.0) : 0.0;
             if (lit && ndotl > 0.0 && ngdotl > 0.0) {
                 tr = traceTransmittance(shOrigin, shDir, 2048.0) * gain;   // the only visibility ray of this vertex
+            } else if (lit && leafBack > 0.0) {
+                tr = traceTransmittance(med.inside ? shOrigin : leafShadowOrigin(s, Ls), shDir, 2048.0) * gain;
             } else {
                 lit = false;
             }
-            if (lit && ndotl > 0.0 && ngdotl > 0.0) {
-                float terminator = smoothstep(0.0, 0.08, ngdotl);
-                vec3 c = thr * s.albedoLit * (1.0 - Fsc) * pc.keyColor.rgb * ndotl * tr * s.mapAo * terminator;
-                if (s.isFoliage) {
-                    float backScatter = max(dot(-s.ns, Ls), 0.0);
-                    if (backScatter > 0.0) {
-                        c += thr * s.albedoLit * (1.0 - Fsc) * pc.keyColor.rgb * (backScatter * 0.42) * tr * s.mapAo * vec3(1.05, 1.25, 0.75);
+            if (lit) {
+                vec3 c = thr * s.albedoLit * (1.0 - Fsc) * pc.keyColor.rgb * ndotl * tr * s.mapAo * smoothstep(0.0, 0.08, ngdotl);
+                if (leafBack > 0.0) {
+                    c += thr * s.albedoLit * (1.0 - Fsc) * pc.keyColor.rgb * (leafBack * 0.42) * smoothstep(0.0, 0.08, leafBack)
+                        * tr * s.mapAo * vec3(1.05, 1.25, 0.75);
+                    // Diagnostic: a sunlit slope must show a non-zero share here, otherwise the leaf transmission reaches no
+                    // pixel (still dark grass dots between the lit ones). Only delivered light counts: a chain of leaf blocks
+                    // that swallows the ray returns tr = 0 and must not be reported as a working term.
+                    if (b == 0u && ((p.x | p.y) & 3) == 0 && any(greaterThan(tr, vec3(0.0)))) {
+                        gLeafBacklit = true;
                     }
                 }
                 res.radiance += c;
@@ -244,11 +279,10 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
                 res.indirect += c;
             }
         }
-        // Outdoor canopy / multi-bounce sky fill on primary hit: prevents ground under dense foliage from crushing to black
-        // while keeping caves and enclosed rooms (s.light.y == 0) completely dark.
-        if (b == 0u && s.metal < 0.5 && s.light.y > 0.05) {
-            float skyVis = clamp(s.light.y, 0.0, 1.0);
-            vec3 canopyFill = thr * s.albedoLit * (1.0 - Fsc) * hemisphereAmbient(s.ns.y, pc.keyDir.w) * (0.28 * skyVis * skyVis) * s.mapAo;
+        // Additive outdoor fill on the primary hit: traced sky occlusion instead of baked vertex sky light squared.
+        // Caves and enclosed rooms (s.light.y == 0) stay completely dark.
+        if (b == 0u && s.metal < 0.5 && s.light.y > 0.02) {
+            vec3 canopyFill = thr * s.albedoLit * (1.0 - Fsc) * primarySkyFill(s) * 0.28 * s.mapAo;
             res.radiance += canopyFill;
             res.indirect += canopyFill;
         }
@@ -342,7 +376,7 @@ void main() {
         Surface firstVisible;
         bool firstVisibleHit;
         vec3 origin = cameraOrigin();
-        PathResult r = tracePath(origin, dir, med0, seed, first, firstHit, firstVisible, firstVisibleHit);
+        PathResult r = tracePath(origin, dir, med0, seed, first, firstHit, firstVisible, firstVisibleHit, p);
         waterSeen = max(waterSeen, r.waterSeen);
         anyHit = anyHit || firstHit;
         if (i == 0u) {
@@ -437,6 +471,9 @@ void main() {
         }
     }
     vec3 color = (mode == MODE_BOUNCES || mode == MODE_NORMALS || mode == MODE_MATERIAL || mode == MODE_ALBEDO) ? mean : finishColor(mean);
+    if (gLeafBacklit) {
+        atomicAdd(StatsBuf(pc.statsAddr).leafBacklit, 1u);
+    }
     countSample(p, anyHit);
     imageStore(outDepth, p, vec4(accFirstDist < 1.0e5 ? accFirstDist : (accHit ? accFirst.t : 1.0e6), 0.0, 0.0, 0.0));
     imageStore(outImage, p, vec4(clamp(color, 0.0, 1.0), 1.0));

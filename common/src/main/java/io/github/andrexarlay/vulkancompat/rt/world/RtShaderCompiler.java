@@ -21,6 +21,12 @@ public final class RtShaderCompiler {
     private RtShaderCompiler() {
     }
 
+    /** GLSL injected after the {@code #version} line of every compile when the opacity micromap probe passed. */
+    private static volatile String extensionPrefix = "";
+    /** SPIR-V target of every compile; the opacity micromap probe may move it from 1.4 to 1.5. */
+    private static volatile int targetSpirv = Shaderc.shaderc_spirv_version_1_4;
+    private static volatile Boolean ommProbeResult;
+
     public static ByteBuffer compileResource(String resourcePath, String name) {
         return compileResource(resourcePath, name, "");
     }
@@ -28,12 +34,66 @@ public final class RtShaderCompiler {
     /** As {@link #compileResource(String, String)}; {@code defines} (e.g. {@code "#define VKB_GBUFFER 1
 "}) go right after the {@code #version} line. */
     public static ByteBuffer compileResource(String resourcePath, String name, String defines) {
-        String source = resolveIncludes(withDefines(loadSource(resourcePath), defines), resourcePath);
+        String source = resolveIncludes(withDefines(loadSource(resourcePath), extensionPrefix + defines), resourcePath);
         long t0 = System.nanoTime();
         ByteBuffer spirv = compile(source, name);
         LOGGER.info(String.format(java.util.Locale.ROOT, "[VKB-RT] shader=%s compile_ms=%.1f spv_bytes=%d cached=false",
             name, (System.nanoTime() - t0) / 1.0e6, spirv.remaining()));
         return spirv;
+    }
+
+    /**
+     * Compile probe for GL_EXT_opacity_micromap on a minimal ray-query compute shader. An acceleration structure
+     * that references opacity micromaps must be declared in the shader (raytraversal.adoc), so on success the
+     * extension is injected into every later RT shader compile; if SPIR-V 1.4 rejects it, 1.5 is probed and becomes
+     * the target. A failure disables opacity micromaps for the session and leaves all shaders unchanged.
+     */
+    public static boolean probeOpacityMicromapExtension() {
+        Boolean r = ommProbeResult;
+        if (r != null) {
+            return r;
+        }
+        synchronized (RtShaderCompiler.class) {
+            if (ommProbeResult != null) {
+                return ommProbeResult;
+            }
+            String probe = "#version 460\n"
+                + "#extension GL_EXT_ray_query : require\n"
+                + "#extension GL_EXT_opacity_micromap : require\n"
+                + "layout(set = 0, binding = 0) uniform accelerationStructureEXT as;\n"
+                + "layout(local_size_x = 1) in;\n"
+                + "void main() {\n"
+                + "    rayQueryEXT q;\n"
+                + "    rayQueryInitializeEXT(q, as, 0, 0u, vec3(0.0), 0.0, vec3(1.0), 0.0);\n"
+                + "}\n";
+            boolean ok = false;
+            try {
+                compileSpirv(probe, "omm_probe", Shaderc.shaderc_spirv_version_1_4);
+                ok = true;
+            } catch (Throwable t14) {
+                try {
+                    compileSpirv(probe, "omm_probe", Shaderc.shaderc_spirv_version_1_5);
+                    targetSpirv = Shaderc.shaderc_spirv_version_1_5;
+                    ok = true;
+                    LOGGER.info("[VKB-RT] opacity micromap probe: SPIR-V 1.4 rejected ({}), compiling with 1.5", brief(t14));
+                } catch (Throwable t15) {
+                    LOGGER.info("[VKB-RT] opacity micromap probe: shaderc rejects the extension ({} / {})",
+                        brief(t14), brief(t15));
+                }
+            }
+            if (ok) {
+                extensionPrefix = "#extension GL_EXT_opacity_micromap : require\n";
+                LOGGER.info("[VKB-RT] opacity micromap probe: shaderc accepts the extension, GLSL prefix injected");
+            }
+            ommProbeResult = ok;
+            return ok;
+        }
+    }
+
+    private static String brief(Throwable t) {
+        String m = t.getMessage();
+        String s = (m == null ? t.toString() : m).replace('\n', ' ');
+        return s.length() > 120 ? s.substring(0, 120) : s;
     }
 
     /** Inserts {@code defines} after the first line (which must be the {@code #version} directive). */
@@ -98,6 +158,10 @@ public final class RtShaderCompiler {
     }
 
     static ByteBuffer compile(String source, String name) {
+        return compileSpirv(source, name, targetSpirv);
+    }
+
+    static ByteBuffer compileSpirv(String source, String name, int spirvVersion) {
         long compiler = Shaderc.shaderc_compiler_initialize();
         if (compiler == 0L) {
             throw new RtFailure("shader_compile", "shaderc_compiler_initialize returned 0");
@@ -106,7 +170,7 @@ public final class RtShaderCompiler {
         try {
             Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan,
                 Shaderc.shaderc_env_version_vulkan_1_2);
-            Shaderc.shaderc_compile_options_set_target_spirv(options, Shaderc.shaderc_spirv_version_1_4);
+            Shaderc.shaderc_compile_options_set_target_spirv(options, spirvVersion);
             Shaderc.shaderc_compile_options_set_optimization_level(options, Shaderc.shaderc_optimization_level_performance);
             // The CharSequence overload encodes the text on the thread's MemoryStack (LWJGL default 64 KiB): the expanded
             // rt_rays/rt_path sources (~66 KiB) overflowed it ("OutOfMemoryError: Out of stack space" in

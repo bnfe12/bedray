@@ -15,16 +15,18 @@ import java.util.Locale;
 
 /**
  * GPU time of named spans inside the RT command buffer (Vulkan timestamp queries), averaged over a window and logged as
- * {@code [VKB-ATMO] gpu_ms name=0.123(n=..) ...}. A ring of {@link #RING} frames: the stamps of a frame are read {@code RING} frames
- * later without waiting. Only created with {@code -Dvkrtx.rt.gpuTimers=true} (otherwise no pool and no writes).
+ * {@code [<label>] gpu_ms name=0.123(n=..) ...}. A ring of {@link #RING} frames: the stamps of a frame are read {@code RING} frames
+ * later without waiting. On by default (the only frame-level split of the RT cost; {@code -Dvkrtx.rt.gpuTimers=false} disables
+ * the query pool and the stamp writes).
  */
 final class RtGpuTimer {
-    static final boolean ENABLED = Boolean.getBoolean("vkrtx.rt.gpuTimers");
+    static final boolean ENABLED = !"false".equalsIgnoreCase(System.getProperty("vkrtx.rt.gpuTimers", "true"));
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     private static final int RING = 4;
-    private static final int WINDOW_FRAMES = 300;
+    private static final int WINDOW_FRAMES = 900;
 
     private final VkDevice device;
+    private final String label;
     private final String[] names;
     private final int marks;       // 2 stamps per span
     private final long pool;
@@ -37,8 +39,9 @@ final class RtGpuTimer {
     private int slot;
     private int framesInWindow;
 
-    RtGpuTimer(VkDevice device, String... spanNames) {
+    RtGpuTimer(VkDevice device, String label, String... spanNames) {
         this.device = device;
+        this.label = label;
         this.names = spanNames;
         this.marks = spanNames.length * 2;
         this.written = new boolean[RING * marks];
@@ -55,7 +58,7 @@ final class RtGpuTimer {
             this.pool = p.get(0);
         }
         this.results = MemoryUtil.memAllocLong(marks * 2);
-        LOGGER.info("[VKB-ATMO] gpu_timers=on spans={} timestamp_period_ns={}", String.join(",", spanNames), periodNs);
+        LOGGER.info("[{}] gpu_timers=on spans={} timestamp_period_ns={}", label, String.join(",", spanNames), periodNs);
     }
 
     /** Start of a frame (before the first stamp): harvests the slot about to be reused and resets its queries in {@code cmd}. */
@@ -104,7 +107,7 @@ final class RtGpuTimer {
             written[base + i] = false;
         }
         if (++framesInWindow >= WINDOW_FRAMES) {
-            StringBuilder sb = new StringBuilder("[VKB-ATMO] gpu_ms");
+            StringBuilder sb = new StringBuilder("[").append(label).append("] gpu_ms");
             for (int span = 0; span < names.length; span++) {
                 sb.append(String.format(Locale.ROOT, " %s=%.3f(n=%d)", names[span], count[span] > 0 ? sumMs[span] / count[span] : 0.0,
                     count[span]));

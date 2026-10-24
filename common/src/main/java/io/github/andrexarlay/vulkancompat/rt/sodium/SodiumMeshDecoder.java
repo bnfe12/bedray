@@ -24,7 +24,10 @@ import java.nio.ByteOrder;
  *       section-local blocks;</li>
  *   <li>{@code _get_texcoord}: {@code (a_TexCoord & 0x7FFF) / 32768}; bit 15 is the shrink bias sign
  *       ({@code mix(-1,1,bool(a_TexCoord >> 15))}, applied in block_layer_opaque.vsh:71 as bias * u_TexCoordShrink).
- *       This decoder returns the value WITHOUT bias (it lies inside the sprite, safe for sampling);</li>
+ *       The bias is applied here exactly like Sodium's vertex shader: without it a far-edge vertex sits exactly ON the
+ *       sprite boundary and NEAREST sampling pulls the first texel of the NEIGHBOUR sprite (a glowing frame around faces
+ *       next to an emissive sprite, or holes where the neighbour is transparent); one quantization step inward is safe
+ *       for NEAREST and invisible for the atlas texture.</li>
  *   <li>{@code _vert_tex_light_coord = a_LightAndData.xy / 256}: byte0 = block light, byte1 = sky light, both encoded as
  *       {@code clamp(level*16 + 8, 8, 248)} (encodeLight); the decoder keeps the raw bytes in {@code light};</li>
  *   <li>{@code _material_params = a_LightAndData[2]}, {@code _draw_id = a_LightAndData[3]} (section index inside the
@@ -61,11 +64,19 @@ public final class SodiumMeshDecoder {
     }
 
     public static float decodeU(int w3) {
-        return (w3 & (TEXTURE_MAX_VALUE - 1)) / (float) TEXTURE_MAX_VALUE;
+        return decodeTex((w3 & 0xFFFF), w3 & (1 << 15));
     }
 
     public static float decodeV(int w3) {
-        return ((w3 >>> 16) & (TEXTURE_MAX_VALUE - 1)) / (float) TEXTURE_MAX_VALUE;
+        return decodeTex((w3 >>> 16) & 0xFFFF, w3 & (1 << 31));
+    }
+
+    /** One quantization step inward from the sprite edge, mirroring Sodium's {@code bias * u_TexCoordShrink}. */
+    public static final float TEX_COORD_SHRINK = 1.0f / TEXTURE_MAX_VALUE;
+
+    private static float decodeTex(int half, int biasBit) {
+        float c = (half & (TEXTURE_MAX_VALUE - 1)) / (float) TEXTURE_MAX_VALUE;
+        return c + (biasBit != 0 ? TEX_COORD_SHRINK : -TEX_COORD_SHRINK);
     }
 
     /** Triangle indices for {@code quadCount} quads: (0,1,2, 2,3,0) per quad, offset by {@code baseVertex}. */

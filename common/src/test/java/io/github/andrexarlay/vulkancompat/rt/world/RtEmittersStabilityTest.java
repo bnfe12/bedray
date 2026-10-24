@@ -66,9 +66,41 @@ public class RtEmittersStabilityTest {
     }
 
     @Test
-    public void testMoveRebuildConstantIsZero() {
-        assertEquals(0.0, RtEmitters.MOVE_REBUILD, 1e-9,
-            "MOVE_REBUILD must be 0.0 for continuous per-frame coordinate synchronization");
+    public void testMoveRebuildThrottleKeepsCoordinatesExact() {
+        // A zero threshold rescanned every section on every moving frame. The records are stored relative to the emitter
+        // origin and the shader subtracts cam - origin each frame, so positions stay exact between rebuilds; the threshold
+        // only throttles the distance-based re-selection, which is why it may be non-zero.
+        assertTrue(RtEmitters.MOVE_REBUILD > 0.0,
+            "MOVE_REBUILD must be > 0 so a moving camera does not rescan every section each frame");
+        assertTrue(RtEmitters.MOVE_REBUILD <= 0.5,
+            "MOVE_REBUILD must stay sub-block so the distance-based light selection tracks the camera");
+        runCameraInvarianceChecks();
+    }
+
+    @Test
+    public void testFingerprintIgnoresReanchoringButSeesLightChanges() {
+        float[] record = {1f, 2f, 3f, 0.5f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 0f, 1f, 1f, 1f, 1f};
+        long seed = 12345L;
+
+        // The same record anchored to a different origin must hash to the same lights in world space.
+        long a = RtEmitters.mixEmitter(seed, record, 0, 0f, 0f, 0f);
+        long b = RtEmitters.mixEmitter(seed, record, 0, 10f, -4f, 32f);
+        float[] moved = record.clone();
+        moved[0] += 10f;
+        moved[1] += -4f;
+        moved[2] += 32f;
+        long c = RtEmitters.mixEmitter(seed, moved, 0, 0f, 0f, 0f);
+        assertEquals(b, c, "a re-anchored list of the same lights must keep its ReSTIR history");
+
+        float[] brighter = record.clone();
+        brighter[14] *= 2f;
+        assertNotEquals(a, RtEmitters.mixEmitter(seed, brighter, 0, 0f, 0f, 0f),
+            "a changed emission must invalidate the stored samples");
+
+        float[] movedLight = record.clone();
+        movedLight[0] += 1f;
+        assertNotEquals(a, RtEmitters.mixEmitter(seed, movedLight, 0, 0f, 0f, 0f),
+            "a light that moved must invalidate the stored samples");
     }
 
     @Test
@@ -98,7 +130,8 @@ public class RtEmittersStabilityTest {
 
     public static void runAll() {
         RtEmittersStabilityTest test = new RtEmittersStabilityTest();
-        test.testMoveRebuildConstantIsZero();
+        test.testMoveRebuildThrottleKeepsCoordinatesExact();
+        test.testFingerprintIgnoresReanchoringButSeesLightChanges();
         test.testCameraInvarianceAndCoordinatesStability();
         test.testTwoSidedEmitterClassification();
         test.testEmitterOrientationAndCosineCulling();
