@@ -156,6 +156,247 @@ class VulkanComputeProbeTest {
         System.out.println("[BEDRAY-COMPUTE-PROBE] Offscreen shaded artifact=" + output.toAbsolutePath());
     }
 
+    /**
+     * Textured + raster variant on a real device: cell tint, emitter list, key light, diffuse bounce,
+     * water transmission, temporal history and depth-gated composition. Correct depth is synthesized
+     * from a CPU DDA oracle and a reverse-Z perspective, so replacement is exercised exactly as in game.
+     * This proves dispatch and data flow offscreen, not in-game appearance.
+     */
+    @Test void texturedLightingHistoryAndCompositionDispatch() throws Exception {
+        GraphicsBackendRegistry.DebugView previousView = GraphicsBackendRegistry.debugView();
+        GraphicsBackendRegistry.setDebugView(GraphicsBackendRegistry.DebugView.SHADED);
+        float aspect = (float) WIDTH / HEIGHT, near = 0.05f, far = 1000f;
+        float fy = (float) (1 / Math.tan(Math.toRadians(35)));
+        float a = near / (far - near), b = near * far / (far - near);
+        float[] projection = {fy / aspect,0,0,0, 0,-fy,0,0, 0,0,a,-1, 0,0,b,0};
+        float[] inverseProjection = new float[16];
+        assertTrue(TemporalHistory.invert(projection, inverseProjection));
+        float[] identity = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+        double camX = 24.5, camY = 27.5, camZ = 31.5; // window sections 0..2 on every axis
+        LitScene scene = litScene();
+        float[] depth = new float[WIDTH * HEIGHT];
+        int hits = 0;
+        for (int y = 0; y < HEIGHT; y++) for (int x = 0; x < WIDTH; x++) {
+            float ndcX = (x + 0.5f) / WIDTH * 2 - 1, ndcY = (y + 0.5f) / HEIGHT * 2 - 1;
+            float[] p = new float[4];
+            for (int row = 0; row < 4; row++)
+                p[row] = inverseProjection[row] * ndcX + inverseProjection[4 + row] * ndcY
+                    + inverseProjection[8 + row] * 0.5f + inverseProjection[12 + row];
+            float[] ray = normalize(p[0] / p[3], p[1] / p[3], p[2] / p[3]);
+            VoxelHit hit = VoxelDda.trace(scene.occupancy(), camX, camY, camZ, ray[0], ray[1], ray[2], 0, 160);
+            if (hit == null) continue;
+            double viewZ = hit.t() * ray[2];
+            depth[x + WIDTH * y] = (float) ((a * viewZ + b) / -viewZ);
+            hits++;
+        }
+        assertTrue(hits > WIDTH * HEIGHT / 3, "Fixture camera must see the lit scene");
+        float[] light = new float[24];
+        light[0] = 0.35f; light[1] = 0.85f; light[2] = 0.25f; light[3] = 1;
+        light[4] = 1; light[5] = 0.95f; light[6] = 0.9f; light[7] = 1;
+        light[8] = 0.25f; light[9] = 0.45f; light[10] = 1; light[11] = 1;
+        light[12] = 1; light[13] = 0.7f; light[14] = 0.45f; light[15] = 1;
+        light[16] = 0.01f; light[17] = 0.01f; light[18] = 0.01f; light[19] = 0.5f;
+        var lighting = new io.github.andrexarlay.bedray.api.v1.LightingFrame(light);
+        try (Probe probe = new Probe(); LitInputs inputs = new LitInputs(probe, depth)) {
+            var atlas = new io.github.andrexarlay.bedray.api.v1.AtlasFrame(1, probe.device.address(), inputs.atlasView,
+                VK_IMAGE_LAYOUT_GENERAL, VK_FORMAT_R8G8B8A8_UNORM, 16, 16,
+                io.github.andrexarlay.bedray.api.v1.AtlasFrame.ColorEncoding.SRGB_IN_UNORM);
+            var raster = new io.github.andrexarlay.bedray.api.v1.RasterFrame(probe.device.address(), inputs.colorView,
+                inputs.depthView, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_D32_SFLOAT, WIDTH, HEIGHT);
+            try (VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.device, WIDTH, HEIGHT,
+                    VK_FORMAT_R8G8B8A8_UNORM, VoxelGrid.builder(48, 48, 48).build(), atlas, raster)) {
+                CameraSnapshot camera = new CameraSnapshot(camX, camY, camZ, inverseProjection, identity);
+                WorldSnapshot snapshot = new WorldSnapshot(1, 1, camera, scene.sections());
+                VoxelWorldUpload uploads = new VoxelWorldUpload();
+                probe.lighting = lighting;
+                byte[] previous = probe.renderWorld(pipeline, false, camera, uploads, uploads.update(snapshot));
+                writeImage(previous, "voxel-lit-first-vulkan.png");
+                assertEquals(2, uploads.emitters().count(), "Emitter cube and lava-like cell must be listed");
+                int replaced = 0, keptSky = 0, magenta = 0;
+                for (int i = 0; i < WIDTH * HEIGHT; i++) {
+                    int r = Byte.toUnsignedInt(previous[i * 4]), g = Byte.toUnsignedInt(previous[i * 4 + 1]),
+                        bl = Byte.toUnsignedInt(previous[i * 4 + 2]);
+                    if (r == 255 && g == 0 && bl == 255) magenta++;
+                    boolean raw = r == 0 && g == 0 && bl == 255;
+                    if (depth[i] == 0 && raw) keptSky++;
+                    if (depth[i] > 0 && !raw) replaced++;
+                }
+                assertEquals(0, magenta, "No invalid-camera pixels");
+                assertEquals(WIDTH * HEIGHT - hits, keptSky, "Pixels without raster depth keep the raster color");
+                assertTrue(replaced > hits * 8 / 10, "Matching depth must replace the raster surface: " + replaced + "/" + hits);
+                // Static camera: history accumulates, so successive frames converge.
+                double firstChange = 0, lastChange = 0;
+                for (int frame = 1; frame <= 24; frame++) {
+                    byte[] next = probe.renderWorld(pipeline, false, camera, uploads, uploads.update(snapshot));
+                    double change = 0;
+                    for (int i = 0; i < PIXEL_BYTES; i++) change += Math.abs(next[i] - previous[i]);
+                    change /= hits;
+                    if (frame == 1) firstChange = change;
+                    if (frame == 24) lastChange = change;
+                    previous = next;
+                }
+                System.out.printf("[BEDRAY-COMPUTE-PROBE] lit frames=25 replaced=%d/%d emitters=%d meanChange(frame1)=%.3f meanChange(frame24)=%.3f history=%s%n",
+                    replaced, hits, uploads.emitters().count(), firstChange, lastChange, pipeline.historyStatus());
+                assertTrue(lastChange < firstChange, "Temporal history must reduce frame-to-frame noise");
+                writeImage(previous, "voxel-lit-vulkan.png");
+                // Camera moved off every scene plane without new raster depth: surfaces fail the depth test and keep raster.
+                CameraSnapshot moved = new CameraSnapshot(camX + 0.37, camY + 0.53, camZ - 0.41, inverseProjection, identity);
+                byte[] stale = probe.renderWorld(pipeline, false, moved, uploads,
+                    uploads.update(new WorldSnapshot(1, 1, moved, scene.sections())));
+                int raw = 0;
+                for (int i = 0; i < WIDTH * HEIGHT; i++)
+                    if (stale[i * 4] == 0 && stale[i * 4 + 1] == 0 && Byte.toUnsignedInt(stale[i * 4 + 2]) == 255) raw++;
+                assertTrue(raw > WIDTH * HEIGHT * 9 / 10, "Mismatched depth must preserve raster: " + raw);
+            } finally {
+                probe.lighting = null;
+            }
+        } finally {
+            GraphicsBackendRegistry.setDebugView(previousView);
+        }
+    }
+
+    private record LitScene(List<SectionSnapshot> sections, VoxelGrid occupancy) {}
+
+    /** World origin 0: floor y=20 (tinted tops), sunken water pool, back wall, emitter cube, emitting unsupported cell. */
+    private static LitScene litScene() {
+        VoxelGridBuilder occupancy = VoxelGrid.builder(48, 48, 48);
+        var face = new io.github.andrexarlay.bedray.api.v1.CubeFaceMaterial(0, 0, 1, 0, 0, 1, 0xFFFFFFFF, false);
+        var top = new io.github.andrexarlay.bedray.api.v1.CubeFaceMaterial(0, 0, 1, 0, 0, 1, 0xFFFFFFFF, true);
+        var cubeMaterial = new io.github.andrexarlay.bedray.api.v1.CubeMaterial(List.of(face, top, face, face, face, face));
+        float[] water = {0,1,0,0,0, 0,1,1,0,1, 1,1,1,1,1, 1,1,0,1,0};
+        var waterModel = new io.github.andrexarlay.bedray.api.v1.BlockModelGeometry(List.of(
+            new io.github.andrexarlay.bedray.api.v1.ModelQuad(water, 0xFFFFFFFF,
+                io.github.andrexarlay.bedray.api.v1.ModelQuad.TRANSLUCENT | io.github.andrexarlay.bedray.api.v1.ModelQuad.CELL_TINT
+                    | io.github.andrexarlay.bedray.api.v1.ModelQuad.FLUID, 0)));
+        int emitterX = 24, emitterY = 21, emitterZ = 30, lavaX = 14, lavaY = 21, lavaZ = 16;
+        List<SectionSnapshot> sections = new ArrayList<>();
+        for (int tz = 0; tz < 3; tz++) for (int ty = 0; ty < 3; ty++) for (int tx = 0; tx < 3; tx++) {
+            byte[] cells = new byte[4096];
+            short[] cubes = new short[4096], models = new short[4096], light = new short[4096];
+            int[] tints = new int[4096];
+            for (int z = 0; z < 16; z++) for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+                int gx = tx * 16 + x, gy = ty * 16 + y, gz = tz * 16 + z, index = x + 16 * (y + 16 * z);
+                boolean pool = gx >= 20 && gx < 28 && gz >= 20 && gz < 28;
+                byte kind = SectionSnapshot.EMPTY;
+                if (gy == 19 || gy == 20 && !pool || gz == 8 && gy > 20 && gy <= 30 && gx >= 10 && gx < 38
+                        || gx == emitterX && gy == emitterY && gz == emitterZ) kind = SectionSnapshot.OPAQUE_CUBE;
+                if (gy == 20 && pool) kind = SectionSnapshot.MODEL;
+                if (gx == lavaX && gy == lavaY && gz == lavaZ) kind = SectionSnapshot.UNSUPPORTED;
+                cells[index] = kind;
+                if (kind == SectionSnapshot.OPAQUE_CUBE) { cubes[index] = 1; tints[index] = 0xFF000000 | (0x40 + gx * 3) << 16 | 0xB04000; }
+                if (kind == SectionSnapshot.MODEL) { models[index] = 1; tints[index] = 0xFF3F76E4; }
+                if (kind == SectionSnapshot.OPAQUE_CUBE || kind == SectionSnapshot.MODEL) occupancy.set(gx, gy, gz, 1);
+                int manhattan = Math.abs(gx - emitterX) + Math.abs(gy - emitterY) + Math.abs(gz - emitterZ);
+                int lava = Math.abs(gx - lavaX) + Math.abs(gy - lavaY) + Math.abs(gz - lavaZ);
+                int block = Math.max(0, Math.max(15 - manhattan, 15 - lava));
+                int sky = gy > 20 ? 15 : 0;
+                int emission = manhattan == 0 || lava == 0 ? 15 : 0;
+                light[index] = (short) (block | sky << 4 | emission << 8);
+            }
+            sections.add(new SectionSnapshot(tx, ty, tz, 1, cells,
+                new io.github.andrexarlay.bedray.api.v1.CubeSectionMaterials(1, List.of(cubeMaterial), cubes),
+                new io.github.andrexarlay.bedray.api.v1.SectionModelGeometry(1, List.of(waterModel), models),
+                new io.github.andrexarlay.bedray.api.v1.SectionLightData(light),
+                new io.github.andrexarlay.bedray.api.v1.SectionTintData(tints)));
+        }
+        return new LitScene(sections, occupancy.build());
+    }
+
+    /** Borrowed-input stand-ins: 16x16 atlas, raster color cleared to blue, raster depth from the oracle. */
+    private static final class LitInputs implements AutoCloseable {
+        private final Probe probe;
+        long atlas, atlasMemory, atlasView, color, colorMemory, colorView, depthImage, depthMemory, depthView;
+        long staging, stagingMemory;
+
+        LitInputs(Probe probe, float[] depth) {
+            this.probe = probe;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                long[] a = image(16, 16, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, stack);
+                atlas = a[0]; atlasMemory = a[1]; atlasView = a[2];
+                long[] c = image(WIDTH, HEIGHT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, stack);
+                color = c[0]; colorMemory = c[1]; colorView = c[2];
+                long[] d = image(WIDTH, HEIGHT, VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT, stack);
+                depthImage = d[0]; depthMemory = d[1]; depthView = d[2];
+                LongBuffer handle = stack.mallocLong(1);
+                check(vkCreateBuffer(probe.device, VkBufferCreateInfo.calloc(stack).sType$Default().size(depth.length * 4L)
+                    .usage(VK_BUFFER_USAGE_TRANSFER_SRC_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "Create depth staging");
+                staging = handle.get(0);
+                VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
+                vkGetBufferMemoryRequirements(probe.device, staging, requirements);
+                stagingMemory = probe.allocate(probe.device.getPhysicalDevice(), requirements,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stack);
+                check(vkBindBufferMemory(probe.device, staging, stagingMemory, 0), "Bind depth staging");
+                PointerBuffer mapped = stack.mallocPointer(1);
+                check(vkMapMemory(probe.device, stagingMemory, 0, depth.length * 4L, 0, mapped), "Map depth staging");
+                MemoryUtil.memFloatBuffer(mapped.get(0), depth.length).put(depth);
+                vkUnmapMemory(probe.device, stagingMemory);
+
+                check(vkResetCommandBuffer(probe.command, 0), "Reset input command buffer");
+                check(vkBeginCommandBuffer(probe.command, VkCommandBufferBeginInfo.calloc(stack).sType$Default()
+                    .flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT)), "Begin input command buffer");
+                VkImageMemoryBarrier.Buffer toTransfer = VkImageMemoryBarrier.calloc(3, stack);
+                long[] images = {atlas, color, depthImage};
+                for (int i = 0; i < 3; i++) {
+                    toTransfer.get(i).sType$Default().image(images[i]).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                        .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).oldLayout(VK_IMAGE_LAYOUT_UNDEFINED)
+                        .newLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).srcAccessMask(0).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
+                    toTransfer.get(i).subresourceRange().aspectMask(i == 2 ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT)
+                        .levelCount(1).layerCount(1);
+                }
+                vkCmdPipelineBarrier(probe.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, toTransfer);
+                VkImageSubresourceRange.Buffer range = VkImageSubresourceRange.calloc(1, stack);
+                range.get(0).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+                VkClearColorValue gray = VkClearColorValue.calloc(stack);
+                gray.float32(0, 0.7f).float32(1, 0.65f).float32(2, 0.6f).float32(3, 0.8f);
+                vkCmdClearColorImage(probe.command, atlas, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, gray, range);
+                VkClearColorValue blue = VkClearColorValue.calloc(stack);
+                blue.float32(0, 0).float32(1, 0).float32(2, 1).float32(3, 1);
+                vkCmdClearColorImage(probe.command, color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blue, range);
+                VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, stack);
+                copy.get(0).imageSubresource().aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT).layerCount(1);
+                copy.get(0).imageExtent().set(WIDTH, HEIGHT, 1);
+                vkCmdCopyBufferToImage(probe.command, staging, depthImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
+                for (int i = 0; i < 3; i++) toTransfer.get(i).oldLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                    .newLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_SHADER_READ_BIT);
+                vkCmdPipelineBarrier(probe.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, null, toTransfer);
+                check(vkEndCommandBuffer(probe.command), "End input command buffer");
+                VkSubmitInfo.Buffer submit = VkSubmitInfo.calloc(1, stack);
+                submit.get(0).sType$Default().pCommandBuffers(stack.pointers(probe.command.address()));
+                check(vkQueueSubmit(probe.queue, submit, VK_NULL_HANDLE), "Submit input upload");
+                check(vkQueueWaitIdle(probe.queue), "Wait for input upload");
+            }
+        }
+
+        private long[] image(int width, int height, int format, int aspect, MemoryStack stack) {
+            LongBuffer handle = stack.mallocLong(1);
+            VkImageCreateInfo info = VkImageCreateInfo.calloc(stack).sType$Default().imageType(VK_IMAGE_TYPE_2D)
+                .format(format).mipLevels(1).arrayLayers(1).samples(VK_SAMPLE_COUNT_1_BIT).tiling(VK_IMAGE_TILING_OPTIMAL)
+                .usage(VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            info.extent().set(width, height, 1);
+            check(vkCreateImage(probe.device, info, null, handle), "Create probe input image");
+            long image = handle.get(0);
+            VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
+            vkGetImageMemoryRequirements(probe.device, image, requirements);
+            long memory = probe.allocate(probe.device.getPhysicalDevice(), requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stack);
+            check(vkBindImageMemory(probe.device, image, memory, 0), "Bind probe input image");
+            VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default().image(image)
+                .viewType(VK_IMAGE_VIEW_TYPE_2D).format(format);
+            view.subresourceRange().aspectMask(aspect).levelCount(1).layerCount(1);
+            check(vkCreateImageView(probe.device, view, null, handle), "Create probe input view");
+            return new long[]{image, memory, handle.get(0)};
+        }
+
+        @Override public void close() {
+            if (probe.device == null) return;
+            vkDeviceWaitIdle(probe.device);
+            for (long view : new long[]{atlasView, colorView, depthView}) if (view != 0) vkDestroyImageView(probe.device, view, null);
+            for (long image : new long[]{atlas, color, depthImage}) if (image != 0) vkDestroyImage(probe.device, image, null);
+            if (staging != 0) vkDestroyBuffer(probe.device, staging, null);
+            for (long memory : new long[]{atlasMemory, colorMemory, depthMemory, stagingMemory}) if (memory != 0) vkFreeMemory(probe.device, memory, null);
+        }
+    }
+
     private record WorldFixture(WorldSnapshot snapshot, VoxelGrid opaque, VoxelGrid markers) {}
 
     private static WorldFixture worldScene(long revision, int wallZ, boolean revised, WorldFixture previous) {
@@ -165,7 +406,7 @@ class VulkanComputeProbeTest {
         for (int tz = 0; tz < 3; tz++) for (int ty = 0; ty < 3; ty++) for (int tx = 0; tx < 3; tx++) {
             // One visible corner remains unloaded. Shaded traversal omits it; occupancy view marks it.
             if (tx == 0 && ty == 0 && tz == 2) {
-                markers.fillBox(0, 0, 32, 16, 16, 48, 3);
+                markers.fillBox(0, 0, 32, 16, 16, 48, 4);
                 continue;
             }
             byte[] cells = new byte[SectionSnapshot.CELL_COUNT];
@@ -246,7 +487,7 @@ class VulkanComputeProbeTest {
             int kind = Byte.toUnsignedInt(ids[at + 3]);
             if (kind != 0) gpuHits++;
             if (kind == 2) excludedHits++;
-            if (kind == 3) unknownHits++;
+            if (kind == 4) unknownHits++;
             if (!matches(ids, at, expected)) {
                 mismatches++;
                 boolean boundary = false;
@@ -312,7 +553,7 @@ class VulkanComputeProbeTest {
         assertEquals(VK_SUCCESS, result, operation + " failed: VkResult=" + result);
     }
 
-    private static final class Probe implements AutoCloseable {
+    static final class Probe implements AutoCloseable {
         VkInstance instance;
         VkDevice device;
         VkQueue queue;
@@ -324,6 +565,7 @@ class VulkanComputeProbeTest {
         long readback;
         long readbackMemory;
         boolean targetInitialized;
+        io.github.andrexarlay.bedray.api.v1.LightingFrame lighting;
 
         Probe() {
             try {
@@ -411,7 +653,7 @@ class VulkanComputeProbeTest {
             }
         }
 
-        private long allocate(VkPhysicalDevice physical, VkMemoryRequirements requirements, int flags, MemoryStack stack) {
+        long allocate(VkPhysicalDevice physical, VkMemoryRequirements requirements, int flags, MemoryStack stack) {
             VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack);
             vkGetPhysicalDeviceMemoryProperties(physical, memory);
             for (int type = 0; type < memory.memoryTypeCount(); type++) {
@@ -451,6 +693,7 @@ class VulkanComputeProbeTest {
                             0, null, null, transition);
                 }
                 if (camera == null) pipeline.record(command, target, hitIds);
+                else if (lighting != null) pipeline.recordWorld(command, target, camera, uploads, updates, lighting);
                 else pipeline.recordWorld(command, target, hitIds, camera, uploads, updates);
                 VkImageMemoryBarrier.Buffer ready = VkImageMemoryBarrier.calloc(1, stack);
                 ready.get(0).sType$Default().image(target).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)

@@ -2,33 +2,73 @@
 // Vulkan 1.0 compute only; no ray queries, acceleration structures or device addresses.
 layout(local_size_x=8, local_size_y=8) in;
 layout(binding=0, rgba8) uniform writeonly image2D outputImage;
+// Live textured grids append one ARGB cell tint per cell after the occupancy cells (index + dimensions.w).
 layout(std430, binding=1) readonly buffer Grid { uvec4 dimensions; uint cells[]; } grid;
 #ifdef TEXTURED_CUBES
-struct CubeFace { vec4 originDu; vec2 dv; uint tint; uint reserved; };
+// flags bit0: multiply by the cell tint (API minor 5).
+struct CubeFace { vec4 originDu; vec2 dv; uint tint; uint flags; };
 layout(std430, binding=2) readonly buffer CubePalette { CubeFace faces[]; } palette;
 layout(binding=3) uniform sampler2D blockAtlas;
 // 96-byte ABI: twenty interleaved xyzuv floats, tint/flags/emission/reserved.
+// flags: 1 cutout, 2 translucent, 4 cell tint, 8 fluid surface.
 struct ModelQuad { vec4 vertices[5]; uvec4 metadata; };
 // 27*128 headers occupy 55,296 bytes, followed by 27 fixed 8192-quad slabs.
 layout(std430, binding=4) readonly buffer Models { uvec4 headers[3456]; ModelQuad quads[]; } models;
-layout(std430, binding=5) readonly buffer Environment { vec4 values[6]; } environment;
+const uint MAX_EMITTERS=128u;
+// values: LightingFrame (key dir/enabled, key RGB/sky factor, sky RGB/ambient factor, block RGB/factor,
+// ambient RGB/brightness, darkness/night vision/boss darkening). info: emitters, history valid, history cap, motion.
+layout(std430, binding=5) readonly buffer Environment {
+    vec4 values[6];
+    mat4 previousViewProjection;
+    vec4 previousCamera;
+    vec4 previousEye;
+    uvec4 info;
+    vec4 emitters[2u*MAX_EMITTERS]; // center xyz + equal-area radius; level, cell xyz
+} environment;
 #endif
 #ifdef RASTER_INPUTS
 layout(binding=6) uniform sampler2D rasterColor;
 layout(binding=7) uniform sampler2D rasterDepth;
+// Ping-pong history: half rgb radiance + sample count, hit distance, octahedral normal.
+layout(binding=8, rgba32ui) uniform uimage2D historyA;
+layout(binding=9, rgba32ui) uniform uimage2D historyB;
 #endif
 layout(push_constant) uniform Diagnostic {
     mat4 inverseViewProjection;
     vec4 cameraOrigin;
-    uvec4 control; // IDs=1, live=2, sRGB destination=4, world light=8, sRGB raster view=16.
+    // x: IDs=1, live=2, sRGB destination=4, world light=8, sRGB raster view=16, history parity=32.
+    // y: debug view. z: frame counter (random sequence). w: reserved.
+    uvec4 control;
     vec4 rayOriginOffset;
 } diagnostic;
+const uint FLAG_CUTOUT=1u, FLAG_TRANSLUCENT=2u, FLAG_CELL_TINT=4u, FLAG_FLUID=8u, FLAG_NO_MATERIAL=16u;
 struct Hit {
     bool found; ivec3 cell; uint material; float t; vec3 normal;
-    vec3 albedo; uint flags; float emission;
+    vec3 albedo; uint flags; float emission; float alpha;
 };
-Hit miss() { return Hit(false,ivec3(0),0u,0.0,vec3(0),vec3(0),0u,0.0); }
+Hit miss() { return Hit(false,ivec3(0),0u,0.0,vec3(0),vec3(0),0u,0.0,0.0); }
+uint cellIndex(ivec3 cell) {
+    ivec3 size=ivec3(grid.dimensions.xyz);
+    if (any(lessThan(cell,ivec3(0))) || any(greaterThanEqual(cell,size))) return 0xffffffffu;
+    uint index=uint(cell.x+size.x*(cell.y+size.y*cell.z));
+    if ((diagnostic.control.x&2u)!=0u) {
+        ivec3 tile=cell/16, local=cell%16;
+        index=uint(tile.x+3*(tile.y+3*tile.z))*4096u+uint(local.x+16*(local.y+16*local.z));
+    }
+    return index<grid.dimensions.w ? index : 0xffffffffu;
+}
+uint cellValue(ivec3 cell) {
+    uint index=cellIndex(cell);
+    return index==0xffffffffu ? 0xffffffffu : grid.cells[index];
+}
 #ifdef TEXTURED_CUBES
+const float PI=3.14159265358979;
+// Mean angular radius of the Sun (0.2666 degrees); the Moon's is within two percent of it.
+const float KEY_ANGULAR_RADIUS=0.004653;
+// A level-15 sphere emitter at this distance contributes below 1/1000 of its 1-block irradiance.
+const float EMITTER_RANGE=32.0;
+// Water's refractive index at visible wavelengths; other translucent surfaces use crown glass.
+const float WATER_IOR=1.333, GLASS_IOR=1.5;
 vec3 srgbToLinear(vec3 value) {
     return mix(value/12.92,pow((value+0.055)/1.055,vec3(2.4)),greaterThan(value,vec3(0.04045)));
 }
@@ -37,6 +77,12 @@ vec3 linearToSrgb(vec3 value) {
 }
 vec3 tintColor(uint tint) {
     return srgbToLinear(vec3(float((tint>>16)&255u),float((tint>>8)&255u),float(tint&255u))/255.0);
+}
+vec3 cellTint(ivec3 cell) {
+    uint index=cellIndex(cell);
+    if (index==0xffffffffu) return vec3(1);
+    uint value=grid.cells[grid.dimensions.w+index];
+    return value==0u ? vec3(1) : tintColor(value);
 }
 float quadComponent(ModelQuad quad, int index) { return quad.vertices[index/4][index%4]; }
 vec3 vertexPosition(ModelQuad quad, int vertex) {
@@ -91,24 +137,16 @@ Hit modelHit(vec3 origin, vec3 ray, ivec3 cell, uint material, float minT, float
             // Test each triangle's alpha before nearest selection, including nonplanar quads.
             // Later accepted coplanar overlays win; transparent overlays leave the base intact.
             if (texel.a<0.1) continue;
-            best=Hit(true,cell,material,max(0.0,t),normal,
-                srgbToLinear(texel.rgb)*tintColor(quad.metadata.x),quad.metadata.y,float(quad.metadata.z)/15.0);
+            vec3 tint=tintColor(quad.metadata.x);
+            if ((quad.metadata.y&FLAG_CELL_TINT)!=0u) tint*=cellTint(cell);
+            best=Hit(true,cell,material,max(0.0,t),normal,srgbToLinear(texel.rgb)*tint,
+                quad.metadata.y,float(quad.metadata.z)/15.0,texel.a);
             nearest=t;
         }
     }
     return best;
 }
 #endif
-uint cellValue(ivec3 cell) {
-    ivec3 size=ivec3(grid.dimensions.xyz);
-    if (any(lessThan(cell,ivec3(0))) || any(greaterThanEqual(cell,size))) return 0xffffffffu;
-    uint index=uint(cell.x+size.x*(cell.y+size.y*cell.z));
-    if ((diagnostic.control.x&2u)!=0u) {
-        ivec3 tile=cell/16, local=cell%16;
-        index=uint(tile.x+3*(tile.y+3*tile.z))*4096u+uint(local.x+16*(local.y+16*local.z));
-    }
-    return index<grid.dimensions.w ? grid.cells[index] : 0xffffffffu;
-}
 Hit trace(vec3 origin, vec3 direction, float minT, float maxT) {
     ivec3 size=ivec3(grid.dimensions.xyz);
     float enter=-3.402823466e38, leave=maxT;
@@ -149,9 +187,11 @@ Hit trace(vec3 origin, vec3 direction, float minT, float maxT) {
             uint occupancy=material&255u;
             if (diagnostic.control.y==3u) {
                 uint marker=material==0xffffffffu ? 4u : occupancy;
-                if (marker!=0u && t<min(boundary,leave)) return Hit(true,cell,marker,t,normal,vec3(0),0u,0.0);
+                if (marker!=0u && t<min(boundary,leave)) return Hit(true,cell,marker,t,normal,vec3(0),0u,0.0,1.0);
             } else if (material!=0xffffffffu && occupancy==1u && t<min(boundary,leave)) {
-                return Hit(true,cell,material,t,normal,vec3(0.65),0u,float((material>>24)&15u)/15.0);
+                // A cube without a palette entry is a real occluder but has no material to shade.
+                uint flags=((material>>8)&255u)==0u ? FLAG_NO_MATERIAL : 0u;
+                return Hit(true,cell,material,t,normal,vec3(0.65),flags,float((material>>24)&15u)/15.0,1.0);
 #ifdef TEXTURED_CUBES
             } else if (material!=0xffffffffu && occupancy==3u) {
                 Hit candidate=modelHit(origin,direction,cell,material,t,min(boundary,leave));
@@ -159,13 +199,21 @@ Hit trace(vec3 origin, vec3 direction, float minT, float maxT) {
 #endif
             }
         } else if (material!=0u && material!=0xffffffffu && t<min(boundary,leave))
-            return Hit(true,cell,material,t,normal,vec3(0),0u,0.0);
+            return Hit(true,cell,material,t,normal,vec3(0),0u,0.0,1.0);
         if (boundary>=leave) break;
-        normal=vec3(0); bool selected=false;
-        for (int a=0; a<3; a++) if (nextT[a]==boundary) {
-            cell[a]+=stepDirection[a]; nextT[a]+=delta[a];
-            if (!selected) { normal[a]=-float(stepDirection[a]); selected=true; }
+        bvec3 crossed=equal(nextT,vec3(boundary));
+        for (int a=0; a<3; a++) if (crossed[a]) { cell[a]+=stepDirection[a]; nextT[a]+=delta[a]; }
+        // An exact edge/corner crossing enters through several faces at once. Report a face whose
+        // neighbor outside the entered cell is not an opaque cube, so a floor seen exactly at a cell
+        // edge keeps its top face instead of a hidden side face.
+        normal=vec3(0); int fallback=-1; bool selected=false;
+        for (int a=0; a<3; a++) if (crossed[a]) {
+            if (fallback<0) fallback=a;
+            ivec3 outside=cell; outside[a]-=stepDirection[a];
+            uint neighbor=cellValue(outside);
+            if (!selected && (neighbor==0xffffffffu || (neighbor&255u)!=1u)) { normal[a]=-float(stepDirection[a]); selected=true; }
         }
+        if (!selected && fallback>=0) normal[fallback]=-float(stepDirection[fallback]);
         t=max(t,boundary);
     }
     return miss();
@@ -177,6 +225,34 @@ vec3 materialColor(uint id) {
     return vec3(0.95,0.66,0.22);
 }
 #ifdef TEXTURED_CUBES
+// ---- Sampling ----
+uint pcg(uint value) {
+    uint state=value*747796405u+2891336453u;
+    uint word=((state>>((state>>28u)+4u))^state)*277803737u;
+    return (word>>22u)^word;
+}
+float random(inout uint seed) { seed=pcg(seed); return float(seed>>8)*(1.0/16777216.0); }
+void basis(vec3 n, out vec3 t, out vec3 b) {
+    float s=n.z>=0.0 ? 1.0 : -1.0;
+    float a=-1.0/(s+n.z), c=n.x*n.y*a;
+    t=vec3(1.0+s*n.x*n.x*a,s*c,-s*n.x);
+    b=vec3(c,s+n.y*n.y*a,-n.y);
+}
+// Cosine-weighted hemisphere direction; pdf = cos(theta)/pi.
+vec3 cosineSample(vec3 n, inout uint seed) {
+    float u=random(seed), v=random(seed);
+    float r=sqrt(u), phi=2.0*PI*v;
+    vec3 t, b; basis(n,t,b);
+    return normalize(t*(r*cos(phi))+b*(r*sin(phi))+n*sqrt(max(0.0,1.0-u)));
+}
+// Uniform direction inside a cone; pdf = 1/(2*pi*(1-cosMax)).
+vec3 coneSample(vec3 axis, float cosMax, inout uint seed) {
+    float u=random(seed), v=random(seed);
+    float c=1.0-u*(1.0-cosMax), s=sqrt(max(0.0,1.0-c*c)), phi=2.0*PI*v;
+    vec3 t, b; basis(axis,t,b);
+    return normalize(t*(s*cos(phi))+b*(s*sin(phi))+axis*c);
+}
+// ---- Materials and environment ----
 vec3 cubeAlbedo(Hit hit, vec3 point) {
     uint reference=(hit.material>>8)&255u;
     if (reference==0u || reference>128u || dot(hit.normal,hit.normal)<0.5) return vec3(0.65);
@@ -195,45 +271,244 @@ vec3 cubeAlbedo(Hit hit, vec3 point) {
     vec2 high=max(max(base,base+du),max(base+surface.dv,base+du+surface.dv));
     vec2 inset=min(vec2(0.5)/vec2(textureSize(blockAtlas,0)),(high-low)*0.5);
     vec2 uv=clamp(base+du*coordinates.x+surface.dv*coordinates.y,low+inset,high-inset);
-    return srgbToLinear(textureLod(blockAtlas,uv,0.0).rgb)*tintColor(surface.tint);
+    vec3 color=srgbToLinear(textureLod(blockAtlas,uv,0.0).rgb)*tintColor(surface.tint);
+    if ((surface.flags&1u)!=0u) color*=cellTint(hit.cell);
+    return color;
 }
-float lightResponse(uint level) { float value=float(level)/15.0; return value/(4.0-3.0*value); }
-float keyVisibility(vec3 origin, vec3 direction) {
+vec3 hitAlbedo(Hit hit, vec3 point) { return (hit.material&255u)==3u ? hit.albedo : cubeAlbedo(hit,point); }
+// Vanilla's light-level curve: response(15)=1, response(0)=0.
+float lightResponse(float level) { float value=clamp(level,0.0,15.0)/15.0; return value/(4.0-3.0*value); }
+// Display sky color decoded to linear, used as uniform sky radiance (pi-normalized irradiance units).
+vec3 skyRadiance() { return environment.values[2].rgb*(environment.values[2].w*environment.values[1].w); }
+vec3 blockColor() { return environment.values[3].rgb*environment.values[3].w; }
+struct CellLight { bool available; float block; float sky; ivec3 cell; };
+// Incident light lies outside the visible surface, not inside an opaque cube.
+CellLight lightOutside(vec3 point, vec3 normal) {
+    ivec3 cell=ivec3(floor(point+normal*0.003));
+    uint light=cellValue(cell);
+    bool available=light!=0xffffffffu && (light&(1u<<28))!=0u;
+    return CellLight(available,available ? float((light>>16)&15u) : 0.0,available ? float((light>>20)&15u) : 0.0,cell);
+}
+uint emissionLevel(Hit hit) { return max(uint(hit.emission*15.0+0.5),(hit.material>>24)&15u); }
+// Opaque blocker search; translucent layers filter by their coverage-weighted color.
+Hit traceOpaque(vec3 origin, vec3 direction, float maxT, out vec3 filterColor) {
+    filterColor=vec3(1);
     float nearT=0.001;
-    // Continue through a bounded number of transparent surfaces, so a wall behind glass still
-    // casts a shadow. The budget is explicit; no refraction/colored absorption is claimed.
     for (int layer=0; layer<8; layer++) {
-        Hit blocker=trace(origin,direction,nearT,100.0);
-        if (!blocker.found) return 1.0;
-        if ((blocker.flags&2u)==0u) return 0.0;
+        Hit blocker=trace(origin,direction,nearT,maxT);
+        if (!blocker.found || (blocker.flags&FLAG_TRANSLUCENT)==0u) return blocker;
+        filterColor*=mix(vec3(1),blocker.albedo,blocker.alpha);
         nearT=max(nearT,blocker.t)+0.0005;
     }
-    return 0.0;
+    filterColor=vec3(0); // explicit layer budget: beyond it nothing is transmitted
+    return miss();
 }
-vec3 worldLighting(Hit hit, vec3 point, vec3 albedo) {
-    // Incident light lies outside the visible surface, not inside an opaque cube.
-    uint light=cellValue(ivec3(floor(point+hit.normal*0.003)));
-    bool available=light!=0xffffffffu && (light&(1u<<28))!=0u;
-    float block=available ? lightResponse((light>>16)&15u) : 0.0;
-    float sky=available ? lightResponse((light>>20)&15u) : 0.0;
-    vec3 illumination=environment.values[4].rgb+environment.values[3].rgb*(block*environment.values[3].w)
-        +environment.values[2].rgb*(sky*environment.values[2].w*environment.values[1].w*0.35);
+// Direct Sun/Moon irradiance from one cone sample. Rays leaving the bounded grid are scaled by the
+// vanilla sky-light response, which removes the key light in caves deeper than the grid.
+vec3 keyIrradiance(vec3 point, vec3 normal, float skyResponse, inout uint seed) {
     vec3 key=environment.values[0].xyz;
     float square=dot(key,key);
-    if (environment.values[0].w>0.0 && square>1e-8 && sky>0.0) {
-        key*=inversesqrt(square);
-        float cosine=max(0.0,dot(hit.normal,key));
+    if (environment.values[0].w<=0.0 || square<1e-8 || skyResponse<=0.0) return vec3(0);
+    key*=inversesqrt(square);
+    vec3 direction=coneSample(key,cos(KEY_ANGULAR_RADIUS),seed);
+    float cosine=dot(normal,direction);
+    if (cosine<=0.0) return vec3(0);
+    vec3 filterColor;
+    Hit blocker=traceOpaque(point+normal*0.003,direction,100.0,filterColor);
+    if (blocker.found) return vec3(0);
+    return environment.values[1].rgb*(environment.values[1].w*skyResponse*cosine)*filterColor;
+}
+// Irradiance at a secondary point without further tracing except one key-light shadow ray:
+// vanilla sky and block light stand in for their own visibility there.
+vec3 secondaryIrradiance(vec3 point, vec3 normal, inout uint seed) {
+    CellLight light=lightOutside(point,normal);
+    float sky=lightResponse(light.sky);
+    return environment.values[4].rgb+skyRadiance()*sky+blockColor()*lightResponse(light.block)
+        +keyIrradiance(point,normal,sky,seed);
+}
+// Radiance arriving along a secondary ray (diffuse bounce, reflection, transmission).
+vec3 secondaryRadiance(vec3 origin, vec3 direction, float originSky, inout uint seed, out bool escaped, out float distance) {
+    vec3 filterColor;
+    Hit hit=traceOpaque(origin,direction,96.0,filterColor);
+    escaped=!hit.found;
+    distance=hit.found ? hit.t : 96.0;
+    if (!hit.found) return skyRadiance()*originSky*filterColor;
+    if ((hit.flags&FLAG_NO_MATERIAL)!=0u) return vec3(0);
+    vec3 point=origin+hit.t*direction;
+    vec3 albedo=hitAlbedo(hit,point);
+    vec3 emitted=blockColor()*lightResponse(float(emissionLevel(hit)));
+    return filterColor*albedo*(secondaryIrradiance(point,hit.normal,seed)+emitted);
+}
+// Block-light irradiance: next-event estimation over the bounded emitter list, sampled by reservoir
+// in proportion to each sphere's unshadowed irradiance bound, plus vanilla light that no listed
+// emitter can explain. Vanilla light from one source of level e at Manhattan distance d is at most
+// e-d (open-air flood fill); if the vanilla level exceeds that bound for every listed emitter, an
+// unlisted source (outside the grid or beyond the list) lights the point and its vanilla value is added.
+// Radiance mapping: a level-e emitter delivers vanilla's response(e-1) at one block, i.e. a sphere of
+// radius r has radiance response(e-1)/r^2 and the far-field irradiance falls off as 1/d^2.
+vec3 blockIrradiance(vec3 point, vec3 normal, CellLight light, ivec3 selfCell, inout uint seed) {
+    uint count=min(environment.info.x,MAX_EMITTERS);
+    float explained=0.0, total=0.0;
+    int chosen=-1;
+    float chosenCosine=0.0;
+    for (uint i=0u; i<count; i++) {
+        vec4 sphere=environment.emitters[2u*i], meta=environment.emitters[2u*i+1u];
+        ivec3 cell=ivec3(meta.yzw);
+        ivec3 manhattan=abs(cell-light.cell);
+        explained=max(explained,meta.x-float(manhattan.x+manhattan.y+manhattan.z));
+        if (all(equal(cell,selfCell))) continue;
+        vec3 toward=sphere.xyz-point;
+        float square=dot(toward,toward), radius=sphere.w;
+        if (square>(EMITTER_RANGE+radius)*(EMITTER_RANGE+radius)) continue;
+        float distance=sqrt(max(square,1e-8));
+        float sinSquare=min(1.0,radius*radius/max(square,1e-8));
+        float cosMax=sqrt(1.0-sinSquare);
+        // Largest cosine toward any point of the sphere: the weight never under-covers the integrand.
+        float bound=clamp(dot(normal,toward)/distance+sqrt(sinSquare),0.0,1.0);
+        if (bound<=0.0) continue;
+        float omega=2.0*PI*(1.0-cosMax);
+        float weight=lightResponse(meta.x-1.0)/(radius*radius)*omega/PI*bound;
+        total+=weight;
+        if (random(seed)*total<weight) { chosen=int(i); chosenCosine=bound; }
+    }
+    vec3 result=vec3(0);
+    if (chosen>=0 && total>0.0) {
+        vec4 sphere=environment.emitters[2u*uint(chosen)], meta=environment.emitters[2u*uint(chosen)+1u];
+        vec3 origin=point+normal*0.003, toward=sphere.xyz-origin;
+        float square=dot(toward,toward), radius=sphere.w;
+        float distance=sqrt(max(square,1e-8));
+        float cosMax=sqrt(1.0-min(1.0,radius*radius/max(square,1e-8)));
+        vec3 direction=coneSample(toward/distance,cosMax,seed);
+        float cosine=dot(normal,direction);
         if (cosine>0.0) {
-            float visible=keyVisibility(point+hit.normal*0.003,key);
-            illumination+=environment.values[1].rgb*(environment.values[1].w*sky*cosine*visible);
+            float along=dot(direction,toward), disc=along*along-(square-radius*radius);
+            float maxT=disc>0.0 ? max(0.001,along-sqrt(disc)) : max(0.001,distance-radius);
+            vec3 filterColor;
+            Hit blocker=traceOpaque(origin,direction,maxT,filterColor);
+            bool visible=!blocker.found || all(equal(blocker.cell,ivec3(meta.yzw)));
+            if (visible) result=blockColor()*filterColor*(total*cosine/chosenCosine);
         }
     }
-    float intrinsic=max(hit.emission,float((hit.material>>24)&15u)/15.0);
-    vec3 color=albedo*(illumination+vec3(intrinsic));
-    // Fixed LDR presentation; host ambient already includes the actual night-vision color.
+    if (light.available && light.block>explained+0.5) result+=blockColor()*lightResponse(light.block);
+    return result;
+}
+// Full primary-surface radiance before presentation (linear, pi-normalized units):
+// ambient + key light + one diffuse bounce/sky sample + block light, times albedo, plus emission.
+vec3 surfaceRadiance(Hit hit, vec3 point, vec3 albedo, inout uint seed) {
+    CellLight light=lightOutside(point,hit.normal);
+    float sky=lightResponse(light.sky);
+    vec3 irradiance=environment.values[4].rgb+keyIrradiance(point,hit.normal,sky,seed);
+    // One cosine-sampled ray: an escape sees the sky (scaled by vanilla sky openness), a hit returns
+    // that surface's outgoing radiance. This is ambient occlusion, sky light and one bounce at once.
+    bool escaped; float distance;
+    vec3 bounceDirection=cosineSample(hit.normal,seed);
+    irradiance+=secondaryRadiance(point+hit.normal*0.003,bounceDirection,sky,seed,escaped,distance);
+    irradiance+=blockIrradiance(point,hit.normal,light,hit.cell,seed);
+    vec3 emitted=blockColor()*lightResponse(float(emissionLevel(hit)));
+    return albedo*(irradiance+emitted);
+}
+// Water and other translucent surfaces: Schlick Fresnel, one reflection and one transmission ray.
+// Water refracts (Snell) and attenuates with distance by Beer-Lambert. Its extinction is derived from
+// the surface texel: one block of water transmits exactly vanilla's blend weight (1-a)+a*c, and the
+// medium's equilibrium radiance is c times the irradiance at the surface. Other translucent quads are
+// thin filters with the same per-layer transmittance and no bending. False = transmission unresolved.
+bool translucentRadiance(Hit hit, vec3 point, vec3 ray, inout uint seed, out vec3 radiance) {
+    radiance=vec3(0);
+    bool fluid=(hit.flags&FLAG_FLUID)!=0u;
+    vec3 normal=hit.normal;
+    float ior=fluid ? WATER_IOR : GLASS_IOR;
+    float f0=(ior-1.0)/(ior+1.0); f0*=f0;
+    float cosine=clamp(-dot(ray,normal),0.0,1.0);
+    float fresnel=f0+(1.0-f0)*pow(1.0-cosine,5.0);
+    CellLight light=lightOutside(point,normal);
+    float sky=lightResponse(light.sky);
+    bool escaped; float distance;
+    vec3 reflected=secondaryRadiance(point+normal*0.003,reflect(ray,normal),sky,seed,escaped,distance);
+    vec3 surface=hit.albedo, perBlock=clamp(vec3(1.0-hit.alpha)+hit.alpha*surface,vec3(0.001),vec3(1));
+    vec3 direction=fluid ? refract(ray,normal,1.0/ior) : ray;
+    if (dot(direction,direction)<0.5) direction=ray;
+    vec3 origin=point-normal*0.003;
+    vec3 filterColor=fluid ? vec3(1) : perBlock;
+    Hit through=miss();
+    float nearT=0.001;
+    for (int layer=0; layer<4; layer++) {
+        through=trace(origin,direction,nearT,96.0);
+        if (!through.found || (through.flags&FLAG_TRANSLUCENT)==0u) break;
+        // Coplanar water faces inside one body are culled; anything else filters like a thin layer.
+        if (!fluid || (through.flags&FLAG_FLUID)==0u) filterColor*=mix(vec3(1),through.albedo,through.alpha);
+        nearT=max(nearT,through.t)+0.0005;
+        through.found=false;
+    }
+    if (!through.found || (through.flags&FLAG_NO_MATERIAL)!=0u) return false;
+    vec3 behind=origin+through.t*direction;
+    vec3 transmitted=hitAlbedo(through,behind)*(secondaryIrradiance(behind,through.normal,seed)
+        +blockColor()*lightResponse(float(emissionLevel(through))))*filterColor;
+    if (fluid) {
+        vec3 extinction=-log(perBlock);
+        vec3 transmittance=exp(-extinction*through.t);
+        vec3 medium=surface*secondaryIrradiance(point,normal,seed);
+        transmitted=transmitted*transmittance+medium*(vec3(1)-transmittance);
+    }
+    radiance=fresnel*reflected+(1.0-fresnel)*transmitted;
+    return true;
+}
+// Fixed LDR presentation; host ambient already includes the actual night-vision color.
+vec3 present(vec3 color) {
     color*=(1.0+clamp(environment.values[4].w,0.0,1.0))*(1.0-clamp(environment.values[5].x,0.0,1.0));
     color=mix(color,color*vec3(0.7,0.6,0.6),clamp(environment.values[5].z,0.0,1.0));
     return color/(vec3(1.0)+color);
+}
+#endif
+#ifdef RASTER_INPUTS
+vec2 octEncode(vec3 n) {
+    float sum=abs(n.x)+abs(n.y)+abs(n.z);
+    if (sum<1e-6) return vec2(0);
+    n/=sum;
+    vec2 e=n.xy;
+    if (n.z<0.0) e=(vec2(1.0)-abs(n.yx))*vec2(n.x>=0.0 ? 1.0 : -1.0,n.y>=0.0 ? 1.0 : -1.0);
+    return e;
+}
+vec3 octDecode(vec2 e) {
+    vec3 n=vec3(e,1.0-abs(e.x)-abs(e.y));
+    float t=max(-n.z,0.0);
+    n.x+=n.x>=0.0 ? -t : t;
+    n.y+=n.y>=0.0 ? -t : t;
+    return normalize(n);
+}
+void storeHistory(ivec2 pixel, uvec4 value) {
+    if ((diagnostic.control.x&32u)!=0u) imageStore(historyA,pixel,value); else imageStore(historyB,pixel,value);
+}
+uvec4 loadHistory(ivec2 pixel) {
+    return (diagnostic.control.x&32u)!=0u ? imageLoad(historyB,pixel) : imageLoad(historyA,pixel);
+}
+// Bilinear reprojection; each tap is accepted only if its stored distance from the previous eye and
+// its normal match this surface point (validation tolerances, not physical constants).
+vec3 accumulate(ivec2 pixel, ivec2 resolution, vec3 point, vec3 normal, vec3 radiance, out float count) {
+    count=1.0;
+    if (environment.info.y==0u) return radiance;
+    vec4 clip=environment.previousViewProjection*vec4(point-environment.previousCamera.xyz,1.0);
+    if (clip.w<=1e-6) return radiance;
+    vec2 position=(clip.xy/clip.w*0.5+0.5)*vec2(resolution)-0.5;
+    if (any(isnan(position)) || any(isinf(position))) return radiance;
+    ivec2 base=ivec2(floor(position));
+    vec2 fraction=position-vec2(base);
+    float expected=length(point-environment.previousEye.xyz);
+    vec3 sum=vec3(0); float weights=0.0, counts=0.0;
+    for (int tap=0; tap<4; tap++) {
+        ivec2 offset=ivec2(tap&1,tap>>1), q=base+offset;
+        if (any(lessThan(q,ivec2(0))) || any(greaterThanEqual(q,resolution))) continue;
+        uvec4 stored=loadHistory(q);
+        vec2 rg=unpackHalf2x16(stored.x), bc=unpackHalf2x16(stored.y);
+        if (bc.y<0.5) continue;
+        float distance=uintBitsToFloat(stored.z);
+        if (abs(distance-expected)>0.02*expected+0.05) continue;
+        if (dot(octDecode(unpackSnorm2x16(stored.w)),normal)<0.9) continue;
+        float w=(offset.x==1 ? fraction.x : 1.0-fraction.x)*(offset.y==1 ? fraction.y : 1.0-fraction.y);
+        sum+=w*vec3(rg,bc.x); counts+=w*bc.y; weights+=w;
+    }
+    if (weights<0.05) return radiance;
+    count=min(counts/weights+1.0,float(max(environment.info.z,1u)));
+    return mix(sum/weights,radiance,1.0/count);
 }
 #endif
 void main() {
@@ -249,44 +524,51 @@ void main() {
     if (live) {
         vec4 point=diagnostic.inverseViewProjection*vec4(ndc,0.5,1.0);
         if (abs(point.w)<1e-8 || any(isnan(point)) || any(isinf(point))) {
+#ifdef RASTER_INPUTS
+            storeHistory(pixel,uvec4(0));
+#endif
             imageStore(outputImage,pixel,vec4(1,0,1,1)); return;
         }
         origin=diagnostic.cameraOrigin.xyz+diagnostic.rayOriginOffset.xyz;
         vec3 direction=point.xyz/point.w-diagnostic.rayOriginOffset.xyz;
         float square=dot(direction,direction);
         if (any(isnan(origin)) || any(isinf(origin)) || square<1e-16 || isnan(square) || isinf(square)) {
+#ifdef RASTER_INPUTS
+            storeHistory(pixel,uvec4(0));
+#endif
             imageStore(outputImage,pixel,vec4(1,0,1,1)); return;
         }
         ray=direction*inversesqrt(square);
     }
     Hit hit=trace(origin,ray,0.0,160.0);
     if ((diagnostic.control.x&1u)!=0u) {
+#ifdef RASTER_INPUTS
+        storeHistory(pixel,uvec4(0));
+#endif
         uint id=live ? hit.material&255u : hit.material;
         imageStore(outputImage,pixel,hit.found ? vec4(vec3(hit.cell),float(id))/255.0 : vec4(0)); return;
     }
     vec3 color=mix(vec3(0.40,0.57,0.74),vec3(0.09,0.16,0.28),clamp(ray.y*0.5+0.5,0.0,1.0));
     vec3 p=origin+hit.t*ray;
-    if (hit.found && diagnostic.control.y==0u) {
-        vec3 albedo=live ? vec3(0.65) : materialColor(hit.material);
 #ifdef TEXTURED_CUBES
-        if (live) albedo=(hit.material&255u)==3u ? hit.albedo : cubeAlbedo(hit,p);
-        if (live && (diagnostic.control.x&8u)!=0u) color=worldLighting(hit,p,albedo);
-        else {
+    bool worldLit=live && (diagnostic.control.x&8u)!=0u;
+    uint seed=pcg(uint(pixel.x)+pcg(uint(pixel.y)+pcg(diagnostic.control.z)));
+    // A translucent primary seen from inside a model cell (e.g. the camera under water) keeps raster.
+    uint cameraCell=cellValue(ivec3(floor(origin)));
+    bool insideModel=cameraCell!=0xffffffffu && (cameraCell&255u)==3u;
+    bool translucent=(hit.flags&FLAG_TRANSLUCENT)!=0u;
+    bool shadeable=hit.found && (hit.flags&FLAG_NO_MATERIAL)==0u && (!translucent || worldLit && !insideModel);
 #endif
-            vec3 sun=normalize(vec3(-0.5,1.0,0.3));
-            Hit shadow=trace(p+hit.normal*0.003,sun,0.001,100.0);
-            float direct=shadow.found ? 0.0 : max(0.0,dot(hit.normal,sun));
-            color=albedo*(0.22+0.78*direct);
-#ifdef TEXTURED_CUBES
-        }
-#endif
-    }
 #ifdef RASTER_INPUTS
+    // Decide composition first: shading is spent only on pixels whose raster surface it replaces.
+    bool replace=false;
+    float weight=0.0;
+    vec3 raster=vec3(0);
     if (live && diagnostic.control.y==0u) {
         vec3 original=texelFetch(rasterColor,pixel,0).rgb;
-        vec3 raster=(diagnostic.control.x&16u)!=0u ? original : srgbToLinear(original);
+        raster=(diagnostic.control.x&16u)!=0u ? original : srgbToLinear(original);
         float depth=texelFetch(rasterDepth,pixel,0).r;
-        bool replace=hit.found && (hit.flags&2u)==0u && depth>0.0 && depth<=1.0;
+        replace=shadeable && depth>0.0 && depth<=1.0;
         if (replace) {
             vec4 rasterPoint=diagnostic.inverseViewProjection*vec4(ndc,depth,1.0);
             replace=abs(rasterPoint.w)>1e-8 && !any(isnan(rasterPoint)) && !any(isinf(rasterPoint));
@@ -297,14 +579,55 @@ void main() {
                 replace=abs(distance-hit.t)<=max(0.025,0.0015*distance);
             }
         }
-        float weight=0.0;
         if (replace) {
             vec3 edge=min(p,vec3(grid.dimensions.xyz)-p);
             weight=smoothstep(0.5,2.5,min(edge.x,min(edge.y,edge.z)));
         }
+    }
+#endif
+    if (hit.found && diagnostic.control.y==0u) {
+        vec3 albedo=live ? vec3(0.65) : materialColor(hit.material);
+#ifdef TEXTURED_CUBES
+        if (live) albedo=hitAlbedo(hit,p);
+        if (worldLit) {
+#ifdef RASTER_INPUTS
+            if (replace) {
+#else
+            if (shadeable) {
+#endif
+                vec3 radiance=vec3(0);
+                bool resolved=true;
+                if (translucent) resolved=translucentRadiance(hit,p,ray,seed,radiance);
+                else radiance=surfaceRadiance(hit,p,albedo,seed);
+                if (any(isnan(radiance)) || any(isinf(radiance))) resolved=false;
+#ifdef RASTER_INPUTS
+                uvec4 stored=uvec4(0);
+                if (resolved) {
+                    float count;
+                    radiance=accumulate(pixel,resolution,p,hit.normal,radiance,count);
+                    stored=uvec4(packHalf2x16(radiance.rg),packHalf2x16(vec2(radiance.b,count)),
+                        floatBitsToUint(hit.t),packSnorm2x16(octEncode(hit.normal)));
+                } else weight=0.0;
+                storeHistory(pixel,stored);
+#endif
+                color=resolved ? present(radiance) : color;
+            }
+        } else {
+#endif
+            vec3 sun=normalize(vec3(-0.5,1.0,0.3));
+            Hit shadow=trace(p+hit.normal*0.003,sun,0.001,100.0);
+            float direct=shadow.found ? 0.0 : max(0.0,dot(hit.normal,sun));
+            color=albedo*(0.22+0.78*direct);
+#ifdef TEXTURED_CUBES
+        }
+#endif
+    }
+#ifdef RASTER_INPUTS
+    if (!(replace && worldLit && hit.found && diagnostic.control.y==0u)) storeHistory(pixel,uvec4(0));
+    if (live && diagnostic.control.y==0u) {
         color=mix(raster,color,weight);
         // Depth cannot identify translucent particles with depth writes disabled. This bounded
-        // hybrid path does not provide complete transparent composition or refraction.
+        // hybrid path does not provide complete transparent composition.
     }
 #endif
     if (diagnostic.control.y==1u) color=hit.found ? hit.normal*0.5+0.5 : vec3(0);
