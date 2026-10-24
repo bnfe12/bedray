@@ -95,8 +95,18 @@ public final class IrisSourcePreprocessor {
                 Shaderc.shaderc_compile_options_set_include_callbacks(options, resolve, release, 0);
                 for (var macro : environment.entrySet())
                     Shaderc.shaderc_compile_options_add_macro_definition(options, macro.getKey(), macro.getValue());
-                result = Shaderc.shaderc_compile_into_preprocessed_text(compiler, source,
-                    SpirvCompiler.toShadercKind(stage), entry, "main", options);
+                // Heap-encoded: the CharSequence overload uses the 64 KiB thread MemoryStack, too small for large packs.
+                ByteBuffer sourceText = MemoryUtil.memUTF8(source, false);
+                ByteBuffer fileName = MemoryUtil.memUTF8(entry);
+                ByteBuffer entryPoint = MemoryUtil.memUTF8("main");
+                try {
+                    result = Shaderc.shaderc_compile_into_preprocessed_text(compiler, sourceText,
+                        SpirvCompiler.toShadercKind(stage), fileName, entryPoint, options);
+                } finally {
+                    MemoryUtil.memFree(entryPoint);
+                    MemoryUtil.memFree(fileName);
+                    MemoryUtil.memFree(sourceText);
+                }
                 if (failure != null) throw new PackScanException(failure);
                 if (result == 0) throw new SpirvCompiler.SpirvCompileException(entry + ": null preprocessor result");
                 int status = Shaderc.shaderc_result_get_compilation_status(result);

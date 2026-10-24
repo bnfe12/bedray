@@ -114,6 +114,29 @@ public final class DirtRtDeviceRequirements {
     }
 
     /**
+     * Requirement built from the compiled pack: the ray-tracing pipeline extension plus every device feature the pack's
+     * SPIR-V needs ({@link DirtRtPackProgram.Result#features()}). The acceleration-structure group is repeated here so this
+     * group is self-consistent: {@code VK_KHR_ray_tracing_pipeline} depends on it, and an all-or-nothing group must never
+     * enable an extension whose dependency another group might have dropped.
+     */
+    public static DeviceRequirement requirement(List<FeatureRequest> packFeatures) {
+        java.util.LinkedHashSet<FeatureRequest> features = new java.util.LinkedHashSet<>();
+        features.add(FeatureRequest.of(org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR.class, "accelerationStructure"));
+        features.add(FeatureRequest.core(FeatureRequest.VK12, "bufferDeviceAddress"));
+        features.add(FeatureRequest.of(VkPhysicalDeviceRayTracingPipelineFeaturesKHR.class, "rayTracingPipeline"));
+        features.addAll(packFeatures);
+        return new DeviceRequirement(
+                ID,
+                Set.of(EXTENSION_NAME, "VK_KHR_acceleration_structure", "VK_KHR_deferred_host_operations",
+                    "VK_KHR_buffer_device_address"),
+                List.copyOf(features),
+                0,
+                true,
+                null
+        );
+    }
+
+    /**
      * Unconditionally registers the Dirt RT pipeline requirement into the given Core registry.
      */
     public static void register(DeviceFeatureRegistry registry) {

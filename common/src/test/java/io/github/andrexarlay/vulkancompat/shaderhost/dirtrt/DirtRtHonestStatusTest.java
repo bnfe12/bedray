@@ -6,18 +6,27 @@ import static org.junit.jupiter.api.Assertions.*;
 public class DirtRtHonestStatusTest {
 
     @Test
-    public void testDirtRtHonestUnavailableStatus() {
+    public void failureWithoutRealFallbackReportsNoPipeline() {
         DirtRtPipeline.resetState();
-        boolean accepted = DirtRtPipeline.handleShaderpackReload("Dirt RT Test Pack");
-        assertTrue(accepted, "Dirt RT pack reload must be accepted");
-        assertEquals(DirtRtPipeline.State.UNAVAILABLE, DirtRtPipeline.getState(),
-            "Dirt RT state must be UNAVAILABLE when runtime loader / pipeline is not implemented (scaffold only)");
+        DirtRtPipeline.setNativeRtFallbackPipeline(0L);
+        DirtRtPipeline.updateState(DirtRtPipeline.State.COMPILING, "Dirt RT Test Pack", "compiling ray stages");
+        DirtRtPipeline.onFailure("compile failed: test", 0L);
+        assertEquals(DirtRtPipeline.State.FAILED, DirtRtPipeline.getState());
         assertEquals(0L, DirtRtPipeline.getCurrentPipelineHandle(),
-            "Dirt RT pipeline handle must be 0L when scaffold only");
-        assertTrue(DirtRtPipeline.getLastError().contains("scaffold only"),
-            "LastError must indicate scaffold only");
-
+            "no invented fallback handle may be reported as a pipeline");
         String f3 = DirtRtPipeline.getF3Telemetry();
-        assertTrue(f3.contains("state=UNAVAILABLE"), "F3 telemetry must report UNAVAILABLE state");
+        assertTrue(f3.contains("state=FAILED"), f3);
+        assertTrue(f3.contains("pipeline=N/A"), f3);
+        assertTrue(f3.contains("detail=compile failed: test"), f3);
+    }
+
+    @Test
+    public void defaultFallbackHandleIsZero() {
+        // The scaffold used to start with 0xCAFEBABE0001 and print it in F3 as if it were a live pipeline.
+        DirtRtPipeline.resetState();
+        assertEquals(0L, DirtRtPipeline.getCurrentPipelineHandle());
+        DirtRtPipeline.failEntityCompatibility("test");
+        String f3 = DirtRtPipeline.getF3Telemetry();
+        assertFalse(f3.toLowerCase().contains("cafebabe"), f3);
     }
 }

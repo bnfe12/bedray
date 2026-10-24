@@ -323,6 +323,20 @@ public final class RtFrameRenderer {
     public static org.joml.Matrix4f displayedProjection(RenderTarget target) {
         return displayedThisFrame(target) && displayedProjection != null ? new org.joml.Matrix4f(displayedProjection) : null;
     }
+
+    /**
+     * Scene TLAS of the frame RT displayed into {@code target} (instances are camera-relative: origin = camera position;
+     * section instances mask 0x01, the entity instance 0x02), or 0 when RT did not replace this frame. Read-only consumers record
+     * after this pass on the same host queue in the same frame; they never keep the handle across frames.
+     */
+    public static long sceneTlas(RenderTarget target) {
+        return displayedThisFrame(target) && world != null ? world.tlasHandle() : 0L;
+    }
+
+    /** RT primary-ray distance image (R32F, GENERAL, 1e6 = no hit) of the frame RT displayed into {@code target}, or null. */
+    public static RtMemory.Img rayDistance(RenderTarget target) {
+        return displayedThisFrame(target) ? outputDepth : null;
+    }
     private static final boolean BOB_PROJECTION = io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.bobProjectionEnabled();
 
     /** Albedo demodulation of the temporal history; {@code -Dvkrtx.rt.demodulate=off} restores the old behaviour for A/B runs. */

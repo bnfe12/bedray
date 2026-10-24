@@ -8,7 +8,7 @@ of the same renderer. Local linked Git worktrees share the repository history an
 |---|---|---|
 | `main` | Published Bedray baseline | Kept separate from the experimental branches |
 | Software voxel traversal | Software traversal/companion API and integration | Bounded textured baked models, cutouts, world lighting and raster preservation; Iris through `086b98a` integrated in one frame loop; physical GI/reflections remain open |
-| Iris Vulkan compatibility | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth, current-frame MRT; general shaderpack compatibility pending |
+| Iris Vulkan compatibility | Iris GLSL compatibility/post layer | Fullscreen post, options/profiles, typed camera/depth, current-frame MRT, startup wiring, ray-tracing pack compile/pipeline (no trace) and an opt-in custom ray-query stage; general shaderpack compatibility pending |
 | Vulkan cache and DXGI presentation | Shared shader/pipeline caches and presentation compatibility | Independent source work; stage-aware Iris SPIR-V caching and LWJGL compatibility require integration |
 
 These are development branches. Separate Compute alpha.7 host/companion candidates contain the combined

@@ -295,9 +295,12 @@ class IrisPassGraphTest {
     @Test
     void syntaxErrorInShaderYieldsCompileFailed() throws IOException {
         Path p = zip("SyntaxError.zip",
+            // A valid output is required: without one the interface analysis refuses the pass before compilation
+            // (UNSUPPORTED_PACK_FEATURES), and this test is about the compiler's own error path.
             "shaders/final.fsh", """
                 #version 120
                 void main() {
+                    gl_FragColor = vec4(1.0);
                     this is invalid glsl code here;
                 }
                 """

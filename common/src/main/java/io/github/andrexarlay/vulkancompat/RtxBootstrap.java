@@ -110,6 +110,8 @@ public final class RtxBootstrap {
         registry.addLateProvider(NRD_PROVIDER_ID, NrdDeviceRequirements::register);
         RtShaderCompiler.prewarmAsync();
         RtxAutotest.registerAll();
+        // Shader hosts (Iris post, Dirt RT, custom RT stage): select before the device so their device groups can register.
+        io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostStartup.run(Platforms.get().gameDir(), registry);
         LOGGER.info("[VKB-RTX] late device-requirement providers added, autotest scenarios registered, Bedray core API {}",
             VulkanBridge.apiVersion());
     }
