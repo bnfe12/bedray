@@ -68,6 +68,13 @@ Jars appear in `neoforge/build/libs/` and `fabric/build/libs/`, named `bedray-ne
 `bedray-fabric-mc26.3-<version>.jar`. `runShimTests` checks Java-level logic and compiles the shaders with shaderc; it does not use
 the GPU and is **not** evidence that a feature works in the game.
 
+The `combinedJar` task of each loader module builds an additional single-jar artifact with the Bedray Compute companion
+nested inside (`bedray-neoforge-mc26.3.0-<version>-combined.jar`, `bedray-fabric-mc26.3-<version>-combined.jar`):
+NeoForge JarJar (`META-INF/jarjar/`) for NeoForge, a Fabric Loader nested JAR (`META-INF/jars/`, `fabric.mod.json` `jars`)
+for Fabric. Compute keeps its own mod id (`bedray_compute`) and descriptor and still loads as its own mod; to detach it
+again, extract the nested jar into the `mods/` folder (and remove the combined jar — installing it and its nested mod
+side by side is a duplicate-mod error). Never install a combined jar together with the standalone compute jar.
+
 The default developer build contains no DLLs. Release builds may include only the exact AMD FidelityFX SDK v1.1.4 Vulkan DLL
 and Intel XeSS SDK 3.0.2 DLL, verified against SHA-256 pins and bundled with their license files. No NVIDIA vendor DLLs or native wrappers are
 allowed in release jars.

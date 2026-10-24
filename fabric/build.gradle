@@ -1,4 +1,7 @@
 apply from: rootProject.file('gradle/loader-module.gradle')
+// Git-Commit / Git-Dirty / Build-Source on the jar and combinedJar manifests (project level: configureEach
+// must not run inside a task configuration block).
+apply from: rootProject.file('gradle/build-provenance.gradle')
 
 // Toolchain decision: plain java-library + compileOnly of the launcher's
 // fabric-loader jar instead of Fabric Loom (MC 26.x is unobfuscated, nothing to remap; the test instance is a launcher instance).
@@ -45,17 +48,70 @@ processResources {
     }
 }
 
+// Shared manifest for the standalone and the combined jar (build-provenance.gradle adds Git-Commit / Git-Dirty / Build-Source).
+def modManifestAttributes = [
+    'Specification-Title'     : rootProject.mod_name,
+    'Specification-Vendor'    : 'bnfe12',
+    'Specification-Version'   : '1',
+    'Implementation-Title'    : "${rootProject.artifact_base}-fabric",
+    'Implementation-Version'  : rootProject.mod_version,
+    'Implementation-Vendor'   : 'bnfe12'
+]
+
 jar {
     bundleCommon(it)
     manifest {
-        attributes([
-            'Specification-Title'     : rootProject.mod_name,
-            'Specification-Vendor'    : 'bnfe12',
-            'Specification-Version'   : '1',
-            'Implementation-Title'    : "${rootProject.artifact_base}-fabric",
-            'Implementation-Version'  : rootProject.mod_version,
-            'Implementation-Vendor'   : 'bnfe12'
-        ])
+        attributes(modManifestAttributes)
+    }
+}
+
+// Modular combined jar: the Bedray host with the Bedray Compute companion nested as a Fabric loader
+// nested JAR (META-INF/jars/, listed in fabric.mod.json "jars"). Compute keeps its own mod id
+// (bedray_compute) and descriptor — it still loads as a separate mod, and extracting the nested jar
+// into mods/ detaches it again. The standalone jar above stays exactly as before; the combined jar
+// is an additional artifact.
+evaluationDependsOn(':compute-fabric')
+def computeFabricJar = project(':compute-fabric').tasks.named('jar')
+
+// Builds the combined fabric.mod.json: the expanded descriptor of the host plus a "jars" entry that
+// points Fabric Loader at the nested companion jar. Written under a different source file name so the
+// jar-level exclude of the packaged descriptor does not swallow it; it is renamed on the way in.
+def combinedFabricModJson = tasks.register('generateCombinedFabricModJson') {
+    def out = layout.buildDirectory.file('combinedFabricModJson/fabric-combined.mod.json')
+    inputs.files(tasks.named('processResources'))
+    inputs.property 'nested_jar', computeFabricJar.map { it.archiveFileName.get() }
+    outputs.file(out)
+    doLast {
+        def expanded = tasks.named('processResources').get().outputs.files.collectMany { f ->
+            f.isDirectory() ? fileTree(f).matching { include 'fabric.mod.json' }.files.toList() : [f]
+        }.find { it.name == 'fabric.mod.json' }
+        if (expanded == null) {
+            throw new GradleException(':fabric:processResources outputs contain no fabric.mod.json')
+        }
+        def descriptor = new groovy.json.JsonSlurper().parseText(expanded.getText('UTF-8'))
+        descriptor.jars = [[file: "META-INF/jars/${computeFabricJar.get().archiveFileName.get()}"]]
+        def file = out.get().asFile
+        file.parentFile.mkdirs()
+        file.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(descriptor)) + '\n'
+    }
+}
+
+tasks.register('combinedJar', Jar) {
+    archiveClassifier = 'combined'
+    group = 'build'
+    description = 'Bedray host jar with the Bedray Compute companion nested as a Fabric nested JAR (detachable: extract META-INF/jars/*.jar into mods/)'
+    // A custom Jar task does not get the java plugin's default main output; the standalone jar does.
+    from(sourceSets.main.output)
+    bundleCommon(it)
+    dependsOn computeFabricJar, combinedFabricModJson
+    // The packaged descriptor has no "jars" entry; the generated combined one replaces it.
+    exclude 'fabric.mod.json'
+    from(combinedFabricModJson.map { task -> task.outputs.files.singleFile }) {
+        rename { 'fabric.mod.json' }
+    }
+    from(computeFabricJar.map { it.archiveFile }) { into 'META-INF/jars' }
+    manifest {
+        attributes(modManifestAttributes)
     }
 }
 
