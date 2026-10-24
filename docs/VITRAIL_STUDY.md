@@ -1,130 +1,128 @@
-# Vitrail: разбор для Iris/Vulkan в Bedray
+# Vitrail source study for Bedray's Iris/Vulkan support
 
-Дата просмотра: 21 октября 2026. Исходники Vitrail: `avpbynf/vitrail-shaders`,
-коммит [`7a3cdcb`](https://github.com/avpbynf/vitrail-shaders/tree/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e).
-Это разбор исходников и опубликованных автором результатов. Сам Vitrail здесь не запускался.
-Его код в Bedray не копировался.
+Historical review date: **October 21, 2026**. Source repository: `avpbynf/vitrail-shaders`,
+commit [`7a3cdcb`](https://github.com/avpbynf/vitrail-shaders/tree/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e).
+This study covers the source and results published by its author at that time. Vitrail was not run
+for this study, and its code was not copied into Bedray. Repository and release observations below
+are historical findings, not a fresh check of the external project's current state.
 
-## Что именно он переносит
+## What Vitrail implements
 
-Обычный шейдерпак — это не одна программа, которая улучшает готовую картинку. Его программы
-рисуют геометрию, записывают нормали и материалы, строят тени и читают результаты предыдущих
-проходов. Они ожидают определённые имена текстур, матрицы, порядок очистки и смены буферов.
-Одного перевода `texture2D` в `texture` для этого недостаточно.
+A typical shaderpack contains programs that render geometry, write normals and materials, create
+shadows and read preceding passes. Those programs expect particular texture names, matrices,
+clearing rules and buffer swaps. Translating `texture2D` to `texture` cannot establish that contract.
 
-Vitrail воспроизводит этот договор поверх Vulkan Minecraft. Содержимое пака читается и
-переводится заранее; затем Minecraft компилирует GLSL в SPIR-V и создаёт графические pipelines.
-Во время кадра исполняются готовые программы. Переключение настроек или измерения требует
-нового чтения/перевода, поскольку меняется выбранная ветка исходников.
+Vitrail implements the shaderpack contract over Minecraft's Vulkan backend. It reads and translates
+pack sources before rendering; Minecraft then compiles GLSL to SPIR-V and creates graphics pipelines.
+Frames execute prepared programs. Changing options or dimensions requires another source-selection
+and translation step because the active conditional branches can change.
 
-В коде это разделено на несколько частей:
+The reviewed implementation separates these responsibilities:
 
-| Часть | Что делает | Почему это необходимо |
+| Component | Responsibility | Reason |
 | --- | --- | --- |
-| Чтение пака и options | Выбирает файлы, includes, условия и fallback-программы | Одна и та же программа при разных настройках имеет разные зависимости |
-| `GlslTranslator` | Переписывает поток токенов и старые GLSL-конструкции | Замена текста регулярными выражениями не различает достаточно конструкций реального языка |
-| `ProgramTranslator` | Согласует стадии одной программы | Два отдельно скомпилированных файла могут иметь несовместимые varyings или uniform blocks |
-| План targets и sampler bindings | Определяет форматы, очистку, чтение и запись половин буфера | Неверная половина буфера часто даёт правдоподобную, но неверную картинку |
-| Интеграция кадра и геометрии | Подставляет программы на нужных этапах мира | Нормали, материалы и тени нельзя восстановить из одного итогового цвета |
-| Нижний Vulkan-уровень | Обслуживает compute, storage images и buffers | Графический Java API игры не предоставляет весь набор Vulkan |
+| Pack and option loading | Select files, includes, conditions and fallback programs | Different settings can change a program's dependencies |
+| `GlslTranslator` | Rewrite tokens and legacy GLSL constructs | Text substitution alone cannot distinguish enough language constructs |
+| `ProgramTranslator` | Reconcile the stages of one program | Separately compiled stages can disagree on varyings or uniform blocks |
+| Target and sampler plan | Define formats, clearing, reads and writes for buffer banks | Reading the wrong bank can produce a plausible but incorrect image |
+| Frame and geometry integration | Run pack programs at the required world stages | Final color alone cannot supply world normals, materials or shadows |
+| Vulkan resource layer | Manage compute, storage images and buffers | Minecraft's graphics Java API does not expose every Vulkan operation |
 
-Это собственный совместимый движок. Официальный Iris не получает Vulkan-backend от простого
-наличия Vitrail в папке mods. Сосуществование устроено через выбор backend: на OpenGL рисует
-Iris, на Vulkan — Vitrail.
+Vitrail supplies its own compatible execution system. Installing it does not give official Iris a
+Vulkan backend. The documented coexistence chooses the implementation by backend: Iris for OpenGL,
+Vitrail for Vulkan.
 
-Источники: [устройство перевода](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/docs/translation.md),
-[кадр](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/docs/frame.md),
-[интерфейс программы](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/common/src/main/java/dev/vitrail/glsl/ProgramTranslator.java),
-[установка и сосуществование с Iris](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/INSTALL.md).
+Sources: [translation design](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/docs/translation.md),
+[frame design](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/docs/frame.md),
+[program interface](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/common/src/main/java/dev/vitrail/glsl/ProgramTranslator.java),
+[installation and Iris coexistence](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/INSTALL.md).
 
-## Почему он смог появиться быстро
+## Interpreting the development timeline
 
-Факт: публичный репозиторий создан 1 августа 2026. Автор пишет о ежедневной работе с июля.
-Последний просмотренный релиз — `v0.13.0-beta` от 13 октября. Дата появления репозитория не
-показывает начало разработки, а частые теги не показывают объём проверенной совместимости.
-Вывод «полный перенос за несколько дней» из этих данных не следует.
+At the review date, public repository metadata reported creation on August 1, 2026; the author
+described daily development since July. The latest release examined was `v0.13.0-beta`, dated
+October 13. Repository creation does not identify the start of development, and frequent tags do
+not measure verified compatibility. These observations do not establish a complete port in a few days.
 
-Видимые ускорители разработки:
+Factors visible in the reviewed material:
 
-1. Minecraft уже предоставляет Vulkan-устройство, управление ресурсами и компилятор. Автору
-   не пришлось создавать весь графический backend с нуля.
-2. Iris служит конкретным эталоном поведения формата. В `NOTICE` перечислены заимствованные
-   таблицы, грамматики и правила; лицензия проекта — LGPL-3.0. Это сокращает объём догадок,
-   хотя интеграцию с новым backend всё равно приходится писать.
-3. В README прямо описана помощь AI с написанием и отладкой. Там же автор заявляет человеческую
-   проверку и сравнение изображения с Iris. Наличие AI само по себе не доказывает качество.
-4. Перевод и компиляция вынесены из обычного кадра; есть кеши и фоновая подготовка семейств
-   программ. Это объясняет часть устройства производительности, но не доказывает превосходство
-   по FPS на конкретном компьютере.
-5. Автор публикует конкретный набор паков и замечания по изображению. Это даёт обратную связь
-   по поведению настоящих паков, которой компилятор дать не может.
+1. Minecraft already supplies the Vulkan device, resource management and shader compiler. The author
+   did not have to build the entire graphics backend from scratch.
+2. Iris supplies a concrete behavioral reference. `NOTICE` lists reused tables, grammars and rules;
+   the project declared LGPL-3.0 licensing. These references reduce guesswork, while integration with
+   another backend still requires implementation.
+3. The README describes AI assistance with implementation and debugging, together with the author's
+   stated human review and image comparisons against Iris. Assistance alone does not establish quality.
+4. Translation and compilation are kept outside the ordinary frame loop, with caches and background
+   preparation of program families. This explains part of the design, without proving an FPS advantage
+   on a particular computer.
+5. The author publishes a specific set of packs and image observations. Real pack behavior supplies
+   feedback that compilation cannot provide.
 
-Таким образом, наиболее обоснованное объяснение скорости — сочетание готовой платформы,
-эталона Iris, инструментов автоматизации и многократной проверки поведения. Это вывод по
-доступным материалам, а не измерение затраченных человеком часов.
+An inference from those materials is that the existing platform, Iris reference, development tools
+and repeated behavior checks all contributed to progress. This is not a measurement of human work hours.
 
-Источники: [метаданные репозитория](https://api.github.com/repos/avpbynf/vitrail-shaders),
+Historical sources: [repository metadata](https://api.github.com/repos/avpbynf/vitrail-shaders),
 [README](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/README.md),
-[релиз](https://github.com/avpbynf/vitrail-shaders/releases/tag/v0.13.0-beta),
+[examined release](https://github.com/avpbynf/vitrail-shaders/releases/tag/v0.13.0-beta),
 [NOTICE](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/NOTICE),
-[ограничения совместимости](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/docs/compatibility.md).
+[compatibility limits](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/docs/compatibility.md).
 
-## Что важно забрать в Bedray
+## Lessons applied to Bedray
 
-Первое — разбирать программу после выбора активных условий. До этого неизвестно, какие
-uniforms, includes и draw buffers вообще нужны. В нашей ветке за это теперь отвечает shaderc:
-его include callback читает только запрошенные препроцессором файлы. Путь остаётся внутри
-shaders root; ограничены глубина, число чтений, суммарный исходник и размер результата.
-Директивы targets временно сохраняются как служебные pragmas, поэтому после обработки остаётся
-директива именно выбранной ветки. Это пока source defaults, без сохранённых настроек Iris.
+First, inspect a program after selecting its active conditions. Its required uniforms, includes and
+draw buffers are unknown beforehand. In the Bedray source examined for this study, shaderc performs
+preprocessing and its include callback reads only requested files. Paths remain inside the shader
+root, with limits on depth, read count, total source and output size. Temporary pragmas preserve
+target directives through preprocessing so the chosen branch's directive survives. This initial
+implementation used source defaults; saved Iris options were added in the later stage linked below.
 
-Второе — согласовывать vertex и fragment вместе. Добавлена проверка типа, размера массива,
-интерполяции и locations. `mat3` занимает три locations, а не одну; следующий varying теперь
-не накладывается на её столбцы. У нашего прямого Vulkan-host locations явные, поэтому копировать
-обходные решения Vitrail для перенумерации через reflection игры здесь не требуется.
+Second, reconcile vertex and fragment stages together. Bedray added checks for type, array size,
+interpolation and locations. A `mat3` consumes three locations; the next varying must not overlap
+its columns. Bedray's direct Vulkan host supplies explicit locations, so the study did not justify
+copying Vitrail's workarounds for renumbering through Minecraft reflection.
 
-Третье — сначала выяснить координаты конкретного backend. Документация Vitrail указывает,
-что внутренние targets Minecraft уже сохраняют ориентацию GL. Это дополнительно сверено с
-байткодом локального Minecraft 26.3: `VulkanRenderPass` задаёт положительный viewport,
-`VulkanGpuSurface.blitFromTexture` разворачивает destination Y при выводе. Поэтому дополнительный
-переворот цвета или depth не добавлен. В vertex entry добавлено отдельное преобразование
-диапазона clip Z `[-w,w] -> [0,w]`; оно выполняется и после раннего return исходного main.
-Перевод reverse-Z depth уже существует отдельно. Эти решения ещё требуют изображения для
-подтверждения в игре.
+Third, establish the backend's actual coordinates. Vitrail's documentation says Minecraft's internal
+targets retain GL orientation. Local Minecraft 26.3 bytecode inspection also found a positive viewport
+in `VulkanRenderPass` and a destination Y reversal in `VulkanGpuSurface.blitFromTexture` at presentation.
+The Bedray source therefore added no extra color/depth flip. Its vertex entry converts clip Z from
+`[-w,w]` to `[0,w]`, including after an early return from the original main. Reverse-Z depth conversion
+is separate. Those source decisions still require an in-game image for visual acceptance.
 
-Источник по координатам и границам API:
-[graphics API](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/docs/internals/game-graphics-api.md).
+Coordinate and API reference:
+[graphics API study](https://github.com/avpbynf/vitrail-shaders/blob/7a3cdcbe1dfd7e04fb2b3021ee8352d341e7647e/docs/internals/game-graphics-api.md).
 
-## Как продолжать, учитывая Bedray и воксели
+## Development sequence for Bedray and voxel rendering
 
-Текущий post-host полезен для проверки договора между паком и host, но он не заменяет весь
-рендерер Iris. Расширять только список regex-замен до «поддержки любых паков» — слабый путь:
-основной объём работы находится в ресурсах, данных мира и интеграции проходов.
+A post host helps inspect the contract between a pack and its executor. It does not supply the full
+Iris world renderer. General pack support requires resource semantics, world data and integration
+with the relevant passes, beyond adding source substitutions or fullscreen passes.
 
-Следующий порядок разработки:
+The sequence proposed at the review date was:
 
-1. Сохранённые options/profiles и честная таблица engine/capability macros. Условия GLSL уже
-   обрабатываются, но условные `shaders.properties` и пользовательские overrides ещё нет.
-2. Типизированный контракт кадра от Bedray: матрицы, текущая/предыдущая камера, depth, motion,
-   источник изображения и точная система координат. Raster/RT/voxel должны явно сообщать,
-   какие данные действительно предоставляют.
-3. Resource graph с именованными colortex, форматами, clear/persistence, mipmaps и правилами
-   переключения половин. Сначала CPU-план, затем его Vulkan-исполнитель.
-4. Geometry/shadow/deferred в фазах мирового рендера. Это отдельная интеграция, которую
-   невозможно заменить увеличением числа fullscreen-проходов.
-5. Compute/images/SSBO поверх того же устройства и очередей Bedray.
+1. Saved options/profiles and an accurate table of engine/capability macros. At that stage, GLSL
+   conditions were processed, while conditional `shaders.properties` and user overrides were pending.
+2. A typed Bedray frame contract: matrices, current/previous camera, depth, motion, actual image
+   producer and exact coordinate conventions. Raster, RT and voxel producers must state which data
+   they actually supply.
+3. A resource graph with named colortex, formats, clearing/persistence, mipmaps and bank selection.
+   Define the CPU plan before its Vulkan executor.
+4. Geometry, shadow and deferred integration in world-rendering phases. More fullscreen passes
+   cannot replace these inputs and stages.
+5. Compute, images and SSBOs using the same Bedray device and queues.
 
-Для широкого frontend нужно оценивать переиспользование лицензированных частей Iris/Vitrail
-с сохранением NOTICE либо полноценный token-based разбор. Перед переносом следует отделить
-чистую обработку пака от Sodium/mixin/GPU-зависимостей. Целиком встраивать второй движок с
-собственным владельцем кадра в Bedray означает конкурирующие hooks и владение ресурсами.
+For a broader frontend, evaluate licensed Iris/Vitrail components with their required notices, or a
+complete token-based parser. Separate pack processing from Sodium, mixins and GPU dependencies before
+porting it. Embedding another complete engine with its own frame owner would create competing hooks
+and resource ownership.
 
-В этой работе изменена только ветка `codex/iris-vulkan`; общие voxel hooks не дублируются.
-Проведена компиляция Java для обоих загрузчиков и исходного примера до SPIR-V через настоящий
-Java frontend. Тесты, GPU dispatch, игровые сеансы, JAR-сборка и публикация релиза не проводились.
-Полная совместимость с паками уровня Vitrail ещё не реализована.
+The historical implementation slice changed only the Iris Vulkan development work; it did not
+duplicate the shared voxel hooks. Java compiled for both loaders, and the original example compiled
+to SPIR-V through the actual Java frontend. That slice ran no tests, GPU dispatch or game sessions,
+and produced no product JAR or release. General compatibility comparable to Vitrail was not implemented.
 
-Обновление следующего этапа: сохранённые options, наследуемые профили и условные свойства post-паков
-реализованы в отдельном [контракте настроек](IRIS_OPTIONS.md). Ранее описанный source-default frontend
-теперь получает выбранные значения перед обработкой includes. World/device-aware macros и мировые
-данные остаются следующими границами; это не меняет приведённые выше результаты исследования Vitrail.
+Later-stage note: saved options, inherited profiles and conditional post-pack properties are described
+in the [options contract](IRIS_OPTIONS.md). The frontend now receives selected values before include
+processing. Further frame and resource work has its own [frame contract](IRIS_FRAME_GUIDES.md) and
+[resource graph](IRIS_RESOURCE_GRAPH.md). These separate implementation records do not change the
+historical Vitrail study or establish live compatibility.

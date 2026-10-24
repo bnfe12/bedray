@@ -8,8 +8,12 @@ import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.bedray.api.v1.WorldSnapshot;
 
-/** Opt-in synthetic or live opaque occupancy diagnostic on the host Vulkan device. */
+/** Opt-in synthetic or bounded live model traversal on the host Vulkan device. */
 public final class VoxelComputeBackend implements GraphicsBackend {
+    public VoxelComputeBackend() {
+        if (GraphicsBackendRegistry.apiMinorVersion() < 4)
+            throw new IllegalStateException("Bedray Compute requires renderer API 1.4 or newer");
+    }
     private VoxelComputePipeline pipeline;
     private String detail = "Waiting for a world snapshot";
     @Override public String sceneDetail() { return detail; }
@@ -17,6 +21,7 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         return mode == GraphicsBackendRegistry.SceneMode.SYNTHETIC || mode == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
     }
     @Override public boolean supportsDebugViews() { return true; }
+    @Override public boolean supportsModelGeometry() { return true; }
     private final io.github.andrexarlay.bedray.compute.voxel.VoxelWorldCache world =
         new io.github.andrexarlay.bedray.compute.voxel.VoxelWorldCache();
 
@@ -33,9 +38,12 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         this.snapshot = snapshot;
         if (detailSession != snapshot.session() || detailRevision != snapshot.revision()) {
             texturedCounts.keySet().removeIf(section -> !snapshot.sections().contains(section));
-            int omitted = 0, opaque = 0, textured = 0;
+            int omitted = 0, opaque = 0, textured = 0, models = 0, quads = 0, lightSections = 0;
             for (var section : snapshot.sections()) {
                 omitted += section.unsupportedCount(); opaque += section.opaqueCount();
+                models += section.modelCount();
+                if (section.models() != null) quads += section.models().quadCount();
+                if (section.lighting() != null) lightSections++;
                 Integer count = texturedCounts.get(section);
                 if (count == null) {
                     int references = 0;
@@ -48,8 +56,9 @@ public final class VoxelComputeBackend implements GraphicsBackend {
                 }
                 textured += count;
             }
-            detail = snapshot.sections().size()+"/27 sections; "+opaque+" opaque; "+textured+" textured; "
-                +(opaque-textured)+" gray; "+omitted+" unsupported; missing sections unknown";
+            detail = snapshot.sections().size()+"/27 sections; "+opaque+" cubes; "+textured+" textured; "
+                +(opaque-textured)+" gray; "+models+" model cells; "+quads+" palette quads; "
+                +lightSections+" light sections; "+omitted+" unsupported; missing sections unknown";
             detailSession = snapshot.session(); detailRevision = snapshot.revision();
         }
     }
@@ -74,11 +83,11 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         if (pipeline == null) {
             pipeline = new VoxelComputePipeline(frame.device(), frame.width(), frame.height(),
                     frame.targetFormat(), live ? VoxelGrid.builder(48,48,48).build() : VoxelDemoScene.create(),
-                    live ? frame.atlas() : null);
+                    live ? frame.atlas() : null,live ? frame.raster() : null);
         }
         if (live) {
             var changed = uploads.update(snapshot);
-            pipeline.recordWorld(frame.commandBuffer(), frame.targetImage(), snapshot.camera(), uploads, changed);
+            pipeline.recordWorld(frame.commandBuffer(), frame.targetImage(), snapshot.camera(), uploads, changed,frame.lighting());
         } else pipeline.record(frame.commandBuffer(), frame.targetImage());
         return true;
     }

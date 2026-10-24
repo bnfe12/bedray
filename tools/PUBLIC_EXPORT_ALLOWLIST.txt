@@ -42,8 +42,20 @@ docs/RELEASE_CHECKLIST.md
 docs/SOFTWARE_RENDERER_MOD_SPEC.md
 docs/COMPUTE.md
 docs/DEVELOPMENT_BRANCHES.md
+docs/IRIS_VULKAN.md
+docs/IRIS_OPTIONS.md
+docs/IRIS_FRAME_GUIDES.md
+docs/IRIS_RESOURCE_GRAPH.md
+docs/IRIS_VOXEL_MERGE.md
+docs/VITRAIL_STUDY.md
+docs/patches/*.patch
 ROADMAP.md
 docs/images/*.png
+
+# original shaderpack source examples
+examples/iris-color-post/**
+examples/iris-depth-post/**
+examples/iris-mrt-post/**
 
 # source code
 core/**

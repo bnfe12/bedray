@@ -3,6 +3,8 @@ package io.github.andrexarlay.bedray.compute.voxel;
 import io.github.andrexarlay.bedray.api.v1.SectionSnapshot;
 import io.github.andrexarlay.bedray.api.v1.WorldSnapshot;
 import io.github.andrexarlay.bedray.api.v1.CubeSectionMaterials;
+import io.github.andrexarlay.bedray.api.v1.SectionModelGeometry;
+import io.github.andrexarlay.bedray.api.v1.ModelQuad;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +18,9 @@ public final class VoxelWorldUpload {
     public static final int DIAMETER = 48;
     public static final int TILE_BYTES = 4096 * Integer.BYTES;
     public static final int PALETTE_BYTES = 27 * CubeSectionMaterials.SECTION_BYTES;
+    // A single model SSBO keeps grid/palette/models/lighting within four storage bindings.
+    public static final int MODEL_BUFFER_HEADER_BYTES = 27 * SectionModelGeometry.SECTION_HEADER_BYTES;
+    public static final int MODEL_BUFFER_BYTES = MODEL_BUFFER_HEADER_BYTES + 27 * SectionModelGeometry.SECTION_QUAD_BYTES;
     public static final int UNKNOWN = -1;
     private final SectionSnapshot[] previous = new SectionSnapshot[27];
     private final SectionSnapshot[] slots = new SectionSnapshot[27];
@@ -36,11 +41,39 @@ public final class VoxelWorldUpload {
         public Tile { if (slot < 0 || slot >= 27) throw new IllegalArgumentException("Invalid voxel tile slot"); }
         public long offset() { return VoxelGrid.HEADER_BYTES + (long) slot * TILE_BYTES; }
         public long materialOffset() { return (long) slot * CubeSectionMaterials.SECTION_BYTES; }
+        public long modelHeaderOffset() { return (long) slot * SectionModelGeometry.SECTION_HEADER_BYTES; }
+        public long modelQuadOffset() { return MODEL_BUFFER_HEADER_BYTES + (long) slot * SectionModelGeometry.SECTION_QUAD_BYTES; }
         public void writeTo(ByteBuffer target) {
             CubeSectionMaterials materials = section == null ? null : section.materials();
+            SectionModelGeometry models = section == null ? null : section.models();
             for (int z=0; z<16; z++) for (int y=0; y<16; y++) for (int x=0; x<16; x++) {
-                int reference = materials == null ? 0 : materials.reference(x,y,z);
-                target.putInt(section == null ? UNKNOWN : (reference << 8) | (section.cell(x,y,z) & 255));
+                if (section == null) { target.putInt(UNKNOWN); continue; }
+                int index = x + 16 * (y + 16 * z);
+                int occupancy = section.cell(x,y,z) & 255;
+                int reference = occupancy == SectionSnapshot.MODEL
+                    ? (models == null ? 0 : models.reference(index))
+                    : (materials == null ? 0 : materials.reference(index));
+                int light = section.lighting() == null ? 0 : (section.lighting().packed(index) << 16) | (1 << 28);
+                target.putInt(light | (reference << 8) | occupancy);
+            }
+        }
+        /** Zero every unused header, so old quad tails cannot be reached after slot reuse. */
+        public void writeModelHeadersTo(ByteBuffer target) {
+            var models = section == null ? null : section.models();
+            int count = models == null ? 0 : models.palette().size();
+            int first = 0;
+            for (int model = 0; model < SectionModelGeometry.MAX_MODELS; model++) {
+                int quads = model < count ? models.palette().get(model).quads().size() : 0;
+                target.putInt(quads == 0 ? 0 : first).putInt(quads).putInt(0).putInt(0);
+                first += quads;
+            }
+        }
+        /** Dense used span only; the command recorder splits it into bounded 64 KiB updates. */
+        public void writeModelQuadsTo(ByteBuffer target) {
+            if (section == null || section.models() == null) return;
+            for (var model : section.models().palette()) for (ModelQuad quad : model.quads()) {
+                for (int component = 0; component < 20; component++) target.putFloat(quad.component(component));
+                target.putInt(quad.tintArgb()).putInt(quad.flags()).putInt(quad.emission()).putInt(0);
             }
         }
         /** Fixed section slab; zero-filled unused entries prevent stale palette reads after slot reuse. */

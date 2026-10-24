@@ -1,212 +1,324 @@
 #version 450
-// Vulkan 1.0 compute only: no ray queries, acceleration structures or device addresses.
+// Vulkan 1.0 compute only; no ray queries, acceleration structures or device addresses.
 layout(local_size_x=8, local_size_y=8) in;
 layout(binding=0, rgba8) uniform writeonly image2D outputImage;
 layout(std430, binding=1) readonly buffer Grid { uvec4 dimensions; uint cells[]; } grid;
 #ifdef TEXTURED_CUBES
-// 32-byte face ABI: UV origin/du, dv, packed opaque ARGB tint, reserved.
 struct CubeFace { vec4 originDu; vec2 dv; uint tint; uint reserved; };
 layout(std430, binding=2) readonly buffer CubePalette { CubeFace faces[]; } palette;
 layout(binding=3) uniform sampler2D blockAtlas;
+// 96-byte ABI: twenty interleaved xyzuv floats, tint/flags/emission/reserved.
+struct ModelQuad { vec4 vertices[5]; uvec4 metadata; };
+// 27*128 headers occupy 55,296 bytes, followed by 27 fixed 8192-quad slabs.
+layout(std430, binding=4) readonly buffer Models { uvec4 headers[3456]; ModelQuad quads[]; } models;
+layout(std430, binding=5) readonly buffer Environment { vec4 values[6]; } environment;
+#endif
+#ifdef RASTER_INPUTS
+layout(binding=6) uniform sampler2D rasterColor;
+layout(binding=7) uniform sampler2D rasterDepth;
 #endif
 layout(push_constant) uniform Diagnostic {
     mat4 inverseViewProjection;
     vec4 cameraOrigin;
-    uvec4 control; // bit 0: hit IDs, bit 1: live section tiles
+    uvec4 control; // IDs=1, live=2, sRGB destination=4, world light=8, sRGB raster view=16.
     vec4 rayOriginOffset;
 } diagnostic;
-
-struct Hit { bool found; ivec3 cell; uint material; float t; vec3 normal; };
-Hit miss() { return Hit(false, ivec3(0), 0u, 0.0, vec3(0)); }
-
+struct Hit {
+    bool found; ivec3 cell; uint material; float t; vec3 normal;
+    vec3 albedo; uint flags; float emission;
+};
+Hit miss() { return Hit(false,ivec3(0),0u,0.0,vec3(0),vec3(0),0u,0.0); }
+#ifdef TEXTURED_CUBES
+vec3 srgbToLinear(vec3 value) {
+    return mix(value/12.92,pow((value+0.055)/1.055,vec3(2.4)),greaterThan(value,vec3(0.04045)));
+}
+vec3 linearToSrgb(vec3 value) {
+    return mix(value*12.92,1.055*pow(value,vec3(1.0/2.4))-0.055,greaterThan(value,vec3(0.0031308)));
+}
+vec3 tintColor(uint tint) {
+    return srgbToLinear(vec3(float((tint>>16)&255u),float((tint>>8)&255u),float(tint&255u))/255.0);
+}
+float quadComponent(ModelQuad quad, int index) { return quad.vertices[index/4][index%4]; }
+vec3 vertexPosition(ModelQuad quad, int vertex) {
+    int i=vertex*5;
+    return vec3(quadComponent(quad,i),quadComponent(quad,i+1),quadComponent(quad,i+2));
+}
+vec2 vertexUv(ModelQuad quad, int vertex) { return vec2(quadComponent(quad,vertex*5+3),quadComponent(quad,vertex*5+4)); }
+bool triangle(vec3 origin, vec3 ray, vec3 a, vec3 b, vec3 c, vec2 ta, vec2 tb, vec2 tc,
+              float minT, float maxT, out float t, out vec2 uv, out vec3 normal) {
+    vec3 e1=b-a, e2=c-a, p=cross(ray,e2);
+    float determinant=dot(e1,p);
+    if (abs(determinant)<1e-9) return false;
+    float inverse=1.0/determinant;
+    vec3 s=origin-a, q=cross(s,e1);
+    float u=dot(s,p)*inverse, v=dot(ray,q)*inverse;
+    if (u < -1e-6 || v < -1e-6 || u+v > 1.000001) return false;
+    t=dot(e2,q)*inverse;
+    // Preserve geometry exactly on a DDA cell boundary despite floating-point roundoff.
+    if (t < max(0.0,minT-0.0002) || t > maxT+0.0002) return false;
+    normal=cross(e1,e2);
+    float square=dot(normal,normal);
+    if (square<1e-16) return false;
+    normal*=inversesqrt(square);
+    if (dot(normal,ray)>0.0) normal=-normal;
+    uv=ta+(tb-ta)*u+(tc-ta)*v;
+    return true;
+}
+Hit modelHit(vec3 origin, vec3 ray, ivec3 cell, uint material, float minT, float maxT) {
+    uint reference=(material>>8)&255u;
+    if (reference==0u || reference>128u) return miss();
+    ivec3 tile=cell/16;
+    uint slot=uint(tile.x+3*(tile.y+3*tile.z));
+    uvec4 header=models.headers[slot*128u+reference-1u];
+    if (header.y==0u || header.y>64u || header.x+header.y>8192u) return miss();
+    Hit best=miss();
+    float nearest=maxT;
+    for (uint index=0u; index<header.y; index++) {
+        uint address=slot*8192u+header.x+index;
+        if (address>=uint(models.quads.length())) return miss();
+        ModelQuad quad=models.quads[address];
+        vec3 a=vertexPosition(quad,0), b=vertexPosition(quad,1), c=vertexPosition(quad,2), d=vertexPosition(quad,3);
+        vec2 ta=vertexUv(quad,0), tb=vertexUv(quad,1), tc=vertexUv(quad,2), td=vertexUv(quad,3);
+        vec2 low=min(min(ta,tb),min(tc,td)), high=max(max(ta,tb),max(tc,td));
+        vec2 inset=min(vec2(0.5)/vec2(textureSize(blockAtlas,0)),(high-low)*0.5);
+        for (int part=0; part<2; part++) {
+            float t; vec2 uv; vec3 normal;
+            bool accepted=part==0
+                ? triangle(origin-vec3(cell),ray,a,b,c,ta,tb,tc,minT,maxT,t,uv,normal)
+                : triangle(origin-vec3(cell),ray,c,d,a,tc,td,ta,minT,maxT,t,uv,normal);
+            if (!accepted || (best.found && t>nearest+0.00001)) continue;
+            vec4 texel=textureLod(blockAtlas,clamp(uv,low+inset,high-inset),0.0);
+            // Test each triangle's alpha before nearest selection, including nonplanar quads.
+            // Later accepted coplanar overlays win; transparent overlays leave the base intact.
+            if (texel.a<0.1) continue;
+            best=Hit(true,cell,material,max(0.0,t),normal,
+                srgbToLinear(texel.rgb)*tintColor(quad.metadata.x),quad.metadata.y,float(quad.metadata.z)/15.0);
+            nearest=t;
+        }
+    }
+    return best;
+}
+#endif
+uint cellValue(ivec3 cell) {
+    ivec3 size=ivec3(grid.dimensions.xyz);
+    if (any(lessThan(cell,ivec3(0))) || any(greaterThanEqual(cell,size))) return 0xffffffffu;
+    uint index=uint(cell.x+size.x*(cell.y+size.y*cell.z));
+    if ((diagnostic.control.x&2u)!=0u) {
+        ivec3 tile=cell/16, local=cell%16;
+        index=uint(tile.x+3*(tile.y+3*tile.z))*4096u+uint(local.x+16*(local.y+16*local.z));
+    }
+    return index<grid.dimensions.w ? grid.cells[index] : 0xffffffffu;
+}
 Hit trace(vec3 origin, vec3 direction, float minT, float maxT) {
-    ivec3 size = ivec3(grid.dimensions.xyz);
-    float enter = -3.402823466e38;
-    float leave = maxT;
-    vec3 enterNormal = vec3(0);
-    for (int a=0; a<3; ++a) {
-        if (direction[a] == 0.0) {
-            if (origin[a] < 0.0 || origin[a] >= float(size[a])) return miss();
+    ivec3 size=ivec3(grid.dimensions.xyz);
+    float enter=-3.402823466e38, leave=maxT;
+    vec3 enterNormal=vec3(0);
+    for (int a=0; a<3; a++) {
+        if (direction[a]==0.0) {
+            if (origin[a]<0.0 || origin[a]>=float(size[a])) return miss();
         } else {
-            float t0 = -origin[a] / direction[a];
-            float t1 = (float(size[a]) - origin[a]) / direction[a];
-            float nearT = min(t0, t1), farT = max(t0, t1);
-            if (nearT > enter) {
-                enter = nearT;
-                enterNormal = vec3(0); enterNormal[a] = direction[a] > 0.0 ? -1.0 : 1.0;
+            float t0=-origin[a]/direction[a], t1=(float(size[a])-origin[a])/direction[a];
+            float nearT=min(t0,t1), farT=max(t0,t1);
+            if (nearT>enter) {
+                enter=nearT; enterNormal=vec3(0); enterNormal[a]=direction[a]>0.0 ? -1.0 : 1.0;
             }
-            leave = min(leave, farT);
+            leave=min(leave,farT);
         }
     }
-    float t = max(minT, enter);
-    if (t >= leave) return miss();
-    vec3 p = fma(vec3(t), direction, origin);
-    ivec3 cell = ivec3(floor(p));
-    ivec3 stepDirection = ivec3(sign(direction));
-    vec3 nextT = vec3(3.402823466e38);
-    vec3 delta = vec3(3.402823466e38);
-    for (int a=0; a<3; ++a) {
-        if (direction[a] < 0.0 && p[a] == floor(p[a])) cell[a]--;
-        // Slab roundoff may put an entry point just beyond the outer face.
-        cell[a] = clamp(cell[a], 0, size[a]-1);
-        if (direction[a] != 0.0) {
-            float edge = float(cell[a] + (direction[a] > 0.0 ? 1 : 0));
-            nextT[a] = (edge-origin[a])/direction[a];
-            delta[a] = abs(1.0/direction[a]);
+    float t=max(minT,enter);
+    if (t>=leave) return miss();
+    vec3 p=fma(vec3(t),direction,origin);
+    ivec3 cell=ivec3(floor(p)), stepDirection=ivec3(sign(direction));
+    vec3 nextT=vec3(3.402823466e38), delta=vec3(3.402823466e38);
+    for (int a=0; a<3; a++) {
+        if (direction[a]<0.0 && p[a]==floor(p[a])) cell[a]--;
+        cell[a]=clamp(cell[a],0,size[a]-1);
+        if (direction[a]!=0.0) {
+            nextT[a]=(float(cell[a]+(direction[a]>0.0 ? 1 : 0))-origin[a])/direction[a];
+            delta[a]=abs(1.0/direction[a]);
         }
     }
-    vec3 normal = enter < minT ? vec3(0) : enterNormal;
-    // Every step crosses at least one cell; sum dimensions bounds an entire box traversal.
-    int limit = size.x+size.y+size.z+1;
-    for (int iteration=0; iteration<limit; ++iteration) {
-        if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell,size)) || t >= leave) break;
-        uint index = uint(cell.x + size.x*(cell.y+size.y*cell.z));
-        if (index >= grid.dimensions.w) return miss();
-        float boundary = min(nextT.x, min(nextT.y,nextT.z));
-        if ((diagnostic.control.x & 2u) != 0u) {
-            ivec3 tile = cell / 16;
-            ivec3 local = cell % 16;
-            index = uint(tile.x+3*(tile.y+3*tile.z))*4096u + uint(local.x+16*(local.y+16*local.z));
-        }
-        if (index >= grid.dimensions.w) return miss();
-        uint material = grid.cells[index];
-        // Occupancy is not an optical material. Shaded live mode traces only supported cubes.
-        // The occupancy view keeps explicit unsupported/unknown diagnostic marker cells.
-        if ((diagnostic.control.x & 2u) != 0u) {
-            if (diagnostic.control.y == 3u) {
-                if (material == 0xffffffffu) material = 3u;
-                else material &= 255u;
-            } else if ((material & 255u) != 1u) material = 0u;
-        }
-        if (material != 0u && t < min(boundary,leave)) return Hit(true, cell, material, t, normal);
-        if (boundary >= leave) break;
-        normal = vec3(0);
-        bool selected = false;
-        for (int a=0; a<3; ++a) {
-            if (nextT[a] == boundary) {
-                cell[a] += stepDirection[a];
-                nextT[a] += delta[a];
-                if (!selected) { normal[a] = -float(stepDirection[a]); selected = true; }
+    vec3 normal=enter<minT ? vec3(0) : enterNormal;
+    int limit=size.x+size.y+size.z+1;
+    for (int iteration=0; iteration<limit; iteration++) {
+        if (any(lessThan(cell,ivec3(0))) || any(greaterThanEqual(cell,size)) || t>=leave) break;
+        float boundary=min(nextT.x,min(nextT.y,nextT.z));
+        uint material=cellValue(cell);
+        bool live=(diagnostic.control.x&2u)!=0u;
+        if (live) {
+            uint occupancy=material&255u;
+            if (diagnostic.control.y==3u) {
+                uint marker=material==0xffffffffu ? 4u : occupancy;
+                if (marker!=0u && t<min(boundary,leave)) return Hit(true,cell,marker,t,normal,vec3(0),0u,0.0);
+            } else if (material!=0xffffffffu && occupancy==1u && t<min(boundary,leave)) {
+                return Hit(true,cell,material,t,normal,vec3(0.65),0u,float((material>>24)&15u)/15.0);
+#ifdef TEXTURED_CUBES
+            } else if (material!=0xffffffffu && occupancy==3u) {
+                Hit candidate=modelHit(origin,direction,cell,material,t,min(boundary,leave));
+                if (candidate.found) return candidate;
+#endif
             }
+        } else if (material!=0u && material!=0xffffffffu && t<min(boundary,leave))
+            return Hit(true,cell,material,t,normal,vec3(0),0u,0.0);
+        if (boundary>=leave) break;
+        normal=vec3(0); bool selected=false;
+        for (int a=0; a<3; a++) if (nextT[a]==boundary) {
+            cell[a]+=stepDirection[a]; nextT[a]+=delta[a];
+            if (!selected) { normal[a]=-float(stepDirection[a]); selected=true; }
         }
-        t = max(t,boundary);
+        t=max(t,boundary);
     }
     return miss();
 }
-
 vec3 materialColor(uint id) {
     if (id==1u) return vec3(0.42,0.52,0.30);
     if (id==2u) return vec3(0.63,0.32,0.18);
     if (id==3u) return vec3(0.52,0.57,0.62);
     return vec3(0.95,0.66,0.22);
 }
-
 #ifdef TEXTURED_CUBES
-vec3 srgbToLinear(vec3 value) {
-    return mix(value/12.92, pow((value+0.055)/1.055,vec3(2.4)), greaterThan(value,vec3(0.04045)));
-}
-
-vec3 linearToSrgb(vec3 value) {
-    return mix(value*12.92, 1.055*pow(value,vec3(1.0/2.4))-0.055, greaterThan(value,vec3(0.0031308)));
-}
-
 vec3 cubeAlbedo(Hit hit, vec3 point) {
-    uint reference = hit.material >> 8;
-    if (reference == 0u || reference > 128u || dot(hit.normal,hit.normal) < 0.5) return vec3(0.65);
-    vec3 local = clamp(point-vec3(hit.cell),vec3(0),vec3(1));
-    uint face;
-    vec2 coordinates;
-    if (hit.normal.y != 0.0) {
-        face = hit.normal.y < 0.0 ? 0u : 1u;
-        coordinates = local.xz;
-    } else if (hit.normal.z != 0.0) {
-        face = hit.normal.z < 0.0 ? 2u : 3u;
-        coordinates = local.xy;
-    } else {
-        face = hit.normal.x < 0.0 ? 4u : 5u;
-        coordinates = local.zy;
+    uint reference=(hit.material>>8)&255u;
+    if (reference==0u || reference>128u || dot(hit.normal,hit.normal)<0.5) return vec3(0.65);
+    vec3 local=clamp(point-vec3(hit.cell),vec3(0),vec3(1));
+    uint face; vec2 coordinates;
+    if (hit.normal.y!=0.0) { face=hit.normal.y<0.0 ? 0u : 1u; coordinates=local.xz; }
+    else if (hit.normal.z!=0.0) { face=hit.normal.z<0.0 ? 2u : 3u; coordinates=local.xy; }
+    else { face=hit.normal.x<0.0 ? 4u : 5u; coordinates=local.zy; }
+    ivec3 tile=hit.cell/16;
+    uint slot=uint(tile.x+3*(tile.y+3*tile.z));
+    uint index=(slot*128u+reference-1u)*6u+face;
+    if (index>=uint(palette.faces.length())) return vec3(0.65);
+    CubeFace surface=palette.faces[index];
+    vec2 base=surface.originDu.xy, du=surface.originDu.zw;
+    vec2 low=min(min(base,base+du),min(base+surface.dv,base+du+surface.dv));
+    vec2 high=max(max(base,base+du),max(base+surface.dv,base+du+surface.dv));
+    vec2 inset=min(vec2(0.5)/vec2(textureSize(blockAtlas,0)),(high-low)*0.5);
+    vec2 uv=clamp(base+du*coordinates.x+surface.dv*coordinates.y,low+inset,high-inset);
+    return srgbToLinear(textureLod(blockAtlas,uv,0.0).rgb)*tintColor(surface.tint);
+}
+float lightResponse(uint level) { float value=float(level)/15.0; return value/(4.0-3.0*value); }
+float keyVisibility(vec3 origin, vec3 direction) {
+    float nearT=0.001;
+    // Continue through a bounded number of transparent surfaces, so a wall behind glass still
+    // casts a shadow. The budget is explicit; no refraction/colored absorption is claimed.
+    for (int layer=0; layer<8; layer++) {
+        Hit blocker=trace(origin,direction,nearT,100.0);
+        if (!blocker.found) return 1.0;
+        if ((blocker.flags&2u)==0u) return 0.0;
+        nearT=max(nearT,blocker.t)+0.0005;
     }
-    ivec3 tile = hit.cell/16;
-    uint slot = uint(tile.x+3*(tile.y+3*tile.z));
-    uint index = (slot*128u+reference-1u)*6u+face;
-    if (index >= uint(palette.faces.length())) return vec3(0.65);
-    CubeFace surface = palette.faces[index];
-    vec2 uvOrigin = surface.originDu.xy;
-    vec2 du = surface.originDu.zw;
-    vec2 uv = uvOrigin+du*coordinates.x+surface.dv*coordinates.y;
-    vec2 low = min(min(uvOrigin,uvOrigin+du),min(uvOrigin+surface.dv,uvOrigin+du+surface.dv));
-    vec2 high = max(max(uvOrigin,uvOrigin+du),max(uvOrigin+surface.dv,uvOrigin+du+surface.dv));
-    // LOD zero and a per-sprite half-texel inset prevent nearest sampling into adjacent atlas sprites.
-    vec2 inset = min(vec2(0.5)/vec2(textureSize(blockAtlas,0)),(high-low)*0.5);
-    uv = clamp(uv,low+inset,high-inset);
-    vec3 tint = vec3(float((surface.tint>>16)&255u),float((surface.tint>>8)&255u),float(surface.tint&255u))/255.0;
-    // The borrowed RGBA8_UNORM view does not perform hardware sRGB decoding.
-    return srgbToLinear(textureLod(blockAtlas,uv,0.0).rgb)*srgbToLinear(tint);
+    return 0.0;
+}
+vec3 worldLighting(Hit hit, vec3 point, vec3 albedo) {
+    // Incident light lies outside the visible surface, not inside an opaque cube.
+    uint light=cellValue(ivec3(floor(point+hit.normal*0.003)));
+    bool available=light!=0xffffffffu && (light&(1u<<28))!=0u;
+    float block=available ? lightResponse((light>>16)&15u) : 0.0;
+    float sky=available ? lightResponse((light>>20)&15u) : 0.0;
+    vec3 illumination=environment.values[4].rgb+environment.values[3].rgb*(block*environment.values[3].w)
+        +environment.values[2].rgb*(sky*environment.values[2].w*environment.values[1].w*0.35);
+    vec3 key=environment.values[0].xyz;
+    float square=dot(key,key);
+    if (environment.values[0].w>0.0 && square>1e-8 && sky>0.0) {
+        key*=inversesqrt(square);
+        float cosine=max(0.0,dot(hit.normal,key));
+        if (cosine>0.0) {
+            float visible=keyVisibility(point+hit.normal*0.003,key);
+            illumination+=environment.values[1].rgb*(environment.values[1].w*sky*cosine*visible);
+        }
+    }
+    float intrinsic=max(hit.emission,float((hit.material>>24)&15u)/15.0);
+    vec3 color=albedo*(illumination+vec3(intrinsic));
+    // Fixed LDR presentation; host ambient already includes the actual night-vision color.
+    color*=(1.0+clamp(environment.values[4].w,0.0,1.0))*(1.0-clamp(environment.values[5].x,0.0,1.0));
+    color=mix(color,color*vec3(0.7,0.6,0.6),clamp(environment.values[5].z,0.0,1.0));
+    return color/(vec3(1.0)+color);
 }
 #endif
-
 void main() {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 resolution = imageSize(outputImage);
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy), resolution=imageSize(outputImage);
     if (any(greaterThanEqual(pixel,resolution))) return;
-    vec2 uv = (vec2(pixel)+0.5)/vec2(resolution)*2.0-1.0;
-    uv.x *= float(resolution.x)/float(resolution.y);
-    // Deliberately fixed camera: this mode diagnoses traversal, not the live Minecraft scene.
-    vec3 origin = vec3(38,24,43);
-    vec3 forward = normalize(vec3(16,5,16)-origin);
-    vec3 right = normalize(cross(forward,vec3(0,1,0)));
-    vec3 up = cross(right,forward);
-    vec3 ray = normalize(forward + 0.62*uv.x*right - 0.62*uv.y*up);
-    if ((diagnostic.control.x & 2u) != 0u) {
-        vec2 ndc = (vec2(pixel)+0.5)/vec2(resolution)*2.0-1.0;
-        // Any interior depth works with reverse-Z as well as conventional projections.
-        vec4 point = diagnostic.inverseViewProjection * vec4(ndc,0.5,1.0);
-        if (abs(point.w) < 1e-8 || any(isnan(point)) || any(isinf(point))) {
+    vec2 uv=(vec2(pixel)+0.5)/vec2(resolution)*2.0-1.0;
+    uv.x*=float(resolution.x)/float(resolution.y);
+    vec3 origin=vec3(38,24,43), forward=normalize(vec3(16,5,16)-origin);
+    vec3 right=normalize(cross(forward,vec3(0,1,0))), up=cross(right,forward);
+    vec3 ray=normalize(forward+0.62*uv.x*right-0.62*uv.y*up);
+    bool live=(diagnostic.control.x&2u)!=0u;
+    vec2 ndc=(vec2(pixel)+0.5)/vec2(resolution)*2.0-1.0;
+    if (live) {
+        vec4 point=diagnostic.inverseViewProjection*vec4(ndc,0.5,1.0);
+        if (abs(point.w)<1e-8 || any(isnan(point)) || any(isinf(point))) {
             imageStore(outputImage,pixel,vec4(1,0,1,1)); return;
         }
-        origin = diagnostic.cameraOrigin.xyz + diagnostic.rayOriginOffset.xyz;
-        if (any(isnan(origin)) || any(isinf(origin))) {
+        origin=diagnostic.cameraOrigin.xyz+diagnostic.rayOriginOffset.xyz;
+        vec3 direction=point.xyz/point.w-diagnostic.rayOriginOffset.xyz;
+        float square=dot(direction,direction);
+        if (any(isnan(origin)) || any(isinf(origin)) || square<1e-16 || isnan(square) || isinf(square)) {
             imageStore(outputImage,pixel,vec4(1,0,1,1)); return;
         }
-        vec3 direction = point.xyz/point.w-diagnostic.rayOriginOffset.xyz;
-        float lengthSquared = dot(direction,direction);
-        if (lengthSquared < 1e-16 || isnan(lengthSquared) || isinf(lengthSquared)) {
-            imageStore(outputImage,pixel,vec4(1,0,1,1)); return;
-        }
-        ray = direction*inversesqrt(lengthSquared);
+        ray=direction*inversesqrt(square);
     }
-    Hit hit = trace(origin,ray,0.0,160.0);
-    if ((diagnostic.control.x & 1u) != 0u) {
-        // Exact byte IDs for CPU/GPU traversal comparison, not shaded color.
-        uint id = (diagnostic.control.x & 2u) != 0u ? hit.material & 255u : hit.material;
-        imageStore(outputImage,pixel,hit.found ? vec4(vec3(hit.cell),float(id))/255.0 : vec4(0));
-        return;
+    Hit hit=trace(origin,ray,0.0,160.0);
+    if ((diagnostic.control.x&1u)!=0u) {
+        uint id=live ? hit.material&255u : hit.material;
+        imageStore(outputImage,pixel,hit.found ? vec4(vec3(hit.cell),float(id))/255.0 : vec4(0)); return;
     }
-    vec3 color = mix(vec3(0.40,0.57,0.74),vec3(0.09,0.16,0.28),clamp(ray.y*0.5+0.5,0.0,1.0));
-    if (hit.found) {
-        vec3 sun = normalize(vec3(-0.5,1.0,0.3));
-        vec3 p = origin+hit.t*ray;
-        Hit shadow = trace(p+hit.normal*0.002,sun,0.0,100.0);
-        float direct = shadow.found ? 0.0 : max(0.0,dot(hit.normal,sun));
-        vec3 albedo = (diagnostic.control.x & 2u) != 0u ? vec3(0.65) : materialColor(hit.material);
+    vec3 color=mix(vec3(0.40,0.57,0.74),vec3(0.09,0.16,0.28),clamp(ray.y*0.5+0.5,0.0,1.0));
+    vec3 p=origin+hit.t*ray;
+    if (hit.found && diagnostic.control.y==0u) {
+        vec3 albedo=live ? vec3(0.65) : materialColor(hit.material);
 #ifdef TEXTURED_CUBES
-        if ((diagnostic.control.x & 2u) != 0u) albedo = cubeAlbedo(hit,p);
+        if (live) albedo=(hit.material&255u)==3u ? hit.albedo : cubeAlbedo(hit,p);
+        if (live && (diagnostic.control.x&8u)!=0u) color=worldLighting(hit,p,albedo);
+        else {
 #endif
-        color = albedo*(0.22+0.78*direct);
-    }
-    if (diagnostic.control.y == 1u) color = hit.found ? hit.normal*0.5+0.5 : vec3(0);
-    if (diagnostic.control.y == 2u) color = hit.found ? vec3(clamp(hit.t/96.0,0.0,1.0)) : vec3(0);
-    if (diagnostic.control.y == 3u) color = !hit.found ? vec3(0)
-        : ((diagnostic.control.x & 2u) != 0u && hit.material == 3u) ? vec3(0.08,0.24,0.85)
-        : ((diagnostic.control.x & 2u) != 0u && hit.material == 2u) ? vec3(0.75,0.10,0.65) : vec3(1);
-    // Diagnostic LDR output only. The future world renderer will share Bedray's HDR/tonemap contract.
-    color = clamp(color,0.0,1.0);
-    // Blitting to sRGB performs destination encoding. Avoid applying gamma twice in that case.
-    if ((diagnostic.control.x & 4u) == 0u) {
+            vec3 sun=normalize(vec3(-0.5,1.0,0.3));
+            Hit shadow=trace(p+hit.normal*0.003,sun,0.001,100.0);
+            float direct=shadow.found ? 0.0 : max(0.0,dot(hit.normal,sun));
+            color=albedo*(0.22+0.78*direct);
 #ifdef TEXTURED_CUBES
-        color = linearToSrgb(color);
+        }
+#endif
+    }
+#ifdef RASTER_INPUTS
+    if (live && diagnostic.control.y==0u) {
+        vec3 original=texelFetch(rasterColor,pixel,0).rgb;
+        vec3 raster=(diagnostic.control.x&16u)!=0u ? original : srgbToLinear(original);
+        float depth=texelFetch(rasterDepth,pixel,0).r;
+        bool replace=hit.found && (hit.flags&2u)==0u && depth>0.0 && depth<=1.0;
+        if (replace) {
+            vec4 rasterPoint=diagnostic.inverseViewProjection*vec4(ndc,depth,1.0);
+            replace=abs(rasterPoint.w)>1e-8 && !any(isnan(rasterPoint)) && !any(isinf(rasterPoint));
+            if (replace) {
+                float distance=length(rasterPoint.xyz/rasterPoint.w-diagnostic.rayOriginOffset.xyz);
+                // Require the same visible surface; preserve foreground entities, unsupported/stale
+                // geometry and world beyond the resident grid instead of erasing them.
+                replace=abs(distance-hit.t)<=max(0.025,0.0015*distance);
+            }
+        }
+        float weight=0.0;
+        if (replace) {
+            vec3 edge=min(p,vec3(grid.dimensions.xyz)-p);
+            weight=smoothstep(0.5,2.5,min(edge.x,min(edge.y,edge.z)));
+        }
+        color=mix(raster,color,weight);
+        // Depth cannot identify translucent particles with depth writes disabled. This bounded
+        // hybrid path does not provide complete transparent composition or refraction.
+    }
+#endif
+    if (diagnostic.control.y==1u) color=hit.found ? hit.normal*0.5+0.5 : vec3(0);
+    if (diagnostic.control.y==2u) color=hit.found ? vec3(clamp(hit.t/96.0,0.0,1.0)) : vec3(0);
+    if (diagnostic.control.y==3u) color=!hit.found ? vec3(0)
+        : live && hit.material==4u ? vec3(0.08,0.24,0.85)
+        : live && hit.material==2u ? vec3(0.75,0.10,0.65)
+        : live && hit.material==3u ? vec3(0.15,0.8,0.35) : vec3(1);
+    color=clamp(color,0.0,1.0);
+    if ((diagnostic.control.x&4u)==0u) {
+#ifdef TEXTURED_CUBES
+        color=linearToSrgb(color);
 #else
-        color = pow(color,vec3(1.0/2.2));
+        color=pow(color,vec3(1.0/2.2));
 #endif
     }
     imageStore(outputImage,pixel,vec4(color,1.0));
