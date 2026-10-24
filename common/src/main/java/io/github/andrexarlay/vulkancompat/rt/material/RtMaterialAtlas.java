@@ -104,7 +104,7 @@ public final class RtMaterialAtlas {
     }
 
     private Epoch epoch;
-    private volatile Epoch handoff;
+    private volatile Epoch pendingEpoch;
     private volatile boolean shutdown;
     private Thread worker;
     private final ConcurrentLinkedQueue<Completed> completed = new ConcurrentLinkedQueue<>();
@@ -207,7 +207,7 @@ public final class RtMaterialAtlas {
         epoch = e;
         // a live Result from the first epoch frame: the emitters read the same arrays and refresh once at the end
         last = new MaterialAtlasBaker.Result(width, height, cpuMaterial, cpuNormal, sprites.size(), 0, 0, 0, 0, 0, 0.0);
-        handoff = e;
+        pendingEpoch = e;
         if (micromapSink != null) {
             micromapSink.onEpochStart();
         }
@@ -221,12 +221,12 @@ public final class RtMaterialAtlas {
 
     private void workerLoop() {
         while (!shutdown) {
-            Epoch e = handoff;
+            Epoch e = pendingEpoch;
             if (e == null || e.finished) {
                 LockSupport.parkNanos(200_000);
                 continue;
             }
-            handoff = null;
+            pendingEpoch = null;
             boolean wantAlpha = micromapSink != null;
             TextureAtlasSprite s;
             while (!e.cancelled && !shutdown && (s = e.queue.poll()) != null) {
