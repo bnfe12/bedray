@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.shaderc.Shaderc;
@@ -204,7 +205,7 @@ public final class FrameGenGpu implements AutoCloseable {
             VkComputePipelineCreateInfo.Buffer cpi = VkComputePipelineCreateInfo.calloc(1, stack);
             cpi.get(0).sType$Default().layout(pipelineLayout).stage().sType$Default()
                 .stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModule).pName(stack.UTF8("main"));
-            check(VK10.vkCreateComputePipelines(device, 0L, cpi, null, p), "vkCreateComputePipelines");
+            check(RtVulkanPipelineCache.createCompute(device, cpi, null, p), "vkCreateComputePipelines");
             pipeline = p.get(0);
 
             VkDescriptorPoolSize.Buffer ps = VkDescriptorPoolSize.calloc(2, stack);

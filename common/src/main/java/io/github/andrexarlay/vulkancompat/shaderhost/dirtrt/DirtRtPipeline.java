@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
 
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.BindingInfo;
 import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.DescriptorType;
 import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.RayPass;
@@ -1209,7 +1210,7 @@ public final class DirtRtPipeline implements AutoCloseable {
                     .maxPipelineRayRecursionDepth(maxRecursionDepth > 0 ? maxRecursionDepth : DEFAULT_MAX_RECURSION_DEPTH)
                     .layout(pipelineLayoutHandle);
 
-            err = KHRRayTracingPipeline.vkCreateRayTracingPipelinesKHR(
+            err = RtVulkanPipelineCache.createRayTracing(
                     device,
                     VK10.VK_NULL_HANDLE,
                     pipelineCache,

@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.iris;
 
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFailure;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
@@ -312,7 +313,7 @@ public final class IrisPostExecutor implements AutoCloseable {
                 .renderPass(VK10.VK_NULL_HANDLE)
                 .subpass(0);
 
-            RtFailure.check(VK10.vkCreateGraphicsPipelines(device, VK10.VK_NULL_HANDLE, pipelineInfo, null, p),
+            RtFailure.check(RtVulkanPipelineCache.createGraphics(device, pipelineInfo, null, p),
                 "create_graphics_pipeline:" + pass.name());
             return p.get(0);
         } finally {
