@@ -88,7 +88,19 @@ public final class SpirvCompiler {
             Shaderc.shaderc_compile_options_set_target_spirv(options, Shaderc.shaderc_spirv_version_1_4);
             Shaderc.shaderc_compile_options_set_optimization_level(options, Shaderc.shaderc_optimization_level_performance);
 
-            long result = Shaderc.shaderc_compile_into_spv(compiler, source, shadercKind, displayName, "main", options);
+            // Heap-encode the source: the CharSequence overload encodes on the thread's MemoryStack (64 KiB by default),
+            // which an include-expanded ray-tracing stage exceeds ("Out of stack space").
+            java.nio.ByteBuffer sourceText = org.lwjgl.system.MemoryUtil.memUTF8(source, false);
+            java.nio.ByteBuffer fileName = org.lwjgl.system.MemoryUtil.memUTF8(displayName);
+            java.nio.ByteBuffer entryPoint = org.lwjgl.system.MemoryUtil.memUTF8("main");
+            long result;
+            try {
+                result = Shaderc.shaderc_compile_into_spv(compiler, sourceText, shadercKind, fileName, entryPoint, options);
+            } finally {
+                org.lwjgl.system.MemoryUtil.memFree(entryPoint);
+                org.lwjgl.system.MemoryUtil.memFree(fileName);
+                org.lwjgl.system.MemoryUtil.memFree(sourceText);
+            }
             if (result == 0L) {
                 throw new SpirvCompileException(displayName + ": null shaderc result handle");
             }

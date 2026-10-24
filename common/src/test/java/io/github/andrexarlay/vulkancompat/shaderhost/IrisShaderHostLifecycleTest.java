@@ -36,11 +36,14 @@ class IrisShaderHostLifecycleTest {
     @BeforeEach
     void setUp() {
         host = new IrisShaderHost(new PackReportCache(ScanLimits.defaults()));
+        // The post host is opt-in; without this property every valid pack probes DISABLED_FOR_SESSION by design.
+        System.setProperty("bedray.iris.post", "true");
     }
 
     @AfterEach
     void tearDown() {
         System.clearProperty(IrisPackChoice.PACK_PROPERTY);
+        System.clearProperty("bedray.iris.post");
     }
 
     private static Path findTinyTestpack() {
@@ -185,7 +188,8 @@ class IrisShaderHostLifecycleTest {
     @Test
     void packWithCompileErrorReturnsCompileFailed() throws IOException {
         writeZip("CompileErrorPack.zip",
-            "shaders/composite.fsh", "#version 120\nthis is invalid glsl syntax;\n",
+            // Writes an output so interface analysis accepts it; the syntax error must then come from the compiler.
+            "shaders/composite.fsh", "#version 120\nvoid main() { gl_FragColor = vec4(1.0); this is invalid glsl syntax; }\n",
             "shaders/final.fsh", "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n"
         );
 

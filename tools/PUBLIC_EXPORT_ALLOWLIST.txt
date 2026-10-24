@@ -47,6 +47,7 @@ docs/IRIS_OPTIONS.md
 docs/IRIS_FRAME_GUIDES.md
 docs/IRIS_RESOURCE_GRAPH.md
 docs/IRIS_VOXEL_MERGE.md
+docs/CUSTOM_RT_SHADERS.md
 docs/VITRAIL_STUDY.md
 docs/patches/*.patch
 ROADMAP.md
@@ -56,6 +57,7 @@ docs/images/*.png
 examples/iris-color-post/**
 examples/iris-depth-post/**
 examples/iris-mrt-post/**
+examples/custom-rt-sky-shadow/**
 
 # source code
 core/**

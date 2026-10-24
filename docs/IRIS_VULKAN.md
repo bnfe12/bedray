@@ -54,6 +54,23 @@ Pack property semantics are not silently discarded. Screen/slider/profile metada
 are evaluated in the documented post dialect; other active renderer properties are refused. Frame generation and temporal upscaling are gated until matching
 history/guide semantics exist.
 
+## Startup wiring
+
+Until this change nothing called the shader-host bootstrap, so the selected host was always native and the post
+host could not activate whatever was configured. `RtxBootstrap` now runs `ShaderHostStartup` in its early hook,
+before the device exists: it selects the host (and compiles the chosen pack when the post host is opted in),
+detects ray-tracing-pipeline packs, and loads the optional custom RT stage. A failure there is logged and leaves
+the native renderer in place. The F3 diag section shows a `shader_host` block: requested and active host, the
+refusal reason of the chosen pack, the work the pack still needs, and the post runtime state.
+
+The bootstrap path was exercised outside the game with the real classes: `iris-color-post` probes READY
+(1 pass); Dirt RT is refused by the post host with its full list of unsupported features (SSBO, custom images,
+gbuffers, `prepare`, compute composites, ray stages). Ray-tracing packs and user ray-query shaders are covered in
+[the custom RT contract](CUSTOM_RT_SHADERS.md).
+
+Shader sources are now handed to shaderc from heap memory. The previous overload encoded them on the 64 KiB
+thread stack, which large packs exceed (`Out of stack space`; observed with Dirt RT's ray stages).
+
 ## Future development activation
 
 With matching source built into a local development instance, choose an unpackaged shader folder

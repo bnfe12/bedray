@@ -51,13 +51,7 @@ public final class RtModesDebug {
         // Frame Generation telemetry must reflect the Streamline runtime actually hooked to present.
         // The legacy FrameGenerationPipeline is an unused scaffold and always reports unsupported.
         out.add("[FRAME-GEN] " + FrameGenRuntime.statusLine());
-
-        // Dirt RT telemetry
-        // Dirt RT / Iris host is an unfinished scaffold: its line appears only after a Dirt RT pack was selected
-        String dirtRt = io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.getF3Telemetry();
-        if (!dirtRt.contains("selectedPack=none")) {
-            out.add(dirtRt);
-        }
+        // Dirt RT / shader-host lines come from the "shader_host" provider (ShaderHostDebug).
     }
 
     private static String onOff(boolean v) {

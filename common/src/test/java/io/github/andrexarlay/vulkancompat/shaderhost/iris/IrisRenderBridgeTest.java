@@ -273,9 +273,11 @@ class IrisRenderBridgeTest {
         IrisPassGraph graph2 = createMockGraph("pack-2");
         IrisPostExecutor exec2 = IrisRenderBridge.getOrCreateExecutor(null, graph2);
 
-        assertNotNull(exec2);
-        assertNotSame(exec1, exec2, "Executor should be recreated when pack changes");
-        assertEquals("pack-2", IrisRenderBridge.activePackName());
+        // A pack change retires the old executor. There is no Vulkan device in a unit test, so no replacement can be
+        // created: the bridge must return null (native image retained) instead of handing back the stale executor.
+        assertNull(exec2, "No executor can be created without a Vulkan device");
+        assertNull(IrisRenderBridge.getExecutor(), "The pack-1 executor must be retired on pack change");
+        assertNull(IrisRenderBridge.activePackName());
     }
 
     @Test

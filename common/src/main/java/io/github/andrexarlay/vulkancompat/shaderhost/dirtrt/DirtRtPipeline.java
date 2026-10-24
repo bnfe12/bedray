@@ -135,7 +135,8 @@ public final class DirtRtPipeline implements AutoCloseable {
     private static volatile long currentFramesRendered = 0L;
     private static volatile String lastError = "none";
     private static volatile long rollbackPipelineHandle = 0L;
-    private static volatile long nativeRtFallbackPipeline = 0xCAFE_BABE_0001L;
+    // No invented handle: a fallback pipeline exists only when a caller registers a real one.
+    private static volatile long nativeRtFallbackPipeline = 0L;
     private static volatile String entityLayoutStatus = "COMPATIBLE";
     private static volatile TlasBinding currentTlasBinding = null;
     private static volatile long currentTlasDescriptor = 0L;
@@ -252,20 +253,13 @@ public final class DirtRtPipeline implements AutoCloseable {
         return lower.contains("dirt rt") || lower.contains("dirtrt") || lower.contains("dirt-rt");
     }
 
-    public static synchronized boolean handleShaderpackReload(String packName) {
-        if (!isDirtRtPack(packName)) {
-            return false;
-        }
-        updateState(State.UNAVAILABLE, packName, "Dirt RT runtime loader is not implemented (scaffold only)");
-        return true;
-    }
-
+    /** Status line; the detail names what the host could not do, never a placeholder handle. */
     public static String getF3Telemetry() {
         State reportingState = (currentPipelineHandle != 0L && currentFramesRendered > 0L && currentState != State.FAILED && currentState != State.ROLLING_BACK)
             ? State.ACTIVE
             : currentState;
         return String.format(
-            "[DirtRT] selectedPack=%s state=%s pipeline=%s entityLayout=%s traceCalls=%d framesRendered=%d lastError=%s",
+            "[DirtRT] selectedPack=%s state=%s pipeline=%s entityLayout=%s traceCalls=%d framesRendered=%d detail=%s",
             selectedPack,
             reportingState,
             currentPipelineHandle != 0L ? ("0x" + Long.toHexString(currentPipelineHandle)) : "N/A",
@@ -999,6 +993,20 @@ public final class DirtRtPipeline implements AutoCloseable {
             int height,
             MemoryStack stack
     ) {
+        recordTracePass(cmd, pipelineHandle, pipelineLayout, pass, passSbt, width, height, stack, true);
+    }
+
+    public static void recordTracePass(
+            VkCommandBuffer cmd,
+            long pipelineHandle,
+            long pipelineLayout,
+            RayPass pass,
+            PassSbt passSbt,
+            int width,
+            int height,
+            MemoryStack stack,
+            boolean pushFirstLobe
+    ) {
         Objects.requireNonNull(cmd, "cmd must not be null");
         Objects.requireNonNull(pass, "pass must not be null");
         Objects.requireNonNull(passSbt, "passSbt must not be null");
@@ -1014,10 +1022,13 @@ public final class DirtRtPipeline implements AutoCloseable {
                 pipelineHandle
         );
 
-        // 2. Push constants (e.g. firstLobe value)
-        ByteBuffer pc = stack.malloc(PUSH_CONSTANT_BYTES);
-        pc.putInt(0, pass.firstLobeVal());
-        VK10.vkCmdPushConstants(cmd, pipelineLayout, PUSH_CONSTANT_STAGES, 0, pc);
+        // 2. Push constants (legacy layout only). Dirt RT selects the lobe at compile time (FIRST_LOBE_VAL) and its
+        //    stages declare no push-constant block, so a reflected layout has no range and nothing is pushed.
+        if (pushFirstLobe) {
+            ByteBuffer pc = stack.malloc(PUSH_CONSTANT_BYTES);
+            pc.putInt(0, pass.firstLobeVal());
+            VK10.vkCmdPushConstants(cmd, pipelineLayout, PUSH_CONSTANT_STAGES, 0, pc);
+        }
 
         // 3. Allocate native VkStridedDeviceAddressRegionKHR structs
         VkRegions regions = passSbt.allocateVkRegions(stack);
@@ -1077,6 +1088,18 @@ public final class DirtRtPipeline implements AutoCloseable {
             int width,
             int height
     ) {
+        recordTraceAllPasses(cmd, pipelineHandle, pipelineLayout, multiPassSbt, width, height, true);
+    }
+
+    public static void recordTraceAllPasses(
+            VkCommandBuffer cmd,
+            long pipelineHandle,
+            long pipelineLayout,
+            MultiPassSbt multiPassSbt,
+            int width,
+            int height,
+            boolean pushFirstLobe
+    ) {
         Objects.requireNonNull(cmd, "cmd must not be null");
         Objects.requireNonNull(multiPassSbt, "multiPassSbt must not be null");
 
@@ -1084,7 +1107,7 @@ public final class DirtRtPipeline implements AutoCloseable {
             for (int i = 0; i < DirtRtPipelineConfig.PASSES.size(); i++) {
                 RayPass pass = DirtRtPipelineConfig.PASSES.get(i);
                 PassSbt passSbt = multiPassSbt.pass(pass);
-                recordTracePass(cmd, pipelineHandle, pipelineLayout, pass, passSbt, width, height, stack);
+                recordTracePass(cmd, pipelineHandle, pipelineLayout, pass, passSbt, width, height, stack, pushFirstLobe);
 
                 if (i < DirtRtPipelineConfig.PASSES.size() - 1) {
                     recordRayPassBarrier(cmd, stack);
@@ -1104,6 +1127,8 @@ public final class DirtRtPipeline implements AutoCloseable {
     private final long[] setLayoutHandles = new long[DirtRtPipelineConfig.TOTAL_DESCRIPTOR_SETS];
     private final long[] shaderModuleHandles = new long[TOTAL_STAGES];
     private boolean initialized = false;
+    /** Legacy hand-written layout carries a 16-byte push range; a reflected layout has exactly what the SPIR-V declares. */
+    private boolean pushFirstLobe = true;
 
     public DirtRtPipeline(VkDevice device, boolean stageOrder) {
         this.device = device;
@@ -1227,6 +1252,120 @@ public final class DirtRtPipeline implements AutoCloseable {
         }
     }
 
+    /**
+     * Initializes the pipeline from the layout the compiled pack stages actually declare (see {@link DirtRtPackProgram}),
+     * instead of the hand-written {@link #describeDescriptorSets} guess. Sets without bindings get an empty layout so set
+     * numbers stay what the shaders use. An unbounded array is created with {@code runtimeArrayCapacity} descriptors,
+     * partially bound and with a variable count; it must be the highest binding of its set.
+     */
+    public void initializeReflected(
+            DirtRtShaderBundle shaders,
+            List<DirtRtPackProgram.BindingStatus> bindings,
+            int runtimeArrayCapacity,
+            long pipelineCache
+    ) {
+        Objects.requireNonNull(device, "Cannot initialize on device: VkDevice was null");
+        Objects.requireNonNull(shaders, "shaders must not be null");
+        Objects.requireNonNull(bindings, "bindings must not be null");
+        if (initialized) {
+            return;
+        }
+        int maxSet = -1;
+        for (DirtRtPackProgram.BindingStatus b : bindings) maxSet = Math.max(maxSet, b.binding().set());
+        if (maxSet >= DirtRtPipelineConfig.TOTAL_DESCRIPTOR_SETS) {
+            throw new IllegalArgumentException("pack uses descriptor set " + maxSet + "; this host supports sets 0.."
+                + (DirtRtPipelineConfig.TOTAL_DESCRIPTOR_SETS - 1));
+        }
+        pushFirstLobe = false;
+        boolean ok = false;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            LongBuffer p = stack.mallocLong(1);
+            int setCount = Math.max(1, maxSet + 1);
+            for (int s = 0; s < setCount; s++) {
+                List<DirtRtPackProgram.BindingStatus> inSet = new ArrayList<>();
+                for (DirtRtPackProgram.BindingStatus b : bindings) if (b.binding().set() == s) inSet.add(b);
+                int highest = inSet.stream().mapToInt(b -> b.binding().binding()).max().orElse(-1);
+                VkDescriptorSetLayoutBinding.Buffer vk = VkDescriptorSetLayoutBinding.calloc(inSet.size(), stack);
+                java.nio.IntBuffer flags = stack.mallocInt(Math.max(1, inSet.size()));
+                boolean anyFlags = false;
+                for (int i = 0; i < inSet.size(); i++) {
+                    var b = inSet.get(i).binding();
+                    int count = b.runtimeArray() ? runtimeArrayCapacity : b.count();
+                    vk.get(i).binding(b.binding()).descriptorType(toVkDescriptorType(b.kind()))
+                        .descriptorCount(count).stageFlags(inSet.get(i).stageFlags());
+                    int f = 0;
+                    if (b.runtimeArray()) {
+                        if (b.binding() != highest) throw new IllegalArgumentException("unbounded array at set " + s
+                            + " binding " + b.binding() + " is not the highest binding of its set");
+                        f = org.lwjgl.vulkan.VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
+                            | org.lwjgl.vulkan.VK12.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+                        anyFlags = true;
+                    }
+                    flags.put(i, f);
+                }
+                VkDescriptorSetLayoutCreateInfo info = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(vk);
+                if (anyFlags) {
+                    flags.limit(inSet.size());
+                    var bindingFlags = org.lwjgl.vulkan.VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack)
+                        .sType$Default().pBindingFlags(flags);
+                    info.pNext(bindingFlags.address());
+                }
+                check(VK10.vkCreateDescriptorSetLayout(device, info, null, p), "descriptor set layout " + s);
+                setLayoutHandles[s] = p.get(0);
+            }
+            LongBuffer layouts = stack.mallocLong(setCount);
+            for (int s = 0; s < setCount; s++) layouts.put(s, setLayoutHandles[s]);
+            VkPipelineLayoutCreateInfo plInfo = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(layouts);
+            check(VK10.vkCreatePipelineLayout(device, plInfo, null, p), "pipeline layout");
+            pipelineLayoutHandle = p.get(0);
+
+            LongBuffer modulesBuf = stack.mallocLong(TOTAL_STAGES);
+            for (int i = 0; i < TOTAL_STAGES; i++) {
+                VkShaderModuleCreateInfo moduleInfo = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(shaders.getShader(i));
+                check(VK10.vkCreateShaderModule(device, moduleInfo, null, p), "shader module " + i);
+                shaderModuleHandles[i] = p.get(0);
+                modulesBuf.put(i, p.get(0));
+            }
+            VkRayTracingPipelineCreateInfoKHR.Buffer pipeInfos = VkRayTracingPipelineCreateInfoKHR.calloc(1, stack);
+            pipeInfos.get(0).sType$Default()
+                .pStages(createPipelineShaderStages(stack, modulesBuf))
+                .pGroups(createPipelineShaderGroups(stack, stageOrder))
+                .maxPipelineRayRecursionDepth(DEFAULT_MAX_RECURSION_DEPTH)
+                .layout(pipelineLayoutHandle);
+            check(KHRRayTracingPipeline.vkCreateRayTracingPipelinesKHR(device, VK10.VK_NULL_HANDLE, pipelineCache, pipeInfos, null, p),
+                "vkCreateRayTracingPipelinesKHR");
+            pipelineHandle = p.get(0);
+            initialized = true;
+            ok = true;
+            LOGGER.info("Dirt RT ray tracing pipeline created from reflected layout: handle=0x{} sets={}",
+                Long.toHexString(pipelineHandle), setCount);
+        } finally {
+            if (!ok) {
+                initialized = true; // let close() release whatever was created before the failure
+                close();
+            }
+        }
+    }
+
+    private static void check(int result, String what) {
+        if (result != VK10.VK_SUCCESS) throw new IllegalStateException(what + " failed: VkResult " + result);
+    }
+
+    public static int toVkDescriptorType(io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvReflection.DescriptorKind kind) {
+        return switch (kind) {
+            case UNIFORM_BUFFER -> VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case STORAGE_BUFFER -> VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case COMBINED_IMAGE_SAMPLER -> VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            case SAMPLED_IMAGE -> VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            case STORAGE_IMAGE -> VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            case SAMPLER -> VK10.VK_DESCRIPTOR_TYPE_SAMPLER;
+            case UNIFORM_TEXEL_BUFFER -> VK10.VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+            case STORAGE_TEXEL_BUFFER -> VK10.VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+            case INPUT_ATTACHMENT -> VK10.VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+            case ACCELERATION_STRUCTURE -> KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        };
+    }
+
     public void recordTracePass(
             VkCommandBuffer cmd,
             RayPass pass,
@@ -1234,7 +1373,9 @@ public final class DirtRtPipeline implements AutoCloseable {
             int width,
             int height
     ) {
-        recordTracePass(cmd, pipelineHandle, pipelineLayoutHandle, pass, passSbt, width, height);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            recordTracePass(cmd, pipelineHandle, pipelineLayoutHandle, pass, passSbt, width, height, stack, pushFirstLobe);
+        }
     }
 
     public void recordTraceAllPasses(
@@ -1243,7 +1384,7 @@ public final class DirtRtPipeline implements AutoCloseable {
             int width,
             int height
     ) {
-        recordTraceAllPasses(cmd, pipelineHandle, pipelineLayoutHandle, multiPassSbt, width, height);
+        recordTraceAllPasses(cmd, pipelineHandle, pipelineLayoutHandle, multiPassSbt, width, height, pushFirstLobe);
     }
 
     public MultiPassSbt queryAndBuildSbt(
