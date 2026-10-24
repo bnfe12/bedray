@@ -36,6 +36,13 @@ public final class IrisSourcePreprocessor {
         "/\\*\\s*(?:DRAWBUFFERS|RENDERTARGETS|GAUX4FORMAT)\\b[\\s\\S]*?\\*/");
     private static final Pattern TARGET_PRAGMA = Pattern.compile(
         "(?m)^[ \\t]*#[ \\t]*pragma[ \\t]+bedray_iris_target_([0-9a-f]+)[ \\t]*$");
+    /** Iris reads {@code const} directives from comment lines that start with {@code const} (its ConstDirectiveParser). */
+    private static final Pattern COMMENT_CONST = Pattern.compile(
+        "(?m)^[ \\t]*(const[ \\t]+\\w+[ \\t]+\\w+[ \\t]*=[^;\\n]*;)");
+    private static final Pattern CONST_PRAGMA = Pattern.compile(
+        "(?m)^[ \\t]*#[ \\t]*pragma[ \\t]+bedray_iris_const_([0-9a-f]+)[ \\t]*$");
+    /** Prefix of a restored const directive that was inside a live block comment; see {@link IrisConstDirectives}. */
+    public static final String CONST_MARKER = "//@bedray-const ";
 
     private IrisSourcePreprocessor() {}
 
@@ -117,7 +124,16 @@ public final class IrisSourcePreprocessor {
                     throw new PackScanException(entry + ": preprocessed source exceeds output budget");
                 // Unknown pragmas survive preprocessing, including only the branch the compiler took.
                 // Restore the target comments for the translator; the compiler never saw them as code.
-                Matcher targets = TARGET_PRAGMA.matcher(MemoryUtil.memUTF8(bytes));
+                Matcher constants = CONST_PRAGMA.matcher(MemoryUtil.memUTF8(bytes));
+                StringBuilder withConstants = new StringBuilder();
+                while (constants.find()) {
+                    String directive;
+                    try { directive = new String(HexFormat.of().parseHex(constants.group(1)), StandardCharsets.UTF_8); }
+                    catch (IllegalArgumentException e) { throw new PackScanException("invalid preserved Iris const directive"); }
+                    constants.appendReplacement(withConstants, Matcher.quoteReplacement(CONST_MARKER + directive));
+                }
+                constants.appendTail(withConstants);
+                Matcher targets = TARGET_PRAGMA.matcher(withConstants);
                 StringBuilder restored = new StringBuilder();
                 while (targets.find()) {
                     String comment;
@@ -179,7 +195,20 @@ public final class IrisSourcePreprocessor {
                 } else if (c == '/' && i < source.length() && source.charAt(i) == '*') {
                     int end = source.indexOf("*/", i + 1);
                     i = end < 0 ? source.length() : end + 2;
-                    Matcher target = TARGET_COMMENT.matcher(source.substring(start, i));
+                    String comment = source.substring(start, i);
+                    Matcher target = TARGET_COMMENT.matcher(comment);
+                    Matcher constant = COMMENT_CONST.matcher(comment);
+                    if (!target.matches() && constant.find()) {
+                        // Like Iris's comment-keeping preprocessor, only directives in the live branch reach the output.
+                        constant.reset();
+                        while (constant.find()) {
+                            out.append("\n#pragma bedray_iris_const_")
+                                .append(HexFormat.of().formatHex(constant.group(1).getBytes(StandardCharsets.UTF_8)));
+                        }
+                        out.append("\n#line ").append(line).append('\n');
+                        for (int p = start; p < i; p++) if (source.charAt(p) == '\n') { out.append('\n'); line++; }
+                        continue;
+                    }
                     if (target.matches()) {
                         String encoded = HexFormat.of().formatHex(source.substring(start, i).getBytes(StandardCharsets.UTF_8));
                         out.append("\n#pragma bedray_iris_target_").append(encoded)

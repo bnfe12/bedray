@@ -77,7 +77,7 @@ class IrisPostExecutorTest {
     void descriptorSetLayoutBindings() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDescriptorSetLayoutBinding.Buffer bindings = IrisPostExecutor.createDescriptorBindings(stack);
-            assertEquals(10, bindings.remaining(), "Nine sampler bindings plus the frame uniform buffer");
+            assertEquals(IrisUniforms.SAMPLER_BINDINGS + 1, bindings.remaining(), "colortex0..15 and depthtex0 samplers plus the frame uniform buffer");
 
             VkDescriptorSetLayoutBinding b0 = bindings.get(0);
             assertEquals(IrisUniforms.BINDING_COLORTEX0, b0.binding(), "Binding 0 index");

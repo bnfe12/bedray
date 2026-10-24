@@ -232,7 +232,7 @@ public final class IrisRenderBridge {
     private static IrisPassGraph ownedGraph;
     private static IrisDepthConverter depthConverter;
     private static int ownedWidth, ownedHeight, ownedFormat;
-    private static long ownedDepthView;
+    private static long ownedColorImage, ownedColorView, ownedDepthImage, ownedDepthView;
     private static WorldFrame.DepthEncoding ownedDepthEncoding;
     /** Target whose views the owned graph borrows; null means unknown, so any target closing retires. */
     private static RenderTarget ownedTarget;
@@ -292,9 +292,7 @@ public final class IrisRenderBridge {
         var device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null) return false;
         try {
-            boolean rendered = renderFrame(WorldFrameCapture.capture(device, target, camera, renderer));
-            ownedTarget = owner != null ? target : null;
-            return rendered;
+            return renderFrame(WorldFrameCapture.capture(device, target, camera, renderer), target);
         }
         catch (IllegalArgumentException | IllegalStateException error) {
             runtimeStatus = "World frame unavailable: " + error.getMessage(); return false;
@@ -303,6 +301,11 @@ public final class IrisRenderBridge {
 
     /** Fullscreen seam for current-frame borrowed color/guides on the existing host device and queue. */
     public static boolean renderFrame(WorldFrame frame) {
+        return renderFrame(frame, null);
+    }
+
+    /** The optional target identity belongs to resources that are actually prepared, including failed recordings. */
+    private static boolean renderFrame(WorldFrame frame, RenderTarget target) {
         if (failed || cleanupBroken || !Boolean.getBoolean("bedray.iris.post")
             || ShaderHosts.active()
                 != ShaderHostKind.IRIS) return false;
@@ -348,6 +351,7 @@ public final class IrisRenderBridge {
         }
         long colorImage=frame.color().image(), colorView=frame.color().view();
         // The executor fills unused depth bindings from its owned sampled color image.
+        long depthImage=readsDepth ? frame.depth().image().image() : 0;
         long depthView=readsDepth ? frame.depth().image().view() : 0;
         int format=frame.color().format(), width=frame.color().width(), height=frame.color().height();
         boolean convertsDepth = readsDepth && encoding != WorldFrame.DepthEncoding.OPENGL_WINDOW_Z;
@@ -356,13 +360,18 @@ public final class IrisRenderBridge {
             ShaderHosts.noteIrisFailure(runtimeStatus); return false;
         }
         if (owner != null && (ownedGraph != graph || ownedWidth != width || ownedHeight != height
-            || ownedFormat != format || ownedDepthView != depthView || ownedDepthEncoding != encoding)) {
+            || ownedFormat != format || ownedTarget != target || ownedColorImage != colorImage
+            || ownedColorView != colorView || ownedDepthImage != depthImage
+            || ownedDepthView != depthView || ownedDepthEncoding != encoding)) {
             if (!retire()) return false;
         }
         try {
             if (executor == null) {
+                // Only accepted frames may replace ownership. Establish it before preparing borrowed descriptors,
+                // so allocation/recording failure cannot leave the previous target shielding the new resources.
                 owner=device; ownedGraph=graph; ownedWidth=width; ownedHeight=height;
-                ownedFormat=format; ownedDepthView=depthView; ownedDepthEncoding=encoding;
+                ownedFormat=format; ownedTarget=target; ownedColorImage=colorImage; ownedColorView=colorView;
+                ownedDepthImage=depthImage; ownedDepthView=depthView; ownedDepthEncoding=encoding;
                 var capabilities=device.vkDevice().getCapabilities();
                 if (capabilities.vkCmdBeginRendering==0 && capabilities.vkCmdBeginRenderingKHR==0)
                     throw new IllegalStateException("Dynamic rendering is unavailable");
@@ -451,7 +460,8 @@ public final class IrisRenderBridge {
             if (waitResult != VK10.VK_SUCCESS) throw new IllegalStateException("Iris retirement wait failed: " + waitResult);
             if(depthConverter!=null) {depthConverter.close();depthConverter=null;}
             if(executor!=null) {executor.close();executor=null;}
-            activePackName=null; owner=null;ownedGraph=null;ownedDepthView=0;ownedDepthEncoding=null;ownedTarget=null;
+            activePackName=null; owner=null;ownedGraph=null;ownedTarget=null;
+            ownedColorImage=ownedColorView=ownedDepthImage=ownedDepthView=0;ownedDepthEncoding=null;
             resetTiming();
             return true;
         } catch (RuntimeException | LinkageError error) {

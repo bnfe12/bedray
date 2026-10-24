@@ -21,7 +21,7 @@ import java.util.regex.Pattern;
  *       {@code gl_ModelViewProjectionMatrix}, {@code gl_ProjectionMatrix}, {@code gl_ModelViewMatrix}, {@code gl_TextureMatrix[0]},
  *       {@code gl_Color}, core-profile {@code vaPosition}/{@code vaUV0}, constant-index {@code gl_FragData},
  *       {@code texture2D}/{@code texture2DLod};</li>
- *   <li>{@code RENDERTARGETS}/{@code DRAWBUFFERS}: up to four output locations mapped to colortex0..7.</li>
+ *   <li>{@code RENDERTARGETS}/{@code DRAWBUFFERS}: up to eight output locations mapped to colortex0..15.</li>
  * </ul>
  * Everything else that a fullscreen pass could reference (other uniforms/samplers, uniform/buffer blocks, images,
  * vertex attributes, shadow samplers) is collected in {@link Result#unsupported()}; the caller then refuses the pack.
@@ -44,7 +44,19 @@ public final class IrisGlslTranslator {
      */
     public record Result(String source, Set<String> unsupported, List<Integer> drawBuffers, Map<String, Integer> varyings,
                          Set<String> pushUsed, Set<Integer> samplerBindings, Map<String, InterfaceVariable> stageInterface,
-                         Set<String> frameUsed) {}
+                         Set<String> frameUsed, List<IrisConstDirectives.ConstDirective> directives, String gaux4Format,
+                         boolean samplesGdepth) {
+        public Result {
+            directives = List.copyOf(directives);
+        }
+
+        /** Result without directive metadata (tests and synthetic passes). */
+        public Result(String source, Set<String> unsupported, List<Integer> drawBuffers, Map<String, Integer> varyings,
+                      Set<String> pushUsed, Set<Integer> samplerBindings, Map<String, InterfaceVariable> stageInterface,
+                      Set<String> frameUsed) {
+            this(source, unsupported, drawBuffers, varyings, pushUsed, samplerBindings, stageInterface, frameUsed, List.of(), null, false);
+        }
+    }
 
     /** A program interface is shared by name AND type; matrices/arrays occupy multiple locations. */
     public record InterfaceVariable(String type, int arraySize, int location, int locations, String interpolation) {}
@@ -58,6 +70,7 @@ public final class IrisGlslTranslator {
     private static final Pattern BLOCK = Pattern.compile("^\\s*(?:layout\\s*\\([^)]*\\)\\s*)?(?:uniform|buffer|readonly\\s+buffer|writeonly\\s+buffer)\\s+\\w+\\s*\\{?\\s*$");
     private static final Pattern TARGETS = Pattern.compile("/\\*\\s*(RENDERTARGETS|DRAWBUFFERS)\\b((?:(?!\\*/).)*)\\*/", Pattern.DOTALL);
     private static final Pattern FRAGDATA = Pattern.compile("\\bgl_FragData\\s*\\[\\s*(\\d+)\\s*\\]");
+    private static final Pattern GAUX4FORMAT = Pattern.compile("/\\*\\s*GAUX4FORMAT\\s*:\\s*(\\w*)\\s*\\*/");
 
     private static final String VERTEX_PRELUDE = String.join("\n",
         "const mat4 vkb_ortho = mat4(2.0, 0.0, 0.0, 0.0,  0.0, 2.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  -1.0, -1.0, 0.0, 1.0);",
@@ -83,9 +96,17 @@ public final class IrisGlslTranslator {
      */
     public static Result translate(String expanded, Stage stage, Map<String, Integer> varyingLocations, String displayName) {
         Set<String> unsupported = new TreeSet<>();
-        if (Pattern.compile("\\b(?:colortex[0-9]+|gcolor|gdepth|gnormal|composite|gaux[1-4])(?:MipmapEnabled|Format|Clear|ClearColor)\\b").matcher(expanded).find()
-            || Pattern.compile("/\\*\\s*GAUX4FORMAT\\b").matcher(expanded).find())
-            unsupported.add("target format/clear/mipmap directives are outside this bounded resource graph");
+        // Target format/clear/mipmap directives are resolved per graph (IrisRenderTargets); here they are only collected.
+        List<IrisConstDirectives.ConstDirective> directives = IrisConstDirectives.parse(expanded);
+        String gaux4Format = null;
+        Matcher gaux4 = GAUX4FORMAT.matcher(expanded);
+        while (gaux4.find()) {
+            if (gaux4Format != null && !gaux4Format.equals(gaux4.group(1))) unsupported.add("multiple GAUX4FORMAT directives");
+            gaux4Format = gaux4.group(1);
+        }
+        if (gaux4Format == null && Pattern.compile("/\\*\\s*GAUX4FORMAT\\b").matcher(expanded).find())
+            unsupported.add("malformed GAUX4FORMAT directive");
+        boolean samplesGdepth = false;
         List<Integer> drawBuffers = new ArrayList<>();
         if (stage == Stage.FRAGMENT) {
             drawBuffers.addAll(parseDrawBuffers(expanded, unsupported));
@@ -147,6 +168,7 @@ public final class IrisGlslTranslator {
                             Integer b = IrisUniforms.SAMPLERS.get(name);
                             if (b != null && type.equals("sampler2D")) {
                                 samplerBindings.add(b);
+                                if (name.equals("gdepth")) samplesGdepth = true;
                                 repl.append("layout(set = 0, binding = ").append(b).append(") uniform sampler2D ").append(name).append(";\n");
                             } else {
                                 unsupported.add("sampler " + type + " " + name);
@@ -301,7 +323,7 @@ public final class IrisGlslTranslator {
         }
         src.append("#line 1 \"").append(displayName).append("\"\n").append(code);
         return new Result(src.toString(), unsupported, List.copyOf(drawBuffers), Map.copyOf(varyingLocations),
-            pushUsed, samplerBindings, Map.copyOf(stageInterface), Set.copyOf(frameUsed));
+            pushUsed, samplerBindings, Map.copyOf(stageInterface), Set.copyOf(frameUsed), directives, gaux4Format, samplesGdepth);
     }
 
     /** Validate before either module reaches pipeline creation; successful individual compiles cannot establish this. */
@@ -405,12 +427,17 @@ public final class IrisGlslTranslator {
             String spec = body.substring(1).strip();
             if (name.equals("DRAWBUFFERS")) {
                 String digits = spec.replaceAll("\\s", "");
-                if (!digits.matches("[0-7]+")) unsupported.add("malformed DRAWBUFFERS " + spec + " (expected digits 0..7)");
+                if (!digits.matches("[0-9]+")) unsupported.add("malformed DRAWBUFFERS " + spec + " (expected digits 0..9)");
                 else for (char digit : digits.toCharArray()) result.add(digit - '0');
             } else {
-                if (!spec.matches("[0-7](?:\\s*,\\s*[0-7])*"))
-                    unsupported.add("malformed RENDERTARGETS " + spec + " (expected comma-separated targets 0..7)");
-                else for (String target : spec.split(",")) result.add(Integer.parseInt(target.strip()));
+                if (!spec.matches("\\d{1,2}(?:\\s*,\\s*\\d{1,2})*"))
+                    unsupported.add("malformed RENDERTARGETS " + spec + " (expected comma-separated colortex indices)");
+                else for (String target : spec.split(",")) {
+                    int index = Integer.parseInt(target.strip());
+                    if (index >= IrisUniforms.COLOR_TARGETS)
+                        unsupported.add("RENDERTARGETS colortex" + index + " (this host provides colortex0.." + (IrisUniforms.COLOR_TARGETS - 1) + ")");
+                    else result.add(index);
+                }
             }
             if (result.isEmpty() || result.size() > IrisUniforms.MAX_DRAW_BUFFERS)
                 unsupported.add("draw buffers need 1.." + IrisUniforms.MAX_DRAW_BUFFERS + " color attachments: " + result);
