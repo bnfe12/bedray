@@ -332,9 +332,9 @@ public final class RtMaterialAtlas {
         }
         long bytes = texels * 4L;
         RtMemory.Buf st = memory.createBuffer("rt_material_staging", bytes * 2, VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkBufferImageCopy.Buffer matRegions = VkBufferImageCopy.calloc(batch.size(), stack);
-            VkBufferImageCopy.Buffer norRegions = VkBufferImageCopy.calloc(batch.size(), stack);
+        VkBufferImageCopy.Buffer matRegions = regions(batch.size());
+        VkBufferImageCopy.Buffer norRegions = regions(batch.size());
+        try {
             long off = 0;
             for (int i = 0; i < batch.size(); i++) {
                 MaterialAtlasBaker.SpriteBake b = batch.get(i);
@@ -355,8 +355,21 @@ public final class RtMaterialAtlas {
             VK10.vkCmdCopyBufferToImage(cmd, st.handle, material.image, VK10.VK_IMAGE_LAYOUT_GENERAL, matRegions);
             VK10.vkCmdCopyBufferToImage(cmd, st.handle, normal.image, VK10.VK_IMAGE_LAYOUT_GENERAL, norRegions);
             VkBarriers.fullMemoryBarrier(cmd);
+        } finally {
+            matRegions.free();
+            norRegions.free();
         }
         retired.add(new Retired(st, STAGING_LIFETIME));
+    }
+
+    /**
+     * The region arrays are sized by the batch, and the batch is data-driven: a frame that follows a long stall drains
+     * the whole atlas at once (1313 sprites of a 2048x2048 atlas). One such array is 71 KiB, past the 64 KiB
+     * thread-local LWJGL stack that {@link MemoryStack} hands out, so the arrays go off-heap and are freed by the
+     * caller — the same arena every other data-sized struct array of the renderer uses.
+     */
+    static VkBufferImageCopy.Buffer regions(int count) {
+        return VkBufferImageCopy.calloc(count);
     }
 
     private static void fillRegion(VkBufferImageCopy r, long bufferOffset, MaterialAtlasBaker.SpriteBake b) {
