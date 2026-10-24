@@ -1,0 +1,6 @@
+# Copy beside the installed pack as shaderpacks/iris-color-post.txt (not inside shaders/).
+# Explicit saved values override the optional -Dbedray.iris.profile baseline.
+ENABLE_COLOR_CONTRAST=true
+COLOR_CONTRAST=1.05
+ENABLE_COLOR_EXPOSURE=true
+COLOR_EXPOSURE=1.05

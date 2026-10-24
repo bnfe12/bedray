@@ -62,8 +62,8 @@ public final class ShaderHostConfig {
     /** Appends the section to bedray.toml (called by VulkanRtxConfig.save). */
     public static void write(Writer w) throws IOException {
         w.write("\n[shader_host]\n");
-        w.write("# [EXPERIMENTAL] native = built-in ray/path tracing renderer. iris = Iris/OptiFine shaderpacks on Vulkan: in construction,\n");
-        w.write("# it only reads the pack chosen in config/iris.properties and falls back to native (no pack is rendered yet)\n");
+        w.write("# [EXPERIMENTAL] native = built-in ray/path tracing renderer. iris = experimental post-only Iris/OptiFine shaders on Vulkan,\n");
+        w.write("# enable with -Dbedray.iris.post=true; unsupported packs retain the native world image\n");
         w.write(KEY + " = \"" + persisted.configName() + "\"\n");
     }
 

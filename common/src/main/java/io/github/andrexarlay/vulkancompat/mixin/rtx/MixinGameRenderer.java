@@ -79,6 +79,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     private void onRenderBegin(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.frameBegin();
+            io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.beginFrame(this.minecraft.level);
+            io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onFrameBegin(this.minecraft.level);
             ComputeRenderBridge.onFrameBegin(this.minecraft.level != null);
             VulkanRtxManager.processPendingChanges();
             WorldTargetManager.resetPhase((GameRenderer) (Object) this);
@@ -194,7 +196,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.mark(PerfMonitor.Mark.RASTER_END);
             ComputeRenderBridge.captureWorld(this.gameRenderState.levelRenderState.cameraRenderState);
-            if (ComputeRenderBridge.renderDiagnostic(this.mainRenderTarget)) {
+            boolean computeRecorded = ComputeRenderBridge.renderDiagnostic(this.mainRenderTarget);
+            if (computeRecorded) {
                 io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.suspendForComputeDiagnostic();
             } else {
                 // The particles of the world pass are replayed before the hardware RT replacement image.
@@ -203,6 +206,16 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
                     this.gameRenderState.levelRenderState.cameraRenderState, this.mainRenderTarget,
                     this.gameRenderState.levelRenderState);
             }
+            // The producer follows this frame's accepted commands and applied scene, not a pending UI request.
+            var producer = computeRecorded
+                ? (ComputeRenderBridge.appliedSceneMode() == io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE
+                    ? io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.VOXEL_COMPUTE
+                    : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.SYNTHETIC)
+                : io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.displayedThisFrame(this.mainRenderTarget)
+                    ? io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.HARDWARE_RT
+                    : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.RASTER;
+            io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.renderFrame(
+                this.mainRenderTarget, this.gameRenderState.levelRenderState.cameraRenderState, producer);
             PerfMonitor.mark(PerfMonitor.Mark.RT_END);
             WorldTargetManager.copyWorldDepth();
         }

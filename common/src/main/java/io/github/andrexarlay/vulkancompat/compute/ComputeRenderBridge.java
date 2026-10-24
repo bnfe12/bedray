@@ -48,6 +48,9 @@ public final class ComputeRenderBridge {
 
     private ComputeRenderBridge() {}
 
+    /** Render-thread scene applied at this frame's boundary; pair with a successful renderDiagnostic result. */
+    public static GraphicsBackendRegistry.SceneMode appliedSceneMode() { return appliedRequest.mode(); }
+
     public static void onFrameBegin(boolean hasWorld) {
         if (!rendererSelectionInitialized) {
             // Config loading and Vulkan runtime setup have finished before the first rendered frame.

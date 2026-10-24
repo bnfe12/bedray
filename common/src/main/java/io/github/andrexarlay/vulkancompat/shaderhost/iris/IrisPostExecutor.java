@@ -10,6 +10,7 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDescriptorImageInfo;
+import org.lwjgl.vulkan.VkDescriptorBufferInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolSize;
 import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
@@ -18,6 +19,9 @@ import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
 import org.lwjgl.vulkan.VkImageCopy;
+import org.lwjgl.vulkan.VkClearColorValue;
+import org.lwjgl.vulkan.VkImageSubresourceRange;
+import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkPipelineColorBlendAttachmentState;
 import org.lwjgl.vulkan.VkPipelineColorBlendStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineDepthStencilStateCreateInfo;
@@ -53,16 +57,9 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Stage I3 execution runtime for Iris composite and final fullscreen passes.
- * <p>
- * Manages:
- * <ul>
- *   <li>Two ping-pong RGBA8 images ({@code colortex0} and {@code colortex1}) allocated through {@link RtMemory#createImage}.</li>
- *   <li>Dynamic rendering graphics pipelines ({@link VkGraphicsPipelineCreateInfo}) for each pass in {@link IrisPassGraph}.</li>
- *   <li>Ring-buffered descriptor sets (binding 0: sampled colortex ping-pong, binding 1: engine depth texture).</li>
- *   <li>32-byte push constants block per draw according to {@link IrisUniforms#PUSH}.</li>
- *   <li>Ping-pong rendering loop: engine color image copy -> sequential pass draws -> final target to engine color view.</li>
- * </ul>
+ * Bounded fullscreen resource-graph executor on the host device/queue. Each logical color target
+ * has separate sampled/output banks. A final pass uses a presentation image; the host color is
+ * overwritten only after the complete graph records. No resource contents are temporal history.
  */
 public final class IrisPostExecutor implements AutoCloseable {
 
@@ -96,9 +93,15 @@ public final class IrisPostExecutor implements AutoCloseable {
     private long descriptorPool = 0L;
     private long[][] descriptorSets; // [FRAME_SLOTS][MAX_PASS_SETS]
     private int currentFrameSlot = -1;
-
-    private RtMemory.Img colortex0;
-    private RtMemory.Img colortex1;
+    private final long[][][] boundImages = new long[FRAME_SLOTS][MAX_PASS_SETS][IrisUniforms.SAMPLER_BINDINGS];
+    private final boolean[][] descriptorsInitialized = new boolean[FRAME_SLOTS][MAX_PASS_SETS];
+    private final RtMemory.Img[][] colorImages = new RtMemory.Img[IrisUniforms.COLOR_TARGETS][2];
+    private RtMemory.Img presentation;
+    private Set<Integer> allocatedTargets = Set.of();
+    private int allocatedWidth, allocatedHeight;
+    private IrisResourcePlan resourcePlan;
+    private static final long MAX_IMAGE_BYTES = 512L * 1024 * 1024;
+    private RtMemory.Buf frameUniforms;
     private boolean imagesInitialized = false;
 
     private final Map<String, Long> pipelines = new LinkedHashMap<>();
@@ -118,7 +121,8 @@ public final class IrisPostExecutor implements AutoCloseable {
         this.device = Objects.requireNonNull(device, "device");
         this.memory = Objects.requireNonNull(memory, "memory");
         this.colorFormat = colorFormat;
-        initVulkan();
+        try { initVulkan(); }
+        catch (RuntimeException | LinkageError error) { cleanup(); throw error; }
     }
 
     /**
@@ -137,6 +141,8 @@ public final class IrisPostExecutor implements AutoCloseable {
     private void initVulkan() {
         LOGGER.info("[IrisPostExecutor] Initializing Vulkan runtime resources (format={})...", colorFormat);
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            frameUniforms = memory.createBuffer("iris_frame", IrisUniforms.FRAME_BYTES,
+                VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
             LongBuffer p = stack.mallocLong(1);
 
             // 1. Color sampler: bilinear clamp to edge
@@ -157,7 +163,7 @@ public final class IrisPostExecutor implements AutoCloseable {
             RtFailure.check(VK10.vkCreateSampler(device, samplerInfo, null, p), "create_depth_sampler");
             this.depthSampler = p.get(0);
 
-            // 3. Descriptor set layout: binding 0 = colortex0, binding 1 = depthtex0
+            // 3. Stable layout shared by every pass: nine samplers and one frame UBO
             VkDescriptorSetLayoutBinding.Buffer bindings = createDescriptorBindings(stack);
             VkDescriptorSetLayoutCreateInfo layoutInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default()
                 .pBindings(bindings);
@@ -174,9 +180,10 @@ public final class IrisPostExecutor implements AutoCloseable {
 
             // 5. Descriptor pool and sets
             int totalSets = FRAME_SLOTS * MAX_PASS_SETS;
-            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
             poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                 .descriptorCount(totalSets * IrisUniforms.SAMPLER_BINDINGS);
+            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(totalSets);
             VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
                 .maxSets(totalSets)
                 .pPoolSizes(poolSizes);
@@ -215,7 +222,7 @@ public final class IrisPostExecutor implements AutoCloseable {
         validateGraph(graph);
 
         if (device != null) {
-            VK10.vkDeviceWaitIdle(device);
+            RtFailure.check(VK10.vkDeviceWaitIdle(device), "iris_pipeline_retirement_wait");
             for (long pipe : this.pipelines.values()) {
                 VK10.vkDestroyPipeline(device, pipe, null);
             }
@@ -285,8 +292,9 @@ public final class IrisPostExecutor implements AutoCloseable {
                 .depthCompareOp(VK10.VK_COMPARE_OP_ALWAYS)
                 .stencilTestEnable(false);
 
-            VkPipelineColorBlendStateCreateInfo colorBlend = createColorBlendState(stack);
-            VkPipelineRenderingCreateInfo renderingCreateInfo = createPipelineRenderingCreateInfo(stack, colorFormat);
+            int attachments = pass.isFinal() ? 1 : pass.drawBuffers().size();
+            VkPipelineColorBlendStateCreateInfo colorBlend = createColorBlendState(stack, attachments);
+            VkPipelineRenderingCreateInfo renderingCreateInfo = createPipelineRenderingCreateInfo(stack, colorFormat, attachments);
 
             VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack);
             pipelineInfo.get(0).sType$Default()
@@ -313,39 +321,73 @@ public final class IrisPostExecutor implements AutoCloseable {
         }
     }
 
-    /**
-     * Ensures ping-pong images exist with the required resolution.
-     */
+    /** Legacy color0 allocation seam; graph callers use prepare before opening a command buffer. */
     public synchronized void ensure(int width, int height) {
-        if (width <= 0 || height <= 0) {
-            throw new IllegalArgumentException("Invalid dimensions: " + width + "x" + height);
+        ensureResources(Set.of(0), false, width, height);
+    }
+
+    private synchronized void ensureResources(Set<Integer> targets, boolean finalPass, int width, int height) {
+        if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid Iris extent");
+        if (memory == null) return;
+        if (allocatedWidth == width && allocatedHeight == height && allocatedTargets.equals(targets)
+            && (presentation != null) == finalPass) return;
+        // The host must submit queued uses and retire this executor before target/graph changes.
+        if (!allocatedTargets.isEmpty()) throw new IllegalStateException("Retire Iris before changing image resources");
+        checkDeviceResources(targets.size() * 2 + (finalPass ? 1 : 0), width, height);
+        int usage = VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT
+            | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        for (int target : targets) {
+            for (int bank = 0; bank < 2; bank++) colorImages[target][bank] = memory.createImage(
+                "iris_colortex" + target + "_" + bank, width, height, colorFormat, usage);
         }
-        if (colortex0 != null && colortex1 != null && colortex0.width == width && colortex0.height == height) {
-            return;
-        }
-        if (memory == null) {
-            return;
-        }
-        if (device != null && (colortex0 != null || colortex1 != null)) {
-            VK10.vkDeviceWaitIdle(device);
-        }
-        if (colortex0 != null) {
-            memory.destroy(colortex0);
-            colortex0 = null;
-        }
-        if (colortex1 != null) {
-            memory.destroy(colortex1);
-            colortex1 = null;
-        }
-        int usage = VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-            | VK10.VK_IMAGE_USAGE_SAMPLED_BIT
-            | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT
-            | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        colortex0 = memory.createImage("iris_colortex0", width, height, colorFormat, usage);
-        colortex1 = memory.createImage("iris_colortex1", width, height, colorFormat, usage);
+        if (finalPass) presentation = memory.createImage("iris_presentation", width, height, colorFormat, usage);
+        allocatedTargets = Set.copyOf(targets);
+        allocatedWidth = width; allocatedHeight = height;
         imagesInitialized = false;
-        LOGGER.info("[IrisPostExecutor] Allocated ping-pong images colortex0/1: {}x{} format={}",
-            width, height, colorFormat);
+        LOGGER.info("[IrisPostExecutor] Allocated {} color target pairs, final={}, {}x{} format={}",
+            targets.size(), finalPass, width, height, colorFormat);
+    }
+
+    private void checkDeviceResources(int imageCount, int width, int height) {
+        int bytesPerPixel = switch (colorFormat) {
+            case VK10.VK_FORMAT_R8G8B8A8_UNORM, VK10.VK_FORMAT_R8G8B8A8_SRGB,
+                 VK10.VK_FORMAT_B8G8R8A8_UNORM, VK10.VK_FORMAT_B8G8R8A8_SRGB,
+                 VK10.VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK10.VK_FORMAT_A2R10G10B10_UNORM_PACK32,
+                 VK10.VK_FORMAT_B10G11R11_UFLOAT_PACK32 -> 4;
+            case VK10.VK_FORMAT_R16G16B16A16_SFLOAT, VK10.VK_FORMAT_R16G16B16A16_UNORM -> 8;
+            case VK10.VK_FORMAT_R32G32B32A32_SFLOAT -> 16;
+            default -> throw new IllegalArgumentException("Unsupported Iris color attachment format " + colorFormat);
+        };
+        long pixels = Math.multiplyExact((long) width, height);
+        long bytes = Math.multiplyExact(pixels, (long) imageCount * bytesPerPixel);
+        if (bytes > MAX_IMAGE_BYTES) throw new IllegalArgumentException("Iris color images exceed the 512 MiB budget");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var properties = VkPhysicalDeviceProperties.calloc(stack);
+            VK10.vkGetPhysicalDeviceProperties(device.getPhysicalDevice(), properties);
+            var limits = properties.limits();
+            if (width > limits.maxImageDimension2D() || height > limits.maxImageDimension2D()
+                || width > limits.maxFramebufferWidth() || height > limits.maxFramebufferHeight())
+                throw new IllegalArgumentException("Iris extent exceeds device image/framebuffer limits");
+            if (limits.maxPerStageDescriptorSamplers() < IrisUniforms.SAMPLER_BINDINGS
+                || limits.maxPerStageDescriptorSampledImages() < IrisUniforms.SAMPLER_BINDINGS
+                || limits.maxDescriptorSetSamplers() < IrisUniforms.SAMPLER_BINDINGS
+                || limits.maxDescriptorSetSampledImages() < IrisUniforms.SAMPLER_BINDINGS)
+                throw new IllegalArgumentException("Insufficient sampled-image descriptor limits for Iris");
+            int attachments = resourcePlan == null ? 1 : resourcePlan.steps().stream()
+                .mapToInt(step -> step.finalPass() ? 1 : step.writes().size()).max().orElse(1);
+            if (attachments > limits.maxColorAttachments() || attachments > limits.maxFragmentOutputAttachments())
+                throw new IllegalArgumentException("Iris draw buffers exceed device attachment limits");
+        }
+    }
+
+    /** Host calls before opening its transient command buffer; may allocate pipelines/images. */
+    public void prepare(IrisPassGraph graph, int width, int height) {
+        validateGraph(graph);
+        if (activeGraph != null && activeGraph != graph)
+            throw new IllegalStateException("Retire Iris before replacing the active graph");
+        resourcePlan = IrisResourcePlan.build(graph);
+        ensureResources(resourcePlan.targets(), resourcePlan.hasFinal(), width, height);
+        buildPipelines(graph);
     }
 
     /**
@@ -378,13 +420,23 @@ public final class IrisPostExecutor implements AutoCloseable {
         float far,
         float frameTime
     ) {
+        record(cmd, graph, engineColorImage, engineColorView, depthView, width, height, frameTimeCounter,
+            frameCounter, near, far, frameTime, null, null);
+    }
+
+    public void record(VkCommandBuffer cmd, IrisPassGraph graph, long engineColorImage, long engineColorView,
+                       long depthView, int width, int height, float frameTimeCounter, int frameCounter,
+                       float near, float far, float frameTime,
+                       io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Camera camera,
+                       io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Camera previousCamera) {
         if (cmd == null) {
             throw new IllegalArgumentException("cmd must not be null");
         }
         if (graph == null || graph.passes().isEmpty()) {
             return;
         }
-        if (engineColorImage == 0L || engineColorView == 0L || depthView == 0L) {
+        boolean readsDepth = graph.passes().stream().anyMatch(pass -> pass.allSamplerBindings().contains(IrisUniforms.BINDING_DEPTHTEX0));
+        if (engineColorImage == 0L || engineColorView == 0L || (readsDepth && depthView == 0L)) {
             throw new IllegalArgumentException("Invalid image handles: engineColorImage=" + engineColorImage
                 + " engineColorView=" + engineColorView + " depthView=" + depthView);
         }
@@ -392,34 +444,38 @@ public final class IrisPostExecutor implements AutoCloseable {
             throw new IllegalArgumentException("Invalid dimensions: " + width + "x" + height);
         }
 
-        ensure(width, height);
-        buildPipelines(graph);
+        prepare(graph, width, height);
 
         if (device == null || memory == null) {
             return;
         }
 
-        // Transition ping-pong images from UNDEFINED to GENERAL on first use or resize
+        if (camera == null && graph.passes().stream().anyMatch(pass -> !pass.allFrameUsed().isEmpty()))
+            throw new IllegalArgumentException("Frame uniforms need a captured current camera");
+        if (previousCamera == null && graph.passes().stream().flatMap(pass -> pass.allFrameUsed().stream())
+            .anyMatch(name -> name.startsWith("gbufferPrevious") || name.equals("previousCameraPosition")))
+            throw new IllegalArgumentException("Previous-frame uniforms need continuous camera history");
+        // Device-local UBO updates participate in queue ordering. No mapped ring is overwritten while in flight.
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var bytes = stack.malloc(IrisUniforms.FRAME_BYTES);
+            IrisFrameUniforms.write(bytes, camera, previousCamera);
+            VkBarriers.fullMemoryBarrier(cmd);
+            VK10.vkCmdUpdateBuffer(cmd, frameUniforms.handle, 0, bytes);
+            VkBarriers.fullMemoryBarrier(cmd);
+        }
+
         if (!imagesInitialized) {
-            VkBarriers.transition(cmd, colortex0.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
-                VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkBarriers.transition(cmd, colortex1.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+            for (int target : allocatedTargets) for (RtMemory.Img image : colorImages[target])
+                VkBarriers.transition(cmd, image.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+            if (presentation != null) VkBarriers.transition(cmd, presentation.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
                 VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
             imagesInitialized = true;
         }
-
         currentFrameSlot = (currentFrameSlot + 1) % FRAME_SLOTS;
         int slot = currentFrameSlot;
-
-        // Step 1: Copy engineColorImage into colortex0
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkImageCopy.Buffer copyRegion = VkImageCopy.calloc(1, stack);
-            copyRegion.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-            copyRegion.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-            copyRegion.get(0).extent().width(width).height(height).depth(1);
-            VK10.vkCmdCopyImage(cmd, engineColorImage, VK10.VK_IMAGE_LAYOUT_GENERAL,
-                colortex0.image, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion);
-        }
+        // Reset this frame's logical routing, without reading any previous auxiliary contents.
+        copyColor(cmd, engineColorImage, colorImages[0][0].image, width, height);
         VkBarriers.fullMemoryBarrier(cmd);
 
         // Dynamic viewport and scissor
@@ -434,38 +490,60 @@ public final class IrisPostExecutor implements AutoCloseable {
             VK10.vkCmdSetScissor(cmd, 0, scissor);
         }
 
-        int readIndex = 0; // 0 = colortex0, 1 = colortex1
-        List<IrisPassGraph.Pass> passes = graph.passes();
-        boolean hasFinalPass = graph.finalPass() != null;
-
-        for (int passIdx = 0; passIdx < passes.size(); passIdx++) {
-            IrisPassGraph.Pass pass = passes.get(passIdx);
+        List<IrisResourcePlan.Step> steps = resourcePlan.steps();
+        for (int passIdx = 0; passIdx < steps.size(); passIdx++) {
+            var step = steps.get(passIdx);
+            var pass = step.pass();
             Long pipeHandle = pipelines.get(pass.name());
-            if (pipeHandle == null) {
-                throw new IllegalStateException("Pipeline not found for pass: " + pass.name());
+            if (pipeHandle == null) throw new IllegalStateException("Pipeline not found: " + pass.name());
+            RtMemory.Img fallback = colorImages[0][step.fallbackBank()];
+            int attachmentCount = step.finalPass() ? 1 : step.writes().size();
+            long[] targetViews = new long[attachmentCount];
+            VkBarriers.fullMemoryBarrier(cmd);
+            if (step.finalPass()) {
+                copyColor(cmd, fallback.image, presentation.image, width, height);
+                targetViews[0] = presentation.view;
+            } else {
+                for (int i = 0; i < step.writes().size(); i++) {
+                    var output = step.writes().get(i);
+                    var destination = colorImages[output.target()][output.bank()];
+                    if (output.preserve()) copyColor(cmd, colorImages[output.target()][output.previousBank()].image,
+                        destination.image, width, height);
+                    else clearColor(cmd, destination.image);
+                    targetViews[i] = destination.view;
+                }
             }
-            if (passIdx >= MAX_PASS_SETS) {
-                throw new IllegalStateException("Pass index " + passIdx + " exceeds MAX_PASS_SETS (" + MAX_PASS_SETS + ")");
-            }
-
-            RtMemory.Img readImg = (readIndex == 0) ? colortex0 : colortex1;
-            RtMemory.Img writeImg = (readIndex == 0) ? colortex1 : colortex0;
-            long targetView = pass.isFinal() ? engineColorView : writeImg.view;
+            VkBarriers.fullMemoryBarrier(cmd);
             long dSet = descriptorSets[slot][passIdx];
-
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                // 1. Update descriptor set for current pass
-                VkDescriptorImageInfo.Buffer imgInfos = VkDescriptorImageInfo.calloc(2, stack);
-                imgInfos.get(0).sampler(colorSampler).imageView(readImg.view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-                imgInfos.get(1).sampler(depthSampler).imageView(depthView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-
-                VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(2, stack);
-                writes.get(0).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_COLORTEX0)
-                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imgInfos.slice(0, 1));
-                writes.get(1).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_DEPTHTEX0)
-                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(imgInfos.slice(1, 1));
-
-                VK10.vkUpdateDescriptorSets(device, writes, null);
+                var bindings = IrisUniforms.samplerBindings();
+                var infos = VkDescriptorImageInfo.calloc(IrisUniforms.SAMPLER_BINDINGS, stack);
+                var writes = VkWriteDescriptorSet.calloc(IrisUniforms.SAMPLER_BINDINGS + 1, stack);
+                for (int i = 0; i < bindings.size(); i++) {
+                    int binding = bindings.get(i), target = IrisUniforms.colorIndex(binding);
+                    long view = fallback.view;
+                    if (binding == IrisUniforms.BINDING_DEPTHTEX0) {
+                        if (pass.allSamplerBindings().contains(binding)) view = depthView;
+                    } else if (target >= 0 && step.readBanks().containsKey(target)) {
+                        view = colorImages[target][step.readBanks().get(target)].view;
+                    }
+                    infos.get(i).sampler(binding == IrisUniforms.BINDING_DEPTHTEX0 ? depthSampler : colorSampler)
+                        .imageView(view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                    writes.get(i).sType$Default().dstSet(dSet).dstBinding(binding)
+                        .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1)
+                        .pImageInfo(infos.slice(i, 1));
+                    if (descriptorsInitialized[slot][passIdx] && boundImages[slot][passIdx][i] != view)
+                        throw new IllegalStateException("Retire Iris before replacing sampled image descriptors");
+                }
+                var bufferInfo = VkDescriptorBufferInfo.calloc(1, stack);
+                bufferInfo.get(0).buffer(frameUniforms.handle).offset(0).range(IrisUniforms.FRAME_BYTES);
+                writes.get(IrisUniforms.SAMPLER_BINDINGS).sType$Default().dstSet(dSet).dstBinding(IrisUniforms.BINDING_FRAME)
+                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).pBufferInfo(bufferInfo);
+                if (!descriptorsInitialized[slot][passIdx]) {
+                    VK10.vkUpdateDescriptorSets(device, writes, null);
+                    for (int i = 0; i < bindings.size(); i++) boundImages[slot][passIdx][i] = infos.get(i).imageView();
+                    descriptorsInitialized[slot][passIdx] = true;
+                }
 
                 // 2. Bind pipeline
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeHandle);
@@ -481,12 +559,10 @@ public final class IrisPostExecutor implements AutoCloseable {
                     0, pushBuf);
 
                 // 5. Begin dynamic rendering
-                VkRenderingAttachmentInfo.Buffer colorAttachment = VkRenderingAttachmentInfo.calloc(1, stack);
-                colorAttachment.get(0).sType$Default()
-                    .imageView(targetView)
-                    .imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                    .loadOp(VK10.VK_ATTACHMENT_LOAD_OP_DONT_CARE)
-                    .storeOp(VK10.VK_ATTACHMENT_STORE_OP_STORE);
+                VkRenderingAttachmentInfo.Buffer colorAttachment = VkRenderingAttachmentInfo.calloc(attachmentCount, stack);
+                for (int i = 0; i < attachmentCount; i++) colorAttachment.get(i).sType$Default()
+                    .imageView(targetViews[i]).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                    .loadOp(VK10.VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK10.VK_ATTACHMENT_STORE_OP_STORE);
 
                 VkRenderingInfo renderingInfo = VkRenderingInfo.calloc(stack);
                 renderingInfo.sType$Default()
@@ -496,30 +572,37 @@ public final class IrisPostExecutor implements AutoCloseable {
 
                 beginRendering(cmd, renderingInfo);
 
-                // 6. Draw fullscreen triangle (3 vertices)
-                VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
-
-                // 7. End dynamic rendering
-                endRendering(cmd);
+                try {
+                    VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
+                } finally {
+                    endRendering(cmd);
+                }
             }
 
-            // 8. Memory barrier and ping-pong switch
             VkBarriers.fullMemoryBarrier(cmd);
-            readIndex = 1 - readIndex;
         }
+        var result = resourcePlan.hasFinal() ? presentation : colorImages[0][resourcePlan.resultBank()];
+        copyColor(cmd, result.image, engineColorImage, width, height);
+        VkBarriers.fullMemoryBarrier(cmd);
+    }
 
-        // Fallback: If no pass was marked final, copy the last rendered ping-pong image to engineColorImage
-        if (!hasFinalPass && !passes.isEmpty()) {
-            RtMemory.Img lastWritten = (readIndex == 1) ? colortex1 : colortex0;
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkImageCopy.Buffer copyRegion = VkImageCopy.calloc(1, stack);
-                copyRegion.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-                copyRegion.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-                copyRegion.get(0).extent().width(width).height(height).depth(1);
-                VK10.vkCmdCopyImage(cmd, lastWritten.image, VK10.VK_IMAGE_LAYOUT_GENERAL,
-                    engineColorImage, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion);
-            }
-            VkBarriers.fullMemoryBarrier(cmd);
+    private static void copyColor(VkCommandBuffer cmd, long source, long destination, int width, int height) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var region = VkImageCopy.calloc(1, stack);
+            region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+            region.get(0).extent().set(width, height, 1);
+            VK10.vkCmdCopyImage(cmd, source, VK10.VK_IMAGE_LAYOUT_GENERAL,
+                destination, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
+        }
+    }
+
+    private static void clearColor(VkCommandBuffer cmd, long image) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var clear = VkClearColorValue.calloc(stack);
+            var range = VkImageSubresourceRange.calloc(1, stack);
+            range.get(0).aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+            VK10.vkCmdClearColorImage(cmd, image, VK10.VK_IMAGE_LAYOUT_GENERAL, clear, range);
         }
     }
 
@@ -546,14 +629,13 @@ public final class IrisPostExecutor implements AutoCloseable {
     // --- Static Builders, Validators and Utilities ---
 
     public static VkDescriptorSetLayoutBinding.Buffer createDescriptorBindings(MemoryStack stack) {
-        VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(2, stack);
-        bindings.get(0).binding(IrisUniforms.BINDING_COLORTEX0)
-            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-            .descriptorCount(1)
+        var bindings = VkDescriptorSetLayoutBinding.calloc(IrisUniforms.SAMPLER_BINDINGS + 1, stack);
+        var samplerBindings = IrisUniforms.samplerBindings();
+        for (int i = 0; i < samplerBindings.size(); i++) bindings.get(i).binding(samplerBindings.get(i))
+            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1)
             .stageFlags(VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT);
-        bindings.get(1).binding(IrisUniforms.BINDING_DEPTHTEX0)
-            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-            .descriptorCount(1)
+        bindings.get(IrisUniforms.SAMPLER_BINDINGS).binding(IrisUniforms.BINDING_FRAME)
+            .descriptorType(VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1)
             .stageFlags(VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT);
         return bindings;
     }
@@ -567,8 +649,12 @@ public final class IrisPostExecutor implements AutoCloseable {
     }
 
     public static VkPipelineColorBlendStateCreateInfo createColorBlendState(MemoryStack stack) {
-        VkPipelineColorBlendAttachmentState.Buffer blendAttachments = VkPipelineColorBlendAttachmentState.calloc(1, stack);
-        blendAttachments.get(0).blendEnable(false)
+        return createColorBlendState(stack, 1);
+    }
+
+    public static VkPipelineColorBlendStateCreateInfo createColorBlendState(MemoryStack stack, int count) {
+        VkPipelineColorBlendAttachmentState.Buffer blendAttachments = VkPipelineColorBlendAttachmentState.calloc(count, stack);
+        for (int i = 0; i < count; i++) blendAttachments.get(i).blendEnable(false)
             .colorWriteMask(VK10.VK_COLOR_COMPONENT_R_BIT
                 | VK10.VK_COLOR_COMPONENT_G_BIT
                 | VK10.VK_COLOR_COMPONENT_B_BIT
@@ -590,8 +676,13 @@ public final class IrisPostExecutor implements AutoCloseable {
     }
 
     public static VkPipelineRenderingCreateInfo createPipelineRenderingCreateInfo(MemoryStack stack, int colorFormat) {
-        return VkPipelineRenderingCreateInfo.calloc(stack).sType$Default()
-            .pColorAttachmentFormats(stack.ints(colorFormat));
+        return createPipelineRenderingCreateInfo(stack, colorFormat, 1);
+    }
+
+    public static VkPipelineRenderingCreateInfo createPipelineRenderingCreateInfo(MemoryStack stack, int colorFormat, int count) {
+        var formats = stack.mallocInt(count);
+        for (int i = 0; i < count; i++) formats.put(i, colorFormat);
+        return VkPipelineRenderingCreateInfo.calloc(stack).sType$Default().pColorAttachmentFormats(formats);
     }
 
     public static ByteBuffer packPushConstants(
@@ -636,17 +727,24 @@ public final class IrisPostExecutor implements AutoCloseable {
         if (graph.passes().isEmpty()) {
             throw new IllegalArgumentException("Pass graph has no passes to execute");
         }
+        if (graph.passCount() > MAX_PASS_SETS) throw new IllegalArgumentException("Too many fullscreen passes");
+        long finals = graph.passes().stream().filter(IrisPassGraph.Pass::isFinal).count();
+        if (finals > 1 || finals == 1 && !graph.passes().getLast().isFinal())
+            throw new IllegalArgumentException("A graph may have one final pass, last in the sequence");
         for (IrisPassGraph.Pass pass : graph.passes()) {
             if (pass.vertexSpirv() == null || pass.fragmentSpirv() == null) {
                 throw new IllegalArgumentException("Pass " + pass.name() + " has null SPIR-V bytecode");
             }
+            if (pass.vertexTranslation() == null || pass.fragmentTranslation() == null)
+                throw new IllegalArgumentException("Pass " + pass.name() + " has no translated resource metadata");
             Set<Integer> bindings = pass.allSamplerBindings();
             for (int b : bindings) {
-                if (b != IrisUniforms.BINDING_COLORTEX0 && b != IrisUniforms.BINDING_DEPTHTEX0) {
+                if (IrisUniforms.colorIndex(b) < 0 && b != IrisUniforms.BINDING_DEPTHTEX0) {
                     throw new IllegalArgumentException("Pass " + pass.name() + " has unsupported sampler binding: " + b);
                 }
             }
         }
+        IrisResourcePlan.build(graph);
     }
 
     public static List<PassExecutionStep> planPassExecution(IrisPassGraph graph, int frameSlot) {
@@ -654,16 +752,20 @@ public final class IrisPostExecutor implements AutoCloseable {
         if (graph == null || graph.passes().isEmpty()) {
             return plan;
         }
-        int readIndex = 0;
-        for (int i = 0; i < graph.passes().size(); i++) {
-            IrisPassGraph.Pass pass = graph.passes().get(i);
-            String readName = (readIndex == 0) ? "colortex0" : "colortex1";
-            String writeName = pass.isFinal() ? "engineColorView" : ((readIndex == 0) ? "colortex1" : "colortex0");
-            plan.add(new PassExecutionStep(i, pass.name(), pass.isFinal(), readName, writeName, frameSlot, i));
-            readIndex = 1 - readIndex;
+        var steps = IrisResourcePlan.build(graph).steps();
+        for (int i = 0; i < steps.size(); i++) {
+            var step = steps.get(i);
+            String readName = step.readBanks().isEmpty() ? targetName(0, step.fallbackBank())
+                : step.readBanks().entrySet().stream().map(entry -> targetName(entry.getKey(), entry.getValue()))
+                    .collect(java.util.stream.Collectors.joining(", "));
+            String writeName = step.finalPass() ? "presentation" : step.writes().stream()
+                .map(output -> targetName(output.target(), output.bank())).collect(java.util.stream.Collectors.joining(", "));
+            plan.add(new PassExecutionStep(i, step.pass().name(), step.finalPass(), readName, writeName, frameSlot, i));
         }
         return Collections.unmodifiableList(plan);
     }
+
+    private static String targetName(int target, int bank) { return "colortex" + target + "[" + bank + "]"; }
 
     // --- Getters & Lifecycle ---
 
@@ -680,11 +782,11 @@ public final class IrisPostExecutor implements AutoCloseable {
     }
 
     public RtMemory.Img colortex0() {
-        return colortex0;
+        return colorImages[0][0];
     }
 
     public RtMemory.Img colortex1() {
-        return colortex1;
+        return colorImages[0][1];
     }
 
     public long colorSampler() {
@@ -726,7 +828,7 @@ public final class IrisPostExecutor implements AutoCloseable {
 
     public synchronized void cleanup() {
         if (device != null) {
-            VK10.vkDeviceWaitIdle(device);
+            RtFailure.check(VK10.vkDeviceWaitIdle(device), "iris_cleanup_wait");
             for (long pipe : pipelines.values()) {
                 VK10.vkDestroyPipeline(device, pipe, null);
             }
@@ -754,15 +856,14 @@ public final class IrisPostExecutor implements AutoCloseable {
             }
         }
         if (memory != null) {
-            if (colortex0 != null) {
-                memory.destroy(colortex0);
-                colortex0 = null;
+            if (frameUniforms != null) { memory.destroy(frameUniforms); frameUniforms = null; }
+            for (int target = 0; target < colorImages.length; target++) for (int bank = 0; bank < 2; bank++) {
+                if (colorImages[target][bank] != null) memory.destroy(colorImages[target][bank]);
+                colorImages[target][bank] = null;
             }
-            if (colortex1 != null) {
-                memory.destroy(colortex1);
-                colortex1 = null;
-            }
+            if (presentation != null) { memory.destroy(presentation); presentation = null; }
         }
+        allocatedTargets = Set.of(); allocatedWidth = allocatedHeight = 0; resourcePlan = null;
         imagesInitialized = false;
         activeGraph = null;
     }

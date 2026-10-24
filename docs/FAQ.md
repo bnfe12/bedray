@@ -12,7 +12,7 @@ Tested only on an NVIDIA GeForce RTX 5060 Ti (8 GB). Ray tracing needs ray query
 Intel cards are untested; testers are wanted ([TESTING.md](TESTING.md)).
 
 **Does it work with shader packs (Iris)?**
-No. Bedray replaces the lighting with its own ray tracing. Support for shader-pack hosting ("Dirt RT") is not implemented.
+General shader-pack support is not implemented. An opt-in [Vulkan fullscreen post subset](IRIS_VULKAN.md) is in source-only development, with no tested-pack or release claim.
 
 **Does it work on Linux or macOS?**
 Not tested; the native pieces are Windows DLLs. Windows only.

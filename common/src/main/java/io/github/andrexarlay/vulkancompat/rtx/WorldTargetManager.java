@@ -217,6 +217,11 @@ public final class WorldTargetManager {
         return BOB_PROJECTION && haveLevelProjection ? new Matrix4f(levelProjection) : fallback;
     }
 
+    /** Exact raster projection, irrespective of the optional RT/compute bob approximation setting. */
+    public static Matrix4f currentLevelProjection() {
+        return haveLevelProjection ? new Matrix4f(levelProjection) : null;
+    }
+
     /** Camera origin offset caused by the view-bob transform, in coordinates relative to the base camera. */
     public static org.joml.Vector3f levelCameraOriginOr(org.joml.Vector3f fallback) {
         return BOB_PROJECTION && haveLevelProjection ? new org.joml.Vector3f(levelCameraOrigin)
