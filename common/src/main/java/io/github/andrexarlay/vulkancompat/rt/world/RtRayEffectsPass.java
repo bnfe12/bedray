@@ -24,12 +24,17 @@ public final class RtRayEffectsPass implements RtPass {
     private static final boolean SPATIAL_FILTER = !"off".equalsIgnoreCase(System.getProperty("vkrtx.rt.spatialFilter", "on"));
     private static final int FILTER_ITERATIONS = 3;
     private final RtPipeline filter;
+    /** ReSTIR DI spatial reuse (rt_restir_spatial.comp); {@code -Dvkrtx.rt.restirSpatial=off} disables it for A/B runs. */
+    private static final boolean RESTIR_SPATIAL = !"off".equalsIgnoreCase(System.getProperty("vkrtx.rt.restirSpatial", "on"));
+    private final RtPipeline restirSpatial;
 
     public RtRayEffectsPass(VkDevice device, boolean gbuffer) {
         this.pipeline = new RtPipeline(device, RtPipeline.SHADER_PATH, "rt_rays.comp", ACCUM_DEFINE, gbuffer, true);
         // the NRD variant does its own filtering and never accumulates
         this.filter = SPATIAL_FILTER && !gbuffer
             ? new RtPipeline(device, "/shaders/rt_atrous.comp", "rt_atrous.comp", ACCUM_DEFINE, false, true) : null;
+        this.restirSpatial = RESTIR_SPATIAL && !gbuffer
+            ? new RtPipeline(device, "/shaders/rt_restir_spatial.comp", "rt_restir_spatial.comp", ACCUM_DEFINE, false, true) : null;
     }
 
     @Override
@@ -52,6 +57,9 @@ public final class RtRayEffectsPass implements RtPass {
         if ((p.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {
             sb.append((p.flags & RtFrameParams.FLAG_MATERIALS) != 0
                 ? ",emissive" + RtSettings.emissiveQuality() + "d" + (int) p.emissiveDistance : ",emissive_no_materials");
+            if (restirSpatial != null) {
+                sb.append(",restir_spatial");
+            }
         }
         if ((p.flags & RtFrameParams.FLAG_REFLECTIONS) != 0) {
             sb.append(",reflections").append(RtSettings.reflectionQuality()).append("d").append(p.rayDistance);
@@ -171,6 +179,9 @@ public final class RtRayEffectsPass implements RtPass {
         RtPipeline.Views v = new RtPipeline.Views(c.tlas(), c.table(), c.output(), c.atlas(), c.material(), c.normal(), accum.view(),
             c.gbuffer(), c.depth(), c.lightmap());
         pipeline.bind(v);
+        if (restirSpatial != null) {
+            restirSpatial.bind(v);
+        }
         if (filter != null) {
             filter.bind(v);
         }
@@ -179,6 +190,20 @@ public final class RtRayEffectsPass implements RtPass {
     @Override
     public void dispatch(VkCommandBuffer cmd, RtFrameParams params, int width, int height) {
         pipeline.dispatch(cmd, params, width, height);
+        if (restirSpatial != null && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0
+            && (params.flags & RtFrameParams.FLAG_MATERIALS) != 0) {
+            // Two checker phases (params2 bits 16-19, the nibble the a-trous filter borrows for its own iterations):
+            // phase 0 merges the even cells reading odd ones, phase 1 the other way round over phase 0's results. The
+            // shader skips pixels itself when the reservoir buffer is off.
+            VkBarriers.fullMemoryBarrier(cmd);   // the ray pass wrote the reservoirs and receiver positions this one reads
+            params.filterIter = 0;
+            restirSpatial.dispatch(cmd, params, width, height);
+            VkBarriers.fullMemoryBarrier(cmd);   // phase 1 reads phase 0's merged records
+            params.filterIter = 1;
+            restirSpatial.dispatch(cmd, params, width, height);
+            VkBarriers.fullMemoryBarrier(cmd);   // next frame's ray pass reads the merged half
+            params.filterIter = 0;
+        }
         if (filter != null && (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.mode == RtConfig.MODE_LIT) {
             params.filterIters = FILTER_ITERATIONS;
             for (int i = 0; i < FILTER_ITERATIONS; i++) {
@@ -204,6 +229,9 @@ public final class RtRayEffectsPass implements RtPass {
 
     @Override
     public void destroy() {
+        if (restirSpatial != null) {
+            restirSpatial.destroy();
+        }
         if (filter != null) {
             filter.destroy();
         }

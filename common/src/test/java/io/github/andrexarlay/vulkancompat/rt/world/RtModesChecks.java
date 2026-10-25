@@ -495,7 +495,9 @@ final class RtModesChecks {
         ByteBuffer pathGb = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+gbuffer",
             RtPipeline.GBUFFER_DEFINE + RtPathTracerPass.ACCUM_DEFINE);
         ByteBuffer atrous = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_atrous.comp", RtPathTracerPass.ACCUM_DEFINE);
-        for (ByteBuffer b : new ByteBuffer[] {rays, raysGb, path, pathGb, atrous}) {
+        ByteBuffer restir = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_restir_spatial.comp",
+            RtRayEffectsPass.ACCUM_DEFINE);
+        for (ByteBuffer b : new ByteBuffer[] {rays, raysGb, path, pathGb, atrous, restir}) {
             check(b.remaining() > 1000 && b.getInt(0) == 0x07230203, "SPIR-V magic / size " + b.remaining());
         }
     }

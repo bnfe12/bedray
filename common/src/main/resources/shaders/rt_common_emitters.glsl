@@ -2,6 +2,10 @@ uint emitterCount() {
     return StatsBuf(pc.statsAddr).emitterCount;
 }
 
+// ReSTIR DI history clamp (temporal and spatial reuse share it): without a cap, M saturates and a stored sample whose light
+// was switched off keeps glowing through history instead of decaying within a few frames.
+const float RESTIR_M_CAP = 20.0;
+
 // Next event estimation of emissive surfaces: resampled importance sampling (RIS) over the emitter list, one shadow ray to
 // the chosen point. Returns the reflected radiance of a Lambert surface (albedo / PI * Le * G), unbiased for p^ > 0.
 // Ray mode adds one temporal reservoir per pixel (sampleEmittersTemporal); the path tracer keeps plain RIS.
@@ -179,7 +183,7 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
         if (reprojectHistoryPixel(p, size, s.pos, q, prevDist, isStatic)) {
             Reservoir prev = ReservoirBuf(fb.reservoirAddr).r[uint((pc.frame & 1u) ^ 1u) * pixels
                 + uint(q.y) * width + uint(q.x)];
-            float mPrev = min(prev.meta.x, 20.0);   // clamps ghosting of a reservoir whose light was switched off
+            float mPrev = min(prev.meta.x, RESTIR_M_CAP);   // clamps ghosting of a reservoir whose light was switched off
             vec3 nPrev = unpackReservoirNormal(prev.meta.z);
             if ((uint(prev.meta.y) & 2u) != 0u) {
                 nPrev.z = -nPrev.z;   // receiver normal faced down (ceiling): the packed xy lost the sign of z
