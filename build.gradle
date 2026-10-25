@@ -34,14 +34,36 @@ def requireClosedGame = { String taskName ->
     // Block unknown Java clients as well: a launcher can choose an arbitrary main class. Gradle
     // processes are the only Java processes this build needs to leave running during deployment.
     def blockers = []
-    ProcessHandle.allProcesses().withCloseable { processes ->
-        processes.forEach { process ->
-            def info = process.info()
-            def executable = new File(info.command().orElse('')).name.toLowerCase(Locale.ROOT)
-            if (executable in ['java', 'java.exe', 'javaw', 'javaw.exe']) {
-                def commandLine = info.commandLine().orElse('')
-                if (!(commandLine =~ /org\.gradle\.|GradleDaemon|GradleWrapperMain/).find()) {
-                    blockers.add(process.pid())
+    if (System.getProperty('os.name').toLowerCase(Locale.ROOT).startsWith('windows')) {
+        // Windows ProcessHandle.Info can omit arguments even for our own Gradle processes. CIM
+        // supplies the actual command lines; unavailable information still blocks replacement.
+        def probeScript = '''$ErrorActionPreference = 'Stop'
+Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='javaw.exe'" |
+    Where-Object { -not $_.CommandLine -or $_.CommandLine -notmatch 'org\\.gradle\\.|GradleDaemon|GradleWorkerMain|GradleWrapperMain' } |
+    ForEach-Object { $_.ProcessId }
+'''
+        def encoded = Base64.encoder.encodeToString(probeScript.getBytes('UTF-16LE'))
+        def probe = new ProcessBuilder('powershell.exe', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
+            '-EncodedCommand', encoded).redirectErrorStream(true).start()
+        if (!probe.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)) {
+            probe.destroyForcibly()
+            throw new GradleException("[${taskName}] Timed out confirming that Java clients are closed. No files were changed.")
+        }
+        def output = probe.inputStream.getText('UTF-8').trim()
+        if (probe.exitValue() != 0 || (output && !output.readLines().every { it.trim() ==~ /\d+/ })) {
+            throw new GradleException("[${taskName}] Cannot confirm that Java clients are closed. No files were changed.")
+        }
+        if (output) blockers.addAll(output.readLines().collect { Long.parseLong(it.trim()) })
+    } else {
+        ProcessHandle.allProcesses().withCloseable { processes ->
+            processes.forEach { process ->
+                def info = process.info()
+                def executable = new File(info.command().orElse('')).name.toLowerCase(Locale.ROOT)
+                if (executable in ['java', 'java.exe', 'javaw', 'javaw.exe']) {
+                    def commandLine = info.commandLine().orElse('')
+                    if (!(commandLine =~ /org\.gradle\.|GradleDaemon|GradleWorkerMain|GradleWrapperMain/).find()) {
+                        blockers.add(process.pid())
+                    }
                 }
             }
         }
