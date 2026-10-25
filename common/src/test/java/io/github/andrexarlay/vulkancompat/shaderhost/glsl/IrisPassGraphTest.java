@@ -277,9 +277,9 @@ class IrisPassGraphTest {
         Path p = zip("UnsupportedUniform.zip",
             "shaders/final.fsh", """
                 #version 120
-                uniform vec3 sunPosition;
+                uniform float screenBrightness;
                 void main() {
-                    gl_FragColor = vec4(sunPosition, 1.0);
+                    gl_FragColor = vec4(screenBrightness);
                 }
                 """
         );
@@ -288,7 +288,7 @@ class IrisPassGraphTest {
             IrisPassGraph.ParseResult res = IrisPassGraph.build(src);
             assertFalse(res.success());
             assertEquals(ShaderHostState.UNSUPPORTED_PACK_FEATURES, res.status().state());
-            assertTrue(res.status().detail().contains("sunPosition"), res.status().detail());
+            assertTrue(res.status().detail().contains("screenBrightness"), res.status().detail());
         }
     }
 

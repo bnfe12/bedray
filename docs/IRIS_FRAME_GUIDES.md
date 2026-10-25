@@ -63,8 +63,9 @@ The existing scalar push block stays 32 bytes. Frame UBO std140 offsets are fixe
 | cameraPosition | vec3 | 384 |
 | previousCameraPosition | vec3 | 400 |
 
-Range: 416 bytes. GPU vec3 positions use floats, while the CPU contract keeps doubles. Other Iris
-world uniforms remain unsupported by name. Stage declarations may read different subsets at the
+Range: 416 bytes. GPU vec3 positions use floats, while the CPU contract keeps doubles. The other Iris
+world uniforms this host supports are in a separate world block at binding 18 (see IRIS_VULKAN.md); the rest
+remain unsupported by name. Stage declarations may read different subsets at the
 same fixed offsets; runtime uniform values do not belong in any shader compilation cache key.
 
 Previous camera data is available only across consecutive frames with the same world/device/producer,

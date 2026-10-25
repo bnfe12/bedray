@@ -87,6 +87,12 @@ public final class IrisPassGraph {
             return Collections.unmodifiableSet(set);
         }
 
+        public Set<String> allWorldUsed() {
+            Set<String> set = new TreeSet<>(vertexTranslation.worldUsed());
+            set.addAll(fragmentTranslation.worldUsed());
+            return Collections.unmodifiableSet(set);
+        }
+
         /** Const/comment directives as Iris reads them: from the fragment source; a sampled gdepth from either stage. */
         public IrisRenderTargets.ProgramDirectives programDirectives() {
             return new IrisRenderTargets.ProgramDirectives(name, fragmentTranslation.directives(),
@@ -108,6 +114,7 @@ public final class IrisPassGraph {
     private final List<Pass> passes;
     private final IrisPackOptions.Summary options;
     private final IrisRenderTargets.Resolution targets;
+    private final IrisWorldUniforms.Constants worldConstants;
 
     public IrisPassGraph(String packName, String shadersRoot, List<Pass> passes) {
         this(packName, shadersRoot, passes, IrisPackOptions.Summary.defaults());
@@ -118,9 +125,21 @@ public final class IrisPassGraph {
         this.shadersRoot = Objects.requireNonNull(shadersRoot, "shadersRoot");
         this.passes = List.copyOf(passes);
         this.options = Objects.requireNonNull(options, "options");
-        this.targets = IrisRenderTargets.resolve(this.passes.stream()
+        var directives = this.passes.stream()
             .filter(pass -> pass.fragmentTranslation() != null && pass.vertexTranslation() != null)
-            .map(Pass::programDirectives).toList());
+            .map(Pass::programDirectives).toList();
+        this.targets = IrisRenderTargets.resolve(directives);
+        this.worldConstants = IrisWorldUniforms.Constants.resolve(directives);
+    }
+
+    /** sunPathRotation and the wetness/dryness/eye-brightness half-lives the world block uses. */
+    public IrisWorldUniforms.Constants worldConstants() { return worldConstants; }
+
+    /** World uniform names any pass reads. */
+    public Set<String> worldUsed() {
+        Set<String> set = new TreeSet<>();
+        passes.forEach(pass -> set.addAll(pass.allWorldUsed()));
+        return Collections.unmodifiableSet(set);
     }
 
     public IrisPackOptions.Summary options() { return options; }
@@ -331,6 +350,20 @@ public final class IrisPassGraph {
             return new ParseResult(false,ShaderHostStatus.of(ShaderHostKind.IRIS,ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                 "post host supports at most 32 passes and one final pass"),null);
 
+        Map<String, String> environment = IrisPackOptions.environment();
+        List<String> macroNotes = new ArrayList<>();
+        {
+            String sources = packShaderText(src, report);
+            for (var missing : IrisStandardMacros.current().unavailable().entrySet()) {
+                if (Pattern.compile("\\b" + missing.getKey() + "\\b").matcher(sources).find())
+                    return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                        "engine macro " + missing.getKey() + " is referenced but unavailable: " + missing.getValue()), null);
+            }
+            for (String family : IrisStandardMacros.NOT_DEFINED_FAMILIES) {
+                if (Pattern.compile("\\b" + family).matcher(sources).find())
+                    macroNotes.add(family + (family.endsWith("_") ? "*" : "") + " is not defined on this host");
+            }
+        }
         // 3. Translate and compile each pass in sequence
         List<Pass> passes = new ArrayList<>();
         int passOrder = 0;
@@ -348,7 +381,7 @@ public final class IrisPassGraph {
             String expandedFsh;
             try {
                 expandedFsh = IrisSourcePreprocessor.preprocess(report.shadersRoot(), fshPath,
-                    configuration::readSource, IrisGlslTranslator.Stage.FRAGMENT, IrisPackOptions.ENVIRONMENT);
+                    configuration::readSource, IrisGlslTranslator.Stage.FRAGMENT, environment);
             } catch (PackScanException e) {
                 return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                     "failed preprocessing " + fshPath + ": " + e.getMessage()), null);
@@ -363,7 +396,7 @@ public final class IrisPassGraph {
             if (src.entries().contains(vshPath)) {
                 try {
                     expandedVsh = IrisSourcePreprocessor.preprocess(report.shadersRoot(), vshPath,
-                        configuration::readSource, IrisGlslTranslator.Stage.VERTEX, IrisPackOptions.ENVIRONMENT);
+                        configuration::readSource, IrisGlslTranslator.Stage.VERTEX, environment);
                 } catch (PackScanException e) {
                     return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                         "failed preprocessing " + vshPath + ": " + e.getMessage()), null);
@@ -424,13 +457,29 @@ public final class IrisPassGraph {
         if (!graph.targets().problems().isEmpty())
             return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                 "render target directives: " + String.join("; ", graph.targets().problems())), null);
+        if (!graph.worldConstants().problems().isEmpty())
+            return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                "pack constants: " + String.join("; ", graph.worldConstants().problems())), null);
         try { IrisResourcePlan.build(graph); }
         catch (IllegalArgumentException error) {
             return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS,
                 ShaderHostState.UNSUPPORTED_PACK_FEATURES, error.getMessage()), null);
         }
         return new ParseResult(true, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY,
-            "all " + passes.size() + " passes (" + orderedPasses + ") translated and compiled to SPIR-V"), graph);
+            "all " + passes.size() + " passes (" + orderedPasses + ") translated and compiled to SPIR-V"
+                + (macroNotes.isEmpty() ? "" : "; " + String.join("; ", macroNotes))), graph);
+    }
+
+    /** Raw text of the pack's shader sources (bounded by the pack limits), for macro-reference checks. */
+    private static String packShaderText(PackSource src, PackReport report) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        for (String entry : src.entries()) {
+            if (entry.startsWith(report.shadersRoot()) && entry.matches(".*\\.(?:vsh|fsh|csh|gsh|glsl|inc)$")) {
+                sb.append(new String(src.read(entry), java.nio.charset.StandardCharsets.UTF_8)).append('\n');
+                if (sb.length() > IrisSourcePreprocessor.MAX_SOURCE_CHARS) break;
+            }
+        }
+        return sb.toString();
     }
 
     /**

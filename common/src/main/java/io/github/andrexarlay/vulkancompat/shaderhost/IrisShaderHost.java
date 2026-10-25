@@ -128,6 +128,7 @@ public final class IrisShaderHost implements ShaderHost {
             return status(ShaderHostState.DISABLED_FOR_SESSION,
                 "Post-only Vulkan host is opt-in: -Dbedray.iris.post=true; no general Iris compatibility claim");
 
+        io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisStandardMacros.configure(ctx.gameDir());
         IrisPassGraph.ParseResult result;
         try {
             result = IrisPassGraph.build(pack, ScanLimits.defaults());

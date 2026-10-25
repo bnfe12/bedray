@@ -16,6 +16,9 @@ import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
 import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames;
 import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrameCapture;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import java.nio.ByteBuffer;
+import java.util.Set;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkFormatProperties;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
@@ -292,6 +295,10 @@ public final class IrisRenderBridge {
         var device = VulkanCapabilityChecker.getVulkanDevice();
         if (device == null) return false;
         try {
+            IrisShaderHost host = ShaderHosts.iris();
+            IrisPassGraph graph = host == null ? null : host.activeGraph();
+            // World state is read once per frame from the live game, only when some program reads a world uniform.
+            pendingWorld = graph != null && !graph.worldUsed().isEmpty() ? IrisWorldCapture.capture(camera) : null;
             boolean rendered = renderFrame(WorldFrameCapture.capture(device, target, camera, renderer));
             ownedTarget = owner != null ? target : null;
             return rendered;
@@ -299,7 +306,16 @@ public final class IrisRenderBridge {
         catch (IllegalArgumentException | IllegalStateException error) {
             runtimeStatus = "World frame unavailable: " + error.getMessage(); return false;
         }
+        finally {
+            pendingWorld = null;
+        }
     }
+
+    /** World state of the frame being rendered by {@link #renderFrame(RenderTarget, CameraRenderState, WorldFrame.Renderer)}. */
+    private static IrisWorldCapture.Result pendingWorld;
+    /** Wetness/eye-brightness smoothing; restarts whenever the post resources are retired. */
+    private static IrisWorldUniforms.Smoothing smoothing;
+    private static IrisWorldUniforms.Constants smoothingConstants;
 
     /** Fullscreen seam for current-frame borrowed color/guides on the existing host device and queue. */
     public static boolean renderFrame(WorldFrame frame) {
@@ -322,8 +338,19 @@ public final class IrisRenderBridge {
         var previousCamera = WorldFrames.previousCamera(frame);
         boolean readsDepth = graph.passes().stream().anyMatch(pass -> pass.allSamplerBindings().contains(
             IrisUniforms.BINDING_DEPTHTEX0));
+        Set<String> worldUsed = graph.worldUsed();
         boolean readsCamera = readsDepth || graph.passes().stream().anyMatch(pass -> !pass.allFrameUsed().isEmpty()
-            || pass.allPushUsed().contains("near") || pass.allPushUsed().contains("far"));
+            || pass.allPushUsed().contains("near") || pass.allPushUsed().contains("far"))
+            || worldUsed.stream().anyMatch(IrisWorldUniforms.CAMERA_DEPENDENT::contains);
+        IrisWorldCapture.Result world = pendingWorld;
+        if (!worldUsed.isEmpty()) {
+            if (world == null) { runtimeStatus = "Iris is waiting for this frame's world state"; return false; }
+            Set<String> missing = new java.util.TreeSet<>(world.unavailable());
+            missing.retainAll(worldUsed);
+            if (!missing.isEmpty() || world.sample() == null) {
+                runtimeStatus = "World uniforms unavailable this frame: " + (missing.isEmpty() ? worldUsed : missing); return false;
+            }
+        }
         if (readsCamera && camera == null) {
             runtimeStatus = "Iris is waiting for current-frame camera/projection"; return false;
         }
@@ -406,8 +433,23 @@ public final class IrisRenderBridge {
             VkBarriers.fullMemoryBarrier(command);
             float near=camera == null ? 0.05f : camera.near(), far=camera == null ? 256f : camera.far();
             if(depthConverter!=null)depthConverter.record(command,camera,encoding);
-            executor.record(command,graph,colorImage,colorView,depthConverter!=null ? depthConverter.view() : depthView,width,height,
-                frameTimeCounter(),frameCounter(),near,far,frameTime(),camera,previousCamera);
+            ByteBuffer worldBytes = null;
+            if (!worldUsed.isEmpty()) {
+                if (smoothing == null || !graph.worldConstants().equals(smoothingConstants)) {
+                    smoothingConstants = graph.worldConstants();
+                    smoothing = new IrisWorldUniforms.Smoothing(smoothingConstants);
+                }
+                worldBytes = MemoryUtil.memAlloc(IrisUniforms.WORLD_BYTES);
+                // Without a camera no program reads a camera-dependent member (checked above); those slots are then unused.
+                IrisWorldUniforms.write(worldBytes, world.sample(), camera != null ? camera.modelView() : new org.joml.Matrix4f(),
+                    graph.worldConstants(), smoothing, frameTime());
+            }
+            try {
+                executor.record(command,graph,colorImage,colorView,depthConverter!=null ? depthConverter.view() : depthView,width,height,
+                    frameTimeCounter(),frameCounter(),near,far,frameTime(),camera,previousCamera,worldBytes);
+            } finally {
+                if (worldBytes != null) MemoryUtil.memFree(worldBytes);
+            }
             recorded=true;
         } catch (RuntimeException | LinkageError error) {
             failed=true;runtimeStatus="Iris recording failed: "+error.getMessage();
@@ -453,6 +495,7 @@ public final class IrisRenderBridge {
             if(executor!=null) {executor.close();executor=null;}
             activePackName=null; owner=null;ownedGraph=null;ownedDepthView=0;ownedDepthEncoding=null;ownedTarget=null;
             resetTiming();
+            smoothing = null; smoothingConstants = null;
             return true;
         } catch (RuntimeException | LinkageError error) {
             cleanupBroken=true;failed=true;runtimeStatus="Iris cleanup failed; restart required";
