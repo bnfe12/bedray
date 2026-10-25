@@ -101,6 +101,8 @@ public final class BedrayConfigScreen extends Screen {
             rowWidgets.add(addRenderableWidget(widget));
         }
         if (filter.isEmpty() && category == SettingsDraft.Category.PRESETS) {
+            addAction(tr("bedray.settings.experience_library", "Rendering experiences..."),
+                () -> openExperiences(contentX, listTop, contentWidth - 6));
             addAction(tr("bedray.settings.presets_manage", "Manage presets..."), () -> minecraft.gui.setScreen(new PresetsScreen(this, draft)));
             addAction(tr("bedray.settings.presets_copy", "Copy pending settings"), () -> minecraft.keyboardHandler.setClipboard(draft.snapshot()));
             addAction(tr("bedray.settings.presets_import", "Import into pending settings"), () -> {
@@ -108,6 +110,8 @@ public final class BedrayConfigScreen extends Screen {
                 runtime = tr("bedray.settings.preset_staged", "%s preset values staged. Apply to commit.", count); rebuildRows();
             });
         }
+        if (filter.isEmpty() && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile())
+            addAction(tr("bedray.settings.customize", "Customize current quality"), () -> { draft.customize(); rebuildRows(); });
         if (filter.isEmpty() && category == SettingsDraft.Category.SYSTEM) {
             addAction(tr("bedray.settings.libraries", "Runtime libraries..."), () -> minecraft.gui.setScreen(new NativesManagerScreen(this)));
             addAction(tr("bedray.settings.report", "Copy diagnostics report"), () -> io.github.andrexarlay.vulkancompat.rtx.debug.Diagnostics.generateAndNotify());
@@ -127,6 +131,9 @@ public final class BedrayConfigScreen extends Screen {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private AbstractWidget createControl(SettingsDraft.Entry entry, int x, int controlWidth) {
         StatefulOption option = entry.option();
+        if (entry.path().equals("renderer")) return Button.builder(draft.experienceTitle(), b -> {
+            select(entry); openExperiences(b.getX(), b.getY(), controlWidth);
+        }).bounds(x, 0, controlWidth, 20).build();
         if (option instanceof IntegerOption integer) return new AbstractSliderButton(x, 0, controlWidth, 20, integer.formatValue(integer.getValidatedValue()), normalized(integer)) {
             @Override protected void updateMessage() { setMessage(integer.formatValue(integer.getValidatedValue())); }
             @Override protected void applyValue() {
@@ -202,6 +209,17 @@ public final class BedrayConfigScreen extends Screen {
         }
         positionChoices(); if (!popupButtons.isEmpty()) setFocused(popupButtons.getFirst());
     }
+    private void openExperiences(int x, int y, int popupWidth) {
+        var experiences = SettingsDraft.Experience.values();
+        openChoices(java.util.Arrays.stream(experiences).map(SettingsDraft.Experience::title).toList(), index -> {
+            draft.selectExperience(experiences[index]); category = SettingsDraft.Category.OVERVIEW; query = ""; scroll = 0; rebuildWidgets();
+        }, x, y, popupWidth);
+        for (int i = 0; i < experiences.length; i++) {
+            popupButtons.get(i).active = experiences[i].available();
+            popupButtons.get(i).setTooltip(Tooltip.create(experiences[i].description().copy().append("\n")
+                .append(Component.translatable("bedray.settings.experience.combinations"))));
+        }
+    }
     private void positionChoices() {
         popupScroll = Math.max(0, Math.min(popupScroll, Math.max(0, popupButtons.size() * 22 - popupHeight + 8)));
         for (int i = 0; i < popupButtons.size(); i++) {
@@ -231,7 +249,8 @@ public final class BedrayConfigScreen extends Screen {
         return super.mouseClicked(event, twice);
     }
     private void rebuildControlMessages() {
-        for (int i = 0; i < rows.size(); i++) rowWidgets.get(i).setMessage(valueText(rows.get(i).option())); updateButtons();
+        for (int i = 0; i < rows.size(); i++) rowWidgets.get(i).setMessage(rows.get(i).path().equals("renderer")
+            ? draft.experienceTitle() : valueText(rows.get(i).option())); updateButtons();
     }
     @Override public boolean keyPressed(KeyEvent event) {
         if (!popupButtons.isEmpty()) {

@@ -1,5 +1,5 @@
 {
-  "bedray.opt.renderer": "World Renderer",
+  "bedray.opt.renderer": "Render experience",
   "bedray.opt.renderer.desc": "Hardware uses the saved RT mode. Voxel uses the included experimental software renderer with textured block models, world lighting and traced shadows. Only loaded sections can become resident; actual coverage is shown at runtime. Unsupported surfaces retain raster. Physical light transport and temporal guides remain incomplete.",
   "bedray.opt.renderer.req": "Included Compute provider and Minecraft Vulkan backend; no RT extensions required for Voxel.",
   "bedray.opt.renderer_status": "Renderer Status",
@@ -246,7 +246,7 @@
   "bedray.opt.voxel_quality_profile": "Voxel Quality",
   "bedray.opt.voxel_quality_profile.desc": "Fast reduces scale and memory, and skips diffuse bounce and layered transparency. Beautiful enables those effects at native scale and follows Minecraft distance. Custom unlocks details. Apply commits the choice.",
   "bedray.opt.path_quality_profile": "Path Tracing Quality",
-  "bedray.opt.path_quality_profile.desc": "Fast: 1 sample, 2 bounces, 256-block path distance. Beautiful: 2 samples, 6 bounces, 512 blocks. Custom unlocks details. The denoiser stays unchanged.",
+  "bedray.opt.path_quality_profile.desc": "Fast: 1 sample, 2 bounces, 256-block path distance. Beautiful: 2 samples, 4 bounces, 512 blocks. Custom unlocks details. The denoiser stays unchanged.",
   "bedray.opt.voxel_distance_auto": "Voxel Distance: Follow Minecraft",
   "bedray.opt.voxel_distance_auto.desc": "Request the game render distance. Only loaded sections are captured; residency can be limited by memory and streaming budgets.",
   "bedray.opt.voxel_distance_chunks": "Voxel Distance (chunks)",
@@ -376,5 +376,16 @@
   "bedray.opt.atm_sunglare_strength": "Sun Glare Strength",
   "bedray.opt.atm_sunglare_strength.desc": "Brightness of the sun halo.",
   "bedray.opt.atm_fog_vanilla": "Vanilla Fog Weight",
-  "bedray.opt.atm_fog_vanilla.desc": "How much of the game's own fog is used."
+  "bedray.opt.atm_fog_vanilla.desc": "How much of the game's own fog is used.",
+  "bedray.settings.experience_library": "Rendering experiences...",
+  "bedray.settings.customize": "Customize current quality",
+  "bedray.settings.experience.vanilla": "Vanilla raster",
+  "bedray.settings.experience.path": "Hardware Path Tracing",
+  "bedray.settings.experience.rays": "Ray Tracing (experimental opt-in)",
+  "bedray.settings.experience.voxel": "Voxel with raster preservation",
+  "bedray.settings.experience.vanilla.desc": "Minecraft rendering with Bedray world tracing off. Suitable when tracing is not wanted or the GPU lacks the required extensions. Upscaling remains a separate setting.",
+  "bedray.settings.experience.path.desc": "Full traced lighting, shadows, reflections and bounced light. Requires a compatible Vulkan hardware-RT GPU; suited to discrete RT GPUs with memory headroom. High rendering workload. Denoiser runtimes have separate requirements.",
+  "bedray.settings.experience.rays.desc": "Configurable hardware ray-traced effects; experimental. Requires a compatible Vulkan RT GPU and an existing explicit experimental-mode opt-in. Disabled without that opt-in. Workload depends on enabled effects.",
+  "bedray.settings.experience.voxel.desc": "Included experimental compute renderer for supported Vulkan GPUs, without RT extensions. Preserves raster where scene data is unavailable or unsupported. Memory and capture budgets limit actual coverage. Fast quality skips diffuse bounce and layered transparency; full physical path tracing is incomplete.",
+  "bedray.settings.experience.combinations": "Compute and hardware world tracing are mutually exclusive. Separate pure-Voxel, RT + Vanilla and RT + Voxel compositors are not implemented and are not offered as selectable modes."
 }
