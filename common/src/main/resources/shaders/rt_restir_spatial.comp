@@ -31,6 +31,9 @@ void main() {
     uint cur = uint(pc.frame & 1u);
     uint slot = cur * pixels + uint(p.y) * width + uint(p.x);
     Reservoir own = ReservoirBuf(fb.reservoirAddr).r[slot];
+    if (own.meta.x <= 0.0) {
+        return;   // this pixel shaded no emissive term this frame: its slot still holds an older frame's receiver
+    }
     vec3 auxP = ReservoirAuxBuf(fb.reservoirAuxAddr).r[slot].xyz;
     vec3 nP = unpackReservoirNormal(own.meta.z);
     if ((uint(own.meta.y) & 2u) != 0u) {
@@ -82,7 +85,9 @@ void main() {
         if (abs(dot(auxQ - auxP, nP)) > planeTol) {
             continue;                                     // plane rejection: a light sample behind a step stays local
         }
-        float phatQ = emitterPhat(nb.yTexEm.xyz, nb.yTexEm.w, nb.enPhat.xyz, (uint(nb.meta.y) & 1u) != 0u, sLoc, maxDist);
+        vec3 dQ = nb.yTexEm.xyz - sLoc.pos;               // emitterPhat takes the squared receiver-to-sample distance
+        float phatQ = emitterPhat(nb.yTexEm.xyz, dot(dQ, dQ), nb.yTexEm.w, nb.enPhat.xyz, (uint(nb.meta.y) & 1u) != 0u, sLoc,
+            maxDist);
         if (phatQ <= 0.0) {
             continue;
         }

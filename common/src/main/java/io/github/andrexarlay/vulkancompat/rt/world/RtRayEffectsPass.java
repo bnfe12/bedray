@@ -33,8 +33,10 @@ public final class RtRayEffectsPass implements RtPass {
         // the NRD variant does its own filtering and never accumulates
         this.filter = SPATIAL_FILTER && !gbuffer
             ? new RtPipeline(device, "/shaders/rt_atrous.comp", "rt_atrous.comp", ACCUM_DEFINE, false, true) : null;
-        this.restirSpatial = RESTIR_SPATIAL && !gbuffer
-            ? new RtPipeline(device, "/shaders/rt_restir_spatial.comp", "rt_restir_spatial.comp", ACCUM_DEFINE, false, true) : null;
+        // Spatial reuse merges reservoirs, not pixels, and rt_rays.comp keeps its temporal merge under a denoiser too, so the
+        // pass is built for both variants - it only has to share the binding layout of the pass whose records it rewrites.
+        this.restirSpatial = RESTIR_SPATIAL
+            ? new RtPipeline(device, "/shaders/rt_restir_spatial.comp", "rt_restir_spatial.comp", ACCUM_DEFINE, gbuffer, true) : null;
     }
 
     @Override
@@ -190,7 +192,8 @@ public final class RtRayEffectsPass implements RtPass {
     @Override
     public void dispatch(VkCommandBuffer cmd, RtFrameParams params, int width, int height) {
         pipeline.dispatch(cmd, params, width, height);
-        if (restirSpatial != null && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0
+        if (restirSpatial != null && params.mode == RtConfig.MODE_LIT
+            && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0
             && (params.flags & RtFrameParams.FLAG_MATERIALS) != 0) {
             // Two checker phases (params2 bits 16-19, the nibble the a-trous filter borrows for its own iterations):
             // phase 0 merges the even cells reading odd ones, phase 1 the other way round over phase 0's results. The

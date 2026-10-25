@@ -126,6 +126,8 @@ public final class RtShaderCompiler {
             new ShaderVariant(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+warmup", accum),
             new ShaderVariant(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+gbuffer+warmup", gbufferAccum),
             new ShaderVariant("/shaders/rt_atrous.comp", "rt_atrous.comp+warmup", accum),
+            new ShaderVariant("/shaders/rt_restir_spatial.comp", "rt_restir_spatial.comp+warmup", accum),
+            new ShaderVariant("/shaders/rt_restir_spatial.comp", "rt_restir_spatial.comp+gbuffer+warmup", gbufferAccum),
             new ShaderVariant("/shaders/rt_volumetric.comp", "rt_volumetric.comp+march+warmup",
                 "#define VKB_POST 1" + (char) 10 + accum + "#define VOL_STAGE 0" + (char) 10),
             new ShaderVariant("/shaders/rt_volumetric.comp", "rt_volumetric.comp+apply+warmup",
