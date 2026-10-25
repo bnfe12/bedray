@@ -7,16 +7,26 @@ import io.github.andrexarlay.bedray.compute.voxel.VoxelGrid;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.bedray.api.v1.WorldSnapshot;
+import io.github.andrexarlay.bedray.api.v1.WorldUpdate;
+import io.github.andrexarlay.bedray.api.v1.WorldStreamingStatus;
+import io.github.andrexarlay.bedray.compute.voxel.StreamedVoxelScene;
 
 /** Opt-in synthetic or bounded live model traversal on the host Vulkan device. */
 public final class VoxelComputeBackend implements GraphicsBackend {
     public VoxelComputeBackend() {
-        if (GraphicsBackendRegistry.apiMinorVersion() < 5)
-            throw new IllegalStateException("Bedray Compute requires renderer API 1.5 or newer");
+        if (GraphicsBackendRegistry.apiMinorVersion() < 6)
+            throw new IllegalStateException("Bedray Compute requires renderer API 1.6 or newer");
     }
     private VoxelComputePipeline pipeline;
     private String detail = "Waiting for a world snapshot";
     @Override public String sceneDetail() {
+        if(streamed.ready()) {
+            var status=streamed.status();
+            return status.residentSections()+" resident; "+status.queuedSections()+" queued; radius "
+                +status.effectiveRenderDistanceChunks()+"/"+status.requestedRenderDistanceChunks()+" chunks; "
+                +status.usedGpuBytes()+"/"+status.budgetGpuBytes()+" GPU scene bytes; "+status.reason()
+                +(pipeline==null?"":"; accumulation "+pipeline.historyStatus());
+        }
         if (pipeline == null || snapshot == null) return detail;
         var emitters = uploads.emitters();
         return detail + "; emitters " + emitters.count() + "/" + emitters.found()
@@ -29,6 +39,19 @@ public final class VoxelComputeBackend implements GraphicsBackend {
     @Override public boolean supportsDebugViews() { return true; }
     @Override public boolean supportsModelGeometry() { return true; }
     @Override public boolean supportsCellTint() { return true; }
+    @Override public boolean supportsWorldStreaming() { return true; }
+    private final StreamedVoxelScene streamed=new StreamedVoxelScene();
+    private io.github.andrexarlay.bedray.api.v1.WorldRenderQuality previousQuality;
+    @Override public WorldStreamingStatus streamingStatus(){return streamed.status();}
+    @Override public java.util.List<io.github.andrexarlay.bedray.api.v1.SectionKey> drainWorldInvalidations(){return streamed.drainInvalidations();}
+    @Override public void acceptWorldUpdate(WorldUpdate update){
+        if(pipeline!=null&&streamed.ready()&&streamed.requestedBudget()!=update.bounds().budgetGpuBytes())
+            throw new IllegalStateException("Host must release compute resources before changing the scene budget");
+        if(pipeline!=null&&(update.reset()||!update.renderQuality().equals(previousQuality)
+                ||streamed.ready()&&streamed.atlasGeneration()!=update.atlasGeneration()))pipeline.invalidateHistory();
+        previousQuality=update.renderQuality();
+        streamed.accept(update);
+    }
     private final io.github.andrexarlay.bedray.compute.voxel.VoxelWorldCache world =
         new io.github.andrexarlay.bedray.compute.voxel.VoxelWorldCache();
 
@@ -76,6 +99,7 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         }
     }
     @Override public void clearWorldSnapshot() {
+        streamed.clear();
         if (snapshot == null) return;
         world.clear(); snapshot = null; detail = "Waiting for a world snapshot"; uploads.clear();
         texturedCounts.clear();
@@ -88,6 +112,14 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         if (frame.sceneMode() == GraphicsBackendRegistry.SceneMode.OFF) return false;
         if (frame.width() <= 0 || frame.height() <= 0 || frame.targetImage() == 0) return false;
         boolean live = frame.sceneMode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
+        if(live&&streamed.ready()) {
+            if(frame.atlas()==null||streamed.atlasGeneration()!=frame.atlas().generation())return false;
+            if(pipeline!=null&&!pipeline.matches(frame))throw new IllegalStateException("Host must release compute resources before resize/device change");
+            if(pipeline==null)pipeline=new VoxelComputePipeline(frame.device(),frame.width(),frame.height(),frame.targetFormat(),
+                VoxelGrid.builder(1,1,1).build(),frame.atlas(),frame.raster(),streamed);
+            pipeline.recordStreamedWorld(frame.commandBuffer(),frame.targetImage(),frame.lighting());
+            return true;
+        }
         if (live && snapshot == null) return false;
         if (live && snapshot.materialGeneration() != 0 && (frame.atlas() == null
                 || snapshot.materialGeneration() != frame.atlas().generation())) return false;
@@ -110,6 +142,7 @@ public final class VoxelComputeBackend implements GraphicsBackend {
             pipeline.close();
             pipeline = null;
             uploads.clear();
+            streamed.clear();
         }
     }
 }

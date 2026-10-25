@@ -40,13 +40,18 @@ final class TemporalHistory {
     }
 
     void prepare(CameraSnapshot camera, VoxelWorldUpload origin, boolean sceneChanged, boolean shaded) {
+        if(origin==null){prepare(camera,0,0,0,sceneChanged,shaded);return;}
+        prepare(camera,origin.originX(),origin.originY(),origin.originZ(),sceneChanged,shaded);
+    }
+
+    void prepare(CameraSnapshot camera,int originX,int originY,int originZ,boolean sceneChanged,boolean shaded) {
         valid = false;
         motion = true;
         cap = CHANGED_CAP;
         pendingInverse = null;
-        if (camera == null || origin == null) return;
+        if (camera == null) return;
         ByteBuffer push = ByteBuffer.allocate(112).order(ByteOrder.LITTLE_ENDIAN);
-        camera.writePushConstants(push, origin.originX(), origin.originY(), origin.originZ());
+        camera.writePushConstants(push, originX, originY, originZ);
         float[] inverse = new float[16];
         for (int i = 0; i < 16; i++) inverse[i] = push.getFloat(i * 4);
         pendingInverse = inverse;
@@ -62,7 +67,7 @@ final class TemporalHistory {
             lastReset = "singular previous projection";
             return;
         }
-        double cx = previousX - origin.originX(), cy = previousY - origin.originY(), cz = previousZ - origin.originZ();
+        double cx = previousX - originX, cy = previousY - originY, cz = previousZ - originZ;
         previousCamera[0] = (float) cx; previousCamera[1] = (float) cy; previousCamera[2] = (float) cz;
         if (!Float.isFinite(previousCamera[0]) || !Float.isFinite(previousCamera[1]) || !Float.isFinite(previousCamera[2])) {
             lastReset = "nonfinite previous camera";
