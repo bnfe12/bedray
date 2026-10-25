@@ -262,6 +262,20 @@ void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 orig
         && !s.isRedstone && !s.isLava && !s.isWater && !s.isIce && !s.isPortal;
     // Full leaf cube vs thin card: only the cube's shadow ray has to cross its own cell (see leafShadowOrigin).
     s.leafCube = s.isFoliage && (rawLight0 & VERT_FLAG_LEAF_CUBE) != 0u;
+
+    // Rain wetness: a water film on everything the rain reaches. Flat, up-facing, sky-exposed blocks go darker and glossy, so wet
+    // ground picks up the specular lobe and mirrors lamps and the sky instead of looking like the same dry world under a grey sky,
+    // and the micro-normals of the material map flatten into the film (that is what makes a puddle a mirror). The strength comes
+    // from the vanilla rain level (fogMisc.x, 0 clear .. 1 downpour) and the sky light of the face, which is 0 under a roof or in a
+    // cave: interiors stay dry. Water, ice, lava, portals and foliage cards are excluded - a leaf is not a surface a film can lie
+    // on, and the others are already handled above.
+    float wetness = StatsBuf(pc.statsAddr).fogMisc.x * smoothstep(0.75, 1.0, s.ng.y) * smoothstep(0.55, 0.95, s.light.y);
+    if (wetness > 0.0 && !s.isWater && !s.isIce && !s.isLava && !s.isPortal && !s.isFoliage) {
+        s.roughness = mix(s.roughness, 0.22, wetness);   // below ROUGH_SPLIT: the wet surface gets a traced specular lobe
+        s.ns = normalize(mix(s.ns, s.ng, wetness * 0.75));
+        s.albedoLit *= 1.0 - 0.28 * wetness;
+        s.albedo *= 1.0 - 0.28 * wetness;
+    }
 }
 
 // Fills s from a committed entity triangle hit: real triangle (positions, vertex colour, vanilla light), texture from the RT

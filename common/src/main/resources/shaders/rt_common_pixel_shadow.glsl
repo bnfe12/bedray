@@ -7,12 +7,14 @@
 // This module owns the whole policy; every shaded pass goes through it. Three rules keep the look from becoming a cheat:
 //
 //  1. It moves the RECEIVER, never the caster and never the result. It is a shadow map in the original sense: one texel has
-//     one depth and the receiver is evaluated at the texel centre. The other light terms keep the exact per-pixel origin -
-//     ambient occlusion, traced sky light, block-emitter light, the emitters' own shadow rays: quantising those would make
-//     the LIGHT blocky, not the shadow. What does follow the option is any surface shaded WITH a sun shadow ray whose result
-//     reaches the image: the primary hit in both passes, and in Fast mode also the reflection and GI hits, so a mirror shows
-//     the same edges as the floor it reflects. The path tracer's deeper vertices stay exact: they are 1 spp, denoised, and
-//     each would pay a validation ray for nothing.
+//     one depth and the receiver is evaluated at the texel centre. The light terms that are not a shadow ray keep the exact
+//     per-pixel origin - ambient occlusion and traced sky light - and so does the emitter falloff: quantising those would make
+//     the LIGHT blocky, not the shadow. What follows the option is any surface shaded with a ray that only answers "is the
+//     light visible": the sun/moon ray (the primary hit in both passes, and in Fast mode also the reflection and GI hits, so a
+//     mirror shows the same edges as the floor it reflects) and the emitter NEE ray of the primary hit, so a torch, a lava pool
+//     or a glowing block casts the same staircase (owner report 2026-10-25: block light stayed smooth while the option was on).
+//     Deeper path vertices and reflection/GI emitter rays stay exact: they are 1-3 spp and denoised, and each sample would pay
+//     a validation ray for a staircase the denoiser dissolves anyway.
 //  2. A cell that crosses geometry keeps the exact shadow. The shared origin has to be able to see the fragment it
 //     replaces; when the short segment between the two is blocked (a step, a slab, a wall corner inside the cell) this
 //     fragment is simply not snapped. The alternative tried before - a fixed lift along the normal, up to 0.4 blocks - put

@@ -780,7 +780,7 @@ public final class RtFrameRenderer {
         skyState.collect(levelState, camera.pos.x + bobOrigin.x, camera.pos.y + bobOrigin.y, camera.pos.z + bobOrigin.z, RtConfig.SUN_FLIP_X,
             skyTextures.cloudWidth(), skyTextures.cloudHeight());
         RtSky.keyLight(sky.sunAngle, sky.moonAngle, RtConfig.SUN_FLIP_X, hasSky, skyState.moonLight, skyState.rainBrightness,
-            params.key);
+            skyState.thunder, params.key);
         skyState.write(hdr, skyTextures.address(), RtConfig.SUN_FLIP_X);
         // vanilla fog of the game (render distance edge, biome / weather / water) + aerial perspective: rt_common.glsl fogTransmittanceHit
         fogState.collect(Minecraft.getInstance(), levelState.worldPartialTicks, lastRadiusXz, skyState.rainBrightness);

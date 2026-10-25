@@ -93,7 +93,7 @@ void storeEmptyReservoir(uint slot) {
 }
 
 vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, uint candidates, ivec2 p, ivec2 size,
-                        bool temporal) {
+                        bool temporal, bool cellShadow) {
     StatsBuf fb = StatsBuf(pc.statsAddr);
     bool useReservoir = temporal && fb.reservoirAddr.x != 0u;
     uint width = uint(size.x);
@@ -263,7 +263,15 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
     if (chosenOpenSource) {
         endBias = max(endBias, min(0.2, 0.45 * dist));
     }
+    // Pixel shadows (option on, camera-visible surface): the visibility ray starts at the centre of this fragment's 16x16-texel
+    // cell, so a torch, a lava pool or a glowing block casts the same staircase edges as the sun instead of a smooth per-pixel
+    // boundary. Only the visibility moves - the geometry term of emitterPhat above stays per-pixel, so the light itself is not
+    // blocky. pixelShadowOrigin validates the cell with its own short ray and keeps the exact origin when the cell crosses
+    // geometry, so no fragment loses its light to a snapped origin buried in a wall.
     vec3 shadowOrigin = s.pos + s.ng * 0.005;
+    if (cellShadow) {
+        shadowOrigin = pixelShadowOrigin(s, shadowOrigin);
+    }
     vec3 rayTarget = chosenY - dn * endBias;
     vec3 rayDir = rayTarget - shadowOrigin;
     float rayDist = length(rayDir);
@@ -294,18 +302,25 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
     return albedo * INV_PI * le / max(chosenEm, 1.0e-4) * (wsum / sampleCount);
 }
 
+// cellShadow: the caller shades a camera-visible surface and the pixelated-shadow option is on (pixelShadowApplies). Only the
+// primary hit passes true - a path vertex pays one validation ray per NEE call for a staircase the denoiser would dissolve.
+vec3 sampleEmitters(Surface s, vec3 albedo, float maxDist, inout uint seed, bool cellShadow) {
+    return sampleEmittersImpl(s, albedo, maxDist, seed, NEE_CANDIDATES, ivec2(0), ivec2(1), false, cellShadow);
+}
+
 vec3 sampleEmitters(Surface s, vec3 albedo, float maxDist, inout uint seed) {
-    return sampleEmittersImpl(s, albedo, maxDist, seed, NEE_CANDIDATES, ivec2(0), ivec2(1), false);
+    return sampleEmitters(s, albedo, maxDist, seed, false);
 }
 
 // Ray mode: one reservoir per pixel and frame. candidates = emissiveRays() * NEE_CANDIDATES, so the history is merged once
 // per pixel instead of once per RIS call.
-vec3 sampleEmittersTemporal(Surface s, vec3 albedo, float maxDist, inout uint seed, ivec2 p, ivec2 size, uint candidates) {
-    return sampleEmittersImpl(s, albedo, maxDist, seed, candidates, p, size, true);
+vec3 sampleEmittersTemporal(Surface s, vec3 albedo, float maxDist, inout uint seed, ivec2 p, ivec2 size, uint candidates,
+                            bool cellShadow) {
+    return sampleEmittersImpl(s, albedo, maxDist, seed, candidates, p, size, true, cellShadow);
 }
 
 vec3 sampleEmitters(Surface s, vec3 albedo, vec3 origin, float maxDist, inout uint seed) {
-    return sampleEmitters(s, albedo, maxDist, seed);
+    return sampleEmitters(s, albedo, maxDist, seed, false);
 }
 
 vec3 sampleEmitters(vec3 pos, vec3 ns, vec3 albedo, vec3 origin, float maxDist, inout uint seed) {
@@ -313,7 +328,7 @@ vec3 sampleEmitters(vec3 pos, vec3 ns, vec3 albedo, vec3 origin, float maxDist, 
     dummy.pos = pos;
     dummy.ng = ns;
     dummy.ns = ns;
-    return sampleEmitters(dummy, albedo, maxDist, seed);
+    return sampleEmitters(dummy, albedo, maxDist, seed, false);
 }
 
 // Ray origin just above the surface (RtLighting.shadowBias)

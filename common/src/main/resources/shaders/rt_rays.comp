@@ -399,12 +399,16 @@ void main() {
                     // its whole block term is the traced one, however far the camera is.
                     if ((farMix < 0.999 || s.light.x <= 0.0) && emitterCount() > 0u) {
                         uint n = emissiveRays();
+                        // Pixel shadows: the emitter shadow ray starts at the centre of this fragment's world cell, the same
+                        // cell the sun shadow uses, so torch and lava shadows get the blocky staircase too.
+                        bool emCellShadow = pixelShadowApplies(s, underwater);
                         if (StatsBuf(pc.statsAddr).reservoirAddr.x != 0u) {
                             // ReSTIR DI: one reservoir per pixel, merging this frame's candidates with the reprojected sample.
-                            emissiveLight = sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES);
+                            emissiveLight = sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES,
+                                emCellShadow);
                         } else {
                             for (uint i = 0u; i < n; i++) {
-                                emissiveLight += sampleEmitters(s, vec3(1.0), reach, seed);
+                                emissiveLight += sampleEmitters(s, vec3(1.0), reach, seed, emCellShadow);
                             }
                             emissiveLight /= float(n);
                         }

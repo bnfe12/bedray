@@ -103,7 +103,7 @@ class RtDistantBlockLightTest {
             "a bounce is shaded where the previous vertex sent it, so its camera distance is unknown and it keeps tracing");
         assertTrue(path.contains("s.albedoLit * nee"),
             "the albedo is applied once: the estimator is called with vec3(1.0) and multiplied here");
-        assertEquals(1, count(path, "sampleEmitters(s, vec3(1.0), reach, seed)"), "one NEE call site in the path tracer");
+        assertEquals(1, count(path, "sampleEmitters(s, vec3(1.0), reach, seed,"), "one NEE call site in the path tracer");
         assertEquals(0, count(path, BAKED), "the baked term must stay behind distantBlockLight, not appear inline");
     }
 }

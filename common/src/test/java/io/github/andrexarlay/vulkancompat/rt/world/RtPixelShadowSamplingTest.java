@@ -215,10 +215,27 @@ public class RtPixelShadowSamplingTest {
     }
 
     @Test
-    public void blockEmittersAreNotQuantized() {
+    public void blockEmittersFollowTheOptionOnThePrimaryHit() {
         String emitters = load(EMITTERS);
-        assertFalse(emitters.contains("pixelShadow"), "block-emitter light keeps the exact per-pixel origin");
-        assertTrue(emitters.contains("s.pos + s.ng * 0.005"), "emitter shadows start on the surface, snapped by nobody");
+        // Owner report 2026-10-25: with the option on, torch and lava shadows stayed smooth while the sun's were blocky. The
+        // emitter visibility ray now starts in the same world cell as the sun ray; only the visibility moves - the falloff and
+        // the geometry term of emitterPhat stay per-pixel, so the light is not blocky, just the shadow boundary.
+        assertTrue(emitters.contains("vec3 shadowOrigin = s.pos + s.ng * 0.005;"),
+            "the exact origin is still the base of the validation ray");
+        assertTrue(emitters.contains("if (cellShadow) {"), "the emitter shadow ray is gated on the caller's request");
+        assertTrue(emitters.contains("shadowOrigin = pixelShadowOrigin(s, shadowOrigin);"),
+            "the emitter shadow ray takes the cell origin when the caller asks for it");
+        // The validation ray inside pixelShadowOrigin is only affordable once per pixel: every deeper path vertex would pay one.
+        assertTrue(load(PATH).contains(
+                "sampleEmitters(s, vec3(1.0), reach, seed, b == 0u && pixelShadowApplies(s, med.inside))"),
+            "the path tracer pixelates the emitter shadow on the first vertex only");
+        assertTrue(load(RAYS).contains("bool emCellShadow = pixelShadowApplies(s, underwater);"),
+            "the ray pass pixelates on the camera-visible hit");
+        String shade = load(SHADE);
+        assertTrue(shade.contains("sampleEmitters(s, vec3(1.0), 32.0, emSeed);"),
+            "a secondary emitter ray keeps the exact origin: three samples would pay three validation rays per hit");
+        assertTrue(shade.contains("sampleEmitters(s, vec3(1.0), 24.0, rs);"),
+            "a reflected emitter ray keeps the exact origin as well");
     }
 
     @Test

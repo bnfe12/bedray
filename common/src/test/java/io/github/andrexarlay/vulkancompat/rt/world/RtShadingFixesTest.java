@@ -551,8 +551,10 @@ public class RtShadingFixesTest {
         assertTrue(common.contains("traceTransmittance(shadowOrigin, rayDir / rayDist, rayDist)"),
             "the reused sample still gets exactly one visibility ray");
 
-        assertTrue(rays.contains("sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES)"),
+        assertTrue(rays.contains("sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES,"),
             "the ray pass merges the history once per pixel");
+        assertTrue(rays.contains("emCellShadow);"),
+            "the merged sample traces its shadow from the pixelated cell, like the sun");
         assertEquals(0, count(path, "sampleEmittersTemporal"), "the path tracer keeps plain RIS");
         assertEquals(0, count(path, "sampleEmittersImpl"), "the path tracer keeps plain RIS");
     }

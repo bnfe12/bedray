@@ -295,7 +295,8 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
             vec3 nee = vec3(0.0);
             // A surface with no vanilla block light (a LabPBR glow, an emissive item) has nothing to fall back to.
             if (b > 0u || blockLightFarMix(cameraDist, listRange) < 0.999 || s.light.x <= 0.0) {
-                nee = sampleEmitters(s, vec3(1.0), reach, seed);
+                // First vertex: the emitter shadow ray follows the pixelated-shadow option exactly like the sun ray above.
+                nee = sampleEmitters(s, vec3(1.0), reach, seed, b == 0u && pixelShadowApplies(s, med.inside));
             }
             if (b == 0u) {
                 nee = distantBlockLight(nee, s, cameraDist, listRange);

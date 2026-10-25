@@ -46,6 +46,8 @@ public final class RtSkyState {
     public float moonAngle;
     public float starAngle;
     public float rainBrightness = 1f;
+    /** Vanilla thunder level, 0 outside a storm, 1 in a full thunderstorm (Level.getThunderLevel). */
+    public float thunder;
     public float starBrightness;
     public final float[] sunset = new float[4];
     public final float[] fogColor = {0.75f, 0.85f, 1f};
@@ -88,6 +90,14 @@ public final class RtSkyState {
         RtSky.sunDirection(sunAngle, flipX, sunDir);
         RtSky.sunDirection(moonAngle, flipX, moonDir);
         rainBrightness = hasSky ? clamp01(sky.rainBrightness) : 1f;
+        // Thunder is not in SkyRenderState (only the rain level is), so a thunderstorm used to light the world exactly like
+        // the same rain without thunder. Vanilla darkens the sky further with getSkyDarken's (1 - 5 * thunder / 16) factor,
+        // which is folded into the key light by RtSky.keyLight; rainBrightness keeps meaning "how much it rains" for the
+        // wetness and the fog.
+        thunder = 0f;
+        if (hasSky && mc.level != null) {
+            thunder = clamp01(mc.level.getThunderLevel(level.worldPartialTicks));
+        }
         starBrightness = hasSky ? Math.max(0f, sky.starBrightness) : 0f;
         Vector4fc ss = sky.sunriseAndSunsetColor;
         if (hasSky && ss != null) {

@@ -642,7 +642,15 @@ public final class DlssRrDenoiser {
         // 3. Evaluate and restore layouts to GENERAL
         try {
             if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.dlssViaStreamline()) {
-                io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureConstants(width, height, width, height);
+                // The constants of a frame are sent by the FIRST feature that needs them, and the ray traced frame is
+                // recorded before the upscale, so this call owns them. Passing the render size as the window made frame
+                // generation and the upscaler run the whole frame against a viewport that does not exist (window !=
+                // render size whenever a quality preset below 100% is used); the real output size is the upscaler's.
+                int outW = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
+                    ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputWidth() : width;
+                int outH = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
+                    ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputHeight() : height;
+                io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureConstants(width, height, outW, outH);
             }
             DlssNative.Status st = rr.evaluate(cmd.address(), feature, eval);
             if (!st.ok()) {
