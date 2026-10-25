@@ -3,7 +3,15 @@
 layout(local_size_x=8, local_size_y=8) in;
 layout(binding=0, rgba8) uniform writeonly image2D outputImage;
 // Live textured grids append one ARGB cell tint per cell after the occupancy cells (index + dimensions.w).
+#ifdef STREAMED_WORLD
+// 64-byte header, then a bounded hash directory (12 words/entry) and resident cell/tint arena.
+// Directory: absolute section xyz/state, cells/tints/palette/header offsets, quad offset/counts.
+layout(std430, binding=1) readonly buffer Grid {
+    uvec4 dimensions; ivec4 boundsMin; ivec4 originSection; uvec4 pageInfo; uint words[];
+} grid;
+#else
 layout(std430, binding=1) readonly buffer Grid { uvec4 dimensions; uint cells[]; } grid;
+#endif
 #ifdef TEXTURED_CUBES
 // flags bit0: multiply by the cell tint (API minor 5).
 struct CubeFace { vec4 originDu; vec2 dv; uint tint; uint flags; };
@@ -13,7 +21,11 @@ layout(binding=3) uniform sampler2D blockAtlas;
 // flags: 1 cutout, 2 translucent, 4 cell tint, 8 fluid surface.
 struct ModelQuad { vec4 vertices[5]; uvec4 metadata; };
 // 27*128 headers occupy 55,296 bytes, followed by 27 fixed 8192-quad slabs.
+#ifdef STREAMED_WORLD
+layout(std430, binding=4) readonly buffer Models { uint words[]; } models;
+#else
 layout(std430, binding=4) readonly buffer Models { uvec4 headers[3456]; ModelQuad quads[]; } models;
+#endif
 const uint MAX_EMITTERS=128u;
 // values: LightingFrame (key dir/enabled, key RGB/sky factor, sky RGB/ambient factor, block RGB/factor,
 // ambient RGB/brightness, darkness/night vision/boss darkening). info: emitters, history valid, history cap, motion.
@@ -47,7 +59,55 @@ struct Hit {
     vec3 albedo; uint flags; float emission; float alpha;
 };
 Hit miss() { return Hit(false,ivec3(0),0u,0.0,vec3(0),vec3(0),0u,0.0,0.0); }
+vec3 boundsMinimum() {
+#ifdef STREAMED_WORLD
+    return vec3(grid.boundsMin.xyz);
+#else
+    return vec3(0);
+#endif
+}
+float sceneDistance() {
+#ifdef STREAMED_WORLD
+    return length(vec3(grid.dimensions.xyz));
+#else
+    return 160.0;
+#endif
+}
+bool diffuseBounceEnabled() {
+#ifdef STREAMED_WORLD
+    return (grid.pageInfo.w&1u)!=0u;
+#else
+    return true;
+#endif
+}
+bool translucentOpticsEnabled() {
+#ifdef STREAMED_WORLD
+    return (grid.pageInfo.w&2u)!=0u;
+#else
+    return true;
+#endif
+}
+#ifdef STREAMED_WORLD
+uint sectionPage(ivec3 cell) {
+    ivec3 key=ivec3(floor(vec3(cell)/16.0))+grid.originSection.xyz;
+    uint h=uint(key.x)*0x8da6b343u^uint(key.y)*0xd8163841u^uint(key.z)*0xcb1ab31fu;
+    h^=h>>16;h*=0x7feb352du;h^=h>>15;
+    uint index=h&(grid.pageInfo.x-1u);
+    for(uint probe=0u;probe<grid.pageInfo.z;probe++,index=(index+1u)&(grid.pageInfo.x-1u)) {
+        uint address=index*12u,state=grid.words[address+3u];
+        if(state==0u)return 0xffffffffu;
+        if(state!=3u&&ivec3(grid.words[address],grid.words[address+1u],grid.words[address+2u])==key)return address;
+    }
+    return 0xffffffffu;
+}
+#endif
 uint cellIndex(ivec3 cell) {
+#ifdef STREAMED_WORLD
+    uint page=sectionPage(cell);
+    if(page==0xffffffffu||grid.words[page+3u]!=2u)return 0xffffffffu;
+    ivec3 local=cell&ivec3(15);
+    return grid.words[page+4u]+uint(local.x+16*(local.y+16*local.z));
+#else
     ivec3 size=ivec3(grid.dimensions.xyz);
     if (any(lessThan(cell,ivec3(0))) || any(greaterThanEqual(cell,size))) return 0xffffffffu;
     uint index=uint(cell.x+size.x*(cell.y+size.y*cell.z));
@@ -56,10 +116,21 @@ uint cellIndex(ivec3 cell) {
         index=uint(tile.x+3*(tile.y+3*tile.z))*4096u+uint(local.x+16*(local.y+16*local.z));
     }
     return index<grid.dimensions.w ? index : 0xffffffffu;
+#endif
 }
 uint cellValue(ivec3 cell) {
+#ifdef STREAMED_WORLD
+    if(any(lessThan(vec3(cell),boundsMinimum()))||any(greaterThanEqual(vec3(cell),boundsMinimum()+vec3(grid.dimensions.xyz))))return 0xffffffffu;
+    uint page=sectionPage(cell);
+    if(page==0xffffffffu)return 0xffffffffu;
+    if(grid.words[page+3u]==1u)return grid.words[page+8u];
+    ivec3 local=cell&ivec3(15);
+    uint index=grid.words[page+4u]+uint(local.x+16*(local.y+16*local.z));
+    return index<uint(grid.words.length())?grid.words[index]:0xffffffffu;
+#else
     uint index=cellIndex(cell);
     return index==0xffffffffu ? 0xffffffffu : grid.cells[index];
+#endif
 }
 #ifdef TEXTURED_CUBES
 const float PI=3.14159265358979;
@@ -79,9 +150,16 @@ vec3 tintColor(uint tint) {
     return srgbToLinear(vec3(float((tint>>16)&255u),float((tint>>8)&255u),float(tint&255u))/255.0);
 }
 vec3 cellTint(ivec3 cell) {
+#ifdef STREAMED_WORLD
+    uint page=sectionPage(cell);
+    if(page==0xffffffffu||grid.words[page+3u]!=2u)return vec3(1);
+    ivec3 local=cell&ivec3(15);
+    uint value=grid.words[grid.words[page+5u]+uint(local.x+16*(local.y+16*local.z))];
+#else
     uint index=cellIndex(cell);
     if (index==0xffffffffu) return vec3(1);
     uint value=grid.cells[grid.dimensions.w+index];
+#endif
     return value==0u ? vec3(1) : tintColor(value);
 }
 float quadComponent(ModelQuad quad, int index) { return quad.vertices[index/4][index%4]; }
@@ -113,16 +191,33 @@ bool triangle(vec3 origin, vec3 ray, vec3 a, vec3 b, vec3 c, vec2 ta, vec2 tb, v
 Hit modelHit(vec3 origin, vec3 ray, ivec3 cell, uint material, float minT, float maxT) {
     uint reference=(material>>8)&255u;
     if (reference==0u || reference>128u) return miss();
+#ifdef STREAMED_WORLD
+    uint page=sectionPage(cell);
+    if(page==0xffffffffu||reference>grid.words[page+9u])return miss();
+    uint headerAddress=grid.words[page+7u]+(reference-1u)*4u;
+    if(headerAddress+3u>=uint(models.words.length()))return miss();
+    uvec4 header=uvec4(models.words[headerAddress],models.words[headerAddress+1u],models.words[headerAddress+2u],models.words[headerAddress+3u]);
+    if(header.y==0u||header.y>64u)return miss();
+#else
     ivec3 tile=cell/16;
     uint slot=uint(tile.x+3*(tile.y+3*tile.z));
     uvec4 header=models.headers[slot*128u+reference-1u];
     if (header.y==0u || header.y>64u || header.x+header.y>8192u) return miss();
+#endif
     Hit best=miss();
     float nearest=maxT;
     for (uint index=0u; index<header.y; index++) {
+#ifdef STREAMED_WORLD
+        uint address=grid.words[page+7u]+grid.words[page+8u]+(header.x+index)*24u;
+        if(address+23u>=uint(models.words.length()))return miss();
+        ModelQuad quad;
+        for(int word=0;word<20;word++)quad.vertices[word/4][word%4]=uintBitsToFloat(models.words[address+uint(word)]);
+        quad.metadata=uvec4(models.words[address+20u],models.words[address+21u],models.words[address+22u],models.words[address+23u]);
+#else
         uint address=slot*8192u+header.x+index;
         if (address>=uint(models.quads.length())) return miss();
         ModelQuad quad=models.quads[address];
+#endif
         vec3 a=vertexPosition(quad,0), b=vertexPosition(quad,1), c=vertexPosition(quad,2), d=vertexPosition(quad,3);
         vec2 ta=vertexUv(quad,0), tb=vertexUv(quad,1), tc=vertexUv(quad,2), td=vertexUv(quad,3);
         vec2 low=min(min(ta,tb),min(tc,td)), high=max(max(ta,tb),max(tc,td));
@@ -149,13 +244,14 @@ Hit modelHit(vec3 origin, vec3 ray, ivec3 cell, uint material, float minT, float
 #endif
 Hit trace(vec3 origin, vec3 direction, float minT, float maxT) {
     ivec3 size=ivec3(grid.dimensions.xyz);
+    ivec3 minimum=ivec3(boundsMinimum()),maximum=minimum+size;
     float enter=-3.402823466e38, leave=maxT;
     vec3 enterNormal=vec3(0);
     for (int a=0; a<3; a++) {
         if (direction[a]==0.0) {
-            if (origin[a]<0.0 || origin[a]>=float(size[a])) return miss();
+            if (origin[a]<float(minimum[a]) || origin[a]>=float(maximum[a])) return miss();
         } else {
-            float t0=-origin[a]/direction[a], t1=(float(size[a])-origin[a])/direction[a];
+            float t0=(float(minimum[a])-origin[a])/direction[a], t1=(float(maximum[a])-origin[a])/direction[a];
             float nearT=min(t0,t1), farT=max(t0,t1);
             if (nearT>enter) {
                 enter=nearT; enterNormal=vec3(0); enterNormal[a]=direction[a]>0.0 ? -1.0 : 1.0;
@@ -170,7 +266,7 @@ Hit trace(vec3 origin, vec3 direction, float minT, float maxT) {
     vec3 nextT=vec3(3.402823466e38), delta=vec3(3.402823466e38);
     for (int a=0; a<3; a++) {
         if (direction[a]<0.0 && p[a]==floor(p[a])) cell[a]--;
-        cell[a]=clamp(cell[a],0,size[a]-1);
+        cell[a]=clamp(cell[a],minimum[a],maximum[a]-1);
         if (direction[a]!=0.0) {
             nextT[a]=(float(cell[a]+(direction[a]>0.0 ? 1 : 0))-origin[a])/direction[a];
             delta[a]=abs(1.0/direction[a]);
@@ -179,7 +275,32 @@ Hit trace(vec3 origin, vec3 direction, float minT, float maxT) {
     vec3 normal=enter<minT ? vec3(0) : enterNormal;
     int limit=size.x+size.y+size.z+1;
     for (int iteration=0; iteration<limit; iteration++) {
-        if (any(lessThan(cell,ivec3(0))) || any(greaterThanEqual(cell,size)) || t>=leave) break;
+        if (any(lessThan(cell,minimum)) || any(greaterThanEqual(cell,maximum)) || t>=leave) break;
+#ifdef STREAMED_WORLD
+        uint page=sectionPage(cell);
+        if((page==0xffffffffu&&diagnostic.control.y!=3u)||(page!=0xffffffffu&&grid.words[page+3u]==1u)) {
+            // Two-level DDA: an absent/queued or explicit empty section costs one section step.
+            // Missing primary surfaces keep raster during composition; they are never opaque cubes.
+            vec3 sectionMin=floor(vec3(cell)/16.0)*16.0;
+            vec3 sectionExit=vec3(3.402823466e38);
+            for(int a=0;a<3;a++)if(direction[a]!=0.0)
+                sectionExit[a]=(sectionMin[a]+(direction[a]>0.0?16.0:0.0)-origin[a])/direction[a];
+            float jump=min(sectionExit.x,min(sectionExit.y,sectionExit.z));
+            if(jump>=leave)break;
+            t=max(t,jump);p=fma(vec3(t),direction,origin);cell=ivec3(floor(p));normal=vec3(0);
+            bool face=false;
+            for(int a=0;a<3;a++) {
+                if(direction[a]<0.0&&p[a]==floor(p[a]))cell[a]--;
+                if(sectionExit[a]==jump) {
+                    // Snap exact crossed planes: fma may otherwise round back into the old section.
+                    cell[a]=int(sectionMin[a])+(direction[a]>0.0?16:-1);
+                    if(!face){normal[a]=-float(stepDirection[a]);face=true;}
+                }
+                nextT[a]=direction[a]==0.0?3.402823466e38:(float(cell[a]+(direction[a]>0.0?1:0))-origin[a])/direction[a];
+            }
+            continue;
+        }
+#endif
         float boundary=min(nextT.x,min(nextT.y,nextT.z));
         uint material=cellValue(cell);
         bool live=(diagnostic.control.x&2u)!=0u;
@@ -261,9 +382,15 @@ vec3 cubeAlbedo(Hit hit, vec3 point) {
     if (hit.normal.y!=0.0) { face=hit.normal.y<0.0 ? 0u : 1u; coordinates=local.xz; }
     else if (hit.normal.z!=0.0) { face=hit.normal.z<0.0 ? 2u : 3u; coordinates=local.xy; }
     else { face=hit.normal.x<0.0 ? 4u : 5u; coordinates=local.zy; }
+#ifdef STREAMED_WORLD
+    uint page=sectionPage(hit.cell);
+    if(page==0xffffffffu||reference>grid.words[page+10u])return vec3(0.65);
+    uint index=grid.words[page+6u]+(reference-1u)*6u+face;
+#else
     ivec3 tile=hit.cell/16;
     uint slot=uint(tile.x+3*(tile.y+3*tile.z));
     uint index=(slot*128u+reference-1u)*6u+face;
+#endif
     if (index>=uint(palette.faces.length())) return vec3(0.65);
     CubeFace surface=palette.faces[index];
     vec2 base=surface.originDu.xy, du=surface.originDu.zw;
@@ -314,7 +441,7 @@ vec3 keyIrradiance(vec3 point, vec3 normal, float skyResponse, inout uint seed) 
     float cosine=dot(normal,direction);
     if (cosine<=0.0) return vec3(0);
     vec3 filterColor;
-    Hit blocker=traceOpaque(point+normal*0.003,direction,100.0,filterColor);
+    Hit blocker=traceOpaque(point+normal*0.003,direction,sceneDistance(),filterColor);
     if (blocker.found) return vec3(0);
     return environment.values[1].rgb*(environment.values[1].w*skyResponse*cosine)*filterColor;
 }
@@ -329,9 +456,9 @@ vec3 secondaryIrradiance(vec3 point, vec3 normal, inout uint seed) {
 // Radiance arriving along a secondary ray (diffuse bounce, reflection, transmission).
 vec3 secondaryRadiance(vec3 origin, vec3 direction, float originSky, inout uint seed, out bool escaped, out float distance) {
     vec3 filterColor;
-    Hit hit=traceOpaque(origin,direction,96.0,filterColor);
+    Hit hit=traceOpaque(origin,direction,sceneDistance(),filterColor);
     escaped=!hit.found;
-    distance=hit.found ? hit.t : 96.0;
+    distance=hit.found ? hit.t : sceneDistance();
     if (!hit.found) return skyRadiance()*originSky*filterColor;
     if ((hit.flags&FLAG_NO_MATERIAL)!=0u) return vec3(0);
     vec3 point=origin+hit.t*direction;
@@ -400,9 +527,11 @@ vec3 surfaceRadiance(Hit hit, vec3 point, vec3 albedo, inout uint seed) {
     vec3 irradiance=environment.values[4].rgb+keyIrradiance(point,hit.normal,sky,seed);
     // One cosine-sampled ray: an escape sees the sky (scaled by vanilla sky openness), a hit returns
     // that surface's outgoing radiance. This is ambient occlusion, sky light and one bounce at once.
-    bool escaped; float distance;
-    vec3 bounceDirection=cosineSample(hit.normal,seed);
-    irradiance+=secondaryRadiance(point+hit.normal*0.003,bounceDirection,sky,seed,escaped,distance);
+    if(diffuseBounceEnabled()) {
+        bool escaped; float distance;
+        vec3 bounceDirection=cosineSample(hit.normal,seed);
+        irradiance+=secondaryRadiance(point+hit.normal*0.003,bounceDirection,sky,seed,escaped,distance);
+    } else irradiance+=skyRadiance()*sky;
     irradiance+=blockIrradiance(point,hit.normal,light,hit.cell,seed);
     vec3 emitted=blockColor()*lightResponse(float(emissionLevel(hit)));
     return albedo*(irradiance+emitted);
@@ -432,7 +561,7 @@ bool translucentRadiance(Hit hit, vec3 point, vec3 ray, inout uint seed, out vec
     Hit through=miss();
     float nearT=0.001;
     for (int layer=0; layer<4; layer++) {
-        through=trace(origin,direction,nearT,96.0);
+        through=trace(origin,direction,nearT,sceneDistance());
         if (!through.found || (through.flags&FLAG_TRANSLUCENT)==0u) break;
         // Coplanar water faces inside one body are culled; anything else filters like a thin layer.
         if (!fluid || (through.flags&FLAG_FLUID)==0u) filterColor*=mix(vec3(1),through.albedo,through.alpha);
@@ -540,7 +669,7 @@ void main() {
         }
         ray=direction*inversesqrt(square);
     }
-    Hit hit=trace(origin,ray,0.0,160.0);
+    Hit hit=trace(origin,ray,0.0,sceneDistance());
     if ((diagnostic.control.x&1u)!=0u) {
 #ifdef RASTER_INPUTS
         storeHistory(pixel,uvec4(0));
@@ -557,7 +686,8 @@ void main() {
     uint cameraCell=cellValue(ivec3(floor(origin)));
     bool insideModel=cameraCell!=0xffffffffu && (cameraCell&255u)==3u;
     bool translucent=(hit.flags&FLAG_TRANSLUCENT)!=0u;
-    bool shadeable=hit.found && (hit.flags&FLAG_NO_MATERIAL)==0u && (!translucent || worldLit && !insideModel);
+    bool shadeable=hit.found && (hit.flags&FLAG_NO_MATERIAL)==0u
+        && (!translucent || worldLit && !insideModel && translucentOpticsEnabled());
 #endif
 #ifdef RASTER_INPUTS
     // Decide composition first: shading is spent only on pixels whose raster surface it replaces.
@@ -580,7 +710,7 @@ void main() {
             }
         }
         if (replace) {
-            vec3 edge=min(p,vec3(grid.dimensions.xyz)-p);
+            vec3 edge=min(p-boundsMinimum(),boundsMinimum()+vec3(grid.dimensions.xyz)-p);
             weight=smoothstep(0.5,2.5,min(edge.x,min(edge.y,edge.z)));
         }
     }
@@ -615,7 +745,7 @@ void main() {
         } else {
 #endif
             vec3 sun=normalize(vec3(-0.5,1.0,0.3));
-            Hit shadow=trace(p+hit.normal*0.003,sun,0.001,100.0);
+            Hit shadow=trace(p+hit.normal*0.003,sun,0.001,sceneDistance());
             float direct=shadow.found ? 0.0 : max(0.0,dot(hit.normal,sun));
             color=albedo*(0.22+0.78*direct);
 #ifdef TEXTURED_CUBES
@@ -631,7 +761,7 @@ void main() {
     }
 #endif
     if (diagnostic.control.y==1u) color=hit.found ? hit.normal*0.5+0.5 : vec3(0);
-    if (diagnostic.control.y==2u) color=hit.found ? vec3(clamp(hit.t/96.0,0.0,1.0)) : vec3(0);
+    if (diagnostic.control.y==2u) color=hit.found ? vec3(clamp(hit.t/sceneDistance(),0.0,1.0)) : vec3(0);
     if (diagnostic.control.y==3u) color=!hit.found ? vec3(0)
         : live && hit.material==4u ? vec3(0.08,0.24,0.85)
         : live && hit.material==2u ? vec3(0.75,0.10,0.65)

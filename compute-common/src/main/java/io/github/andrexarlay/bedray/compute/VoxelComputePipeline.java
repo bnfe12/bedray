@@ -4,6 +4,7 @@ import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
 import io.github.andrexarlay.bedray.api.v1.VoxelVolume;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelEmitters;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
+import io.github.andrexarlay.bedray.compute.voxel.StreamedVoxelScene;
 import io.github.andrexarlay.bedray.api.v1.CameraSnapshot;
 import io.github.andrexarlay.bedray.api.v1.AtlasFrame;
 import io.github.andrexarlay.bedray.api.v1.CubeSectionMaterials;
@@ -31,6 +32,8 @@ public final class VoxelComputePipeline implements AutoCloseable {
     private final boolean liveCapacity;
     private final AtlasFrame atlas;
     private final RasterFrame raster;
+    private final StreamedVoxelScene streamed;
+    private long sceneMemoryBytes;
     private long gridBuffer, gridMemory, image, imageMemory, view;
     private long paletteBuffer, paletteMemory, sampler;
     private long modelBuffer, modelMemory, lightingBuffer, lightingMemory;
@@ -59,13 +62,19 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
     public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelVolume grid,
                                 AtlasFrame atlas, RasterFrame raster) {
+        this(device,width,height,targetFormat,grid,atlas,raster,null);
+    }
+
+    public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelVolume grid,
+                                AtlasFrame atlas, RasterFrame raster, StreamedVoxelScene streamed) {
         this.device = device;
         this.width = width;
         this.height = height;
         this.targetFormat = targetFormat;
         this.atlas = atlas;
         this.raster = raster;
-        this.liveCapacity = grid.sizeX() == 48 && grid.sizeY() == 48 && grid.sizeZ() == 48
+        this.streamed = streamed;
+        this.liveCapacity = streamed != null || grid.sizeX() == 48 && grid.sizeY() == 48 && grid.sizeZ() == 48
                 && grid.cellCount() == 48*48*48 && grid.byteSize() == 16L+48L*48*48*4;
         try {
             if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid output dimensions");
@@ -112,11 +121,13 @@ public final class VoxelComputePipeline implements AutoCloseable {
             VkPhysicalDevice physical = device.getPhysicalDevice();
             VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
             vkGetPhysicalDeviceProperties(physical, properties);
+            if (streamed != null) streamed.configure(Integer.toUnsignedLong(properties.limits().maxStorageBufferRange()));
             // Live textured grids carry the per-cell tint after the occupancy tiles.
-            gridBytes = grid.byteSize() + (atlas != null ? VoxelWorldUpload.TINT_BYTES : 0);
+            gridBytes = streamed != null ? streamed.gridBytes() : grid.byteSize() + (atlas != null ? VoxelWorldUpload.TINT_BYTES : 0);
             if (width > properties.limits().maxImageDimension2D() || height > properties.limits().maxImageDimension2D()
                     || gridBytes > Integer.toUnsignedLong(properties.limits().maxStorageBufferRange())
-                    || atlas != null && VoxelWorldUpload.MODEL_BUFFER_BYTES > Integer.toUnsignedLong(properties.limits().maxStorageBufferRange())) {
+                    || atlas != null && (streamed != null ? streamed.modelBytes() : VoxelWorldUpload.MODEL_BUFFER_BYTES)
+                        > Integer.toUnsignedLong(properties.limits().maxStorageBufferRange())) {
                 throw new IllegalArgumentException("Compute scene exceeds device limits");
             }
             if (atlas != null && (properties.limits().maxPerStageDescriptorStorageBuffers() < 4
@@ -141,6 +152,10 @@ public final class VoxelComputePipeline implements AutoCloseable {
             }
 
             LongBuffer handle = stack.mallocLong(1);
+            if (streamed != null) {
+                long[] storage=createStorage(streamed.gridBytes(),stack);
+                gridBuffer=storage[0];gridMemory=storage[1];
+            } else {
             check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default().size(gridBytes)
                     .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create grid buffer");
             gridBuffer = handle.get(0);
@@ -155,8 +170,15 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 if (gridBytes > grid.byteSize())
                     MemoryUtil.memSet(pointer.get(0) + grid.byteSize(), 0, gridBytes - grid.byteSize());
             } finally { vkUnmapMemory(device, gridMemory); }
+            }
+            VkMemoryRequirements requirements = VkMemoryRequirements.calloc(stack);
+            var pointer = stack.mallocPointer(1);
 
             if (atlas != null) {
+                if (streamed != null) {
+                    long[] storage=createStorage(streamed.paletteBytes(),stack);
+                    paletteBuffer=storage[0];paletteMemory=storage[1];
+                } else {
                 check(vkCreateBuffer(device, VkBufferCreateInfo.calloc(stack).sType$Default().size(VoxelWorldUpload.PALETTE_BYTES)
                         .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
                         .sharingMode(VK_SHARING_MODE_EXCLUSIVE), null, handle), "create cube palette buffer");
@@ -167,10 +189,12 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 check(vkMapMemory(device, paletteMemory, 0, VoxelWorldUpload.PALETTE_BYTES, 0, pointer), "map cube palette memory");
                 try { MemoryUtil.memSet(pointer.get(0), 0, VoxelWorldUpload.PALETTE_BYTES); }
                 finally { vkUnmapMemory(device, paletteMemory); }
-                long[] model = createStorage(VoxelWorldUpload.MODEL_BUFFER_BYTES,stack);
+                }
+                long[] model = createStorage(streamed != null ? streamed.modelBytes() : VoxelWorldUpload.MODEL_BUFFER_BYTES,stack);
                 modelBuffer = model[0]; modelMemory = model[1];
                 long[] light = createStorage(FRAME_BYTES,stack);
                 lightingBuffer = light[0]; lightingMemory = light[1];
+                if(streamed!=null)streamed.allocationBytes(sceneMemoryBytes);
                 check(vkCreateSampler(device, VkSamplerCreateInfo.calloc(stack).sType$Default()
                         .magFilter(VK_FILTER_NEAREST).minFilter(VK_FILTER_NEAREST)
                         .mipmapMode(VK_SAMPLER_MIPMAP_MODE_NEAREST)
@@ -210,6 +234,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
             String source = shaderSource();
             if (atlas != null) source = source.replace("#version 450", "#version 450\n#define TEXTURED_CUBES 1");
+            if (streamed != null) source = source.replace("#version 450", "#version 450\n#define STREAMED_WORLD 1");
             if (raster != null) source = source.replace("#version 450", "#version 450\n#define RASTER_INPUTS 1");
             ByteBuffer spirv = ComputeShaderCompiler.compile(source, "bedray_compute/voxel.comp");
             check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(spirv), null, handle), "create shader");
@@ -257,7 +282,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             writes.get(1).sType$Default().dstSet(descriptorSet).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(bufferInfo);
             if (atlas != null) {
                 VkDescriptorBufferInfo.Buffer paletteInfo = VkDescriptorBufferInfo.calloc(1, stack);
-                paletteInfo.get(0).buffer(paletteBuffer).offset(0).range(VoxelWorldUpload.PALETTE_BYTES);
+                paletteInfo.get(0).buffer(paletteBuffer).offset(0).range(streamed != null ? streamed.paletteBytes() : VoxelWorldUpload.PALETTE_BYTES);
                 writes.get(2).sType$Default().dstSet(descriptorSet).dstBinding(2).descriptorCount(1)
                     .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(paletteInfo);
                 VkDescriptorImageInfo.Buffer atlasInfo = VkDescriptorImageInfo.calloc(1, stack);
@@ -265,7 +290,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 writes.get(3).sType$Default().dstSet(descriptorSet).dstBinding(3).descriptorCount(1)
                     .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(atlasInfo);
                 VkDescriptorBufferInfo.Buffer modelsInfo = VkDescriptorBufferInfo.calloc(1,stack);
-                modelsInfo.get(0).buffer(modelBuffer).offset(0).range(VoxelWorldUpload.MODEL_BUFFER_BYTES);
+                modelsInfo.get(0).buffer(modelBuffer).offset(0).range(streamed != null ? streamed.modelBytes() : VoxelWorldUpload.MODEL_BUFFER_BYTES);
                 writes.get(4).sType$Default().dstSet(descriptorSet).dstBinding(4).descriptorCount(1)
                     .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(modelsInfo);
                 VkDescriptorBufferInfo.Buffer lightInfo = VkDescriptorBufferInfo.calloc(1,stack);
@@ -308,6 +333,11 @@ public final class VoxelComputePipeline implements AutoCloseable {
         try {
             var requirements = VkMemoryRequirements.calloc(stack);
             vkGetBufferMemoryRequirements(device,buffer,requirements);
+            if(streamed!=null) {
+                if(sceneMemoryBytes+requirements.size()>streamed.requestedBudget())
+                    throw new IllegalStateException("Voxel scene allocation exceeds the configured GPU budget");
+                sceneMemoryBytes+=requirements.size();
+            }
             memory = allocate(requirements,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,stack);
             check(vkBindBufferMemory(device,buffer,memory,0),"bind material storage");
             // Device-local geometry avoids repeated model reads across a host-memory bus.
@@ -358,6 +388,11 @@ public final class VoxelComputePipeline implements AutoCloseable {
         record(command,target,false,camera,origin,updates,lighting);
     }
 
+    public void recordStreamedWorld(VkCommandBuffer command,long target,LightingFrame lighting) {
+        if(streamed==null)throw new IllegalStateException("No streamed residency");
+        record(command,target,false,streamed.camera(),null,List.of(),lighting);
+    }
+
     void recordWorld(VkCommandBuffer command, long target, boolean hitIds, CameraSnapshot camera,
                      VoxelWorldUpload origin, List<VoxelWorldUpload.Tile> updates) {
         java.util.Objects.requireNonNull(camera);
@@ -377,15 +412,15 @@ public final class VoxelComputePipeline implements AutoCloseable {
         }
         // Validate camera data before recording any resource updates.
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            if (camera != null) camera.writePushConstants(stack.calloc(112),origin.originX(),origin.originY(),origin.originZ());
+            if (camera != null) camera.writePushConstants(stack.calloc(112),originX(origin),originY(origin),originZ(origin));
         }
         // Reprojection inputs are computed before recording; a singular previous matrix only disables history.
-        if (raster != null) history.prepare(camera, origin, !updates.isEmpty(),
+        if (raster != null && streamed == null) history.prepare(camera, origin, !updates.isEmpty(),
             GraphicsBackendRegistry.debugView() == GraphicsBackendRegistry.DebugView.SHADED);
         if (!updates.isEmpty() || atlas != null) {
             // vkCmdUpdateBuffer copies bytes into the command buffer immediately. No persistent mapped
             // staging range is overwritten while an earlier frame might still be reading it.
-            if (tileScratch == null) tileScratch = MemoryUtil.memAlloc(atlas == null
+            if (tileScratch == null) tileScratch = MemoryUtil.memAlloc(streamed != null ? 65536 : atlas == null
                 ? VoxelWorldUpload.TILE_BYTES : SectionModelGeometry.SECTION_QUAD_BYTES).order(ByteOrder.LITTLE_ENDIAN);
             ByteBuffer upload = tileScratch;
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -406,13 +441,27 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 }
                 vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
                     0,null,barrier,null);
-                if (atlas != null && !initialized) {
+                if (streamed != null && streamed.consumeDirectoryClear()) {
+                    vkCmdFillBuffer(command,gridBuffer,StreamedVoxelScene.HEADER_BYTES,streamed.directoryBytes(),0);
+                    VkMemoryBarrier.Buffer clearBarrier=VkMemoryBarrier.calloc(1,stack);
+                    clearBarrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
+                    vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,clearBarrier,null,null);
+                } else if (streamed == null && atlas != null && !initialized) {
                     vkCmdFillBuffer(command,modelBuffer,0,VoxelWorldUpload.MODEL_BUFFER_HEADER_BYTES,0);
                     VkMemoryBarrier.Buffer clearBarrier = VkMemoryBarrier.calloc(1,stack);
                     clearBarrier.get(0).sType$Default().srcAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT)
                         .dstAccessMask(VK_ACCESS_TRANSFER_WRITE_BIT);
                     vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
                         0,clearBarrier,null,null);
+                }
+                if (streamed != null) {
+                    upload.clear();streamed.writeHeader(upload);upload.flip();
+                    vkCmdUpdateBuffer(command,gridBuffer,0,upload);
+                    boolean changed=streamed.upload((buffer,offset,bytes)->vkCmdUpdateBuffer(command,
+                        buffer==0?gridBuffer:buffer==1?paletteBuffer:modelBuffer,offset,bytes),upload,
+                        StreamedVoxelScene.HEADER_BYTES+FRAME_BYTES);
+                    if(raster!=null)history.prepare(camera,originX(origin),originY(origin),originZ(origin),changed,
+                        GraphicsBackendRegistry.debugView()==GraphicsBackendRegistry.DebugView.SHADED);
                 }
                 for (var tile : updates) {
                     upload.clear(); tile.writeTo(upload); upload.flip();
@@ -440,9 +489,13 @@ public final class VoxelComputePipeline implements AutoCloseable {
                     for (int component = 0; component < LightingFrame.FLOAT_COUNT; component++)
                         upload.putFloat(lighting == null ? 0 : lighting.component(component));
                     VoxelEmitters emitters = origin == null ? null : origin.emitters();
-                    history.writeFrame(upload, emitters == null ? 0 : emitters.count());
+                    history.writeFrame(upload, streamed != null ? streamed.emitterCount() : emitters == null ? 0 : emitters.count());
                     upload.flip();
                     vkCmdUpdateBuffer(command,lightingBuffer,0,upload);
+                    if(streamed!=null) {
+                        upload.clear();streamed.writeEmitters(upload);upload.flip();
+                        vkCmdUpdateBuffer(command,lightingBuffer,FRAME_HEADER_BYTES,upload);
+                    }
                     boolean emittersChanged = origin != null && origin.consumeEmittersChanged();
                     if (emitters != null && (emittersChanged || !initialized)) {
                         upload.clear(); emitters.writeTo(upload); upload.flip();
@@ -492,7 +545,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
             ByteBuffer push = stack.calloc(112).order(ByteOrder.LITTLE_ENDIAN);
             if (camera != null) {
-                camera.writePushConstants(push,origin.originX(),origin.originY(),origin.originZ());
+                camera.writePushConstants(push,originX(origin),originY(origin),originZ(origin));
             }
             boolean srgbTarget = targetFormat == VK_FORMAT_R8G8B8A8_SRGB || targetFormat == VK_FORMAT_B8G8R8A8_SRGB;
             push.putInt(80,(hitIds ? 1 : 0) | (camera != null ? 2 : 0) | (srgbTarget ? 4 : 0)
@@ -527,6 +580,10 @@ public final class VoxelComputePipeline implements AutoCloseable {
 
     /** Drops accumulated history, e.g. on a new world session; the next frame starts from one sample. */
     public void invalidateHistory() { history.invalidate(); }
+
+    private int originX(VoxelWorldUpload origin){return streamed!=null?streamed.originX():origin.originX();}
+    private int originY(VoxelWorldUpload origin){return streamed!=null?streamed.originY():origin.originY();}
+    private int originZ(VoxelWorldUpload origin){return streamed!=null?streamed.originZ():origin.originZ();}
 
     /** CPU view of temporal accumulation for diagnostics; per-pixel validation happens on the GPU. */
     public String historyStatus() { return raster == null ? "off (no raster inputs)" : history.status(); }
