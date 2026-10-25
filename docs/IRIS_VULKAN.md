@@ -21,12 +21,16 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
   Matrices and fixed-size arrays reserve their full location span; the post dialect caps it at 16.
   Top-level declarations are read as statements, including multiline and same-line declarations.
 - Root `composite*.vsh/fsh` and one last `final.vsh/fsh`, at most 32 passes. Composite passes can write
-  up to four distinct targets among `colortex0..7`; final has one presentation output. Logical targets,
-  output locations and physical image banks are separate. See [the resource graph](IRIS_RESOURCE_GRAPH.md).
-- Legacy fullscreen GLSL inputs, colortex0..7, gcolor and depthtex0/gdepthtex aliases, and the existing
-  scalar timing/size/near/far uniform contract. Unknown uniforms/features are rejected by name.
-- Actual target format is used for ping-pong images and pipelines. The host color image is updated
-  only after the entire graph records successfully. Runtime code never substitutes a mock executor.
+  up to eight distinct targets among `colortex0..15` (device `maxColorAttachments` permitting); final has one
+  presentation output. Logical targets, output locations and physical image banks are separate.
+- Target directives: `colortexNFormat` (GL names mapped to Vulkan, unsupported ones refused by name),
+  `colortexNClear`/`colortexNClearColor`, history across frames for `Clear = false`, per-program
+  `colortexNMipmapEnabled`, `GAUX4FORMAT` and the legacy names. See [the resource graph](IRIS_RESOURCE_GRAPH.md).
+- Legacy fullscreen GLSL inputs, colortex0..15 with the gcolor/gdepth/gnormal/composite/gaux1..4 aliases,
+  depthtex0/gdepthtex, and the existing scalar timing/size/near/far uniform contract. Unknown uniforms/features
+  are rejected by name.
+- The host color image is updated only after the entire graph records successfully. Runtime code never
+  substitutes a mock executor.
 - Reverse-Z raster depth is converted to conventional 0-near/1-far depth in an R32F compute image.
   A typed world frame identifies actual producer, world/frame stamp, device, camera and optional depth
   encoding. Depth-reading packs are suspended without a matching guide; raster depth is never substituted
@@ -46,10 +50,9 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
   latch to a native fallback for the session; cleanup failures require restart. Runtime status is
   separate from successful pack compilation.
 
-General packs requiring gbuffers, shadow maps, deferred/compute stages, more than four simultaneous color outputs,
-custom images/textures/SSBO, required Iris features, persistent color
-buffers, mipmap/format directives, other world/lighting/material uniforms, fragment coordinate layout overrides/front-face semantics or
-geometry/tessellation are still unsupported.
+General packs requiring gbuffers, shadow maps, deferred/compute stages, integer targets, custom
+images/textures/SSBO, required Iris features, `scale`/`blend`/`flip` properties, other world/lighting/material
+uniforms, fragment coordinate layout overrides/front-face semantics or geometry/tessellation are still unsupported.
 Pack property semantics are not silently discarded. Screen/slider/profile metadata and enabled expressions
 are evaluated in the documented post dialect; other active renderer properties are refused. Frame generation and temporal upscaling are gated until matching
 history/guide semantics exist.
@@ -138,6 +141,7 @@ native RT/voxel adapters remain color-only, so depth-reading post packs stay una
 The host owns all target formats, command submission and retirement. Resolve the three shared mixin/UI
 files once; do not retain duplicate frame hooks or a second executor copied from the old development repo.
 
-Next gates are target formats/clear controls/persistence/mips, world/device-aware engine macros and
-additional world uniforms, then geometry/shadow/deferred integration. They require
+Target formats, clear controls, persistence and mipmaps are implemented (compile/unit-test evidence only).
+Next gates are world/device-aware engine macros and additional world uniforms, then deferred/compute passes and
+geometry/shadow integration. They require
 runtime evidence before any supported-pack list or release.

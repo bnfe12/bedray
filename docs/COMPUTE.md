@@ -9,6 +9,25 @@ No RT extensions, acceleration structures, ray queries, device addresses, Int64,
 vendor DLLs are required by the Compute provider. In-game use still requires Minecraft 26.3's Vulkan
 backend baseline and the provider's queue/format/descriptor checks. This is not an arbitrary-GPU claim.
 
+## Alpha.11 integration and optical limits
+
+The host integrates the newer hardware-renderer fixes for degenerate geometry/camera directions,
+nonfinite temporal inputs, missing sun halo, small-emitter power and canopy sampling. Sun textures
+retain resource-pack opacity in the restored halo, the body mask and reflections; opacity is applied
+once to specular brightness. Underwater camera-medium detection now measures surface elevation from
+the current query origin after skipping glass or ice.
+
+The newer Iris post graph adds target formats, clearing, image history and mipmaps. Its borrowed-target
+identity is adopted only when preparing an accepted frame, before allocations/recording can fail.
+Early rejection keeps the previous owner, and image/view identity changes retire its resources first.
+Bedray and Compute still ship separately; the alpha.10 activation fixes below are retained.
+
+Hardware Path Tracing still has distinct optical limits: realistic water/glass primarily receive the
+sun through the reflected environment, without a separate rough-interface solar estimate. Water-volume
+in-scattering uses an ambient approximation without directional sunlight visibility, so it cannot
+produce shadowed underwater sun shafts. Submerged opaque surfaces have a separate refracted sunlight
+path. Restoring the halo does not establish that these other effects are implemented or verified.
+
 ## Alpha.10 activation fix
 
 A matching alpha.9 game launch selected Voxel, captured its camera and still displayed raster. The
@@ -59,7 +78,8 @@ Ordered by visible effect per unit of work. Each step stays bounded and keeps th
    count, hit distance and normal. Each surface point is reprojected with the previous frame's camera.
    A bilinear history tap is accepted only if its distance and normal match. The history window is 64
    frames while the camera and scene are steady, and 8 frames on any frame with camera motion or a
-   scene upload, so lighting changes fade in within that window.
+   scene upload. Environment changes alone do not currently shorten history, and the reduced cap is
+   not held for a cooldown after a single update; lighting-response correctness remains a follow-up.
 6. **Larger region: not in this pass.** The 27-section window is fixed by the stream contract
    (2 section reads per frame, 14-frame revisit). The model SSBO grows by 786,432 bytes per section,
    so 5×5×5 sections would need about 98 MB of model slabs and a 63-frame revisit. That needs a
@@ -105,8 +125,9 @@ atlas sources are also unsupported. A guessed solid cube is never substituted fo
 
 Fluid input uses the vanilla tessellator where its exact result fits the bounded cell representation;
 waterlogged geometry requires the combined result to fit. Actual fluid heights, flow UVs and tint are
-captured rather than inventing full fluid cubes. Translucent raster preservation is still the presentation
-policy. Physically correct transmission, colored glass shadows and fluid optical transport remain future work.
+captured rather than inventing full fluid cubes. Alpha.8 adds bounded experimental transmission and
+colored filtering; unresolved paths retain raster. Correct water exit-medium tracking and complete
+transparent composition remain open.
 
 ## Public data contract
 

@@ -25,9 +25,10 @@ public final class IrisUniforms {
     public static final Map<String, Integer> SAMPLERS;
     public static final int BINDING_COLORTEX0 = 0;
     public static final int BINDING_DEPTHTEX0 = 1;
-    public static final int COLOR_TARGETS = 8;
-    /** Portable bounded post stage; Vulkan guarantees at least four simultaneous color attachments. */
-    public static final int MAX_DRAW_BUFFERS = 4;
+    /** colortex0..15; Iris accepts more, this host refuses higher indices by name. */
+    public static final int COLOR_TARGETS = 16;
+    /** Draw buffers per pass; the executor also checks the device's maxColorAttachments (Vulkan guarantees only 4). */
+    public static final int MAX_DRAW_BUFFERS = 8;
     public static final int SAMPLER_BINDINGS = COLOR_TARGETS + 1;
     public static final int BINDING_FRAME = 2;
     public static final int FRAME_BYTES = 416;
@@ -59,6 +60,11 @@ public final class IrisUniforms {
         Map<String, Integer> s = new LinkedHashMap<>();
         for (int i = 0; i < COLOR_TARGETS; i++) s.put("colortex" + i, colorBinding(i));
         s.put("gcolor", BINDING_COLORTEX0);
+        // Legacy OptiFine names, as Iris accepts them.
+        s.put("gdepth", colorBinding(1));
+        s.put("gnormal", colorBinding(2));
+        s.put("composite", colorBinding(3));
+        for (int i = 1; i <= 4; i++) s.put("gaux" + i, colorBinding(3 + i));
         s.put("depthtex0", BINDING_DEPTHTEX0);
         s.put("gdepthtex", BINDING_DEPTHTEX0);
         SAMPLERS = java.util.Collections.unmodifiableMap(s);

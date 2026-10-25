@@ -7,5 +7,5 @@
   "environment": "client",
   "license": "LGPL-3.0-or-later",
   "entrypoints": {"client": ["io.github.andrexarlay.bedray.compute.fabric.ComputeFabric"]},
-  "depends": {"fabricloader": ">=0.19.5", "minecraft": "~26.3", "java": ">=25", "bedray": ">=0.1.1-alpha.10"}
+  "depends": {"fabricloader": ">=0.19.5", "minecraft": "~26.3", "java": ">=25", "bedray": ">=0.1.1-alpha.11"}
 }

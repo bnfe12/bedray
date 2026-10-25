@@ -57,6 +57,7 @@ docs/images/*.png
 examples/iris-color-post/**
 examples/iris-depth-post/**
 examples/iris-mrt-post/**
+examples/iris-history-post/**
 examples/custom-rt-sky-shadow/**
 
 # source code

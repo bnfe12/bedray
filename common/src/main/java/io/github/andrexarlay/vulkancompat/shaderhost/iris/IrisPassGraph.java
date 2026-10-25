@@ -86,6 +86,12 @@ public final class IrisPassGraph {
             set.addAll(fragmentTranslation.frameUsed());
             return Collections.unmodifiableSet(set);
         }
+
+        /** Const/comment directives as Iris reads them: from the fragment source; a sampled gdepth from either stage. */
+        public IrisRenderTargets.ProgramDirectives programDirectives() {
+            return new IrisRenderTargets.ProgramDirectives(name, fragmentTranslation.directives(),
+                fragmentTranslation.samplesGdepth() || vertexTranslation.samplesGdepth(), fragmentTranslation.gaux4Format());
+        }
     }
 
     /**
@@ -101,6 +107,7 @@ public final class IrisPassGraph {
     private final String shadersRoot;
     private final List<Pass> passes;
     private final IrisPackOptions.Summary options;
+    private final IrisRenderTargets.Resolution targets;
 
     public IrisPassGraph(String packName, String shadersRoot, List<Pass> passes) {
         this(packName, shadersRoot, passes, IrisPackOptions.Summary.defaults());
@@ -111,9 +118,15 @@ public final class IrisPassGraph {
         this.shadersRoot = Objects.requireNonNull(shadersRoot, "shadersRoot");
         this.passes = List.copyOf(passes);
         this.options = Objects.requireNonNull(options, "options");
+        this.targets = IrisRenderTargets.resolve(this.passes.stream()
+            .filter(pass -> pass.fragmentTranslation() != null && pass.vertexTranslation() != null)
+            .map(Pass::programDirectives).toList());
     }
 
     public IrisPackOptions.Summary options() { return options; }
+
+    /** colortex formats, clear/persistence and per-program mipmaps resolved from the passes' directives. */
+    public IrisRenderTargets.Resolution targets() { return targets; }
 
     public String packName() {
         return packName;
@@ -408,6 +421,9 @@ public final class IrisPassGraph {
         }
 
         IrisPassGraph graph = new IrisPassGraph(report.name(), report.shadersRoot(), passes, configuration.summary());
+        if (!graph.targets().problems().isEmpty())
+            return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
+                "render target directives: " + String.join("; ", graph.targets().problems())), null);
         try { IrisResourcePlan.build(graph); }
         catch (IllegalArgumentException error) {
             return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS,

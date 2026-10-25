@@ -271,7 +271,8 @@ WaterMedium cameraWaterMedium(vec3 origin) {
             m.inside = true;
             m.sigmaT = waterSigmaT(tint);
             m.scatterAlbedo = waterScatterAlbedo(tint);
-            m.surfY = origin.y + t;
+            // t starts at o, which may already have advanced past glass or ice.
+            m.surfY = o.y + t;
         }
         return m;
     }

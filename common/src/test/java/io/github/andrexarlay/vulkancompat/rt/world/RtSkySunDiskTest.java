@@ -25,10 +25,10 @@ public class RtSkySunDiskTest {
     private static final String SKY_MODULE = "/shaders/rt_sky.glsl";
 
     /** Halo texel of sun.png, x = 16, y = 6: the outer ring of the disc. */
-    private static final float[] HALO = {36 / 255f, 36 / 255f, 14 / 255f};
+    private static final float[] HALO = {36 / 255f, 36 / 255f, 14 / 255f, 1f};
     /** Core texel, x = 16, y = 16. */
-    private static final float[] CORE = {1f, 1f, 217 / 255f};
-    private static final float[] CORNER = {0f, 0f, 0f};
+    private static final float[] CORE = {1f, 1f, 217 / 255f, 1f};
+    private static final float[] CORNER = {0f, 0f, 0f, 1f};
 
     @Test
     public void haloIsPartOfTheSun() {
@@ -70,17 +70,17 @@ public class RtSkySunDiskTest {
         String src = RtShaderCompiler.loadSource(SKY_MODULE);
         assertFalse(src.contains("smoothstep(0.42, 0.85, peak) * (1.0 - smoothstep(0.55, 0.98, box))"),
             "the old mask multiplied the whole sprite by the core: peak 0.42 is above the halo's 0.14, so the glow was erased");
-        assertTrue(src.contains("return vec4(t.rgb * feather, core * feather);"),
-            "rgb carries the sprite (halo included), alpha carries the body for sunDisk");
+        assertTrue(src.contains("return vec4(t.rgb * opacity, core * opacity);"),
+            "rgb carries the sprite with its texture opacity (halo included), alpha carries the body mask");
         // the halo is round: a box (max of the two axes) metric would fade the disc into a square while the radius does not
         assertFalse(src.contains("float box = max(abs(q.x), abs(q.y));"), "the feather must follow the round halo, not the quad");
         // the display composite is additive like vanilla: multiplying by the body mask would erase the halo again
         assertTrue(src.contains("c += sun.rgb * rain;"), "the sun sprite is composited by its own colour");
-        assertFalse(src.contains("c += sun.rgb * sun.a * rain;"), "alpha is no longer an opacity for the sun");
-        assertTrue(src.contains("if (sb2 > 0.0 && sun.a == 0.0 && moon.a == 0.0) {"),
-            "stars are hidden by the sun body only: the added halo does not occlude what is behind it");
-        assertTrue(src.contains("return pc.keyColor.rgb * (t.a * lum * 6.0);"),
-            "sunDisk keeps one compact highlight from the body mask");
+        assertFalse(src.contains("c += sun.rgb * sun.a * rain;"), "the body mask must not multiply the premultiplied sprite");
+        assertTrue(src.contains("c += vec3(skyStars(dir) * sb2 * (1.0 - sun.a));"),
+            "the sun body attenuates stars by its opacity; the added halo does not occlude them");
+        assertTrue(src.contains("return pc.keyColor.rgb * (bodyLuminance * 6.0);"),
+            "sunDisk keeps one compact highlight with texture opacity applied once");
     }
 
     // ---- ports of the shader math ------------------------------------------------------------------------------------------
@@ -116,7 +116,8 @@ public class RtSkySunDiskTest {
         float feather = 1f - smoothstep(FEATHER_EDGES[0], FEATHER_EDGES[1], radius);
         float peak = Math.max(texel[0], Math.max(texel[1], texel[2]));
         float core = smoothstep(CORE_EDGES[0], CORE_EDGES[1], peak);
-        return new float[] {texel[0] * feather, texel[1] * feather, texel[2] * feather, core * feather};
+        float opacity = texel[3] * feather;
+        return new float[] {texel[0] * opacity, texel[1] * opacity, texel[2] * opacity, core * opacity};
     }
 
     private static float fallbackMask(float qx, float qy) {
