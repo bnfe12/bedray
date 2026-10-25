@@ -337,6 +337,8 @@ class IrisPassGraphTest {
         Path withDh = zip("WithDh.zip",
             "shaders/dh_terrain.vsh", "#version 120\nvoid main(){gl_Position=ftransform();}\n",
             "shaders/dh_terrain.fsh", fin,
+            "shaders/clrwl_gbuffers.vsh", "#version 120\nvoid main(){gl_Position=ftransform();}\n",
+            "shaders/clrwl_gbuffers.fsh", fin,
             "shaders/final.fsh", fin
         );
         try (PackSource src = PackSource.open(withDh, ScanLimits.DEFAULT)) {

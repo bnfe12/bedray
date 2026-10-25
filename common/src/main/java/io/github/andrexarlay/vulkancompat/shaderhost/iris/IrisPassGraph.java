@@ -249,7 +249,8 @@ public final class IrisPassGraph {
 
     /**
      * Validates one folder's programs against what this host executes: the fullscreen {@code prepare*}, {@code deferred*},
-     * {@code composite*} and {@code final} passes. Distant Horizons programs are inactive without that mod and are ignored.
+     * {@code composite*} and {@code final} passes. Distant Horizons ({@code dh_*}) and Colorwheel ({@code clrwl_*}) programs
+     * are inactive without those mods and are ignored.
      * Geometry ({@code gbuffers_*}, {@code shadow}) and compute programs are refused by name until the host runs them.
      */
     public static ShaderHostStatus validate(PackReport report, String folder) {
@@ -293,7 +294,10 @@ public final class IrisPassGraph {
                     pn = ProgramName.classify(prog + "." + st.ext);
                     if (pn != null) break;
                 }
-                if (pn != null && pn.family() == ProgramName.Family.DISTANT_HORIZONS) continue;
+                // Iris loads dh_* only with Distant Horizons and clrwl_* only with Colorwheel installed; without those
+                // mods the programs are inactive, so they neither run nor block the pack.
+                if (pn != null && (pn.family() == ProgramName.Family.DISTANT_HORIZONS
+                    || pn.family() == ProgramName.Family.COLORWHEEL)) continue;
                 if (pn == null || !FULLSCREEN_FAMILIES.contains(pn.family())) {
                     forbiddenPrograms.add(prog + " (" + (pn == null ? "unknown" : pn.family()) + ")");
                     continue;
