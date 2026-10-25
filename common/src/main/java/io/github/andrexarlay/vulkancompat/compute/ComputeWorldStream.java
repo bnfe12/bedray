@@ -147,8 +147,9 @@ final class ComputeWorldStream {
                         if (fromDirty && dirtySet.add(key)) dirty.addFirst(key);
                         break;
                     }
-                    SectionSnapshot section = isEmpty ? new SectionSnapshot(key.x(), key.y(), key.z(), ++revision,
-                        new byte[SectionSnapshot.CELL_COUNT]) : source.capture(key, ++revision);
+                    // Air-only geometry can still carry nonuniform propagated sky/block light.
+                    // Capture that light payload; the provider compacts genuinely uniform air pages.
+                    SectionSnapshot section = source.capture(key, ++revision);
                     captures++;
                     if (section == null) { removals.add(key); invalidate(key); }
                     else {

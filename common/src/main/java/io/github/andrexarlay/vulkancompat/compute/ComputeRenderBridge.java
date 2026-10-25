@@ -48,6 +48,7 @@ public final class ComputeRenderBridge {
     private static int resourceWidth, resourceHeight, resourceFormat;
     private static long capturedAtlasGeneration, resourceAtlasGeneration;
     private static long capturedStreamingBudget;
+    private static int capturedStreamingRadius, capturedMinSectionY, capturedMaxSectionY;
     private static long coverageLogNanos, limitedSinceNanos;
     private static int loggedResident = -1, loggedQueued = -1;
     private static boolean populatedLogged, limitedLogged;
@@ -138,12 +139,20 @@ public final class ComputeRenderBridge {
             }
             if (backend.supportsWorldStreaming()) {
                 long budget = (long)VulkanRtxConfig.voxelMemoryBudgetMiB() * 1024 * 1024;
-                if (capturedStreamingBudget != 0 && capturedStreamingBudget != budget) {
+                var minecraft = net.minecraft.client.Minecraft.getInstance();
+                int minecraftRadius = Math.clamp(minecraft.options.getEffectiveRenderDistance(), 1, 64);
+                int radius = VulkanRtxConfig.voxelDistanceAuto() ? minecraftRadius
+                    : Math.min(minecraftRadius, VulkanRtxConfig.voxelDistanceChunks());
+                int minY = minecraft.level == null ? 0 : minecraft.level.getMinSectionY();
+                int maxY = minecraft.level == null ? 0 : minecraft.level.getMaxSectionY();
+                if (capturedStreamingBudget != 0 && (capturedStreamingBudget != budget
+                        || capturedStreamingRadius != radius || capturedMinSectionY != minY || capturedMaxSectionY != maxY)) {
                     if (!releaseResources()) return;
                     backend.clearWorldSnapshot();
                     worldCapture.clear();
                 }
                 capturedStreamingBudget = budget;
+                capturedStreamingRadius = radius; capturedMinSectionY = minY; capturedMaxSectionY = maxY;
                 for (var key : backend.drainWorldInvalidations()) worldCapture.invalidated(key);
                 var update = worldCapture.captureStreaming(camera, atlas, backend.supportsModelGeometry(),
                     backend.supportsCellTint(), backend.streamingStatus().queuedSections());
