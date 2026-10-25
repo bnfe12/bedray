@@ -379,21 +379,9 @@ public class RtShadingFixesTest {
     }
 
     private static void runPixelShadowChecks() {
-        // Java port of the GLSL snap in rt_common.glsl pixelShadowOrigin: centre of the horizontal cell.
-        float cell = 2.0f;
-        assertEquals(snapCell(0.1f, cell), snapCell(1.9f, cell), EPSILON, "same cell snaps to the same x");
-        assertEquals(snapCell(0.1f, cell), 1.0f, EPSILON, "cell 0 centre is half a cell");
-        assertEquals(snapCell(-0.1f, cell), snapCell(-1.9f, cell), EPSILON, "same negative cell snaps together");
-        assertEquals(snapCell(-0.1f, cell), -1.0f, EPSILON, "cell -1 centre is negative half a cell");
-        for (float x : new float[] {-17.3f, -1.0f, 0.0f, 3.7f, 15.9f, 64.2f}) {
-            float offset = snapCell(x, cell) - x;
-            assertTrue(Math.abs(offset) <= cell * 0.5f + 1.0e-4f, "snap stays within half a cell, offset=" + offset);
-        }
-        // Disabled (shadowPixel = 0): the helper must keep the per-pixel origin untouched.
-        assertEquals(3.7f, snapCell(3.7f, 0.0f), EPSILON, "cell 0 disables the snap");
-
-        // The shader side of the contract (one module, no normal lift, entity/foliage gate, no hidden sample state) is
-        // RtPixelShadowSamplingTest's job; only the StatsBuf plumbing and the settings stay here.
+        // The shader side of the contract (the snap formula, one module, no normal lift, entity/foliage gate, no hidden
+        // sample state, and the numeric cell behaviour) is RtPixelShadowSamplingTest's job; a Java mirror here would only
+        // test itself. Only the StatsBuf plumbing and the settings stay in this class.
         String common = RtWorldChecks.rtCommon();
         assertTrue(common.contains("float shadowPixel;"), "StatsBuf carries the pixel-shadow cell size");
 
@@ -600,9 +588,5 @@ public class RtShadingFixesTest {
         int end = src.indexOf(';', start);
         assertTrue(start > 0 && end > start, file + " must expose gbufferViews()");
         return count(src.substring(start, end), ".view");
-    }
-
-    private static float snapCell(float x, float cell) {
-        return cell > 0.0f ? (float) (Math.floor(x / cell) + 0.5) * cell : x;
     }
 }

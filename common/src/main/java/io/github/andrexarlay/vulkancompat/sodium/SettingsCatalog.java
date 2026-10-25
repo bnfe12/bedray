@@ -260,10 +260,12 @@ public final class SettingsCatalog {
             "Both methods hook the Vulkan swapchain at game startup, so changing the method requires a game restart.", Scene.DAY, 0.5f, 0.5f,
             "frame_generation_mode", List.of(), "A still image cannot show frame generation: it changes motion smoothness, not how a single frame looks.", null));
         INFOS.put("frame_generation_mode", new Info("frame_generation_mode", Tier.ESSENTIAL, "Frame Generation",
+            "Inserts frames the game did not draw: motion looks smoother and the reported FPS rises, while input latency grows a little."
+                + " 2x adds one frame, 3x and 4x add more and need an RTX 40/50 card.",
             "",
-            "",
-            "Needs AMD FSR 3 (amd_fidelityfx_vk.dll, any GPU) or NVIDIA DLSS-G (RTX 40/50 + Streamline files) and a temporal upscaler (FSR, DLSS or XeSS).", Scene.DAY, 0.5f, 0.5f,
-            "frame_generation_mode", List.of(), "", null));
+            "Hardware renderer only. Needs a frame generation runtime (see Frame Generation Method) and a temporal upscaler;"
+                + " the voxel renderer forces it off.", Scene.DAY, 0.5f, 0.5f,
+            "frame_generation_mode", List.of(), "Generated frames need motion: a still image cannot show them.", null));
 
         // ===================== ADVANCED =====================
         put("pt_preset", Tier.ADVANCED, "Path Tracing Profile",
@@ -406,7 +408,7 @@ public final class SettingsCatalog {
                 + "occlusion, traced sky light and light from glowing blocks stay exact. There is one exception: "
                 + "cells that cross geometry keep exact shadows.",
             "FPS: none to low (one validation ray of at most half a cell per shaded hit).",
-            "Hidden mode: Ray Tracing (Fast) is in development.",
+            "Needs ray tracing on; it applies to Path Tracing and to Ray Tracing (Fast).",
             "A look option with no preview screenshot yet.");
         for (String[] e : new String[][] {
             {"rays_shadow_quality", "RT Shadow Rays", "Shadow rays per pixel."},
@@ -419,7 +421,10 @@ public final class SettingsCatalog {
             {"rays_emissive_distance", "RT Block Light Distance", "Glowing blocks farther than this do not light a surface."},
             {"rays_gi_quality", "RT GI Rays", "Bounce rays per pixel."},
             {"rays_gi_distance", "RT GI Distance", "Longest bounce ray in blocks."}}) {
-            putNoImage(e[0], Tier.EXPERT, e[1], e[2], "", "Hidden mode: Ray Tracing (Fast) is in development.",
+            putNoImage(e[0], Tier.EXPERT, e[1], e[2], "",
+                e[0].equals("rays_pixel_shadow_size")
+                    ? "Used when RT Pixel Shadows is on (both RT modes)."
+                    : "Hidden mode: Ray Tracing (Fast) is in development.",
                 "The Ray Tracing (Fast) mode is not public yet, so it has no screenshots.");
         }
         putNoImage("rt_distance_auto", Tier.EXPERT, "RT Distance: As in Game", "On: ray tracing covers the game render distance. Off: the manual distance.",

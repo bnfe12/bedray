@@ -238,7 +238,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         return new net.caffeinemc.mods.sodium.client.config.structure.Config(new ArrayList<>(builder.build()));
     }
 
-    private void registerSettings(ConfigBuilder builder) {
+    /** Package-visible so the id/dependency tests can drive the real registration against a recording builder. */
+    void registerSettings(ConfigBuilder builder) {
         PAGE_ESSENTIAL.clear();
         PAGE_ADVANCED.clear();
         GROUP_IDS.clear();

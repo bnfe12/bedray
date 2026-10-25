@@ -35,7 +35,7 @@ class UpscalerQualityBindingTest {
         try {
             // Store inactive quality settings without native libraries or a GPU.
             VulkanRtxConfig.activeBackend = UpscalerBackend.BILINEAR;
-            new VulkanSodiumConfig().registerConfigLate(recorder(ConfigBuilder.class, null, setters, names));
+            new VulkanSodiumConfig().registerSettings(recorder(ConfigBuilder.class, null, setters, names));
             for (var backend : new UpscalerBackend[]{UpscalerBackend.DLSS, UpscalerBackend.XESS, UpscalerBackend.FSR}) {
                 String path = backend.name().toLowerCase(Locale.ROOT) + "_mode";
                 assertNotNull(setters.get(path), path);
