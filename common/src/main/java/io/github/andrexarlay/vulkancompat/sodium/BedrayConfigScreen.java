@@ -38,7 +38,13 @@ public final class BedrayConfigScreen extends Screen {
     private Component runtime = Component.empty();
     private int statusTicks;
 
-    public BedrayConfigScreen(Screen parent) { super(tr("bedray.settings.title", "Bedray Settings")); this.parent = parent; }
+    public BedrayConfigScreen(Screen parent) {
+        super(tr("bedray.settings.title", "Bedray Settings"));
+        this.parent = parent;
+        // Construct before Gui.setScreen replaces the parent, so a model initialization failure
+        // cannot leave Minecraft rendering a partially initialized screen.
+        this.draft = new SettingsDraft();
+    }
     SettingsDraft draft() { return draft; }
     private static Component tr(String key, String fallback, Object... args) { return Component.translatableWithFallback(key, fallback, args); }
 

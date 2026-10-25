@@ -224,7 +224,15 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     /** Fresh option objects keep this screen's pending changes independent of a parent Sodium screen. */
     static net.caffeinemc.mods.sodium.client.config.structure.Config createScreenConfig() {
         var builder = new net.caffeinemc.mods.sodium.client.config.builder.ConfigBuilderImpl(
-            ignored -> new ConfigManager.ModMetadata("Bedray", ""), "bedray");
+            configId -> {
+                // Copy metadata, never the parent's mutable Option objects or pending values.
+                if (ConfigManager.CONFIG != null) {
+                    for (var mod : ConfigManager.CONFIG.getModOptions())
+                        if (mod.configId().equals(configId)) return new ConfigManager.ModMetadata(mod.name(), mod.version());
+                }
+                String version = VulkanSodiumConfig.class.getPackage().getImplementationVersion();
+                return new ConfigManager.ModMetadata("Bedray", version == null || version.isBlank() ? "unknown" : version);
+            }, "bedray");
         new VulkanSodiumConfig().registerSettings(builder);
         return new net.caffeinemc.mods.sodium.client.config.structure.Config(new ArrayList<>(builder.build()));
     }
