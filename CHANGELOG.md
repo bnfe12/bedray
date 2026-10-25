@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Notify the Voxel stream directly about propagated block/sky-light changes, including empty air
+  sections, with bounded delivery and current-world checks independent of geometry uploads.
+* Track water transport by medium segments, stop water extinction after an exit, and refract at
+  water-to-air boundaries. Preserve raster for unresolved or internally reflected transmission paths.
+
 * One jar per loader is now the whole product: the combined artifact (host + nested Voxel provider)
   is the default build task for both loaders, so an instance no longer needs a second compute jar.
   Extracting the nested jar into `mods/` still detaches the provider again.

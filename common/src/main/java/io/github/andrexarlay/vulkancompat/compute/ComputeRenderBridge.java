@@ -56,6 +56,7 @@ public final class ComputeRenderBridge {
     private static long resourceColorView, resourceDepthView;
     private static LightingFrame currentLighting;
     private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
+    private static final ComputeLightInvalidations lightInvalidations = new ComputeLightInvalidations();
 
     private ComputeRenderBridge() {}
 
@@ -65,6 +66,10 @@ public final class ComputeRenderBridge {
     }
     public static void sectionRemoved(int x, int y, int z) {
         if (enabled()) worldCapture.sectionRemoved(x, y, z);
+    }
+
+    public static void sectionLightingChanged(net.minecraft.client.multiplayer.ClientChunkCache source, int x, int y, int z) {
+        lightInvalidations.changed(source, x, y, z);
     }
 
     /** Render-thread scene applied at this frame's boundary; pair with a successful renderDiagnostic result. */
@@ -84,6 +89,7 @@ public final class ComputeRenderBridge {
         hadWorld = hasWorld;
         appliedRequest = nextRequest;
         cameraPending = appliedRequest.mode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
+        lightInvalidations.setEnabled(hasWorld && cameraPending && !cleanupBroken);
         if (enabled()) VulkanRtxConfig.enforceComputeCompatibility();
         if (requestChanged) {
             if (!releaseResources()) return;
@@ -111,6 +117,10 @@ public final class ComputeRenderBridge {
             } else if (GraphicsBackendRegistry.backend() != null) {
                 noteIdle(sceneLabel() + " waiting for a world");
             }
+        }
+        if (hasWorld && cameraPending) {
+            var level = net.minecraft.client.Minecraft.getInstance().level;
+            lightInvalidations.drain(level == null ? null : level.getChunkSource(), worldCapture);
         }
     }
 

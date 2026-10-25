@@ -41,6 +41,24 @@ backend baseline and the provider's queue/format/descriptor checks. This is not 
 
 ## Alpha.13 streaming and settings
 
+### Engine follow-up
+
+Propagated block/sky-light changes notify the Voxel stream directly through the client chunk cache,
+including air sections with no Sodium geometry upload. The notification queue coalesces section
+coordinates, retains at most 8192 entries and drains at most 256 per client frame. Capture/upload
+budgets still apply after delivery. Callbacks from an old world's chunk cache are ignored; an
+overflow starts a fresh bounded stream session instead of silently retaining stale lighting.
+
+The experimental translucent path integrates extinction and medium radiance separately over each
+water segment. Exiting water restores air transport and applies the water-to-air Snell ratio; later
+water entries can use their own surface tint/extinction. Glass remains a thin filter. The four-hit
+transmission budget is unchanged. An unresolved path, including total internal reflection, keeps
+raster rather than substituting a straight ray. Additional internal reflection paths, a submerged
+primary camera and directional volumetric shafts remain outside this transport approximation.
+
+These are source changes pending fresh matching-build visual checks, not a water-rendering or
+lighting-stability acceptance result.
+
 The included API 1.6 provider receives incremental section changes across Minecraft's effective render
 distance and valid world height. Loaded chunks are read without creating new chunks. Discovery starts
 near the camera, reprioritizes vertical movement, and bounds section capture and upload work. Geometry

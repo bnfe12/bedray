@@ -555,31 +555,51 @@ bool translucentRadiance(Hit hit, vec3 point, vec3 ray, inout uint seed, out vec
     vec3 reflected=secondaryRadiance(point+normal*0.003,reflect(ray,normal),sky,seed,escaped,distance);
     vec3 surface=hit.albedo, perBlock=clamp(vec3(1.0-hit.alpha)+hit.alpha*surface,vec3(0.001),vec3(1));
     vec3 direction=fluid ? refract(ray,normal,1.0/ior) : ray;
-    if (dot(direction,direction)<0.5) direction=ray;
+    if (dot(direction,direction)<0.5) return false;
     vec3 origin=point-normal*0.003;
-    vec3 filterColor=fluid ? vec3(1) : perBlock;
-    Hit through=miss();
-    float nearT=0.001;
+    vec3 throughput=fluid ? vec3(1) : perBlock;
+    vec3 scattering=vec3(0);
+    bool inWater=fluid;
+    vec3 extinction=fluid ? -log(perBlock) : vec3(0);
+    vec3 medium=fluid ? surface*secondaryIrradiance(point,normal,seed) : vec3(0);
+    float remaining=sceneDistance();
     for (int layer=0; layer<4; layer++) {
-        through=trace(origin,direction,nearT,sceneDistance());
-        if (!through.found || (through.flags&FLAG_TRANSLUCENT)==0u) break;
-        // Coplanar water faces inside one body are culled; anything else filters like a thin layer.
-        if (!fluid || (through.flags&FLAG_FLUID)==0u) filterColor*=mix(vec3(1),through.albedo,through.alpha);
-        nearT=max(nearT,through.t)+0.0005;
-        through.found=false;
+        Hit through=trace(origin,direction,0.001,remaining);
+        if (!through.found || (through.flags&FLAG_NO_MATERIAL)!=0u) return false;
+        vec3 behind=origin+through.t*direction;
+        // Only a segment actually inside water contributes optical depth and medium radiance.
+        // Air after the exit surface must not inherit the preceding body's extinction.
+        if (inWater) {
+            vec3 transmittance=exp(-extinction*through.t);
+            scattering+=throughput*medium*(vec3(1)-transmittance);
+            throughput*=transmittance;
+        }
+        if ((through.flags&FLAG_TRANSLUCENT)==0u) {
+            vec3 transmitted=hitAlbedo(through,behind)*(secondaryIrradiance(behind,through.normal,seed)
+                +blockColor()*lightResponse(float(emissionLevel(through))))*throughput+scattering;
+            radiance=fresnel*reflected+(1.0-fresnel)*transmitted;
+            return true;
+        }
+        if ((through.flags&FLAG_FLUID)!=0u) {
+            // Vanilla culls internal fluid faces. Each remaining fluid boundary enters or exits
+            // a body, including when a glass primary ray later enters water.
+            vec3 refracted=refract(direction,through.normal,inWater ? WATER_IOR : 1.0/WATER_IOR);
+            // Internal reflection needs another transport path; retain raster instead of inventing
+            // a straight transmitted ray when Snell's law has no transmitted solution.
+            if (dot(refracted,refracted)<0.5) return false;
+            direction=normalize(refracted);
+            inWater=!inWater;
+            if (inWater) {
+                vec3 transmission=clamp(mix(vec3(1),through.albedo,through.alpha),vec3(0.001),vec3(1));
+                extinction=-log(transmission);
+                medium=through.albedo*secondaryIrradiance(behind,through.normal,seed);
+            }
+        } else throughput*=mix(vec3(1),through.albedo,through.alpha);
+        remaining-=through.t+0.003;
+        if (remaining<=0.001) return false;
+        origin=behind+direction*0.003;
     }
-    if (!through.found || (through.flags&FLAG_NO_MATERIAL)!=0u) return false;
-    vec3 behind=origin+through.t*direction;
-    vec3 transmitted=hitAlbedo(through,behind)*(secondaryIrradiance(behind,through.normal,seed)
-        +blockColor()*lightResponse(float(emissionLevel(through))))*filterColor;
-    if (fluid) {
-        vec3 extinction=-log(perBlock);
-        vec3 transmittance=exp(-extinction*through.t);
-        vec3 medium=surface*secondaryIrradiance(point,normal,seed);
-        transmitted=transmitted*transmittance+medium*(vec3(1)-transmittance);
-    }
-    radiance=fresnel*reflected+(1.0-fresnel)*transmitted;
-    return true;
+    return false; // Explicit interface budget; unresolved transmission retains raster.
 }
 // Fixed LDR presentation; host ambient already includes the actual night-vision color.
 vec3 present(vec3 color) {

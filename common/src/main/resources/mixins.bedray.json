@@ -30,6 +30,7 @@
     "compute.MixinComputeResources",
     "compute.MixinComputeAtlas",
     "compute.MixinComputeTarget",
+    "compute.MixinComputeLightUpdates",
     "rt.MixinEntityRenderDispatcher",
     "rt.MixinSubmitNodeCollection",
     "rt.MixinGameRendererHand",
