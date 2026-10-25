@@ -77,7 +77,7 @@ final class ComputeBlockMaterials {
     }
     private record PaletteEntry(AppearanceKey key, CubeMaterial material, int reference) {}
 
-    private final Map<SectionKey, SectionGeometry> sections = new LinkedHashMap<>();
+    private final Map<SectionKey, SectionGeometry> sections = new LinkedHashMap<>(64, 0.75f, true);
     private final Map<List<BlockStateModelPart>, Geometry> variants = new LinkedHashMap<>(128, 0.75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<List<BlockStateModelPart>, Geometry> eldest) {
             return size() > MAX_VARIANTS;
@@ -155,13 +155,17 @@ final class ComputeBlockMaterials {
     }
 
     SectionSnapshot captureSection(int x, int y, int z, long revision, boolean extended) {
+        return captureSection(x, y, z, revision, extended, false);
+    }
+
+    SectionSnapshot captureSection(int x, int y, int z, long revision, boolean extended, boolean streaming) {
         if (!loaded(x,y,z)) return null;
         var chunk = level.getChunkSource().getChunk(x,z,ChunkStatus.FULL,false);
         if (chunk == null) return null;
         var section = chunk.getSection(level.getSectionIndexFromSectionY(y));
         SectionKey key = new SectionKey(x,y,z);
         SectionGeometry cached = sections.computeIfAbsent(key, ignored -> new SectionGeometry());
-        if (sections.size() > 27) throw new IllegalStateException("Material section window exceeded 27 residents");
+        if (!streaming && sections.size() > 27) throw new IllegalStateException("Material section window exceeded 27 residents");
         byte[] cells = new byte[SectionSnapshot.CELL_COUNT];
         short[] references = new short[SectionSnapshot.CELL_COUNT];
         List<CubeMaterial> palette = new ArrayList<>();
@@ -219,9 +223,29 @@ final class ComputeBlockMaterials {
         }
         cached.appearances = appearances;
         CubeSectionMaterials materialData = new CubeSectionMaterials(generation,palette,references);
-        return new SectionSnapshot(x,y,z,revision,cells,materialData,
+        SectionSnapshot result = new SectionSnapshot(x,y,z,revision,cells,materialData,
             extended ? modelCapture.finish() : null, extended ? new SectionLightData(light) : null,
             cellTints == null ? null : new SectionTintData(cellTints));
+        if (streaming) {
+            // Large per-cell state/template arrays are a hot extraction cache, not a second world copy.
+            // Bound both entry count and conservative packed model/reference payload estimates.
+            long bytes = 0;
+            var iterator = sections.entrySet().iterator();
+            while (iterator.hasNext()) {
+                var entry = iterator.next();
+                var value = entry.getValue();
+                bytes += 65536L;
+                for (var model : value.models.models.keySet()) bytes += (long)model.quads().size() * 192;
+            }
+            iterator = sections.entrySet().iterator();
+            while ((sections.size() > 64 || bytes > 16L * 1024 * 1024) && iterator.hasNext()) {
+                var value = iterator.next().getValue();
+                bytes -= 65536L;
+                for (var model : value.models.models.keySet()) bytes -= (long)model.quads().size() * 192;
+                iterator.remove();
+            }
+        }
+        return result;
     }
 
     private static boolean eligibleState(BlockState state) {

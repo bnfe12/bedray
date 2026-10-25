@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.1-alpha.13 (development, unreleased)
+
+* Include the separately registered Voxel provider in the default Fabric/NeoForge player JAR. Keep
+  host-only and standalone provider artifacts for modular development; avoid duplicate external mods.
+* Add render-distance-driven loaded-world section streaming, bounded scene arenas/uploads, real
+  residency diagnostics and eviction feedback through API 1.6. Preserve actual lighting in empty air.
+* Replace the duplicated immediate-write settings screen with shared definitions, private pending
+  changes, search, direct selection menus and Apply/Revert. Add Fast/Beautiful/Custom quality profiles.
+* Increase valid temporal reuse during motion and section streaming, and detect lighting changes.
+  Visual noise reduction and motion quality remain live acceptance requirements.
+* Integrate the current atlas upload stack fix and emitter publication during world streaming.
+* Make developer deployment back up old JARs, reject running Java clients, verify copied bytes and
+  restore previous files on failure. Optional native synchronization is a separate action.
+
+Compilation, package inspection and live evidence for this checkpoint are recorded separately; this
+entry does not designate a stable release or claim a new simultaneous hardware-RT/Voxel renderer.
+
 ## 0.1.0-alpha.1 (2026-10-20, ALPHA)
 
 First public alpha. Tested only on an NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, driver 617.42.

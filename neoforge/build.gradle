@@ -1,4 +1,7 @@
 apply from: rootProject.file('gradle/loader-module.gradle')
+// Git-Commit / Git-Dirty / Build-Source on the jar and combinedJar manifests (project level: configureEach
+// must not run inside a task configuration block).
+apply from: rootProject.file('gradle/build-provenance.gradle')
 
 base {
     archivesName = "${rootProject.artifact_base}-neoforge-mc${rootProject.minecraft_version}"
@@ -48,26 +51,78 @@ processResources {
     }
 }
 
+// Shared manifest for the standalone and the combined jar (build-provenance.gradle adds Git-Commit / Git-Dirty / Build-Source).
+def modManifestAttributes = [
+    'Specification-Title'     : rootProject.mod_name,
+    'Specification-Vendor'    : 'bnfe12',
+    'Specification-Version'   : '1',
+    'Implementation-Title'    : "${rootProject.artifact_base}-neoforge",
+    'Implementation-Version'  : rootProject.mod_version,
+    'Implementation-Vendor'   : 'bnfe12',
+    'MixinConfigs'            : 'mixins.bedray_core.json,mixins.bedray_core_neoforge.json,mixins.bedray.json',
+    'FMLModType'              : 'MOD'
+]
+
 jar {
+    archiveClassifier = 'host-only'
     bundleCommon(it)
     manifest {
-        attributes([
-            'Specification-Title'     : rootProject.mod_name,
-            'Specification-Vendor'    : 'bnfe12',
-            'Specification-Version'   : '1',
-            'Implementation-Title'    : "${rootProject.artifact_base}-neoforge",
-            'Implementation-Version'  : rootProject.mod_version,
-            'Implementation-Vendor'   : 'bnfe12',
-            'MixinConfigs'            : 'mixins.bedray_core.json,mixins.bedray_core_neoforge.json,mixins.bedray.json',
-            'FMLModType'              : 'MOD'
-        ])
+        attributes(modManifestAttributes)
     }
 }
+
+// Modular combined jar: the Bedray host with the Bedray Compute companion nested as a NeoForge JarJar
+// (META-INF/jarjar/metadata.json). Compute keeps its own mod id (bedray_compute) and descriptor — it
+// still loads as a separate mod, and extracting the nested jar into mods/ detaches it again. The
+// host-only artifact is for developers; the included-provider artifact is the canonical distribution.
+evaluationDependsOn(':compute-neoforge')
+def computeNeoJar = project(':compute-neoforge').tasks.named('jar')
+
+// Writes the JarJar metadata FML reads: one candidate, the compute companion at its exact version.
+// Field names and shape follow the metadata.json that NeoForge itself and mod builds (e.g. Sodium)
+// ship: jars[].identifier {group, artifact}, jars[].version {range, artifactVersion}, path, isObfuscated.
+def jarjarMetadata = tasks.register('generateJarJarMetadata') {
+    def out = layout.buildDirectory.file('jarjar/metadata.json')
+    inputs.property 'mod_group', rootProject.mod_group
+    inputs.property 'mod_version', rootProject.mod_version
+    inputs.property 'compute_artifact', 'bedray-compute-neoforge'
+    outputs.file(out)
+    doLast {
+        def nestedName = computeNeoJar.get().archiveFileName.get()
+        def metadata = [jars: [[
+            identifier   : [group: String.valueOf(rootProject.mod_group), artifact: 'bedray-compute-neoforge'],
+            version      : [range: "[${rootProject.mod_version},)", artifactVersion: String.valueOf(rootProject.mod_version)],
+            path         : "META-INF/jarjar/${nestedName}",
+            isObfuscated : false
+        ]]]
+        def file = out.get().asFile
+        file.parentFile.mkdirs()
+        file.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata)) + '\n'
+    }
+}
+
+tasks.register('combinedJar', Jar) {
+    archiveClassifier = ''
+    group = 'build'
+    description = 'Bedray host jar with the Bedray Compute companion nested as a JarJar mod (detachable: extract META-INF/jarjar/*.jar into mods/)'
+    // A custom Jar task does not get the java plugin's default main output; the standalone jar does.
+    from(sourceSets.main.output)
+    bundleCommon(it)
+    dependsOn computeNeoJar, jarjarMetadata
+    from(computeNeoJar.map { it.archiveFile }) { into 'META-INF/jarjar' }
+    from(jarjarMetadata.map { task -> task.outputs.files.singleFile }) { into 'META-INF/jarjar' }
+    manifest {
+        attributes(modManifestAttributes)
+    }
+}
+
+tasks.named('assemble') { dependsOn tasks.named('combinedJar') }
+tasks.named('jar') { finalizedBy tasks.named('combinedJar') }
 
 publishing {
     publications {
         create('mavenJava', MavenPublication) {
-            from components.java
+            artifact tasks.named('combinedJar')
             artifactId = "${rootProject.artifact_base}-neoforge"
         }
     }

@@ -22,7 +22,7 @@ def requireProp = { String key ->
 
 // Optional deploy tasks for developers: they copy the single mod jar into the mods folder of a test instance
 // (testbed_dir / fabric_testbed_dir / user_dir, set in your user Gradle home, see gradle.properties.example).
-// Older Bedray jars are removed; a leftover jar of an earlier prototype (vulkan_compat_shim*.jar) is removed
+// Older Bedray jars are backed up; a leftover jar of an earlier prototype (vulkan_compat_shim*.jar) is moved
 // only after its neoforge.mods.toml proves it is our old mod.
 // -PdryRun=true: only prints what would be copied/deleted, changes nothing.
 def isDryRun = { -> 'true' == String.valueOf(project.findProperty('dryRun')) }
@@ -30,35 +30,117 @@ def isDryRun = { -> 'true' == String.valueOf(project.findProperty('dryRun')) }
 // Files of earlier Bedray builds that must not stay next to the new jar (a second copy of the same code must never load).
 def staleJars = ['vulkan-rtx*.jar', 'bedray*.jar', 'vulkan-' + 'bridge*.jar'] // last: jar of the older separate component
 
+def requireClosedGame = { String taskName ->
+    // Block unknown Java clients as well: a launcher can choose an arbitrary main class. Gradle
+    // processes are the only Java processes this build needs to leave running during deployment.
+    def blockers = []
+    if (System.getProperty('os.name').toLowerCase(Locale.ROOT).startsWith('windows')) {
+        // Windows ProcessHandle.Info can omit arguments even for our own Gradle processes. CIM
+        // supplies the actual command lines; unavailable information still blocks replacement.
+        def probeScript = '''$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='javaw.exe'" |
+    Where-Object { -not $_.CommandLine -or $_.CommandLine -notmatch 'org\\.gradle\\.|GradleDaemon|GradleWorkerMain|GradleWrapperMain' } |
+    ForEach-Object { $_.ProcessId }
+'''
+        def encoded = Base64.encoder.encodeToString(probeScript.getBytes('UTF-16LE'))
+        def probe = new ProcessBuilder('powershell.exe', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-WindowStyle', 'Hidden',
+            '-EncodedCommand', encoded).redirectErrorStream(true).start()
+        if (!probe.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)) {
+            probe.destroyForcibly()
+            throw new GradleException("[${taskName}] Timed out confirming that Java clients are closed. No files were changed.")
+        }
+        def output = probe.inputStream.getText('UTF-8').trim()
+        if (probe.exitValue() != 0 || (output && !output.readLines().every { it.trim() ==~ /\d+/ })) {
+            throw new GradleException("[${taskName}] Cannot confirm that Java clients are closed. No files were changed.")
+        }
+        if (output) blockers.addAll(output.readLines().collect { Long.parseLong(it.trim()) })
+    } else {
+        ProcessHandle.allProcesses().withCloseable { processes ->
+            processes.forEach { process ->
+                def info = process.info()
+                def executable = new File(info.command().orElse('')).name.toLowerCase(Locale.ROOT)
+                if (executable in ['java', 'java.exe', 'javaw', 'javaw.exe']) {
+                    def commandLine = info.commandLine().orElse('')
+                    if (!(commandLine =~ /org\.gradle\.|GradleDaemon|GradleWorkerMain|GradleWrapperMain/).find()) {
+                        blockers.add(process.pid())
+                    }
+                }
+            }
+        }
+    }
+    if (!blockers.isEmpty()) {
+        throw new GradleException("[${taskName}] Close Minecraft and other Java clients before deployment (process IDs: ${blockers.join(', ')}). No files were changed.")
+    }
+}
+
 def deployJar = { File dir, String taskName, String loaderProject ->
     if (!dir.isDirectory()) {
         throw new GradleException("[${taskName}] mods folder does not exist: ${dir}")
     }
-    def rtxJar = project(loaderProject).tasks.named('jar').get().archiveFile.get().asFile
+    def rtxJar = project(loaderProject).tasks.named('combinedJar').get().archiveFile.get().asFile
     def dry = isDryRun()
-    fileTree(dir: dir, include: 'vulkan_compat_shim*.jar').each { old ->
+    if (!rtxJar.isFile()) {
+        throw new GradleException("[${taskName}] Missing included-provider artifact: ${rtxJar}")
+    }
+    new java.util.jar.JarFile(rtxJar).withCloseable { archive ->
+        def attributes = archive.manifest?.mainAttributes
+        if (attributes?.getValue('Git-Dirty') != 'false') {
+            throw new GradleException("[${taskName}] Deployment requires an artifact built from a clean Git commit")
+        }
+        def expectedPrefix = loaderProject == ':fabric' ? 'META-INF/jars/bedray-compute-' : 'META-INF/jarjar/bedray-compute-'
+        if (!archive.entries().toList().any { it.name.startsWith(expectedPrefix) && it.name.endsWith('.jar') }) {
+            throw new GradleException("[${taskName}] Refusing host-only artifact: nested Compute provider is missing")
+        }
+    }
+    def prototypes = fileTree(dir: dir, include: 'vulkan_compat_shim*.jar').files
+    prototypes.each { old ->
         def isOurs = zipTree(old).matching { include 'META-INF/neoforge.mods.toml' }.files.any { it.text.contains('modId="vulkan_compat_shim"') }
         if (!isOurs) {
             throw new GradleException("${old} does not contain modId=\"vulkan_compat_shim\" in neoforge.mods.toml; refusing to delete it")
         }
-        logger.lifecycle("${dry ? '[dry-run] would remove' : 'Removed'} old prototype jar ${old.name}")
-        if (!dry) {
-            delete old
-        }
     }
-    // Compute is a separate optional mod, not another copy of the host.
-    def stale = fileTree(dir: dir, include: staleJars, exclude: 'bedray-compute*.jar').files
-    stale.each { logger.lifecycle("${dry ? '[dry-run] would delete' : 'Deleting'} ${it.name}") }
+    // The provider is now included. An external old companion would duplicate its mod ID.
+    def stale = (fileTree(dir: dir, include: staleJars).files + prototypes).unique()
+    stale.each { logger.lifecycle("${dry ? '[dry-run] would back up' : 'Backing up'} ${it.name}") }
     if (dry) {
         logger.lifecycle("[dry-run] would copy ${rtxJar.name} -> ${dir}")
         return
     }
-    delete stale
-    copy {
-        from rtxJar
-        into dir
+    requireClosedGame(taskName)
+    def backupDir = new File(dir.parentFile, "bedray-backups/${java.time.Instant.now().toString().replace(':', '-')}")
+    def pending = new File(dir, ".${rtxJar.name}.pending")
+    def target = new File(dir, rtxJar.name)
+    def moved = []
+    boolean installed = false
+    try {
+        java.nio.file.Files.copy(rtxJar.toPath(), pending.toPath())
+        if (java.nio.file.Files.mismatch(rtxJar.toPath(), pending.toPath()) != -1L) {
+            throw new GradleException("[${taskName}] Prepared JAR differs from the source artifact")
+        }
+        // Recheck after preparing the copy, immediately before changing installed files.
+        requireClosedGame(taskName)
+        backupDir.mkdirs()
+        stale.each { old ->
+            java.nio.file.Files.move(old.toPath(), new File(backupDir, old.name).toPath())
+            moved.add(old.name)
+        }
+        java.nio.file.Files.move(pending.toPath(), target.toPath())
+        installed = true
+        if (java.nio.file.Files.mismatch(rtxJar.toPath(), target.toPath()) != -1L) {
+            throw new GradleException("[${taskName}] Installed JAR differs from the source artifact")
+        }
+    } catch (Exception failure) {
+        if (installed) {
+            java.nio.file.Files.move(target.toPath(), pending.toPath())
+        }
+        java.nio.file.Files.deleteIfExists(pending.toPath())
+        moved.reverseEach { name ->
+            java.nio.file.Files.move(new File(backupDir, name).toPath(), new File(dir, name).toPath())
+        }
+        throw failure
     }
-    logger.lifecycle("Deployed ${rtxJar.name} -> ${dir}")
+    logger.lifecycle("Deployed ${rtxJar.name} -> ${dir}; previous jars: ${backupDir}")
 }
 
 // Local DLLs (never committed, project rules): vkb_dlss.dll (our NGX wrapper, native/dlss_bridge/build.bat) and
@@ -70,6 +152,7 @@ tasks.register('syncDlssNatives') {
     doLast {
         def target = file("${file(requireProp('testbed_dir')).parentFile}/bedray/natives")
         def dry = isDryRun()
+        if (!dry) requireClosedGame('syncDlssNatives')
         ['vkb_dlss.dll', 'nvngx_dlss.dll'].each { name ->
             def src = file("${requireProp('local_natives_dir')}/${name}")
             if (!src.isFile()) {
@@ -90,7 +173,7 @@ tasks.register('syncDlssNatives') {
 tasks.register('deployTestbed') {
     group = 'deployment'
     description = 'Deploys the Bedray NeoForge jar (the only jar needed) into the test instance mods folder (autotests); -PdryRun=true lists only'
-    dependsOn project(':neoforge').tasks.named('jar'), tasks.named('syncDlssNatives')
+    dependsOn project(':neoforge').tasks.named('combinedJar')
     doLast { deployJar(file(requireProp('testbed_dir')), 'deployTestbed', ':neoforge') }
 }
 
@@ -98,13 +181,13 @@ tasks.register('deployTestbed') {
 tasks.register('deployFabricTestbed') {
     group = 'deployment'
     description = 'Deploys the Bedray Fabric jar into the Fabric test instance mods folder (autotests); -PdryRun=true lists only'
-    dependsOn project(':fabric').tasks.named('jar')
+    dependsOn project(':fabric').tasks.named('combinedJar')
     doLast { deployJar(file(requireProp('fabric_testbed_dir')), 'deployFabricTestbed', ':fabric') }
 }
 
 tasks.register('deployUser') {
     group = 'deployment'
     description = 'Deploys the Bedray NeoForge jar into the user_dir mods folder (run only on request)'
-    dependsOn project(':neoforge').tasks.named('jar')
+    dependsOn project(':neoforge').tasks.named('combinedJar')
     doLast { deployJar(file(requireProp('user_dir')), 'deployUser', ':neoforge') }
 }

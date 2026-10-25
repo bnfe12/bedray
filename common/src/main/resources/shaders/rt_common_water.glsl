@@ -236,7 +236,12 @@ uint traceWaterBoundary(vec3 origin, vec3 dir, float tmax, bool excludeSelfAvata
     vec3 p0 = loadPos(pos, v.x);
     vec3 p1 = loadPos(pos, v.y);
     vec3 p2 = loadPos(pos, v.z);
-    vec3 n = normalize(cross(p1 - p0, p2 - p0));
+    vec3 g = cross(p1 - p0, p2 - p0);
+    float g2 = dot(g, g);
+    if (g2 < 1.0e-12) {
+        return 3u;   // zero-area triangle: nothing to classify, and a NaN normal below would pass the water test
+    }
+    vec3 n = g * inversesqrt(g2);
     FloatBuf uvb = FloatBuf(sec.uvAddr);
     vec2 uv = b3.x * loadUv(uvb, v.x) + b3.y * loadUv(uvb, v.y) + b3.z * loadUv(uvb, v.z);
     vec4 m = textureLod(matAtlas, uv, 0.0);
@@ -266,7 +271,8 @@ WaterMedium cameraWaterMedium(vec3 origin) {
             m.inside = true;
             m.sigmaT = waterSigmaT(tint);
             m.scatterAlbedo = waterScatterAlbedo(tint);
-            m.surfY = origin.y + t;
+            // t starts at o, which may already have advanced past glass or ice.
+            m.surfY = o.y + t;
         }
         return m;
     }

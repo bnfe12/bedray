@@ -1,6 +1,7 @@
 package io.github.andrexarlay.bedray.compute;
 
 import io.github.andrexarlay.bedray.api.v1.CameraSnapshot;
+import io.github.andrexarlay.bedray.api.v1.LightingFrame;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
 
 import java.nio.ByteBuffer;
@@ -12,12 +13,14 @@ import java.util.Arrays;
  * camera origin and eye in the current grid coordinates, and a per-frame history cap. The GPU then
  * reprojects every surface point and accepts history only where distance and normal agree.
  *
- * The cap bounds how long stale radiance can persist: 64 frames while the camera and scene are
- * unchanged, 8 frames on any frame with camera motion or a scene upload (block, light or material
- * change). These are explicit accumulation-window choices, not physical constants.
+ * The cap controls the effective sample count of exponential averaging: 64 while camera and scene are
+ * unchanged, 32 during camera motion and 16 after scene/lighting changes. Distant streaming must not
+ * hold every visible pixel to the former eight-frame window. Depth/normal rejection still decides
+ * whether a particular history sample can be reused; these caps are response/noise tradeoffs.
  */
 final class TemporalHistory {
-    static final int STATIC_CAP = 64, CHANGED_CAP = 8;
+    static final int STATIC_CAP = 64, CHANGED_CAP = 16, MOTION_CAP = 32;
+    private static final int LIGHTING_COOLDOWN = 8;
 
     private float[] previousInverse;
     private double previousX, previousY, previousZ;
@@ -33,6 +36,30 @@ final class TemporalHistory {
     private int cap;
     private long frameCounter, steadyFrames;
     private String lastReset = "first frame";
+    private float[] lightingAnchor;
+    private int lightingCooldown;
+
+    /** Compare against an anchor, not the previous frame: gradual daylight is allowed to accumulate,
+     * while weather/time/exposure changes shorten history for several frames. Large discontinuities
+     * reject the old history entirely. No images are blurred and no additional rays are required. */
+    void environment(LightingFrame lighting) {
+        if (lighting == null) return;
+        if (lightingAnchor == null) {
+            lightingAnchor = new float[LightingFrame.FLOAT_COUNT];
+            for (int i = 0; i < lightingAnchor.length; i++) lightingAnchor[i] = lighting.component(i);
+            return;
+        }
+        float difference = 0;
+        for (int i = 0; i < lightingAnchor.length; i++)
+            difference = Math.max(difference, Math.abs(lighting.component(i) - lightingAnchor[i]));
+        if (difference < 0.025f) return;
+        for (int i = 0; i < lightingAnchor.length; i++) lightingAnchor[i] = lighting.component(i);
+        lightingCooldown = LIGHTING_COOLDOWN;
+        if (difference >= 0.25f) {
+            previousInverse = null;
+            lastReset = "lighting discontinuity";
+        }
+    }
 
     void invalidate() {
         previousInverse = null;
@@ -40,13 +67,18 @@ final class TemporalHistory {
     }
 
     void prepare(CameraSnapshot camera, VoxelWorldUpload origin, boolean sceneChanged, boolean shaded) {
+        if(origin==null){prepare(camera,0,0,0,sceneChanged,shaded);return;}
+        prepare(camera,origin.originX(),origin.originY(),origin.originZ(),sceneChanged,shaded);
+    }
+
+    void prepare(CameraSnapshot camera,int originX,int originY,int originZ,boolean sceneChanged,boolean shaded) {
         valid = false;
         motion = true;
         cap = CHANGED_CAP;
         pendingInverse = null;
-        if (camera == null || origin == null) return;
+        if (camera == null) return;
         ByteBuffer push = ByteBuffer.allocate(112).order(ByteOrder.LITTLE_ENDIAN);
-        camera.writePushConstants(push, origin.originX(), origin.originY(), origin.originZ());
+        camera.writePushConstants(push, originX, originY, originZ);
         float[] inverse = new float[16];
         for (int i = 0; i < 16; i++) inverse[i] = push.getFloat(i * 4);
         pendingInverse = inverse;
@@ -62,7 +94,7 @@ final class TemporalHistory {
             lastReset = "singular previous projection";
             return;
         }
-        double cx = previousX - origin.originX(), cy = previousY - origin.originY(), cz = previousZ - origin.originZ();
+        double cx = previousX - originX, cy = previousY - originY, cz = previousZ - originZ;
         previousCamera[0] = (float) cx; previousCamera[1] = (float) cy; previousCamera[2] = (float) cz;
         if (!Float.isFinite(previousCamera[0]) || !Float.isFinite(previousCamera[1]) || !Float.isFinite(previousCamera[2])) {
             lastReset = "nonfinite previous camera";
@@ -71,7 +103,7 @@ final class TemporalHistory {
         valid = true;
         motion = !Arrays.equals(previousInverse, inverse) || previousX != pendingX || previousY != pendingY
             || previousZ != pendingZ || !Arrays.equals(previousOffset, pendingOffset);
-        cap = motion || sceneChanged ? CHANGED_CAP : STATIC_CAP;
+        cap = sceneChanged || lightingCooldown > 0 ? CHANGED_CAP : motion ? MOTION_CAP : STATIC_CAP;
         steadyFrames = cap == STATIC_CAP ? steadyFrames + 1 : 0;
     }
 
@@ -94,6 +126,7 @@ final class TemporalHistory {
         }
         parity = !parity;
         frameCounter++;
+        if (lightingCooldown > 0) lightingCooldown--;
     }
 
     boolean parity() { return parity; }
@@ -103,7 +136,8 @@ final class TemporalHistory {
         if (!valid) return "reset (" + lastReset + ")";
         return cap == STATIC_CAP
             ? "steady, window " + Math.min(steadyFrames + 1, STATIC_CAP) + "/" + STATIC_CAP + " frames"
-            : (motion ? "moving" : "scene update") + ", window " + CHANGED_CAP + " frames";
+            : (lightingCooldown > 0 ? "lighting update" : motion ? "moving" : "scene update")
+                + ", window " + cap + " frames";
     }
 
     /** Column-major 4x4 inverse in double precision; false for a singular or nonfinite result. */

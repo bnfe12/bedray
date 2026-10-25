@@ -317,7 +317,7 @@ public class RtShadingFixesTest {
         // Quad 1 (cutout torch): boost at offset FLOATS + 7
         float quad1Boost = records[RtEmitters.FLOATS + 7];
         // the boost is power based now (RtEmitters.MIN_POWER = area x mean emission x boost), not a flat 2.8x of every cutout quad:
-        // this 0.2 x 0.8 quad (area 0.16, fully emissive) is lifted to the minimum power 0.2
+        // this 0.2 x 0.8 quad (area 0.16, fully emissive) is lifted to the minimum power
         float quad1Area = records[RtEmitters.FLOATS + 3];
         float quad1Mean = records[RtEmitters.FLOATS + 14];
         assertEquals(0.16f, quad1Area, 1e-4f, "area of the torch quad");

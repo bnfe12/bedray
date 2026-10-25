@@ -18,6 +18,10 @@ instance's `mods` folder. Bedray is **one self-contained jar**; no other library
 2. The **Bedray jar** for your loader: `bedray-neoforge-mc26.3.0-<version>.jar` or `bedray-fabric-mc26.3-<version>.jar`.
    Check the SHA-256 given in the release description (PowerShell: `Get-FileHash <file> -Algorithm SHA256`).
 
+Development alpha.13 includes Bedray Compute inside that Bedray JAR. Remove an older external
+`bedray-compute-*.jar` when updating to this distribution; the loader discovers the included provider
+as `bedray_compute`. The `-host-only.jar` artifact is intended for developers, not this installation.
+
 Do not install the NeoForge and the Fabric jar together. Start the game once. If everything is right, **Options, Video Settings**
 shows the pages **Bedray ALPHA: Upscaling, Ray Tracing, Advanced and Experimental**, and the F3 screen has "Bedray" sections (overview, load, quality, libraries; two more can be enabled in the F3+F6 screen).
 The first start creates `config/bedray.toml`. If you used a pre-release build, your old `config/vulkan_rtx.toml` is copied once

@@ -43,15 +43,29 @@ public final class ComputeRenderBridge {
     private static boolean hadWorld;
     private static boolean cameraPending;
     private static String pendingCameraReason;
+    private static String pendingFrameReason, pendingRasterReason;
     private static long recordedRevision = Long.MIN_VALUE;
     private static int resourceWidth, resourceHeight, resourceFormat;
     private static long capturedAtlasGeneration, resourceAtlasGeneration;
+    private static long capturedStreamingBudget;
+    private static int capturedStreamingRadius, capturedMinSectionY, capturedMaxSectionY;
+    private static long coverageLogNanos, limitedSinceNanos;
+    private static int loggedResident = -1, loggedQueued = -1;
+    private static boolean populatedLogged, limitedLogged;
     private static RenderTarget resourceTarget;
     private static long resourceColorView, resourceDepthView;
     private static LightingFrame currentLighting;
     private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
 
     private ComputeRenderBridge() {}
+
+    /** Accepted Sodium builds notify voxel extraction without enabling the hardware geometry decoder. */
+    public static void sectionChanged(int x, int y, int z) {
+        if (enabled()) worldCapture.sectionChanged(x, y, z);
+    }
+    public static void sectionRemoved(int x, int y, int z) {
+        if (enabled()) worldCapture.sectionRemoved(x, y, z);
+    }
 
     /** Render-thread scene applied at this frame's boundary; pair with a successful renderDiagnostic result. */
     public static GraphicsBackendRegistry.SceneMode appliedSceneMode() { return appliedRequest.mode(); }
@@ -76,6 +90,7 @@ public final class ComputeRenderBridge {
             worldCapture.clear();
             if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
             pendingCameraReason = null;
+            pendingFrameReason = null;
             recordedRevision = Long.MIN_VALUE;
         }
         if (cleanupBroken) {
@@ -87,6 +102,7 @@ public final class ComputeRenderBridge {
                 worldCapture.clear();
                 if (GraphicsBackendRegistry.backend() != null) GraphicsBackendRegistry.backend().clearWorldSnapshot();
                 pendingCameraReason = null;
+                pendingFrameReason = null;
                 recordedRevision = Long.MIN_VALUE;
             }
             if (!releaseResources()) return;
@@ -121,8 +137,38 @@ public final class ComputeRenderBridge {
                 notePendingCamera("Waiting for block atlas and baked models", camera);
                 return;
             }
-            var snapshot = worldCapture.capture(camera, atlas, backend.supportsModelGeometry(),
-                backend.supportsCellTint());
+            if (backend.supportsWorldStreaming()) {
+                long budget = (long)VulkanRtxConfig.voxelMemoryBudgetMiB() * 1024 * 1024;
+                var minecraft = net.minecraft.client.Minecraft.getInstance();
+                int minecraftRadius = Math.clamp(minecraft.options.getEffectiveRenderDistance(), 1, 64);
+                int radius = VulkanRtxConfig.voxelDistanceAuto() ? minecraftRadius
+                    : Math.min(minecraftRadius, VulkanRtxConfig.voxelDistanceChunks());
+                int minY = minecraft.level == null ? 0 : minecraft.level.getMinSectionY();
+                int maxY = minecraft.level == null ? 0 : minecraft.level.getMaxSectionY();
+                if (capturedStreamingBudget != 0 && (capturedStreamingBudget != budget
+                        || capturedStreamingRadius != radius || capturedMinSectionY != minY || capturedMaxSectionY != maxY)) {
+                    if (!releaseResources()) return;
+                    backend.clearWorldSnapshot();
+                    worldCapture.clear();
+                }
+                capturedStreamingBudget = budget;
+                capturedStreamingRadius = radius; capturedMinSectionY = minY; capturedMaxSectionY = maxY;
+                for (var key : backend.drainWorldInvalidations()) worldCapture.invalidated(key);
+                var update = worldCapture.captureStreaming(camera, atlas, backend.supportsModelGeometry(),
+                    backend.supportsCellTint(), backend.streamingStatus().queuedSections());
+                if (update == null) { notePendingCamera(worldCapture.pendingReason(), camera); return; }
+                backend.acceptWorldUpdate(update);
+                capturedAtlasGeneration = atlas.generation();
+                cameraPending = false;
+                if (pendingCameraReason != null) {
+                    LOGGER.info("[BEDRAY-COMPUTE] camera_ready stream_session={} revision={} distance={} discovered={}",
+                        update.session(), update.revision(), update.bounds().effectiveRenderDistanceChunks(),
+                        update.discoveredSections());
+                    pendingCameraReason = null;
+                }
+                return;
+            }
+            var snapshot = worldCapture.capture(camera, atlas, backend.supportsModelGeometry(), backend.supportsCellTint());
             if (snapshot == null) {
                 notePendingCamera(worldCapture.pendingReason(), camera);
                 return;
@@ -207,7 +253,15 @@ public final class ComputeRenderBridge {
         int format = VulkanConst.toVk(target.getColorTexture().getFormat());
         RasterFrame raster = live && backend.supportsModelGeometry() ? rasterFrame(device,target) : null;
         if (live && backend.supportsModelGeometry() && (raster == null || currentLighting == null)) {
-            noteIdle("Waiting for matching raster depth and world lighting; normal renderer retained");
+            String reason = raster == null ? "Raster input: " + pendingRasterReason : "";
+            if (currentLighting == null) reason += (reason.isEmpty() ? "" : "; ")
+                + "World lighting: " + ComputeLightingCapture.pendingReason();
+            if (!java.util.Objects.equals(pendingFrameReason, reason)) {
+                LOGGER.warn("[BEDRAY-COMPUTE] frame_pending reason={} target={}x{} format={} retry=next_frame",
+                    reason,target.width,target.height,format);
+                pendingFrameReason = reason;
+            }
+            noteIdle(reason + "; normal renderer retained");
             return false;
         }
         long atlasGeneration = atlas == null ? 0 : atlas.generation();
@@ -245,7 +299,12 @@ public final class ComputeRenderBridge {
             encoder.execute(commandBuffer);
         }
         if (recorded) {
+            if (pendingFrameReason != null) {
+                LOGGER.info("[BEDRAY-COMPUTE] frame_inputs_ready target={}x{}", target.width,target.height);
+                pendingFrameReason = null;
+            }
             GraphicsBackendRegistry.noteRendered(backend.id(), appliedRequest);
+            logStreamingCoverage(backend);
             if (recordedRevision != appliedRequest.revision()) {
                 LOGGER.info("[BEDRAY-COMPUTE] scene_recorded mode={} backend={} target={}x{} detail={}",
                     appliedRequest.mode(), backend.id(), target.width, target.height, backend.sceneDetail());
@@ -272,19 +331,35 @@ public final class ComputeRenderBridge {
     }
 
     private static RasterFrame rasterFrame(VulkanDevice device, RenderTarget target) {
+        pendingRasterReason = null;
         var color = target.getColorTexture(); var depth = target.getDepthTexture();
         var colorView = target.getColorTextureView(); var depthView = target.getDepthTextureView();
-        if (color == null || depth == null || colorView == null || depthView == null
-            || color.isClosed() || depth.isClosed() || colorView.isClosed() || depthView.isClosed()
-            || (color.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0
-            || (depth.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0) return null;
+        if (color == null || depth == null || colorView == null || depthView == null) {
+            pendingRasterReason = "Waiting for world color/depth textures and views";
+            return null;
+        }
+        if (color.isClosed() || depth.isClosed() || colorView.isClosed() || depthView.isClosed()) {
+            pendingRasterReason = "World color/depth texture or view is closed";
+            return null;
+        }
+        if ((color.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0
+            || (depth.usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0) {
+            pendingRasterReason = "World inputs lack sampled usage: color=" + color.usage() + " depth=" + depth.usage();
+            return null;
+        }
         int format = VulkanConst.toVk(color.getFormat()), depthFormat = VulkanConst.toVk(depth.getFormat());
         if (depthFormat != VK10.VK_FORMAT_D32_SFLOAT
             || (format != VK10.VK_FORMAT_R8G8B8A8_UNORM && format != VK10.VK_FORMAT_R8G8B8A8_SRGB
-                && format != VK10.VK_FORMAT_B8G8R8A8_UNORM && format != VK10.VK_FORMAT_B8G8R8A8_SRGB)) return null;
+                && format != VK10.VK_FORMAT_B8G8R8A8_UNORM && format != VK10.VK_FORMAT_B8G8R8A8_SRGB)) {
+            pendingRasterReason = "Unsupported sampled world formats: color=" + format + " depth=" + depthFormat;
+            return null;
+        }
         long colorHandle = WorldTargetManager.extractVkImageView(colorView);
         long depthHandle = WorldTargetManager.extractVkImageView(depthView);
-        if (colorHandle == 0 || depthHandle == 0) return null;
+        if (colorHandle == 0 || depthHandle == 0) {
+            pendingRasterReason = "Waiting for Vulkan world image views";
+            return null;
+        }
         return new RasterFrame(device.vkDevice().address(), colorHandle, depthHandle, format, depthFormat,
             target.width,target.height);
     }
@@ -316,6 +391,13 @@ public final class ComputeRenderBridge {
             // execute() queues transient buffers in the host encoder. Flush those before provider.close() waits idle.
             device.createCommandEncoder().submit();
             owner.close();
+            // close() releases provider residency on resize, atlas retirement and budget changes as well
+            // as world exit. Forget CPU delivery markers so the next frame republishes the loaded scene.
+            worldCapture.clear();
+            capturedStreamingBudget = capturedAtlasGeneration = 0;
+            populatedLogged = limitedLogged = false;
+            coverageLogNanos = limitedSinceNanos = 0;
+            loggedResident = loggedQueued = -1;
             return true;
         } catch (RuntimeException | LinkageError error) {
             // A failed submit may leave unsubmitted references. Never reuse the provider's old device handles.
@@ -328,6 +410,32 @@ public final class ComputeRenderBridge {
 
     private static void noteIdle(String reason) {
         GraphicsBackendRegistry.noteIdle(reason, appliedRequest);
+    }
+
+    private static void logStreamingCoverage(GraphicsBackend backend) {
+        if (!backend.supportsWorldStreaming()) return;
+        var status = backend.streamingStatus();
+        if (!status.available()) return;
+        long now = System.nanoTime();
+        if (status.memoryLimited()) {
+            if (limitedSinceNanos == 0) limitedSinceNanos = now;
+        } else limitedSinceNanos = 0;
+        String event = null;
+        if (!populatedLogged && status.residentSections() > 0) {
+            event = "first_populated"; populatedLogged = true;
+        } else if (!limitedLogged && limitedSinceNanos != 0 && now - limitedSinceNanos >= 2_000_000_000L) {
+            event = "memory_limited"; limitedLogged = true;
+        } else if (limitedLogged && !status.memoryLimited()) {
+            event = "memory_recovered"; limitedLogged = false;
+        } else if (populatedLogged && now - coverageLogNanos >= 5_000_000_000L
+                && (status.residentSections() != loggedResident || status.queuedSections() != loggedQueued)) event = "progress";
+        if (event == null) return;
+        LOGGER.info("[BEDRAY-COMPUTE] coverage event={} requested={} effective={} resident={} queued={} used={} budget={} uploaded={} discovered={} empty={} limited={} reason={}",
+            event, status.requestedRenderDistanceChunks(), status.effectiveRenderDistanceChunks(),
+            status.residentSections(), status.queuedSections(), status.usedGpuBytes(), status.budgetGpuBytes(),
+            status.uploadedBytes(), status.discoveredSections(), status.emptySections(), status.memoryLimited(), status.reason());
+        coverageLogNanos = now;
+        loggedResident = status.residentSections(); loggedQueued = status.queuedSections();
     }
 
     private static void notePendingCamera(String reason,

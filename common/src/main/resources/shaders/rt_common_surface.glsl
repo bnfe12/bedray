@@ -95,7 +95,7 @@ void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 orig
     vec3 p0 = loadPos(pos, v.x);
     vec3 p1 = loadPos(pos, v.y);
     vec3 p2 = loadPos(pos, v.z);
-    vec3 n = normalize(cross(p1 - p0, p2 - p0));
+    vec3 n = normalizeOr(cross(p1 - p0, p2 - p0), -dir);
     FloatBuf uvb = FloatBuf(sec.uvAddr);
     vec2 uv0 = loadUv(uvb, v.x);
     vec2 uv1 = loadUv(uvb, v.y);
@@ -186,10 +186,13 @@ void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 orig
                 float det = d1.x * d2.y - d2.x * d1.y;
                 if (abs(det) > 1.0e-12) {
                     float r = 1.0 / det;
-                    vec3 T = normalize((e1 * d2.y - e2 * d1.y) * r);   // dP/du
-                    vec3 B = normalize((e2 * d1.x - e1 * d2.x) * r);   // dP/dv (down in the texture)
+                    // det only says the UVs are not collinear. A zero-area triangle (three collinear vertices) with real atlas
+                    // UVs still passes the det gate while e1 * d2.y - e2 * d1.y cancels exactly, so the tangents need their own
+                    // guard: falling back to the geometric normal collapses the perturbation instead of writing NaN into s.ns.
+                    vec3 T = normalizeOr((e1 * d2.y - e2 * d1.y) * r, n);   // dP/du
+                    vec3 B = normalizeOr((e2 * d1.x - e1 * d2.x) * r, n);   // dP/dv (down in the texture)
                     float z = sqrt(max(0.0, 1.0 - dot(xy, xy)));
-                    vec3 nsObj = normalize(T * xy.x + B * xy.y + n * z);
+                    vec3 nsObj = normalizeOr(T * xy.x + B * xy.y + n * z, n);
                     vec3 cand = dot(n, s.ng) > 0.0 ? nsObj : reflect(nsObj, n);   // keep it on the side facing the ray
                     float ndot = dot(cand, s.ng);
                     // Smooth blending towards geometric normal to eliminate normal popping and seam tearing
@@ -746,7 +749,7 @@ vec3 sampleGgxVndf(vec3 n, vec3 v, float alpha, vec2 u, out float vdotH) {
 }
 
 vec3 brdfSpecularGGX(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0) {
-    vec3 H = normalize(V + L);
+    vec3 H = normalizeOr(V + L, N);
     float NdotL = max(dot(N, L), 0.0);
     float NdotV = max(dot(N, V), 1.0e-4);
     float NdotH = max(dot(N, H), 0.0);

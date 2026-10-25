@@ -40,6 +40,7 @@ final class RtModesChecks {
         RtIceGlassOpticsTest.runAll();
         RtWaterMediumTest.runAll();
         RtVanillaWaterLightTest.runAll();
+        RtShaderNaNGuardTest.runAll();
     }
 
     private static void resetLevels() {

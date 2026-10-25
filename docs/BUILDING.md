@@ -56,7 +56,7 @@ Only Minecraft and the mods you download yourself from their official pages belo
 | `common` | All mod logic (rendering, ray tracing, upscalers, settings). No loader API. |
 | `neoforge`, `fabric` | Entry point and descriptor. Each loader jar contains `core` + `common` + its own classes, so a user installs exactly one jar. |
 | `renderer-api` | Host-owned versioned companion API, included only in host loader JARs. |
-| `compute-common`, `compute-neoforge`, `compute-fabric` | Optional software voxel diagnostic and separate companion JARs. See [COMPUTE](COMPUTE.md). |
+| `compute-common`, `compute-neoforge`, `compute-fabric` | Software voxel provider, nested in the player distribution and registered as its own mod. See [COMPUTE](COMPUTE.md). |
 
 ## 4. Build and test
 
@@ -67,6 +67,19 @@ gradlew clean :core:test :common:runShimTests :neoforge:jar :fabric:jar
 Jars appear in `neoforge/build/libs/` and `fabric/build/libs/`, named `bedray-neoforge-mc26.3.0-<version>.jar` and
 `bedray-fabric-mc26.3-<version>.jar`. `runShimTests` checks Java-level logic and compiles the shaders with shaderc; it does not use
 the GPU and is **not** evidence that a feature works in the game.
+
+The `combinedJar` task of each loader module builds the canonical player artifact with the Bedray Compute provider
+nested inside (`bedray-neoforge-mc26.3.0-<version>.jar`, `bedray-fabric-mc26.3-<version>.jar`):
+NeoForge JarJar (`META-INF/jarjar/`) for NeoForge, a Fabric Loader nested JAR (`META-INF/jars/`, `fabric.mod.json` `jars`)
+for Fabric. Compute keeps its own mod id (`bedray_compute`) and descriptor and still loads as its own mod. `assemble`,
+`jar`, deployment and Maven publication select or produce this included-provider distribution. The `jar` task also creates
+a developer-only `-host-only.jar`; a deliberately separate setup needs that host and the matching standalone provider.
+Never install the player JAR together with a standalone Compute JAR: that duplicates the provider's mod ID.
+
+Developer deploy tasks require a clean source build and closed Java clients. They verify that the provider is nested,
+move earlier host and external companion JARs to a dated backup, then install the single player JAR. A failed move rolls
+back the earlier files. `-PdryRun=true` inspects the planned changes without touching the instance. Configurations and
+native-library folders are not part of this JAR replacement.
 
 The default developer build contains no DLLs. Release builds may include only the exact AMD FidelityFX SDK v1.1.4 Vulkan DLL
 and Intel XeSS SDK 3.0.2 DLL, verified against SHA-256 pins and bundled with their license files. No NVIDIA vendor DLLs or native wrappers are

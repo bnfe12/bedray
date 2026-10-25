@@ -1,13 +1,127 @@
 # Bedray Compute — experimental development
 
+## Architecture decision: streamed coverage and one settings owner (2026-10-25)
+
+The current distribution includes the Compute provider as a nested mod inside Bedray. Its mod ID,
+registration and versioned host API remain separate; installing an additional external companion is
+not part of that distribution. Preserve existing hardware RT and Iris functionality while extending
+the software renderer.
+
+Requested horizontal coverage follows Minecraft's effective render distance. Read loaded chunks
+only, across the world's valid section-height range. Use bounded incremental capture and section
+deltas, compact GPU pages and a small section directory. Do not grow the old fixed 27-section model
+slabs into a render-distance-sized dense allocation. Unknown, queued, empty and resident sections
+are distinct states; incomplete coverage retains raster and reports its actual residency and memory
+pressure. CPU capture, retained caches, upload bytes and GPU scene storage all require explicit bounds.
+Queue barriers order in-place page reuse; resource destruction retains the host completion rules.
+
+An additive streaming API keeps the legacy bounded snapshot path for existing providers. The host
+owns loaded-world capture and requested settings; the provider owns residency and publishes immutable
+coverage statistics. No RT extension, buffer device address or assumed frame-completion offset is
+introduced by this decision.
+
+The existing Bedray settings screen becomes the primary interface. Sodium links to that screen.
+Fresh per-screen options reuse the existing definitions and validators, keeping a private draft until
+Apply. Revert and Cancel do not mutate renderer state or a parent Sodium draft. Search, localization,
+renderer-relevant controls, and requested-versus-active status belong in this one interface. Avoid
+per-frame schema rebuilding, file scanning and unmeasured performance promises.
+
+Compilation and packaging verify implementation contracts. A fresh matching-version game run and
+visible populated output are separate acceptance requirements; this decision does not claim those
+checks have already passed.
+
 Stage: bounded software voxel rendering on ordinary Vulkan compute. Bedray owns the game data,
-device, queue, targets and settings; Bedray Compute remains a separate companion JAR. Development
+device, queue, targets and settings; Bedray Compute is a separate provider nested in the player JAR. Development
 candidates are for focused personal checks. Compilation and archive inspection do not establish
 presentation, stability, performance or compatibility in Minecraft.
 
 No RT extensions, acceleration structures, ray queries, device addresses, Int64, vendor SDKs or
 vendor DLLs are required by the Compute provider. In-game use still requires Minecraft 26.3's Vulkan
 backend baseline and the provider's queue/format/descriptor checks. This is not an arbitrary-GPU claim.
+
+## Alpha.13 streaming and settings
+
+The included API 1.6 provider receives incremental section changes across Minecraft's effective render
+distance and valid world height. Loaded chunks are read without creating new chunks. Discovery starts
+near the camera, reprioritizes vertical movement, and bounds section capture and upload work. Geometry
+changes invalidate Voxel independently of the hardware RT capture gate. Air-only sections retain their
+actual propagated light; known empty geometry is not treated as missing lighting.
+
+GPU residency uses an absolute-coordinate section directory and reusable compact cell, palette and
+model arenas. Model storage follows used quads, rather than reserving 8192 quads for every section.
+Uploads publish a directory entry only after its payload is complete. The scene allocation obeys its
+memory budget, pending payloads are bounded, and nearer sections can replace farther ones. Eviction
+feeds back into capture with a retry cooldown. Requested chunks, resident sections, upload queue and
+actual allocated scene bytes are separate diagnostics. Output/history images are additional memory.
+
+The settings screen uses a private pending model, shared validators, search, category navigation,
+direct choice menus, and Apply/Revert. Fast, Beautiful and Custom profiles are separate for Voxel and
+Path Tracing. Both Voxel presets follow Minecraft distance; Fast lowers the scene budget and disables
+the extra diffuse bounce and translucent optics. Beautiful enables those effects. Custom unlocks manual
+quality controls. A named or imported personal preset is staged before applying it.
+
+Temporal reuse still requires matching surface distance and normal. Its effective averaging cap is
+64 in a steady scene, 32 for camera motion and 16 for scene/lighting changes, instead of the previous
+eight during every streaming frame. Lighting changes are compared with an anchor; significant changes
+shorten accumulation for eight recorded frames, and large discontinuities reject old history. These
+are response/noise heuristics, not strict radiance lifetimes or measured guarantees. More history can
+also retain view-dependent reflection/transmission information longer; motion response needs live checks.
+
+Available renderer paths are raster, hardware Path Tracing, experimental hardware RT effects, and
+Voxel with raster preservation. Voxel currently suspends the hardware pass. A simultaneous RT+Voxel
+mode needs explicit effect ownership, composition and temporal guides. Merely adding a preset name
+does not implement it; separate pure/hybrid labels must not select the same underlying path silently.
+
+| Rendering experience | Intended use and requirements |
+|---|---|
+| Vanilla / raster | Lowest rendering cost in this set; keeps the game's lighting. Bedray still uses the game's Vulkan backend. |
+| Voxel with raster preservation | For a supported Vulkan compute GPU, including devices without hardware RT. Fast trades additional light transport and resolution for lower work. Shared-memory GPUs may still be constrained by scene and target memory. |
+| Hardware Path Tracing | Requires the hardware ray-query/acceleration-structure checks. Fast uses 1 sample and 2 bounces; Beautiful uses 2 samples and 4 bounces. It is the most demanding supported lighting path here; resolution, scene and denoiser matter. |
+| Hardware Ray Tracing effects | Requires hardware RT support and the existing experimental opt-in. It is not a stable substitute for Path Tracing. |
+
+These are qualitative workload descriptions, not measured GPU rankings or FPS promises. The experience
+menu and quality profile are separate: choose a renderer first, then Fast/Beautiful, or Customize to
+retain the current values while unlocking controls. Save the resulting pending values in My Presets.
+
+These are development changes. Final matching-version gameplay evidence is required for coverage,
+noise, menu layout, switching, resize/reload, memory pressure and sustained travel.
+
+## Alpha.11 integration and optical limits
+
+The host integrates the newer hardware-renderer fixes for degenerate geometry/camera directions,
+nonfinite temporal inputs, missing sun halo, small-emitter power and canopy sampling. Sun textures
+retain resource-pack opacity in the restored halo, the body mask and reflections; opacity is applied
+once to specular brightness. Underwater camera-medium detection now measures surface elevation from
+the current query origin after skipping glass or ice.
+
+The newer Iris post graph adds target formats, clearing, image history and mipmaps. Its borrowed-target
+identity is adopted only when preparing an accepted frame, before allocations/recording can fail.
+Early rejection keeps the previous owner, and image/view identity changes retire its resources first.
+This historical checkpoint shipped Bedray and Compute separately; alpha.13 includes the provider.
+The alpha.10 activation fixes below are retained.
+
+Hardware Path Tracing still has distinct optical limits: realistic water/glass primarily receive the
+sun through the reflected environment, without a separate rough-interface solar estimate. Water-volume
+in-scattering uses an ambient approximation without directional sunlight visibility, so it cannot
+produce shadowed underwater sun shafts. Submerged opaque surfaces have a separate refracted sunlight
+path. Restoring the halo does not establish that these other effects are implemented or verified.
+
+## Alpha.10 activation fix
+
+A matching alpha.9 game launch selected Voxel, captured its camera and still displayed raster. The
+lighting collector required `GameRenderState.readyForLevelRendering`, a field that Minecraft 26.3
+declares but never populates, including the inspected NeoForge 26.3.0.76 runtime. Its default false
+value prevented every lighting snapshot and therefore every compute dispatch in game.
+
+Alpha.10 uses the actual `shouldRenderLevel` world-pass condition while retaining the existing current
+camera/projection and finite lightmap/sky checks. Pending lighting and raster inputs now have separate,
+specific status messages and a transition-only `frame_pending` log. `frame_inputs_ready` reports
+recovery; `scene_recorded` still means command recording, not visual acceptance. The fix needs a fresh
+matching-version game run; earlier offscreen probes did not exercise this host readiness check.
+
+Vanilla's boss-overlay fade can also retain a small negative value after subtraction. The collector
+accepts a finite boss factor and clamps the published value to [0,1], so that ordinary fade-out does
+not disable Compute. Nonfinite input still keeps raster and reports a pending reason.
 
 ## Alpha.8 visual pass
 
@@ -42,7 +156,8 @@ Ordered by visible effect per unit of work. Each step stays bounded and keeps th
    count, hit distance and normal. Each surface point is reprojected with the previous frame's camera.
    A bilinear history tap is accepted only if its distance and normal match. The history window is 64
    frames while the camera and scene are steady, and 8 frames on any frame with camera motion or a
-   scene upload, so lighting changes fade in within that window.
+   scene upload. Environment changes alone do not currently shorten history, and the reduced cap is
+   not held for a cooldown after a single update; lighting-response correctness remains a follow-up.
 6. **Larger region: not in this pass.** The 27-section window is fixed by the stream contract
    (2 section reads per frame, 14-frame revisit). The model SSBO grows by 786,432 bytes per section,
    so 5×5×5 sections would need about 98 MB of model slabs and a 63-frame revisit. That needs a
@@ -62,7 +177,7 @@ Ordered by visible effect per unit of work. Each step stays bounded and keeps th
 - Normals, distance and occupancy debug views isolate the compute scene. CPU counters expose accepted cubes,
   models, light and omitted cells. Recording counters do not prove presentation.
 
-The resident window remains **3×3×3 loaded sections (48 blocks per axis)**. Capture polls two sections
+In the legacy snapshot path, the resident window is **3×3×3 loaded sections (48 blocks per axis)**. Capture polls two sections
 per rendered frame, so a stationary window is revisited within 14 rendered frames. Membership follows
 camera section coordinates and includes valid world build sections; 27 residents are not always possible.
 Only already loaded chunks are read, with creation disabled. Missing cells remain unknown.
@@ -88,12 +203,17 @@ atlas sources are also unsupported. A guessed solid cube is never substituted fo
 
 Fluid input uses the vanilla tessellator where its exact result fits the bounded cell representation;
 waterlogged geometry requires the combined result to fit. Actual fluid heights, flow UVs and tint are
-captured rather than inventing full fluid cubes. Translucent raster preservation is still the presentation
-policy. Physically correct transmission, colored glass shadows and fluid optical transport remain future work.
+captured rather than inventing full fluid cubes. Alpha.8 adds bounded experimental transmission and
+colored filtering; unresolved paths retain raster. Correct water exit-medium tracking and complete
+transparent composition remain open.
 
 ## Public data contract
 
-`renderer-api` major 1/minor 5 keeps prior constructors and callbacks. Providers explicitly opt into
+`renderer-api` major 1/minor 6 adds opt-in streamed section deltas, render-quality input and immutable
+coverage status. Prior constructors and callbacks remain available. The following describes the retained
+minor 5 payload format; the fixed GPU slab layout applies only to the legacy snapshot path.
+
+Providers explicitly opt into
 `supportsModelGeometry()`; older providers continue receiving the cube-only representation. Minor 5 adds
 `supportsCellTint()`: only opted-in providers receive `SectionTintData`, `CubeFaceMaterial.cellTint` and
 `ModelQuad.CELL_TINT`; others keep tints baked into every palette entry. Minor 5 also adds
@@ -193,8 +313,11 @@ and colored emitter spectra (emitters use the game's block-light tint).
 
 ## Activation
 
-Install the matching **Bedray + Bedray Compute alpha.8 pair**, for the same loader. The companion requires
-host alpha.8 or newer for API minor 5. Updating only one JAR cannot supply the other side's contracts.
+Install the **Bedray alpha.13 player JAR** for the appropriate loader. It includes the matching Compute
+provider and host API 1.6. Remove older external `bedray-compute-*.jar` files to avoid duplicate mod IDs.
+For development, `-host-only.jar` plus the matching separate Compute artifact remains available. The nested
+provider can be extracted from `META-INF/jars/` (Fabric) or `META-INF/jarjar/` (NeoForge); use it with the
+matching host-only artifact, replacing the included-provider JAR. Do not install both distributions together.
 
 Open Sodium Video Settings → **Bedray** → **World Renderer** → **Voxel (Experimental)**.
 The missing add-on and initialization failures appear in Renderer Status. The saved hardware RT mode

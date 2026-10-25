@@ -53,6 +53,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -77,6 +78,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     public enum WaterStyle { VANILLA, REALISTIC }
     public enum RendererStatus { STATUS }
+    public enum QualityProfile { FAST, BEAUTIFUL, CUSTOM }
 
     private enum Mark { NONE, RT, PATH }
 
@@ -215,6 +217,28 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     @Override
     public void registerConfigLate(ConfigBuilder builder) {
+        builder.registerOwnModOptions().setName("Bedray").addPage(builder.createExternalPage()
+            .setName(tr("bedray.settings.open", "Bedray Settings..."))
+            .setScreenConsumer(parent -> Minecraft.getInstance().gui.setScreen(new BedrayConfigScreen(parent))));
+    }
+
+    /** Fresh option objects keep this screen's pending changes independent of a parent Sodium screen. */
+    static net.caffeinemc.mods.sodium.client.config.structure.Config createScreenConfig() {
+        var builder = new net.caffeinemc.mods.sodium.client.config.builder.ConfigBuilderImpl(
+            configId -> {
+                // Copy metadata, never the parent's mutable Option objects or pending values.
+                if (ConfigManager.CONFIG != null) {
+                    for (var mod : ConfigManager.CONFIG.getModOptions())
+                        if (mod.configId().equals(configId)) return new ConfigManager.ModMetadata(mod.name(), mod.version());
+                }
+                String version = VulkanSodiumConfig.class.getPackage().getImplementationVersion();
+                return new ConfigManager.ModMetadata("Bedray", version == null || version.isBlank() ? "unknown" : version);
+            }, "bedray");
+        new VulkanSodiumConfig().registerSettings(builder);
+        return new net.caffeinemc.mods.sodium.client.config.structure.Config(new ArrayList<>(builder.build()));
+    }
+
+    private void registerSettings(ConfigBuilder builder) {
         PAGE_ESSENTIAL.clear();
         PAGE_ADVANCED.clear();
         GROUP_IDS.clear();
@@ -258,12 +282,24 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             == VulkanRtxConfig.RendererSelection.HARDWARE_RT;
     }
 
+    /**
+     * RT predicates call hardwareRenderer before reading the mode, including when composed with another toggle.
+     * Sodium guards every read on the provider's ConfigState; a helper call does not declare dependencies for its caller.
+     */
+    private static Identifier[] rtDependencies(Identifier modeId, Identifier... additional) {
+        Set<Identifier> dependencies = new LinkedHashSet<>();
+        dependencies.add(id("renderer"));
+        dependencies.add(modeId);
+        for (Identifier dependency : additional) dependencies.add(dependency);
+        return dependencies.toArray(Identifier[]::new);
+    }
+
     public static Component rendererName(VulkanRtxConfig.RendererSelection renderer) {
         if (renderer == VulkanRtxConfig.RendererSelection.HARDWARE_RT) {
             return tr("bedray.renderer.hardware", "Hardware RT / Raster");
         }
         return GraphicsBackendRegistry.backend() == null
-            ? tr("bedray.renderer.voxel_missing", "Voxel (Compute add-on missing)")
+            ? tr("bedray.renderer.voxel_missing", "Voxel (included provider unavailable)")
             : tr("bedray.renderer.voxel", "Voxel (Experimental)");
     }
 
@@ -280,7 +316,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             return tr("bedray.renderer.status.hardware", "Hardware / raster renderer selected").getString();
         }
         if (GraphicsBackendRegistry.backend() == null) {
-            return tr("bedray.renderer.status.missing", "Unavailable: install the matching Bedray Compute add-on").getString();
+            return tr("bedray.renderer.status.missing", "Unavailable: the included Compute provider is missing or incompatible").getString();
         }
         return GraphicsBackendRegistry.status();
     }
@@ -291,7 +327,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                                     Path gameDir, StorageEventHandler st) {
         Function<ConfigState, Boolean> anyRt = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class).isActive();
         Function<ConfigState, Boolean> pathOn = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class) == RtMode.PATH_TRACED;
-        Identifier[] dMode = {id("renderer"), modeId};
+        Identifier[] dMode = rtDependencies(modeId);
 
         // ---- Ray tracing and light
         OptionGroupBuilder rt = group(builder, "bedray.group.main_rt", "Ray Tracing & Light", new ArrayList<>());
@@ -311,6 +347,31 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
             .setBinding(v -> {}, () -> RendererStatus.STATUS).setStorageHandler(st);
         rt.addOption(track("renderer_status", rendererStatus));
+        for (boolean voxel : new boolean[] {false, true}) {
+            String path = voxel ? "voxel_quality_profile" : "path_quality_profile";
+            EnumOptionBuilder<QualityProfile> profile = builder.createEnumOption(id(path), QualityProfile.class);
+            profile.setName(nameOf(path)).setTooltip(v -> tipOf(path)).setDefaultValue(QualityProfile.CUSTOM)
+                .setAllowedValues(EnumSet.allOf(QualityProfile.class))
+                .setElementNameProvider(v -> tr("bedray.settings.profile." + v.name().toLowerCase(Locale.ROOT), v.name()))
+                .setBinding(v -> { if (voxel) VulkanRtxConfig.setVoxelQualityProfile(v.name()); else VulkanRtxConfig.setPathQualityProfile(v.name()); },
+                    () -> QualityProfile.valueOf(voxel ? VulkanRtxConfig.voxelQualityProfile() : VulkanRtxConfig.pathQualityProfile()))
+                .setStorageHandler(st);
+            rt.addOption(track(path, profile));
+        }
+        rt.addOption(boolOpt(builder, "voxel_distance_auto", true, VulkanRtxConfig::setVoxelDistanceAuto,
+            VulkanRtxConfig::voxelDistanceAuto, s -> !hardwareRenderer(s), new Identifier[] {id("renderer")},
+            Mark.NONE, OptionImpact.MEDIUM, false, st));
+        rt.addOption(intOpt(builder, "voxel_distance_chunks", 12, 2, 64, 1, unit(" chunks"),
+            VulkanRtxConfig::setVoxelDistanceChunks, VulkanRtxConfig::voxelDistanceChunks,
+            s -> !hardwareRenderer(s) && !s.readBooleanOption(id("voxel_distance_auto")),
+            new Identifier[] {id("renderer"), id("voxel_distance_auto")}, Mark.NONE, OptionImpact.HIGH, true, st));
+        rt.addOption(intOpt(builder, "voxel_memory_budget_mib", 256, 64, 1024, 64, unit(" MiB"),
+            VulkanRtxConfig::setVoxelMemoryBudgetMiB, VulkanRtxConfig::voxelMemoryBudgetMiB,
+            s -> !hardwareRenderer(s), new Identifier[] {id("renderer")}, Mark.NONE, OptionImpact.HIGH, false, st));
+        rt.addOption(boolOpt(builder, "voxel_diffuse_bounce", true, VulkanRtxConfig::setVoxelDiffuseBounce,
+            VulkanRtxConfig::voxelDiffuseBounce, s -> !hardwareRenderer(s), new Identifier[] {id("renderer")}, Mark.NONE, OptionImpact.HIGH, false, st));
+        rt.addOption(boolOpt(builder, "voxel_translucent_optics", true, VulkanRtxConfig::setVoxelTranslucentOptics,
+            VulkanRtxConfig::voxelTranslucentOptics, s -> !hardwareRenderer(s), new Identifier[] {id("renderer")}, Mark.NONE, OptionImpact.HIGH, false, st));
         EnumOptionBuilder<RtMode> modeOpt = builder.createEnumOption(modeId, RtMode.class);
         modeOpt.setName(nameOf("rt_mode")).setTooltip(v -> tipOf("rt_mode"))
             .setDefaultValue(RtMode.OFF)
@@ -533,7 +594,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         Function<ConfigState, Boolean> anyRt = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class).isActive();
         Function<ConfigState, Boolean> pathOn = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class) == RtMode.PATH_TRACED;
         Function<ConfigState, Boolean> raysOn = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class) == RtMode.RAY_TRACED;
-        Identifier[] dMode = {id("renderer"), modeId};
+        Identifier[] dMode = rtDependencies(modeId);
         boolean expert = SettingsCatalog.expertUi();
 
         // ---- Path tracing details
@@ -550,7 +611,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setEnabledProvider(pathOn, dMode).setControlHiddenWhenDisabled(false)
             .setBinding(VulkanSodiumConfig::applyPathPresetFromUi, () -> RtSettings.pathPreset)
             .setImpact(OptionImpact.HIGH).setStorageHandler(st);
-        builder.createOptionGroup().addOption(ptPreset);   // alpha: no quality presets on the page (release/final-ui), ids stay
+        pt.addOption(track("pt_preset", ptPreset));
         pt.addOption(intOpt(builder, "path_spp", 2, 1, 8, 1, unit(" rays"),
             v -> RtSettings.pathSpp = v, () -> RtSettings.pathSpp, pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st));
         pt.addOption(intOpt(builder, "path_distance", 384, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16,
@@ -573,7 +634,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         pt.addOption(boolOpt(builder, "dlss_rr_geometric_normals", true, v -> RtSettings.dlssRrGeometricNormals = v,
             () -> RtSettings.dlssRrGeometricNormals,
             s -> anyRt.apply(s) && s.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR,
-            new Identifier[] {id("renderer"), modeId, denId}, Mark.NONE, OptionImpact.LOW, true, st));
+            rtDependencies(modeId, denId), Mark.NONE, OptionImpact.LOW, true, st));
         endGroup(builder, page, pt, "adv_pt");
 
         // ---- Light and atmosphere
@@ -587,13 +648,13 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         Identifier godId = id("atm_godrays");
         Function<ConfigState, Boolean> shaftsOn = s -> s.readEnumOption(godId, RtAtmosphereSettings.GodRays.class) != RtAtmosphereSettings.GodRays.OFF
             && anyRt.apply(s);
-        Identifier[] dShafts = {id("renderer"), modeId, godId};
+        Identifier[] dShafts = rtDependencies(modeId, godId);
         look.addOption(atmSlider(builder, "atm_godrays_strength", "godrays_strength", 100, 0, 200, 5, shaftsOn, dShafts, true, st));
         Identifier bloomId = id("atm_bloom");
         look.addOption(boolOpt(builder, "atm_bloom", true, v -> RtAtmosphereSettings.set("bloom", v ? 1 : 0),
             () -> RtAtmosphereSettings.get("bloom") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(atmSlider(builder, "atm_bloom_strength", "bloom_strength", 25, 0, 200, 5,
-            s -> s.readBooleanOption(bloomId) && anyRt.apply(s), new Identifier[] {id("renderer"), modeId, bloomId}, true, st));
+            s -> s.readBooleanOption(bloomId) && anyRt.apply(s), rtDependencies(modeId, bloomId), true, st));
         look.addOption(boolOpt(builder, "atm_sunglare", true, v -> RtAtmosphereSettings.set("sunglare", v ? 1 : 0),
             () -> RtAtmosphereSettings.get("sunglare") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         Identifier fogId = id("rt_fog");
@@ -604,22 +665,22 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 RtSettings.rtFogDensity = v;
                 RtSettings.fogDensity = RtSettings.clampFloat(v / 100f, 0.0f, 2.0f);
             }, () -> RtSettings.rtFogDensity, s -> s.readBooleanOption(fogId) && anyRt.apply(s),
-            new Identifier[] {id("renderer"), modeId, fogId}, Mark.NONE, OptionImpact.MEDIUM, true, st));
+            rtDependencies(modeId, fogId), Mark.NONE, OptionImpact.MEDIUM, true, st));
         look.addOption(atmSlider(builder, "atm_fog_aerial", "fog_aerial", 100, 0, 200, 5,
-            s -> s.readBooleanOption(fogId) && anyRt.apply(s), new Identifier[] {id("renderer"), modeId, fogId}, true, st));
+            s -> s.readBooleanOption(fogId) && anyRt.apply(s), rtDependencies(modeId, fogId), true, st));
         Identifier waveId = id("waving_foliage");
         Identifier pixelShadowsId = id("rays_pixel_shadows");
         look.addOption(boolOpt(builder, "rays_pixel_shadows", false, v -> RtSettings.raysPixelShadows = v, () -> RtSettings.raysPixelShadows,
             anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         look.addOption(intOpt(builder, "rays_pixel_shadow_size", 1, 1, 16, 1, unit(" texels"), v -> RtSettings.raysPixelShadowSize = v,
             () -> RtSettings.raysPixelShadowSize,
-            s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId), new Identifier[] {modeId, pixelShadowsId}, Mark.RT, OptionImpact.HIGH, false, st));
+            s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId), rtDependencies(modeId, pixelShadowsId), Mark.RT, OptionImpact.HIGH, false, st));
         look.addOption(boolOpt(builder, "waving_foliage", true, v -> RtSettings.wavingFoliage = v, () -> RtSettings.wavingFoliage,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(intOpt(builder, "waving_foliage_strength", 100, 0, 200, 5, percent(),
             v -> RtSettings.wavingFoliageStrength = v, () -> RtSettings.wavingFoliageStrength,
             s -> s.readBooleanOption(waveId) && anyRt.apply(s),
-            new Identifier[] {id("renderer"), modeId, waveId}, Mark.NONE, OptionImpact.LOW, true, st));
+            rtDependencies(modeId, waveId), Mark.NONE, OptionImpact.LOW, true, st));
         endGroup(builder, page, look, "adv_look");
 
         // ---- Image
@@ -698,6 +759,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             diag.addOption(track("compute_debug_view", computeView));
         }
         diag.addOption(boolOpt(builder, "debug_overlay", true, VulkanSodiumConfig::setDebugOverlay, VulkanSodiumConfig::debugOverlayOn,
+            null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
+        diag.addOption(boolOpt(builder, "ui_expert", false, v -> VulkanRtxConfig.uiExpert = v, () -> VulkanRtxConfig.uiExpert,
             null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         if (expert) {
             Identifier viewId = id("rt_debug_view");
@@ -799,7 +862,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         ex.addOption(boolOpt(builder, "rt_distance_auto", true, v -> RtSettings.rtDistanceAuto = v, () -> RtSettings.rtDistanceAuto,
             anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         ex.addOption(intOpt(builder, "rt_distance_chunks", 8, 2, 32, 1, unit(" chunks"), v -> RtSettings.rtDistanceChunks = v,
-            () -> RtSettings.rtDistanceChunks, s -> anyRt.apply(s) && !s.readBooleanOption(distAutoId), new Identifier[] {id("renderer"), modeId, distAutoId},
+            () -> RtSettings.rtDistanceChunks, s -> anyRt.apply(s) && !s.readBooleanOption(distAutoId), rtDependencies(modeId, distAutoId),
             Mark.RT, OptionImpact.MEDIUM, true, st));
         ex.addOption(intOpt(builder, "rt_vram_budget_mb", 2048, 256, 16384, 256, unit(" MB"), v -> RtSettings.vramBudgetMb = v,
             () -> RtSettings.vramBudgetMb, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
@@ -870,6 +933,22 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     }
 
     private static volatile boolean valueRefreshRequested;
+    private static boolean applyingScreenConfig;
+
+    static void applyScreenConfig(net.caffeinemc.mods.sodium.client.config.structure.Config config, Map<String, String> imported) {
+        applyingScreenConfig = true;
+        try {
+            imported.forEach(VulkanRtxConfig::applyKeyValue);
+            config.applyAllOptions();
+            SettingsPolicy.enforce();
+            VulkanRtxConfig.enforceBackendAvailability();
+            afterPresetApplied();
+            VulkanRtxManager.applyResolutionScalingNow();
+            VulkanRtxConfig.save();
+        } finally {
+            applyingScreenConfig = false;
+        }
+    }
 
     /**
      * A preset changed many values behind Sodium's back: the controls keep the values they loaded when the screen was built.
@@ -877,7 +956,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
      * on its next frame, after Sodium's apply loop has finished.
      */
     static void requestValueRefresh() {
-        valueRefreshRequested = true;
+        if (!applyingScreenConfig) valueRefreshRequested = true;
     }
 
     public static boolean consumeValueRefreshRequest() {
