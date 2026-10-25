@@ -37,6 +37,27 @@ public final class VkBarriers {
     }
 
     /**
+     * Compute dispatch -> acceleration structure build: the dispatch wrote the geometry the build reads. Exact stages
+     * (COMPUTE_SHADER WRITE -> ACCELERATION_STRUCTURE_BUILD READ/WRITE); the AS build also writes its result buffer,
+     * so the write access is included on the destination side.
+     */
+    public static void computeToAsBuild(VkCommandBuffer cmd) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            org.lwjgl.vulkan.VkMemoryBarrier2.Buffer b = org.lwjgl.vulkan.VkMemoryBarrier2.calloc(1, stack);
+            b.get(0).sType$Default()
+                .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+                .dstStageMask(org.lwjgl.vulkan.KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR)
+                .dstAccessMask(org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                    | org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+            org.lwjgl.vulkan.VkDependencyInfo dep = org.lwjgl.vulkan.VkDependencyInfo.calloc(stack);
+            dep.sType$Default()
+                .pMemoryBarriers(b);
+            VK13.vkCmdPipelineBarrier2(cmd, dep);
+        }
+    }
+
+    /**
      * Compute dispatch -> compute dispatch: the previous dispatch's storage writes become visible to the next
      * dispatch's storage reads/writes and sampled reads. Exact stages (COMPUTE_SHADER WRITE -> COMPUTE_SHADER
      * READ|WRITE) instead of ALL_COMMANDS -> ALL_COMMANDS: both endpoints are compute, so a full-scope barrier only

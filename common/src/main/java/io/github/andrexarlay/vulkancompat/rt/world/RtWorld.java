@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
 import io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry;
 import org.lwjgl.PointerBuffer;
@@ -147,6 +148,8 @@ public final class RtWorld {
     private final RtArena blasArena;
     private final RtMemory.Buf indexBuf;
     private final RtMemory.Buf staging;
+    /** GPU dequantization of the raw Sodium capture into the geometry arena (module 2). */
+    private final io.github.andrexarlay.vulkancompat.rt.sodium.SodiumDequantize dequantize;
     private final RtMemory.Buf scratch;
     private final RtMemory.Buf table;
     private final RtMemory.Buf instances;
@@ -199,13 +202,14 @@ public final class RtWorld {
         this.indexBuf = mem.createBuffer("quad_index", 6L * 4L * MAX_QUADS_PER_SECTION,
             VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | RtMemory.USAGE_AS_INPUT, false);
         this.staging = mem.createBuffer("staging", STAGING_SEGMENT_BYTES * STAGING_SEGMENTS,
-            VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+            VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
         this.table = mem.createBuffer("section_table", (long) MAX_SLOTS * TABLE_ENTRY_BYTES,
             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
         this.instances = mem.createBuffer("instances", (long) INSTANCE_BYTES * RtConfig.MAX_INSTANCES * STAGING_SEGMENTS,
             RtMemory.USAGE_AS_INPUT, true);
         this.entityBlas = new RtEntityBlas(device, mem);
         this.omm = OpacityMicromapCache.create(mem);
+        this.dequantize = new io.github.andrexarlay.vulkancompat.rt.sodium.SodiumDequantize(device);
 
         long tlasSize;
         long tlasScratch;
@@ -382,22 +386,59 @@ public final class RtWorld {
     private int lastTaggedQuads;
 
     /**
-     * Light words of the section with {@link #VEGETATION_BIT} (plus {@link #LEAF_CUBE_BIT} on a full leaf cube) set on the
-     * cutout quads whose block is a plant or a leaf, or null when nothing is tagged (the caller then stages
-     * {@code d.light}). The shared scratch array is safe because the caller copies the result into the staging buffer
-     * immediately; {@link #lastTaggedQuads} is only valid until the next call.
+     * Per-quad vegetation OR bits for the GPU dequantize dispatch (the shader merges them into the staged light
+     * words): {@code out[q] = VEGETATION_BIT (| LEAF_CUBE_BIT)} for the cutout quads whose block is a plant or a
+     * leaf, or null when nothing is tagged. Same classification loop as {@link #tagVegetation}, which stays the
+     * word-based contract used by the tests; {@link #lastTaggedQuads} is only valid until the next call.
      */
-    int[] taggedLight(DecodedSection d) {
+    int[] quadFlags(DecodedSection d) {
         lastTaggedQuads = 0;
         if (blockLookup == null || d.quadsInPass(DecodedSection.PASS_CUTOUT) == 0) {
             return null;
         }
-        int words = d.totalQuads() * 4;
-        if (taggedLightScratch.length < words) {
-            taggedLightScratch = new int[words];
+        int quads = d.totalQuads();
+        if (taggedLightScratch.length < quads) {
+            taggedLightScratch = new int[quads];
         }
-        lastTaggedQuads = tagVegetation(d, taggedLightScratch, blockLookup);
-        return lastTaggedQuads > 0 ? taggedLightScratch : null;
+        java.util.Arrays.fill(taggedLightScratch, 0, quads, 0);
+        int cutout = d.quadsInPass(DecodedSection.PASS_CUTOUT);
+        int first = d.passQuadStart(DecodedSection.PASS_CUTOUT);
+        int tagged = 0;
+        // The faces of one block are usually adjacent in the buffer, and a level lookup is not free: ask once per cell.
+        int lastX = Integer.MIN_VALUE;
+        int lastY = 0;
+        int lastZ = 0;
+        int kind = FOLIAGE_NONE;
+        for (int q = first; q < first + cutout; q++) {
+            int p = q * 12;
+            int n = q * 3;
+            float nx = d.normals[n];
+            float ny = d.normals[n + 1];
+            float nz = d.normals[n + 2];
+            float cx = (d.positions[p] + d.positions[p + 3] + d.positions[p + 6] + d.positions[p + 9]) * 0.25f;
+            float cy = (d.positions[p + 1] + d.positions[p + 4] + d.positions[p + 7] + d.positions[p + 10]) * 0.25f;
+            float cz = (d.positions[p + 2] + d.positions[p + 5] + d.positions[p + 8] + d.positions[p + 11]) * 0.25f;
+            int bx = (int) Math.floor(d.sectionX * 16 + cx - nx * 0.01f);
+            int by = (int) Math.floor(d.sectionY * 16 + cy - ny * 0.01f);
+            int bz = (int) Math.floor(d.sectionZ * 16 + cz - nz * 0.01f);
+            if (bx != lastX || by != lastY || bz != lastZ) {
+                kind = blockLookup.foliageKind(bx, by, bz);
+                lastX = bx;
+                lastY = by;
+                lastZ = bz;
+            }
+            if (kind == FOLIAGE_NONE) {
+                continue;
+            }
+            int bits = VEGETATION_BIT;
+            if (kind == FOLIAGE_CUBE && axisAligned(nx, ny, nz)) {
+                bits |= LEAF_CUBE_BIT;
+            }
+            taggedLightScratch[q] = bits;
+            tagged++;
+        }
+        lastTaggedQuads = tagged;
+        return tagged > 0 ? taggedLightScratch : null;
     }
 
     /**
@@ -470,14 +511,20 @@ public final class RtWorld {
      * tags of the previous build.
      */
     private long stagedLightHash(DecodedSection d) {
-        int[] tagged = taggedLight(d);
-        return lightHash(tagged != null ? tagged : d.light, d.totalQuads() * 4);
+        int[] flags = quadFlags(d);
+        return lightHash(d.light, flags, d.totalQuads() * 4);
     }
 
     private static long lightHash(int[] words, int count) {
+        return lightHash(words, null, count);
+    }
+
+    /** Hash of the words the GPU will stage: {@code light[i] | flags[i >> 2]} (flags null = untagged). */
+    private static long lightHash(int[] words, int[] flags, int count) {
         long h = 0xcbf29ce484222325L;
         for (int i = 0; i < count; i++) {
-            h = (h ^ (words[i] & 0xFFFFFFFFL)) * 0x100000001b3L;
+            int w = words[i] | (flags != null ? flags[i >> 2] : 0);
+            h = (h ^ (w & 0xFFFFFFFFL)) * 0x100000001b3L;
         }
         return h;
     }
@@ -821,7 +868,12 @@ public final class RtWorld {
         if (scratchCursor + scratchNeed > scratch.size) {
             return null;
         }
-        long stagingOffset = stage(geomBytes);
+        // Staged: the raw Sodium capture (80 B/quad) + per-quad foliage flags (4 B/quad when tagged) + the micromap
+        // index tail. The GPU dequantize dispatch (sodium_dequantize.comp) writes the [positions][uvs][colours][light]
+        // arena block from them; only the micromap tail still needs a transfer copy.
+        int[] tagged = quadFlags(d);
+        long stageBytes = 80L * quads + (tagged != null ? 4L * quads : 0L) + (ommIdx != null ? 8L * cutoutQuads : 0L);
+        long stagingOffset = stage(stageBytes);
         if (stagingOffset < 0) {
             return null;
         }
@@ -832,24 +884,32 @@ public final class RtWorld {
         long blasHandle = 0L;
         BuildItem item = new BuildItem();
         try {
-            // Stage [positions][uvs][colours][light] (+ the micromap index buffer of the cutout pass) and copy to the arena block.
             long tc = RtTimings.start();
-            FloatBuffer fb = MemoryUtil.memFloatBuffer(staging.mapped + stagingOffset, quads * 20);
-            fb.put(d.positions, 0, quads * 12);
-            fb.put(d.uvs, 0, quads * 8);
-            java.nio.IntBuffer ib = MemoryUtil.memIntBuffer(staging.mapped + stagingOffset + 80L * quads, quads * 8);
-            ib.put(d.colors, 0, quads * 4);
-            int[] tagged = taggedLight(d);
-            ib.put(tagged != null ? tagged : d.light, 0, quads * 4);
-            long tagHash = lightHash(tagged != null ? tagged : d.light, quads * 4);
+            java.nio.IntBuffer sb = MemoryUtil.memIntBuffer(staging.mapped + stagingOffset, quads * 20);
+            sb.put(d.rawWords, 0, quads * 20);
+            long flagsOffset = 0L;
+            long flagsAddr = 0L;
+            if (tagged != null) {
+                flagsOffset = stagingOffset + 80L * quads;
+                MemoryUtil.memIntBuffer(staging.mapped + flagsOffset, quads).put(tagged);
+                flagsAddr = staging.address + flagsOffset;
+            }
+            long tagHash = lightHash(d.light, tagged, quads * 4);
             if (lastTaggedQuads > 0) {
                 vegetationQuads += lastTaggedQuads;
                 vegetationSections++;
             }
+            long ommOffset = stagingOffset + 84L * quads;
             if (ommIdx != null) {
-                MemoryUtil.memIntBuffer(staging.mapped + stagingOffset + 112L * quads, ommIdx.length).put(ommIdx);
+                MemoryUtil.memIntBuffer(staging.mapped + ommOffset, ommIdx.length).put(ommIdx);
             }
-            copyBuffer(cmd, staging.handle, stagingOffset, geomBlock.buffer(), geomBlock.offset, geomBytes);
+            // The dispatch reads the raw words straight from the mapped staging via its device address (the segment is
+            // retired three frames later, the dispatch is recorded in this frame's command buffer) and writes the arena
+            // block; a compute-to-AS-build barrier in recordBlasBuilds orders it against the reads of the build.
+            dequantize.dispatch(cmd, staging.address + stagingOffset, geomBlock.address(), flagsAddr, quads);
+            if (ommIdx != null) {
+                copyBuffer(cmd, staging.handle, ommOffset, geomBlock.buffer(), geomBlock.offset + 112L * quads, 8L * cutoutQuads);
+            }
             RtTimings.stop(RtTimings.Phase.STAGE_COPY, tc);
 
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -986,6 +1046,8 @@ public final class RtWorld {
                 infos.get(i).scratchData().deviceAddress(b.scratchAddress);
                 ranges.put(i, b.ranges.address());
             }
+            // The dequantize dispatches of this frame's staging copies wrote the geometry the builds read.
+            VkBarriers.computeToAsBuild(cmd);
             KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR(cmd, infos, ranges);
         } finally {
             infos.free();
@@ -1084,6 +1146,7 @@ public final class RtWorld {
 
     /** Waits for the GPU and releases everything. Safe to call once; the object is unusable afterwards. */
     public void destroy() {
+        dequantize.destroy();
         VK10.vkDeviceWaitIdle(device);
         for (SectionGpu g : gpu.values()) {
             deferred.add(new Deferred(frameIndex, g));
