@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1-alpha.14 (development, unreleased)
+## Unreleased
 
 * One jar per loader is now the whole product: the combined artifact (host + nested Voxel provider)
   is the default build task for both loaders, so an instance no longer needs a second compute jar.
