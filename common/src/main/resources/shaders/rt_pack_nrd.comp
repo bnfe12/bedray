@@ -137,7 +137,16 @@ void main() {
     if (pc.denoiser == 2u) {
         // DLSS-RR: one raw HDR colour and the two albedo guides, RR demodulates internally; its motion comes from the
         // velocity pass, so IN_MV is left untouched here.
-        imageStore(nrdInDiffuse, p, vec4(clamp(radiance + specRadiance, 0.0, FP16_MAX), 1.0));
+        //
+        // The analytic direct channel belongs to that one colour. The emission of the first vertex (the visible face of a
+        // torch, glowstone, lava), the first camera-facing interface mirror, the noise-free GGX sun highlight and the fog
+        // in-scatter of rt_rays.comp all land in gbDirect and are subtracted from gbDiffuse there, and compose adds nothing
+        // back for RR: leaving it out made every glowing block light the room while its own face stayed unlit.
+        vec3 direct = imageLoad(gbDirect, p).rgb;
+        if (invalid3(direct)) {
+            direct = vec3(0.0);
+        }
+        imageStore(nrdInDiffuse, p, vec4(clamp(radiance + specRadiance + direct, 0.0, FP16_MAX), 1.0));
         imageStore(nrdInSpecular, p, vec4(clamp(imageLoad(gbSpecAlbedo, p).rgb, 0.0, 1.0), 1.0));
         return;
     }
@@ -176,7 +185,7 @@ void main() {
     vec4 den = imageLoad(nrdOutDiffuse, p);
     vec3 color;
     if (pc.denoiser == 2u) {
-        color = max(den.xyz, 0.0);                   // RR output is the final radiance: direct light is already in its input
+        color = max(den.xyz, 0.0);                   // RR output is the final radiance: direct light was folded into its input
     } else {
         vec4 denSpec = imageLoad(nrdOutSpecular, p);
         vec3 ambient = pc.denoiser == 0u ? yCoCgToLinear(den.xyz) : max(den.xyz, 0.0);

@@ -612,27 +612,20 @@ vec3 leafShadowOrigin(Surface s, vec3 L) {
     return s.leafCube && !s.backFace ? s.pos - s.ng * 1.01 : s.pos + L * 0.01;
 }
 
-// Display colour of a glowing texel: texel colour x emission mask, hue preserving. The brightest channel goes through a soft
-// shoulder (max 0.96, slope ~2 at the dark end), the other channels are scaled with it, so a glowstone gradient, a flame or a
-// lamp keeps the colours of its own pixels instead of clipping to white; dark pixels (mask 0) stay dark.
-vec3 emissionDisplay(vec3 texel, float emission) {
-    vec3 c = texel * emission;
-    float m = max(c.r, max(c.g, c.b));
-    if (m <= 1.0e-4) {
-        return vec3(0.0);
-    }
-    float shoulder = 0.96 * (1.0 - exp(-2.2 * m));
-    return c * (shoulder / m);
-}
-
 vec3 emitterLightColor(vec3 tex);
 
-// Radiance emitted by a surface (only with emissive lights enabled and baked materials). Built in display space and
-// converted with the inverse of the tone mapping (like the sky), so the camera sees emissionDisplay() whatever the exposure.
+// Radiance emitted by a surface (only with emissive lights enabled and baked materials). Scene-linear, and built with the same
+// expression the emitter list casts its light with (rt_common_emitters.glsl, leNoTrans = texel * emission * EMISSIVE_GAIN *
+// EMISSIVE_FLUX_GAIN): the face of a glowing block is exactly as bright as the light it gives off, and the tone map (peak
+// channel, hue preserving) decides how far it saturates into white. The texel colour carries the pattern of the sprite, the
+// emission mask its per-pixel strength. A display-anchored value (the inverse tone map of a capped display colour, the old
+// emissionDisplay) could neither follow the exposure nor reach the bloom threshold, so at night a torch was dimmer than the
+// light it cast and never glowed.
 vec3 emitted(Surface s) {
     if (!hasFlag(FLAG_EMISSIVE) || s.emission <= 0.0) {
         return vec3(0.0);
     }
+    float flux = EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN;
     if (s.isLava) {
         float t = float(pc.frame) * 0.06;
         vec3 p = s.worldPos;
@@ -643,17 +636,16 @@ vec3 emitted(Surface s) {
         float lum = dot(s.albedoTex, vec3(0.299, 0.587, 0.114));
         float texelHotspot = 0.8 + 1.4 * pow(clamp(lum, 0.0, 1.0), 1.6);
         vec3 fieryColor = mix(s.albedoTex * vec3(1.35, 1.08, 0.65), vec3(1.0, 0.86, 0.36), pow(clamp(lum, 0.0, 1.0), 2.0) * 0.65);
-        return displayToRadiance(emissionDisplay(fieryColor, 1.15 * pulse * texelHotspot * max(s.emission, 1.0)));
+        return fieryColor * (1.15 * pulse * texelHotspot * max(s.emission, 1.0) * flux);
     }
     // Redstone wire emits saturated red light even if the atlas texture is greyscale
     if (s.isRedstone && s.emission > 0.01) {
         // per pixel: the greyscale dust sprite modulates the glow (bright centre pixels glow more), the level follows signal / 15
         float texLum = clamp(dot(s.albedoTex, vec3(0.299, 0.587, 0.114)) * 1.5, 0.0, 1.0);
         vec3 redColor = vec3(1.0, 0.04, 0.02) * (0.8 + 0.4 * s.emission) * mix(0.6, 1.0, texLum);
-        return displayToRadiance(emissionDisplay(redColor, s.emission * 1.2));
+        return redColor * (s.emission * 1.2 * flux);
     }
-    vec3 col = emitterLightColor(s.albedoTex);
-    return displayToRadiance(emissionDisplay(col, s.emission));
+    return emitterLightColor(s.albedoTex) * (s.emission * flux);
 }
 
 const uint NEE_CANDIDATES = 8u;

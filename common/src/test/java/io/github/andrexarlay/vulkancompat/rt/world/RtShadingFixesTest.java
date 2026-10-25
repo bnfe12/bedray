@@ -62,6 +62,11 @@ public class RtShadingFixesTest {
         runBiomeAmbientChecks();
     }
 
+    @Test
+    public void testEmissiveSurfacesShowTheirLight() {
+        runEmissiveSurfaceChecks();
+    }
+
     public static void runAll() {
         RtShadingFixesTest test = new RtShadingFixesTest();
         test.testReflectionEnergySplit();
@@ -73,6 +78,40 @@ public class RtShadingFixesTest {
         test.testDenoisedSpecularContract();
         test.testRoughSurfaceEnergySplit();
         test.testBiomeAmbientVariation();
+        test.testEmissiveSurfacesShowTheirLight();
+    }
+
+    /**
+     * A glowing block must LOOK like it emits: its visible face carries the same scene-linear radiance the emitter list casts
+     * into the room, and that radiance survives the denoiser input. Both halves were broken (owner report 2026-10-25 "blocks
+     * give light but do not look like the texture emits"): the emission was anchored to a capped display colour (dimmer than
+     * the light it casts, and below the bloom threshold), and the DLSS-RR pack never read the channel it is written to.
+     */
+    private static void runEmissiveSurfaceChecks() {
+        String surface = RtWorldChecks.rtCommon();
+        int emittedStart = surface.indexOf("vec3 emitted(Surface s) {");
+        int emittedEnd = surface.indexOf("\n}", emittedStart);
+        assertTrue(emittedStart > 0 && emittedEnd > emittedStart, "emitted() is declared in the common modules");
+        String body = surface.substring(emittedStart, emittedEnd);
+
+        assertTrue(surface.contains("float flux = EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN;"),
+            "the visible emission uses the same gain as the emitter list");
+        assertTrue(body.contains("return emitterLightColor(s.albedoTex) * (s.emission * flux);"),
+            "a glowing texel radiates its classified colour at its own emission strength");
+        assertTrue(body.contains("return redColor * (s.emission * 1.2 * flux);"), "redstone keeps its saturated red glow");
+        assertTrue(body.contains("return fieryColor * (1.15 * pulse * texelHotspot * max(s.emission, 1.0) * flux);"),
+            "lava keeps its pulse and hotspot");
+        assertFalse(body.contains("displayToRadiance"),
+            "the emission is scene-linear: a display-anchored value cannot follow the exposure nor reach the bloom threshold");
+        assertFalse(surface.contains("vec3 emissionDisplay("), "the capped display helper is gone, not kept as a second path");
+
+        assertTrue(surface.contains("leNoTrans = texRgb * chosenEm * EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN;"),
+            "the cast light and the visible face are the same expression");
+
+        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+        assertTrue(path.contains("res.direct0 += e;"), "the first-vertex emission goes to the analytic direct channel");
+        assertTrue(path.contains("gbRestSum += r.radiance - r.direct0;"),
+            "and is subtracted from the denoised diffuse channel, so nothing is counted twice");
     }
 
     private static float fresnelSchlick(float f0, float cosTheta) {
@@ -462,8 +501,13 @@ public class RtShadingFixesTest {
             "RELAX gets a real specular lane");
         assertTrue(pack.contains("if (pc.denoiser != 2u) {") && pack.contains("imageStore(nrdInMotion, p, vec4(0.0));"),
             "DLSS-RR leaves IN_MV to the velocity pass");
-        assertTrue(pack.contains("vec4(clamp(radiance + specRadiance, 0.0, FP16_MAX), 1.0)"),
-            "DLSS-RR receives one combined raw colour");
+        // The analytic direct channel carries the first-vertex emission (the visible face of a torch, glowstone, lava), the
+        // first camera-facing interface mirror, the GGX sun highlight and the fog in-scatter, and is subtracted from
+        // gbDiffuse in the ray shaders. Without it in the RR input those pixels were lit by their own light and stayed dark.
+        assertTrue(pack.contains("vec3 direct = imageLoad(gbDirect, p).rgb;")
+                && pack.contains("vec4(clamp(radiance + specRadiance + direct, 0.0, FP16_MAX), 1.0)"),
+            "DLSS-RR receives one combined raw colour, direct channel included (emission is visible, not only cast)");
+        assertTrue(pack.contains("if (invalid3(direct)) {"), "a non-finite direct term is dropped before the denoiser history");
 
         // Compose: RR output is final; NRD is remodulated and the specular lane added.
         assertTrue(pack.contains("color = max(den.xyz, 0.0);"), "RR compose adds no direct light twice");
