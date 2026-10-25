@@ -45,10 +45,18 @@ final class ComputeWorldStream {
         discoveryShell = discoveryY = 0; discoveryColumn = -1; discoveryKey = null;
         verticalCenter = Integer.MIN_VALUE; retryAfter.clear();
     }
-    void changed(int x, int y, int z) {
+    boolean changed(int x, int y, int z) {
         SectionKey key = new SectionKey(x, y, z);
-        if (bounds == null || !bounds.contains(key)) return;
-        if (dirtySet.size() < DIRTY_LIMIT && dirtySet.add(key)) dirty.addLast(key);
+        if (bounds == null || !bounds.contains(key) || dirtySet.contains(key)) return true;
+        if (dirtySet.size() >= DIRTY_LIMIT) return false;
+        dirtySet.add(key); dirty.addLast(key);
+        return true;
+    }
+    /** Revalidate incrementally after notification overflow without discarding the visible GPU scene. */
+    void refresh() {
+        recent.clear(); cacheBytes = 0; dirty.clear(); dirtySet.clear(); pending = null;
+        captured.clear(); capturedCount = 0;
+        discoveryShell = discoveryY = 0; discoveryColumn = -1; discoveryKey = null;
     }
     void removed(int x, int y, int z) {
         SectionKey key = new SectionKey(x, y, z);
