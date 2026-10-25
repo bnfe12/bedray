@@ -415,6 +415,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             if (camera != null) camera.writePushConstants(stack.calloc(112),originX(origin),originY(origin),originZ(origin));
         }
         // Reprojection inputs are computed before recording; a singular previous matrix only disables history.
+        if (raster != null) history.environment(lighting);
         if (raster != null && streamed == null) history.prepare(camera, origin, !updates.isEmpty(),
             GraphicsBackendRegistry.debugView() == GraphicsBackendRegistry.DebugView.SHADED);
         if (!updates.isEmpty() || atlas != null) {

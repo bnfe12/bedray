@@ -1,6 +1,7 @@
 package io.github.andrexarlay.bedray.compute;
 
 import io.github.andrexarlay.bedray.api.v1.CameraSnapshot;
+import io.github.andrexarlay.bedray.api.v1.LightingFrame;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
 
 import java.nio.ByteBuffer;
@@ -13,11 +14,13 @@ import java.util.Arrays;
  * reprojects every surface point and accepts history only where distance and normal agree.
  *
  * The cap bounds how long stale radiance can persist: 64 frames while the camera and scene are
- * unchanged, 8 frames on any frame with camera motion or a scene upload (block, light or material
- * change). These are explicit accumulation-window choices, not physical constants.
+ * unchanged, 32 during camera motion and 16 after scene/lighting changes. Distant streaming must not
+ * hold every visible pixel to the former eight-frame window. Depth/normal rejection still decides
+ * whether a particular history sample can be reused; these caps are response/noise tradeoffs.
  */
 final class TemporalHistory {
-    static final int STATIC_CAP = 64, CHANGED_CAP = 8;
+    static final int STATIC_CAP = 64, CHANGED_CAP = 16, MOTION_CAP = 32;
+    private static final int LIGHTING_COOLDOWN = 8;
 
     private float[] previousInverse;
     private double previousX, previousY, previousZ;
@@ -33,6 +36,30 @@ final class TemporalHistory {
     private int cap;
     private long frameCounter, steadyFrames;
     private String lastReset = "first frame";
+    private float[] lightingAnchor;
+    private int lightingCooldown;
+
+    /** Compare against an anchor, not the previous frame: gradual daylight is allowed to accumulate,
+     * while weather/time/exposure changes shorten history for several frames. Large discontinuities
+     * reject the old history entirely. No images are blurred and no additional rays are required. */
+    void environment(LightingFrame lighting) {
+        if (lighting == null) return;
+        if (lightingAnchor == null) {
+            lightingAnchor = new float[LightingFrame.FLOAT_COUNT];
+            for (int i = 0; i < lightingAnchor.length; i++) lightingAnchor[i] = lighting.component(i);
+            return;
+        }
+        float difference = 0;
+        for (int i = 0; i < lightingAnchor.length; i++)
+            difference = Math.max(difference, Math.abs(lighting.component(i) - lightingAnchor[i]));
+        if (difference < 0.025f) return;
+        for (int i = 0; i < lightingAnchor.length; i++) lightingAnchor[i] = lighting.component(i);
+        lightingCooldown = LIGHTING_COOLDOWN;
+        if (difference >= 0.25f) {
+            previousInverse = null;
+            lastReset = "lighting discontinuity";
+        }
+    }
 
     void invalidate() {
         previousInverse = null;
@@ -76,7 +103,7 @@ final class TemporalHistory {
         valid = true;
         motion = !Arrays.equals(previousInverse, inverse) || previousX != pendingX || previousY != pendingY
             || previousZ != pendingZ || !Arrays.equals(previousOffset, pendingOffset);
-        cap = motion || sceneChanged ? CHANGED_CAP : STATIC_CAP;
+        cap = sceneChanged || lightingCooldown > 0 ? CHANGED_CAP : motion ? MOTION_CAP : STATIC_CAP;
         steadyFrames = cap == STATIC_CAP ? steadyFrames + 1 : 0;
     }
 
@@ -99,6 +126,7 @@ final class TemporalHistory {
         }
         parity = !parity;
         frameCounter++;
+        if (lightingCooldown > 0) lightingCooldown--;
     }
 
     boolean parity() { return parity; }
@@ -108,7 +136,8 @@ final class TemporalHistory {
         if (!valid) return "reset (" + lastReset + ")";
         return cap == STATIC_CAP
             ? "steady, window " + Math.min(steadyFrames + 1, STATIC_CAP) + "/" + STATIC_CAP + " frames"
-            : (motion ? "moving" : "scene update") + ", window " + CHANGED_CAP + " frames";
+            : (lightingCooldown > 0 ? "lighting update" : motion ? "moving" : "scene update")
+                + ", window " + cap + " frames";
     }
 
     /** Column-major 4x4 inverse in double precision; false for a singular or nonfinite result. */
