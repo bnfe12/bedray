@@ -222,8 +222,14 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
             // cost a validation ray each and change nothing visible.
             bool cellShadow = b == 0u && pixelShadowApplies(s, med.inside);
             ivec2 rotation = sunShadowRotation(s, cellShadow, p, false);
-            // first hit: low-discrepancy sample of the sun disk; deeper vertices keep the random cone sample
-            vec3 L = b == 0u ? sunShadowDirectionAt(pc.keyDir.xyz, sunRadius(), rotation, pc.frame, gSunSub, gSunSpp) : coneAround(pc.keyDir.xyz, sunRadius(), seed);
+            // first hit: low-discrepancy sample of the sun disk; deeper vertices keep the random cone sample, except on a leaf.
+            // A deeper plant vertex has the same 0.6-per-layer staircase, so a cone direction re-rolled every frame flips its
+            // texels exactly like the direct term did: it keeps one disk direction of its own block instead (sunSampleFrame).
+            vec3 L = b == 0u
+                ? sunShadowDirectionAt(pc.keyDir.xyz, sunRadius(), rotation, sunSampleFrame(s.isFoliage, pc.frame), gSunSub, gSunSpp)
+                : s.isFoliage
+                    ? sunShadowDirectionAt(pc.keyDir.xyz, sunRadius(), sunShadowRotation(s, false, p, false), 0u, 0u, 1u)
+                    : coneAround(pc.keyDir.xyz, sunRadius(), seed);
             vec3 Ls = L;
             vec3 tr = vec3(0.0);
             bool lit = false;

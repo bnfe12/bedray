@@ -43,6 +43,12 @@ final class SettingsDraft {
     }
     private static final Set<String> SESSION = Set.of("renderer_status", "compute_scene", "compute_debug_view", "debug_overlay",
         "rt_debug_view", "frame_generation_status", "ui_expert");
+    // What a quality profile decides. Only these rows go read-only with Fast/Beautiful; the profile says how much tracing
+    // work a frame may do, and has no business freezing the upscaler, frame generation or the lighting knobs next to it
+    // (picking Fast used to lock the whole page, so the upscaler could not be configured at all).
+    private static final Set<String> VOXEL_PROFILE_OWNED = Set.of(
+        "voxel_distance_auto", "voxel_memory_budget_mib", "voxel_diffuse_bounce", "voxel_translucent_optics");
+    private static final Set<String> PATH_PROFILE_OWNED = Set.of("path_spp", "path_bounces", "path_distance");
     private static final Set<String> PRESET_SKIPPED = Set.of("ui_expert", "experimental_rays", "rt_show_advanced", "rt_show_expert",
         "enable_hardware_ray_tracing", "rt_preset", "pt_preset");
     final Config config = VulkanSodiumConfig.createScreenConfig();
@@ -66,9 +72,25 @@ final class SettingsDraft {
     boolean changed() { return !imported.isEmpty() || config.anyOptionChanged(); }
     boolean editable(Entry e) {
         if (!hasQualityProfile()) return true;
-        if (e.path().equals("renderer") || e.path().equals("rt_mode") || e.path().endsWith("quality_profile") || e.category() == Category.SYSTEM) return true;
-        String profile = voxel() ? "voxel_quality_profile" : "path_quality_profile";
-        return config.readEnumOption(id(profile), VulkanSodiumConfig.QualityProfile.class) == VulkanSodiumConfig.QualityProfile.CUSTOM;
+        boolean voxel = voxel();
+        VulkanSodiumConfig.QualityProfile active = config.readEnumOption(
+            id(voxel ? "voxel_quality_profile" : "path_quality_profile"), VulkanSodiumConfig.QualityProfile.class);
+        return editable(voxel, active, e.path());
+    }
+    /** The rule itself: a row is editable unless the active profile is the thing that sets it. */
+    static boolean editable(boolean voxel, VulkanSodiumConfig.QualityProfile active, String path) {
+        return !profileOwned(voxel, path) || active == VulkanSodiumConfig.QualityProfile.CUSTOM;
+    }
+    /** True for the rows the active quality profile sets, and only those. */
+    boolean profileOwned(String path) {
+        return profileOwned(voxel(), path);
+    }
+    static boolean profileOwned(boolean voxel, String path) {
+        return (voxel ? VOXEL_PROFILE_OWNED : PATH_PROFILE_OWNED).contains(path);
+    }
+    /** The owned rows as a list, so a test can check every member against the catalog. */
+    static Set<String> ownedPaths(boolean voxel) {
+        return voxel ? VOXEL_PROFILE_OWNED : PATH_PROFILE_OWNED;
     }
     @SuppressWarnings({"rawtypes", "unchecked"})
     void choose(Entry entry, Enum<?> value) {
@@ -81,7 +103,6 @@ final class SettingsDraft {
             stage("voxel_memory_budget_mib", fast ? 128 : 256);
             stage("voxel_diffuse_bounce", !fast);
             stage("voxel_translucent_optics", !fast);
-            stage("quality_preset", fast ? VulkanRtxConfig.QualityPreset.BALANCED : VulkanRtxConfig.QualityPreset.NATIVE);
         } else {
             stage("path_spp", fast ? 1 : 2);
             stage("path_bounces", fast ? 2 : 4);

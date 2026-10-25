@@ -524,6 +524,14 @@ vec3 shadowLayerTransmittance(Surface s, vec3 d) {
     return (1.0 - s.f0) * pow(c, vec3(power));
 }
 
+// How many foliage layers one shadow ray filters before it stops fetching surfaces. A leaf transmits ~60 %, so six faces
+// leave 4.7 % of the sun and every further card only moves single digits of a percent. The cap matters because a leaf filter,
+// unlike an opaque cutout texel, does not end the ray: a full canopy (a leaf cube alone contributes two faces, entry and
+// exit) stacks layers with no limit, and each one is a complete fetchSurface (atlas, normal map, material, foliage tag)
+// inside the hottest ray of the frame. Past the cap the walk keeps going without the fetch and folds the layer in as a
+// neutral leaf, so a blocker behind the canopy still ends the ray and the product stays order independent.
+const uint LEAF_LAYER_LIMIT = 6u;
+
 // RGB transmittance along a shadow ray in ONE traversal (was: a visibility ray plus up to 8 closest-hit walks, one traversal per
 // glass face). Every non-opaque candidate triangle is classified by candidateAccepted(skip = true): an opaque one (solid, cutout
 // texel >= 0.99, entity) blocks the light and ends the query; a filter (translucent pass, glass / water / ice texel) is fetched
@@ -536,6 +544,7 @@ vec3 traceTransmittance(vec3 origin, vec3 d, float tmax) {
     rayQueryEXT sq;
     rayQueryInitializeEXT(sq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, 0.001, d, tmax);
     vec3 T = vec3(1.0);
+    uint leafLayers = 0u;
     while (rayQueryProceedEXT(sq)) {
         if (rayQueryGetIntersectionTypeEXT(sq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
             continue;
@@ -552,6 +561,17 @@ vec3 traceTransmittance(vec3 origin, vec3 d, float tmax) {
         if (!gSawTranslucent) {
             continue;   // a hole of a cutout texel
         }
+        if (leafLayers >= LEAF_LAYER_LIMIT) {
+            // Past the cap the walk still visits every candidate, so a blocker behind the canopy ends the ray exactly as
+            // before, but it no longer pays a surface fetch for a layer whose hue cannot be seen at this transmittance: the
+            // remaining 4.7 % of the sun is folded in with the neutral leaf factor. A pane or a water surface here gets the
+            // same neutral factor instead of Beer-Lambert, which is an error of at most a couple of percent of the sun.
+            T *= 0.60;
+            if (max(T.r, max(T.g, T.b)) < 0.001) {
+                return vec3(0.0);
+            }
+            continue;
+        }
         Surface s;
         if (isEntityHit(customIndex)) {
             fetchEntitySurface(customIndex, geom, prim, bary, rayQueryGetIntersectionTEXT(sq, false), origin, d, s);
@@ -564,6 +584,7 @@ vec3 traceTransmittance(vec3 origin, vec3 d, float tmax) {
             // The old opaque cutout made a grass tuft cast hard black texel squares on snow and let no sun under a tree.
             vec3 hue = s.albedoLit / max(max(s.albedoLit.r, max(s.albedoLit.g, s.albedoLit.b)), 1.0e-3);
             T *= 0.60 * mix(vec3(1.0), hue, 0.45);
+            leafLayers++;
         } else {
             T *= shadowLayerTransmittance(s, d);
         }

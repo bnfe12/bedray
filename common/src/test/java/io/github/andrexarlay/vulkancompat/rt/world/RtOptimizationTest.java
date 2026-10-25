@@ -48,6 +48,34 @@ public class RtOptimizationTest {
     }
 
     @Test
+    public void testLeafFilterWalkIsBounded() {
+        String surface = RtShaderCompiler.loadSource("/shaders/rt_common_surface.glsl");
+        assertNotNull(surface, "rt_common_surface.glsl missing");
+        assertTrue(surface.contains("const uint LEAF_LAYER_LIMIT = 6u;"),
+            "a leaf filter does not end a shadow ray, so one ray crossing a canopy needs a bound on the layers it shades");
+        int fn = surface.indexOf("vec3 traceTransmittance(vec3 origin, vec3 d, float tmax)");
+        assertTrue(fn > 0, "traceTransmittance moved");
+        int end = surface.indexOf("\n}", fn);
+        String body = surface.substring(fn, end < 0 ? surface.length() : end).replace("\r\n", "\n");
+        assertEquals(3, body.split("leafLayers", -1).length - 1,
+            "the counter is declared once, advanced in the foliage branch and read by the cap");
+        String cap = "if (leafLayers >= LEAF_LAYER_LIMIT) {";
+        assertTrue(body.contains(cap), "the cap is missing: a canopy ray pays a fetchSurface per layer with no limit");
+        assertTrue(body.indexOf(cap) > body.indexOf("candidateAccepted("),
+            "the blocker test has to run for every candidate, including those past the cap");
+        String capped = body.substring(body.indexOf(cap) + cap.length(), body.indexOf("Surface s;"));
+        // The cap must not return early: candidates behind it are still visited, so an opaque blocker ends the ray and the
+        // product stays order independent. Returning the partial product leaked up to 4.7 % of the sun through geometry
+        // that stands behind the canopy.
+        assertFalse(capped.contains("return T;"), "the cap must keep walking the rest of the ray, not return the product");
+        assertTrue(capped.contains("T *= 0.60;"), "a layer past the cap is folded in as a neutral leaf");
+        assertTrue(capped.contains("continue;"), "the walk continues past the cap instead of fetching the surface");
+        String foliage = body.substring(body.indexOf("if (s.isFoliage) {"));
+        assertFalse(foliage.substring(0, foliage.indexOf("} else {")).contains("return vec3(0.0)"),
+            "the leaf branch filters the light, it never blocks it");
+    }
+
+    @Test
     public void testEmissionEvaluatedOncePerLitPixel() {
         String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
         assertTrue(rays.contains("vec3 selfEmission = emitted(s);"), "the emissive exitance is hoisted out of three uses");

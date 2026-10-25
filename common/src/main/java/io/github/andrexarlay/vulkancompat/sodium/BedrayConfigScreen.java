@@ -101,9 +101,13 @@ public final class BedrayConfigScreen extends Screen {
         int controls = Math.max(70, Math.min(160, contentWidth / 2));
         for (SettingsDraft.Entry entry : nextRows) {
             AbstractWidget widget = createControl(entry, contentX + contentWidth - controls - 6, controls);
-            widget.active = entry.option().isEnabled() && draft.editable(entry);
-            widget.setTooltip(Tooltip.create(widget.active ? entry.option().getTooltip()
-                : tr("bedray.settings.locked", "Choose Custom quality to edit details. Some controls also require another feature or runtime.")));
+            boolean enabled = entry.option().isEnabled() && draft.editable(entry);
+            widget.active = enabled;
+            // Say which of the two reasons locked the row: the profile that sets this value, or a missing prerequisite.
+            widget.setTooltip(Tooltip.create(enabled ? entry.option().getTooltip()
+                : draft.hasQualityProfile() && draft.profileOwned(entry.path())
+                    ? tr("bedray.settings.locked_by_profile", "Set by the Fast/Beautiful quality profile. Switch the profile to Custom to tune it by hand.")
+                    : tr("bedray.settings.locked", "Needs another option, feature or runtime library to be active first.")));
             nextWidgets.add(widget);
         }
         closeChoices();

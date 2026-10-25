@@ -173,7 +173,14 @@ void main() {
             if (underwater) {
                 // sun under water: refracted shadow ray + absorption + Fresnel + analytic caustic (rt_common.glsl waterSunBeam)
                 vec3 Lw;
-                vec3 Ls = hasFlag(FLAG_SOFT_SHADOWS) ? coneAround(L, sunRadius(), seed) : L;
+                // A plant under water keeps one refracted sun direction of its own block: kelp and seagrass are foliage cards,
+                // and a cone sample re-rolled every frame ripples them exactly like the canopy on land (sunSampleFrame).
+                vec3 Ls = L;
+                if (hasFlag(FLAG_SOFT_SHADOWS)) {
+                    Ls = s.isFoliage
+                        ? sunShadowDirectionAt(L, sunRadius(), sunShadowRotation(s, false, p, false), 0u, 0u, 1u)
+                        : coneAround(L, sunRadius(), seed);
+                }
                 uwLit = waterSunBeam(o, s.worldPos.xz, Ls, med, Lw, uwOrigin, uwDir, uwGain);
                 L = Lw;
             }
@@ -203,7 +210,7 @@ void main() {
                         ivec2 rotation = sunShadowRotation(s, cellShadow, p, dot(camJitter, camJitter) > 1.0e-10);
                         uint n = shadowRays();
                         for (uint i = 0u; i < n; i++) {
-                            vis += traceTransmittance(shadowO, sunShadowDirectionAt(L, sunRadius(), rotation, pc.frame, i, n), 2048.0);
+                            vis += traceTransmittance(shadowO, sunShadowDirectionAt(L, sunRadius(), rotation, sunSampleFrame(s.isFoliage, pc.frame), i, n), 2048.0);
                         }
                         vis /= float(n);
                     } else {
@@ -220,7 +227,7 @@ void main() {
                     vec3 lo = leafShadowOrigin(s, L);
                     ivec2 rotation = sunShadowRotation(s, false, p, dot(camJitter, camJitter) > 1.0e-10);
                     for (uint i = 0u; i < n; i++) {
-                        vis += traceTransmittance(lo, sunShadowDirectionAt(L, sunRadius(), rotation, pc.frame, i, n), 2048.0);
+                        vis += traceTransmittance(lo, sunShadowDirectionAt(L, sunRadius(), rotation, sunSampleFrame(s.isFoliage, pc.frame), i, n), 2048.0);
                     }
                     vis /= float(n);
                 } else {

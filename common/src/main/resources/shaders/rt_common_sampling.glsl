@@ -136,3 +136,12 @@ vec3 sunShadowDirectionAt(vec3 d, float radius, ivec2 rotation, uint frame, uint
     return sunDiskDirection(d, radius, r2Point(pixelOffset(rotation), (frame & 1023u) * perFrame + i));
 }
 
+// Which frame index the sun disk of a shadow ray uses. Foliage keeps one world-stable sample: a leaf card is thinner than a
+// texel, so its transmission is a staircase of 0.6 per layer and re-rolling the disk point every frame flipped single texels,
+// i.e. a sunlit canopy rippled in ~40 % steps that no denoiser can remove — the value really does change from frame to frame.
+// The rotation is per pixel and the spp strata still vary, so the disk stays soft; only the frame term is frozen. Ground,
+// walls and props keep the per-frame rotation (their transmission is smooth, so it does not flicker).
+uint sunSampleFrame(bool isFoliage, uint frame) {
+    return isFoliage ? 0u : frame;
+}
+

@@ -46,6 +46,8 @@ public class RtPixelShadowSamplingTest {
     private static final String ROTATION_SIG = "ivec2 sunShadowRotation(Surface s, bool cellShadow, ivec2 pixel, bool jittered)";
     private static final String DISK_SIG =
         "vec3 sunShadowDirectionAt(vec3 d, float radius, ivec2 rotation, uint frame, uint i, uint perFrame)";
+    private static final String DISK_CALL = "sunShadowDirectionAt(";
+    private static final String FREEZE_SIG = "uint sunSampleFrame(bool isFoliage, uint frame)";
 
     @Test
     public void policyIsOwnedByOneModule() {
@@ -138,6 +140,46 @@ public class RtPixelShadowSamplingTest {
         String rotation = functionBody(load(MODULE), ROTATION_SIG);
         assertTrue(rotation.contains("(shadowPixelSize() > 0.0 || jittered) ? pixelShadowStableCell(s.worldPos) : pixel"),
             "switching the option off restores the per-pixel penumbra");
+    }
+
+    @Test
+    public void foliageKeepsOneSunDiskSampleInTime() {
+        String freeze = functionBody(load(SAMPLING), FREEZE_SIG);
+        assertTrue(freeze.contains("isFoliage ? 0u : frame"),
+            "a leaf keeps the disk point of frame 0: one card is thinner than a texel, so its transmission is a 0.6-per-layer "
+                + "staircase and re-rolling the disk point every frame flipped whole texels in ~40 % steps");
+        // Every shadow ray of the two ray-generation passes has to take the frame from the helper. A raw pc.frame at any
+        // call site puts the per-frame re-roll back, and the resulting ripple is real signal change, not noise the denoiser
+        // can average: that is exactly what the owner saw on a sunlit canopy.
+        for (String path : new String[] {PATH, RAYS, SAMPLING}) {
+            for (String line : load(path).split("\n")) {
+                if (line.contains(DISK_CALL) && !line.contains("vec3 " + DISK_CALL)) {
+                    // Two legal forms: the frame argument comes from the helper, or it is the literal 0 for the sites where
+                    // only 0 is ever passed (the deeper leaf vertex, the plant under water). Anything else re-rolls.
+                    assertTrue(line.contains("sunSampleFrame(") || line.contains(", 0u, 0u, 1u)"),
+                        path + ": the sun-disk shadow ray must pass a frozen frame, not the raw one: " + line.trim());
+                }
+            }
+        }
+        // The receivers that do not flicker keep the per-frame rotation: freezing the whole sample would cost penumbra quality
+        // where the transmission is smooth.
+        assertEquals(1, count(load(SAMPLING), "uint sunSampleFrame("), "one helper decides the frame index");
+
+        // Freezing the frame term is not enough on its own: the rotation hashes a 1/16-block cell of the jittered hit, so a
+        // leaf's rotation index restarted every frame and a new sequence began. Foliage is locked to its block instead.
+        String rotation = functionBody(load(MODULE), ROTATION_SIG);
+        assertTrue(rotation.contains("if (s.isFoliage) {"), "foliage needs its own rotation branch");
+        assertTrue(rotation.contains("pixelShadowStableCell(floor(s.worldPos))"),
+            "a leaf keeps one rotation for its whole block, immune to the sub-pixel camera jitter");
+        assertTrue(rotation.indexOf("s.isFoliage") < rotation.indexOf("? pixelShadowStableCell(s.worldPos) : pixel"),
+            "the foliage branch comes before the per-cell/per-pixel fallback");
+
+        // Both remaining per-frame disk samples are the ones nobody froze: the deeper path vertex and the refracted beam
+        // under water. A plant at either still has to take the block-locked sample or it ripples like the direct term did.
+        assertTrue(load(PATH).contains("sunShadowRotation(s, false, p, false)"),
+            "a deeper path vertex on a leaf takes the block-locked rotation");
+        assertTrue(load(RAYS).contains("sunShadowRotation(s, false, p, false)"),
+            "a plant under water takes the block-locked rotation instead of a per-frame cone sample");
     }
 
     @Test

@@ -79,9 +79,19 @@ ivec2 pixelShadowStableCell(vec3 worldPos) {
 // not boil), a world-locked cell when the option is on but this geometry keeps the exact origin, and the pixel itself when
 // nothing is quantised (option off, camera still). Unchanged from before the option existed, so switching it off restores
 // the exact per-pixel penumbra of every earlier build.
+//
+// Foliage is the exception and is locked to its block: pixelShadowStableCell hashes a 1/16-block cell, and the accumulating
+// sub-pixel camera jitter moves a leaf hit across those cell borders every frame, so the rotation index - and with it the
+// whole sun-disk sequence - restarted frame to frame for a growing share of the canopy (about a fifth of the leaves at eight
+// blocks, nearly all of them past thirty). Leaf transmission is a 0.6-per-layer staircase, so that restart flipped whole
+// texels in ~40 % steps: the ripple the owner kept reporting. Freezing only the frame term (sunSampleFrame) cannot fix that,
+// the rotation has to be stable too, and a leaf card never leaves its own block.
 ivec2 sunShadowRotation(Surface s, bool cellShadow, ivec2 pixel, bool jittered) {
     if (cellShadow) {
         return pixelShadowCellIndex(s.worldPos);
+    }
+    if (s.isFoliage) {
+        return pixelShadowStableCell(floor(s.worldPos));
     }
     return (shadowPixelSize() > 0.0 || jittered) ? pixelShadowStableCell(s.worldPos) : pixel;
 }
