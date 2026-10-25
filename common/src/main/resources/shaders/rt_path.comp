@@ -284,7 +284,23 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
         }
         // NEE of the emissive surfaces (light list), diffuse lobe only
         if (s.metal < 0.5 && hasFlag(FLAG_EMISSIVE)) {
-            vec3 c = thr * (1.0 - Fsc) * s.mapAo * sampleEmitters(s, s.albedoLit, reach, seed);
+            // Past the list's reach the camera-sorted emitter list cannot serve the receiver any more (rt_common_shade.glsl,
+            // distantBlockLight): the vanilla block-light field takes the term over there. Only the primary hit has a camera
+            // distance - a bounce is shaded where the previous vertex sent it and keeps the traced estimate. The list radius of
+            // this mode is min(path distance, 128) blocks (RtFrameRenderer).
+            float listRange = min(reach, 128.0);
+            // s.t counts from the last interface (the origin is reset at every glass or water face) and s.pos is
+            // camera-relative, so the distance the list was sorted by is length(s.pos).
+            float cameraDist = length(s.pos);
+            vec3 nee = vec3(0.0);
+            // A surface with no vanilla block light (a LabPBR glow, an emissive item) has nothing to fall back to.
+            if (b > 0u || blockLightFarMix(cameraDist, listRange) < 0.999 || s.light.x <= 0.0) {
+                nee = sampleEmitters(s, vec3(1.0), reach, seed);
+            }
+            if (b == 0u) {
+                nee = distantBlockLight(nee, s, cameraDist, listRange);
+            }
+            vec3 c = thr * (1.0 - Fsc) * s.mapAo * s.albedoLit * nee;
             res.radiance += c;
             if (b > 0u) {
                 res.indirect += c;

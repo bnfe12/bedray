@@ -352,6 +352,11 @@ uint entitySlot(uvec3 vi) {
 // the light is unfiltered and the (much more expensive) layer walk can be skipped.
 bool gSawTranslucent = false;
 
+// Set by candidateAccepted when a filter ray (skipTranslucent) passed a redstone dust texel. The interface walk of a secondary
+// ray fetches such a candidate like a layer instead of dropping it as a hole, so a mirror keeps the dust line the per-face walk
+// used to commit. Shadow and visibility rays only read gSawTranslucent: dust must never tint the light with a quad-shaped shadow.
+bool gSawDust = false;
+
 // Alpha cutout of entity / item triangles (the entity BLAS is not opaque): texel alpha >= 0.1 like vanilla entity_cutout. Texels
 // between 0.1 and 0.95 (stained glass / ice / slime items) are glass-like: visibility and shadow rays treat them as filters.
 bool entityCandidateAccepted(uint prim, vec2 bary, bool skipTranslucent) {
@@ -448,6 +453,7 @@ bool candidateAccepted(uint slot, uint geom, uint prim, vec2 bary, bool skipTran
             // to shade the thin dust quad as an alpha filter and produce block-shaped shadows.
             // Visibility-style rays ignore only its tagged texels; camera/reflection hits and the
             // emitter sampler remain unchanged.
+            gSawDust = true;
             return false;
         }
     }

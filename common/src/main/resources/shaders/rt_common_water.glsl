@@ -112,11 +112,6 @@ vec3 interfaceTransmittance(Surface s, float F) {
     return (1.0 - F) * pow(c, vec3(power));
 }
 
-// Beer-Lambert depth absorption for water column of travel distance dist (blocks); the vanilla style's fixed coefficients.
-vec3 waterBeerLambert(float dist) {
-    return clamp(exp(-vec3(0.18, 0.06, 0.02) * max(dist, 0.0)), vec3(0.001), vec3(1.0));
-}
-
 // ---- water medium -----------------------------------------------------------------------------------------------------------
 // A ray (camera, reflection, bounce) that crosses a horizontal water face toggles the medium. Inside, every segment is attenuated
 // by exp(-sigmaT * length) and adds the light it scatters towards the eye, so the colour of water depends on the depth of the
@@ -294,54 +289,107 @@ WaterMedium cameraWaterMediumShared(vec3 origin) {
 }
 
 // First non-interface surface along a ray; interfaces on the way only attenuate (deterministic, no random choice).
-// Uses traceSurface (mask 0x03: MASK_WORLD | MASK_ENTITIES) so reflections and refractions see entities and terrain.
-// The medium m (water body the ray starts in, if any) is updated at every water boundary; filterOut collects the transmittance
-// of interfaces and of the water, inscatter the light scattered towards the ray inside the water (already weighted by the
-// filter of the part of the ray before it; the caller multiplies it with its own throughput only).
+// Uses the same TLAS traversal as traceSurface (mask 0x03: MASK_WORLD | MASK_ENTITIES) so reflections and refractions see
+// entities and terrain. The medium m (water body the ray starts in, if any) is updated at every water boundary; filterOut
+// collects the transmittance of interfaces and of the water, inscatter the light scattered towards the ray inside the water
+// (already weighted by the filter of the part of the ray before it; the caller multiplies it with its own throughput only).
+//
+// ONE traversal for the whole ray (was: a closest-hit walk with one ray query per glass face). A glass block has two faces and
+// a window several panes, so a reflection or GI ray that crossed them paid a full traversal per face; a stained-glass window
+// seen through a mirror cost four to eight of them. A filter ray never has to SEE the pane it passes, so every translucent
+// candidate is classified from the candidate data, fetched once for the same Beer-Lambert layer the walk used, and skipped:
+// the traversal continues to the next candidate by itself. Only a candidate that really ends the ray (an opaque one, or a
+// translucent one that is not an interface at all, e.g. a portal or a stained-glass item) is committed.
 bool traceThroughInterfacesM(vec3 origin, vec3 dir, float reach, inout WaterMedium m, out Surface hit, out vec3 filterOut, out vec3 inscatter) {
-    vec3 o = origin;
-    vec3 d = dir;
     filterOut = vec3(1.0);
     inscatter = vec3(0.0);
-    bool legacyIn = false;      // vanilla style: legacy Beer-Lambert from the first water face to the hit
-    vec3 legacyEntry = vec3(0.0);
-    // a glass block has a front and a back face: 16 steps pass 8 blocks of glass; the walk ends early when nothing is left of the light
-    for (uint i = 0u; i < 16u; i++) {
-        if (i > 0u && max(filterOut.r, max(filterOut.g, filterOut.b)) < 0.004) {
+    rayQueryEXT sq;
+    rayQueryInitializeEXT(sq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, 0.001, dir, reach);
+    // Distance of the last layer: the water segments must not count the body twice. The segment length is clamped because a ray
+    // query is not required to report its candidates front to back; a negative length would turn exp() into a gain > 1.
+    float lastT = 0.0;
+    uint layers = 0u;           // 16 interfaces pass 8 blocks of glass (a cutout hole is no longer a hop)
+    bool fetchedHit = false;    // the ray ended on a fetched non-interface surface, which is `hit` already
+    while (rayQueryProceedEXT(sq)) {
+        if (rayQueryGetIntersectionTypeEXT(sq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
+            continue;
+        }
+        uint slot = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(sq, false));
+        uint geom = uint(rayQueryGetIntersectionGeometryIndexEXT(sq, false));
+        uint prim = uint(rayQueryGetIntersectionPrimitiveIndexEXT(sq, false));
+        vec2 bary = rayQueryGetIntersectionBarycentricsEXT(sq, false);
+        float t = rayQueryGetIntersectionTEXT(sq, false);
+        gSawTranslucent = false;
+        gSawDust = false;
+        gHitT = t;
+        bool opaque = candidateAccepted(slot, geom, prim, bary, true, false);
+        if (!opaque && !gSawTranslucent && !gSawDust) {
+            continue;   // hole of a cutout texel, or an overlay a filter ray ignores at all
+        }
+        if (m.inside) {
+            vec3 T;
+            vec3 ins;
+            waterSegment(m, origin + dir * lastT, dir, max(t - lastT, 0.0), T, ins);
+            inscatter += filterOut * ins;
+            filterOut *= T;
+        }
+        lastT = max(t, lastT);
+        if (opaque) {
+            // The solid layer (pass 0) has no alpha test: candidateAccepted treats it as opaque, so the ray ends here even for a
+            // texel the camera would call a hole. That is the same rule the direct image uses for a solid surface.
+            // The first accepted opaque candidate ends the walk, which relies on the traversal reporting candidates front to
+            // back (every driver does, and the water segments above already assume it). Re-deriving the nearest hit would cost a
+            // second traversal per filter ray - the cost this walk exists to remove - so the assumption is taken here on purpose.
+            rayQueryConfirmIntersectionEXT(sq);
+            break;
+        }
+        Surface c;
+        if (isEntityHit(slot)) {
+            fetchEntitySurface(slot, geom, prim, bary, t, origin, dir, c);
+        } else {
+            fetchSurface(slot, geom, prim, bary, t, origin, dir, true, c);
+        }
+        if ((!c.translucent && c.alpha < 0.5) || c.alpha < 0.05 || c.isOutline) {
+            continue;   // a hole or an outline triangle: the ray passes and nothing is filtered
+        }
+        if (!isInterface(c)) {
+            hit = c;
+            fetchedHit = true;
+            rayQueryConfirmIntersectionEXT(sq);
+            break;
+        }
+        filterOut *= interfaceTransmittance(c, interfaceReflectance(c, dir));
+        crossWaterBoundary(m, c, dir);
+        if (max(filterOut.r, max(filterOut.g, filterOut.b)) < 0.004) {
+            return false;   // nothing is left of the light behind these layers
+        }
+        if (++layers >= 16u) {
             return false;
         }
-        if (!traceSurface(o, d, 0.001, reach, false, hit)) {
+    }
+    if (!fetchedHit) {
+        if (rayQueryGetIntersectionTypeEXT(sq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) {
             if (m.inside) {
                 vec3 T;
                 vec3 ins;
-                waterSegment(m, o, d, min(reach, 48.0), T, ins);
+                waterSegment(m, origin + dir * lastT, dir, clamp(reach - lastT, 0.0, 48.0), T, ins);
                 inscatter += filterOut * ins;
                 filterOut *= T;
             }
             return false;
         }
-        if (m.inside) {
-            vec3 T;
-            vec3 ins;
-            waterSegment(m, o, d, hit.t, T, ins);
-            inscatter += filterOut * ins;
-            filterOut *= T;
+        uint hitSlot = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(sq, true));
+        uint hitGeom = uint(rayQueryGetIntersectionGeometryIndexEXT(sq, true));
+        uint hitPrim = uint(rayQueryGetIntersectionPrimitiveIndexEXT(sq, true));
+        vec2 hitBary = rayQueryGetIntersectionBarycentricsEXT(sq, true);
+        float hitT = rayQueryGetIntersectionTEXT(sq, true);
+        if (isEntityHit(hitSlot)) {
+            fetchEntitySurface(hitSlot, hitGeom, hitPrim, hitBary, hitT, origin, dir, hit);
+        } else {
+            fetchSurface(hitSlot, hitGeom, hitPrim, hitBary, hitT, origin, dir, true, hit);
         }
-        if ((!hit.translucent && hit.alpha < 0.5) || hit.alpha < 0.05 || hit.isOutline) {
-            o = hit.pos + d * 0.002;
-            continue;
-        }
-        if (!isInterface(hit)) {
-            if (legacyIn) {
-                filterOut *= waterBeerLambert(length(hit.pos - legacyEntry));
-            }
-            return true;
-        }
-        filterOut *= interfaceTransmittance(hit, interfaceReflectance(hit, d));
-        crossWaterBoundary(m, hit, d);
-        o = hit.pos + d * 0.002;
     }
-    return false;
+    return true;
 }
 
 bool traceThroughInterfaces(vec3 origin, vec3 dir, float reach, out Surface hit, out vec3 filterOut) {

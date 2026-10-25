@@ -60,6 +60,13 @@ void main() {
     bool sawWater = med.inside;
     float firstDist = 1.0e6;
     bool hadFirst = false;
+    // Which interfaces pay for a mirror ray. A glass block is two faces and a window several panes, and the mirror of a back face
+    // or of a pane behind a pane carries 2..8 % of the light (the path tracer already drops those). Sampling all of them doubled
+    // the whole secondary cost of every stained-glass pixel: each mirror is a full mirrorRadianceM with a shadow, an AO, a sky
+    // and an emitter ray. The camera-facing interface keeps its mirror, and so does a water face seen behind glass in either
+    // style, because that reflection is the whole look of the water. At most two mirrors per pixel, the same budget as before.
+    uint interfaces = 0u;
+    uint mirrors = 0u;
     for (uint step = 0u; step < 16u; step++) {
         if (!traceSurface(rayOrig, rayDir, 0.001, 4096.0, false, true, s)) {
             if (med.inside) {
@@ -92,7 +99,8 @@ void main() {
         if (isInterface(s)) {
             float F = interfaceReflectance(s, rayDir);
             bool volume = s.isWater && waterVolumeStyle() && isWaterBoundary(s);
-            if (hasFlag(FLAG_REFLECTIONS) && step < 2u) {
+            if (hasFlag(FLAG_REFLECTIONS) && mirrors < 2u && (interfaces == 0u || s.isWater)) {
+                mirrors++;
                 vec3 rdir = bendHorizon(reflect(rayDir, s.ns), s.ng);
                 if (volume && s.roughness > 0.03) {
                     rdir = bendHorizon(coneAround(rdir, s.roughness * s.roughness, seed), s.ng);   // far sheen: waves below the pixel
@@ -100,6 +108,7 @@ void main() {
                 vec3 refl = interfaceMirror(volume && F < 0.05, offsetOrigin(s), rdir, rayDistance(), hasFlag(FLAG_SHADOWS), med);
                 glassRefl += thr * F * refl;
             }
+            interfaces++;
             if (s.isWater && !volume) {
                 // vanilla style: the animated water sprite (biome tint) is blended over the scene behind it
                 glassRefl += thr * ((1.0 - F) * VANILLA_WATER_ALPHA) * vanillaWaterSurface(s, rayDir, emissiveDistance(), seed);
@@ -280,21 +289,38 @@ void main() {
                 color = vec3(ao);
             } else {
                 float day = pc.keyDir.w;
-                // Block light only through the emitter list: emissiveRays() NEE samples (RIS over the emitters, one visibility
-                // ray each). No baked vanilla block light (vertex light.x) is mixed in anywhere.
+                // Block light through the emitter list: emissiveRays() NEE samples (RIS over the emitters, one visibility ray
+                // each). Past the NEE reach the list cannot serve this receiver any more (its candidates are all farther than
+                // EMITTER_RADIUS from it), so the vanilla block-light field takes the term over there and the walk is skipped:
+                // a distant torch lights the ground it stands on instead of leaving it black, and distant pixels cost no rays.
                 vec3 emissiveLight = vec3(0.0);
-                if (hasFlag(FLAG_EMISSIVE) && hasFlag(FLAG_MATERIALS) && emitterCount() > 0u) {
-                    uint n = emissiveRays();
+                // s.t is the distance from the LAST interface, not from the camera (the ray origin is reset at every glass or
+                // water face), and s.pos is camera-relative: the distance the list is sorted by is length(s.pos).
+                float cameraDist = length(s.pos);
+                // RtEmitters builds its list within emissiveDistance() + 8 blocks of the camera (RtFrameRenderer).
+                float listRange = emissiveDistance() + 8.0;
+                float farMix = blockLightFarMix(cameraDist, listRange);
+                // Past the list's reach the vanilla block light is already inside emissiveLight (distantBlockLight), so the
+                // optional baked fill must not add it a second time: its weight fades out over the same band.
+                float blockFillScale = 1.0;
+                if (hasFlag(FLAG_EMISSIVE) && hasFlag(FLAG_MATERIALS)) {
                     float reach = emissiveDistance();
-                    if (StatsBuf(pc.statsAddr).reservoirAddr.x != 0u) {
-                        // ReSTIR DI: one reservoir per pixel, merging this frame's candidates with the reprojected sample.
-                        emissiveLight = sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES);
-                    } else {
-                        for (uint i = 0u; i < n; i++) {
-                            emissiveLight += sampleEmitters(s, vec3(1.0), reach, seed);
+                    // A surface with no vanilla block light (a LabPBR glow, an emissive item) has nothing to fall back to:
+                    // its whole block term is the traced one, however far the camera is.
+                    if ((farMix < 0.999 || s.light.x <= 0.0) && emitterCount() > 0u) {
+                        uint n = emissiveRays();
+                        if (StatsBuf(pc.statsAddr).reservoirAddr.x != 0u) {
+                            // ReSTIR DI: one reservoir per pixel, merging this frame's candidates with the reprojected sample.
+                            emissiveLight = sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES);
+                        } else {
+                            for (uint i = 0u; i < n; i++) {
+                                emissiveLight += sampleEmitters(s, vec3(1.0), reach, seed);
+                            }
+                            emissiveLight /= float(n);
                         }
-                        emissiveLight /= float(n);
                     }
+                    emissiveLight = distantBlockLight(emissiveLight, s, cameraDist, listRange);
+                    blockFillScale = 1.0 - farMix;
                 }
                 // Indirect light: traced sky light (cosine rays towards the sky) with contact AO, or one traced bounce (GI).
                 vec3 indirect;
@@ -324,7 +350,7 @@ void main() {
                 if (leafBack > 0.0) {
                     directSun += pc.keyColor.rgb * (leafBack * 0.42) * smoothstep(0.0, 0.08, leafBack) * vis * vec3(1.05, 1.25, 0.75);
                 }
-                vec3 direct = directSun + bakedBlockFill(s);
+                vec3 direct = directSun + bakedBlockFill(s) * blockFillScale;
                 // Emissive exitance is view independent: evaluate its colour classification once, not three times per pixel.
                 vec3 selfEmission = emitted(s);
                 vec3 diffuseLight = direct + indirect + emissiveLight;
@@ -433,7 +459,7 @@ void main() {
                     // When hard shadows or temporal upscaler jitter are active, keep directSun in the unfiltered rAcc channel
                     // so the 17x17 a-trous spatial filter and low-res temporal reprojection do not blur or wobble shadow edges.
                     bool keepSunSharp = !hasFlag(FLAG_SOFT_SHADOWS) || (dot(camJitter, camJitter) > 1.0e-10);
-                    vec3 filteredDiff = keepSunSharp ? (bakedBlockFill(s) + indirect + emissiveLight) : diffuseLight;
+                    vec3 filteredDiff = keepSunSharp ? (bakedBlockFill(s) * blockFillScale + indirect + emissiveLight) : diffuseLight;
                     diffE = filteredDiff * diffK * thr;
                 }
                 tonemapped = true;

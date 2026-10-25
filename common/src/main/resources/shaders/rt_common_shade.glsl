@@ -39,6 +39,40 @@ vec3 bakedBlockFill(Surface s) {
     float f = bakedLightFill();
     return f <= 0.0 ? vec3(0.0) : blockLightColor() * s.light.x * f;
 }
+// How much of the block light of a surface has to come from the baked vanilla field instead of the emitter list. The list is
+// ordered by importance FROM THE CAMERA (RtEmitters: emission * area / distance^2) and every candidate farther than
+// EMITTER_RADIUS from the shaded point is rejected, so a receiver far from the player gets almost no usable candidate: the
+// torches that stand around it are sampled ~1 / d^2 as often as the ones next to the camera and the rest of the time the
+// estimate is exactly zero. That is why a village, a lit cave or a lamp on the far bank read as unlit, while the same lamp
+// lights its surroundings as soon as the player walks up to it. The list itself only holds emitters within `listRange` of the
+// camera, and an emitter stands at most EMITTER_RADIUS away from the surface it lights, so the list stops being complete
+// already at `listRange - EMITTER_RADIUS`: a receiver there can be lit by a torch that is just outside the list. The handover
+// is therefore the band `listRange -+ EMITTER_RADIUS`, and past it the vanilla block-light field (vertex light.x, the
+// propagation the game itself shows for that same torch) is the whole term. Near the player the traced estimate stays the
+// only source, so no baked light appears in the room around the camera.
+float blockLightFarMix(float cameraDist, float listRange) {
+    // The inner edge is floored: rays_emissive_distance can be as low as 8, and a negative edge would put baked light on the
+    // surfaces around the player, which is the leak the traced emitters replaced.
+    return smoothstep(max(listRange - EMITTER_RADIUS, 8.0), listRange + EMITTER_RADIUS, cameraDist);
+}
+// The vanilla lightmap is a display value, not radiance: its block-light texel is ~0.87 at level 13, while the traced estimate
+// of that same torch on that same floor is ~0.05. The far field only has to carry the light at the scale the player already
+// sees around the torch, so the field is divided by ~20. A single gain keeps the shape: light.x falls like the level (13 -> 1
+// over 15 blocks) and the traced attenuation falls like d^-1.25 over the same span.
+const float BLOCK_LIGHT_FIELD_GAIN = 0.05;
+vec3 vanillaBlockIrradiance(Surface s) {
+    return blockLightColor() * clamp(s.light.x, 0.0, 1.0) * BLOCK_LIGHT_FIELD_GAIN;
+}
+// traced: the NEE estimate with albedo excluded (sampleEmitters(s, vec3(1.0), ...))
+vec3 distantBlockLight(vec3 traced, Surface s, float cameraDist, float listRange) {
+    float far = blockLightFarMix(cameraDist, listRange);
+    if (far <= 0.0) {
+        return traced;
+    }
+    // mix, not max: the traced term is a 1..4 spp estimator that reads 0 on most pixels of the band, so max() would add the
+    // whole field on top of an average that is already lower and leave a bright ring around the player.
+    return mix(traced, vanillaBlockIrradiance(s), far);
+}
 const float GROUND_BOUNCE_BLOCKED = 0.72;
 vec3 tracedSkyLight(Surface s, uint samples, inout uint seed) {
     vec3 o = offsetOrigin(s);
