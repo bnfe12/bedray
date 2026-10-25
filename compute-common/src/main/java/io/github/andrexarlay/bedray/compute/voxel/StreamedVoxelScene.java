@@ -134,11 +134,14 @@ public final class StreamedVoxelScene {
     /** Callback copies at most 64 KiB immediately into the command buffer. Buffer index: grid,
      * palette, models. Directory publication is ordered after all its payload writes. */
     @FunctionalInterface public interface Writer { void write(int buffer, long offset, ByteBuffer bytes); }
-    public boolean upload(Writer writer, ByteBuffer scratch, int frameOverheadBytes) {
+    /** orderWrites records a transfer-write to transfer-write memory dependency before overlapping
+     * directory publication or whole-frame reuse of resident payload ranges. */
+    public boolean upload(Writer writer, Runnable orderWrites, ByteBuffer scratch, int frameOverheadBytes) {
         if (directory == null || latest == null) return false;
         changed = false; memoryLimited = !evicted.isEmpty(); uploadedBytes=frameOverheadBytes;
         if(memoryLimited)reason="Memory-limited residency; unavailable sections retain raster";
-        int budget = Math.max(0, latest.bounds().uploadBudgetBytes() - frameOverheadBytes);
+        int frameBudget = Math.max(0, latest.bounds().uploadBudgetBytes() - frameOverheadBytes);
+        int budget = frameBudget;
         int commands = 0;
         compactTombstones();
         // Invalidations/removals precede reused payload ranges in this same queue submission.
@@ -157,8 +160,7 @@ public final class StreamedVoxelScene {
                 SectionKey key = entry.getKey(); SectionSnapshot section = entry.getValue();
                 if (!inside(key)) { pending.remove(key); continue; }
                 Page old = pages.get(key);
-                if (old != null) { removeResident(key); continue; }
-                int slot = slot(key,true);
+                int slot = old == null ? slot(key,true) : old.slot;
                 if (slot < 0) {
                     memoryLimited = true; reason = "Section directory is full";
                     if(invalidations.size()<64){pending.remove(key);evicted.add(key);invalidations.add(key);}
@@ -167,17 +169,29 @@ public final class StreamedVoxelScene {
                 int paletteSize = section.materials()==null ? 0 : section.materials().palette().size()*CubeSectionMaterials.MATERIAL_BYTES;
                 int modelSize = section.models()==null ? 0 : section.models().palette().size()*16+section.models().quadCount()*ModelQuad.BYTES;
                 int uniform = uniformEmpty(section);
-                int cellOffset = uniform != -1 ? -1 : cells.allocate(CELL_BYTES);
-                int paletteOffset = paletteSize==0 ? -1 : palettes.allocate(paletteSize);
-                int modelOffset = modelSize==0 ? -1 : models.allocate(modelSize);
+                int uploadBytes = (uniform == -1 ? CELL_BYTES : 0) + paletteSize + modelSize + ENTRY_BYTES;
+                int uploadCommands = (uniform == -1 ? 1 : 0) + spans(paletteSize) + spans(modelSize) + 1;
+                // Reuse is safe only when all payload writes and publication finish in this call.
+                // Otherwise allocate a second page and keep the old directory record visible.
+                boolean reuse = old != null && canReuse(old, uniform, paletteSize, modelSize)
+                    && uploadBytes <= frameBudget && uploadCommands <= 128;
+                if (reuse && (uploadBytes > budget || uploadCommands > 128 - commands)) break;
+                int cellOffset = uniform != -1 ? -1 : reuse ? old.cells : cells.allocate(CELL_BYTES);
+                int paletteOffset = paletteSize==0 ? -1 : reuse ? old.palette : palettes.allocate(paletteSize);
+                int modelOffset = modelSize==0 ? -1 : reuse ? old.models : models.allocate(modelSize);
                 if (uniform == -1 && cellOffset<0 || paletteSize>0 && paletteOffset<0 || modelSize>0 && modelOffset<0) {
                     if (cellOffset>=0) cells.free(cellOffset,CELL_BYTES);
                     if (paletteOffset>=0) palettes.free(paletteOffset,paletteSize);
                     if (modelOffset>=0) models.free(modelOffset,modelSize);
-                    memoryLimited = true; reason = "Scene arena budget exhausted; queued sections retain raster";
+                    boolean needCells = uniform == -1 && cellOffset < 0;
+                    boolean needPalette = paletteSize > 0 && paletteOffset < 0;
+                    boolean needModels = modelSize > 0 && modelOffset < 0;
+                    memoryLimited = true; reason = "Scene arena budget exhausted; previous pages and raster retained";
                     SectionKey farthest = null; double farDistance = distance(key);
                     for(var resident : pages.entrySet()) {
-                        if(resident.getValue().cells<0)continue;
+                        Page candidatePage = resident.getValue();
+                        if(resident.getKey().equals(key) || !(needCells && candidatePage.cells >= 0
+                                || needPalette && candidatePage.palette >= 0 || needModels && candidatePage.models >= 0)) continue;
                         double candidate=distance(resident.getKey());
                         if(candidate>farDistance){farthest=resident.getKey();farDistance=candidate;}
                     }
@@ -192,8 +206,10 @@ public final class StreamedVoxelScene {
                 pending.remove(key);
                 Page page = new Page(slot,section.revision(),cellOffset,paletteOffset,paletteSize,modelOffset,modelSize,
                     section.materials()==null?0:section.materials().palette().size(),section.models()==null?0:section.models().palette().size(),uniform);
-                active = new Upload(key,section,page,payload);
+                active = new Upload(key,section,page,payload,reuse);
                 if (uniform != -1) active.position = CELL_BYTES;
+                // A prior publication in this call may have written these same payload ranges.
+                if (reuse) orderWrites.run();
             }
             Upload upload = active;
             int total = upload.payload.limit();
@@ -221,9 +237,17 @@ public final class StreamedVoxelScene {
                 directory[o+8]=page.uniform!=-1?page.uniform:page.modelCount*4;
                 directory[o+9]=page.modelCount; directory[o+10]=page.paletteCount; directory[o+11]=0;
                 scratch.clear(); for(int word=0;word<12;word++)scratch.putInt(directory[o+word]);scratch.flip();
+                // A dirty tombstone/zero or an earlier replacement can target this same bucket.
+                // Transfer command recording order alone does not resolve that WAW hazard.
+                orderWrites.run();
                 writer.write(0,HEADER_BYTES+(long)page.slot*ENTRY_BYTES,scratch);
                 uploadedBytes+=ENTRY_BYTES;budget-=ENTRY_BYTES;commands++;changed=true;
-                pages.put(upload.key,page); indexEmitters(upload.key,upload.section);
+                Page previous = pages.put(upload.key,page);
+                if (previous != null) {
+                    if (upload.reuse) releaseUnused(previous,page);
+                    else release(previous);
+                }
+                indexEmitters(upload.key,upload.section);
                 evicted.remove(upload.key);
                 active=null; revision++;
             }
@@ -231,6 +255,13 @@ public final class StreamedVoxelScene {
         reason=memoryLimited?reason:pending.isEmpty()&&active==null?"Resident coverage; unavailable sections retain raster":"Uploading section deltas; queued sections retain raster";
         refreshEmitters();
         return changed;
+    }
+
+    private static int spans(int bytes) { return (bytes + 65535) / 65536; }
+    private static boolean canReuse(Page page, int uniform, int paletteSize, int modelSize) {
+        return (uniform != -1 || page.cells >= 0)
+            && (paletteSize == 0 || page.palette >= 0 && paletteSize <= page.paletteSize)
+            && (modelSize == 0 || page.models >= 0 && modelSize <= page.modelSize);
     }
 
     private static ByteBuffer pack(SectionSnapshot section) {
@@ -345,12 +376,20 @@ public final class StreamedVoxelScene {
         Page page=pages.remove(key);if(page==null)return;
         directory[page.slot*12+3]=TOMBSTONE;dirty.add(page.slot);
         queueTombstone(page.slot);
-        release(page); List<Emitter> removed=emitterPages.remove(key);
-        if(removed!=null){emitterFound-=removed.size();selectedEmitters.removeAll(removed);emitterCursor=null;}
+        release(page); removeEmitters(key);
         revision++;
     }
-    private void cancelActive(){release(active.page);active=null;}
+    private void cancelActive(){if(!active.reuse)release(active.page);active=null;}
     private void release(Page page){if(page.cells>=0)cells.free(page.cells,CELL_BYTES);if(page.palette>=0)palettes.free(page.palette,page.paletteSize);if(page.models>=0)models.free(page.models,page.modelSize);}
+    private void releaseUnused(Page previous, Page next) {
+        if(previous.cells >= 0 && next.cells < 0) cells.free(previous.cells,CELL_BYTES);
+        releaseTail(palettes,previous.palette,previous.paletteSize,next.paletteSize);
+        releaseTail(models,previous.models,previous.modelSize,next.modelSize);
+    }
+    private static void releaseTail(Arena arena, int offset, int previousSize, int nextSize) {
+        int previousAligned = (previousSize + 15) & ~15, nextAligned = (nextSize + 15) & ~15;
+        if(offset >= 0 && previousAligned > nextAligned) arena.free(offset + nextAligned,previousAligned - nextAligned);
+    }
     public void clear() {
         latest=null;session=-1;atlasGeneration=0;pending.clear();pages.clear();dirty.clear();evicted.clear();invalidations.clear();active=null;
         tombstones.clear();queuedTombstones.clear();
@@ -366,7 +405,12 @@ public final class StreamedVoxelScene {
     public int emitterCount(){return selectedEmitters.size();}
     public List<SectionKey> drainInvalidations(){if(invalidations.isEmpty())return List.of();List<SectionKey> result=List.copyOf(invalidations);invalidations.clear();return result;}
     private record Emitter(double x,double y,double z,float radius,int level,int cellX,int cellY,int cellZ) {}
+    private void removeEmitters(SectionKey key) {
+        List<Emitter> removed=emitterPages.remove(key);
+        if(removed!=null){emitterFound-=removed.size();selectedEmitters.removeAll(removed);emitterCursor=null;}
+    }
     private void indexEmitters(SectionKey key,SectionSnapshot section) {
+        removeEmitters(key);
         if(section.lighting()==null)return;
         ArrayList<Emitter> emitters=new ArrayList<>();
         for(int i=0;i<4096;i++) {
@@ -405,8 +449,8 @@ public final class StreamedVoxelScene {
     }
     private record Page(int slot,long revision,int cells,int palette,int paletteSize,int models,int modelSize,int paletteCount,int modelCount,int uniform) {}
     private static final class Upload {
-        final SectionKey key;final SectionSnapshot section;final Page page;final ByteBuffer payload;int position;
-        Upload(SectionKey key,SectionSnapshot section,Page page,ByteBuffer payload){this.key=key;this.section=section;this.page=page;this.payload=payload;}
+        final SectionKey key;final SectionSnapshot section;final Page page;final ByteBuffer payload;final boolean reuse;int position;
+        Upload(SectionKey key,SectionSnapshot section,Page page,ByteBuffer payload,boolean reuse){this.key=key;this.section=section;this.page=page;this.payload=payload;this.reuse=reuse;}
     }
     /** Coalescing first-fit arena. No relocation of live pages and no presumed frame completion. */
     private static final class Arena {
