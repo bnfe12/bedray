@@ -60,6 +60,8 @@ public final class PreviewPanel {
     private static String lastLogged = "";
     private static Properties manifest;
     private static boolean modalOpen;
+    private static boolean resetAllowed = true;
+    private static Component runtimeStatus = Component.empty();
     private static int[] compactBtnRect = new int[4];
 
     /** Clickable rectangles of the last render: x, y, w, h, action id. */
@@ -80,6 +82,10 @@ public final class PreviewPanel {
     public static void closeModal() {
         modalOpen = false;
     }
+
+    public static void openModal(Option option) { selected = option; modalOpen = true; scroll = 0; }
+    public static void setResetAllowed(boolean allowed) { resetAllowed = allowed; }
+    public static void setRuntimeStatus(Component status) { runtimeStatus = status; }
 
     /** Catalog entry of a Bedray option, or null (buttons and unknown options keep Sodium's tooltip). */
     public static SettingsCatalog.Info lookup(Identifier id, Option option) {
@@ -260,6 +266,7 @@ public final class PreviewPanel {
             cy += 11;
         }
         cy += 2;
+        if (!runtimeStatus.getString().isEmpty()) cy = paragraph(g, font, runtimeStatus, cx, cy, cw, 0xFF8ABCD8) + 3;
 
         // picture block (drawn only when actual preview screenshots exist — never show a placeholder box)
         if (info.hasPreviews()) {
@@ -269,9 +276,6 @@ public final class PreviewPanel {
 
         // explanation, price, requirement, scene
         cy = paragraph(g, font, Component.translatableWithFallback("bedray.opt." + info.path() + ".desc", info.desc()), cx, cy, cw, 0xFFFFFFFF);
-        if (!info.cost().isEmpty()) {
-            cy = paragraph(g, font, Component.translatableWithFallback("bedray.opt." + info.path() + ".cost", info.cost()), cx, cy + 2, cw, 0xFFFFD866);
-        }
         if (!info.requires().isEmpty()) {
             cy = paragraph(g, font, Component.translatableWithFallback("bedray.opt." + info.path() + ".req", info.requires()), cx, cy + 2, cw, 0xFFFFA060);
         }
@@ -289,7 +293,7 @@ public final class PreviewPanel {
         g.fill(x + 1, contentLimit, x + w - 1, contentLimit + 1, 0x40FFFFFF);
         Component label = Component.translatableWithFallback("bedray.preview.reset", "Reset to default");
         int bw = Math.min(w - 8, font.width(label) + 12);
-        button(g, font, x + 4, contentLimit + 4, bw, 14, label, mouseX, mouseY, "reset");
+        if (resetAllowed) button(g, font, x + 4, contentLimit + 4, bw, 14, label, mouseX, mouseY, "reset");
         if (isModal) {
             Component closeLbl = Component.translatableWithFallback("bedray.preview.close", "Close [Esc]");
             int cbw = Math.min(w - bw - 12, font.width(closeLbl) + 12);
@@ -535,6 +539,7 @@ public final class PreviewPanel {
                     case "split" -> splitLocked = !splitLocked;
                     case "close_modal" -> modalOpen = false;
                     case "reset" -> {
+                        if (!resetAllowed) return true;
                         selected.resetToDefault();
                         LOGGER.info("[VKB-AUTOTEST] ui_option_reset option={}", comparePath);
                     }
@@ -595,6 +600,8 @@ public final class PreviewPanel {
         compactBtnRect = new int[4];
         HITS.clear();
         TEX_PRESENT.clear();
+        manifest = null;
+        runtimeStatus = Component.empty();
     }
 
     /** Minecraft cursor in GUI coordinates (MouseHandler.getScaledXPos/YPos(Window), javap). */
