@@ -536,8 +536,8 @@ public class RtShadingFixesTest {
             "the RIS target is shared by candidates and reused history");
         assertTrue(common.contains("prev.leWsum.w * (mPrev / max(prev.meta.x, 1.0))"),
             "the stored weight is scaled to the clamped sample count that is added to M (no unbounded ramp)");
-        assertTrue(common.contains("(phatHist / max(prev.enPhat.w, 1.0e-8))"),
-            "the stored RIS weight is rescaled to the current receiver");
+        assertTrue(common.contains("float ratio = clamp(phatHist / max(prev.enPhat.w, 1.0e-8), 0.0, 8.0);"),
+            "the stored RIS weight is rescaled to the current receiver and the rescale is capped (no history firefly)");
         assertTrue(common.contains("float mPrev = min(prev.meta.x, 20.0);"), "the history sample count is clamped");
         assertTrue(common.contains("normalDot > (isStatic ? 0.8 : 0.6)"), "a normal mismatch rejects the history");
         assertTrue(common.contains("abs(prev.meta.w - prevDist) < tol"), "a depth mismatch rejects the history");

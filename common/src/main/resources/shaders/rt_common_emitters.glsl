@@ -191,8 +191,12 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
                     // ReSTIR merge: the stored cumulative weight is rescaled from the previous receiver to this one, and from
                     // meta.x samples down to the clamped mPrev that is added to sampleCount - otherwise the history weight
                     // never decays while M saturates and emissive light ramps up frame after frame.
-                    float wHist = prev.leWsum.w * (mPrev / max(prev.meta.x, 1.0))
-                        * (phatHist / max(prev.enPhat.w, 1.0e-8));
+                    // The phat ratio is the bias correction of a reused sample; uncapped it turns a history sample taken at a
+                    // grazing angle (tiny phat) into a firefly that the accumulation then keeps alive for many frames. Capping
+                    // it bounds the influence of one reused sample (standard ReSTIR firefly clamp, owner report: white
+                    // explosions looking at torches / lava).
+                    float ratio = clamp(phatHist / max(prev.enPhat.w, 1.0e-8), 0.0, 8.0);
+                    float wHist = prev.leWsum.w * (mPrev / max(prev.meta.x, 1.0)) * ratio;
                     float accept = wHist / max(wsum + wHist, 1.0e-8);
                     wsum += wHist;
                     sampleCount += mPrev;
