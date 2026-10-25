@@ -9,8 +9,8 @@
 // reservoir is a sample distribution, visibility is evaluated by the ray pass on the sample it finally shades with.
 #include "rt_common.glsl"
 
-const int SPATIAL_RADIUS = 8;      // screen-space radius in pixels
-const int SPATIAL_DRAWS = 4;       // draws per pixel; the opposite-parity restriction keeps about half of them
+const int SPATIAL_RADIUS = 4;      // screen-space radius in pixels (mission brief: disk radius 4)
+const int SPATIAL_DRAWS = 8;       // draws per pixel; the opposite-parity restriction keeps 3-5 effective merges
 
 void main() {
     ivec2 size = imageSize(outImage);
@@ -76,8 +76,8 @@ void main() {
         if ((uint(nb.meta.y) & 2u) != 0u) {
             nQ.z = -nQ.z;
         }
-        if (dot(nQ, nP) < 0.8) {
-            continue;                                     // normal rejection: walls must not import each other's light
+        if (dot(nQ, nP) < 0.85) {
+            continue;                                     // normal rejection (mission brief): walls must not import each other's light
         }
         if (abs(dot(auxQ - auxP, nP)) > planeTol) {
             continue;                                     // plane rejection: a light sample behind a step stays local
@@ -86,7 +86,10 @@ void main() {
         if (phatQ <= 0.0) {
             continue;
         }
-        float wQ = nb.leWsum.w * (mNb / max(nb.meta.x, 1.0)) * (phatQ / max(nb.enPhat.w, 1.0e-8));
+        // Import weight: neighbour cumulative weight rescaled from its receiver to this one. The sample is an area-parameterized
+        // point on the emitter quad, so the receiver change carries no Jacobian (|J| = 1); the firefly clamp bounds the ratio.
+        float ratio = clamp(phatQ / max(nb.enPhat.w, 1.0e-4), 0.0, RESTIR_SPATIAL_RATIO_CAP);
+        float wQ = nb.leWsum.w * (mNb / max(nb.meta.x, 1.0)) * ratio;
         float accept = wQ / max(wsum + wQ, 1.0e-8);
         wsum += wQ;
         count += mNb;

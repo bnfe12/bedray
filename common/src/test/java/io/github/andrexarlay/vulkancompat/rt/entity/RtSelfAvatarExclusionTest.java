@@ -45,8 +45,9 @@ public class RtSelfAvatarExclusionTest {
 
     @Test
     public void rangeIsPublishedInTheStatsSlot() {
-        assertEquals(500, RtStatsLayout.SELF_AVATAR_TRI_START, "the range fills the free tail of the 512-byte StatsBuf slot");
-        assertEquals(504, RtStatsLayout.SELF_AVATAR_TRI_COUNT, "two separate uints, no uvec2 padding");
+        assertEquals(RtStatsLayout.RESERVOIR_AUX_ADDR + 12, RtStatsLayout.SELF_AVATAR_TRI_START,
+            "the trailing uints follow the reservoir stats block directly");
+        assertEquals(RtStatsLayout.RESERVOIR_AUX_ADDR + 16, RtStatsLayout.SELF_AVATAR_TRI_COUNT, "two separate uints, no uvec2 padding");
         assertTrue(RtStatsLayout.SIZE <= RtStatsLayout.SLOT_STRIDE, "the slot ring must still fit the struct");
         String core = read(CORE);
         assertTrue(core.contains("uint selfAvatarTriStart;"), "the shader reads the first triangle of the capture");

@@ -5,6 +5,14 @@ uint emitterCount() {
 // ReSTIR DI history clamp (temporal and spatial reuse share it): without a cap, M saturates and a stored sample whose light
 // was switched off keeps glowing through history instead of decaying within a few frames.
 const float RESTIR_M_CAP = 20.0;
+// Anti-firefly clamp of the receiver-change ratio in reservoir imports: phat at the new receiver over the stored phat spikes
+// when the previous receiver saw the emitter edge-on (tiny stored p^) and imports it at full weight. The bound trades a small
+// estimator bias for bounded per-sample radiance (a ratio above the cap comes from a grazing receiver, not a brighter light).
+const float RESTIR_TEMPORAL_RATIO_CAP = 8.0;   // temporal merge (history reservoir)
+const float RESTIR_SPATIAL_RATIO_CAP = 5.0;    // spatial merge (neighbour reservoirs)
+// Occlusion-aware writeback: a sample whose shadow ray failed keeps its slot but its cumulative weight decays, so an occluded
+// history fades in 4 frames instead of glowing through walls forever, and fresh candidates take the reservoir back over.
+const float RESTIR_OCCLUSION_DECAY = 0.25;
 
 // Next event estimation of emissive surfaces: resampled importance sampling (RIS) over the emitter list, one shadow ray to
 // the chosen point. Returns the reflected radiance of a Lambert surface (albedo / PI * Le * G), unbiased for p^ > 0.
@@ -199,9 +207,10 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
                 if (phatHist > 0.0) {
                     // ReSTIR merge: the stored cumulative weight is rescaled from the previous receiver to this one, and from
                     // meta.x samples down to the clamped mPrev that is added to sampleCount - otherwise the history weight
-                    // never decays while M saturates and emissive light ramps up frame after frame.
-                    float wHist = prev.leWsum.w * (mPrev / max(prev.meta.x, 1.0))
-                        * (phatHist / max(prev.enPhat.w, 1.0e-8));
+                    // never decays while M saturates and emissive light ramps up frame after frame. The receiver-change ratio
+                    // is clamped (RESTIR_TEMPORAL_RATIO_CAP): an unclamped phatHist / phatStored spike is the firefly source.
+                    float ratio = clamp(phatHist / max(prev.enPhat.w, 1.0e-4), 0.0, RESTIR_TEMPORAL_RATIO_CAP);
+                    float wHist = prev.leWsum.w * (mPrev / max(prev.meta.x, 1.0)) * ratio;
                     float accept = wHist / max(wsum + wHist, 1.0e-8);
                     wsum += wHist;
                     sampleCount += mPrev;
@@ -245,20 +254,6 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
         }
         leNoTrans = texRgb * chosenEm * EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN;
     }
-    if (useReservoir) {
-        // Store before the visibility ray: the reservoir is a sample distribution, visibility is applied only to this frame's
-        // shade, so an occluded frame does not throw the sample away for the next one.
-        Reservoir outR;
-        vec3 recvN = normalize(s.ns);
-        outR.yTexEm = vec4(chosenY, chosenEm);
-        outR.enPhat = vec4(chosenEn, chosenPhat);
-        outR.leWsum = vec4(leNoTrans, wsum);
-        // meta.y bit 0 = open source, bit 1 = receiver normal faced down, bit 2 = receiver is itself emissive
-        outR.meta = vec4(sampleCount, float((chosenOpenSource ? 1 : 0) | (recvN.z < 0.0 ? 2 : 0) | (s.emission > 0.5 ? 4 : 0)),
-            uintBitsToFloat(packSnorm2x16(recvN.xy)), length(s.pos));
-        ReservoirBuf(fb.reservoirAddr).r[writeSlot] = outR;
-    }
-
     // Visibility test between receiver (s.pos) and sampled emitter point (chosenY).
     // Geometric normal s.ng prevents self-intersection / shadow acne on block boundaries and normal map seams.
     float endBias = clamp(0.02 * dist, 0.002, 0.03);
@@ -276,7 +271,22 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
     if (rayDist > 0.002) {
         trans = traceTransmittance(shadowOrigin, rayDir / rayDist, rayDist);
     }
-    if (max(trans.r, max(trans.g, trans.b)) <= 0.0) {
+    bool occluded = max(trans.r, max(trans.g, trans.b)) <= 0.0;
+    if (useReservoir) {
+        // Occlusion-aware writeback: the reservoir is a sample distribution for the next frames, so an occluded frame does not
+        // throw the sample away - but its cumulative weight decays (RESTIR_OCCLUSION_DECAY), so history behind a new occluder
+        // fades instead of glowing through it, and fresh candidates win the reservoir back within a few frames.
+        Reservoir outR;
+        vec3 recvN = normalize(s.ns);
+        outR.yTexEm = vec4(chosenY, chosenEm);
+        outR.enPhat = vec4(chosenEn, chosenPhat);
+        outR.leWsum = vec4(leNoTrans, occluded ? wsum * RESTIR_OCCLUSION_DECAY : wsum);
+        // meta.y bit 0 = open source, bit 1 = receiver normal faced down, bit 2 = receiver is itself emissive
+        outR.meta = vec4(sampleCount, float((chosenOpenSource ? 1 : 0) | (recvN.z < 0.0 ? 2 : 0) | (s.emission > 0.5 ? 4 : 0)),
+            uintBitsToFloat(packSnorm2x16(recvN.xy)), length(s.pos));
+        ReservoirBuf(fb.reservoirAddr).r[writeSlot] = outR;
+    }
+    if (occluded) {
         return vec3(0.0);
     }
     vec3 le = leNoTrans * trans;
