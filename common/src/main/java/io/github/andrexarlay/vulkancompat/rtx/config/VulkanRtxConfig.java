@@ -30,6 +30,32 @@ public final class VulkanRtxConfig {
     /** The voxel option uses the separate bounded software renderer with model textures and world light. */
     public enum RendererSelection { HARDWARE_RT, VOXEL_LIVE_DEBUG }
     public static RendererSelection rendererSelection = RendererSelection.HARDWARE_RT;
+    public static boolean voxelDistanceAuto = true;
+    public static int voxelDistanceChunks = 12;
+    public static int voxelMemoryBudgetMiB = 256;
+    public static String voxelQualityProfile = "CUSTOM";
+    public static String pathQualityProfile = "CUSTOM";
+    public static boolean voxelDiffuseBounce = true;
+    public static boolean voxelTranslucentOptics = true;
+    public static boolean voxelDiffuseBounce() { return voxelDiffuseBounce; }
+    public static boolean voxelTranslucentOptics() { return voxelTranslucentOptics; }
+    public static void setVoxelDiffuseBounce(boolean value) { voxelDiffuseBounce = value; }
+    public static void setVoxelTranslucentOptics(boolean value) { voxelTranslucentOptics = value; }
+    public static boolean voxelDistanceAuto() { return voxelDistanceAuto; }
+    public static int voxelDistanceChunks() { return Math.clamp(voxelDistanceChunks, 2, 64); }
+    public static int voxelMemoryBudgetMiB() { return Math.clamp(voxelMemoryBudgetMiB, 64, 1024); }
+    public static void setVoxelDistanceAuto(boolean value) { voxelDistanceAuto = value; }
+    public static void setVoxelDistanceChunks(int value) { voxelDistanceChunks = Math.clamp(value, 2, 64); }
+    public static void setVoxelMemoryBudgetMiB(int value) { voxelMemoryBudgetMiB = Math.clamp(value, 64, 1024); }
+    public static String voxelQualityProfile() { return qualityProfile(voxelQualityProfile); }
+    public static String pathQualityProfile() { return qualityProfile(pathQualityProfile); }
+    public static void setVoxelQualityProfile(String value) { voxelQualityProfile = qualityProfile(value); }
+    public static void setPathQualityProfile(String value) { pathQualityProfile = qualityProfile(value); }
+    private static String qualityProfile(String value) {
+        if (value == null) return "CUSTOM";
+        String normalized = value.toUpperCase(java.util.Locale.ROOT);
+        return switch (normalized) { case "FAST", "BEAUTIFUL", "CUSTOM" -> normalized; default -> "CUSTOM"; };
+    }
     private static boolean rendererUiOverride;
     private static GraphicsBackendRegistry.SceneMode diagnosticScene = GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
 
@@ -483,6 +509,13 @@ public final class VulkanRtxConfig {
         try {
             switch (key) {
                 case "renderer" -> rendererSelection = RendererSelection.valueOf(val.toUpperCase(java.util.Locale.ROOT));
+                case "voxel_distance_auto" -> setVoxelDistanceAuto(Boolean.parseBoolean(val));
+                case "voxel_distance_chunks" -> setVoxelDistanceChunks(Integer.parseInt(val));
+                case "voxel_memory_budget_mib" -> setVoxelMemoryBudgetMiB(Integer.parseInt(val));
+                case "voxel_quality_profile" -> setVoxelQualityProfile(val);
+                case "path_quality_profile" -> setPathQualityProfile(val);
+                case "voxel_diffuse_bounce" -> setVoxelDiffuseBounce(Boolean.parseBoolean(val));
+                case "voxel_translucent_optics" -> setVoxelTranslucentOptics(Boolean.parseBoolean(val));
                 case "upscaler_backend", "active_backend" -> {
                     UpscalerBackend parsed;
                     try {
@@ -810,6 +843,14 @@ public final class VulkanRtxConfig {
             writer.write("\n[ray_tracing]\n");
             writer.write("# HARDWARE_RT keeps the rt_mode preference. VOXEL_LIVE_DEBUG requires the matching separate Bedray Compute add-on: bounded textured models and world light without RT cores, with raster preservation. Physical GI, reflections and temporal guides remain pending.\n");
             writer.write("renderer = \"" + rendererSelection.name() + "\"\n");
+            writer.write("# Voxel coverage follows loaded Minecraft chunks by default; custom distance is bounded by Minecraft.\n");
+            writer.write("voxel_distance_auto = " + voxelDistanceAuto() + "\n");
+            writer.write("voxel_distance_chunks = " + voxelDistanceChunks() + "\n");
+            writer.write("voxel_memory_budget_mib = " + voxelMemoryBudgetMiB() + "\n");
+            writer.write("voxel_quality_profile = \"" + voxelQualityProfile() + "\"\n");
+            writer.write("path_quality_profile = \"" + pathQualityProfile() + "\"\n");
+            writer.write("voxel_diffuse_bounce = " + voxelDiffuseBounce() + "\n");
+            writer.write("voxel_translucent_optics = " + voxelTranslucentOptics() + "\n");
             writer.write("# [EXPERIMENTAL] Hardware ray tracing (requires VK_KHR_ray_query). rt_mode: off, rays (Ray Tracing: shadows, reflections, AO, emissive lights) or path (Path Tracing: full light transport)\n");
             writer.write("rt_mode = \"" + rtModePersisted.logName() + "\"\n");
             writer.write("# Hidden in this release: Ray Tracing (Fast) is in development. true unlocks rt_mode = \"rays\" and its settings.\n");
