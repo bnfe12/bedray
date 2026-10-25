@@ -72,6 +72,17 @@ Voxel with raster preservation. Voxel currently suspends the hardware pass. A si
 mode needs explicit effect ownership, composition and temporal guides. Merely adding a preset name
 does not implement it; separate pure/hybrid labels must not select the same underlying path silently.
 
+| Rendering experience | Intended use and requirements |
+|---|---|
+| Vanilla / raster | Lowest rendering cost in this set; keeps the game's lighting. Bedray still uses the game's Vulkan backend. |
+| Voxel with raster preservation | For a supported Vulkan compute GPU, including devices without hardware RT. Fast trades additional light transport and resolution for lower work. Shared-memory GPUs may still be constrained by scene and target memory. |
+| Hardware Path Tracing | Requires the hardware ray-query/acceleration-structure checks. Fast uses 1 sample and 2 bounces; Beautiful uses 2 samples and 4 bounces. It is the most demanding supported lighting path here; resolution, scene and denoiser matter. |
+| Hardware Ray Tracing effects | Requires hardware RT support and the existing experimental opt-in. It is not a stable substitute for Path Tracing. |
+
+These are qualitative workload descriptions, not measured GPU rankings or FPS promises. The experience
+menu and quality profile are separate: choose a renderer first, then Fast/Beautiful, or Customize to
+retain the current values while unlocking controls. Save the resulting pending values in My Presets.
+
 These are development changes. Final matching-version gameplay evidence is required for coverage,
 noise, menu layout, switching, resize/reload, memory pressure and sustained travel.
 

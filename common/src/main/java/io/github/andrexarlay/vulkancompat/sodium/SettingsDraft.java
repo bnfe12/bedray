@@ -93,6 +93,9 @@ final class SettingsDraft {
         if (config.getOption(id(path)) instanceof StatefulOption option) option.modifyValue(value);
     }
     private void applySelectedProfile() {
+        // Mirror the provider's actual compatibility rule in the pending model too, so render scale
+        // is visible before Apply when switching away from a temporal hardware upscaler.
+        if (voxel()) stage("upscaler_backend", io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.BILINEAR);
         String path = voxel() ? "voxel_quality_profile" : "path_quality_profile";
         entries.stream().filter(e -> e.path().equals(path)).findFirst().ifPresent(e -> choose(e, (Enum<?>)e.option().getValidatedValue()));
     }
