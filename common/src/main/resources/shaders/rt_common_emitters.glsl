@@ -87,6 +87,11 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
     uint width = uint(size.x);
     uint pixels = uint(size.x) * uint(size.y);
     uint writeSlot = uint(pc.frame & 1u) * pixels + uint(p.y) * width + uint(p.x);
+    if (useReservoir && fb.reservoirAuxAddr.x != 0u) {
+        // receiver position for the spatial reuse pass (rt_restir_spatial.comp): importing a neighbour's sample must
+        // re-evaluate its target p^ at this receiver, and the 64 B reservoir record has no room for the position
+        ReservoirAuxBuf(fb.reservoirAuxAddr).r[writeSlot] = vec4(s.pos, 0.0);
+    }
     uint n = fb.emitterCount;
     if (n == 0u) {
         if (useReservoir) {
@@ -244,8 +249,8 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
         outR.yTexEm = vec4(chosenY, chosenEm);
         outR.enPhat = vec4(chosenEn, chosenPhat);
         outR.leWsum = vec4(leNoTrans, wsum);
-        // meta.y bit 0 = open source, bit 1 = receiver normal faced down
-        outR.meta = vec4(sampleCount, float((chosenOpenSource ? 1 : 0) | (recvN.z < 0.0 ? 2 : 0)),
+        // meta.y bit 0 = open source, bit 1 = receiver normal faced down, bit 2 = receiver is itself emissive
+        outR.meta = vec4(sampleCount, float((chosenOpenSource ? 1 : 0) | (recvN.z < 0.0 ? 2 : 0) | (s.emission > 0.5 ? 4 : 0)),
             uintBitsToFloat(packSnorm2x16(recvN.xy)), length(s.pos));
         ReservoirBuf(fb.reservoirAddr).r[writeSlot] = outR;
     }

@@ -124,9 +124,10 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer StatsBuf {
     vec4 fogFade;               // 464 x clock of the section fade-in (20 ms ticks), y fade length in ticks (0 = off)
     float shadowPixel;          // 480 edge of a pixelated-shadow cell in texture pixels (1 = one texel of a 16x16 block sprite; 0 = option off)
     uvec2 reservoirAddr;        // 488 ReservoirBuf: two parity halves of size.x * size.y records (0 = temporal reuse off)
-    uint leafBacklit;           // 496 primary hits of this frame (1 in 16) whose key light came through a leaf card
-    uint selfAvatarTriStart;    // 500 first triangle of the local player's captured body in this frame's entity BLAS
-    uint selfAvatarTriCount;    // 504 0 = no capture (third person, option off): nothing is ever skipped
+    uvec2 reservoirAuxAddr;     // 496 ReservoirAuxBuf: vec4 receiver position (camera-relative) per pixel, same two parity halves (0 = off)
+    uint leafBacklit;           // 504 primary hits of this frame (1 in 16) whose key light came through a leaf card
+    uint selfAvatarTriStart;    // 508 first triangle of the local player's captured body in this frame's entity BLAS
+    uint selfAvatarTriCount;    // 512 0 = no capture (third person, option off): nothing is ever skipped
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer Vec4Buf { vec4 v[]; };
 // ReSTIR DI reservoir: one chosen emitter sample per pixel, reused by the next frame.
@@ -137,6 +138,10 @@ struct Reservoir {
     vec4 meta;     // x sample count, y open-source flag, z packed receiver normal, w receiver distance
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer ReservoirBuf { Reservoir r[]; };
+// ReSTIR DI spatial reuse: receiver position of the pixel that wrote the reservoir. The 64-byte record has no room
+// for it, but importing a neighbour's sample (rt_restir_spatial.comp) must re-evaluate its target p^ at the local
+// receiver, which needs the local position and normal (normal is packed in the reservoir itself).
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer ReservoirAuxBuf { vec4 r[]; };
 // RtEmitters record: p0.xyz corner (relative to the emitter origin), p0.w area; e1, e2 edges; uvc.xy atlas UV of the
 // emissive colour, uvc.z mean emission, uvc.w entity slot + 1; duv contains the UV edges; tint multiplies entity emitter RGB.
 struct Emitter {

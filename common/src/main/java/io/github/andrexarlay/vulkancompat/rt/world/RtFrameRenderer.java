@@ -68,6 +68,8 @@ public final class RtFrameRenderer {
     private static final int STATS_STRIDE = RtStatsLayout.SLOT_STRIDE;
     /** Bytes per pixel of one ReSTIR parity half (Reservoir in rt_common.glsl, cross-checked by RtStatsLayoutTest). */
     static final int RESERVOIR_BYTES = 64;
+    /** Bytes per pixel of one ReSTIR receiver-position half (ReservoirAuxBuf: vec4 camera-relative position). */
+    static final int RESERVOIR_AUX_BYTES = 16;
     /** Rebuilt sections closer than this (squared section distance, ~2 sections) reset the path tracing accumulation. */
     static final long SCENE_CHANGE_RADIUS_SQ = 8;
 
@@ -110,6 +112,8 @@ public final class RtFrameRenderer {
     private static RtMemory.Buf entityMotionBuf;
     /** ReSTIR DI reservoirs of rt_rays.comp: two parity halves of 64 B per pixel (ReservoirBuf in rt_common.glsl). */
     private static RtMemory.Buf reservoirBuf;
+    /** ReSTIR DI receiver positions of rt_rays.comp: two parity halves of 16 B per pixel, written with the reservoirs. */
+    private static RtMemory.Buf reservoirAuxBuf;
     private static long reservoirPixels = -1L;
     private static long reservoirLightFingerprint = Long.MIN_VALUE;
     private static boolean reservoirResetRequested = true;
@@ -803,6 +807,7 @@ public final class RtFrameRenderer {
             | (LOW_DISC ? RtFrameParams.FLAG_LOWDISC : 0);
         // ReSTIR DI: one reservoir per pixel, two parity halves. Only the ray pass reads it; path tracing keeps plain RIS.
         long reservoirAddr = 0L;
+        long reservoirAuxAddr = 0L;
         if (pass.mode() == RtMode.RAY_TRACED && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {
             long pixels = (long) w * h;
             long need = pixels * 2L * RESERVOIR_BYTES;
@@ -817,6 +822,19 @@ public final class RtFrameRenderer {
                         | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
                 reset = true;
                 LOGGER.info("[VKB-RT] ReSTIR reservoirs {}x{} x2 = {} KiB", w, h, need / 1024);
+            }
+            long auxNeed = pixels * 2L * RESERVOIR_AUX_BYTES;
+            if (reservoirAuxBuf == null || reservoirAuxBuf.size < auxNeed) {
+                if (reservoirAuxBuf != null) {
+                    VK10.vkDeviceWaitIdle(device);
+                    world.memory().destroy(reservoirAuxBuf);
+                }
+                reservoirAuxBuf = world.memory().createBuffer("rt_restir_aux", auxNeed,
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                        | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+                LOGGER.info("[VKB-RT] ReSTIR receiver aux {}x{} x2 = {} KiB", w, h, auxNeed / 1024);
+                // No fill: every pixel rewrites its own slot before the spatial pass reads it, and a stale position
+                // next to a zeroed (empty) reservoir is skipped by the M == 0 test there anyway.
             }
             if (pixels != reservoirPixels) {
                 // A different resolution moves every pixel: the old records sit at other indices and must not be read.
@@ -836,6 +854,7 @@ public final class RtFrameRenderer {
                 reservoirResetRequested = false;
             }
             reservoirAddr = reservoirBuf.address;
+            reservoirAuxAddr = reservoirAuxBuf.address;
             if (reset) {
                 // A removed torch must not keep contributing through a stored sample: the world changed, drop all history.
                 VK10.vkCmdFillBuffer(cmd, reservoirBuf.handle, 0L, reservoirBuf.size, 0);
@@ -854,6 +873,8 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.SHADOW_PIXEL, pixelShadowStatsValue());
         // StatsBuf.reservoirAddr (488): ReSTIR parity buffer of the ray pass; 0 disables temporal reuse
         MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, reservoirAddr);
+        // StatsBuf.reservoirAuxAddr (496): camera-relative receiver position per reservoir record (spatial reuse)
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_AUX_ADDR, reservoirAuxAddr);
         // Temporal reprojection uses the full pose in both projections. Hit positions include the current bob origin, while
         // camDelta remains the raw camera-position delta; the prior full projection already carries the previous bob origin.
         curViewProj.set(frameProjection).mul(camera.viewRotationMatrix);

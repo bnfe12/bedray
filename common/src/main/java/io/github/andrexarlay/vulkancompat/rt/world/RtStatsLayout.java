@@ -109,6 +109,7 @@ public final class RtStatsLayout {
     public static final int FOG_FADE = add("fogFade", "vec4");
     public static final int SHADOW_PIXEL = add("shadowPixel", "float");
     public static final int RESERVOIR_ADDR = add("reservoirAddr", "uvec2");
+    public static final int RESERVOIR_AUX_ADDR = add("reservoirAuxAddr", "uvec2");
     public static final int LEAF_BACKLIT = add("leafBacklit", "uint");
     public static final int SELF_AVATAR_TRI_START = add("selfAvatarTriStart", "uint");
     public static final int SELF_AVATAR_TRI_COUNT = add("selfAvatarTriCount", "uint");
@@ -116,7 +117,7 @@ public final class RtStatsLayout {
     /** std430 size of the struct (struct alignment 16). */
     public static final int SIZE = (cursor + 15) & -16;
     /** Slot spacing of the frame slot ring (RtFrameRenderer STATS_SLOTS); >= {@link #SIZE}. */
-    public static final int SLOT_STRIDE = 512;
+    public static final int SLOT_STRIDE = 544;
 
     static {
         if (SIZE > SLOT_STRIDE) {
