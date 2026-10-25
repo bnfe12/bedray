@@ -169,7 +169,7 @@ public class OpacityMicromapTest {
         byte[] texelState = filled(OpacityMicromapCache.TEXEL_OPAQUE);
         byte[] payload = new byte[OpacityMicromapCache.ENTRY_BYTES];
         int st = OpacityMicromapCache.classifyEntry(0.25f, 0.25f, 0.75f, 0.25f, 0.25f, 0.75f,
-            texelState, 64, 64, payload);
+            texelState, new byte[64 * 64], true, 64, 64, payload);
         assertEquals(OpacityMicromapCache.ST_OK, st);
         for (int i = 0; i < payload.length; i++) {
             assertEquals((byte) 0x55, payload[i], "byte " + i);
@@ -212,7 +212,38 @@ public class OpacityMicromapTest {
     }
 
     /** classifyEntry for the identity UV triangle (0,0),(1,0),(0,1) in a 64x64 atlas. */
+    @Test
+    public void testTransparentNeedsEmptyNeighbourhood() {
+        // fully transparent texture; one 100-alpha texel inside region 0's 5-texel neighbourhood must keep that
+        // micro-triangle unknown (the far test would still average over it), distant regions stay transparent
+        byte[] texelState = filled(OpacityMicromapCache.TEXEL_TRANSPARENT);
+        byte[] texelAlpha = new byte[64 * 64];
+        texelAlpha[4 * 64 + 4] = 100;
+        byte[] payload = new byte[OpacityMicromapCache.ENTRY_BYTES];
+        int st = OpacityMicromapCache.classifyEntry(0f, 0f, 1f, 0f, 0f, 1f, texelState, texelAlpha, true, 64, 64, payload);
+        assertEquals(OpacityMicromapCache.ST_OK, st);
+        assertEquals(OpacityMicromapCache.STATE_UNKNOWN, (payload[0] >> 0) & 3, "region 0 sits next to the 100-alpha texel");
+        boolean anyTransparent = false;
+        for (int r = 0; r < 256; r++) {
+            anyTransparent |= ((payload[r >> 2] >> (2 * (r & 3))) & 3) == OpacityMicromapCache.STATE_TRANSPARENT;
+        }
+        assertTrue(anyTransparent, "micro-triangles outside the touched neighbourhood still resolve transparent");
+    }
+
+    @Test
+    public void testTransparentWaitsForBakeComplete() {
+        // identical texture, but the bake has not settled: tier 2 must not resolve, tier 1 (opaque) still may
+        byte[] texelState = filled(OpacityMicromapCache.TEXEL_TRANSPARENT);
+        byte[] payload = new byte[OpacityMicromapCache.ENTRY_BYTES];
+        int st = OpacityMicromapCache.classifyEntry(0f, 0f, 1f, 0f, 0f, 1f, texelState, new byte[64 * 64], false, 64, 64, payload);
+        assertEquals(OpacityMicromapCache.ST_OK, st);
+        for (int i = 0; i < payload.length; i++) {
+            assertEquals((byte) 0xAA, payload[i], "byte " + i + " (state 2 = unknown while the bake runs)");
+        }
+    }
+
     private static int classifyIdentity(byte[] texelState, byte[] payload) {
-        return OpacityMicromapCache.classifyEntry(0f, 0f, 1f, 0f, 0f, 1f, texelState, 64, 64, payload);
+        // zero alphas = an empty neighbourhood, bake settled: tier 2 (transparent) may resolve
+        return OpacityMicromapCache.classifyEntry(0f, 0f, 1f, 0f, 0f, 1f, texelState, new byte[64 * 64], true, 64, 64, payload);
     }
 }

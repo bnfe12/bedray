@@ -44,17 +44,23 @@ import java.util.Locale;
  * the shader's cutout alpha test decides, so a classification mistake can only cost performance, never change
  * the image.
  *
- * <p>Classification follows the shader's {@code dustCoverage} cutout test: a micro-triangle becomes opaque only when
- * every texel of its footprint (bounding box grown by {@link #TEXEL_MARGIN} texels) has alpha &ge; 253 and is not ice;
- * transparent only when every texel has alpha &le; 127. The margin is what makes a state safe at any ray distance
- * (far away the shader averages a 3x3 footprint of up to &plusmn;4 texels), so a classification can only cost
- * performance, never change the image. Mixed, animated or not-yet-baked texels leave the micro-triangle unknown.
+ * <p>Classification is two-tier and image-identical by construction. Tier 1 (opaque): the micro-triangle's exact
+ * footprint (no margin) holds only fully-opaque texels (alpha &ge; 253, not ice). A resolved-opaque candidate is still
+ * reported to the shader and the shader's own cutout test stays authoritative, so this can only save nothing or skip
+ * nothing today - but it is a definitive state the hardware can act on, and it can never change the image at any ray
+ * distance. Tier 2 (transparent): the exact footprint is fully transparent AND the whole neighbourhood the far test
+ * can average over ({@link #TEXEL_NEIGHBORHOOD} texels, the 3x3 tap spread plus linear-filter rounding) holds no texel
+ * above {@link #NEIGHBORHOOD_MAX_ALPHA}: near, the exact texel already fails alpha &ge; 0.5; far, the averaged coverage
+ * stays below the 0.04 draw threshold, so the hardware may cull the candidate without losing a hit the shader would
+ * have drawn. Everything else stays unknown: the shader's cutout test decides, a classification mistake can only cost
+ * performance, never change the image.
  *
- * <p>That same margin is why the feature is off by default ({@code RtConfig.OPACITY_MICROMAPS}): measured on the 26.3
- * cutout sprites (oak_leaves, short_grass, fern, vine, iron_bars; 16x16) every micro-triangle stays unknown at {@code TEXEL_MARGIN = 5}, so no candidate is resolved and the micromap costs memory
- * for nothing. Only a margin of 0 resolves states (26-31% opaque, 15-43% transparent), and that margin drops foliage at
- * distance where the shader's average still accepts it. Re-enabling needs a classification that resolves under the safe
- * margin, not new wiring.
+ * <p>Why not a plain margin-0 both-state resolution: the far cutout test draws at a coverage of just 0.04, so a
+ * margin-0 transparent classification next to any foliage texel removes hits the distant shader would still have
+ * drawn - the measured "foliage drops at distance" regression that kept the feature off by default
+ * ({@code RtConfig.OPACITY_MICROMAPS}). The alpha-accurate neighbourhood guard is the classification that resolves
+ * under the safe margin. Tier 2 additionally waits for {@code onEpochFinished()}: while the atlas bake is still
+ * running, a neighbouring sprite could later turn opaque, so mid-bake classifications resolve opaque states only.
  *
  * <p>Epochs: the material atlas re-bakes on a pack switch. {@link #onEpochStart()} clears the interning state and
  * retires the object (its references stay valid until the sections rebuild); {@link #onEpochFinished()} bumps the
@@ -73,8 +79,10 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
     static final int TRI_BYTES = 8;
     static final int THROTTLE_FRAMES = 15;
     static final int RETIRED_FRAMES = 3;
-    /** Texels of slack around a micro-triangle footprint: 4 for the shader's max footprint tap radius, 1 rounding. */
-    static final int TEXEL_MARGIN = 5;
+    /** Radius of the neighbourhood the far cutout test can average over: 4 for the shader's max 3x3 tap spread, 1 rounding. */
+    static final int TEXEL_NEIGHBORHOOD = 5;
+    /** A neighbourhood texel above this alpha could push the far test's averaged coverage over its 0.04 draw threshold. */
+    static final int NEIGHBORHOOD_MAX_ALPHA = 10;
 
     /** Payload opacity values (4-state): fully transparent, fully opaque, unknown-transparent. */
     static final byte STATE_TRANSPARENT = 0;
@@ -191,7 +199,8 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
      * nothing was committed; the caller must not allocate an entry).
      */
     static int classifyEntry(float u0, float v0, float u1, float v1, float u2, float v2,
-                             byte[] texelState, int atlasW, int atlasH, byte[] outPayload) {
+                             byte[] texelState, byte[] texelAlpha, boolean transparentResolutionAllowed,
+                             int atlasW, int atlasH, byte[] outPayload) {
         int[][] bbox = regionBbox();
         Arrays.fill(outPayload, (byte) 0);
         for (int r = 0; r < MICRO_TRIS; r++) {
@@ -212,13 +221,12 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
                 if (y < vMin) vMin = y;
                 if (y > vMax) vMax = y;
             }
-            int x0 = Math.max(0, floorTexel(uMin, atlasW) - TEXEL_MARGIN);
-            int x1 = Math.min(atlasW - 1, ceilTexel(uMax, atlasW) + TEXEL_MARGIN);
-            int y0 = Math.max(0, floorTexel(vMin, atlasH) - TEXEL_MARGIN);
-            int y1 = Math.min(atlasH - 1, ceilTexel(vMax, atlasH) + TEXEL_MARGIN);
-            boolean sawOpaque = false;
-            boolean sawTransparent = false;
-            boolean sawUnknown = false;
+            int x0 = Math.max(0, floorTexel(uMin, atlasW));
+            int x1 = Math.min(atlasW - 1, ceilTexel(uMax, atlasW));
+            int y0 = Math.max(0, floorTexel(vMin, atlasH));
+            int y1 = Math.min(atlasH - 1, ceilTexel(vMax, atlasH));
+            boolean allOpaque = true;
+            boolean allTransparent = true;
             for (int y = y0; y <= y1; y++) {
                 int row = y * atlasW;
                 for (int x = x0; x <= x1; x++) {
@@ -226,28 +234,58 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
                     if (st == TEXEL_UNKNOWN) {
                         return ST_RETRY;
                     }
-                    if (st == TEXEL_OPAQUE) {
-                        sawOpaque = true;
-                    } else if (st == TEXEL_TRANSPARENT) {
-                        sawTransparent = true;
-                    } else {
-                        sawUnknown = true;
+                    if (st != TEXEL_OPAQUE) {
+                        allOpaque = false;
+                    }
+                    if (st != TEXEL_TRANSPARENT) {
+                        allTransparent = false;
                     }
                 }
             }
             byte state;
-            if (sawUnknown) {
-                state = STATE_UNKNOWN;
-            } else if (sawOpaque && sawTransparent) {
-                state = STATE_UNKNOWN;
-            } else if (sawOpaque) {
+            if (allOpaque) {
+                // Tier 1, margin 0: the exact footprint is fully opaque. The candidate is still reported to the shader,
+                // whose cutout test stays authoritative (close up the exact texel passes a >= 0.5; far away the averaged
+                // coverage still sees the hit texel), so this can never change the image at any ray distance.
                 state = STATE_OPAQUE;
-            } else {
+            } else if (allTransparent && transparentResolutionAllowed && neighborhoodEmpty(texelState, texelAlpha, x0, y0, x1, y1, atlasW, atlasH)) {
+                // Tier 2: the footprint is transparent AND every texel the far test can average over is draw-able-free,
+                // so the hardware may cull the candidate: near, the exact texel fails alpha >= 0.5 anyway; far, the
+                // averaged coverage stays under the 0.04 threshold and the shader would reject the hit too.
                 state = STATE_TRANSPARENT;
+            } else {
+                state = STATE_UNKNOWN;
             }
             outPayload[r >> 2] |= state << (2 * (r & 3));
         }
         return ST_OK;
+    }
+
+    /**
+     * Tier 2 guard: the far cutout test (dustCoverage) spreads 3x3 taps up to &plusmn;{@link #TEXEL_NEIGHBORHOOD} texels
+     * around the hit and draws when the averaged coverage reaches 0.04. The candidate may only leave the traversal if no
+     * texel the taps can touch holds a draw-able alpha (or is opaque / mixed - an animated neighbour can turn opaque
+     * later, a partial texel already draws). Unknown texels count as empty: with the bake settled they are atlas padding.
+     */
+    private static boolean neighborhoodEmpty(byte[] texelState, byte[] texelAlpha, int x0, int y0, int x1, int y1,
+                                             int atlasW, int atlasH) {
+        int nx0 = Math.max(0, x0 - TEXEL_NEIGHBORHOOD);
+        int nx1 = Math.min(atlasW - 1, x1 + TEXEL_NEIGHBORHOOD);
+        int ny0 = Math.max(0, y0 - TEXEL_NEIGHBORHOOD);
+        int ny1 = Math.min(atlasH - 1, y1 + TEXEL_NEIGHBORHOOD);
+        for (int y = ny0; y <= ny1; y++) {
+            int row = y * atlasW;
+            for (int x = nx0; x <= nx1; x++) {
+                byte st = texelState[row + x];
+                if (st == TEXEL_OPAQUE || st == TEXEL_MIXED) {
+                    return false;
+                }
+                if ((texelAlpha[row + x] & 0xFF) > NEIGHBORHOOD_MAX_ALPHA) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static int floorTexel(float uv, int size) {
@@ -294,6 +332,10 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
     private boolean disabled;
 
     private byte[] texelState;
+    /** Raw alpha per atlas texel (0 = empty; unbaked regions read 0, gated by {@link #bakeComplete} for tier 2). */
+    private byte[] texelAlpha;
+    /** True only between {@link #onEpochFinished()} and the next {@link #onEpochStart()}: tier 2 needs a settled bake. */
+    private boolean bakeComplete;
     private int atlasW;
     private int atlasH;
 
@@ -523,7 +565,7 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
         }
         ensureBuildBuffer();
         byte[] payload = new byte[ENTRY_BYTES];
-        int st = classifyEntry(u0, v0, u1, v1, u2, v2, texelState, atlasW, atlasH, payload);
+        int st = classifyEntry(u0, v0, u1, v1, u2, v2, texelState, texelAlpha, bakeComplete, atlasW, atlasH, payload);
         if (st != ST_OK) {
             return ST_RETRY;
         }
@@ -715,6 +757,11 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
         if (texelState != null) {
             Arrays.fill(texelState, TEXEL_UNKNOWN);
         }
+        if (texelAlpha != null) {
+            // unbaked reads as empty; tier 2 is gated by bakeComplete until the settled re-bake has rewritten these
+            Arrays.fill(texelAlpha, (byte) 0);
+        }
+        bakeComplete = false;
     }
 
     @Override
@@ -726,16 +773,18 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
         ensureAtlasArrays(atlasWidth, atlasHeight);
         if (alpha == null) {
             fillRect(x0, y0, w, h, TEXEL_MIXED);
+            fillAlphaRect(x0, y0, w, h, (byte) 0xFF);   // no data: block tier-2 resolutions nearby
             return;
         }
         for (int y = 0; y < h; y++) {
             int row = (y0 + y) * atlasW + x0;
             for (int x = 0; x < w; x++) {
                 byte st;
+                int a = alpha[y * w + x] & 0xFF;
+                texelAlpha[row + x] = (byte) a;
                 if (animated) {
                     st = TEXEL_MIXED;
                 } else {
-                    int a = alpha[y * w + x] & 0xFF;
                     if (a <= 127) {
                         st = TEXEL_TRANSPARENT;
                     } else {
@@ -759,6 +808,7 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
         }
         // sections whose triangles were retried during the bake get one more pass now that every sprite is final
         objectGen++;
+        bakeComplete = true;
     }
 
     private void ensureAtlasArrays(int width, int height) {
@@ -768,6 +818,7 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
             return;
         }
         texelState = new byte[width * height];
+        texelAlpha = new byte[width * height];
         atlasW = width;
         atlasH = height;
     }
@@ -776,6 +827,13 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
         for (int y = 0; y < h; y++) {
             int row = (y0 + y) * atlasW + x0;
             Arrays.fill(texelState, row, row + w, st);
+        }
+    }
+
+    private void fillAlphaRect(int x0, int y0, int w, int h, byte a) {
+        for (int y = 0; y < h; y++) {
+            int row = (y0 + y) * atlasW + x0;
+            Arrays.fill(texelAlpha, row, row + w, a);
         }
     }
 
