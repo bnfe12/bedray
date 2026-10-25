@@ -39,6 +39,42 @@ No RT extensions, acceleration structures, ray queries, device addresses, Int64,
 vendor DLLs are required by the Compute provider. In-game use still requires Minecraft 26.3's Vulkan
 backend baseline and the provider's queue/format/descriptor checks. This is not an arbitrary-GPU claim.
 
+## Alpha.13 streaming and settings
+
+The included API 1.6 provider receives incremental section changes across Minecraft's effective render
+distance and valid world height. Loaded chunks are read without creating new chunks. Discovery starts
+near the camera, reprioritizes vertical movement, and bounds section capture and upload work. Geometry
+changes invalidate Voxel independently of the hardware RT capture gate. Air-only sections retain their
+actual propagated light; known empty geometry is not treated as missing lighting.
+
+GPU residency uses an absolute-coordinate section directory and reusable compact cell, palette and
+model arenas. Model storage follows used quads, rather than reserving 8192 quads for every section.
+Uploads publish a directory entry only after its payload is complete. The scene allocation obeys its
+memory budget, pending payloads are bounded, and nearer sections can replace farther ones. Eviction
+feeds back into capture with a retry cooldown. Requested chunks, resident sections, upload queue and
+actual allocated scene bytes are separate diagnostics. Output/history images are additional memory.
+
+The settings screen uses a private pending model, shared validators, search, category navigation,
+direct choice menus, and Apply/Revert. Fast, Beautiful and Custom profiles are separate for Voxel and
+Path Tracing. Both Voxel presets follow Minecraft distance; Fast lowers the scene budget and disables
+the extra diffuse bounce and translucent optics. Beautiful enables those effects. Custom unlocks manual
+quality controls. A named or imported personal preset is staged before applying it.
+
+Temporal reuse still requires matching surface distance and normal. Its effective averaging cap is
+64 in a steady scene, 32 for camera motion and 16 for scene/lighting changes, instead of the previous
+eight during every streaming frame. Lighting changes are compared with an anchor; significant changes
+shorten accumulation for eight recorded frames, and large discontinuities reject old history. These
+are response/noise heuristics, not strict radiance lifetimes or measured guarantees. More history can
+also retain view-dependent reflection/transmission information longer; motion response needs live checks.
+
+Available renderer paths are raster, hardware Path Tracing, experimental hardware RT effects, and
+Voxel with raster preservation. Voxel currently suspends the hardware pass. A simultaneous RT+Voxel
+mode needs explicit effect ownership, composition and temporal guides. Merely adding a preset name
+does not implement it; separate pure/hybrid labels must not select the same underlying path silently.
+
+These are development changes. Final matching-version gameplay evidence is required for coverage,
+noise, menu layout, switching, resize/reload, memory pressure and sustained travel.
+
 ## Alpha.11 integration and optical limits
 
 The host integrates the newer hardware-renderer fixes for degenerate geometry/camera directions,

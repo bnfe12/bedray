@@ -13,7 +13,7 @@ import java.util.Arrays;
  * camera origin and eye in the current grid coordinates, and a per-frame history cap. The GPU then
  * reprojects every surface point and accepts history only where distance and normal agree.
  *
- * The cap bounds how long stale radiance can persist: 64 frames while the camera and scene are
+ * The cap controls the effective sample count of exponential averaging: 64 while camera and scene are
  * unchanged, 32 during camera motion and 16 after scene/lighting changes. Distant streaming must not
  * hold every visible pixel to the former eight-frame window. Depth/normal rejection still decides
  * whether a particular history sample can be reused; these caps are response/noise tradeoffs.
