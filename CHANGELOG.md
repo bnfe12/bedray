@@ -13,6 +13,8 @@
   as unavailable instead of a fake `0.0` when nothing accumulates.
 * Cheaper emitter sampling: the light radius is hoisted out of the candidate loop and the distance
   falloff avoids `pow`.
+* Settings text: Frame Generation shows a real description instead of an empty tooltip, and RT Pixel
+  Shadows / Pixel Shadow Size no longer claim to be hidden-mode only (path tracing uses them too).
 
 ## 0.1.1-alpha.13 (development, unreleased)
 
