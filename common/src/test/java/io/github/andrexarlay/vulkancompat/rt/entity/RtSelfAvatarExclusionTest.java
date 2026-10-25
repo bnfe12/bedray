@@ -64,9 +64,15 @@ public class RtSelfAvatarExclusionTest {
         assertTrue(path.contains("traceSurface(o, d, b == 0u ? 0.001 : 0.0, b == 0u ? 4096.0 : reach, false, b == 0u, s)"),
             "the path tracer must skip the avatar on the primary hit only: reflections of the player need it");
         String rays = read(RAYS);
-        assertTrue(rays.contains("traceSurface(rayOrig, rayDir, 0.001, 4096.0, false, true, s)"),
-            "the raster-like mode starts its camera ray inside the same body");
+        String walk = requireBlock(rays, "bool cameraWalk(inout CameraPath cp, vec3 origin, vec3 dir, inout uint seed,"
+            + " out Surface s, out bool bend) {");
+        assertTrue(walk.contains("if (isSelfAvatarPrim(slot, prim)) {\n            continue;"),
+            "the raster-like mode starts its camera ray inside the same body, and the camera walk owns the traversal now");
+        assertFalse(walk.contains("rayQueryConfirmIntersectionEXT"),
+            "the avatar has to be dropped before anything is committed: the walk never commits for that reason");
         String water = read(WATER);
+        assertFalse(requireBlock(water, "bool traceThroughInterfacesM(").contains("isSelfAvatarPrim"),
+            "mirrors and GI keep the body: the exclusion belongs to the camera ray, not to the shared interface walk");
         assertTrue(water.contains("traceWaterBoundary(o, vec3(0.0, 1.0, 0.0), 160.0, true, t, tint)"),
             "under water the camera-medium probe looks straight up through the player's own head: it would read a blocker and "
                 + "lose the water body");

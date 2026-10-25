@@ -35,6 +35,151 @@ vec3 shadeSecondary(Surface s) {
     return shadeSimple(s, vec3(0.0), hasFlag(FLAG_SHADOWS));
 }
 
+// ---- Camera path through the interfaces in front of the shaded surface -----------------------------------------------------
+// A glass block is two faces and a window several panes, and the camera ray used one closest-hit traversal per face: a
+// stained-glass window six faces deep paid six full TLAS traversals for the single most numerous ray of the frame, and each
+// pane tints it (the owner: "работа с цветными стёклами, которые красят лучи" — the worst drop). A pane never bends the ray,
+// so the camera ray classifies the interfaces from the candidates exactly like the secondary walk (traceThroughInterfacesM)
+// and crosses them all in ONE query; only the work per layer differs, because the camera adds the mirror of each interface
+// and its tint (instead of folding a filter). Realistic-style water is the one interface that bends the ray (Snell): the walk
+// stops there and the caller refracts and re-enters it.
+struct CameraPath {
+    vec3 thr;           // throughput behind the interfaces crossed so far
+    vec3 glassRefl;     // mirror light of those interfaces, already weighted by F and thr
+    WaterMedium med;    // water body the ray is in
+    float firstDist;    // distance of the first surface the ray met (outDepth reports the interface, as the per-face walk did)
+    bool hadFirst;
+    uint interfaces;    // interfaces crossed, for the mirror gate
+    uint mirrors;
+    bool sawWater;
+};
+
+void cameraPathStart(out CameraPath cp, WaterMedium camMed) {
+    cp.thr = vec3(1.0);
+    cp.glassRefl = vec3(0.0);
+    cp.med = camMed;
+    cp.firstDist = 1.0e6;
+    cp.hadFirst = false;
+    cp.interfaces = 0u;
+    cp.mirrors = 0u;
+    cp.sawWater = camMed.inside;
+}
+
+// What one interface does to the camera ray, minus the bend: the mirror with its Fresnel weight, the vanilla water sheet
+// colour, and the transmittance of the layer. Returns true for a realistic water face, which the caller refracts through.
+bool cameraInterface(Surface s, vec3 rayDir, inout CameraPath cp, inout uint seed) {
+    float F = interfaceReflectance(s, rayDir);
+    bool volume = s.isWater && waterVolumeStyle() && isWaterBoundary(s);
+    // Which interfaces pay for a mirror ray. The camera-facing interface keeps its mirror, and so does a water face seen behind
+    // glass in either style, because that reflection is the whole look of the water. The mirror of a back face or of a pane
+    // behind a pane carries 2..8 % of the light, and each mirror is a full mirrorRadianceM with a shadow, an AO, a sky and an
+    // emitter ray: sampling all of them doubled the whole secondary cost of every stained-glass pixel.
+    if (hasFlag(FLAG_REFLECTIONS) && cp.mirrors < 2u && (cp.interfaces == 0u || s.isWater)) {
+        cp.mirrors++;
+        vec3 rdir = bendHorizon(reflect(rayDir, s.ns), s.ng);
+        if (volume && s.roughness > 0.03) {
+            rdir = bendHorizon(coneAround(rdir, s.roughness * s.roughness, seed), s.ng);   // far sheen: waves below the pixel
+        }
+        vec3 refl = interfaceMirror(volume && F < 0.05, offsetOrigin(s), rdir, rayDistance(), hasFlag(FLAG_SHADOWS), cp.med);
+        cp.glassRefl += cp.thr * F * refl;
+    }
+    cp.interfaces++;
+    if (s.isWater && !volume) {
+        // vanilla style: the animated water sprite (biome tint) is blended over the scene behind it
+        cp.glassRefl += cp.thr * ((1.0 - F) * VANILLA_WATER_ALPHA) * vanillaWaterSurface(s, rayDir, emissiveDistance(), seed);
+        crossWaterBoundary(cp.med, s, rayDir);
+        cp.sawWater = true;
+    }
+    cp.thr *= interfaceTransmittance(s, F);
+    if (volume) {
+        crossWaterBoundary(cp.med, s, rayDir);
+        cp.sawWater = true;
+    }
+    return volume;
+}
+
+// One TLAS traversal from origin down to the surface the camera sees, folding every interface in front of it into cp. Returns
+// false when there is nothing to shade: nothing hit (the scattering of the water behind the last layer is folded in) or no
+// light left behind the layers. `bend` is set when the ray stopped on a realistic water face: the caller refracts there and
+// calls the walk again.
+// ASSUMPTION: the candidates of one ray query arrive front to back. The Vulkan spec leaves the order implementation defined,
+// and every desktop driver walks its BVH front to back; traceThroughInterfacesM (rt_common_water.glsl) already depends on it
+// for every reflection and GI ray, so this walk does not add a new class of risk - but it does extend the assumption to the
+// camera ray, where an out-of-order candidate would shade a farther surface and fold a pane behind it. Making it order
+// independent would mean buffering the layers (they carry a mirror each) and keeping the query alive behind the nearest
+// surface, which costs exactly the traversals this walk removes. `bend` is the one case where the walk does not need the
+// order: a realistic water face always ends the segment, because the caller re-enters from it with a refracted direction.
+bool cameraWalk(inout CameraPath cp, vec3 origin, vec3 dir, inout uint seed, out Surface s, out bool bend) {
+    bend = false;
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, 0.001, dir, 4096.0);
+    float lastT = 0.0;
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
+            continue;
+        }
+        uint slot = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
+        uint geom = uint(rayQueryGetIntersectionGeometryIndexEXT(rq, false));
+        uint prim = uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false));
+        vec2 bary = rayQueryGetIntersectionBarycentricsEXT(rq, false);
+        float t = rayQueryGetIntersectionTEXT(rq, false);
+        if (isSelfAvatarPrim(slot, prim)) {
+            continue;   // the body of the first-person camera: a hit here is its own inside face
+        }
+        gHitT = t;
+        // Camera classification (skipTranslucent = false): a cutout hole and a redstone dust texel below its coverage stay holes
+        // and a visible dust texel stays a hit, exactly as the per-face walk classified them.
+        if (!candidateAccepted(slot, geom, prim, bary, false)) {
+            continue;
+        }
+        // The water column between the last layer and this candidate scatters towards the eye.
+        if (cp.med.inside) {
+            vec3 T;
+            vec3 ins;
+            waterSegment(cp.med, origin + dir * lastT, dir, max(t - lastT, 0.0), T, ins);
+            cp.glassRefl += cp.thr * ins;
+            cp.thr *= T;
+        }
+        lastT = max(t, lastT);
+        Surface c;
+        if (isEntityHit(slot)) {
+            fetchEntitySurface(slot, geom, prim, bary, t, origin, dir, c);
+        } else {
+            fetchSurface(slot, geom, prim, bary, t, origin, dir, true, c);
+        }
+        if ((!c.translucent && c.alpha < 0.5) || c.alpha < 0.05) {
+            continue;   // empty space of the quad (cutout hole, or a translucent texel the camera looks through): the ray passes
+        }
+        if (!cp.hadFirst) {
+            cp.hadFirst = true;
+            cp.firstDist = t;
+        }
+        s = c;
+        if (!isInterface(c)) {
+            return true;    // the surface the camera sees, with the exact position, normal and distance of the candidate
+        }
+        bend = cameraInterface(c, dir, cp, seed);
+        if (bend) {
+            return true;
+        }
+        if (max(cp.thr.r, max(cp.thr.g, cp.thr.b)) < 0.004) {
+            return false;   // nothing is left of the light behind these layers (their mirror light stays), as the walk ended before
+        }
+        if (cp.interfaces >= 16u) {
+            return true;    // 16 interfaces deep: the last pane is shaded as a surface, which is where the per-face walk ended up
+        }
+    }
+    // The traversal ran out: a miss. The water the ray is still in scatters towards the eye for the next 48 blocks.
+    if (cp.med.inside) {
+        vec3 T;
+        vec3 ins;
+        waterSegment(cp.med, origin + dir * lastT, dir, clamp(4096.0 - lastT, 0.0, 48.0), T, ins);
+        cp.glassRefl += cp.thr * ins;
+        cp.thr *= T;
+    }
+    return false;
+}
+
 void main() {
     WaterMedium camMed = cameraWaterMediumShared(cameraOrigin());   // camera under water: one ray per subgroup
     ivec2 size = imageSize(outImage);
@@ -50,91 +195,34 @@ void main() {
     Surface s;
     vec3 rayOrig = cameraOrigin();
     vec3 rayDir = dir;
-    vec3 thr = vec3(1.0);
-    bool hit = false;
     // Interfaces in front of the shaded surface (rt_common.glsl interface*): deterministic split, the mirror reflection of each
     // is added with weight F (glassRefl), the ray continues behind it with (1 - F) * tint. No random choice, so glass and water
-    // do not flicker between "opaque" and "transparent" per pixel and frame.
-    vec3 glassRefl = vec3(0.0);
-    WaterMedium med = camMed;
-    bool sawWater = med.inside;
-    float firstDist = 1.0e6;
-    bool hadFirst = false;
-    // Which interfaces pay for a mirror ray. A glass block is two faces and a window several panes, and the mirror of a back face
-    // or of a pane behind a pane carries 2..8 % of the light (the path tracer already drops those). Sampling all of them doubled
-    // the whole secondary cost of every stained-glass pixel: each mirror is a full mirrorRadianceM with a shadow, an AO, a sky
-    // and an emitter ray. The camera-facing interface keeps its mirror, and so does a water face seen behind glass in either
-    // style, because that reflection is the whole look of the water. At most two mirrors per pixel, the same budget as before.
-    uint interfaces = 0u;
-    uint mirrors = 0u;
-    for (uint step = 0u; step < 16u; step++) {
-        if (!traceSurface(rayOrig, rayDir, 0.001, 4096.0, false, true, s)) {
-            if (med.inside) {
-                vec3 T;
-                vec3 ins;
-                waterSegment(med, rayOrig, rayDir, 48.0, T, ins);
-                glassRefl += thr * ins;
-                thr *= T;
-            }
+    // do not flicker between "opaque" and "transparent" per pixel and frame. One traversal covers a whole straight run of the
+    // ray (cameraWalk); a realistic water face bends it, so the walk is re-entered behind the Snell bend, at most a few times.
+    CameraPath cp;
+    cameraPathStart(cp, camMed);
+    bool hit = false;
+    for (uint bendIdx = 0u; bendIdx < 4u; bendIdx++) {
+        bool bend = false;
+        hit = cameraWalk(cp, rayOrig, rayDir, seed, s, bend);
+        if (!bend) {
+            break;
+        }
+        vec3 rd = refract(rayDir, s.ns, rayDir.y < 0.0 ? 1.0 / WATER_IOR : WATER_IOR);
+        if (dot(rd, rd) <= 0.5) {
+            cp.thr = vec3(0.0);   // total internal reflection: the mirror ray above carries the light
             hit = false;
             break;
         }
-        if (med.inside) {
-            vec3 T;
-            vec3 ins;
-            waterSegment(med, rayOrig, rayDir, s.t, T, ins);
-            glassRefl += thr * ins;
-            thr *= T;
-        }
-        if ((!s.translucent && s.alpha < 0.5) || s.alpha < 0.05) {
-            // Cutout transparent pixel (e.g. empty space of redstone wire quad) - pass through!
-            rayOrig = s.pos + rayDir * 0.002;
-            continue;
-        }
-        hit = true;
-        if (!hadFirst) {
-            firstDist = s.t;
-            hadFirst = true;
-        }
-        if (isInterface(s)) {
-            float F = interfaceReflectance(s, rayDir);
-            bool volume = s.isWater && waterVolumeStyle() && isWaterBoundary(s);
-            if (hasFlag(FLAG_REFLECTIONS) && mirrors < 2u && (interfaces == 0u || s.isWater)) {
-                mirrors++;
-                vec3 rdir = bendHorizon(reflect(rayDir, s.ns), s.ng);
-                if (volume && s.roughness > 0.03) {
-                    rdir = bendHorizon(coneAround(rdir, s.roughness * s.roughness, seed), s.ng);   // far sheen: waves below the pixel
-                }
-                vec3 refl = interfaceMirror(volume && F < 0.05, offsetOrigin(s), rdir, rayDistance(), hasFlag(FLAG_SHADOWS), med);
-                glassRefl += thr * F * refl;
-            }
-            interfaces++;
-            if (s.isWater && !volume) {
-                // vanilla style: the animated water sprite (biome tint) is blended over the scene behind it
-                glassRefl += thr * ((1.0 - F) * VANILLA_WATER_ALPHA) * vanillaWaterSurface(s, rayDir, emissiveDistance(), seed);
-                crossWaterBoundary(med, s, rayDir);
-                sawWater = true;
-            }
-            thr *= interfaceTransmittance(s, F);
-            if (volume) {
-                vec3 rd = refract(rayDir, s.ns, rayDir.y < 0.0 ? 1.0 / WATER_IOR : WATER_IOR);
-                crossWaterBoundary(med, s, rayDir);
-                sawWater = true;
-                if (dot(rd, rd) > 0.5) {
-                    rayDir = normalize(rd);   // Snell refraction through the wavy surface
-                } else {
-                    thr = vec3(0.0);          // total internal reflection: the mirror ray above carries the light
-                }
-            }
-            if (max(thr.r, max(thr.g, thr.b)) < 0.004) {
-                hit = false;   // nothing is left of the light behind this layer
-                break;
-            }
-            rayOrig = s.pos + rayDir * 0.002;
-            continue;
-        }
-        break;
+        rayDir = normalize(rd);   // Snell refraction through the wavy surface
+        rayOrig = s.pos + rayDir * 0.002;
     }
+    vec3 thr = cp.thr;
+    vec3 glassRefl = cp.glassRefl;
+    WaterMedium med = cp.med;
+    bool sawWater = cp.sawWater;
+    float firstDist = cp.firstDist;
+    bool hadFirst = cp.hadFirst;
     vec3 color = vec3(0.0);            // the sky is only needed on a miss (display space, not tone mapped below)
     vec3 diffE = vec3(0.0);    // lit view: diffuse light reaching the eye (x thr), before the albedo
     bool tonemapped = false;   // lit / reflection views are tone mapped after the accumulation
@@ -294,8 +382,10 @@ void main() {
                 // EMITTER_RADIUS from it), so the vanilla block-light field takes the term over there and the walk is skipped:
                 // a distant torch lights the ground it stands on instead of leaving it black, and distant pixels cost no rays.
                 vec3 emissiveLight = vec3(0.0);
-                // s.t is the distance from the LAST interface, not from the camera (the ray origin is reset at every glass or
-                // water face), and s.pos is camera-relative: the distance the list is sorted by is length(s.pos).
+                // s.pos is camera-relative (fetchSurface: origin + dir * t, with the camera origin as the origin), so the
+                // distance the emitter list is sorted by is length(s.pos). Not s.t: since the camera ray crosses its
+                // interfaces in one traversal, s.t is the absolute distance for glass and only a refracted water segment
+                // resets the origin, which is why the distance is taken from the position.
                 float cameraDist = length(s.pos);
                 // RtEmitters builds its list within emissiveDistance() + 8 blocks of the camera (RtFrameRenderer).
                 float listRange = emissiveDistance() + 8.0;
