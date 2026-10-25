@@ -21,6 +21,8 @@ public final class StreamedVoxelScene {
     private final Map<SectionKey, Page> pages = new HashMap<>();
     private final LinkedHashMap<SectionKey, SectionSnapshot> pending = new LinkedHashMap<>();
     private final LinkedHashSet<Integer> dirty = new LinkedHashSet<>();
+    private final ArrayDeque<Integer> tombstones = new ArrayDeque<>();
+    private final BitSet queuedTombstones = new BitSet();
     private final Set<SectionKey> evicted = new HashSet<>();
     private final ArrayDeque<SectionKey> invalidations = new ArrayDeque<>();
     private final LinkedHashMap<SectionKey, List<Emitter>> emitterPages = new LinkedHashMap<>();
@@ -138,6 +140,7 @@ public final class StreamedVoxelScene {
         if(memoryLimited)reason="Memory-limited residency; unavailable sections retain raster";
         int budget = Math.max(0, latest.bounds().uploadBudgetBytes() - frameOverheadBytes);
         int commands = 0;
+        compactTombstones();
         // Invalidations/removals precede reused payload ranges in this same queue submission.
         while (!dirty.isEmpty() && budget >= ENTRY_BYTES && commands < 128) {
             int slot = dirty.iterator().next(); dirty.remove(slot);
@@ -273,8 +276,62 @@ public final class StreamedVoxelScene {
         return insert?tomb:-1;
     }
     private static int hash(SectionKey key) {
-        int h=key.x()*0x8da6b343^key.y()*0xd8163841^key.z()*0xcb1ab31f;
+        return hash(key.x(),key.y(),key.z());
+    }
+    private static int hash(int x,int y,int z) {
+        int h=x*0x8da6b343^y*0xd8163841^z*0xcb1ab31f;
         h^=h>>>16;h*=0x7feb352d;h^=h>>>15;return h;
+    }
+
+    /** Reclaim dead probe-chain markers without relocating pages or uploading their payloads.
+     * A reachable entry is at most MAX_PROBES-1 positions after its home bucket. Therefore only
+     * the next 63 positions can depend on a tombstone; markers outside live probe paths can become
+     * terminating zero buckets. A partially uploaded page is a reserved entry too, even though its
+     * directory record has not been published. The unchanged dirty queue orders all GPU writes.
+     * Work is round-robin and bounded to 64 markers / 4096 metadata checks per recorded frame. */
+    private void compactTombstones() {
+        int count = Math.min(64, tombstones.size());
+        for (int n = 0; n < count; n++) {
+            Integer bucket = tombstones.removeFirst();
+            int hole = bucket;
+            queuedTombstones.clear(hole);
+            if (directory[hole * 12 + 3] != TOMBSTONE) continue;
+            if (neededForProbe(hole)) {
+                queuedTombstones.set(hole);
+                tombstones.addLast(bucket);
+            } else {
+                Arrays.fill(directory, hole * 12, hole * 12 + 12, 0);
+                dirty.add(hole);
+            }
+        }
+    }
+
+    private boolean neededForProbe(int hole) {
+        if (active != null && active.page.slot != hole
+                && crossesHole(hash(active.key), active.page.slot, hole)) return true;
+        int mask = directoryCapacity - 1;
+        for (int distance = 1; distance < MAX_PROBES; distance++) {
+            int slot = (hole + distance) & mask, offset = slot * 12;
+            int state = directory[offset + 3];
+            // No published probe chain can continue through a terminating zero bucket. An
+            // unpublished reservation was checked above, so this early exit is safe as well.
+            if (state == 0) return false;
+            if (state == TOMBSTONE) continue;
+            if (crossesHole(hash(directory[offset], directory[offset + 1], directory[offset + 2]), slot, hole)) return true;
+        }
+        return false;
+    }
+
+    private boolean crossesHole(int hash, int slot, int hole) {
+        int mask = directoryCapacity - 1, home = hash & mask;
+        return ((hole - home) & mask) < ((slot - home) & mask);
+    }
+
+    private void queueTombstone(int slot) {
+        if (!queuedTombstones.get(slot)) {
+            queuedTombstones.set(slot);
+            tombstones.addLast(slot);
+        }
     }
     private boolean inside(SectionKey key) {
         var b=latest.bounds();int r=b.effectiveRenderDistanceChunks();
@@ -287,6 +344,7 @@ public final class StreamedVoxelScene {
     private void removeResident(SectionKey key) {
         Page page=pages.remove(key);if(page==null)return;
         directory[page.slot*12+3]=TOMBSTONE;dirty.add(page.slot);
+        queueTombstone(page.slot);
         release(page); List<Emitter> removed=emitterPages.remove(key);
         if(removed!=null){emitterFound-=removed.size();selectedEmitters.removeAll(removed);emitterCursor=null;}
         revision++;
@@ -295,6 +353,7 @@ public final class StreamedVoxelScene {
     private void release(Page page){if(page.cells>=0)cells.free(page.cells,CELL_BYTES);if(page.palette>=0)palettes.free(page.palette,page.paletteSize);if(page.models>=0)models.free(page.models,page.modelSize);}
     public void clear() {
         latest=null;session=-1;atlasGeneration=0;pending.clear();pages.clear();dirty.clear();evicted.clear();invalidations.clear();active=null;
+        tombstones.clear();queuedTombstones.clear();
         if(directory!=null)Arrays.fill(directory,0);if(cells!=null)cells.reset();if(palettes!=null)palettes.reset();if(models!=null)models.reset();
         emitterPages.clear();selectedEmitters.clear();emitterCursor=null;emitterFound=0;clearDirectory=true;revision++;
     }
