@@ -41,7 +41,13 @@ import java.util.regex.Pattern;
  */
 public final class IrisPassGraph {
 
-    private static final Pattern COMPOSITE_PATTERN = Pattern.compile("^composite(\\d*)(_[a-z])?$");
+    /** Dimension id Iris resolves before a world exists; the host builds every used folder and switches per dimension. */
+    public static final String OVERWORLD = "minecraft:overworld";
+    private static final Set<ProgramName.Family> FULLSCREEN_FAMILIES = Set.of(
+        ProgramName.Family.PREPARE, ProgramName.Family.DEFERRED, ProgramName.Family.COMPOSITE, ProgramName.Family.FINAL);
+    /** Fullscreen pass names in execution order: prepare*, then deferred*, then composite*; final comes last. */
+    private static final Pattern FULLSCREEN_PATTERN = Pattern.compile("^(prepare|deferred|composite)(\\d*)(_[a-z])?$");
+    private static final List<String> FULLSCREEN_ORDER = List.of("prepare", "deferred", "composite");
     private static final Pattern FINAL_PATTERN = Pattern.compile("^final(_[a-z])?$");
     private static final Pattern VEC2_TEXCOORD = Pattern.compile("\\b(?:varying|in)\\s+vec2\\s+texcoord\\b");
 
@@ -111,18 +117,24 @@ public final class IrisPassGraph {
 
     private final String packName;
     private final String shadersRoot;
+    private final String folder;
     private final List<Pass> passes;
     private final IrisPackOptions.Summary options;
     private final IrisRenderTargets.Resolution targets;
     private final IrisWorldUniforms.Constants worldConstants;
 
     public IrisPassGraph(String packName, String shadersRoot, List<Pass> passes) {
-        this(packName, shadersRoot, passes, IrisPackOptions.Summary.defaults());
+        this(packName, shadersRoot, "", passes, IrisPackOptions.Summary.defaults());
     }
 
     public IrisPassGraph(String packName, String shadersRoot, List<Pass> passes, IrisPackOptions.Summary options) {
+        this(packName, shadersRoot, "", passes, options);
+    }
+
+    public IrisPassGraph(String packName, String shadersRoot, String folder, List<Pass> passes, IrisPackOptions.Summary options) {
         this.packName = Objects.requireNonNull(packName, "packName");
         this.shadersRoot = Objects.requireNonNull(shadersRoot, "shadersRoot");
+        this.folder = Objects.requireNonNull(folder, "folder");
         this.passes = List.copyOf(passes);
         this.options = Objects.requireNonNull(options, "options");
         var directives = this.passes.stream()
@@ -155,6 +167,11 @@ public final class IrisPassGraph {
         return shadersRoot;
     }
 
+    /** Program folder this graph was built from ({@code ""} = root, else e.g. {@code world0}). */
+    public String folder() {
+        return folder;
+    }
+
     public List<Pass> passes() {
         return passes;
     }
@@ -177,16 +194,69 @@ public final class IrisPassGraph {
      * with an explanatory message if unsupported features are present.
      */
     public static ShaderHostStatus validate(PackReport report) {
+        return validate(report, folderFor(report, OVERWORLD));
+    }
+
+    /**
+     * Program folder Iris uses for a dimension. With {@code dimension.properties}: the folder whose id list contains the
+     * dimension, else the folder listing {@code *}, else the root. Without it: the classic {@code world0} (overworld),
+     * {@code world-1} (nether) and {@code world1} (end) folders when present, else the root. A mapped folder that holds no
+     * programs resolves to the root. Returns {@code ""} for the root.
+     */
+    public static String folderFor(PackReport report, String dimensionId) {
+        Map<String, List<String>> ids = report.dimensionIds();
+        if (!ids.isEmpty()) {
+            String wildcard = null;
+            for (Map.Entry<String, List<String>> entry : ids.entrySet()) {
+                if (entry.getValue().contains(dimensionId)) return programFolder(report, entry.getKey());
+                if (wildcard == null && entry.getValue().contains("*")) wildcard = entry.getKey();
+            }
+            return wildcard == null ? "" : programFolder(report, wildcard);
+        }
+        String classic = switch (dimensionId) {
+            case OVERWORLD -> "world0";
+            case "minecraft:the_nether" -> "world-1";
+            case "minecraft:the_end" -> "world1";
+            default -> null;
+        };
+        return classic == null ? "" : programFolder(report, classic);
+    }
+
+    /** Folders the pack actually uses for some dimension, root last; each needs its own compiled graph. */
+    public static List<String> usedFolders(PackReport report) {
+        Set<String> folders = new java.util.LinkedHashSet<>();
+        if (!report.dimensionIds().isEmpty()) {
+            for (String folder : report.dimensionIds().keySet()) folders.add(programFolder(report, folder));
+            if (report.dimensionIds().values().stream().noneMatch(list -> list.contains("*"))) folders.add("");
+        } else {
+            for (String dimension : List.of(OVERWORLD, "minecraft:the_nether", "minecraft:the_end")) folders.add(folderFor(report, dimension));
+            folders.add("");
+        }
+        // Only folders with programs are buildable; the root may be empty when every dimension has its own folder.
+        folders.removeIf(folder -> programsIn(report, folder).isEmpty());
+        return List.copyOf(folders);
+    }
+
+    private static String programFolder(PackReport report, String folder) {
+        return programsIn(report, folder).isEmpty() ? "" : folder;
+    }
+
+    /** Programs of one folder. Iris reads a dimension's programs from its folder alone; the root is not merged in. */
+    static SortedMap<String, Set<ProgramName.Stage>> programsIn(PackReport report, String folder) {
+        SortedMap<String, Set<ProgramName.Stage>> programs = report.dimensions().get(folder);
+        return programs == null ? Collections.emptySortedMap() : programs;
+    }
+
+    /**
+     * Validates one folder's programs against what this host executes: the fullscreen {@code prepare*}, {@code deferred*},
+     * {@code composite*} and {@code final} passes. Distant Horizons programs are inactive without that mod and are ignored.
+     * Geometry ({@code gbuffers_*}, {@code shadow}) and compute programs are refused by name until the host runs them.
+     */
+    public static ShaderHostStatus validate(PackReport report, String folder) {
         Objects.requireNonNull(report, "report");
         List<String> unsupported = new ArrayList<>();
 
         if (!report.propertiesConditional() && !report.requiredFeatures().isEmpty()) unsupported.add("required Iris features " + report.requiredFeatures());
-
-        // 1. Dimension folders: Step A only supports the root shaders/ folder.
-        List<String> nonRootFolders = report.dimensions().keySet().stream().filter(f -> !f.isEmpty()).toList();
-        if (!nonRootFolders.isEmpty()) {
-            unsupported.add("dimension folders " + nonRootFolders + " (step A supports root shaders/ only)");
-        }
 
         // 2. Ray tracing: not supported in raster step A.
         if (report.rtModel() != PackReport.RtModel.NONE) {
@@ -207,15 +277,15 @@ public final class IrisPassGraph {
             unsupported.add("custom textures " + report.customTextures());
         }
 
-        // 4. Programs in root folder: only COMPOSITE and FINAL are allowed.
-        SortedMap<String, Set<ProgramName.Stage>> rootPrograms = report.dimensions().get("");
-        if (rootPrograms == null || rootPrograms.isEmpty()) {
-            unsupported.add("no programs found in shaders root");
+        // 4. Programs of the dimension's folder: fullscreen passes run, Distant Horizons programs are inactive.
+        SortedMap<String, Set<ProgramName.Stage>> folderPrograms = programsIn(report, folder);
+        if (folderPrograms.isEmpty()) {
+            unsupported.add("no programs found in shaders " + (folder.isEmpty() ? "root" : folder + "/"));
         } else {
             List<String> forbiddenPrograms = new ArrayList<>();
             List<String> forbiddenStages = new ArrayList<>();
             List<String> missingFragment = new ArrayList<>();
-            for (Map.Entry<String, Set<ProgramName.Stage>> entry : rootPrograms.entrySet()) {
+            for (Map.Entry<String, Set<ProgramName.Stage>> entry : folderPrograms.entrySet()) {
                 String prog = entry.getKey();
                 Set<ProgramName.Stage> stages = entry.getValue();
                 ProgramName pn = null;
@@ -223,8 +293,10 @@ public final class IrisPassGraph {
                     pn = ProgramName.classify(prog + "." + st.ext);
                     if (pn != null) break;
                 }
-                if (pn == null || (pn.family() != ProgramName.Family.COMPOSITE && pn.family() != ProgramName.Family.FINAL)) {
+                if (pn != null && pn.family() == ProgramName.Family.DISTANT_HORIZONS) continue;
+                if (pn == null || !FULLSCREEN_FAMILIES.contains(pn.family())) {
                     forbiddenPrograms.add(prog + " (" + (pn == null ? "unknown" : pn.family()) + ")");
+                    continue;
                 }
                 for (ProgramName.Stage st : stages) {
                     if (st != ProgramName.Stage.VERTEX && st != ProgramName.Stage.FRAGMENT) {
@@ -236,7 +308,9 @@ public final class IrisPassGraph {
                 }
             }
             if (!forbiddenPrograms.isEmpty()) {
-                unsupported.add("unsupported programs: " + forbiddenPrograms + " (step A supports composite*.fsh/vsh and final.fsh/vsh only)");
+                unsupported.add("unsupported programs: " + forbiddenPrograms
+                    + " (the host runs prepare*, deferred*, composite* and final; the geometry stage for gbuffers_*/shadow"
+                    + " and compute programs are not implemented yet)");
             }
             if (!forbiddenStages.isEmpty()) {
                 unsupported.add("unsupported shader stages: " + forbiddenStages);
@@ -262,20 +336,27 @@ public final class IrisPassGraph {
     }
 
     public static ParseResult build(PackSource src, PackReport report, IrisPackOptions.Request request) throws IOException {
+        return build(src, report, request, folderFor(report, OVERWORLD));
+    }
+
+    /** Builds the graph of one program folder ({@code ""} = root); see {@link #folderFor} and {@link #usedFolders}. */
+    public static ParseResult build(PackSource src, PackReport report, IrisPackOptions.Request request, String folder) throws IOException {
         Objects.requireNonNull(src, "src");
         Objects.requireNonNull(report, "report");
+        Objects.requireNonNull(folder, "folder");
 
         // 1. Initial structural validation
-        ShaderHostStatus validation = validate(report);
+        ShaderHostStatus validation = validate(report, folder);
         if (validation.state() != ShaderHostState.READY) {
             return new ParseResult(false, validation, null);
         }
 
-        SortedMap<String, Set<ProgramName.Stage>> rootPrograms = report.dimensions().get("");
-        if (rootPrograms == null || rootPrograms.isEmpty()) {
+        SortedMap<String, Set<ProgramName.Stage>> rootPrograms = programsIn(report, folder);
+        if (rootPrograms.isEmpty()) {
             return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                 "pack " + report.name() + " has no programs"), null);
         }
+        String programRoot = report.shadersRoot() + (folder.isEmpty() ? "" : folder + "/");
 
         IrisPackOptions configuration;
         try { configuration = IrisPackOptions.resolve(src, report, request); }
@@ -295,12 +376,12 @@ public final class IrisPassGraph {
                     "unimplemented shader properties: " + unsupportedKeys),null);
         }
 
-        // 2. Discover and sort composite and final passes
+        // 2. Discover and sort the fullscreen passes (prepare*, deferred*, composite*) and final
         List<String> compositeNames = new ArrayList<>();
         List<String> finalNames = new ArrayList<>();
 
         for (String prog : rootPrograms.keySet()) {
-            Matcher mc = COMPOSITE_PATTERN.matcher(prog);
+            Matcher mc = FULLSCREEN_PATTERN.matcher(prog);
             if (mc.matches()) {
                 compositeNames.add(prog);
                 continue;
@@ -312,16 +393,18 @@ public final class IrisPassGraph {
         }
 
         compositeNames.sort((a, b) -> {
-            Matcher ma = COMPOSITE_PATTERN.matcher(a);
-            Matcher mb = COMPOSITE_PATTERN.matcher(b);
+            Matcher ma = FULLSCREEN_PATTERN.matcher(a);
+            Matcher mb = FULLSCREEN_PATTERN.matcher(b);
             ma.matches();
             mb.matches();
-            int numA = ma.group(1).isEmpty() ? 0 : Integer.parseInt(ma.group(1));
-            int numB = mb.group(1).isEmpty() ? 0 : Integer.parseInt(mb.group(1));
-            int cmp = Integer.compare(numA, numB);
+            int cmp = Integer.compare(FULLSCREEN_ORDER.indexOf(ma.group(1)), FULLSCREEN_ORDER.indexOf(mb.group(1)));
             if (cmp != 0) return cmp;
-            String subA = ma.group(2) == null ? "" : ma.group(2);
-            String subB = mb.group(2) == null ? "" : mb.group(2);
+            int numA = ma.group(2).isEmpty() ? 0 : Integer.parseInt(ma.group(2));
+            int numB = mb.group(2).isEmpty() ? 0 : Integer.parseInt(mb.group(2));
+            cmp = Integer.compare(numA, numB);
+            if (cmp != 0) return cmp;
+            String subA = ma.group(3) == null ? "" : ma.group(3);
+            String subB = mb.group(3) == null ? "" : mb.group(3);
             cmp = subA.compareTo(subB);
             return cmp != 0 ? cmp : a.compareTo(b);
         });
@@ -343,7 +426,7 @@ public final class IrisPassGraph {
 
         if (orderedPasses.isEmpty()) {
             return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.DISABLED_FOR_SESSION,
-                "pack " + report.name() + " has no enabled composite or final passes"), null);
+                "pack " + report.name() + " has no enabled prepare, deferred, composite or final passes"), null);
         }
 
         if (orderedPasses.size() > IrisPostExecutor.MAX_PASS_SETS || orderedPasses.stream().filter(p -> p.startsWith("final")).count() > 1)
@@ -369,8 +452,8 @@ public final class IrisPassGraph {
         int passOrder = 0;
 
         for (String passName : orderedPasses) {
-            ProgramName.Family family = passName.startsWith("final") ? ProgramName.Family.FINAL : ProgramName.Family.COMPOSITE;
-            String fshPath = report.shadersRoot() + passName + ".fsh";
+            ProgramName.Family family = ProgramName.classify(passName + ".fsh").family();
+            String fshPath = programRoot + passName + ".fsh";
 
             if (!src.entries().contains(fshPath)) {
                 return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
@@ -391,7 +474,7 @@ public final class IrisPassGraph {
             }
 
             // Expand or synthesize vertex shader
-            String vshPath = report.shadersRoot() + passName + ".vsh";
+            String vshPath = programRoot + passName + ".vsh";
             String expandedVsh;
             if (src.entries().contains(vshPath)) {
                 try {
@@ -453,7 +536,7 @@ public final class IrisPassGraph {
                 vResult, fResult, vSpv, fSpv));
         }
 
-        IrisPassGraph graph = new IrisPassGraph(report.name(), report.shadersRoot(), passes, configuration.summary());
+        IrisPassGraph graph = new IrisPassGraph(report.name(), report.shadersRoot(), folder, passes, configuration.summary());
         if (!graph.targets().problems().isEmpty())
             return new ParseResult(false, ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.UNSUPPORTED_PACK_FEATURES,
                 "render target directives: " + String.join("; ", graph.targets().problems())), null);

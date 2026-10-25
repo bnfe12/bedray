@@ -258,6 +258,12 @@ public final class IrisRenderBridge {
                 != ShaderHostKind.IRIS) {
             retire();
             worldIdentity = world;
+            // A dimension change always arrives as a new client level, so the resources above are already retired;
+            // here the host switches to the program folder Iris uses for that dimension (world0, world-1, ...).
+            if (world instanceof net.minecraft.world.level.Level level) {
+                var host = ShaderHosts.iris();
+                if (host != null) host.selectDimension(level.dimension().identifier().toString());
+            }
         }
     }
 
