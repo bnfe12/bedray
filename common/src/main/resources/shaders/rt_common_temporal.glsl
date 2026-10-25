@@ -1,36 +1,3 @@
-// ---- Pixelated shadows (look option, RtSettings.raysPixelShadows) ----------------------------------------------------------
-// The sun visibility is evaluated once per world-space shadow texel instead of once per pixel: the shadow ray origin is
-// snapped to the centre of a horizontal world cell, so one whole light cell shares one sample and the penumbra becomes
-// deliberately blocky, exactly at the resolution of the block textures: the cell is measured in texture pixels
-// (1/16 block), so size 1 = a 16x16 block-texture pixel. The grid lives in the world, so the pattern is stable while
-// the camera moves and does not swim. shadowPixel = 0 (option off) keeps the exact per-pixel origin.
-float shadowPixelSize() {
-    // StatsBuf.shadowPixel carries texture pixels; one texture pixel is 1/16 of a block.
-    return pc.statsAddr == uvec2(0u) ? 0.0 : StatsBuf(pc.statsAddr).shadowPixel * (1.0 / 16.0);
-}
-
-vec3 pixelShadowOrigin(Surface s, vec3 o) {
-    float cell = shadowPixelSize();
-    if (cell <= 0.0) {
-        return o;
-    }
-    // Snap horizontally only: the grid stays parallel to the block grid at any sun height, so a low sun does not shove
-    // the origin vertically into the ground.
-    vec2 w = s.worldPos.xz;
-    vec3 lateral = vec3((floor(w.x / cell) + 0.5) * cell - w.x, 0.0, (floor(w.y / cell) + 0.5) * cell - w.y);
-    // Keep the displacement in the surface plane: a naive world snap pushes wall fragments sideways INTO the wall, and
-    // the whole cell traces out of solid geometry and goes black.
-    lateral -= s.ng * dot(lateral, s.ng);
-    // A cell wider than one block spans steps and slabs: lift the shared origin enough to clear them, but not a ceiling.
-    return o + lateral + s.ng * min(0.05 + 0.2 * cell, 0.4);
-}
-
-// Cell-space index for the sun-disk sample sequence: every pixel of a cell shares the same penumbra sample.
-vec2 pixelShadowCell(vec3 worldPos) {
-    float cell = shadowPixelSize();
-    return cell > 0.0 ? floor(worldPos.xz / cell) : floor(worldPos.xz * 16.0);
-}
-
 bool keyLightOn() {
     return max(pc.keyColor.r, max(pc.keyColor.g, pc.keyColor.b)) > 0.001;
 }

@@ -78,8 +78,8 @@ public final class RtPathTracerPass implements RtPass {
     @Override
     public void configure(RtFrameParams params, boolean denoising) {
         params.mode = RtConfig.effectiveMode();
-        params.bounces = RtSettings.bounces();
-        params.spp = RtSettings.spp();
+        params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());
+        params.spp = RtAdaptiveQuality.spp(RtSettings.spp());
         params.rayDistance = RtSettings.pathMaxDistance();
         params.quality = 1;
         params.rayQualities = -1;

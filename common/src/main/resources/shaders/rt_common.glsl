@@ -7,6 +7,7 @@
 #include "rt_common_light.glsl"
 #include "rt_common_sampling.glsl"
 #include "rt_common_surface.glsl"
+#include "rt_common_pixel_shadow.glsl"
 #include "rt_common_emitters.glsl"
 #include "rt_common_temporal.glsl"
 #include "rt_common_water.glsl"

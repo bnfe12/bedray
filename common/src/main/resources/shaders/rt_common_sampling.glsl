@@ -126,12 +126,13 @@ vec3 sunDiskDirection(vec3 d, float radius, vec2 u) {
     return normalize(d + t * q.x + b * q.y);
 }
 
-// Pixel and sample counter of the shadow sequence of the current thread (set by main()).
-ivec2 gSunPixel = ivec2(0);
-uint gSunIndex = 0u;
-
-// Shadow direction of sample `i` of this frame for the primary hit (stratified in time and over the disk).
-vec3 sunShadowDirection(vec3 d, float radius, uint i, uint perFrame) {
-    return sunDiskDirection(d, radius, r2Point(pixelOffset(gSunPixel), gSunIndex * perFrame + i));
+// Shadow direction of sample `i` of this frame for a shaded fragment, with the sun-disk rotation taken from `rotation`:
+// the pixel index normally, the world cell index when the pixel-shadow option samples the shadow per cell
+// (rt_common_pixel_shadow.glsl sunShadowRotation). The rotation is passed in, not held in a global, so shading a secondary
+// ray can never change the sample sequence of the primary pixel that spawned it.
+vec3 sunShadowDirectionAt(vec3 d, float radius, ivec2 rotation, uint frame, uint i, uint perFrame) {
+    // The frame is wrapped exactly like noise2D: the sequence stays exact in a long session, and the 1024-frame repeat is
+    // invisible to a 1/N penumbra (the alternative was a sequence index that drifts into float granularity).
+    return sunDiskDirection(d, radius, r2Point(pixelOffset(rotation), (frame & 1023u) * perFrame + i));
 }
 

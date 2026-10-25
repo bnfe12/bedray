@@ -291,6 +291,13 @@ public final class SettingsCatalog {
                 p("nrd", "NRD", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.NRD),
                 p("dlss_rr", "DLSS Ray Reconstruction", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.DLSS_RR)),
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
+        putNoImage("adaptive_quality", Tier.ADVANCED, "Adaptive Quality",
+            "Keeps Path Tracing inside a GPU frame budget: when the measured time of the traced rays and the denoiser is over it, rays per pixel drop first and then bounces, "
+                + "below the values you chose; when the frame has room again they come back. It never goes above your values. Off by default - turn it on if you want a steadier "
+                + "frame rate in heavy scenes and accept less detail there.",
+            "FPS: none on its own - it trades image detail for a steadier frame rate when a scene is too heavy for the budget.",
+            "Path Tracing only. Uses the GPU timers, so it stays off when they were disabled at startup.",
+            "A still cannot show a governor at work: the effect is in the frame time of a heavy scene, not in one image.");
         put("path_caustics", Tier.ADVANCED, "Water Caustics",
             "Sunlight focused by the water surface into moving bright patterns on the ground under water.",
             "", "Path Tracing only.", Scene.WATER, 0.5f, 0.75f, "path_caustics", List.of(
@@ -383,7 +390,6 @@ public final class SettingsCatalog {
         for (String[] e : new String[][] {
             {"rays_shadows", "RT Shadows", "Traced sun and moon shadows (Ray Tracing Fast mode)."},
             {"rays_soft_shadows", "RT Soft Shadows", "Shadows soften with distance from the caster (Ray Tracing Fast mode)."},
-            {"rays_pixel_shadows", "RT Pixel Shadows", "Minecraft-style blocky shadow edges: every fragment of a world cell traces its sun ray from the cell centre (both RT modes)."},
             {"rays_reflections", "RT Reflections", "Traced reflections on water, glass, metals (Ray Tracing Fast mode)."},
             {"rays_ao", "RT Ambient Occlusion", "Traced darkening in corners (Ray Tracing Fast mode)."},
             {"rays_gi", "RT Global Illumination", "One traced bounce of indirect light (Ray Tracing Fast mode)."},
@@ -392,6 +398,16 @@ public final class SettingsCatalog {
             putNoImage(e[0], Tier.EXPERT, e[1], e[2], "", "Hidden mode: Ray Tracing (Fast) is in development.",
                 "The Ray Tracing (Fast) mode is not public yet, so it has no screenshots.");
         }
+        // A look option, not a cost option: the only added work is one short ray (at most half a cell) that checks the
+        // shared origin still sees the fragment it replaces.
+        putNoImage("rays_pixel_shadows", Tier.EXPERT, "RT Pixel Shadows",
+            "Blocky, Minecraft-style sun and moon shadows: the sun and moon shadow is sampled once per world cell instead of "
+                + "once per pixel, so the edge becomes a staircase at block-texture resolution (both RT modes). Ambient "
+                + "occlusion, traced sky light and light from glowing blocks stay exact. There is one exception: "
+                + "cells that cross geometry keep exact shadows.",
+            "FPS: none to low (one validation ray of at most half a cell per shaded hit).",
+            "Hidden mode: Ray Tracing (Fast) is in development.",
+            "A look option with no preview screenshot yet.");
         for (String[] e : new String[][] {
             {"rays_shadow_quality", "RT Shadow Rays", "Shadow rays per pixel."},
             {"rays_pixel_shadow_size", "RT Pixel Shadow Size", "Size of a pixelated shadow in texture pixels (1 = one pixel of a 16x16 block texture); larger means chunkier edges. Only used when RT Pixel Shadows is on."},

@@ -77,7 +77,11 @@ vec3 shadeSimple(Surface s, vec3 dir, bool shadowRay) {
     // the sun side of the card so the blade does not shadow itself.
     float leafBack = s.isFoliage ? max(dot(-s.ng, L), 0.0) : 0.0;
     if (keyLightOn() && ndotl > 0.0 && ngdotl > 0.0) {
-        sunT = shadowRay ? traceTransmittance(o, L, 2048.0) : vec3(1.0);
+        // Pixel shadows reach secondary shading too: a mirror or a bounce that lands on a shadowed floor must show the same
+        // shadow edges the floor has when seen directly (rt_common_pixel_shadow.glsl). Built here, where the ray is really
+        // traced: the geometry validation inside the origin is a ray of its own. Nothing on this path is refracted.
+        vec3 shadowO = shadowRay && pixelShadowApplies(s, false) ? pixelShadowOrigin(s, o) : o;
+        sunT = shadowRay ? traceTransmittance(shadowO, L, 2048.0) : vec3(1.0);
     } else if (keyLightOn() && leafBack > 0.0) {
         sunT = shadowRay ? traceTransmittance(leafShadowOrigin(s, L), L, 2048.0) : vec3(1.0);
     }
@@ -158,7 +162,9 @@ vec3 shadeReflectionHit(Surface s, vec3 dir, bool shadowRay) {
     // every back-lit one (sun behind the card) lost the key light completely. Sun-side shadow origin, no self-shadowing.
     float leafBack = s.isFoliage ? max(dot(-s.ng, L), 0.0) : 0.0;
     if (keyLightOn() && ndotl > 0.0 && ngdotl > 0.0) {
-        sunT = shadowRay ? traceTransmittance(o, L, 2048.0) : vec3(1.0);
+        // Same per-cell origin as shadeSimple: a reflected floor and the floor itself must not disagree about their shadows.
+        vec3 shadowO = shadowRay && pixelShadowApplies(s, false) ? pixelShadowOrigin(s, o) : o;
+        sunT = shadowRay ? traceTransmittance(shadowO, L, 2048.0) : vec3(1.0);
     } else if (keyLightOn() && leafBack > 0.0) {
         sunT = shadowRay ? traceTransmittance(leafShadowOrigin(s, L), L, 2048.0) : vec3(1.0);
     }

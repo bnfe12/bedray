@@ -27,6 +27,7 @@ final class RtModesChecks {
         paramsPacking();
         accumulation();
         settingsKeys();
+        telemetry();
         scenarioSteps();
         shadersCompile();
         exposureAndEmitters();
@@ -360,6 +361,55 @@ final class RtModesChecks {
         check(a.next(turned, 1.01, 2, 3, new float[] {0.5f, 0.9f, 0f}, false, 8, 100, 50, true) == 1 && a.cap() == RtAccumulation.CHANGE_CAP, "sun move caps");
         check(a.next(turned, 1.01, 2, 3, new float[] {0.5f, 0.9f, 0f}, false, 8, 120, 50, true) == 0 && a.lastResetReason().equals("resize"), "resize resets");
         check(a.next(turned, 1.01, 2, 3, sun, false, 8, 100, 50, false) == 0, "disabled: always 0");
+    }
+
+    /**
+     * The lines the owner reads must not contradict each other: a path-traced session printed {@code status mode=path} and
+     * {@code rt_pass ... mode=lit} in the same second (owner log 2026-10-25), and {@code hist_pct=0.0} in a session that has
+     * no accumulation at all.
+     */
+    private static void telemetry() {
+        RtMode oldMode = VulkanRtxConfig.rtMode;
+        boolean oldRt = VulkanRtxConfig.enableHardwareRayTracing;
+        String oldDebug = RtConfig.currentDebugView();
+        try {
+            // the field directly, not setRtMode: the latter would also persist the mode and unlock the experimental ones
+            VulkanRtxConfig.rtMode = RtMode.PATH_TRACED;
+            check("path".equals(RtConfig.effectiveModeName()), "path session reports 'path', not 'lit'");
+            RtConfig.setDebugView("normals");
+            check("normals".equals(RtConfig.effectiveModeName()), "a debug view still wins over the mode name");
+            RtConfig.setDebugView("");
+            VulkanRtxConfig.rtMode = RtMode.AO;
+            check("ao".equals(RtConfig.effectiveModeName()), "ao session keeps its name");
+            VulkanRtxConfig.rtMode = RtMode.DIRECT;
+            check("shadow".equals(RtConfig.effectiveModeName()), "direct session keeps its name");
+            VulkanRtxConfig.rtMode = RtMode.RAY_TRACED;
+            check("lit".equals(RtConfig.effectiveModeName()), "the ray mode (one lit pass) keeps its name");
+        } finally {
+            RtConfig.setDebugView(oldDebug);
+            VulkanRtxConfig.rtMode = oldMode;
+            VulkanRtxConfig.enableHardwareRayTracing = oldRt;
+        }
+        check(RtAccumulation.acceptedPct(0, 100, false) < 0.0, "no accumulation: history share is n/a, not 0%");
+        check(RtAccumulation.acceptedPct(0, 0, true) < 0.0, "no counted hits: history share is n/a");
+        check(Math.abs(RtAccumulation.acceptedPct(25, 200, true) - 12.5) < 1.0e-9, "accepted share of the hit pixels");
+        Matrix4f m = new Matrix4f().perspective(1f, 1.7f, 0.05f, 1000f).invert();
+        float[] sun = {0.5f, 0.8f, 0f};
+        RtAccumulation t = new RtAccumulation();
+        t.next(m, 0, 0, 0, sun, false, 7, 100, 50, true);      // first_frame
+        t.next(m, 0.25, 0, 0, sun, false, 7, 100, 50, true);   // cap_moving
+        check(t.lastDetail().startsWith("d=(0.2500,0.0000,0.0000)"), "camera delta formatted on demand: " + t.lastDetail());
+        t.next(m, 0.25, 0, 0, sun, true, 7, 100, 50, true);    // cap_scene
+        t.next(m, 0.25, 0, 0, sun, false, 9, 100, 50, true);   // settings
+        check(t.lastDetail().isEmpty(), "a reset drops the camera delta of an older move");
+        RtAccumulation turned = new RtAccumulation();
+        turned.next(m, 0, 0, 0, sun, false, 7, 100, 50, true);
+        turned.next(new Matrix4f(m).rotateY(0.01f), 0, 0, 0, sun, false, 7, 100, 50, true);
+        check(turned.lastDetail().startsWith("d=(0.0000"), "a turn moves no metre but still reports the delta");
+        String window = t.drainResetCounts();
+        check(window.equals("cap_moving:1,cap_scene:1,first_frame:1,settings:1"),
+            "per-window counters stay in one order: " + window);
+        check(t.drainResetCounts().equals("none"), "draining starts the window over");
     }
 
     private static void settingsKeys() {

@@ -84,8 +84,10 @@ struct Surface {
     vec3 motion;       // previous-frame position minus current (world, blocks); non-zero only for moving entities
 };
 
-// Fills s from a committed triangle hit.
-void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 origin, vec3 dir, out Surface s) {
+// Fills s from a committed triangle hit. wantNormal = false skips everything only a shading normal consumes (the normal
+// atlas fetch, the tangent basis, the water wave normal): the transmittance walk reads tint, alpha, f0 and the geometric
+// normal only, so a shadow ray crossing a pane or a water surface no longer pays for a normal it never looks at.
+void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 origin, vec3 dir, bool wantNormal, out Surface s) {
     s.motion = vec3(0.0);
     s.isOutline = false;
     vec3 b3 = vec3(1.0 - bary.x - bary.y, bary.x, bary.y);
@@ -166,7 +168,7 @@ void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 orig
             s.emission = sig * (dustCov >= 1.0 ? 1.0 : clamp(0.25 + 2.5 * dustCov, 0.0, 1.0));
         }
         bool labN = (matSourceFlags & 2u) != 0u;   // material alpha bit 1 cleared: LabPBR _n
-        if ((labN && hasFlag(FLAG_NORMAL_MAPS)) || (!labN && hasFlag(FLAG_AUTO_NORMALS))) {
+        if (wantNormal && ((labN && hasFlag(FLAG_NORMAL_MAPS)) || (!labN && hasFlag(FLAG_AUTO_NORMALS)))) {
             vec4 nm = textureLod(nrmAtlas, uv, 0.0);
             s.mapAo = nm.b;
             vec2 xy = (nm.rg - vec2(128.0 / 255.0)) * (255.0 / 127.0);   // DirectX: x right, y down (= +v of the atlas)
@@ -230,16 +232,18 @@ void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 orig
         s.roughness = 0.02;
         s.metal = 0.0;
         s.f0 = 0.02;
-        float footprint = t * WATER_PIXEL_ANGLE / max(abs(dot(dir, s.ng)), 0.06);
-        float lostVar;
-        vec3 waveN = waterWaveNormal(s.worldPos, s.ng, waterTime(), footprint, lostVar);
-        if (getWaterStyle() == WATER_STYLE_REALISTIC) {
-            s.ns = waveN;
-            s.roughness = clamp(sqrt(lostVar) * 1.6, 0.02, 0.30);
-        } else {
-            // Vanilla style keeps the wave shape but damps it: clearly visible ripples, not a storm
-            s.ns = normalize(mix(s.ng, waveN, 0.55));
-            s.roughness = clamp(0.02 + sqrt(lostVar) * 0.8, 0.02, 0.16);
+        if (wantNormal) {
+            float footprint = t * WATER_PIXEL_ANGLE / max(abs(dot(dir, s.ng)), 0.06);
+            float lostVar;
+            vec3 waveN = waterWaveNormal(s.worldPos, s.ng, waterTime(), footprint, lostVar);
+            if (getWaterStyle() == WATER_STYLE_REALISTIC) {
+                s.ns = waveN;
+                s.roughness = clamp(sqrt(lostVar) * 1.6, 0.02, 0.30);
+            } else {
+                // Vanilla style keeps the wave shape but damps it: clearly visible ripples, not a storm
+                s.ns = normalize(mix(s.ng, waveN, 0.55));
+                s.roughness = clamp(0.02 + sqrt(lostVar) * 0.8, 0.02, 0.16);
+            }
         }
     }
     if (s.isIce) {
@@ -489,7 +493,7 @@ bool traceSurface(vec3 origin, vec3 dir, float tmin, float tmax, bool skipTransl
         fetchSurface(customIndex,
             uint(rayQueryGetIntersectionGeometryIndexEXT(rq, true)),
             uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, true)),
-            rayQueryGetIntersectionBarycentricsEXT(rq, true), rayQueryGetIntersectionTEXT(rq, true), origin, dir, s);
+            rayQueryGetIntersectionBarycentricsEXT(rq, true), rayQueryGetIntersectionTEXT(rq, true), origin, dir, true, s);
     }
     return true;
 }
@@ -552,7 +556,7 @@ vec3 traceTransmittance(vec3 origin, vec3 d, float tmax) {
         if (isEntityHit(customIndex)) {
             fetchEntitySurface(customIndex, geom, prim, bary, rayQueryGetIntersectionTEXT(sq, false), origin, d, s);
         } else {
-            fetchSurface(customIndex, geom, prim, bary, rayQueryGetIntersectionTEXT(sq, false), origin, d, s);
+            fetchSurface(customIndex, geom, prim, bary, rayQueryGetIntersectionTEXT(sq, false), origin, d, false, s);
         }
         if (s.isFoliage) {
             // Leaves / grass filter the key light instead of blocking it: ~60 % transmission, tinted by the plant. Entry and

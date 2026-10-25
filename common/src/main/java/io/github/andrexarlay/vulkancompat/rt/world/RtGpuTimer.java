@@ -34,6 +34,9 @@ final class RtGpuTimer {
     private final boolean[] written;
     private final double[] sumMs;
     private final int[] count;
+    /** Exponentially smoothed milliseconds per span: the live value {@link RtAdaptiveQuality} decides on. */
+    private final double[] ewmaMs;
+    private final boolean[] sampled;
     private LongBuffer results;
     private long frame;
     private int slot;
@@ -47,6 +50,8 @@ final class RtGpuTimer {
         this.written = new boolean[RING * marks];
         this.sumMs = new double[spanNames.length];
         this.count = new int[spanNames.length];
+        this.ewmaMs = new double[spanNames.length];
+        this.sampled = new boolean[spanNames.length];
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.malloc(stack);
             VK10.vkGetPhysicalDeviceProperties(device.getPhysicalDevice(), props);
@@ -98,8 +103,11 @@ final class RtGpuTimer {
             if (ok) {
                 long ticks = results.get(b * 2) - results.get(a * 2);
                 if (ticks >= 0) {
-                    sumMs[span] += ticks * periodNs * 1.0e-6;
+                    double spanMs = ticks * periodNs * 1.0e-6;
+                    sumMs[span] += spanMs;
                     count[span]++;
+                    ewmaMs[span] = sampled[span] ? ewmaMs[span] * 0.9 + spanMs * 0.1 : spanMs;
+                    sampled[span] = true;
                 }
             }
         }
@@ -117,6 +125,24 @@ final class RtGpuTimer {
             LOGGER.info(sb.toString());
             framesInWindow = 0;
         }
+    }
+
+    /**
+     * Smoothed GPU time of the given spans (inclusive), milliseconds; negative until every one of them has produced a
+     * readable sample. The stamps of a frame are read {@link #RING} frames late, so the first frames of a session have none.
+     */
+    double recentMs(int from, int to) {
+        if (from < 0 || to >= ewmaMs.length || from > to) {
+            return -1.0;
+        }
+        double total = 0.0;
+        for (int span = from; span <= to; span++) {
+            if (!sampled[span]) {
+                return -1.0;
+            }
+            total += ewmaMs[span];
+        }
+        return total;
     }
 
     void destroy() {

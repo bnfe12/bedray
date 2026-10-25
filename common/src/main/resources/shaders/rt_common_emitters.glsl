@@ -5,9 +5,10 @@ uint emitterCount() {
 // Next event estimation of emissive surfaces: resampled importance sampling (RIS) over the emitter list, one shadow ray to
 // the chosen point. Returns the reflected radiance of a Lambert surface (albedo / PI * Le * G), unbiased for p^ > 0.
 // Ray mode adds one temporal reservoir per pixel (sampleEmittersTemporal); the path tracer keeps plain RIS.
-float emitterPhat(vec3 y, float texEm, vec3 en, bool openSource, Surface s, float maxDist) {
+// d2 is the squared receiver-to-y distance, which the candidate loop already needs for its own radius test: recomputing it here
+// cost a subtraction and a dot product per candidate of every NEE call.
+float emitterPhat(vec3 y, float d2, float texEm, vec3 en, bool openSource, Surface s, float maxDist) {
     vec3 d = y - s.pos;
-    float d2 = dot(d, d);
     if (d2 > maxDist * maxDist || d2 < 1.0e-6) {
         return 0.0;
     }
@@ -26,18 +27,18 @@ float emitterPhat(vec3 y, float texEm, vec3 en, bool openSource, Surface s, floa
     if (cosS <= 0.0) {
         return 0.0;
     }
-    // light radius: a source reaches EMITTER_RADIUS blocks (vanilla light level 15 = 15 blocks), not the whole ray distance: a lava
-    // column 10 blocks away painted the walls orange in daylight
+    // Light radius: a source reaches EMITTER_RADIUS blocks (the reach of the game's own block light), not the whole ray
+    // distance, or a lava column 10 blocks away painted the walls orange in daylight.
     float lightR = min(maxDist, EMITTER_RADIUS);
     float distFactor = clamp(1.0 - (d2 / (lightR * lightR)), 0.0, 1.0);
-    // falloff of the light of a source: d^-1.5 up to 2 blocks (a torch or a held item still reads across a small room), then
-    // d^-1.25 instead of the physical d^-2, continuous at 2 blocks (0.84090 = 2^1.25 / (2 * sqrt(2))). A point source loses
-    // 94% of its 2-block value by 8 blocks and 99% by 15, so a torch lit a 4-5 block puddle and the rest of a room stayed
-    // black (owner report 2026-10-23), while the game's own block light is level 15 and reaches 15 blocks. This tail is ~2.8x
-    // brighter at 8 blocks and ~4x at 15, and the window above still ends it at EMITTER_RADIUS.
+    // Falloff of a source: d^-1.5 up to 2 blocks (a torch or a held item still reads across a small room), then d^-1.25,
+    // continuous at the 2-block seam (0.84090 = 2^1.25 / (2 * sqrt(2))). The physical d^-2 tail lost 94% of the 2-block value by
+    // 8 blocks, so a torch lit a 4-5 block puddle and the rest of a room stayed black (owner report 2026-10-23); this one is
+    // ~2.8x brighter there and ~4x at 15 blocks, and the window above still ends it at EMITTER_RADIUS. Written with sqrt
+    // instead of pow(d, 1.25): dd^-0.625 = inversesqrt(dd * sqrt(sqrt(dd))), one rsqrt lane instead of a log2/exp2 pair, eight
+    // times per NEE call in the hottest loop of the emissive pass.
     float dd = max(d2, 0.25);
-    float ddist = sqrt(dd);
-    float att = dd <= 4.0 ? inversesqrt(dd * ddist) : 0.84090 / pow(ddist, 1.25);
+    float att = dd <= 4.0 ? inversesqrt(dd * sqrt(dd)) : 0.84090 * inversesqrt(dd * sqrt(sqrt(dd)));
     return texEm * cosS * cosR * distFactor * distFactor * att;
 }
 
@@ -108,16 +109,27 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
     // stratified points on the emitter quads: a per-call random shift of the R2 low-discrepancy sequence over the candidates, so the
     // few quads of a torch / candle are covered evenly instead of by independent random points (the flicker of a torch light)
     vec2 r2shift = vec2(rand01(seed), rand01(seed));
+    // loop-invariant: the same light radius for every candidate of this call
+    float lightR = min(maxDist, EMITTER_RADIUS);
     for (uint k = 0u; k < candidates; k++) {
         // the list is sorted by importance (RtEmitters): index = n * u^2 favours its front, P(i) = sqrt((i+1)/n) - sqrt(i/n)
         float u = rand01(seed);
         uint idx = min(uint(u * u * float(n)), n - 1u);
-        float pIdx = sqrt(float(idx + 1u) / float(n)) - sqrt(float(idx) / float(n));
+        // P(i) = sqrt((i+1)/n) - sqrt(i/n), one sqrt pair instead of two square roots of quotients
+        float pIdx = (sqrt(float(idx + 1u)) - sqrt(float(idx))) * inversesqrt(float(n));
         Emitter e = eb.e[idx];
         vec2 ab = fract(r2shift + float(k) * vec2(0.7548776662, 0.5698402909));
         float a = ab.x;
         float b = ab.y;
         vec3 y = e.p0.xyz - camRel + e.e1.xyz * a + e.e2.xyz * b;
+        // The two zero tests of emitterPhat (outside the light radius, inside the emitter's own body) hoisted in front of
+        // the per-candidate texture fetches: such a candidate contributes phat = 0 and adds no weight, so rejecting it here
+        // costs a subtraction and a dot product instead of a material-atlas (or entity-atlas) fetch. The random stream is
+        // unchanged: the original path did not draw for it either.
+        float candD2 = dot(y - s.pos, y - s.pos);
+        if (candD2 > lightR * lightR || candD2 < (s.emission > 0.5 ? 0.25 : 1.0e-6)) {
+            continue;
+        }
         vec2 yuv = e.uvc.xy + e.duv.xy * a + e.duv.zw * b;
         // light leaves only the emissive texels: the emission of the texel at the sampled point (the emitter rectangle is the
         // bounding box of the emissive texels, RtEmitters.buildQuadRecord; texels in it that do not glow emit nothing)
@@ -134,7 +146,7 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
         float crossLen = length(crossE);
         vec3 en = crossLen > 1.0e-6 ? crossE / crossLen : vec3(0.0, 1.0, 0.0);
         bool twoSided = e.e2.w > 0.5;
-        float phat = emitterPhat(y, texEm, en, twoSided, s, maxDist);
+        float phat = emitterPhat(y, candD2, texEm, en, twoSided, s, maxDist);
         if (phat <= 0.0) {
             continue;
         }
@@ -173,7 +185,8 @@ vec3 sampleEmittersImpl(Surface s, vec3 albedo, float maxDist, inout uint seed, 
                 // y is camera-relative; camDelta = current - previous camera, so the previous sample moves by -camDelta
                 vec3 yNow = prev.yTexEm.xyz - (isStatic ? vec3(0.0) : fb.camDelta.xyz);
                 bool open = (uint(prev.meta.y) & 1u) != 0u;
-                float phatHist = emitterPhat(yNow, prev.yTexEm.w, prev.enPhat.xyz, open, s, maxDist);
+                float phatHist = emitterPhat(yNow, dot(yNow - s.pos, yNow - s.pos), prev.yTexEm.w, prev.enPhat.xyz, open, s,
+                    maxDist);
                 if (phatHist > 0.0) {
                     // ReSTIR merge: the stored cumulative weight is rescaled from the previous receiver to this one, and from
                     // meta.x samples down to the clamped mPrev that is added to sampleCount - otherwise the history weight

@@ -30,7 +30,8 @@ public class RtBlockLightReachTest {
     /** Attenuation of one emitter at {@code d} blocks, as emitterPhat computes it. */
     private static double attenuation(double d) {
         double dd = Math.max(d * d, 0.25);
-        double tail = dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd)) : HANDOVER / Math.pow(Math.sqrt(dd), 1.25);
+        double tail = dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd))
+                                : HANDOVER / Math.sqrt(dd * Math.sqrt(Math.sqrt(dd)));
         double window = Math.clamp(1.0 - (dd / (EMITTER_RADIUS * EMITTER_RADIUS)), 0.0, 1.0);
         return tail * window * window;
     }
@@ -69,13 +70,54 @@ public class RtBlockLightReachTest {
     @Test
     public void shaderKeepsThatCurve() {
         String src = RtShaderCompiler.loadSource(EMITTERS);
-        assertTrue(src.contains("0.84090 / pow(ddist, 1.25)"),
+        assertTrue(src.contains("0.84090 * inversesqrt(dd * sqrt(sqrt(dd)))"),
             "emitterPhat must use the gentler d^-1.25 tail");
+        assertFalse(src.contains("pow(ddist, 1.25)"),
+            "the tail must not go through pow: eight calls per NEE call, half a million lanes of log2/exp2");
         assertFalse(src.contains("1.41421356 / dd"),
             "the physical d^-2 tail is what made every torch a 4-5 block puddle");
-        assertTrue(src.contains("float ddist = sqrt(dd);"), "the tail is written in terms of the distance");
+        assertTrue(src.contains("inversesqrt(dd * sqrt(dd))"), "the near field is written as dd^-0.75 == d^-1.5");
         String surface = RtShaderCompiler.loadSource(SURFACE);
         assertTrue(surface.contains("const float EMITTER_RADIUS = 24.0;"),
             "the window still ends at the light radius of the comment above it");
+    }
+
+    /** inversesqrt/sqrt form of the tail must stay numerically identical to the d^-1.5 / d^-1.25 curve the numbers above use. */
+    @Test
+    public void sqrtFormMatchesTheCurve() {
+        for (double d = 0.5; d <= 20.0; d += 0.05) {
+            double dd = d * d;
+            double shader = dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd))
+                                      : HANDOVER / Math.sqrt(dd * Math.sqrt(Math.sqrt(dd)));
+            double reference = dd <= 4.0 ? Math.pow(dd, -0.75) : HANDOVER * Math.pow(dd, -0.625);
+            assertEquals(reference, shader, 1.0e-12 * reference, "falloff at " + d + " blocks");
+        }
+    }
+
+    /**
+     * The candidate loop already has the squared distance of every candidate (its own radius test), so it hands it to
+     * emitterPhat instead of the function rebuilding it from {@code y - s.pos}: one subtraction and one dot product per
+     * candidate of every NEE call, and the light radius is hoisted out of the loop.
+     */
+    @Test
+    public void candidateLoopReusesTheDistanceAndTheRadius() {
+        String src = RtShaderCompiler.loadSource(EMITTERS);
+        assertTrue(src.contains("float emitterPhat(vec3 y, float d2, float texEm"), "emitterPhat takes the squared distance");
+        assertTrue(src.contains("emitterPhat(y, candD2, texEm, en, twoSided, s, maxDist)"),
+            "the candidate call passes the distance it already measured");
+        assertTrue(src.contains("emitterPhat(yNow, dot(yNow - s.pos, yNow - s.pos)"), "the history call passes its own");
+        String decl = "float lightR = min(maxDist, EMITTER_RADIUS);";
+        assertEquals(2, count(src, decl), "one declaration inside emitterPhat, one hoisted for the candidate loop");
+        int loop = src.indexOf("for (uint k = 0u; k < candidates; k++)");
+        assertTrue(loop > 0, "the candidate loop is still where this test expects it");
+        assertTrue(src.lastIndexOf(decl) < loop, "and no candidate recomputes it: the last declaration is before the loop");
+    }
+
+    private static int count(String haystack, String needle) {
+        int n = 0;
+        for (int i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + needle.length())) {
+            n++;
+        }
+        return n;
     }
 }

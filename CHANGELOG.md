@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.1-alpha.14 (development, unreleased)
+
+* One jar per loader is now the whole product: the combined artifact (host + nested Voxel provider)
+  is the default build task for both loaders, so an instance no longer needs a second compute jar.
+  Extracting the nested jar into `mods/` still detaches the provider again.
+* Own the pixel shadow policy in one module and cut dead work from the path tracer: one shared gate,
+  cell-snapped origin, honest option cost labels.
+* Adaptive quality governor for Path Tracing: rays per pixel drop first, then bounces, never above the
+  values the player chose. Off by default.
+* Honest telemetry: a path-traced session reports `mode=path`, and history percentages are reported
+  as unavailable instead of a fake `0.0` when nothing accumulates.
+* Cheaper emitter sampling: the light radius is hoisted out of the candidate loop and the distance
+  falloff avoids `pow`.
+
 ## 0.1.1-alpha.13 (development, unreleased)
 
 * Include the separately registered Voxel provider in the default Fabric/NeoForge player JAR. Keep

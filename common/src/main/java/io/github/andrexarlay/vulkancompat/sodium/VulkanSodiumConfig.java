@@ -628,6 +628,21 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setBinding(customPath(v -> RtSettings.pathDenoiser = v, () -> RtSettings.pathDenoiser), () -> RtSettings.pathDenoiser)
             .setImpact(OptionImpact.HIGH).setStorageHandler(st);
         pt.addOption(track("path_denoiser", den));
+        EnumOptionBuilder<RtSettings.AdaptiveQuality> aq = builder.createEnumOption(id("adaptive_quality"), RtSettings.AdaptiveQuality.class);
+        aq.setName(nameOf("adaptive_quality")).setTooltip(v -> tipOf("adaptive_quality")).setDefaultValue(RtSettings.AdaptiveQuality.OFF)
+            .setAllowedValues(EnumSet.allOf(RtSettings.AdaptiveQuality.class))
+            .setElementNameProvider(val -> switch (val) {
+                case OFF -> tr("bedray.adaptive_quality.off", "Off");
+                case FPS30 -> tr("bedray.adaptive_quality.fps30", "30 FPS");
+                case FPS45 -> tr("bedray.adaptive_quality.fps45", "45 FPS");
+                case FPS60 -> tr("bedray.adaptive_quality.fps60", "60 FPS");
+                case FPS90 -> tr("bedray.adaptive_quality.fps90", "90 FPS");
+                case FPS120 -> tr("bedray.adaptive_quality.fps120", "120 FPS");
+            })
+            .setEnabledProvider(pathOn, dMode).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> RtSettings.setAdaptiveQuality(v), () -> RtSettings.adaptiveQuality)
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        pt.addOption(track("adaptive_quality", aq));
         pt.addOption(boolOpt(builder, "path_caustics", true, v -> RtSettings.caustics = v, () -> RtSettings.caustics,
             pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
         Identifier denId = id("path_denoiser");
@@ -671,10 +686,10 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         Identifier waveId = id("waving_foliage");
         Identifier pixelShadowsId = id("rays_pixel_shadows");
         look.addOption(boolOpt(builder, "rays_pixel_shadows", false, v -> RtSettings.raysPixelShadows = v, () -> RtSettings.raysPixelShadows,
-            anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
+            anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
         look.addOption(intOpt(builder, "rays_pixel_shadow_size", 1, 1, 16, 1, unit(" texels"), v -> RtSettings.raysPixelShadowSize = v,
             () -> RtSettings.raysPixelShadowSize,
-            s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId), rtDependencies(modeId, pixelShadowsId), Mark.RT, OptionImpact.HIGH, false, st));
+            s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId), rtDependencies(modeId, pixelShadowsId), Mark.RT, OptionImpact.LOW, false, st));
         look.addOption(boolOpt(builder, "waving_foliage", true, v -> RtSettings.wavingFoliage = v, () -> RtSettings.wavingFoliage,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(intOpt(builder, "waving_foliage_strength", 100, 0, 200, 5, percent(),

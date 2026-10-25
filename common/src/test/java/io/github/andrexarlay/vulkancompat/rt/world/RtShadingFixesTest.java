@@ -392,23 +392,10 @@ public class RtShadingFixesTest {
         // Disabled (shadowPixel = 0): the helper must keep the per-pixel origin untouched.
         assertEquals(3.7f, snapCell(3.7f, 0.0f), EPSILON, "cell 0 disables the snap");
 
-        // Shaders: both modes route their shadow ray through the snapped origin, and the sun-disk sample is shared per cell.
+        // The shader side of the contract (one module, no normal lift, entity/foliage gate, no hidden sample state) is
+        // RtPixelShadowSamplingTest's job; only the StatsBuf plumbing and the settings stay here.
         String common = RtWorldChecks.rtCommon();
-        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
-        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
         assertTrue(common.contains("float shadowPixel;"), "StatsBuf carries the pixel-shadow cell size");
-        assertTrue(common.contains("vec3 pixelShadowOrigin(Surface s, vec3 o)"), "rt_common.glsl defines the snap");
-        assertTrue(common.contains("vec2 pixelShadowCell(vec3 worldPos)"), "rt_common.glsl defines the cell index");
-        // The snapped origin must stay in the surface plane: a naive world snap into a wall self-shadows the wall.
-        assertTrue(common.contains("lateral -= s.ng * dot(lateral, s.ng);"), "the lateral snap is projected into the surface plane");
-        assertTrue(common.contains("s.ng * min(0.05 + 0.2 * cell, 0.4)"), "the lifted origin clears steps but not a ceiling");
-        // Fast mode: the snap may only feed the sun ray. AO, GI, reflections and gbHitDist keep the exact surface origin.
-        assertTrue(count(rays, "vec3 shadowO = o;") == 1, "rt_rays.comp keeps the exact origin for secondary rays");
-        assertTrue(count(rays, "traceTransmittance(shadowO,") == 2, "both shadow paths trace from the snapped origin");
-        assertEquals(0, count(rays, "traceTransmittance(o,"), "no shadow path keeps the unsnapped origin");
-        assertTrue(count(rays, "o = pixelShadowOrigin") == 0, "the shared origin must never be overwritten by the snap");
-        assertTrue(rays.contains("gSunPixel = ivec2(pixelShadowCell(s.worldPos))"), "rt_rays.comp shares the penumbra sample per cell");
-        assertTrue(path.contains("pixelShadowOrigin(s, so)"), "rt_path.comp snaps the shadow ray origin");
 
         // Settings: registered, off by default, clamped, and reset by a preset.
         RtSettings.Preset savedPreset = RtSettings.preset;
@@ -513,7 +500,7 @@ public class RtShadingFixesTest {
         int resStart = common.indexOf("struct Reservoir {");
         assertEquals(4, count(common.substring(resStart, common.indexOf("};", resStart)), "vec4 "),
             "Reservoir is 4 x vec4 = 64 B, matching RESERVOIR_BYTES in RtFrameRenderer");
-        assertTrue(common.contains("float emitterPhat(vec3 y, float texEm, vec3 en, bool openSource, Surface s, float maxDist)"),
+        assertTrue(common.contains("float emitterPhat(vec3 y, float d2, float texEm, vec3 en, bool openSource, Surface s, float maxDist)"),
             "the RIS target is shared by candidates and reused history");
         assertTrue(common.contains("prev.leWsum.w * (mPrev / max(prev.meta.x, 1.0))"),
             "the stored weight is scaled to the clamped sample count that is added to M (no unbounded ramp)");

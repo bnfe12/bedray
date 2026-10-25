@@ -114,6 +114,11 @@ public final class RtFrameRenderer {
     private static long reservoirLightFingerprint = Long.MIN_VALUE;
     private static boolean reservoirResetRequested = true;
     private static final boolean[] statsWritten = new boolean[STATS_SLOTS];
+    /**
+     * Whether the frame that wrote each stats slot incremented the history counter, i.e. ran {@code temporalAccumulate}
+     * (see {@link RtAccumulation#acceptedPct}): the shader also requires a non-zero history length.
+     */
+    private static final boolean[] statsAccumulated = new boolean[STATS_SLOTS];
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
     private static double lastHitPct = -1.0;
@@ -121,6 +126,8 @@ public final class RtFrameRenderer {
     private static double lastLeafPct = -1.0;
     private static double passMsInWindow = 0.0;
     private static int passFramesInWindow = 0;
+    /** Wall clock of the previous traced frame: the time base of {@link RtAdaptiveQuality} (frame-to-frame, not per span). */
+    private static long lastTracedNs = 0L;
     private static final RtFrameParams params = new RtFrameParams();
     /** Vanilla sky parameters of the frame (RtSkyState) and the resource pack sun / moon / cloud textures. */
     private static final RtSkyState skyState = new RtSkyState();
@@ -375,6 +382,8 @@ public final class RtFrameRenderer {
         reservoirResetRequested = true;
         lastHistPct = -1.0;
         lastLeafPct = -1.0;
+        lastTracedNs = 0L;   // the gap before the next traced frame describes the old setup, not a slow one
+        RtAdaptiveQuality.reset();
     }
 
     /** True when this path owns the Hardware RT toggle, so the old PoC overlay must not run. */
@@ -564,9 +573,17 @@ public final class RtFrameRenderer {
                 ? new org.joml.Matrix4f().scaling(1, -1, 1).mul(frameProjection) : new org.joml.Matrix4f(frameProjection);
         }
         if (traced) {
+            long tracedNs = System.nanoTime();
+            double dtMs = lastTracedNs == 0L ? 0.0 : (tracedNs - lastTracedNs) / 1.0e6;
+            lastTracedNs = tracedNs;
             passFrames++;
             passFramesInWindow++;
-            passMsInWindow += (System.nanoTime() - frameStart) / 1.0e6;
+            passMsInWindow += (tracedNs - frameStart) / 1.0e6;
+            if (pass.mode() == RtMode.PATH_TRACED) {
+                // what the ladder can actually move: the traced rays and the denoiser (the chunk build behind SPAN_WORLD does
+                // not get cheaper with fewer rays, and would only pin the scene at one ray while the world streams)
+                RtAdaptiveQuality.observe(gpuTimer == null ? Double.NaN : gpuTimer.recentMs(SPAN_RAYS, SPAN_DENOISE), dtMs);
+            }
         }
         logWindow(stats, target);
     }
@@ -688,7 +705,10 @@ public final class RtFrameRenderer {
             int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
             int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
             if (hits > 0) {
-                lastHistPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED) / hits;
+                // Without the accumulating variant histAccepted is never incremented, and the share used to print as a
+                // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
+                lastHistPct = RtAccumulation.acceptedPct(MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED), hits,
+                    statsAccumulated[readSlot]);
                 // Both counters use the same 1-in-16 pixel mask as countSample, so this is a true share of the hit pixels.
                 lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT) / hits;
             }
@@ -939,6 +959,7 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_RAYS, true);
         }
         statsWritten[writeSlot] = true;
+        statsAccumulated[writeSlot] = (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.accumCount > 0;
         dispatchCounter++;
         VkBarriers.fullMemoryBarrier(cmd);
         if (probePrev != null && outputDepth != null) {
@@ -1345,6 +1366,11 @@ public final class RtFrameRenderer {
         }
     }
 
+    /** Milliseconds for the status line, or "n/a" while the GPU timer has no readable sample. */
+    private static String msOrNa(double v) {
+        return v < 0.0 ? "n/a" : String.format(Locale.ROOT, "%.1f", v);
+    }
+
     private static void logWindow(RtWorld.FrameStats s, RenderTarget target) {
         builtInWindow += s.builtThisFrame();
         buildMsInWindow += s.buildMs();
@@ -1374,13 +1400,24 @@ public final class RtFrameRenderer {
                 world != null ? world.vegetationSections() : 0L, world != null ? world.vegetationQuads() : 0L));
         }
         if (passFramesInWindow > 0) {
+            int userSpp = RtSettings.spp();
+            int userBounces = RtSettings.bounces();
+            double budget = RtSettings.adaptiveBudgetMs();
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f displayed=%s mode=%s",
+                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
                 passFrames, target != null ? (long) target.width * target.height : 0L,
                 lastHitPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHitPct),
                 lastHistPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHistPct),
                 lastLeafPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastLeafPct),
-                passMsInWindow / passFramesInWindow, RtConfig.displayed(), RtConfig.effectiveModeName()));
+                passMsInWindow / passFramesInWindow,
+                RtAdaptiveQuality.spp(userSpp), RtAdaptiveQuality.bounces(userSpp, userBounces),
+                // work_ms: the rays and the denoiser, i.e. what the governor compares with the budget; pass_ms: the whole RT
+                // command buffer (chunk build, atmosphere, the copy), i.e. what the frame actually pays for ray tracing
+                msOrNa(gpuTimer == null ? -1.0 : gpuTimer.recentMs(SPAN_RAYS, SPAN_DENOISE)),
+                msOrNa(gpuTimer == null ? -1.0 : gpuTimer.recentMs(SPAN_WORLD, SPAN_ATMO)),
+                budget <= 0.0 ? "off" : String.format(Locale.ROOT, "%.1f", budget),
+                RtAdaptiveQuality.level(), RtAdaptiveQuality.levels(userSpp, userBounces),
+                RtConfig.displayed(), RtConfig.effectiveModeName()));
         } else if (s.instances() == 0 && s.pending() > 0) {
             LOGGER.info("[VKB-RT] rt_pass waiting instances=0 pending={}", s.pending());
         }
@@ -1493,6 +1530,7 @@ public final class RtFrameRenderer {
             skyTextures = null;
             outputReady = false;
             java.util.Arrays.fill(statsWritten, false);
+            java.util.Arrays.fill(statsAccumulated, false);
         }
     }
 }

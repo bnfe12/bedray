@@ -14,8 +14,8 @@ import static org.junit.jupiter.api.Assertions.*;
 public class RtShaderModulesTest {
     private static final String[] MODULES = {
         "rt_common_core.glsl", "rt_tonemap.glsl", "rt_sky.glsl", "rt_common_light.glsl",
-        "rt_common_sampling.glsl", "rt_common_surface.glsl", "rt_common_emitters.glsl",
-        "rt_common_temporal.glsl", "rt_common_water.glsl", "rt_common_shade.glsl"};
+        "rt_common_sampling.glsl", "rt_common_surface.glsl", "rt_common_pixel_shadow.glsl",
+        "rt_common_emitters.glsl", "rt_common_temporal.glsl", "rt_common_water.glsl", "rt_common_shade.glsl"};
 
     @Test
     public void umbrellaExpandsToModulesInOrder() {

@@ -64,10 +64,7 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
     float reach = rayDistance();
     firstHit = false;
     firstVisibleHit = false;
-    Surface visible;
     uint transCount = 0u;
-    float firstDist = 1.0e6;
-    bool hadFirst = false;
     for (uint b = 0u; b <= bounces; b++) {
         Surface s;
         bool hitHere = traceSurface(o, d, b == 0u ? 0.001 : 0.0, b == 0u ? 4096.0 : reach, false, b == 0u, s);
@@ -91,11 +88,12 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
             b--;
             continue;
         }
-        if (hitHere && !hadFirst) {
-            firstDist = s.t;
-            hadFirst = true;
-            res.firstDist = firstDist;
-            visible = s;
+        if (hitHere && !firstVisibleHit) {
+            // firstVisible is the first surface the camera ray met, interface or solid; the caller keeps it only when the
+            // path continued through a pane (there is no solid first hit then). Written here instead of a second copy that
+            // had to stay live until the end of the loop.
+            res.firstDist = s.t;
+            firstVisible = s;
             firstVisibleHit = true;
         }
         if (b == 1u && hitHere) {
@@ -212,23 +210,27 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
         // probability of the specular lobe: balanced baseline so reflections are clear even looking head-on
         float ps = s.metal > 0.5 ? 1.0 : (s.roughness < ROUGH_SPLIT ? clamp(max(Fsc, 0.45 * gloss), 0.05, 0.95) : 0.0);
 
-        // Pixel shadows: the whole cell shares one sun-disk sample (pixelShadowCell), the pairing rt_rays.comp makes.
-        // Without it a cell keeps a per-pixel disk sample while its shadow ray starts from the cell centre, so the
-        // deliberately blocky penumbra fills with per-pixel speckle.
-        if (b == 0u && !med.inside && shadowPixelSize() > 0.0) {
-            gSunPixel = ivec2(pixelShadowCell(s.worldPos)) & ivec2(1023);
-        }
-        // NEE of the sun/moon for the diffuse lobe (the specular lobe sees the sun disk through the sky instead)
-        // first hit: low-discrepancy sample of the sun disk; deeper vertices keep the random cone sample
-        vec3 L = b == 0u ? sunShadowDirection(pc.keyDir.xyz, sunRadius(), gSunSub, gSunSpp) : coneAround(pc.keyDir.xyz, sunRadius(), seed);
+        // NEE of the sun/moon for the diffuse lobe (the specular lobe sees the sun disk through the sky instead).
+        // Everything the key light needs is computed inside this gate: a metal vertex (its own BRDF has no diffuse lobe)
+        // and a switched-off key light used to pay for the disk sample and the rotation index, and the deeper-vertex cone
+        // sample also advanced the random stream there.
         if (s.metal < 0.5 && keyLightOn()) {
+            // Pixel shadows: the whole cell shares one sun-disk sample and one shadow-ray origin
+            // (rt_common_pixel_shadow.glsl), the pairing rt_rays.comp makes. Without it a cell keeps a per-pixel disk
+            // sample while its shadow ray starts from the cell centre, so the deliberately blocky penumbra fills with
+            // per-pixel speckle. First vertex only: the deeper ones are 1 spp and denoised, so quantising them would
+            // cost a validation ray each and change nothing visible.
+            bool cellShadow = b == 0u && pixelShadowApplies(s, med.inside);
+            ivec2 rotation = sunShadowRotation(s, cellShadow, p, false);
+            // first hit: low-discrepancy sample of the sun disk; deeper vertices keep the random cone sample
+            vec3 L = b == 0u ? sunShadowDirectionAt(pc.keyDir.xyz, sunRadius(), rotation, pc.frame, gSunSub, gSunSpp) : coneAround(pc.keyDir.xyz, sunRadius(), seed);
             vec3 Ls = L;
             vec3 tr = vec3(0.0);
             bool lit = false;
             float ndotl = 0.0;
             float ngdotl = 0.0;
             // Pixel shadows: the shadow ray starts from the centre of the world cell, not from this fragment.
-            vec3 shOrigin = shadowPixelSize() > 0.0 && !med.inside ? pixelShadowOrigin(s, so) : so;
+            vec3 shOrigin = cellShadow ? pixelShadowOrigin(s, so) : so;
             vec3 shDir = L;
             vec3 gain = vec3(1.0);
             if (med.inside) {
@@ -322,9 +324,6 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
             thr /= q;
         }
     }
-    if (firstVisibleHit) {
-        firstVisible = visible;
-    }
     return res;
 }
 
@@ -338,24 +337,20 @@ void main() {
     uint mode = viewMode();
     uint seed = pcgHash(uint(p.x) * 1973u + uint(p.y) * 9277u + pc.frame * 26699u + 7u);
     uint spp = sppCount();
-    gSunPixel = p;
-    gSunIndex = pc.frame;
     gSunSpp = spp;
     vec3 sum = vec3(0.0);
     bool anyHit = false;
     float waterSeen = 0.0;
     bool accHit = false;
     bool accInterface = false;
-    Surface accFirst;
+    // One surface copy for both consumers (temporal accumulation and the denoiser G-buffer). Three live copies of a
+    // 26-field struct across the spp loop pushed the ray generation shader into local-memory spills.
+    Surface accBest;
     float accFirstDist = 1.0e6;
 #ifdef VKB_GBUFFER
     vec3 gbDirectSum = vec3(0.0);
     vec3 gbRestSum = vec3(0.0);
     float gbDist = 0.0;
-    Surface gbFirst;
-    bool gbHit = false;
-    Surface gbFirstVisible;
-    bool gbInterface = false;
 #endif
     vec2 camJitter = getCameraJitter();
     bool hasJitter = (dot(camJitter, camJitter) > 1.0e-10);
@@ -388,22 +383,16 @@ void main() {
             // transmitted + reflected signal through the pane, so the accumulation keeps its history on the interface.
             accInterface = !firstHit && firstVisibleHit && isInterface(firstVisible) && !firstVisible.isWater;
             if (accHit) {
-                accFirst = first;
+                accBest = first;
             } else if (accInterface) {
-                accFirst = firstVisible;
+                accBest = firstVisible;
             }
             accFirstDist = r.firstDist;
+#ifdef VKB_GBUFFER
+            gbDist = r.bounceDist;   // same sample as the surface above: the denoiser depth must match its normal / albedo
+#endif
         }
 #ifdef VKB_GBUFFER
-        if (i == 0u) {
-            gbHit = firstHit;
-            gbFirst = first;
-            gbDist = r.bounceDist;
-            gbInterface = accInterface;
-            if (gbInterface) {
-                gbFirstVisible = firstVisible;
-            }
-        }
         gbDirectSum += r.direct0;
         gbRestSum += r.radiance - r.direct0;
 #endif
@@ -455,14 +444,14 @@ void main() {
             // the 16x16 block texture across jittered positions before DLSS/FSR/XeSS reconstructs the frame.
             // Through glass the tint is a colour filter, not a diffuse albedo: demodulating by it would divide by a dark
             // value and amplify the transmitted noise, so an interface pixel uses albedo 1 and stores the full signal.
-            vec3 alb = accHit ? max(accFirst.albedoLit, vec3(0.02)) : vec3(1.0);
+            vec3 alb = accHit ? max(accBest.albedoLit, vec3(0.02)) : vec3(1.0);
             vec3 eAcc = sampleValue / alb;
-            mean = temporalAccumulate(p, size, eAcc, vec3(0.0), accumHit, accFirst.pos,
-                accFirst.ng, accFirst.t, alb, true);
+            mean = temporalAccumulate(p, size, eAcc, vec3(0.0), accumHit, accBest.pos,
+                accBest.ng, accBest.t, alb, true);
         } else {
             // path tracing without upscaler jitter: the whole sample is one signal
-            mean = temporalAccumulate(p, size, sampleValue, vec3(0.0), accumHit, accumHit ? accFirst.pos : vec3(0.0),
-                accumHit ? accFirst.ng : vec3(0.0), accumHit ? accFirst.t : 0.0, vec3(1.0), true);
+            mean = temporalAccumulate(p, size, sampleValue, vec3(0.0), accumHit, accumHit ? accBest.pos : vec3(0.0),
+                accumHit ? accBest.ng : vec3(0.0), accumHit ? accBest.t : 0.0, vec3(1.0), true);
         }
     }
 #endif
@@ -478,7 +467,7 @@ void main() {
         atomicAdd(StatsBuf(pc.statsAddr).leafBacklit, 1u);
     }
     countSample(p, anyHit);
-    imageStore(outDepth, p, vec4(accFirstDist < 1.0e5 ? accFirstDist : (accHit ? accFirst.t : 1.0e6), 0.0, 0.0, 0.0));
+    imageStore(outDepth, p, vec4(accFirstDist < 1.0e5 ? accFirstDist : (accHit ? accBest.t : 1.0e6), 0.0, 0.0, 0.0));
     imageStore(outImage, p, vec4(clamp(color, 0.0, 1.0), 1.0));
 #ifdef VKB_GBUFFER
     // NRD input (lit view only): raw per-frame radiance; rt_pack_nrd.comp demodulates it for NRD (albedo * denoised + direct)
@@ -488,28 +477,25 @@ void main() {
     // before this branch such a pixel was written as sky and skipped by NRD / DLSS-RR, leaving 1 ssp noise on every pane and on
     // everything seen through it. It is denoised at the pane now, with the pane's depth / normal and the whole transmitted +
     // reflected signal.
-    if (mode == MODE_LIT && (gbHit || gbInterface)) {
-        Surface gbSurf = gbFirst;
-        if (!gbHit) {
-            gbSurf = gbFirstVisible;
-        }
+    if (mode == MODE_LIT && (accHit || accInterface)) {
+        // accBest is the solid first hit when there is one, the pane otherwise: the same surface the accumulation reprojects.
         // NRD and DLSS-RR receive the effective bobbed camera pose, so IN_VIEWZ uses that same view space.
-        float viewZ = -dot(gbSurf.pos - cameraOrigin(), bobCameraForward());
+        float viewZ = -dot(accBest.pos - cameraOrigin(), bobCameraForward());
         imageStore(gbViewZ, p, vec4(viewZ, 0.0, 0.0, 0.0));
         if (StatsBuf(pc.statsAddr).motionAddr != uvec2(0u)) {
-            Vec4Buf(StatsBuf(pc.statsAddr).motionAddr).v[p.y * size.x + p.x] = vec4(gbSurf.motion, (isEntityHit(gbSurf.slot) || dot(gbSurf.motion, gbSurf.motion) > 1.0e-8) ? 1.0 : 0.0);
+            Vec4Buf(StatsBuf(pc.statsAddr).motionAddr).v[p.y * size.x + p.x] = vec4(accBest.motion, (isEntityHit(accBest.slot) || dot(accBest.motion, accBest.motion) > 1.0e-8) ? 1.0 : 0.0);
         }
-        vec3 nOut = hasFlag(FLAG_GEOMETRIC_NORMALS) ? gbSurf.ng : gbSurf.ns;
+        vec3 nOut = hasFlag(FLAG_GEOMETRIC_NORMALS) ? accBest.ng : accBest.ns;
         vec3 n = length(nOut) > 1.0e-4 ? normalize(nOut) : vec3(0.0, 0.0, 1.0);
-        float r = clamp(gbSurf.roughness, 0.0, 1.0);
+        float r = clamp(accBest.roughness, 0.0, 1.0);
         imageStore(gbNormalRough, p, vec4(n, r));
         // The path tracer sums diffuse and specular per sample: the split G-buffer channels stay empty and the whole
         // signal goes through the colour input as raw radiance (specular albedo is a material guide only).
         imageStore(gbSpecular, p, vec4(0.0));
-        if (gbHit) {
-            vec3 a = max(gbFirst.albedoLit, vec3(0.02));
-            vec3 specAlb = (gbFirst.metal > 0.5 || gbFirst.roughness < 0.6)
-                ? (gbFirst.metal > 0.5 ? gbFirst.albedoTex : vec3(gbFirst.f0)) : vec3(0.0);
+        if (accHit) {
+            vec3 a = max(accBest.albedoLit, vec3(0.02));
+            vec3 specAlb = (accBest.metal > 0.5 || accBest.roughness < 0.6)
+                ? (accBest.metal > 0.5 ? accBest.albedoTex : vec3(accBest.f0)) : vec3(0.0);
             imageStore(gbDiffuse, p, vec4(gbRestSum / float(spp), gbDist));
             imageStore(gbAlbedo, p, vec4(clamp(a, 0.0, 1.0), 1.0));
             imageStore(gbDirect, p, vec4(gbDirectSum / float(spp), 0.0));

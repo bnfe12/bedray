@@ -46,8 +46,6 @@ void main() {
     vec2 camJitter = getCameraJitter();
     vec3 dir = cameraRay(p, size, vec2(0.5) + camJitter);
     uint seed = uint(p.x) * 1973u + uint(p.y) * 9277u + pc.frame * 26699u + 1u;
-    gSunPixel = p;
-    gSunIndex = pc.frame;
 
     Surface s;
     vec3 rayOrig = cameraOrigin();
@@ -164,11 +162,9 @@ void main() {
             vec3 L = pc.keyDir.xyz;
             bool underwater = med.inside && waterVolumeStyle();
             // Pixel shadows: every fragment of a world cell traces its sun ray from the same point, so the shadow edge
-            // becomes a blocky staircase. Only the shadow ray moves: AO, GI and reflections keep the exact surface origin.
-            vec3 shadowO = o;
-            if (!underwater && shadowPixelSize() > 0.0) {
-                shadowO = pixelShadowOrigin(s, o);
-            }
+            // becomes a blocky staircase (rt_common_pixel_shadow.glsl owns the policy). Only the shadow ray moves: AO, GI
+            // and reflections keep the exact surface origin, and a cell that crosses geometry keeps its exact shadow.
+            bool cellShadow = hasFlag(FLAG_SHADOWS) && pixelShadowApplies(s, underwater);
             vec3 vis = vec3(0.0);
             vec3 uwOrigin = o;
             vec3 uwDir = L;
@@ -197,19 +193,22 @@ void main() {
             } else if (keyLightOn() && ndotl > 0.0 && ngdotl > 0.0) {
                 if (!hasFlag(FLAG_SHADOWS)) {
                     vis = vec3(1.0);
-                } else if (hasFlag(FLAG_SOFT_SHADOWS)) {
-                    if (shadowPixelSize() > 0.0) {
-                        gSunPixel = ivec2(pixelShadowCell(s.worldPos)) & ivec2(1023);
-                    } else if (dot(camJitter, camJitter) > 1.0e-10) {
-                        gSunPixel = ivec2(floor((s.worldPos.xz + vec2(s.worldPos.y * 0.5)) * 16.0)) & ivec2(1023);
-                    }
-                    uint n = shadowRays();
-                    for (uint i = 0u; i < n; i++) {
-                        vis += traceTransmittance(shadowO, sunShadowDirection(L, sunRadius(), i, n), 2048.0);
-                    }
-                    vis /= float(n);
                 } else {
-                    vis = traceTransmittance(shadowO, L, 2048.0);
+                    // Built here, behind both guards: the geometry validation inside it is a ray, and a back face or a dark
+                    // key light never traces the shadow ray that would use it.
+                    vec3 shadowO = cellShadow ? pixelShadowOrigin(s, o) : o;
+                    if (hasFlag(FLAG_SOFT_SHADOWS)) {
+                        // The cell rotation gives the whole cell the same sun-disk samples; when the origin was not snapped
+                        // the rotation is still world-locked, so the penumbra does not boil with the accumulating jitter.
+                        ivec2 rotation = sunShadowRotation(s, cellShadow, p, dot(camJitter, camJitter) > 1.0e-10);
+                        uint n = shadowRays();
+                        for (uint i = 0u; i < n; i++) {
+                            vis += traceTransmittance(shadowO, sunShadowDirectionAt(L, sunRadius(), rotation, pc.frame, i, n), 2048.0);
+                        }
+                        vis /= float(n);
+                    } else {
+                        vis = traceTransmittance(shadowO, L, 2048.0);
+                    }
                 }
             } else if (keyLightOn() && leafBack > 0.0) {
                 if (!hasFlag(FLAG_SHADOWS)) {
@@ -219,8 +218,9 @@ void main() {
                     // crisp leaf shadow next to the soft ones of the ground it stands on.
                     uint n = shadowRays();
                     vec3 lo = leafShadowOrigin(s, L);
+                    ivec2 rotation = sunShadowRotation(s, false, p, dot(camJitter, camJitter) > 1.0e-10);
                     for (uint i = 0u; i < n; i++) {
-                        vis += traceTransmittance(lo, sunShadowDirection(L, sunRadius(), i, n), 2048.0);
+                        vis += traceTransmittance(lo, sunShadowDirectionAt(L, sunRadius(), rotation, pc.frame, i, n), 2048.0);
                     }
                     vis /= float(n);
                 } else {

@@ -160,6 +160,12 @@ public final class RtConfig {
         if (rm == RtMode.DIRECT) {
             return "shadow";
         }
+        // Path tracing runs its own pass and its own push constants; reporting "lit" here printed `status mode=path` and
+        // `rt_pass ... mode=lit` in the same second of a path-traced session (owner log 2026-10-25), so the perf and quality
+        // lines of that pass were attributed to the ray pass.
+        if (rm == RtMode.PATH_TRACED) {
+            return "path";
+        }
         return "lit";
     }
 
