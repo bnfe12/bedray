@@ -31,6 +31,18 @@ public interface GraphicsBackend extends AutoCloseable {
     /** Immutable CPU data only; no borrowed game objects or GPU work. A new session replaces all old data. */
     default void acceptWorldSnapshot(WorldSnapshot snapshot) {}
 
+    /** API minor 6: bounded immutable section deltas over the loaded render-distance domain. */
+    default boolean supportsWorldStreaming() { return false; }
+
+    /** Called instead of acceptWorldSnapshot when supportsWorldStreaming returns true. */
+    default void acceptWorldUpdate(WorldUpdate update) {}
+
+    default WorldStreamingStatus streamingStatus() { return WorldStreamingStatus.unavailable(); }
+
+    /** At most 64 evicted/rejected coordinates per call. The host forgets delivery and may capture them again.
+     * Consumers must retain invalidations until drained; unavailable pages always preserve raster output. */
+    default java.util.List<SectionKey> drainWorldInvalidations() { return java.util.List.of(); }
+
     /** Clear retained CPU scene/camera history on world exit or when capture is disabled. */
     default void clearWorldSnapshot() {}
 

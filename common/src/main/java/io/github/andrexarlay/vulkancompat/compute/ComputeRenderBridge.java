@@ -47,12 +47,24 @@ public final class ComputeRenderBridge {
     private static long recordedRevision = Long.MIN_VALUE;
     private static int resourceWidth, resourceHeight, resourceFormat;
     private static long capturedAtlasGeneration, resourceAtlasGeneration;
+    private static long capturedStreamingBudget;
+    private static long coverageLogNanos, limitedSinceNanos;
+    private static int loggedResident = -1, loggedQueued = -1;
+    private static boolean populatedLogged, limitedLogged;
     private static RenderTarget resourceTarget;
     private static long resourceColorView, resourceDepthView;
     private static LightingFrame currentLighting;
     private static final ComputeWorldCapture worldCapture = new ComputeWorldCapture();
 
     private ComputeRenderBridge() {}
+
+    /** Accepted Sodium builds notify voxel extraction without enabling the hardware geometry decoder. */
+    public static void sectionChanged(int x, int y, int z) {
+        if (enabled()) worldCapture.sectionChanged(x, y, z);
+    }
+    public static void sectionRemoved(int x, int y, int z) {
+        if (enabled()) worldCapture.sectionRemoved(x, y, z);
+    }
 
     /** Render-thread scene applied at this frame's boundary; pair with a successful renderDiagnostic result. */
     public static GraphicsBackendRegistry.SceneMode appliedSceneMode() { return appliedRequest.mode(); }
@@ -124,8 +136,30 @@ public final class ComputeRenderBridge {
                 notePendingCamera("Waiting for block atlas and baked models", camera);
                 return;
             }
-            var snapshot = worldCapture.capture(camera, atlas, backend.supportsModelGeometry(),
-                backend.supportsCellTint());
+            if (backend.supportsWorldStreaming()) {
+                long budget = (long)VulkanRtxConfig.voxelMemoryBudgetMiB() * 1024 * 1024;
+                if (capturedStreamingBudget != 0 && capturedStreamingBudget != budget) {
+                    if (!releaseResources()) return;
+                    backend.clearWorldSnapshot();
+                    worldCapture.clear();
+                }
+                capturedStreamingBudget = budget;
+                for (var key : backend.drainWorldInvalidations()) worldCapture.invalidated(key);
+                var update = worldCapture.captureStreaming(camera, atlas, backend.supportsModelGeometry(),
+                    backend.supportsCellTint(), backend.streamingStatus().queuedSections());
+                if (update == null) { notePendingCamera(worldCapture.pendingReason(), camera); return; }
+                backend.acceptWorldUpdate(update);
+                capturedAtlasGeneration = atlas.generation();
+                cameraPending = false;
+                if (pendingCameraReason != null) {
+                    LOGGER.info("[BEDRAY-COMPUTE] camera_ready stream_session={} revision={} distance={} discovered={}",
+                        update.session(), update.revision(), update.bounds().effectiveRenderDistanceChunks(),
+                        update.discoveredSections());
+                    pendingCameraReason = null;
+                }
+                return;
+            }
+            var snapshot = worldCapture.capture(camera, atlas, backend.supportsModelGeometry(), backend.supportsCellTint());
             if (snapshot == null) {
                 notePendingCamera(worldCapture.pendingReason(), camera);
                 return;
@@ -261,6 +295,7 @@ public final class ComputeRenderBridge {
                 pendingFrameReason = null;
             }
             GraphicsBackendRegistry.noteRendered(backend.id(), appliedRequest);
+            logStreamingCoverage(backend);
             if (recordedRevision != appliedRequest.revision()) {
                 LOGGER.info("[BEDRAY-COMPUTE] scene_recorded mode={} backend={} target={}x{} detail={}",
                     appliedRequest.mode(), backend.id(), target.width, target.height, backend.sceneDetail());
@@ -347,6 +382,13 @@ public final class ComputeRenderBridge {
             // execute() queues transient buffers in the host encoder. Flush those before provider.close() waits idle.
             device.createCommandEncoder().submit();
             owner.close();
+            // close() releases provider residency on resize, atlas retirement and budget changes as well
+            // as world exit. Forget CPU delivery markers so the next frame republishes the loaded scene.
+            worldCapture.clear();
+            capturedStreamingBudget = capturedAtlasGeneration = 0;
+            populatedLogged = limitedLogged = false;
+            coverageLogNanos = limitedSinceNanos = 0;
+            loggedResident = loggedQueued = -1;
             return true;
         } catch (RuntimeException | LinkageError error) {
             // A failed submit may leave unsubmitted references. Never reuse the provider's old device handles.
@@ -359,6 +401,32 @@ public final class ComputeRenderBridge {
 
     private static void noteIdle(String reason) {
         GraphicsBackendRegistry.noteIdle(reason, appliedRequest);
+    }
+
+    private static void logStreamingCoverage(GraphicsBackend backend) {
+        if (!backend.supportsWorldStreaming()) return;
+        var status = backend.streamingStatus();
+        if (!status.available()) return;
+        long now = System.nanoTime();
+        if (status.memoryLimited()) {
+            if (limitedSinceNanos == 0) limitedSinceNanos = now;
+        } else limitedSinceNanos = 0;
+        String event = null;
+        if (!populatedLogged && status.residentSections() > 0) {
+            event = "first_populated"; populatedLogged = true;
+        } else if (!limitedLogged && limitedSinceNanos != 0 && now - limitedSinceNanos >= 2_000_000_000L) {
+            event = "memory_limited"; limitedLogged = true;
+        } else if (limitedLogged && !status.memoryLimited()) {
+            event = "memory_recovered"; limitedLogged = false;
+        } else if (populatedLogged && now - coverageLogNanos >= 5_000_000_000L
+                && (status.residentSections() != loggedResident || status.queuedSections() != loggedQueued)) event = "progress";
+        if (event == null) return;
+        LOGGER.info("[BEDRAY-COMPUTE] coverage event={} requested={} effective={} resident={} queued={} used={} budget={} uploaded={} discovered={} empty={} limited={} reason={}",
+            event, status.requestedRenderDistanceChunks(), status.effectiveRenderDistanceChunks(),
+            status.residentSections(), status.queuedSections(), status.usedGpuBytes(), status.budgetGpuBytes(),
+            status.uploadedBytes(), status.discoveredSections(), status.emptySections(), status.memoryLimited(), status.reason());
+        coverageLogNanos = now;
+        loggedResident = status.residentSections(); loggedQueued = status.queuedSections();
     }
 
     private static void notePendingCamera(String reason,
