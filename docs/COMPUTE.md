@@ -46,8 +46,9 @@ backend baseline and the provider's queue/format/descriptor checks. This is not 
 Propagated block/sky-light changes notify the Voxel stream directly through the client chunk cache,
 including air sections with no Sodium geometry upload. The notification queue coalesces section
 coordinates, retains at most 8192 entries and drains at most 256 per client frame. Capture/upload
-budgets still apply after delivery. Callbacks from an old world's chunk cache are ignored; an
-overflow starts a fresh bounded stream session instead of silently retaining stale lighting.
+budgets still apply after delivery. A full downstream capture queue keeps notifications pending.
+Callbacks from an old world's chunk cache are ignored before they can fill the queue. Overflow
+requests incremental section revalidation while retaining GPU residency and the stream session.
 
 The experimental translucent path integrates extinction and medium radiance separately over each
 water segment. Exiting water restores air transport and applies the water-to-air Snell ratio; later
