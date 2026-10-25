@@ -38,12 +38,13 @@ def requireClosedGame = { String taskName ->
         // Windows ProcessHandle.Info can omit arguments even for our own Gradle processes. CIM
         // supplies the actual command lines; unavailable information still blocks replacement.
         def probeScript = '''$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='javaw.exe'" |
     Where-Object { -not $_.CommandLine -or $_.CommandLine -notmatch 'org\\.gradle\\.|GradleDaemon|GradleWorkerMain|GradleWrapperMain' } |
     ForEach-Object { $_.ProcessId }
 '''
         def encoded = Base64.encoder.encodeToString(probeScript.getBytes('UTF-16LE'))
-        def probe = new ProcessBuilder('powershell.exe', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
+        def probe = new ProcessBuilder('powershell.exe', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-WindowStyle', 'Hidden',
             '-EncodedCommand', encoded).redirectErrorStream(true).start()
         if (!probe.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)) {
             probe.destroyForcibly()
