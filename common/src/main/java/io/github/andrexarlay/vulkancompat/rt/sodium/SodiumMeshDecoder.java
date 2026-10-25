@@ -131,6 +131,7 @@ public final class SodiumMeshDecoder {
         int[] colors = new int[total * 4];
         int[] light = new int[total * 4];
         float[] normals = new float[total * 3];
+        int[] rawWords = new int[total * 20];
         float[] min = {Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY};
         float[] max = {Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
 
@@ -147,6 +148,12 @@ public final class SodiumMeshDecoder {
                     int w3 = d.getInt(o + 12);
                     int w4 = d.getInt(o + 16);
                     int vi = quad * 4 + v;
+                    int ro = vi * 5;
+                    rawWords[ro] = w0;
+                    rawWords[ro + 1] = w1;
+                    rawWords[ro + 2] = w2;
+                    rawWords[ro + 3] = w3;
+                    rawWords[ro + 4] = w4 & 0x00FFFFFF;   // section index byte masked: raw equality == decoded equality
                     for (int axis = 0; axis < 3; axis++) {
                         float c = decodePosition(w0, w1, axis);
                         positions[vi * 3 + axis] = c;
@@ -165,7 +172,8 @@ public final class SodiumMeshDecoder {
             min = new float[3];
             max = new float[3];
         }
-        return new DecodedSection(key, sectionX, sectionY, sectionZ, passQuads, positions, uvs, colors, light, normals, min, max);
+        return new DecodedSection(key, sectionX, sectionY, sectionZ, passQuads, positions, uvs, colors, light, normals,
+            min, max, rawWords);
     }
 
     /** n = normalize(cross(p2 - p0, p3 - p1)). A zero-area quad has no normal: fixed (0,1,0), such quads draw nothing. */

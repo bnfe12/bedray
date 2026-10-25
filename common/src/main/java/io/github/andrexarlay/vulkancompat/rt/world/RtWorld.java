@@ -491,8 +491,9 @@ public final class RtWorld {
                 return false;
             }
         }
-        return java.util.Arrays.equals(a.positions, b.positions) && java.util.Arrays.equals(a.uvs, b.uvs)
-            && java.util.Arrays.equals(a.colors, b.colors) && java.util.Arrays.equals(a.light, b.light);
+        // Raw words carry the whole geometry identity (the section index byte is pre-masked in the capture): one
+        // array compare replaces the four decoded-array compares.
+        return java.util.Arrays.equals(a.rawWords, b.rawWords);
     }
 
     /** Version of the set of sections that have a BLAS (changes on build, replace and evict). */
