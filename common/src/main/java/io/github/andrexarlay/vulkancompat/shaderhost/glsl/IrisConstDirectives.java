@@ -49,6 +49,7 @@ public final class IrisConstDirectives {
 
     /** A float literal, or null. */
     public static Float number(String value) {
+        value = value.replaceAll("\\s+", ""); // the preprocessor's output separates tokens: "- 30.0"
         if (!value.matches(NUMBER)) return null;
         String v = value.endsWith("f") || value.endsWith("F") ? value.substring(0, value.length() - 1) : value;
         try { return Float.parseFloat(v); }

@@ -54,6 +54,11 @@ dependencies {
 test {
     useJUnitPlatform()
     jvmArgs '--enable-native-access=ALL-UNNAMED'
+    // Optional real-pack survey (IrisRealPackSurveyTest): -PirisSurvey="<pack>;<pack>"; packs stay outside the repository.
+    if (project.hasProperty('irisSurvey')) {
+        systemProperty 'bedray.iris.survey', project.property('irisSurvey')
+        outputs.upToDateWhen { false }
+    }
     testLogging {
         events 'passed', 'failed', 'skipped'
         showStandardStreams = false

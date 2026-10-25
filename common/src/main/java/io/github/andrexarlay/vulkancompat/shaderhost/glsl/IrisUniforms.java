@@ -33,6 +33,10 @@ public final class IrisUniforms {
     public static final int BINDING_FRAME = 2;
     public static final int FRAME_BYTES = 416;
     public static final Map<String, Member> FRAME;
+    /** Typed world-state block (Iris world/celestial/weather/fog/eye uniforms), std140, written once per frame. */
+    public static final int BINDING_WORLD = 18;
+    public static final int WORLD_BYTES = 144;
+    public static final Map<String, Member> WORLD;
 
     static {
         Map<String, Member> p = new LinkedHashMap<>();
@@ -56,6 +60,30 @@ public final class IrisUniforms {
         frame.put("cameraPosition", new Member("vec3", 384));
         frame.put("previousCameraPosition", new Member("vec3", 400));
         FRAME = java.util.Collections.unmodifiableMap(frame);
+
+        Map<String, Member> world = new LinkedHashMap<>();
+        world.put("worldTime", new Member("int", 0));
+        world.put("worldDay", new Member("int", 4));
+        world.put("moonPhase", new Member("int", 8));
+        world.put("sunAngle", new Member("float", 12));
+        world.put("shadowAngle", new Member("float", 16));
+        world.put("rainStrength", new Member("float", 20));
+        world.put("wetness", new Member("float", 24));
+        world.put("isEyeInWater", new Member("int", 28));
+        world.put("sunPosition", new Member("vec3", 32));
+        world.put("nightVision", new Member("float", 44));
+        world.put("moonPosition", new Member("vec3", 48));
+        world.put("blindness", new Member("float", 60));
+        world.put("shadowLightPosition", new Member("vec3", 64));
+        world.put("darknessFactor", new Member("float", 76));
+        world.put("upPosition", new Member("vec3", 80));
+        world.put("fogStart", new Member("float", 92));
+        world.put("skyColor", new Member("vec3", 96));
+        world.put("fogEnd", new Member("float", 108));
+        world.put("fogColor", new Member("vec3", 112));
+        world.put("eyeBrightness", new Member("ivec2", 128));
+        world.put("eyeBrightnessSmooth", new Member("ivec2", 136));
+        WORLD = java.util.Collections.unmodifiableMap(world);
 
         Map<String, Integer> s = new LinkedHashMap<>();
         for (int i = 0; i < COLOR_TARGETS; i++) s.put("colortex" + i, colorBinding(i));

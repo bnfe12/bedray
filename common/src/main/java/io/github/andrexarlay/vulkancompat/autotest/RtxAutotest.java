@@ -5,7 +5,7 @@ import io.github.andrexarlay.vulkanbridge.autotest.AutotestScenarios;
 /**
  * Registers the scenarios of the RTX mod in the autotest harness of Bedray Core (API 0.1.1,
  * {@code AutotestScenarios.register}, see Bedray Core API docs). Select with
- * {@code -Dvkbridge.autotest=settings}, {@code sun}, {@code upscaler_switch}, {@code perf}, {@code rt_upscaler}, {@code rt_modes}, {@code rt_light} or {@code rt_particles}.
+ * {@code -Dvkbridge.autotest=settings}, {@code sun}, {@code upscaler_switch}, {@code perf}, {@code rt_upscaler}, {@code rt_modes}, {@code rt_light}, {@code rt_particles} or {@code iris}.
  */
 public final class RtxAutotest {
     private RtxAutotest() {}
@@ -29,5 +29,6 @@ public final class RtxAutotest {
         AutotestScenarios.register(new F3Scenario());
         AutotestScenarios.register(new AtmosphereScenario());
         AutotestScenarios.register(new ParticlesScenario());
+        AutotestScenarios.register(new IrisScenario());
     }
 }

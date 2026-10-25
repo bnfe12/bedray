@@ -45,16 +45,26 @@ public final class IrisGlslTranslator {
     public record Result(String source, Set<String> unsupported, List<Integer> drawBuffers, Map<String, Integer> varyings,
                          Set<String> pushUsed, Set<Integer> samplerBindings, Map<String, InterfaceVariable> stageInterface,
                          Set<String> frameUsed, List<IrisConstDirectives.ConstDirective> directives, String gaux4Format,
-                         boolean samplesGdepth) {
+                         boolean samplesGdepth, Set<String> worldUsed) {
         public Result {
             directives = List.copyOf(directives);
+            worldUsed = Set.copyOf(worldUsed);
+        }
+
+        public Result(String source, Set<String> unsupported, List<Integer> drawBuffers, Map<String, Integer> varyings,
+                      Set<String> pushUsed, Set<Integer> samplerBindings, Map<String, InterfaceVariable> stageInterface,
+                      Set<String> frameUsed, List<IrisConstDirectives.ConstDirective> directives, String gaux4Format,
+                      boolean samplesGdepth) {
+            this(source, unsupported, drawBuffers, varyings, pushUsed, samplerBindings, stageInterface, frameUsed, directives,
+                gaux4Format, samplesGdepth, Set.of());
         }
 
         /** Result without directive metadata (tests and synthetic passes). */
         public Result(String source, Set<String> unsupported, List<Integer> drawBuffers, Map<String, Integer> varyings,
                       Set<String> pushUsed, Set<Integer> samplerBindings, Map<String, InterfaceVariable> stageInterface,
                       Set<String> frameUsed) {
-            this(source, unsupported, drawBuffers, varyings, pushUsed, samplerBindings, stageInterface, frameUsed, List.of(), null, false);
+            this(source, unsupported, drawBuffers, varyings, pushUsed, samplerBindings, stageInterface, frameUsed, List.of(), null, false,
+                Set.of());
         }
     }
 
@@ -120,6 +130,7 @@ public final class IrisGlslTranslator {
         Set<Integer> samplerBindings = new TreeSet<>();
         Set<String> pushUsed = new TreeSet<>();
         Set<String> frameUsed = new TreeSet<>();
+        Set<String> worldUsed = new TreeSet<>();
         Map<String, Integer> fragOutputs = new LinkedHashMap<>();
         boolean usesVaPosition = false;
         boolean usesVaUV0 = false;
@@ -178,6 +189,8 @@ public final class IrisGlslTranslator {
                             pushUsed.add(name);
                         } else if (IrisUniforms.FRAME.containsKey(name) && IrisUniforms.FRAME.get(name).glslType().equals(type)) {
                             frameUsed.add(name);
+                        } else if (IrisUniforms.WORLD.containsKey(name) && IrisUniforms.WORLD.get(name).glslType().equals(type)) {
+                            worldUsed.add(name);
                         } else if (IrisUniforms.CONSTANT_MATRICES.contains(name) && type.equals("mat4")) {
                             // replaced by constants below
                         } else {
@@ -321,9 +334,18 @@ public final class IrisGlslTranslator {
             });
             src.append("};\n");
         }
+        if (!worldUsed.isEmpty()) {
+            src.append("layout(std140, set = 0, binding = ").append(IrisUniforms.BINDING_WORLD).append(") uniform VkbIrisWorld {\n");
+            IrisUniforms.WORLD.forEach((name, member) -> {
+                if (worldUsed.contains(name)) src.append("    layout(offset = ").append(member.offset()).append(") ")
+                    .append(member.glslType()).append(' ').append(name).append(";\n");
+            });
+            src.append("};\n");
+        }
         src.append("#line 1 \"").append(displayName).append("\"\n").append(code);
         return new Result(src.toString(), unsupported, List.copyOf(drawBuffers), Map.copyOf(varyingLocations),
-            pushUsed, samplerBindings, Map.copyOf(stageInterface), Set.copyOf(frameUsed), directives, gaux4Format, samplesGdepth);
+            pushUsed, samplerBindings, Map.copyOf(stageInterface), Set.copyOf(frameUsed), directives, gaux4Format, samplesGdepth,
+            worldUsed);
     }
 
     /** Validate before either module reaches pipeline creation; successful individual compiles cannot establish this. */

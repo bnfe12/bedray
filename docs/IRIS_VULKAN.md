@@ -29,6 +29,7 @@ device or swapchain. The Iris mod itself does not gain a Vulkan renderer by inst
 - Legacy fullscreen GLSL inputs, colortex0..15 with the gcolor/gdepth/gnormal/composite/gaux1..4 aliases,
   depthtex0/gdepthtex, and the existing scalar timing/size/near/far uniform contract. Unknown uniforms/features
   are rejected by name.
+- Engine macros and world uniforms: see [world state](#engine-macros-and-world-uniforms) below.
 - The host color image is updated only after the entire graph records successfully. Runtime code never
   substitutes a mock executor.
 - Reverse-Z raster depth is converted to conventional 0-near/1-far depth in an R32F compute image.
@@ -73,6 +74,40 @@ gbuffers, `prepare`, compute composites, ray stages). Ray-tracing packs and user
 
 Shader sources are now handed to shaderc from heap memory. The previous overload encoded them on the 64 KiB
 thread stack, which large packs exceed (`Out of stack space`; observed with Dirt RT's ray stages).
+
+## Engine macros and world uniforms
+
+Pack sources and `shaders.properties` are preprocessed with Iris's standard macros, stated only where this host can
+state them truthfully at the early bootstrap (no device yet): `MC_VERSION` from the game's own `version.json` with
+Iris's formatting (26.3 -> 260300), `MC_MIPMAP_LEVEL` from options.txt, `MC_OS_*`, `IS_IRIS`, `MC_NORMAL_MAP`,
+`MC_SPECULAR_MAP`, `MC_RENDER_QUALITY`/`MC_SHADOW_QUALITY` 1.0, `MC_HAND_DEPTH` 0.125, `MC_RENDER_STAGE_*`
+(Iris's phase ordinals) and `DH_BLOCK_*`. `MC_GL_VERSION`/`MC_GLSL_VERSION` are 450, the dialect this host
+translates to, and `MAX_COLOR_BUFFERS` is 16. `IRIS_VERSION`, `MC_GL_VENDOR_*`, `MC_GL_RENDERER_*` and GL extension
+macros are not defined; a pack that references them still builds and the status names them. A macro that cannot be
+stated (for example an unreadable game version) refuses every pack that references it, by name.
+
+World uniforms live in one std140 block at binding 18, written once per frame with `vkCmdUpdateBuffer` from the live
+game on the render thread, the same calls Iris 1.11.7 makes on 26.3 (checked with javap):
+
+| Uniform | Source |
+| --- | --- |
+| `worldTime`, `worldDay` | default clock, `% 24000` / `/ 24000`; fixed-time dimensions report 0 except End/Nether |
+| `moonPhase`, `sunAngle`, `shadowAngle` | camera environment attributes MOON_PHASE, SUN_ANGLE, MOON_ANGLE |
+| `sunPosition`, `moonPosition`, `shadowLightPosition`, `upPosition` | gbufferModelView x Y(-90) x Z(`sunPathRotation`) x X(angle) applied to (0, 100, 0, 1); shadow light = sun by day, moon by night |
+| `rainStrength`, `wetness` | rain level (clamped); wetness smoothed with `wetnessHalflife`/`drynessHalflife` (tenths of a second) |
+| `skyColor` | environment attribute SKY_COLOR |
+| `fogColor`, `fogStart`, `fogEnd` | this frame's camera fog data (color, environmental start/end) |
+| `isEyeInWater` | fluid in camera: 1 water, 2 lava (not for spectators), 3 powder snow |
+| `eyeBrightness`, `eyeBrightnessSmooth` | block/sky light at the eye x 16; smoothed with `eyeBrightnessHalflife` |
+| `nightVision`, `blindness`, `darknessFactor` | mob effects as Iris reads them (conduit power counts as night vision) |
+
+`cameraPosition`/`previousCameraPosition` and the matrices stay in the frame block; `frameCounter`, `frameTime`,
+`frameTimeCounter`, `viewWidth`, `viewHeight`, `aspectRatio`, `near`, `far` stay push constants. A declaration with a
+different type than Iris's (`uniform float worldTime`) is refused by name, as are uniforms outside these tables.
+If a value cannot be read in a frame, programs that read it are skipped for that frame and the status names it;
+nothing is substituted. Smoothing restarts when the post resources are retired. In the End, Iris can move the shadow
+light to the end flash through a pack setting; this host refuses unknown properties, so that setting cannot be on.
+The [world example](../examples/iris-world-post/README.md) reads most of the block.
 
 ## Future development activation
 
@@ -141,7 +176,7 @@ native RT/voxel adapters remain color-only, so depth-reading post packs stay una
 The host owns all target formats, command submission and retirement. Resolve the three shared mixin/UI
 files once; do not retain duplicate frame hooks or a second executor copied from the old development repo.
 
-Target formats, clear controls, persistence and mipmaps are implemented (compile/unit-test evidence only).
-Next gates are world/device-aware engine macros and additional world uniforms, then deferred/compute passes and
+Target formats, clear controls, persistence, mipmaps, engine macros and the world block are implemented
+(compile/unit-test evidence only). Next gates are deferred/compute passes and
 geometry/shadow integration. They require
 runtime evidence before any supported-pack list or release.

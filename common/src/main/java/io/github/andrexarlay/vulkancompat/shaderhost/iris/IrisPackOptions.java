@@ -35,6 +35,13 @@ import java.util.regex.Pattern;
 public final class IrisPackOptions {
     public static final String PROFILE_PROPERTY = "bedray.iris.profile";
     public static final Map<String, String> ENVIRONMENT = Map.of("BEDRAY_VULKAN", "1", "BEDRAY_IRIS_POST", "1");
+
+    /** Bedray's own markers plus the Iris engine macros ({@link IrisStandardMacros}) for sources and shaders.properties. */
+    public static Map<String, String> environment() {
+        Map<String, String> env = new LinkedHashMap<>(IrisStandardMacros.current().macros());
+        env.putAll(ENVIRONMENT);
+        return Collections.unmodifiableMap(env);
+    }
     private static final String NAME = "[A-Za-z_]\\w*";
     private static final String TOKEN = "(?:[A-Za-z_]\\w*|[+-]?(?:0[xX][0-9A-Fa-f]+[uU]?|(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?[fFuU]?))";
     private static final Pattern DEFINE = Pattern.compile("^\\s*(//\\s*)?#define\\s+(" + NAME + ")(?:\\s+(.*))?$" );
@@ -279,7 +286,7 @@ public final class IrisPackOptions {
     }
 
     private Map<String, String> macros(Map<String, String> options) {
-        Map<String, String> macros = new LinkedHashMap<>(ENVIRONMENT);
+        Map<String, String> macros = new LinkedHashMap<>(environment());
         macros.put("true", "1"); macros.put("false", "0");
         options.forEach((name, value) -> {
             if (definitions.get(name).bool()) { if (value.equals("true")) macros.put(name, "1"); }
