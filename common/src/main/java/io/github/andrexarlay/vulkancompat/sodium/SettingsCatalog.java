@@ -162,7 +162,7 @@ public final class SettingsCatalog {
     static {
         // ===================== ESSENTIAL =====================
         putNoImage("renderer", Tier.ESSENTIAL, "World Renderer",
-            "Hardware RT / Raster uses the saved hardware tracing mode. Voxel selects the separate Bedray Compute add-on: gray opaque cubes in a 48-block window with fixed diagnostic sunlight and traced shadows. Full textures, materials and light transport are pending. Frame generation is disabled and scaling becomes bilinear; the hardware RT mode stays saved.",
+            "Hardware RT / Raster uses the saved hardware tracing mode. Voxel selects the included Bedray Compute provider: gray opaque cubes in a 48-block window with fixed diagnostic sunlight and traced shadows. Full textures, materials and light transport are pending. Frame generation is disabled and scaling becomes bilinear; the hardware RT mode stays saved.",
             "GPU cost is experimental and has not been measured in gameplay.",
             "Voxel requires the matching Bedray Compute add-on and the game's Vulkan backend; no RT extensions are required. Experimental.",
             "No gameplay comparison has been captured for the voxel renderer.");
@@ -172,15 +172,15 @@ public final class SettingsCatalog {
             "Runtime status has no comparison image.");
         putNoImage("compute_scene", Tier.EXPERT, "Compute Diagnostic Scene",
             "Session diagnostic preference for the selected voxel renderer. Synthetic replaces the world with a fixed test scene; live mode draws opaque occupancy. World Renderer remains the main hardware/voxel switch. A saved voxel choice starts in live mode on the next launch.",
-            "GPU cost is experimental and has not been measured in gameplay.", "Requires the separate Bedray Compute add-on.",
+            "GPU cost is experimental and has not been measured in gameplay.", "Requires the included Bedray Compute provider.",
             "No live gameplay comparison has been captured.");
         putNoImage("compute_debug_view", Tier.EXPERT, "Compute Debug View",
             "Inspect opaque occupancy shading, face normals, ray distance or unsupported and missing cells. These are diagnostic views, without textures or full material lighting.",
-            "Diagnostic shading only.", "Requires a Bedray Compute provider with debug-view support.",
+            "Diagnostic shading only.", "Requires the included Bedray Compute provider with debug-view support.",
             "No live gameplay comparison has been captured.");
         put("rt_mode", Tier.ESSENTIAL, "Ray Tracing",
             "Off draws the classic game. Path Tracing replaces its lighting with traced light: real shadows, reflections, bounced light and glowing blocks.",
-            "FPS: Path Tracing is the most expensive setting (use an upscaler). VRAM: +0.2-0.5 GB.",
+            "",
             "Needs a GPU with VK_KHR_ray_query. Experimental.", Scene.DAY, 0.62f, 0.55f, "rt_mode", List.of(
                 p("off", "Off", () -> {
                     VulkanRtxConfig.rtMode = RtMode.OFF;
@@ -190,31 +190,31 @@ public final class SettingsCatalog {
             v -> v instanceof RtMode m ? (m == RtMode.OFF ? "off" : "path") : String.valueOf(v));
         put("path_bounces", Tier.ESSENTIAL, "Light Quality (bounces)",
             "How many times light may bounce. More bounces light dark rooms and tint walls with the colour of their neighbours.",
-            "FPS: about -10% per extra bounce. VRAM: none.", "Path Tracing only.", Scene.INTERIOR, 0.5f, 0.55f, "path_bounces", List.of(
+            "", "Path Tracing only.", Scene.INTERIOR, 0.5f, 0.55f, "path_bounces", List.of(
                 p("1", "1 bounce", () -> RtSettings.pathBounces = 1),
                 p("3", "3 bounces", () -> RtSettings.pathBounces = 3),
                 p("6", "6 bounces", () -> RtSettings.pathBounces = 6)), null);
         put("path_auto_exposure", Tier.ESSENTIAL, "Auto Exposure",
             "The picture brightens in the dark and dims in bright light, like an eye. Off keeps one fixed brightness.",
-            "FPS: none.", "Path Tracing only. Known issue: it can pulse or jump when the scene changes; turn it off if the brightness bothers you.",
+            "", "Path Tracing only. Known issue: it can pulse or jump when the scene changes; turn it off if the brightness bothers you.",
             Scene.INTERIOR, 0.5f, 0.5f, "path_auto_exposure", List.of(
                 onOff(false, () -> RtSettings.pathAutoExposure = false),
                 onOff(true, () -> RtSettings.pathAutoExposure = true)), null);
         put("water_style", Tier.ESSENTIAL, "Water Style",
             "Vanilla keeps the classic clear animated water. Realistic adds waves, refraction and reflections.",
-            "FPS: low. VRAM: none.", "", Scene.WATER, 0.5f, 0.5f, "water_style", List.of(
+            "", "", Scene.WATER, 0.5f, 0.5f, "water_style", List.of(
                 p("vanilla", "Vanilla", () -> RtSettings.waterStyle = RtSettings.WATER_STYLE_VANILLA),
                 p("realistic", "Realistic", () -> RtSettings.waterStyle = RtSettings.WATER_STYLE_REALISTIC)),
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
         put("atm_godrays", Tier.ESSENTIAL, "Light Shafts",
             "Visible beams of sun and moon light through leaves, windows and cave openings; strongest at sunrise and sunset.",
-            "FPS: low-medium. VRAM: none.", "Needs ray tracing on.", Scene.SUNSET, 0.5f, 0.45f, "godrays", List.of(
+            "", "Needs ray tracing on.", Scene.SUNSET, 0.5f, 0.45f, "godrays", List.of(
                 p("off", "Off", () -> RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.OFF.ordinal())),
                 p("on", "On", () -> RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.POST.ordinal()))),
             v -> v instanceof RtAtmosphereSettings.GodRays g ? (g == RtAtmosphereSettings.GodRays.OFF ? "off" : "on") : String.valueOf(v));
         put("upscaler_backend", Tier.ESSENTIAL, "Upscaler",
-            "Draws the 3D world smaller and rebuilds the full picture, so you get more FPS. DLSS, FSR and XeSS rebuild detail; Built-in only stretches.",
-            "FPS: +25-60% at Quality. VRAM: +30-80 MB.", "DLSS needs an NVIDIA RTX GPU and its files; FSR and XeSS need their libraries (see docs/INSTALL.md).",
+            "Renders the 3D world at a smaller size and reconstructs the full image. DLSS, FSR and XeSS use temporal reconstruction; Built-in uses spatial scaling.",
+            "", "DLSS needs an NVIDIA RTX GPU and its files; FSR and XeSS need their libraries (see docs/INSTALL.md).",
             Scene.DAY, 0.55f, 0.6f, "upscaler_backend", List.of(
                 p("bilinear", "Built-in (native)", () -> upscale(UpscalerBackend.BILINEAR, null)),
                 p("dlss", "DLSS Quality", () -> upscale(UpscalerBackend.DLSS, UpscalerMode.QUALITY)),
@@ -251,40 +251,40 @@ public final class SettingsCatalog {
         for (String id : new String[] {"dlss_mode", "xess_mode", "fsr_mode", "quality_preset"}) {
             put(id, Tier.ESSENTIAL, id.equals("quality_preset") ? "3D Scale" : "Upscaler Quality",
                 "How small the 3D world is drawn before it is rebuilt to full size. Quality is nearly as sharp as native; Ultra Performance is soft but fastest.",
-                "FPS: Quality +30%, Balanced +45%, Performance +70-100%. VRAM: less at low scales.",
+                "",
                 "The screenshots were taken with the first available upscaler (see the caption).", Scene.DAY, 0.55f, 0.6f, "upscaler_mode", modes, modeKey);
         }
         INFOS.put("frame_generation_provider", new Info("frame_generation_provider", Tier.ESSENTIAL, "Frame Generation Method",
             "Auto uses NVIDIA DLSS Frame Generation (Streamline) when the NVIDIA driver and Streamline files are installed, otherwise AMD FSR 3 Frame Generation (works on any GPU with amd_fidelityfx_vk.dll, 2x mode).",
-            "FPS: same as Frame Generation.",
+            "",
             "Both methods hook the Vulkan swapchain at game startup, so changing the method requires a game restart.", Scene.DAY, 0.5f, 0.5f,
             "frame_generation_mode", List.of(), "A still image cannot show frame generation: it changes motion smoothness, not how a single frame looks.", null));
         INFOS.put("frame_generation_mode", new Info("frame_generation_mode", Tier.ESSENTIAL, "Frame Generation",
-            "Inserts generated frames between rendered ones (2x with AMD FSR 3 or NVIDIA DLSS-G, 3x/4x Multi Frame Generation on RTX 50): smoother motion and higher displayed FPS.",
-            "Displayed FPS x2-x4, rendered FPS lower. VRAM: +100-300 MB.",
+            "",
+            "",
             "Needs AMD FSR 3 (amd_fidelityfx_vk.dll, any GPU) or NVIDIA DLSS-G (RTX 40/50 + Streamline files) and a temporal upscaler (FSR, DLSS or XeSS).", Scene.DAY, 0.5f, 0.5f,
-            "frame_generation_mode", List.of(), "A still image cannot show frame generation: it changes how smooth motion is, not how a frame looks. Watch the F3 screen for the FPS.", null));
+            "frame_generation_mode", List.of(), "", null));
 
         // ===================== ADVANCED =====================
         put("pt_preset", Tier.ADVANCED, "Path Tracing Profile",
             "Fast and Quality set rays per pixel, bounces and distance in one step. Custom appears when you change one of those values.",
-            "FPS: Quality is about 2x the frame time of Fast.", "Path Tracing only.", Scene.INTERIOR, 0.5f, 0.55f, "pt_preset", List.of(
+            "", "Path Tracing only.", Scene.INTERIOR, 0.5f, 0.55f, "pt_preset", List.of(
                 p("fast", "Fast", () -> RtSettings.applyPathPreset(RtSettings.PathPreset.FAST)),
                 p("quality", "Quality", () -> RtSettings.applyPathPreset(RtSettings.PathPreset.QUALITY))),
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
         put("path_spp", Tier.ADVANCED, "Rays per Pixel",
             "How many light paths are traced for each pixel every frame. More rays means less grain before the denoiser.",
-            "FPS: linear - 2 rays cost about twice as much as 1.", "Path Tracing only.", Scene.INTERIOR, 0.5f, 0.55f, "path_spp", List.of(
+            "", "Path Tracing only.", Scene.INTERIOR, 0.5f, 0.55f, "path_spp", List.of(
                 p("1", "1 ray", () -> RtSettings.pathSpp = 1),
                 p("2", "2 rays", () -> RtSettings.pathSpp = 2),
                 p("4", "4 rays", () -> RtSettings.pathSpp = 4)), null);
         putNoImage("path_distance", Tier.ADVANCED, "Ray Distance",
             "How far a light path may travel in blocks. Longer reaches distant sky and hills; shorter is faster.",
-            "FPS: medium at 384+ blocks. VRAM: none.", "Path Tracing only.",
+            "", "Path Tracing only.",
             "The difference shows only in large open scenes (distant terrain lighting); a still of the test scene would not show it.");
         put("path_denoiser", Tier.ADVANCED, "Denoiser",
             "Removes the grain of traced light. NRD is the default; DLSS Ray Reconstruction replaces denoiser and upscaler (RTX only). Off leaves raw grain.",
-            "FPS: NRD 1-2 ms, Ray Reconstruction a little more. VRAM: +100-200 MB.",
+            "",
             "NRD needs its library, Ray Reconstruction needs an NVIDIA RTX GPU and the DLSS files; a missing one falls back to accumulation.",
             Scene.INTERIOR, 0.5f, 0.55f, "path_denoiser", List.of(
                 p("off", "Off", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.OFF),
@@ -293,68 +293,68 @@ public final class SettingsCatalog {
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
         put("path_caustics", Tier.ADVANCED, "Water Caustics",
             "Sunlight focused by the water surface into moving bright patterns on the ground under water.",
-            "FPS: medium. VRAM: none.", "Path Tracing only.", Scene.WATER, 0.5f, 0.75f, "path_caustics", List.of(
+            "", "Path Tracing only.", Scene.WATER, 0.5f, 0.75f, "path_caustics", List.of(
                 onOff(false, () -> RtSettings.caustics = false), onOff(true, () -> RtSettings.caustics = true)), null);
         putNoImage("dlss_rr_geometric_normals", Tier.ADVANCED, "Sharp Block Edges (Ray Reconstruction)",
             "Gives DLSS Ray Reconstruction the flat block-face directions, which keeps block edges crisp. Off feeds smoothed directions.",
-            "FPS: none.", "Only with Path Tracing and DLSS Ray Reconstruction.",
+            "", "Only with Path Tracing and DLSS Ray Reconstruction.",
             "Needs the DLSS Ray Reconstruction library; it is not available on every machine, so no screenshot is shipped.");
         putNoImage("path_exposure_ev", Tier.ADVANCED, "Exposure Compensation",
             "Manual brightness offset in EV (-4.0 to +4.0). Shifts Auto Exposure when it is on, or sets the fixed brightness when Auto Exposure is off.",
-            "FPS: none.", "Needs ray tracing on.",
+            "", "Needs ray tracing on.",
             "Shares the Auto Exposure behaviour; adjust live to match your monitor brightness.");
         putNoImage("rt_particles", Tier.ADVANCED, "Particles in RT",
             "Smoke, flames, sparks, bubbles, block-break and weather splash particles in the ray traced image, occluded by terrain and lit by the scene.",
-            "FPS: low.", "Needs ray tracing on.",
+            "", "Needs ray tracing on.",
             "Particles are animated and short-lived; a still preview does not represent them.");
         putNoImage("waving_foliage", Tier.ADVANCED, "Waving Foliage",
             "Classic shaderpack wind waving on grass, leaves and cutout foliage.",
-            "FPS: none.", "Needs ray tracing on.",
+            "", "Needs ray tracing on.",
             "Dynamic wind animation on foliage quads.");
         putNoImage("waving_foliage_strength", Tier.ADVANCED, "Wind Strength",
             "Strength of the waving foliage wind motion (0 to 200 percent).",
-            "FPS: none.", "Waving Foliage on.",
+            "", "Waving Foliage on.",
             "Slider controlling wind amplitude.");
         INFOS.put("atm_godrays_strength", shared("atm_godrays_strength", "atm_godrays", Tier.ADVANCED, "Light Shaft Strength",
-            "Brightness of the light beams.", "FPS: none.", "Needs Light Shafts on.", v -> asNumber(v) > 0 ? "on" : "off"));
+            "Brightness of the light beams.", "", "Needs Light Shafts on.", v -> asNumber(v) > 0 ? "on" : "off"));
         INFOS.put("atm_godrays_quality", noImg("atm_godrays_quality", Tier.ADVANCED, "Light Shaft Quality",
-            "Steps used to draw each beam: Low 6, Medium 8, High 12, Ultra 16. More steps give smoother beams.", "FPS: low to medium.", "Needs Light Shafts on.",
+            "Steps used to draw each beam: Low 6, Medium 8, High 12, Ultra 16. More steps give smoother beams.", "", "Needs Light Shafts on.",
             "The difference between quality steps is subtle (smoother edges) and is not shown by a single still."));
         put("atm_bloom", Tier.ADVANCED, "Bloom",
-            "A soft glow around very bright lights and glowing blocks, like a camera lens.", "FPS: low.", "Needs ray tracing on.",
+            "A soft glow around very bright lights and glowing blocks, like a camera lens.", "", "Needs ray tracing on.",
             Scene.LAVA, 0.5f, 0.55f, "bloom", List.of(
                 p("off", "Off", () -> RtAtmosphereSettings.set("bloom", 0)),
                 p("on", "On", () -> RtAtmosphereSettings.set("bloom", 1))), null);
         INFOS.put("atm_bloom_strength", shared("atm_bloom_strength", "atm_bloom", Tier.ADVANCED, "Bloom Strength", "How strong the glow is.",
-            "FPS: none.", "Needs Bloom on.", v -> asNumber(v) > 0 ? "on" : "off"));
+            "", "Needs Bloom on.", v -> asNumber(v) > 0 ? "on" : "off"));
         put("atm_sunglare", Tier.ADVANCED, "Sun Glare",
-            "A bright halo around the sun when you look at it; hidden behind blocks and clouds.", "FPS: none.", "Needs ray tracing on.",
+            "A bright halo around the sun when you look at it; hidden behind blocks and clouds.", "", "Needs ray tracing on.",
             Scene.SUNSET, 0.2f, 0.45f, "sunglare", List.of(
                 p("off", "Off", () -> RtAtmosphereSettings.set("sunglare", 0)),
                 p("on", "On", () -> RtAtmosphereSettings.set("sunglare", 1))), null);
         put("atm_fog_aerial", Tier.ADVANCED, "Distance Haze",
-            "Far terrain fades into the colour of the sky, denser in rain and valleys. 0 turns it off.", "FPS: low.", "Needs Fog on.",
+            "Far terrain fades into the colour of the sky, denser in rain and valleys. 0 turns it off.", "", "Needs Fog on.",
             Scene.DAY, 0.5f, 0.35f, "fog_aerial", List.of(
                 p("0", "None", () -> RtAtmosphereSettings.set("fog_aerial", 0.0)),
                 p("1", "Default", () -> RtAtmosphereSettings.set("fog_aerial", 1.0)),
                 p("2", "Strong", () -> RtAtmosphereSettings.set("fog_aerial", 2.0))), null);
         put("rt_fog", Tier.ADVANCED, "Fog",
-            "Atmospheric depth and fog in the traced picture, with the sun scattering through it.", "FPS: low.", "Needs ray tracing on.",
+            "Atmospheric depth and fog in the traced picture, with the sun scattering through it.", "", "Needs ray tracing on.",
             Scene.SUNSET, 0.5f, 0.45f, "rt_fog", List.of(
                 onOff(false, () -> RtSettings.volumetricFogEnabled = RtSettings.rtFog = false),
                 onOff(true, () -> RtSettings.volumetricFogEnabled = RtSettings.rtFog = true)), null);
         INFOS.put("rt_fog_density", shared("rt_fog_density", "rt_fog", Tier.ADVANCED, "Fog Density", "How thick the fog is (100% = default).",
-            "FPS: none.", "Needs Fog on.", v -> asNumber(v) > 0 ? "on" : "off"));
+            "", "Needs Fog on.", v -> asNumber(v) > 0 ? "on" : "off"));
         put("auto_normals", Tier.ADVANCED, "Surface Relief",
             "Builds bumps from block textures so light and shadow catch the grain of stone and planks. Resource packs with their own normal maps keep them.",
-            "FPS: low. VRAM: none.", "Needs ray tracing on.", Scene.DAY, 0.3f, 0.8f, "auto_normals", List.of(
+            "", "Needs ray tracing on.", Scene.DAY, 0.3f, 0.8f, "auto_normals", List.of(
                 onOff(false, () -> RtSettings.autoNormals = false), onOff(true, () -> RtSettings.autoNormals = true)), null);
         putNoImage("point_sampling_sharpness", Tier.ADVANCED, "Pixel-Sharp Textures",
-            "Keeps textures as hard square pixels when you look closely, instead of smoothing them.", "FPS: none.",
+            "Keeps textures as hard square pixels when you look closely, instead of smoothing them.", "",
             "Takes effect after reloading resource packs (F3+T).",
             "The setting only applies after a resource reload, so a live before/after screenshot is not possible.");
         put("fsr_sharpness", Tier.ADVANCED, "FSR Sharpening",
-            "Extra sharpening after FSR (RCAS). 0 is off.", "FPS: very low.", "FSR only.", Scene.DAY, 0.55f, 0.6f, "fsr_sharp", List.of(
+            "Extra sharpening after FSR (RCAS). 0 is off.", "", "FSR only.", Scene.DAY, 0.55f, 0.6f, "fsr_sharp", List.of(
                 p("0", "Off", () -> {
                     VulkanRtxConfig.fsrSharpness = 0f;
                     upscale(UpscalerBackend.FSR, UpscalerMode.QUALITY);
@@ -365,18 +365,18 @@ public final class SettingsCatalog {
                 return d < 25 ? "0" : d < 75 ? "50" : "100";
             });
         putNoImage("custom_scale", Tier.ADVANCED, "Custom 3D Scale",
-            "Exact render size for the built-in upscaler, 25% to 100%.", "FPS: proportional to pixel count.", "Built-in upscaler with 3D Scale set to Custom.",
+            "Exact render size for the built-in upscaler, 25% to 100%.", "", "Built-in upscaler with 3D Scale set to Custom.",
             "It is the same effect as the 3D Scale presets; see the 3D Scale screenshots.");
         putNoImage("frame_generation_reflex", Tier.ADVANCED, "NVIDIA Reflex",
-            "Lowers input delay. Boost also raises GPU clocks.", "FPS: none.", "NVIDIA GPU with Streamline.",
+            "Lowers input delay. Boost also raises GPU clocks.", "", "NVIDIA GPU with Streamline.",
             "Reflex changes latency, not the look of a frame.");
         putNoImage("frame_generation_limit", Tier.ADVANCED, "Presented FPS Cap",
-            "Caps the displayed frame rate (0 = no cap). Keeps frame pacing steady near the monitor refresh rate.", "FPS: caps it.", "Frame Generation active.",
+            "Caps the displayed frame rate (0 = no cap). Keeps frame pacing steady near the monitor refresh rate.", "", "Frame Generation active.",
             "A frame cap changes timing, not the look of a frame.");
         putNoImage("frame_generation_status", Tier.ADVANCED, "Frame Generation Status",
             "Read-only: whether frame generation is active, and why not when it is not.", "", "", "Status line, nothing to preview.");
         putNoImage("debug_overlay", Tier.ADVANCED, "F3 Bedray Info",
-            "Shows the Bedray block on the F3 screen: backend, FPS, ray tracing and upscaler state.", "FPS: none.", "",
+            "Shows the Bedray backend, rendering and upscaler diagnostics on the F3 screen.", "", "",
             "It only adds text to the F3 screen.");
 
         // ===================== EXPERT (visible only with -Dvkrtx.ui.expert=true) =====================
@@ -389,7 +389,7 @@ public final class SettingsCatalog {
             {"rays_gi", "RT Global Illumination", "One traced bounce of indirect light (Ray Tracing Fast mode)."},
             {"rays_emissive", "RT Block Light", "Light and shadows from glowing blocks (Ray Tracing Fast mode)."},
             {"rays_accumulate", "RT Temporal Accumulation", "Averages frames to remove noise (Ray Tracing Fast mode)."}}) {
-            putNoImage(e[0], Tier.EXPERT, e[1], e[2], "FPS: medium-high.", "Hidden mode: Ray Tracing (Fast) is in development.",
+            putNoImage(e[0], Tier.EXPERT, e[1], e[2], "", "Hidden mode: Ray Tracing (Fast) is in development.",
                 "The Ray Tracing (Fast) mode is not public yet, so it has no screenshots.");
         }
         for (String[] e : new String[][] {
@@ -403,34 +403,46 @@ public final class SettingsCatalog {
             {"rays_emissive_distance", "RT Block Light Distance", "Glowing blocks farther than this do not light a surface."},
             {"rays_gi_quality", "RT GI Rays", "Bounce rays per pixel."},
             {"rays_gi_distance", "RT GI Distance", "Longest bounce ray in blocks."}}) {
-            putNoImage(e[0], Tier.EXPERT, e[1], e[2], "FPS: grows with the number.", "Hidden mode: Ray Tracing (Fast) is in development.",
+            putNoImage(e[0], Tier.EXPERT, e[1], e[2], "", "Hidden mode: Ray Tracing (Fast) is in development.",
                 "The Ray Tracing (Fast) mode is not public yet, so it has no screenshots.");
         }
         putNoImage("rt_distance_auto", Tier.EXPERT, "RT Distance: As in Game", "On: ray tracing covers the game render distance. Off: the manual distance.",
-            "FPS: more distance costs more.", "", "A distance setting; see its numbers.");
+            "", "", "A distance setting; see its numbers.");
         putNoImage("rt_distance_chunks", Tier.EXPERT, "RT Distance (manual)", "Chunks covered by ray tracing when 'As in Game' is off.",
-            "FPS and VRAM grow with the distance.", "", "A distance setting; see its numbers.");
+            "", "", "A distance setting; see its numbers.");
         putNoImage("rt_vram_budget_mb", Tier.EXPERT, "RT Memory Budget", "GPU memory for chunk geometry; the farthest chunks are left out when it is full.",
-            "FPS: none, but too large a value can exhaust VRAM.", "", "A memory limit has no look of its own.");
+            "", "", "A memory limit has no look of its own.");
         putNoImage("rt_light_budget", Tier.EXPERT, "RT Light Budget", "Most important glowing block faces that cast traced light.",
-            "FPS: grows with the number.", "", "A budget has no look of its own; too small drops far lamps.");
+            "", "", "A budget has no look of its own; too small drops far lamps.");
         putNoImage("sun_size_tenths", Tier.EXPERT, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
-            "FPS: none.", "", "Visible only as shadow softness at a moment of day; not captured.");
-        putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "FPS: none.", "Surface Relief on.",
+            "", "", "Visible only as shadow softness at a moment of day; not captured.");
+        putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
             "Shares the Surface Relief screenshots.");
         putNoImage("texture_lod_bias_offset", Tier.EXPERT, "Texture Sharpness Offset",
             "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
-            "FPS: none.", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
-        putNoImage("fsr_version", Tier.EXPERT, "FSR Version", "Which FSR inside the AMD library is used. Auto picks the newest (3.1).", "FPS: none.", "FSR only.",
+            "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
+        putNoImage("fsr_version", Tier.EXPERT, "FSR Version", "Which FSR inside the AMD library is used. Auto picks the newest (3.1).", "", "FSR only.",
             "Version choice, no visual preview.");
-        putNoImage("atm_godrays_range", Tier.EXPERT, "Light Shaft Range", "Distance in blocks the beams are computed over.", "FPS: low.", "", "A range value.");
-        putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "FPS: none.", "", "Shares the Bloom screenshots.");
-        putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "FPS: none.", "", "Shares the Bloom screenshots.");
-        putNoImage("atm_sunglare_strength", Tier.EXPERT, "Sun Glare Strength", "Brightness of the sun halo.", "FPS: none.", "", "Shares the Sun Glare screenshots.");
-        putNoImage("atm_fog_vanilla", Tier.EXPERT, "Vanilla Fog Weight", "How much of the game's own fog is used.", "FPS: none.", "", "Shares the Fog screenshots.");
-        putNoImage("rt_fog_in_scattering", Tier.EXPERT, "Fog In-scattering", "Sunlight and skylight scattering through the fog.", "FPS: low.", "", "Shares the Fog screenshots.");
+        putNoImage("atm_godrays_range", Tier.EXPERT, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
+        putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
+        putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");
+        putNoImage("atm_sunglare_strength", Tier.EXPERT, "Sun Glare Strength", "Brightness of the sun halo.", "", "", "Shares the Sun Glare screenshots.");
+        putNoImage("atm_fog_vanilla", Tier.EXPERT, "Vanilla Fog Weight", "How much of the game's own fog is used.", "", "", "Shares the Fog screenshots.");
+        putNoImage("rt_fog_in_scattering", Tier.EXPERT, "Fog In-scattering", "Sunlight and skylight scattering through the fog.", "", "", "Shares the Fog screenshots.");
         putNoImage("rt_debug_view", Tier.EXPERT, "RT Debug Buffer", "Replaces the world with an internal buffer (normals, depth, albedo...). For diagnosis only.",
-            "FPS: low.", "", "A diagnostic view, not a look.");
+            "", "", "A diagnostic view, not a look.");
+        putNoImage("voxel_quality_profile", Tier.ESSENTIAL, "Voxel Quality", "Fast reduces render scale and memory budget, and disables the diffuse bounce and layered transparent optics. Beautiful enables those effects at native scale and follows Minecraft's distance. Custom unlocks individual settings. Changes remain pending until Apply.", "", "Experimental renderer.", "No voxel quality comparison has been captured.");
+        putNoImage("path_quality_profile", Tier.ESSENTIAL, "Path Tracing Quality", "Fast uses 1 sample, 2 light bounces and a 256-block path distance. Beautiful uses 2 samples, 6 bounces and 512 blocks. Custom unlocks individual settings. The denoiser choice stays unchanged; missing runtimes are not installed by a profile.", "", "Hardware Path Tracing only.", "Existing previews show individual hardware settings, not these profiles.");
+        putNoImage("voxel_distance_auto", Tier.ADVANCED, "Voxel Distance: Follow Minecraft", "Request the game's render distance. Only loaded sections can become resident; actual coverage depends on the capture and memory budgets.", "", "Voxel renderer only.", "Coverage is reported by runtime statistics.");
+        putNoImage("voxel_distance_chunks", Tier.ADVANCED, "Voxel Distance (chunks)", "Requested horizontal radius when Follow Minecraft is off. Increasing this value does not load or generate chunks.", "", "Voxel renderer only.", "Coverage is reported by runtime statistics.");
+        putNoImage("voxel_memory_budget_mib", Tier.ADVANCED, "Voxel GPU Memory Budget", "Maximum GPU scene storage in MiB. The provider prioritizes nearby sections; memory pressure can reduce resident coverage below the requested distance.", "", "Voxel renderer only.", "Memory use is reported by runtime statistics.");
+        putNoImage("voxel_diffuse_bounce", Tier.ADVANCED, "Voxel Diffuse Bounce", "Trace the supported diffuse bounce in the software renderer. Turning it off removes this lighting work; full physical light transport is still in development.", "", "Voxel renderer only.", "No voxel lighting comparison has been captured.");
+        putNoImage("voxel_translucent_optics", Tier.ADVANCED, "Voxel Layered Transparency", "Enable the software renderer's layered transparent optical path. Turning it off skips this additional traversal and preserves the underlying raster where replacement is unsupported.", "", "Voxel renderer only.", "No voxel transparency comparison has been captured.");
+        putNoImage("ui_expert", Tier.ADVANCED, "Expert Settings", "Show low-level rendering and diagnostic options. Apply to rebuild this screen with the new option set.", "", "", "Interface preference, no image comparison.");
+        putNoImage("frame_generation_provider", Tier.ADVANCED, "Frame Generation Method", "Select the runtime provider. Changing it requires a restart; installed files do not establish that generation is active.", "", "Hardware renderer with a supported runtime.", "Generated frames require motion, so a still image cannot demonstrate them.");
+        // Older descriptions carried generic FPS and VRAM estimates without linked measurements.
+        INFOS.replaceAll((path, info) -> new Info(info.path(), info.tier(), info.name(), info.desc(), "", info.requires(),
+            info.scene(), info.cropU(), info.cropV(), info.previewBase(), info.previews(), info.noImage(), info.keyOf()));
     }
 
     private static Info shared(String path, String sharedWith, Tier tier, String name, String desc, String cost, String requires,

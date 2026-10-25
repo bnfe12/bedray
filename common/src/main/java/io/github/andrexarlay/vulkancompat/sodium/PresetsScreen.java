@@ -17,14 +17,20 @@ import java.util.List;
 public final class PresetsScreen extends Screen {
     private static final int ROW_H = 22;
     private final Screen parent;
+    private final SettingsDraft draft;
     private EditBox nameBox;
     private int page;
     private Component status = Component.empty();
     private List<String> names = List.of();
 
     public PresetsScreen(Screen parent) {
+        this(parent, parent instanceof BedrayConfigScreen screen ? screen.draft() : new SettingsDraft());
+    }
+
+    PresetsScreen(Screen parent, SettingsDraft draft) {
         super(Component.translatableWithFallback("bedray.presets.title", "My Bedray presets"));
         this.parent = parent;
+        this.draft = draft;
     }
 
     private static Component tr(String k, String f, Object... a) {
@@ -45,7 +51,7 @@ public final class PresetsScreen extends Screen {
             String n = PresetStore.sanitize(nameBox.getValue());
             if (n == null) {
                 status = tr("bedray.presets.bad_name", "Enter a name (letters, digits, space, - and _).");
-            } else if (PresetStore.saveCurrent(n)) {
+            } else if (PresetStore.save(n, draft.snapshot())) {
                 status = tr("bedray.presets.saved", "Saved \"%s\".", n);
                 nameBox.setValue("");
                 rebuild();
@@ -69,8 +75,9 @@ public final class PresetsScreen extends Screen {
             int bw = Math.max(40, Math.min(58, (w - 60) / 3));
             addRenderableWidget(Button.builder(tr("bedray.presets.load", "Load"), b -> {
                 String t = PresetStore.read(n);
-                int c = t == null ? -1 : PresetStore.apply(t);
-                status = c < 0 ? tr("bedray.presets.load_failed", "Could not load \"%s\".", n) : tr("bedray.presets.loaded", "Loaded \"%s\" (%s settings).", n, c);
+                int c = t == null ? -1 : draft.importText(t);
+                status = c < 0 ? tr("bedray.presets.load_failed", "Could not load \"%s\".", n)
+                    : tr("bedray.settings.preset_staged", "%s preset values staged. Apply to commit.", c);
             }).bounds(x + w - bw * 2 - 4, ry, bw, 20).build());
             addRenderableWidget(Button.builder(tr("bedray.presets.delete", "Delete"), b -> {
                 PresetStore.delete(n);
@@ -84,13 +91,13 @@ public final class PresetsScreen extends Screen {
             .bounds(x + 24, bottom - 22, 20, 20).build());
         int hw = (w - 48 - 8) / 2;
         addRenderableWidget(Button.builder(tr("bedray.presets.copy", "Copy to clipboard"), b -> {
-            Minecraft.getInstance().keyboardHandler.setClipboard(PresetStore.snapshot());
+            Minecraft.getInstance().keyboardHandler.setClipboard(draft.snapshot());
             status = tr("bedray.presets.copied", "Current settings copied as text.");
         }).bounds(x + 48, bottom - 22, hw, 20).build());
         addRenderableWidget(Button.builder(tr("bedray.presets.import", "Import from clipboard"), b -> {
-            int c = PresetStore.apply(Minecraft.getInstance().keyboardHandler.getClipboard());
+            int c = draft.importText(Minecraft.getInstance().keyboardHandler.getClipboard());
             status = c < 0 ? tr("bedray.presets.import_failed", "The clipboard has no Bedray settings.")
-                : tr("bedray.presets.imported", "Imported %s settings.", c);
+                : tr("bedray.settings.preset_staged", "%s preset values staged. Apply to commit.", c);
         }).bounds(x + 48 + hw + 8, bottom - 22, hw, 20).build());
         addRenderableWidget(Button.builder(tr("gui.done", "Done"), b -> onClose()).bounds(x, bottom + 2, w, 20).build());
     }
