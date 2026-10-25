@@ -1,6 +1,34 @@
 apply from: rootProject.file('gradle/loader-module.gradle')
 // Bedray 2.0: AOT compile of the Slang entry passes (see docs/SLANG_MIGRATION.md).
 apply from: rootProject.file('gradle/slang.gradle')
+apply from: rootProject.file('gradle/build-provenance.gradle')
+
+// Reuse the same resolved provenance as the loader manifests. Realizing this task reads its
+// attributes only; generating resources does not depend on executing the common JAR task.
+def provenanceAttributes = tasks.named('jar', Jar).get().manifest.attributes
+def buildIdentity = [
+    version: String.valueOf(rootProject.mod_version),
+    commit: String.valueOf(provenanceAttributes['Git-Commit'] ?: 'unknown'),
+    dirty: String.valueOf(provenanceAttributes['Git-Dirty'] ?: 'unknown'),
+    source: String.valueOf(provenanceAttributes['Build-Source'] ?: 'unknown')
+]
+def buildIdentityResources = layout.buildDirectory.dir('generated/bedrayBuildIdentity')
+def generateBuildIdentity = tasks.register('generateBedrayBuildIdentity') {
+    inputs.properties(buildIdentity)
+    outputs.dir(buildIdentityResources)
+    doLast {
+        def target = buildIdentityResources.get().file('META-INF/bedray-build.properties').asFile
+        target.parentFile.mkdirs()
+        def escape = { String value ->
+            value.replace('\\', '\\\\').replace('\r', '\\r').replace('\n', '\\n')
+                .replace('\t', '\\t').replace('=', '\\=').replace(':', '\\:')
+        }
+        // Properties.store adds a timestamp; explicit stable lines keep metadata reproducible.
+        target.setText(buildIdentity.collect { key, value -> "${key}=${escape(value)}" }.join('\n') + '\n', 'UTF-8')
+    }
+}
+sourceSets.main.resources.srcDir(buildIdentityResources)
+tasks.named('processResources') { dependsOn(generateBuildIdentity) }
 
 // All mod logic lives here (no loader API: see NoLoaderImportsTest). The loader modules only add entry points and descriptors.
 base {
