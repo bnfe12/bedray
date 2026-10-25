@@ -1,0 +1,66 @@
+#version 460
+// GPU dequantization of Sodium 0.9.2 compact chunk vertices: replaces the CPU float materialization in
+// SodiumMeshDecoder.decode and the staging put in RtWorld's section build. One invocation per quad: decodes the
+// 4 vertices (20 bytes each, little-endian words) and writes the per-section geometry arena block layout
+// [positions float3 x 4Q][uv float2 x 4Q][colours uint x 4Q][light uint x 4Q] (RtWorld.GEOM_BYTES_PER_QUAD = 112)
+// straight into the arena block, so the raw capture (80 bytes per quad) is all the CPU ever touches.
+// Vertex layout source: SodiumMeshDecoder javadoc (Sodium 0.9.2 CompactChunkVertex decompilation), mirrored bit for bit:
+//   w0 position hi: axis a (0=x, 1=y, 2=z) at bits 10a .. 10a+9; w1 position lo: same layout;
+//     position = (((hi << 10) | lo) * 32 / 2^20) - 8, section-local blocks (the section table carries the origin).
+//   w2 colour ABGR, stored as-is (byte 0 = R after the little-endian load).
+//   w3 texture: u in bits 0..15 (15 magnitude bits + bias bit 15), v in bits 16..31 (15 magnitude bits + bias bit 31);
+//     uv = (half & 0x7FFF) / 32768 + (biasBit ? +1/32768 : -1/32768) - Sodium's shrink bias, one quantization step
+//     inward from the sprite edge so NEAREST sampling cannot pull a neighbouring sprite's texel.
+//   w4 light: block light 0..7, sky light 8..15, material 16..23, region-local section index 24..31 (dropped, exactly
+//     like the CPU decoder). The CPU foliage tagging runs before this dispatch (it needs world lookups) and passes the
+//     OR bits per quad through flagsAddr.
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RawQuads { uint w[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ArenaBlock { uint w[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer QuadFlags { uint f[]; };
+
+layout(push_constant) uniform PC {
+    uvec2 rawAddr;      // RawQuads: quadCount * 20 uints (5 per vertex)
+    uvec2 arenaAddr;    // ArenaBlock: this section's geometry arena block
+    uvec2 flagsAddr;    // QuadFlags: uint per quad (0 = no foliage tagging this section)
+    uint quadCount;
+    uint pad0;
+} pc;
+
+const float VERTEX_SCALE = 32.0 / 1048576.0;
+const float VERTEX_OFFSET = -8.0;
+const float TEX_MAX_INV = 1.0 / 32768.0;
+
+void main() {
+    uint q = gl_GlobalInvocationID.x;
+    if (q >= pc.quadCount) {
+        return;
+    }
+    RawQuads src = RawQuads(pc.rawAddr);
+    uint flagBits = pc.flagsAddr.x != 0u ? QuadFlags(pc.flagsAddr).f[q] : 0u;
+    ArenaBlock outBlock = ArenaBlock(pc.arenaAddr);
+    // Arena word map (112 bytes = 28 words per quad): positions q*28 .. +11, uvs q*28+12 .. +19,
+    // colours q*28+20 .. +23, light q*28+24 .. +27.
+    uint posBase = q * 28u;
+    for (uint v = 0u; v < 4u; v++) {
+        uint o = q * 20u + v * 5u;   // vertex word offset in the raw capture
+        uint w0 = src.w[o];
+        uint w1 = src.w[o + 1u];
+        uint w3 = src.w[o + 3u];
+        uint w4 = src.w[o + 4u];
+        for (uint axis = 0u; axis < 3u; axis++) {
+            uint q20 = (((w0 >> (axis * 10u)) & 1023u) << 10u) | ((w1 >> (axis * 10u)) & 1023u);
+            float p = float(q20) * VERTEX_SCALE + VERTEX_OFFSET;
+            outBlock.w[posBase + v * 3u + axis] = floatBitsToUint(p);
+        }
+        float u = float(w3 & 0x7FFFu) * TEX_MAX_INV + ((w3 & 0x8000u) != 0u ? TEX_MAX_INV : -TEX_MAX_INV);
+        float vTex = float((w3 >> 16) & 0x7FFFu) * TEX_MAX_INV + ((w3 & 0x80000000u) != 0u ? TEX_MAX_INV : -TEX_MAX_INV);
+        outBlock.w[posBase + 12u + v * 2u] = floatBitsToUint(u);
+        outBlock.w[posBase + 12u + v * 2u + 1u] = floatBitsToUint(vTex);
+        outBlock.w[posBase + 20u + v] = src.w[o + 2u];                                  // colour ABGR as-is
+        outBlock.w[posBase + 24u + v] = (w4 & 0x00FFFFFFu) | flagBits;                  // section index dropped
+    }
+}
