@@ -99,9 +99,9 @@ final class RtVolumetricPass {
         local.skyColor[2] = 0f;
 
         march.dispatch(cmd, local, hw, hh);
-        VkBarriers.fullMemoryBarrier(cmd);
+        VkBarriers.computeToCompute(cmd);
         apply.dispatch(cmd, local, w, h);
-        VkBarriers.fullMemoryBarrier(cmd);
+        VkBarriers.fullMemoryBarrier(cmd);   // trailing: guards the engine's non-compute consumers
         historyReady = true;
         lastFrame = p.frame;
     }

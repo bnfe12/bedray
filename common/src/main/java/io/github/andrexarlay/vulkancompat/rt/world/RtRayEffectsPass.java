@@ -195,23 +195,23 @@ public final class RtRayEffectsPass implements RtPass {
             // Two checker phases (params2 bits 16-19, the nibble the a-trous filter borrows for its own iterations):
             // phase 0 merges the even cells reading odd ones, phase 1 the other way round over phase 0's results. The
             // shader skips pixels itself when the reservoir buffer is off.
-            VkBarriers.fullMemoryBarrier(cmd);   // the ray pass wrote the reservoirs and receiver positions this one reads
+            VkBarriers.computeToCompute(cmd);   // the ray pass wrote the reservoirs and receiver positions this one reads
             params.filterIter = 0;
             restirSpatial.dispatch(cmd, params, width, height);
-            VkBarriers.fullMemoryBarrier(cmd);   // phase 1 reads phase 0's merged records
+            VkBarriers.computeToCompute(cmd);   // phase 1 reads phase 0's merged records
             params.filterIter = 1;
             restirSpatial.dispatch(cmd, params, width, height);
-            VkBarriers.fullMemoryBarrier(cmd);   // next frame's ray pass reads the merged half
+            VkBarriers.fullMemoryBarrier(cmd);   // trailing: guards consumers that are not this mod's compute dispatches
             params.filterIter = 0;
         }
         if (filter != null && (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.mode == RtConfig.MODE_LIT) {
             params.filterIters = FILTER_ITERATIONS;
             for (int i = 0; i < FILTER_ITERATIONS; i++) {
-                VkBarriers.fullMemoryBarrier(cmd);   // the previous dispatch wrote the accumulation image this one reads
+                VkBarriers.computeToCompute(cmd);   // the previous dispatch wrote the accumulation image this one reads
                 params.filterIter = i;
                 filter.dispatch(cmd, params, width, height);
             }
-            VkBarriers.fullMemoryBarrier(cmd);
+            VkBarriers.fullMemoryBarrier(cmd);   // trailing: guards the engine's non-compute consumers
             params.filterIter = 0;
             params.filterIters = 0;
         }

@@ -178,11 +178,11 @@ public final class RtPathTracerPass implements RtPass {
         if (filter != null && (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.mode == RtConfig.MODE_LIT) {
             params.filterIters = 3;
             for (int i = 0; i < params.filterIters; i++) {
-                VkBarriers.fullMemoryBarrier(cmd);
+                VkBarriers.computeToCompute(cmd);
                 params.filterIter = i;
                 filter.dispatch(cmd, params, width, height);
             }
-            VkBarriers.fullMemoryBarrier(cmd);
+            VkBarriers.fullMemoryBarrier(cmd);   // trailing: guards the engine's non-compute consumers
             params.filterIter = 0;
             params.filterIters = 0;
         }
