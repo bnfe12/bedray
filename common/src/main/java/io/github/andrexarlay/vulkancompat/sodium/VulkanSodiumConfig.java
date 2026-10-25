@@ -53,6 +53,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -281,6 +282,18 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             == VulkanRtxConfig.RendererSelection.HARDWARE_RT;
     }
 
+    /**
+     * RT predicates call hardwareRenderer before reading the mode, including when composed with another toggle.
+     * Sodium guards every read on the provider's ConfigState; a helper call does not declare dependencies for its caller.
+     */
+    private static Identifier[] rtDependencies(Identifier modeId, Identifier... additional) {
+        Set<Identifier> dependencies = new LinkedHashSet<>();
+        dependencies.add(id("renderer"));
+        dependencies.add(modeId);
+        for (Identifier dependency : additional) dependencies.add(dependency);
+        return dependencies.toArray(Identifier[]::new);
+    }
+
     public static Component rendererName(VulkanRtxConfig.RendererSelection renderer) {
         if (renderer == VulkanRtxConfig.RendererSelection.HARDWARE_RT) {
             return tr("bedray.renderer.hardware", "Hardware RT / Raster");
@@ -314,7 +327,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                                     Path gameDir, StorageEventHandler st) {
         Function<ConfigState, Boolean> anyRt = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class).isActive();
         Function<ConfigState, Boolean> pathOn = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class) == RtMode.PATH_TRACED;
-        Identifier[] dMode = {id("renderer"), modeId};
+        Identifier[] dMode = rtDependencies(modeId);
 
         // ---- Ray tracing and light
         OptionGroupBuilder rt = group(builder, "bedray.group.main_rt", "Ray Tracing & Light", new ArrayList<>());
@@ -581,7 +594,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         Function<ConfigState, Boolean> anyRt = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class).isActive();
         Function<ConfigState, Boolean> pathOn = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class) == RtMode.PATH_TRACED;
         Function<ConfigState, Boolean> raysOn = s -> hardwareRenderer(s) && s.readEnumOption(modeId, RtMode.class) == RtMode.RAY_TRACED;
-        Identifier[] dMode = {id("renderer"), modeId};
+        Identifier[] dMode = rtDependencies(modeId);
         boolean expert = SettingsCatalog.expertUi();
 
         // ---- Path tracing details
@@ -621,7 +634,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         pt.addOption(boolOpt(builder, "dlss_rr_geometric_normals", true, v -> RtSettings.dlssRrGeometricNormals = v,
             () -> RtSettings.dlssRrGeometricNormals,
             s -> anyRt.apply(s) && s.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR,
-            new Identifier[] {id("renderer"), modeId, denId}, Mark.NONE, OptionImpact.LOW, true, st));
+            rtDependencies(modeId, denId), Mark.NONE, OptionImpact.LOW, true, st));
         endGroup(builder, page, pt, "adv_pt");
 
         // ---- Light and atmosphere
@@ -635,13 +648,13 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         Identifier godId = id("atm_godrays");
         Function<ConfigState, Boolean> shaftsOn = s -> s.readEnumOption(godId, RtAtmosphereSettings.GodRays.class) != RtAtmosphereSettings.GodRays.OFF
             && anyRt.apply(s);
-        Identifier[] dShafts = {id("renderer"), modeId, godId};
+        Identifier[] dShafts = rtDependencies(modeId, godId);
         look.addOption(atmSlider(builder, "atm_godrays_strength", "godrays_strength", 100, 0, 200, 5, shaftsOn, dShafts, true, st));
         Identifier bloomId = id("atm_bloom");
         look.addOption(boolOpt(builder, "atm_bloom", true, v -> RtAtmosphereSettings.set("bloom", v ? 1 : 0),
             () -> RtAtmosphereSettings.get("bloom") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(atmSlider(builder, "atm_bloom_strength", "bloom_strength", 25, 0, 200, 5,
-            s -> s.readBooleanOption(bloomId) && anyRt.apply(s), new Identifier[] {id("renderer"), modeId, bloomId}, true, st));
+            s -> s.readBooleanOption(bloomId) && anyRt.apply(s), rtDependencies(modeId, bloomId), true, st));
         look.addOption(boolOpt(builder, "atm_sunglare", true, v -> RtAtmosphereSettings.set("sunglare", v ? 1 : 0),
             () -> RtAtmosphereSettings.get("sunglare") >= 0.5, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         Identifier fogId = id("rt_fog");
@@ -652,22 +665,22 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 RtSettings.rtFogDensity = v;
                 RtSettings.fogDensity = RtSettings.clampFloat(v / 100f, 0.0f, 2.0f);
             }, () -> RtSettings.rtFogDensity, s -> s.readBooleanOption(fogId) && anyRt.apply(s),
-            new Identifier[] {id("renderer"), modeId, fogId}, Mark.NONE, OptionImpact.MEDIUM, true, st));
+            rtDependencies(modeId, fogId), Mark.NONE, OptionImpact.MEDIUM, true, st));
         look.addOption(atmSlider(builder, "atm_fog_aerial", "fog_aerial", 100, 0, 200, 5,
-            s -> s.readBooleanOption(fogId) && anyRt.apply(s), new Identifier[] {id("renderer"), modeId, fogId}, true, st));
+            s -> s.readBooleanOption(fogId) && anyRt.apply(s), rtDependencies(modeId, fogId), true, st));
         Identifier waveId = id("waving_foliage");
         Identifier pixelShadowsId = id("rays_pixel_shadows");
         look.addOption(boolOpt(builder, "rays_pixel_shadows", false, v -> RtSettings.raysPixelShadows = v, () -> RtSettings.raysPixelShadows,
             anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         look.addOption(intOpt(builder, "rays_pixel_shadow_size", 1, 1, 16, 1, unit(" texels"), v -> RtSettings.raysPixelShadowSize = v,
             () -> RtSettings.raysPixelShadowSize,
-            s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId), new Identifier[] {modeId, pixelShadowsId}, Mark.RT, OptionImpact.HIGH, false, st));
+            s -> anyRt.apply(s) && s.readBooleanOption(pixelShadowsId), rtDependencies(modeId, pixelShadowsId), Mark.RT, OptionImpact.HIGH, false, st));
         look.addOption(boolOpt(builder, "waving_foliage", true, v -> RtSettings.wavingFoliage = v, () -> RtSettings.wavingFoliage,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         look.addOption(intOpt(builder, "waving_foliage_strength", 100, 0, 200, 5, percent(),
             v -> RtSettings.wavingFoliageStrength = v, () -> RtSettings.wavingFoliageStrength,
             s -> s.readBooleanOption(waveId) && anyRt.apply(s),
-            new Identifier[] {id("renderer"), modeId, waveId}, Mark.NONE, OptionImpact.LOW, true, st));
+            rtDependencies(modeId, waveId), Mark.NONE, OptionImpact.LOW, true, st));
         endGroup(builder, page, look, "adv_look");
 
         // ---- Image
@@ -849,7 +862,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         ex.addOption(boolOpt(builder, "rt_distance_auto", true, v -> RtSettings.rtDistanceAuto = v, () -> RtSettings.rtDistanceAuto,
             anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         ex.addOption(intOpt(builder, "rt_distance_chunks", 8, 2, 32, 1, unit(" chunks"), v -> RtSettings.rtDistanceChunks = v,
-            () -> RtSettings.rtDistanceChunks, s -> anyRt.apply(s) && !s.readBooleanOption(distAutoId), new Identifier[] {id("renderer"), modeId, distAutoId},
+            () -> RtSettings.rtDistanceChunks, s -> anyRt.apply(s) && !s.readBooleanOption(distAutoId), rtDependencies(modeId, distAutoId),
             Mark.RT, OptionImpact.MEDIUM, true, st));
         ex.addOption(intOpt(builder, "rt_vram_budget_mb", 2048, 256, 16384, 256, unit(" MB"), v -> RtSettings.vramBudgetMb = v,
             () -> RtSettings.vramBudgetMb, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
