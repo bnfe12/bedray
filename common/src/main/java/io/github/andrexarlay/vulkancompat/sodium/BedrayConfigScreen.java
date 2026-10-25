@@ -51,7 +51,7 @@ public final class BedrayConfigScreen extends Screen {
     @Override protected void init() {
         if (draft == null) draft = new SettingsDraft();
         PreviewPanel.clearSelection();
-        clearWidgets(); rowWidgets.clear(); popupButtons.clear();
+        clearWidgets(); rowWidgets.clear(); rows.clear(); popupButtons.clear();
         boolean sidebar = width >= 440;
         detailsWidth = width >= 760 ? Math.min(320, width / 3) : 0;
         detailsX = width - detailsWidth - 8;
@@ -88,24 +88,30 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     void rebuildRows() {
-        closeChoices();
-        for (AbstractWidget widget : rowWidgets) removeWidget(widget);
-        rowWidgets.clear(); rows.clear();
+        // Evaluate dependent option state and construct all controls before publishing either list.
+        // A failed predicate must not leave entries without matching widgets for tick/render.
+        List<SettingsDraft.Entry> nextRows = new ArrayList<>();
+        List<AbstractWidget> nextWidgets = new ArrayList<>();
         String filter = query.trim().toLowerCase(Locale.ROOT);
         for (SettingsDraft.Entry entry : draft.entries) {
             if (!draft.visible(entry)) continue;
             if (filter.isEmpty() ? entry.category() != category : !entry.searchText().contains(filter)) continue;
-            rows.add(entry);
+            nextRows.add(entry);
         }
-        if (!rows.contains(selected)) selected = rows.isEmpty() ? null : rows.getFirst();
         int controls = Math.max(70, Math.min(160, contentWidth / 2));
-        for (SettingsDraft.Entry entry : rows) {
+        for (SettingsDraft.Entry entry : nextRows) {
             AbstractWidget widget = createControl(entry, contentX + contentWidth - controls - 6, controls);
             widget.active = entry.option().isEnabled() && draft.editable(entry);
             widget.setTooltip(Tooltip.create(widget.active ? entry.option().getTooltip()
                 : tr("bedray.settings.locked", "Choose Custom quality to edit details. Some controls also require another feature or runtime.")));
-            rowWidgets.add(addRenderableWidget(widget));
+            nextWidgets.add(widget);
         }
+        closeChoices();
+        for (AbstractWidget widget : rowWidgets) removeWidget(widget);
+        rowWidgets.clear(); rows.clear();
+        rows.addAll(nextRows);
+        for (AbstractWidget widget : nextWidgets) rowWidgets.add(addRenderableWidget(widget));
+        if (!rows.contains(selected)) selected = rows.isEmpty() ? null : rows.getFirst();
         if (filter.isEmpty() && category == SettingsDraft.Category.PRESETS) {
             addAction(tr("bedray.settings.experience_library", "Rendering experiences..."),
                 () -> openExperiences(contentX, listTop, contentWidth - 6));
