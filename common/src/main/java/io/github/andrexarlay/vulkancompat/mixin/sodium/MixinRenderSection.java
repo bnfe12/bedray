@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.mixin.sodium;
 
 import io.github.andrexarlay.vulkancompat.rt.sodium.SectionCapture;
+import io.github.andrexarlay.vulkancompat.compute.ComputeRenderBridge;
 import net.caffeinemc.mods.sodium.client.render.chunk.RenderSection;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -16,6 +17,8 @@ public abstract class MixinRenderSection {
 
     @Inject(method = "delete()V", at = @At("HEAD"))
     private void vkb$dropGeometry(CallbackInfo ci) {
-        SectionCapture.onSectionDeleted((RenderSection) (Object) this);
+        var section = (RenderSection) (Object) this;
+        ComputeRenderBridge.sectionRemoved(section.getChunkX(), section.getChunkY(), section.getChunkZ());
+        SectionCapture.onSectionDeleted(section);
     }
 }
