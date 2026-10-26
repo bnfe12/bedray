@@ -5,8 +5,6 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 
-import java.util.Objects;
-
 /**
  * Ray Tracing mode: primary rays through the TLAS of Sodium sections plus separately switchable ray traced effects, shader
  * {@code rt_rays.comp}. Settings (group "Ray Tracing" of the settings page, RtSettings.rays*), each with its own quality
@@ -112,7 +110,10 @@ public final class RtRayEffectsPass implements RtPass {
         params.giDistance = RtSettings.giDistance();
         params.emissiveDistance = RtSettings.emissiveDistance();
         RtMode currentMode = RtConfig.mode();
-        params.aoRadius = (currentMode == RtMode.AO || RtSettings.ao()) ? RtSettings.aoRadius() : 2.5f;   // 2.5 = radius of the legacy -Dvkbridge.rt.ao / NRD path
+        // 0 = AO off. Secondary shading (rt_common_shade.glsl) gates its contact AO on this, so a non-zero legacy radius here
+        // silently charged every reflection two visibility rays even with AO disabled; rt_rays.comp substitutes the legacy 2.5
+        // for the single denoiser-guide ray when it reads 0.
+        params.aoRadius = (currentMode == RtMode.AO || RtSettings.ao()) ? RtSettings.aoRadius() : 0f;
         params.bounces = 0;
         params.spp = 1;
         int ao = Math.max(RtConfig.effectiveAoSamples(), (currentMode == RtMode.AO || RtSettings.ao()) ? RtSettings.aoQuality() : 0);
@@ -166,8 +167,17 @@ public final class RtRayEffectsPass implements RtPass {
             f |= RtFrameParams.FLAG_VIBRANT_VISUALS;
         }
         params.flags = f;
-        int settingsHash = Objects.hash(params.mode, params.rayQualities, params.rayDistance, params.giDistance,
-            params.emissiveDistance, params.aoRadius, params.aoSamples, f, params.tonemap);
+        // Mixed as primitives: Objects.hash would box all nine values into an Object[] every frame, and the only consumer
+        // (RtAccumulation.next) just tests it against last frame's int.
+        int settingsHash = params.mode;
+        settingsHash = 31 * settingsHash + params.rayQualities;
+        settingsHash = 31 * settingsHash + params.rayDistance;
+        settingsHash = 31 * settingsHash + Float.floatToRawIntBits(params.giDistance);
+        settingsHash = 31 * settingsHash + Float.floatToRawIntBits(params.emissiveDistance);
+        settingsHash = 31 * settingsHash + Float.floatToRawIntBits(params.aoRadius);
+        settingsHash = 31 * settingsHash + params.aoSamples;
+        settingsHash = 31 * settingsHash + f;
+        settingsHash = 31 * settingsHash + (params.tonemap ? 1 : 0);
         params.accumCount = accum.history.next(params.invViewProjStable, params.cameraX, params.cameraY, params.cameraZ, params.key.dir,
             params.sceneChanged, settingsHash, accum.width(), accum.height(), accumulate);
         params.historyCap = accum.history.cap();

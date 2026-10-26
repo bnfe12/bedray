@@ -334,6 +334,9 @@ void main() {
             // Ambient occlusion: cosine-weighted rays inside the AO radius, raw (noisy) result.
             float ao = 1.0;
             float radius = aoRadius();
+            // AO off reaches here as radius 0: aoSampleCount() is still >= 1 because the denoiser needs one closest-hit ray
+            // per pixel, so the guide ray keeps the legacy 2.5-block reach instead of collapsing to a zero-length query.
+            radius = radius > 0.0 ? radius : 2.5;
 #ifdef VKB_GBUFFER
             float gbHitDist = radius;
             // The denoiser needs one closest-hit distance for the diffuse guide; the AO visibility itself is unused with GI.

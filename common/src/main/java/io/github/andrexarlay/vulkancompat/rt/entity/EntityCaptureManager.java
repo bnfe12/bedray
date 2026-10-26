@@ -88,6 +88,8 @@ public final class EntityCaptureManager {
     private float[] publishedEmitters = new float[0];
     private int publishedEmitterCount;
     private static final int MAX_PARTICLE_EMITTERS_PER_FRAME = 256;
+    /** Offsets of the three basis rows inside a {@link RtEmitters#FLOATS}-wide quad, rotated into view space per frame. */
+    private static final int[] EMITTER_AXES = {0, 4, 8};
     private int particleEmitterCount;
     private int publishedParticleEmitterCount;
     private final float[] particlePositions = new float[12];
@@ -578,7 +580,7 @@ public final class EntityCaptureManager {
             emissiveQuads.add(quad);
             // world axes (camera relative) -> view space: p0 is a point, the edges are vectors; both are only rotated
             Vector4f v = new Vector4f();
-            for (int k : new int[] {0, 4, 8}) {
+            for (int k : EMITTER_AXES) {
                 v.set(rec[k], rec[k + 1], rec[k + 2], 0.0f).mul(handViewRotation);
                 rec[k] = v.x;
                 rec[k + 1] = v.y;
@@ -615,7 +617,7 @@ public final class EntityCaptureManager {
                 int src = i * RtEmitters.FLOATS;
                 int dst = (publishedEmitterCount + i) * RtEmitters.FLOATS;
                 System.arraycopy(handEmitters, src, out, dst, RtEmitters.FLOATS);
-                for (int k : new int[] {0, 4, 8}) {
+                for (int k : EMITTER_AXES) {
                     v.set(out[dst + k], out[dst + k + 1], out[dst + k + 2], 0.0f).mul(inv);
                     out[dst + k] = v.x;
                     out[dst + k + 1] = v.y;
