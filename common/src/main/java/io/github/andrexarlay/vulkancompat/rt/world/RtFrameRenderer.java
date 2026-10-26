@@ -14,6 +14,8 @@ import io.github.andrexarlay.vulkancompat.rt.denoise.NrdException;
 import io.github.andrexarlay.vulkancompat.rt.material.MaterialAtlasBaker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
 import io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangDeviceCapabilities;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
@@ -107,6 +109,15 @@ public final class RtFrameRenderer {
     private static RtGpuTimer gpuTimer;
     /** God rays, bloom and sun glare post passes (Bedray atmosphere), run on the final image after the denoiser. */
     private static final RtAtmosphere atmosphere = new RtAtmosphere();
+    /**
+     * Dedicated Slang runtime for the Path Tracing pass. Bloom keeps the capability-free runtime of {@link RtAtmosphere};
+     * this one is created with the feature mask the logical device really enabled, because path_trace uses ray queries,
+     * buffer device addresses and Int64.
+     */
+    private static SlangRuntime pathSlangRuntime;
+    private static boolean pathSlangUnavailable;
+    private static String pathSlangUnavailableReason = "Slang path runtime is not initialized";
+    private static boolean pathSlangFallbackLogged;
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtMemory.Buf entityMotionBuf;
@@ -557,7 +568,7 @@ public final class RtFrameRenderer {
 
         RtMode want = passModeFor(RtConfig.mode());
         boolean wantGb = wantGbuffer(want);
-        if (pass != null && (pass.mode() != want || pass.usesGbuffer() != wantGb)) {
+        if (pass != null && (pass.mode() != want || !pass.builtFor(wantGb))) {
             LOGGER.info("[VKB-RT] mode_switch from={} to={} nrd_gbuffer={}", pass.mode().logName(), want.logName(), wantGb);
             pass.destroy();
             pass = createPass(device, want, wantGb);
@@ -568,8 +579,9 @@ public final class RtFrameRenderer {
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
         // This transient handle comes from the pool that was reset after its previous submission completed, so the
-        // native bloom recording made into it is no longer in flight and can release its descriptor pool now.
+        // native bloom and path-tracer recordings made into it are no longer in flight and can release their pools now.
         atmosphere.releaseRecording(cmd.address());
+        pass.releaseRecording(cmd.address());
         VkBarriers.fullMemoryBarrier(cmd);
         if (gpuTimer != null) {
             gpuTimer.beginFrame(cmd);
@@ -1164,6 +1176,25 @@ public final class RtFrameRenderer {
      */
     private static DenoiserMode resolveDenoiseMode() {
         RtSettings.PathDenoiser want = RtSettings.denoiser();
+        if (RtConfig.mode() == RtMode.PATH_TRACED && RtConfig.PATH_TRACER != RtConfig.PathTracer.LEGACY
+            && want != RtSettings.PathDenoiser.OFF) {
+            // The Slang path writes no G-buffer, so it can feed neither NRD nor DLSS-RR. With AUTO the Slang pass is the
+            // primary path: keep the requested setting visible but disable the denoiser for this mode instead of silently
+            // staying on GLSL. -Dbedray.pathTracer=legacy is the way back to the denoised GLSL tracer.
+            boolean forced = RtConfig.PATH_TRACER == RtConfig.PathTracer.SLANG;
+            String blocker = forced ? null : slangPathBlocker();
+            if (forced || blocker == null) {
+                String reason = forced ? "slang_path_has_no_gbuffer" : "auto_slang_path_has_no_gbuffer";
+                String line = "requested=" + want + " active=off reason=" + reason
+                    + (forced ? "" : " (-Dbedray.pathTracer=legacy keeps the G-buffer denoiser)");
+                denoiserResolutionReason = reason;
+                if (!line.equals(lastDenoiserLog)) {
+                    lastDenoiserLog = line;
+                    LOGGER.info("[VKB-RT] denoiser {}", line);
+                }
+                return DenoiserMode.OFF;
+            }
+        }
         DenoiserMode mode = DenoiserMode.OFF;
         String reason = "setting";
         switch (want) {
@@ -1303,6 +1334,13 @@ public final class RtFrameRenderer {
 
     private static RtPass createPass(VkDevice device, RtMode mode, boolean gbuffer) {
         if (mode == RtMode.PATH_TRACED) {
+            RtPass slang = createSlangPathPass(device, gbuffer);
+            if (slang != null) {
+                return slang;
+            }
+            if (RtConfig.PATH_TRACER == RtConfig.PathTracer.SLANG) {
+                throw new RtFailure("slang_path", pathSlangUnavailableReason);
+            }
             if (!gbuffer && RtSettings.denoiser() == RtSettings.PathDenoiser.NRD) {
                 LOGGER.warn("[VKB-NRD] path_tracing denoiser=nrd requested but NRD is not active ({}): accumulation only",
                     denoiseMode.isNrd() ? "?" : "start the game with -Dvkrtx.denoiser=nrd and the NRD natives");
@@ -1310,6 +1348,127 @@ public final class RtFrameRenderer {
             return new RtPathTracerPass(device, gbuffer);
         }
         return new RtRayEffectsPass(device, gbuffer);
+    }
+
+    /**
+     * Slang Path Tracing pass when the selector allows it; {@code null} means the caller must use GLSL. In
+     * {@code slang} mode a null result becomes a hard {@link RtFailure}, so a forced Slang run never silently falls back.
+     */
+    private static RtPass createSlangPathPass(VkDevice device, boolean gbuffer) {
+        RtConfig.PathTracer selector = RtConfig.PATH_TRACER;
+        if (selector == RtConfig.PathTracer.LEGACY) {
+            return null;
+        }
+        if (gbuffer) {
+            // AUTO only keeps the denoiser when the Slang pass is blocked; report that real blocker instead of blaming
+            // the denoiser, which is the consequence, not the cause.
+            String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
+            pathSlangUnavailableReason = blocker != null ? blocker
+                : "a G-buffer denoiser is selected and the Slang path writes no G-buffer";
+            if (selector == RtConfig.PathTracer.AUTO) {
+                logSlangFallback(pathSlangUnavailableReason);
+            }
+            return null;
+        }
+        String debugView = RtConfig.currentDebugView();
+        if (selector == RtConfig.PathTracer.AUTO && !debugView.isEmpty()) {
+            logSlangFallback("debug view '" + debugView + "' is not implemented in the Slang path");
+            return null;
+        }
+        VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
+        if (vulkanDevice == null) {
+            pathSlangUnavailableReason = "VulkanDevice is not available";
+            if (selector == RtConfig.PathTracer.AUTO) {
+                logSlangFallback(pathSlangUnavailableReason);
+            }
+            return null;
+        }
+        try {
+            SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
+            String problem = RtSlangPathPass.supportProblem(runtime);
+            if (problem != null) {
+                pathSlangUnavailableReason = problem;
+                if (selector == RtConfig.PathTracer.AUTO) {
+                    logSlangFallback(problem);
+                }
+                return null;
+            }
+            if (world == null) {
+                pathSlangUnavailableReason = "the RT world is not initialized";
+                if (selector == RtConfig.PathTracer.AUTO) {
+                    logSlangFallback(pathSlangUnavailableReason);
+                }
+                return null;
+            }
+            if (!debugView.isEmpty()) {
+                LOGGER.warn("[VKB-RT] path_tracer=slang ignores debug view '{}'", debugView);
+            }
+            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, world.memory(), gbuffer);
+            LOGGER.info("[VKB-RT] path_tracer selector={} on AOT Slang passes {}+{} (gbuffer={})",
+                selector.name().toLowerCase(Locale.ROOT), RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
+            return slang;
+        } catch (RuntimeException e) {
+            String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            pathSlangUnavailableReason = reason;
+            if (selector == RtConfig.PathTracer.SLANG) {
+                if (e instanceof RtFailure failure) {
+                    throw failure;
+                }
+                throw new RtFailure("slang_path", reason, e);
+            }
+            logSlangFallback(reason);
+            return null;
+        }
+    }
+
+    /**
+     * Null when AUTO can render Path Tracing through the Slang pass now, otherwise why it must stay on GLSL. Never logs:
+     * the pass creation path owns the single fallback line. The runtime is created here on first use, so a missing native
+     * or AOT artifact is discovered before the denoiser is switched off.
+     */
+    private static String slangPathBlocker() {
+        if (!RtConfig.currentDebugView().isEmpty()) {
+            return "debug view is not implemented in the Slang path";
+        }
+        VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
+        if (vulkanDevice == null) {
+            return "VulkanDevice is not available";
+        }
+        if (world == null) {
+            return "the RT world is not initialized";
+        }
+        try {
+            return RtSlangPathPass.supportProblem(pathSlangRuntime(vulkanDevice));
+        } catch (RuntimeException e) {
+            return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        }
+    }
+
+    private static SlangRuntime pathSlangRuntime(VulkanDevice vulkanDevice) {
+        if (pathSlangRuntime != null && !pathSlangRuntime.isClosed()) {
+            return pathSlangRuntime;
+        }
+        if (pathSlangUnavailable) {
+            throw new IllegalStateException(pathSlangUnavailableReason);
+        }
+        try {
+            int enabledMask = SlangDeviceCapabilities.enabledMask(vulkanDevice);
+            SlangRuntime runtime = SlangRuntime.create(vulkanDevice, enabledMask);
+            pathSlangRuntime = runtime;
+            LOGGER.info("[VKB-RT] Slang path runtime ready enabled_mask=0x{}", Integer.toHexString(enabledMask));
+            return runtime;
+        } catch (RuntimeException e) {
+            pathSlangUnavailable = true;
+            pathSlangUnavailableReason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw e;
+        }
+    }
+
+    private static void logSlangFallback(String reason) {
+        if (!pathSlangFallbackLogged) {
+            pathSlangFallbackLogged = true;
+            LOGGER.info("[VKB-RT] path tracing on GLSL rt_path.comp: {}", reason);
+        }
     }
 
     /** True when the NRD path is active for this session (selected at world creation from -Dvkrtx.denoiser). */
@@ -1529,6 +1688,13 @@ public final class RtFrameRenderer {
             if (pl != null) {
                 pl.destroy(); // waits for the device to go idle first
             }
+            if (pathSlangRuntime != null) {
+                pathSlangRuntime.close(); // the pass released its recordings in destroy()
+                pathSlangRuntime = null;
+            }
+            pathSlangUnavailable = false;
+            pathSlangFallbackLogged = false;
+            pathSlangUnavailableReason = "Slang path runtime is not initialized";
             atmosphere.destroy();
             if (gpuTimer != null) {
                 gpuTimer.destroy();

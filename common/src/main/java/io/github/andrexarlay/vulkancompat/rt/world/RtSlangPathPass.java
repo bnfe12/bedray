@@ -53,7 +53,25 @@ public final class RtSlangPathPass implements RtPass {
 
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
     static boolean isSupported(SlangRuntime runtime) {
-        return RtPathTraceSlangPass.isSupported(runtime) && SlangPassLibrary.available(DISPLAY_PASS);
+        return supportProblem(runtime) == null;
+    }
+
+    /** Why this runtime cannot run the Slang path, or null when it can. Used verbatim in the fallback/failure log. */
+    static String supportProblem(SlangRuntime runtime) {
+        if (runtime == null) {
+            return "no Slang runtime";
+        }
+        if (!SlangPassLibrary.available(RtPathTraceSlangPass.PASS_NAME)) {
+            return "AOT pass " + RtPathTraceSlangPass.PASS_NAME + " is missing from the jar";
+        }
+        if (!runtime.supports(RtPathTraceSlangPass.REQUIRED_CAPABILITIES)) {
+            return "device capabilities required by " + RtPathTraceSlangPass.PASS_NAME
+                + " (rayQuery, bufferDeviceAddress, shaderInt64) are not enabled";
+        }
+        if (!SlangPassLibrary.available(DISPLAY_PASS)) {
+            return "AOT pass " + DISPLAY_PASS + " is missing from the jar";
+        }
+        return null;
     }
 
     private final VkDevice device;

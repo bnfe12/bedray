@@ -1,103 +1,83 @@
-# Handoff: wiring the Slang path tracer into the live frame
+# Handoff: Slang path tracer wired into the live frame
 
-Date: 2026-10-26. Status: **partially written, NOT compiled. The `common` module does not build in this state**
-(see "Compile blockers"). Nothing below has run on a GPU or in Minecraft.
+Date: 2026-10-26. Status: **wired, compiled, tested and packaged. Not yet verified on a GPU or in Minecraft.**
 
-Goal set by the author: Path Tracing mode renders through the AOT Slang programs; the GLSL path stays as a fallback,
-**and must be fully detachable** (a mode where the GLSL path tracer is never created).
+Path Tracing mode now selects an AOT Slang pass (`path_trace` + `path_display`, both RGBA16F/linear) with the GLSL
+`rt_path.comp` tracer as fallback. The legacy path is detachable at runtime with `-Dbedray.pathTracer=slang`.
 
-## 1. What already works (verified)
+## 1. Selector
 
-- Fabric bundle `build/bedray-distribution/fabric/` (22:24) builds and is installed in the FreesmLauncher profile
-  `Bedray Fabric 26.3` (`mods/bedray-fabric.jar`, `bedray/natives/` with `bedray_core.dll` and the 12 upscaler/denoiser
-  natives copied from `Vulkan Testbed 26.3 Bedray`). That installed jar predates every change in section 3.
-- Two fixes in that jar, both verified by `:common:runShimTests` 36/36:
-  - every Java shader path `"/shaders/X"` -> `"/shaders/glsl/X"` (the GLSL files moved in commit `0136472`, the Java
-    paths did not; nothing in the renderer could load);
-  - `rt_common_water.glsl:94` local `filter` (GLSL reserved word) renamed `tint`; it broke both `rt_rays` and `rt_path`.
-- `RtGlassCostTest` has 3 failing text assertions; the GLSL text was unchanged, so they predate this work.
-- Build command: `./gradlew.bat fabricBedrayDistribution --no-daemon -Pslangc=C:/Temp/bedray-slang-2026.20/bin/slangc.exe
-  -PbedrayCmake="C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"`.
-  `runShimTests` takes ~15 min (shaderc compiles `rt_rays.comp` in ~7 min).
+`-Dbedray.pathTracer=auto|slang|legacy` (`RtConfig.PathTracer`, parsed once at class load).
 
-## 2. Facts found (with source)
-
-- **Bloom is already on Slang in the live frame**: `RtAtmosphere.slangRuntime()` creates `SlangRuntime.create(device, 0)`
-  and `RtBloomPass` uses `passes/bloom_*.slang`, falling back to `rt_bloom.comp` only on failure. Recording release:
-  `RtFrameRenderer` line ~572 `atmosphere.releaseRecording(cmd.address())` right after
-  `encoder.allocateAndBeginTransientCommandBuffer()` (the transient handle comes back only after its previous
-  submission completed). Follow the same pattern.
-- Path tracing today: `RtFrameRenderer.createPass` (line ~1304) builds `RtPathTracerPass` (GLSL `rt_path.comp`).
-  Callers: line ~486 (world init), ~563 (mode switch), ~1283 (`rebuildPlainPipeline`). `VulkanDevice` is reachable
-  statically via `VulkanCapabilityChecker.getVulkanDevice()`.
-- Mode-switch check (line ~560): `pass.mode() != want || pass.usesGbuffer() != wantGb`. A pass that cannot write the
-  NRD/DLSS-RR G-buffer would be **recreated every frame** while a denoiser is selected. Needs a different check.
-- Frame outputs: `rt_output` RGBA8 UNORM (GLSL writes tone-mapped LDR directly), `rt_depth` R32F (miss = 1e6, read by
-  composite and bloom). Both stay in `GENERAL`. Created in `RtFrameRenderer` line ~655.
-- `passes/path_trace.slang` writes **linear HDR** (RGBA16F, no exposure, no tone map) and depth with the same 1e6 miss
-  convention. A display step (mean -> exposure -> `tonemapColor` -> RGBA8) is required; `tonemap_curve.slang` is the
-  same curve as `rt_tonemap.glsl` / `RtTonemap.java`.
-- Camera: the Slang shader takes an explicit basis (forward, right, up, tan half fov in `forward.w`, aspect in `right.w`)
-  and builds `F + R*ndc.x*t*a - U*ndc.y*t`, ray origin 0. GLSL `cameraRay` (`rt_common_temporal.glsl:50`) uses
-  `pc.invViewProj * (ndc, 0.5, 1)` with `ndc.y` negated when `flipY`, minus `cameraBobOrigin`. Exact basis: unproject
-  NDC (0,0), (1,0) and the bottom edge on depth 0.5 => C, X, Y; forward = C/|C|, right = (X-C)/|X-C|,
-  up = -(Y-C)/|Y-C|, tan = |Y-C|/|C|, aspect = |X-C|/|Y-C|. Only difference: no view-bob origin.
-- Sun/sky inputs: `RtFrameParams.key` (`dir` towards light, `color`, `day`, `isMoon`), `RtFrameParams.skyColor`.
-  `sun.slang` uses `color.rgb * color.w`; `sky.slang` (GradientSky) is a two-colour gradient, simpler than `rt_sky.glsl`.
-- Auto exposure in the GLSL path comes from statistics `rt_path.comp` writes into `statsBuf`; the Slang shader writes
-  none, so the Slang path has no auto exposure (fixed 1.0) until a luminance reduction exists.
-- **Device features**: `passes/path_trace.slang` manifest requires `CAP_RAY_QUERY | CAP_BUFFER_DEVICE_ADDRESS |
-  CAP_SHADER_INT64` (mask 517). The "Hardware Ray Tracing" group (`RtDeviceRequirements.requirement`) requests
-  accelerationStructure, rayQuery, bufferDeviceAddress — **not `shaderInt64`** (GLSL uses `buffer_reference_uvec2`).
-  The authoritative enabled set is the private field `VulkanDevice.enabledFeatures` (`FeatureSet`, javap on
-  `libs/minecraft-26.3-client.jar`); `FeatureSet.features()` -> `VulkanFeature.name()`. `DeviceFeatureRegistry` has no
-  "was this group kept" query.
-
-## 3. Uncommitted changes made for the wiring (review before keeping)
-
-| File | Change | State |
+| Value | Path Tracing mode | Denoiser |
 |---|---|---|
-| `common/src/main/resources/shaders/slang/passes/path_display.slang` | new: running mean (`accumFrames`, 0 = reset), exposure, `tonemapColor`, writes RGBA8 `outImage`; bindings `radiance` RGBA16F, `accum` RGBA32F, `outImage` RGBA8; 16-byte push | **compiled** with slangc (8156 B SPIR-V, 3 bindings, capabilities 0) |
-| `common/src/main/java/.../rt/world/RtPathTraceSlangPass.java` | constructor no longer takes Scene/Atlases; `record(cmd, scene, atlases, depthView, frame, dispatch)`; own depth image removed, depth goes to the caller's `rt_depth` | not compiled |
-| `common/src/main/java/.../mixin/rt/MixinVulkanDeviceFeaturesAccessor.java` | new `@Accessor("enabledFeatures")` on `VulkanDevice` (`remap = false`) | not compiled |
-| `common/src/main/resources/mixins.bedray.json` | `rt.MixinVulkanDeviceFeaturesAccessor` added to `client` | — |
-| `common/src/main/java/.../rt/slang/SlangDeviceCapabilities.java` | new: `enabledMask(VulkanDevice)` maps enabled feature names to `CAP_*` bits | not compiled |
-| `common/src/main/java/.../rtx/raytracing/RtDeviceRequirements.java` | new optional group `Bedray Slang Path Tracing` (RT extensions + `shaderInt64` via `FeatureRequest.core(VK10, ...)`), `registerSlangPath` | not compiled |
-| `common/src/main/java/.../RtxBootstrap.java` | `SLANG_PATH_PROVIDER_ID` + late provider registration after OMM | not compiled |
-| `common/src/main/java/.../rt/world/RtSlangPathPass.java` | new `RtPass`: trace + display, accumulation reset (camera, scene, settings, size), camera basis (section 2), sun/sky mapping, Halton jitter, recording tracking, `builtFor`, `releaseRecording` | not compiled |
+| `auto` (default) | Slang when the runtime, both AOT passes, the required capabilities (rayQuery, bufferDeviceAddress, shaderInt64), the RT world and no debug view are available; otherwise GLSL | G-buffer denoiser is turned off while Slang is active, with a log line naming `-Dbedray.pathTracer=legacy`; if Slang is blocked, normal resolution (NRD / DLSS-RR) continues and the GLSL path keeps the denoiser |
+| `slang` | Slang only; a missing native/artifact/capability raises `RtFailure("slang_path", ...)` instead of silently falling back | forced off (`reason=slang_path_has_no_gbuffer`) |
+| `legacy` | GLSL only; `RtSlangPathPass` is never constructed and the Slang runtime is never created | unchanged |
 
-## 4. Compile blockers (fix first)
+Rationale for AUTO: the shipped profile has `path_denoiser = "DLSS_RR"`, so the handover's earlier rule ("Slang only when
+no G-buffer denoiser is wanted") would have kept every default run on GLSL. The Slang path writes no G-buffer, so AUTO
+disables the denoiser for Path Tracing instead; Ray Tracing mode is unaffected.
 
-1. `RtPass` lacks the two methods `RtSlangPathPass` overrides. Add:
-   - `default boolean builtFor(boolean gbuffer) { return usesGbuffer() == gbuffer; }`
-   - `default void releaseRecording(long commandBuffer) {}`
-2. `RtPathTraceSlangPassTest` only uses `Frame`/`Dispatch`; re-check it after the constructor change.
-3. Unverified imports/APIs in `RtSlangPathPass`: `RtFailure.check`, `RtAdaptiveQuality.bounces`, `RtConfig.effectiveMode`,
-   `SlangPassLibrary.available`, `Matrix4f.equals(Matrix4f, float)` — all used elsewhere in the tree, but compile to confirm.
-4. `SlangDeviceCapabilities` uses `((Object) device) instanceof MixinVulkanDeviceFeaturesAccessor` because the mixin adds
-   the interface at runtime.
+## 2. Wiring (implemented)
 
-## 5. Remaining wiring (not started)
+- `RtPass` gained `default boolean builtFor(boolean gbuffer)` and `default void releaseRecording(long commandBuffer)`.
+  The mode-switch check uses `!pass.builtFor(wantGb)`; without it a Slang pass would be rebuilt every frame while a
+  denoiser is wanted.
+- `RtFrameRenderer`:
+  - one dedicated `SlangRuntime` created with `SlangDeviceCapabilities.enabledMask(VulkanDevice)` — the features the
+    logical device really enabled, never a support query; bloom keeps its own capability-free runtime;
+  - `pass.releaseRecording(cmd.address())` after `atmosphere.releaseRecording(...)`, before re-recording the transient
+    command buffer whose previous submission completed;
+  - shutdown destroys the pass (which releases its recordings), then closes the dedicated runtime;
+  - `slangPathBlocker()` decides AUTO before the denoiser is switched off and is reused by `createSlangPathPass` so the
+    logged fallback reason is the real blocker, not its consequence.
+- `RtSlangPathPass`: trace + display, RGBA32F running mean, camera basis from `invViewProj` (same C/X/Y construction as
+  GLSL `cameraRay`, including the `flipY` convention), Halton sub-pixel jitter, sun/sky from `RtFrameParams`, full
+  memory barriers after both dispatches, per-command-buffer native recording release.
+- `path_display.slang`: 16-byte push (`accumFrames`, flags, exposure, maxRadiance), three storage-image bindings,
+  `tonemap_curve.slang`. `path_display` is now in `shaders/slang/manifest/index.json` (10 passes) and in the built jar.
 
-1. `RtFrameRenderer`:
-   - mode switch condition: `!pass.builtFor(wantGb)` instead of `pass.usesGbuffer() != wantGb`;
-   - after `atmosphere.releaseRecording(cmd.address())` add `pass.releaseRecording(cmd.address())`;
-   - a shared or dedicated `SlangRuntime` created with `SlangDeviceCapabilities.enabledMask(vulkanDevice)` (never a
-     support query), closed in renderer shutdown after the pass is destroyed;
-   - `createPass` for `PATH_TRACED`: selector (below).
-2. Selector, e.g. `-Dbedray.pathTracer=auto|slang|legacy` (or a config key):
-   - `auto`: Slang when `RtSlangPathPass.isSupported(runtime)` and no G-buffer denoiser is wanted; otherwise GLSL, with
-     the reason logged once;
-   - `slang`: Slang only, GLSL `RtPathTracerPass` never constructed (the detachable mode the author asked for); if
-     unsupported, path tracing reports a clear failure instead of silently using GLSL; denoiser disabled with a log line;
-   - `legacy`: current behaviour.
-   Construction failure of the Slang pass in `auto` must fall back without leaking the native recording.
-3. Log lines to check in `latest.log`: `[VKB-RT] path tracing on AOT Slang passes path_trace + path_display`,
-   `[VKB-SLANG] registered path_trace`, `rt_path_trace WxH RGBA16F radiance, depth into rt_depth`, and the
-   `Enabling optional FeatureSet [Bedray Slang Path Tracing]` engine line.
+## 3. Verification performed
 
-## 6. Known gaps of the Slang path (state them in the report)
+- `:common:compileJava` and `:fabricBedrayDistribution` succeed with
+  `-Pslangc=C:/Temp/bedray-slang-2026.20/bin/slangc.exe` and the documented CMake path.
+- Targeted tests pass: `RtPathTraceSlangPassTest` (7), `SlangPassLibraryTest` (7), `BedrayCoreAbiTest` (3).
+- Full `:common:test`: 605 tests, 7 failed, 3 skipped. All 7 failures are pre-existing and unrelated to this work:
+  `RtGlassCostTest` (3) asserts unchanged GLSL text, `RtSelfAvatarExclusionTest` (4) still reads the old
+  `src/main/resources/shaders/...` paths that moved to `shaders/glsl/...` in `0136472`.
+- Built `build/bedray-distribution/fabric/bedray-fabric.jar` (sha256 `84996bb928cbe6688a9514b785e7d97e44833497f2e8a89254421ca4068b4289`).
+  It contains `path_trace`/`path_display` manifests and SPIR-V, `RtSlangPathPass`, `RtPathTraceSlangPass`, and the new
+  `auto_slang_path_has_no_gbuffer` selector strings.
+- Installed into `Bedray Fabric 26.3`:
+  `minecraft/mods/bedray-fabric.jar` replaced (backup `minecraft/bedray-backups/bedray-fabric.jar.20261026-2313.bak`).
+  `bedray_core.dll` is byte-identical to the installed one (sha256 `cd6a0eab...fc8e1d`), so it was not replaced.
 
-No NRD/DLSS-RR G-buffer, no auto exposure, two-colour sky, no view-bob origin, moon colour 0, block-material table empty
-(`materialCount = 0`), no motion-vector output for the upscalers' reprojection. Image quality will differ from the GLSL
-path tracer; this is a first live path, not parity.
+## 4. Not verified
+
+Nothing below has run in Minecraft yet. The next step is launching the profile, selecting Path Tracing (the profile
+already has `rt_mode = "path"`), and reading `latest.log` for:
+
+- `Enabling optional FeatureSet [Bedray Slang Path Tracing]` (or its absence: then AUTO keeps the denoiser and GLSL);
+- `[VKB-RT] Slang path runtime ready enabled_mask=0x...`;
+- `[VKB-SLANG] registered path_trace` / `path_display`;
+- `[VKB-RT] path_tracer selector=auto on AOT Slang passes path_trace+path_display (gbuffer=false)`;
+- `[VKB-RT] rt_path_trace WxH RGBA16F radiance, depth into rt_depth (Slang, 9 binding(s))`;
+- `[VKB-RT] denoiser requested=DLSS_RR active=off reason=auto_slang_path_has_no_gbuffer (...)`.
+
+A `VK_ERROR_DEVICE_LOST`, validation error, or a black/half-black image is a failure of this first live path, not of the
+fallback: rerun with `-Dbedray.pathTracer=legacy` to confirm the GLSL tracer still works, then send `latest.log`.
+
+## 5. Known gaps of the Slang path (image quality / parity)
+
+- no NRD / DLSS-RR G-buffer and no motion-vector output (G-buffer denoisers are disabled for this mode);
+- no auto exposure or luminance statistics (`statsBuf` is not written; exposure is fixed at 1.0);
+- one sample per pixel per frame (host `spp` is not looped), so `spp > 1` settings are effectively ignored while
+  accumulation is off; temporal accumulation only helps when the camera is still;
+- two-colour gradient sky instead of `rt_sky.glsl`; moon radiance 0 and `key.isMoon` is not mapped;
+- no view-bob origin (primary rays start at the camera origin; bob projection is still used for the camera basis);
+- block-material table is empty (`materialCount = 0`), so voxel material extensions are not sampled;
+- debug views (normals/depth/uv/section) are not implemented; AUTO falls back to GLSL for them.
+
+This is a first live path, not parity. Debug-view, auto-exposure, motion-vector and material-table work belong to the
+next batch.

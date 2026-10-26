@@ -8,8 +8,9 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * {@link #prepare} (pass-owned images), {@link #configure} (push constants from the settings of this pass),
  * {@link #bind} (descriptor set, only rewritten when a view changed), {@link #dispatch}.
  * <p>
- * Implementations: {@link RtRayEffectsPass} (Ray Tracing mode) and {@link RtPathTracerPass} (Path Tracing mode). Each reads only
- * its own settings group (RtSettings), so the two modes stay independent.
+ * Implementations: {@link RtRayEffectsPass} (Ray Tracing mode), {@link RtPathTracerPass} (Path Tracing mode on GLSL) and
+ * {@link RtSlangPathPass} (Path Tracing mode on the AOT Slang programs). Each reads only its own settings group
+ * (RtSettings), so the modes stay independent.
  */
 public interface RtPass {
     RtMode mode();
@@ -35,6 +36,22 @@ public interface RtPass {
 
     /** True when the pipeline writes the NRD G-buffer (bindings 4..8). */
     boolean usesGbuffer();
+
+    /**
+     * Whether this pass was built for the requested G-buffer mode. The renderer rebuilds a pass only when this is false,
+     * not when {@link #usesGbuffer()} differs: a pass that cannot write the G-buffer but was deliberately built for that
+     * request would otherwise be recreated every frame while a denoiser is selected.
+     */
+    default boolean builtFor(boolean gbuffer) {
+        return usesGbuffer() == gbuffer;
+    }
+
+    /**
+     * Releases native recording state for a transient command buffer whose previous submission completed. Passes that
+     * record through {@code SlangRuntime} override this; recording-free passes keep the empty default.
+     */
+    default void releaseRecording(long commandBuffer) {
+    }
 
     /** Resets temporal accumulation history (if any) when settings, presets, or denoisers change. */
     default void resetHistory() {

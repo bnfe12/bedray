@@ -93,6 +93,30 @@ public final class RtConfig {
     public static final String DEBUG_NAME = System.getProperty("vkbridge.rt.debug", "").trim().toLowerCase(Locale.ROOT);
     public static final int DEBUG_MODE = parseMode(DEBUG_NAME);
 
+    /** Path Tracing implementation: {@code auto} (Slang with GLSL fallback), {@code slang} (Slang only), {@code legacy}. */
+    public enum PathTracer {
+        AUTO,
+        SLANG,
+        LEGACY
+    }
+
+    /**
+     * Session selector for the Path Tracing pass ({@code -Dbedray.pathTracer=auto|slang|legacy}). Unknown values behave
+     * like {@code auto}; the renderer logs the resolved selector when it builds the pass.
+     */
+    public static final PathTracer PATH_TRACER = parsePathTracer(System.getProperty("bedray.pathTracer", "auto"));
+
+    private static PathTracer parsePathTracer(String raw) {
+        if (raw == null) {
+            return PathTracer.AUTO;
+        }
+        return switch (raw.trim().toLowerCase(Locale.ROOT)) {
+            case "slang" -> PathTracer.SLANG;
+            case "legacy" -> PathTracer.LEGACY;
+            default -> PathTracer.AUTO;
+        };
+    }
+
     /** Debug view set at runtime by an autotest scenario (null = the -Dvkbridge.rt.debug value). */
     private static volatile String debugOverride;
 
