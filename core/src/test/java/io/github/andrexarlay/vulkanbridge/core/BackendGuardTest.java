@@ -25,6 +25,29 @@ class BackendGuardTest {
     }
 
     @Test
+    void disabledGuardLetsTheVanillaResetThroughAndWritesNothing(@TempDir Path dir) {
+        Path state = BackendGuard.stateFile(dir);
+        assertEquals(BackendGuard.Decision.VANILLA_DISABLED, BackendGuard.onUncleanStartup(state, false, 2));
+        assertFalse(Files.exists(state));
+    }
+
+    @Test
+    void badMaxKeepsPropertyFallsBackInsteadOfCrashingTheStartup() {
+        System.setProperty(BackendGuard.PROPERTY_MAX_KEEPS, "two");
+        try {
+            assertEquals(BackendGuard.DEFAULT_MAX_KEEPS, BackendGuard.maxKeepsFromProperties());
+        } finally {
+            System.clearProperty(BackendGuard.PROPERTY_MAX_KEEPS);
+        }
+        System.setProperty(BackendGuard.PROPERTY_MAX_KEEPS, "-1");
+        try {
+            assertEquals(BackendGuard.DEFAULT_MAX_KEEPS, BackendGuard.maxKeepsFromProperties());
+        } finally {
+            System.clearProperty(BackendGuard.PROPERTY_MAX_KEEPS);
+        }
+    }
+
+    @Test
     void cleanStartupResetsTheCounter(@TempDir Path dir) {
         Path state = BackendGuard.stateFile(dir);
         BackendGuard.onUncleanStartup(state, true, 2);

@@ -86,6 +86,28 @@ public class RtSkyAndLightingTest {
     }
 
     @Test
+    public void testCelestialBodyAlphaIsTheVanillaSpriteAlphaAndDrivesTheGlare() {
+        RtSky.Key clear = new RtSky.Key();
+        RtSky.Key pouring = new RtSky.Key();
+        RtSky.keyLight(0f, (float) Math.PI, false, true, 1f, 1f, clear);
+        RtSky.keyLight(0f, (float) Math.PI, false, true, 1f, 0f, pouring);
+        assertEquals(1f, clear.bodyAlpha, EPSILON, "vanilla draws the sprite with alpha = SkyRenderState.rainBrightness");
+        assertEquals(0f, pouring.bodyAlpha, EPSILON, "a full storm hides the sun completely");
+        RtSky.Key noSky = new RtSky.Key();
+        RtSky.keyLight(0f, 0f, false, false, noSky);
+        assertEquals(0f, noSky.bodyAlpha, EPSILON, "no sky, no celestial body to hide");
+
+        // the halo belongs to the body: no body, no glare
+        assertEquals(0f, RtSky.glareStrength(1f, 1f, 1f, pouring.bodyAlpha), EPSILON);
+        assertEquals(1f, RtSky.glareStrength(1f, 1f, 1f, clear.bodyAlpha), EPSILON);
+        assertEquals(0f, RtSky.glareStrength(1f, 0f, 1f, 1f), EPSILON, "night has no sun glare");
+        assertEquals(0.5f, RtSky.glareStrength(1f, 1f, 0.5f, 1f), EPSILON, "the elevation ramp is a smoothstep");
+        assertEquals(2f, RtSky.glareStrength(2f, 1f, 1f, 1f), EPSILON, "the settings strength scales the term");
+        assertEquals(0f, RtSky.glareStrength(1f, 1f, -0.5f, 1f), EPSILON, "a body below the horizon has no glare");
+        assertEquals(1f, RtSky.glareStrength(1f, 3f, 2f, 3f), EPSILON, "day, elevation and alpha clamp before the multiply");
+    }
+
+    @Test
     public void testGoldenHourAmbientIsWarmerThanNoon() {
         float[] sky = {0.47f, 0.65f, 1.0f};
         float[] noon = new float[3];

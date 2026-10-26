@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen.fsr3;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FfxLayouts;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -160,7 +161,7 @@ public final class FfxFgNative {
             lookup = SymbolLookup.libraryLookup(dll, arena);
         } catch (IllegalArgumentException | UnsatisfiedLinkError e) {
             arena.close();
-            throw new IllegalStateException("cannot load " + dll + ": " + e, e);
+            throw new IllegalStateException("cannot load " + LogPaths.show(dll) + ": " + LogPaths.show(e), e);
         }
         Linker linker = Linker.nativeLinker();
         createContext = bind(linker, lookup, "ffxCreateContext", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
@@ -180,10 +181,15 @@ public final class FfxFgNative {
 
     public static FfxFgNative load(Path dll) {
         if (!Files.isRegularFile(dll)) {
-            throw new IllegalStateException("not found: " + dll);
+            throw new IllegalStateException("not found: " + LogPaths.show(dll));
+        }
+        // the developer override property reaches this loader straight from the command line, with no natives manager in between
+        String reject = io.github.andrexarlay.vulkancompat.rtx.NativeDllGate.reject(dll);
+        if (reject != null) {
+            throw new IllegalStateException(LogPaths.show(dll) + " " + reject);
         }
         FfxFgNative n = new FfxFgNative(dll.toAbsolutePath().normalize());
-        LOGGER.info("[VKB-FG] fsr3 loaded {}", n.libraryPath);
+        LOGGER.info("[VKB-FG] fsr3 loaded {}", LogPaths.show(n.libraryPath));
         return n;
     }
 

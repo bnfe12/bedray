@@ -521,8 +521,10 @@ void main() {
 #endif
         }
 #ifdef VKB_GBUFFER
-        gbDirectSum += r.direct0;
-        gbRestSum += r.radiance - r.direct0;
+        // NRD / DLSS-RR keep these two sums in their own history, and the per-sample firefly gate below only sanitises the
+        // view-selected v: a NaN in the raw radiance would otherwise be held by the denoiser for many frames.
+        gbDirectSum += finiteOr(r.direct0, vec3(0.0));
+        gbRestSum += finiteOr(r.radiance - r.direct0, vec3(0.0));
 #endif
         vec3 v;
         if (mode == MODE_GI) {

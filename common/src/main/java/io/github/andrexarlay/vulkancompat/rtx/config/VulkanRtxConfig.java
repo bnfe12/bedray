@@ -260,8 +260,13 @@ public final class VulkanRtxConfig {
     public static float nisSharpness = 0.2f;
     /** User render scale per backend in percent, used when that backend's mode is CUSTOM ({@code <backend>_custom_scale}). */
     private static final java.util.EnumMap<UpscalerBackend, Integer> customPercents = new java.util.EnumMap<>(UpscalerBackend.class);
-    /** Game directory used to look for native libraries when validating {@link #activeBackend}. */
-    private static java.nio.file.Path gameDir = java.nio.file.Path.of("").toAbsolutePath().normalize();
+    /**
+     * Test override for the directory searched for native libraries. Unset means "ask the platform" (see {@link #gameDir()}):
+     * the static field used to default to the current working directory, which on a launcher-started client is not the game
+     * directory, so an installed {@code libxess.dll} looked missing and {@link #enforceBackendAvailability()} reset XeSS to
+     * BILINEAR while {@code XessRuntime} (which reads {@code Minecraft.gameDirectory}) would have loaded it.
+     */
+    private static java.nio.file.Path gameDirOverride;
     public static QualityPreset qualityPreset = QualityPreset.NATIVE;
     public static int customScalePercent = 100;
     /** Auto negative Mipmap LOD bias based on upscaler render scale. */
@@ -481,11 +486,17 @@ public final class VulkanRtxConfig {
 
     /** Redirects the directory searched for native libraries (unit tests only). */
     public static void setGameDirForTesting(java.nio.file.Path dir) {
-        gameDir = dir;
+        gameDirOverride = dir;
     }
 
+    /**
+     * The directory the native libraries are searched in: the platform game directory (loader system property, then
+     * {@code Minecraft.gameDirectory}, then the working directory) unless a test redirected it.
+     */
     public static java.nio.file.Path gameDir() {
-        return gameDir;
+        return gameDirOverride != null
+            ? gameDirOverride
+            : io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerLibraryLoader.resolveGameDirectory();
     }
 
     /**
@@ -493,7 +504,7 @@ public final class VulkanRtxConfig {
      * with a WARN. Called after load and by the settings page before a new backend is stored.
      */
     public static void enforceBackendAvailability() {
-        activeBackend = UpscalerSelection.resolve(activeBackend, gameDir);
+        activeBackend = UpscalerSelection.resolve(activeBackend, gameDir());
     }
 
     /** Redirects the config file (unit tests only). */

@@ -110,7 +110,7 @@ public class RtShadingFixesTest {
 
         String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
         assertTrue(path.contains("res.direct0 += e;"), "the first-vertex emission goes to the analytic direct channel");
-        assertTrue(path.contains("gbRestSum += r.radiance - r.direct0;"),
+        assertTrue(path.contains("gbRestSum +=") && path.contains("r.radiance - r.direct0"),
             "and is subtracted from the denoised diffuse channel, so nothing is counted twice");
     }
 

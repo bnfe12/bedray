@@ -26,6 +26,11 @@ final class RtAtmosphere {
     private RtBloomPass bloom;
     private RtGpuTimer timer;
     private String lastLogged = "";
+    /**
+     * The settings folded into one primitive. describe() is thirteen boxed arguments through String.format, and the frame
+     * that changes nothing still had to pay for it to discover that nothing changed.
+     */
+    private long lastLoggedToken = Long.MIN_VALUE;
     private final Vector4f tmp = new Vector4f();
 
     /**
@@ -77,9 +82,9 @@ final class RtAtmosphere {
             }
             float[] dir = p.key.dir;
             boolean keyOn = Math.max(p.key.color[0], Math.max(p.key.color[1], p.key.color[2])) > 1.0e-3f;
-            float elevation = Math.max(0f, Math.min(1f, dir[1] / 0.2f));
+            // bodyAlpha is the alpha vanilla draws the sun sprite with: while a storm hides the body the halo must be off too.
             float glareK = glare && keyOn && !p.key.isMoon
-                ? RtAtmosphereSettings.sunGlareStrength() * Math.max(0f, Math.min(1f, p.key.day)) * elevation * elevation * (3f - 2f * elevation)
+                ? RtSky.glareStrength(RtAtmosphereSettings.sunGlareStrength(), p.key.day, dir[1] / 0.2f, p.key.bodyAlpha)
                 : 0f;
             // NDC of the sun (the shader maps NDC straight to pixels: apply the RT's flip of the y axis here)
             float ndcX = 9f;
@@ -106,11 +111,38 @@ final class RtAtmosphere {
     }
 
     private void logIfChanged(boolean shafts) {
+        long token = settingsToken(shafts);
+        if (token == lastLoggedToken) {
+            return;
+        }
+        lastLoggedToken = token;
         String now = RtAtmosphereSettings.describe() + " shafts_pass=" + shafts;
         if (!now.equals(lastLogged)) {
             lastLogged = now;
             LOGGER.info("[VKB-ATMO] {}", now);
         }
+    }
+
+    /**
+     * Every value RtAtmosphereSettings.describe() prints, hashed into one long (FNV-1a). A collision would cost one missed
+     * debug line; it cannot cost correctness, because the log is the only consumer.
+     */
+    private static long settingsToken(boolean shafts) {
+        long h = 0xcbf29ce484222325L;
+        h = 0x100000001b3L * h + (shafts ? 1 : 0);
+        h = 0x100000001b3L * h + RtAtmosphereSettings.godRays().ordinal();
+        h = 0x100000001b3L * h + RtAtmosphereSettings.godRaySteps();
+        h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.godRayStrength());
+        h = 0x100000001b3L * h + RtAtmosphereSettings.godRayRange();
+        h = 0x100000001b3L * h + (RtAtmosphereSettings.bloom() ? 1 : 0);
+        h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.bloomStrength());
+        h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.bloomThreshold());
+        h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.bloomScatter());
+        h = 0x100000001b3L * h + (RtAtmosphereSettings.sunGlare() ? 1 : 0);
+        h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.sunGlareStrength());
+        h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.fogVanilla());
+        h = 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.fogAerial());
+        return 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.chunkFadeSeconds());
     }
 
     void resetHistory() {

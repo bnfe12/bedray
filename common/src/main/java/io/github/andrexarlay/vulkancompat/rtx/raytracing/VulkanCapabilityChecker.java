@@ -95,8 +95,7 @@ public final class VulkanCapabilityChecker {
         }
 
         Set<String> extensions = queryDeviceExtensions();
-        cachedDeviceExtensions = extensions;
-        if (extensions == null || extensions.isEmpty()) {
+        if (extensions.isEmpty()) {
             LOGGER.info("[VulkanCapabilityChecker] Vulkan device extensions could not be queried; hardware ray tracing is unavailable.");
             return false;
         }
@@ -243,15 +242,24 @@ public final class VulkanCapabilityChecker {
     }
 
     private static Set<String> queryDeviceExtensions() {
-        if (cachedDeviceExtensions != null) {
-            return cachedDeviceExtensions;
+        Set<String> cached = cachedDeviceExtensions;
+        if (cached != null) {
+            return cached;
         }
         VkPhysicalDevice physicalDevice = getVkPhysicalDevice();
-        if (physicalDevice != null) {
-            queryGpuProperties(physicalDevice);
-            return queryPhysicalExtensions(physicalDevice);
+        if (physicalDevice == null) {
+            // Nothing is cached on purpose: a probe that runs before the device exists must not pin "no extensions" for the
+            // whole session, because hasExtension()/getMissingExtensions() only re-query while the field is still null. That
+            // stale cache would report ray tracing unavailable forever and leave isNvidiaGpu() defaulting to true.
+            return Collections.emptySet();
         }
-        return Collections.emptySet();
+        queryGpuProperties(physicalDevice);
+        Set<String> extensions = queryPhysicalExtensions(physicalDevice);
+        // With a live device the answer is cached even when it is empty: enumeration comes back empty only when the driver
+        // really failed, and leaving the field null would make every later hasExtension() re-run the whole query — a
+        // ~60-80 KB heap calloc (VkExtensionProperties.calloc) each time, which the always-cache code never paid.
+        cachedDeviceExtensions = extensions;
+        return extensions;
     }
 
     public static void queryGpuProperties(VkPhysicalDevice physicalDevice) {

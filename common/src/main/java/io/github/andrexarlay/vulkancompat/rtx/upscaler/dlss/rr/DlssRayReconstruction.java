@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.rr;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssLayouts;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNative;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNativeException;
@@ -148,7 +149,7 @@ public final class DlssRayReconstruction implements AutoCloseable {
      */
     public static synchronized DlssRayReconstruction load(Path vkbDlssDll) {
         if (vkbDlssDll == null || !Files.isRegularFile(vkbDlssDll)) {
-            throw new DlssNativeException("[DLSS-RR] vkb_dlss.dll path is invalid: " + vkbDlssDll, null);
+            throw new DlssNativeException("[DLSS-RR] vkb_dlss.dll path is invalid: " + LogPaths.show(vkbDlssDll), null);
         }
         // Do not associate this DLL with a denoiser-owned arena. Closing that arena on an RR
         // fallback can unload vkb_dlss.dll while NGX/Streamline still has native callbacks into
@@ -160,14 +161,14 @@ public final class DlssRayReconstruction implements AutoCloseable {
                 loadedLibrary = SymbolLookup.libraryLookup(requestedPath, LIBRARY_ARENA);
                 loadedLibraryPath = requestedPath;
             } else if (!requestedPath.equals(loadedLibraryPath)) {
-                throw new DlssNativeException("[DLSS-RR] vkb_dlss.dll already pinned from " + loadedLibraryPath
-                    + "; refusing a second wrapper at " + requestedPath, null);
+                throw new DlssNativeException("[DLSS-RR] vkb_dlss.dll already pinned from " + LogPaths.show(loadedLibraryPath)
+                    + "; refusing a second wrapper at " + LogPaths.show(requestedPath), null);
             }
             DlssRayReconstruction rr = new DlssRayReconstruction(loadedLibrary);
-            LOGGER.info("[DLSS-RR] Initialized native FFM Ray Reconstruction binding from {} (process-pinned)", requestedPath);
+            LOGGER.info("[DLSS-RR] Initialized native FFM Ray Reconstruction binding from {} (process-pinned)", LogPaths.show(requestedPath));
             return rr;
         } catch (Throwable t) {
-            throw new DlssNativeException("[DLSS-RR] Failed to load vkb_dlss.dll: " + t.getMessage(), t);
+            throw new DlssNativeException("[DLSS-RR] Failed to load vkb_dlss.dll: " + LogPaths.show(t.getMessage()), t);
         }
     }
 

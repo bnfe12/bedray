@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.config;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,9 +37,9 @@ public final class ConfigFiles {
         if (Files.isRegularFile(legacy)) {
             try {
                 Files.copy(legacy, file, StandardCopyOption.COPY_ATTRIBUTES);
-                LOGGER.info("[Bedray] settings migrated: copied {} to {} (the old file is left in place)", legacy, file);
+                LOGGER.info("[Bedray] settings migrated: copied {} to {} (the old file is left in place)", LogPaths.show(legacy), LogPaths.show(file));
             } catch (IOException e) {
-                LOGGER.warn("[Bedray] could not copy old settings {} to {}: {}", legacy, file, e.toString());
+                LOGGER.warn("[Bedray] could not copy old settings {} to {}: {}", LogPaths.show(legacy), LogPaths.show(file), e.toString());
             }
         }
         return file;

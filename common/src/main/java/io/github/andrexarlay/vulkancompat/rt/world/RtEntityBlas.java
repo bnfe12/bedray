@@ -32,12 +32,39 @@ public final class RtEntityBlas {
     private long blasAddress = 0L;
     private int builtPrimitives = 0;
 
+    /**
+     * A grow must not destroy the current BLAS where it stands: {@code blasAddress} is baked into the TLAS instance
+     * buffers of frames that may still be in flight, and freeing an acceleration structure an in-flight submission
+     * reads is undefined (it shows up as {@code VK_ERROR_DEVICE_LOST}). Retired structures are queued and destroyed
+     * once the retirement window has passed.
+     */
+    private static final int RETIRE_BUILDS = 5;
+    private final java.util.ArrayDeque<Pending> retired = new java.util.ArrayDeque<>();
+    private long buildCount;
+
+    private record Pending(long bornAt, long handle, RtMemory.Buf buf) {
+    }
+
+    private void tickRetire() {
+        buildCount++;
+        while (!retired.isEmpty() && buildCount - retired.peekFirst().bornAt() > RETIRE_BUILDS) {
+            Pending p = retired.pollFirst();
+            if (p.handle() != 0L) {
+                KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, p.handle(), null);
+            }
+            if (p.buf() != null) {
+                mem.destroy(p.buf());
+            }
+        }
+    }
+
     public RtEntityBlas(VkDevice device, RtMemory mem) {
         this.device = device;
         this.mem = mem;
     }
 
     public void build(VkCommandBuffer cb, io.github.andrexarlay.vulkancompat.rt.entity.EntityGpuFrame gpuFrame, RtMemory.Buf scratchBuf, long scratchBase) {
+        tickRetire();   // drains on EVERY frame, including a frame with no entity geometry: the queue would otherwise freeze
         if (gpuFrame == null || !gpuFrame.isValid()) {
             blasAddress = 0L;
             builtPrimitives = 0;
@@ -47,6 +74,7 @@ public final class RtEntityBlas {
     }
 
     public void build(VkCommandBuffer cb, RtEntityGeometryManager geometryManager, RtMemory.Buf scratchBuf, long scratchBase) {
+        tickRetire();   // ditto, before the empty-frame return: an entity-free area is exactly when the queue must still drain
         int triangleCount = geometryManager.frameTriangles();
         int vertexCount = geometryManager.frameVertices();
         long vertexAddress = geometryManager.framePosAddress();
@@ -113,14 +141,9 @@ public final class RtEntityBlas {
             }
 
             if (blasBuf == null || blasBuf.size < requiredSize) {
-                if (blasHandle != 0L) {
-                    KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, blasHandle, null);
-                    blasHandle = 0L;
-                    blasAddress = 0L;
-                }
-                if (blasBuf != null) {
-                    mem.destroy(blasBuf);
-                }
+                retired.addLast(new Pending(buildCount, blasHandle, blasBuf));
+                blasHandle = 0L;
+                blasAddress = 0L;
                 blasBuf = mem.createBuffer("entity_blas", Math.max(requiredSize, 2L << 20),
                     KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
                         | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
@@ -244,6 +267,15 @@ public final class RtEntityBlas {
     }
 
     public void close() {
+        while (!retired.isEmpty()) {
+            Pending p = retired.pollFirst();
+            if (p.handle() != 0L) {
+                KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, p.handle(), null);
+            }
+            if (p.buf() != null) {
+                mem.destroy(p.buf());
+            }
+        }
         if (blasHandle != 0L) {
             KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, blasHandle, null);
             blasHandle = 0L;

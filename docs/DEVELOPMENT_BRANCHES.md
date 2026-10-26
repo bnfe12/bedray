@@ -77,6 +77,18 @@ No builds, shader compilation, tests, game sessions or benchmarks were run for t
 model is an authored slab approximation, not a general closed-volume glass or caustics solver. See
 [TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md) for the exact format, defaults, settings and limitations.
 
+## Later ReSTIR/barriers checkpoint (2026-10-26)
+
+The final remote refresh found 15 additional commits on `feat/restir-barriers-20261025`, advancing it from `b3b3ab6` to
+`1ae65809d8199c7b802198fd8ab4ea9fa3ec5f54`. Their history is merged after the transparent-material follow-up (#6).
+The three shared shader files merge both the optical transport and finite-input/AO changes; no implementation is replaced
+by an older branch snapshot. The new changes cover entity capture/retirement, temporal/denoiser finite values, native loader
+and C++ exception handling, backend/bridge teardown, log-path redaction, weather celestial visibility and bloom/AO costs.
+
+Integration review also corrects the partially allocated entity-ring retire queue: a non-null generation record owns the
+possibly null buffer slots, rather than inserting null elements into `ArrayDeque`. Missing ring allocations are retried.
+Source/diff review only; no build, shader compilation, tests, GPU session or benchmark was run for this checkpoint.
+
 All branches are protected against force-push and deletion. The default branch requires pull requests
 with resolved review conversations. No bypass actors are configured; ordinary commits to development
 branches remain available. Deliberate branch retirement requires an explicit rules change.

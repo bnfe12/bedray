@@ -18,6 +18,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -115,6 +116,22 @@ struct TagBuilder {
 
 #define API extern "C" __declspec(dllexport)
 
+// Exception containment (ADR-0005 rule 4): exports reached from Java through an FFM downcall must not
+// let a C++ exception escape (it becomes an unhandled native exception in the JVM and kills the process).
+// Records the message in this file's thread-local t_err (the vkb_dlss.h error string) and returns the
+// generic VKB_DLSS_ERR_UNSUPPORTED; the code numbering is unchanged, matching the vkb_nrd.cpp reference.
+#define SLDL_TRY try {
+#define SLDL_CATCH()                                                                            \
+    }                                                                                           \
+    catch (const std::exception& e_) {                                                          \
+        t_err = std::string("unexpected C++ exception: ") + e_.what();                           \
+        return VKB_DLSS_ERR_UNSUPPORTED;                                                        \
+    }                                                                                           \
+    catch (...) {                                                                               \
+        t_err = "Unknown unhandled C++ exception";                                              \
+        return VKB_DLSS_ERR_UNSUPPORTED;                                                        \
+    }
+
 API uint32_t vkb_dlss_get_api_version(void) { return VKB_DLSS_API_VERSION; }
 API uint32_t vkb_dlss_get_ngx_api_version(void) { return 0; }
 API const char* vkb_dlss_get_last_error_string(void) { return t_err.c_str(); }
@@ -160,6 +177,7 @@ static void fillCaps(VkbDlssCaps* c) {
 
 API int32_t vkb_dlss_init(uint64_t instance, uint64_t physicalDevice, uint64_t device, void* gipa, void*, const wchar_t*, const wchar_t*,
                           const char*, const char*, VkbDlssCaps* outCaps) {
+    SLDL_TRY
     (void)device;
     if (!g_inited) { t_err = "Streamline is not initialised"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     if (!g_luidValid && gipa && instance && physicalDevice) {
@@ -175,17 +193,21 @@ API int32_t vkb_dlss_init(uint64_t instance, uint64_t physicalDevice, uint64_t d
     resolve();
     if (outCaps) fillCaps(outCaps);
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps) {
+    SLDL_TRY
     if (!outCaps) return VKB_DLSS_ERR_INVALID_ARG;
     fillCaps(outCaps);
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 API void vkb_dlss_shutdown(void) { g_sr.valid = false; g_rr.valid = false; }
 
 API int32_t vkb_dlss_query_optimal_settings(int32_t qualityMode, uint32_t outWidth, uint32_t outHeight, VkbDlssOptimalSettings* out) {
+    SLDL_TRY
     if (!out) return VKB_DLSS_ERR_INVALID_ARG;
     if (!resolve()) { t_err = "sl.dlss functions not available"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     sl::DLSSOptions o{};
@@ -202,11 +224,13 @@ API int32_t vkb_dlss_query_optimal_settings(int32_t qualityMode, uint32_t outWid
     out->max_width = s.renderWidthMax; out->max_height = s.renderHeightMax;
     out->sharpness = s.optimalSharpness;
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 // ---- Super Resolution ------------------------------------------------------------------------------------------------------
 
 API int32_t vkb_dlss_create_feature(uint64_t, const VkbDlssCreateInfo* info, uint64_t* outFeature) {
+    SLDL_TRY
     if (!info || !outFeature) return VKB_DLSS_ERR_INVALID_ARG;
     if (!resolve()) { t_err = "sl.dlss functions not available"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     sl::DLSSOptions o{};
@@ -220,9 +244,11 @@ API int32_t vkb_dlss_create_feature(uint64_t, const VkbDlssCreateInfo* info, uin
     g_sr.opts = o; g_sr.valid = true;
     *outFeature = 1;
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalInfo* info) {
+    SLDL_TRY
     if (!info || feature != 1 || !g_sr.valid) return VKB_DLSS_ERR_INVALID_ARG;
     if (!g_token) { t_err = "no frame token (frame head hook did not run)"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     TagBuilder tb;
@@ -245,18 +271,22 @@ API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalI
     r = p_slEvaluateFeature(sl::kFeatureDLSS, *g_token, inputs, 1, reinterpret_cast<sl::CommandBuffer*>(cmd));
     if (r != sl::Result::eOk) { fail("slEvaluateFeature(DLSS)", r); return VKB_DLSS_ERR_NGX; }
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 API int32_t vkb_dlss_release_feature(uint64_t feature) {
+    SLDL_TRY
     if (feature != 1) return VKB_DLSS_ERR_INVALID_ARG;
     g_sr.valid = false;
     if (g_inited && p_slFreeResources) p_slFreeResources(sl::kFeatureDLSS, sl::ViewportHandle(0u));
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 // ---- Ray Reconstruction ----------------------------------------------------------------------------------------------------
 
 API int32_t vkb_dlss_rr_is_supported(uint32_t* outSupported) {
+    SLDL_TRY
     if (!outSupported) return VKB_DLSS_ERR_INVALID_ARG;
     bool loaded = false;
     if (g_inited && p_slIsFeatureLoaded) p_slIsFeatureLoaded(sl::kFeatureDLSS_RR, loaded);
@@ -268,9 +298,11 @@ API int32_t vkb_dlss_rr_is_supported(uint32_t* outSupported) {
     }
     *outSupported = ok ? 1 : 0;
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 API int32_t vkb_dlss_rr_create_feature(uint64_t, const VkbDlssRrCreateInfo* info, uint64_t* outFeature) {
+    SLDL_TRY
     if (!info || !outFeature) return VKB_DLSS_ERR_INVALID_ARG;
     resolve();
     if (!p_rrSetOptions) { t_err = "sl.dlss_d functions not available (sl.dlss_d.dll / nvngx_dlssd.dll missing?)"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
@@ -291,9 +323,11 @@ API int32_t vkb_dlss_rr_create_feature(uint64_t, const VkbDlssRrCreateInfo* info
     g_rrDepthLinear = info->depth_type == 0 ? 1 : 0;
     *outFeature = 2;
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssRrEvalInfo* info) {
+    SLDL_TRY
     if (!info || feature != 2 || !g_rr.valid) return VKB_DLSS_ERR_INVALID_ARG;
     if (!g_token) { t_err = "no frame token (frame head hook did not run)"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     // matrices change every frame (ProgrammingGuideDLSS_RR.md: DLSSDOptions::worldToCameraView / cameraViewToWorld)
@@ -364,19 +398,24 @@ API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssRr
     r = p_slEvaluateFeature(sl::kFeatureDLSS_RR, *g_token, inputs, 1, reinterpret_cast<sl::CommandBuffer*>(cmd));
     if (r != sl::Result::eOk) { fail("slEvaluateFeature(DLSS-RR)", r); return VKB_DLSS_ERR_NGX; }
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 API int32_t vkb_dlss_rr_release_feature(uint64_t feature) {
+    SLDL_TRY
     if (feature != 2) return VKB_DLSS_ERR_INVALID_ARG;
     g_rr.valid = false;
     if (g_inited && p_slFreeResources) p_slFreeResources(sl::kFeatureDLSS_RR, sl::ViewportHandle(0u));
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }
 
 API int32_t vkb_dlss_fg_is_supported(uint32_t* outSupported) {
+    SLDL_TRY
     if (!outSupported) return VKB_DLSS_ERR_INVALID_ARG;
     bool loaded = false;
     if (g_inited && p_slIsFeatureLoaded) p_slIsFeatureLoaded(sl::kFeatureDLSS_G, loaded);
     *outSupported = loaded ? 1 : 0;
     return VKB_DLSS_OK;
+    SLDL_CATCH()
 }

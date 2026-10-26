@@ -44,19 +44,41 @@ final class GlContext {
         }
         // From now on the engine's SDL event loop must ignore this window's events (MixinWindowForeignEvents).
         GlBridgeConfig.setBridgeWindowHandle(g.window);
-        g.context = SDLVideo.SDL_GL_CreateContext(g.window);
-        if (g.context == 0L) {
-            throw new IllegalStateException("SDL_GL_CreateContext(4.6 core) failed: " + SDLError.SDL_GetError());
+        try {
+            g.context = SDLVideo.SDL_GL_CreateContext(g.window);
+            if (g.context == 0L) {
+                throw new IllegalStateException("SDL_GL_CreateContext(4.6 core) failed: " + SDLError.SDL_GetError());
+            }
+            sdl(SDLVideo.SDL_GL_MakeCurrent(g.window, g.context), "SDL_GL_MakeCurrent");
+            // LWJGL default function provider (opengl32 + wglGetProcAddress): valid for any WGL context current on this thread.
+            if (GL.getFunctionProvider() == null) {
+                GL.create();
+            }
+            g.caps = GL.createCapabilities();
+            g.vendor = glGetString(GL_VENDOR);
+            g.renderer = glGetString(GL_RENDERER);
+            g.version = glGetString(GL_VERSION);
+        } catch (Throwable t) {
+            // The caller keeps nothing but the returned object, so a failure here would leave a hidden 64x64 window alive while
+            // shutdown clears the handle (the caller sees glCtx == null) — and an unregistered window has its events forwarded
+            // to the real game window, which is the historical "the game became 64x64" bug. Destroy it with the failure.
+            try {
+                if (g.context != 0L) {
+                    SDLVideo.SDL_GL_MakeCurrent(g.window, 0L);
+                    SDLVideo.SDL_GL_DestroyContext(g.context);
+                    g.context = 0L;
+                }
+                // destroy() releases the capabilities of this thread with the context; a half-built context must not leave them
+                // behind either, or the GL thread would dispatch against a driver object that no longer exists.
+                GL.setCapabilities(null);
+                SDLVideo.SDL_DestroyWindow(g.window);
+                g.window = 0L;
+                GlBridgeConfig.setBridgeWindowHandle(0L);
+            } catch (Throwable unwind) {
+                GlLog.error(5, "result=gl_context_unwind_failed reason=" + unwind, unwind);
+            }
+            throw t;
         }
-        sdl(SDLVideo.SDL_GL_MakeCurrent(g.window, g.context), "SDL_GL_MakeCurrent");
-        // LWJGL default function provider (opengl32 + wglGetProcAddress): valid for any WGL context current on this thread.
-        if (GL.getFunctionProvider() == null) {
-            GL.create();
-        }
-        g.caps = GL.createCapabilities();
-        g.vendor = glGetString(GL_VENDOR);
-        g.renderer = glGetString(GL_RENDERER);
-        g.version = glGetString(GL_VERSION);
         return g;
     }
 

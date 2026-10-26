@@ -635,13 +635,31 @@ public final class GlBridgeImpl implements GlBridge {
      */
     private Generation createGeneration(EngineVk e, int w, int h, String why) {
         SharedRing ring = new SharedRing(e, w, h, SLOTS);
-        for (int i = 0; i < SLOTS; i++) {
-            final int slot = i;
-            long[] handles = ring.exportHandles(slot);
-            gl.run(() -> ring.importIntoGl(slot, handles));
+        try {
+            for (int i = 0; i < SLOTS; i++) {
+                final int slot = i;
+                long[] handles = ring.exportHandles(slot);
+                gl.run(() -> ring.importIntoGl(slot, handles));
+            }
+            GlLog.line(5, "event=shared_images why=" + why + " slots=" + SLOTS + " size=" + w + "x" + h + " format=RGBA8_UNORM handleType=OPAQUE_WIN32");
+            lastSelfTestPixel = GlSelfTest.run(e, gl, ring);
+        } catch (Throwable t) {
+            // The caller only stores the ring in a Generation once this method returns, so nothing (not shutdown(), not the
+            // retire queue) holds a reference to unwind it. A failed import or self-test would otherwise leak the whole ring
+            // on every retried resize. The self-test submits release work and can fault on a fence TIMEOUT, i.e. with GPU work
+            // of this ring still in flight, and SharedRing.destroy requires the queue to be idle.
+            try {
+                e.graphicsQueue().waitIdle();
+            } catch (Throwable unwind) {
+                GlLog.error(5, "result=ring_unwind_wait_failed reason=" + unwind, unwind);
+            }
+            try {
+                ring.destroy(gl);
+            } catch (Throwable unwind) {
+                GlLog.error(5, "result=ring_unwind_failed reason=" + unwind, unwind);
+            }
+            throw t;
         }
-        GlLog.line(5, "event=shared_images why=" + why + " slots=" + SLOTS + " size=" + w + "x" + h + " format=RGBA8_UNORM handleType=OPAQUE_WIN32");
-        lastSelfTestPixel = GlSelfTest.run(e, gl, ring);
         width = w;
         height = h;
         return new Generation(ring);
@@ -697,53 +715,129 @@ public final class GlBridgeImpl implements GlBridge {
         long t0 = System.nanoTime();
         GlLog.line(7, "event=shutdown_begin state=" + state + " liveRings=" + SharedRing.LIVE.get() + " retiredPending=" + retired.size());
         List<Generation> all = new ArrayList<>(retired);
-        for (Lane[] byPhase : lanes) {
-            for (Lane lane : byPhase) {
-                if (lane == null) {
-                    continue;
+        Throwable err = null;
+        err = step(err, "collect_generations", () -> {
+            for (Lane[] byPhase : lanes) {
+                for (Lane lane : byPhase) {
+                    if (lane != null) {
+                        all.add(lane.gen);
+                    }
                 }
-                if (lane.pending != null) {
+            }
+        });
+        // Every pending frame is joined on its own: one faulting pipelined frame must not leave the later lanes' generations
+        // out of {@code all} (the ring loop below would then never destroy them, and SharedRing.LIVE would stay elevated).
+        err = step(err, "join_queued_frames", () -> {
+            for (Lane[] byPhase : lanes) {
+                for (Lane lane : byPhase) {
+                    if (lane == null || lane.pending == null) {
+                        continue;
+                    }
                     Pending p = lane.pending;
                     lane.pending = null;
-                    GlThread.join(p.future());
+                    try {
+                        GlThread.join(p.future());
+                    } catch (Throwable t) {
+                        GlLog.error(7, "result=shutdown_join_failed lane=" + lane.name() + " reason=" + t, t);
+                    }
                 }
-                all.add(lane.gen);
             }
-        }
-        engine.graphicsQueue().waitIdle();
-        perf.destroyVulkan(engine);
-        gl.run(() -> {
+        });
+        err = step(err, "graphics_wait_idle", () -> engine.graphicsQueue().waitIdle());
+        err = step(err, "perf_vulkan", () -> perf.destroyVulkan(engine));
+        err = step(err, "renderers_removed", () -> gl.run(() -> {
             perf.glDestroy();
             for (GlRenderer r : new ArrayList<>(attached.keySet())) {
-                r.onRemoved();
-            }
-            attached.clear();
-            offscreen.destroy();
-        });
-        for (Generation g : all) {
-            if (!g.dead) {
-                g.dead = true;
-                g.ring.destroy(gl);
-                if (g.binding != null) {
-                    compositor.unbind(g.binding);
+                try {
+                    r.onRemoved();
+                } catch (Throwable t) {
+                    GlLog.error(7, "result=renderer_removed_failed renderer="
+                        + r.getClass().getName() + " reason=" + t, t);
                 }
             }
+            attached.clear();
+            // The offscreen targets belong to the bridge, not to the third-party renderers: they still have to go.
+            offscreen.destroy();
+        }));
+        err = step(err, "rings", () -> {
+            for (Generation g : all) {
+                if (g.dead) {
+                    continue;
+                }
+                g.dead = true;
+                try {
+                    g.ring.destroy(gl);
+                } catch (Throwable t) {
+                    GlLog.error(7, "result=ring_destroy_failed reason=" + t, t);
+                }
+                if (g.binding != null) {
+                    try {
+                        compositor.unbind(g.binding);
+                    } catch (Throwable t) {
+                        GlLog.error(7, "result=compositor_unbind_failed reason=" + t, t);
+                    }
+                }
+            }
+        });
+        err = step(err, "lanes", () -> {
+            retired.clear();
+            for (Lane[] byPhase : lanes) {
+                Arrays.fill(byPhase, null);
+            }
+        });
+        err = step(err, "compositor", () -> {
+            if (compositor != null) {
+                compositor.destroy();
+                compositor = null;
+            }
+        });
+        // glCtx is null when stage 5 threw before/while the context was created, while gl itself already exists.
+        err = step(err, "gl_context", () -> {
+            if (glCtx != null) {
+                gl.run(() -> glCtx.destroy());
+            }
+            glCtx = null;
+        });
+        // last line of defence against the 64x64 window bug: with a stale handle the engine keeps cancelling the real
+        // window's own resize/move/close events once SDL reuses that address.
+        err = step(err, "window_handle", () -> GlBridgeConfig.setBridgeWindowHandle(0L));
+        boolean stopped = false;
+        try {
+            stopped = gl.shutdown(5000);
+        } catch (Throwable t) {
+            err = keepFirst(err, t);
+            GlLog.error(7, "result=shutdown_step_failed step=gl_thread reason=" + t, t);
         }
-        retired.clear();
-        for (Lane[] byPhase : lanes) {
-            Arrays.fill(byPhase, null);
-        }
-        if (compositor != null) {
-            compositor.destroy();
-            compositor = null;
-        }
-        gl.run(() -> glCtx.destroy());
-        GlBridgeConfig.setBridgeWindowHandle(0L);
-        boolean stopped = gl.shutdown(5000);
-        GlLog.line(7, "event=shutdown_done ms=" + String.format("%.1f", (System.nanoTime() - t0) / 1e6) + " liveRings=" + SharedRing.LIVE.get()
-            + " glThreadStopped=" + stopped);
         gl = null;
+        engine = null;
+        stage4Done = false;
+        identityMatch = null;
         state = State.DISABLED;
+        if (err != null && failure == null) {
+            // failure() is what the autotest and the status line read; a teardown fault would otherwise live only in the log.
+            failure = "shutdown: " + err;
+        }
+        GlLog.line(7, "event=shutdown_done ms=" + String.format("%.1f", (System.nanoTime() - t0) / 1e6) + " liveRings=" + SharedRing.LIVE.get()
+            + " glThreadStopped=" + stopped + (err == null ? "" : " first_error=" + err));
+    }
+
+    /**
+     * One teardown step. Nothing here is retryable, and letting a fault escape would abort the {@code VulkanDevice.close()} this is
+     * injected into: the engine device would never be destroyed, the bridge window handle would stay published, and the GL thread
+     * would never stop. So every step runs and only the first fault is kept, for the log.
+     */
+    private Throwable step(Throwable first, String name, Runnable body) {
+        try {
+            body.run();
+            return first;
+        } catch (Throwable t) {
+            GlLog.error(7, "result=shutdown_step_failed step=" + name + " reason=" + t, t);
+            return keepFirst(first, t);
+        }
+    }
+
+    private static Throwable keepFirst(Throwable first, Throwable t) {
+        return first != null ? first : t;
     }
 
     private void retire(Generation g) {

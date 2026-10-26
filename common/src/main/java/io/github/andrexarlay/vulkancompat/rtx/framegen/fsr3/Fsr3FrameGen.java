@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rtx.framegen.fsr3;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGpu;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenProvider;
@@ -140,8 +141,8 @@ public final class Fsr3FrameGen {
         try {
             nat = FfxFgNative.load(dll);
         } catch (RuntimeException | Error e) {
-            LOGGER.error("[VKB-FG] fsr3 load failed", e);
-            swapchainFail("load", e.toString());
+            LOGGER.error("[VKB-FG] fsr3 load failed\n{}", LogPaths.stack(e));
+            swapchainFail("load", LogPaths.show(e));
             return false;
         }
         if (VkSwapchainCreateInfoKHR.SIZEOF != FfxFgNative.SWAPCHAIN_CREATE_INFO_SIZE) {
@@ -185,7 +186,7 @@ public final class Fsr3FrameGen {
                 out.put(out.position(), c.swapchain());
                 LOGGER.info("[VKB-FG] [VKB-AUTOTEST] fsr3=swapchain_context_created result=0 extent={}x{} present_mode={} queues=game(family {}) present/acquire(family {}) dll={} ({})",
                     ci.imageExtent().width(), ci.imageExtent().height(), ci.presentMode(), device.graphicsQueue().queueFamilyIndex(),
-                    Fsr3Queues.family(), nat.libraryPath(), dllNote);
+                    Fsr3Queues.family(), LogPaths.show(nat.libraryPath()), dllNote);
                 return VK10.VK_SUCCESS;
             }
             int r = nat.createSwapchain(repl.createSwapchain(), vk.address(), ci.address(), MemoryUtil.memAddress(out), scHandle);
