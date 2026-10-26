@@ -442,12 +442,15 @@ vec3 sunDisk(vec3 dir) {
         return vec3(0.0);
     }
     bool keyIsSun = dot(pc.keyDir.xyz, sb.skySunDir.xyz) > 0.999;
+    // The sprites vanish with the weather (SkyRenderState.rainBrightness is the alpha vanilla draws them with, and the display
+    // composite above multiplies by it), so a body that is not in the sky must not glint in water or glass either.
+    float rain = clamp(sb.skyMisc.w, 0.0, 1.0);
     if (keyIsSun) {
         float bodyLuminance;
         skySunTexel(dir, bodyLuminance);
-        return pc.keyColor.rgb * (bodyLuminance * 6.0);
+        return pc.keyColor.rgb * (bodyLuminance * 6.0 * rain);
     }
     vec4 t = skyMoonTexel(dir);
     float lum = dot(t.rgb, vec3(0.2126, 0.7152, 0.0722));
-    return pc.keyColor.rgb * (t.a * lum * 6.0);
+    return pc.keyColor.rgb * (t.a * lum * 6.0 * rain);
 }
