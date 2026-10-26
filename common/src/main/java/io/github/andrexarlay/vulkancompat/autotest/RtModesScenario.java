@@ -508,6 +508,12 @@ public final class RtModesScenario implements AutotestScenario {
 
     private volatile int[] stillImg;
 
+    /** Temporal-history acceptance, or "n/a" before the first readback (the raw accessor reports -1 then, not a percent). */
+    private static String histPct() {
+        double pct = RtFrameRenderer.lastHistoryAcceptedPct();
+        return pct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", pct);
+    }
+
     /** Mean absolute luminance gradient (detail energy) of a screen image. */
     private static double sharpness(int[] px, int w, int h) {
         double s = 0;
@@ -645,7 +651,7 @@ public final class RtModesScenario implements AutotestScenario {
                             "sharp", String.format(Locale.ROOT, "%.3f", sharpness(last, w, h)),
                             "err_vs_ref", ref == null || ref == last ? "n/a" : String.format(Locale.ROOT, "%.3f", meanAbsDiff(last, ref)),
                             "rmse_vs_ref", ref == null || ref == last ? "n/a" : String.format(Locale.ROOT, "%.3f", rmse(last, ref)),
-                            "hist_pct", String.format(Locale.ROOT, "%.1f", RtFrameRenderer.lastHistoryAcceptedPct()),
+                            "hist_pct", histPct(),
                             "accum_frames", String.valueOf(RtFrameRenderer.lastAccumulatedFrames()));
                     } catch (Throwable t) {
                         ctx.log("scenario", name(), "step", String.valueOf(index), "event", "still_metrics", "result", "error;" + t);
@@ -786,7 +792,7 @@ public final class RtModesScenario implements AutotestScenario {
                 "err_edge", String.format(Locale.ROOT, "%.3f", bestEdge), "err_flat", String.format(Locale.ROOT, "%.3f", bestFlat),
                 "edge_share", String.format(Locale.ROOT, "%.2f", bestEdgeShare),
                 "spark_pm", String.format(Locale.ROOT, "%.3f", spark),
-                "hist_pct", String.format(Locale.ROOT, "%.1f", RtFrameRenderer.lastHistoryAcceptedPct()),
+                "hist_pct", histPct(),
                 "sharp_still", stillImg == null ? "n/a" : String.format(Locale.ROOT, "%.3f", sharpness(stillImg, sw, sh)),
                 "sharp_moving", String.format(Locale.ROOT, "%.3f", sharpness(imgs[STAB_FRAMES - 1], sw, sh)),
                 "edge_still", stillImg == null ? "n/a" : String.format(Locale.ROOT, "%.3f", edgeSharpness(stillImg, sw, sh, 12f)),
@@ -957,7 +963,7 @@ public final class RtModesScenario implements AutotestScenario {
                     ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.inputWidth() + "x"
                     + io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.inputHeight() : "-",
                 "accum_frames", String.valueOf(RtFrameRenderer.lastAccumulatedFrames()),
-                "hist_pct", String.format(Locale.ROOT, "%.1f", RtFrameRenderer.lastHistoryAcceptedPct()),
+                "hist_pct", histPct(),
                 "entity_capture", String.format(Locale.ROOT, "hooks=%d,seen=%d,captured=%d,vertices=%d,indices=%d",
                     io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().getHookInvocations(),
                     io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().getEntitiesSeen(),
@@ -995,7 +1001,7 @@ public final class RtModesScenario implements AutotestScenario {
                 io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.arm(dir, String.format(Locale.ROOT, "%02d_%s", index, s.label()));
                 ctx.waitFrames(10, () -> {
                     ctx.log("scenario", name(), "step", String.valueOf(index), "event", "motion_probe", "motion", motion,
-                        "hist_pct", String.format(Locale.ROOT, "%.1f", RtFrameRenderer.lastHistoryAcceptedPct()),
+                        "hist_pct", histPct(),
                         "result", String.valueOf(io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.lastResult()).replace(' ', ';'));
                     captureStability(ctx, s, index, file, () -> ctx.shot(file, () -> step(ctx, steps, index + 1)));
                 });

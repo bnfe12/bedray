@@ -36,10 +36,17 @@ public final class DecodedSection {
     /** Minimum / maximum decoded position over all vertices (section-local), or zeros when empty. */
     public final float[] posMin;
     public final float[] posMax;
+    /**
+     * Raw Sodium vertex words as captured, 5 ints per vertex in vertex order (w0..w4), quads back to back. The
+     * region-local section index byte of w4 (bits 24-31) is pre-masked to 0, so raw-word equality is exactly
+     * equivalent to comparing {@code positions}, {@code uvs}, {@code colors} and {@code light}: the section
+     * identity test can use this array alone, and the GPU dequantize dispatch consumes it verbatim.
+     */
+    public final int[] rawWords;
 
     DecodedSection(long key, int sectionX, int sectionY, int sectionZ, int[] passQuads,
                    float[] positions, float[] uvs, int[] colors, int[] light, float[] normals,
-                   float[] posMin, float[] posMax) {
+                   float[] posMin, float[] posMax, int[] rawWords) {
         this.key = key;
         this.sectionX = sectionX;
         this.sectionY = sectionY;
@@ -52,6 +59,7 @@ public final class DecodedSection {
         this.normals = normals;
         this.posMin = posMin;
         this.posMax = posMax;
+        this.rawWords = rawWords;
     }
 
     public int quadsInPass(int pass) {

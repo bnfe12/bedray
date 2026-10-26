@@ -24,7 +24,10 @@ import java.nio.ByteOrder;
  *       section-local blocks;</li>
  *   <li>{@code _get_texcoord}: {@code (a_TexCoord & 0x7FFF) / 32768}; bit 15 is the shrink bias sign
  *       ({@code mix(-1,1,bool(a_TexCoord >> 15))}, applied in block_layer_opaque.vsh:71 as bias * u_TexCoordShrink).
- *       This decoder returns the value WITHOUT bias (it lies inside the sprite, safe for sampling);</li>
+ *       The bias is applied here exactly like Sodium's vertex shader: without it a far-edge vertex sits exactly ON the
+ *       sprite boundary and NEAREST sampling pulls the first texel of the NEIGHBOUR sprite (a glowing frame around faces
+ *       next to an emissive sprite, or holes where the neighbour is transparent); one quantization step inward is safe
+ *       for NEAREST and invisible for the atlas texture.</li>
  *   <li>{@code _vert_tex_light_coord = a_LightAndData.xy / 256}: byte0 = block light, byte1 = sky light, both encoded as
  *       {@code clamp(level*16 + 8, 8, 248)} (encodeLight); the decoder keeps the raw bytes in {@code light};</li>
  *   <li>{@code _material_params = a_LightAndData[2]}, {@code _draw_id = a_LightAndData[3]} (section index inside the
@@ -61,11 +64,19 @@ public final class SodiumMeshDecoder {
     }
 
     public static float decodeU(int w3) {
-        return (w3 & (TEXTURE_MAX_VALUE - 1)) / (float) TEXTURE_MAX_VALUE;
+        return decodeTex((w3 & 0xFFFF), w3 & (1 << 15));
     }
 
     public static float decodeV(int w3) {
-        return ((w3 >>> 16) & (TEXTURE_MAX_VALUE - 1)) / (float) TEXTURE_MAX_VALUE;
+        return decodeTex((w3 >>> 16) & 0xFFFF, w3 & (1 << 31));
+    }
+
+    /** One quantization step inward from the sprite edge, mirroring Sodium's {@code bias * u_TexCoordShrink}. */
+    public static final float TEX_COORD_SHRINK = 1.0f / TEXTURE_MAX_VALUE;
+
+    private static float decodeTex(int half, int biasBit) {
+        float c = (half & (TEXTURE_MAX_VALUE - 1)) / (float) TEXTURE_MAX_VALUE;
+        return c + (biasBit != 0 ? TEX_COORD_SHRINK : -TEX_COORD_SHRINK);
     }
 
     /** Triangle indices for {@code quadCount} quads: (0,1,2, 2,3,0) per quad, offset by {@code baseVertex}. */
@@ -120,6 +131,7 @@ public final class SodiumMeshDecoder {
         int[] colors = new int[total * 4];
         int[] light = new int[total * 4];
         float[] normals = new float[total * 3];
+        int[] rawWords = new int[total * 20];
         float[] min = {Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY};
         float[] max = {Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY};
 
@@ -136,6 +148,12 @@ public final class SodiumMeshDecoder {
                     int w3 = d.getInt(o + 12);
                     int w4 = d.getInt(o + 16);
                     int vi = quad * 4 + v;
+                    int ro = vi * 5;
+                    rawWords[ro] = w0;
+                    rawWords[ro + 1] = w1;
+                    rawWords[ro + 2] = w2;
+                    rawWords[ro + 3] = w3;
+                    rawWords[ro + 4] = w4 & 0x00FFFFFF;   // section index byte masked: raw equality == decoded equality
                     for (int axis = 0; axis < 3; axis++) {
                         float c = decodePosition(w0, w1, axis);
                         positions[vi * 3 + axis] = c;
@@ -154,7 +172,8 @@ public final class SodiumMeshDecoder {
             min = new float[3];
             max = new float[3];
         }
-        return new DecodedSection(key, sectionX, sectionY, sectionZ, passQuads, positions, uvs, colors, light, normals, min, max);
+        return new DecodedSection(key, sectionX, sectionY, sectionZ, passQuads, positions, uvs, colors, light, normals,
+            min, max, rawWords);
     }
 
     /** n = normalize(cross(p2 - p0, p3 - p1)). A zero-area quad has no normal: fixed (0,1,0), such quads draw nothing. */

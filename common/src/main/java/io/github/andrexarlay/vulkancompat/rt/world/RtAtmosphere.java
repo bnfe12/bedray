@@ -48,7 +48,11 @@ final class RtAtmosphere {
             return;
         }
         if (RtGpuTimer.ENABLED && timer == null) {
-            timer = new RtGpuTimer(device, "godrays", "bloom");
+            try {
+                timer = new RtGpuTimer(device, "VKB-ATMO", "godrays", "bloom");
+            } catch (RuntimeException e) {
+                LOGGER.warn("[VKB-ATMO] gpu timers unavailable: {}", e.getMessage());
+            }
         }
         if (timer != null) {
             timer.beginFrame(cmd);
@@ -88,7 +92,7 @@ final class RtAtmosphere {
                 }
             }
             float threshold = RtAtmosphereSettings.bloomThreshold();
-            RtBloomPass.Params bp = new RtBloomPass.Params(p.invViewProj, dir, glareK, RtAtmosphereSettings.sunGlareStar() ? 1f : 0f,
+            RtBloomPass.Params bp = new RtBloomPass.Params(p.invViewProj, dir, glareK,
                 bobX, bobY, bobZ, p.flipY, p.tonemap, threshold, 0.35f * threshold, RtAtmosphereSettings.bloomStrength(),
                 RtAtmosphereSettings.bloomScatter(), ndcX, ndcY);
             if (timer != null) {

@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.mixin.rtx;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkancompat.compute.ComputeRenderBridge;
 import io.github.andrexarlay.vulkancompat.rtx.GameRendererTargetAccessor;
 import io.github.andrexarlay.vulkancompat.rtx.VulkanRtxManager;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
@@ -78,6 +79,9 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     private void onRenderBegin(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.frameBegin();
+            io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.beginFrame(this.minecraft.level);
+            io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onFrameBegin(this.minecraft.level);
+            ComputeRenderBridge.onFrameBegin(this.minecraft.level != null);
             VulkanRtxManager.processPendingChanges();
             WorldTargetManager.resetPhase((GameRenderer) (Object) this);
             // after resetPhase: the XeSS/DLSS runtimes have applied the current request (the RT block reads their state)
@@ -191,11 +195,27 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
     private void onBeforeRender3dHud(CallbackInfo ci) {
         if (VulkanBridge.isVulkan()) {
             PerfMonitor.mark(PerfMonitor.Mark.RASTER_END);
-            // the particles of the world pass are drawn again into their own layer (the RT image replaces the raster colour)
-            io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.replay(this.mainRenderTarget);
-            io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.render(
-                this.gameRenderState.levelRenderState.cameraRenderState, this.mainRenderTarget,
-                this.gameRenderState.levelRenderState);
+            ComputeRenderBridge.captureWorld(this.gameRenderState);
+            boolean computeRecorded = ComputeRenderBridge.renderDiagnostic(this.mainRenderTarget);
+            if (computeRecorded) {
+                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.suspendForComputeDiagnostic();
+            } else {
+                // The particles of the world pass are replayed before the hardware RT replacement image.
+                io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.replay(this.mainRenderTarget);
+                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.render(
+                    this.gameRenderState.levelRenderState.cameraRenderState, this.mainRenderTarget,
+                    this.gameRenderState.levelRenderState);
+            }
+            // The producer follows this frame's accepted commands and applied scene, not a pending UI request.
+            var producer = computeRecorded
+                ? (ComputeRenderBridge.appliedSceneMode() == io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE
+                    ? io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.VOXEL_COMPUTE
+                    : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.SYNTHETIC)
+                : io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.displayedThisFrame(this.mainRenderTarget)
+                    ? io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.HARDWARE_RT
+                    : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.RASTER;
+            io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.renderFrame(
+                this.mainRenderTarget, this.gameRenderState.levelRenderState.cameraRenderState, producer);
             PerfMonitor.mark(PerfMonitor.Mark.RT_END);
             WorldTargetManager.copyWorldDepth();
         }

@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rtx.debug;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.device.DeviceInfo;
+import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
 import io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry;
@@ -215,6 +216,11 @@ public final class F3Sections {
     private static void overview(List<String> out) {
         out.add(HEAD + "Bedray RTX (alpha)" + R);
         out.add(rtLine());
+        if (VulkanRtxConfig.voxelRendererSelected()) {
+            out.add("Voxel: " + GraphicsBackendRegistry.status());
+            var backend = GraphicsBackendRegistry.backend();
+            if (backend != null) out.add("Voxel data: " + backend.sceneDetail());
+        }
         out.add(upscaleLine());
         out.add(renderLine());
         String denoise = denoiseLine();

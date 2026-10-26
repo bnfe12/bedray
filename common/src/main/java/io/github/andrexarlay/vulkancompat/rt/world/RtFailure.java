@@ -30,10 +30,10 @@ public final class RtFailure extends RuntimeException {
         return result;
     }
 
-    /** Throws when a Vulkan call did not return VK_SUCCESS. */
+    /** Throws when a Vulkan call did not return VK_SUCCESS; a device loss gets its name, not a bare number. */
     public static void check(int vkResult, String stage) {
         if (vkResult != VK10.VK_SUCCESS) {
-            throw new RtFailure(stage, "VkResult=" + vkResult);
+            throw new RtFailure(stage, vkResult == VK10.VK_ERROR_DEVICE_LOST ? "VK_ERROR_DEVICE_LOST" : "VkResult=" + vkResult);
         }
     }
 }

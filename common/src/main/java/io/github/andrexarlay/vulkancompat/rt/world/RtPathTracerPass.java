@@ -78,8 +78,8 @@ public final class RtPathTracerPass implements RtPass {
     @Override
     public void configure(RtFrameParams params, boolean denoising) {
         params.mode = RtConfig.effectiveMode();
-        params.bounces = RtSettings.bounces();
-        params.spp = RtSettings.spp();
+        params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());
+        params.spp = RtAdaptiveQuality.spp(RtSettings.spp());
         params.rayDistance = RtSettings.pathMaxDistance();
         params.quality = 1;
         params.rayQualities = -1;
@@ -160,7 +160,7 @@ public final class RtPathTracerPass implements RtPass {
     @Override
     public void bind(RtPipeline.Views c) {
         RtPipeline.Views views = new RtPipeline.Views(c.tlas(), c.table(), c.output(), c.atlas(), c.material(), c.normal(), accum.view(),
-            c.gbuffer(), c.depth());
+            c.gbuffer(), c.depth(), c.lightmap());
         pipeline.bind(views);
         if (filter != null) {
             filter.bind(views);
@@ -178,11 +178,11 @@ public final class RtPathTracerPass implements RtPass {
         if (filter != null && (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.mode == RtConfig.MODE_LIT) {
             params.filterIters = 3;
             for (int i = 0; i < params.filterIters; i++) {
-                VkBarriers.fullMemoryBarrier(cmd);
+                VkBarriers.computeToCompute(cmd);
                 params.filterIter = i;
                 filter.dispatch(cmd, params, width, height);
             }
-            VkBarriers.fullMemoryBarrier(cmd);
+            VkBarriers.fullMemoryBarrier(cmd);   // trailing: guards the engine's non-compute consumers
             params.filterIter = 0;
             params.filterIters = 0;
         }

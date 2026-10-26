@@ -1,4 +1,22 @@
-# Feature matrix (0.1.0-alpha.1)
+# Feature matrix: current source and historical release evidence
+
+## Current main integration (2026-10-26)
+
+The 0.1.1-alpha.13 source combines the development branches listed in [DEVELOPMENT_BRANCHES](DEVELOPMENT_BRANCHES.md).
+**No build, shader compilation, tests, game session or FPS measurement was run for this integration.** Historical evidence
+below does not transfer to the combined source. All current changes remain experimental and unreleased.
+
+| Area | Implemented source | Current integration evidence / limits |
+|---|---|---|
+| Hardware RT | ReSTIR history limits, spatial reuse, pixel shadows, weather capture, GPU geometry dequantization and barriers | Source integration only; runtime and performance unmeasured |
+| Transparent interfaces | RT camera/secondary segments use one query with nearest 16 layers sorted; PT reuses 16-entry batches within its 24-interface budget | Source change only; bounded sorting/storage cost unmeasured; unresolved RT transmission suppressed |
+| Water / glass | Realistic water Snell/medium approximation; vanilla textured sheet; glass thin tint/Fresnel filter | Full glass volume transport remains absent; water caustics are approximate |
+| Software Voxel | Streamed loaded sections, bounded residency, light invalidation and water entry/exit segments | Separate Compute provider nested in player JAR; incomplete coverage preserves raster |
+| Iris | Opt-in post subset, world/frame guides and custom RT hooks | General pack support incomplete; see [IRIS_VULKAN](IRIS_VULKAN.md) |
+| Shader / pipeline caches | Local SPIR-V warmup with an atomic compiler-profile snapshot, shared driver pipeline cache | Local caching; no Microsoft Advanced Shader Delivery service integration |
+| DXGI | Optional compatibility policy for Minecraft's own presentation path | Requires a game version with Mojang's DXGI implementation; project still targets 26.3 |
+
+## Historical evidence: 0.1.0-alpha.1
 
 **Bedray is an alpha. Nothing below is marked STABLE.** The statuses are based on the code and on the developer's own test runs.
 Tests were made only on **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, driver 617.42**, mostly with NeoForge. Other GPUs and
@@ -77,7 +95,7 @@ other upscalers, or noise levels) has not been evaluated.
 | Volumetric / distance fog | EXPERIMENTAL | L2 | | |
 | Entities, items, hand in the traced scene | EXPERIMENTAL | L1 | code and unit checks only; no recorded in-game image check | |
 | Particles in the traced scene | EXPERIMENTAL | L1 | partial; particles may not cast shadows or appear in reflections | |
-| Water and glass | EXPERIMENTAL | L4 | thin-surface model: reflection and tint, no refraction | |
+| Water and glass | EXPERIMENTAL | historical L4 | Earlier screenshots only. Water has a realistic Snell/medium approximation; glass remains a thin filter. Current integration has no fresh evidence | |
 | Animated block textures in materials | EXPERIMENTAL | L4 | only the first frame is baked | |
 | RT debug buffers | EXPERIMENTAL | L4 | normals, depth, albedo views | |
 
@@ -85,7 +103,7 @@ other upscalers, or noise levels) has not been evaluated.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Iris / "Dirt RT" shader-pack host | NOT_IMPLEMENTED | scaffold only; its F3 line is hidden unless a Dirt RT pack is selected |
+| General Iris / "Dirt RT" shader-pack compatibility | NOT_IMPLEMENTED | [Source-only post subset](IRIS_VULKAN.md) is implemented experimentally; no game/GPU validation or released support claim |
 | Linux, macOS | NOT_IMPLEMENTED | Windows only |
 
-This table is updated for every release. If the table and the settings page disagree, the table is wrong; please file an issue.
+Historical evidence applies only to its named build. Current implementation scope is listed above and in the linked source docs.

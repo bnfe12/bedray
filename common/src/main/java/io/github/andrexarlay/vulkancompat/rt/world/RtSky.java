@@ -56,7 +56,13 @@ public final class RtSky {
      * The moon takes over when the sun is more than ~7 degrees below the horizon.
      */
     public static void keyLight(float sunAngle, float moonAngle, boolean flipX, boolean hasSky, Key out) {
-        keyLight(sunAngle, moonAngle, flipX, hasSky, 1f, 1f, out);
+        keyLight(sunAngle, moonAngle, flipX, hasSky, 1f, 1f, 0f, out);
+    }
+
+    /** Key light without thunder data (callers that test the rain / phase behaviour in isolation). */
+    public static void keyLight(float sunAngle, float moonAngle, boolean flipX, boolean hasSky, float moonLight,
+                                float rainBrightness, Key out) {
+        keyLight(sunAngle, moonAngle, flipX, hasSky, moonLight, rainBrightness, 0f, out);
     }
 
     /**
@@ -106,7 +112,7 @@ public final class RtSky {
      * rain brightness ({@code SkyRenderState.rainBrightness}, 1 = clear, 0 = full rain) applied.
      */
     public static void keyLight(float sunAngle, float moonAngle, boolean flipX, boolean hasSky, float moonLight,
-                                float rainBrightness, Key out) {
+                                float rainBrightness, float thunder, Key out) {
         if (!hasSky) {
             out.dir[0] = 0f; out.dir[1] = 1f; out.dir[2] = 0f;
             out.color[0] = 0f; out.color[1] = 0f; out.color[2] = 0f;
@@ -121,7 +127,10 @@ public final class RtSky {
         out.day = dayFactor(sun[1]);
         out.isMoon = sun[1] <= -0.12f;
         float rain = Math.max(0f, Math.min(1f, rainBrightness));
-        float weather = 0.25f + 0.75f * rain;
+        // Vanilla's own storm factor (Level.getSkyDarken): a thunderstorm darkens the skylight on top of the rain. Applied to
+        // the key light, so the sky, the sun/moon colour and every traced shadow term follow it.
+        float storm = 1f - (5f / 16f) * Math.max(0f, Math.min(1f, thunder));
+        float weather = (0.25f + 0.75f * rain) * storm;
         if (sun[1] > -0.12f) {
             System.arraycopy(sun, 0, out.dir, 0, 3);
             float k = SUN_INTENSITY * out.day * weather;
@@ -176,12 +185,14 @@ public final class RtSky {
     /**
      * Mirror of {@code skyLight()} in rt_common.glsl. {@code sunY}/{@code moonY} are the vertical components of the sun / moon
      * directions, {@code rain} the vanilla rain brightness (1 clear), {@code keyColor} the key light of the frame.
+     * The GPU path also tints the horizon haze with the biome fog colour; it is the one term this mirror lacks because the
+     * fog colour is not an argument here.
      */
     public static void skyLight(float[] skyColor, float day, float sunY, float moonY, float moonPhaseLight, float rain,
                                 float[] keyColor, boolean hasSky, SkyLight out) {
         float[] skyTint = new float[3];
         for (int i = 0; i < 3; i++) {
-            skyTint[i] = 0.25f * skyColor[i] + 0.75f;
+            skyTint[i] = 0.45f * skyColor[i] + 0.55f;
         }
         if (!hasSky) {
             float scale = 0.65f * ((float) Math.pow(Math.max(0f, day), 1.5) * 0.90f + 0.01f);

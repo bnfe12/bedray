@@ -107,7 +107,11 @@ public final class StreamlineBootstrap {
         }
         nativeLib = n;
         int mask = n.loadedMask();
-        LOGGER.info("[VKB-FG] sl=INIT_OK dir={} loaded_mask={} (bit0 DLSS_G, bit1 Reflex, bit2 PCL)", dir, mask);
+        LOGGER.info("[VKB-FG] sl=INIT_OK dir={} loaded_mask={} (bit0 DLSS_G, bit1 Reflex, bit2 PCL, bit3 DLSS_SR, bit4 DLSS_RR)", dir, mask);
+        if ((mask & 16) == 0) {
+            LOGGER.warn("[VKB-FG] no DLSS Ray Reconstruction plugin: copy sl.dlss_d.dll and nvngx_dlssd.dll next to sl.interposer.dll in {}. "
+                + "Without them Path Tracing falls back to NRD while frame generation is on: raw NGX cannot create RR next to Streamline.", dir);
+        }
         int[] req = n.dlssgRequirements();
         if (req != null) {
             LOGGER.info("[VKB-FG] dlss_g requirements flags=0x{} vk_graphics_queues={} vk_compute_queues={} driver={}.{}.{}",

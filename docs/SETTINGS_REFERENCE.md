@@ -4,6 +4,13 @@ Open **Options, Video Settings** and look for the **Bedray** section: two pages,
 **Bedray Advanced**. Everything is saved in `config/bedray.toml`. The decision for every option, with the reasons, is in
 [SETTINGS_AUDIT.md](SETTINGS_AUDIT.md).
 
+Development alpha.7 includes **World Renderer** and **Renderer Status** on the main Bedray page. Install
+the separate matching Bedray Compute JAR to choose **Voxel (Experimental)**; a missing add-on is shown
+explicitly. Voxel traces accepted textured block models and cutouts with world sky/block light and shadows
+inside a 48-block window. Shaded composition preserves distant, unsupported and translucent raster surfaces.
+It selects Bilinear and switches off FG; physical GI/reflections and matching temporal guides remain pending.
+The hardware RT mode preference is retained for switching back. See [COMPUTE](COMPUTE.md).
+
 How the screen works:
 
 * Move the mouse over a setting, or click it: the **right-hand panel** shows real screenshots taken in the game for that setting

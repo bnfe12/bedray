@@ -12,3 +12,4 @@ pluginManagement {
 rootProject.name = 'bedray'
 // core: internal platform layer ("Bedray Core"), packaged into the loader jars. common: all mod logic. neoforge / fabric: entry points.
 include 'core', 'common', 'neoforge', 'fabric'
+include 'renderer-api', 'compute-common', 'compute-fabric', 'compute-neoforge'

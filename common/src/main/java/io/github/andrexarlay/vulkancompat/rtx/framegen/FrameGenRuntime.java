@@ -247,23 +247,33 @@ public final class FrameGenRuntime {
         return Availability.NO_BINARIES;
     }
 
+    /**
+     * Short badge for the settings row. It follows the proven state machine, not {@code modeOn}: "2x" appears only after
+     * {@link State#ACTIVE}, i.e. after the swapchain really presented the extra frames, so the label never claims a
+     * multiplier that is not on screen yet.
+     */
     public static String statusBadge() {
         Availability a = availability();
-        if (amd() && a == Availability.READY) {
-            return isActive() ? "2x" : FrameGenSettings.mode() == FrameGenSettings.Mode.OFF ? "Off" : "Standby";
+        boolean modeOff = FrameGenSettings.mode() == FrameGenSettings.Mode.OFF;
+        if (a != Availability.READY) {
+            if (modeOff) {
+                return "Off";
+            }
+            return switch (a) {
+                case NEEDS_RESTART -> "Pending Restart";
+                case NO_BINARIES -> "No DLLs";
+                case FAILED -> "Failed";
+                case UNSUPPORTED -> "Unsupported";
+                default -> "Off";
+            };
         }
-        if (a == Availability.READY) {
-            return isActive() ? (modeOn ? (appliedGenerate + 1) + "x" : "Ready") : "Standby";
-        }
-        if (FrameGenSettings.mode() == FrameGenSettings.Mode.OFF) {
-            return "Off";
-        }
-        return switch (a) {
-            case NEEDS_RESTART -> "Pending Restart";
-            case NO_BINARIES -> "No DLLs";
+        Status st = status();
+        return switch (st.state()) {
+            case ACTIVE -> snapshot().multiplier() + "x";
+            case ENGAGING -> "Pending";
+            case READY -> modeOff ? "Off" : "Standby";
             case FAILED -> "Failed";
-            case UNSUPPORTED -> "Unsupported";
-            default -> "Off";
+            case UNAVAILABLE -> "Unavailable";
         };
     }
 
@@ -276,7 +286,8 @@ public final class FrameGenRuntime {
             return Fsr3FrameGen.statusLine();
         }
         if (amd() && availability() == Availability.NO_BINARIES) {
-            return "Unavailable (AMD FSR 3): " + Fsr3FrameGen.failure();
+            String why = Fsr3FrameGen.failed() ? Fsr3FrameGen.failure() : Fsr3FrameGen.dllNote();
+            return "Unavailable (AMD FSR 3): " + why;
         }
         if (!amd() && availability() == Availability.NEEDS_RESTART && FrameGenSettings.provider() == FrameGenSettings.Provider.AMD) {
             return "Restart required to activate AMD FSR 3 frame generation";
@@ -301,12 +312,13 @@ public final class FrameGenRuntime {
         };
     }
 
-    /** True while frame generation is running (SL initialised, not failed, last frame had it switched on). */
+    /**
+     * True while frame generation is proven on screen. Both providers gate this on {@link State#ACTIVE}, which is only
+     * reached after the swapchain reported the extra presented frames over a sustained streak; a requested mode that has
+     * not produced them yet stays invisible to the rest of the engine.
+     */
     public static boolean isActive() {
-        if (amd()) {
-            return Fsr3FrameGen.status().state() == State.ACTIVE;
-        }
-        return StreamlineBootstrap.isReady() && !failed && modeOn;
+        return status().state() == State.ACTIVE;
     }
 
     /** Frames the game rendered while frame generation was on / frames the swapchain actually presented, cumulative. */

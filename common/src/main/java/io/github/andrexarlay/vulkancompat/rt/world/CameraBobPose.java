@@ -46,7 +46,11 @@ public final class CameraBobPose {
             return dest.set(0f, 0f, -1f);
         }
         Vector4f forward = new Matrix4f(viewRotation).invert().transform(new Vector4f(0f, 0f, -1f, 0f));
-        if (!Float.isFinite(forward.x) || !Float.isFinite(forward.y) || !Float.isFinite(forward.z)) {
+        // The shaders use this axis as the fallback direction when the inverse projection is unusable, so it has to be a unit
+        // vector. A singular rotation inverts to a zero matrix: the components stay finite and pass the check below, and
+        // normalize() of (0,0,0) is NaN, which would poison every fallback ray for the whole frame.
+        if (!Float.isFinite(forward.x) || !Float.isFinite(forward.y) || !Float.isFinite(forward.z)
+            || forward.lengthSquared() < 1.0e-12f) {
             return dest.set(0f, 0f, -1f);
         }
         return dest.set(forward.x, forward.y, forward.z).normalize();

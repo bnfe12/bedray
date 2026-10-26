@@ -36,8 +36,10 @@ public final class RtConfig {
     public static final int RADIUS_XZ_OVERRIDE = Math.max(0, Integer.getInteger("vkbridge.rt.radiusSections", 0));
     /** Session override of the vertical RT radius in sections ({@code -Dvkbridge.rt.radiusY}), 0 = from the settings. */
     public static final int RADIUS_Y_OVERRIDE = Math.max(0, Integer.getInteger("vkbridge.rt.radiusY", 0));
-    /** Vertical radius with "RT Distance: As in game": +-8 sections = 256 blocks of height around the camera. */
-    public static final int AUTO_RADIUS_Y = 8;
+    /** Vertical radius with "RT Distance: As in game": +-16 sections = 512 blocks of height around the camera. Below the
+     * camera the extra sections hold little geometry (terrain ends at the world floor) and empty sections get no BLAS,
+     * so the instance count barely grows; the previous +-8 dropped the ground out of the TLAS when flying above ~y 190. */
+    public static final int AUTO_RADIUS_Y = 16;
     /** Legacy constants (radius before the settings existed), used by the unit tests only. */
     public static final int RADIUS_XZ = 6;
     public static final int RADIUS_Y = 4;
@@ -47,6 +49,15 @@ public final class RtConfig {
     /** Session override of the BLAS memory budget ({@code -Dvkbridge.rt.vramBudgetMb}), 0 = from the settings. */
     public static final long VRAM_BUDGET_OVERRIDE_MB = Math.max(0L, Long.getLong("vkbridge.rt.vramBudgetMb", 0L));
     public static final int MAX_INSTANCES = Math.max(256, Integer.getInteger("vkbridge.rt.maxInstances", 16384));
+    /** Opacity micromaps on CUTOUT geometry (VK_EXT_opacity_micromap). Off by default: a state is only safe when the
+     * whole footprint the shader's cutout test averages resolves to it, and that margin leaves no micro-triangle of a
+     * real 16x16 cutout sprite classifiable (measured, see {@link OpacityMicromapCache}).
+     * {@code -Dvkbridge.rt.opacityMicromaps=true} re-enables the experiment. */
+    public static final boolean OPACITY_MICROMAPS = Boolean.parseBoolean(System.getProperty("vkbridge.rt.opacityMicromaps", "false"));
+
+    /** The local player's own model in first person, so water and glass reflect their body ({@code -Dvkbridge.rt.selfAvatar=false}
+     * turns it off for an A/B check). */
+    public static final boolean SELF_AVATAR = Boolean.parseBoolean(System.getProperty("vkbridge.rt.selfAvatar", "true"));
 
     /** Horizontal RT radius in sections: override, else the game render distance ("As in game"), else the manual value. */
     public static int radiusXz(int gameRenderDistanceChunks) {
@@ -148,6 +159,12 @@ public final class RtConfig {
         }
         if (rm == RtMode.DIRECT) {
             return "shadow";
+        }
+        // Path tracing runs its own pass and its own push constants; reporting "lit" here printed `status mode=path` and
+        // `rt_pass ... mode=lit` in the same second of a path-traced session (owner log 2026-10-25), so the perf and quality
+        // lines of that pass were attributed to the ray pass.
+        if (rm == RtMode.PATH_TRACED) {
+            return "path";
         }
         return "lit";
     }

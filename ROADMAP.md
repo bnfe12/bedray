@@ -101,6 +101,7 @@ A feature is not considered done merely because its code compiles or a unit test
 - Bound acceleration-structure, history, denoiser and texture memory; exercise low-VRAM behavior and render-distance changes.
 - Compare sample count, ray depth, denoiser and reflection quality against measured cost.
 - Build a compatibility matrix for NeoForge and Fabric first, then AMD RDNA 2+ and Intel Arc where hardware is available.
+- Track the compute-only voxel renderer as a separate companion project using [SOFTWARE_RENDERER_MOD_SPEC.md](docs/SOFTWARE_RENDERER_MOD_SPEC.md); this is a design track, not a tested-support claim.
 - Test vendor-library versions and graceful fallback paths; do not bundle files unless redistribution terms permit it and notices ship with them.
 
 **Exit gate:** every supported combination has a reproducible start/test procedure and recorded evidence; unsupported combinations are not advertised as tested.

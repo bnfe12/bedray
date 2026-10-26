@@ -1,0 +1,72 @@
+diff --git a/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtVulkanPipelineCache.java b/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtVulkanPipelineCache.java
+--- a/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtVulkanPipelineCache.java
++++ b/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtVulkanPipelineCache.java
+@@ -2,6 +2,7 @@
+
+ import io.github.andrexarlay.vulkanbridge.platform.Platforms;
+ import org.lwjgl.BufferUtils;
++import org.lwjgl.PointerBuffer;
+ import org.lwjgl.system.MemoryStack;
+ import org.lwjgl.vulkan.KHRRayTracingPipeline;
+ import org.lwjgl.vulkan.VK10;
+@@ -17,7 +18,6 @@
+
+ import java.io.IOException;
+ import java.nio.ByteBuffer;
+-import java.nio.IntBuffer;
+ import java.nio.LongBuffer;
+ import java.nio.file.AtomicMoveNotSupportedException;
+ import java.nio.file.Files;
+@@ -93,8 +93,8 @@
+                 info.pInitialData(initial);
+             }
+             int result = VK10.vkCreatePipelineCache(device, info, null, out);
+-            if (result == VK10.VK_ERROR_INVALID_PIPELINE_CACHE_DATA && initial != null) {
+-                LOGGER.warn("[Bedray] ignored incompatible pipeline cache {} (Vulkan error {})", file.getFileName(), result);
++            if (result != VK10.VK_SUCCESS && initial != null) {
++                LOGGER.warn("[Bedray] could not create pipeline cache with persisted data {} (Vulkan error {}); retrying empty", file.getFileName(), result);
+                 info = VkPipelineCacheCreateInfo.calloc(stack).sType$Default();
+                 out.put(0, VK10.VK_NULL_HANDLE);
+                 result = VK10.vkCreatePipelineCache(device, info, null, out);
+@@ -123,8 +123,7 @@
+         try (MemoryStack stack = MemoryStack.stackPush()) {
+             VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
+             VK10.vkGetPhysicalDeviceProperties(device.getPhysicalDevice(), properties);
+-            ByteBuffer uuid = BufferUtils.createByteBuffer(VK10.VK_UUID_SIZE);
+-            properties.pipelineCacheUUID(uuid);
++            ByteBuffer uuid = properties.pipelineCacheUUID();
+             byte[] uuidBytes = new byte[VK10.VK_UUID_SIZE];
+             uuid.get(0, uuidBytes);
+             String key = String.format(java.util.Locale.ROOT, "v%08x-d%08x-r%08x-%s",
+@@ -153,18 +152,18 @@
+
+     private static void persist(VkDevice device, Entry entry) {
+         try (MemoryStack stack = MemoryStack.stackPush()) {
+-            IntBuffer size = stack.mallocInt(1);
++            PointerBuffer size = stack.mallocPointer(1);
+             int result = VK10.vkGetPipelineCacheData(device, entry.handle, size, null);
+             if (result != VK10.VK_SUCCESS && result != VK10.VK_INCOMPLETE) {
+                 LOGGER.warn("[Bedray] could not read Vulkan pipeline cache (error {})", result);
+                 return;
+             }
+-            int capacity = size.get(0);
++            long capacity = size.get(0);
+             for (int attempt = 0; attempt < 4 && capacity > 0 && capacity <= 256 * 1024 * 1024; attempt++) {
+-                ByteBuffer data = BufferUtils.createByteBuffer(capacity);
++                ByteBuffer data = BufferUtils.createByteBuffer((int) capacity);
+                 size.put(0, capacity);
+                 result = VK10.vkGetPipelineCacheData(device, entry.handle, size, data);
+-                int written = size.get(0);
++                long written = size.get(0);
+                 if (result == VK10.VK_INCOMPLETE) {
+                     capacity = Math.max(capacity * 2, written + 1);
+                     continue;
+@@ -173,7 +172,7 @@
+                     LOGGER.warn("[Bedray] could not serialize Vulkan pipeline cache (error {})", result);
+                     return;
+                 }
+-                data.limit(written);
++                data.limit((int) written);
+                 writeAtomically(entry.file, data);
+                 LOGGER.info("[Bedray] pipeline cache saved: {} bytes", written);
+                 return;

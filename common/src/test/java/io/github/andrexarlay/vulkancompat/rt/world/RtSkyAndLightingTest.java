@@ -72,6 +72,20 @@ public class RtSkyAndLightingTest {
     }
 
     @Test
+    public void testThunderstormDarkensTheKeyLightOnTopOfRain() {
+        RtSky.Key rain = new RtSky.Key();
+        RtSky.Key storm = new RtSky.Key();
+        RtSky.keyLight(0f, (float) Math.PI, false, true, 1f, 1f, 0f, rain);
+        RtSky.keyLight(0f, (float) Math.PI, false, true, 1f, 1f, 1f, storm);
+        assertTrue(storm.color[0] < rain.color[0], "a thunderstorm is darker than the same rain without thunder");
+        // vanilla's storm factor of getSkyDarken: the whole key light scales by (1 - 5 * thunder / 16)
+        assertEquals(rain.color[0] * 11f / 16f, storm.color[0], Math.max(1e-4f, rain.color[0] * 1e-5f));
+        RtSky.Key half = new RtSky.Key();
+        RtSky.keyLight(0f, (float) Math.PI, false, true, 1f, 1f, 0.5f, half);
+        assertTrue(half.color[0] > storm.color[0] && half.color[0] < rain.color[0], "thunder level ramps the dimming");
+    }
+
+    @Test
     public void testGoldenHourAmbientIsWarmerThanNoon() {
         float[] sky = {0.47f, 0.65f, 1.0f};
         float[] noon = new float[3];

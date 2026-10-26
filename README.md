@@ -2,12 +2,17 @@
 
 # Bedray
 
-> **EARLY ALPHA 0.1.0-alpha.1 — this is an evolving project, not a finished version. Major renderer, settings, configuration and compatibility changes are expected; bugs, crashes, visual artifacts and high GPU load are possible. Back up worlds/configuration and test in a separate instance. See the [roadmap](ROADMAP.md).**
+> **EARLY ALPHA — this is an evolving project, not a finished version. Major renderer, settings, configuration and compatibility changes are expected; bugs, crashes, visual artifacts and high GPU load are possible. Back up worlds/configuration and test in a separate instance. See the [roadmap](ROADMAP.md).**
 > Tested only on an **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, NVIDIA driver 617.42**. Other graphics cards have not been checked.
 > **Looking for testers with AMD Radeon (RDNA 2 or newer) and Intel Arc GPUs.** See [Help us test](#help-us-test).
 
+> **Current `main`: unreleased 0.1.1-alpha.13 source integration (2026-10-26).** The development branches are consolidated here.
+> No build, shader compilation, tests, game session or FPS measurement was run for this integration, at the owner's request.
+> Earlier screenshots and release evidence describe earlier builds. See [the integration record](docs/DEVELOPMENT_BRANCHES.md).
+
 Bedrock RTX-style ray tracing and path tracing for **Minecraft Java Edition**, running on the game's **native Vulkan backend**, as a
-Sodium add-on with its own pages in Sodium Video Settings. It also adds temporal upscalers (DLSS, XeSS, FSR) and denoisers.
+Sodium add-on with a dedicated Bedray settings screen opened from Video Settings. It also adds temporal upscalers
+(DLSS, XeSS, FSR), denoisers and an experimental software voxel provider.
 
 Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by Mojang, Microsoft, NVIDIA, AMD or Intel.
 
@@ -25,17 +30,28 @@ Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by
 
 ## What it does
 
-* **Path Tracing mode (recommended, the one mode of the alpha; quality presets are planned):** global illumination with several bounces, accumulation, auto exposure and a
-  denoiser (NRD, DLSS Ray Reconstruction, or accumulation only).
-* **Ray Tracing (Fast):** a simpler and faster mode (traced sun and moon shadows, ambient occlusion, reflections, light from glowing
-  blocks) is **in development and hidden in this release**. Its code is in the jar, but the settings page offers only **Off** and
-  **Path Tracing (recommended)**. Developers can unlock it with `experimental_rays = true` in `config/bedray.toml`.
+* **Path Tracing:** global illumination with several bounces, accumulation, auto exposure and a denoiser
+  (NRD, DLSS Ray Reconstruction, or accumulation only). Development settings provide renderer-specific quality profiles.
+* **Ray Tracing effects (experimental):** traced sun/moon shadows, ambient occlusion, reflections and emissive block light.
+  The published alpha.1 hid this mode; current source exposes experimental renderer choices in the Bedray screen.
 * **Light shafts (volumetric light):** an option in the Basic group of the Ray Tracing page, next to bloom, sun glare and distance haze.
 * **Materials:** LabPBR `_s` / `_n` maps, automatic PBR and normals for vanilla textures.
+* **Water and glass:** realistic water uses approximate Snell refraction and medium segments; vanilla water keeps a textured
+  sheet. Glass uses a thin tinted interface. RT camera and secondary walks use one query with up to 16 sorted layers;
+  Path Tracing reuses sorted 16-entry batches across its existing 24-interface budget instead of restarting per glass face.
+* **Iris post host (opt-in, experimental):** a Vulkan fullscreen post subset and custom RT hooks; general shaderpack compatibility
+  remains incomplete. See [IRIS_VULKAN](docs/IRIS_VULKAN.md).
 * **Upscalers:** DLSS Super Resolution, XeSS, FSR 3.1 / 2.x, plus built-in Bilinear, FSR 1 and NIS that need no extra files.
 * **Frame generation:** NVIDIA DLSS frame generation (2x, 3x, 4x) and Reflex through Streamline. Needs extra files and one restart; tested only on an RTX 5060 Ti. See [docs/FRAME_GENERATION.md](docs/FRAME_GENERATION.md).
 
 What works and how well it is proven is in **[docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md)**. Nothing in this alpha is marked stable.
+
+Development alpha.13 includes **Voxel (Experimental)** in the Bedray player JAR. The provider keeps its own
+mod ID and API, nested inside the loader artifact; do not install an additional external Compute JAR.
+It uses ordinary Vulkan compute for textured block models, cutouts and bounded world lighting, with raster
+preservation where representation is incomplete. Its requested coverage follows Minecraft render distance,
+while actual residency is limited by scene memory and incremental loading. Full material/light transport,
+multi-GPU performance and fresh live-game acceptance remain pending. See [COMPUTE](docs/COMPUTE.md).
 
 ## Requirements
 
@@ -57,7 +73,8 @@ Short version (full guide: **[docs/INSTALL.md](docs/INSTALL.md)**):
 
 1. Use a clean instance: Minecraft 26.3 with NeoForge or Fabric.
 2. Put these files into `mods/`: Sodium 0.9.x and the Bedray jar for your loader (one jar, no extra library mod).
-3. Start the game, open **Options, Video Settings** and find the **Bedray ALPHA** pages (Upscaling, Ray Tracing, Advanced and Experimental).
+3. Start the game, open **Options, Video Settings → Bedray Settings** and choose the renderer. The development
+   screen separates renderer, lighting, materials, upscaling, presets and diagnostics; pending changes require Apply.
 
 The release jars include the exact redistributable AMD FidelityFX Vulkan runtime and Intel XeSS runtime, and extract them on first start.
 Without extra files, the built-in upscalers (Bilinear, FSR 1, NIS), XeSS, FSR 3.1 and ray / path tracing with accumulation work.
@@ -76,6 +93,8 @@ Do it by hand with [docs/INSTALL.md](docs/INSTALL.md), or let an AI assistant do
 | [FRAME_GENERATION](docs/FRAME_GENERATION.md) | DLSS frame generation and Reflex |
 | [TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [FAQ](docs/FAQ.md), [KNOWN_ISSUES](docs/KNOWN_ISSUES.md) | When something is wrong |
 | [ROADMAP](ROADMAP.md) | Long-term plan, priorities and acceptance gates |
+| [SHADER_CACHE](docs/SHADER_CACHE.md) | SPIR-V warmup and Vulkan pipeline-cache behavior |
+| [DXGI_PRESENT](docs/DXGI_PRESENT.md) | Minecraft's native DXGI presentation option and Bedray compatibility |
 | [FEATURE_MATRIX](docs/FEATURE_MATRIX.md) | Status and evidence level of every feature |
 | [TESTING](docs/TESTING.md) | How to test and report |
 | [BUILDING](docs/BUILDING.md) | Build from source |
@@ -101,10 +120,10 @@ needed); XeSS (Intel library needed); Path Tracing with the NRD denoiser. The ex
 
 ## What is not included
 
-* Iris / "Dirt RT" shader-pack host: a scaffold only, it does nothing.
+* General Iris / "Dirt RT" shaderpack compatibility. The implemented opt-in post subset has explicit unsupported features.
 * DLSS 5 / neural rendering: **not implemented**. The settings page shows a disabled line.
 * AMD FSR frame generation, FSR 4 (not available on Vulkan).
-* Ray-traced particles in reflections, refraction through water and glass (only a thin-surface approximation).
+* Complete particle transport in reflections and shadows; physical closed-volume refraction through glass.
 * Linux and macOS.
 
 ## Licence

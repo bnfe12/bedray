@@ -39,7 +39,7 @@ final class RtBloomPass {
     private static final String[] STAGE_NAMES = {"prefilter_down", "down", "up", "apply"};
 
     /** Everything the apply stage needs per frame (all but {@code strength} are inputs of the sun glare). */
-    record Params(Matrix4f invViewProj, float[] sunDir, float glareStrength, float starAmount, float camX, float camY, float camZ,
+    record Params(Matrix4f invViewProj, float[] sunDir, float glareStrength, float camX, float camY, float camZ,
                   boolean flipY, boolean tonemapped, float threshold, float knee, float strength, float scatter, float sunNdcX,
                   float sunNdcY) {
     }
@@ -100,7 +100,7 @@ final class RtBloomPass {
                 VkComputePipelineCreateInfo.Buffer ci = VkComputePipelineCreateInfo.calloc(1, stack);
                 ci.get(0).sType$Default().layout(pipelineLayout);
                 ci.get(0).stage().sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModules[s]).pName(stack.UTF8("main"));
-                RtFailure.check(VK10.vkCreateComputePipelines(device, VK10.VK_NULL_HANDLE, ci, null, p), "create_bloom_pipeline");
+                RtFailure.check(RtVulkanPipelineCache.createCompute(device, ci, null, p), "create_bloom_pipeline");
                 pipelines[s] = p.get(0);
             }
         }
@@ -207,7 +207,7 @@ final class RtBloomPass {
             pr.invViewProj.get(0, pc);
             pc.putFloat(64, pr.sunDir[0]).putFloat(68, pr.sunDir[1]).putFloat(72, pr.sunDir[2]).putFloat(76, pr.glareStrength);
             pc.putFloat(80, pr.camX).putFloat(84, pr.camY).putFloat(88, pr.camZ).putFloat(92, pr.flipY ? 1f : 0f);
-            pc.putFloat(96, pr.threshold).putFloat(100, pr.knee).putFloat(104, bloom ? pr.strength : 0f).putFloat(108, pr.starAmount);
+            pc.putFloat(96, pr.threshold).putFloat(100, pr.knee).putFloat(104, bloom ? pr.strength : 0f);
             pc.putFloat(112, pr.tonemapped ? 1f : 0f).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
             if (bloom) {
                 dispatch(cmd, 0, sets[0], pc, mips[0].width, mips[0].height);

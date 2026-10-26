@@ -20,6 +20,18 @@ import java.nio.ByteBuffer;
 public final class RtFrameParams {
     public static final int BYTES = 128;
 
+    /** PC member types in declaration order (layout(push_constant) uniform PC in rt_common.glsl; verified by RtStatsLayoutTest). */
+    static final String[] PC_TYPES = {"mat4", "uvec2", "uint", "uint", "vec4", "vec4", "vec4"};
+    /** std430 offsets of the PC members, computed once by the same rules the GLSL compiler applies. */
+    static final int[] PC_OFFSETS = RtStatsLayout.std430Offsets(PC_TYPES);
+    static final int OFF_INV_VIEW_PROJ = PC_OFFSETS[0];
+    static final int OFF_STATS_ADDR = PC_OFFSETS[1];
+    static final int OFF_MODE_BITS = PC_OFFSETS[2];
+    static final int OFF_FRAME = PC_OFFSETS[3];
+    static final int OFF_KEY_DIR = PC_OFFSETS[4];
+    static final int OFF_KEY_COLOR = PC_OFFSETS[5];
+    static final int OFF_SKY_COLOR = PC_OFFSETS[6];
+
     public static final int FLAG_SHADOWS = 1;
     public static final int FLAG_SOFT_SHADOWS = 1 << 1;
     public static final int FLAG_REFLECTIONS = 1 << 2;
@@ -113,12 +125,15 @@ public final class RtFrameParams {
 
     /** Writes the 128 bytes at absolute offset 0 (position and limit of {@code b} are not changed). */
     public void write(ByteBuffer b) {
-        invViewProj.get(0, b);
-        b.putLong(64, statsAddress);
-        b.putInt(72, modeBits());
-        b.putInt(76, frame);
-        b.putFloat(80, key.dir[0]).putFloat(84, key.dir[1]).putFloat(88, key.dir[2]).putFloat(92, key.day);
-        b.putFloat(96, key.color[0]).putFloat(100, key.color[1]).putFloat(104, key.color[2]).putInt(108, flags);
-        b.putFloat(112, skyColor[0]).putFloat(116, skyColor[1]).putFloat(120, skyColor[2]).putInt(124, params2());
+        invViewProj.get(OFF_INV_VIEW_PROJ, b);
+        b.putLong(OFF_STATS_ADDR, statsAddress);
+        b.putInt(OFF_MODE_BITS, modeBits());
+        b.putInt(OFF_FRAME, frame);
+        b.putFloat(OFF_KEY_DIR, key.dir[0]).putFloat(OFF_KEY_DIR + 4, key.dir[1])
+            .putFloat(OFF_KEY_DIR + 8, key.dir[2]).putFloat(OFF_KEY_DIR + 12, key.day);
+        b.putFloat(OFF_KEY_COLOR, key.color[0]).putFloat(OFF_KEY_COLOR + 4, key.color[1])
+            .putFloat(OFF_KEY_COLOR + 8, key.color[2]).putInt(OFF_KEY_COLOR + 12, flags);
+        b.putFloat(OFF_SKY_COLOR, skyColor[0]).putFloat(OFF_SKY_COLOR + 4, skyColor[1])
+            .putFloat(OFF_SKY_COLOR + 8, skyColor[2]).putInt(OFF_SKY_COLOR + 12, params2());
     }
 }

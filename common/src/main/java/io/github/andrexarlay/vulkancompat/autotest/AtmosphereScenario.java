@@ -313,7 +313,6 @@ public final class AtmosphereScenario implements AutotestScenario {
         RtAtmosphereSettings.set("godrays_quality", s.value("gq") != null ? Integer.parseInt(s.value("gq")) : 1);
         RtAtmosphereSettings.set("bloom", 1);
         RtAtmosphereSettings.set("sunglare", 1);
-        RtAtmosphereSettings.set("sunglare_star", s.mods().contains("star") ? 1 : 0);
         String gr = s.value("gr");
         if (gr != null) {
             RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.GodRays.valueOf(gr.toUpperCase(Locale.ROOT)).ordinal());

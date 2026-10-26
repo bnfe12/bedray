@@ -60,6 +60,8 @@ public final class PreviewPanel {
     private static String lastLogged = "";
     private static Properties manifest;
     private static boolean modalOpen;
+    private static boolean resetAllowed = true;
+    private static Component runtimeStatus = Component.empty();
     private static int[] compactBtnRect = new int[4];
 
     /** Clickable rectangles of the last render: x, y, w, h, action id. */
@@ -80,6 +82,10 @@ public final class PreviewPanel {
     public static void closeModal() {
         modalOpen = false;
     }
+
+    public static void openModal(Option option) { selected = option; modalOpen = true; scroll = 0; }
+    public static void setResetAllowed(boolean allowed) { resetAllowed = allowed; }
+    public static void setRuntimeStatus(Component status) { runtimeStatus = status; }
 
     /** Catalog entry of a Bedray option, or null (buttons and unknown options keep Sodium's tooltip). */
     public static SettingsCatalog.Info lookup(Identifier id, Option option) {
@@ -177,10 +183,10 @@ public final class PreviewPanel {
         int screenH = mc != null && mc.getWindow() != null ? mc.getWindow().getGuiScaledHeight() : area.getLimitY();
 
         if (modalOpen) {
-            int mw = Mth.clamp(screenW - 28, 180, MAX_PANEL_W);
+            int mw = Math.max(120, Math.min(screenW - 28, MAX_PANEL_W));
             int mx0 = (screenW - mw) / 2;
             int my0 = 14;
-            int mLimitY = Math.max(my0 + 90, screenH - 14);
+            int mLimitY = Math.min(screenH - 6, Math.max(my0 + 90, screenH - 14));
             g.nextStratum();
             g.fill(0, 0, screenW, screenH, 0xB806060A);
             drawPanelBox(g, font, mx0, my0, mw, mLimitY, option, info, mouseX, mouseY, true);
@@ -206,7 +212,7 @@ public final class PreviewPanel {
     private static void renderCompactButton(GuiGraphicsExtractor g, Font font, Dim2i area, int reservedLimitY, Option option, int mouseX, int mouseY) {
         Minecraft mc = Minecraft.getInstance();
         int screenW = mc != null && mc.getWindow() != null ? mc.getWindow().getGuiScaledWidth() : area.getLimitX();
-        Component btnText = Component.translatableWithFallback("bedray.preview.open_modal", "🔍 Инфо / Скриншоты: %s", option.getName());
+        Component btnText = Component.translatableWithFallback("bedray.preview.open_modal", "Info / Screenshots: %s", option.getName());
         int maxW = Math.min(240, screenW - 16);
         String label = font.plainSubstrByWidth(btnText.getString(), maxW - 12);
         int bw = Math.min(maxW, font.width(label) + 12);
@@ -245,8 +251,8 @@ public final class PreviewPanel {
         int top = y + 4 - scroll;
         int cy = top;
 
-        // title, value, impact
-        g.text(font, option.getName().copy().withStyle(ChatFormatting.BOLD), cx, cy, 0xFFFFFFFF);
+        // title (truncated: a long localized name must not overflow the narrow panel), value, impact
+        g.text(font, font.plainSubstrByWidth(option.getName().copy().withStyle(ChatFormatting.BOLD).getString(), cw), cx, cy, 0xFFFFFFFF);
         cy += 11;
         Object value = option instanceof StatefulOption<?> so ? so.getValidatedValue() : null;
         if (value != null) {
@@ -255,10 +261,12 @@ public final class PreviewPanel {
             cy += 11;
         }
         if (option.getImpact() != null) {
-            g.text(font, Component.translatable("sodium.options.performance_impact_string", option.getImpact().getName()), cx, cy, 0xFFCCCCCC);
+            g.text(font, font.plainSubstrByWidth(Component.translatable("sodium.options.performance_impact_string", option.getImpact().getName()).getString(), cw),
+                cx, cy, 0xFFCCCCCC);
             cy += 11;
         }
         cy += 2;
+        if (!runtimeStatus.getString().isEmpty()) cy = paragraph(g, font, runtimeStatus, cx, cy, cw, 0xFF8ABCD8) + 3;
 
         // picture block (drawn only when actual preview screenshots exist — never show a placeholder box)
         if (info.hasPreviews()) {
@@ -268,9 +276,6 @@ public final class PreviewPanel {
 
         // explanation, price, requirement, scene
         cy = paragraph(g, font, Component.translatableWithFallback("bedray.opt." + info.path() + ".desc", info.desc()), cx, cy, cw, 0xFFFFFFFF);
-        if (!info.cost().isEmpty()) {
-            cy = paragraph(g, font, Component.translatableWithFallback("bedray.opt." + info.path() + ".cost", info.cost()), cx, cy + 2, cw, 0xFFFFD866);
-        }
         if (!info.requires().isEmpty()) {
             cy = paragraph(g, font, Component.translatableWithFallback("bedray.opt." + info.path() + ".req", info.requires()), cx, cy + 2, cw, 0xFFFFA060);
         }
@@ -288,7 +293,7 @@ public final class PreviewPanel {
         g.fill(x + 1, contentLimit, x + w - 1, contentLimit + 1, 0x40FFFFFF);
         Component label = Component.translatableWithFallback("bedray.preview.reset", "Reset to default");
         int bw = Math.min(w - 8, font.width(label) + 12);
-        button(g, font, x + 4, contentLimit + 4, bw, 14, label, mouseX, mouseY, "reset");
+        if (resetAllowed) button(g, font, x + 4, contentLimit + 4, bw, 14, label, mouseX, mouseY, "reset");
         if (isModal) {
             Component closeLbl = Component.translatableWithFallback("bedray.preview.close", "Close [Esc]");
             int cbw = Math.min(w - bw - 12, font.width(closeLbl) + 12);
@@ -534,6 +539,7 @@ public final class PreviewPanel {
                     case "split" -> splitLocked = !splitLocked;
                     case "close_modal" -> modalOpen = false;
                     case "reset" -> {
+                        if (!resetAllowed) return true;
                         selected.resetToDefault();
                         LOGGER.info("[VKB-AUTOTEST] ui_option_reset option={}", comparePath);
                     }
@@ -594,6 +600,8 @@ public final class PreviewPanel {
         compactBtnRect = new int[4];
         HITS.clear();
         TEX_PRESENT.clear();
+        manifest = null;
+        runtimeStatus = Component.empty();
     }
 
     /** Minecraft cursor in GUI coordinates (MouseHandler.getScaledXPos/YPos(Window), javap). */
