@@ -82,7 +82,8 @@ public final class DlssAvailability {
             r = resolver.get();
         } catch (IllegalStateException e) {
             // VulkanBridge.libraries() throws outside the game (no game directory): reported, never treated as "present".
-            return Library.unusable("native library manager unavailable: " + e.getMessage());
+            return Library.unusable("native library manager unavailable: "
+                + io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(e.getMessage()));
         }
         if (!r.usable()) {
             return Library.unusable("dlss library " + r.status().state() + ": " + r.status().detail());

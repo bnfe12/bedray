@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat;
 
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkanbridge.platform.Platforms;
 import io.github.andrexarlay.vulkancompat.autotest.RtxAutotest;
 import io.github.andrexarlay.vulkancompat.rt.denoise.NrdDeviceRequirements;
@@ -91,7 +92,7 @@ public final class RtxBootstrap {
                 LOGGER.info("[VKB-RTX] ensureVulkanOptionsEarly: locked options.txt to preferredGraphicsBackend:\"vulkan\" and startedCleanly:true");
             }
         } catch (Throwable t) {
-            LOGGER.warn("[VKB-RTX] ensureVulkanOptionsEarly warning: {}", t.getMessage());
+            LOGGER.warn("[VKB-RTX] ensureVulkanOptionsEarly warning: {}", LogPaths.show(t.getMessage()));
         }
     }
 

@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rtx.config;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerSwitch;
@@ -793,7 +794,7 @@ public final class VulkanRtxConfig {
             LOGGER.info("Loaded Vulkan config: backend={}, xessMode={}, upscaler={}, quality={}, customScale={}%, rtMode={}, hardwareRayTracing={}",
                 activeBackend, xessMode, upscalerType, qualityPreset, customScalePercent, rtMode.logName(), enableHardwareRayTracing);
         } catch (IOException e) {
-            LOGGER.error("Failed to load bedray.toml config: {}", e.getMessage());
+            LOGGER.error("Failed to load bedray.toml config: {}", LogPaths.show(e.getMessage()));
         }
     }
 
@@ -806,7 +807,7 @@ public final class VulkanRtxConfig {
         try (BufferedWriter writer = Files.newBufferedWriter(configFile.toPath(), StandardCharsets.UTF_8)) {
             writeAll(writer);
         } catch (IOException e) {
-            LOGGER.error("Failed to save bedray.toml config: {}", e.getMessage());
+            LOGGER.error("Failed to save bedray.toml config: {}", LogPaths.show(e.getMessage()));
         }
     }
 

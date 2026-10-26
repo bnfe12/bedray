@@ -72,17 +72,17 @@ public final class NativeInstaller {
         try {
             NativeFolders.ensureLayout(nativesDir);
         } catch (IOException e) {
-            errors.add("cannot prepare " + LogPaths.show(nativesDir) + ": " + e.getMessage());
-            LOGGER.warn("[VKB-NATIVES] install aborted: cannot prepare {}", LogPaths.show(nativesDir), e);
+            errors.add("cannot prepare " + LogPaths.show(nativesDir) + ": " + LogPaths.show(e.getMessage()));
+            LOGGER.warn("[VKB-NATIVES] install aborted: cannot prepare {}\n{}", LogPaths.show(nativesDir), LogPaths.stack(e));
             return new Report(List.of(), List.of(), skipped, errors);
         }
         for (Path src : sources) {
-            String name = src.getFileName() == null ? src.toString() : src.getFileName().toString();
+            String name = src.getFileName() == null ? LogPaths.show(src) : src.getFileName().toString();
             try {
                 installOne(nativesDir, src, name, libs, files, skipped);
             } catch (NativeLibraryException | IOException e) {
-                errors.add(name + ": " + e.getMessage());
-                LOGGER.warn("[VKB-NATIVES] source rejected: {}: {}", name, e.getMessage());
+                errors.add(name + ": " + LogPaths.show(e.getMessage()));
+                LOGGER.warn("[VKB-NATIVES] source rejected: {}: {}", name, LogPaths.show(e.getMessage()));
             }
         }
         LOGGER.info("[VKB-NATIVES] install_done libraries={} files={} skipped={} errors={}", libs.size(), files.size(), skipped.size(), errors.size());
@@ -94,7 +94,7 @@ public final class NativeInstaller {
         try {
             a = Files.readAttributes(src, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
         } catch (IOException e) {
-            throw new IOException("cannot read the dropped file: " + e.getMessage(), e);
+            throw new IOException("cannot read the dropped file: " + LogPaths.show(e.getMessage()), e);
         }
         if (a.isSymbolicLink() || a.isOther()) {
             throw new IOException("is a symbolic link or special file; refused");
@@ -267,8 +267,8 @@ public final class NativeInstaller {
                 try {
                     NativeLibrariesImpl.moveInto(tmp, target);
                 } catch (IOException e) {
-                    throw new IOException("cannot replace " + LogPaths.show(target) + " (is it loaded by the running game? close the game and try again): "
-                        + e.getMessage(), e);
+                    throw new IOException(LogPaths.show("cannot replace " + target + " (is it loaded by the running game? close the game and try again): "
+                        + e.getMessage()), e);
                 }
             } finally {
                 Files.deleteIfExists(tmp);

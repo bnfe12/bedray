@@ -145,8 +145,9 @@ public final class FrameGenEarly {
         Path interposer = dir.resolve("sl.interposer.dll");
         java.util.List<String> missing = missingFiles();
         if (!missing.isEmpty()) {
-            note = "missing_files: " + missing + " in " + dir;
-            System.err.println("[VKB-FG] frame generation requested (" + m + ") but these files are missing in " + dir + ": " + missing
+            note = "missing_files: " + missing + " in " + io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(dir);
+            System.err.println("[VKB-FG] frame generation requested (" + m + ") but these files are missing in "
+                + io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(dir) + ": " + missing
                 + " (shim: native/sl_bridge/build.bat); staying on vulkan-1.dll");
             return;
         }

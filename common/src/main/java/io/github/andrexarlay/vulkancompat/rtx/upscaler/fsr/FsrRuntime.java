@@ -123,7 +123,7 @@ public final class FsrRuntime {
             try {
                 nativeLib = FfxNative.load(lib.dll());
             } catch (FsrException e) {
-                LOGGER.error("[VKB-FSR] fsr=FAILED stage=load result={}", e.getMessage(), e);
+                LOGGER.error("[VKB-FSR] fsr=FAILED stage=load result={}\n{}", LogPaths.show(e.getMessage()), LogPaths.stack(e));
                 return List.of();
             }
         }
@@ -210,7 +210,7 @@ public final class FsrRuntime {
             create(request, device, winW, winH);
         } catch (FsrException e) {
             LOGGER.error("FSR setup failed\n{}", LogPaths.stack(e));
-            fail(e.stage(), e.getMessage());
+            fail(e.stage(), LogPaths.show(e.getMessage()));
         } catch (RuntimeException | Error e) {
             // The game keeps running without FSR; the reason is logged with the full stack (not swallowed).
             // Redacted stack: the FFM load failure carries the absolute DLL path inside its own message.
@@ -250,7 +250,7 @@ public final class FsrRuntime {
         }
         List<FfxNative.ProviderVersion> available = availableVersions();
         if (nativeLib == null || available.isEmpty()) {
-            fail("versions", "no upscaler provider reported by " + lib.dll());
+            fail("versions", "no upscaler provider reported by " + LogPaths.show(lib.dll()));
             return;
         }
         Optional<FfxNative.ProviderVersion> picked = request.version().pick(available);
@@ -376,7 +376,7 @@ public final class FsrRuntime {
                     LOGGER.warn("[VKB-FSR] ffxDestroyContext after failure returned {}", r);
                 }
             } catch (RuntimeException e) {
-                LOGGER.error("[VKB-FSR] ffxDestroyContext after failure threw", e);
+                LOGGER.error("[VKB-FSR] ffxDestroyContext after failure threw\n{}", LogPaths.stack(e));
             }
         }
         context = null;

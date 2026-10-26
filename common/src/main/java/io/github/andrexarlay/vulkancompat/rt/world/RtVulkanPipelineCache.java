@@ -107,7 +107,8 @@ public final class RtVulkanPipelineCache {
                 LOGGER.warn("[Bedray] Vulkan pipeline cache unavailable (error {}); continuing without the cache", result);
             }
         } catch (RuntimeException e) {
-            LOGGER.warn("[Bedray] could not create Vulkan pipeline cache; continuing without it: {}", e.toString());
+            LOGGER.warn("[Bedray] could not create Vulkan pipeline cache; continuing without it: {}",
+                io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(e.toString()));
         }
         if (handle != VK10.VK_NULL_HANDLE) {
             LOGGER.info("[Bedray] pipeline cache={} source={}", initial == null ? "empty" : "loaded", file == null ? "memory-only" : file.getFileName());
@@ -132,7 +133,8 @@ public final class RtVulkanPipelineCache {
                 properties.vendorID(), properties.deviceID(), properties.driverVersion(), HexFormat.of().formatHex(uuidBytes));
             return configDir.resolve("bedray").resolve("cache").resolve("vulkan").resolve(key + ".bin");
         } catch (RuntimeException e) {
-            LOGGER.warn("[Bedray] could not identify the Vulkan device for pipeline caching: {}", e.toString());
+            LOGGER.warn("[Bedray] could not identify the Vulkan device for pipeline caching: {}",
+                io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(e.toString()));
             return null;
         }
     }
@@ -183,7 +185,8 @@ public final class RtVulkanPipelineCache {
                 LOGGER.warn("[Bedray] Vulkan pipeline cache did not fit the serialization limit; skipped saving");
             }
         } catch (RuntimeException e) {
-            LOGGER.warn("[Bedray] could not save Vulkan pipeline cache: {}", e.toString());
+            LOGGER.warn("[Bedray] could not save Vulkan pipeline cache: {}",
+                io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(e.toString()));
         }
     }
 
@@ -202,7 +205,8 @@ public final class RtVulkanPipelineCache {
                 Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException | RuntimeException e) {
-            LOGGER.warn("[Bedray] could not write Vulkan pipeline cache: {}", e.toString());
+            LOGGER.warn("[Bedray] could not write Vulkan pipeline cache: {}",
+                io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(e.toString()));
         } finally {
             if (temporary != null) {
                 try {
