@@ -37,6 +37,7 @@
     "rt.MixinRenderTypeAccessor",
     "rt.MixinParticleGroupAccessor",
     "rt.MixinQuadParticleFeatureRenderer",
+    "rt.MixinWeatherEffectRenderer",
     "rt.MixinRenderSetupAccessor",
     "rt.MixinTextureBindingAccessor",
     "rt.MixinTextureAtlasAccessor",
