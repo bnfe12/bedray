@@ -7,6 +7,7 @@ import io.github.andrexarlay.vulkanbridge.api.LibraryResolution;
 import io.github.andrexarlay.vulkanbridge.api.LibraryStatus;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraryException;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -106,6 +107,18 @@ public final class NativeLibrariesImpl implements NativeLibraries {
         return out;
     }
 
+    /** The legacy folders as a status message may name them (no absolute home/profile prefix in a shared log). */
+    private static String shownDirs(List<Path> dirs) {
+        StringBuilder sb = new StringBuilder();
+        for (Path d : dirs) {
+            if (!sb.isEmpty()) {
+                sb.append(", ");
+            }
+            sb.append(LogPaths.show(d));
+        }
+        return sb.toString();
+    }
+
     // ---- registry
 
     @Override
@@ -187,7 +200,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             }
             FileCheck check = checkFile(d, file, p);
             if (check.rejection != null) {
-                LibraryStatus st = LibraryStatus.rejected(file + " (" + p + "): " + check.rejection);
+                LibraryStatus st = LibraryStatus.rejected(file + " (" + LogPaths.show(p) + "): " + check.rejection);
                 return new LibraryResolution(d, st, Map.of(), Map.of(), false);
             }
             found.put(file, p);
@@ -202,10 +215,11 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                     + ", signature " + (check.signed ? "present (not validated)" : "absent"));
         }
         if (!missing.isEmpty()) {
-            LibraryStatus st = LibraryStatus.missing("missing " + missing + " in " + primary + " (also searched " + legacyDirs + ")");
+            LibraryStatus st = LibraryStatus.missing("missing " + missing + " in " + LogPaths.show(primary)
+                + " (also searched " + shownDirs(legacyDirs) + ")");
             return new LibraryResolution(d, st, Map.of(), Map.of(), false);
         }
-        String detail = String.join("; ", notes) + (legacyUsed ? "; loaded from the legacy directory " + legacyHit : "");
+        String detail = String.join("; ", notes) + (legacyUsed ? "; loaded from the legacy directory " + LogPaths.show(legacyHit) : "");
         LibraryStatus st = allKnownHashes ? LibraryStatus.verified(detail) : LibraryStatus.presentUnverified(detail);
         return new LibraryResolution(d, st, found, versions, legacyUsed);
     }
