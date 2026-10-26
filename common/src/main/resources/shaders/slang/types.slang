@@ -2,7 +2,11 @@
 // Ported 1:1 from rt_common_core.glsl (lines 22-170).
 // All field names, sizes and alignments match the Java side (RtWorld, RtFrameRenderer).
 
-module types;
+// Slang modules are internal by default.  Everything here forms the shared
+// shader ABI, so importing modules must be able to see these declarations.
+public module types;
+
+import "contracts/math.slang";
 
 // ---- Geometry ----
 
@@ -81,11 +85,6 @@ struct InterfaceCandidate {
 };
 
 // ---- Constants ----
-
-static const float PI        = 3.14159265358979323846;
-static const float TWO_PI    = 6.28318530718;
-static const float INV_PI    = 0.31830988618;
-static const float HALF_PI   = 1.57079632679;
 
 static const float EMITTER_RADIUS = 15.0;   // block-light propagation radius
 

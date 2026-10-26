@@ -2,7 +2,7 @@
 // Ported 1:1 from rt_tonemap.glsl.
 // Pure math — no scene access.
 
-module tonemap;
+public module tonemap;
 
 import types;
 

@@ -19,8 +19,8 @@ public class RtShaderModulesTest {
 
     @Test
     public void umbrellaExpandsToModulesInOrder() {
-        String umbrella = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
-        String expanded = RtShaderCompiler.resolveIncludes(umbrella, "/shaders/rt_common.glsl");
+        String umbrella = RtShaderCompiler.loadSource("/shaders/glsl/rt_common.glsl");
+        String expanded = RtShaderCompiler.resolveIncludes(umbrella, "/shaders/glsl/rt_common.glsl");
         // the resolver leaves each include line's terminator unconsumed: "\n", or "\r\n" in a CRLF checkout
         String[] lines = umbrella.split("\n", -1);
         int nonIncludeBytes = 0;
@@ -35,7 +35,7 @@ public class RtShaderModulesTest {
         int pos = -1;
         for (String m : MODULES) {
             String content = RtShaderCompiler.resolveIncludes(
-                RtShaderCompiler.loadSource("/shaders/" + m), "/shaders/" + m);
+                RtShaderCompiler.loadSource("/shaders/glsl/" + m), "/shaders/glsl/" + m);
             int at = expanded.indexOf(content, pos + 1);
             assertTrue(at >= 0, m + " is missing from the umbrella expansion or out of order");
             pos = at;

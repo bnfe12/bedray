@@ -108,7 +108,7 @@ public class RtShadingFixesTest {
         assertTrue(surface.contains("leNoTrans = texRgb * chosenEm * EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN;"),
             "the cast light and the visible face are the same expression");
 
-        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+        String path = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
         assertTrue(path.contains("res.direct0 += e;"), "the first-vertex emission goes to the analytic direct channel");
         assertTrue(path.contains("gbRestSum +=") && path.contains("r.radiance - r.direct0"),
             "and is subtracted from the denoised diffuse channel, so nothing is counted twice");
@@ -145,7 +145,7 @@ public class RtShadingFixesTest {
 
         // The old non-physical shortcuts (15 % metal diffuse, Fresnel scaled by gloss) must stay gone, the diffuse share
         // must apply to metals even with reflections off, and the sampled reflection must be the VNDF estimator.
-        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
         String common = RtWorldChecks.rtCommon();
         assertFalse(rays.contains("diffuse * 0.15"), "no 15% metal diffuse in rt_rays.comp");
         assertFalse(common.contains("diffuse * 0.15"), "no 15% metal diffuse in rt_common.glsl");
@@ -185,7 +185,7 @@ public class RtShadingFixesTest {
             "the guarded bug: the full Schlick curve keeps under 45% of the diffuse at 84 degrees");
 
         String common = RtWorldChecks.rtCommon();
-        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+        String path = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
         assertTrue(common.contains("const float ROUGH_SPLIT = 0.6;"),
             "one roughness threshold shared by the energy split and the specular lobe probability");
         assertTrue(common.contains("vec3 fresnelEnergySplit(vec3 f0, float cosTheta, float roughness, bool metal)"),
@@ -467,9 +467,9 @@ public class RtShadingFixesTest {
             "NRD must expose every G-buffer image the shader writes");
 
         String common = RtWorldChecks.rtCommon();
-        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
-        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
-        String pack = RtShaderCompiler.loadSource("/shaders/rt_pack_nrd.comp");
+        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
+        String path = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
+        String pack = RtShaderCompiler.loadSource("/shaders/glsl/rt_pack_nrd.comp");
 
         assertTrue(common.contains("binding = 13, rgba16f) uniform writeonly image2D gbSpecular"), "binding 13 declared");
         assertTrue(common.contains("binding = 14, rgba8) uniform writeonly image2D gbSpecAlbedo"), "binding 14 declared");
@@ -523,8 +523,8 @@ public class RtShadingFixesTest {
     @Test
     public void testRestirTemporalReuse() {
         String common = RtWorldChecks.rtCommon();
-        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
-        String path = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
+        String path = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
 
         assertTrue(common.contains("uvec2 reservoirAddr;"), "StatsBuf publishes the reservoir buffer address");
         assertTrue(common.contains("struct Reservoir {"), "one packed reservoir record");

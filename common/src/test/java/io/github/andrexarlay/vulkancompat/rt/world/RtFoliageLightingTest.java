@@ -21,10 +21,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class RtFoliageLightingTest {
 
-    private static final String PATH_SHADER = "/shaders/rt_path.comp";
-    private static final String RAYS_SHADER = "/shaders/rt_rays.comp";
-    private static final String SHADE_MODULE = "/shaders/rt_common_shade.glsl";
-    private static final String SURFACE_MODULE = "/shaders/rt_common_surface.glsl";
+    private static final String PATH_SHADER = "/shaders/glsl/rt_path.comp";
+    private static final String RAYS_SHADER = "/shaders/glsl/rt_rays.comp";
+    private static final String SHADE_MODULE = "/shaders/glsl/rt_common_shade.glsl";
+    private static final String SURFACE_MODULE = "/shaders/glsl/rt_common_surface.glsl";
     private static final String ORIGIN_HELPER = "vec3 leafShadowOrigin(Surface s, vec3 L) {";
 
     @Test

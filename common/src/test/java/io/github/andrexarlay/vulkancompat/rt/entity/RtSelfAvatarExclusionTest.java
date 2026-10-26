@@ -23,8 +23,8 @@ public class RtSelfAvatarExclusionTest {
     private static final String CORE = "src/main/resources/shaders/rt_common_core.glsl";
     private static final String SURFACE = "src/main/resources/shaders/rt_common_surface.glsl";
     private static final String WATER = "src/main/resources/shaders/rt_common_water.glsl";
-    private static final String PATH = "src/main/resources/shaders/rt_path.comp";
-    private static final String RAYS = "src/main/resources/shaders/rt_rays.comp";
+    private static final String PATH = "src/main/resources/shaders/glsl/rt_path.comp";
+    private static final String RAYS = "src/main/resources/shaders/glsl/rt_rays.comp";
 
     @Test
     public void captureRecordsTheRangeInTheSharedEntityIndexBuffer() {

@@ -30,13 +30,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * still contains the formula the mirror evaluates, so the two cannot drift apart in silence.
  */
 public class RtPixelShadowSamplingTest {
-    private static final String MODULE = "/shaders/rt_common_pixel_shadow.glsl";
-    private static final String SAMPLING = "/shaders/rt_common_sampling.glsl";
-    private static final String TEMPORAL = "/shaders/rt_common_temporal.glsl";
-    private static final String SHADE = "/shaders/rt_common_shade.glsl";
-    private static final String EMITTERS = "/shaders/rt_common_emitters.glsl";
-    private static final String PATH = "/shaders/rt_path.comp";
-    private static final String RAYS = "/shaders/rt_rays.comp";
+    private static final String MODULE = "/shaders/glsl/rt_common_pixel_shadow.glsl";
+    private static final String SAMPLING = "/shaders/glsl/rt_common_sampling.glsl";
+    private static final String TEMPORAL = "/shaders/glsl/rt_common_temporal.glsl";
+    private static final String SHADE = "/shaders/glsl/rt_common_shade.glsl";
+    private static final String EMITTERS = "/shaders/glsl/rt_common_emitters.glsl";
+    private static final String PATH = "/shaders/glsl/rt_path.comp";
+    private static final String RAYS = "/shaders/glsl/rt_rays.comp";
     private static final String CONFIG = "src/main/java/io/github/andrexarlay/vulkancompat/sodium/VulkanSodiumConfig.java";
     private static final String CATALOG = "src/main/java/io/github/andrexarlay/vulkancompat/sodium/SettingsCatalog.java";
 

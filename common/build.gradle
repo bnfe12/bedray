@@ -1,4 +1,6 @@
 apply from: rootProject.file('gradle/loader-module.gradle')
+// Bedray 2.0: AOT compile of the Slang entry passes (see docs/SLANG_MIGRATION.md).
+apply from: rootProject.file('gradle/slang.gradle')
 
 // All mod logic lives here (no loader API: see NoLoaderImportsTest). The loader modules only add entry points and descriptors.
 base {
@@ -54,6 +56,10 @@ dependencies {
 test {
     useJUnitPlatform()
     jvmArgs '--enable-native-access=ALL-UNNAMED'
+    if (project.hasProperty('bedrayCoreLibrary')) {
+        systemProperty 'bedray.core.library', project.property('bedrayCoreLibrary')
+        outputs.upToDateWhen { false }
+    }
     // Optional real-pack survey (IrisRealPackSurveyTest): -PirisSurvey="<pack>;<pack>"; packs stay outside the repository.
     if (project.hasProperty('irisSurvey')) {
         systemProperty 'bedray.iris.survey', project.property('irisSurvey')

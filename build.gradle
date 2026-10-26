@@ -18,7 +18,8 @@ def requireProp = { String key ->
 
 // Multi-loader root project: core (internal platform layer "Bedray Core"), common (all mod logic, no loader API),
 // neoforge and fabric (entry point, descriptor; each jar contains core + common, one jar per loader).
-// The root project builds nothing itself; it hosts the deploy tasks.
+// The root project hosts distribution and optional deployment tasks.
+apply from: rootProject.file('gradle/bedray-distribution.gradle')
 
 // Optional deploy tasks for developers: they copy the single mod jar into the mods folder of a test instance
 // (testbed_dir / fabric_testbed_dir / user_dir, set in your user Gradle home, see gradle.properties.example).

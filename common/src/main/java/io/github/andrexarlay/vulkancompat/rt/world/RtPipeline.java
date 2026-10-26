@@ -38,9 +38,9 @@ import java.util.List;
 public final class RtPipeline {
     public static final int PUSH_BYTES = RtFrameParams.BYTES;
     /** Shader of the Ray Tracing mode. */
-    public static final String SHADER_PATH = "/shaders/rt_rays.comp";
+    public static final String SHADER_PATH = "/shaders/glsl/rt_rays.comp";
     /** Shader of the Path Tracing mode. */
-    public static final String PATH_SHADER_PATH = "/shaders/rt_path.comp";
+    public static final String PATH_SHADER_PATH = "/shaders/glsl/rt_path.comp";
     /** Number of G-buffer storage images (bindings 4..8) of the denoiser variant: viewZ, normal+roughness, diffuse, albedo, direct. */
     public static final int GBUFFER_IMAGES = 5;
     /** Specular radiance + hit distance of the denoiser variant (binding 13, after the material/normal/accum/depth slots). */

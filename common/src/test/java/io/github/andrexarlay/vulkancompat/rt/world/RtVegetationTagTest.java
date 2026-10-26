@@ -27,8 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class RtVegetationTagTest {
 
-    private static final String CORE = "/shaders/rt_common_core.glsl";
-    private static final String SURFACE = "/shaders/rt_common_surface.glsl";
+    private static final String CORE = "/shaders/glsl/rt_common_core.glsl";
+    private static final String SURFACE = "/shaders/glsl/rt_common_surface.glsl";
 
     @Test
     public void tagsOnlyVegetationCutoutQuads() {

@@ -33,7 +33,7 @@ public final class SodiumDequantize {
 
     public SodiumDequantize(VkDevice device) {
         this.device = device;
-        ByteBuffer spirv = RtShaderCompiler.compileResource("/shaders/sodium_dequantize.comp", "sodium_dequantize.comp");
+        ByteBuffer spirv = RtShaderCompiler.compileResource("/shaders/glsl/sodium_dequantize.comp", "sodium_dequantize.comp");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkShaderModuleCreateInfo smci = VkShaderModuleCreateInfo.calloc(stack)
                 .sType$Default()

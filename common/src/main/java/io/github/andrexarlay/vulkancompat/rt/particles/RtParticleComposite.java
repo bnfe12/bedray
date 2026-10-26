@@ -29,7 +29,7 @@ import java.nio.LongBuffer;
  * (resize, RT output re-created), never per frame.
  */
 final class RtParticleComposite {
-    static final String SHADER_PATH = "/shaders/rt_particles_composite.comp";
+    static final String SHADER_PATH = "/shaders/glsl/rt_particles_composite.comp";
     private static final int PUSH_BYTES = 16; // uvec2 size, float strength, float pad
 
     private final VkDevice device;

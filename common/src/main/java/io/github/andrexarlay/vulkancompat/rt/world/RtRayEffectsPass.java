@@ -30,11 +30,11 @@ public final class RtRayEffectsPass implements RtPass {
         this.pipeline = new RtPipeline(device, RtPipeline.SHADER_PATH, "rt_rays.comp", ACCUM_DEFINE, gbuffer, true);
         // the NRD variant does its own filtering and never accumulates
         this.filter = SPATIAL_FILTER && !gbuffer
-            ? new RtPipeline(device, "/shaders/rt_atrous.comp", "rt_atrous.comp", ACCUM_DEFINE, false, true) : null;
+            ? new RtPipeline(device, "/shaders/glsl/rt_atrous.comp", "rt_atrous.comp", ACCUM_DEFINE, false, true) : null;
         // Spatial reuse merges reservoirs, not pixels, and rt_rays.comp keeps its temporal merge under a denoiser too, so the
         // pass is built for both variants - it only has to share the binding layout of the pass whose records it rewrites.
         this.restirSpatial = RESTIR_SPATIAL
-            ? new RtPipeline(device, "/shaders/rt_restir_spatial.comp", "rt_restir_spatial.comp", ACCUM_DEFINE, gbuffer, true) : null;
+            ? new RtPipeline(device, "/shaders/glsl/rt_restir_spatial.comp", "rt_restir_spatial.comp", ACCUM_DEFINE, gbuffer, true) : null;
     }
 
     @Override

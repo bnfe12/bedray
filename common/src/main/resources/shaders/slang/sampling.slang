@@ -2,9 +2,9 @@
 // Ported 1:1 from rt_common_sampling.glsl and rt_noise.glsl.
 // Pure math — no scene access, no side effects.
 
-module sampling;
+public module sampling;
 
-import types;
+import "contracts/math.slang";
 
 // ---- PCG hash (random number generator) ----
 

@@ -2,7 +2,7 @@
 // Ported 1:1 from rt_common_core.glsl (descriptor declarations).
 // Uses Slang [[vk::binding(N, S)]] attributes instead of GLSL layout().
 
-module bindings;
+public module bindings;
 
 import types;
 

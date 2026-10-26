@@ -2,7 +2,7 @@
 // Works on ALL GPUs with ray tracing support: NVIDIA RTX 20/30/40/50, AMD RDNA 2+, Intel Arc.
 // This is the Tier 1 and Tier 2 backend.
 
-module backend_query;
+public module backend_query;
 
 import types;
 import bindings;
@@ -11,19 +11,37 @@ import ray_backend;
 // Alpha-test helper: decodes the atlas UV from barycentric coordinates and
 // tests the alpha channel. Returns true if the candidate should be accepted.
 // This mirrors CANDIDATE_ACCEPTED() from the old GLSL.
+
+float2 loadSectionUv(Section section, uint vertex) {
+    return ((float2*)section.uvAddr)[vertex];
+}
+
+// Triangle `prim` is one half of quad `quad`; vertex order matches the old
+// triangleVertices() helper so the atlas UV interpolation is unchanged.
+float2 interpolateQuadUV(Section section, uint quad, uint prim, float2 bary) {
+    uint base = quad * 4u;
+    bool second = (prim & 1u) != 0u;
+    uint3 v = uint3(base + (second ? 2u : 0u),
+                    base + (second ? 3u : 1u),
+                    base + (second ? 0u : 2u));
+    return (1.0 - bary.x - bary.y) * loadSectionUv(section, v.x) +
+           bary.x * loadSectionUv(section, v.y) +
+           bary.y * loadSectionUv(section, v.z);
+}
+
 bool candidateAccepted(RayQuery<RAY_FLAG_NONE> rq, bool shadow) {
     // Get the intersection attributes
     float2 bary = rq.CandidateTriangleBarycentrics();
     int    inst = rq.CandidateInstanceID();
     int    prim = rq.CandidatePrimitiveIndex();
+    uint   geom = rq.CandidateGeometryIndex();
 
     // Look up the section for this instance
     Section sec = sections[inst];
-    uint geom   = cycleGeometry(sec, prim);
-    uint quad   = cycleQuad(sec, prim, geom);
+    uint quad   = sec.quadStart[geom] + (uint(prim) >> 1u);
 
     // Interpolate UV from the quad's 4 vertices (triangle = half of a quad)
-    float2 uv = interpolateQuadUV(sec, quad, prim, bary);
+    float2 uv = interpolateQuadUV(sec, quad, uint(prim), bary);
 
     // Sample the atlas alpha
     float a = atlas.SampleLevel(uv, 0).a;

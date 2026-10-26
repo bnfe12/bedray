@@ -126,21 +126,21 @@ public final class RtShaderCompiler {
             new ShaderVariant(RtPipeline.SHADER_PATH, "rt_rays.comp+gbuffer+warmup", gbufferAccum),
             new ShaderVariant(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+warmup", accum),
             new ShaderVariant(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+gbuffer+warmup", gbufferAccum),
-            new ShaderVariant("/shaders/rt_atrous.comp", "rt_atrous.comp+warmup", accum),
-            new ShaderVariant("/shaders/rt_restir_spatial.comp", "rt_restir_spatial.comp+warmup", accum),
-            new ShaderVariant("/shaders/rt_restir_spatial.comp", "rt_restir_spatial.comp+gbuffer+warmup", gbufferAccum),
-            new ShaderVariant("/shaders/rt_volumetric.comp", "rt_volumetric.comp+march+warmup",
+            new ShaderVariant("/shaders/glsl/rt_atrous.comp", "rt_atrous.comp+warmup", accum),
+            new ShaderVariant("/shaders/glsl/rt_restir_spatial.comp", "rt_restir_spatial.comp+warmup", accum),
+            new ShaderVariant("/shaders/glsl/rt_restir_spatial.comp", "rt_restir_spatial.comp+gbuffer+warmup", gbufferAccum),
+            new ShaderVariant("/shaders/glsl/rt_volumetric.comp", "rt_volumetric.comp+march+warmup",
                 "#define VKB_POST 1" + (char) 10 + accum + "#define VOL_STAGE 0" + (char) 10),
-            new ShaderVariant("/shaders/rt_volumetric.comp", "rt_volumetric.comp+apply+warmup",
+            new ShaderVariant("/shaders/glsl/rt_volumetric.comp", "rt_volumetric.comp+apply+warmup",
                 "#define VKB_POST 1" + (char) 10 + accum + "#define VOL_STAGE 1" + (char) 10),
-            new ShaderVariant("/shaders/rt_bloom.comp", "rt_bloom.comp+prefilter_down+warmup", "#define BLOOM_STAGE 0" + (char) 10),
-            new ShaderVariant("/shaders/rt_bloom.comp", "rt_bloom.comp+down+warmup", "#define BLOOM_STAGE 1" + (char) 10),
-            new ShaderVariant("/shaders/rt_bloom.comp", "rt_bloom.comp+up+warmup", "#define BLOOM_STAGE 2" + (char) 10),
-            new ShaderVariant("/shaders/rt_bloom.comp", "rt_bloom.comp+apply+warmup", "#define BLOOM_STAGE 3" + (char) 10),
+            new ShaderVariant("/shaders/glsl/rt_bloom.comp", "rt_bloom.comp+prefilter_down+warmup", "#define BLOOM_STAGE 0" + (char) 10),
+            new ShaderVariant("/shaders/glsl/rt_bloom.comp", "rt_bloom.comp+down+warmup", "#define BLOOM_STAGE 1" + (char) 10),
+            new ShaderVariant("/shaders/glsl/rt_bloom.comp", "rt_bloom.comp+up+warmup", "#define BLOOM_STAGE 2" + (char) 10),
+            new ShaderVariant("/shaders/glsl/rt_bloom.comp", "rt_bloom.comp+apply+warmup", "#define BLOOM_STAGE 3" + (char) 10),
             new ShaderVariant(RtCompositePipeline.SHADER_PATH, "rt_composite.comp+warmup", ""),
-            new ShaderVariant("/shaders/rt_pack_nrd.comp", "rt_pack_nrd.comp+pack+warmup", "#define VKB_PASS_PACK 1" + (char) 10),
-            new ShaderVariant("/shaders/rt_pack_nrd.comp", "rt_pack_nrd.comp+compose+warmup", "#define VKB_PASS_COMPOSE 1" + (char) 10),
-            new ShaderVariant("/shaders/rt_particles_composite.comp", "rt_particles_composite.comp+warmup", "")
+            new ShaderVariant("/shaders/glsl/rt_pack_nrd.comp", "rt_pack_nrd.comp+pack+warmup", "#define VKB_PASS_PACK 1" + (char) 10),
+            new ShaderVariant("/shaders/glsl/rt_pack_nrd.comp", "rt_pack_nrd.comp+compose+warmup", "#define VKB_PASS_COMPOSE 1" + (char) 10),
+            new ShaderVariant("/shaders/glsl/rt_particles_composite.comp", "rt_particles_composite.comp+warmup", "")
         );
     }
 

@@ -225,7 +225,7 @@ public final class FrameGenGpu implements AutoCloseable {
 
     private static ByteBuffer compile() {
         String glsl;
-        try (InputStream in = FrameGenGpu.class.getResourceAsStream("/shaders/fg_prepare.comp")) {
+        try (InputStream in = FrameGenGpu.class.getResourceAsStream("/shaders/glsl/fg_prepare.comp")) {
             if (in == null) {
                 throw new IllegalStateException("resource /shaders/fg_prepare.comp not found");
             }

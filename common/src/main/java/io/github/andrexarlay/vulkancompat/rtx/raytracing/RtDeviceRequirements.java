@@ -75,4 +75,32 @@ public final class RtDeviceRequirements {
     public static void registerOmm(DeviceFeatureRegistry registry) {
         registry.register(ommRequirement());
     }
+
+    public static final String SLANG_PATH_ID = "Bedray Slang Path Tracing";
+
+    /**
+     * Optional group for the AOT Slang path tracer ({@code passes/path_trace.slang}): its SPIR-V declares Int64 next to
+     * RayQueryKHR and PhysicalStorageBufferAddresses, and the legacy GLSL path never needed {@code shaderInt64}. Kept
+     * separate so a GPU without it loses only the Slang path tracer, never the ray tracing group above. Whether it was
+     * kept is read back from the device's enabled feature set (SlangDeviceCapabilities), not assumed.
+     */
+    public static DeviceRequirement slangPathRequirement() {
+        return new DeviceRequirement(
+            SLANG_PATH_ID,
+            Set.of(
+                "VK_KHR_acceleration_structure",
+                "VK_KHR_ray_query",
+                "VK_KHR_buffer_device_address",
+                "VK_KHR_deferred_host_operations"
+            ),
+            List.of(FeatureRequest.core(FeatureRequest.VK10, "shaderInt64")),
+            0,
+            true,
+            null
+        );
+    }
+
+    public static void registerSlangPath(DeviceFeatureRegistry registry) {
+        registry.register(slangPathRequirement());
+    }
 }

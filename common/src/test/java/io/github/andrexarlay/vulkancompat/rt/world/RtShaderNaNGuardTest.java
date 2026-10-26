@@ -86,7 +86,7 @@ public class RtShaderNaNGuardTest {
         // RtPathCompiler expansion: the sky branch writes a motion vector the upscaler reprojects from, and a NaN there survives
         // far longer than one frame. This file is outside the common expansion the other tests read.
         String path = RtShaderCompiler.resolveIncludes(
-            RtShaderCompiler.loadSource("/shaders/rt_path.comp"), "/shaders/rt_path.comp");
+            RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp"), "/shaders/glsl/rt_path.comp");
         assertNotNull(path);
         assertFalse(path.contains("normalize(prevClipDir.xyz / prevClipDir.w)"),
             "an Inf quotient divided into a unit vector is NaN (Inf * inversesqrt(Inf)), so the divisor needs safeW() as well");
@@ -171,7 +171,7 @@ public class RtShaderNaNGuardTest {
     @Test
     public void testRayModeSanitisesTheFrameBeforeWritingIt() {
         String rays = RtShaderCompiler.resolveIncludes(
-            RtShaderCompiler.loadSource("/shaders/rt_rays.comp"), "/shaders/rt_rays.comp");
+            RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp"), "/shaders/glsl/rt_rays.comp");
         int write = rays.indexOf("imageStore(outImage, p, vec4(clamp(tonemapped ? finishColor(mean) : mean, 0.0, 1.0), 1.0));");
         for (String channel : new String[] {"r", "g", "b"}) {
             int at = rays.indexOf("if (isnan(mean." + channel + ") || isinf(mean." + channel + ")) mean." + channel + " = 0.0;");

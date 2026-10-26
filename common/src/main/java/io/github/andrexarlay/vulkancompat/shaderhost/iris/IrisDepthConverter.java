@@ -45,7 +45,7 @@ final class IrisDepthConverter implements AutoCloseable {
             var range=VkPushConstantRange.calloc(1,stack);range.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(128);
             check(vkCreatePipelineLayout(device,VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(range),null,handle));pipelineLayout=handle.get(0);
             String source;
-            try(var stream=IrisDepthConverter.class.getResourceAsStream("/shaders/iris_depth.comp")) {
+            try(var stream=IrisDepthConverter.class.getResourceAsStream("/shaders/glsl/iris_depth.comp")) {
                 if(stream==null)throw new IllegalStateException("Missing iris_depth.comp");
                 source=new String(stream.readAllBytes(),StandardCharsets.UTF_8);
             }

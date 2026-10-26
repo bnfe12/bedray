@@ -26,7 +26,7 @@ import java.nio.LongBuffer;
  * from the engine render target over the ray-traced world (rt_output).
  */
 public final class RtCompositePipeline {
-    public static final String SHADER_PATH = "/shaders/rt_composite.comp";
+    public static final String SHADER_PATH = "/shaders/glsl/rt_composite.comp";
     public static final int PUSH_BYTES = 80; // mat4 (64) + uvec2 (8) + float (4) + float (4)
 
     private final VkDevice device;

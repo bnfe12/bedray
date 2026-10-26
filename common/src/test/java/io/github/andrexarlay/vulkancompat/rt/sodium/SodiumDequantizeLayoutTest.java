@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class SodiumDequantizeLayoutTest {
 
-    private static final Path SHADER = Path.of("src/main/resources/shaders/sodium_dequantize.comp");
+    private static final Path SHADER = Path.of("src/main/resources/shaders/glsl/sodium_dequantize.comp");
     private static final Path WORLD = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtWorld.java");
 
     private static String read(Path path) {

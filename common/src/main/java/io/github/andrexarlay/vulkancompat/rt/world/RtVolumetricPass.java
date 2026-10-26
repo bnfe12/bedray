@@ -35,9 +35,9 @@ final class RtVolumetricPass {
 
     RtVolumetricPass(VkDevice device) {
         this.device = device;
-        this.march = new RtPipeline(device, "/shaders/rt_volumetric.comp", "rt_volumetric.comp+march", DEFINES + "#define VOL_STAGE 0" + (char) 10,
+        this.march = new RtPipeline(device, "/shaders/glsl/rt_volumetric.comp", "rt_volumetric.comp+march", DEFINES + "#define VOL_STAGE 0" + (char) 10,
             false, true);
-        this.apply = new RtPipeline(device, "/shaders/rt_volumetric.comp", "rt_volumetric.comp+apply", DEFINES + "#define VOL_STAGE 1" + (char) 10,
+        this.apply = new RtPipeline(device, "/shaders/glsl/rt_volumetric.comp", "rt_volumetric.comp+apply", DEFINES + "#define VOL_STAGE 1" + (char) 10,
             false, true);
     }
 

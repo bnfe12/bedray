@@ -55,7 +55,7 @@ public class RtStatsLayoutTest {
 
     @Test
     public void statsBufMatchesGlsl() {
-        String glsl = RtShaderCompiler.loadSource("/shaders/rt_common_core.glsl");
+        String glsl = RtShaderCompiler.loadSource("/shaders/glsl/rt_common_core.glsl");
         List<G> gl = parse(glsl, "buffer StatsBuf");
         List<RtStatsLayout.Member> j = RtStatsLayout.members();
         assertEquals(gl.size(), j.size(), "StatsBuf member count");
@@ -74,7 +74,7 @@ public class RtStatsLayoutTest {
 
     @Test
     public void pushConstantBlockMatchesRtFrameParams() {
-        String glsl = RtShaderCompiler.loadSource("/shaders/rt_common_core.glsl");
+        String glsl = RtShaderCompiler.loadSource("/shaders/glsl/rt_common_core.glsl");
         List<G> gl = parse(glsl, "uniform PC");
         assertEquals(RtFrameParams.PC_TYPES.length, gl.size(), "PC member count");
         int[] offsets = RtStatsLayout.std430Offsets(RtFrameParams.PC_TYPES);
@@ -88,7 +88,7 @@ public class RtStatsLayoutTest {
 
     @Test
     public void reservoirStrideMatchesGlsl() {
-        String glsl = RtShaderCompiler.loadSource("/shaders/rt_common_core.glsl");
+        String glsl = RtShaderCompiler.loadSource("/shaders/glsl/rt_common_core.glsl");
         List<G> gl = parse(glsl, "struct Reservoir");
         int size = 0;
         for (G g : gl) {
@@ -99,7 +99,7 @@ public class RtStatsLayoutTest {
 
     @Test
     public void emitterStrideMatchesGlsl() {
-        String glsl = RtShaderCompiler.loadSource("/shaders/rt_common_core.glsl");
+        String glsl = RtShaderCompiler.loadSource("/shaders/glsl/rt_common_core.glsl");
         List<G> gl = parse(glsl, "struct Emitter");
         int size = 0;
         for (G g : gl) {

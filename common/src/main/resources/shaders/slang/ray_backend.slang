@@ -6,7 +6,7 @@
 // Tier 1/2 (all GPUs): backend_query.slang — uses VK_KHR_ray_query (inline RT)
 // Tier 3 (RTX 40/50):  backend_ser.slang   — uses RT pipeline + SER (future)
 
-module ray_backend;
+public module ray_backend;
 
 import types;
 

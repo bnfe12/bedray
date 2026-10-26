@@ -42,6 +42,7 @@
     "rt.MixinRenderSetupAccessor",
     "rt.MixinTextureBindingAccessor",
     "rt.MixinTextureAtlasAccessor",
+    "rt.MixinVulkanDeviceFeaturesAccessor",
     "rt.MixinSpriteContentsAccessor",
     "debug.MixinDebugScreenEntries",
     "debug.MixinDebugScreenEntryList",

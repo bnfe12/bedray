@@ -56,12 +56,12 @@ public class RtVanillaWaterLightTest {
     @Test
     public void testCallSitesPassReachAndSeed() {
         String rays = RtShaderCompiler.resolveIncludes(
-            RtShaderCompiler.loadSource("/shaders/rt_rays.comp"), "/shaders/rt_rays.comp");
+            RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp"), "/shaders/glsl/rt_rays.comp");
         assertTrue(rays.contains("vanillaWaterSurface(s, rayDir, emissiveDistance(), seed)"),
             "ray mode must light the sheet from the emissive reach configured for the frame");
 
         String path = RtShaderCompiler.resolveIncludes(
-            RtShaderCompiler.loadSource("/shaders/rt_path.comp"), "/shaders/rt_path.comp");
+            RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp"), "/shaders/glsl/rt_path.comp");
         assertTrue(path.contains("vanillaWaterSurface(s, d, reach, seed)"),
             "path mode must light the sheet from the path reach with the path sampler seed");
 

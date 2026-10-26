@@ -35,6 +35,7 @@ public final class RtxBootstrap {
     public static final String MOD_ID = "bedray";
     public static final String RT_PROVIDER_ID = "bedray.hardware_ray_tracing";
     public static final String OMM_PROVIDER_ID = "bedray.opacity_micromaps";
+    public static final String SLANG_PATH_PROVIDER_ID = "bedray.slang_path_tracing";
     public static final String XESS_PROVIDER_ID = "bedray.xess";
     public static final String DLSS_PROVIDER_ID = "bedray.dlss";
     public static final String NRD_PROVIDER_ID = "bedray.nrd";
@@ -100,6 +101,8 @@ public final class RtxBootstrap {
         registry.addLateProvider(RT_PROVIDER_ID, RtDeviceRequirements::register);
         // optional OMM group: dropped by the engine on non-RT/non-micromap devices; requires synchronization2
         registry.addLateProvider(OMM_PROVIDER_ID, RtDeviceRequirements::registerOmm);
+        // optional Slang path tracer group (shaderInt64): dropped alone on a GPU without it, ray tracing stays
+        registry.addLateProvider(SLANG_PATH_PROVIDER_ID, RtDeviceRequirements::registerSlangPath);
         registry.addLateProvider(XESS_PROVIDER_ID,
             r -> XessDeviceRequirements.register(r, () -> Platforms.get().gameDir().toAbsolutePath().normalize()));
         // DLSS: device group + instance extensions (VK_KHR_get_physical_device_properties2), only when DLSS was requested

@@ -13,9 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtGlassCostTest {
 
-    private static final String WATER = "/shaders/rt_common_water.glsl";
-    private static final String RAYS = "/shaders/rt_rays.comp";
-    private static final String CORE = "/shaders/rt_common_core.glsl";
+    private static final String WATER = "/shaders/glsl/rt_common_water.glsl";
+    private static final String RAYS = "/shaders/glsl/rt_rays.comp";
+    private static final String CORE = "/shaders/glsl/rt_common_core.glsl";
 
     private static String function(String source, String signature) {
         int at = source.indexOf(signature);
@@ -63,7 +63,7 @@ class RtGlassCostTest {
         String tail = core.substring(redstone, Math.min(core.length(), redstone + 200)).replace("\r\n", "\n");
         assertTrue(tail.contains("gSawDust = true;"),
             "the interface walk needs to know that this candidate was dust, not a hole, or a mirror loses the dust line");
-        String transmittance = function(RtShaderCompiler.loadSource("/shaders/rt_common_surface.glsl"),
+        String transmittance = function(RtShaderCompiler.loadSource("/shaders/glsl/rt_common_surface.glsl"),
             "vec3 traceTransmittance(vec3 origin, vec3 d, float tmax)");
         assertFalse(transmittance.contains("gSawDust"),
             "dust must never be shaded as an alpha filter: that made its shadow a block-shaped quad");

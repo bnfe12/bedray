@@ -14,9 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtDistantBlockLightTest {
 
-    private static final String SHADE = "/shaders/rt_common_shade.glsl";
-    private static final String RAYS = "/shaders/rt_rays.comp";
-    private static final String PATH = "/shaders/rt_path.comp";
+    private static final String SHADE = "/shaders/glsl/rt_common_shade.glsl";
+    private static final String RAYS = "/shaders/glsl/rt_rays.comp";
+    private static final String PATH = "/shaders/glsl/rt_path.comp";
     private static final String BAKED = "blockLightColor() * clamp(s.light.x, 0.0, 1.0)";
 
     private static String source(String resource) {

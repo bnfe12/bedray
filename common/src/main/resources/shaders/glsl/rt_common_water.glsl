@@ -91,9 +91,10 @@ vec3 interfaceTransmittance(Surface s, float F, vec3 d) {
         return vec3(1.0 - F);   // the colour of the water comes from the depth absorption of the medium (waterSegment)
     }
     if (s.isWater) {
-        vec3 filter = s.optics.x >= 1.0 ? pow(clamp(s.opticalTransmittance, vec3(0.0001), vec3(1.0)),
+        // Not named `filter`: that is a reserved word in GLSL and fails the whole shader.
+        vec3 tint = s.optics.x >= 1.0 ? pow(clamp(s.opticalTransmittance, vec3(0.0001), vec3(1.0)),
             vec3(s.optics.y / max(s.optics.z, 0.0001))) : vec3(1.0);
-        return (1.0 - F) * (1.0 - VANILLA_WATER_ALPHA) * filter;
+        return (1.0 - F) * (1.0 - VANILLA_WATER_ALPHA) * tint;
     }
     if (s.backFace && !s.isWater && !s.isIce) {
         // exit face of a glass block: the entry face already filtered the light (a block is one slab of coloured glass, not two)

@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class RtSkySunDiskTest {
 
-    private static final String SKY_MODULE = "/shaders/rt_sky.glsl";
+    private static final String SKY_MODULE = "/shaders/glsl/rt_sky.glsl";
 
     /** Halo texel of sun.png, x = 16, y = 6: the outer ring of the disc. */
     private static final float[] HALO = {36 / 255f, 36 / 255f, 14 / 255f, 1f};

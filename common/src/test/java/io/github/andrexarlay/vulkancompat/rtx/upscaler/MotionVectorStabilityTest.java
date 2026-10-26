@@ -232,7 +232,7 @@ public class MotionVectorStabilityTest {
     /** Source contract: the shader and the CPU reference must agree on where the jitter is applied. */
     @Test
     public void testVelocityShaderCarriesJitter() throws Exception {
-        String src = readSource("src/main/resources/shaders/velocity_reproject.comp");
+        String src = readSource("src/main/resources/shaders/glsl/velocity_reproject.comp");
         assertTrue(src.contains("vec4 jitter;"), "FrameUniforms carries the current and previous sub-pixel jitter");
         assertTrue(src.contains("+ jitter.xy"), "the unprojected sample coordinate must be shifted by the current jitter");
         assertTrue(src.contains("- jitter.zw"), "the previous-frame disocclusion lookups must undo the previous jitter");

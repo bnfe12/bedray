@@ -23,9 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * All four are behaviour preserving: the numbers the shader produces stay the same, only the work between them shrinks.
  */
 public class RtPathHotLoopTest {
-    private static final String PATH = "/shaders/rt_path.comp";
-    private static final String SURFACE = "/shaders/rt_common_surface.glsl";
-    private static final String EMITTERS = "/shaders/rt_common_emitters.glsl";
+    private static final String PATH = "/shaders/glsl/rt_path.comp";
+    private static final String SURFACE = "/shaders/glsl/rt_common_surface.glsl";
+    private static final String EMITTERS = "/shaders/glsl/rt_common_emitters.glsl";
 
     private static final String TRACE_SIG = "PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med";
     private static final String TRANSMITTANCE_SIG = "vec3 traceTransmittance(vec3 origin, vec3 d, float tmax)";

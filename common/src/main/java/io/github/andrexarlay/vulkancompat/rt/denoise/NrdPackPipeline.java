@@ -31,7 +31,7 @@ import java.nio.LongBuffer;
  * velocity pass), 13 specular albedo (F0) guide. The set is written when the images change (after a device-idle wait by the caller).
  */
 final class NrdPackPipeline {
-    static final String SHADER_PATH = "/shaders/rt_pack_nrd.comp";
+    static final String SHADER_PATH = "/shaders/glsl/rt_pack_nrd.comp";
     static final int BINDINGS = 14;
     /** 4 uint + vec4 + uvec2 + float + vec2 (motion address), see the PC block of the shader. */
     static final int PUSH_BYTES = 56;

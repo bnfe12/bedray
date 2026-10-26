@@ -40,12 +40,12 @@ public final class RtAtmosphereTest {
     static void shadersCompile() {
         String post = "#define VKB_POST 1" + (char) 10 + "#define VKB_ACCUM 1" + (char) 10;
         for (int stage = 0; stage < 2; stage++) {
-            ByteBuffer spv = RtShaderCompiler.compileResource("/shaders/rt_volumetric.comp", "rt_volumetric.comp+stage" + stage,
+            ByteBuffer spv = RtShaderCompiler.compileResource("/shaders/glsl/rt_volumetric.comp", "rt_volumetric.comp+stage" + stage,
                 post + "#define VOL_STAGE " + stage + (char) 10);
             check(spv.remaining() > 1000 && (spv.remaining() & 3) == 0, "rt_volumetric stage " + stage + " SPIR-V");
         }
         for (int stage = 0; stage < 4; stage++) {
-            ByteBuffer spv = RtShaderCompiler.compileResource("/shaders/rt_bloom.comp", "rt_bloom.comp+stage" + stage,
+            ByteBuffer spv = RtShaderCompiler.compileResource("/shaders/glsl/rt_bloom.comp", "rt_bloom.comp+stage" + stage,
                 "#define BLOOM_STAGE " + stage + (char) 10);
             check(spv.remaining() > 500 && (spv.remaining() & 3) == 0, "rt_bloom stage " + stage + " SPIR-V");
         }

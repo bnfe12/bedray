@@ -27,7 +27,7 @@ public class RtEntityCompositeTest {
         // Verify standard Vulkan SPIR-V magic number 0x07230203
         assertEquals(0x07230203, spirv.getInt(0), "SPIR-V magic number mismatch");
         assertEquals(80, RtCompositePipeline.PUSH_BYTES, "Push constant size must be exactly 80 bytes");
-        assertEquals("/shaders/rt_composite.comp", RtCompositePipeline.SHADER_PATH);
+        assertEquals("/shaders/glsl/rt_composite.comp", RtCompositePipeline.SHADER_PATH);
     }
 
     @Test

@@ -39,8 +39,8 @@ import java.util.Objects;
 public final class RtTestPipeline implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/RtTestPipeline");
 
-    public static final String SHADER_COMP_PATH = "/shaders/rt_test.comp";
-    public static final String SHADER_SPV_PATH = "/shaders/rt_test.spv";
+    public static final String SHADER_COMP_PATH = "/shaders/glsl/rt_test.comp";
+    public static final String SHADER_SPV_PATH = "/shaders/glsl/rt_test.spv";
 
     /**
      * Wrapper for Vulkan image view handle for typed call sites.

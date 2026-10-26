@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -24,6 +26,9 @@ final class RtAtmosphere {
 
     private RtVolumetricPass volumetric;
     private RtBloomPass bloom;
+    /** Native Slang runtime, created with the first bloom pass; {@code null} until then and when unavailable. */
+    private SlangRuntime slangRuntime;
+    private boolean slangUnavailableLogged;
     private RtGpuTimer timer;
     private String lastLogged = "";
     /**
@@ -38,8 +43,9 @@ final class RtAtmosphere {
      * @param viewProj camera-relative view-projection of this frame (the same one the temporal reprojection uses)
      * @param bobX     camera origin offset of the frame (bob), camera-relative
      */
-    void record(VkCommandBuffer cmd, VkDevice device, RtMemory mem, RtFrameParams p, Matrix4f viewProj, RtPipeline.Views views,
-                int w, int h, float bobX, float bobY, float bobZ) {
+    void record(VkCommandBuffer cmd, VulkanDevice vulkanDevice, RtMemory mem, RtFrameParams p, Matrix4f viewProj,
+                RtPipeline.Views views, int w, int h, float bobX, float bobY, float bobZ) {
+        VkDevice device = vulkanDevice.vkDevice();
         if (p.mode != RtConfig.MODE_LIT || views.depth() == 0L) {
             return; // debug views show the raw buffer
         }
@@ -78,7 +84,7 @@ final class RtAtmosphere {
         }
         if (glow || glare) {
             if (bloom == null) {
-                bloom = new RtBloomPass(device);
+                bloom = new RtBloomPass(device, slangRuntime(vulkanDevice));
             }
             float[] dir = p.key.dir;
             boolean keyOn = Math.max(p.key.color[0], Math.max(p.key.color[1], p.key.color[2])) > 1.0e-3f;
@@ -145,6 +151,42 @@ final class RtAtmosphere {
         return 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.chunkFadeSeconds());
     }
 
+    /**
+     * Creates the native runtime on first use. A missing DLL or a jar without AOT passes is not fatal: bloom keeps
+     * the legacy GLSL path, and the reason is logged once instead of every frame.
+     */
+    private SlangRuntime slangRuntime(VulkanDevice device) {
+        if (slangRuntime != null || slangUnavailableLogged) {
+            return slangRuntime;
+        }
+        slangUnavailableLogged = true;
+        boolean compiled;
+        try {
+            compiled = SlangRuntime.hasCompiledPasses();
+        } catch (RuntimeException e) {
+            LOGGER.warn("[VKB-ATMO] Slang pass index is unreadable, bloom stays on rt_bloom.comp: {}", e.getMessage());
+            return null;
+        }
+        if (!compiled) {
+            LOGGER.info("[VKB-ATMO] no AOT Slang passes in the jar, bloom stays on rt_bloom.comp");
+            return null;
+        }
+        try {
+            // Bloom needs no optional device feature: compute, combined image samplers and storage images are core.
+            slangRuntime = SlangRuntime.create(device, 0);
+        } catch (RuntimeException e) {
+            LOGGER.warn("[VKB-ATMO] native Slang runtime unavailable, bloom stays on rt_bloom.comp: {}", e.getMessage());
+        }
+        return slangRuntime;
+    }
+
+    /** The command buffer is about to be re-recorded: its previous native recording completed two submits ago. */
+    void releaseRecording(long commandBuffer) {
+        if (bloom != null) {
+            bloom.releaseRecording(commandBuffer);
+        }
+    }
+
     void resetHistory() {
         if (volumetric != null) {
             volumetric.resetHistory();
@@ -157,8 +199,12 @@ final class RtAtmosphere {
             volumetric = null;
         }
         if (bloom != null) {
-            bloom.destroy();
+            bloom.destroy(); // releases the remaining recordings before the runtime shuts down
             bloom = null;
+        }
+        if (slangRuntime != null) {
+            slangRuntime.close();
+            slangRuntime = null;
         }
         if (timer != null) {
             timer.destroy();

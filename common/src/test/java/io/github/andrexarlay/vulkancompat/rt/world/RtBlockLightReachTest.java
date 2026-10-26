@@ -20,8 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class RtBlockLightReachTest {
 
-    private static final String EMITTERS = "/shaders/rt_common_emitters.glsl";
-    private static final String SURFACE = "/shaders/rt_common_surface.glsl";
+    private static final String EMITTERS = "/shaders/glsl/rt_common_emitters.glsl";
+    private static final String SURFACE = "/shaders/glsl/rt_common_surface.glsl";
 
     /** The shader's handover constant: 2^1.25 / (2 * sqrt(2)), the value of d^-1.5 at d = 2. */
     private static final double HANDOVER = 0.84090;

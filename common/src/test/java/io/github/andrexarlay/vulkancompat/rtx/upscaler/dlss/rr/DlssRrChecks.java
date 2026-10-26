@@ -423,12 +423,12 @@ public final class DlssRrChecks {
         String commonSrc = RtWorldChecks.rtCommon();
         check(commonSrc.contains("vec3 bendHorizon(vec3 r, vec3 ng)"), "rt_common.glsl defines bendHorizon");
 
-        String pathSrc = RtShaderCompiler.loadSource("/shaders/rt_path.comp");
+        String pathSrc = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
         check(pathSrc.contains("r = bendHorizon(r, s.ng);"), "rt_path.comp applies bendHorizon");
         check(!pathSrc.contains("if (dot(r, s.ng) <= 0.0) {\n                break;\n            }"),
             "rt_path.comp no longer breaks ray on dot(r, s.ng) <= 0");
 
-        String raysSrc = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String raysSrc = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
         check(raysSrc.contains("rdir = bendHorizon(rdir, s.ng);"), "rt_rays.comp applies bendHorizon");
         check(!raysSrc.contains("rdir = reflect(rdir, s.ng);"), "rt_rays.comp no longer uses abrupt reflect(rdir, s.ng)");
 

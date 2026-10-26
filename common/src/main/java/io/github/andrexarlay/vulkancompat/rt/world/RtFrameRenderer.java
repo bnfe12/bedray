@@ -567,6 +567,9 @@ public final class RtFrameRenderer {
         long frameStart = System.nanoTime();
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
+        // This transient handle comes from the pool that was reset after its previous submission completed, so the
+        // native bloom recording made into it is no longer in flight and can release its descriptor pool now.
+        atmosphere.releaseRecording(cmd.address());
         VkBarriers.fullMemoryBarrier(cmd);
         if (gpuTimer != null) {
             gpuTimer.beginFrame(cmd);
@@ -586,7 +589,7 @@ public final class RtFrameRenderer {
         blasBuiltTotal += stats.builtThisFrame();
         boolean traced = false;
         if (stats.instances() > 0 && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
-            recordPrimaryRays(cmd, device, camera, target, levelState,
+            recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
                 world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ);
             traced = true;
         }
@@ -616,8 +619,9 @@ public final class RtFrameRenderer {
     }
 
     /** Output image, dispatch and (debug view only) the copy into the engine colour image, inside the open command buffer. */
-    private static void recordPrimaryRays(VkCommandBuffer cmd, VkDevice device, CameraRenderState camera, RenderTarget target,
-                                         LevelRenderState levelState, boolean sceneChanged) {
+    private static void recordPrimaryRays(VkCommandBuffer cmd, VulkanDevice vulkanDevice, CameraRenderState camera,
+                                         RenderTarget target, LevelRenderState levelState, boolean sceneChanged) {
+        VkDevice device = vulkanDevice.vkDevice();
         SkyRenderState sky = levelState.skyRenderState;
         frameProjection = BOB_PROJECTION ? io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.levelProjectionOr(camera.projectionMatrix) : camera.projectionMatrix;
         org.joml.Vector3f bobOrigin = BOB_PROJECTION
@@ -1107,7 +1111,7 @@ public final class RtFrameRenderer {
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_ATMO, false);
         }
-        atmosphere.record(cmd, device, world.memory(), params, curViewProj,
+        atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
             new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, outputDepth.view, lightmapView),
             w, h, bobOrigin.x, bobOrigin.y, bobOrigin.z);

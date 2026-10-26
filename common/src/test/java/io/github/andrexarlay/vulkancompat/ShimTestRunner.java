@@ -731,11 +731,11 @@ public class ShimTestRunner {
     private static void testRtShaderSourcesCompile() {
         String gbuffer = io.github.andrexarlay.vulkancompat.rt.world.RtPipeline.GBUFFER_DEFINE;
         String accum = io.github.andrexarlay.vulkancompat.rt.world.RtPathTracerPass.ACCUM_DEFINE;
-        assertSpirv("/shaders/rt_rays.comp", "rt_rays.comp", "", "ray mode");
-        assertSpirv("/shaders/rt_rays.comp", "rt_rays.comp+gbuffer", gbuffer, "ray mode with the denoiser G-buffer");
-        assertSpirv("/shaders/rt_path.comp", "rt_path.comp", accum, "path mode");
-        assertSpirv("/shaders/rt_path.comp", "rt_path.comp+gbuffer", gbuffer + accum, "path mode with the denoiser G-buffer");
-        assertSpirv("/shaders/rt_atrous.comp", "rt_atrous.comp", accum, "path-mode atrous filter");
+        assertSpirv("/shaders/glsl/rt_rays.comp", "rt_rays.comp", "", "ray mode");
+        assertSpirv("/shaders/glsl/rt_rays.comp", "rt_rays.comp+gbuffer", gbuffer, "ray mode with the denoiser G-buffer");
+        assertSpirv("/shaders/glsl/rt_path.comp", "rt_path.comp", accum, "path mode");
+        assertSpirv("/shaders/glsl/rt_path.comp", "rt_path.comp+gbuffer", gbuffer + accum, "path mode with the denoiser G-buffer");
+        assertSpirv("/shaders/glsl/rt_atrous.comp", "rt_atrous.comp", accum, "path-mode atrous filter");
     }
 
     private static void assertSpirv(String path, String name, String defines, String what) {

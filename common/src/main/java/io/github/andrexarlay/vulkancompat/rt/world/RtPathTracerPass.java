@@ -44,7 +44,7 @@ public final class RtPathTracerPass implements RtPass {
     /** {@code gbuffer}: also write the NRD G-buffer (albedo-demodulated per-frame signals, see rt_path.comp). */
     public RtPathTracerPass(VkDevice device, boolean gbuffer) {
         this.pipeline = new RtPipeline(device, RtPipeline.PATH_SHADER_PATH, "rt_path.comp", ACCUM_DEFINE, gbuffer, true);
-        this.filter = !gbuffer ? new RtPipeline(device, "/shaders/rt_atrous.comp", "rt_atrous.comp", ACCUM_DEFINE, false, true) : null;
+        this.filter = !gbuffer ? new RtPipeline(device, "/shaders/glsl/rt_atrous.comp", "rt_atrous.comp", ACCUM_DEFINE, false, true) : null;
     }
 
     @Override

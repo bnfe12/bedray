@@ -16,9 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class RtCanopyLightTest {
 
-    private static final String PATH_SHADER = "/shaders/rt_path.comp";
-    private static final String CORE_MODULE = "/shaders/rt_common_core.glsl";
-    private static final String SURFACE_MODULE = "/shaders/rt_common_surface.glsl";
+    private static final String PATH_SHADER = "/shaders/glsl/rt_path.comp";
+    private static final String CORE_MODULE = "/shaders/glsl/rt_common_core.glsl";
+    private static final String SURFACE_MODULE = "/shaders/glsl/rt_common_surface.glsl";
 
     @Test
     public void primarySkyFillIsTracedNotVertexSquared() {

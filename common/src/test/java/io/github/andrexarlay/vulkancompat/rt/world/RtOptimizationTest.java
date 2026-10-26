@@ -17,7 +17,7 @@ public class RtOptimizationTest {
 
     @Test
     public void testSkyModelOnlyRunsOnMiss() {
-        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
         assertFalse(rays.contains("vec3 color = skyDisplay(rayDir);"),
             "the sky model must not run before the trace: a hit overwrites the colour");
         int sky = rays.indexOf("color = skyDisplay(rayDir);");
@@ -28,7 +28,7 @@ public class RtOptimizationTest {
 
     @Test
     public void testAoVisibilityIsGatedByTracedGi() {
-        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
         assertTrue(rays.contains("min(AO_STEPS_WITH_GI, aoSamples)"),
             "with GI only the ray that feeds the denoiser guide may run, and none when AO is off");
         assertTrue(rays.contains("const uint AO_STEPS_WITH_GI = 1u;"), "the guide ray exists in the G-buffer pass");
@@ -38,7 +38,7 @@ public class RtOptimizationTest {
 
     @Test
     public void testReflectionEnvironmentIsDeferredToMiss() {
-        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
         assertFalse(rays.contains("vec3 env = mirror"),
             "the environment must not be evaluated before the reflection ray");
         int trace = rays.indexOf("bool hitRefl = traceSecondary(");
@@ -49,7 +49,7 @@ public class RtOptimizationTest {
 
     @Test
     public void testLeafFilterWalkIsBounded() {
-        String surface = RtShaderCompiler.loadSource("/shaders/rt_common_surface.glsl");
+        String surface = RtShaderCompiler.loadSource("/shaders/glsl/rt_common_surface.glsl");
         assertNotNull(surface, "rt_common_surface.glsl missing");
         assertTrue(surface.contains("const uint LEAF_LAYER_LIMIT = 6u;"),
             "a leaf filter does not end a shadow ray, so one ray crossing a canopy needs a bound on the layers it shades");
@@ -77,7 +77,7 @@ public class RtOptimizationTest {
 
     @Test
     public void testEmissionEvaluatedOncePerLitPixel() {
-        String rays = RtShaderCompiler.loadSource("/shaders/rt_rays.comp");
+        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
         assertTrue(rays.contains("vec3 selfEmission = emitted(s);"), "the emissive exitance is hoisted out of three uses");
         assertFalse(rays.contains("+ emitted(s)"), "no lit path may re-evaluate the emission");
     }

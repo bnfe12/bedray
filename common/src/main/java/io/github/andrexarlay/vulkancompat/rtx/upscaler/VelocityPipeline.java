@@ -52,7 +52,7 @@ import java.util.Objects;
 public final class VelocityPipeline implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/VelocityPipeline");
 
-    public static final String SHADER_RESOURCE_PATH = "/shaders/velocity_reproject.comp";
+    public static final String SHADER_RESOURCE_PATH = "/shaders/glsl/velocity_reproject.comp";
 
     /** Number of ring slots; engine MAX_SUBMITS_IN_FLIGHT is 2, one spare. */
     private static final int SLOTS = 3;
