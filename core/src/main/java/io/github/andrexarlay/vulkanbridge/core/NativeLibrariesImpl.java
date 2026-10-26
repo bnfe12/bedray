@@ -242,7 +242,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             }
             return new FileCheck(null, sha256Cached(p, size), structural.version, structural.signed);
         } catch (IOException e) {
-            return FileCheck.reject("cannot be read: " + e);
+            return FileCheck.reject("cannot be read: " + LogPaths.show(e.toString()));
         }
     }
 
@@ -290,7 +290,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 }
             }
         } catch (IOException e) {
-            throw new NativeLibraryException("-", "cannot list " + LogPaths.show(dir) + ": " + e, e);
+            throw new NativeLibraryException("-", LogPaths.show("cannot list " + dir + ": " + e), e);
         }
         return null;
     }
@@ -342,7 +342,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             try {
                 loader.load(p.toString());
             } catch (UnsatisfiedLinkError e) {
-                throw new NativeLibraryException(id, "the OS refused to load " + LogPaths.show(p) + " (already loaded: " + loadedNames + "): " + e.getMessage(), e);
+                throw new NativeLibraryException(id, LogPaths.show("the OS refused to load " + p + " (already loaded: " + loadedNames + "): " + e.getMessage()), e);
             }
             loadedNames.add(name);
         }
@@ -363,7 +363,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 try {
                     Files.delete(p);
                 } catch (IOException e) {
-                    throw new NativeLibraryException(id, "cannot delete " + LogPaths.show(p) + " (is it loaded by the running game?): " + e, e);
+                    throw new NativeLibraryException(id, LogPaths.show("cannot delete " + p + " (is it loaded by the running game?): " + e), e);
                 }
                 removed.add(p);
             }
@@ -428,7 +428,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             }
         } catch (IOException e) {
             String partial = written.isEmpty() ? "" : " (already written: " + written + ")";
-            throw new NativeLibraryException(id, "install failed: " + e + partial, e);
+            throw new NativeLibraryException(id, LogPaths.show("install failed: " + e + partial), e);
         } finally {
             if (staging != null) {
                 deleteTree(staging);
@@ -575,7 +575,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 Files.delete(p);
             }
         } catch (IOException e) {
-            throw new NativeLibraryException("-", "cannot clean the staging directory " + LogPaths.show(root) + ": " + e, e);
+            throw new NativeLibraryException("-", LogPaths.show("cannot clean the staging directory " + root + ": " + e), e);
         }
     }
 }

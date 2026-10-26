@@ -83,7 +83,7 @@ public final class RtShaderCompiler {
                 try {
                     cache.write(key, spirv);
                 } catch (IOException e) {
-                    LOGGER.debug("[VKB-RT] shader={} disk_cache_write_failed={}", name, e.toString());
+                    LOGGER.debug("[VKB-RT] shader={} disk_cache_write_failed={}", name, io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(e.toString()));
                 }
             }
             mine.complete(bytes);
@@ -111,7 +111,8 @@ public final class RtShaderCompiler {
                 }
                 LOGGER.info("[Bedray/ShaderCache] asynchronous SPIR-V warmup complete variants={}", variants.size());
             } catch (Throwable e) {
-                LOGGER.warn("[Bedray/ShaderCache] asynchronous SPIR-V warmup stopped: {}", e.toString());
+                LOGGER.warn("[Bedray/ShaderCache] asynchronous SPIR-V warmup stopped: {}",
+                    io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(e.toString()));
             }
         }, "Bedray-SPIR-V-Warmup");
         worker.setDaemon(true);
@@ -159,7 +160,8 @@ public final class RtShaderCompiler {
                 return diskCache;
             } catch (RuntimeException e) {
                 diskCacheUnavailable = true;
-                LOGGER.debug("[Bedray/ShaderCache] persistent cache unavailable: {}", e.toString());
+                LOGGER.debug("[Bedray/ShaderCache] persistent cache unavailable: {}",
+                    io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(e.toString()));
                 return null;
             }
         }

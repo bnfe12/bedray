@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import net.caffeinemc.mods.sodium.client.config.structure.Option;
 import net.caffeinemc.mods.sodium.client.config.structure.StatefulOption;
 import net.caffeinemc.mods.sodium.client.util.Dim2i;
@@ -121,7 +122,7 @@ public final class PreviewPanel {
                     }
                 }
             } catch (Exception e) {
-                LOGGER.debug("no preview manifest: {}", e.toString());
+                LOGGER.debug("no preview manifest: {}", LogPaths.show(e));
             }
         }
         return manifest.getProperty(file, "");

@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import com.mojang.blaze3d.platform.NativeImage;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.MoonPhase;
@@ -127,7 +128,7 @@ public final class RtSkyTextures {
                 sheetH = img.getHeight();
                 sheetPixels = img.getPixelsABGR();
             } catch (Exception e) {
-                LOGGER.warn("[VKB-SKY] moon_phases.png fallback load failed", e);
+                LOGGER.warn("[VKB-SKY] moon_phases.png fallback load failed\n{}", LogPaths.stack(e));
             }
         }
 
@@ -169,7 +170,7 @@ public final class RtSkyTextures {
                 mask |= 1 << i;
                 LOGGER.info("[VKB-SKY] texture slot={} id={} size={}x{} pack={}", i, id, w[i], hh[i], res.get().sourcePackId());
             } catch (Exception e) {
-                LOGGER.error("[VKB-SKY] texture load failed {} (slot {})", id, i, e);
+                LOGGER.error("[VKB-SKY] texture load failed {} (slot {})\n{}", id, i, LogPaths.stack(e));
                 pixels[i] = null;
             }
         }

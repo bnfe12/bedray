@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager;
@@ -286,7 +287,7 @@ public final class FrameGenRuntime {
             return Fsr3FrameGen.statusLine();
         }
         if (amd() && availability() == Availability.NO_BINARIES) {
-            String why = Fsr3FrameGen.failed() ? Fsr3FrameGen.failure() : Fsr3FrameGen.dllNote();
+            String why = LogPaths.show(Fsr3FrameGen.failed() ? Fsr3FrameGen.failure() : Fsr3FrameGen.dllNote());
             return "Unavailable (AMD FSR 3): " + why;
         }
         if (!amd() && availability() == Availability.NEEDS_RESTART && FrameGenSettings.provider() == FrameGenSettings.Provider.AMD) {
@@ -295,7 +296,7 @@ public final class FrameGenRuntime {
         Snapshot sn = snapshot();
         Status st = sn.status();
         return switch (availability()) {
-            case NO_BINARIES -> "Unavailable: missing " + FrameGenEarly.missingFiles() + " in " + FrameGenEarly.slDir();
+            case NO_BINARIES -> LogPaths.show("Unavailable: missing " + FrameGenEarly.missingFiles() + " in " + FrameGenEarly.slDir());
             case NEEDS_RESTART -> FrameGenSettings.mode() == FrameGenSettings.Mode.OFF
                 ? "Off (Select 2x and restart to activate Streamline)"
                 : "Restart required to activate Streamline (" + FrameGenSettings.mode().label() + ")";
@@ -342,8 +343,8 @@ public final class FrameGenRuntime {
 
     private static void fail(String stage, String detail, Throwable t) {
         failed = true;
-        failure = stage + ": " + detail;
-        LOGGER.error("[VKB-FG] fg=FAILED stage={} {}", stage, detail, t);
+        failure = LogPaths.show(stage + ": " + detail);
+        LOGGER.error("[VKB-FG] fg=FAILED stage={} {}\n{}", stage, LogPaths.show(detail), LogPaths.stack(t));
     }
 
     private static void check(int r, String what) {
@@ -724,7 +725,7 @@ public final class FrameGenRuntime {
             LOGGER.info("[VKB-FG] teardown surface_close rendered_total={} presented_total={} doubled_frames={}", renderedTotal, presentedTotal, doubledFrames);
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
-            LOGGER.error("[VKB-FG] teardown surface_close failed", t);
+            LOGGER.error("[VKB-FG] teardown surface_close failed\n{}", LogPaths.stack(t));
         }
     }
 
@@ -743,7 +744,7 @@ public final class FrameGenRuntime {
             LOGGER.info("[VKB-FG] teardown slShutdown result={}", r);
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
-            LOGGER.error("[VKB-FG] teardown slShutdown failed", t);
+            LOGGER.error("[VKB-FG] teardown slShutdown failed\n{}", LogPaths.stack(t));
         }
     }
 

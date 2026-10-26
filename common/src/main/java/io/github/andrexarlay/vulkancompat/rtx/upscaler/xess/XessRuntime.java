@@ -231,7 +231,7 @@ public final class XessRuntime {
             try {
                 nativeLib = XessNative.load(dll);
             } catch (XessNativeException e) {
-                LOGGER.error("XeSS library load failed", e);
+                LOGGER.error("XeSS library load failed\n{}", LogPaths.stack(e));
                 fail("load", "load_error");
                 return;
             }
@@ -480,7 +480,7 @@ public final class XessRuntime {
                     LOGGER.warn("xessDestroyContext after failure returned {}", r);
                 }
             } catch (RuntimeException e) {
-                LOGGER.error("xessDestroyContext after failure threw", e);
+                LOGGER.error("xessDestroyContext after failure threw\n{}", LogPaths.stack(e));
             }
         }
         context = null;

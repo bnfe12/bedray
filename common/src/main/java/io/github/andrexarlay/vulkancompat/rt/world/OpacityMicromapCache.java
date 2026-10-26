@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import org.lwjgl.system.MemoryStack;
@@ -448,7 +449,7 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
             LOGGER.info("[VKB-RT] opacity micromaps enabled level={} entries_max={}", LEVEL, MAX_ENTRIES);
             return c;
         } catch (Throwable t) {
-            LOGGER.error("[VKB-RT] opacity micromaps unavailable: {}", t.toString());
+            LOGGER.error("[VKB-RT] opacity micromaps unavailable\n{}", LogPaths.stack(t));
             return null;
         }
     }
@@ -674,7 +675,7 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
                 // keep the old object and the pending payload; the throttle retries the flip later
                 if (frame - lastLoggedFlushFailure > 600) {
                     lastLoggedFlushFailure = frame;
-                    LOGGER.warn("[VKB-RT] opacity micromap flip failed (kept previous object): {}", e.getMessage());
+                    LOGGER.warn("[VKB-RT] opacity micromap flip failed (kept previous object): {}", LogPaths.show(e.getMessage()));
                 }
             }
         }
@@ -726,7 +727,7 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
         entries = 0;
         objectEntries = 0;
         Arrays.fill(microTris, 0L);
-        LOGGER.error("[VKB-RT] opacity micromaps DISABLED: {} (sections fall back to the shader cutout test)", why);
+        LOGGER.error("[VKB-RT] opacity micromaps DISABLED: {} (sections fall back to the shader cutout test)", LogPaths.show(why));
     }
 
     // ---------------------------------------------------------------------------------------------- atlas sink

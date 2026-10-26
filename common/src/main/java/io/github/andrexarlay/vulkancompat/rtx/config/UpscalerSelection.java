@@ -196,7 +196,8 @@ public final class UpscalerSelection {
                 if (key.equals(tech + "_version")) version = val;
             }
         } catch (IOException e) {
-            LOGGER.error("[VKB-AUTOTEST] {}=FAILED stage=config result=read_error file={} message={}", tech, LogPaths.show(configFile), e.toString());
+            LOGGER.error("[VKB-AUTOTEST] {}=FAILED stage=config result=read_error file={} message={}", tech, LogPaths.show(configFile),
+                LogPaths.show(e.toString()));
             return null;
         }
         return new String[] {backend, mode, version};

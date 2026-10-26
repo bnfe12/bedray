@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.material;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
@@ -85,7 +86,7 @@ public final class MaterialAtlasBaker {
         } catch (IOException | RuntimeException e) {
             // A broken PNG of a resource pack: this sprite keeps auto-PBR values; counted and logged (not silent).
             if (LOGGED_ERRORS.incrementAndGet() <= MAX_LOGGED_ERRORS) {
-                LOGGER.warn("[VKB-RT] materials read_failed sprite={} {}", name, e.toString());
+                LOGGER.warn("[VKB-RT] materials read_failed sprite={} {}", name, LogPaths.show(e));
             }
         }
         byte[] alpha = null;

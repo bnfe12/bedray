@@ -223,7 +223,7 @@ public final class FrameGenSettings {
                 }
             }
         } catch (IOException e) {
-            LOGGER.warn("[VKB-FG] cannot read {}: {}", LogPaths.show(toml), e.toString());
+            LOGGER.warn("[VKB-FG] cannot read {}: {}", LogPaths.show(toml), LogPaths.show(e));
         }
         return null;
     }
@@ -245,7 +245,7 @@ public final class FrameGenSettings {
                 }
             }
         } catch (IOException e) {
-            LOGGER.warn("[VKB-FG] cannot read {}: {}", LogPaths.show(toml), e.toString());
+            LOGGER.warn("[VKB-FG] cannot read {}: {}", LogPaths.show(toml), LogPaths.show(e));
         }
         return null;
     }

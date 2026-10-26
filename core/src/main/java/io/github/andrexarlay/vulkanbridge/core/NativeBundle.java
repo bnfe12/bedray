@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -72,26 +73,27 @@ public final class NativeBundle {
         String name = slot.file();
         URL res = NativeBundle.class.getResource(RESOURCE_DIR + name);
         if (res == null) {
-            return new Entry(name, Outcome.NOT_EMBEDDED, "this build does not contain the binary (see docs/NATIVES_LICENSES.md); put the file in " + nativesDir + " yourself");
+            return new Entry(name, Outcome.NOT_EMBEDDED, "this build does not contain the binary (see docs/NATIVES_LICENSES.md); put the file in "
+                + LogPaths.show(nativesDir) + " yourself");
         }
         Path dir = slot.folder().resolve(nativesDir);
         try {
             if (Files.isSymbolicLink(dir)) {
-                return new Entry(name, Outcome.FAILED, dir + " is a symbolic link; refusing to write into it");
+                return new Entry(name, Outcome.FAILED, LogPaths.show(dir) + " is a symbolic link; refusing to write into it");
             }
             Files.createDirectories(dir);
             long resSize = res.openConnection().getContentLengthLong();
             Path existing = NativeFiles.find(dir, name);
             if (existing != null) {
                 if (Files.isSymbolicLink(existing)) {
-                    return new Entry(name, Outcome.KEPT_USER_FILE, existing + " is a symbolic link; left alone");
+                    return new Entry(name, Outcome.KEPT_USER_FILE, LogPaths.show(existing) + " is a symbolic link; left alone");
                 }
                 String have = Files.size(existing) == resSize ? NativeFiles.sha256(existing) : null;
                 if (slot.bundledSha256().equals(have)) {
                     copyLicenses(nativesDir, name);
-                    return new Entry(name, Outcome.ALREADY_PRESENT, "sha256=" + have + " path=" + existing);
+                    return new Entry(name, Outcome.ALREADY_PRESENT, "sha256=" + have + " path=" + LogPaths.show(existing));
                 }
-                return new Entry(name, Outcome.KEPT_USER_FILE, "path=" + existing + " differs from the bundled file (sha256 "
+                return new Entry(name, Outcome.KEPT_USER_FILE, "path=" + LogPaths.show(existing) + " differs from the bundled file (sha256 "
                     + (have == null ? "not computed, size " + Files.size(existing) + " != " + resSize : have) + ", bundled " + slot.bundledSha256()
                     + "); your file is kept");
             }
@@ -123,12 +125,12 @@ public final class NativeBundle {
                 Path target = dir.resolve(name);
                 Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
                 copyLicenses(nativesDir, name);
-                return new Entry(name, Outcome.EXTRACTED, "sha256=" + sha + " bytes=" + Files.size(target) + " path=" + target);
+                return new Entry(name, Outcome.EXTRACTED, "sha256=" + sha + " bytes=" + Files.size(target) + " path=" + LogPaths.show(target));
             } finally {
                 Files.deleteIfExists(tmp);
             }
         } catch (IOException | java.security.NoSuchAlgorithmException | RuntimeException e) {
-            return new Entry(name, Outcome.FAILED, e.toString());
+            return new Entry(name, Outcome.FAILED, LogPaths.show(e.toString()));
         }
     }
 
