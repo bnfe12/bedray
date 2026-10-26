@@ -162,6 +162,10 @@ public final class XessNative implements AutoCloseable {
             throw new XessNativeException("libxess.dll not found at " + dll
                 + " (XeSS is unavailable; install the DLL from the Intel XeSS SDK there)");
         }
+        String reject = io.github.andrexarlay.vulkancompat.rtx.NativeDllGate.reject(dll);
+        if (reject != null) {
+            throw new XessNativeException("libxess.dll at " + dll + " " + reject + " (XeSS is unavailable)");
+        }
         XessNative n = new XessNative(dll.toAbsolutePath().normalize());
         LOGGER.info("Loaded {} ({} bytes)", n.libraryPath, fileSize(dll));
         return n;

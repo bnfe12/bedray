@@ -182,6 +182,11 @@ public final class FfxFgNative {
         if (!Files.isRegularFile(dll)) {
             throw new IllegalStateException("not found: " + dll);
         }
+        // the developer override property reaches this loader straight from the command line, with no natives manager in between
+        String reject = io.github.andrexarlay.vulkancompat.rtx.NativeDllGate.reject(dll);
+        if (reject != null) {
+            throw new IllegalStateException(dll + " " + reject);
+        }
         FfxFgNative n = new FfxFgNative(dll.toAbsolutePath().normalize());
         LOGGER.info("[VKB-FG] fsr3 loaded {}", n.libraryPath);
         return n;

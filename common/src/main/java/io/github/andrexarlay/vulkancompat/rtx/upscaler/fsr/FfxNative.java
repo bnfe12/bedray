@@ -151,6 +151,10 @@ public final class FfxNative {
         if (!Files.isRegularFile(dll)) {
             throw new FsrException("load", "not found: " + dll, null);
         }
+        String reject = io.github.andrexarlay.vulkancompat.rtx.NativeDllGate.reject(dll);
+        if (reject != null) {
+            throw new FsrException("load", dll + " " + reject, null);
+        }
         FfxNative n = new FfxNative(dll.toAbsolutePath().normalize());
         LOGGER.info("[VKB-FSR] loaded {}", n.libraryPath);
         return n;
