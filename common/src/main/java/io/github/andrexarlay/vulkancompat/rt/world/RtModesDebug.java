@@ -38,6 +38,10 @@ public final class RtModesDebug {
             "[RT-WATER] style=%s reflection=%s transmission=%s caustics=%s mask=0x%02X",
             waterStyle, reflectionTraced ? "RAY_TRACED" : "DISABLED", waterTransport, caustics, RtFrameRenderer.getReflectionMask()));
         out.add(RtFrameRenderer.getHermeticTelemetry());
+        out.add(RtFrameRenderer.transparencyTelemetry());
+        out.add("[RT-OPTICS] model=" + (RtSettings.opticalMaterials() ? "AUTHORED_SLAB" : "LEGACY")
+            + " opticalMaterials=" + RtSettings.opticalMaterials() + " closedGlassVolume=UNSUPPORTED directShadows="
+            + RtSettings.directTranslucentShadows() + " indirectShadows=" + RtSettings.indirectTranslucentShadows());
         String localLightsState = RtFrameRenderer.hasActiveLocalLights() ? "ACTIVE" : "DISABLED";
         out.add(String.format(Locale.ROOT,
             "[RT-TRANSMISSION] glass=THIN_INTERFACE_APPROX water=%s refraction=%s interfaces=SORTED_BOUNDED batchSize=16 interfaceBudget=%d caustics=%s localLights=%s",

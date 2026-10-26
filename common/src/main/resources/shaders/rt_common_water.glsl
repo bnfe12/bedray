@@ -13,10 +13,10 @@ bool isInterface(Surface s) {
         return false;
     }
     // Transparent cutout holes (alpha < 0.5 on solid/cutout geometry) are empty space, not a dielectric interface
-    if ((!s.translucent && s.alpha < 0.5) || s.alpha < 0.05) {
+    if (surfaceIsHole(s)) {
         return false;
     }
-    return s.translucent || s.isIce || (s.f0 <= 0.08 && s.roughness <= 0.15 && s.alpha < 0.99);
+    return s.opticalKind == 1u || s.translucent || s.isIce || (s.f0 <= 0.08 && s.roughness <= 0.15 && s.alpha < 0.99);
 }
 
 // Water the realistic style models as a volume (absorption, in-scattering, Snell refraction, caustics); the vanilla style keeps
@@ -66,10 +66,13 @@ bool isWaterBoundary(Surface s) {
 
 float interfaceReflectance(Surface s, vec3 d) {
     float cosV = clamp(abs(dot(d, s.ns)), 0.0, 1.0);
+    if (s.optics.x >= 1.0 && s.optics.x <= 1.00001) return 0.0;
     if (s.isWater && waterVolumeStyle() && isWaterBoundary(s)) {
         // exact dielectric Fresnel; from below (ray going up) with total internal reflection beyond the 48 degree Snell window
-        return fresnelDielectric(cosV, d.y < 0.0 ? WATER_IOR : 1.0 / WATER_IOR);
+        float ior = surfaceIor(s);
+        return fresnelDielectric(cosV, d.y < 0.0 ? ior : 1.0 / ior);
     }
+    if (s.optics.x >= 1.0) return fresnelDielectric(cosV, s.optics.x);
     float f0 = clamp(s.f0, 0.02, 0.08);
     float R = f0 + (1.0 - f0) * pow(1.0 - cosV, 5.0);
     if (!s.isWater && !s.isIce) {
@@ -78,21 +81,25 @@ float interfaceReflectance(Surface s, vec3 d) {
     return R;
 }
 
-vec3 interfaceTransmittance(Surface s, float F) {
+vec3 interfaceTransmittance(Surface s, float F, vec3 d) {
     // Beer-Lambert style absorption: colour^thickness, the glass tint is the texel colour and its alpha the thickness (ice 1.3).
-    // Clear glass centre (alpha 0) passes unchanged, stained glass (alpha 0.4) filters by its own dye colour, water (alpha ~0.7,
+    // Legacy clear centres have no dye; authored profiles also apply reference absorption and Fresnel. Stained glass filters
+    // by its own dye colour, water (alpha ~0.7,
     // grey texture * biome tint from the vertex colour) keeps its biome blue.
     // Ice / blue_ice transmits tinted with its ice albedo.
     if (s.isWater && waterVolumeStyle() && isWaterBoundary(s)) {
         return vec3(1.0 - F);   // the colour of the water comes from the depth absorption of the medium (waterSegment)
     }
     if (s.isWater) {
-        return vec3((1.0 - F) * (1.0 - VANILLA_WATER_ALPHA));   // vanilla style: the textured sheet is blended in, see vanillaWaterSurface
+        vec3 filter = s.optics.x >= 1.0 ? pow(clamp(s.opticalTransmittance, vec3(0.0001), vec3(1.0)),
+            vec3(s.optics.y / max(s.optics.z, 0.0001))) : vec3(1.0);
+        return (1.0 - F) * (1.0 - VANILLA_WATER_ALPHA) * filter;
     }
     if (s.backFace && !s.isWater && !s.isIce) {
         // exit face of a glass block: the entry face already filtered the light (a block is one slab of coloured glass, not two)
-        return vec3(1.0 - F);
+        return vec3((1.0 - F) * (1.0 - s.optics.w * s.alpha));
     }
+    if (s.optics.x >= 1.0) return opticalLayerTransmittance(s, F, d);
     vec3 c = clamp(s.albedoLit, vec3(0.001), vec3(1.0));
     if (s.isWater && waterVolumeStyle()) {
         // Realistic style: water is a continuous fluid, filtered by the biome tint rather than 16x16 texture pixel noise
@@ -112,6 +119,14 @@ vec3 interfaceTransmittance(Surface s, float F) {
     return (1.0 - F) * pow(c, vec3(power));
 }
 
+vec3 interfaceTransmittance(Surface s, float F) { return interfaceTransmittance(s, F, s.ng); }
+
+vec3 interfaceDiffuseLayer(Surface s, float F) {
+    if (s.optics.w <= 0.0 || s.isWater) return vec3(0.0);
+    vec3 light = hemisphereAmbient(1.0, pc.keyDir.w) * max(s.light.y, 0.03) + blockLightColor() * s.light.x;
+    return (1.0 - F) * s.optics.w * s.alpha * s.albedoLit * light;
+}
+
 // ---- water medium -----------------------------------------------------------------------------------------------------------
 // A ray (camera, reflection, bounce) that crosses a horizontal water face toggles the medium. Inside, every segment is attenuated
 // by exp(-sigmaT * length) and adds the light it scatters towards the eye, so the colour of water depends on the depth of the
@@ -120,6 +135,7 @@ vec3 interfaceTransmittance(Surface s, float F) {
 // absorption alone there is nothing to see once the bottom is attenuated away, which is what made deep oceans black.
 struct WaterMedium {
     bool inside;
+    float ior;
     vec3 sigmaT;        // extinction (absorption + scattering), 1/block
     vec3 scatterAlbedo; // sigmaS / sigmaT: colour and share of the in-scattered light
     float surfY;        // camera-relative world Y of the water surface
@@ -128,6 +144,7 @@ struct WaterMedium {
 WaterMedium noWater() {
     WaterMedium m;
     m.inside = false;
+    m.ior = 1.333;
     m.sigmaT = vec3(0.0);
     m.scatterAlbedo = vec3(0.0);
     m.surfY = 0.0;
@@ -156,9 +173,11 @@ vec3 waterTint(Surface s) {
 WaterMedium enterWater(Surface s) {
     WaterMedium m;
     m.inside = true;
+    m.ior = surfaceIor(s);
     vec3 tint = waterTint(s);
     m.sigmaT = waterSigmaT(tint);
-    m.scatterAlbedo = waterScatterAlbedo(tint);
+    if (s.optics.x >= 1.0) m.sigmaT += -log(clamp(s.opticalTransmittance, vec3(0.0001), vec3(1.0))) / max(s.optics.z, 0.0001);
+    m.scatterAlbedo = vec3(WATER_SCATTERING) / m.sigmaT;
     m.surfY = s.pos.y;
     return m;
 }
@@ -193,7 +212,7 @@ void waterSegment(WaterMedium m, vec3 o, vec3 d, float len, out vec3 T, out vec3
 // is inlined at every call site, which made the whole shader slower even in scenes without water).
 // Returns 0 = miss, 1 = water boundary face (horizontal water; tint = biome tint of the water), 2 = blocker (solid, entity, cutout),
 // 3 = other translucent layer (glass, ice, stained glass: the caller lets the ray pass).
-uint traceWaterBoundary(vec3 origin, vec3 dir, float tmax, bool excludeSelfAvatar, out float hitT, out vec3 tint) {
+uint traceWaterBoundary(vec3 origin, vec3 dir, float tmax, bool excludeSelfAvatar, out float hitT, out vec3 tint, out vec4 optical) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, 0.001, dir, tmax);
     while (rayQueryProceedEXT(rq)) {
@@ -210,6 +229,7 @@ uint traceWaterBoundary(vec3 origin, vec3 dir, float tmax, bool excludeSelfAvata
     }
     hitT = 0.0;
     tint = vec3(1.0);
+    optical = vec4(0.0, 0.0, 0.0, 1.333);
     if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) {
         return 0u;
     }
@@ -221,7 +241,8 @@ uint traceWaterBoundary(vec3 origin, vec3 dir, float tmax, bool excludeSelfAvata
     uint geom = uint(rayQueryGetIntersectionGeometryIndexEXT(rq, true));
     uint prim = uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, true));
     Section sec = sections.s[customIndex];
-    if (((uint(sec.origin.w) >> (2u * geom)) & 3u) != 2u) {
+    uint pass = (uint(sec.origin.w) >> (2u * geom)) & 3u;
+    if (pass == 0u) {
         return 2u;
     }
     vec2 bary = rayQueryGetIntersectionBarycentricsEXT(rq, true);
@@ -241,8 +262,16 @@ uint traceWaterBoundary(vec3 origin, vec3 dir, float tmax, bool excludeSelfAvata
     vec2 uv = b3.x * loadUv(uvb, v.x) + b3.y * loadUv(uvb, v.y) + b3.z * loadUv(uvb, v.z);
     vec4 m = textureLod(matAtlas, uv, 0.0);
     // water material of the auto PBR (rough 0.02, f0 0.02), see fetchSurface; ice has roughness 0.05
-    if (!(m.g <= 0.025 && m.r <= 0.035) || abs(n.y) < 0.5) {
+    uint profile = (255u - uint(m.a * 255.0 + 0.5)) >> 3u;
+    float kind = opticalValue(profile, 7u);
+    if (pass != 2u && kind == 0.0) return 2u;
+    if ((kind != 2.0 && (kind != 0.0 || !(m.g <= 0.025 && m.r <= 0.035))) || abs(n.y) < 0.5) {
         return 3u;
+    }
+    if (kind == 2.0) {
+        optical.w = opticalValue(profile, 0u);
+        optical.xyz = -log(clamp(vec3(opticalValue(profile, 4u), opticalValue(profile, 5u), opticalValue(profile, 6u)),
+            vec3(0.0001), vec3(1.0))) / max(opticalValue(profile, 2u), 0.0001);
     }
     UIntBuf cols = UIntBuf(sec.colAddr);
     vec3 vcol = b3.x * unpackColor(cols.v[v.x]) + b3.y * unpackColor(cols.v[v.y]) + b3.z * unpackColor(cols.v[v.z]);
@@ -254,18 +283,20 @@ uint traceWaterBoundary(vec3 origin, vec3 dir, float tmax, bool excludeSelfAvata
 WaterMedium cameraWaterMedium(vec3 origin) {
     WaterMedium m = noWater();
     vec3 o = origin;
-    for (uint i = 0u; i < 3u; i++) {
+    for (uint i = 0u; i < 16u; i++) {
         float t;
         vec3 tint;
-        uint k = traceWaterBoundary(o, vec3(0.0, 1.0, 0.0), 160.0, true, t, tint);
+        vec4 optical;
+        uint k = traceWaterBoundary(o, vec3(0.0, 1.0, 0.0), 160.0, true, t, tint, optical);
         if (k == 3u) {
             o += vec3(0.0, t + 0.002, 0.0);   // glass / ice above the eye: look through it
             continue;
         }
         if (k == 1u) {
             m.inside = true;
-            m.sigmaT = waterSigmaT(tint);
-            m.scatterAlbedo = waterScatterAlbedo(tint);
+            m.ior = optical.w;
+            m.sigmaT = waterSigmaT(tint) + optical.xyz;
+            m.scatterAlbedo = vec3(WATER_SCATTERING) / m.sigmaT;
             // t starts at o, which may already have advanced past glass or ice.
             m.surfY = o.y + t;
         }
@@ -282,6 +313,7 @@ WaterMedium cameraWaterMediumShared(vec3 origin) {
         m = cameraWaterMedium(origin);
     }
     m.inside = subgroupBroadcastFirst(m.inside);
+    m.ior = subgroupBroadcastFirst(m.ior);
     m.sigmaT = subgroupBroadcastFirst(m.sigmaT);
     m.scatterAlbedo = subgroupBroadcastFirst(m.scatterAlbedo);
     m.surfY = subgroupBroadcastFirst(m.surfY);
@@ -308,6 +340,7 @@ void rememberInterfaceCandidate(inout InterfaceCandidate candidates[INTERFACE_LA
     inout float overflowT, InterfaceCandidate candidate) {
     uint at = min(count, INTERFACE_LAYER_CAPACITY - 1u);
     if (count == INTERFACE_LAYER_CAPACITY) {
+        transparencyOverflow();
         if (candidate.t >= candidates[at].t) {
             overflowT = min(overflowT, candidate.t);
             return;
@@ -348,6 +381,7 @@ bool traceThroughInterfacesM(vec3 origin, vec3 dir, float reach, inout WaterMedi
     float overflowT = reach;
     rayQueryEXT sq;
     rayQueryInitializeEXT(sq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, 0.001, dir, reach);
+    transparencyQuery(false);
     while (rayQueryProceedEXT(sq)) {
         if (rayQueryGetIntersectionTypeEXT(sq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
             continue;
@@ -374,13 +408,14 @@ bool traceThroughInterfacesM(vec3 origin, vec3 dir, float reach, inout WaterMedi
         } else {
             fetchSurface(slot, geom, prim, bary, t, origin, dir, true, c);
         }
-        if ((!c.translucent && c.alpha < 0.5) || c.alpha < 0.05 || c.isOutline) {
+        if (surfaceIsHole(c) || c.isOutline) {
             continue;   // a hole or an outline triangle: the ray passes and nothing is filtered
         }
         if (!isInterface(c)) {
             rayQueryConfirmIntersectionEXT(sq);
             continue;
         }
+        transparencyCandidate();
         rememberInterfaceCandidate(candidates, count, overflowT, InterfaceCandidate(uvec3(slot, geom, prim), bary, t));
     }
     bool hasHit = rayQueryGetIntersectionTypeEXT(sq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
@@ -410,7 +445,8 @@ bool traceThroughInterfacesM(vec3 origin, vec3 dir, float reach, inout WaterMedi
             filterOut *= T;
         }
         lastT = t;
-        filterOut *= interfaceTransmittance(c, interfaceReflectance(c, dir));
+        transparencyLayer();
+        filterOut *= interfaceTransmittance(c, interfaceReflectance(c, dir), dir);
         crossWaterBoundary(m, c, dir);
         if (max(filterOut.r, max(filterOut.g, filterOut.b)) < 0.004) {
             filterOut = vec3(0.0);
@@ -453,7 +489,7 @@ bool waterSunBeam(vec3 so, vec2 worldXZ, vec3 L, WaterMedium m, out vec3 Lw, out
     if (L.y < 0.03) {
         return false;
     }
-    Lw = -refract(-L, vec3(0.0, 1.0, 0.0), 1.0 / WATER_IOR);
+    Lw = -refract(-L, vec3(0.0, 1.0, 0.0), 1.0 / m.ior);
     vec3 o = so;
     bool found = false;
     float travel = 0.0;
@@ -461,7 +497,8 @@ bool waterSunBeam(vec3 so, vec2 worldXZ, vec3 L, WaterMedium m, out vec3 Lw, out
     for (uint i = 0u; i < 4u; i++) {
         float t;
         vec3 tint;
-        uint k = traceWaterBoundary(o, Lw, 200.0, false, t, tint);
+        vec4 optical;
+        uint k = traceWaterBoundary(o, Lw, 200.0, false, t, tint, optical);
         if (k == 0u) {
             break;
         }
@@ -481,7 +518,7 @@ bool waterSunBeam(vec3 so, vec2 worldXZ, vec3 L, WaterMedium m, out vec3 Lw, out
         return true;
     }
     float depth = max(hpos.y - so.y, 0.0);
-    float F = fresnelDielectric(L.y, WATER_IOR);
+    float F = fresnelDielectric(L.y, m.ior);
     float c = waterCaustic(worldXZ, L, depth, waterTime());
     // the rest of the beam (sky side) is the caller's single traceTransmittance(shOrigin, shDir)
     shOrigin = hpos + L * 0.003;

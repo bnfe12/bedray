@@ -192,6 +192,11 @@ public final class NrdDenoiser {
         havePrev = false;
     }
 
+    /** Clear native temporal history on the next recorded frame after a transport/settings change. */
+    public void resetHistory() {
+        restartNext = true;
+    }
+
     private void fillResources() {
         resources.fill((byte) 0);
         setRes(NrdLayouts.RES_IN_MV, inMotion, FMT_RGBA16F);

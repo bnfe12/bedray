@@ -197,6 +197,8 @@ final class SettingsDraft {
     }
 
     private static Category category(String p) {
+        if (p.equals("rays_transparency_stats")) return Category.SYSTEM;
+        if (p.equals("rays_cull_shared_glass") || p.equals("rays_optical_materials")) return Category.WORLD;
         if (p.equals("renderer") || p.equals("renderer_status") || p.startsWith("voxel_") || p.equals("path_quality_profile")) return Category.OVERVIEW;
         if (p.startsWith("compute_") || p.startsWith("debug_") || p.equals("rt_debug_view") || p.equals("ui_expert")) return Category.SYSTEM;
         if (p.contains("mode") && (p.startsWith("dlss") || p.startsWith("fsr") || p.startsWith("xess"))

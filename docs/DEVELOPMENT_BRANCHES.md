@@ -57,6 +57,26 @@ Additional integration fixes:
 
 The current source is the shared baseline. Local packaging and live-game acceptance remain separate future work.
 
+## Transparent-material follow-up (2026-10-26)
+
+The RTX Remix comparison follow-up adds the remaining material/cost-control work to the shared baseline:
+
+* Resource packs can attach validated `.bedray.json` optical data to an atlas sprite. A 1536-byte immutable palette and
+  the existing material source byte supply IOR, authored thickness, RGB transmittance/reference distance and diffuse share.
+  Low source flags remain unchanged; capacity is 31 distinct profiles plus legacy. Old in-flight profile records are not rewritten.
+* Clear glass centres are dielectric candidates. Optical sprites remain unresolved by opacity micromaps so hardware alpha
+  classification cannot drop their interfaces. Water boundaries and the approximate sun beam use custom IOR/absorption.
+* Direct and secondary colored-shadow policies have independent persisted switches, with scoped visibility state for
+  reflection/GI shading. Camera transparency is independent of those switches.
+* A conservative CPU filter removes only proven matching internal unit glass-block boundaries within one section, preserving
+  decoded/raw vertex data and pass ranges. Sodium's existing face culling remains the first stage.
+* Optional GPU counters use appended frame-slot fields with matching Java/GLSL layout and delayed unsigned readback. Their
+  slot activation is recorded so previously disabled frames show WAITING. CPU face totals are reported separately.
+
+No builds, shader compilation, tests, game sessions or benchmarks were run for this follow-up, as requested. The material
+model is an authored slab approximation, not a general closed-volume glass or caustics solver. See
+[TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md) for the exact format, defaults, settings and limitations.
+
 All branches are protected against force-push and deletion. The default branch requires pull requests
 with resolved review conversations. No bypass actors are configured; ordinary commits to development
 branches remain available. Deliberate branch retirement requires an explicit rules change.

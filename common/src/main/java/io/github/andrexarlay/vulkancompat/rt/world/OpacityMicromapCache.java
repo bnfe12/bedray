@@ -781,8 +781,9 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
             for (int x = 0; x < w; x++) {
                 byte st;
                 int a = alpha[y * w + x] & 0xFF;
-                texelAlpha[row + x] = (byte) a;
-                if (animated) {
+                boolean optical = io.github.andrexarlay.vulkancompat.rt.material.OpticalMaterials.profileId(material[y * w + x]) != 0;
+                texelAlpha[row + x] = optical ? (byte) 0xFF : (byte) a; // tier-2 must not cull a clear dielectric centre
+                if (animated || optical) {
                     st = TEXEL_MIXED;
                 } else {
                     if (a <= 127) {

@@ -130,6 +130,11 @@ public final class RtSettings {
     public static final int WATER_STYLE_REALISTIC = 1;
     /** Water style: 0 = Vanilla (classic clear azure Minecraft look), 1 = Realistic (wave normal ripples, caustics, refraction). */
     public static int waterStyle = WATER_STYLE_REALISTIC;
+    public static boolean directTranslucentShadows = true;
+    public static boolean opticalMaterials = true;
+    public static boolean indirectTranslucentShadows = true;
+    public static boolean cullSharedGlass = true;
+    public static boolean transparencyStats = false;
 
     // ---- Foliage & Wind ----
     public static boolean wavingFoliage = false;
@@ -213,6 +218,11 @@ public final class RtSettings {
     private static final AdaptiveQuality ADAPTIVE_OVR;
 
     static {
+        bool("rays_direct_translucent_shadows", () -> directTranslucentShadows, v -> directTranslucentShadows = v);
+        bool("rays_optical_materials", () -> opticalMaterials, v -> opticalMaterials = v);
+        bool("rays_indirect_translucent_shadows", () -> indirectTranslucentShadows, v -> indirectTranslucentShadows = v);
+        bool("rays_cull_shared_glass", () -> cullSharedGlass, v -> cullSharedGlass = v);
+        bool("rays_transparency_stats", () -> transparencyStats, v -> transparencyStats = v);
         bool("rays_shadows", () -> raysShadows, v -> raysShadows = v);
         bool("rays_soft_shadows", () -> raysSoftShadows, v -> raysSoftShadows = v);
         integer("rays_shadow_quality", () -> raysShadowQuality, v -> raysShadowQuality = v, 1, 8);
@@ -396,6 +406,11 @@ public final class RtSettings {
 
     // ---- Effective values used by the renderer (session override, else the configured value) ----
     public static boolean shadows() { return b("rays_shadows"); }
+    public static boolean directTranslucentShadows() { return b("rays_direct_translucent_shadows"); }
+    public static boolean opticalMaterials() { return b("rays_optical_materials"); }
+    public static boolean indirectTranslucentShadows() { return b("rays_indirect_translucent_shadows"); }
+    public static boolean cullSharedGlass() { return b("rays_cull_shared_glass"); }
+    public static boolean transparencyStats() { return b("rays_transparency_stats"); }
     public static boolean softShadows() { return b("rays_soft_shadows"); }
     public static int shadowQuality() { return i("rays_shadow_quality"); }
     public static boolean pixelShadows() { return b("rays_pixel_shadows"); }

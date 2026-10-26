@@ -243,16 +243,21 @@ vec3 shadeReflectionHit(Surface s, vec3 dir, bool shadowRay) {
 // m: water body the mirror ray starts in (camera under water looking at the surface from below): the ray is attenuated and
 // in-scatters like every other ray in the water.
 vec3 mirrorRadianceM(vec3 origin, vec3 dir, float reach, bool shadowRay, WaterMedium m) {
+    bool previousVisibility = gSecondaryVisibility;
+    gSecondaryVisibility = true;
     Surface r;
     vec3 f;
     vec3 ins;
     if (traceThroughInterfacesM(origin, dir, reach, m, r, f, ins)) {
-        return f * shadeReflectionHit(r, dir, shadowRay) + ins;
+        vec3 result = f * shadeReflectionHit(r, dir, shadowRay) + ins;
+        gSecondaryVisibility = previousVisibility;
+        return result;
     }
     vec3 sky = skyAt(dir);
     if (dir.y <= 0.0) {
         sky = skyRadiance(dir);   // no geometry below the horizon in range: the same ground dome the path tracer sees on a miss
     }
+    gSecondaryVisibility = previousVisibility;
     return f * sky + ins;
 }
 

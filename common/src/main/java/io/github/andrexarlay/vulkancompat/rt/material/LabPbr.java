@@ -15,7 +15,8 @@ package io.github.andrexarlay.vulkancompat.rt.material;
  *       {@code sqrt(1 - x^2 - y^2)}; blue = AO (linear, 255 = none); alpha = height.</li>
  * </ul>
  * Material atlas texel (RGBA8, same layout as the block atlas): R = linear roughness, G = f0 (dielectric, 0..229) or 255
- * (metal), B = emission, A = source bits: 255 - 1 (LabPBR {@code _s}) - 2 (LabPBR {@code _n}) - 4 (redstone). Normal atlas texel: the LabPBR {@code _n} texel unchanged;
+ * (metal), B = emission, A = 255 minus metadata: low bits 1 (LabPBR {@code _s}), 2 (LabPBR {@code _n}), 4 (redstone),
+ * high five bits the optical palette id. Normal atlas texel: the LabPBR {@code _n} texel unchanged;
  * sprites without {@code _n} get {@link #FLAT_NORMAL}.
  */
 public final class LabPbr {

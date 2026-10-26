@@ -39,6 +39,9 @@ Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by
 * **Water and glass:** realistic water uses approximate Snell refraction and medium segments; vanilla water keeps a textured
   sheet. Glass uses a thin tinted interface. RT camera and secondary walks use one query with up to 16 sorted layers;
   Path Tracing reuses sorted 16-entry batches across its existing 24-interface budget instead of restarting per glass face.
+  Resource-pack optical profiles add IOR, authored thickness, RGB reference transmittance/distance and a diffuse coating.
+  Direct/secondary transparent-shadow switches, conservative shared-face filtering and opt-in F3 counters are available.
+  See [transparent materials](docs/TRANSPARENT_MATERIALS.md); this remains a slab approximation rather than closed-volume glass transport.
 * **Iris post host (opt-in, experimental):** a Vulkan fullscreen post subset and custom RT hooks; general shaderpack compatibility
   remains incomplete. See [IRIS_VULKAN](docs/IRIS_VULKAN.md).
 * **Upscalers:** DLSS Super Resolution, XeSS, FSR 3.1 / 2.x, plus built-in Bilinear, FSR 1 and NIS that need no extra files.

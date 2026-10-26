@@ -61,6 +61,10 @@ public final class RtFrameParams {
     public static final int FLAG_CAUSTICS = 1 << 15;
     /** First-hit sun NEE is included in the denoised radiance rather than passed through raw. */
     public static final int FLAG_SUN_DENOISED = 1 << 16;
+    public static final int FLAG_SKIP_DIRECT_TRANSLUCENT = 1 << 17;
+    public static final int FLAG_SKIP_INDIRECT_TRANSLUCENT = 1 << 18;
+    public static final int FLAG_TRANSPARENCY_STATS = 1 << 19;
+    public static final int FLAG_OPTICAL_MATERIALS = 1 << 20;
     /** Temporal accumulation stores irradiance (colour / primary albedo) and remodulates with the CURRENT albedo (sharp textures). */
     public static final int FLAG_DEMODULATE = 1 << 24;
     /** Low-discrepancy spatio-temporal sample sequence of the ray shaders (rt_noise.glsl); {@code -Dvkrtx.rt.lowDisc=off} for A/B runs. */

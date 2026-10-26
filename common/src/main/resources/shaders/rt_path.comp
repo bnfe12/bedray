@@ -53,6 +53,7 @@ bool gatherPathInterfaces(vec3 origin, vec3 dir, float tmin, float reach, bool c
     overflowT = reach;
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, tmin, dir, reach);
+    transparencyQuery(false);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
             continue;
@@ -72,9 +73,10 @@ bool gatherPathInterfaces(vec3 origin, vec3 dir, float tmin, float reach, bool c
         InterfaceCandidate candidate = InterfaceCandidate(uvec3(slot, geom, prim), bary, t);
         Surface c;
         fetchInterfaceCandidate(candidate, origin, dir, c);
-        if ((!camera && c.isOutline) || (!c.translucent && c.alpha < 0.5) || c.alpha < 0.05) {
+        if ((!camera && c.isOutline) || surfaceIsHole(c)) {
             continue;
         }
+        if (isInterface(c)) transparencyCandidate();
         if (!isInterface(c) || (c.isWater && waterVolumeStyle() && isWaterBoundary(c))) {
             rayQueryConfirmIntersectionEXT(rq);
             continue;
@@ -125,6 +127,7 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
     bool segmentValid = false;
     bool segmentHasTerminal = false;
     for (uint b = 0u; b <= bounces; b++) {
+        gSecondaryVisibility = b > 0u;
         Surface s;
         float tmin = b == 0u ? 0.001 : 0.0;
         if (!segmentValid) {
@@ -178,7 +181,7 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
             }
             thr *= T;
         }
-        if (hitHere && ((b > 0u && s.isOutline) || (!s.translucent && s.alpha < 0.5) || s.alpha < 0.05)) {
+        if (hitHere && ((b > 0u && s.isOutline) || surfaceIsHole(s))) {
             // Cutout transparent pixel or secondary ray hitting selection outline ribbon - pass through!
             o = s.pos + d * 0.002;
             b--;
@@ -212,6 +215,7 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
         // deeper interfaces (back faces, panes behind panes; F = 2..8 %) are dropped: sampling them by Fresnel was the
         // per-pixel sparkle on stained glass.
         if (isInterface(s) && transCount < 24u) {
+            transparencyLayer();
             transCount++;
             float F = interfaceReflectance(s, d);
             bool volume = s.isWater && waterVolumeStyle() && isWaterBoundary(s);
@@ -235,11 +239,12 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
                     b--;
                     continue;
                 }
-                vec3 rd = refract(d, s.ns, entering ? 1.0 / WATER_IOR : WATER_IOR);
+                float waterIor = surfaceIor(s);
+                vec3 rd = refract(d, s.ns, entering ? 1.0 / waterIor : waterIor);
                 if (dot(rd, rd) < 0.5) {
                     break;   // total internal reflection on the camera path: the mirror estimate above carries it
                 }
-                thr *= interfaceTransmittance(s, F);
+                thr *= interfaceTransmittance(s, F, d);
                 crossWaterBoundary(med, s, d);
                 res.waterSeen = 1.0;
                 d = normalize(rd);
@@ -259,7 +264,10 @@ PathResult tracePath(vec3 origin, vec3 dir, WaterMedium med, inout uint seed, ou
                 crossWaterBoundary(med, s, d);
                 res.waterSeen = 1.0;
             }
-            thr *= interfaceTransmittance(s, F);
+            vec3 layerDiffuse = thr * interfaceDiffuseLayer(s, F);
+            res.radiance += layerDiffuse;
+            if (b == 0u) res.direct0 += layerDiffuse; else res.indirect += layerDiffuse;
+            thr *= interfaceTransmittance(s, F, d);
             if (max(thr.r, max(thr.g, thr.b)) < 0.004) {
                 break;   // nothing is left of the light behind this layer
             }
