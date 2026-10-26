@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkanbridge.autotest;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.Difficulty;
@@ -56,9 +57,14 @@ public final class TestWorldScenario implements AutotestScenario {
 
     @Override
     public void run(AutotestContext ctx) {
+        String bad = firstUnsafeName();
+        if (bad != null) {
+            ctx.fail("build_test_world: -Dvkbridge.autotest." + bad, null);
+            return;
+        }
         Path src = datapack.isBlank() ? null : Paths.get(datapack);
         if (src == null || !Files.isRegularFile(src.resolve("pack.mcmeta"))) {
-            ctx.fail("build_test_world: -Dvkbridge.autotest.datapack must point at a directory with pack.mcmeta, got '" + datapack + "'", null);
+            ctx.fail("build_test_world: -Dvkbridge.autotest.datapack must point at a directory with pack.mcmeta, got '" + LogPaths.show(datapack) + "'", null);
             return;
         }
         Minecraft mc = ctx.minecraft();
@@ -80,7 +86,7 @@ public final class TestWorldScenario implements AutotestScenario {
                 // minecart_improvements, redstone_experiments, trade_rebalance), so /reload is not used.
                 Path dst = source.getBaseDir().resolve(worldName).resolve(LevelResource.DATAPACK_DIR.id()).resolve(ns);
                 copyTree(src, dst);
-                ctx.log("event", "datapack_copied", "to", dst.toString());
+                ctx.log("event", "datapack_copied", "to", LogPaths.show(dst));
                 LevelSettings settings = new LevelSettings(worldName, GameType.CREATIVE,
                         new LevelSettings.DifficultySettings(Difficulty.PEACEFUL, false, false), true, WorldDataConfiguration.DEFAULT);
                 WorldOptions options = new WorldOptions(20261012L, false, false);
@@ -138,6 +144,34 @@ public final class TestWorldScenario implements AutotestScenario {
 
     private static void cmd(net.minecraft.server.MinecraftServer server, String command) {
         server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), command);
+    }
+
+    /**
+     * Every {@code -Dvkbridge.autotest.*} name ends up in a filesystem path, and the overwrite branch hands the world
+     * name straight to {@code LevelStorageSource.createAccess(..).deleteLevel()} — a string sink we cannot normalise.
+     * So separators and {@code ..} are rejected before anything is read, written, or deleted.
+     *
+     * @return a message for ctx.fail, or null when every configured name is a plain single segment
+     */
+    private String firstUnsafeName() {
+        String bad = unsafeName(worldName, "worldName");
+        if (bad == null) {
+            bad = unsafeName(ns, "namespace");
+        }
+        for (String zone : zones) {
+            if (bad != null) {
+                return bad;
+            }
+            bad = unsafeName(zone.trim(), "zones entry");
+        }
+        return bad;
+    }
+
+    private static String unsafeName(String value, String property) {
+        if (value.isBlank() || value.contains("/") || value.contains("\\") || value.contains("..") || value.contains(":")) {
+            return property + " must be a plain folder/function name without path separators, '..' or ':', got '" + LogPaths.show(value) + "'";
+        }
+        return null;
     }
 
     private static void copyTree(Path src, Path dst) throws IOException {
