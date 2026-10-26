@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.pack;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
+
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -44,7 +46,7 @@ public final class ShaderpackDiscovery {
                     out.add(new Candidate(p, PackSource.Kind.DIRECTORY));
                 }
                 if (out.size() > MAX_CANDIDATES) {
-                    throw new PackScanException("more than " + MAX_CANDIDATES + " entries in " + shaderpacksDir);
+                    throw new PackScanException("more than " + MAX_CANDIDATES + " entries in " + LogPaths.show(shaderpacksDir));
                 }
             }
         }

@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.config;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssQuality;
@@ -99,16 +100,16 @@ public final class UpscalerSelection {
             m = mode == null ? UpscalerModes.defaultMode(UpscalerBackend.XESS)
                 : UpscalerMode.valueOf(mode.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            LOGGER.error("[VKB-AUTOTEST] xess=FAILED stage=config result=invalid_mode value={} file={}", mode, configFile);
+            LOGGER.error("[VKB-AUTOTEST] xess=FAILED stage=config result=invalid_mode value={} file={}", mode, LogPaths.show(configFile));
             return null;
         }
         if (!UpscalerModes.isOffered(UpscalerBackend.XESS, m)) {
-            LOGGER.error("[VKB-AUTOTEST] xess=FAILED stage=config result=invalid_mode value={} file={}", mode, configFile);
+            LOGGER.error("[VKB-AUTOTEST] xess=FAILED stage=config result=invalid_mode value={} file={}", mode, LogPaths.show(configFile));
             return null;
         }
         if (!XessConfig.libraryExists(gameDir)) {
             LOGGER.warn("[VKB-AUTOTEST] xess=FAILED stage=config result=dll_missing path={} (active_backend=XESS in {} ignored)",
-                XessConfig.libraryPath(gameDir), configFile);
+                LogPaths.show(XessConfig.libraryPath(gameDir)), LogPaths.show(configFile));
             return null;
         }
         // CUSTOM: the device requirements are the same; the percent is applied by UpscalerRequest after the config is loaded.
@@ -136,11 +137,11 @@ public final class UpscalerSelection {
             m = mode == null ? UpscalerModes.defaultMode(UpscalerBackend.DLSS)
                 : UpscalerMode.valueOf(mode.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] dlss=FAILED stage=config result=invalid_mode value={} file={}", mode, configFile);
+            LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] dlss=FAILED stage=config result=invalid_mode value={} file={}", mode, LogPaths.show(configFile));
             return null;
         }
         if (!UpscalerModes.isOffered(UpscalerBackend.DLSS, m)) {
-            LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] dlss=FAILED stage=config result=invalid_mode value={} file={}", mode, configFile);
+            LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] dlss=FAILED stage=config result=invalid_mode value={} file={}", mode, LogPaths.show(configFile));
             return null;
         }
         return DlssQuality.fromMode(m == UpscalerMode.CUSTOM ? UpscalerMode.QUALITY : m); // CUSTOM: see UpscalerRequest.build
@@ -167,7 +168,7 @@ public final class UpscalerSelection {
             return new FsrRequest(FsrQuality.fromMode(m == UpscalerMode.CUSTOM ? UpscalerMode.QUALITY : m), v); // CUSTOM: see UpscalerRequest.build
         } catch (IllegalArgumentException e) {
             LOGGER.error("[VKB-FSR] [VKB-AUTOTEST] fsr=FAILED stage=config result=invalid_value mode={} version={} file={} message={}",
-                raw[1], raw[2], configFile, e.getMessage());
+                raw[1], raw[2], LogPaths.show(configFile), e.getMessage());
             return null;
         }
     }
@@ -195,7 +196,7 @@ public final class UpscalerSelection {
                 if (key.equals(tech + "_version")) version = val;
             }
         } catch (IOException e) {
-            LOGGER.error("[VKB-AUTOTEST] {}=FAILED stage=config result=read_error file={} message={}", tech, configFile, e.toString());
+            LOGGER.error("[VKB-AUTOTEST] {}=FAILED stage=config result=read_error file={} message={}", tech, LogPaths.show(configFile), e.toString());
             return null;
         }
         return new String[] {backend, mode, version};

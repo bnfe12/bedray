@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rtx.upscaler.xess;
 
 import com.mojang.renderpearl.api.device.DeviceInfo;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerReconfigure;
@@ -208,8 +209,9 @@ public final class XessRuntime {
             create(mode, device, winW, winH);
         } catch (RuntimeException | Error e) {
             // The game must keep running without XeSS, but the reason is logged with the full stack (not swallowed).
-            LOGGER.error("XeSS setup threw an exception", e);
-            LOGGER.error("[VKB-AUTOTEST] xess=FAILED stage=exception result=exception message={}", e.toString());
+            // Redacted stack: see DlssRuntime for why the throwable form cannot be passed to the logger directly.
+            LOGGER.error("XeSS setup threw an exception\n{}", LogPaths.stack(e));
+            LOGGER.error("[VKB-AUTOTEST] xess=FAILED stage=exception result=exception message={}", LogPaths.show(e.toString()));
             destroyQuietlyAfterFailure();
             state = State.FAILED;
         }

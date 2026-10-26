@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -222,7 +223,7 @@ public final class FrameGenSettings {
                 }
             }
         } catch (IOException e) {
-            LOGGER.warn("[VKB-FG] cannot read {}: {}", toml, e.toString());
+            LOGGER.warn("[VKB-FG] cannot read {}: {}", LogPaths.show(toml), e.toString());
         }
         return null;
     }
@@ -244,7 +245,7 @@ public final class FrameGenSettings {
                 }
             }
         } catch (IOException e) {
-            LOGGER.warn("[VKB-FG] cannot read {}: {}", toml, e.toString());
+            LOGGER.warn("[VKB-FG] cannot read {}: {}", LogPaths.show(toml), e.toString());
         }
         return null;
     }

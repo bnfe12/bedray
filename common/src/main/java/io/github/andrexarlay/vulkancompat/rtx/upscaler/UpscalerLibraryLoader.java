@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -100,7 +101,7 @@ public final class UpscalerLibraryLoader {
             }
             ensureReadme(nativesDir);
         } catch (IOException e) {
-            LOGGER.warn("Failed to create natives directory {}: {}", nativesDir, e.getMessage());
+            LOGGER.warn("Failed to create natives directory {}: {}", LogPaths.show(nativesDir), e.getMessage());
         }
         return nativesDir;
     }
@@ -209,7 +210,7 @@ public final class UpscalerLibraryLoader {
                 }
             }
         } catch (IOException e) {
-            LOGGER.warn("[UpscalerLibraryLoader] Cannot list {}: {}", dir, e.getMessage());
+            LOGGER.warn("[UpscalerLibraryLoader] Cannot list {}: {}", LogPaths.show(dir), e.getMessage());
         }
         return false;
     }
@@ -248,12 +249,13 @@ public final class UpscalerLibraryLoader {
         xessAvailable = xess;
 
         LOGGER.info("[UpscalerLibraryLoader] Scanned natives at {}: DLSS={} (FG={}, RR={}), FSR={}, XeSS={}, BILINEAR=true",
-                mainDir, dlss, dlssFg, dlssRr, fsr, xess);
+                LogPaths.show(mainDir), dlss, dlssFg, dlssRr, fsr, xess);
     }
 
     /**
      * Returns true if the native library for the backend is present (and, for DLSS, the GPU is NVIDIA).
-     * This is NOT "the backend works": DLSS/FSR/XeSS are STUB, see {@link UpscalerBackend#isImplemented()}.
+     * This is NOT "the backend works": a present DLL only says the library can be linked; which backend actually renders
+     * is decided per frame, see {@link UpscalerBackend#isImplemented()} and {@code UpscalerSelection}.
      * BILINEAR is built in and always available.
      */
     public static boolean isBackendAvailable(UpscalerBackend backend) {
@@ -310,7 +312,7 @@ public final class UpscalerLibraryLoader {
      */
     public static boolean tryLoadLibrary(Path dllPath) {
         if (dllPath == null || !Files.isRegularFile(dllPath)) {
-            LOGGER.info("[UpscalerLibraryLoader] Native library not found: {}", dllPath);
+            LOGGER.info("[UpscalerLibraryLoader] Native library not found: {}", LogPaths.show(dllPath));
             return false;
         }
         try {
@@ -338,7 +340,7 @@ public final class UpscalerLibraryLoader {
                 }
             }
         } catch (IOException e) {
-            LOGGER.warn("[UpscalerLibraryLoader] Cannot list {}: {}", dir, e.getMessage());
+            LOGGER.warn("[UpscalerLibraryLoader] Cannot list {}: {}", LogPaths.show(dir), e.getMessage());
         }
         return false;
     }
