@@ -949,22 +949,22 @@ public final class EntityCaptureManager {
      */
     private void stageCapturedQuadsEmitters(int slot, int startVert, int endVert, float gain) {
         RtEmitters.TexelEmission texels = EntityTextureAtlas.INSTANCE.texels(slot);
-        List<Float> rawVerts = frameConsumer.getVertices();
-        int maxVert = Math.min(endVert, rawVerts.size() / 10);
+        float[] rawVerts = frameConsumer.vertexData();
+        int maxVert = Math.min(endVert, frameConsumer.vertexFloatCount() / CapturedVertexConsumer.FLOATS_PER_VERTEX);
         for (int v = startVert; v + 3 < maxVert; v += 4) {
             for (int c = 0; c < 4; c++) {
                 int base = (v + c) * 10;
-                particlePositions[c * 3] = rawVerts.get(base);
-                particlePositions[c * 3 + 1] = rawVerts.get(base + 1);
-                particlePositions[c * 3 + 2] = rawVerts.get(base + 2);
-                int abgr = Float.floatToRawIntBits(rawVerts.get(base + 3));
+                particlePositions[c * 3] = rawVerts[base];
+                particlePositions[c * 3 + 1] = rawVerts[base + 1];
+                particlePositions[c * 3 + 2] = rawVerts[base + 2];
+                int abgr = Float.floatToRawIntBits(rawVerts[base + 3]);
                 int a = (abgr >>> 24) & 0xFF;
                 int b = (abgr >>> 16) & 0xFF;
                 int g = (abgr >>> 8) & 0xFF;
                 int r = abgr & 0xFF;
                 particleColors[c] = (a << 24) | (r << 16) | (g << 8) | b;
-                particleUvs[c * 2] = rawVerts.get(base + 4);
-                particleUvs[c * 2 + 1] = rawVerts.get(base + 5);
+                particleUvs[c * 2] = rawVerts[base + 4];
+                particleUvs[c * 2 + 1] = rawVerts[base + 5];
             }
             if (QuadEmitterBuilder.build(particleRecord, slot, particlePositions, particleUvs, particleColors, texels)) {
                 particleRecord[7] *= gain / 2.4f;
@@ -1098,16 +1098,16 @@ public final class EntityCaptureManager {
             frameConsumer.flushRemaining();
             int endVert = frameConsumer.getVertexCount();
             if (isEndPortal && endVert > startVert) {
-                List<Float> rawVerts = frameConsumer.getVertices();
-                int maxVert = Math.min(endVert, rawVerts.size() / 10);
+                float[] rawVerts = frameConsumer.vertexData();
+                int maxVert = Math.min(endVert, frameConsumer.vertexFloatCount() / CapturedVertexConsumer.FLOATS_PER_VERTEX);
                 for (int v = startVert; v + 3 < maxVert; v += 4) {
                     int b0 = v * 10, b1 = (v + 1) * 10, b2 = (v + 2) * 10, b3 = (v + 3) * 10;
-                    float e1x = rawVerts.get(b1) - rawVerts.get(b0);
-                    float e1y = rawVerts.get(b1 + 1) - rawVerts.get(b0 + 1);
-                    float e1z = rawVerts.get(b1 + 2) - rawVerts.get(b0 + 2);
-                    float e2x = rawVerts.get(b2) - rawVerts.get(b0);
-                    float e2y = rawVerts.get(b2 + 1) - rawVerts.get(b0 + 1);
-                    float e2z = rawVerts.get(b2 + 2) - rawVerts.get(b0 + 2);
+                    float e1x = rawVerts[b1] - rawVerts[b0];
+                    float e1y = rawVerts[b1 + 1] - rawVerts[b0 + 1];
+                    float e1z = rawVerts[b1 + 2] - rawVerts[b0 + 2];
+                    float e2x = rawVerts[b2] - rawVerts[b0];
+                    float e2y = rawVerts[b2 + 1] - rawVerts[b0 + 1];
+                    float e2z = rawVerts[b2 + 2] - rawVerts[b0 + 2];
                     float nx = e1y * e2z - e1z * e2y;
                     float ny = e1z * e2x - e1x * e2z;
                     float nz = e1x * e2y - e1y * e2x;
@@ -1117,15 +1117,15 @@ public final class EntityCaptureManager {
                     } else {
                         nx = 0f; ny = 1f; nz = 0f;
                     }
-                    float[][] uvs = {{0f, 0f}, {1f, 0f}, {1f, 1f}, {0f, 1f}};
-                    int[] bases = {b0, b1, b2, b3};
                     for (int c = 0; c < 4; c++) {
-                        int base = bases[c];
-                        rawVerts.set(base + 4, uvs[c][0]);
-                        rawVerts.set(base + 5, uvs[c][1]);
-                        rawVerts.set(base + 7, nx);
-                        rawVerts.set(base + 8, ny);
-                        rawVerts.set(base + 9, nz);
+                        int base = b0 + c * 10;
+                        float su = c == 1 || c == 2 ? 1f : 0f;
+                        float sv = c >= 2 ? 1f : 0f;
+                        rawVerts[base + 4] = su;
+                        rawVerts[base + 5] = sv;
+                        rawVerts[base + 7] = nx;
+                        rawVerts[base + 8] = ny;
+                        rawVerts[base + 9] = nz;
                     }
                 }
                 if (slot > 0 && EntityTextureAtlas.INSTANCE.hasEmission(slot)) {
@@ -1258,23 +1258,6 @@ public final class EntityCaptureManager {
             totalVertices.addAndGet(entityVertices);
             totalIndices.addAndGet(entityIndices);
 
-            // Compute local/world bounding box from captured vertices
-            float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY, minZ = Float.POSITIVE_INFINITY;
-            float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
-
-            List<Float> allVerts = frameConsumer.getVertices();
-            for (int i = entityStartVertex * 10; i < endVertex * 10 && i + 2 < allVerts.size(); i += 10) {
-                float vx = allVerts.get(i);
-                float vy = allVerts.get(i + 1);
-                float vz = allVerts.get(i + 2);
-                if (vx < minX) minX = vx;
-                if (vy < minY) minY = vy;
-                if (vz < minZ) minZ = vz;
-                if (vx > maxX) maxX = vx;
-                if (vy > maxY) maxY = vy;
-                if (vz > maxZ) maxZ = vz;
-            }
-
             EntityGeometryFrame.CapturedEntity entity = new EntityGeometryFrame.CapturedEntity(
                 curEntityId,
                 curEntityType,
@@ -1323,22 +1306,13 @@ public final class EntityCaptureManager {
         publishedEmitterCount = worldEmitterCount;
         publishedParticleEmitterCount = particleEmitterCount;
 
-        List<Float> rawVerts = frameConsumer.getVertices();
-        List<Integer> rawIndices = frameConsumer.getIndices();
-        io.github.andrexarlay.vulkancompat.api.rt.RtSceneApi.emitActiveInstances(rawVerts, rawIndices, stagedEntities);
+        io.github.andrexarlay.vulkancompat.api.rt.RtSceneApi.emitActiveInstances(frameConsumer, stagedEntities);
 
-        int totalVerts = rawVerts.size() / 10;
-        int totalIndices = rawIndices.size();
+        int totalVerts = frameConsumer.vertexFloatCount() / CapturedVertexConsumer.FLOATS_PER_VERTEX;
+        int totalIndices = frameConsumer.indexCount();
 
-        float[] vertexData = new float[rawVerts.size()];
-        for (int i = 0; i < rawVerts.size(); i++) {
-            vertexData[i] = rawVerts.get(i);
-        }
-
-        int[] indexData = new int[rawIndices.size()];
-        for (int i = 0; i < rawIndices.size(); i++) {
-            indexData[i] = rawIndices.get(i);
-        }
+        float[] vertexData = java.util.Arrays.copyOf(frameConsumer.vertexData(), frameConsumer.vertexFloatCount());
+        int[] indexData = java.util.Arrays.copyOf(frameConsumer.indexData(), frameConsumer.indexCount());
 
         EntityGeometryFrame frame = new EntityGeometryFrame(
             currentFrameId,
