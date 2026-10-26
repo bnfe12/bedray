@@ -72,6 +72,7 @@ public class LogPathBoundaryTest {
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/ShaderHostConfig.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/ShaderHostStartup.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/ShaderHostStatus.java",
+        "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/customrt/CustomRtStage.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/dirtrt/DirtRtPipeline.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/dirtrt/DirtRtRuntime.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/iris/IrisRenderBridge.java",
@@ -99,7 +100,9 @@ public class LogPathBoundaryTest {
         sink("../common/src/main/java/io/github/andrexarlay/vulkancompat/rt/upscale/dlss/nr/DlssNeuralRendering.java",
             "LogPaths.show(reason)", "unusable("),
         sink("../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/dirtrt/DirtRtPipeline.java",
-            "LogPaths.show(lastError)", "onFailure("));
+            "LogPaths.show(lastError)", "onFailure("),
+        sink("../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/customrt/CustomRtStage.java",
+            "LogPaths.show(why)", "fail(", "waiting("));
 
     private static String[] sink(String file, String... markers) {
         String[] entry = new String[markers.length + 1];

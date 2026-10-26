@@ -83,6 +83,50 @@ public class LogPathsTest {
     }
 
     @Test
+    public void redactsAProfileNameThatContainsAnApostrophe() {
+        // Windows and macOS accounts use apostrophes; the old name class stopped at one and printed O'Brien's tail.
+        String shown = LogPaths.show("C:\\Users\\O'Brien\\AppData\\Roaming\\FreesmLauncher\\libxess.dll");
+        assertFalse(shown.contains("Brien"), "the tail of an apostrophe name must not survive: " + shown);
+        assertTrue(shown.startsWith("<home>\\AppData\\"), shown);
+        String nix = LogPaths.show("/home/d'amico/.minecraft/logs/latest.log");
+        assertFalse(nix.contains("amico"), nix);
+        assertTrue(nix.startsWith("<home>/.minecraft/"), nix);
+    }
+
+    @Test
+    public void redactsAHomeNestedUnderAnotherAbsoluteRoot() {
+        // Fedora Silverblue/Universal Blue and Solaris-family put the profile under /var/home or /export/home; the
+        // word-boundary lookbehind used to refuse any separator preceded by a letter, so these printed the account raw.
+        String silver = LogPaths.show("/var/home/bob/.local/share/minecraft/logs/latest.log");
+        assertFalse(silver.contains("bob"), "Silverblue home leaked: " + silver);
+        assertTrue(silver.startsWith("<home>/.local/"), silver);
+        String solaris = LogPaths.show("/export/home/jones/game/natives/libxess.dll");
+        assertFalse(solaris.contains("jones"), solaris);
+        assertTrue(solaris.startsWith("<home>/game/"), solaris);
+    }
+
+    @Test
+    public void redactsADotlessUncShareRoot() {
+        // A server share has a leading backslash run then dotless segments (server, share) before Users; the segment skip
+        // walks them and the whole leading path collapses into <home>, hiding server and share too. A server name with a
+        // dot (\\wsl.localhost\...) is a documented hole — it is only caught on the owner's own machine, where
+        // user.home is replaced literally first.
+        String unc = LogPaths.show("\\\\fileserver\\games\\Users\\bob\\AppData\\Roaming\\libxess.dll");
+        assertFalse(unc.contains("bob"), "UNC home leaked: " + unc);
+        assertFalse(unc.contains("fileserver"), unc);
+        assertTrue(unc.startsWith("<home>\\"), unc);
+    }
+
+    @Test
+    public void keepsTheSchemeOfAFileUrlThatNamesAHomeSegment() {
+        // "file:/home/bob/game" is a real absolute path and its profile must redact, but the drive-letter branch used to
+        // eat the scheme's last letter and print "fil<home>".
+        String shown = LogPaths.show("file:/home/bob/game/config.toml");
+        assertFalse(shown.contains("bob"), shown);
+        assertTrue(shown.startsWith("file:<home>/game/"), "the file: scheme must survive intact: " + shown);
+    }
+
+    @Test
     public void mapsTheGameDirectoryToItsOwnAlias() {
         java.nio.file.Path gameDir = java.nio.file.Path.of("X:", "instances", "RT 26.3", "minecraft").toAbsolutePath();
         LogPaths.setGameDir(gameDir);

@@ -13,23 +13,35 @@ import java.util.regex.Pattern;
  */
 public final class LogPaths {
     /**
-     * A profile directory of any machine. Four rules, each learned from a shape that actually leaked or actually got
+     * A profile directory of any machine. Five rules, each learned from a shape that actually leaked or actually got
      * swallowed: the separator runs are {@code +} because a JSON or {@code Properties} dump escapes its backslashes and
-     * {@code C:\\Users\\bob} failed to match a single-separator pattern; the name may contain spaces because Windows
-     * account names do, and the old form stopped at the first one and printed {@code Smith\AppData\...}; the name stops at
-     * {@code : ; , ( )} and quotes because {@code AccessDeniedException} prints {@code <path>: Access denied} and the
-     * reason after the path is the part the owner needs to read; and the root must be absolute — a drive letter, or a
-     * separator that is not part of a word — because {@code github.com/users/foo}, {@code docs/users/manual.pdf} and
-     * {@code aka.ms/vs/redist/home/page} all matched the unanchored form and came out as {@code <home>}.
+     * {@code C:\\Users\\bob} failed to match a single-separator pattern; the name may contain spaces and apostrophes
+     * because Windows/macOS account names do ("John Smith", "O'Brien"), and the old form stopped at the first one and
+     * printed {@code Smith\AppData\...} or {@code 'Brien\AppData\...}; the name stops at {@code : ; , ( )} and a double
+     * quote because {@code AccessDeniedException} prints {@code <path>: Access denied} and the reason after the path is
+     * the part the owner needs to read; the root must be absolute — a drive letter, or a leading backslash segment like
+     * the Silverblue/Solaris home mounts or a dotless server share — because {@code github.com/users/foo},
+     * {@code docs/users/manual.pdf} and {@code aka.ms/vs/redist/home/page} all matched the unanchored form and came out
+     * as {@code <home>}; and the drive branch refuses a letter that is itself part of a word ({@code (?<![a-z])}) so that
+     * the {@code file:} scheme of a {@code file:/home/bob} URL is not mistaken for an {@code e:} drive and printed as
+     * {@code fil<home>}.
      *
-     * <p>Spaces are capped at two following words so that prose after a bare {@code /home} is swallowed only in small
-     * pieces. The known hole: a UNC root ({@code \\server\share\Users\bob}) has no separator its name can anchor to, so it
-     * is left as written; own-machine paths never depend on this pattern because {@link #setGameDir} and
-     * {@code user.home} are replaced literally first.
+     * <p>Any number of dotless path segments may precede {@code users|home}, so {@code /var/home/bob} (Fedora Silverblue
+     * / Universal Blue), {@code /export/home/jones} and {@code \\server\share\Users\bob} redact. Skipping only dotless
+     * segments is what keeps the form safe on URLs: a hostname carries a dot, so {@code github.com/users} cannot be
+     * walked into. The known hole: a server name that itself contains a dot ({@code \\wsl.localhost\...\home\bob}) is
+     * left as written — on the owner's own machine that path is still caught, because {@link #setGameDir} and
+     * {@code user.home} are replaced literally before this pattern runs. Spaces in the name are capped at two following
+     * words so prose after a bare {@code /home} is swallowed only in small pieces; a bare relative
+     * {@code /home/settings.cfg} is over-redacted (a filename is indistinguishable from a username) — over-redaction
+     * loses nothing the owner needs, a leak would.
      */
     private static final Pattern PROFILE = Pattern.compile(
-        "(?i)(?:[a-z]:[/\\\\]+|(?<![A-Za-z0-9._])[/\\\\]+)(?:users|home)[/\\\\]+"
-            + "[^/\\\\:;,()\"' \\r\\n]+(?: [^/\\\\:;,()\"' \\r\\n]+){0,2}");
+        "(?i)(?:^|(?<=[\\s\"'(,;:=]))"
+            + "(?:(?<![a-z])[a-z]:[/\\\\]+|(?:[/\\\\]+[\\w $-]+)*[/\\\\]+)"
+            + "(?:users|home)[/\\\\]+"
+            + "[^/\\\\:;(),\" \\r\\n]+(?: [^/\\\\:;(),\" \\r\\n]+){0,2}");
+
     private static volatile String gameDir = "";
 
     private LogPaths() {

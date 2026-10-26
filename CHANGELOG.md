@@ -21,7 +21,11 @@
   the Dirt RT, frame-generation and shader-host surfaces show on the debug screen or keep as a session failure
   reason. Causes are still logged in full. The source contract that guards it now reads the throwable names out
   of each file's own `catch` clauses and follows the text into stored status strings, so renaming a catch
-  variable or building a status message cannot reopen a closed leak.
+  variable or building a status message cannot reopen a closed leak. This covers the custom-RT host stage, whose
+  compile/load/prepare/recording failures store a reason into the debug string shown on the F3 overlay. The
+  redactor now also catches a profile under another absolute root (`/var/home`, `/export/home`, a dotless
+  `\\server\share\Users`), an account name with an apostrophe (`O'Brien`), and leaves a `file:/home/...` URL's
+  scheme intact instead of eating its last letter.
 
 ## 0.1.1-alpha.13 (development, unreleased)
 
