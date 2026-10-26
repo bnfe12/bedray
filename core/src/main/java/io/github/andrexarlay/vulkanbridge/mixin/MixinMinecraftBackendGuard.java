@@ -28,10 +28,14 @@ public abstract class MixinMinecraftBackendGuard {
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/OptionInstance;set(Ljava/lang/Object;)V"))
     private Object vkbridge$guardBackendReset(Object value) {
         if (value instanceof PreferredGraphicsApi api && api != PreferredGraphicsApi.VULKAN) {
-            LOGGER.info("[BedrayCore/Options] backend_guard intercepted reset to {}, strictly enforcing VULKAN", api);
-            BackendGuard.onUncleanStartup(
+            BackendGuard.Decision decision = BackendGuard.onUncleanStartup(
                     BackendGuard.stateFile(Platforms.get().configDir()),
                     BackendGuard.enabledFromProperties(), BackendGuard.maxKeepsFromProperties());
+            if (decision != BackendGuard.Decision.KEEP_VULKAN) {
+                LOGGER.info("[BedrayCore/Options] backend_guard decision={} letting vanilla reset to {}", decision, api);
+                return value;
+            }
+            LOGGER.info("[BedrayCore/Options] backend_guard intercepted reset to {}, strictly enforcing VULKAN", api);
             return PreferredGraphicsApi.VULKAN;
         }
         return value;

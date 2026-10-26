@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,12 +26,14 @@ import java.nio.file.Path;
  * <ul>
  *   <li>Only the {@code VULKAN -> DEFAULT} step is intercepted; {@code startedCleanly}, the fullscreen reset and the
  *       {@code DEFAULT -> OPENGL} step of vanilla stay untouched.</li>
- *   <li>The choice is kept for at most {@link #DEFAULT_MAX_KEEPS} consecutive unclean startups (counter file
- *       {@code <config>/bedray/backend_guard.properties}); after that the vanilla fallback runs, so a Vulkan
- *       driver that really cannot start does not trap the user in a crash loop.</li>
+ *   <li>Vulkan is kept on <em>every</em> unclean startup while the guard is enabled. The counter file
+ *       {@code <config>/bedray/backend_guard.properties} records how many in a row, which is telemetry for the log, not a
+ *       budget: the earlier bound ({@code maxKeeps}, after which vanilla fell back to OpenGL) was dropped because on a
+ *       driver that cannot start Vulkan the fallback silently disabled the whole mod.</li>
  *   <li>A clean startup (title screen reached) deletes the counter.</li>
- *   <li>{@code -Dvkbridge.backendGuard=false} restores vanilla behaviour; {@code -Dvkbridge.backendGuard.maxKeeps=N}
- *       changes the bound.</li>
+ *   <li>{@code -Dvkbridge.backendGuard=false} restores vanilla behaviour; it is honoured in {@link #onUncleanStartup},
+ *       which is the escape hatch for a machine where Vulkan cannot start at all.
+ *       {@code -Dvkbridge.backendGuard.maxKeeps=N} is accepted and logged but no longer changes any decision.</li>
  * </ul>
  * Every decision is logged as {@code [BedrayCore/Options] backend_guard ...}.
  */
@@ -46,9 +49,7 @@ public final class BackendGuard {
         /** Keep VULKAN (the vanilla reset is not applied). */
         KEEP_VULKAN,
         /** Let vanilla reset to DEFAULT: the guard is disabled by the property. */
-        VANILLA_DISABLED,
-        /** Let vanilla reset to DEFAULT: the bound of consecutive kept unclean startups is reached. */
-        VANILLA_LIMIT_REACHED
+        VANILLA_DISABLED
     }
 
     private BackendGuard() {}
@@ -66,6 +67,11 @@ public final class BackendGuard {
      *                              startup with the real cause rather than guessing)
      */
     public static Decision onUncleanStartup(Path stateFile, boolean enabled, int maxKeeps) {
+        if (!enabled) {
+            LOGGER.info("[BedrayCore/Options] backend_guard decision=vanilla reason=disabled_by_property "
+                + "property=" + PROPERTY_ENABLED);
+            return Decision.VANILLA_DISABLED;
+        }
         int kept = readCount(stateFile);
         writeCount(stateFile, kept + 1);
         LOGGER.warn("[BedrayCore/Options] backend_guard decision=keep_vulkan reason=unclean_startup "
@@ -81,7 +87,7 @@ public final class BackendGuard {
                 LOGGER.info("[BedrayCore/Options] backend_guard event=clean_startup counter_reset=true");
             }
         } catch (IOException e) {
-            throw new UncheckedIOException("cannot delete " + stateFile, e);
+            throw new UncheckedIOException("cannot delete " + LogPaths.show(stateFile), e);
         }
     }
 
@@ -95,11 +101,18 @@ public final class BackendGuard {
         if (value == null || value.isBlank()) {
             return DEFAULT_MAX_KEEPS;
         }
-        int parsed = Integer.parseInt(value.trim());
-        if (parsed < 0) {
-            throw new IllegalArgumentException(PROPERTY_MAX_KEEPS + " must be >= 0, got " + parsed);
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            if (parsed < 0) {
+                throw new NumberFormatException(PROPERTY_MAX_KEEPS + " must be >= 0, got " + parsed);
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            // Read inside the Minecraft constructor: a typo in an optional tuning property must not be a startup crash.
+            LOGGER.warn("[BedrayCore/Options] backend_guard property_ignored property={} value={} reason={} (using {})",
+                PROPERTY_MAX_KEEPS, value, e.getMessage(), DEFAULT_MAX_KEEPS);
+            return DEFAULT_MAX_KEEPS;
         }
-        return parsed;
     }
 
     static int readCount(Path stateFile) {
@@ -113,9 +126,9 @@ public final class BackendGuard {
                     return Integer.parseInt(trimmed.substring(KEY.length() + 1).trim());
                 }
             }
-            throw new IllegalStateException(stateFile + " has no " + KEY + "= line");
+            throw new IllegalStateException(LogPaths.show(stateFile) + " has no " + KEY + "= line");
         } catch (IOException e) {
-            throw new UncheckedIOException("cannot read " + stateFile, e);
+            throw new UncheckedIOException("cannot read " + LogPaths.show(stateFile), e);
         }
     }
 
@@ -126,7 +139,7 @@ public final class BackendGuard {
             Files.writeString(stateFile, "# Written by Bedray (BackendGuard). Consecutive unclean startups whose Vulkan choice was kept.\n"
                     + KEY + "=" + count + "\n", StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new UncheckedIOException("cannot write " + stateFile, e);
+            throw new UncheckedIOException("cannot write " + LogPaths.show(stateFile), e);
         }
     }
 }
