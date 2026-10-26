@@ -58,12 +58,27 @@ final class OverlayCompositor {
 
     private final EngineVk e;
     private final int colorFormat;
-    private final long vert, frag, setLayout, pipelineLayout, pipeline, sampler;
+    private long vert, frag, setLayout, pipelineLayout, pipeline, sampler;
 
     OverlayCompositor(EngineVk e, RenderTarget main) {
         this.e = e;
-        VkDevice dev = e.vkDevice();
         this.colorFormat = VulkanConst.toVk(main.getColorTexture().getFormat());
+        try {
+            build(e, main);
+        } catch (Throwable t) {
+            // A compositor whose creation failed is never stored by the caller, so its destroy() would never run and the
+            // shader modules / layouts already created would survive vkDestroyDevice.
+            try {
+                destroy();
+            } catch (Throwable unwind) {
+                GlLog.error(4, "result=compositor_ctor_unwind_failed reason=" + unwind, unwind);
+            }
+            throw t;
+        }
+    }
+
+    private void build(EngineVk e, RenderTarget main) {
+        VkDevice dev = e.vkDevice();
         vert = shader(dev, VERT, Shaderc.shaderc_glsl_vertex_shader, "vkb_overlay.vert");
         frag = shader(dev, FRAG, Shaderc.shaderc_glsl_fragment_shader, "vkb_overlay.frag");
         try (MemoryStack s = stackPush()) {
@@ -131,13 +146,15 @@ final class OverlayCompositor {
 
     Binding bind(SharedRing ring) {
         VkDevice dev = e.vkDevice();
+        long pool = 0L;
+        boolean bound = false;
         try (MemoryStack s = stackPush()) {
             LongBuffer p = s.mallocLong(1);
             VkDescriptorPoolSize.Buffer ps = VkDescriptorPoolSize.calloc(1, s).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                 .descriptorCount(ring.slots);
             VkDescriptorPoolCreateInfo dpi = VkDescriptorPoolCreateInfo.calloc(s).sType$Default().maxSets(ring.slots).pPoolSizes(ps);
             SharedRing.check(vkCreateDescriptorPool(dev, dpi, null, p), "vkCreateDescriptorPool");
-            long pool = p.get(0);
+            pool = p.get(0);
             LongBuffer layouts = s.mallocLong(ring.slots);
             for (int i = 0; i < ring.slots; i++) {
                 layouts.put(i, setLayout);
@@ -154,7 +171,14 @@ final class OverlayCompositor {
                     .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(ii);
                 vkUpdateDescriptorSets(dev, w, null);
             }
-            return new Binding(pool, descSet);
+            Binding binding = new Binding(pool, descSet);
+            bound = true;
+            return binding;
+        } finally {
+            if (pool != 0L && !bound) {
+                // Only unbind() destroys a pool, and it never sees a Binding the caller did not get back.
+                vkDestroyDescriptorPool(dev, pool, null);
+            }
         }
     }
 
