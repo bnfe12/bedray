@@ -290,7 +290,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 }
             }
         } catch (IOException e) {
-            throw new NativeLibraryException("-", "cannot list " + dir + ": " + e, e);
+            throw new NativeLibraryException("-", "cannot list " + LogPaths.show(dir) + ": " + e, e);
         }
         return null;
     }
@@ -342,7 +342,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             try {
                 loader.load(p.toString());
             } catch (UnsatisfiedLinkError e) {
-                throw new NativeLibraryException(id, "the OS refused to load " + p + " (already loaded: " + loadedNames + "): " + e.getMessage(), e);
+                throw new NativeLibraryException(id, "the OS refused to load " + LogPaths.show(p) + " (already loaded: " + loadedNames + "): " + e.getMessage(), e);
             }
             loadedNames.add(name);
         }
@@ -363,7 +363,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 try {
                     Files.delete(p);
                 } catch (IOException e) {
-                    throw new NativeLibraryException(id, "cannot delete " + p + " (is it loaded by the running game?): " + e, e);
+                    throw new NativeLibraryException(id, "cannot delete " + LogPaths.show(p) + " (is it loaded by the running game?): " + e, e);
                 }
                 removed.add(p);
             }
@@ -382,7 +382,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
     public InstallResult install(String id, Path source) {
         LibraryDescriptor d = descriptor(id);
         if (source == null || !Files.isRegularFile(source)) {
-            throw new NativeLibraryException(id, "source is not a file: " + source);
+            throw new NativeLibraryException(id, "source is not a file: " + LogPaths.show(source));
         }
         String srcName = source.getFileName().toString();
         String lower = srcName.toLowerCase(Locale.ROOT);
@@ -417,7 +417,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             for (Staged s : staged) {
                 Path target = dir.resolve(s.canonicalName);
                 if (Files.isSymbolicLink(target)) {
-                    throw new NativeLibraryException(id, "refusing to overwrite a symbolic link: " + target);
+                    throw new NativeLibraryException(id, "refusing to overwrite a symbolic link: " + LogPaths.show(target));
                 }
                 Path existing = locate(dir, s.canonicalName);
                 if (existing != null && !existing.getFileName().toString().equals(s.canonicalName)) {
@@ -575,7 +575,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 Files.delete(p);
             }
         } catch (IOException e) {
-            throw new NativeLibraryException("-", "cannot clean the staging directory " + root + ": " + e, e);
+            throw new NativeLibraryException("-", "cannot clean the staging directory " + LogPaths.show(root) + ": " + e, e);
         }
     }
 }

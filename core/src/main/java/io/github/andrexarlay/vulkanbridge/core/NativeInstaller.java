@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraryException;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,8 +72,8 @@ public final class NativeInstaller {
         try {
             NativeFolders.ensureLayout(nativesDir);
         } catch (IOException e) {
-            errors.add("cannot prepare " + nativesDir + ": " + e.getMessage());
-            LOGGER.warn("[VKB-NATIVES] install aborted: cannot prepare {}", nativesDir, e);
+            errors.add("cannot prepare " + LogPaths.show(nativesDir) + ": " + e.getMessage());
+            LOGGER.warn("[VKB-NATIVES] install aborted: cannot prepare {}", LogPaths.show(nativesDir), e);
             return new Report(List.of(), List.of(), skipped, errors);
         }
         for (Path src : sources) {
@@ -191,7 +192,7 @@ public final class NativeInstaller {
                 if (p == null) {
                     ok.add(s);
                 } else {
-                    why.add(s.origin() + ": " + p);
+                    why.add(LogPaths.show(s.origin()) + ": " + p);
                 }
             }
             if (ok.isEmpty()) {
@@ -231,7 +232,7 @@ public final class NativeInstaller {
         }
         List<String> names = new ArrayList<>();
         for (Staged s : ok) {
-            names.add(s.origin());
+            names.add(LogPaths.show(s.origin()));
         }
         throw new NativeLibraryException(ID, "ambiguous: " + name + " occurs " + ok.size() + " times as a valid x64 DLL " + names
             + "; extract the one you want and drop that file");
@@ -243,11 +244,11 @@ public final class NativeInstaller {
         for (NativeCatalog.Slot slot : slots) {
             Path dir = slot.folder().resolve(nativesDir);
             if (Files.isSymbolicLink(dir)) {
-                throw new IOException(dir + " is a symbolic link; refusing to write into it");
+                throw new IOException(LogPaths.show(dir) + " is a symbolic link; refusing to write into it");
             }
             Path existing = NativeFiles.find(dir, s.canonical());
             if (existing != null && Files.isSymbolicLink(existing)) {
-                throw new IOException(existing + " is a symbolic link; refusing to overwrite it");
+                throw new IOException(LogPaths.show(existing) + " is a symbolic link; refusing to overwrite it");
             }
         }
         for (NativeCatalog.Slot slot : slots) {
@@ -266,15 +267,15 @@ public final class NativeInstaller {
                 try {
                     NativeLibrariesImpl.moveInto(tmp, target);
                 } catch (IOException e) {
-                    throw new IOException("cannot replace " + target + " (is it loaded by the running game? close the game and try again): "
+                    throw new IOException("cannot replace " + LogPaths.show(target) + " (is it loaded by the running game? close the game and try again): "
                         + e.getMessage(), e);
                 }
             } finally {
                 Files.deleteIfExists(tmp);
             }
             files.add(target);
-            LOGGER.info("[VKB-NATIVES] native_installed file={} to={} bytes={} sha256={} from={}", s.canonical(), target, Files.size(target),
-                NativeFiles.sha256(target), s.origin());
+            LOGGER.info("[VKB-NATIVES] native_installed file={} to={} bytes={} sha256={} from={}", LogPaths.show(s.canonical()),
+                LogPaths.show(target), Files.size(target), NativeFiles.sha256(target), LogPaths.show(s.origin()));
         }
     }
 }

@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -32,7 +34,7 @@ public final class NativeFolders {
         for (NativeCatalog.Folder f : NativeCatalog.Folder.values()) {
             Path dir = f.resolve(nativesDir);
             if (Files.isSymbolicLink(dir)) {
-                throw new IOException(dir + " is a symbolic link; Bedray will not use it as a natives folder");
+                throw new IOException(LogPaths.show(dir) + " is a symbolic link; Bedray will not use it as a natives folder");
             }
             if (!Files.isDirectory(dir)) {
                 Files.createDirectories(dir);
@@ -44,7 +46,7 @@ public final class NativeFolders {
 
     private static boolean writeReadmeIfNeeded(Path readme) throws IOException {
         if (Files.isSymbolicLink(readme)) {
-            throw new IOException(readme + " is a symbolic link; not overwriting it");
+            throw new IOException(LogPaths.show(readme) + " is a symbolic link; not overwriting it");
         }
         if (Files.exists(readme)) {
             int existing = versionOf(readme);
