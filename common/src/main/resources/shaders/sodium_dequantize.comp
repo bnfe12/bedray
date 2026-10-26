@@ -1,9 +1,14 @@
 #version 460
 // GPU dequantization of Sodium 0.9.2 compact chunk vertices: replaces the CPU float materialization in
 // SodiumMeshDecoder.decode and the staging put in RtWorld's section build. One invocation per quad: decodes the
-// 4 vertices (20 bytes each, little-endian words) and writes the per-section geometry arena block layout
-// [positions float3 x 4Q][uv float2 x 4Q][colours uint x 4Q][light uint x 4Q] (RtWorld.GEOM_BYTES_PER_QUAD = 112)
-// straight into the arena block, so the raw capture (80 bytes per quad) is all the CPU ever touches.
+// 4 vertices (20 bytes each, little-endian words) and writes the per-section geometry arena block.
+//
+// The arena block layout is PLANAR, not per-quad interleaved (RtWorld.writeTableEntry / GEOM_BYTES_PER_QUAD = 112):
+//     [positions float3 x 4Q][uv float2 x 4Q][colour uint x 4Q][light uint x 4Q]
+// so the plane word bases are 0, 12Q, 20Q and 24Q. The BLAS build reads positions at passStart * 48 B and the RT
+// shaders take the other three planes from the section table, so a per-quad interleaved write would feed both of
+// them garbage (degenerate triangles -> GPU hang).
+//
 // Vertex layout source: SodiumMeshDecoder javadoc (Sodium 0.9.2 CompactChunkVertex decompilation), mirrored bit for bit:
 //   w0 position hi: axis a (0=x, 1=y, 2=z) at bits 10a .. 10a+9; w1 position lo: same layout;
 //     position = (((hi << 10) | lo) * 32 / 2^20) - 8, section-local blocks (the section table carries the origin).
@@ -36,15 +41,18 @@ const float TEX_MAX_INV = 1.0 / 32768.0;
 
 void main() {
     uint q = gl_GlobalInvocationID.x;
-    if (q >= pc.quadCount) {
+    uint quads = pc.quadCount;
+    if (q >= quads) {
         return;
     }
     RawQuads src = RawQuads(pc.rawAddr);
     uint flagBits = pc.flagsAddr.x != 0u ? QuadFlags(pc.flagsAddr).f[q] : 0u;
-    ArenaBlock outBlock = ArenaBlock(pc.arenaAddr);
-    // Arena word map (112 bytes = 28 words per quad): positions q*28 .. +11, uvs q*28+12 .. +19,
-    // colours q*28+20 .. +23, light q*28+24 .. +27.
-    uint posBase = q * 28u;
+    ArenaBlock arena = ArenaBlock(pc.arenaAddr);
+    // Planar plane bases in words: positions 0, uvs 12Q, colours 20Q, light 24Q (28 words = 112 B per quad).
+    uint posBase = q * 12u;
+    uint uvBase = quads * 12u + q * 8u;
+    uint colBase = quads * 20u + q * 4u;
+    uint lightBase = quads * 24u + q * 4u;
     for (uint v = 0u; v < 4u; v++) {
         uint o = q * 20u + v * 5u;   // vertex word offset in the raw capture
         uint w0 = src.w[o];
@@ -54,13 +62,13 @@ void main() {
         for (uint axis = 0u; axis < 3u; axis++) {
             uint q20 = (((w0 >> (axis * 10u)) & 1023u) << 10u) | ((w1 >> (axis * 10u)) & 1023u);
             float p = float(q20) * VERTEX_SCALE + VERTEX_OFFSET;
-            outBlock.w[posBase + v * 3u + axis] = floatBitsToUint(p);
+            arena.w[posBase + v * 3u + axis] = floatBitsToUint(p);
         }
         float u = float(w3 & 0x7FFFu) * TEX_MAX_INV + ((w3 & 0x8000u) != 0u ? TEX_MAX_INV : -TEX_MAX_INV);
         float vTex = float((w3 >> 16) & 0x7FFFu) * TEX_MAX_INV + ((w3 & 0x80000000u) != 0u ? TEX_MAX_INV : -TEX_MAX_INV);
-        outBlock.w[posBase + 12u + v * 2u] = floatBitsToUint(u);
-        outBlock.w[posBase + 12u + v * 2u + 1u] = floatBitsToUint(vTex);
-        outBlock.w[posBase + 20u + v] = src.w[o + 2u];                                  // colour ABGR as-is
-        outBlock.w[posBase + 24u + v] = (w4 & 0x00FFFFFFu) | flagBits;                  // section index dropped
+        arena.w[uvBase + v * 2u] = floatBitsToUint(u);
+        arena.w[uvBase + v * 2u + 1u] = floatBitsToUint(vTex);
+        arena.w[colBase + v] = src.w[o + 2u];                                      // colour ABGR as-is
+        arena.w[lightBase + v] = (w4 & 0x00FFFFFFu) | flagBits;                    // section index dropped
     }
 }

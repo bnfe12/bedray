@@ -201,8 +201,12 @@ public final class RtWorld {
             64L << 20);
         this.indexBuf = mem.createBuffer("quad_index", 6L * 4L * MAX_QUADS_PER_SECTION,
             VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | RtMemory.USAGE_AS_INPUT, false);
+        // The GPU dequantize dispatch reads these words through a buffer_reference, i.e. as a storage buffer, so the
+        // buffer carries STORAGE usage on top of the transfer / device-address bits (a buffer_reference read from a
+        // buffer created without it is undefined).
         this.staging = mem.createBuffer("staging", STAGING_SEGMENT_BYTES * STAGING_SEGMENTS,
-            VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+            VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
         this.table = mem.createBuffer("section_table", (long) MAX_SLOTS * TABLE_ENTRY_BYTES,
             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
         this.instances = mem.createBuffer("instances", (long) INSTANCE_BYTES * RtConfig.MAX_INSTANCES * STAGING_SEGMENTS,
