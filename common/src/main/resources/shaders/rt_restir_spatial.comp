@@ -31,8 +31,8 @@ void main() {
     uint cur = uint(pc.frame & 1u);
     uint slot = cur * pixels + uint(p.y) * width + uint(p.x);
     Reservoir own = ReservoirBuf(fb.reservoirAddr).r[slot];
-    if (own.meta.x <= 0.0) {
-        return;   // this pixel shaded no emissive term this frame: its slot still holds an older frame's receiver
+    if (!(own.meta.x > 0.0)) {
+        return;   // this pixel shaded no emissive term this frame: its slot still holds an older frame's receiver (NaN count too)
     }
     vec3 auxP = ReservoirAuxBuf(fb.reservoirAuxAddr).r[slot].xyz;
     vec3 nP = unpackReservoirNormal(own.meta.z);
@@ -71,8 +71,8 @@ void main() {
         uint qSlot = cur * pixels + uint(q.y) * width + uint(q.x);
         Reservoir nb = ReservoirBuf(fb.reservoirAddr).r[qSlot];
         float mNb = min(nb.meta.x, RESTIR_M_CAP);         // same cap as the temporal merge: bounds the M growth
-        if (mNb <= 0.0) {
-            continue;
+        if (!(mNb > 0.0)) {
+            continue;                                     // empty or NaN-count neighbour: its weights are not usable
         }
         vec3 auxQ = ReservoirAuxBuf(fb.reservoirAuxAddr).r[qSlot].xyz;
         vec3 nQ = unpackReservoirNormal(nb.meta.z);
@@ -88,8 +88,8 @@ void main() {
         vec3 dQ = nb.yTexEm.xyz - sLoc.pos;               // emitterPhat takes the squared receiver-to-sample distance
         float phatQ = emitterPhat(nb.yTexEm.xyz, dot(dQ, dQ), nb.yTexEm.w, nb.enPhat.xyz, (uint(nb.meta.y) & 1u) != 0u, sLoc,
             maxDist);
-        if (phatQ <= 0.0) {
-            continue;
+        if (!(phatQ > 0.0)) {
+            continue;                                     // zero or NaN target p^ (NaN passes a <= 0.0 test)
         }
         // Import weight: neighbour cumulative weight rescaled from its receiver to this one. The sample is an area-parameterized
         // point on the emitter quad, so the receiver change carries no Jacobian (|J| = 1); the firefly clamp bounds the ratio.
@@ -108,6 +108,14 @@ void main() {
         }
     }
     if (won) {
+        // The merged record is imported by next frame's temporal reuse (rt_common_emitters.glsl), so a non-finite weight here does
+        // not only break this pixel: it poisons every receiver that merges this slot. The neighbour fields are read straight from
+        // the reservoir buffer, where the ray pass can leave a NaN weight or a NaN sample position behind.
+        if (!(wsum >= 0.0) || !(count > 0.0) || !(winPhat > 0.0) || isnan(winEm) || isinf(winEm)
+            || any(isnan(winY)) || any(isinf(winY)) || any(isnan(winEn)) || any(isinf(winEn))
+            || any(isnan(winLe)) || any(isinf(winLe))) {
+            return;   // keep this pixel's own pre-spatial record instead of storing a reservoir no receiver can shade with
+        }
         Reservoir outR = own;                             // meta (receiver normal, distance, flags) stays this pixel's
         outR.yTexEm = vec4(winY, winEm);
         outR.enPhat = vec4(winEn, winPhat);

@@ -408,15 +408,18 @@ void fetchEntitySurface(uint customIndex, uint geom, uint prim, vec2 bary, float
                 float det = d1.x * d2.y - d2.x * d1.y;
                 if (abs(det) > 1.0e-12) {
                     float rDet = 1.0 / det;
-                    vec3 T = normalize((e1 * d2.y - e2 * d1.y) * rDet);
-                    vec3 B = normalize((e2 * d1.x - e1 * d2.x) * rDet);
-                    T = normalize(T - ng * dot(ng, T));
-                    B = normalize(B - ng * dot(ng, B));
+                    // Same guard the block path above uses: the det test only proves the atlas UVs are not collinear, so a
+                    // degenerate entity quad still cancels the tangent exactly and normalize(0) would write NaN into ns, which
+                    // then leaves the surface as a NaN ray direction handed to the next ray query.
+                    vec3 T = normalizeOr((e1 * d2.y - e2 * d1.y) * rDet, ng);
+                    vec3 B = normalizeOr((e2 * d1.x - e1 * d2.x) * rDet, ng);
+                    T = normalizeOr(T - ng * dot(ng, T), ng);
+                    B = normalizeOr(B - ng * dot(ng, B), ng);
                     float z = sqrt(max(0.25, 1.0 - dot(grad, grad)));
-                    vec3 nsObj = normalize(T * grad.x + B * grad.y + ng * z);
+                    vec3 nsObj = normalizeOr(T * grad.x + B * grad.y + ng * z, ng);
                     vec3 cand = dot(nsObj, ng) > 0.0 ? nsObj : reflect(nsObj, ng);
                     float ndot = dot(cand, ng);
-                    ns = normalize(mix(ng, cand, smoothstep(0.20, 0.65, ndot)));
+                    ns = normalizeOr(mix(ng, cand, smoothstep(0.20, 0.65, ndot)), ng);
                 }
             }
         }

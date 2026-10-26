@@ -155,7 +155,9 @@ void main() {
     vec3 motion = vec3(0.0);
     if (pc.motionAddr.x != 0u || pc.motionAddr.y != 0u) {
         vec4 m = Vec4Buf(pc.motionAddr).v[p.y * pc.size.x + p.x];
-        if (m.w > 0.5 && !(m.x > 1.0e29)) {
+        // The disocclusion sentinel is 1e30; a NaN must be rejected too, and NaN fails the "greater than" test, so the old
+        // !(m.x > 1.0e29) alone let a NaN straight into NRD's motion input.
+        if (m.w > 0.5 && !invalid3(m.xyz) && !(m.x > 1.0e29)) {
             motion = m.xyz;
         }
     }
