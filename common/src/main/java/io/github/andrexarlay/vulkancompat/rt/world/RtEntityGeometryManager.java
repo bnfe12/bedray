@@ -137,6 +137,9 @@ public final class RtEntityGeometryManager {
         if (mem == null) {
             return;
         }
+        // The retire queue must drain on every frame, not only on a grow: growth is logarithmic, so once the working set stops
+        // expanding (player standing still, entity-free area) the last grown-out ring set would sit at device memory forever.
+        tickRingRetire(mem);
 
         // Case 1: captured frame (EntityCaptureManager): interleaved 10 floats per vertex
         // [x, y, z, colour(ABGR bits), u, v, light(bits), nx, ny, nz], camera-relative positions
@@ -244,6 +247,8 @@ public final class RtEntityGeometryManager {
 
     /** Ring of {@link #RING} slices so that the CPU never overwrites data a frame still in flight reads (BLAS build, shader). */
     public static final int RING = 3;
+    /** The four per-slice buffers of the ring: pos, index, attribute, previous position. */
+    private static final int RING_BUFS = 4;
     public static final int FLOATS_PER_VERTEX = 10;
     private RtMemory.Buf ringPos;
     private RtMemory.Buf ringIdx;
@@ -254,6 +259,18 @@ public final class RtEntityGeometryManager {
     private double prevCamX, prevCamY, prevCamZ;
     private int matchedEntities;
     private int unmatchedEntities;
+    /**
+     * Scratch for the per-frame entity matching loop (every captured entity against every previous one). Matching is
+     * O(entities^2) and ran on the render thread with one fresh {@code Vector3f} per pair, which is hundreds of thousands of
+     * short-lived objects per frame in a mob farm. Only touched from the synchronized upload path.
+     */
+    private final org.joml.Vector3f matchCur = new org.joml.Vector3f();
+    private final org.joml.Vector3f matchPrev = new org.joml.Vector3f();
+    private final org.joml.Matrix4f matchInv = new org.joml.Matrix4f();
+    private final org.joml.Matrix4f matchCurToPrev = new org.joml.Matrix4f();
+    private final org.joml.Vector4f matchPoint = new org.joml.Vector4f();
+    /** Marks previous-frame entities already claimed this frame, indexed by their position in {@code prevFrame.entities()}. */
+    private boolean[] prevUsed = new boolean[0];
     private RtMemory.Buf atlasBuf;
     private RtMemory.Buf rectBuf;
     private long atlasVersion = -1;
@@ -263,6 +280,45 @@ public final class RtEntityGeometryManager {
     private int frameVertices;
     private int frameTriangles;
     private long uploadedBytes;
+
+    /**
+     * Ring buffers replaced by a bigger generation. A grow must NOT destroy them where it stands: the previous frames'
+     * command buffers still read these device addresses (the shader through {@code buffer_reference}, the entity BLAS
+     * build through the recorded geometry), and freeing a buffer an in-flight submission touches is undefined and has
+     * shown up as {@code VK_ERROR_DEVICE_LOST}. They go to the same deferred queue as the atlas versions.
+     */
+    private final java.util.ArrayDeque<long[]> retiredRingAt = new java.util.ArrayDeque<>();
+    private final java.util.ArrayDeque<RtMemory.Buf> retiredRing = new java.util.ArrayDeque<>();
+    private long ringFrame;
+
+    /** Advances the ring-retire clock once per frame and destroys grown-out sets past the window. */
+    private void tickRingRetire(RtMemory mem) {
+        ringFrame++;
+        while (!retiredRingAt.isEmpty() && ringFrame - retiredRingAt.peekFirst()[0] > RETIRE_FRAMES) {
+            retiredRingAt.pollFirst();
+            for (int i = 0; i < RING_BUFS; i++) {
+                // A retired set can hold nulls: retireRing() enqueues all four slots as soon as ringPos exists, so a grow
+                // that threw part-way through createBuffer leaves the rest unset. RtMemory.destroy dereferences the buffer.
+                RtMemory.Buf buf = retiredRing.pollFirst();
+                if (buf != null) {
+                    mem.destroy(buf);
+                }
+            }
+        }
+    }
+
+    private void retireRing() {
+        RtMemory.Buf[] bufs = {ringPos, ringIdx, ringAttr, ringPrev};
+        if (ringPos != null) {
+            for (RtMemory.Buf b : bufs) {
+                retiredRing.addLast(b);
+            }
+            retiredRingAt.addLast(new long[] {ringFrame});
+        }
+        ringPos = ringIdx = ringAttr = ringPrev = null;
+        frameVertices = 0;
+        frameTriangles = 0;
+    }
 
     private void uploadInterleaved(RtMemory mem) {
         float[] src = currentFrame.vertexData();
@@ -275,7 +331,9 @@ public final class RtEntityGeometryManager {
             return;
         }
         if (ringPos == null || verts > ringVertexCap || indices > ringIndexCap) {
-            close(mem);
+            // only the ring is recycled here: close() would also drop the staged-quad buffers and currentFrame, which
+            // the atlas upload and the next frame's motion matching still need
+            retireRing();
             ringVertexCap = Math.max(65536L, Long.highestOneBit((long) verts) << 1);
             ringIndexCap = Math.max(98304L, Long.highestOneBit((long) indices) << 1);
             int addr = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -327,21 +385,29 @@ public final class RtEntityGeometryManager {
         float ox = (float) (prevCamX - curCamX);
         float oy = (float) (prevCamY - curCamY);
         float oz = (float) (prevCamZ - curCamZ);
-        java.util.Set<EntityGeometryFrame.CapturedEntity> used = new java.util.HashSet<>();
+        java.util.List<EntityGeometryFrame.CapturedEntity> prevEntities = prevFrame.entities();
+        if (prevUsed.length < prevEntities.size()) {
+            prevUsed = new boolean[Math.max(prevEntities.size(), prevUsed.length * 2 + 16)];
+        } else {
+            java.util.Arrays.fill(prevUsed, 0, prevEntities.size(), false);
+        }
         for (EntityGeometryFrame.CapturedEntity e : currentFrame.entities()) {
             EntityGeometryFrame.CapturedEntity best = null;
+            int bestIndex = -1;
             double bestD = 4.0;
             if (psrc != null) {
-                org.joml.Vector3f c = e.currentTransform().getTranslation(new org.joml.Vector3f());
-                for (EntityGeometryFrame.CapturedEntity p : prevFrame.entities()) {
-                    if (used.contains(p) || p.vertexCount() != e.vertexCount() || !p.entityType().equals(e.entityType())) {
+                org.joml.Vector3f c = e.currentTransform().getTranslation(matchCur);
+                for (int pi = 0; pi < prevEntities.size(); pi++) {
+                    EntityGeometryFrame.CapturedEntity p = prevEntities.get(pi);
+                    if (prevUsed[pi] || p.vertexCount() != e.vertexCount() || !p.entityType().equals(e.entityType())) {
                         continue;
                     }
                     if (e.entityId() < -1 && p.entityId() == e.entityId()) {
                         best = p;
+                        bestIndex = pi;
                         break;
                     }
-                    org.joml.Vector3f q = p.currentTransform().getTranslation(new org.joml.Vector3f());
+                    org.joml.Vector3f q = p.currentTransform().getTranslation(matchPrev);
                     double dx = q.x + ox - c.x;
                     double dy = q.y + oy - c.y;
                     double dz = q.z + oz - c.z;
@@ -349,16 +415,17 @@ public final class RtEntityGeometryManager {
                     if (d < bestD) {
                         bestD = d;
                         best = p;
+                        bestIndex = pi;
                     }
                 }
             }
             if (best == null && e.previousTransform() != null && e.currentTransform() != null
                     && !e.previousTransform().equals(e.currentTransform(), 1.0e-6f)) {
-                org.joml.Matrix4f invCur = new org.joml.Matrix4f(e.currentTransform());
-                if (Math.abs(invCur.determinant()) > 1.0e-8f) {
-                    invCur.invert();
-                    org.joml.Matrix4f curToPrev = new org.joml.Matrix4f(e.previousTransform()).mul(invCur);
-                    org.joml.Vector4f tmp = new org.joml.Vector4f();
+                matchInv.set(e.currentTransform());
+                if (Math.abs(matchInv.determinant()) > 1.0e-8f) {
+                    matchInv.invert();
+                    matchCurToPrev.set(e.previousTransform()).mul(matchInv);
+                    org.joml.Vector4f tmp = matchPoint;
                     matchedEntities++;
                     for (int k = 0; k < e.vertexCount(); k++) {
                         int cv = e.vertexOffset() + k;
@@ -366,7 +433,7 @@ public final class RtEntityGeometryManager {
                         if (cv >= verts || co + 2 >= src.length) {
                             break;
                         }
-                        tmp.set(src[co], src[co + 1], src[co + 2], 1.0f).mul(curToPrev);
+                        tmp.set(src[co], src[co + 1], src[co + 2], 1.0f).mul(matchCurToPrev);
                         MemoryUtil.memPutFloat(dst + cv * 12L, tmp.x + ox);
                         MemoryUtil.memPutFloat(dst + cv * 12L + 4, tmp.y + oy);
                         MemoryUtil.memPutFloat(dst + cv * 12L + 8, tmp.z + oz);
@@ -386,7 +453,9 @@ public final class RtEntityGeometryManager {
                 }
                 continue;
             }
-            used.add(best);
+            if (bestIndex >= 0) {
+                prevUsed[bestIndex] = true;
+            }
             matchedEntities++;
             for (int k = 0; k < e.vertexCount(); k++) {
                 int cv = e.vertexOffset() + k;
@@ -520,6 +589,11 @@ public final class RtEntityGeometryManager {
         }
         retiredBufs.clear();
         retiredAtlas.clear();
+        for (RtMemory.Buf b : retiredRing) {
+            mem.destroy(b);
+        }
+        retiredRing.clear();
+        retiredRingAt.clear();
         if (atlasBuf != null) {
             mem.destroy(atlasBuf);
             mem.destroy(rectBuf);
