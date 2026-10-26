@@ -82,13 +82,39 @@ struct Surface {
     bool isOutline;
     bool backFace;     // the ray left the block through this face (glass: the tint was applied by the entry face)
     vec3 motion;       // previous-frame position minus current (world, blocks); non-zero only for moving entities
+    vec4 optics;       // IOR, physical slab thickness (blocks), transmittance measurement distance (blocks), diffuse-layer share
+    vec3 opticalTransmittance;
+    uint opticalKind;  // 0 legacy/custom thin, 1 glass, 2 water, 3 ice
 };
+
+bool surfaceIsHole(Surface s) {
+    return s.opticalKind != 1u && ((!s.translucent && s.alpha < 0.5) || s.alpha < 0.05);
+}
+
+float surfaceIor(Surface s) { return s.optics.x >= 1.0 ? s.optics.x : (s.isWater ? 1.333 : 1.52); }
+float opticalSlabLength(Surface s, vec3 d) {
+    float cosine = clamp(abs(dot(s.ng, d)), 0.0, 1.0);
+    float ior = max(s.optics.x, 1.0);
+    float insideCosine = sqrt(max(1.0 - (1.0 - cosine * cosine) / (ior * ior), 0.0));
+    return max(s.optics.y, 0.0001) / max(insideCosine, 0.05);
+}
+vec3 opticalLayerTransmittance(Surface s, float F, vec3 d) {
+    float distance = max(s.optics.z, 0.0001);
+    float opticalLength = opticalSlabLength(s, d);
+    // Authored slab thickness; this does not claim measured entry/exit distance through a closed glass mesh.
+    vec3 reference = clamp(s.opticalTransmittance, vec3(0.0001), vec3(1.0));
+    vec3 dye = pow(clamp(s.albedoLit, vec3(0.001), vec3(1.0)), vec3(clamp(s.alpha, 0.0, 1.0)));
+    return (1.0 - F) * (1.0 - s.optics.w * s.alpha) * pow(reference * dye, vec3(opticalLength / distance));
+}
 
 // Fills s from a committed triangle hit. wantNormal = false skips everything only a shading normal consumes (the normal
 // atlas fetch, the tangent basis, the water wave normal): the transmittance walk reads tint, alpha, f0 and the geometric
 // normal only, so a shadow ray crossing a pane or a water surface no longer pays for a normal it never looks at.
 void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 origin, vec3 dir, bool wantNormal, out Surface s) {
     s.motion = vec3(0.0);
+    s.optics = vec4(0.0);
+    s.opticalTransmittance = vec3(1.0);
+    s.opticalKind = 0u;
     s.isOutline = false;
     vec3 b3 = vec3(1.0 - bary.x - bary.y, bary.x, bary.y);
     Section sec = sections.s[slot];
@@ -204,7 +230,15 @@ void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 orig
         }
     }
 
-    if ((!s.translucent && s.alpha < 0.5) || s.alpha < 0.05) {
+    uint opticalProfile = matSourceFlags >> 3u;
+    if (hasFlag(FLAG_MATERIALS) && opticalValue(opticalProfile, 0u) >= 1.0) {
+        s.optics = vec4(opticalValue(opticalProfile, 0u), opticalValue(opticalProfile, 1u),
+            opticalValue(opticalProfile, 2u), opticalValue(opticalProfile, 3u));
+        s.opticalTransmittance = vec3(opticalValue(opticalProfile, 4u), opticalValue(opticalProfile, 5u), opticalValue(opticalProfile, 6u));
+        s.opticalKind = uint(opticalValue(opticalProfile, 7u) + 0.5);
+        if (s.opticalKind == 1u || s.opticalKind == 2u) s.translucent = true;
+    }
+    if (surfaceIsHole(s)) {
         s.roughness = 1.0;
         s.metal = 0.0;
         s.f0 = 0.0;
@@ -218,6 +252,10 @@ void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 orig
     // The alpha of the atlas texel is NOT a criterion: the 26.3 water sprite is opaque (the translucency lives in the render pass), so
     // with `alpha < 0.99` no water was ever recognised and it was shaded as a texel-tinted glass sheet (the blocky 16x16 pattern).
     s.isWater = s.translucent && s.f0 <= 0.025 && s.roughness <= 0.035 && !s.isIce;
+    if (s.optics.x >= 1.0) {
+        s.isWater = s.opticalKind == 2u;
+        s.isIce = s.opticalKind == 3u;
+    }
     // Lava detection: requires material-atlas emission >= 0.5 (real lava/magma), orange-warm hue
     // (r dominant over both g and b), and never translucent.
     // Intentionally NOT using s.light.x — nearby torches/campfires raised block-light on warm-toned
@@ -249,6 +287,10 @@ void fetchSurface(uint slot, uint geom, uint prim, vec2 bary, float t, vec3 orig
     if (s.isIce) {
         s.roughness = 0.05;
         s.ns = s.ng;
+    }
+    if (s.optics.x >= 1.0) {
+        s.f0 = pow((s.optics.x - 1.0) / (s.optics.x + 1.0), 2.0);
+        s.metal = 0.0;
     }
     // Nether portal detection: emissive translucent/semi-transparent surface
     s.isPortal = (s.translucent || s.alpha < 0.99) && s.emission >= 0.5;
@@ -474,6 +516,9 @@ void fetchEntitySurface(uint customIndex, uint geom, uint prim, vec2 bary, float
     s.isFoliage = false;
     s.leafCube = false;
     s.isOutline = isOutline;
+    s.optics = vec4(0.0);
+    s.opticalTransmittance = vec3(1.0);
+    s.opticalKind = 0u;
 }
 
 
@@ -522,6 +567,14 @@ bool traceSurface(vec3 origin, vec3 dir, float tmin, float tmax, bool skipTransl
 // Light filtering of one translucent layer (stained glass, water, ice, translucent texels) hit by a shadow ray: Beer-Lambert style
 // absorption by the tinted texture colour, weighted by the alpha; clear glass (alpha < 0.1) transmits without tint.
 vec3 shadowLayerTransmittance(Surface s, vec3 d) {
+    if (s.optics.x >= 1.0) {
+        float f0 = pow((s.optics.x - 1.0) / (s.optics.x + 1.0), 2.0);
+        if (s.backFace && s.opticalKind == 1u) return vec3((1.0 - f0) * (1.0 - s.optics.w * s.alpha));
+        float opticalLength = opticalSlabLength(s, d);
+        vec3 reference = s.opticalTransmittance * pow(clamp(s.albedoLit, vec3(0.001), vec3(1.0)), vec3(s.alpha));
+        return (1.0 - f0) * (1.0 - s.optics.w * s.alpha)
+            * pow(clamp(reference, vec3(0.0001), vec3(1.0)), vec3(opticalLength / max(s.optics.z, 0.0001)));
+    }
     if (s.backFace && !s.isWater && !s.isIce) {
         return vec3(1.0 - s.f0);   // exit face: tinted at the entry face
     }
@@ -557,6 +610,8 @@ vec3 traceTransmittance(vec3 origin, vec3 d, float tmax) {
     }
     rayQueryEXT sq;
     rayQueryInitializeEXT(sq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, 0.001, d, tmax);
+    transparencyQuery(true);
+    bool filterTransparent = !hasFlag(gSecondaryVisibility ? FLAG_SKIP_INDIRECT_TRANSLUCENT : FLAG_SKIP_DIRECT_TRANSLUCENT);
     vec3 T = vec3(1.0);
     uint leafLayers = 0u;
     while (rayQueryProceedEXT(sq)) {
@@ -574,6 +629,13 @@ vec3 traceTransmittance(vec3 origin, vec3 d, float tmax) {
         }
         if (!gSawTranslucent) {
             continue;   // a hole of a cutout texel
+        }
+        transparencyCandidate();
+        if (!filterTransparent) {
+            if (isEntityHit(customIndex)) continue;
+            Section section = sections.s[customIndex];
+            uvec3 vertices = triangleVertices(section.quadStart[geom] + (prim >> 1u), prim);
+            if ((UIntBuf(section.lightAddr).v[vertices.x] & VERT_FLAG_VEGETATION) == 0u) continue;
         }
         if (leafLayers >= LEAF_LAYER_LIMIT) {
             // Past the cap the walk still visits every candidate, so a blocker behind the canopy ends the ray exactly as
@@ -602,6 +664,7 @@ vec3 traceTransmittance(vec3 origin, vec3 d, float tmax) {
         } else {
             T *= shadowLayerTransmittance(s, d);
         }
+        transparencyLayer();
         if (max(T.r, max(T.g, T.b)) < 0.001) {
             return vec3(0.0);
         }

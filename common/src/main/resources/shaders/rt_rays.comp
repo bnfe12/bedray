@@ -28,11 +28,15 @@ bool traceSecondary(vec3 origin, vec3 dir, float reach, inout uint seed, out Sur
 }
 
 vec3 shadeSecondary(Surface s, vec3 dir) {
-    return shadeSimple(s, dir, hasFlag(FLAG_SHADOWS));
+    bool previousVisibility = gSecondaryVisibility;
+    gSecondaryVisibility = true;
+    vec3 result = shadeSimple(s, dir, hasFlag(FLAG_SHADOWS));
+    gSecondaryVisibility = previousVisibility;
+    return result;
 }
 
 vec3 shadeSecondary(Surface s) {
-    return shadeSimple(s, vec3(0.0), hasFlag(FLAG_SHADOWS));
+    return shadeSecondary(s, vec3(0.0));
 }
 
 // ---- Camera path through the interfaces in front of the shaded surface -----------------------------------------------------
@@ -67,6 +71,7 @@ void cameraPathStart(out CameraPath cp, WaterMedium camMed) {
 // What one interface does to the camera ray, minus the bend: the mirror with its Fresnel weight, the vanilla water sheet
 // colour, and the transmittance of the layer. Returns true for a realistic water face, which the caller refracts through.
 bool cameraInterface(Surface s, vec3 rayDir, inout CameraPath cp, inout uint seed) {
+    transparencyLayer();
     float F = interfaceReflectance(s, rayDir);
     bool volume = s.isWater && waterVolumeStyle() && isWaterBoundary(s);
     // Which interfaces pay for a mirror ray. The camera-facing interface keeps its mirror, and so does a water face seen behind
@@ -89,7 +94,8 @@ bool cameraInterface(Surface s, vec3 rayDir, inout CameraPath cp, inout uint see
         crossWaterBoundary(cp.med, s, rayDir);
         cp.sawWater = true;
     }
-    cp.thr *= interfaceTransmittance(s, F);
+    cp.glassRefl += cp.thr * interfaceDiffuseLayer(s, F);
+    cp.thr *= interfaceTransmittance(s, F, rayDir);
     if (volume) {
         crossWaterBoundary(cp.med, s, rayDir);
         cp.sawWater = true;
@@ -107,6 +113,7 @@ bool cameraWalk(inout CameraPath cp, vec3 origin, vec3 dir, inout uint seed, out
     float overflowT = 4096.0;
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, 0.001, dir, 4096.0);
+    transparencyQuery(false);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) {
             continue;
@@ -131,9 +138,10 @@ bool cameraWalk(inout CameraPath cp, vec3 origin, vec3 dir, inout uint seed, out
         } else {
             fetchSurface(slot, geom, prim, bary, t, origin, dir, true, c);
         }
-        if ((!c.translucent && c.alpha < 0.5) || c.alpha < 0.05) {
+        if (surfaceIsHole(c)) {
             continue;   // empty space of the quad (cutout hole, or a translucent texel the camera looks through): the ray passes
         }
+        if (isInterface(c)) transparencyCandidate();
         if (!isInterface(c) || (c.isWater && waterVolumeStyle() && isWaterBoundary(c))) {
             rayQueryConfirmIntersectionEXT(rq);
             continue;
@@ -249,7 +257,8 @@ void main() {
         if (!bend) {
             break;
         }
-        vec3 rd = refract(rayDir, s.ns, rayDir.y < 0.0 ? 1.0 / WATER_IOR : WATER_IOR);
+        float waterIor = surfaceIor(s);
+        vec3 rd = refract(rayDir, s.ns, rayDir.y < 0.0 ? 1.0 / waterIor : waterIor);
         if (dot(rd, rd) <= 0.5) {
             cp.thr = vec3(0.0);   // total internal reflection: the mirror ray above carries the light
             hit = false;

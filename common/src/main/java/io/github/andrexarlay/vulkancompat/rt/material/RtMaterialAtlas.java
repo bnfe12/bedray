@@ -43,6 +43,12 @@ public final class RtMaterialAtlas {
     private final RtMemory memory;
     private RtMemory.Img material;
     private RtMemory.Img normal;
+    private RtMemory.Buf opticalBuffer;
+    private OpticalMaterials optics = new OpticalMaterials();
+    private int uploadedOpticalProfiles;
+
+    public long opticalAddress() { return opticalBuffer == null ? 0L : opticalBuffer.address; }
+    public int opticalProfileCount() { return optics.snapshot().size() - 1; }
     private Object bakedAtlas;
     private int bakedW = -1;
     private int bakedH = -1;
@@ -83,6 +89,7 @@ public final class RtMaterialAtlas {
         final int width;
         final int height;
         final ResourceProvider resources;
+        final OpticalMaterials optics;
         final ArrayDeque<TextureAtlasSprite> queue = new ArrayDeque<>();
         final long startNs = System.nanoTime();
         // worker-thread only (the render thread reads them after the volatile `finished` write)
@@ -95,11 +102,12 @@ public final class RtMaterialAtlas {
         volatile boolean cancelled;
         volatile boolean finished;
 
-        Epoch(TextureAtlas atlas, int width, int height, ResourceProvider resources) {
+        Epoch(TextureAtlas atlas, int width, int height, ResourceProvider resources, OpticalMaterials optics) {
             this.atlas = atlas;
             this.width = width;
             this.height = height;
             this.resources = resources;
+            this.optics = optics;
         }
     }
 
@@ -157,11 +165,21 @@ public final class RtMaterialAtlas {
     }
 
     private void recreateImages(VkCommandBuffer cmd, int width, int height) {
+        io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setLookup(null);
         if (material != null) {
             VK10.vkDeviceWaitIdle(memory.device); // in-flight frames may still sample the old images
             memory.destroy(material);
             memory.destroy(normal);
+            if (opticalBuffer != null) memory.destroy(opticalBuffer);
+            material = null;
+            normal = null;
+            opticalBuffer = null;
         }
+        optics = new OpticalMaterials();
+        opticalBuffer = memory.createBuffer("rt_optical_profiles", OpticalMaterials.BYTES,
+            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+        MemoryUtil.memSet(opticalBuffer.mapped, 0, OpticalMaterials.BYTES);
+        uploadedOpticalProfiles = 1; // slot zero stays empty; publish reserved built-ins before referencing sprite rects
         int usage = VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         material = memory.createImage("rt_material_atlas", width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, usage);
         normal = memory.createImage("rt_normal_atlas", width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, usage);
@@ -200,7 +218,7 @@ public final class RtMaterialAtlas {
             cpuNormal = new int[width * height];
             Arrays.fill(cpuNormal, LabPbr.FLAT_NORMAL);
         }
-        Epoch e = new Epoch(atlas, width, height, resources);
+        Epoch e = new Epoch(atlas, width, height, resources, optics);
         synchronized (e.queue) {
             e.queue.addAll(sprites.values());
         }
@@ -230,7 +248,7 @@ public final class RtMaterialAtlas {
             boolean wantAlpha = micromapSink != null;
             TextureAtlasSprite s;
             while (!e.cancelled && !shutdown && (s = e.queue.poll()) != null) {
-                MaterialAtlasBaker.SpriteBake b = MaterialAtlasBaker.bakeSprite(s, e.width, e.height, e.resources, wantAlpha);
+                MaterialAtlasBaker.SpriteBake b = MaterialAtlasBaker.bakeSprite(s, e.width, e.height, e.resources, wantAlpha, e.optics);
                 if (b == null) {
                     e.errors++;
                     continue;
@@ -281,6 +299,21 @@ public final class RtMaterialAtlas {
             return false;
         }
         mirrorToCpu(batch, e.width, e.height);
+        var opticalProfiles = optics.snapshot();
+        for (int i = uploadedOpticalProfiles; i < opticalProfiles.size(); i++) {
+            MemoryUtil.memFloatBuffer(opticalBuffer.mapped + (long) i * OpticalMaterials.FLOATS * Float.BYTES,
+                OpticalMaterials.FLOATS).put(opticalProfiles.get(i).data());
+        }
+        uploadedOpticalProfiles = opticalProfiles.size();
+        int[] lookup = cpuMaterial;
+        OpticalMaterials palette = optics;
+        io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setLookup((u, v) -> {
+            if (!io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.cullSharedGlass()) return 0;
+            int x = Math.max(0, Math.min(e.width - 1, (int) (u * e.width)));
+            int y = Math.max(0, Math.min(e.height - 1, (int) (v * e.height)));
+            int id = OpticalMaterials.profileId(lookup[y * e.width + x]);
+            return palette.cullsGlass(id) ? id : 0;
+        });
         if (micromapSink != null) {
             for (MaterialAtlasBaker.SpriteBake b : batch) {
                 micromapSink.onSpriteBaked(b.x0(), b.y0(), b.w(), b.h(), b.material(), b.alpha(), b.animated(),
@@ -391,6 +424,8 @@ public final class RtMaterialAtlas {
     }
 
     public void destroy() {
+        io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setLookup(null);
+        if (opticalBuffer != null) { memory.destroy(opticalBuffer); opticalBuffer = null; }
         shutdown = true;
         if (epoch != null) {
             epoch.cancelled = true;

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+* Add per-texture optical sidecars and a bounded immutable GPU palette for IOR, authored slab thickness, reference RGB
+  transmittance/distance and diffuse coatings. Preserve dielectric clear-glass centres and keep optical sprites unresolved
+  by opacity micromaps. Custom water IOR/absorption reaches its boundary, camera-medium and sun-beam paths.
+* Add persisted direct/secondary transparent-shadow controls, conservative extra shared full-block glass-face filtering,
+  and opt-in delayed GPU transparency counters plus CPU face totals. Expose controls in the Bedray screen in English/Russian.
+* Preserve the thin/slab approximation explicitly; no physical closed-volume glass claim, build, tests, GPU session or FPS
+  validation accompanies this source follow-up. See `docs/TRANSPARENT_MATERIALS.md` for limits and authoring.
+
 * Consolidate the 2026-10-26 development branch heads into main, retaining source history and the latest Voxel light/water
   follow-up, Iris scenario, ReSTIR limits, weather, GPU geometry dequantization, cache and DXGI work.
 * Resolve transparent interface traversal independently of driver candidate order: keep the nearest bounded metadata,

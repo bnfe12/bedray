@@ -50,6 +50,11 @@ public final class MaterialAtlasBaker {
      */
     public static SpriteBake bakeSprite(TextureAtlasSprite sprite, int atlasW, int atlasH, ResourceProvider resources,
                                         boolean wantAlpha) {
+        return bakeSprite(sprite, atlasW, atlasH, resources, wantAlpha, null);
+    }
+
+    public static SpriteBake bakeSprite(TextureAtlasSprite sprite, int atlasW, int atlasH, ResourceProvider resources,
+                                        boolean wantAlpha, OpticalMaterials optics) {
         Identifier name = sprite.contents().name();
         int w = sprite.contents().width();
         int h = sprite.contents().height();
@@ -94,6 +99,7 @@ public final class MaterialAtlasBaker {
         int[] material = new int[w * h];
         int[] normal = new int[w * h];
         int emissive = MaterialRegion.fill(material, normal, w, 0, 0, w, h, auto, albedo, spec, nrm, name.getPath());
+        if (optics != null) optics.apply(material, name, resources);
         boolean autoNormals = false;
         if (nrm == null && albedo != null) {
             AutoNormals.fill(normal, w, 0, 0, w, h, albedo);

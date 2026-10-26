@@ -123,11 +123,21 @@ public final class RtFrameRenderer {
      * (see {@link RtAccumulation#acceptedPct}): the shader also requires a non-zero history length.
      */
     private static final boolean[] statsAccumulated = new boolean[STATS_SLOTS];
+    private static final boolean[] statsTransparency = new boolean[STATS_SLOTS];
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
     private static double lastHitPct = -1.0;
     /** Share of the hit pixels whose key light reached them through a leaf card (1-in-16 mask, like hist_pct). */
     private static double lastLeafPct = -1.0;
+    private static volatile String lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
+
+    public static String transparencyTelemetry() {
+        var settings = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.transparencyStats();
+        return (settings ? lastTransparency : "[RT-TRANSPARENCY] counters=OFF")
+            + " glass_faces_examined=" + io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.examinedFaces()
+            + " glass_faces_removed=" + io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.removedFaces()
+            + " optical_palette_profiles=" + (materials == null ? 0 : materials.opticalProfileCount());
+    }
     private static double passMsInWindow = 0.0;
     private static int passFramesInWindow = 0;
     /** Wall clock of the previous traced frame: the time base of {@link RtAdaptiveQuality} (frame-to-frame, not per span). */
@@ -180,6 +190,7 @@ public final class RtFrameRenderer {
     private static int lastFrameBounces = -1;
     private static int lastFrameSpp = -1;
     private static boolean lastFrameAutoExposure = true;
+    private static int lastFrameTransparencyPolicy = -1;
 
     /**
      * Screen-space depth composite pipeline for legacy raster entity compositing.
@@ -381,6 +392,12 @@ public final class RtFrameRenderer {
         if (pass != null) {
             pass.resetHistory();
         }
+        if (denoiser != null) {
+            denoiser.resetHistory();
+        }
+        if (dlssRrDenoiser != null) {
+            dlssRrDenoiser.resetHistory();
+        }
         exposure.reset();
         atmosphere.resetHistory();
         reservoirResetRequested = true;
@@ -497,6 +514,9 @@ public final class RtFrameRenderer {
         int curBounces = RtSettings.bounces();
         int curSpp = RtSettings.spp();
         boolean curAutoExposure = RtSettings.autoExposure();
+        int curTransparencyPolicy = (RtSettings.opticalMaterials() ? 1 : 0)
+            | (RtSettings.directTranslucentShadows() ? 2 : 0)
+            | (RtSettings.indirectTranslucentShadows() ? 4 : 0);
 
         boolean presetOrDenoiserChanged = (lastFrameBounces != -1) && (
             curPreset != lastFramePreset
@@ -506,12 +526,14 @@ public final class RtFrameRenderer {
             || curBounces != lastFrameBounces
             || curSpp != lastFrameSpp
             || curAutoExposure != lastFrameAutoExposure
+            || curTransparencyPolicy != lastFrameTransparencyPolicy
         );
 
         if (presetOrDenoiserChanged) {
-            LOGGER.info("[VKB-RT] resetHistory: preset({}->{}) pt_preset({}->{}) denoiser({}->{}) denoiseMode({}->{}) bounces({}->{}) spp({}->{}) autoExp({}->{})",
+            LOGGER.info("[VKB-RT] resetHistory: preset({}->{}) pt_preset({}->{}) denoiser({}->{}) denoiseMode({}->{}) bounces({}->{}) spp({}->{}) autoExp({}->{}) transparency({}->{})",
                 lastFramePreset, curPreset, lastFramePathPreset, curPathPreset, lastFramePathDenoiser, curPathDenoiser,
-                lastFrameDenoiseMode, denoiseMode, lastFrameBounces, curBounces, lastFrameSpp, curSpp, lastFrameAutoExposure, curAutoExposure);
+                lastFrameDenoiseMode, denoiseMode, lastFrameBounces, curBounces, lastFrameSpp, curSpp, lastFrameAutoExposure, curAutoExposure,
+                lastFrameTransparencyPolicy, curTransparencyPolicy);
             resetHistory();
         }
 
@@ -522,6 +544,7 @@ public final class RtFrameRenderer {
         lastFrameBounces = curBounces;
         lastFrameSpp = curSpp;
         lastFrameAutoExposure = curAutoExposure;
+        lastFrameTransparencyPolicy = curTransparencyPolicy;
 
         if (denoiseMode != DenoiserMode.DLSS_RR && dlssRrDenoiser != null) {
             dlssRrDenoiser.destroy();
@@ -708,6 +731,15 @@ public final class RtFrameRenderer {
             long base = statsBuf.mapped + (long) readSlot * STATS_STRIDE;
             int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
             int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
+            lastTransparency = statsTransparency[readSlot] ? String.format(Locale.ROOT,
+                "[RT-TRANSPARENCY] counters=READBACK queries=%d candidates=%d layers=%d overflows=%d direct_shadow_queries=%d indirect_shadow_queries=%d",
+                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_QUERIES)),
+                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_CANDIDATES)),
+                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_LAYERS)),
+                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_OVERFLOWS)),
+                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_DIRECT_SHADOWS)),
+                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_INDIRECT_SHADOWS)))
+                : "[RT-TRANSPARENCY] counters=WAITING";
             if (hits > 0) {
                 // Without the accumulating variant histAccepted is never incremented, and the share used to print as a
                 // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
@@ -734,6 +766,7 @@ public final class RtFrameRenderer {
         // leafBacklit sits far past the four head counters, so the 16-byte fill above does not reach it: without its own
         // zeroing the slot would keep the count of the frame that used it three slots ago.
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.LEAF_BACKLIT, 4, 0);
+        VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.TRANS_QUERIES, 24, 0);
         if (emitters == null) {
             emitters = new RtEmitters(world.memory());
         }
@@ -749,6 +782,10 @@ public final class RtFrameRenderer {
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.lightBudget(), entityEmitters,
             entityEmitters.length / RtEmitters.FLOATS);
         long hdr = statsBuf.mapped + writeOffset;
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.OPTICAL_ADDR,
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials() ? materials.opticalAddress() : 0L);
+        io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setEnabled(
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.cullSharedGlass());
         MemoryUtil.memPutInt(hdr + RtStatsLayout.EMITTER_COUNT, emitters.count());
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.EXPOSURE, exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths()));
@@ -805,6 +842,10 @@ public final class RtFrameRenderer {
                 || denoiseMode.isNrd() && NRD_DENOISE_SUN) ? RtFrameParams.FLAG_SUN_DENOISED : 0)
             | (DEMODULATE ? RtFrameParams.FLAG_DEMODULATE : 0)
             | (LOW_DISC ? RtFrameParams.FLAG_LOWDISC : 0);
+        if (!io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.directTranslucentShadows()) params.flags |= RtFrameParams.FLAG_SKIP_DIRECT_TRANSLUCENT;
+        if (!io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.indirectTranslucentShadows()) params.flags |= RtFrameParams.FLAG_SKIP_INDIRECT_TRANSLUCENT;
+        if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.transparencyStats()) params.flags |= RtFrameParams.FLAG_TRANSPARENCY_STATS;
+        if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials()) params.flags |= RtFrameParams.FLAG_OPTICAL_MATERIALS;
         // ReSTIR DI: one reservoir per pixel, two parity halves. Only the ray pass reads it; path tracing keeps plain RIS.
         long reservoirAddr = 0L;
         long reservoirAuxAddr = 0L;
@@ -980,6 +1021,7 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_RAYS, true);
         }
         statsWritten[writeSlot] = true;
+        statsTransparency[writeSlot] = (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0;
         statsAccumulated[writeSlot] = (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.accumCount > 0;
         dispatchCounter++;
         VkBarriers.fullMemoryBarrier(cmd);
@@ -1551,6 +1593,8 @@ public final class RtFrameRenderer {
             skyTextures = null;
             outputReady = false;
             java.util.Arrays.fill(statsWritten, false);
+            java.util.Arrays.fill(statsTransparency, false);
+            lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
             java.util.Arrays.fill(statsAccumulated, false);
         }
     }

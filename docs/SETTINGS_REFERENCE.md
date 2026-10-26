@@ -1,5 +1,15 @@
 # Settings reference
 
+## Transparent materials and cost controls (source development)
+
+`rays_direct_translucent_shadows` and `rays_indirect_translucent_shadows` independently control colored transparent
+visibility in direct and secondary shading (both default on). `rays_cull_shared_glass` enables the conservative extra
+section-local full-block face filter (default on; reload the world after a change). `rays_transparency_stats` enables
+delayed GPU counters in F3 (default off; atomics add overhead). These apply to hardware RT/Path Tracing.
+Per-texture IOR, thickness and absorption parameters belong in resource-pack sidecars. See
+[TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md). No validation run or FPS measurement was made for these source changes.
+`rays_optical_materials` (default on) is the master switch for the authored shader optics, with a legacy mode for comparison.
+
 Open **Options, Video Settings** and look for the **Bedray** section: two pages, **Bedray** (the essentials) and
 **Bedray Advanced**. Everything is saved in `config/bedray.toml`. The decision for every option, with the reasons, is in
 [SETTINGS_AUDIT.md](SETTINGS_AUDIT.md).

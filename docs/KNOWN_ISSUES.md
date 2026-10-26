@@ -31,6 +31,15 @@ more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc 
 
 ## Performance and memory
 
+* Optical profiles use 31 distinct immutable palette slots plus legacy. New property sets after palette exhaustion retain
+  legacy optics with a warning until atlas recreation/restart. Blocks/panes sharing a sprite share its authored thickness.
+* Clear glass now retains alpha-zero dielectric candidates; optical sprites cannot use fixed alpha opacity-micromap culling.
+  Reflection/absorption quality and the net performance cost of this change have not been evaluated.
+* Extra glass-face filtering is conservative and section-local. It may remove nothing when Sodium already culled the faces
+  or the matching companion-face proof is absent. Its toggle affects newly captured sections; reload to rebuild all sections.
+* Transparency diagnostics count instrumented operations and use delayed frame-slot readback. They do not measure separate
+  transparent GPU milliseconds, and enabling their atomics adds overhead. See [TRANSPARENT_MATERIALS](TRANSPARENT_MATERIALS.md).
+
 * Ray and especially path tracing are very expensive. On 8 GB of VRAM use a render distance around 12 chunks or less.
 * "RT Memory Budget" limits the memory for chunk geometry (default 2048 MB); far chunks are dropped when it is full.
 * Changing render scale or upscaler during play was exercised by automatic tests only for part of the combinations. If you see

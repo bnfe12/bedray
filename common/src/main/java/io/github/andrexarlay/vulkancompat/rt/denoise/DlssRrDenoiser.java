@@ -274,6 +274,11 @@ public final class DlssRrDenoiser {
         havePrev = false;
     }
 
+    /** Reset ray-reconstruction history on the next recorded frame after a transport/settings change. */
+    public void resetHistory() {
+        restartNext = true;
+    }
+
     void writeSet(long outputView) {
         this.boundOutputView = outputView;
         if (packPipeline != null && boundOutputView != 0L) {

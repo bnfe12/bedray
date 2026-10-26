@@ -160,6 +160,21 @@ public final class SettingsCatalog {
     // ---------------------------------------------------------------- the table
 
     static {
+        put("rays_optical_materials", Tier.ADVANCED, "Optical Materials",
+            "Use authored IOR, slab thickness and absorption profiles, including clear-glass dielectric centres. Off restores legacy shader optics for comparison.",
+            "Clear-glass interfaces can add ray work. Compare the same scene; no FPS benefit is guaranteed.", "Hardware RT / Path Tracing.");
+        put("rays_direct_translucent_shadows", Tier.ADVANCED, "Direct Transparent Shadows",
+            "Glass, ice and water tint direct sunlight and local-light shadow rays. Off passes their light without the color filter.",
+            "Can reduce transparent shadow work when disabled; actual cost depends on the scene.", "Hardware RT / Path Tracing.");
+        put("rays_indirect_translucent_shadows", Tier.ADVANCED, "Secondary Transparent Shadows",
+            "Apply transparent shadow filters when shading reflections and bounced light. Camera transparency stays enabled.",
+            "Can reduce shadow work in glass-heavy reflections when disabled.", "Hardware RT / Path Tracing.");
+        put("rays_cull_shared_glass", Tier.ADVANCED, "Cull Shared Glass Faces",
+            "Remove matching internal full-block glass boundaries after Sodium capture. Requires matching optical materials and outward companion faces. Changes affect newly captured sections; reload the world to rebuild all sections.",
+            "Adds bounded capture work and may reduce BLAS geometry; already culled scenes have no extra faces to remove.", "Hardware RT; custom materials can opt out.");
+        put("rays_transparency_stats", Tier.EXPERT, "Transparency Counters",
+            "Show delayed GPU query/candidate/layer/budget counters and CPU glass-face totals in F3 diagnostics. These are counts, not timings.",
+            "GPU atomic counters add overhead. Leave off for normal play.", "Hardware RT / Path Tracing.");
         // ===================== ESSENTIAL =====================
         putNoImage("renderer", Tier.ESSENTIAL, "World Renderer",
             "Hardware RT / Raster uses the saved hardware tracing mode. Voxel selects the included Bedray Compute provider: gray opaque cubes in a 48-block window with fixed diagnostic sunlight and traced shadows. Full textures, materials and light transport are pending. Frame generation is disabled and scaling becomes bilinear; the hardware RT mode stays saved.",

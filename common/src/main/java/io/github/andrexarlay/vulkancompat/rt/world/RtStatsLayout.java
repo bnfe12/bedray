@@ -113,11 +113,18 @@ public final class RtStatsLayout {
     public static final int LEAF_BACKLIT = add("leafBacklit", "uint");
     public static final int SELF_AVATAR_TRI_START = add("selfAvatarTriStart", "uint");
     public static final int SELF_AVATAR_TRI_COUNT = add("selfAvatarTriCount", "uint");
+    public static final int OPTICAL_ADDR = add("opticalAddr", "uvec2");
+    public static final int TRANS_QUERIES = add("transQueries", "uint");
+    public static final int TRANS_CANDIDATES = add("transCandidates", "uint");
+    public static final int TRANS_LAYERS = add("transLayers", "uint");
+    public static final int TRANS_OVERFLOWS = add("transOverflows", "uint");
+    public static final int TRANS_DIRECT_SHADOWS = add("transDirectShadows", "uint");
+    public static final int TRANS_INDIRECT_SHADOWS = add("transIndirectShadows", "uint");
 
     /** std430 size of the struct (struct alignment 16). */
     public static final int SIZE = (cursor + 15) & -16;
     /** Slot spacing of the frame slot ring (RtFrameRenderer STATS_SLOTS); >= {@link #SIZE}. */
-    public static final int SLOT_STRIDE = 544;
+    public static final int SLOT_STRIDE = 576;
 
     static {
         if (SIZE > SLOT_STRIDE) {

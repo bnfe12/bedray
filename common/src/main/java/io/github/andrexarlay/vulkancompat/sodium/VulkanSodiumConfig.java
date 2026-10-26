@@ -402,6 +402,14 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 () -> RtSettings.waterStyle == RtSettings.WATER_STYLE_VANILLA ? WaterStyle.VANILLA : WaterStyle.REALISTIC)
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         rt.addOption(track("water_style", water));
+        rt.addOption(boolOpt(builder, "rays_optical_materials", true, v -> RtSettings.opticalMaterials = v,
+            () -> RtSettings.opticalMaterials, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
+        rt.addOption(boolOpt(builder, "rays_direct_translucent_shadows", true, v -> RtSettings.directTranslucentShadows = v,
+            () -> RtSettings.directTranslucentShadows, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
+        rt.addOption(boolOpt(builder, "rays_indirect_translucent_shadows", true, v -> RtSettings.indirectTranslucentShadows = v,
+            () -> RtSettings.indirectTranslucentShadows, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
+        rt.addOption(boolOpt(builder, "rays_cull_shared_glass", true, v -> RtSettings.cullSharedGlass = v,
+            () -> RtSettings.cullSharedGlass, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         rt.addOption(godRaysOption(builder, anyRt, dMode, st));
         page.addOptionGroup(rt);
 
@@ -781,6 +789,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         }
         diag.addOption(boolOpt(builder, "debug_overlay", true, VulkanSodiumConfig::setDebugOverlay, VulkanSodiumConfig::debugOverlayOn,
             null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
+        diag.addOption(boolOpt(builder, "rays_transparency_stats", false, v -> RtSettings.transparencyStats = v,
+            () -> RtSettings.transparencyStats, null, NO_DEPS, Mark.NONE, OptionImpact.MEDIUM, false, st));
         diag.addOption(boolOpt(builder, "ui_expert", false, v -> VulkanRtxConfig.uiExpert = v, () -> VulkanRtxConfig.uiExpert,
             null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         if (expert) {

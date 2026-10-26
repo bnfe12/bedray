@@ -128,6 +128,13 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer StatsBuf {
     uint leafBacklit;           // 504 primary hits of this frame (1 in 16) whose key light came through a leaf card
     uint selfAvatarTriStart;    // 508 first triangle of the local player's captured body in this frame's entity BLAS
     uint selfAvatarTriCount;    // 512 0 = no capture (third person, option off): nothing is ever skipped
+    uvec2 opticalAddr;         // immutable optical palette: 32 records, 12 floats per record
+    uint transQueries;
+    uint transCandidates;
+    uint transLayers;
+    uint transOverflows;
+    uint transDirectShadows;
+    uint transIndirectShadows;
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer Vec4Buf { vec4 v[]; };
 // ReSTIR DI reservoir: one chosen emitter sample per pixel, reused by the next frame.
@@ -195,6 +202,10 @@ const uint FLAG_GEOMETRIC_NORMALS = 2048u; // flat voxel geometric normal (ng) f
 const uint FLAG_VOLUMETRIC_FOG = 4096u;    // volumetric fog and atmospheric haze
 const uint FLAG_WATER_REALISTIC = 8192u;
 const uint FLAG_SUN_DENOISED = 65536u;     // first-hit sun NEE joins the denoised radiance signal when selected
+const uint FLAG_SKIP_DIRECT_TRANSLUCENT = 131072u;
+const uint FLAG_SKIP_INDIRECT_TRANSLUCENT = 262144u;
+const uint FLAG_TRANSPARENCY_STATS = 524288u;
+const uint FLAG_OPTICAL_MATERIALS = 1048576u;
 const uint FLAG_DEMODULATE = 16777216u;
 const uint FLAG_LOWDISC = 33554432u;      // low-discrepancy spatio-temporal sample sequence (rt_noise.glsl) instead of white noise   // ray mode: the diffuse irradiance is accumulated separately from the specular/emission/fog rest   // water style: 1 = Realistic, 0 = Vanilla
 
@@ -213,6 +224,25 @@ const uint MASK_HERMETIC = MASK_WORLD | MASK_ENTITIES; // 0x03u
 
 uint rtFlags() { return floatBitsToUint(pc.keyColor.w); }
 bool hasFlag(uint f) { return (rtFlags() & f) != 0u; }
+
+bool gSecondaryVisibility = false;
+float opticalValue(uint profile, uint field) {
+    if (!hasFlag(FLAG_OPTICAL_MATERIALS) || profile == 0u || profile >= 32u) return 0.0;
+    uvec2 address = StatsBuf(pc.statsAddr).opticalAddr;
+    if (all(equal(address, uvec2(0u)))) return 0.0;
+    return FloatBuf(address).v[profile * 12u + field];
+}
+void transparencyQuery(bool shadow) {
+    if (!hasFlag(FLAG_TRANSPARENCY_STATS)) return;
+    atomicAdd(StatsBuf(pc.statsAddr).transQueries, 1u);
+    if (shadow) {
+        if (gSecondaryVisibility) atomicAdd(StatsBuf(pc.statsAddr).transIndirectShadows, 1u);
+        else atomicAdd(StatsBuf(pc.statsAddr).transDirectShadows, 1u);
+    }
+}
+void transparencyCandidate() { if (hasFlag(FLAG_TRANSPARENCY_STATS)) atomicAdd(StatsBuf(pc.statsAddr).transCandidates, 1u); }
+void transparencyLayer() { if (hasFlag(FLAG_TRANSPARENCY_STATS)) atomicAdd(StatsBuf(pc.statsAddr).transLayers, 1u); }
+void transparencyOverflow() { if (hasFlag(FLAG_TRANSPARENCY_STATS)) atomicAdd(StatsBuf(pc.statsAddr).transOverflows, 1u); }
 // normalize() of a zero vector is NaN in GLSL, and a voxel mesh can carry one: a quad stored as (A, B, C, C) turns its second
 // triangle into (C, C, A), a zero-area sliver nobody sees but every traversal hits. NaN then survives clamp() and denoising.
 // Callers that derive a direction from geometry use this and pass a direction they already trust as the fallback.
@@ -473,6 +503,13 @@ bool candidateAccepted(uint slot, uint geom, uint prim, vec2 bary, bool skipTran
     // footprint-averaged coverage farther (same model as the redstone dust): grass and leaves no longer flip the whole
     // quad between hit and hole at every Halton jitter phase, which read as flickering plant parts.
     float a = dustCoverage(uv, gHitT);
+    if (hasFlag(FLAG_MATERIALS)) {
+        uint opticalProfile = (255u - uint(textureLod(matAtlas, uv, 0.0).a * 255.0 + 0.5)) >> 3u;
+        if (opticalValue(opticalProfile, 7u) == 1.0) {
+            gSawTranslucent = gSawTranslucent || skipTranslucent;
+            return !skipTranslucent; // clear glass alpha-zero centres are dielectric interfaces, not empty holes
+        }
+    }
     if (foliageFilter && skipTranslucent && a >= 0.5) {
         // Vegetation must be classified before the generic alpha filter: an emissive plant blocks even when its texel alpha is
         // below 0.99, matching Surface.isFoliage. Other foliage becomes a coloured filter in traceTransmittance.

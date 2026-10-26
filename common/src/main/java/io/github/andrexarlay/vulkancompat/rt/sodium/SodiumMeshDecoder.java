@@ -172,8 +172,8 @@ public final class SodiumMeshDecoder {
             min = new float[3];
             max = new float[3];
         }
-        return new DecodedSection(key, sectionX, sectionY, sectionZ, passQuads, positions, uvs, colors, light, normals,
-            min, max, rawWords);
+        return GlassFaceFilter.apply(new DecodedSection(key, sectionX, sectionY, sectionZ, passQuads, positions, uvs, colors, light, normals,
+            min, max, rawWords));
     }
 
     /** n = normalize(cross(p2 - p0, p3 - p1)). A zero-area quad has no normal: fixed (0,1,0), such quads draw nothing. */
