@@ -89,7 +89,7 @@ public final class ShaderHostConfig {
                 }
             }
         } catch (IOException e) {
-            LOGGER.error("[VKB-SHADERHOST] could not read {}: {}", LogPaths.show(toml), e.toString());
+            LOGGER.error("[VKB-SHADERHOST] could not read {}: {}", LogPaths.show(toml), LogPaths.show(e));
         }
     }
 }

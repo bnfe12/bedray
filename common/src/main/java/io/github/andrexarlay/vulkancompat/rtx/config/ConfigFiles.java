@@ -39,7 +39,7 @@ public final class ConfigFiles {
                 Files.copy(legacy, file, StandardCopyOption.COPY_ATTRIBUTES);
                 LOGGER.info("[Bedray] settings migrated: copied {} to {} (the old file is left in place)", LogPaths.show(legacy), LogPaths.show(file));
             } catch (IOException e) {
-                LOGGER.warn("[Bedray] could not copy old settings {} to {}: {}", LogPaths.show(legacy), LogPaths.show(file), e.toString());
+                LOGGER.warn("[Bedray] could not copy old settings {} to {}: {}", LogPaths.show(legacy), LogPaths.show(file), LogPaths.show(e));
             }
         }
         return file;

@@ -1,8 +1,8 @@
 package io.github.andrexarlay.vulkancompat.rtx.config;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
 import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
-import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerSwitch;
@@ -745,7 +745,7 @@ public final class VulkanRtxConfig {
             LOGGER.info("[VKB-AUTOTEST] upscaler_config_load backend={} mode={} custom={} outcome={}", activeBackend, mode,
                 customPercent(activeBackend), o);
         } catch (IllegalArgumentException e) {
-            LOGGER.error("[VKB-AUTOTEST] upscaler_config_load FAILED backend={} mode={}: {}", activeBackend, mode, e.getMessage(), e);
+            LOGGER.error("[VKB-AUTOTEST] upscaler_config_load FAILED backend={} mode={}\n{}", activeBackend, mode, LogPaths.stack(e));
         }
     }
 

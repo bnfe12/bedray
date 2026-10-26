@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.particles;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -180,8 +181,8 @@ public final class RtParticleLayer {
         } catch (RuntimeException | LinkageError e) {
             failed = true;
             layerReady = false;
-            LOGGER.error("[VKB-RT] particles layer FAILED (particles are not drawn while RT is displayed; setting stays on): {}",
-                e.toString(), e);
+            LOGGER.error("[VKB-RT] particles layer FAILED (particles are not drawn while RT is displayed; setting stays on)\n{}",
+                LogPaths.stack(e));
             return;
         }
         replayNanosWindow += System.nanoTime() - t0;

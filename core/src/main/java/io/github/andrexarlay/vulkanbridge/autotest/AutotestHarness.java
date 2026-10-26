@@ -6,6 +6,7 @@ import com.mojang.renderpearl.api.device.DeviceInfo;
 import io.github.andrexarlay.vulkanbridge.core.VulkanBackendDetector;
 import io.github.andrexarlay.vulkanbridge.platform.HookPriority;
 import io.github.andrexarlay.vulkanbridge.platform.LoaderAccess;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkanbridge.platform.Platforms;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
@@ -568,8 +569,8 @@ public final class AutotestHarness {
             device = info.name();
             vendor = info.vendorName();
         } catch (Throwable t) {
-            LOGGER.error("[VKB-AUTOTEST] could not read DeviceInfo", t);
-            kv("deviceInfoError", String.valueOf(t));
+            LOGGER.error("[VKB-AUTOTEST] could not read DeviceInfo\n{}", LogPaths.stack(t));
+            kv("deviceInfoError", LogPaths.show(String.valueOf(t)));
         }
         kv("scenario", scenario,
                 "backend", backend,
@@ -607,7 +608,7 @@ public final class AutotestHarness {
         finishing = true;
         phase = Phase.FINISHED;
         if (t != null) {
-            LOGGER.error("[VKB-AUTOTEST] failure stack trace", t);
+            LOGGER.error("[VKB-AUTOTEST] failure stack trace\n{}", LogPaths.stack(t));
         }
         kv(concat(new String[] {"scenario", scenario, "frames", String.valueOf(frames)},
                 concat(poseKv(), new String[] {"result", "FAIL", "error", reason})));
@@ -617,7 +618,7 @@ public final class AutotestHarness {
     private static void kv(String... pairs) {
         StringBuilder sb = new StringBuilder("[VKB-AUTOTEST]");
         for (int i = 0; i + 1 < pairs.length; i += 2) {
-            String v = pairs[i + 1].replace('\n', ' ').replace('\r', ' ');
+            String v = LogPaths.show(pairs[i + 1].replace('\n', ' ').replace('\r', ' '));
             if (v.indexOf(' ') >= 0) {
                 v = '"' + v.replace("\"", "'") + '"';
             }

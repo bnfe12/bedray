@@ -136,7 +136,7 @@ public final class NativeInstaller {
             try {
                 NativeLibrariesImpl.deleteTree(staging);
             } catch (NativeLibraryException e) {
-                LOGGER.warn("[VKB-NATIVES] {}", e.getMessage());
+                LOGGER.warn("[VKB-NATIVES] {}", LogPaths.show(e.getMessage()));
             }
         }
     }
@@ -178,7 +178,7 @@ public final class NativeInstaller {
                 byName.computeIfAbsent(canonical, k -> new ArrayList<>()).add(new Staged(canonical, e.getName(), tmp));
             }
         } catch (java.util.zip.ZipException e) {
-            throw new IOException("not a readable zip archive: " + e.getMessage(), e);
+            throw new IOException(LogPaths.show("not a readable zip archive: " + e.getMessage()), e);
         }
         if (byName.isEmpty()) {
             throw new NativeLibraryException(ID, "the archive contains none of the libraries Bedray uses");

@@ -15,6 +15,13 @@
   falloff avoids `pow`.
 * Settings text: Frame Generation shows a real description instead of an empty tooltip, and RT Pixel
   Shadows / Pixel Shadow Size no longer claim to be hidden-mode only (path tracing uses them too).
+* Privacy of a public release: an absolute path is printed as `<gameDir>` or `<home>` wherever it can reach
+  a player's file — the launch log, the F3 overlay, the natives screen. That includes the paths carried inside
+  exception messages and stack traces of filesystem and vendor-library failures, and the stored status strings
+  the Dirt RT, frame-generation and shader-host surfaces show on the debug screen or keep as a session failure
+  reason. Causes are still logged in full. The source contract that guards it now reads the throwable names out
+  of each file's own `catch` clauses and follows the text into stored status strings, so renaming a catch
+  variable or building a status message cannot reopen a closed leak.
 
 ## 0.1.1-alpha.13 (development, unreleased)
 

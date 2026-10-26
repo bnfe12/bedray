@@ -463,7 +463,7 @@ public final class RtFrameRenderer {
                     gpuTimer = new RtGpuTimer(device, "VKB-RT-GPU", "world", "rays", "denoise", "atmo");
                 } catch (RuntimeException e) {
                     // A device without timestamp queries must lose the timings, not the whole RT frame.
-                    LOGGER.warn("[VKB-RT] gpu timers unavailable: {}", e.getMessage());
+                    LOGGER.warn("[VKB-RT] gpu timers unavailable: {}", LogPaths.show(e.getMessage()));
                 }
             }
             selectDenoiser();
@@ -662,7 +662,7 @@ public final class RtFrameRenderer {
         try {
             lightmapView = WorldTargetManager.extractVkImageView(Minecraft.getInstance().gameRenderer.lightmap());
         } catch (RuntimeException | LinkageError e) {
-            LOGGER.debug("[VKB-RT] lightmap view unavailable: {}", e.toString());
+            LOGGER.debug("[VKB-RT] lightmap view unavailable: {}", LogPaths.show(e));
         }
         if (denoiseMode == DenoiserMode.DLSS_RR) {
             // [DLSS-RR]

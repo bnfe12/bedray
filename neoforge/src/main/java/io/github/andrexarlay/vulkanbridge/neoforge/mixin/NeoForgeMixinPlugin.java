@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkanbridge.neoforge.mixin;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
@@ -66,7 +67,7 @@ public class NeoForgeMixinPlugin implements IMixinConfigPlugin {
             methodPresent = hasMethod(pipelines);
         } catch (Exception | LinkageError e) {
             LOGGER.warn("[VKB-COMPAT] mixin_skipped={} reason=cannot_inspect_bytecode ({}); if this NeoForge still lacks "
-                    + "RenderPipelines.registerCustomPipelines the game will fail with NoSuchMethodError", CLIENT_HOOKS_MIXIN, e.toString());
+                    + "RenderPipelines.registerCustomPipelines the game will fail with NoSuchMethodError", CLIENT_HOOKS_MIXIN, LogPaths.show(e));
             return false;
         }
         if (callPresent && !methodPresent) {

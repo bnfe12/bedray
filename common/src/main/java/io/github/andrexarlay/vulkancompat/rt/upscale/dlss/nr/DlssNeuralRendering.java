@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.upscale.dlss.nr;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,6 +80,11 @@ public final class DlssNeuralRendering implements Closeable, AutoCloseable {
     }
 
     public record LibraryResolution(boolean usable, Path modelDll, Path loaderDll, String reason) {
+        public LibraryResolution {
+            // The reason names the directories it looked in, and it reaches both the log and the natives screen.
+            reason = reason == null ? null : LogPaths.show(reason);
+        }
+
         public static LibraryResolution unusable(String reason) {
             return new LibraryResolution(false, null, null, reason);
         }
@@ -220,7 +226,7 @@ public final class DlssNeuralRendering implements Closeable, AutoCloseable {
             // 1. Library check
             LibraryResolution libRes = checkLibraries(customDir);
             if (!libRes.usable()) {
-                LOGGER.info("[DLSS-NR] Native libraries not found: {}. DLSS-NR will be safely disabled.", libRes.reason());
+                LOGGER.info("[DLSS-NR] Native libraries not found: {}. DLSS-NR will be safely disabled.", LogPaths.show(libRes.reason()));
                 this.status = Status.NOT_SUPPORTED_MISSING_LIBS;
                 this.initialized = false;
                 return this.status;
@@ -241,10 +247,10 @@ public final class DlssNeuralRendering implements Closeable, AutoCloseable {
             this.initialized = true;
             this.status = Status.INITIALIZED;
             LOGGER.warn("[DLSS-NR] STUB: files present (model={}, loader={}) but nothing is loaded or evaluated on the GPU",
-                resolvedModelDll, resolvedLoaderDll);
+                LogPaths.show(resolvedModelDll), LogPaths.show(resolvedLoaderDll));
             return Status.INITIALIZED;
         } catch (Throwable t) {
-            LOGGER.warn("[DLSS-NR] Fail-Safe Guard caught error during initialization: {}", t.getMessage(), t);
+            LOGGER.warn("[DLSS-NR] Fail-Safe Guard caught error during initialization: {}\n{}", LogPaths.show(t.getMessage()), LogPaths.stack(t));
             this.status = Status.NOT_SUPPORTED_INIT_FAILED;
             this.initialized = false;
             return this.status;
@@ -266,7 +272,7 @@ public final class DlssNeuralRendering implements Closeable, AutoCloseable {
             composeColorRgb(originalRgb, modelRgb, outputRgb, config);
             return Status.INITIALIZED;
         } catch (Throwable t) {
-            LOGGER.warn("[DLSS-NR] Fail-Safe Guard caught exception in evaluate: {}", t.getMessage());
+            LOGGER.warn("[DLSS-NR] Fail-Safe Guard caught exception in evaluate: {}", LogPaths.show(t.getMessage()));
             if (originalRgb != null && outputRgb != null && originalRgb != outputRgb) {
                 System.arraycopy(originalRgb, 0, outputRgb, 0, Math.min(originalRgb.length, outputRgb.length));
             }
@@ -289,7 +295,7 @@ public final class DlssNeuralRendering implements Closeable, AutoCloseable {
             composePixelBuffer(originalPixels, modelPixels, outputPixels, pixelCount, config);
             return Status.INITIALIZED;
         } catch (Throwable t) {
-            LOGGER.warn("[DLSS-NR] Fail-Safe Guard caught exception in evaluate buffer: {}", t.getMessage());
+            LOGGER.warn("[DLSS-NR] Fail-Safe Guard caught exception in evaluate buffer: {}", LogPaths.show(t.getMessage()));
             if (originalPixels != null && outputPixels != null && originalPixels != outputPixels) {
                 System.arraycopy(originalPixels, 0, outputPixels, 0, Math.min(originalPixels.length, outputPixels.length));
             }
