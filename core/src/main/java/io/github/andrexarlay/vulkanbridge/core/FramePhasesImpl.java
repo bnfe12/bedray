@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -43,10 +44,22 @@ public final class FramePhasesImpl implements FramePhases {
     }
 
     private final Object lock = new Object();
+    /**
+     * Per-phase listener lists, copy-on-write like {@link #modifiers}: the array reference is volatile, so a registration
+     * made off the render thread is safely published to the dispatch loop, which reads it without the lock. Assigning an
+     * element of a plain final array would have published the new list with no memory barrier.
+     */
     @SuppressWarnings("unchecked")
-    private final List<Entry<FramePhaseListener>>[] listeners = new List[FramePhase.values().length];
+    private volatile List<Entry<FramePhaseListener>>[] listeners = emptyListenerArray();
     private volatile List<Entry<UnaryOperator<Matrix4f>>> modifiers = List.of();
     private final Map<ExclusiveRole, String> owners = new EnumMap<>(ExclusiveRole.class);
+
+    @SuppressWarnings("unchecked")
+    private static List<Entry<FramePhaseListener>>[] emptyListenerArray() {
+        List<Entry<FramePhaseListener>>[] empty = new List[FramePhase.values().length];
+        Arrays.fill(empty, List.of());
+        return empty;
+    }
 
     // render thread state
     private long frameIndex;
@@ -57,12 +70,6 @@ public final class FramePhasesImpl implements FramePhases {
     private double partialTick;
     private volatile FrameInfo current;
 
-    public FramePhasesImpl() {
-        for (int i = 0; i < listeners.length; i++) {
-            listeners[i] = List.of();
-        }
-    }
-
     // ---- registration
 
     @Override
@@ -72,14 +79,20 @@ public final class FramePhasesImpl implements FramePhases {
         Objects.requireNonNull(listener, "listener");
         Entry<FramePhaseListener> e = new Entry<>(priority, listener);
         synchronized (lock) {
-            listeners[phase.ordinal()] = inserted(listeners[phase.ordinal()], e);
+            int at = phase.ordinal();
+            List<Entry<FramePhaseListener>>[] copy = listeners.clone();
+            copy[at] = inserted(copy[at], e);
+            listeners = copy;
         }
         return () -> {
             if (!e.live.compareAndSet(true, false)) {
                 return false;
             }
             synchronized (lock) {
-                listeners[phase.ordinal()] = without(listeners[phase.ordinal()], e);
+                int at = phase.ordinal();
+                List<Entry<FramePhaseListener>>[] copy = listeners.clone();
+                copy[at] = without(copy[at], e);
+                listeners = copy;
             }
             return true;
         };

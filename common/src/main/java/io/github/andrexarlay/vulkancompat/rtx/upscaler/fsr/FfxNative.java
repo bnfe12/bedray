@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -126,7 +127,7 @@ public final class FfxNative {
             lookup = SymbolLookup.libraryLookup(libraryPath, arena);
         } catch (IllegalArgumentException | UnsatisfiedLinkError e) {
             arena.close();
-            throw new FsrException("load", "cannot load " + libraryPath + ": " + e, e);
+            throw new FsrException("load", "cannot load " + LogPaths.show(libraryPath) + ": " + LogPaths.show(e), e);
         }
         Linker linker = Linker.nativeLinker();
         try {
@@ -149,10 +150,14 @@ public final class FfxNative {
     /** Loads the DLL from an explicit file. @throws FsrException (stage {@code load}) on any problem. */
     public static FfxNative load(Path dll) {
         if (!Files.isRegularFile(dll)) {
-            throw new FsrException("load", "not found: " + dll, null);
+            throw new FsrException("load", "not found: " + LogPaths.show(dll), null);
+        }
+        String reject = io.github.andrexarlay.vulkancompat.rtx.NativeDllGate.reject(dll);
+        if (reject != null) {
+            throw new FsrException("load", LogPaths.show(dll) + " " + reject, null);
         }
         FfxNative n = new FfxNative(dll.toAbsolutePath().normalize());
-        LOGGER.info("[VKB-FSR] loaded {}", n.libraryPath);
+        LOGGER.info("[VKB-FSR] loaded {}", LogPaths.show(n.libraryPath));
         return n;
     }
 

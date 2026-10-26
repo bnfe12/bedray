@@ -18,6 +18,14 @@ public final class RtSky {
         public float day;
         /** True when the moon is the key light (sun more than ~7 degrees below the horizon). */
         public boolean isMoon;
+        /**
+         * Alpha vanilla draws the celestial sprite with, which is {@code SkyRenderState.rainBrightness} itself: the bytecode of
+         * SkyRenderer.renderSunMoonAndStars passes field rainBrightness straight into renderSun, where it becomes
+         * {@code new Vector4f(1, 1, 1, rainBrightness)} (javap -c on libs/minecraft-26.3-client.jar, 2026-10-26). Anything that
+         * only exists because the body is in the sky — the glare halo, the specular glint on water and glass — has to obey it,
+         * or a pouring storm still shows a sun. The key colour cannot stand in for it: it keeps a weather floor.
+         */
+        public float bodyAlpha;
     }
 
     private RtSky() {
@@ -49,6 +57,17 @@ public final class RtSky {
     /** 0 at night, 1 in full daylight, from the sun elevation (sin of the angle above the horizon). */
     public static float dayFactor(float sunY) {
         return smoothstep(-0.10f, 0.25f, sunY);
+    }
+
+    /**
+     * Strength of the sun glare halo: the settings strength times the day factor, the smoothstep of the elevation (the halo
+     * fades out as the body sets) and {@link Key#bodyAlpha} (the storm that hides the sun hides its halo too).
+     * Every factor is clamped, so a caller cannot push the term out of range.
+     */
+    public static float glareStrength(float strength, float day, float elevation, float bodyAlpha) {
+        float e = Math.max(0f, Math.min(1f, elevation));
+        return strength * Math.max(0f, Math.min(1f, day)) * (e * e * (3f - 2f * e))
+            * Math.max(0f, Math.min(1f, bodyAlpha));
     }
 
     /**
@@ -118,6 +137,7 @@ public final class RtSky {
             out.color[0] = 0f; out.color[1] = 0f; out.color[2] = 0f;
             out.day = 0.6f;
             out.isMoon = false;
+            out.bodyAlpha = 0f;
             return;
         }
         float[] sun = new float[3];
@@ -127,6 +147,7 @@ public final class RtSky {
         out.day = dayFactor(sun[1]);
         out.isMoon = sun[1] <= -0.12f;
         float rain = Math.max(0f, Math.min(1f, rainBrightness));
+        out.bodyAlpha = rain;
         // Vanilla's own storm factor (Level.getSkyDarken): a thunderstorm darkens the skylight on top of the rain. Applied to
         // the key light, so the sky, the sun/moon colour and every traced shadow term follow it.
         float storm = 1f - (5f / 16f) * Math.max(0f, Math.min(1f, thunder));

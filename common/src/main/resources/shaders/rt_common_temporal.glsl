@@ -28,6 +28,15 @@ float safeW(float w) {
     return abs(w) < 1.0e-6 ? (w < 0.0 ? -1.0e-6 : 1.0e-6) : w;
 }
 
+// shaderc/glslang has no isfinite() (rt_atrous.comp proved it), so keep the isnan/isinf idiom the rest of the chain uses.
+float finiteOr(float v, float fallback) {
+    return (isnan(v) || isinf(v)) ? fallback : v;
+}
+
+vec3 finiteOr(vec3 v, vec3 fallback) {
+    return vec3(finiteOr(v.x, fallback.x), finiteOr(v.y, fallback.y), finiteOr(v.z, fallback.z));
+}
+
 // Camera forward derived from the current projection (including bob), matching the effective ray origin.
 vec3 bobCameraForward() {
     vec4 centerW = pc.invViewProj * vec4(0.0, 0.0, 0.5, 1.0);
@@ -194,14 +203,20 @@ vec3 temporalAccumulate(ivec2 p, ivec2 size, vec3 e, vec3 r, bool hit, vec3 pos,
             atomicAdd(fb.histAccepted, 1u);    // history accepted (CPU: hist_pct of the counted hit pixels)
         }
     }
+    // n is written to the history alpha channel (n + 1.0 below), so it must be finite: once it turns NaN the pixel can never be
+    // spatially filtered again (rt_atrous.comp gates on n < FILTER_FULL_N, where NaN compares false) and it poisons the mean of
+    // every following frame.
+    n = !(n >= 0.0) || isinf(n) ? 0.0 : n;
     vec3 meanE = (histE * n + e) / (n + 1.0);
     vec3 meanR = (histR * n + r) / (n + 1.0);
-    if (isnan(meanE.r) || isinf(meanE.r)) meanE.r = e.r;
-    if (isnan(meanE.g) || isinf(meanE.g)) meanE.g = e.g;
-    if (isnan(meanE.b) || isinf(meanE.b)) meanE.b = e.b;
-    if (isnan(meanR.r) || isinf(meanR.r)) meanR.r = r.r;
-    if (isnan(meanR.g) || isinf(meanR.g)) meanR.g = r.g;
-    if (isnan(meanR.b) || isinf(meanR.b)) meanR.b = r.b;
+    // The fallback is the fresh sample, but only if that sample is itself usable: when the new radiance is what broke the mean,
+    // reusing it here stored NaN straight into the history and the temporal chain never recovered.
+    meanE.r = finiteOr(meanE.r, finiteOr(e.r, 0.0));
+    meanE.g = finiteOr(meanE.g, finiteOr(e.g, 0.0));
+    meanE.b = finiteOr(meanE.b, finiteOr(e.b, 0.0));
+    meanR.r = finiteOr(meanR.r, finiteOr(r.r, 0.0));
+    meanR.g = finiteOr(meanR.g, finiteOr(r.g, 0.0));
+    meanR.b = finiteOr(meanR.b, finiteOr(r.b, 0.0));
     meanE = max(meanE, vec3(0.0));
     meanR = max(meanR, vec3(0.0));
     imageStore(accumImage, ivec2(p.x, p.y + cur * size.y), vec4(meanE, n + 1.0));

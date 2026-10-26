@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.rtx.upscaler.xess;
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
 import io.github.andrexarlay.vulkanbridge.api.DeviceRequirement;
 import io.github.andrexarlay.vulkanbridge.api.FeatureRequest;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
 import org.lwjgl.vulkan.VK13;
@@ -101,10 +102,10 @@ public final class XessDeviceRequirements {
             UpscalerPreregistration.record(UpscalerBackend.XESS, false);
             if (requested) {
                 LOGGER.warn("[VKB-AUTOTEST] xess=FAILED stage=device_hook result=dll_missing path={} (XeSS FeatureSets NOT added, device unchanged)",
-                    XessConfig.libraryPath(gameDir.get()));
+                    LogPaths.show(XessConfig.libraryPath(gameDir.get())));
             } else {
                 LOGGER.info("[VKB-AUTOTEST] upscaler_prereg backend=XESS registered=false reason=dll_missing path={}",
-                    XessConfig.libraryPath(gameDir.get()));
+                    LogPaths.show(XessConfig.libraryPath(gameDir.get())));
             }
             return;
         }

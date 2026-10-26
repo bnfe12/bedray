@@ -2,24 +2,25 @@ package io.github.andrexarlay.vulkancompat.rt.entity;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import org.joml.Matrix3f;
-import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Intercepts vertex data during entity rendering and transforms it into
  * index-buffered triangles (quad triangulation: 0,1,2 and 2,3,0).
  */
 public class CapturedVertexConsumer implements VertexConsumer {
-    private final List<Float> vertices = new ArrayList<>();
-    private final List<Integer> indices = new ArrayList<>();
+    /** Floats per recorded vertex: x,y,z, color(ABGR bits), u, v, light bits, nx, ny, nz. */
+    public static final int FLOATS_PER_VERTEX = 10;
 
-    // Temporary storage for vertices of the current polygon/quad
-    private final List<float[]> currentQuadVertices = new ArrayList<>(4);
+    private float[] vertices = new float[4096 * FLOATS_PER_VERTEX];
+    private int vertexFloatCount;
+    private int[] indices = new int[6144];
+    private int indexCount;
+
+    // Storage for the vertices of the current polygon/quad (one flat row; a quad is the longest polygon here)
+    private final float[] quadStage = new float[4 * FLOATS_PER_VERTEX];
+    private int quadStageCount;
 
     // Current vertex staging fields
     private float curX, curY, curZ;
@@ -28,7 +29,6 @@ public class CapturedVertexConsumer implements VertexConsumer {
     private int curLight = 15728880;
     private float curNormalX = 0f, curNormalY = 1f, curNormalZ = 0f;
 
-    private int totalVertexCount = 0;
     /** RT entity atlas slot of the following vertices (EntityTextureAtlas), packed into bits 8..15 of the light word. */
     private int texSlot;
     /** Optional UV remap (atlas UV -> sprite-local 0..1): u0, u1, v0, v1; null = as given. */
@@ -38,6 +38,10 @@ public class CapturedVertexConsumer implements VertexConsumer {
     private int curFlags;
     private boolean allowHurt = true;
     private boolean pendingVertex = false;
+
+    // Reused across vertices: one captured frame is tens of thousands of vertices on the render thread.
+    private final Vector4f stagePos = new Vector4f();
+    private final Vector3f stageNormal = new Vector3f();
 
     public void setFlags(int flags) {
         this.baseFlags = flags;
@@ -81,11 +85,10 @@ public class CapturedVertexConsumer implements VertexConsumer {
         }
         this.pendingVertex = true;
         this.curFlags = this.baseFlags;
-        Vector4f pos = new Vector4f(x, y, z, 1.0f);
-        pos.mul(pose.pose());
-        this.curX = pos.x;
-        this.curY = pos.y;
-        this.curZ = pos.z;
+        stagePos.set(x, y, z, 1.0f).mul(pose.pose());
+        this.curX = stagePos.x;
+        this.curY = stagePos.y;
+        this.curZ = stagePos.z;
         return this;
     }
 
@@ -146,14 +149,13 @@ public class CapturedVertexConsumer implements VertexConsumer {
 
     @Override
     public VertexConsumer setNormal(PoseStack.Pose pose, float normalX, float normalY, float normalZ) {
-        Vector3f norm = new Vector3f();
-        pose.transformNormal(normalX, normalY, normalZ, norm);
-        if (norm.lengthSquared() > 1e-12f) {
-            norm.normalize();
+        pose.transformNormal(normalX, normalY, normalZ, stageNormal);
+        if (stageNormal.lengthSquared() > 1e-12f) {
+            stageNormal.normalize();
         }
-        this.curNormalX = norm.x;
-        this.curNormalY = norm.y;
-        this.curNormalZ = norm.z;
+        this.curNormalX = stageNormal.x;
+        this.curNormalY = stageNormal.y;
+        this.curNormalZ = stageNormal.z;
         flushStagedVertex();
         return this;
     }
@@ -170,7 +172,6 @@ public class CapturedVertexConsumer implements VertexConsumer {
         );
         // light word: block (0..240) | slot << 8 | sky (0..240) << 16 | flags << 24
         int lightWord = (curLight & 0xFF) | (texSlot << 8) | (((curLight >>> 16) & 0xFF) << 16) | ((curFlags & 0xFF) << 24);
-        float lightFloat = Float.intBitsToFloat(lightWord);
         float u = curU;
         float v = curV;
         if (uvRemap != null) {
@@ -178,43 +179,42 @@ public class CapturedVertexConsumer implements VertexConsumer {
             v = (v - uvRemap[2]) / Math.max(1e-6f, uvRemap[3] - uvRemap[2]);
         }
 
-        // Record a single vertex tuple: [x, y, z, color, u, v, light, nx, ny, nz] (10 floats)
-        float[] vData = new float[]{
-            curX, curY, curZ,
-            colorFloat,
-            u, v,
-            lightFloat,
-            curNormalX, curNormalY, curNormalZ
-        };
+        // Record a single vertex tuple: [x, y, z, color, u, v, light, nx, ny, nz]
+        int s = quadStageCount * FLOATS_PER_VERTEX;
+        quadStage[s] = curX;
+        quadStage[s + 1] = curY;
+        quadStage[s + 2] = curZ;
+        quadStage[s + 3] = colorFloat;
+        quadStage[s + 4] = u;
+        quadStage[s + 5] = v;
+        quadStage[s + 6] = Float.intBitsToFloat(lightWord);
+        quadStage[s + 7] = curNormalX;
+        quadStage[s + 8] = curNormalY;
+        quadStage[s + 9] = curNormalZ;
+        quadStageCount++;
 
-        currentQuadVertices.add(vData);
-
-        if (currentQuadVertices.size() == 4) {
+        if (quadStageCount == 4) {
             emitQuadTriangles();
         }
     }
 
     private void emitQuadTriangles() {
-        int baseIndex = totalVertexCount;
-
-        // Add 4 vertices to global vertex stream
-        for (float[] vData : currentQuadVertices) {
-            for (float f : vData) {
-                vertices.add(f);
-            }
-        }
-        totalVertexCount += 4;
+        // The index base is derived from the write offset itself: the second counter this used to read was not advanced by the
+        // bridge emitter (RtSceneApi.appendVertex), so a quad staged across bridge geometry rebased onto the wrong vertices.
+        int at = ensureVertexSpace(4 * FLOATS_PER_VERTEX);
+        int baseIndex = at / FLOATS_PER_VERTEX;
+        System.arraycopy(quadStage, 0, vertices, at, 4 * FLOATS_PER_VERTEX);
 
         // Triangulate quad into two triangles: (0, 1, 2) and (2, 3, 0)
-        indices.add(baseIndex + 0);
-        indices.add(baseIndex + 1);
-        indices.add(baseIndex + 2);
+        int iat = ensureIndexSpace(6);
+        indices[iat] = baseIndex + 0;
+        indices[iat + 1] = baseIndex + 1;
+        indices[iat + 2] = baseIndex + 2;
+        indices[iat + 3] = baseIndex + 2;
+        indices[iat + 4] = baseIndex + 3;
+        indices[iat + 5] = baseIndex + 0;
 
-        indices.add(baseIndex + 2);
-        indices.add(baseIndex + 3);
-        indices.add(baseIndex + 0);
-
-        currentQuadVertices.clear();
+        quadStageCount = 0;
     }
 
     /**
@@ -224,46 +224,99 @@ public class CapturedVertexConsumer implements VertexConsumer {
         if (this.pendingVertex) {
             flushStagedVertex();
         }
-        if (currentQuadVertices.size() == 3) {
-            int baseIndex = totalVertexCount;
-            for (float[] vData : currentQuadVertices) {
-                for (float f : vData) {
-                    vertices.add(f);
-                }
-            }
-            totalVertexCount += 3;
-            indices.add(baseIndex + 0);
-            indices.add(baseIndex + 1);
-            indices.add(baseIndex + 2);
-            currentQuadVertices.clear();
-        } else if (!currentQuadVertices.isEmpty()) {
-            currentQuadVertices.clear();
+        if (quadStageCount == 3) {
+            int at = ensureVertexSpace(3 * FLOATS_PER_VERTEX);
+            int baseIndex = at / FLOATS_PER_VERTEX;
+            System.arraycopy(quadStage, 0, vertices, at, 3 * FLOATS_PER_VERTEX);
+            int iat = ensureIndexSpace(3);
+            indices[iat] = baseIndex + 0;
+            indices[iat + 1] = baseIndex + 1;
+            indices[iat + 2] = baseIndex + 2;
+            quadStageCount = 0;
+        } else if (quadStageCount != 0) {
+            quadStageCount = 0;
         }
     }
 
-    public List<Float> getVertices() {
-        flushRemaining();
+    /** Append one already-transformed vertex tuple, used by the bridge emitter (RtSceneApi) writing into this frame. */
+    public void appendVertex(float x, float y, float z, float color, float u, float v, float light,
+                             float nx, float ny, float nz) {
+        int i = ensureVertexSpace(FLOATS_PER_VERTEX);
+        vertices[i] = x;
+        vertices[i + 1] = y;
+        vertices[i + 2] = z;
+        vertices[i + 3] = color;
+        vertices[i + 4] = u;
+        vertices[i + 5] = v;
+        vertices[i + 6] = light;
+        vertices[i + 7] = nx;
+        vertices[i + 8] = ny;
+        vertices[i + 9] = nz;
+    }
+
+    /** Append one already-rebased triangle index, used by the bridge emitter writing into this frame. */
+    public void appendIndex(int index) {
+        indices[ensureIndexSpace(1)] = index;
+    }
+
+    private int ensureVertexSpace(int count) {
+        int at = vertexFloatCount;
+        int needed = at + count;
+        if (needed > vertices.length) {
+            float[] grown = new float[(int) Math.min(Integer.MAX_VALUE - 8L,
+                Math.max((long) needed, Math.max(4096L, vertices.length) * 2L))];
+            System.arraycopy(vertices, 0, grown, 0, at);
+            vertices = grown;
+        }
+        vertexFloatCount = needed;
+        return at;
+    }
+
+    private int ensureIndexSpace(int count) {
+        int at = indexCount;
+        int needed = at + count;
+        if (needed > indices.length) {
+            int[] grown = new int[(int) Math.min(Integer.MAX_VALUE - 8L,
+                Math.max((long) needed, Math.max(6144L, indices.length) * 2L))];
+            System.arraycopy(indices, 0, grown, 0, at);
+            indices = grown;
+        }
+        indexCount = needed;
+        return at;
+    }
+
+    /** The recorded vertex stream; only the first {@link #vertexFloatCount()} entries are meaningful. */
+    public float[] vertexData() {
         return vertices;
     }
 
-    public List<Integer> getIndices() {
-        flushRemaining();
+    /** Recorded floats ({@link #vertexData()} length). Does not flush staged vertices. */
+    public int vertexFloatCount() {
+        return vertexFloatCount;
+    }
+
+    /** The recorded index stream; only the first {@link #indexCount()} entries are meaningful. */
+    public int[] indexData() {
         return indices;
     }
 
+    /** Number of triangle indices committed to {@link #indexData()}. */
+    public int indexCount() {
+        return indexCount;
+    }
+
     public int getVertexCount() {
-        return totalVertexCount + currentQuadVertices.size();
+        return vertexFloatCount / FLOATS_PER_VERTEX + quadStageCount;
     }
 
     public int getIndexCount() {
-        return indices.size() + (currentQuadVertices.size() == 4 ? 6 : (currentQuadVertices.size() == 3 ? 3 : 0));
+        return indexCount + (quadStageCount == 4 ? 6 : (quadStageCount == 3 ? 3 : 0));
     }
 
     public void clear() {
-        vertices.clear();
-        indices.clear();
-        currentQuadVertices.clear();
-        totalVertexCount = 0;
+        vertexFloatCount = 0;
+        indexCount = 0;
+        quadStageCount = 0;
         curFlags = 0;
         baseFlags = 0;
         allowHurt = true;

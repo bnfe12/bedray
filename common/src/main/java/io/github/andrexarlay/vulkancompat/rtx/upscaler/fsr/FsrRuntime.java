@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr;
 
 import com.mojang.renderpearl.api.device.DeviceInfo;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
@@ -208,12 +209,13 @@ public final class FsrRuntime {
         try {
             create(request, device, winW, winH);
         } catch (FsrException e) {
-            LOGGER.error("FSR setup failed", e);
+            LOGGER.error("FSR setup failed\n{}", LogPaths.stack(e));
             fail(e.stage(), e.getMessage());
         } catch (RuntimeException | Error e) {
             // The game keeps running without FSR; the reason is logged with the full stack (not swallowed).
-            LOGGER.error("FSR setup threw an exception", e);
-            fail("exception", e.toString());
+            // Redacted stack: the FFM load failure carries the absolute DLL path inside its own message.
+            LOGGER.error("FSR setup threw an exception\n{}", LogPaths.stack(e));
+            fail("exception", LogPaths.show(e));
         }
     }
 

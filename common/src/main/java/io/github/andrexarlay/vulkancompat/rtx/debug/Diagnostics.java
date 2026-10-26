@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.device.DeviceInfo;
 import io.github.andrexarlay.vulkanbridge.api.LibraryResolution;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import io.github.andrexarlay.vulkanbridge.platform.LoaderAccess;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkanbridge.platform.Platforms;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
 import io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings;
@@ -108,7 +109,7 @@ public final class Diagnostics {
             LOGGER.info("[VKB-DIAG] report written: {} ({} bytes)", file.getFileName(), text.length());
             return new Result(file, text, null);
         } catch (IOException e) {
-            LOGGER.error("[VKB-DIAG] cannot write the report", e);
+            LOGGER.error("[VKB-DIAG] cannot write the report\n{}", LogPaths.stack(e));
             return new Result(null, text, "write failed: " + e.getClass().getSimpleName());
         }
     }

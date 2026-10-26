@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkanbridge.compat.iris;
 
 import io.github.andrexarlay.vulkanbridge.core.VulkanBackendDetector;
 import io.github.andrexarlay.vulkanbridge.mixin.iris.IrisAccessor;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkanbridge.platform.Platforms;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.UpdateChecker;
@@ -85,7 +86,7 @@ public final class IrisCompat {
             Files.createDirectories(shaderpacks);
         } catch (IOException e) {
             // Same handling as Iris.onEarlyInitialize: the screen still opens, the list is just empty.
-            LOGGER.warn("{} event=shaderpacks_dir_failed path={}", TAG, shaderpacks, e);
+            LOGGER.warn("{} event=shaderpacks_dir_failed path={}", TAG, LogPaths.show(shaderpacks), e);
         }
 
         if (Iris.getIrisConfig() == null) {
@@ -108,7 +109,7 @@ public final class IrisCompat {
         IrisConfig config = Iris.getIrisConfig();
         boolean rtxLoaded = Platforms.get().isModLoaded("vulkan_rtx");
         LOGGER.info("{} event=init irisVersion={} irisVulkanMode=true shadersEnabled={} pack={} shaderpacksDir={} vulkanRtxLoaded={}",
-                TAG, version, config.areShadersEnabled(), config.getShaderPackName().orElse("<none>"), shaderpacks, rtxLoaded);
+                TAG, version, config.areShadersEnabled(), config.getShaderPackName().orElse("<none>"), LogPaths.show(shaderpacks), rtxLoaded);
         if (rtxLoaded) {
             LOGGER.warn("{} event=possible_duplicate vulkan_rtx is loaded; its own Iris GUI mixins (mixin/iris/*) target the same Iris methods and must be removed there",
                     TAG);

@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.api.rt;
 
+import io.github.andrexarlay.vulkancompat.rt.entity.CapturedVertexConsumer;
 import io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager;
 import io.github.andrexarlay.vulkancompat.rt.entity.EntityGeometryFrame;
 import io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas;
@@ -40,9 +41,9 @@ public interface RtSceneApi {
     /**
      * Emits all active bridge instances into the current frame's vertex, index, and entity lists.
      */
-    static void emitActiveInstances(List<Float> outVertices, List<Integer> outIndices,
+    static void emitActiveInstances(CapturedVertexConsumer out,
                                     List<EntityGeometryFrame.CapturedEntity> outEntities) {
-        DefaultRtSceneApi.INSTANCE.emitInto(outVertices, outIndices, outEntities);
+        DefaultRtSceneApi.INSTANCE.emitInto(out, outEntities);
     }
 
     /**
@@ -146,6 +147,15 @@ final class DefaultRtSceneApi implements RtSceneApi {
     private final Map<Long, StoredMesh> meshes = new LinkedHashMap<>();
     private final Map<Long, StoredInstance> instances = new LinkedHashMap<>();
 
+    /**
+     * Largest accepted vertex count of one mesh. The API is called by other mods, so the arithmetic below cannot assume the
+     * caller is sane: {@code vertexCount * stride} in int overflows past 2^31/stride and would then read outside the buffer.
+     * A real entity model is thousands of vertices.
+     */
+    private static final int MAX_MESH_VERTICES = 1 << 22;
+    /** Largest accepted index count; keeps {@code triCount * 3} (the built triangle array) inside int range. */
+    private static final int MAX_MESH_INDICES = 3 << 22;
+
     static int normalizeLightByte(int levelOrByte) {
         if (levelOrByte <= 0) {
             return 0;
@@ -162,20 +172,28 @@ final class DefaultRtSceneApi implements RtSceneApi {
         if (vertices == null || vertexCount <= 0 || format == null || layer == null) {
             return RtMeshHandle.INVALID;
         }
+        if (vertexCount > MAX_MESH_VERTICES) {
+            throw new IllegalArgumentException("vertexCount " + vertexCount + " exceeds the API limit " + MAX_MESH_VERTICES);
+        }
+        if (indexCount > MAX_MESH_INDICES) {
+            throw new IllegalArgumentException("indexCount " + indexCount + " exceeds the API limit " + MAX_MESH_INDICES);
+        }
         int stride = format.strideBytes();
         int basePos = vertices.position();
-        if (vertices.remaining() < vertexCount * stride) {
+        long neededVertexBytes = (long) vertexCount * stride;
+        if (vertices.remaining() < neededVertexBytes) {
             throw new IllegalArgumentException("vertices buffer has " + vertices.remaining()
-                + " bytes remaining, need at least " + (vertexCount * stride));
+                + " bytes remaining, need at least " + neededVertexBytes);
         }
         ByteBuffer vb = vertices.slice().order(ByteOrder.LITTLE_ENDIAN);
 
         int[] triIndices;
         if (indices != null && indexCount >= 3) {
             int triCount = indexCount / 3;
-            if (indices.remaining() < triCount * 3 * 4) {
+            long neededIndexBytes = (long) triCount * 3 * 4;
+            if (indices.remaining() < neededIndexBytes) {
                 throw new IllegalArgumentException("indices buffer has " + indices.remaining()
-                    + " bytes remaining, need at least " + (triCount * 3 * 4));
+                    + " bytes remaining, need at least " + neededIndexBytes);
             }
             ByteBuffer ib = indices.slice().order(ByteOrder.LITTLE_ENDIAN);
             triIndices = new int[triCount * 3];
@@ -330,7 +348,7 @@ final class DefaultRtSceneApi implements RtSceneApi {
      * Appends all active bridge instances into the current {@link EntityCaptureManager} frame before {@code endFrame()}
      * finalises the interleaved vertex/index arrays.
      */
-    public synchronized void emitInto(List<Float> outVertices, List<Integer> outIndices,
+    public synchronized void emitInto(CapturedVertexConsumer out,
                                       List<EntityGeometryFrame.CapturedEntity> outEntities) {
         if (instances.isEmpty()) {
             return;
@@ -350,8 +368,8 @@ final class DefaultRtSceneApi implements RtSceneApi {
                 continue;
             }
             int texSlot = resolveTextureSlot(inst.texture);
-            int startVertex = outVertices.size() / 10;
-            int startIndex = outIndices.size();
+            int startVertex = out.vertexFloatCount() / CapturedVertexConsumer.FLOATS_PER_VERTEX;
+            int startIndex = out.indexCount();
             int vCount = mesh.handle().vertexCount();
             inst.worldTransform.normal(normalMat);
 
@@ -372,21 +390,13 @@ final class DefaultRtSceneApi implements RtSceneApi {
                 }
                 int lightWord = (blk & 0xFF) | ((texSlot & 0xFF) << 8) | ((sky & 0xFF) << 16);
 
-                outVertices.add(tmpPos.x);
-                outVertices.add(tmpPos.y);
-                outVertices.add(tmpPos.z);
-                outVertices.add(Float.intBitsToFloat(mesh.colorAbgr()[i]));
-                outVertices.add(mesh.u()[i]);
-                outVertices.add(mesh.v()[i]);
-                outVertices.add(Float.intBitsToFloat(lightWord));
-                outVertices.add(tmpNorm.x);
-                outVertices.add(tmpNorm.y);
-                outVertices.add(tmpNorm.z);
+                out.appendVertex(tmpPos.x, tmpPos.y, tmpPos.z, Float.intBitsToFloat(mesh.colorAbgr()[i]),
+                    mesh.u()[i], mesh.v()[i], Float.intBitsToFloat(lightWord), tmpNorm.x, tmpNorm.y, tmpNorm.z);
             }
 
             int[] idx = mesh.indices();
             for (int index : idx) {
-                outIndices.add(startVertex + index);
+                out.appendIndex(startVertex + index);
             }
 
             int flags = EntityGeometryFrame.CapturedEntity.FLAG_BLOCK_ENTITY;

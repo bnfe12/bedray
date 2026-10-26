@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,7 +64,7 @@ public final class StreamlineBootstrap {
         Path dir = FrameGenEarly.slDir();
         Path interposer = dir.resolve("sl.interposer.dll");
         if (!Files.isRegularFile(interposer)) {
-            fail("config", "not found: " + interposer);
+            fail("config", "not found: " + LogPaths.show(interposer));
             return;
         }
         Path shim = FrameGenEarly.shimPath();
@@ -71,15 +72,15 @@ public final class StreamlineBootstrap {
         try {
             n = SlNative.load(shim);
         } catch (RuntimeException | LinkageError e) {
-            fail("load_shim", e.toString());
-            LOGGER.error("[VKB-FG] shim load error", e);
+            fail("load_shim", LogPaths.show(e.toString()));
+            LOGGER.error("[VKB-FG] shim load error\n{}", LogPaths.stack(e));
             return;
         }
         Path logDir = Paths.get("bedray", "sl").toAbsolutePath().normalize();
         try {
             Files.createDirectories(logDir);
         } catch (java.io.IOException e) {
-            LOGGER.warn("[VKB-FG] cannot create {}: {}", logDir, e.toString());
+            LOGGER.warn("[VKB-FG] cannot create {}: {}", LogPaths.show(logDir), e.toString());
         }
         int r = n.init(dir.toString(), logDir.toString(), false);
         pumpLog(n);
@@ -96,21 +97,21 @@ public final class StreamlineBootstrap {
             org.lwjgl.system.FunctionProvider fp = org.lwjgl.vulkan.VK.getFunctionProvider();
             String cur = fp instanceof org.lwjgl.system.SharedLibrary sl0 ? sl0.getPath() : null;
             if (cur == null || !Paths.get(cur).toAbsolutePath().normalize().equals(interposer)) {
-                LOGGER.info("[VKB-FG] LWJGL Vulkan library was {}, re-creating it from {}", cur, interposer);
+                LOGGER.info("[VKB-FG] LWJGL Vulkan library was {}, re-creating it from {}", LogPaths.show(cur), LogPaths.show(interposer));
                 org.lwjgl.vulkan.VK.destroy();
                 org.lwjgl.vulkan.VK.create(interposer.toString());
             }
         } catch (RuntimeException | LinkageError e) {
-            fail("lwjgl_vk_reload", e.toString());
+            fail("lwjgl_vk_reload", LogPaths.show(e.toString()));
             LOGGER.error("[VKB-FG] VK.create(interposer) failed", e);
             return;
         }
         nativeLib = n;
         int mask = n.loadedMask();
-        LOGGER.info("[VKB-FG] sl=INIT_OK dir={} loaded_mask={} (bit0 DLSS_G, bit1 Reflex, bit2 PCL, bit3 DLSS_SR, bit4 DLSS_RR)", dir, mask);
+        LOGGER.info("[VKB-FG] sl=INIT_OK dir={} loaded_mask={} (bit0 DLSS_G, bit1 Reflex, bit2 PCL, bit3 DLSS_SR, bit4 DLSS_RR)", LogPaths.show(dir), mask);
         if ((mask & 16) == 0) {
             LOGGER.warn("[VKB-FG] no DLSS Ray Reconstruction plugin: copy sl.dlss_d.dll and nvngx_dlssd.dll next to sl.interposer.dll in {}. "
-                + "Without them Path Tracing falls back to NRD while frame generation is on: raw NGX cannot create RR next to Streamline.", dir);
+                + "Without them Path Tracing falls back to NRD while frame generation is on: raw NGX cannot create RR next to Streamline.", LogPaths.show(dir));
         }
         int[] req = n.dlssgRequirements();
         if (req != null) {

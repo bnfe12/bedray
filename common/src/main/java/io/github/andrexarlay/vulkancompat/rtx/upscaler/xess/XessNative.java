@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.xess;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -105,9 +106,9 @@ public final class XessNative implements AutoCloseable {
             lookup = SymbolLookup.libraryLookup(libraryPath, arena);
         } catch (IllegalArgumentException | UnsatisfiedLinkError e) {
             arena.close();
-            throw new XessNativeException("Cannot load " + libraryPath
+            throw new XessNativeException("Cannot load " + LogPaths.show(libraryPath)
                 + " (usual causes: missing Visual C++ 2015-2022 x64 Redistributable 14.40+, missing d3d12.dll/dxgi.dll, "
-                + "or a non-x64 DLL): " + e, e);
+                + "or a non-x64 DLL): " + LogPaths.show(e), e);
         }
         Linker linker = Linker.nativeLinker();
         try {
@@ -159,11 +160,15 @@ public final class XessNative implements AutoCloseable {
      */
     public static XessNative load(Path dll) {
         if (!Files.isRegularFile(dll)) {
-            throw new XessNativeException("libxess.dll not found at " + dll
+            throw new XessNativeException("libxess.dll not found at " + LogPaths.show(dll)
                 + " (XeSS is unavailable; install the DLL from the Intel XeSS SDK there)");
         }
+        String reject = io.github.andrexarlay.vulkancompat.rtx.NativeDllGate.reject(dll);
+        if (reject != null) {
+            throw new XessNativeException("libxess.dll at " + LogPaths.show(dll) + " " + reject + " (XeSS is unavailable)");
+        }
         XessNative n = new XessNative(dll.toAbsolutePath().normalize());
-        LOGGER.info("Loaded {} ({} bytes)", n.libraryPath, fileSize(dll));
+        LOGGER.info("Loaded {} ({} bytes)", LogPaths.show(n.libraryPath), fileSize(dll));
         return n;
     }
 
@@ -171,7 +176,7 @@ public final class XessNative implements AutoCloseable {
         try {
             return Files.size(p);
         } catch (IOException e) {
-            throw new XessNativeException("Cannot stat " + p, e);
+            throw new XessNativeException("Cannot stat " + LogPaths.show(p), e);
         }
     }
 

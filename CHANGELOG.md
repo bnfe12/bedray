@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* Integrate the 15 later ReSTIR/barriers commits through `1ae6580`: finite temporal/denoiser inputs, entity buffer retirement,
+  primitive entity capture, native exception containment, DLL/load-path checks, backend escape-hatch and teardown fixes,
+  log-path redaction, rain/storm celestial suppression and narrower bloom/AO work. Preserve the optical-material changes.
+* Keep partially allocated retired entity rings in one generation record: `ArrayDeque` cannot contain null buffer elements.
+  Retry allocation when any ring buffer is missing. This source integration was not built or tested.
+
 * Add per-texture optical sidecars and a bounded immutable GPU palette for IOR, authored slab thickness, reference RGB
   transmittance/distance and diffuse coatings. Preserve dielectric clear-glass centres and keep optical sprites unresolved
   by opacity micromaps. Custom water IOR/absorption reaches its boundary, camera-medium and sun-beam paths.

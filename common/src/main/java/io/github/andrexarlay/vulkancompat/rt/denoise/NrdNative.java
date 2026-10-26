@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rt.denoise;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
@@ -57,7 +59,7 @@ public final class NrdNative implements AutoCloseable {
             lookup = SymbolLookup.libraryLookup(libraryPath, arena);
         } catch (IllegalArgumentException | UnsatisfiedLinkError e) {
             arena.close();
-            throw new NrdException("load", "cannot load " + libraryPath + " (x64 DLL expected): " + e, e);
+            throw new NrdException("load", "cannot load " + LogPaths.show(libraryPath) + " (x64 DLL expected): " + LogPaths.show(e), e);
         }
         Linker linker = Linker.nativeLinker();
         try {
@@ -86,7 +88,7 @@ public final class NrdNative implements AutoCloseable {
     /** Loads vkb_nrd.dll from an explicit file and checks the API version. */
     public static NrdNative load(Path wrapperDll) {
         if (!Files.isRegularFile(wrapperDll)) {
-            throw new NrdException("load", "vkb_nrd.dll not found at " + wrapperDll, null);
+            throw new NrdException("load", "vkb_nrd.dll not found at " + LogPaths.show(wrapperDll), null);
         }
         NrdNative n = new NrdNative(wrapperDll.toAbsolutePath().normalize());
         int v = n.apiVersion();

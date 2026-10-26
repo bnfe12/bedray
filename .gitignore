@@ -16,6 +16,8 @@ libs/
 /vulkan_rtx/
 .vulkan_rtx_cache/
 /bedray/
+# same folder when a test JVM's working directory is a module dir (the natives loader falls back to the CWD)
+/*/bedray/
 /.bedray_cache/
 local.properties
 *.log

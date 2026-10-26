@@ -6,7 +6,8 @@ import java.util.Set;
 
 /**
  * L1/L2 checks of the atmosphere post passes (light shafts, bloom, sun glare): all shader stages compile with shaderc, the settings
- * clamp and round-trip, the UI option table is consistent with get/set, and the size helpers of the passes. No GPU involved.
+ * clamp and round-trip, the UI option table is consistent with get/set, the size helpers of the passes and the weather gate of the
+ * glare. No GPU involved.
  */
 public final class RtAtmosphereTest {
     private RtAtmosphereTest() {
@@ -22,7 +23,18 @@ public final class RtAtmosphereTest {
         shadersCompile();
         settings();
         helpers();
+        glare();
         fogMath();
+    }
+
+    /** The sun halo of a frame is a pure product of RtSky; the weather must be able to switch it off completely. */
+    static void glare() {
+        check(RtSky.glareStrength(1f, 1f, 1f, 1f) == 1f, "full glare at noon under a clear sky");
+        check(RtSky.glareStrength(1f, 1f, 1f, 0f) == 0f, "rain hides the sun, so its halo goes with it");
+        check(RtSky.glareStrength(1f, 0f, 1f, 1f) == 0f, "night has no sun glare");
+        check(RtSky.glareStrength(1f, 1f, 0.5f, 1f) == 0.5f, "the elevation ramp is smoothstep(0,1,e)");
+        check(RtSky.glareStrength(2f, 1f, 1f, 1f) == 2f, "the settings strength scales the term");
+        check(RtSky.glareStrength(1f, 1f, -1f, 1f) == 0f && RtSky.glareStrength(1f, 3f, 3f, 5f) == 1f, "every factor clamps");
     }
 
     static void shadersCompile() {

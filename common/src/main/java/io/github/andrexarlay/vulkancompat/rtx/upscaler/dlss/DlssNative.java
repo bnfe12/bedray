@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -102,7 +103,7 @@ public final class DlssNative implements AutoCloseable {
             lookup = SymbolLookup.libraryLookup(libraryPath, arena);
         } catch (IllegalArgumentException | UnsatisfiedLinkError e) {
             arena.close();
-            throw new DlssNativeException("Cannot load " + libraryPath + " (is it an x64 DLL built by native/dlss_bridge/build.bat?): " + e, e);
+            throw new DlssNativeException("Cannot load " + LogPaths.show(libraryPath) + " (is it an x64 DLL built by native/dlss_bridge/build.bat?): " + LogPaths.show(e), e);
         }
         Linker linker = Linker.nativeLinker();
         try {

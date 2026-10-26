@@ -7,6 +7,7 @@ import io.github.andrexarlay.vulkanbridge.api.LibraryResolution;
 import io.github.andrexarlay.vulkanbridge.api.LibraryStatus;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraryException;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -106,6 +107,18 @@ public final class NativeLibrariesImpl implements NativeLibraries {
         return out;
     }
 
+    /** The legacy folders as a status message may name them (no absolute home/profile prefix in a shared log). */
+    private static String shownDirs(List<Path> dirs) {
+        StringBuilder sb = new StringBuilder();
+        for (Path d : dirs) {
+            if (!sb.isEmpty()) {
+                sb.append(", ");
+            }
+            sb.append(LogPaths.show(d));
+        }
+        return sb.toString();
+    }
+
     // ---- registry
 
     @Override
@@ -187,7 +200,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             }
             FileCheck check = checkFile(d, file, p);
             if (check.rejection != null) {
-                LibraryStatus st = LibraryStatus.rejected(file + " (" + p + "): " + check.rejection);
+                LibraryStatus st = LibraryStatus.rejected(file + " (" + LogPaths.show(p) + "): " + check.rejection);
                 return new LibraryResolution(d, st, Map.of(), Map.of(), false);
             }
             found.put(file, p);
@@ -202,10 +215,11 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                     + ", signature " + (check.signed ? "present (not validated)" : "absent"));
         }
         if (!missing.isEmpty()) {
-            LibraryStatus st = LibraryStatus.missing("missing " + missing + " in " + primary + " (also searched " + legacyDirs + ")");
+            LibraryStatus st = LibraryStatus.missing("missing " + missing + " in " + LogPaths.show(primary)
+                + " (also searched " + shownDirs(legacyDirs) + ")");
             return new LibraryResolution(d, st, Map.of(), Map.of(), false);
         }
-        String detail = String.join("; ", notes) + (legacyUsed ? "; loaded from the legacy directory " + legacyHit : "");
+        String detail = String.join("; ", notes) + (legacyUsed ? "; loaded from the legacy directory " + LogPaths.show(legacyHit) : "");
         LibraryStatus st = allKnownHashes ? LibraryStatus.verified(detail) : LibraryStatus.presentUnverified(detail);
         return new LibraryResolution(d, st, found, versions, legacyUsed);
     }
@@ -276,7 +290,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 }
             }
         } catch (IOException e) {
-            throw new NativeLibraryException("-", "cannot list " + dir + ": " + e, e);
+            throw new NativeLibraryException("-", "cannot list " + LogPaths.show(dir) + ": " + e, e);
         }
         return null;
     }
@@ -328,7 +342,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             try {
                 loader.load(p.toString());
             } catch (UnsatisfiedLinkError e) {
-                throw new NativeLibraryException(id, "the OS refused to load " + p + " (already loaded: " + loadedNames + "): " + e.getMessage(), e);
+                throw new NativeLibraryException(id, "the OS refused to load " + LogPaths.show(p) + " (already loaded: " + loadedNames + "): " + e.getMessage(), e);
             }
             loadedNames.add(name);
         }
@@ -349,7 +363,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 try {
                     Files.delete(p);
                 } catch (IOException e) {
-                    throw new NativeLibraryException(id, "cannot delete " + p + " (is it loaded by the running game?): " + e, e);
+                    throw new NativeLibraryException(id, "cannot delete " + LogPaths.show(p) + " (is it loaded by the running game?): " + e, e);
                 }
                 removed.add(p);
             }
@@ -368,7 +382,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
     public InstallResult install(String id, Path source) {
         LibraryDescriptor d = descriptor(id);
         if (source == null || !Files.isRegularFile(source)) {
-            throw new NativeLibraryException(id, "source is not a file: " + source);
+            throw new NativeLibraryException(id, "source is not a file: " + LogPaths.show(source));
         }
         String srcName = source.getFileName().toString();
         String lower = srcName.toLowerCase(Locale.ROOT);
@@ -403,7 +417,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
             for (Staged s : staged) {
                 Path target = dir.resolve(s.canonicalName);
                 if (Files.isSymbolicLink(target)) {
-                    throw new NativeLibraryException(id, "refusing to overwrite a symbolic link: " + target);
+                    throw new NativeLibraryException(id, "refusing to overwrite a symbolic link: " + LogPaths.show(target));
                 }
                 Path existing = locate(dir, s.canonicalName);
                 if (existing != null && !existing.getFileName().toString().equals(s.canonicalName)) {
@@ -561,7 +575,7 @@ public final class NativeLibrariesImpl implements NativeLibraries {
                 Files.delete(p);
             }
         } catch (IOException e) {
-            throw new NativeLibraryException("-", "cannot clean the staging directory " + root + ": " + e, e);
+            throw new NativeLibraryException("-", "cannot clean the staging directory " + LogPaths.show(root) + ": " + e, e);
         }
     }
 }

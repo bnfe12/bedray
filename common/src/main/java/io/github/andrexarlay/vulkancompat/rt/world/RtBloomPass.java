@@ -210,26 +210,36 @@ final class RtBloomPass {
             pc.putFloat(96, pr.threshold).putFloat(100, pr.knee).putFloat(104, bloom ? pr.strength : 0f);
             pc.putFloat(112, pr.tonemapped ? 1f : 0f).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
             if (bloom) {
-                dispatch(cmd, 0, sets[0], pc, mips[0].width, mips[0].height);
+                dispatch(cmd, 0, sets[0], pc, mips[0].width, mips[0].height, true);
                 for (int i = 1; i < LEVELS; i++) {
-                    dispatch(cmd, 1, sets[i], pc, mips[i].width, mips[i].height);
+                    dispatch(cmd, 1, sets[i], pc, mips[i].width, mips[i].height, true);
                 }
                 for (int i = LEVELS - 2; i >= 0; i--) {
-                    dispatch(cmd, 2, sets[LEVELS + (LEVELS - 2 - i)], pc, mips[i].width, mips[i].height);
+                    dispatch(cmd, 2, sets[LEVELS + (LEVELS - 2 - i)], pc, mips[i].width, mips[i].height, true);
                 }
             }
-            dispatch(cmd, 3, sets[2 * LEVELS - 1], pc, width, height);
+            // the apply dispatch is the exit of the pass: its barrier must stay full-scope for the consumers of the output image
+            dispatch(cmd, 3, sets[2 * LEVELS - 1], pc, width, height, false);
         }
     }
 
-    private void dispatch(VkCommandBuffer cmd, int stage, long set, ByteBuffer pc, int gx, int gy) {
+    /**
+     * One chain dispatch. Every mip lives permanently in GENERAL layout, so between chain stages only ordering is
+     * needed: with {@code computeToCompute} true, the barrier is COMPUTE->COMPUTE instead of the ALL_COMMANDS
+     * sledgehammer, which would also stall the transfer / graphics / AS work of the frame (11 such barriers per frame).
+     */
+    private void dispatch(VkCommandBuffer cmd, int stage, long set, ByteBuffer pc, int gx, int gy, boolean computeToCompute) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[stage]);
             VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(set), null);
             VK10.vkCmdPushConstants(cmd, pipelineLayout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, pc);
             VK10.vkCmdDispatch(cmd, (gx + 7) / 8, (gy + 7) / 8, 1);
         }
-        VkBarriers.fullMemoryBarrier(cmd);
+        if (computeToCompute) {
+            VkBarriers.computeToCompute(cmd);
+        } else {
+            VkBarriers.fullMemoryBarrier(cmd);
+        }
     }
 
     void destroy() {

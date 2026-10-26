@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss;
 
 import com.mojang.renderpearl.api.device.DeviceInfo;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerReconfigure;
@@ -249,8 +250,10 @@ public final class DlssRuntime {
             create(mode, device, winW, winH);
         } catch (RuntimeException | Error e) {
             // The game keeps running without DLSS, but the reason is logged with the full stack (not swallowed).
-            LOGGER.error("DLSS setup threw an exception", e);
-            LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] dlss=FAILED stage=exception result=exception message={}", e.toString());
+            // The stack goes through LogPaths: the FFM load failure inside it carries the absolute DLL path in its own
+            // message, so printing the throwable unredacted would leak the profile directory one line below the redacted summary.
+            LOGGER.error("DLSS setup threw an exception\n{}", LogPaths.stack(e));
+            LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] dlss=FAILED stage=exception result=exception message={}", LogPaths.show(e.toString()));
             state = State.FAILED;
         }
     }
@@ -273,7 +276,7 @@ public final class DlssRuntime {
             try {
                 nativeLib = DlssNative.load(lib.wrapperDll());
             } catch (DlssNativeException e) {
-                LOGGER.error("DLSS wrapper load failed", e);
+                LOGGER.error("DLSS wrapper load failed\n{}", LogPaths.stack(e));
                 fail("load", "load_error");
                 return;
             }
@@ -516,7 +519,7 @@ public final class DlssRuntime {
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {
-            throw new IllegalStateException("Cannot create the NGX log directory " + dir, e);
+            throw new IllegalStateException("Cannot create the NGX log directory " + LogPaths.show(dir), e);
         }
         return dir;
     }

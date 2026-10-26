@@ -79,8 +79,12 @@ public class RtSkySunDiskTest {
         assertFalse(src.contains("c += sun.rgb * sun.a * rain;"), "the body mask must not multiply the premultiplied sprite");
         assertTrue(src.contains("c += vec3(skyStars(dir) * sb2 * (1.0 - sun.a));"),
             "the sun body attenuates stars by its opacity; the added halo does not occlude them");
-        assertTrue(src.contains("return pc.keyColor.rgb * (bodyLuminance * 6.0);"),
-            "sunDisk keeps one compact highlight with texture opacity applied once");
+        assertTrue(src.contains("return pc.keyColor.rgb * (bodyLuminance * 6.0 * rain);"),
+            "sunDisk keeps one compact highlight with texture opacity applied once, and hides it while the sun is hidden");
+        assertTrue(src.contains("return pc.keyColor.rgb * (t.a * lum * 6.0 * rain);"),
+            "the moon glint obeys the same sprite alpha as the moon sprite in the sky");
+        assertFalse(src.contains("return pc.keyColor.rgb * (bodyLuminance * 6.0);"),
+            "the key colour keeps a weather floor (0.25 at full rain), so it cannot be the sprite alpha");
     }
 
     // ---- ports of the shader math ------------------------------------------------------------------------------------------

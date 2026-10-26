@@ -47,11 +47,16 @@ void main() {
         vec3 rayDir = cameraRay(p, size, vec2(0.5) + camJitter);
         vec4 c0 = pc.invViewProj * vec4(0.0, 0.0, 0.5, 1.0);
         vec4 c1 = pc.invViewProj * vec4(0.0, 2.0 / float(size.y), 0.5, 1.0);
-        float pixAngle = length(normalize(c1.xyz / c1.w) - normalize(c0.xyz / c0.w));
+        // Same guard rt_common_temporal.glsl uses for the screen-space angle: a degenerate invViewProj (zero or infinite w)
+        // would make pixAngle NaN, and NaN propagates into every neighbour test below, so the whole filter collapses at once.
+        float pixAngle = length(normalizeOr(c1.xyz / safeW(c1.w), rawCameraForward())
+            - normalizeOr(c0.xyz / safeW(c0.w), rawCameraForward()));
         float cosInc = max(abs(dot(rayDir, nC)), 0.08);
         float lumC = lum(sC.rgb);
 
-        float varC = sC.a;
+        // Iterations > 0 inherit the variance written by the previous one: a NaN or out-of-range value there must not widen
+        // sigmaL to Inf (which would silently drop the luminance test for every neighbour).
+        float varC = sC.a >= 0.0 && sC.a <= 1.0e6 ? sC.a : 0.0;
         if (it == 0u) {
             // spatial variance of the noisy irradiance (3x3, same surface only)
             float m1 = 0.0;
@@ -75,7 +80,8 @@ void main() {
             }
             m1 /= max(mw, 1.0);
             m2 /= max(mw, 1.0);
-            varC = max(m2 - m1 * m1, 0.0);
+            float varEst = m2 - m1 * m1;
+            varC = (isnan(varEst) || isinf(varEst)) ? 0.0 : min(max(varEst, 0.0), 1.0e6);
         }
         float sigmaL = 4.0 * sqrt(max(varC, 0.0)) + 1.0e-3;
 
@@ -109,6 +115,12 @@ void main() {
                     w *= exp(-abs(lum(sq.rgb) - lumC) / sigmaL);
                 }
                 float vq = it == 0u ? varC : (i == 0 && j == 0 ? sC.a : sq.a);
+                // A non-finite sample or weight (Inf - Inf luminance between two saturated pixels) would poison the whole
+                // neighbourhood sum, so drop that tap instead; NaN fails every comparison, hence the "not greater" form.
+                if (!(w > 0.0) || any(isnan(sq.rgb)) || any(isinf(sq.rgb))) {
+                    continue;
+                }
+                vq = vq >= 0.0 && vq <= 1.0e6 ? vq : 0.0;
                 sum += w * sq.rgb;
                 sumVar += w * w * vq;
                 sumW += w;
@@ -119,9 +131,26 @@ void main() {
         res = mix(sC.rgb, filtered, strength);
         resVar = sumVar / max(sumW * sumW, 1.0e-6);
     }
+    // Last line of defence: the scratch rows written here become the history the next iterations and frames filter, so a single
+    // NaN would persist and spread screen-wide rather than costing one pixel. Black self-heals once rt_rays writes a finite value.
+    if (any(isnan(res)) || any(isinf(res))) {
+        res = vec3(0.0);
+    }
+    resVar = (isnan(resVar) || isinf(resVar)) ? 0.0 : min(resVar, 1.0e6);
     imageStore(accumImage, ivec2(p.x, p.y + dstRow), vec4(res, resVar));
     if (live && it + 1u == iters) {
         vec3 rest = imageLoad(accumImage, ivec2(p.x, p.y + (7 + cur) * H)).rgb;   // reflections, emission, fog: not filtered here
+        // clamp() of a NaN is undefined, and this is the image the upscaler consumes: an infinite rest band would smear the
+        // whole reconstructed frame rather than lose the reflection of one pixel.
+        if (any(isnan(rest)) || any(isinf(rest))) {
+            rest = vec3(0.0);
+        }
+        // The albedo band is multiplied into the filtered radiance below, so it poisons the pixel exactly like `rest` would.
+        // It reaches here straight from the G-buffer store (rt_common_temporal.glsl writes it without going through the
+        // radiance guards), and a non-finite albedo is one multiply away from the undefined clamp(NaN).
+        if (any(isnan(band.rgb)) || any(isinf(band.rgb))) {
+            band.rgb = vec3(0.0);
+        }
         imageStore(outImage, p, vec4(clamp(finishColor(res * band.rgb + rest), 0.0, 1.0), 1.0));
     }
 }

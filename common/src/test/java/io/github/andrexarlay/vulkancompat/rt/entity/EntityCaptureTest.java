@@ -234,22 +234,22 @@ public class EntityCaptureTest {
         assertEquals(4, consumer.getVertexCount());
         assertEquals(6, consumer.getIndexCount());
 
-        List<Integer> indices = consumer.getIndices();
-        assertEquals(6, indices.size());
+        int[] indices = consumer.indexData();
+        assertEquals(6, consumer.indexCount());
         // Triangle 1: (0, 1, 2)
-        assertEquals(0, indices.get(0));
-        assertEquals(1, indices.get(1));
-        assertEquals(2, indices.get(2));
+        assertEquals(0, indices[0]);
+        assertEquals(1, indices[1]);
+        assertEquals(2, indices[2]);
         // Triangle 2: (2, 3, 0)
-        assertEquals(2, indices.get(3));
-        assertEquals(3, indices.get(4));
-        assertEquals(0, indices.get(5));
+        assertEquals(2, indices[3]);
+        assertEquals(3, indices[4]);
+        assertEquals(0, indices[5]);
 
-        List<Float> vertices = consumer.getVertices();
-        assertEquals(40, vertices.size()); // 4 vertices * 10 floats
-        assertEquals(0f, vertices.get(0));
-        assertEquals(0f, vertices.get(1));
-        assertEquals(0f, vertices.get(2));
+        float[] vertices = consumer.vertexData();
+        assertEquals(40, consumer.vertexFloatCount()); // 4 vertices * 10 floats
+        assertEquals(0f, vertices[0]);
+        assertEquals(0f, vertices[1]);
+        assertEquals(0f, vertices[2]);
 
         consumer.clear();
         assertEquals(0, consumer.getVertexCount());
@@ -361,9 +361,9 @@ public class EntityCaptureTest {
         consumer.addVertex(1f, 1f, 0f).setUv1(0, 10).setNormal(0f, 1f, 0f);
         consumer.addVertex(0f, 1f, 0f).setUv1(0, 10).setNormal(0f, 1f, 0f);
 
-        List<Float> verts = consumer.getVertices();
-        assertEquals(40, verts.size());
-        int lightWord0 = Float.floatToRawIntBits(verts.get(6));
+        float[] verts = consumer.vertexData();
+        assertEquals(40, consumer.vertexFloatCount());
+        int lightWord0 = Float.floatToRawIntBits(verts[6]);
         int flags0 = (lightWord0 >>> 24) & 0xFF;
         assertEquals(0, flags0 & 0x40, "NO_OVERLAY (v=10) must NOT set 0x40 hurt flag");
 
@@ -375,8 +375,9 @@ public class EntityCaptureTest {
         consumer.addVertex(1f, 1f, 0f).setUv1(0, 3).setNormal(0f, 1f, 0f);
         consumer.addVertex(0f, 1f, 0f).setUv1(0, 3).setNormal(0f, 1f, 0f);
 
-        verts = consumer.getVertices();
-        int lightWordHurt = Float.floatToRawIntBits(verts.get(6));
+        verts = consumer.vertexData();
+        assertEquals(40, consumer.vertexFloatCount());
+        int lightWordHurt = Float.floatToRawIntBits(verts[6]);
         int flagsHurt = (lightWordHurt >>> 24) & 0xFF;
         assertEquals(0x40, flagsHurt & 0x40, "Hurt overlay (v=3) MUST set 0x40 hurt flag");
 
@@ -389,8 +390,9 @@ public class EntityCaptureTest {
         consumer.addVertex(1f, 1f, 0f).setUv1(0, 3).setNormal(0f, 1f, 0f);
         consumer.addVertex(0f, 1f, 0f).setUv1(0, 3).setNormal(0f, 1f, 0f);
 
-        verts = consumer.getVertices();
-        int lightWordBlocked = Float.floatToRawIntBits(verts.get(6));
+        verts = consumer.vertexData();
+        assertEquals(40, consumer.vertexFloatCount());
+        int lightWordBlocked = Float.floatToRawIntBits(verts[6]);
         int flagsBlocked = (lightWordBlocked >>> 24) & 0xFF;
         assertEquals(0, flagsBlocked & 0x40, "Non-living entity with allowHurt=false must NOT set 0x40");
     }
@@ -419,8 +421,9 @@ public class EntityCaptureTest {
         assertEquals(0, chest.renderFlags() & 0x40, "Chest entity renderFlags must NOT have 0x40 hurt flag");
 
         // Verify vertex light word packed flag as well
-        List<Float> verts = consumer.getVertices();
-        int lightWord = Float.floatToRawIntBits(verts.get(6));
+        float[] verts = consumer.vertexData();
+        assertEquals(40, consumer.vertexFloatCount());
+        int lightWord = Float.floatToRawIntBits(verts[6]);
         int flags = (lightWord >>> 24) & 0xFF;
         assertEquals(0, flags & 0x40, "Chest vertices must NOT have 0x40 hurt flag in light word");
     }

@@ -40,7 +40,8 @@ final class SharedRing {
     final long[] image, memory, memSize, imageView, semVkToGl, semGlToVk, fence;
     final VkCommandBuffer[] cmdRelease;
     final long cmdPool;
-    private final VkPhysicalDeviceMemoryProperties memProps;
+    /** Not final: {@link #destroyVulkanObjects()} frees it and clears the reference, and a ring whose constructor threw never assigned it. */
+    private VkPhysicalDeviceMemoryProperties memProps;
 
     // GL side (valid after importIntoGl on the GL thread)
     final int[] glMemObj, glTex, glFbo, glSemVkToGl, glSemGlToVk;
@@ -103,35 +104,50 @@ final class SharedRing {
     SharedRing(EngineVk e, int w, int h, int slots) {
         this.e = e;
         LIVE.incrementAndGet();
-        this.w = w;
-        this.h = h;
-        this.slots = slots;
-        image = new long[slots];
-        memory = new long[slots];
-        memSize = new long[slots];
-        imageView = new long[slots];
-        semVkToGl = new long[slots];
-        semGlToVk = new long[slots];
-        fence = new long[slots];
-        cmdRelease = new VkCommandBuffer[slots];
-        glMemObj = new int[slots];
-        glTex = new int[slots];
-        glFbo = new int[slots];
-        glSemVkToGl = new int[slots];
-        glSemGlToVk = new int[slots];
-        VkDevice dev = e.vkDevice();
-        memProps = VkPhysicalDeviceMemoryProperties.calloc();
-        vkGetPhysicalDeviceMemoryProperties(e.physicalDevice(), memProps);
-        try (MemoryStack s = stackPush()) {
-            LongBuffer p = s.mallocLong(1);
-            VkCommandPoolCreateInfo pci = VkCommandPoolCreateInfo.calloc(s).sType$Default()
-                .flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT).queueFamilyIndex(e.queueFamily());
-            check(vkCreateCommandPool(dev, pci, null, p), "vkCreateCommandPool");
-            cmdPool = p.get(0);
-        }
-        for (int i = 0; i < slots; i++) {
-            createSlot(i);
-            recordRelease(i);
+        try {
+            this.w = w;
+            this.h = h;
+            this.slots = slots;
+            image = new long[slots];
+            memory = new long[slots];
+            memSize = new long[slots];
+            imageView = new long[slots];
+            semVkToGl = new long[slots];
+            semGlToVk = new long[slots];
+            fence = new long[slots];
+            cmdRelease = new VkCommandBuffer[slots];
+            glMemObj = new int[slots];
+            glTex = new int[slots];
+            glFbo = new int[slots];
+            glSemVkToGl = new int[slots];
+            glSemGlToVk = new int[slots];
+            VkDevice dev = e.vkDevice();
+            memProps = VkPhysicalDeviceMemoryProperties.calloc();
+            vkGetPhysicalDeviceMemoryProperties(e.physicalDevice(), memProps);
+            try (MemoryStack s = stackPush()) {
+                LongBuffer p = s.mallocLong(1);
+                VkCommandPoolCreateInfo pci = VkCommandPoolCreateInfo.calloc(s).sType$Default()
+                    .flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT).queueFamilyIndex(e.queueFamily());
+                check(vkCreateCommandPool(dev, pci, null, p), "vkCreateCommandPool");
+                cmdPool = p.get(0);
+            }
+            for (int i = 0; i < slots; i++) {
+                createSlot(i);
+                recordRelease(i);
+            }
+        } catch (Throwable t) {
+            // Until the constructor returns, no Generation references this ring, so neither shutdown() nor a retire queue can
+            // ever reach the slots that did get created: a driver refusing the third image would keep the first two alive
+            // (VkImage + dedicated memory + 4 semaphores + a fence + the command pool + the calloc'd memory properties)
+            // for the rest of the process, and vkDestroyDevice cannot clean up what Java forgot.
+            try {
+                destroyVulkanObjects();
+            } catch (Throwable unwind) {
+                GlLog.error(4, "result=ring_ctor_unwind_failed reason=" + unwind, unwind);
+            }
+            destroyed = true;
+            LIVE.decrementAndGet();
+            throw t;
         }
     }
 
@@ -245,38 +261,53 @@ final class SharedRing {
     /**
      * GL thread. GL calls: EXT_external_objects (glCreateMemoryObjectsEXT, glMemoryObjectParameteriEXT(DEDICATED_MEMORY_OBJECT_EXT),
      * glTextureStorageMem2DEXT), EXT_external_objects_win32 (glImportMemoryWin32HandleEXT(memory, size, handleType, handle),
-     * glImportSemaphoreWin32HandleEXT(semaphore, handleType, handle)); our handle copies are closed right after the import.
+     * glImportSemaphoreWin32HandleEXT(semaphore, handleType, handle)); the exported handle copies are closed once every
+     * import that needs them has run (see the finally).
      */
     void importIntoGl(int i, long[] handles) {
-        glMemObj[i] = EXTMemoryObject.glCreateMemoryObjectsEXT();
-        EXTMemoryObject.glMemoryObjectParameteriEXT(glMemObj[i], EXTMemoryObject.GL_DEDICATED_MEMORY_OBJECT_EXT, GL_TRUE);
-        EXTMemoryObjectWin32.glImportMemoryWin32HandleEXT(glMemObj[i], memSize[i], EXTMemoryObjectWin32.GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, handles[0]);
-        glCheck("glImportMemoryWin32HandleEXT");
-        Win32Handles.close(handles[0]);
-        glTex[i] = glCreateTextures(GL_TEXTURE_2D);
-        EXTMemoryObject.glTextureStorageMem2DEXT(glTex[i], 1, GL_RGBA8, w, h, glMemObj[i], 0L);
-        glCheck("glTextureStorageMem2DEXT");
-        if (glDepth == 0) {
-            glDepth = glCreateRenderbuffers();
-            glNamedRenderbufferStorage(glDepth, GL_DEPTH32F_STENCIL8, w, h);
-            glCheck("glNamedRenderbufferStorage(depth)");
+        try {
+            glMemObj[i] = EXTMemoryObject.glCreateMemoryObjectsEXT();
+            EXTMemoryObject.glMemoryObjectParameteriEXT(glMemObj[i], EXTMemoryObject.GL_DEDICATED_MEMORY_OBJECT_EXT, GL_TRUE);
+            EXTMemoryObjectWin32.glImportMemoryWin32HandleEXT(glMemObj[i], memSize[i], EXTMemoryObjectWin32.GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, handles[0]);
+            glCheck("glImportMemoryWin32HandleEXT");
+            glTex[i] = glCreateTextures(GL_TEXTURE_2D);
+            EXTMemoryObject.glTextureStorageMem2DEXT(glTex[i], 1, GL_RGBA8, w, h, glMemObj[i], 0L);
+            glCheck("glTextureStorageMem2DEXT");
+            if (glDepth == 0) {
+                glDepth = glCreateRenderbuffers();
+                glNamedRenderbufferStorage(glDepth, GL_DEPTH32F_STENCIL8, w, h);
+                glCheck("glNamedRenderbufferStorage(depth)");
+            }
+            glFbo[i] = glCreateFramebuffers();
+            glNamedFramebufferTexture(glFbo[i], GL_COLOR_ATTACHMENT0, glTex[i], 0);
+            glNamedFramebufferRenderbuffer(glFbo[i], GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, glDepth);
+            int st = glCheckNamedFramebufferStatus(glFbo[i], GL_FRAMEBUFFER);
+            if (st != GL_FRAMEBUFFER_COMPLETE) {
+                throw new IllegalStateException("imported FBO incomplete: 0x" + Integer.toHexString(st));
+            }
+            glSemVkToGl[i] = importSemaphore(handles[1]);
+            glSemGlToVk[i] = importSemaphore(handles[2]);
+        } finally {
+            // Each entry is our own export of a Vulkan object; the GL import above already duplicated it into the driver,
+            // so closing after the last use is safe, and closing here instead of per-import is what stops an incomplete FBO
+            // from leaking the two semaphore handles nobody had reached yet. One failing CloseHandle must not hide the import
+            // error that brought us here, nor skip the remaining handles.
+            for (long handle : handles) {
+                if (handle != 0L) {
+                    try {
+                        Win32Handles.close(handle);
+                    } catch (Throwable t) {
+                        GlLog.error(4, "result=nt_handle_close_failed handle=0x" + Long.toHexString(handle) + " reason=" + t, t);
+                    }
+                }
+            }
         }
-        glFbo[i] = glCreateFramebuffers();
-        glNamedFramebufferTexture(glFbo[i], GL_COLOR_ATTACHMENT0, glTex[i], 0);
-        glNamedFramebufferRenderbuffer(glFbo[i], GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, glDepth);
-        int st = glCheckNamedFramebufferStatus(glFbo[i], GL_FRAMEBUFFER);
-        if (st != GL_FRAMEBUFFER_COMPLETE) {
-            throw new IllegalStateException("imported FBO incomplete: 0x" + Integer.toHexString(st));
-        }
-        glSemVkToGl[i] = importSemaphore(handles[1]);
-        glSemGlToVk[i] = importSemaphore(handles[2]);
     }
 
     private static int importSemaphore(long handle) {
         int sem = EXTSemaphore.glGenSemaphoresEXT();
         EXTSemaphoreWin32.glImportSemaphoreWin32HandleEXT(sem, EXTSemaphoreWin32.GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, handle);
         glCheck("glImportSemaphoreWin32HandleEXT");
-        Win32Handles.close(handle);
         return sem;
     }
 
@@ -312,13 +343,19 @@ final class SharedRing {
         glViewport(0, 0, w, h);
         glClearNamedFramebufferfv(glFbo[slot], GL_COLOR, 0, clear);
         glClearNamedFramebufferfi(glFbo[slot], GL_DEPTH_STENCIL, 0, 1.0f, 0);
-        if (pass != null) {
-            pass.run(glFbo[slot], w, h);
+        try {
+            if (pass != null) {
+                pass.run(glFbo[slot], w, h);
+            }
+        } finally {
+            // A third-party renderer that throws here used to leave GL_TIME_ELAPSED open on this query object: the next
+            // frame's glBeginQuery on a different id is then GL_INVALID_OPERATION, which the glCheck below reports as a
+            // bridge failure with an unrelated call, and the FBO stays bound.
+            if (perf != null) {
+                perf.glEnd();
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
-        if (perf != null) {
-            perf.glEnd();
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
         EXTSemaphore.glSignalSemaphoreEXT(glSemGlToVk[slot], NO_BUFFERS, new int[] {glTex[slot]}, new int[] {dstGlLayout});
         glFlush();
         glCheck("glFrame slot " + slot + " frame " + frame);
@@ -344,18 +381,46 @@ final class SharedRing {
         }
         destroyed = true;
         LIVE.decrementAndGet();
-        gl.run(() -> {
-            glFinish();
-            for (int i = 0; i < slots; i++) {
-                glDeleteFramebuffers(glFbo[i]);
-                glDeleteTextures(glTex[i]);
-                EXTMemoryObject.glDeleteMemoryObjectsEXT(glMemObj[i]);
-                EXTSemaphore.glDeleteSemaphoresEXT(glSemVkToGl[i]);
-                EXTSemaphore.glDeleteSemaphoresEXT(glSemGlToVk[i]);
+        try {
+            gl.run(() -> {
+                glFinish();
+                for (int i = 0; i < slots; i++) {
+                    glDeleteFramebuffers(glFbo[i]);
+                    glDeleteTextures(glTex[i]);
+                    // The core delete functions ignore name 0; EXT_external_objects and EXT_semaphore_external do not document
+                    // that, and a ring that failed half-way through importIntoGl reaches here with entries never assigned.
+                    if (glMemObj[i] != 0) {
+                        EXTMemoryObject.glDeleteMemoryObjectsEXT(glMemObj[i]);
+                    }
+                    if (glSemVkToGl[i] != 0) {
+                        EXTSemaphore.glDeleteSemaphoresEXT(glSemVkToGl[i]);
+                    }
+                    if (glSemGlToVk[i] != 0) {
+                        EXTSemaphore.glDeleteSemaphoresEXT(glSemGlToVk[i]);
+                    }
+                }
+                glDeleteRenderbuffers(glDepth);
+                glCheck("SharedRing.destroy");
+            });
+        } finally {
+            // A GL error in the half above (glCheck throws) used to skip this, and with destroyed already set no later call
+            // would ever retry: the images, memory, semaphores, fences and the command pool survived until vkDestroyDevice.
+            try {
+                destroyVulkanObjects();
+            } catch (Throwable unwind) {
+                GlLog.error(4, "result=ring_destroy_unwind_failed reason=" + unwind, unwind);
             }
-            glDeleteRenderbuffers(glDepth);
-            glCheck("SharedRing.destroy");
-        });
+        }
+    }
+
+    /**
+     * Vulkan half of {@link #destroy}: every slot handle is either live or {@code VK_NULL_HANDLE}, so a ring that failed
+     * half-way through the constructor unwinds through the same code. Also releases the off-heap memory properties.
+     */
+    private void destroyVulkanObjects() {
+        if (fence == null) {
+            return;
+        }
         VkDevice dev = e.vkDevice();
         for (int i = 0; i < slots; i++) {
             vkDestroyFence(dev, fence[i], null);
@@ -366,7 +431,10 @@ final class SharedRing {
             vkFreeMemory(dev, memory[i], null);
         }
         vkDestroyCommandPool(dev, cmdPool, null);
-        memProps.free();
+        if (memProps != null) {
+            memProps.free();
+            memProps = null;
+        }
     }
 
     static void glCheck(String what) {

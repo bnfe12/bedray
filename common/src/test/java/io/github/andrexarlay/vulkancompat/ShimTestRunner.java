@@ -682,16 +682,18 @@ public class ShimTestRunner {
                 threw = expected.getMessage().contains("not found");
             }
             assertTrue(threw, "missing DLL must raise XessNativeException(not found), not be ignored");
-            // a file that is not a DLL: loading must fail with the cause attached (no crash, no silent success)
+            // A file that is not a usable x64 DLL is refused by the pre-load PE gate, BEFORE the OS loader is ever called,
+            // so there is no loader failure to attach as a cause: the contract is the exception plus its reason.
             java.nio.file.Path fake = dir.resolve("libxess.dll");
             java.nio.file.Files.writeString(fake, "not a dll");
-            Throwable cause = null;
+            String why = null;
             try {
                 XessNative.load(fake);
             } catch (XessNativeException expected) {
-                cause = expected.getCause();
+                why = expected.getMessage();
             }
-            assertTrue(cause != null, "invalid DLL must raise XessNativeException with a cause");
+            assertTrue(why != null && why.contains("libxess.dll") && why.length() > 40,
+                "invalid DLL must raise XessNativeException naming the file and the reason, not be ignored");
         } finally {
             java.nio.file.Files.deleteIfExists(dir.resolve("libxess.dll"));
             java.nio.file.Files.deleteIfExists(dir);
