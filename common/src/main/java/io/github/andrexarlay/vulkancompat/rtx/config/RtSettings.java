@@ -174,6 +174,8 @@ public final class RtSettings {
     public static boolean vibrantVisuals = false;
     /** Particles (smoke, flames, sparks, bubbles, block breaking...) are drawn into the ray traced image (RtParticleLayer). */
     public static boolean rtParticles = true;
+    /** Rain and snow columns are drawn into the ray traced image too (RtWeatherLayer, on the particle layer of RtParticleLayer). */
+    public static boolean rtWeather = true;
 
     // ---- DLSS 5 Neural Rendering (DLSS-NR) [EXPERIMENTAL] ----
     public static boolean dlssNrEnabled = false;
@@ -240,6 +242,7 @@ public final class RtSettings {
         bool("caustics", () -> caustics, v -> caustics = v);
         bool("vibrant_visuals", () -> vibrantVisuals, v -> vibrantVisuals = v);
         bool("rt_particles", () -> rtParticles, v -> rtParticles = v);
+        bool("rt_weather", () -> rtWeather, v -> rtWeather = v);
         bool("auto_normals", () -> autoNormals, v -> autoNormals = v);
         bool("rt_distance_auto", () -> rtDistanceAuto, v -> rtDistanceAuto = v);
         integer("rt_distance_chunks", () -> rtDistanceChunks, v -> rtDistanceChunks = v, 2, 32);
@@ -420,6 +423,12 @@ public final class RtSettings {
     public static boolean caustics() { return b("path_caustics") || b("caustics"); }
     public static boolean vibrantVisuals() { return b("vibrant_visuals"); }
     public static boolean particles() { return b("rt_particles"); }
+    /**
+     * Weather (rain / snow columns) rides on the particle layer of {@code RtParticleLayer} and its composite, so it is only ever on
+     * while particles are on: off with them, otherwise the own setting decides. The RT image itself is a further condition, checked
+     * by {@code RtWeatherLayer.capturing()}.
+     */
+    public static boolean weather() { return b("rt_weather") && b("rt_particles"); }
     public static boolean autoNormalsOn() { return b("auto_normals"); }
     public static boolean rtDistanceAuto() { return b("rt_distance_auto"); }
     public static int rtDistanceChunks() { return i("rt_distance_chunks"); }

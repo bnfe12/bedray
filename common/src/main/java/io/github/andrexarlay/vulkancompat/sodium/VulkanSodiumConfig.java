@@ -659,8 +659,13 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> Component.literal(String.format(Locale.ROOT, "%+.1f EV", v / 10.0)),
             v -> RtSettings.pathExposureEvTenths = v, () -> RtSettings.pathExposureEvTenths,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        Identifier particleId = id("rt_particles");
         look.addOption(boolOpt(builder, "rt_particles", true, v -> RtSettings.rtParticles = v, () -> RtSettings.rtParticles,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        // weather rides on the particle layer, so it is only ever offered while particles are on (RtSettings.weather() enforces it)
+        look.addOption(boolOpt(builder, "rt_weather", true, v -> RtSettings.rtWeather = v, () -> RtSettings.rtWeather,
+            s -> anyRt.apply(s) && s.readBooleanOption(particleId), rtDependencies(modeId, particleId),
+            Mark.NONE, OptionImpact.LOW, false, st));
         Identifier godId = id("atm_godrays");
         Function<ConfigState, Boolean> shaftsOn = s -> s.readEnumOption(godId, RtAtmosphereSettings.GodRays.class) != RtAtmosphereSettings.GodRays.OFF
             && anyRt.apply(s);

@@ -316,6 +316,11 @@ public final class SettingsCatalog {
             "Smoke, flames, sparks, bubbles, block-break and weather splash particles in the ray traced image, occluded by terrain and lit by the scene.",
             "", "Needs ray tracing on.",
             "Particles are animated and short-lived; a still preview does not represent them.");
+        putNoImage("rt_weather", Tier.ADVANCED, "Rain And Snow In RT",
+            "Rain and snow columns in the ray traced image, drawn the way the game draws them: occluded by terrain and fogged, "
+                + "but never seen by the denoisers, so they cannot smear or trail.",
+            "", "Needs ray tracing and Particles in RT on.",
+            "Columns only appear while it rains or snows; a still preview cannot show falling rain.");
         putNoImage("waving_foliage", Tier.ADVANCED, "Waving Foliage",
             "Classic shaderpack wind waving on grass, leaves and cutout foliage.",
             "", "Needs ray tracing on.",
