@@ -12,6 +12,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <mutex>
 #include <string>
 #include <deque>
@@ -91,9 +92,26 @@ bool resolveFeatureFuncs() {
 }
 } // namespace
 
+// Exception containment (ADR-0005 rule 4): these exports are reached from Java through a
+// java.lang.foreign (FFM) downcall, so a C++ exception escaping one of them becomes an unhandled
+// native exception in the JVM and terminates the process. Each wrapped body returns the value the
+// function already uses on its documented "failed / nothing available" error path. This translation
+// unit has no thread-local last-error string of its own (the SL log ring is separate), so containment
+// is by return code only.
+#define SL_TRY try {
+#define SL_CATCH(retval)            \
+    }                               \
+    catch (const std::exception&) { \
+        return (retval);            \
+    }                               \
+    catch (...) {                   \
+        return (retval);            \
+    }
+
 /* Loads <slDir>\sl.interposer.dll (signature checked) and calls slInit with DLSS_G + Reflex + PCL for Vulkan.
  * Must run before the first Vulkan call of the process. Returns sl::Result, or negative: -1 bad args, -2 signature, -3 load, -4 exports. */
 VKB_API int vkb_sl_init(const wchar_t* slDir, const wchar_t* logDir, int verbose) {
+    SL_TRY
     if (g_inited) return 0;
     if (!slDir) return -1;
     std::wstring dir = slDir;
@@ -145,10 +163,12 @@ VKB_API int vkb_sl_init(const wchar_t* slDir, const wchar_t* logDir, int verbose
     sl::Result r = p_slInit(pref, sl::kSDKVersion);
     if (r == sl::Result::eOk) g_inited = true;
     return static_cast<int>(r);
+    SL_CATCH(-1)
 }
 
 /* Copies queued SL log lines (newline separated) into buf; returns bytes written. */
 VKB_API int vkb_sl_drain_log(char* buf, int cap) {
+    SL_TRY
     std::lock_guard<std::mutex> lock(g_logMutex);
     int n = 0;
     while (!g_log.empty()) {
@@ -161,10 +181,12 @@ VKB_API int vkb_sl_drain_log(char* buf, int cap) {
     }
     if (n < cap) buf[n] = 0;
     return n;
+    SL_CATCH(0)
 }
 
 /* Feature state for logs: bit0 DLSS_G loaded, bit1 Reflex loaded, bit2 PCL loaded; -1 if not initialised. */
 VKB_API int vkb_sl_loaded_mask() {
+    SL_TRY
     if (!g_inited || !p_slIsFeatureLoaded) return -1;
     int m = 0;
     bool l = false;
@@ -178,11 +200,13 @@ VKB_API int vkb_sl_loaded_mask() {
     l = false;
     if (p_slIsFeatureLoaded(sl::kFeatureDLSS_RR, l) == sl::Result::eOk && l) m |= 16;
     return m;
+    SL_CATCH(-1)
 }
 
 /* DLSS_G requirements as seen by SL after init. out[0]=flags, out[1]=vk graphics queues, out[2]=vk compute queues,
  * out[3..5]=detected driver major/minor/build. */
 VKB_API int vkb_sl_dlssg_requirements(uint32_t* out) {
+    SL_TRY
     if (!g_inited || !p_slGetFeatureRequirements) return -1;
     sl::FeatureRequirements q{};
     sl::Result r = p_slGetFeatureRequirements(sl::kFeatureDLSS_G, q);
@@ -194,12 +218,14 @@ VKB_API int vkb_sl_dlssg_requirements(uint32_t* out) {
     out[4] = q.driverVersionDetected.minor;
     out[5] = q.driverVersionDetected.build;
     return 0;
+    SL_CATCH(-1)
 }
 
 
 /* slIsFeatureSupported(DLSS_G, adapter) for the adapter with the given 8 byte LUID (VkPhysicalDeviceIDProperties.deviceLUID).
  * Returns sl::Result (0 = supported; eErrorOSOutOfDate, eErrorDriverOutOfDate, eErrorNoSupportedAdapterFound, ...). */
 VKB_API int vkb_sl_dlssg_supported(const uint8_t* luid8) {
+    SL_TRY
     if (!g_inited || !p_slIsFeatureSupported) return -1;
     uint8_t luid[8];
     memcpy(luid, luid8, 8);
@@ -207,10 +233,12 @@ VKB_API int vkb_sl_dlssg_supported(const uint8_t* luid8) {
     info.deviceLUID = luid;
     info.deviceLUIDSizeInBytes = 8;
     return static_cast<int>(p_slIsFeatureSupported(sl::kFeatureDLSS_G, info));
+    SL_CATCH(-1)
 }
 
 /* Versions of the DLSS_G plugin: out[0..2] = SL major/minor/build, out[3..5] = NGX major/minor/build. */
 VKB_API int vkb_sl_dlssg_version(uint32_t* out) {
+    SL_TRY
     if (!g_inited || !p_slGetFeatureVersion) return -1;
     sl::FeatureVersion v{};
     sl::Result r = p_slGetFeatureVersion(sl::kFeatureDLSS_G, v);
@@ -218,6 +246,7 @@ VKB_API int vkb_sl_dlssg_version(uint32_t* out) {
     out[0] = v.versionSL.major; out[1] = v.versionSL.minor; out[2] = v.versionSL.build;
     out[3] = v.versionNGX.major; out[4] = v.versionNGX.minor; out[5] = v.versionNGX.build;
     return 0;
+    SL_CATCH(-1)
 }
 
 /* Test helper (autotests only, -Dvkrtx.autotest.keepFocus): brings the game window of this process to the foreground. Streamline turns DLSS-G off
@@ -250,28 +279,35 @@ VKB_API int vkb_focus_game_window() {
 
 /* New frame token (one per frame, before slReflexSleep). frameIndex is the engine frame counter (monotonic). */
 VKB_API int vkb_sl_frame_begin(uint32_t frameIndex) {
+    SL_TRY
     if (!g_inited) return -1;
     return static_cast<int>(p_slGetNewFrameToken(g_token, &frameIndex));
+    SL_CATCH(-1)
 }
 
 VKB_API int vkb_sl_reflex_sleep() {
+    SL_TRY
     if (!g_inited || !g_token || !resolveFeatureFuncs() || !p_slReflexSleep) return -1;
     return static_cast<int>(p_slReflexSleep(*g_token));
+    SL_CATCH(-1)
 }
 
 /* mode: 0 off, 1 low latency, 2 low latency + boost */
 VKB_API int vkb_sl_reflex_options(int mode, uint32_t frameLimitUs) {
+    SL_TRY
     if (!g_inited || !resolveFeatureFuncs() || !p_slReflexSetOptions) return -1;
     sl::ReflexOptions o{};
     o.mode = static_cast<sl::ReflexMode>(mode);
     o.frameLimitUs = frameLimitUs;
     return static_cast<int>(p_slReflexSetOptions(o));
+    SL_CATCH(-1)
 }
 
 
 /* Latest complete Reflex frame report: out[0] = frameID (low 32 bit), out[1] = end-to-end latency in microseconds
  * (gpuRenderEndTime - simStartTime), out[2] = gpuFrameTimeUs, out[3] = lowLatencyAvailable. Returns 0 when a report was found. */
 VKB_API int vkb_sl_reflex_latency(uint32_t* out) {
+    SL_TRY
     if (!g_inited || !resolveFeatureFuncs() || !p_slReflexGetState) return -1;
     sl::Result r = p_slReflexGetState(g_reflexState);
     if (r != sl::Result::eOk) return static_cast<int>(r);
@@ -288,18 +324,22 @@ VKB_API int vkb_sl_reflex_latency(uint32_t* out) {
     out[1] = static_cast<uint32_t>(best->gpuRenderEndTime - best->simStartTime);
     out[2] = best->gpuFrameTimeUs;
     return 0;
+    SL_CATCH(-1)
 }
 
 /* sl::PCLMarker value (sl_pcl.h): 0 sim start, 1 sim end, 2 render submit start, 3 render submit end, 4 present start, 5 present end */
 VKB_API int vkb_sl_marker(int marker) {
+    SL_TRY
     if (!g_inited || !g_token || !resolveFeatureFuncs() || !p_slPCLSetMarker) return -1;
     return static_cast<int>(p_slPCLSetMarker(static_cast<sl::PCLMarker>(marker), *g_token));
+    SL_CATCH(-1)
 }
 
 /* Common constants. m: 4 row-major matrices (cameraViewToClip, clipToCameraView, clipToPrevClip, prevClipToClip) = 64 floats;
  * v: jitter xy, mvecScale xy, camPos xyz, up xyz, right xyz, fwd xyz, near, far, fovY, aspect, mvecInvalidValue = 21 floats;
  * i: depthInverted, cameraMotionIncluded, motionVectors3D, reset, motionVectorsJittered, motionVectorsDilated (0/1). */
 VKB_API int vkb_sl_set_constants(const float* m, const float* v, const int* i, uint32_t viewport) {
+    SL_TRY
     if (!g_inited || !g_token) return -1;
     sl::Constants c{};
     auto mat = [&](sl::float4x4& dst, const float* src) {
@@ -329,6 +369,7 @@ VKB_API int vkb_sl_set_constants(const float* m, const float* v, const int* i, u
     c.motionVectorsJittered = i[4] ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     c.motionVectorsDilated = i[5] ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     return static_cast<int>(p_slSetConstants(c, *g_token, sl::ViewportHandle(viewport)));
+    SL_CATCH(-1)
 }
 
 /* Tags one buffer for the current frame token. bufferType: sl_core_types.h kBufferType*. image == 0 clears the tag.
@@ -336,6 +377,7 @@ VKB_API int vkb_sl_set_constants(const float* m, const float* v, const int* i, u
  * (VkImageLayout at use time, VkFormat, VkImageUsageFlags). Extent = whole image. */
 VKB_API int vkb_sl_tag(uint32_t bufferType, uint64_t image, uint64_t view, uint32_t layout, uint32_t w, uint32_t h,
                        uint32_t vkFormat, uint32_t usage, int lifecycle, uint32_t viewport) {
+    SL_TRY
     if (!g_inited || !g_token) return -1;
     if (image == 0) {
         sl::ResourceTag t(nullptr, bufferType, static_cast<sl::ResourceLifecycle>(lifecycle), nullptr);
@@ -352,12 +394,14 @@ VKB_API int vkb_sl_tag(uint32_t bufferType, uint64_t image, uint64_t view, uint3
     sl::Extent ext{0, 0, w, h};
     sl::ResourceTag t(&res, bufferType, static_cast<sl::ResourceLifecycle>(lifecycle), &ext);
     return static_cast<int>(p_slSetTagForFrame(*g_token, sl::ViewportHandle(viewport), &t, 1, nullptr));
+    SL_CATCH(-1)
 }
 
 /* mode: 0 off, 1 on, 2 auto, 3 dynamic (not on Vulkan). numFrames = frames to generate (1 = 2x). flags: sl::DLSSGFlags bits.
  * w/h: back buffer size; backBuffers: swapchain image count; recompose: 1 = user interface recomposition. */
 VKB_API int vkb_sl_dlssg_options(int mode, uint32_t numFrames, uint32_t flags, uint32_t w, uint32_t h, uint32_t backBuffers,
                                  int recompose, uint32_t viewport, uint32_t dynW, uint32_t dynH) {
+    SL_TRY
     if (!g_inited || !resolveFeatureFuncs() || !p_slDLSSGSetOptions) return -1;
     sl::DLSSGOptions o{};
     o.mode = static_cast<sl::DLSSGMode>(mode);
@@ -370,11 +414,13 @@ VKB_API int vkb_sl_dlssg_options(int mode, uint32_t numFrames, uint32_t flags, u
     o.dynamicResHeight = dynH;
     o.enableUserInterfaceRecomposition = recompose ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     return static_cast<int>(p_slDLSSGSetOptions(sl::ViewportHandle(viewport), o));
+    SL_CATCH(-1)
 }
 
 /* out: [0]=status bits, [1]=minWidthOrHeight, [2]=numFramesActuallyPresented (since last call), [3]=numFramesToGenerateMax,
  * [4]=vsyncSupportAvailable (sl::Boolean). vram = estimatedVRAMUsageInBytes. */
 VKB_API int vkb_sl_dlssg_state(uint32_t* out, uint64_t* vram, uint32_t viewport) {
+    SL_TRY
     if (!g_inited || !resolveFeatureFuncs() || !p_slDLSSGGetState) return -1;
     sl::DLSSGState s{};
     sl::Result r = p_slDLSSGGetState(sl::ViewportHandle(viewport), s, nullptr);
@@ -386,10 +432,13 @@ VKB_API int vkb_sl_dlssg_state(uint32_t* out, uint64_t* vram, uint32_t viewport)
     out[4] = static_cast<uint32_t>(s.bIsVsyncSupportAvailable);
     *vram = s.estimatedVRAMUsageInBytes;
     return 0;
+    SL_CATCH(-1)
 }
 
 VKB_API int vkb_sl_shutdown() {
+    SL_TRY
     if (!g_inited) return 0;
     g_inited = false;
     return static_cast<int>(p_slShutdown());
+    SL_CATCH(-1)
 }

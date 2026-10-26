@@ -99,6 +99,20 @@ static int failVk(const char* what, VkResult r) {
     }                                                                                         \
     catch (const std::exception& e_) {                                                        \
         return fail(VKB_NRD_ERR_UNSUPPORTED, "unexpected C++ exception: %s", e_.what());     \
+    }                                                                                         \
+    catch (...) {                                                                             \
+        /* NRD and the vendor headers can throw outside std::exception; anything escaping an   \
+           FFM downcall reaches Java as an unhandled native exception and kills the process. */\
+        return fail(VKB_NRD_ERR_UNSUPPORTED, "unexpected non-std C++ exception");            \
+    }
+
+#define API_CATCH_VOID()                                                                      \
+    }                                                                                         \
+    catch (const std::exception& e_) {                                                        \
+        fail(VKB_NRD_ERR_UNSUPPORTED, "unexpected C++ exception: %s", e_.what());            \
+    }                                                                                         \
+    catch (...) {                                                                             \
+        fail(VKB_NRD_ERR_UNSUPPORTED, "unexpected non-std C++ exception");                   \
     }
 
 // ---- tables (from nrd_wrapper.cpp, with the R10_G10_B10_A2_UINT / RGBA8_UINT fixes) ---------------
@@ -1000,17 +1014,21 @@ VKB_NRD_API int32_t vkb_nrd_dispatch(uint64_t handle, uint64_t command_buffer, u
 }
 
 VKB_NRD_API void vkb_nrd_destroy(uint64_t handle) {
+    API_TRY
     std::lock_guard<std::mutex> lock(g.mutex);
     Denoiser* d = lookup(handle);
     if (d) destroyDenoiser(d);
+    API_CATCH_VOID()
 }
 
 VKB_NRD_API void vkb_nrd_shutdown(void) {
+    API_TRY
     std::lock_guard<std::mutex> lock(g.mutex);
     if (!g.inited) return;
     while (!g.live.empty()) destroyDenoiser(*g.live.begin());
     unloadNrd();
     g.inited = false;
+    API_CATCH_VOID()
 }
 
 }  // extern "C"

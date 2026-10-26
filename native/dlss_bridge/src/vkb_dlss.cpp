@@ -29,6 +29,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -194,6 +195,31 @@ NVSDK_NGX_Resource_VK toResource(const VkbDlssImage& i) {
 
 }  // namespace
 
+// Exception containment (ADR-0005 rule 4). These exports are reached through a java.lang.foreign (FFM)
+// downcall: a C++ exception escaping an extern "C" function surfaces in the JVM as an unhandled native
+// exception and terminates the Minecraft process. Every non-trivial export wraps its body with these.
+// fail() already resets g_lastNgx and stores the message in the thread-local g_lastError; the fallback
+// code is VKB_DLSS_ERR_UNSUPPORTED (this project has no dedicated internal/exception code and the
+// numbering must not change), matching the vkb_nrd.cpp reference pattern.
+#define API_TRY try {
+#define API_CATCH()                                                                                     \
+    }                                                                                                   \
+    catch (const std::exception& e_) {                                                                  \
+        return fail(VKB_DLSS_ERR_UNSUPPORTED, std::string("unexpected C++ exception: ") + e_.what());   \
+    }                                                                                                   \
+    catch (...) {                                                                                       \
+        return fail(VKB_DLSS_ERR_UNSUPPORTED, "Unknown unhandled C++ exception");                       \
+    }
+
+#define API_CATCH_VOID()                                                                                \
+    }                                                                                                   \
+    catch (const std::exception& e_) {                                                                  \
+        fail(VKB_DLSS_ERR_UNSUPPORTED, std::string("unexpected C++ exception: ") + e_.what());          \
+    }                                                                                                   \
+    catch (...) {                                                                                       \
+        fail(VKB_DLSS_ERR_UNSUPPORTED, "Unknown unhandled C++ exception");                              \
+    }
+
 // ============================================================================================
 // generic
 // ============================================================================================
@@ -219,8 +245,10 @@ VKB_DLSS_API const char* vkb_dlss_result_to_string(int32_t r) {
 }
 
 VKB_DLSS_API void vkb_dlss_set_log_callback(VkbDlssLogCallback cb) {
+    API_TRY
     std::lock_guard<std::recursive_mutex> lk(st().mutex);
     st().logCb = cb;
+    API_CATCH_VOID()
 }
 
 // ============================================================================================
@@ -228,6 +256,7 @@ VKB_DLSS_API void vkb_dlss_set_log_callback(VkbDlssLogCallback cb) {
 // ============================================================================================
 VKB_DLSS_API int32_t vkb_dlss_get_required_instance_extensions(
     const wchar_t* featurePath, const wchar_t* dataPath, uint32_t* outCount, const char* const** outNames) {
+    API_TRY
     if (!outCount || !outNames) return fail(VKB_DLSS_ERR_INVALID_ARG, "outCount/outNames is null");
     std::lock_guard<std::recursive_mutex> lk(st().mutex);
     NVSDK_NGX_FeatureDiscoveryInfo d;
@@ -240,11 +269,13 @@ VKB_DLSS_API int32_t vkb_dlss_get_required_instance_extensions(
     NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(&d, &count, &props);
     if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements", r);
     return copyExtensions(count, props, st().instExtStore, st().instExtPtrs, outCount, outNames);
+    API_CATCH()
 }
 
 VKB_DLSS_API int32_t vkb_dlss_get_required_device_extensions(
     uint64_t instance, uint64_t physicalDevice, const wchar_t* featurePath, const wchar_t* dataPath,
     uint32_t* outCount, const char* const** outNames) {
+    API_TRY
     if (!outCount || !outNames || !instance || !physicalDevice)
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null instance/physicalDevice/out pointer");
     std::lock_guard<std::recursive_mutex> lk(st().mutex);
@@ -260,6 +291,7 @@ VKB_DLSS_API int32_t vkb_dlss_get_required_device_extensions(
         reinterpret_cast<VkPhysicalDevice>(static_cast<uintptr_t>(physicalDevice)), &d, &count, &props);
     if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements", r);
     return copyExtensions(count, props, st().devExtStore, st().devExtPtrs, outCount, outNames);
+    API_CATCH()
 }
 
 bool refreshCapabilityParameters(State& s) {
@@ -279,6 +311,7 @@ bool refreshCapabilityParameters(State& s) {
 // init / capabilities / shutdown
 // ============================================================================================
 VKB_DLSS_API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps) {
+    API_TRY
     if (!outCaps || outCaps->struct_size != sizeof(VkbDlssCaps))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null outCaps or wrong struct_size");
     State& s = st();
@@ -326,12 +359,14 @@ VKB_DLSS_API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps) {
     g_lastError.clear();
     g_lastNgx = 0;
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 VKB_DLSS_API int32_t vkb_dlss_init(
     uint64_t instance, uint64_t physicalDevice, uint64_t device, void* gipa, void* gdpa,
     const wchar_t* featurePath, const wchar_t* logPath, const char* projectId, const char* engineVersion,
     VkbDlssCaps* outCaps) {
+    API_TRY
     if (!instance || !physicalDevice || !device || !outCaps || outCaps->struct_size != sizeof(VkbDlssCaps))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null handle/outCaps or wrong VkbDlssCaps.struct_size");
     State& s = st();
@@ -415,9 +450,11 @@ VKB_DLSS_API int32_t vkb_dlss_init(
     g_lastError.clear();
     g_lastNgx = 0;
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 VKB_DLSS_API void vkb_dlss_shutdown(void) {
+    API_TRY
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
     if (!s.initialised) return;
@@ -434,6 +471,7 @@ VKB_DLSS_API void vkb_dlss_shutdown(void) {
     NVSDK_NGX_VULKAN_Shutdown1(s.device);
     s.device = VK_NULL_HANDLE;
     s.initialised = false;
+    API_CATCH_VOID()
 }
 
 // ============================================================================================
@@ -441,6 +479,7 @@ VKB_DLSS_API void vkb_dlss_shutdown(void) {
 // ============================================================================================
 VKB_DLSS_API int32_t vkb_dlss_query_optimal_settings(int32_t mode, uint32_t w, uint32_t h,
                                                      VkbDlssOptimalSettings* out) {
+    API_TRY
     if (!out || out->struct_size != sizeof(VkbDlssOptimalSettings) || w == 0 || h == 0)
         return fail(VKB_DLSS_ERR_INVALID_ARG, "bad out/struct_size/size");
     NVSDK_NGX_PerfQuality_Value pq;
@@ -471,12 +510,14 @@ VKB_DLSS_API int32_t vkb_dlss_query_optimal_settings(int32_t mode, uint32_t w, u
     out->min_height = minh;
     out->sharpness = sharp;
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 // ============================================================================================
 // feature
 // ============================================================================================
 VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t cmd, const VkbDlssCreateInfo* info, uint64_t* outFeature) {
+    API_TRY
     if (!cmd || !info || !outFeature || info->struct_size != sizeof(VkbDlssCreateInfo))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null cmd/info/outFeature or wrong struct_size");
     NVSDK_NGX_PerfQuality_Value pq;
@@ -516,9 +557,11 @@ VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t cmd, const VkbDlssCreateIn
     s.features.insert(raw);
     *outFeature = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(raw));
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalInfo* info) {
+    API_TRY
     if (!cmd || !feature || !info || info->struct_size != sizeof(VkbDlssEvalInfo))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null cmd/feature/info or wrong struct_size");
     if (!info->color.view || !info->output.view || !info->depth.view || !info->motion_vectors.view)
@@ -559,9 +602,11 @@ VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const Vkb
                                                       f->handle, f->params, &ep);
     if (NVSDK_NGX_FAILED(r)) return failNgx("NGX_VULKAN_EVALUATE_DLSS_EXT", r);
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 VKB_DLSS_API int32_t vkb_dlss_release_feature(uint64_t feature) {
+    API_TRY
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
     Feature* f = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
@@ -573,12 +618,14 @@ VKB_DLSS_API int32_t vkb_dlss_release_feature(uint64_t feature) {
     delete f;
     if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_ReleaseFeature", r);
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 // ============================================================================================
 // DLSS Ray Reconstruction (DLSS-D / DLSS 3.5+) [DLSS-RR]
 // ============================================================================================
 VKB_DLSS_API int32_t vkb_dlss_rr_is_supported(uint32_t* outSupported) {
+    API_TRY
     if (!outSupported) return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] outSupported is null");
     *outSupported = 0;
     State& s = st();
@@ -607,9 +654,11 @@ VKB_DLSS_API int32_t vkb_dlss_rr_is_supported(uint32_t* outSupported) {
         }
     }
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t cmd, const VkbDlssRrCreateInfo* info, uint64_t* outFeature) {
+    API_TRY
     if (!cmd || !info || !outFeature || info->struct_size != sizeof(VkbDlssRrCreateInfo))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] null cmd/info/outFeature or wrong struct_size");
     if (info->render_width == 0 || info->render_height == 0 || info->output_width == 0 || info->output_height == 0)
@@ -656,9 +705,11 @@ VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t cmd, const VkbDlssRrCre
     s.features.insert(raw);
     *outFeature = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(raw));
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 VKB_DLSS_API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssRrEvalInfo* info) {
+    API_TRY
     if (!cmd || !feature || !info || info->struct_size != sizeof(VkbDlssRrEvalInfo))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] null cmd/feature/info or wrong struct_size");
     if (!info->color.view || !info->output.view || !info->depth.view || !info->motion_vectors.view)
@@ -758,19 +809,24 @@ VKB_DLSS_API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const 
                                                       f->handle, f->params, &ep);
     if (NVSDK_NGX_FAILED(r)) return failNgx("[DLSS-RR] NGX_VULKAN_EVALUATE_DLSSD_EXT", r);
     return VKB_DLSS_OK;
+    API_CATCH()
 }
 
 VKB_DLSS_API int32_t vkb_dlss_rr_release_feature(uint64_t feature) {
+    API_TRY
     return vkb_dlss_release_feature(feature);
+    API_CATCH()
 }
 
 // ============================================================================================
 // STUBS (explicit, not silent)
 // ============================================================================================
 VKB_DLSS_API int32_t vkb_dlss_fg_is_supported(uint32_t* outSupported) {
+    API_TRY
     // STUB: Frame Generation requires Streamline integration, not part of this DLL yet.
     if (outSupported) *outSupported = 0;
     return fail(VKB_DLSS_NOT_IMPLEMENTED, "STUB: DLSS Frame Generation (Streamline) is not implemented");
+    API_CATCH()
 }
 
 }  // extern "C"
