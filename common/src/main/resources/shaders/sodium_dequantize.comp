@@ -1,7 +1,10 @@
 #version 460
-// GPU dequantization of Sodium 0.9.2 compact chunk vertices: replaces the CPU float materialization in
-// SodiumMeshDecoder.decode and the staging put in RtWorld's section build. One invocation per quad: decodes the
+// GPU dequantization of Sodium 0.9.2 compact chunk vertices: replaces the float staging put in RtWorld's section
+// build. One invocation per quad: decodes the
 // 4 vertices (20 bytes each, little-endian words) and writes the per-section geometry arena block.
+//
+// This removes the staging write, not the CPU decode: SodiumMeshDecoder.decode still materializes the floats because
+// the foliage tagging, the micromap UV interning and the staged light hash read them.
 //
 // The arena block layout is PLANAR, not per-quad interleaved (RtWorld.writeTableEntry / GEOM_BYTES_PER_QUAD = 112):
 //     [positions float3 x 4Q][uv float2 x 4Q][colour uint x 4Q][light uint x 4Q]
