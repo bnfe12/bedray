@@ -868,11 +868,12 @@ public final class RtWorld {
         if (scratchCursor + scratchNeed > scratch.size) {
             return null;
         }
-        // Staged: the raw Sodium capture (80 B/quad) + per-quad foliage flags (4 B/quad when tagged) + the micromap
-        // index tail. The GPU dequantize dispatch (sodium_dequantize.comp) writes the [positions][uvs][colours][light]
-        // arena block from them; only the micromap tail still needs a transfer copy.
+        // Staged: the raw Sodium capture (80 B/quad) + per-quad foliage flags (4 B/quad, always reserved: the micromap
+        // index tail starts at a fixed 84 B/quad) + the micromap index tail. The GPU dequantize dispatch
+        // (sodium_dequantize.comp) writes the [positions][uvs][colours][light] arena block from them; only the micromap
+        // tail still needs a transfer copy.
         int[] tagged = quadFlags(d);
-        long stageBytes = 80L * quads + (tagged != null ? 4L * quads : 0L) + (ommIdx != null ? 8L * cutoutQuads : 0L);
+        long stageBytes = 84L * quads + (ommIdx != null ? 8L * cutoutQuads : 0L);
         long stagingOffset = stage(stageBytes);
         if (stagingOffset < 0) {
             return null;
@@ -891,7 +892,7 @@ public final class RtWorld {
             long flagsAddr = 0L;
             if (tagged != null) {
                 flagsOffset = stagingOffset + 80L * quads;
-                MemoryUtil.memIntBuffer(staging.mapped + flagsOffset, quads).put(tagged);
+                MemoryUtil.memIntBuffer(staging.mapped + flagsOffset, quads).put(tagged, 0, quads);
                 flagsAddr = staging.address + flagsOffset;
             }
             long tagHash = lightHash(d.light, tagged, quads * 4);
