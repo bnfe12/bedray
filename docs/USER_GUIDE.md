@@ -46,7 +46,9 @@ Tips
 ## What is traced, what is not
 
 Blocks and their chunk geometry are traced. Entities, items and particles are only partly supported: see
-[FEATURE_MATRIX.md](FEATURE_MATRIX.md). Water and glass use a thin-surface approximation (reflection and tint, no real refraction).
+[FEATURE_MATRIX.md](FEATURE_MATRIX.md). Glass uses thin-interface reflection and tint without closed-volume refraction.
+Realistic water uses approximate Snell refraction, extinction and in-scattering along water segments; vanilla water uses
+a textured sheet. The current main integration has not been built or exercised in-game; older screenshots describe older builds.
 
 ## Hotkeys
 

@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial;
 
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.shaderc.Shaderc;
@@ -98,7 +99,7 @@ final class SpatialComputePass {
             ci.get(0).sType$Default().stage().sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModule)
                 .pName(stack.UTF8("main"));
             ci.get(0).layout(pipelineLayout);
-            check(VK10.vkCreateComputePipelines(device, 0L, ci, null, p), "vkCreateComputePipelines");
+            check(RtVulkanPipelineCache.createCompute(device, ci, null, p), "vkCreateComputePipelines");
             pipeline = p.get(0);
 
             VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(bindings.length, stack);

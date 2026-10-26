@@ -161,6 +161,9 @@ public final class EntityCaptureManager {
         insideEntity = false;
         worldEmitterCount = 0;
         particleEmitterCount = 0;
+        selfAvatarVerts = 0;
+        selfAvatarTriStart = 0;
+        selfAvatarTriCount = 0;
         frameSeq++;
     }
 
@@ -462,6 +465,106 @@ public final class EntityCaptureManager {
         handPass = false;
     }
 
+    /** True while GameRenderer.renderItemInHand submits the arm and the held item. */
+    public synchronized boolean inHandPass() {
+        return handPass;
+    }
+
+    /**
+     * Adds the local player's own model to this frame's entity geometry: under a first-person camera the raster pass never
+     * draws it, so a ray reflected by water or glass would hit nothing and the player would not see themselves. The state is
+     * the one the game already extracted ({@code PlayerRenderState.avatarRenderState}); it is re-submitted through the vanilla
+     * dispatcher with {@link RtCaptureCollector}, which keeps the model geometry and drops everything else, so the pose,
+     * rotations and equipment layers stay the game's own. Third person is skipped - there the entity capture already has it.
+     *
+     * @return true when model geometry was captured
+     */
+    public synchronized boolean captureSelfAvatar(net.minecraft.client.renderer.state.level.CameraRenderState camera,
+                                                  net.minecraft.client.renderer.state.level.PlayerRenderState player) {
+        selfAvatarVerts = 0;
+        net.minecraft.client.renderer.entity.state.AvatarRenderState avatar =
+            player != null && player.hasPlayer ? player.avatarRenderState : null;
+        // Sleeping in first person is the one case where vanilla does draw the own body (lying in bed): capturing the
+        // standing avatar on top of it would put a second player into the same reflections.
+        boolean usable = avatar != null && avatar.skin != null && !avatar.isInvisible && !avatar.isSpectator
+            && camera != null && camera.pos != null
+            && (camera.entityRenderState == null || !camera.entityRenderState.isSleeping);
+        if (!SelfAvatarGate.shouldCapture(open, io.github.andrexarlay.vulkancompat.rt.world.RtConfig.SELF_AVATAR,
+            camera != null && camera.isFirstPerson, usable)) {
+            return false;
+        }
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        net.minecraft.client.renderer.entity.EntityRenderDispatcher dispatcher =
+            mc != null ? mc.getEntityRenderDispatcher() : null;
+        if (dispatcher == null) {
+            return false;
+        }
+        int before = frameConsumer.getVertexCount();
+        int beforeIndices = frameConsumer.getIndexCount();
+        try {
+            dispatcher.submit(avatar, camera, avatar.x - camera.pos.x, avatar.y - camera.pos.y, avatar.z - camera.pos.z,
+                new PoseStack(), RtCaptureCollector.INSTANCE);
+        } catch (RuntimeException e) {
+            if (selfAvatarFailures.getAndIncrement() == 0) {
+                LOGGER.error("[VK-RT] self avatar capture failed", e);
+            }
+            endEntity();
+        }
+        selfAvatarVerts = frameConsumer.getVertexCount() - before;
+        // The body is captured as one contiguous run of the shared index buffer the entity BLAS is built from, so the shader
+        // can name its triangles. Geometry appended to the frame afterwards (the bridge instances of endFrame) is simply not
+        // part of the run and stays visible to the primary rays.
+        int capturedIndices = frameConsumer.getIndexCount() - beforeIndices;
+        selfAvatarTriStart = beforeIndices / 3;
+        selfAvatarTriCount = capturedIndices / 3;
+        return selfAvatarVerts > 0;
+    }
+
+    /** First triangle of the local player's captured body in this frame's entity index buffer. */
+    public synchronized int selfAvatarTriStart() {
+        return selfAvatarTriStart;
+    }
+
+    /** Triangles of the local player's captured body this frame (0 when it was not captured). */
+    public synchronized int selfAvatarTriCount() {
+        return selfAvatarTriCount;
+    }
+
+    /** Vertices of the local player's model captured in the last frame (0 when it was not captured). */
+    public synchronized int selfAvatarVertices() {
+        return selfAvatarVerts;
+    }
+
+    private int selfAvatarVerts;
+    private int selfAvatarTriStart;
+    private int selfAvatarTriCount;
+    private final java.util.concurrent.atomic.AtomicLong selfAvatarFailures = new java.util.concurrent.atomic.AtomicLong();
+
+    private int handDiagLines;
+
+    /**
+     * Diagnostic for the first-person pass: logs what the hand and the held item are submitted with, at most eight lines per
+     * session. The arm is drawn by vanilla {@code SubmitNodeCollector.submitModelPart} with
+     * {@code RenderTypes.entityTranslucent(skin)}, so the render type names the texture and the pose tells the scale.
+     */
+    public synchronized void noteHandSubmit(String kind, String detail, RenderType renderType, int light, int overlay, PoseStack poseStack) {
+        if (handDiagLines >= 8) {
+            return;
+        }
+        handDiagLines++;
+        String pose = "none";
+        try {
+            if (poseStack != null && !poseStack.isEmpty()) {
+                Vector3f t = poseStack.last().pose().getTranslation(new Vector3f());
+                pose = String.format(java.util.Locale.ROOT, "%.3f,%.3f,%.3f", t.x(), t.y(), t.z());
+            }
+        } catch (RuntimeException ignored) {
+        }
+        LOGGER.info("[VK-HAND-DIAG] kind={} {} renderType={} texture={} light={} overlay={} pose={}", kind, detail,
+            renderType != null ? renderType.toString() : "null", renderType != null ? String.valueOf(textureOf(renderType)) : "null",
+            Integer.toHexString(light), Integer.toHexString(overlay), pose);
+    }
+
     private void stageHandEmitters(PoseStack.Pose pose, ItemQuads itemQuads, int[] tintColors, Set<BakedQuad> emissiveQuads) {
         for (BakedQuad quad : itemQuads.all()) {
             if (quad == null) {
@@ -525,7 +628,8 @@ public final class EntityCaptureManager {
 
     /** Emitter quads of the entity capture of the last closed frame, and of the hand (for the autotest log). */
     public synchronized String emitterTelemetry() {
-        return "world=" + publishedEmitterCount + ",particles=" + publishedParticleEmitterCount + ",hand=" + handEmitterCount;
+        return "world=" + publishedEmitterCount + ",particles=" + publishedParticleEmitterCount + ",hand=" + handEmitterCount
+            + ",self_avatar=" + selfAvatarVerts;
     }
 
     /** Keep text in the RT scene; {@code -Dvkrtx.rt.text.off=true} restores the old raster-only path for A/B checks. */

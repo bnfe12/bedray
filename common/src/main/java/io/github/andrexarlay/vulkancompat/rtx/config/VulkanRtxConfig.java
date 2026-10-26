@@ -1,6 +1,8 @@
 package io.github.andrexarlay.vulkancompat.rtx.config;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
+import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
+import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerSwitch;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion;
@@ -24,6 +26,106 @@ import java.nio.file.Files;
  */
 public final class VulkanRtxConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/Config");
+
+    /** The voxel option uses the separate bounded software renderer with model textures and world light. */
+    public enum RendererSelection { HARDWARE_RT, VOXEL_LIVE_DEBUG }
+    public static RendererSelection rendererSelection = RendererSelection.HARDWARE_RT;
+    public static boolean voxelDistanceAuto = true;
+    public static int voxelDistanceChunks = 12;
+    public static int voxelMemoryBudgetMiB = 256;
+    public static String voxelQualityProfile = "CUSTOM";
+    public static String pathQualityProfile = "CUSTOM";
+    public static boolean voxelDiffuseBounce = true;
+    public static boolean voxelTranslucentOptics = true;
+    public static boolean voxelDiffuseBounce() { return voxelDiffuseBounce; }
+    public static boolean voxelTranslucentOptics() { return voxelTranslucentOptics; }
+    public static void setVoxelDiffuseBounce(boolean value) { voxelDiffuseBounce = value; }
+    public static void setVoxelTranslucentOptics(boolean value) { voxelTranslucentOptics = value; }
+    public static boolean voxelDistanceAuto() { return voxelDistanceAuto; }
+    public static int voxelDistanceChunks() { return Math.clamp(voxelDistanceChunks, 2, 64); }
+    public static int voxelMemoryBudgetMiB() { return Math.clamp(voxelMemoryBudgetMiB, 64, 1024); }
+    public static void setVoxelDistanceAuto(boolean value) { voxelDistanceAuto = value; }
+    public static void setVoxelDistanceChunks(int value) { voxelDistanceChunks = Math.clamp(value, 2, 64); }
+    public static void setVoxelMemoryBudgetMiB(int value) { voxelMemoryBudgetMiB = Math.clamp(value, 64, 1024); }
+    public static String voxelQualityProfile() { return qualityProfile(voxelQualityProfile); }
+    public static String pathQualityProfile() { return qualityProfile(pathQualityProfile); }
+    public static void setVoxelQualityProfile(String value) { voxelQualityProfile = qualityProfile(value); }
+    public static void setPathQualityProfile(String value) { pathQualityProfile = qualityProfile(value); }
+    private static String qualityProfile(String value) {
+        if (value == null) return "CUSTOM";
+        String normalized = value.toUpperCase(java.util.Locale.ROOT);
+        return switch (normalized) { case "FAST", "BEAUTIFUL", "CUSTOM" -> normalized; default -> "CUSTOM"; };
+    }
+    private static boolean rendererUiOverride;
+    private static GraphicsBackendRegistry.SceneMode diagnosticScene = GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
+
+    /** Startup diagnostic properties remain session-only until the player explicitly selects a renderer. */
+    public static GraphicsBackendRegistry.SceneMode selectedComputeScene() {
+        if (!rendererUiOverride) {
+            if (Boolean.getBoolean("bedray.compute.world")) return GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
+            if (Boolean.getBoolean("bedray.compute.demo")) return GraphicsBackendRegistry.SceneMode.SYNTHETIC;
+        }
+        return rendererSelection == RendererSelection.VOXEL_LIVE_DEBUG
+            ? diagnosticScene : GraphicsBackendRegistry.SceneMode.OFF;
+    }
+
+    /** Diagnostic preference is independent of the main hardware/voxel selection. */
+    public static GraphicsBackendRegistry.SceneMode computeDiagnosticScene() {
+        if (!rendererUiOverride) {
+            if (Boolean.getBoolean("bedray.compute.world")) return GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
+            if (Boolean.getBoolean("bedray.compute.demo")) return GraphicsBackendRegistry.SceneMode.SYNTHETIC;
+        }
+        return diagnosticScene;
+    }
+
+    public static RendererSelection selectedRenderer() {
+        return voxelRendererSelected() ? RendererSelection.VOXEL_LIVE_DEBUG : RendererSelection.HARDWARE_RT;
+    }
+
+    public static boolean voxelRendererSelected() {
+        return selectedComputeScene() != GraphicsBackendRegistry.SceneMode.OFF;
+    }
+
+    /** Applies an explicit in-game choice. The independent hardware RT mode remains saved for switching back. */
+    public static void setRendererSelection(RendererSelection selection) {
+        diagnosticScene = computeDiagnosticScene();
+        rendererSelection = java.util.Objects.requireNonNull(selection, "selection");
+        rendererUiOverride = true;
+        applyRendererSelection();
+    }
+
+    /** Changes only the diagnostic preference; the main control remains the sole owner of hardware/voxel selection. */
+    public static void setComputeScene(GraphicsBackendRegistry.SceneMode scene) {
+        java.util.Objects.requireNonNull(scene, "scene");
+        if (scene == GraphicsBackendRegistry.SceneMode.OFF) {
+            throw new IllegalArgumentException("Use renderer selection to disable voxel diagnostics");
+        }
+        rendererSelection = selectedRenderer();
+        rendererUiOverride = true;
+        diagnosticScene = scene;
+        applyRendererSelection();
+    }
+
+    /** Called on the render thread after runtime initialization, never from the static config loader. */
+    public static void applyRendererSelection() {
+        if (voxelRendererSelected()) {
+            enforceComputeCompatibility();
+        }
+        enableHardwareRayTracing = !voxelRendererSelected() && rtMode.isActive();
+        GraphicsBackendRegistry.setSceneMode(selectedComputeScene());
+    }
+
+    /** Compute diagnostics do not yet produce depth/motion guides for temporal upscalers or frame generation. */
+    public static void enforceComputeCompatibility() {
+        if (FrameGenSettings.mode() != FrameGenSettings.Mode.OFF) {
+            FrameGenSettings.setMode(FrameGenSettings.Mode.OFF);
+            LOGGER.info("[Bedray] frame generation disabled for the voxel diagnostic renderer");
+        }
+        if (activeBackend != null && activeBackend != UpscalerBackend.BILINEAR) {
+            applyUpscaler(UpscalerBackend.BILINEAR, null, null, "voxel_renderer");
+            LOGGER.info("[Bedray] temporal upscaler replaced with built-in bilinear for the voxel diagnostic renderer");
+        }
+    }
 
     // STUB: only used by unreferenced stub layers. No mode switching exists; world rendering is never replaced.
     public enum RtxMode {
@@ -173,7 +275,7 @@ public final class VulkanRtxConfig {
     /** Active resource pack texture width in pixels; 16 is the vanilla baseline. */
     public static int resourcePackResolution = 16;
     /**
-     * Master switch of the world ray/path tracing renderer: true exactly when {@link #rtMode} is not OFF (kept as a field because
+     * Master switch of the hardware world ray/path tracing renderer: true when the hardware renderer is selected and {@link #rtMode} is not OFF (kept as a field because
      * WorldTargetManager and the PoC engine read it). Written by {@link #setRtMode}; legacy value of the old toml key
      * {@code enable_hardware_ray_tracing}.
      */
@@ -220,11 +322,14 @@ public final class VulkanRtxConfig {
     public static void setRtMode(RtMode mode) {
         rtMode = mode;
         rtModePersisted = mode;
-        enableHardwareRayTracing = mode.isActive();
+        enableHardwareRayTracing = !voxelRendererSelected() && mode.isActive();
     }
 
     /** Mode used by the renderer: also honours a direct write of {@link #enableHardwareRayTracing} (legacy callers, tests). */
     public static RtMode effectiveRtMode() {
+        if (voxelRendererSelected()) {
+            return RtMode.OFF;
+        }
         if (rtMode == RtMode.OFF && enableHardwareRayTracing) {
             return RtMode.RAY_TRACED;
         }
@@ -242,7 +347,7 @@ public final class VulkanRtxConfig {
             return;
         }
         rtMode = parsed;
-        enableHardwareRayTracing = parsed.isActive();
+        enableHardwareRayTracing = !voxelRendererSelected() && parsed.isActive();
         if (!parsed.isPublic()) {
             raysUnlockedBySession = true;
         }
@@ -281,7 +386,8 @@ public final class VulkanRtxConfig {
      */
     public static UpscalerSwitch.Outcome applyUpscalerFull(UpscalerBackend backend, UpscalerMode xess, UpscalerMode dlss,
                                                            UpscalerMode fsr, FsrVersion fsrVer, UpscalerMode fsr1, String reason) {
-        activeBackend = backend;
+        activeBackend = voxelRendererSelected() && backend != null && backend != UpscalerBackend.BILINEAR
+            ? UpscalerBackend.BILINEAR : backend;
         enforceBackendAvailability();
         if (xess != null) {
             xessMode = xess;
@@ -402,6 +508,14 @@ public final class VulkanRtxConfig {
     public static void applyKeyValue(String key, String val) {
         try {
             switch (key) {
+                case "renderer" -> rendererSelection = RendererSelection.valueOf(val.toUpperCase(java.util.Locale.ROOT));
+                case "voxel_distance_auto" -> setVoxelDistanceAuto(Boolean.parseBoolean(val));
+                case "voxel_distance_chunks" -> setVoxelDistanceChunks(Integer.parseInt(val));
+                case "voxel_memory_budget_mib" -> setVoxelMemoryBudgetMiB(Integer.parseInt(val));
+                case "voxel_quality_profile" -> setVoxelQualityProfile(val);
+                case "path_quality_profile" -> setPathQualityProfile(val);
+                case "voxel_diffuse_bounce" -> setVoxelDiffuseBounce(Boolean.parseBoolean(val));
+                case "voxel_translucent_optics" -> setVoxelTranslucentOptics(Boolean.parseBoolean(val));
                 case "upscaler_backend", "active_backend" -> {
                     UpscalerBackend parsed;
                     try {
@@ -659,6 +773,7 @@ public final class VulkanRtxConfig {
             enforceBackendAvailability();
             syncUpscalerTypeWithPreset();
             syncRequestWithLoadedConfig();
+            enableHardwareRayTracing = !voxelRendererSelected() && rtMode.isActive();
             TextureLodBias.autoTextureLodBias = autoTextureLodBias;
             TextureLodBias.textureLodBiasOffset = textureLodBiasOffset;
             TextureLodBias.manualTextureLodBias = manualTextureLodBias;
@@ -726,6 +841,16 @@ public final class VulkanRtxConfig {
             writer.write("point_sampling_sharpness = " + pointSamplingSharpness + "\n");
             writer.write("resource_pack_resolution = " + resourcePackResolution + "\n");
             writer.write("\n[ray_tracing]\n");
+            writer.write("# HARDWARE_RT keeps the rt_mode preference. VOXEL_LIVE_DEBUG requires the matching separate Bedray Compute add-on: bounded textured models and world light without RT cores, with raster preservation. Physical GI, reflections and temporal guides remain pending.\n");
+            writer.write("renderer = \"" + rendererSelection.name() + "\"\n");
+            writer.write("# Voxel coverage follows loaded Minecraft chunks by default; custom distance is bounded by Minecraft.\n");
+            writer.write("voxel_distance_auto = " + voxelDistanceAuto() + "\n");
+            writer.write("voxel_distance_chunks = " + voxelDistanceChunks() + "\n");
+            writer.write("voxel_memory_budget_mib = " + voxelMemoryBudgetMiB() + "\n");
+            writer.write("voxel_quality_profile = \"" + voxelQualityProfile() + "\"\n");
+            writer.write("path_quality_profile = \"" + pathQualityProfile() + "\"\n");
+            writer.write("voxel_diffuse_bounce = " + voxelDiffuseBounce() + "\n");
+            writer.write("voxel_translucent_optics = " + voxelTranslucentOptics() + "\n");
             writer.write("# [EXPERIMENTAL] Hardware ray tracing (requires VK_KHR_ray_query). rt_mode: off, rays (Ray Tracing: shadows, reflections, AO, emissive lights) or path (Path Tracing: full light transport)\n");
             writer.write("rt_mode = \"" + rtModePersisted.logName() + "\"\n");
             writer.write("# Hidden in this release: Ray Tracing (Fast) is in development. true unlocks rt_mode = \"rays\" and its settings.\n");

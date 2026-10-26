@@ -27,6 +27,7 @@ layout(set = 0, binding = 2, std140) uniform FrameUniforms {
     uvec4 entityMotion;        // xy = address of the per-pixel entity motion (rt_path: vec4 xyz = prev - cur world, w = 1 entity), 0 = none;
                                // zw = address of the per-pixel disocclusion mask output (float, 1 = no valid history), 0 = none
     uvec4 prevDepth;           // xy = address of the PREVIOUS frame's linear view Z (float per pixel, same layout as the G-buffer), 0 = none
+    vec4 jitter;               // xy = current sub-pixel jitter, zw = previous frame's, in render pixels (projection offset)
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MotionBuf { vec4 v[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer MaskBuf { float v[]; };
@@ -40,9 +41,13 @@ void main() {
         return;
     }
 
-    vec2 uv = (vec2(pixelCoord) + vec2(0.5)) * renderResolution.zw;
+    // The projection was jittered by jitter.xy, which moves the content by -jitter.xy pixels: this pixel therefore holds
+    // the surface of the unjittered pixel p + jitter.xy. Unproject that exact point, otherwise the reprojection error
+    // follows every Halton phase and the temporal filter shakes along block edges.
+    vec2 texelUv = (vec2(pixelCoord) + vec2(0.5)) * renderResolution.zw;
+    vec2 uv = (vec2(pixelCoord) + vec2(0.5) + jitter.xy) * renderResolution.zw;
     vec2 ndc = uv * 2.0 - 1.0;
-    vec4 depthSample = texture(depthTexture, uv);
+    vec4 depthSample = texture(depthTexture, texelUv);
     float depth = depthSample.r;
 
     bool isSky = false;
@@ -141,14 +146,15 @@ void main() {
     } else if (!isSky && linearViewZ && (prevDepth.x != 0u || prevDepth.y != 0u) && abs(prevClip.w) > 1e-7) {
         // depth test against the previous frame: the reprojected point must be the surface seen there. For a perspective
         // projection clip.w = distance along the view axis = |viewZ| (the G-buffer stores -dot(pos, forward)).
-        ivec2 q = clamp(ivec2(prevUv * renderResolution.xy), ivec2(0), size - 1);
+        // The previous G-buffer pixel q holds the surface of the unjittered pixel q + jitter.zw.
+        ivec2 q = clamp(ivec2(prevUv * renderResolution.xy - jitter.zw), ivec2(0), size - 1);
         float prevZ = abs(DepthBuf(prevDepth.xy).v[q.y * size.x + q.x]);
         float expected = abs(prevClip.w);
         if (!(prevZ < 1.0e5) || abs(prevZ - expected) > 0.03 * expected + 0.1) {
             disocclusionMask = 1.0;
         }
     } else if (isSky && linearViewZ && (prevDepth.x != 0u || prevDepth.y != 0u) && prevClip.w > 1e-6) {
-        ivec2 q = clamp(ivec2(prevUv * renderResolution.xy), ivec2(0), size - 1);
+        ivec2 q = clamp(ivec2(prevUv * renderResolution.xy - jitter.zw), ivec2(0), size - 1);
         float prevZ = abs(DepthBuf(prevDepth.xy).v[q.y * size.x + q.x]);
         if (prevZ < 1.0e5) {
             disocclusionMask = 1.0;

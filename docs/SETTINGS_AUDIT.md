@@ -19,8 +19,23 @@ FPS column: qualitative (none / low / medium / high). "Needed by the user" is th
 
 ## Page 1 "Bedray" (ESSENTIAL)
 
+### Compute interoperability update, 2026-10-22
+
+Bedray and Compute remain separate mods. `renderer` is visible on the main Sodium page and the custom
+Bedray screen, persists in the host configuration and requests the companion through the renderer API.
+The renderer selection, hardware RT mode and read-only `renderer_status` form one renderer concept.
+Missing companion state is explicit. No new preview image or gameplay-support claim is introduced.
+Expert `compute_scene` and `compute_debug_view` expose diagnostics. Hardware-only controls follow the
+pending renderer choice, and voxel mode uses Bilinear with FG off until temporal guides exist.
+This update is source-reviewed/compiled separately; the older test evidence does not validate it.
+
+Alpha.5 adds current Compute status/data to F3, full Renderer Status details in the Sodium tooltip,
+and a one-time fatal renderer message. Transient camera readiness no longer latches a permanent
+failure. These diagnostics describe current capture/command recording, not visual acceptance.
+
 | Option (id) | What it does | Picture / FPS | Needed by the user? | Decision |
 |---|---|---|---|---|
+| `renderer`, `renderer_status` World Renderer | Hardware/raster or companion voxel diagnostic; status names missing add-on and recorded/failed state | diagnostic scope / cost unmeasured | Yes: the renderer must be selectable without RT hardware | ESSENTIAL, part of the renderer concept |
 | `rt_mode` Ray Tracing | Off / Path Tracing (Ray Tracing Fast, AO, Direct only when unlocked) | the whole look / very high | Yes, the main switch | ESSENTIAL |
 | `path_bounces` Light Quality | light bounces per path (1-8, default 3) | brighter interiors, colour bleeding / about -10% per bounce | Yes, one slider for "light quality" | ESSENTIAL (was Expert "PT Bounces") |
 | `path_auto_exposure` Auto Exposure | exposure follows the scene brightness | brightness / none | Yes: brightness complaints; known to pulse, so it must be switchable. Manual EV is **not available** (needs a renderer change, see "Not solved") | ESSENTIAL |
@@ -63,7 +78,8 @@ Every group ends with "Reset this group"; the right-hand panel has "Reset to def
 | Option (id) | Decision | Reason |
 |---|---|---|
 | `rt_preset` RT Quality and `rays_shadows`, `rays_soft_shadows`, `rays_reflections`, `rays_ao`, `rays_gi`, `rays_emissive`, `rays_accumulate` | HIDDEN-MODE | only used by Ray Tracing (Fast), hidden in this release; shown in group "Ray Tracing (Fast, experimental)" when unlocked or Expert |
-| `rays_shadow_quality`, `rays_reflection_quality`, `rays_reflection_distance`, `rays_ao_quality`, `rays_ao_radius`, `rays_emissive_quality`, `rays_emissive_distance`, `rays_gi_quality`, `rays_gi_distance` | EXPERT | numbers of the hidden mode |
+| `rays_pixel_shadows` | EXPERT (optional) | a normal user-facing toggle in the Advanced page's "Fine-Tuning & Budgets" group, enabled whenever a tracing mode is active; it affects both RT and Path Tracing (the sun ray starts at the centre of a `rays_pixel_shadow_size` cell), so it is not hidden with the Ray Tracing (Fast) group |
+| `rays_shadow_quality`, `rays_pixel_shadow_size`, `rays_reflection_quality`, `rays_reflection_distance`, `rays_ao_quality`, `rays_ao_radius`, `rays_emissive_quality`, `rays_emissive_distance`, `rays_gi_quality`, `rays_gi_distance` | EXPERT | numbers of the hidden mode; the pixel-shadow cell row is only enabled while `rays_pixel_shadows` is on |
 | `rt_distance_auto` | FORCED-ON (true) | "RT Distance: As in Game" has no reason to be off; the manual distance remains in Expert |
 | `rt_distance_chunks` RT Distance (manual) | EXPERT | only meaningful with `rt_distance_auto` off |
 | `path_accumulate` PT Accumulation | FORCED-ON (true) | averaging frames is the safety net when the denoiser is off or missing |

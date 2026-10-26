@@ -34,6 +34,8 @@ public class ShimTestRunner {
             "testVulkanCapabilityChecker",
             "testRtExperimentEngine",
             "testWorldTargetManager",
+            "testHandDeferral",
+            "testUpscalerJitterSource",
             "testUpscalerBackendsImplementedFlags",
             "testUpscalerSelection",
             "testDlss",
@@ -52,6 +54,7 @@ public class ShimTestRunner {
             "testNrdDenoiser",
             "testJitterPhaseCount",
             "testVelocityShaderCompiles",
+            "testRtShaderSourcesCompile",
             "testMixinDisableCsv",
             "testRtxDeviceRequirements",
             "testLateProvidersAndScenarios",
@@ -69,6 +72,8 @@ public class ShimTestRunner {
             wrap(ShimTestRunner::testVulkanCapabilityChecker),
             wrap(ShimTestRunner::testRtExperimentEngine),
             wrap(ShimTestRunner::testWorldTargetManager),
+            wrap(ShimTestRunner::testHandDeferral),
+            wrap(ShimTestRunner::testUpscalerJitterSource),
             wrap(ShimTestRunner::testUpscalerBackendsImplementedFlags),
             wrap(io.github.andrexarlay.vulkancompat.rtx.config.UpscalerSelectionChecks::runAll),
             wrap(io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssChecks::runAll),
@@ -87,6 +92,7 @@ public class ShimTestRunner {
             wrap(io.github.andrexarlay.vulkancompat.rt.denoise.NrdChecks::runAll),
             wrap(ShimTestRunner::testJitterPhaseCount),
             wrap(ShimTestRunner::testVelocityShaderCompiles),
+            wrap(ShimTestRunner::testRtShaderSourcesCompile),
             wrap(ShimTestRunner::testMixinDisableCsv),
             wrap(ShimTestRunner::testRtxDeviceRequirements),
             wrap(ShimTestRunner::testLateProvidersAndScenarios),
@@ -280,6 +286,24 @@ public class ShimTestRunner {
         io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideForTesting(true);
         assertTrue(io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isHardwareRayTracingSupported(), "Override true must enable support");
 
+        // 5. Opacity micromap probe: extension gate is headless-testable; device feature path must not throw without a device
+        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.reset();
+        io.github.andrexarlay.vulkanbridge.core.VulkanBackendDetector.setVulkanActive(true);
+        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setCachedDeviceExtensionsForTesting(java.util.Set.of(
+            "VK_KHR_acceleration_structure", "VK_KHR_ray_query", "VK_KHR_buffer_device_address", "VK_KHR_deferred_host_operations"
+        ));
+        assertTrue(!io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isOpacityMicromapSupported(), "OMM probe must be false when the extension is absent");
+        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setCachedDeviceExtensionsForTesting(java.util.Set.of(
+            "VK_KHR_acceleration_structure", "VK_KHR_ray_query", "VK_KHR_buffer_device_address", "VK_KHR_deferred_host_operations",
+            io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.EXT_OPACITY_MICROMAP
+        ));
+        assertTrue(!io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isOpacityMicromapSupported(), "OMM probe must be false headless (no physical device resolvable)");
+        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideOpacityMicromapForTesting(true);
+        assertTrue(io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isOpacityMicromapSupported(), "OMM override true must win");
+        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideOpacityMicromapForTesting(false);
+        assertTrue(!io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isOpacityMicromapSupported(), "OMM override false must win");
+        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideOpacityMicromapForTesting(null);
+
         io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.reset();
     }
 
@@ -372,6 +396,68 @@ public class ShimTestRunner {
             VulkanRtxConfig.enableHardwareRayTracing = oldRt;
             io.github.andrexarlay.vulkanbridge.core.VulkanBackendDetector.reset();
         }
+    }
+
+    /**
+     * The first-person hand is rendered without motion vectors and with its own depth buffer, so it must be pulled out of
+     * the world phase exactly when a temporal upscaler is active, then replayed at full resolution after the upscale.
+     */
+    private static void testHandDeferral() throws Exception {
+        assertTrue(WorldTargetManager.handMustBeDeferred(true, true), "hand must be deferred inside the world phase with a temporal upscaler");
+        assertTrue(!WorldTargetManager.handMustBeDeferred(true, false), "hand must stay in the world phase without a temporal upscaler");
+        assertTrue(!WorldTargetManager.handMustBeDeferred(false, true), "hand must never be deferred outside the world phase");
+        assertTrue(!WorldTargetManager.handMustBeDeferred(false, false), "hand must never be deferred outside the world phase");
+        assertTrue(!WorldTargetManager.shouldDeferHand(), "default state must not defer the hand");
+
+        Class<?> accessor = Class.forName("io.github.andrexarlay.vulkancompat.rtx.GameRendererHandAccessor");
+        assertTrue(accessor.getMethod("vkb$replayDeferredHand") != null, "vkb$replayDeferredHand exists");
+
+        Class<?> mixin = Class.forName("io.github.andrexarlay.vulkancompat.mixin.rt.MixinGameRendererHand");
+        assertTrue(accessor.isAssignableFrom(mixin), "MixinGameRendererHand must implement the replay accessor");
+        assertTrue(mixin.getDeclaredMethod("vkb$invokeRenderItemInHand",
+            net.minecraft.client.renderer.state.level.CameraRenderState.class,
+            net.minecraft.client.renderer.state.level.PlayerRenderState.class,
+            com.mojang.renderpearl.api.textures.GpuTextureView.class) != null,
+            "the mixin must invoke the original renderItemInHand for the replay");
+    }
+
+    /**
+     * DLSS-SR must not apply the camera jitter to colour that a same-resolution denoiser has already resolved: the
+     * jitter would be applied twice and the whole frame would crawl.
+     */
+    private static void testUpscalerJitterSource() throws Exception {
+        assertEquals(0.3f, WorldTargetManager.upscalerJitterComponent(false, 0.3f), 1e-6f,
+            "unresolved colour keeps the camera jitter for DLSS-SR");
+        assertEquals(0.0f, WorldTargetManager.upscalerJitterComponent(true, 0.3f), 1e-6f,
+            "denoiser-resolved colour reaches DLSS-SR with zero jitter");
+
+        io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.resetFrameColorTemporallyResolved();
+        assertTrue(!io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.frameColorTemporallyResolved(),
+            "a fresh frame starts unresolved");
+
+        String world = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rtx/WorldTargetManager.java");
+        assertTrue(world.contains("resetFrameColorTemporallyResolved();"),
+            "beginWorldPhase must clear the resolved-colour flag every frame");
+        assertTrue(world.contains("upscalerJitterComponent(colorResolved,"),
+            "recordXess must route the SR jitter through the resolved-colour rule");
+        assertTrue(!world.contains("srJitterX = CameraJitterManager.getCurrentPixelJitterX()"),
+            "recordXess must not bypass the rule with the raw camera jitter");
+
+        String renderer = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
+        int marks = 0;
+        for (int i = renderer.indexOf("frameColorTemporallyResolved = true;"); i >= 0;
+             i = renderer.indexOf("frameColorTemporallyResolved = true;", i + 1)) {
+            marks++;
+        }
+        assertTrue(marks >= 2, "both the NRD and the DLSS-RR record paths must mark the colour resolved (found " + marks + ")");
+    }
+
+    /** Reads a source file from either the repository root or the common module, whichever the working directory is. */
+    private static String readSource(String repoRelative) throws Exception {
+        java.nio.file.Path relative = java.nio.file.Path.of(repoRelative);
+        java.nio.file.Path path = java.nio.file.Files.isRegularFile(relative)
+            ? relative : java.nio.file.Path.of("common").resolve(relative);
+        return java.nio.file.Files.readString(path, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** BILINEAR and XeSS are implemented; DLSS/FSR need their Core-resolved libraries and must not be reported as ready without them. */
@@ -636,6 +722,25 @@ public class ShimTestRunner {
         assertTrue(spv != null && spv.remaining() > 0, "velocity_reproject.comp must compile to SPIR-V");
     }
 
+    /**
+     * Compiles the RT shaders in every define combination the pipelines instantiate. A GLSL error in rt_common.glsl
+     * surfaces here instead of disabling ray tracing at runtime.
+     */
+    private static void testRtShaderSourcesCompile() {
+        String gbuffer = io.github.andrexarlay.vulkancompat.rt.world.RtPipeline.GBUFFER_DEFINE;
+        String accum = io.github.andrexarlay.vulkancompat.rt.world.RtPathTracerPass.ACCUM_DEFINE;
+        assertSpirv("/shaders/rt_rays.comp", "rt_rays.comp", "", "ray mode");
+        assertSpirv("/shaders/rt_rays.comp", "rt_rays.comp+gbuffer", gbuffer, "ray mode with the denoiser G-buffer");
+        assertSpirv("/shaders/rt_path.comp", "rt_path.comp", accum, "path mode");
+        assertSpirv("/shaders/rt_path.comp", "rt_path.comp+gbuffer", gbuffer + accum, "path mode with the denoiser G-buffer");
+        assertSpirv("/shaders/rt_atrous.comp", "rt_atrous.comp", accum, "path-mode atrous filter");
+    }
+
+    private static void assertSpirv(String path, String name, String defines, String what) {
+        java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler.compileResource(path, name, defines);
+        assertTrue(spv != null && spv.remaining() > 0, what + " must compile to SPIR-V");
+    }
+
     private static void testFeatureSetStructs() {
         try {
             com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct asStruct =
@@ -725,7 +830,7 @@ public class ShimTestRunner {
         io.github.andrexarlay.vulkanbridge.autotest.AutotestScenarios.clearForTests();
     }
 
-    private static void testMotionVectorStability() {
+    private static void testMotionVectorStability() throws Exception {
         io.github.andrexarlay.vulkancompat.rtx.upscaler.MotionVectorStabilityTest t =
             new io.github.andrexarlay.vulkancompat.rtx.upscaler.MotionVectorStabilityTest();
         t.testMotionVectorReprojectionMath();
@@ -734,5 +839,7 @@ public class ShimTestRunner {
         t.testCpuReferenceCameraRotation();
         t.testCpuReferenceHistoryReset();
         t.testCpuReferenceMotionVectorWithCameraJitter();
+        t.testCpuReferenceJitteredReprojectionStaysStatic();
+        t.testVelocityShaderCarriesJitter();
     }
 }

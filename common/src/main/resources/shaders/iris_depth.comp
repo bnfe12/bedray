@@ -1,0 +1,40 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(binding=0) uniform sampler2D rasterDepth;
+layout(binding=1,r32f) uniform writeonly image2D irisDepth;
+layout(push_constant) uniform Parameters {
+    mat4 inverseProjection;
+    vec4 inverseView0; // xyz = inverse model-view column, w = depth encoding
+    vec4 inverseView1;
+    vec4 inverseView2;
+    vec4 parameters; // near, far, hardware-to-GL scale, bias
+} pc;
+void main() {
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy), size=imageSize(irisDepth);
+    if(any(greaterThanEqual(pixel,size)))return;
+    float depth=texelFetch(rasterDepth,pixel,0).r;
+    float converted=1.0;
+    int encoding=int(pc.inverseView0.w);
+    if(!isnan(depth) && !isinf(depth)) {
+        if(encoding==0) {
+            converted=clamp(depth*pc.parameters.z+pc.parameters.w,0.0,1.0);
+        } else if(encoding==1) {
+            converted=clamp(depth,0.0,1.0);
+        } else if(depth>0.0) {
+            float distance=depth;
+            if(encoding==3) {
+                vec2 ndc=(vec2(pixel)+0.5)/vec2(size)*2.0-1.0;
+                vec4 view=pc.inverseProjection*vec4(ndc,0.0,1.0);
+                if(abs(view.w)>1e-8) {
+                    vec3 ray=view.xyz/view.w;
+                    mat3 inverseView=mat3(pc.inverseView0.xyz,pc.inverseView1.xyz,pc.inverseView2.xyz);
+                    float worldLength=length(inverseView*ray);
+                    distance=worldLength>1e-8 ? depth*abs(ray.z)/worldLength : 1e30;
+                } else distance=1e30;
+            }
+            float near=pc.parameters.x, far=pc.parameters.y;
+            converted=clamp((far/(far-near))*(1.0-near/max(distance,near)),0.0,1.0);
+        }
+    }
+    imageStore(irisDepth,pixel,vec4(converted));
+}

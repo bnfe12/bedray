@@ -222,17 +222,19 @@ public final class Fsr3FrameGen {
     }
 
     public static int acquireNextImage(VkDevice vk, long swapchain, long timeout, long semaphore, long fence, IntBuffer index) {
-        if (swapchainActive()) {
-            return nat.acquireNextImage(repl.acquireNextImage(), vk.address(), swapchain, timeout, semaphore, fence, MemoryUtil.memAddress(index));
-        }
-        return KHRSwapchain.vkAcquireNextImageKHR(vk, swapchain, timeout, semaphore, fence, index);
+        int result = swapchainActive()
+            ? nat.acquireNextImage(repl.acquireNextImage(), vk.address(), swapchain, timeout, semaphore, fence, MemoryUtil.memAddress(index))
+            : KHRSwapchain.vkAcquireNextImageKHR(vk, swapchain, timeout, semaphore, fence, index);
+        io.github.andrexarlay.vulkancompat.rt.world.RtDeviceLost.check(result, "fg_acquire");
+        return result;
     }
 
     public static int queuePresent(VkQueue queue, VkPresentInfoKHR info) {
-        if (swapchainActive()) {
-            return nat.queuePresent(repl.queuePresent(), queue.address(), info.address());
-        }
-        return KHRSwapchain.vkQueuePresentKHR(queue, info);
+        int result = swapchainActive()
+            ? nat.queuePresent(repl.queuePresent(), queue.address(), info.address())
+            : KHRSwapchain.vkQueuePresentKHR(queue, info);
+        io.github.andrexarlay.vulkancompat.rt.world.RtDeviceLost.check(result, "fg_present");
+        return result;
     }
 
     // ------------------------------------------------------------------------------------------------ FG context
@@ -409,15 +411,10 @@ public final class Fsr3FrameGen {
                 throw new IllegalStateException("ffxConfigure(frame generation) returned " + r);
             }
             configuredFrame = frameId;
-            float near;
-            float far;
-            if (cam.infiniteFar()) {
-                far = cam.near();
-                near = Float.MAX_VALUE;
-            } else {
-                far = cam.near();
-                near = cam.far();
-            }
+            // FsrCamera already reports finite planes: an infinite far plane is encoded as Float.MAX_VALUE. Handing FFX the
+            // reversed pair made every interpolated frame reproject with near=1024 and far=0.05, i.e. inverted depth.
+            float near = cam.near();
+            float far = cam.far();
             float[] vectors = {
                 (float) cc.x, (float) cc.y, (float) cc.z,
                 rc.m01(), rc.m11(), rc.m21(),
@@ -641,7 +638,9 @@ public final class Fsr3FrameGen {
         if (failed) {
             return FrameGenRuntime.Availability.FAILED;
         }
-        if (nat == null && swapchainFailed) {
+        // Before the first swapchain the native library is not loaded yet, so the only honest test is whether it resolves at
+        // all; otherwise the settings page offers FSR 3 on a machine where it will fail on the first world frame.
+        if (nat == null && (swapchainFailed || resolveDll() == null)) {
             return FrameGenRuntime.Availability.NO_BINARIES;
         }
         return FrameGenRuntime.Availability.READY;

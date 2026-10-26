@@ -1,4 +1,7 @@
-# Known issues (0.1.0-alpha.1)
+# Known issues
+
+Current `main` is the unreleased 2026-10-26 source integration. No build, tests, shader compilation or game session was run
+for it. The platform evidence below belongs to earlier alpha builds; see [FEATURE_MATRIX](FEATURE_MATRIX.md).
 
 Bedray is an alpha. **Tested only on an NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, driver 617.42.** Everything below may differ, or
 more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc have not been checked at all).
@@ -18,7 +21,11 @@ more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc 
 * Animated textures (fire, lava, portals) bake only their first frame into the materials, so glow and roughness can mismatch.
 * Particles do not (fully) take part in ray tracing: they may cast no shadow and be missing in reflections. Entities, items and the
   hand are only partly supported.
-* Water and glass: reflection and tint only; no refraction, no volumetric depth, caustics are a pattern, not physical.
+* Glass is a thin reflection/tint filter without physical closed-volume refraction. Realistic water uses approximate Snell
+  refraction and medium segments; caustics are analytic patterns rather than a full caustic light-transport solver.
+* Camera and secondary transmission retain at most 16 sorted interface candidates. An unresolved deeper path suppresses
+  transmitted light instead of substituting sky, so very deep stacks can darken. Sorting/storage cost and visual correctness
+  need a matching-build GPU run; no FPS improvement has been measured for this integration.
 * Temporal upscalers can ghost or smear. Image quality was not compared systematically between upscalers.
 * The first seconds after entering a world can be slow or look incomplete while geometry is built.
 
@@ -33,7 +40,7 @@ more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc 
 
 * Frame generation (BETA) was run only on one RTX 5060 Ti; there is no benchmark table, and other GPUs are untested ([FRAME_GENERATION.md](FRAME_GENERATION.md)). It needs a restart after the Streamline files are added.
 * DLSS Ray Reconstruction was checked by the author on one machine only.
-* DLSS 5 / neural rendering, AMD frame generation, FSR 4 and the Iris / Dirt RT shader-pack host are not implemented.
+* DLSS 5 / neural rendering, AMD frame generation, FSR 4 and general Iris / Dirt RT shader-pack compatibility are not implemented. The [experimental post subset](IRIS_VULKAN.md) is source-only and unverified in-game.
 * **Fabric:** the jar builds and its metadata is checked, but there is much less in-game evidence than for NeoForge.
 * Some mods that replace the renderer or draw with OpenGL may conflict. Test on a clean instance first.
 

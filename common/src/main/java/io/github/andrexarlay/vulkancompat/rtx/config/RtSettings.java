@@ -28,6 +28,28 @@ public final class RtSettings {
 
     public enum PathDenoiser { OFF, NRD, DLSS_RR }
 
+    /**
+     * Frame-rate budget of the adaptive quality of the Path Tracing pass. The pass measures its own GPU time and lowers rays
+     * per pixel first, then the path length, until it fits; the spp and bounces the player set are the ceiling, so it never
+     * renders better than those values. The budget is a share ({@link #BUDGET_SHARE}) of one frame of that rate: the world
+     * raster, the compositor and the present still cost their own time on top of the ray tracing pass.
+     */
+    public enum AdaptiveQuality {
+        OFF(0), FPS30(30), FPS45(45), FPS60(60), FPS90(90), FPS120(120);
+
+        public static final double BUDGET_SHARE = 0.7;
+        public final int fps;
+
+        AdaptiveQuality(int fps) {
+            this.fps = fps;
+        }
+
+        /** GPU budget of the ray tracing pass in milliseconds; 0 when adaptive quality is off. */
+        public double budgetMs() {
+            return fps == 0 ? 0.0 : 1000.0 * BUDGET_SHARE / fps;
+        }
+    }
+
     /** Quality presets of the settings page; CUSTOM keeps the individual values. */
     public enum Preset {
         OFF(RtMode.OFF), LOW(RtMode.RAY_TRACED), MEDIUM(RtMode.RAY_TRACED), HIGH(RtMode.RAY_TRACED), ULTRA(RtMode.RAY_TRACED),
@@ -53,6 +75,10 @@ public final class RtSettings {
     /** Shadow rays jittered inside a widened sun disk (soft penumbra), {@link #raysShadowQuality} rays per pixel. */
     public static boolean raysSoftShadows = false;
     public static int raysShadowQuality = 2;
+    /** Stylised retro shadows: the sun visibility is evaluated once per world-space cell, so edges are blocky like a low-res shadow map. */
+    public static boolean raysPixelShadows = false;
+    /** Edge of a pixelated-shadow cell in texture pixels (1 = one pixel of a 16x16 block texture = 1/16 block), both modes. */
+    public static int raysPixelShadowSize = 1;
     public static boolean raysReflections = false;
     public static int raysReflectionQuality = 1;
     public static int raysReflectionDistance = 128;
@@ -125,6 +151,13 @@ public final class RtSettings {
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
+    /**
+     * Adaptive quality of the path tracer: keeps the RT pass inside {@link AdaptiveQuality#budgetMs()} by lowering spp, then
+     * bounces, below the values above (never above them). OFF by default: a budget is a target, and a pass that cannot reach
+     * it (a 4K trace on a mid-range GPU costs far more than one frame of 60 FPS) would sit at one ray forever instead of
+     * showing the scene the player asked for.
+     */
+    public static AdaptiveQuality adaptiveQuality = AdaptiveQuality.OFF;
     /** Tone mapping exposure adapts to the mean (log) luminance of the image (never darker than the ray mode). */
     public static boolean pathAutoExposure = true;
     /** Exposure compensation in tenths of EV (-40..+40, 0 = none). Auto exposure on: added to the adapted value; off: fixed exposure 1.1 * 2^EV. */
@@ -141,6 +174,8 @@ public final class RtSettings {
     public static boolean vibrantVisuals = false;
     /** Particles (smoke, flames, sparks, bubbles, block breaking...) are drawn into the ray traced image (RtParticleLayer). */
     public static boolean rtParticles = true;
+    /** Rain and snow columns are drawn into the ray traced image too (RtWeatherLayer, on the particle layer of RtParticleLayer). */
+    public static boolean rtWeather = true;
 
     // ---- DLSS 5 Neural Rendering (DLSS-NR) [EXPERIMENTAL] ----
     public static boolean dlssNrEnabled = false;
@@ -174,11 +209,15 @@ public final class RtSettings {
     private static final Map<String, Integer> INT_OVR = new LinkedHashMap<>();
     private static final Map<String, Boolean> BOOL_OVR = new LinkedHashMap<>();
     private static final PathDenoiser DENOISER_OVR;
+    /** {@code -Dvkrtx.rt.adaptive_quality=} value of this session; null when the config owns it (it is never written out). */
+    private static final AdaptiveQuality ADAPTIVE_OVR;
 
     static {
         bool("rays_shadows", () -> raysShadows, v -> raysShadows = v);
         bool("rays_soft_shadows", () -> raysSoftShadows, v -> raysSoftShadows = v);
         integer("rays_shadow_quality", () -> raysShadowQuality, v -> raysShadowQuality = v, 1, 8);
+        bool("rays_pixel_shadows", () -> raysPixelShadows, v -> raysPixelShadows = v);
+        integer("rays_pixel_shadow_size", () -> raysPixelShadowSize, v -> raysPixelShadowSize = v, 1, 16);
         bool("rays_reflections", () -> raysReflections, v -> raysReflections = v);
         integer("rays_reflection_quality", () -> raysReflectionQuality, v -> raysReflectionQuality = v, 1, 4);
         integer("rays_reflection_distance", () -> raysReflectionDistance, v -> raysReflectionDistance = v, DISTANCE_MIN, DISTANCE_MAX);
@@ -203,6 +242,7 @@ public final class RtSettings {
         bool("caustics", () -> caustics, v -> caustics = v);
         bool("vibrant_visuals", () -> vibrantVisuals, v -> vibrantVisuals = v);
         bool("rt_particles", () -> rtParticles, v -> rtParticles = v);
+        bool("rt_weather", () -> rtWeather, v -> rtWeather = v);
         bool("auto_normals", () -> autoNormals, v -> autoNormals = v);
         bool("rt_distance_auto", () -> rtDistanceAuto, v -> rtDistanceAuto = v);
         integer("rt_distance_chunks", () -> rtDistanceChunks, v -> rtDistanceChunks = v, 2, 32);
@@ -313,13 +353,23 @@ public final class RtSettings {
             }
         }
         DENOISER_OVR = parsed;
+        String aq = System.getProperty("vkrtx.rt.adaptive_quality");
+        AdaptiveQuality aqOvr = null;
+        if (aq != null) {
+            try {
+                aqOvr = AdaptiveQuality.valueOf(aq.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                LOGGER.error("[VKB-RT] invalid -Dvkrtx.rt.adaptive_quality={} (off|fps30|fps45|fps60|fps90|fps120), ignored", aq);
+            }
+        }
+        ADAPTIVE_OVR = aqOvr;
         // a fresh config starts with the values of the default quality presets (the toml file overrides them on load)
         applyPreset(Preset.MEDIUM);
         writeAlphaPathDefaults();
         pathPreset = PathPreset.CUSTOM;
-        if (!INT_OVR.isEmpty() || !BOOL_OVR.isEmpty() || DENOISER_OVR != null) {
-            LOGGER.info("[VKB-RT] settings overrides (session only): {} {} {}", INT_OVR, BOOL_OVR,
-                DENOISER_OVR == null ? "" : "path_denoiser=" + DENOISER_OVR);
+        if (!INT_OVR.isEmpty() || !BOOL_OVR.isEmpty() || DENOISER_OVR != null || ADAPTIVE_OVR != null) {
+            LOGGER.info("[VKB-RT] settings overrides (session only): {} {} {} adaptive_quality={}", INT_OVR, BOOL_OVR,
+                DENOISER_OVR == null ? "" : "path_denoiser=" + DENOISER_OVR, ADAPTIVE_OVR == null ? "from config" : ADAPTIVE_OVR);
         }
     }
 
@@ -348,6 +398,8 @@ public final class RtSettings {
     public static boolean shadows() { return b("rays_shadows"); }
     public static boolean softShadows() { return b("rays_soft_shadows"); }
     public static int shadowQuality() { return i("rays_shadow_quality"); }
+    public static boolean pixelShadows() { return b("rays_pixel_shadows"); }
+    public static int pixelShadowSize() { return i("rays_pixel_shadow_size"); }
     public static boolean reflections() { return b("rays_reflections"); }
     public static int reflectionQuality() { return i("rays_reflection_quality"); }
     public static int reflectionDistance() { return i("rays_reflection_distance"); }
@@ -371,6 +423,12 @@ public final class RtSettings {
     public static boolean caustics() { return b("path_caustics") || b("caustics"); }
     public static boolean vibrantVisuals() { return b("vibrant_visuals"); }
     public static boolean particles() { return b("rt_particles"); }
+    /**
+     * Weather (rain / snow columns) rides on the particle layer of {@code RtParticleLayer} and its composite, so it is only ever on
+     * while particles are on: off with them, otherwise the own setting decides. The RT image itself is a further condition, checked
+     * by {@code RtWeatherLayer.capturing()}.
+     */
+    public static boolean weather() { return b("rt_weather") && b("rt_particles"); }
     public static boolean autoNormalsOn() { return b("auto_normals"); }
     public static boolean rtDistanceAuto() { return b("rt_distance_auto"); }
     public static int rtDistanceChunks() { return i("rt_distance_chunks"); }
@@ -384,6 +442,23 @@ public final class RtSettings {
     public static float sunTiltRad() { return (float) Math.toRadians(i("sun_tilt_deg")); }
     public static int autoNormalStrengthPercent() { return i("auto_normal_strength"); }
     public static PathDenoiser denoiser() { return DENOISER_OVR != null ? DENOISER_OVR : pathDenoiser; }
+    /** GPU budget of the ray tracing pass in milliseconds, 0 when adaptive quality is off. */
+    public static double adaptiveBudgetMs() {
+        AdaptiveQuality q = ADAPTIVE_OVR != null ? ADAPTIVE_OVR : adaptiveQuality;
+        return q == null ? 0.0 : q.budgetMs();
+    }
+
+    /**
+     * Saves the value chosen on the settings page. A {@code -Dvkrtx.rt.adaptive_quality=} override still wins for this
+     * session, and says so once here instead of leaving a page that appears to do nothing.
+     */
+    public static void setAdaptiveQuality(AdaptiveQuality v) {
+        adaptiveQuality = v;
+        if (ADAPTIVE_OVR != null && v != ADAPTIVE_OVR) {
+            LOGGER.info("[VKB-RT] adaptive_quality saved as {} but this session runs {} (-Dvkrtx.rt.adaptive_quality)",
+                v, ADAPTIVE_OVR);
+        }
+    }
     public static boolean volumetricFogEnabled() { return b("volumetric_fog_enabled"); }
     public static float fogDensity() { return fogDensity; }
     public static float fogInScattering() { return fogInScattering; }
@@ -546,6 +621,8 @@ public final class RtSettings {
         raysShadows = true;
         raysSoftShadows = true;
         raysShadowQuality = 1;
+        raysPixelShadows = false;
+        raysPixelShadowSize = 1;
         raysReflections = false;
         raysReflectionQuality = 1;
         raysReflectionDistance = 64;
@@ -577,6 +654,10 @@ public final class RtSettings {
                 raysAo = true;
                 raysAoQuality = 2;
                 raysEmissiveDistance = 32;
+                // one traced bounce: the cheapest light leak that removes the flat "ambient only" look indoors
+                raysGi = true;
+                raysGiQuality = 1;
+                raysGiDistance = 48;
             }
             case HIGH -> {
                 waterStyle = WATER_STYLE_REALISTIC;
@@ -618,7 +699,7 @@ public final class RtSettings {
     public enum Level { BASIC, ADVANCED, EXPERT, ALL }
 
     /** Boolean keys shown in the Advanced level (all integer keys belong to Expert). */
-    public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_reflections",
+    public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections",
         "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate", "rt_distance_auto", "auto_normals", "path_accumulate",
         "path_auto_exposure", "dlss_rr_geometric_normals", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
         "waving_foliage");
@@ -722,6 +803,19 @@ public final class RtSettings {
                     pathDenoiser = PathDenoiser.valueOf(clean);
                 } catch (IllegalArgumentException e) {
                     LOGGER.warn("Invalid path_denoiser '{}' (use off|nrd|dlss_rr), keeping {}", val, pathDenoiser);
+                }
+                return true;
+            }
+            case "adaptive_quality" -> {
+                if (ADAPTIVE_OVR != null) {
+                    LOGGER.info("[VKB-RT] adaptive_quality from the config ({}) ignored: -Dvkrtx.rt.adaptive_quality={} pins it",
+                        val, ADAPTIVE_OVR);
+                    return true;
+                }
+                try {
+                    adaptiveQuality = AdaptiveQuality.valueOf(val.trim().toUpperCase(Locale.ROOT));
+                } catch (IllegalArgumentException e) {
+                    LOGGER.warn("Invalid adaptive_quality '{}' (use OFF|FPS30|FPS45|FPS60|FPS90|FPS120), keeping {}", val, adaptiveQuality);
                 }
                 return true;
             }
@@ -892,6 +986,9 @@ public final class RtSettings {
         }
         w.write("# OFF, NRD or DLSS_RR (DLSS_RR uses NVIDIA DLSS Ray Reconstruction)\n");
         w.write("path_denoiser = \"" + pathDenoiser.name() + "\"\n");
+        w.write("# Adaptive quality: OFF, FPS30, FPS45, FPS60, FPS90 or FPS120 - the RT pass lowers rays per pixel, then bounces,\n");
+        w.write("# below the values above to fit 70% of a frame of that rate (never above them)\n");
+        w.write("adaptive_quality = \"" + (adaptiveQuality != null ? adaptiveQuality.name() : "OFF") + "\"\n");
         w.write("# DLSS Ray Reconstruction: flat voxel geometric normals (ng) for sharp block edges (true), or smooth/perturbed (false)\n");
         w.write("dlss_rr_geometric_normals = " + dlssRrGeometricNormals + "\n");
         w.write("\n[dlss_neural_rendering]\n");

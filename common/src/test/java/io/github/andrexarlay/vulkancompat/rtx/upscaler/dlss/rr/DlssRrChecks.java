@@ -7,6 +7,7 @@ import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFrameParams;
 import io.github.andrexarlay.vulkancompat.rt.world.RtPipeline;
 import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
+import io.github.andrexarlay.vulkancompat.rt.world.RtWorldChecks;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssLayouts;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNative;
@@ -419,7 +420,7 @@ public final class DlssRrChecks {
         check(dot(rDownBent, ng) > 0.0f, "extreme downward vector bent above horizon");
 
         // 2. Shader source validation: rt_common.glsl, rt_path.comp, rt_rays.comp
-        String commonSrc = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        String commonSrc = RtWorldChecks.rtCommon();
         check(commonSrc.contains("vec3 bendHorizon(vec3 r, vec3 ng)"), "rt_common.glsl defines bendHorizon");
 
         String pathSrc = RtShaderCompiler.loadSource("/shaders/rt_path.comp");

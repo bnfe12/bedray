@@ -43,4 +43,36 @@ public final class RtDeviceRequirements {
     public static void register(DeviceFeatureRegistry registry) {
         registry.register(requirement());
     }
+
+    public static final String OMM_ID = "Opacity Micromaps";
+
+    /**
+     * Optional self-contained group for the cutout-leaf opacity micromaps. Requires synchronization2 for the
+     * sync2 micromap-build barrier; drops as a whole on non-RT devices (duplicate feature structs collapse
+     * through the engine's value-equal VulkanFeature set).
+     */
+    public static DeviceRequirement ommRequirement() {
+        return new DeviceRequirement(
+            OMM_ID,
+            Set.of(
+                "VK_KHR_acceleration_structure",
+                "VK_KHR_ray_query",
+                "VK_KHR_buffer_device_address",
+                "VK_KHR_deferred_host_operations",
+                "VK_EXT_opacity_micromap",
+                "VK_KHR_synchronization2"
+            ),
+            List.of(
+                FeatureRequest.of(org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapFeaturesEXT.class, "micromap"),
+                FeatureRequest.of(org.lwjgl.vulkan.VkPhysicalDeviceSynchronization2FeaturesKHR.class, "synchronization2")
+            ),
+            0,
+            true,
+            null
+        );
+    }
+
+    public static void registerOmm(DeviceFeatureRegistry registry) {
+        registry.register(ommRequirement());
+    }
 }

@@ -1,16 +1,23 @@
 package io.github.andrexarlay.vulkancompat.shaderhost;
 
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
+import io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisPackOptions;
 import io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisPassGraph;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReport;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReportCache;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackScanException;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackSource;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.ScanLimits;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.ShaderpackDiscovery;
+import io.github.andrexarlay.vulkancompat.shaderhost.pack.ShaderpackScanner;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -23,7 +30,9 @@ import java.util.TreeSet;
 public final class IrisShaderHost implements ShaderHost {
     private final PackReportCache cache;
     private volatile PackReport lastReport;
-    private volatile IrisPassGraph activeGraph;
+    /** Compiled graph per program folder ({@code ""} = root); a pack with world folders has one per used folder. */
+    private volatile Map<String, IrisPassGraph> graphs = Map.of();
+    private volatile String activeFolder = "";
     private volatile ShaderHostStatus lastStatus;
 
     public IrisShaderHost(PackReportCache cache) {
@@ -40,9 +49,28 @@ public final class IrisShaderHost implements ShaderHost {
         return lastReport;
     }
 
-    /** Currently active and compiled pass graph (null when probe was not READY or after teardown). */
+    /** Compiled pass graph of the current dimension's folder (null when probe was not READY, after teardown, or when that
+     * dimension's folder failed to build). */
     public IrisPassGraph activeGraph() {
-        return activeGraph;
+        return graphs.get(activeFolder);
+    }
+
+    /** Program folder of the current dimension ({@code ""} = root). */
+    public String activeFolder() {
+        return activeFolder;
+    }
+
+    /**
+     * Selects the program folder Iris would use for {@code dimensionId} (e.g. {@code minecraft:the_nether}).
+     * @return true when the active graph changed, so the caller must retire resources built for the previous one
+     */
+    public boolean selectDimension(String dimensionId) {
+        PackReport report = lastReport;
+        if (report == null || dimensionId == null) return false;
+        String folder = IrisPassGraph.folderFor(report, dimensionId);
+        if (folder.equals(activeFolder)) return false;
+        activeFolder = folder;
+        return true;
     }
 
     /** Last probe status (null before first probe or after teardown). */
@@ -55,7 +83,7 @@ public final class IrisShaderHost implements ShaderHost {
         if (lastStatus != null) {
             return lastStatus.state();
         }
-        return activeGraph != null ? ShaderHostState.READY : ShaderHostState.NOT_INSTALLED;
+        return activeGraph() != null ? ShaderHostState.READY : ShaderHostState.NOT_INSTALLED;
     }
 
     public void setStatusForTesting(ShaderHostStatus status) {
@@ -63,25 +91,32 @@ public final class IrisShaderHost implements ShaderHost {
     }
 
     public void setActiveGraphForTesting(IrisPassGraph graph) {
-        this.activeGraph = graph;
+        this.graphs = graph == null ? Map.of() : Map.of(graph.folder(), graph);
+        this.activeFolder = graph == null ? "" : graph.folder();
     }
 
-    /** Releases the active pass graph and cached probe state. */
+    /** Releases the compiled pass graphs and cached probe state. */
     public void teardown() {
-        activeGraph = null;
+        graphs = Map.of();
+        activeFolder = "";
         lastReport = null;
         lastStatus = null;
     }
 
     @Override
     public ShaderHostStatus probe(ShaderHostContext ctx) {
-        lastStatus = doProbe(ctx);
+        try { lastStatus = doProbe(ctx); }
+        catch (RuntimeException | LinkageError error) {
+            graphs = Map.of();
+            lastStatus = status(ShaderHostState.COMPILE_FAILED, "Shader host initialization failed: " + error.getMessage());
+        }
         return lastStatus;
     }
 
     private ShaderHostStatus doProbe(ShaderHostContext ctx) {
         lastReport = null;
-        activeGraph = null;
+        graphs = Map.of();
+        activeFolder = "";
         Optional<String> choice;
         try {
             choice = IrisPackChoice.read(ctx.gameDir());
@@ -120,9 +155,31 @@ public final class IrisShaderHost implements ShaderHost {
             return validation;
         }
 
-        IrisPassGraph.ParseResult result;
-        try {
-            result = IrisPassGraph.build(pack, ScanLimits.defaults());
+        if (!Boolean.getBoolean("bedray.iris.post"))
+            return status(ShaderHostState.DISABLED_FOR_SESSION,
+                "Post-only Vulkan host is opt-in: -Dbedray.iris.post=true; no general Iris compatibility claim");
+
+        io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisStandardMacros.configure(ctx.gameDir());
+        String primary = IrisPassGraph.folderFor(report, IrisPassGraph.OVERWORLD);
+        Map<String, IrisPassGraph> built = new LinkedHashMap<>();
+        List<String> otherFailures = new ArrayList<>();
+        try (PackSource src = PackSource.open(pack, ScanLimits.defaults())) {
+            PackReport scanned = ShaderpackScanner.scan(src);
+            IrisPackOptions.Request request = IrisPackOptions.readRequest(pack);
+            List<String> folders = new ArrayList<>(IrisPassGraph.usedFolders(scanned));
+            folders.remove(primary);
+            folders.addFirst(primary);
+            for (String folder : folders) {
+                IrisPassGraph.ParseResult result = IrisPassGraph.build(src, scanned, request, folder);
+                if (result.success()) {
+                    built.put(folder, result.graph());
+                } else if (folder.equals(primary)) {
+                    // The overworld folder is the pack's main program set; without it the host stays native.
+                    return result.status();
+                } else {
+                    otherFailures.add(folderLabel(folder) + ": " + result.status().detail());
+                }
+            }
         } catch (IOException e) {
             return status(ShaderHostState.UNSUPPORTED_PACK_FEATURES, "pack refused while building: " + e.getMessage());
         } catch (Exception e) {
@@ -132,14 +189,21 @@ public final class IrisShaderHost implements ShaderHost {
             return status(ShaderHostState.COMPILE_FAILED, e.getMessage());
         }
 
-        if (!result.success()) {
-            return result.status();
-        }
-
-        IrisPassGraph graph = result.graph();
-        activeGraph = graph;
+        graphs = Map.copyOf(built);
+        activeFolder = primary;
+        IrisPassGraph graph = built.get(primary);
         return ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY,
-            "pack " + report.name() + " (" + graph.passCount() + " passes) ready");
+            "pack " + report.name() + " (" + graph.passCount() + " passes in " + folderLabel(primary) + ", folders "
+                + built.keySet().stream().map(IrisShaderHost::folderLabel).toList() + ", "
+                + graph.options().changedOptions() + " changed options, profile="
+                + (graph.options().matchedProfile() == null ? "custom" : graph.options().matchedProfile())
+                + ") compiled; in-game execution is not verified"
+                + (otherFailures.isEmpty() ? "" : "; not built: " + String.join("; ", otherFailures))
+                + (graph.options().diagnostics().isEmpty() ? "" : "; " + String.join("; ", graph.options().diagnostics())));
+    }
+
+    private static String folderLabel(String folder) {
+        return folder.isEmpty() ? "shaders/" : folder + "/";
     }
 
     @Override

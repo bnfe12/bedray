@@ -39,13 +39,37 @@ docs/BUILDING.md
 docs/FEATURE_MATRIX.md
 docs/TESTING.md
 docs/RELEASE_CHECKLIST.md
+docs/SOFTWARE_RENDERER_MOD_SPEC.md
+docs/COMPUTE.md
+docs/DEVELOPMENT_BRANCHES.md
+docs/IRIS_VULKAN.md
+docs/IRIS_OPTIONS.md
+docs/IRIS_FRAME_GUIDES.md
+docs/IRIS_RESOURCE_GRAPH.md
+docs/IRIS_VOXEL_MERGE.md
+docs/CUSTOM_RT_SHADERS.md
+docs/VITRAIL_STUDY.md
+docs/patches/*.patch
+ROADMAP.md
 docs/images/*.png
+
+# original shaderpack source examples
+examples/iris-color-post/**
+examples/iris-depth-post/**
+examples/iris-mrt-post/**
+examples/iris-history-post/**
+examples/iris-world-post/**
+examples/custom-rt-sky-shadow/**
 
 # source code
 core/**
 common/**
 neoforge/**
 fabric/**
+renderer-api/**
+compute-common/**
+compute-fabric/**
+compute-neoforge/**
 native/**
 scripts/**
 
@@ -53,3 +77,5 @@ scripts/**
 tools/PUBLIC_EXPORT_ALLOWLIST.txt
 tools/make_preview_assets.py
 tools/public_scan.ps1
+tools/test-world-snapshots.sh
+tools/tests/*.java

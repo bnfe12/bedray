@@ -31,15 +31,18 @@ public final class RtModesDebug {
         RtMode pass = RtFrameRenderer.lastPassMode();
         boolean reflectionTraced = pass == RtMode.PATH_TRACED || RtSettings.reflections();
         String waterStyle = RtSettings.waterStyle() == 1 ? "REALISTIC" : "VANILLA";
-        String caustics = waterStyle.equals("REALISTIC") ? "REALISTIC_MODE_ONLY" : "OFF";
+        boolean realisticWater = waterStyle.equals("REALISTIC");
+        String waterTransport = realisticWater ? "SEGMENT_APPROX" : "THIN_INTERFACE_APPROX";
+        String caustics = realisticWater && RtSettings.caustics() ? "ANALYTIC_APPROX" : "OFF";
         out.add(String.format(Locale.ROOT,
-            "[RT-WATER] style=%s reflection=%s transmission=THIN_INTERFACE_APPROX caustics=%s mask=0x%02X",
-            waterStyle, reflectionTraced ? "RAY_TRACED" : "DISABLED", caustics, RtFrameRenderer.getReflectionMask()));
+            "[RT-WATER] style=%s reflection=%s transmission=%s caustics=%s mask=0x%02X",
+            waterStyle, reflectionTraced ? "RAY_TRACED" : "DISABLED", waterTransport, caustics, RtFrameRenderer.getReflectionMask()));
         out.add(RtFrameRenderer.getHermeticTelemetry());
         String localLightsState = RtFrameRenderer.hasActiveLocalLights() ? "ACTIVE" : "DISABLED";
         out.add(String.format(Locale.ROOT,
-            "[RT-TRANSMISSION] model=THIN_INTERFACE_APPROX refraction=STRAIGHT_THROUGH volumeExit=UNSUPPORTED caustics=%s localLights=%s",
-            caustics, localLightsState));
+            "[RT-TRANSMISSION] glass=THIN_INTERFACE_APPROX water=%s refraction=%s interfaces=SORTED_BOUNDED batchSize=16 interfaceBudget=%d caustics=%s localLights=%s",
+            waterTransport, realisticWater ? "WATER_SNELL_APPROX" : "STRAIGHT_THROUGH",
+            pass == RtMode.PATH_TRACED ? 24 : 16, caustics, localLightsState));
 
         // Temporal upscalers and Streamline use the camera-only velocity compute pass. DLSS-RR's
         // path-tracer G-buffer motion is a separate input and is only present when RR is active.
@@ -51,13 +54,7 @@ public final class RtModesDebug {
         // Frame Generation telemetry must reflect the Streamline runtime actually hooked to present.
         // The legacy FrameGenerationPipeline is an unused scaffold and always reports unsupported.
         out.add("[FRAME-GEN] " + FrameGenRuntime.statusLine());
-
-        // Dirt RT telemetry
-        // Dirt RT / Iris host is an unfinished scaffold: its line appears only after a Dirt RT pack was selected
-        String dirtRt = io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.getF3Telemetry();
-        if (!dirtRt.contains("selectedPack=none")) {
-            out.add(dirtRt);
-        }
+        // Dirt RT / shader-host lines come from the "shader_host" provider (ShaderHostDebug).
     }
 
     private static String onOff(boolean v) {

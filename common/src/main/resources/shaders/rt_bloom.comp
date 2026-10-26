@@ -187,15 +187,6 @@ void main() {
             float fgMask = pixelIsSky ? 1.0 : (0.18 * exp(-theta / 0.045));
             // halo: compact Lorentzian core + gentle exponential glow
             float g = (0.38 / (1.0 + (theta / 0.028) * (theta / 0.028)) + 0.045 * exp(-theta / 0.18)) * fgMask;
-            if (pc.p0.w > 0.0 && pixelIsSky) {
-                vec2 rel = (uv - (pc.p1.zw * 0.5 + 0.5)) * vec2(float(size.x) / float(size.y), 1.0);
-                if (pc.camOrigin.w > 0.5) {
-                    rel.y = -rel.y;
-                }
-                float r = length(rel);
-                float phi = atan(rel.y, rel.x);
-                g += pc.p0.w * pow(abs(cos(3.0 * phi)), 48.0) * 0.18 * exp(-r / 0.14);
-            }
             if (g > 1.0e-3) {
                 float vis = sunVisibility(size);
                 add += vec3(1.0, 0.93, 0.80) * (g * 2.2 * glareK * vis);

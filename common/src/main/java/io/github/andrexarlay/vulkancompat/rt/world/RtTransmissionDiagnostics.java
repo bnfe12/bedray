@@ -3,16 +3,15 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 import java.util.Locale;
 
 /**
- * Honest diagnostic snapshot of the RGB colored transmission pipeline.
+ * Diagnostic snapshot of RGB colored shadow-ray transmission, separate from camera/path water transport.
  *
- * <p>The current implementation uses {@code ANGULAR_LAYER_APPROXIMATION}:
- * a single-layer Beer–Lambert attenuation based on the surface normal dot product
- * and the glass/ice albedo color. This is NOT physically correct volume
- * entry/exit transport — it does not track refraction ray segments through
- * a closed volume.</p>
+ * <p>The legacy identifier {@code ANGULAR_LAYER_APPROXIMATION} describes approximate RGB layer filtering.
+ * Glass uses tint/alpha; ice and water shadow layers also use the incidence angle. These straight shadow
+ * rays do not track refracted entry/exit transport through a closed glass volume.</p>
  *
- * <p>Volume exit transport ({@code VOLUME_EXIT_MISSING}) and caustics ({@code OFF})
- * are honestly reported as not implemented.</p>
+ * <p>{@code VOLUME_EXIT_MISSING} and {@code caustics=OFF} refer to this shadow filter. The separate
+ * realistic-water path has Snell refraction, medium segments and optional approximate analytic caustics;
+ * it must not be inferred from these legacy shadow fields. See {@link RtModesDebug} for water mode details.</p>
  */
 public final class RtTransmissionDiagnostics {
 

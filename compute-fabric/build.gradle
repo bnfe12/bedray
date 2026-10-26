@@ -1,0 +1,22 @@
+apply from: rootProject.file('gradle/loader-module.gradle')
+// Git-Commit / Git-Dirty / Build-Source on the jar manifest (project level: configureEach
+// must not run inside a task configuration block).
+apply from: rootProject.file('gradle/build-provenance.gradle')
+evaluationDependsOn(':compute-common')
+base { archivesName = 'bedray-compute-fabric-mc26.3' }
+dependencies {
+    compileOnly project(':renderer-api')
+    compileOnly project(':compute-common')
+    compileOnly files("${rootProject.fabric_libs_dir}/fabric-loader/${rootProject.fabric_loader_version}/fabric-loader-${rootProject.fabric_loader_version}.jar")
+}
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') { expand(version: project.version) }
+}
+jar {
+    from project(':compute-common').sourceSets.main.output
+    from(rootProject.file('LICENSE'))
+    from(rootProject.file('NOTICE'))
+    from(rootProject.file('COPYING'))
+    from(rootProject.file('THIRD_PARTY_NOTICES.md'))
+}

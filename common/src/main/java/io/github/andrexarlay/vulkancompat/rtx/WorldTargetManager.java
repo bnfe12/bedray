@@ -97,6 +97,12 @@ public final class WorldTargetManager {
 
     private static boolean resetHistory = true;
     private static boolean inWorldPhase = false;
+    /**
+     * The hand is drawn into the low-resolution world target without motion vectors and with a depth buffer of its own,
+     * so a temporal upscaler consumes it as background (stretched arm). It is deferred to full resolution instead.
+     */
+    private static boolean handPassDeferred = false;
+    private static Boolean lastLoggedHandDeferral = null;
 
     private static int lastLogW = -1;
     private static int lastLogH = -1;
@@ -200,14 +206,31 @@ public final class WorldTargetManager {
 
     /** Arms {@link #noteLevelProjection}: called before {@code renderLevel} of every Vulkan frame. */
     public static void beginLevelProjectionFrame() {
+        haveLevelProjection = false;
+        levelCameraOrigin.zero();
         awaitingLevelProjection = true;
     }
 
     private static boolean awaitingLevelProjection;
 
-    /** The full, unjittered world projection including bobbing, or {@code fallback} before the first frame. */
+    /** True only after the world projection hook has run in the current renderLevel invocation. */
+    public static boolean hasCurrentLevelProjection() {
+        return haveLevelProjection;
+    }
+
+    /** The current frame's full, unjittered world projection including bobbing, or {@code fallback}. */
     public static Matrix4f levelProjectionOr(Matrix4f fallback) {
         return BOB_PROJECTION && haveLevelProjection ? new Matrix4f(levelProjection) : fallback;
+    }
+
+    /** Exact raster projection, irrespective of the optional RT/compute bob approximation setting. */
+    public static Matrix4f currentLevelProjection() {
+        return haveLevelProjection ? new Matrix4f(levelProjection) : null;
+    }
+
+    /** Effective origin of the exact raster camera, independent of hardware RT diagnostic settings. */
+    public static org.joml.Vector3f currentLevelCameraOrigin() {
+        return haveLevelProjection ? new org.joml.Vector3f(levelCameraOrigin) : null;
     }
 
     /** Camera origin offset caused by the view-bob transform, in coordinates relative to the base camera. */
@@ -284,6 +307,8 @@ public final class WorldTargetManager {
      * low-res {@code worldTarget} and {@code worldHud3d}, and advances the sub-pixel jitter frame.
      */
     public static void beginWorldPhase(GameRenderer renderer, int winW, int winH) {
+        // Always start from "unresolved": only this frame's denoiser record may claim the colour is already resolved.
+        io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.resetFrameColorTemporallyResolved();
         if (!isScalingActive()) {
             return;
         }
@@ -325,6 +350,12 @@ public final class WorldTargetManager {
 
         inWorldPhase = true;
         depthCopiedThisFrame = false;
+        handPassDeferred = handMustBeDeferred(inWorldPhase, TemporalUpscaler.isActive());
+        if (lastLoggedHandDeferral == null || lastLoggedHandDeferral != handPassDeferred) {
+            lastLoggedHandDeferral = handPassDeferred;
+            LOGGER.info("[VKB-AUTOTEST] hand_defer={} (temporal upscaler {})", handPassDeferred,
+                TemporalUpscaler.isActive() ? TemporalUpscaler.active() : "off");
+        }
         if (TemporalUpscaler.isActive()) {
             if (TemporalUpscaler.initEpoch() != lastXessEpoch) {
                 lastXessEpoch = TemporalUpscaler.initEpoch();
@@ -405,6 +436,16 @@ public final class WorldTargetManager {
                 }
             } finally {
                 advanceFrameHistory();
+            }
+        }
+
+        // Full-resolution replay: the hand has no motion vectors and uses its own depth buffer, so it must not be fed to
+        // the temporal upscaler with the world. Drawn after the upscale and before the GUI.
+        if (renderer instanceof GameRendererHandAccessor handAccessor) {
+            try {
+                handAccessor.vkb$replayDeferredHand();
+            } catch (Throwable t) {
+                LOGGER.error("Failed to replay the deferred first-person hand pass", t);
             }
         }
     }
@@ -643,6 +684,16 @@ public final class WorldTargetManager {
         long colorImg = extractVkImage(worldTarget);
         long mvImg = extractVkImage(motionVectorsTarget);
         long outImg = extractVkImage(xessOutput);
+        // The DLSS-RR image is resolved on the render grid and moved by entity and RT-geometry motion. Reusing RR's own
+        // motion vectors keeps the upscaler's reprojection consistent with the denoiser; a raster-depth pass would only
+        // know camera motion and would drag moving entities and water across block edges. The raster pass still runs
+        // below, because frame generation consumes the same motion vector image.
+        final boolean colorResolved = io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.frameColorTemporallyResolved();
+        final long resolvedMvView = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorView() : 0L;
+        final long resolvedMvImg = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorImage() : 0L;
+        final boolean reuseDenoiserMotion = resolvedMvView != 0L && resolvedMvImg != 0L;
+        final long srMvView = reuseDenoiserMotion ? resolvedMvView : mvView;
+        final long srMvImg = reuseDenoiserMotion ? resolvedMvImg : mvImg;
         if (rasterDepthView == 0L || mvView == 0L || colorView == 0L || outView == 0L
             || colorImg == 0L || rasterDepthImg == 0L || mvImg == 0L || outImg == 0L) {
             throw new IllegalStateException("XeSS: missing Vulkan handle (rasterDepthView=" + rasterDepthView
@@ -680,13 +731,16 @@ public final class WorldTargetManager {
         io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
 
         final boolean reset = resetHistory;
+        // A denoiser-resolved image is already back on the pixel grid: it must reach DLSS-SR with zero jitter.
+        final float srJitterX = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterX());
+        final float srJitterY = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterY());
         FrameContext ctx = new FrameContext(
             cmd,
             new FrameContext.ImageRef(colorImg, colorView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
             new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, inW, inH),
-            new FrameContext.ImageRef(mvImg, mvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
+            new FrameContext.ImageRef(srMvImg, srMvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
             new FrameContext.ImageRef(outImg, outView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, outW, outH),
-            CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(),
+            srJitterX, srJitterY,
             inW, inH, outW, outH,
             (float) TemporalUpscaler.scale(),
             TemporalUpscaler.modeName(),
@@ -704,9 +758,9 @@ public final class WorldTargetManager {
         }
         copyXessOutputToMain(fullMain);
         if (xessFrames == 0 || xessFrames % 120 == 0) {
-            LOGGER.info("{}[VKB-AUTOTEST] {}=dispatch ok frames={} result=0 input={}x{} output={}x{} jitter=({},{}) reset={} phase={}",
+            LOGGER.info("{}[VKB-AUTOTEST] {}=dispatch ok frames={} result=0 input={}x{} output={}x{} jitter=({},{}) jitter_source={} reset={} phase={}",
                 kind == UpscalerBackend.FSR ? "[VKB-FSR] " : "", kind.name().toLowerCase(java.util.Locale.ROOT), xessFrames + 1, inW, inH, outW, outH,
-                CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(),
+                srJitterX, srJitterY, colorResolved ? "denoiser_resolved" : "camera",
                 reset, CameraJitterManager.getPhaseIndex());
         }
         xessFrames++;
@@ -847,6 +901,7 @@ public final class WorldTargetManager {
         if (inWorldPhase) {
             LOGGER.warn("World phase was not properly ended in previous frame; resetting render targets");
             inWorldPhase = false;
+            handPassDeferred = false;
             if (renderer instanceof GameRendererTargetAccessor accessor) {
                 if (savedMainRenderTarget != null) {
                     accessor.vkb$setMainRenderTarget(savedMainRenderTarget);
@@ -1083,6 +1138,28 @@ public final class WorldTargetManager {
 
     public static boolean isInWorldPhase() {
         return inWorldPhase;
+    }
+
+    /**
+     * The hand must leave the world phase exactly when a temporal upscaler would reproject it: it is rendered without
+     * motion vectors, so feeding it to the temporal pass stretches it across the frame.
+     */
+    public static boolean handMustBeDeferred(boolean inWorldPhase, boolean temporalUpscalerActive) {
+        return inWorldPhase && temporalUpscalerActive;
+    }
+
+    /** True when the hand pass belongs to the full-resolution replay after the temporal upscale (see {@link GameRendererHandAccessor}). */
+    public static boolean shouldDeferHand() {
+        return inWorldPhase && handPassDeferred;
+    }
+
+    /**
+     * Sub-pixel jitter handed to a temporal upscaler for the world colour. NRD and DLSS-RR already resolve their own
+     * sub-pixel history into a render-resolution image sitting on the pixel grid, so passing the camera jitter on to a
+     * following DLSS-SR pass would offset it a second time and make the whole frame crawl.
+     */
+    public static float upscalerJitterComponent(boolean colorTemporallyResolved, float cameraJitter) {
+        return colorTemporallyResolved ? 0.0f : cameraJitter;
     }
 
     public static RenderTarget getSavedMainRenderTarget() {

@@ -4,9 +4,7 @@ import io.github.andrexarlay.vulkancompat.rt.entity.RtEntityShaderDiagnostics;
 import io.github.andrexarlay.vulkancompat.rt.entity.RtSceneInstances;
 import org.junit.jupiter.api.Test;
 
-import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,16 +22,13 @@ public class RtEntityShaderPipelineTest {
     }
 
     @Test
-    public void testShaderSourceContainsEntityPath() throws Exception {
-        try (InputStream is = getClass().getResourceAsStream("/shaders/rt_common.glsl")) {
-            assertNotNull(is, "/shaders/rt_common.glsl not found");
-            String src = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+    public void testShaderSourceContainsEntityPath() {
+        String src = RtWorldChecks.rtCommon();
 
-            assertTrue(src.contains("INSTANCE_TYPE_ENTITY = 0x800000u"), "rt_common.glsl must declare INSTANCE_TYPE_ENTITY");
-            assertTrue(src.contains("bool isEntityHit(uint customIndex)"), "rt_common.glsl must declare isEntityHit");
-            assertTrue(src.contains("void fetchEntitySurface("), "rt_common.glsl must declare fetchEntitySurface");
-            assertTrue(src.contains("isEntityHit(customIndex)"), "traceSurface must branch on isEntityHit");
-        }
+        assertTrue(src.contains("INSTANCE_TYPE_ENTITY = 0x800000u"), "rt_common.glsl must declare INSTANCE_TYPE_ENTITY");
+        assertTrue(src.contains("bool isEntityHit(uint customIndex)"), "rt_common.glsl must declare isEntityHit");
+        assertTrue(src.contains("void fetchEntitySurface("), "rt_common.glsl must declare fetchEntitySurface");
+        assertTrue(src.contains("isEntityHit(customIndex)"), "traceSurface must branch on isEntityHit");
     }
 
     @Test

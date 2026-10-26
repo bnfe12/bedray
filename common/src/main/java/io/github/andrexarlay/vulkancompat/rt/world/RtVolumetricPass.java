@@ -73,7 +73,7 @@ final class RtVolumetricPass {
         }
         boolean valid = historyReady && consecutive(lastFrame, p.frame);
         RtPipeline.Views v = new RtPipeline.Views(views.tlas(), views.table(), views.output(), views.atlas(), views.material(),
-            views.normal(), history.view, null, views.depth());
+            views.normal(), history.view, null, views.depth(), views.lightmap());
         march.bind(v);
         apply.bind(v);
 
@@ -99,9 +99,9 @@ final class RtVolumetricPass {
         local.skyColor[2] = 0f;
 
         march.dispatch(cmd, local, hw, hh);
-        VkBarriers.fullMemoryBarrier(cmd);
+        VkBarriers.computeToCompute(cmd);
         apply.dispatch(cmd, local, w, h);
-        VkBarriers.fullMemoryBarrier(cmd);
+        VkBarriers.fullMemoryBarrier(cmd);   // trailing: guards the engine's non-compute consumers
         historyReady = true;
         lastFrame = p.frame;
     }

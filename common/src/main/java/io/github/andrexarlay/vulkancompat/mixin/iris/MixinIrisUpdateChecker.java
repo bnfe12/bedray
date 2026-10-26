@@ -84,29 +84,8 @@ public abstract class MixinIrisUpdateChecker {
             Class<?> irisClass = Class.forName("net.irisshaders.iris.Iris");
             ensureIrisConfig(irisClass);
 
-            String packName = null;
-            try {
-                java.lang.reflect.Method getPackName = irisClass.getMethod("getCurrentPackName");
-                packName = (String) getPackName.invoke(null);
-            } catch (Throwable ignored) {}
-
-            if (packName == null || packName.isBlank()) {
-                try {
-                    var choice = io.github.andrexarlay.vulkancompat.shaderhost.IrisPackChoice.read(java.nio.file.Paths.get("."));
-                    if (choice.isPresent()) {
-                        packName = choice.get();
-                    }
-                } catch (Throwable ignored) {}
-            }
-
-            if (packName != null && packName.toLowerCase().contains("dirt rt")) {
-                io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.updateState(
-                    io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.State.UNAVAILABLE,
-                    packName,
-                    "Dirt RT runtime loader is not implemented (scaffold only)"
-                );
-                // Do NOT cancel Iris in vain without a ready pipeline; preserve native working RT pipeline / rendering.
-            }
+            // Dirt RT status is owned by the shader host bootstrap (DirtRtRuntime); this reload hook no longer
+            // overwrites it with a fixed "unavailable" state.
         } catch (Throwable ignored) {}
     }
 }

@@ -6,9 +6,10 @@
 //    SkyRenderer.buildSkyDisc(16));
 //  - the sunrise / sunset fan (SkyRenderState.sunriseAndSunsetColor, SkyRenderer.renderSunriseAndSunset; approximated per
 //    direction, see skySunsetFan) and the per-direction sunset tint of the fog colour (AtmosphericFogEnvironment.getBaseColor);
-//  - square sun (30 at distance 100) and moon (20 at distance 100, texture of the current MoonPhase) with the transform of
-//    SkyRenderer.renderSunMoonAndStars: Ry(-90) * Rx(angle), quad at y = 100; textures from the resource packs
-//    (RtSkyTextures); blend OVERLAY = src * srcAlpha + dst (BlendFunction 26.3), alpha = texel alpha * rainBrightness;
+//  - sun (30 at distance 100) and moon (20 at distance 100, texture of the current MoonPhase) with the transform of
+//    SkyRenderer.renderSunMoonAndStars: Ry(-90) * Rx(angle), quad at y = 100; textures from the resource packs (RtSkyTextures).
+//    The sun sprite is added with its texture opacity and carries a separate body mask in alpha for stars / the specular disk;
+//    the moon keeps the OVERLAY blend of BlendFunction 26.3 (src * srcAlpha + dst);
 //  - stars: procedural point field rotated by starAngle, brightness starBrightness (vanilla: 1500 random quads);
 //  - clouds: the clouds.png cells (12 x 4 x 12 blocks, colour LevelRenderState.cloudColor, face shades of core/clouds.vsh),
 //    ray marched through the cloud slab (FANCY) or one plane (FAST), fading to FogCloudsEnd like core/clouds.fsh.
@@ -100,27 +101,39 @@ vec2 celestialQuad(vec3 d, float angle, float halfSize) {
     return l.xz * (100.0 / l.y) / halfSize;
 }
 
-// Sun texel (rgb, alpha) for a direction; alpha 0 outside the square.
-vec4 skySunTexel(vec3 d) {
+// Sun texel for a direction: rgb is the sprite premultiplied by its texture opacity, alpha is the sun BODY (0 over the halo).
+// Vanilla 26.3 sun.png is 32x32 and opaque in every texel, black in the corners: an 8x8 square core of (255,255,217) inside a
+// round halo of (36,36,14). Vanilla's OVERLAY blend is src * srcAlpha + dst: premultiply here so resource-pack transparency is
+// retained while the core stays square and the glow stays round. The specular disk uses only the core; its luminance is kept
+// separately so multiplying it by the body mask cannot apply a resource pack's texture opacity twice.
+vec4 skySunTexel(vec3 d, out float bodyLuminance) {
+    bodyLuminance = 0.0;
     vec2 q = celestialQuad(d, StatsBuf(pc.statsAddr).skySunDir.w, 16.0);
     if (max(abs(q.x), abs(q.y)) > 1.0) {
         return vec4(0.0);
     }
     // buildCelestialQuad: (-1,-1) -> (u0, v0), (1, -1) -> (u1, v0), (1, 1) -> (u1, v1)
     vec2 uv = q * 0.5 + 0.5;
+    float radius = length(q);
+    // The sprite is opaque to its border, so the quad edge is faded by hand; the halo is round, so the fade is concentric.
+    float feather = 1.0 - smoothstep(0.90, 1.0, radius);
     if (!skyTexLoaded(0u)) {
-        float box = max(abs(q.x), abs(q.y));
-        float m = 1.0 - smoothstep(0.35, 0.55, box);
+        // No resource pack file: a plain disc. The old fallback was a box, which is the "giant solid beige box" the mask that
+        // used to sit here was fighting; that mask actually deleted the real halo, not the fallback.
+        float m = (1.0 - smoothstep(0.25, 0.95, radius)) * feather;
+        bodyLuminance = dot(vec3(1.0, 0.95, 0.78), vec3(0.2126, 0.7152, 0.0722)) * m * m;
         return vec4(vec3(1.0, 0.95, 0.78) * m, m);
     }
     vec4 t = skyTexel(0u, uv);
-    float peak = max(t.r, max(t.g, t.b));
-    float box = max(abs(q.x), abs(q.y));
-    // Vanilla sun.png has a dim outer halo filling the whole 32x32 quad (peak ~ 0.15..0.40) and a bright solar core.
-    // Adding that dim outer square directly onto a bright daytime sky pushes display RGB near 1.0 across the entire quad,
-    // which tonemapInverse turns into a giant solid beige box. Keep the crisp core and feather out the outer border.
-    float core = smoothstep(0.42, 0.85, peak) * (1.0 - smoothstep(0.55, 0.98, box));
-    return vec4(t.rgb * core, t.a * core);
+    float core = smoothstep(0.42, 0.85, max(t.r, max(t.g, t.b)));   // halo peak is 0.14, the core is saturated
+    float opacity = t.a * feather;
+    bodyLuminance = dot(t.rgb, vec3(0.2126, 0.7152, 0.0722)) * core * opacity;
+    return vec4(t.rgb * opacity, core * opacity);
+}
+
+vec4 skySunTexel(vec3 d) {
+    float bodyLuminance;
+    return skySunTexel(d, bodyLuminance);
 }
 
 vec4 skyMoonTexel(vec3 d) {
@@ -269,7 +282,9 @@ vec3 skyFogColor(vec3 d) {
         if ((skyFlags() & 32u) != 0u) {
             sunX = -sunX;
         }
-        vec2 hz = normalize(vec2(d.x, d.z) + vec2(1.0e-6, 0.0));
+        vec2 hz = vec2(d.x, d.z);
+        float hz2 = dot(hz, hz);
+        hz = hz2 > 1.0e-12 ? hz * inversesqrt(hz2) : vec2(1.0, 0.0);   // straight down/up: any horizon direction is a stand-in
         float look = max(0.0, hz.x * sunX);
         fog = mix(fog, ss.rgb, look * ss.a);
     }
@@ -388,17 +403,18 @@ vec3 skyDisplay(vec3 dir) {
     c = mix(c, sb.skySunset.rgb, fan);
     float rain = sb.skyMisc.w;
     vec4 cl = skyClouds(dir);
-    // sun, moon (OVERLAY: += rgb * a), stars (+= b * b); all below the horizon fog / clouds
+    // sun (+= premultiplied rgb), moon (OVERLAY: += rgb * a), stars (+= b * b); all below the horizon fog / clouds
     if (dir.y > -0.05) {
         vec4 sun = skySunTexel(dir);
-        c += sun.rgb * sun.a * rain;
+        c += sun.rgb * rain;   // rgb already includes texture opacity; alpha is the body mask, not another opacity multiplier
         vec4 moon = skyMoonTexel(dir);
         c += moon.rgb * moon.a * rain;
         float day = pc.keyDir.w;
         float nightStars = (1.0 - smoothstep(0.05, 0.25, day)) * (1.0 - cl.a) * rain;
         float sb2 = max(sb.skyFogColor.w * sb.skyFogColor.w, nightStars * 0.25);
-        if (sb2 > 0.0 && sun.a == 0.0 && moon.a == 0.0) {
-            c += vec3(skyStars(dir) * sb2);
+        // stars behind the sun body only: the halo is added light, it does not hide what is behind it
+        if (sb2 > 0.0 && sun.a < 1.0 && moon.a == 0.0) {
+            c += vec3(skyStars(dir) * sb2 * (1.0 - sun.a));
         }
     }
     c = mix(c, cl.rgb, cl.a);
@@ -426,7 +442,12 @@ vec3 sunDisk(vec3 dir) {
         return vec3(0.0);
     }
     bool keyIsSun = dot(pc.keyDir.xyz, sb.skySunDir.xyz) > 0.999;
-    vec4 t = keyIsSun ? skySunTexel(dir) : skyMoonTexel(dir);
+    if (keyIsSun) {
+        float bodyLuminance;
+        skySunTexel(dir, bodyLuminance);
+        return pc.keyColor.rgb * (bodyLuminance * 6.0);
+    }
+    vec4 t = skyMoonTexel(dir);
     float lum = dot(t.rgb, vec3(0.2126, 0.7152, 0.0722));
     return pc.keyColor.rgb * (t.a * lum * 6.0);
 }

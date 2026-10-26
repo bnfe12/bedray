@@ -1,596 +1,320 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
-import io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings;
-import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
-import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
-import io.github.andrexarlay.vulkancompat.rtx.config.TextureLodBias;
-import io.github.andrexarlay.vulkancompat.rtx.config.UpscalerMode;
-import io.github.andrexarlay.vulkancompat.rtx.config.UpscalerModes;
+import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
-import net.minecraft.client.Minecraft;
+import net.caffeinemc.mods.sodium.client.config.structure.EnumOption;
+import net.caffeinemc.mods.sodium.client.config.structure.IntegerOption;
+import net.caffeinemc.mods.sodium.client.config.structure.StatefulOption;
+import net.caffeinemc.mods.sodium.client.util.Dim2i;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.AbstractSliderButton;
+import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
-/**
- * Dedicated In-Game Configuration Screen for Bedray Ray Tracing & Performance.
- * Provides deep global configuration across 7 organized categories with smooth scrolling.
- */
+/** The single Bedray settings interface. Only Apply commits its private option state. */
 public final class BedrayConfigScreen extends Screen {
+    private static final int ROW_HEIGHT = 30;
     private final Screen parent;
-    private int selectedCategory = 0;
-    private int scrollOffset = 0;
-    private int maxScroll = 0;
-    private int listTop = 48;
-
-    private static final String[] CATEGORIES = {
-        "Ray Tracing",
-        "Shadows & Light",
-        "Nature & Water",
-        "Upscalers & FG",
-        "Camera & Color",
-        "Materials & PBR",
-        "System & Future"
-    };
-
-    private static final class OptionRow {
-        final String label;
-        final String hint;
-        final java.util.function.Supplier<String> valueText;
-        final Runnable onClick;
-
-        OptionRow(String label, String hint, java.util.function.Supplier<String> valueText, Runnable onClick) {
-            this.label = label;
-            this.hint = hint;
-            this.valueText = valueText;
-            this.onClick = onClick;
-        }
-    }
-
-    private final List<OptionRow> currentRows = new ArrayList<>();
-    private final List<Button> rowButtons = new ArrayList<>();
+    private SettingsDraft draft;
+    private SettingsDraft.Category category = SettingsDraft.Category.OVERVIEW;
+    private String query = "";
+    private int scroll, maxScroll, contentX, contentWidth, listTop, listBottom, detailsX, detailsWidth;
+    private final List<AbstractWidget> rowWidgets = new ArrayList<>();
+    private final List<SettingsDraft.Entry> rows = new ArrayList<>();
+    private final List<Button> popupButtons = new ArrayList<>();
+    private int popupX, popupY, popupWidth, popupHeight, popupScroll, popupFocus;
+    private SettingsDraft.Entry selected;
+    private Button applyButton, revertButton;
+    private Component runtime = Component.empty();
+    private int statusTicks;
 
     public BedrayConfigScreen(Screen parent) {
-        super(Component.translatableWithFallback("bedray.config.title", "Bedray Ray Tracing Settings"));
+        super(tr("bedray.settings.title", "Bedray Settings"));
         this.parent = parent;
+        // Construct before Gui.setScreen replaces the parent, so a model initialization failure
+        // cannot leave Minecraft rendering a partially initialized screen.
+        this.draft = new SettingsDraft();
+    }
+    SettingsDraft draft() { return draft; }
+    private static Component tr(String key, String fallback, Object... args) { return Component.translatableWithFallback(key, fallback, args); }
+
+    @Override protected void init() {
+        if (draft == null) draft = new SettingsDraft();
+        PreviewPanel.clearSelection();
+        clearWidgets(); rowWidgets.clear(); rows.clear(); popupButtons.clear();
+        boolean sidebar = width >= 440;
+        detailsWidth = width >= 760 ? Math.min(320, width / 3) : 0;
+        detailsX = width - detailsWidth - 8;
+        contentX = sidebar ? 132 : 8;
+        contentWidth = Math.max(120, width - contentX - 8 - (detailsWidth > 0 ? detailsWidth + 8 : 0));
+        listTop = sidebar ? 54 : 78;
+        listBottom = height - 50;
+        EditBox search = new EditBox(font, 8, 27, width - 16, 20, tr("bedray.settings.search", "Search settings"));
+        search.setHint(tr("bedray.settings.search", "Search settings")); search.setMaxLength(80); search.setValue(query);
+        search.setResponder(text -> { query = text; scroll = 0; rebuildRows(); }); addRenderableWidget(search);
+        if (sidebar) {
+            int index = 0;
+            for (SettingsDraft.Category value : SettingsDraft.Category.values()) addRenderableWidget(Button.builder(value.title(), b -> selectCategory(value))
+                .bounds(8, listTop + index++ * 23, 116, 20).build());
+        } else addRenderableWidget(Button.builder(category.title(), b -> {
+            var values = SettingsDraft.Category.values();
+            openChoices(java.util.Arrays.stream(values).map(SettingsDraft.Category::title).toList(), i -> selectCategory(values[i]), 8, 52, width - 16);
+        }).bounds(8, 52, width - 16, 20).build());
+        int gap = 4, buttonWidth = (width - 16 - 3 * gap) / 4, footerY = height - 26;
+        addRenderableWidget(Button.builder(tr("bedray.settings.details", "Details"), b -> { if (selected != null) PreviewPanel.openModal(selected.option()); })
+            .bounds(8, footerY, buttonWidth, 20).build());
+        applyButton = addRenderableWidget(Button.builder(tr("bedray.settings.apply", "Apply"), b -> apply())
+            .bounds(8 + buttonWidth + gap, footerY, buttonWidth, 20).build());
+        revertButton = addRenderableWidget(Button.builder(tr("bedray.settings.revert", "Revert"), b -> { draft.revert(); rebuildRows(); })
+            .bounds(8 + 2 * (buttonWidth + gap), footerY, buttonWidth, 20).build());
+        addRenderableWidget(Button.builder(tr("bedray.settings.cancel", "Close / Cancel"), b -> onClose())
+            .bounds(8 + 3 * (buttonWidth + gap), footerY, buttonWidth, 20).build());
+        rebuildRows(); updateRuntime();
     }
 
-    @Override
-    protected void init() {
-        clearWidgets();
-        currentRows.clear();
-        rowButtons.clear();
-        scrollOffset = 0;
-
-        int contentWidth = Math.min(width - 16, 540);
-        int contentX = (width - contentWidth) / 2;
-
-        // Top Category Tabs
-        int tabCount = CATEGORIES.length;
-        int columns = Math.max(1, Math.min(tabCount, contentWidth / 100));
-        int tabW = (contentWidth - (columns - 1) * 3) / columns;
-        listTop = 22 + ((tabCount + columns - 1) / columns) * 21 + 8;
-        for (int i = 0; i < tabCount; i++) {
-            final int catIdx = i;
-            boolean active = (i == selectedCategory);
-            String title = (active ? "> " : "") + CATEGORIES[i] + (active ? " <" : "");
-            addRenderableWidget(Button.builder(Component.literal(title), b -> {
-                selectedCategory = catIdx;
-                rebuildWidgets();
-            }).bounds(contentX + (i % columns) * (tabW + 3), 22 + (i / columns) * 21, tabW, 18).build());
-        }
-
-        // Build items for current category
-        buildCategoryRows();
-
-        // Render option rows in center scrollable area
-        int startY = listTop;
-        int rowH = 24;
-        int btnW = 150;
-        int btnX = contentX + contentWidth - btnW;
-
-        for (int i = 0; i < currentRows.size(); i++) {
-            OptionRow row = currentRows.get(i);
-            int rowY = startY + i * rowH;
-            Button btn = Button.builder(Component.literal(row.valueText.get()), b -> {
-                row.onClick.run();
-                // Presets and resets can change several rows at once.
-                for (int index = 0; index < rowButtons.size(); index++) {
-                    rowButtons.get(index).setMessage(Component.literal(currentRows.get(index).valueText.get()));
-                }
-            }).bounds(btnX, rowY, btnW, 20).build();
-
-            rowButtons.add(btn);
-            addRenderableWidget(btn);
-        }
-        updateRowButtonPositions();
-
-        // Bottom action buttons
-        int bottomY = height - 26;
-        int bottomBtnW = (contentWidth - 16) / 5;
-
-        // Button 1: Roadmap
-        addRenderableWidget(Button.builder(Component.literal("Roadmap..."), b -> {
-            Minecraft.getInstance().gui.setScreen(new BedrayRoadmapScreen(this));
-        }).bounds(contentX, bottomY, bottomBtnW, 20).build());
-
-        // Button 2: Presets
-        addRenderableWidget(Button.builder(Component.literal("My Presets..."), b -> {
-            Minecraft.getInstance().gui.setScreen(new PresetsScreen(this));
-        }).bounds(contentX + bottomBtnW + 4, bottomY, bottomBtnW, 20).build());
-
-        // Button 3: Natives
-        addRenderableWidget(Button.builder(Component.literal("DLL Natives..."), b -> {
-            Minecraft.getInstance().gui.setScreen(new NativesManagerScreen(this));
-        }).bounds(contentX + (bottomBtnW + 4) * 2, bottomY, bottomBtnW, 20).build());
-
-        // Button 4: Sodium
-        addRenderableWidget(Button.builder(Component.literal("Sodium..."), b -> {
-            openSodiumScreen();
-        }).bounds(contentX + (bottomBtnW + 4) * 3, bottomY, bottomBtnW, 20).build());
-
-        // Button 5: Done
-        addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> onClose())
-            .bounds(contentX + (bottomBtnW + 4) * 4, bottomY, bottomBtnW, 20).build());
+    private void selectCategory(SettingsDraft.Category value) {
+        category = value; scroll = 0;
+        if (width < 440) rebuildWidgets(); else rebuildRows();
     }
 
-    @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (maxScroll > 0 && mouseY >= listTop && mouseY < height - 42) {
-            scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset - (int) (scrollY * 24.0)));
-            updateRowButtonPositions();
-            return true;
+    void rebuildRows() {
+        // Evaluate dependent option state and construct all controls before publishing either list.
+        // A failed predicate must not leave entries without matching widgets for tick/render.
+        List<SettingsDraft.Entry> nextRows = new ArrayList<>();
+        List<AbstractWidget> nextWidgets = new ArrayList<>();
+        String filter = query.trim().toLowerCase(Locale.ROOT);
+        for (SettingsDraft.Entry entry : draft.entries) {
+            if (!draft.visible(entry)) continue;
+            if (filter.isEmpty() ? entry.category() != category : !entry.searchText().contains(filter)) continue;
+            nextRows.add(entry);
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        int controls = Math.max(70, Math.min(160, contentWidth / 2));
+        for (SettingsDraft.Entry entry : nextRows) {
+            AbstractWidget widget = createControl(entry, contentX + contentWidth - controls - 6, controls);
+            boolean enabled = entry.option().isEnabled() && draft.editable(entry);
+            widget.active = enabled;
+            // Say which of the two reasons locked the row: the profile that sets this value, or a missing prerequisite.
+            widget.setTooltip(Tooltip.create(enabled ? entry.option().getTooltip()
+                : draft.hasQualityProfile() && draft.profileOwned(entry.path())
+                    ? tr("bedray.settings.locked_by_profile", "Set by the Fast/Beautiful quality profile. Switch the profile to Custom to tune it by hand.")
+                    : tr("bedray.settings.locked", "Needs another option, feature or runtime library to be active first.")));
+            nextWidgets.add(widget);
+        }
+        closeChoices();
+        for (AbstractWidget widget : rowWidgets) removeWidget(widget);
+        rowWidgets.clear(); rows.clear();
+        rows.addAll(nextRows);
+        for (AbstractWidget widget : nextWidgets) rowWidgets.add(addRenderableWidget(widget));
+        if (!rows.contains(selected)) selected = rows.isEmpty() ? null : rows.getFirst();
+        if (filter.isEmpty() && category == SettingsDraft.Category.PRESETS) {
+            addAction(tr("bedray.settings.experience_library", "Rendering experiences..."),
+                () -> openExperiences(contentX, listTop, contentWidth - 6));
+            addAction(tr("bedray.settings.presets_manage", "Manage presets..."), () -> minecraft.gui.setScreen(new PresetsScreen(this, draft)));
+            addAction(tr("bedray.settings.presets_copy", "Copy pending settings"), () -> minecraft.keyboardHandler.setClipboard(draft.snapshot()));
+            addAction(tr("bedray.settings.presets_import", "Import into pending settings"), () -> {
+                int count = draft.importText(minecraft.keyboardHandler.getClipboard());
+                runtime = tr("bedray.settings.preset_staged", "%s preset values staged. Apply to commit.", count); rebuildRows();
+            });
+        }
+        if (filter.isEmpty() && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile())
+            addAction(tr("bedray.settings.customize", "Customize current quality"), () -> { draft.customize(); rebuildRows(); });
+        if (filter.isEmpty() && category == SettingsDraft.Category.SYSTEM) {
+            addAction(tr("bedray.settings.libraries", "Runtime libraries..."), () -> minecraft.gui.setScreen(new NativesManagerScreen(this)));
+            addAction(tr("bedray.settings.report", "Copy diagnostics report"), () -> io.github.andrexarlay.vulkancompat.rtx.debug.Diagnostics.generateAndNotify());
+            addAction(tr("bedray.settings.reset", "Reset editable settings (pending)"), () -> { draft.reset(); rebuildRows(); });
+        }
+        maxScroll = Math.max(0, rowWidgets.size() * ROW_HEIGHT - Math.max(0, listBottom - listTop));
+        scroll = Math.min(scroll, maxScroll); positionRows();
+        PreviewPanel.clearSelection();
+        if (selected != null) { PreviewPanel.select(selected.option()); PreviewPanel.setRuntimeStatus(draft.status(selected).text()); }
+        updateButtons();
     }
 
-    private void updateRowButtonPositions() {
-        int startY = listTop;
-        int listBottom = height - 42;
-        int rowH = 24;
-
-        for (int i = 0; i < rowButtons.size(); i++) {
-            Button btn = rowButtons.get(i);
-            int ry = startY + i * rowH - scrollOffset;
-            btn.setY(ry);
-            btn.visible = (ry >= startY && ry + 20 <= listBottom);
-        }
+    private void addAction(Component name, Runnable action) {
+        rowWidgets.add(addRenderableWidget(Button.builder(name, b -> action.run()).bounds(contentX, 0, contentWidth - 6, 20).build()));
     }
 
-    private void buildCategoryRows() {
-        switch (selectedCategory) {
-            case 0 -> { // Ray Tracing & Engine
-                currentRows.add(new OptionRow("Ray Tracing Mode", "Master renderer switch (Off, Fast Ray Tracing, Path Tracing)",
-                    () -> {
-                        RtMode m = VulkanRtxConfig.rtMode;
-                        if (m == RtMode.OFF) return "Off";
-                        if (m == RtMode.PATH_TRACED) return "Path Tracing (Full)";
-                        if (m == RtMode.RAY_TRACED) return "Ray Tracing (Direct+GI)";
-                        return m.logName().toUpperCase(java.util.Locale.ROOT);
-                    },
-                    () -> {
-                        RtMode[] modes = VulkanRtxConfig.raysUnlocked()
-                            ? new RtMode[]{RtMode.OFF, RtMode.PATH_TRACED, RtMode.RAY_TRACED}
-                            : new RtMode[]{RtMode.OFF, RtMode.PATH_TRACED};
-                        VulkanRtxConfig.setRtMode(next(VulkanRtxConfig.rtMode, modes));
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("RT Quality Preset", "Overall quality profile for lighting and ray tracing",
-                    () -> RtSettings.preset != null ? RtSettings.preset.name() : "CUSTOM",
-                    () -> {
-                        RtSettings.Preset[] p = {RtSettings.Preset.LOW, RtSettings.Preset.MEDIUM, RtSettings.Preset.HIGH,
-                            RtSettings.Preset.ULTRA, RtSettings.Preset.FAST, RtSettings.Preset.QUALITY};
-                        RtSettings.Preset nextPreset = next(RtSettings.preset != null ? RtSettings.preset : RtSettings.Preset.MEDIUM, p);
-                        RtSettings.applyPreset(nextPreset);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Ray Tracing Distance", "World block distance for primary and secondary ray queries",
-                    () -> (RtSettings.rtDistanceChunks * 16) + " blocks",
-                    () -> {
-                        int[] chunks = {4, 6, 8, 10, 12, 16, 20, 24, 32};
-                        RtSettings.rtDistanceChunks = next(RtSettings.rtDistanceChunks, chunks);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Path Max Bounces", "Maximum light bounces in full Path Tracing mode",
-                    () -> RtSettings.pathBounces + " Bounces",
-                    () -> {
-                        int[] b = {1, 2, 3, 4, 6, 8};
-                        RtSettings.pathBounces = next(RtSettings.pathBounces, b);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Samples Per Pixel (SPP)", "Primary ray samples per pixel per frame",
-                    () -> RtSettings.pathSpp + " SPP",
-                    () -> {
-                        int[] s = {1, 2, 4, 8, 16};
-                        RtSettings.pathSpp = next(RtSettings.pathSpp, s);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Path Denoiser", "Spatiotemporal AI / bilateral filtering for path tracing",
-                    () -> RtSettings.pathDenoiser.name(),
-                    () -> {
-                        RtSettings.pathDenoiser = next(RtSettings.pathDenoiser, RtSettings.PathDenoiser.values());
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Demodulation & Accumulation", "Separate albedo and irradiance during denoising",
-                    () -> RtSettings.pathAccumulate ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.pathAccumulate = !RtSettings.pathAccumulate;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("DLSS-RR Geo Normals", "Feed flat voxel geometric normals (ng) to DLSS-RR for sharp block edges",
-                    () -> RtSettings.dlssRrGeometricNormals ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.dlssRrGeometricNormals = !RtSettings.dlssRrGeometricNormals;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("VRAM Budget (MB)", "GPU memory ceiling for Acceleration Structures (TLAS/BLAS)",
-                    () -> RtSettings.vramBudgetMb + " MB",
-                    () -> {
-                        int[] budgets = {1024, 1536, 2048, 3072, 4096, 6144, 8192};
-                        RtSettings.vramBudgetMb = next(RtSettings.vramBudgetMb, budgets);
-                        VulkanRtxConfig.save();
-                    }));
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private AbstractWidget createControl(SettingsDraft.Entry entry, int x, int controlWidth) {
+        StatefulOption option = entry.option();
+        if (entry.path().equals("renderer")) return Button.builder(draft.experienceTitle(), b -> {
+            select(entry); openExperiences(b.getX(), b.getY(), controlWidth);
+        }).bounds(x, 0, controlWidth, 20).build();
+        if (option instanceof IntegerOption integer) return new AbstractSliderButton(x, 0, controlWidth, 20, integer.formatValue(integer.getValidatedValue()), normalized(integer)) {
+            @Override protected void updateMessage() { setMessage(integer.formatValue(integer.getValidatedValue())); }
+            @Override protected void applyValue() {
+                var validator = integer.getSteppedValidator();
+                int stepped = validator.min() + (int)Math.round(value * (validator.max() - validator.min()) / validator.step()) * validator.step();
+                integer.modifyValue(Math.max(validator.min(), Math.min(validator.max(), stepped)));
+                select(entry); updateMessage(); updateButtons();
             }
-            case 1 -> { // Shadows & Light
-                currentRows.add(new OptionRow("Traced Sun Shadows", "Physically accurate direct solar and lunar ray shadows",
-                    () -> RtSettings.raysShadows ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.raysShadows = !RtSettings.raysShadows;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Soft Penumbra Shadows", "Widened solar disk with realistic soft penumbra edges",
-                    () -> RtSettings.raysSoftShadows ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.raysSoftShadows = !RtSettings.raysSoftShadows;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Sun Disk Angular Size", "Apparent solar disk size controlling shadow softness",
-                    () -> String.format(java.util.Locale.US, "%.1f°", RtSettings.sunSizeTenths / 10.0f),
-                    () -> {
-                        int[] sizes = {5, 10, 14, 20, 30};
-                        RtSettings.sunSizeTenths = next(RtSettings.sunSizeTenths, sizes);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Shadow Ray Count", "Rays per pixel for soft shadow penumbra reconstruction",
-                    () -> RtSettings.raysShadowQuality + " spp",
-                    () -> {
-                        int[] q = {1, 2, 4, 8};
-                        RtSettings.raysShadowQuality = next(RtSettings.raysShadowQuality, q);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Ray Traced AO (RTAO)", "Physically traced ambient contact shadows",
-                    () -> RtSettings.raysAo ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.raysAo = !RtSettings.raysAo;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("RTAO Sample Radius", "Search sphere radius for ambient occlusion contact shadow",
-                    () -> RtSettings.raysAoRadius + " Blocks",
-                    () -> {
-                        int[] rad = {1, 2, 3, 4, 5, 6};
-                        RtSettings.raysAoRadius = next(RtSettings.raysAoRadius, rad);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Direct GI Bounce", "One-bounce diffuse global illumination from sun and sky",
-                    () -> RtSettings.raysGi ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.raysGi = !RtSettings.raysGi;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Emissive Block Lighting", "Torches, lanterns, glowstone and lava cast real light",
-                    () -> RtSettings.raysEmissive ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.raysEmissive = !RtSettings.raysEmissive;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Emissive Distance", "Effective light reach for voxel emissives in blocks",
-                    () -> RtSettings.raysEmissiveDistance + " Blocks",
-                    () -> {
-                        int[] dist = {16, 24, 32, 48, 64};
-                        RtSettings.raysEmissiveDistance = next(RtSettings.raysEmissiveDistance, dist);
-                        VulkanRtxConfig.save();
-                    }));
+        };
+        return Button.builder(valueText(option), b -> {
+            select(entry);
+            if (option.getValidatedValue() instanceof Boolean on) { option.modifyValue(!on); rebuildRows(); }
+            else if (option instanceof EnumOption enumeration) {
+                List<Enum> values = new ArrayList<>((java.util.Set<Enum>)enumeration.getAllowedValues().get(draft.config));
+                openChoices(values.stream().map(enumeration::getElementName).toList(), index -> {
+                    draft.choose(entry, values.get(index)); rebuildRows();
+                }, b.getX(), b.getY(), Math.max(controlWidth, 150));
             }
-            case 2 -> { // Nature & Water
-                currentRows.add(new OptionRow("Waving Foliage & Plants", "Grass, crops and leaves wind swaying (Disabled by default)",
-                    () -> RtSettings.wavingFoliage ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.wavingFoliage = !RtSettings.wavingFoliage;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Wind Strength", "Global wind velocity and foliage sway amplitude",
-                    () -> RtSettings.wavingFoliageStrength + "%",
-                    () -> {
-                        int[] strengths = {25, 50, 75, 100, 125, 150, 200};
-                        RtSettings.wavingFoliageStrength = next(RtSettings.wavingFoliageStrength, strengths);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Water Shader Style", "Vanilla flat water or Realistic RTX physical water",
-                    () -> RtSettings.waterStyle == RtSettings.WATER_STYLE_REALISTIC ? "Realistic RTX" : "Vanilla Style",
-                    () -> {
-                        RtSettings.waterStyle = RtSettings.waterStyle == RtSettings.WATER_STYLE_REALISTIC ? RtSettings.WATER_STYLE_VANILLA : RtSettings.WATER_STYLE_REALISTIC;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Water Caustics", "Physically focused sunlight patterns on river and sea beds",
-                    () -> RtSettings.caustics ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.caustics = !RtSettings.caustics;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Volumetric God Rays", "Atmospheric sun crepuscular rays through tree canopies",
-                    () -> RtAtmosphereSettings.godRays() != RtAtmosphereSettings.GodRays.OFF ? "ON" : "OFF",
-                    () -> {
-                        RtAtmosphereSettings.set("godrays", RtAtmosphereSettings.godRays() == RtAtmosphereSettings.GodRays.OFF ? 1 : 0);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Solar In-Scattering", "Atmospheric Rayleigh and Mie light scattering",
-                    () -> (int) (RtSettings.fogInScattering * 100) + "%",
-                    () -> {
-                        float[] s = {0.0f, 0.5f, 1.0f, 1.5f, 2.0f};
-                        RtSettings.fogInScattering = next(RtSettings.fogInScattering, s);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Sun Glare", "Anamorphic solar glare when looking towards the sun",
-                    () -> RtAtmosphereSettings.sunGlare() ? "ON" : "OFF",
-                    () -> {
-                        RtAtmosphereSettings.set("sunglare", RtAtmosphereSettings.sunGlare() ? 0 : 1);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Bloom & Glare Glow", "HDR bloom radiance around bright lights and sun",
-                    () -> RtAtmosphereSettings.bloom() ? "ON" : "OFF",
-                    () -> {
-                        RtAtmosphereSettings.set("bloom", RtAtmosphereSettings.bloom() ? 0 : 1);
-                        VulkanRtxConfig.save();
-                    }));
-            }
-            case 3 -> { // Upscalers & FG
-                currentRows.add(new OptionRow("Active Upscaler", "Super-resolution backend: DLSS, FSR, XeSS, NIS, Bilinear",
-                    () -> VulkanRtxConfig.activeBackend.name(),
-                    () -> {
-                        UpscalerBackend[] b = {UpscalerBackend.BILINEAR, UpscalerBackend.FSR, UpscalerBackend.DLSS,
-                            UpscalerBackend.XESS, UpscalerBackend.FSR1, UpscalerBackend.NIS};
-                        VulkanRtxConfig.activeBackend = next(VulkanRtxConfig.activeBackend, b);
-                        VulkanRtxConfig.reapplyUpscaler("user_config");
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Upscaler Quality Mode", "Resolution scaling preset (Quality, Balanced, Performance)",
-                    () -> {
-                        UpscalerMode m = VulkanRtxConfig.modeOf(VulkanRtxConfig.activeBackend);
-                        return m != null ? m.name() : "N/A (Bilinear)";
-                    },
-                    () -> {
-                        List<UpscalerMode> modes = UpscalerModes.modesFor(VulkanRtxConfig.activeBackend);
-                        if (modes.isEmpty()) return;
-                        UpscalerMode cur = VulkanRtxConfig.modeOf(VulkanRtxConfig.activeBackend);
-                        int idx = modes.indexOf(cur);
-                        UpscalerMode nextMode = (idx < 0 || idx + 1 >= modes.size()) ? modes.get(0) : modes.get(idx + 1);
-                        switch (VulkanRtxConfig.activeBackend) {
-                            case DLSS -> VulkanRtxConfig.dlssMode = nextMode;
-                            case XESS -> VulkanRtxConfig.xessMode = nextMode;
-                            case FSR -> VulkanRtxConfig.fsrMode = nextMode;
-                            case FSR1 -> VulkanRtxConfig.fsr1Mode = nextMode;
-                        }
-                        VulkanRtxConfig.reapplyUpscaler("user_mode");
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Custom Render Scale", "Custom resolution scaling percentage",
-                    () -> VulkanRtxConfig.customScalePercent + "%",
-                    () -> {
-                        int[] scales = {33, 50, 67, 75, 85, 100};
-                        VulkanRtxConfig.customScalePercent = next(VulkanRtxConfig.customScalePercent, scales);
-                        VulkanRtxConfig.reapplyUpscaler("user_custom_scale");
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Sharpening Filter", "FidelityFX RCAS or NVIDIA Image Scaling sharpening strength",
-                    () -> (int) (VulkanRtxConfig.fsrSharpness * 100) + "%",
-                    () -> {
-                        float[] sharp = {0.0f, 0.15f, 0.30f, 0.50f, 0.75f, 1.0f};
-                        VulkanRtxConfig.fsrSharpness = next(VulkanRtxConfig.fsrSharpness, sharp);
-                        VulkanRtxConfig.nisSharpness = VulkanRtxConfig.fsrSharpness;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Frame Generation", "NVIDIA Streamline DLSS-G / AMD FSR 3 frame generator",
-                    () -> VulkanRtxConfig.frameGenerationSetting.getLabel(),
-                    () -> {
-                        VulkanRtxConfig.frameGenerationSetting = next(VulkanRtxConfig.frameGenerationSetting,
-                            VulkanRtxConfig.FrameGenerationSetting.values());
-                        VulkanRtxConfig.save();
-                    }));
-            }
-            case 4 -> { // Camera & Color
-                currentRows.add(new OptionRow("Auto Texture LOD Bias", "Automatically adjust mipmap sharpness based on scale factor",
-                    () -> VulkanRtxConfig.autoTextureLodBias ? "ON" : "OFF",
-                    () -> {
-                        VulkanRtxConfig.autoTextureLodBias = !VulkanRtxConfig.autoTextureLodBias;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Texture LOD Bias Offset", "Manual mipmap bias offset for pixel-art clarity",
-                    () -> String.format(java.util.Locale.US, "%+.2f", VulkanRtxConfig.textureLodBiasOffset),
-                    () -> {
-                        float[] offsets = {-1.0f, -0.75f, -0.5f, -0.25f, 0.0f, +0.25f, +0.5f};
-                        VulkanRtxConfig.textureLodBiasOffset = next(VulkanRtxConfig.textureLodBiasOffset, offsets);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Point Sampling Sharpness", "Preserve crisp retro texel grid for pixel-art textures",
-                    () -> VulkanRtxConfig.pointSamplingSharpness ? "ON" : "OFF",
-                    () -> {
-                        VulkanRtxConfig.pointSamplingSharpness = !VulkanRtxConfig.pointSamplingSharpness;
-                        VulkanRtxConfig.save();
-                    }));
-            }
-            case 5 -> { // Materials & PBR
-                currentRows.add(new OptionRow("Auto Normal Maps", "Generate synthetic microfacet normal maps for vanilla blocks",
-                    () -> RtSettings.autoNormals ? "ON" : "OFF",
-                    () -> {
-                        RtSettings.autoNormals = !RtSettings.autoNormals;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Auto Normal Strength", "Depth and relief intensity of procedural normal maps",
-                    () -> RtSettings.autoNormalStrength + "%",
-                    () -> {
-                        int[] s = {25, 50, 75, 100, 125, 150, 200};
-                        RtSettings.autoNormalStrength = next(RtSettings.autoNormalStrength, s);
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Resource Pack Resolution", "Atlas tile dimension matching installed PBR pack",
-                    () -> VulkanRtxConfig.resourcePackResolution + "x",
-                    () -> {
-                        int[] res = {16, 32, 64, 128, 256, 512};
-                        VulkanRtxConfig.resourcePackResolution = next(VulkanRtxConfig.resourcePackResolution, res);
-                        TextureLodBias.resourcePackResolution = VulkanRtxConfig.resourcePackResolution;
-                        VulkanRtxConfig.save();
-                    }));
-            }
-            case 6 -> { // System & Future
-                currentRows.add(new OptionRow("Experimental Rays Mode", "Unlock hidden Fast RT and experimental modes",
-                    () -> VulkanRtxConfig.experimentalRays ? "UNLOCKED" : "LOCKED",
-                    () -> {
-                        VulkanRtxConfig.experimentalRays = !VulkanRtxConfig.experimentalRays;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Expert & Debug UI", "Display diagnostic graphs and low-level shader options",
-                    () -> VulkanRtxConfig.uiExpert ? "ON" : "OFF",
-                    () -> {
-                        VulkanRtxConfig.uiExpert = !VulkanRtxConfig.uiExpert;
-                        VulkanRtxConfig.save();
-                    }));
-
-                currentRows.add(new OptionRow("Reset All To Defaults", "Restore all graphics, ray tracing and upscaler defaults",
-                    () -> "Reset",
-                    () -> {
-                        VulkanSodiumConfig.resetAllToDefaultsAndReopen(this);
-                        rebuildWidgets();
-                    }));
-            }
-        }
-
-        // Calculate max vertical scroll based on current rows
-        int startY = listTop;
-        int listBottom = height - 42;
-        int rowH = 24;
-        int totalH = currentRows.size() * rowH;
-        maxScroll = Math.max(0, totalH - Math.max(0, listBottom - startY));
+        }).bounds(x, 0, controlWidth, 20).build();
     }
 
-    private static <T> T next(T current, T[] array) {
-        for (int i = 0; i < array.length; i++) {
-            if (array[i].equals(current)) {
-                return array[(i + 1) % array.length];
-            }
-        }
-        return array[0];
+    private static double normalized(IntegerOption option) {
+        var v = option.getSteppedValidator(); return (option.getValidatedValue() - v.min()) / (double)Math.max(1, v.max() - v.min());
     }
-
-    private static int next(int current, int[] array) {
-        for (int i = 0; i < array.length; i++) {
-            if (array[i] == current) {
-                return array[(i + 1) % array.length];
-            }
-        }
-        return array[0];
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Component valueText(StatefulOption<?> option) {
+        Object value = option.getValidatedValue();
+        if (value instanceof Boolean on) return tr(on ? "bedray.onoff.on" : "bedray.onoff.off", on ? "On" : "Off");
+        if (option instanceof IntegerOption number) return number.formatValue((Integer)value);
+        if (option instanceof EnumOption enumeration) return enumeration.getElementName((Enum)value);
+        return Component.literal(String.valueOf(value));
     }
-
-    private static float next(float current, float[] array) {
-        for (int i = 0; i < array.length; i++) {
-            if (Math.abs(array[i] - current) < 1.0e-4) {
-                return array[(i + 1) % array.length];
-            }
-        }
-        return array[0];
+    private void select(SettingsDraft.Entry entry) {
+        if (selected != entry) { selected = entry; PreviewPanel.setRuntimeStatus(draft.status(entry).text()); }
+        PreviewPanel.select(entry.option());
     }
-
-    private void openSodiumScreen() {
-        net.caffeinemc.mods.sodium.client.config.structure.OptionPage targetPage = null;
-        try {
-            for (var mo : net.caffeinemc.mods.sodium.client.config.ConfigManager.CONFIG.getModOptions()) {
-                if ("bedray".equals(mo.configId()) && !mo.pages().isEmpty() && mo.pages().get(0) instanceof net.caffeinemc.mods.sodium.client.config.structure.OptionPage page) {
-                    targetPage = page;
-                    break;
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        if (targetPage != null) {
-            Minecraft.getInstance().gui.setScreen(net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen.createScreen(this, targetPage));
-        } else {
-            Minecraft.getInstance().gui.setScreen(net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen.createScreen(this));
+    private void positionRows() {
+        for (int i = 0; i < rowWidgets.size(); i++) {
+            AbstractWidget w = rowWidgets.get(i); int y = listTop + i * ROW_HEIGHT - scroll;
+            w.setY(y); w.visible = y >= listTop && y + 20 <= listBottom;
         }
     }
+    private void updateButtons() { if (applyButton != null) applyButton.active = draft.changed(); if (revertButton != null) revertButton.active = draft.changed(); }
+    private void apply() { draft.apply(); draft = new SettingsDraft(); rebuildRows(); updateRuntime(); }
+    @Override public void tick() {
+        super.tick();
+        for (int i = 0; i < rows.size(); i++) if (rowWidgets.get(i).isFocused()) select(rows.get(i));
+        if (++statusTicks >= 20) { statusTicks = 0; updateRuntime(); }
+    }
+    private void updateRuntime() {
+        if (selected != null) PreviewPanel.setRuntimeStatus(draft.status(selected).text());
+        if (VulkanRtxConfig.voxelRendererSelected() && GraphicsBackendRegistry.backend() != null) {
+            var status = GraphicsBackendRegistry.backend().streamingStatus();
+            runtime = status.available() ? tr("bedray.settings.coverage", "Runtime: %s/%s chunks; %s resident, %s queued; GPU %s/%s MiB%s",
+                status.effectiveRenderDistanceChunks(), status.requestedRenderDistanceChunks(), status.residentSections(), status.queuedSections(),
+                status.usedGpuBytes() / (1024 * 1024), status.budgetGpuBytes() / (1024 * 1024),
+                status.memoryLimited() ? tr("bedray.settings.memory_limited", " (memory limited)").getString() : "")
+                : Component.literal(GraphicsBackendRegistry.status());
+        } else runtime = Component.literal(VulkanSodiumConfig.rendererStatus());
+    }
 
-    @Override
-    public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float delta) {
-        super.extractRenderState(g, mouseX, mouseY, delta);
-
-        // Header Title
-        g.text(font, title, (width - font.width(title)) / 2, 8, 0xFFFFFFFF);
-
-        int contentWidth = Math.min(width - 16, 540);
-        int contentX = (width - contentWidth) / 2;
-
-        int startY = listTop;
-        int listBottom = height - 42;
-        int rowH = 24;
-
-        // Render option text labels and hints
-        for (int i = 0; i < currentRows.size(); i++) {
-            OptionRow row = currentRows.get(i);
-            int rowY = startY + i * rowH - scrollOffset;
-            if (rowY < startY || rowY + 20 > listBottom) {
-                continue;
-            }
-
-            g.text(font, font.plainSubstrByWidth(row.label, contentWidth - 160), contentX + 4, rowY + 2, 0xFFFFFFFF);
-            g.text(font, font.plainSubstrByWidth(row.hint, contentWidth - 160), contentX + 4, rowY + 12, 0xFF888888);
+    private void openChoices(List<Component> labels, java.util.function.IntConsumer choose, int anchorX, int anchorY, int requestedWidth) {
+        closeChoices(); PreviewPanel.closeModal();
+        popupWidth = Math.min(width - 16, Math.max(requestedWidth, labels.stream().mapToInt(font::width).max().orElse(100) + 16));
+        popupHeight = Math.min(height - 40, labels.size() * 22 + 8);
+        popupX = Math.max(8, Math.min(width - popupWidth - 8, anchorX));
+        popupY = Math.max(8, Math.min(height - popupHeight - 30, anchorY + 21));
+        popupScroll = 0; popupFocus = 0;
+        for (int i = 0; i < labels.size(); i++) {
+            final int index = i;
+            popupButtons.add(addWidget(Button.builder(labels.get(i), b -> { closeChoices(); choose.accept(index); })
+                .bounds(popupX + 4, 0, popupWidth - 8, 20).build()));
         }
+        positionChoices(); if (!popupButtons.isEmpty()) setFocused(popupButtons.getFirst());
+    }
+    private void openExperiences(int x, int y, int popupWidth) {
+        var experiences = SettingsDraft.Experience.values();
+        openChoices(java.util.Arrays.stream(experiences).map(SettingsDraft.Experience::title).toList(), index -> {
+            draft.selectExperience(experiences[index]); category = SettingsDraft.Category.OVERVIEW; query = ""; scroll = 0; rebuildWidgets();
+        }, x, y, popupWidth);
+        for (int i = 0; i < experiences.length; i++) {
+            popupButtons.get(i).active = experiences[i].available();
+            popupButtons.get(i).setTooltip(Tooltip.create(experiences[i].description().copy().append("\n")
+                .append(Component.translatable("bedray.settings.experience.combinations"))));
+        }
+    }
+    private void positionChoices() {
+        popupScroll = Math.max(0, Math.min(popupScroll, Math.max(0, popupButtons.size() * 22 - popupHeight + 8)));
+        for (int i = 0; i < popupButtons.size(); i++) {
+            Button b = popupButtons.get(i); b.setY(popupY + 4 + i * 22 - popupScroll);
+            b.visible = b.getY() >= popupY + 4 && b.getY() + 20 <= popupY + popupHeight - 4;
+        }
+    }
+    private void closeChoices() { for (Button b : popupButtons) removeWidget(b); popupButtons.clear(); }
+    @Override public boolean mouseScrolled(double x, double y, double sx, double sy) {
+        if (!popupButtons.isEmpty()) { popupScroll -= (int)(sy * 22); positionChoices(); return true; }
+        if (PreviewPanel.scrolled(x, y, sy)) return true;
+        if (x >= contentX && x < contentX + contentWidth && y >= listTop && y < listBottom && maxScroll > 0) {
+            scroll = Math.max(0, Math.min(maxScroll, scroll - (int)(sy * ROW_HEIGHT))); positionRows(); return true;
+        }
+        return super.mouseScrolled(x, y, sx, sy);
+    }
+    @Override public boolean mouseClicked(MouseButtonEvent event, boolean twice) {
+        if (!popupButtons.isEmpty()) {
+            for (Button b : List.copyOf(popupButtons)) if (b.visible && b.mouseClicked(event, twice)) return true;
+            closeChoices(); return true;
+        }
+        if (event.button() == 0 && PreviewPanel.click(event.x(), event.y())) { rebuildControlMessages(); return true; }
+        if (event.x() >= contentX && event.x() < contentX + contentWidth && event.y() >= listTop && event.y() < listBottom) {
+            int index = ((int)event.y() - listTop + scroll) / ROW_HEIGHT;
+            if (index >= 0 && index < rows.size()) select(rows.get(index));
+        }
+        return super.mouseClicked(event, twice);
+    }
+    private void rebuildControlMessages() {
+        for (int i = 0; i < rows.size(); i++) rowWidgets.get(i).setMessage(rows.get(i).path().equals("renderer")
+            ? draft.experienceTitle() : valueText(rows.get(i).option())); updateButtons();
+    }
+    @Override public boolean keyPressed(KeyEvent event) {
+        if (!popupButtons.isEmpty()) {
+            if (event.key() == 256) { closeChoices(); return true; }
+            if (event.key() == 264 || event.key() == 265 || event.key() == 258) {
+                popupFocus = Math.floorMod(popupFocus + (event.key() == 265 ? -1 : 1), popupButtons.size());
+                popupScroll = Math.max(0, popupFocus * 22 - popupHeight + 32); positionChoices(); setFocused(popupButtons.get(popupFocus)); return true;
+            }
+        }
+        if (event.key() == 256 && PreviewPanel.isModalOpen()) { PreviewPanel.closeModal(); return true; }
+        return super.keyPressed(event);
+    }
 
-        // Scroll indicator if scrollable
+    @Override public void extractRenderState(GuiGraphicsExtractor g, int mx, int my, float delta) {
+        super.extractRenderState(g, mx, my, delta);
+        g.text(font, title, 8, 9, 0xFFFFFFFF);
+        int labelWidth = Math.max(30, contentWidth - Math.max(70, Math.min(160, contentWidth / 2)) - 14);
+        for (int i = 0; i < rows.size(); i++) {
+            if (!rowWidgets.get(i).visible) continue;
+            SettingsDraft.Entry row = rows.get(i); int y = rowWidgets.get(i).getY();
+            g.text(font, font.plainSubstrByWidth(row.option().getName().getString(), labelWidth), contentX + 2, y + 1,
+                rowWidgets.get(i).active ? 0xFFFFFFFF : 0xFF909090);
+            String subtitle = query.isBlank() ? row.option().hasChanged() ? tr("bedray.settings.pending", "Pending").getString() : ""
+                : row.category().title().getString();
+            g.text(font, font.plainSubstrByWidth(subtitle, labelWidth), contentX + 2, y + 12, 0xFF8ABCD8);
+        }
+        if (rows.isEmpty() && category != SettingsDraft.Category.PRESETS && category != SettingsDraft.Category.SYSTEM) {
+            Component empty = draft.voxel() && query.isBlank() ? tr("bedray.settings.voxel_unrelated", "These settings belong to the hardware renderer. Choose another category.")
+                : tr("bedray.settings.empty", "No matching settings.");
+            int y = listTop; for (var line : font.split(empty, contentWidth - 8)) { g.text(font, line, contentX + 2, y, 0xFFB0B0B0); y += 11; }
+        }
         if (maxScroll > 0) {
-            String scrollHint = "(Scroll mouse wheel to see more options)";
-            g.text(font, scrollHint, (width - font.width(scrollHint)) / 2, height - 39, 0x80888888);
+            int track = Math.max(1, listBottom - listTop), thumb = Math.max(8, track * track / (maxScroll + track));
+            int y = listTop + (track - thumb) * scroll / maxScroll;
+            g.fill(contentX + contentWidth - 3, y, contentX + contentWidth - 1, y + thumb, 0xFF79A6BE);
+        }
+        g.text(font, font.plainSubstrByWidth(runtime.getString(), width - 16), 8, height - 40, 0xFFB6D4E8);
+        if (selected != null && (detailsWidth > 0 || PreviewPanel.isModalOpen())) {
+            PreviewPanel.setResetAllowed(draft.editable(selected));
+            PreviewPanel.render(g, font, new Dim2i(detailsX, listTop, detailsWidth, listBottom - listTop), listBottom,
+                selected.option(), selected.info(), mx, my);
+        }
+        if (!popupButtons.isEmpty()) {
+            g.nextStratum(); g.fill(0, 0, width, height, 0x70000000);
+            g.fill(popupX, popupY, popupX + popupWidth, popupY + popupHeight, 0xFF141C24);
+            g.outline(popupX, popupY, popupWidth, popupHeight, 0xFF79A6BE);
+            for (Button b : popupButtons) b.extractRenderState(g, mx, my, delta);
         }
     }
-
-    @Override
-    public void onClose() {
-        if (minecraft != null) {
-            minecraft.gui.setScreen(parent);
-        }
-    }
+    @Override public void onClose() { PreviewPanel.clearSelection(); minecraft.gui.setScreen(parent); }
 }

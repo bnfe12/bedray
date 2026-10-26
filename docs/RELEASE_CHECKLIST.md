@@ -1,5 +1,9 @@
 # Release checklist: 0.1.0-alpha.1
 
+**Historical release record.** Current `main` contains the 2026-10-26 development integration, version 0.1.1-alpha.13.
+No build, shader compilation, tests, game session or release publication was performed for that integration. The checked
+items below apply only to the named alpha.1 build. See [DEVELOPMENT_BRANCHES](DEVELOPMENT_BRANCHES.md) for source provenance.
+
 This evidence log was updated on 2026-10-20. Checks describe only the evidence named beside them. This release is an ALPHA; a successful build and automated tests do not establish live-game stability.
 Update this file for every release. Publishing is being done at the owner's request as an ALPHA pre-release.
 

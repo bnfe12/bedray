@@ -21,7 +21,7 @@ def provenance = [
     'Build-Source': commit == null ? 'source-archive' : 'git-checkout'
 ]
 
-tasks.named('jar', Jar) {
+tasks.withType(Jar).matching { it.name in ['jar', 'combinedJar'] }.configureEach {
     // Changes to HEAD or the worktree must invalidate an otherwise up-to-date archive.
     inputs.properties(provenance)
     manifest.attributes(provenance)

@@ -58,6 +58,10 @@ import java.util.OptionalDouble;
  *       bloom / god rays (flames and magic bloom). The image then goes through the upscaler like the rest of the scene.</li>
  * </ol>
  * Everything runs on the render thread. Cost without particles: one boolean check per group; no pass, no dispatch.
+ * <p>
+ * Rain and snow columns use this same layer, depth attachment and composite: {@link RtWeatherLayer} records them during the world
+ * pass and adds its draws here (after the particle draws, which is the order of the world pass), so weather is occluded by geometry
+ * and invisible to the denoisers exactly like particles.
  */
 public final class RtParticleLayer {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
@@ -98,6 +102,7 @@ public final class RtParticleLayer {
     public static void beginFrame() {
         LEDGER.clear();
         DRAWS.clear();
+        RtWeatherLayer.beginFrame();
         transforms = null;
         lightmap = null;
         layerReady = false;
@@ -131,7 +136,8 @@ public final class RtParticleLayer {
      * @param target the world target the RT image will replace (its depth buffer is the raster depth of this frame)
      */
     public static void replay(RenderTarget target) {
-        if (DRAWS.isEmpty() || target == null || target.getDepthTextureView() == null || !capturing()) {
+        boolean weather = RtWeatherLayer.hasDraws();
+        if ((DRAWS.isEmpty() && !weather) || target == null || target.getDepthTextureView() == null || !capturing()) {
             return;
         }
         long t0 = System.nanoTime();
@@ -141,8 +147,14 @@ public final class RtParticleLayer {
             try (RenderPass pass = encoder.createRenderPass(() -> "Bedray RT particles", layer.getColorTextureView(),
                 Optional.<Vector4fc>of(CLEAR), target.getDepthTextureView(), OptionalDouble.empty())) {
                 RenderSystem.bindDefaultUniforms(pass);
-                pass.setUniform("DynamicTransforms", transforms);
-                pass.setUniform("Sampler2", lightmap, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
+                // the particle state can be absent while weather is captured (a frame with rain and no particles): the weather
+                // draws bind their own DynamicTransforms / Sampler2, so nothing is set from the particle capture here
+                if (transforms != null) {
+                    pass.setUniform("DynamicTransforms", transforms);
+                }
+                if (lightmap != null) {
+                    pass.setUniform("Sampler2", lightmap, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
+                }
                 long quads = 0;
                 for (LayerDraw d : DRAWS) {
                     pass.setPipeline(RenderSystem.getCompiledPipeline(d.pipeline()));
@@ -152,11 +164,19 @@ public final class RtParticleLayer {
                     pass.drawIndexed(d.indexCount(), 1, d.firstIndex(), d.baseVertex(), 0);
                     quads += d.indexCount() / 6;
                 }
+                // weather after particles: the order of the world pass, where the columns are drawn over sprites and clouds.
+                // One pass for both, so the columns test against the same depth the particles were drawn with.
+                if (weather) {
+                    RtWeatherLayer.draw(pass);
+                }
                 quadsLastFrame = quads;
                 drawsLastFrame = DRAWS.size();
             }
             layerReady = true;
-            framesWithParticles++;
+            // a frame can carry only the columns (rain without particles): counted by RtWeatherLayer, not as a particle frame
+            if (!DRAWS.isEmpty()) {
+                framesWithParticles++;
+            }
         } catch (RuntimeException | LinkageError e) {
             failed = true;
             layerReady = false;
@@ -222,14 +242,15 @@ public final class RtParticleLayer {
     /** Failure of an earlier frame is forgotten when RT is switched on again. */
     public static void clearFailure() {
         failed = false;
+        RtWeatherLayer.clearFailure();
     }
 
     /** One line for the autotest log. */
     public static String telemetry() {
         double ms = replayFramesWindow == 0 ? 0.0 : replayNanosWindow / 1.0e6 / replayFramesWindow;
-        return String.format(Locale.ROOT, "enabled=%s capturing=%s failed=%s layer=%s draws=%d quads=%d frames=%d composited=%d replay_cpu_ms=%.3f",
+        return String.format(Locale.ROOT, "enabled=%s capturing=%s failed=%s layer=%s draws=%d quads=%d frames=%d composited=%d replay_cpu_ms=%.3f weather=%s",
             RtSettings.particles(), capturing(), failed, layer == null ? "none" : layer.width + "x" + layer.height, drawsLastFrame,
-            quadsLastFrame, framesWithParticles, compositedFrames, ms);
+            quadsLastFrame, framesWithParticles, compositedFrames, ms, RtWeatherLayer.telemetry());
     }
 
     /** Restarts the CPU averaging window of the replay (autotest, between measurements). */

@@ -62,7 +62,7 @@ public class RtVolumetricFogTest {
     @Test
     public void testShaderCompilation() {
         // Verify shader source presence of volumetric fog functions and flags
-        String commonSrc = RtShaderCompiler.loadSource("/shaders/rt_common.glsl");
+        String commonSrc = RtWorldChecks.rtCommon();
         assertTrue(commonSrc.contains("applyVolumetricAtmosphere"), "rt_common.glsl must declare applyVolumetricAtmosphere");
         assertTrue(commonSrc.contains("FLAG_VOLUMETRIC_FOG"), "rt_common.glsl must define FLAG_VOLUMETRIC_FOG");
         assertTrue(commonSrc.contains("phaseHenyeyGreenstein"), "rt_common.glsl must declare phaseHenyeyGreenstein");
