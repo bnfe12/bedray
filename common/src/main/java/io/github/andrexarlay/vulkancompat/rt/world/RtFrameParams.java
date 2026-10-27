@@ -119,6 +119,15 @@ public final class RtFrameParams {
     public float bobY;
     public float bobZ;
     public boolean sceneChanged;
+    // ---- emitter list of this frame, for the Slang path tracer's block-emitter NEE (StatsBuf mirrors these) ----
+    /** VkBuffer of the {@link RtEmitters} ring; {@link #emitterOffset} selects the segment in use. */
+    public long emitterHandle;
+    public long emitterOffset;
+    public int emitterCount;
+    /** Camera position minus the block origin the list was rebuilt at: the shader subtracts it from every stored corner. */
+    public float emitterCamRelX;
+    public float emitterCamRelY;
+    public float emitterCamRelZ;
     public final RtSky.Key key = new RtSky.Key();
     public final float[] skyColor = {0.47f, 0.65f, 1.0f};
 

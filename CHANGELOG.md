@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+* Give the Slang path tracer block-emitter next-event estimation (`light/block_emitters.slang`, binding 18 over the records
+  `RtEmitters` already uploads): a torch-lit interior is no longer black in Path Tracing mode. The transport kernel, the eight
+  chromatic categories, the two-sided floor, the redstone bit test and the open-source shadow end bias are the legacy tuned
+  ones, pinned on both sides by `RtSlangBlockEmitterTest`; `RtSlangPathPass` samples the list under
+  `-Dvkbridge.rt.blockEmitters` with `-Dvkbridge.rt.emitterCandidates` and `-Dvkbridge.rt.emitterProbability`.
+  `ILightSampler` now takes a `LightReceiver` so a glowing face rejects its own quad instead of being lit twice, and
+  `MaterialSample` carries the scalar emission mask. Entity-atlas emitters and the pixelated cell shadow stay unported; no
+  reservoir yet. Evidence: `:common:test` green (615 tests) and `compileSlang` produces the 10-binding/64-byte manifest; no
+  owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
 * Integrate the 15 later ReSTIR/barriers commits through `1ae6580`: finite temporal/denoiser inputs, entity buffer retirement,
   primitive entity capture, native exception containment, DLL/load-path checks, backend escape-hatch and teardown fixes,
   log-path redaction, rain/storm celestial suppression and narrower bloom/AO work. Preserve the optical-material changes.

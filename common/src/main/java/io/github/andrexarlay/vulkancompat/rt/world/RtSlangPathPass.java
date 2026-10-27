@@ -277,12 +277,19 @@ public final class RtSlangPathPass implements RtPass {
             throw new IllegalStateException("path_slang dispatched before prepare/bind");
         }
         fillFrame(params, width, height);
+        // The emitter list of the legacy path, bound as a second descriptor range: switching block emitters off is an A/B
+        // on the shader's NEE branch only, the list keeps being rebuilt either way.
+        int emitterCount = RtConfig.SLANG_BLOCK_EMITTERS ? Math.max(0, params.emitterCount) : 0;
+        RtPathTraceSlangPass.Emitters emitters = new RtPathTraceSlangPass.Emitters(
+            emitterCount > 0 ? params.emitterHandle : 0L, params.emitterOffset, emitterCount);
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
-            8, sampleIndex++, 0, 0, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f);
+            8, sampleIndex++, 0, 0, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
+            emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
+            params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES);
         recordings.add(cmd.address());
         trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
             new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
-            views.depth(), frame, dispatch);
+            emitters, views.depth(), frame, dispatch);
 
         int flags = DISPLAY_FLAG_TONEMAP | (RtSettings.accumulate() ? DISPLAY_FLAG_ACCUMULATE : 0);
         if (params.cameraStatic) {

@@ -88,10 +88,10 @@ RCTraceSegmentOptions defaultRCTraceSegmentOptions() {
 // environment returns zero radiance, which stores a resolved-zero far record
 // flagged BOUNDED_MISS - exactly the plain contract.
 struct RCTSNoLightSampler : ILightSampler {
-    LightSample sample(float3 surfacePosition, float3 surfaceNormal, inout uint seed) {
+    LightSample sample(LightReceiver receiver, inout uint seed) {
         return invalidLightSample();
     }
-    LightEvaluation evaluate(float3 surfacePosition, float3 surfaceNormal, LightSample sample) {
+    LightEvaluation evaluate(LightReceiver receiver, LightSample sample) {
         return invalidLightEvaluation();
     }
 };
@@ -144,7 +144,7 @@ float3 rctsShadeSurface<T : ITraversal, L : ILightSampler>(
     float3 normal = surface.shadingNormal;
     if (dot(normal, view) < 0.0) normal = -normal;
 
-    LightSample light = lights.sample(surface.hit.position, normal, seed);
+    LightSample light = lights.sample(lightReceiver(surface.hit.position, normal, surface.material.emissionMask), seed);
     if (light.valid && light.sourcePdf > 0.0) {
         float cosine = max(dot(normal, light.direction), 0.0);
         if (cosine > 0.0) {

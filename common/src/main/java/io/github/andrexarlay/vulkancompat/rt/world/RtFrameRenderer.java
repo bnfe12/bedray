@@ -809,6 +809,12 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 4, (float) (camera.pos.y - emitters.originY()));
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 8, (float) (camera.pos.z - emitters.originZ()));
         MemoryUtil.memPutLong(hdr + RtStatsLayout.EMITTER_ADDR, emitters.address());
+        params.emitterHandle = emitters.handle();
+        params.emitterOffset = emitters.segmentOffset();
+        params.emitterCount = emitters.count();
+        params.emitterCamRelX = MemoryUtil.memGetFloat(hdr + RtStatsLayout.CAM_REL);
+        params.emitterCamRelY = MemoryUtil.memGetFloat(hdr + RtStatsLayout.CAM_REL + 4);
+        params.emitterCamRelZ = MemoryUtil.memGetFloat(hdr + RtStatsLayout.CAM_REL + 8);
         VkBarriers.fullMemoryBarrier(cmd);
 
         // stable (unjittered) matrix for both rays and accumulation decision:

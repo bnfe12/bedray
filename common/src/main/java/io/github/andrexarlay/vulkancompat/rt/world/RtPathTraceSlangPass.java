@@ -26,8 +26,8 @@ import java.util.Set;
  * Host side of {@code passes/path_trace.slang}: owns the radiance output, the frame-constant upload and the dummy
  * block-material table, and records one compute dispatch into the caller's command buffer.
  *
- * <p>Driven by {@link RtSlangPathPass}, which plugs it into the frame as the Path Tracing pass. The host contract (nine
- * bindings, 608-byte {@code FrameConstants}, 40-byte push block, capability mask 517) is expressed here once instead
+ * <p>Driven by {@link RtSlangPathPass}, which plugs it into the frame as the Path Tracing pass. The host contract (ten
+ * bindings, 608-byte {@code FrameConstants}, 64-byte push block, capability mask 517) is expressed here once instead
  * of being re-derived at the call site. The scene, the atlases and the depth target are passed to every
  * {@link #record}: the TLAS is rebuilt as chunks change, and depth goes straight into the renderer's {@code rt_depth},
  * which the composite and bloom already read.
@@ -46,8 +46,10 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     static final String PASS_NAME = "path_trace";
     static final int FRAME_CONSTANTS_BYTES = 608;
-    static final int PUSH_BYTES = 40;
+    static final int PUSH_BYTES = 64;
     static final int BLOCK_MATERIAL_BYTES = 64;
+    /** {@code light/block_emitters.slang}: the RtEmitters record, six vec4. */
+    static final int EMITTER_BYTES = 96;
     static final int SECTION_BYTES = 64;
     static final int THREAD_GROUP = 8;
     /** Frame-constant ring slots; the engine keeps at most two frames in flight, one slot is spare. */
@@ -71,7 +73,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         new Expected("normalAtlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
         new Expected("outDepth", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("frame", BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER),
-        new Expected("blockMaterials", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        new Expected("blockMaterials", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("emitters", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
 
     /** Scene inputs the host must supply: the frame TLAS and the section table written by {@link RtWorld}. */
     record Scene(long tlas, RtMemory.Buf sectionTable) {
@@ -82,6 +85,15 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * the block atlas, and the shader samples with an explicit level 0.
      */
     record Atlases(long albedoView, long materialView, long normalView, long sampler) {
+    }
+
+    /**
+     * The emitter list of this frame: one segment of the {@link RtEmitters} ring, bound at its own offset. A count of 0
+     * still needs a descriptor (the shader indexes it only through {@code pc.emitterCount}), so the pass substitutes the
+     * dummy block-material table, which is allocated for exactly that reason.
+     */
+    record Emitters(long buffer, long offset, int count) {
+        static final Emitters NONE = new Emitters(0L, 0L, 0);
     }
 
     /**
@@ -190,12 +202,15 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     }
 
     /**
-     * The 40-byte push block of {@code passes/path_trace.slang}: path limits and sampling inputs only. Exposure is not
+     * The 64-byte push block of {@code passes/path_trace.slang}: path limits, sampling inputs and the emitter list of the
+     * frame. Exposure is not
      * here on purpose: the pass writes scene-referred radiance and the display step applies {@code FrameConstants.exposure}
      * exactly once.
      */
     record Dispatch(int maxDepth, int maxSurfaceSteps, int sampleIndex, int materialCount, int flags,
-                    float rayBias, float alphaCutoff, float maxDistance, float maxRadiance, float sunProbability) {
+                    float rayBias, float alphaCutoff, float maxDistance, float maxRadiance, float sunProbability,
+                    int emitterCount, float emitterProbability, float emitterCamRelX, float emitterCamRelY,
+                    float emitterCamRelZ, int emitterCandidates) {
         Dispatch {
             if (maxDepth < 1) {
                 throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
@@ -221,6 +236,18 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             if (!(sunProbability >= 0f) || sunProbability > 1f) {
                 throw new IllegalArgumentException("sunProbability must be in [0, 1], got " + sunProbability);
             }
+            if (emitterCount < 0) {
+                throw new IllegalArgumentException("emitterCount must be >= 0, got " + emitterCount);
+            }
+            if (!(emitterProbability >= 0f) || emitterProbability > 1f) {
+                throw new IllegalArgumentException("emitterProbability must be in [0, 1], got " + emitterProbability);
+            }
+            if (emitterCandidates < 1 || emitterCandidates > 32) {
+                throw new IllegalArgumentException("emitterCandidates must be in [1, 32], got " + emitterCandidates);
+            }
+            if (!Float.isFinite(emitterCamRelX) || !Float.isFinite(emitterCamRelY) || !Float.isFinite(emitterCamRelZ)) {
+                throw new IllegalArgumentException("the emitter camera offset must be finite");
+            }
         }
 
         void writeTo(ByteBuffer out) {
@@ -239,6 +266,12 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             out.putFloat(base + 28, maxDistance);
             out.putFloat(base + 32, maxRadiance);
             out.putFloat(base + 36, sunProbability);
+            out.putInt(base + 40, emitterCount);
+            out.putFloat(base + 44, emitterProbability);
+            out.putFloat(base + 48, emitterCamRelX);
+            out.putFloat(base + 52, emitterCamRelY);
+            out.putFloat(base + 56, emitterCamRelZ);
+            out.putFloat(base + 60, emitterCandidates);
         }
     }
 
@@ -275,6 +308,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         requireElementBytes(manifest, "sections", SECTION_BYTES);
         requireElementBytes(manifest, "frame", FRAME_CONSTANTS_BYTES);
         requireElementBytes(manifest, "blockMaterials", BLOCK_MATERIAL_BYTES);
+        requireElementBytes(manifest, "emitters", EMITTER_BYTES);
     }
 
     private static void requireElementBytes(SlangPassManifest manifest, String name, int expected) {
@@ -361,7 +395,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * path uses and must keep its own barriers around the dispatch; this method adds the trailing full memory barrier
      * that makes both outputs visible to their consumers.
      */
-    void record(VkCommandBuffer cmd, Scene scene, Atlases atlases, long depthView, Frame frame, Dispatch dispatch) {
+    void record(VkCommandBuffer cmd, Scene scene, Atlases atlases, Emitters emitters, long depthView, Frame frame,
+                Dispatch dispatch) {
         if (closed) {
             throw new IllegalStateException("path trace pass is closed");
         }
@@ -381,6 +416,10 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (depthView == 0L) {
             throw new IllegalArgumentException("path trace needs a depth target");
         }
+        if (dispatch.emitterCount() > 0 && (emitters == null || emitters.buffer() == 0L)) {
+            throw new IllegalArgumentException("the push promises " + dispatch.emitterCount()
+                + " emitter(s) but no emitter buffer is bound");
+        }
         ensure(cmd, frame.width, frame.height);
         // Rotate the frame-constant slot: the engine can have two frames in flight, and the GPU must not read this
         // frame's block after the next frame overwrote it.
@@ -393,7 +432,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             // pool that has to be released on the discard path.
             recordings.add(cmd.address());
             program.dispatch(cmd.address(), program.groups(width, 0), program.groups(height, 1), 1,
-                resources(scene, atlases, depthView, slot), push);
+                resources(scene, atlases, emitters, depthView, slot), push);
         }
         VkBarriers.fullMemoryBarrier(cmd);
     }
@@ -410,8 +449,15 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         return SlangProgram.Resource.uniformBuffer("frame", frameConstants[slot].handle, 0, FRAME_CONSTANTS_BYTES);
     }
 
-    private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, long depthView, int frameSlot) {
+    private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters, long depthView,
+                                                   int frameSlot) {
         RtMemory.Buf table = scene.sectionTable();
+        // An empty list still needs a descriptor. The dummy table is 64 B, so the fallback range is clamped to it: the
+        // shader never indexes past pc.emitterCount, which is 0 for exactly this case.
+        long emitterBuffer = emitters != null && emitters.buffer() != 0L ? emitters.buffer() : blockMaterials.handle;
+        long emitterOffset = emitterBuffer == blockMaterials.handle ? 0L : emitters.offset();
+        long emitterBytes = emitterBuffer == blockMaterials.handle ? BLOCK_MATERIAL_BYTES
+            : Math.max(1, emitters.count()) * (long) EMITTER_BYTES;
         return List.of(
             SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
             SlangProgram.Resource.storageImage("outImage", radiance.view),
@@ -421,7 +467,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             SlangProgram.Resource.sampled("normalAtlas", atlases.normalView(), atlases.sampler()),
             SlangProgram.Resource.storageImage("outDepth", depthView),
             SlangProgram.Resource.uniformBuffer("frame", frameConstants[frameSlot].handle, 0, FRAME_CONSTANTS_BYTES),
-            SlangProgram.Resource.storageBuffer("blockMaterials", blockMaterials.handle, 0, BLOCK_MATERIAL_BYTES));
+            SlangProgram.Resource.storageBuffer("blockMaterials", blockMaterials.handle, 0, BLOCK_MATERIAL_BYTES),
+            SlangProgram.Resource.storageBuffer("emitters", emitterBuffer, emitterOffset, emitterBytes));
     }
 
     /** (Re)creates the radiance output when the render size changed; the old image is destroyed only after the device is idle. */

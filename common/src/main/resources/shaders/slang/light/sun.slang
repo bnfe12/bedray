@@ -30,7 +30,7 @@ struct SunMoonSampler : ILightSampler {
     SunState sun;
     float sunProbability;   // host-provided split between sun and moon
 
-    LightSample sample(float3 surfacePosition, float3 surfaceNormal, inout uint seed) {
+    LightSample sample(LightReceiver receiver, inout uint seed) {
         LightSample result = invalidLightSample();
 
         float sunIntensity = luminance(sun.color.rgb) * max(sun.color.w, 0.0);
@@ -53,7 +53,7 @@ struct SunMoonSampler : ILightSampler {
         if (luminance(radiance) <= 0.0) return result;
 
         float3 direction = coneAround(axis, radius, seed);
-        float cosSurface = lightCosine(surfaceNormal, direction);
+        float cosSurface = lightCosine(receiver.normal, direction);
         if (cosSurface <= 0.0) return result;
 
         float selectionPdf = pickSun ? sunPdf : moonPdf;
@@ -62,7 +62,7 @@ struct SunMoonSampler : ILightSampler {
 
         result.valid = true;
         result.kind = kind;
-        result.position = surfacePosition + direction * SUN_FAR_DISTANCE;
+        result.position = receiver.position + direction * SUN_FAR_DISTANCE;
         result.direction = direction;
         result.radiance = radiance;
         result.distance = SUN_FAR_DISTANCE;
@@ -72,7 +72,7 @@ struct SunMoonSampler : ILightSampler {
         return result;
     }
 
-    LightEvaluation evaluate(float3 surfacePosition, float3 surfaceNormal, LightSample sample) {
+    LightEvaluation evaluate(LightReceiver receiver, LightSample sample) {
         LightEvaluation result = invalidLightEvaluation();
         if (sample.kind != LightKind.Sun && sample.kind != LightKind.Moon) return result;
 
@@ -87,7 +87,7 @@ struct SunMoonSampler : ILightSampler {
         float3 radiance = isSun
             ? sun.color.rgb * max(sun.color.w, 0.0)
             : sun.moonColor.rgb * max(sun.moonColor.w, 0.0);
-        float cosSurface = lightCosine(surfaceNormal, direction);
+        float cosSurface = lightCosine(receiver.normal, direction);
         if (cosSurface <= 0.0 || luminance(radiance) <= 0.0) return result;
 
         float sunIntensity = luminance(sun.color.rgb) * max(sun.color.w, 0.0);

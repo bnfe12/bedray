@@ -421,7 +421,7 @@ RCShadedSurface rcShadeSurface<T : ITraversal, L : ILightSampler>(
     normal = normalize(normal);
     if (dot(normal, view) < 0.0) normal = -normal;
 
-    LightSample light = lights.sample(surface.hit.position, normal, seed);
+    LightSample light = lights.sample(lightReceiver(surface.hit.position, normal, surface.material.emissionMask), seed);
     // ILightSampler has no separate failure code: valid == false is the
     // sampler's "no sample" result (no light or internal failure), so it skips
     // NEE by contract.  A purportedly valid sample must instead be usable: a

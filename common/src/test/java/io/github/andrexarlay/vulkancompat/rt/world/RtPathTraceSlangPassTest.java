@@ -66,7 +66,7 @@ class RtPathTraceSlangPassTest {
     @Test
     void pushBlockKeepsTheSlangLayout() {
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(
-            8, 32, 5, 0, 0x21, 0.01f, 0.5f, 512f, 1000f, 0.75f);
+            8, 32, 5, 0, 0x21, 0.01f, 0.5f, 512f, 1000f, 0.75f, 64, 0.5f, 1.5f, -2.25f, 0.75f, 8);
         ByteBuffer out = ByteBuffer.allocate(RtPathTraceSlangPass.PUSH_BYTES);
         dispatch.writeTo(out);
 
@@ -80,8 +80,14 @@ class RtPathTraceSlangPassTest {
         assertEquals(512f, out.getFloat(28), "maxDistance at 28");
         assertEquals(1000f, out.getFloat(32), "maxRadiance at 32");
         assertEquals(0.75f, out.getFloat(36), "sunProbability at 36");
+        assertEquals(64, out.getInt(40), "emitterCount at 40");
+        assertEquals(0.5f, out.getFloat(44), "emitterProbability at 44");
+        assertEquals(1.5f, out.getFloat(48), "camRel.x at 48 (float4 wants a 16-byte boundary)");
+        assertEquals(-2.25f, out.getFloat(52), "camRel.y at 52");
+        assertEquals(0.75f, out.getFloat(56), "camRel.z at 56");
+        assertEquals(8f, out.getFloat(60), "candidates at 60");
         assertEquals(RtPathTraceSlangPass.PUSH_BYTES, out.capacity());
-        assertEquals(40, RtPathTraceSlangPass.PUSH_BYTES, "the Slang block is five uints and five floats");
+        assertEquals(64, RtPathTraceSlangPass.PUSH_BYTES, "ten scalars, the emitter pair and one float4");
     }
 
     @Test
@@ -94,12 +100,24 @@ class RtPathTraceSlangPassTest {
         assertThrows(IllegalArgumentException.class, () -> dispatch(8, 1, 0.5f, 100f, 0f, 0.5f));
         assertThrows(IllegalArgumentException.class, () -> dispatch(8, 1, 0.5f, 100f, 1f, -0.1f));
         assertThrows(IllegalArgumentException.class, () -> dispatch(8, 1, 0.5f, 100f, 1f, 1.1f));
+        assertThrows(IllegalArgumentException.class, () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, -1, 0.5f, 8));
+        assertThrows(IllegalArgumentException.class, () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 1.5f, 8));
+        assertThrows(IllegalArgumentException.class, () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 0));
+        assertThrows(IllegalArgumentException.class, () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 33));
+        assertThrows(IllegalArgumentException.class,
+            () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, Float.NaN, 8));
     }
 
     private static RtPathTraceSlangPass.Dispatch dispatch(int depth, int steps, float alphaCutoff, float maxDistance,
                                                           float maxRadiance, float sunProbability) {
+        return dispatch(depth, steps, alphaCutoff, maxDistance, maxRadiance, sunProbability, 0, 0f, 1);
+    }
+
+    private static RtPathTraceSlangPass.Dispatch dispatch(int depth, int steps, float alphaCutoff, float maxDistance,
+                                                          float maxRadiance, float sunProbability, int emitterCount,
+                                                          float emitterProbability, int emitterCandidates) {
         return new RtPathTraceSlangPass.Dispatch(depth, steps, 0, 0, 0, 0.01f, alphaCutoff, maxDistance, maxRadiance,
-            sunProbability);
+            sunProbability, emitterCount, emitterProbability, 0f, 0f, 0f, emitterCandidates);
     }
 
     @Test
@@ -131,6 +149,8 @@ class RtPathTraceSlangPassTest {
             "FrameConstants");
         assertEquals(RtPathTraceSlangPass.BLOCK_MATERIAL_BYTES, manifest.binding("blockMaterials").elementBytes(),
             "BlockMaterial");
+        assertEquals(RtPathTraceSlangPass.EMITTER_BYTES, manifest.binding("emitters").elementBytes(),
+            "BlockEmitterRecord: the six vec4 RtEmitters writes, so one buffer serves both paths");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[0], "group x");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[1], "group y");
     }

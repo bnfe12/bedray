@@ -115,7 +115,7 @@ class SlangPassLibraryTest {
         Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
 
         SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        assertEquals(9, manifest.bindings().size(), "path_trace: binding count");
+        assertEquals(10, manifest.bindings().size(), "path_trace: binding count");
         assertBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
         assertBinding(manifest, "outImage", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -128,7 +128,10 @@ class SlangPassLibraryTest {
         assertEquals(608, manifest.binding("frame").elementBytes(), "FrameConstants stays 608 bytes");
         assertBinding(manifest, "blockMaterials", 17, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
         assertEquals(64, manifest.binding("blockMaterials").elementBytes(), "BlockMaterial stays 64 bytes");
-        assertEquals(40, manifest.pushConstantBytes(), "path_trace: push constant block");
+        assertBinding(manifest, "emitters", 18, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        assertEquals(96, manifest.binding("emitters").elementBytes(),
+            "BlockEmitterRecord is the 96-byte RtEmitters record, so one upload serves both paths");
+        assertEquals(64, manifest.pushConstantBytes(), "path_trace: push constant block");
         assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS
             | BedrayCoreLayouts.CAP_SHADER_INT64, manifest.requiredCapabilities(),
             "path_trace: ray query + device addresses + 64-bit integers");

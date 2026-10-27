@@ -172,12 +172,12 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         float3 view = -ray.direction;
         if (dot(normal, view) < 0.0) normal = -normal;
 
-        // Sun/moon NEE cannot sample a surface emitter, so every accepted hit
-        // carries its own emission; a sampler that adds emitters must gate this.
+        // The face of a glowing block is seen as its own emission, and the light it casts on other surfaces comes from
+        // NEE; a sampler that reads the emitter list rejects the receiver's own quad through LightReceiver.emission.
         result.radiance += throughput * surface.material.emission;
 
         // ---- Next-event estimation ----
-        LightSample light = lights.sample(hit.position, normal, seed);
+        LightSample light = lights.sample(lightReceiver(hit.position, normal, surface.material.emissionMask), seed);
         if (light.valid && light.sourcePdf > 0.0) {
             float3 lightDirection = light.direction;
             float cosine = max(dot(normal, lightDirection), 0.0);

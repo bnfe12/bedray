@@ -32,6 +32,7 @@ static const uint MATERIAL_FLAG_SUBSURFACE  = 1u << 4u;
 struct MaterialSample {
     float3 albedo;              // linear diffuse albedo
     float3 emission;            // linear emitted radiance
+    float  emissionMask;        // atlas emission before the gain: the legacy s.emission, used for emitter self-rejection
     float3 f0;                  // reflectance at normal incidence
     float  roughness;           // linear roughness (0..1)
     float  metallic;            // 0 = dielectric, 1 = metal

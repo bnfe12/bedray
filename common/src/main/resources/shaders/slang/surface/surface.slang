@@ -118,6 +118,7 @@ MaterialSample defaultMaterialSample() {
     MaterialSample material;
     material.albedo = float3(1.0);
     material.emission = float3(0.0);
+    material.emissionMask = 0.0;
     material.f0 = float3(0.04);
     material.roughness = 0.9;
     material.metallic = 0.0;
@@ -184,7 +185,8 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         material.alpha = clamp(block.albedo.a, 0.0, 1.0);
         material.roughness = clamp(block.surface.x, 0.0, 1.0);
         material.f0 = float3(max(block.surface.y, 0.0));
-        material.emission = block.albedo.rgb * max(block.surface.z, 0.0);
+        material.emissionMask = max(block.surface.z, 0.0);
+        material.emission = block.albedo.rgb * material.emissionMask;
         material.ior = max(block.surface.w, 1.0);
         material.transmission = clamp(block.optical.x, 0.0, 1.0);
         material.thickness = max(block.optical.y, 0.0);
@@ -227,7 +229,8 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         material.roughness = clamp(materialTexel.r, 0.0, 1.0);
         material.metallic = materialTexel.g > (229.0 / 255.0) ? 1.0 : 0.0;
         material.f0 = material.metallic > 0.5 ? float3(0.04) : float3(max(materialTexel.g, 0.0));
-        material.emission = albedoTexel.rgb * max(materialTexel.b, 0.0);
+        material.emissionMask = max(materialTexel.b, 0.0);
+        material.emission = albedoTexel.rgb * material.emissionMask;
         material.ior = max(options.defaultIor, 1.0);
         material.thickness = max(options.defaultThickness, 0.0);
         material.ambientOcclusion = 1.0;
@@ -295,6 +298,7 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         material.emission *= options.emissionScale;
     } else {
         material.emission = float3(0.0);
+        material.emissionMask = 0.0;
     }
 
     if (material.alphaMode == AlphaMode.Translucent && material.transmission <= 0.0) {

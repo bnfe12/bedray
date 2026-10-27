@@ -160,7 +160,7 @@ DIReservoirResult reservoirResolve(DIReservoir reservoir, float3 surfacePosition
 DIReservoir restirDiSample<S : ILightSampler>(S sampler,
         float3 surfacePosition, float3 surfaceNormal, inout uint seed) {
     DIReservoir reservoir = emptyReservoir();
-    LightSample candidate = sampler.sample(surfacePosition, surfaceNormal, seed);
+    LightSample candidate = sampler.sample(lightReceiver(surfacePosition, surfaceNormal, 0.0), seed);
     if (!candidate.valid || candidate.targetPdf <= 0.0 || candidate.sourcePdf <= 0.0) {
         return reservoir;
     }
@@ -179,7 +179,7 @@ DIReservoir restirDiTemporal<S : ILightSampler>(S sampler,
     if (history.stats.x <= 0.0) return current;
 
     LightSample historySample = reservoirLightSample(history, surfacePosition);
-    LightEvaluation evaluation = sampler.evaluate(surfacePosition, surfaceNormal, historySample);
+    LightEvaluation evaluation = sampler.evaluate(lightReceiver(surfacePosition, surfaceNormal, 0.0), historySample);
     if (!evaluation.valid || evaluation.targetPdf <= 0.0) return current;
 
     DIReservoir merged = mergeReservoirs(current, history, evaluation.targetPdf,
@@ -196,7 +196,7 @@ DIReservoir restirDiSpatial<S : ILightSampler>(S sampler,
     if (neighbor.stats.x <= 0.0) return current;
 
     LightSample neighborSample = reservoirLightSample(neighbor, surfacePosition);
-    LightEvaluation evaluation = sampler.evaluate(surfacePosition, surfaceNormal, neighborSample);
+    LightEvaluation evaluation = sampler.evaluate(lightReceiver(surfacePosition, surfaceNormal, 0.0), neighborSample);
     if (!evaluation.valid || evaluation.targetPdf <= 0.0) return current;
 
     return mergeReservoirs(current, neighbor, evaluation.targetPdf,

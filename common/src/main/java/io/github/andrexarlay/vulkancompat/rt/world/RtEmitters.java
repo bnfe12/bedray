@@ -329,7 +329,17 @@ public final class RtEmitters {
 
     /** Device address of the current segment (valid when {@link #count()} > 0). */
     public long address() {
-        return buffer.address + (long) Math.max(segment, 0) * MAX_EMITTERS * BYTES;
+        return buffer.address + segmentOffset();
+    }
+
+    /** The whole ring buffer, for a descriptor that binds {@link #segmentOffset()} explicitly (the Slang path). */
+    public long handle() {
+        return buffer.handle;
+    }
+
+    /** Byte offset of the current segment inside {@link #handle()}; one segment holds {@link #MAX_EMITTERS} records. */
+    public long segmentOffset() {
+        return (long) Math.max(segment, 0) * MAX_EMITTERS * BYTES;
     }
 
     public int originX() {

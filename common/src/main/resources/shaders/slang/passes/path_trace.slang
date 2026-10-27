@@ -18,6 +18,7 @@
 //   12 outDepth         R32F storage image (first accepted surface distance, 1e6 on a miss)
 //   16 frame            ConstantBuffer<FrameConstants> (608 B)
 //   17 blockMaterials   StructuredBuffer<BlockMaterial> (dummy table until voxel materials exist)
+//   18 emitters         StructuredBuffer<BlockEmitterRecord> (the RtEmitters list of the legacy path, 96 B per record)
 //
 // The manifest records Int64, PhysicalStorageBufferAddresses and RayQueryKHR as
 // required capabilities; the Java host must enable the matching ABI bits.
@@ -25,6 +26,7 @@
 public module path_trace_pass;
 
 import "contracts/contracts.slang";
+import "light/block_emitters.slang";
 import "light/sky.slang";
 import "light/sun.slang";
 import "pathtrace/path_tracer.slang";
@@ -46,6 +48,9 @@ struct PathTracePush {
     float maxDistance;
     float maxRadiance;
     float sunProbability;
+    uint  emitterCount;
+    float emitterProbability;
+    float4 emitterCameraRelative;   // xyz camera minus the origin the list was rebuilt at, w candidates per call
 };
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;
@@ -57,6 +62,7 @@ struct PathTracePush {
 [[vk::image_format("r32f")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;
 [[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;
 [[vk::binding(17, 0)]] StructuredBuffer<BlockMaterial> blockMaterials;
+[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -111,9 +117,25 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.sections = sections;
     traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_WORLD;
 
-    SunMoonSampler lights;
-    lights.sun = f.sun;
-    lights.sunProbability = pc.sunProbability;
+    SunMoonSampler keyLight;
+    keyLight.sun = f.sun;
+    keyLight.sunProbability = pc.sunProbability;
+
+    // Block emitters of this frame, in the list RtEmitters uploads for the legacy path as well. The receiver's own
+    // emission reaches the sampler through LightReceiver, so a glowing face is not lit by its own quad.
+    BlockEmitterSampler emitterSampler;
+    emitterSampler.records = emitters;
+    emitterSampler.atlas = atlas;
+    emitterSampler.count = pc.emitterCount;
+    emitterSampler.candidates = uint(max(pc.emitterCameraRelative.w, 1.0));
+    emitterSampler.cameraRelative = pc.emitterCameraRelative.xyz;
+    emitterSampler.maxDistance = max(pc.maxDistance, 1.0);
+
+    SunAndBlockEmitterSampler lights;
+    lights.keyLight = keyLight;
+    lights.emitters = emitterSampler;
+    // No list, no share: the sun keeps the whole density instead of being renormalised by a branch that never wins.
+    lights.emitterProbability = pc.emitterCount > 0u ? clamp(pc.emitterProbability, 0.0, 1.0) : 0.0;
 
     GradientSky environment;
     environment.atmosphere = f.atmosphere;

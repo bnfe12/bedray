@@ -58,7 +58,7 @@ struct UniformEmitterSampler : ILightSampler {
     EmitterList lights;
     float maxDistance;
 
-    LightSample sample(float3 surfacePosition, float3 surfaceNormal, inout uint seed) {
+    LightSample sample(LightReceiver receiver, inout uint seed) {
         LightSample result = invalidLightSample();
         if (lights.count == 0u) return result;
 
@@ -67,13 +67,13 @@ struct UniformEmitterSampler : ILightSampler {
         float2 uv = float2(rand01(seed), rand01(seed));
         float3 lightPosition = emitter.p0.xyz + emitter.e1.xyz * uv.x + emitter.e2.xyz * uv.y;
 
-        float3 toLight = lightPosition - surfacePosition;
+        float3 toLight = lightPosition - receiver.position;
         float distanceToLight = length(toLight);
         if (distanceToLight <= 1.0e-5 || distanceToLight > maxDistance) return result;
 
         float3 direction = toLight / distanceToLight;
         float cosLight = emitterCosine(emitter, direction);
-        float cosSurface = lightCosine(surfaceNormal, direction);
+        float cosSurface = lightCosine(receiver.normal, direction);
         if (cosLight <= 0.0 || cosSurface <= 0.0) return result;
 
         float3 radiance = emitterRadiance(emitter);
@@ -97,18 +97,18 @@ struct UniformEmitterSampler : ILightSampler {
         return result;
     }
 
-    LightEvaluation evaluate(float3 surfacePosition, float3 surfaceNormal, LightSample sample) {
+    LightEvaluation evaluate(LightReceiver receiver, LightSample sample) {
         LightEvaluation result = invalidLightEvaluation();
         if (sample.lightIndex >= lights.count) return result;
 
         EmitterRecord emitter = lights.emitters[sample.lightIndex];
-        float3 toLight = sample.position - surfacePosition;
+        float3 toLight = sample.position - receiver.position;
         float distanceToLight = length(toLight);
         if (distanceToLight <= 1.0e-5 || distanceToLight > maxDistance) return result;
 
         float3 direction = toLight / distanceToLight;
         float cosLight = emitterCosine(emitter, direction);
-        float cosSurface = lightCosine(surfaceNormal, direction);
+        float cosSurface = lightCosine(receiver.normal, direction);
         if (cosLight <= 0.0 || cosSurface <= 0.0) return result;
 
         float3 radiance = emitterRadiance(emitter);

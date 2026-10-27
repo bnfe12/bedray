@@ -102,7 +102,7 @@ common/src/main/resources/shaders/slang/
 │   ├── hit.slang                      Ray, SurfaceHit, VisibilityResult, RayPayload
 │   ├── history.slang                  HistoryHeader/Sample/Policy, reprojection
 │   ├── math.slang                     constants, luminance, safeNormalize, frames
-│   └── light.slang                    LightSample, ILightSampler
+│   └── light.slang                    LightSample, LightReceiver, ILightSampler
 ├── traversal/
 │   ├── traversal.slang                ITraversal
 │   ├── voxel_traversal.slang          BitmaskVoxelTraversal + VoxelWorld
@@ -112,7 +112,8 @@ common/src/main/resources/shaders/slang/
 ├── voxel/
 │   └── voxel.slang                    single-section Bitmask HDDA
 ├── light/
-│   ├── emitters.slang                 EmitterRecord + UniformEmitterSampler
+│   ├── block_emitters.slang           BlockEmitterRecord (the RtEmitters upload) + legacy-look emitter NEE
+│   ├── emitters.slang                 EmitterRecord + UniformEmitterSampler; no host feeds this record yet
 │   ├── sun.slang                      SunMoonSampler
 │   └── sky.slang                      IEnvironmentSampler + GradientSky
 ├── surface/
@@ -167,11 +168,11 @@ modules use quoted imports (`import "voxel/voxel.slang";`), so a single
 | Contract | Owns | Must not own |
 |---|---|---|
 | `frame.slang` | camera, sun/moon, atmosphere, exposure, frame index/flags | descriptor bindings, plan selection |
-| `material.slang` | decoded albedo/roughness/f0/emission/alpha mode/optical fields | atlas sampling, traversal decisions |
+| `material.slang` | decoded albedo/roughness/f0/emission/emission-mask/alpha mode/optical fields | atlas sampling, traversal decisions |
 | `geometry.slang` | `VoxelSection` occupancy masks, `VoxelGrid`, `GeometrySection` ranges | section directory buffers, TLAS handles |
 | `hit.slang` | `Ray`, `SurfaceHit`, `VisibilityResult`, `PathVertex`, `RayPayload` | backend-specific hit structures |
 | `history.slang` | previous view-projection, reprojection, validation, blend weight | per-feature reservoir records |
-| `light.slang` | `LightSample`, `LightEvaluation`, `ILightSampler` | reservoir math, traversal handles |
+| `light.slang` | `LightSample`, `LightEvaluation`, `LightReceiver`, `ILightSampler` | reservoir math, traversal handles |
 
 Voxel contract: a 16³ section is 64 macro cells of 4³ voxels, one `uint64_t`
 mask per cell.  A block edit flips one bit; no mesh or SDF rebuild.  The
@@ -222,11 +223,14 @@ before the first dispatch.
 | `outDepth` | 12 | R32F storage image; first-hit distance, `1e6` on a miss |
 | `frame` | 16 | 608-byte `FrameConstants` uniform buffer, one upload per frame |
 | `blockMaterials` | 17 | dummy `BlockMaterial` table until voxel materials exist: allocate at least one 64-byte element and push `materialCount = 0` |
+| `emitters` | 18 | the `RtEmitters` ring buffer bound at the current segment offset — the same 96-byte records the legacy `rt_path.comp` reads, so one upload serves both paths; a dummy element when the list is empty |
 
-The push block is 40 bytes.  It carries sampling and path limits only: the pass
-writes scene-referred radiance, and `FrameConstants.exposure` is applied once by
-the display/tonemap pass, so accumulation and denoise stay in linear HDR and
-exposure cannot be applied twice.  The pass requires `CAP_RAY_QUERY |
+The push block is 64 bytes.  It carries sampling and path limits plus the
+emitter tail (`emitterCount`, `emitterProbability`, and `emitterCameraRelative`,
+whose xyz is the camera minus the origin the list was rebuilt at and whose w is
+the candidates per call): the pass writes scene-referred radiance, and
+`FrameConstants.exposure` is applied once by the display/tonemap pass, so
+accumulation and denoise stay in linear HDR and exposure cannot be applied twice.  The pass requires `CAP_RAY_QUERY |
 CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing uses its own
 `SlangRuntime`, created from `SlangDeviceCapabilities.enabledMask`; the mask-0
 runtime in `RtAtmosphere` belongs to bloom only. The final C++ renderer must
@@ -259,7 +263,7 @@ depth images lazily from the frame size, keeps a ring of three separate 608-byte
 uniform buffers (the engine keeps at most two frames in flight; separate buffers
 avoid `minUniformBufferOffsetAlignment` issues with a 608-byte stride), zeroes
 one 64-byte `BlockMaterial` element, validates the generated manifest against
-the nine bindings above, and records the trace dispatch, the display dispatch
+the ten bindings above, and records the trace dispatch, the display dispatch
 and a full memory barrier. The renderer keeps
 ownership of the TLAS, section table and atlas views. Every command buffer
 passed to `dispatch` must reach `releaseRecording` after its submission
@@ -268,15 +272,20 @@ completed or the recording was discarded, and `close()` must run before
 mode, not the final ownership model: the C++ renderer must take over resources,
 recording and lifetime, and the adapter must not grow into a parallel renderer.
 
-The running mean is not reprojected, so the adapter resets it to zero when the
-camera moves, the scene changes, the key light's direction or colour changes, or
-the sky colour changes. Without the lighting check a moving sun would be averaged
-into a static dot instead of restarting accumulation. The sun/moon cone uses
+The running mean is reprojected: `path_display.slang` carries each pixel's
+history through `FrameConstants.prevViewProjection` plus the anchor delta,
+rejects it on a depth discontinuity (`REPROJECTION_TOLERANCE`) and keeps a
+per-pixel sample count, so accumulation continues while the camera moves instead
+of restarting on every frame. The adapter still resets the whole image when the
+scene changes, the key light's direction or colour changes, or the sky colour
+changes — a moving sun must not be averaged into a static dot. The history is
+only trusted after it was written once (`historyWritten`), and the reset path is
+`RtSlangPathPass.resetHistory`. The sun/moon cone uses
 `RtSettings.sunRadiusRad()` (the `sun_size_tenths` setting, default 0.0044 rad)
 like the GLSL path; the earlier hardcoded 0.0093 rad was about twice that radius,
-or roughly 4.5x the solid angle. Evidence level for both fixes: the adapter was
-type-checked with `javac` against the previous build output; no Gradle build,
-game launch or GPU frame is recorded.
+or roughly 4.5x the solid angle. Evidence level: both fixes compile through
+`compileSlang` and are covered by `RtPathTraceSlangPassTest`; neither has an
+owner-verified frame recorded yet.
 
 ### Path-trace shading corrections
 
@@ -306,13 +315,48 @@ normal cannot start the ray inside the surface.  NEE still evaluates the BSDF
 and cosine with the shading normal.  This change is covered by the same
 manual SPIR-V compile.
 
-`tracePath` now adds a surface's emission on every accepted hit instead of only
-after a camera or delta bounce.  The gate assumed the previous vertex's NEE
-sampled surface emitters, but the only wired sampler is `SunMoonSampler`, so
-indirect light from emissive blocks was dropped entirely.  A future emitter
-sampler must restore the delta/camera gate with MIS to avoid double counting.
-The same manual `slangc` invocation compiles the changed `path_trace` entry
-point (94,184-byte SPIR-V); no Gradle build or GPU frame is recorded.
+`tracePath` adds a surface's emission on every accepted hit: the face of a
+glowing block is seen as its own radiance, and the light it casts on other
+surfaces arrives from emitter NEE. Those are two terms, not a double count,
+provided a glowing face is not lit by its own quad — which is why
+`ILightSampler` takes a `LightReceiver` and the sampler rejects a candidate
+closer than half a block when `receiver.emission > 0.5` (see the next section).
+
+### Block-emitter NEE
+
+`light/block_emitters.slang` gives the Slang path the emitters the legacy path
+already sampled; before it, a torch-lit room rendered black because the only
+wired `ILightSampler` was `SunMoonSampler`. The module reads the `RtEmitters`
+records through binding 18 and implements `ILightSampler` (plus
+`SunAndBlockEmitterSampler`, which splits each draw between the key light and
+the emitters and divides the returned `sourcePdf` by the branch share — with one
+live branch nothing is renormalised).
+
+The *structure* is new Slang (contracts, `MaterialAtlas`, `sampling.slang`), the
+*look* is the legacy kernel deliberately kept: `d^-1.5` to two blocks then
+`d^-1.25` with the `0.84090` seam constant, the squared `EMITTER_RADIUS` window,
+the eight chromatic categories, the `0.25` edge-on floor for two-sided sources,
+the redstone alpha-bit test and the open-source shadow end bias. Those values
+were tuned by the owner against real screens, so `RtSlangBlockEmitterTest` pins
+each of them on both sides — retune one file and the test names the other.
+
+Estimator contract: `radiance` carries the legacy `p^`-folded weight
+(`wsum / candidates` divided by the receiver cosine, because `bsdfEvaluate`
+applies that cosine again) multiplied by the solid-angle density, and
+`sourcePdf` stays the honest density of the chosen point so ReSTIR can reuse the
+sample without re-deriving it. For one candidate per call this reproduces the
+legacy integrand exactly; for more it is its RIS average.
+
+Known deviations from the legacy path: entity-atlas emitters (`uvc.w != 0`) are
+skipped, because the entity texture is not bound to this pass and a candidate
+that cannot be evaluated must not take weight; the pixelated-cell shadow origin
+is not ported; there is no reservoir yet, so each call samples the list
+independently (`restir/restir_di.slang` is not wired to this pass). Switches: `-Dvkbridge.rt.blockEmitters` (default true, the whole feature),
+`-Dvkbridge.rt.emitterCandidates` (1..32, default 8 = `NEE_CANDIDATES`) and
+`-Dvkbridge.rt.emitterProbability` (0..1, default 0.5). Evidence: `compileSlang`
+produces 10 bindings / 64-byte push for `path_trace`, and
+`RtSlangBlockEmitterTest` + `RtPathTraceSlangPassTest` pass; no GPU frame or
+side-by-side screenshot is recorded.
 
 The same audit recorded the remaining systemic gaps in
 `docs/PATH_TRACE_CPP_INTEGRATION_PLAN.md` ("Follow-ups from the 2026-10-27
@@ -379,7 +423,7 @@ The pass must then:
   accepts for both storage writes and sampled reads;
 * use one `BedrayFrameDesc` per compute pass if adopting `record_core_dispatches`;
   the C++ integration must resolve reflected named bindings into that descriptor
-  and supply the matching 40-byte push block. The bridge does not do this mapping
+  and supply the matching 64-byte push block. The bridge does not do this mapping
   itself and has not yet been connected or validated in a live frame.
 
 Two contracts still need one owner before integration: the graph's 64-bit
@@ -406,7 +450,7 @@ candidates, not a validated or active runtime.
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; no pass yet |
 | Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/segment_store.slang` | typed segment storage is a source candidate; typed trace exists in an isolated agent workspace, but cross-cascade resolve and host integration are unfinished. The old float4 resolve is incompatible with the typed trace. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
-| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ITraversal`, NEE through `ILightSampler`, filtered shadows, Russian roulette, first-hit distance; `RtSlangPathPass` wraps `RtPathTraceSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
+| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ITraversal`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; `RtSlangPathPass` wraps `RtPathTraceSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
 
 Surface decoding lives in `surface/surface.slang`; the filtered shadow walk lives
 in `surface/visibility.slang`; the BSDF lobes live in `shading/bsdf.slang`.
@@ -430,9 +474,11 @@ table from the first draft is now an input to this plan, not a shader variant:
 
 ## Verification
 
-The user has deferred new builds and tests until the full migration is
-complete. The commands below describe later verification; they are not an
-instruction to run checks during the current migration phase.
+Every batch runs `:common:test` before it is committed, and the owner playtests
+the deployed jar in the real instance — a compile or a unit test is never
+recorded as a game check. Pass `-Pslangc=<path to slangc.exe>` (or set
+`SLANG_DIR`): without it `:common:compileSlang` fails closed in about a second
+and the whole suite goes with it.
 
 `slangc` 2026.20 is not committed; install the Slang SDK outside the
 repository and point `SLANG_DIR` at it.

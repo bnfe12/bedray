@@ -39,9 +39,27 @@ struct LightEvaluation {
     float  sourcePdf;
 };
 
+// The surface a light is sampled *for*.  Position and normal are what a sampler
+// can see today; `emission` is the one piece of receiver state it cannot infer,
+// and an emitter sampler needs it: a face that is itself a light must not be lit
+// by its own quad, or a torch glows twice (once as `emitted`, once as NEE).
+struct LightReceiver {
+    float3 position;
+    float3 normal;      // shading normal, already flipped to the ray side
+    float  emission;    // the receiver's own emissive mask; >= 0.5 is a light face
+};
+
+LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
+    LightReceiver receiver;
+    receiver.position = position;
+    receiver.normal = normal;
+    receiver.emission = emission;
+    return receiver;
+}
+
 interface ILightSampler {
-    LightSample sample(float3 surfacePosition, float3 surfaceNormal, inout uint seed);
-    LightEvaluation evaluate(float3 surfacePosition, float3 surfaceNormal, LightSample sample);
+    LightSample sample(LightReceiver receiver, inout uint seed);
+    LightEvaluation evaluate(LightReceiver receiver, LightSample sample);
 };
 
 LightSample invalidLightSample() {

@@ -76,10 +76,13 @@ Current host resources:
 | 12 `outDepth` | R32F storage | renderer `rt_depth` | host-owned, `GENERAL` |
 | 16 `frame` | 608-byte uniform buffer | ring of three Java buffers | one upload per frame |
 | 17 `blockMaterials` | 64-byte structured buffer | one zeroed element, `materialCount = 0` | dummy until material tables exist |
+| 18 `emitters` | 96-byte structured buffer | the `RtEmitters` ring buffer at `segmentOffset()`; one dummy element when the list is empty | the same upload the legacy `rt_path.comp` reads |
 
-The display program binds `radiance` (0), the RGBA32F `accum` (1) and the
-host `rt_output` (2). The trace push block is 40 bytes; the display push block
-is 16 bytes. Both programs use 8x8x1 workgroups. The trace program requires
+The display program binds `radiance` (0), the RGBA32F `accum` (1), the host
+`rt_output` (2), `depth` (3), `historyDepth` (4) and the trace pass's own `frame`
+uniform buffer (5), so the display reads exactly the camera matrices the traced
+frame used. The trace push block is 64 bytes; the display push block is 32 bytes.
+Both programs use 8x8x1 workgroups. The trace program requires
 `CAP_RAY_QUERY | CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (manifest mask
 517).
 
@@ -138,7 +141,7 @@ C++ path-trace pass owns:
   created lazily per extent and retained until completion;
 * per-recording descriptor sets and per-recording frame-constant uploads;
 * the dummy `BlockMaterial` table until the scene material contract exists;
-* the 40-byte trace push and 16-byte display push packing from named parameters;
+* the 64-byte trace push and 32-byte display push packing from named parameters;
 * the entry barrier, the trace→display barrier, the display exit barrier and the
   `UNDEFINED→GENERAL` transitions for its own images;
 * dispatch recording, generation retirement on `release_recording`, and status
@@ -354,11 +357,14 @@ the pass must not silently reinterpret `rt_depth`.
 | trace | `path_trace` | TLAS + tables + atlases + frame constants | radiance + depth | `ceil(width/8) x ceil(height/8)` |
 | display | `path_display` | radiance + accum | accum + `rt_output` | `ceil(width/8) x ceil(height/8)` |
 
-* Trace push (40 bytes): `maxDepth`, `maxSurfaceSteps`, `sampleIndex`,
+* Trace push (64 bytes): `maxDepth`, `maxSurfaceSteps`, `sampleIndex`,
   `materialCount`, `flags`, `rayBias`, `alphaCutoff`, `maxDistance`,
-  `maxRadiance`, `sunProbability`.
-* Display push (16 bytes): `accumFrames`, `flags`
-  (`ACCUMULATE`, `TONEMAP`), `exposure`, `maxRadiance`.
+  `maxRadiance`, `sunProbability`, then `emitterCount`, `emitterProbability` and
+  `emitterCameraRelative` (xyz camera minus the emitter-list origin, w candidates
+  per call).
+* Display push (32 bytes): `accumFrames`, `flags`
+  (`ACCUMULATE`, `TONEMAP`, `REPROJECT`, `CAMERA_STATIC`, `FLIP_Y`), `exposure`,
+  `maxRadiance`, the camera anchor delta `xyz` and the reprojection tolerance.
 * Group counts are checked against the core's
   `max_compute_work_group_count_*`; exceeding a limit is an error, never a
   silent clamp.
@@ -478,14 +484,21 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   with NEE, or diffuse paths would count the sun twice.
 * **Emission used to be dropped after a diffuse bounce.** The reference pass
   gated emission on the previous bounce being a camera or delta ray, assuming
-  emitter NEE; the wired sampler covers only the sun and moon, so glowstone and
+  emitter NEE; the wired sampler covered only the sun and moon, so glowstone and
   lava hit after a diffuse bounce contributed nothing. `tracePath` now adds
-  emission on every accepted hit. A port that binds an emitter sampler must
-  restore the gate and use MIS, or emitters will be counted twice.
-* **No emitter buffer in the pass.** `light/emitters.slang` defines
-  `UniformEmitterSampler` and `EmitterList`, but `passes/path_trace.slang` has
-  no emitter binding and the manifest has no emitter record. Emissive-face NEE
-  is not connected.
+  emission on every accepted hit, and the emitter sampler that is bound
+  (`light/block_emitters.slang`) distinguishes the two terms the way the legacy
+  path does: a receiver whose own face glows (`LightReceiver.emission > 0.5`)
+  rejects emitter points closer than half a block, so a torch face is not lit by
+  its own quad. A port that samples a *different* emitter list must keep that
+  rejection, or emissive faces blow out on top of the emission term.
+* **Emitter NEE is connected for blocks, not for entities.**
+  `passes/path_trace.slang` binds the `RtEmitters` records as `emitters`
+  (binding 18) and resamples them per bounce, so a torch-lit interior is lit in
+  Slang mode. `light/emitters.slang` (`UniformEmitterSampler` over a host-built
+  `EmitterRecord`) still has no host: nothing uploads that record, and
+  entity-atlas emitters (`uvc.w != 0`) are skipped by the block sampler because
+  the entity texture is not bound to this pass.
 * **Sky colours are display-referred.** `SkyRenderState.skyColor` is the colour
   vanilla draws, not radiance; the legacy sky converts it with
   `tonemapInverse` (`rt_sky.glsl:39`). `GradientSky` consumes radiance and the

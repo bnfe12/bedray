@@ -59,6 +59,14 @@ public final class RtConfig {
      * turns it off for an A/B check). */
     public static final boolean SELF_AVATAR = Boolean.parseBoolean(System.getProperty("vkbridge.rt.selfAvatar", "true"));
 
+    /** Block-emitter next-event estimation in the Slang path tracer. {@code -Dvkbridge.rt.blockEmitters=false} falls back to
+     * sun-and-moon only, which is what a torch-lit room looked like before the port. The number of resampled quads per
+     * bounce and the share of the NEE draw given to the emitter list follow the same switch family. */
+    public static final boolean SLANG_BLOCK_EMITTERS = Boolean.parseBoolean(System.getProperty("vkbridge.rt.blockEmitters", "true"));
+    public static final int SLANG_EMITTER_CANDIDATES = Math.max(1, Math.min(32, Integer.getInteger("vkbridge.rt.emitterCandidates", 8)));
+    public static final float SLANG_EMITTER_PROBABILITY = Math.min(1.0f,
+        Math.max(0.0f, Float.parseFloat(System.getProperty("vkbridge.rt.emitterProbability", "0.5"))));
+
     /** Horizontal RT radius in sections: override, else the game render distance ("As in game"), else the manual value. */
     public static int radiusXz(int gameRenderDistanceChunks) {
         if (RADIUS_XZ_OVERRIDE > 0) {
