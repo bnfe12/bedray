@@ -72,6 +72,14 @@ public final class RtFrameParams {
     public static final int MAX_ACCUM = (1 << 14) - 1;
 
     public final Matrix4f invViewProj = new Matrix4f();
+    /** View-projection of the previous frame, or {@code invViewProj}-consistent on the first frame after a reset. */
+    public final Matrix4f prevViewProj = new Matrix4f();
+    /** Camera delta between the previous and this frame's TLAS anchor; zero on the first frame. */
+    public float cameraDeltaX;
+    public float cameraDeltaY;
+    public float cameraDeltaZ;
+    /** True when neither the anchor nor the pose changed, so history can be read at the same pixel. */
+    public boolean cameraStatic;
     /** CPU only: inverse view-projection without the upscaler jitter (accumulation reset decision). */
     public final Matrix4f invViewProjStable = new Matrix4f();
     public long statsAddress;

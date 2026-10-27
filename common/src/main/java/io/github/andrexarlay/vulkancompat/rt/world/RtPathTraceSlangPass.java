@@ -398,6 +398,18 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         VkBarriers.fullMemoryBarrier(cmd);
     }
 
+    /**
+     * The FrameConstants block the last {@link #record} uploaded, as a display-pass resource. A consumer that reads the
+     * same camera, sun and previous-projection data binds this buffer instead of uploading a second copy that could
+     * disagree with the traced frame.
+     */
+    SlangProgram.Resource frameResource() {
+        if (slot < 0 || frameConstants[slot] == null) {
+            throw new IllegalStateException("path trace has not uploaded frame constants yet");
+        }
+        return SlangProgram.Resource.uniformBuffer("frame", frameConstants[slot].handle, 0, FRAME_CONSTANTS_BYTES);
+    }
+
     private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, long depthView, int frameSlot) {
         RtMemory.Buf table = scene.sectionTable();
         return List.of(

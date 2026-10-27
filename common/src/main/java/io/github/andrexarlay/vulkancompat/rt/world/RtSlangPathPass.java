@@ -35,7 +35,8 @@ import java.util.Set;
  * <p>What this pass does not do yet, compared with the GLSL {@link RtPathTracerPass}: no NRD / DLSS-RR G-buffer (the
  * renderer only selects this pass when no G-buffer denoiser is wanted, or when the Slang path is forced), no auto
  * exposure (the GLSL shader feeds the luminance statistics; exposure is fixed at 1), a two-colour sky instead of
- * {@code rt_sky.glsl}, and primary rays start at the camera origin without the view-bob offset.
+ * {@code rt_sky.glsl}; the mean is reprojected per pixel through the previous view-projection, so accumulation
+ * survives camera motion but restarts on disocclusion.
  *
  * <p>Recording lifetime: every command buffer passed to {@link #dispatch} keeps native descriptor pools until
  * {@link #releaseRecording(long)}; the renderer calls it when the same transient handle comes back from the pool reset
@@ -45,10 +46,15 @@ public final class RtSlangPathPass implements RtPass {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
 
     static final String DISPLAY_PASS = "path_display";
-    static final int DISPLAY_PUSH_BYTES = 16;
+    static final int DISPLAY_PUSH_BYTES = 32;
     static final int DISPLAY_FLAG_ACCUMULATE = 1;
     static final int DISPLAY_FLAG_TONEMAP = 1 << 1;
+    static final int DISPLAY_FLAG_REPROJECT = 1 << 2;
+    static final int DISPLAY_FLAG_CAMERA_STATIC = 1 << 3;
+    static final int DISPLAY_FLAG_FLIP_Y = 1 << 4;
     static final float MAX_RADIANCE = 64f;
+    /** Relative depth disagreement (in blocks at unit distance) that still counts as the same surface when reprojecting. */
+    static final float REPROJECTION_TOLERANCE = 0.02f;
 
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
     static boolean isSupported(SlangRuntime runtime) {
@@ -83,16 +89,15 @@ public final class RtSlangPathPass implements RtPass {
     private final Set<Long> recordings = new LinkedHashSet<>();
     private RtMemory memory;
     private RtMemory.Img accum;
+    private RtMemory.Img historyDepth;
     private RtPipeline.Views views;
     private int accumFrames;
     private boolean forceReset = true;
+    /** True when the previous display dispatch left a mean and a depth history that reprojection can read. */
+    private boolean historyWritten;
     private int lastSettingsHash;
     private int lastWidth;
     private int lastHeight;
-    private final Matrix4f lastInvViewProj = new Matrix4f();
-    private double lastCamX = Double.NaN;
-    private double lastCamY;
-    private double lastCamZ;
     private final float[] lastSunDirection = new float[3];
     private final float[] lastSunColor = new float[3];
     private final float[] lastSkyColor = new float[3];
@@ -132,15 +137,19 @@ public final class RtSlangPathPass implements RtPass {
             throw new IllegalStateException(program.name() + " pushes " + manifest.pushConstantBytes() + " B, host block is "
                 + DISPLAY_PUSH_BYTES + " B");
         }
-        for (String name : List.of("radiance", "accum", "outImage")) {
+        for (String name : List.of("radiance", "accum", "outImage", "depth", "historyDepth")) {
             SlangPassManifest.Binding binding = manifest.binding(name);
             if (binding == null || binding.descriptorType() != BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE) {
                 throw new IllegalStateException(program.name() + ": '" + name + "' must be a storage image");
             }
         }
-        if (manifest.bindings().size() != 3) {
+        SlangPassManifest.Binding constants = manifest.binding("frame");
+        if (constants == null || constants.descriptorType() != BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+            throw new IllegalStateException(program.name() + ": 'frame' must be the FrameConstants buffer");
+        }
+        if (manifest.bindings().size() != 6) {
             throw new IllegalStateException(program.name() + " declares " + manifest.bindings().size()
-                + " binding(s), host supplies 3");
+                + " binding(s), host supplies 6");
         }
     }
 
@@ -174,18 +183,29 @@ public final class RtSlangPathPass implements RtPass {
     @Override
     public void prepare(VkCommandBuffer cmd, RtMemory mem, int width, int height) {
         memory = mem;
-        if (accum != null && lastWidth == width && lastHeight == height) {
+        if (accum != null && historyDepth != null && lastWidth == width && lastHeight == height) {
             return;
         }
-        if (accum != null) {
+        if (accum != null || historyDepth != null) {
             VK10.vkDeviceWaitIdle(device); // frames in flight may still read the old running mean
             releaseRecordings();
-            mem.destroy(accum);
-            accum = null;
+            if (accum != null) {
+                mem.destroy(accum);
+                accum = null;
+            }
+            if (historyDepth != null) {
+                mem.destroy(historyDepth);
+                historyDepth = null;
+            }
+            historyWritten = false;
         }
         accum = mem.createImage("rt_path_slang_accum", width, height, VK10.VK_FORMAT_R32G32B32A32_SFLOAT,
             VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         VkBarriers.transition(cmd, accum.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+            VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+        historyDepth = mem.createImage("rt_path_slang_history_depth", width, height, VK10.VK_FORMAT_R32_SFLOAT,
+            VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+        VkBarriers.transition(cmd, historyDepth.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
             VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
         lastWidth = width;
         lastHeight = height;
@@ -200,29 +220,23 @@ public final class RtSlangPathPass implements RtPass {
         params.rayDistance = RtSettings.pathMaxDistance();
         params.flags |= RtFrameParams.FLAG_EMISSIVE;
 
-        boolean cameraMoved = !Double.isNaN(lastCamX) && (Math.abs(params.cameraX - lastCamX) > RtAccumulation.POS_EPS
-            || Math.abs(params.cameraY - lastCamY) > RtAccumulation.POS_EPS
-            || Math.abs(params.cameraZ - lastCamZ) > RtAccumulation.POS_EPS
-            || !params.invViewProjStable.equals(lastInvViewProj, RtAccumulation.MATRIX_EPS));
-        // The running mean is not reprojected: any lighting change starts it over instead of ghosting the old sun.
+        // The mean is reprojected per pixel, so camera motion no longer invalidates the whole history; only a change
+        // the reprojection cannot explain (new lights, new geometry, new settings) restarts it.
         boolean lightingChanged = hasLighting
             && (differs(params.key.dir, lastSunDirection)
                 || differs(params.key.color, lastSunColor)
                 || differs(params.skyColor, lastSkyColor));
         int settingsHash = Objects.hash(params.bounces, params.rayDistance, RtSettings.accumulate(), params.mode,
             RtSettings.pathPreset, RtSettings.preset);
-        if (forceReset || cameraMoved || lightingChanged || params.sceneChanged || settingsHash != lastSettingsHash
+        if (forceReset || lightingChanged || params.sceneChanged || settingsHash != lastSettingsHash
             || !RtSettings.accumulate()) {
             accumFrames = 0;
+            historyWritten = false;
         } else if (accumFrames < RtFrameParams.MAX_ACCUM) {
             accumFrames++;
         }
         forceReset = false;
         lastSettingsHash = settingsHash;
-        lastCamX = params.cameraX;
-        lastCamY = params.cameraY;
-        lastCamZ = params.cameraZ;
-        lastInvViewProj.set(params.invViewProjStable);
         System.arraycopy(params.key.dir, 0, lastSunDirection, 0, 3);
         System.arraycopy(params.key.color, 0, lastSunColor, 0, 3);
         System.arraycopy(params.skyColor, 0, lastSkyColor, 0, 3);
@@ -254,6 +268,7 @@ public final class RtSlangPathPass implements RtPass {
     @Override
     public void resetHistory() {
         forceReset = true;
+        historyWritten = false;
     }
 
     @Override
@@ -270,14 +285,29 @@ public final class RtSlangPathPass implements RtPass {
             views.depth(), frame, dispatch);
 
         int flags = DISPLAY_FLAG_TONEMAP | (RtSettings.accumulate() ? DISPLAY_FLAG_ACCUMULATE : 0);
+        if (params.cameraStatic) {
+            flags |= DISPLAY_FLAG_CAMERA_STATIC;
+        }
+        if (historyWritten && !params.cameraStatic) {
+            flags |= DISPLAY_FLAG_REPROJECT;
+        }
+        if (params.flipY) {
+            flags |= DISPLAY_FLAG_FLIP_Y;
+        }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer push = stack.malloc(DISPLAY_PUSH_BYTES);
             push.putInt(0, accumFrames).putInt(4, flags).putFloat(8, 1.0f).putFloat(12, MAX_RADIANCE);
+            push.putFloat(16, params.cameraDeltaX).putFloat(20, params.cameraDeltaY)
+                .putFloat(24, params.cameraDeltaZ).putFloat(28, REPROJECTION_TOLERANCE);
             display.dispatch(cmd.address(), display.groups(width, 0), display.groups(height, 1), 1, List.of(
                 SlangProgram.Resource.storageImage("radiance", trace.radianceView()),
                 SlangProgram.Resource.storageImage("accum", accum.view),
-                SlangProgram.Resource.storageImage("outImage", views.output())), push);
+                SlangProgram.Resource.storageImage("outImage", views.output()),
+                SlangProgram.Resource.storageImage("depth", views.depth()),
+                SlangProgram.Resource.storageImage("historyDepth", historyDepth.view),
+                trace.frameResource()), push);
         }
+        historyWritten = true;
         VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read by the composite, bloom and upscalers next
     }
 
@@ -307,6 +337,7 @@ public final class RtSlangPathPass implements RtPass {
 
         frame.invViewProjection.set(p.invViewProj);
         frame.viewProjection.set(p.invViewProj).invert();
+        frame.prevViewProjection.set(p.prevViewProj);
         frame.forward.set(forward.x, forward.y, forward.z, downLen / centreLen);
         frame.right.set(right.x, right.y, right.z, rightLen / downLen);
         frame.up.set(up.x, up.y, up.z, 0f);
@@ -397,7 +428,10 @@ public final class RtSlangPathPass implements RtPass {
         if (accum != null && memory != null) {
             memory.destroy(accum);
             accum = null;
+            memory.destroy(historyDepth);
+            historyDepth = null;
         }
+        historyWritten = false;
         VK10.vkDestroySampler(device, sampler, null);
     }
 }

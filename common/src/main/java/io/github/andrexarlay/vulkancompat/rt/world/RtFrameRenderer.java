@@ -955,6 +955,11 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_DELTA + 4, dy);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_DELTA + 8, dz);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_DELTA + 12, camMoved ? 1.0f : 0.0f);
+        params.prevViewProj.set(prevViewProj);
+        params.cameraDeltaX = dx;
+        params.cameraDeltaY = dy;
+        params.cameraDeltaZ = dz;
+        params.cameraStatic = !camMoved;
         float baseDistance = (float) Math.max(32, params.rayDistance);
         float fogDistance = baseDistance * params.fogDistanceScale;
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.FOG_DENSITY, params.fogDensity);
