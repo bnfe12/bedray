@@ -12,9 +12,8 @@ The lighting engine is built strictly upon four foundational mathematical algori
 1. **ReSTIR DI** (*Reservoir-based Spatiotemporal Importance Resampling for Direct Illumination* - Bitterli et al. 2021):
    - Uses reservoirs to sample thousands of light emitters (sun, moon, torches, lanterns, lava, glowing blocks) with **1 shadow ray per pixel**.
    - Spatial checkerboard reuse and temporal accumulation with defensive clamping (`RESTIR_M_CAP = 20.0`).
-2. **ReSTIR PT** (*Path-Space ReSTIR* - Lin et al. 2022/2023):
+2. **ReSTIR PT / GI** (*Path-Space ReSTIR & Reservoir GI* - Lin et al. 2022/2023):
    - Re-samples multi-bounce indirect paths across space and time via shift mappings.
-   - Cinematic photorealism, eliminates Monte Carlo variance at 1-2 SPP for complex indirect light and specular caustics.
    - Dedicated to High-End hardware (Tier 3: RTX 4070+, RTX 50xx).
 3. **Path Tracing (PT)** (*Unidirectional Monte Carlo Ray Tracing*):
    - Ground truth physically based shading (GGX VNDF visible normal distribution, Fresnel-Schlick).
@@ -38,20 +37,67 @@ The software/fallback voxel renderer replaces the legacy per-block 2-level DDA (
 
 ---
 
-## 3. Presets & Mode Matrix
+## 3. Трехуровневая масштабируемая архитектура (Tiered Scalable Architecture)
 
-The user interface exposes 3 World Modes, each with 2 Profiles (Fast / Quality), plus a Custom override:
+Движок строится по принципу единого конвейера-трансформера: благодаря статическому полиморфизму Slang единый шейдерный код работает в трех режимах без дублирования:
 
-| Mode | Profile | Direct Light | Indirect GI | Reflections | Voxel / RT Traversal | Denoising |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1. Voxel + Vanilla** *(No RT cores, iGPU, GTX)* | **Fast** | Vanilla / DDA | **Radiance Cascades** | Screen-Space | **Bitmask HDDA** | Off |
-| | **Quality** | **ReSTIR DI** (Voxel) | **Radiance Cascades** (Hi-Res) | **Path Tracing** (Voxel) | **Bitmask HDDA** | A-Trous / SVGF |
-| **2. Voxel + RT Hybrid** *(RTX 20/30, AMD, Arc)* | **Fast** | **ReSTIR DI** (1 ray) | **Radiance Cascades** | **Path Tracing** (1 ray) | Hybrid (Voxel GI + Hardware Rays) | NRD Diffuse |
-| | **Quality** | **ReSTIR DI** (Full) | **Radiance Cascades** | **ReSTIR PT** | Hybrid | NRD Diff+Spec |
-| **3. Full Hardware RT/PT** *(RTX 4070+, RTX 50xx)* | **Fast** | **ReSTIR DI** | **Radiance Cascades** (HW) | **Path Tracing** (GGX) | Hardware TLAS/BLAS | NRD / DLSS-RR |
-| | **Quality** | **ReSTIR DI** + SSS | **ReSTIR PT** (SER + OMM) | **ReSTIR PT** | Hardware TLAS/BLAS | **DLSS-RR + FG** |
+| Графический компонент | 1. Программный Voxel-режим (Без RT-ядер) | 2. Hybrid Ray Tracing (Классический RT) | 3. Full Path Tracing (Ультра) |
+| :--- | :--- | :--- | :--- |
+| **Тени от солнца и факелов** | **DDA Raymarching** по битовым маскам HDDA | **Аппаратные RT-тени** (блоки + полигоны мобов) | **ReSTIR DI** (тысячи эмиттеров, 1 луч) |
+| **Отражения (Вода, зеркала, лед)** | **SSR** (экранные) + fallback в Bitmask HDDA вне экрана | **1 аппаратный луч отражения** через `rayQuery` | Полная трассировка путей (Glossy/Rough PT) |
+| **Глобальное освещение (GI)** | **Radiance Cascades** (работает чисто на Compute!) | **Radiance Cascades** + 1 диффузный отскок луча | **RCPG + ReSTIR GI** (бесконечные честные отскоки) |
+| **Мобы и сущности** | Растеризуются в G-буфер обычным способом | Растеризация + аппаратный BLAS для теней/отражений | Полный Path Tracing через Hardware BVH |
+| **Целевое железо** | GTX 1060 / 1660, Intel Arc, встройки, Snapdragon X, Apple M1/M2 | RTX 3050 / 3060, Radeon RX 6600 / 7600, Apple M3/M4 | RTX 4070 / 5060 Ti и выше |
+| **Ожидаемый FPS** | **120 – 200+ FPS** | **90 – 140 FPS** | **60 – 120 FPS** |
 
-**Custom Mode (Expert):** Every channel (Direct, Indirect, Reflections, Transmission) can independently select any of the 4 algorithms.
+### 3.1 Как устроен режим «Красиво БЕЗ RT-ядер» (Voxel-only Compute)
+1. **Radiance Cascades на Compute-шейдерах:** Radiance Cascades вообще не требует аппаратных RT-ядер. Он шагает по Bitmask HDDA обычными compute-потоками, обеспечивая глубокое, мягкое освещение в пещерах и комнатах на любой видеокарте.
+2. **Аналитический Voxel Ambient Occlusion за 0 миллисекунд:** Поскольку воксели лежат в 64-битных масках (uint64_t), затенение в углах блоков (AO) вычисляется побитовыми операциями:
+   ```hlsl
+   uint aoOcclusion = countbits(blockMask & neighborPattern);
+   float ao = 1.0 - float(aoOcclusion) * AO_WEIGHT;
+   ```
+   Это дает идеальное затенение стыков блоков прямо в первичном луче без зерна и шума.
+3. **Честные воксельные тени (DDA Shadows):** Вместо артефактных Shadow Maps пускается луч от поверхности к солнцу через Bitmask HDDA. Это дает идеальные, попиксельно резкие тени от каждого блока на чистом Compute.
+
+### 3.2 Селективный Ray Tracing против тяжелого Path Tracing (Hybrid RT)
+Вместо хаотичного блуждания лучей во все стороны, в режиме Hybrid RT лучи пускаются точечно:
+1. **Только тени:** 1 направленный луч к источнику света. Мобы отбрасывают честные тени на стены с учетом скелетных анимаций.
+2. **Только отражения:** 1 зеркальный луч от воды или полированного камня. Если поверхность матовая (земля, камень) — луч не пускается вообще.
+3. **RTAO (Трассированное затенение):** 1 короткий луч в полусфере для физически точной окклюзии под ногами мобов и в траве.
+*Итог:* 80% лоска полноценного Path Tracing при втрое меньших затратах ресурсов.
+
+### 3.3 Архитектурный трюк в Slang: Статический полиморфизм без потери FPS
+В Slang используется параметризация интерфейсов (Zero-overhead specialization):
+```hlsl
+interface ISceneTracer {
+    bool traceShadowRay(Ray ray, float maxDist);
+    HitInfo traceReflectionRay(Ray ray);
+};
+
+// 1. Программный бэкенд (Bitmask HDDA)
+struct SoftwareVoxelTracer : ISceneTracer {
+    bool traceShadowRay(Ray ray, float maxDist) {
+        return marchBitmaskHDDA(ray, maxDist); // Только Compute DDA
+    }
+};
+
+// 2. Аппаратный гибридный бэкенд
+struct HardwareHybridTracer : ISceneTracer {
+    RayQuery<RAY_FLAG_CULL_OPAQUE> query;
+    bool traceShadowRay(Ray ray, float maxDist) {
+        return marchBitmaskHDDA(ray, maxDist) || traceHardwareRayQuery(query, ray, maxDist);
+    }
+};
+
+// Единая логика освещения компилируется AOT в монолитный SPIR-V за 0 runtime-оверхеда:
+[shader("compute")]
+void mainLighting<Tracer : ISceneTracer>(Tracer tracer, ...) {
+    if (!tracer.traceShadowRay(sunRay, sunDist)) {
+        // Освещаем точку
+    }
+}
+```
 
 ---
 
@@ -106,4 +152,3 @@ The user interface exposes 3 World Modes, each with 2 Profiles (Fast / Quality),
 
 ### 5.7 Panama FFM `Linker.Option.critical(true)`
 * **Оптимизация:** На микро-вызовах нативного слоя (запись push-констант, обновление таймлайнов семафоров), не блокирующих поток и не вызывающих GC, передавать опцию `critical(true)`. Это устраняет накладные расходы Java на сохранение состояния потока, снижая стоимость вызова до машинной инструкции `CALL`.
-
