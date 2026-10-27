@@ -99,13 +99,16 @@ float specularProbability(float3 V, float3 N, float f0, bool isMetal) {
     return clamp(F, 0.04, 0.96);
 }
 
-// PDF of a GGX reflection direction for a given view direction.  Used by MIS.
+// PDF of a GGX reflection direction for a given view direction.  This is the
+// visible-normal (VNDF) density that sampleGGXVNDF draws from, not the plain
+// half-vector NDF density; MIS and reservoir reuse must use the same density as
+// the sampler.
 float ggxReflectionPdf(float3 V, float3 N, float3 L, float roughness) {
     float alpha = max(roughness * roughness, 1.0e-4);
     float3 H = safeNormalize(V + L, N);
     float NdotH = max(dot(N, H), 0.0);
-    float VdotH = max(dot(V, H), 1.0e-4);
-    return ggxNDF(NdotH, alpha) * NdotH / (4.0 * VdotH);
+    float NdotV = max(dot(N, V), 1.0e-4);
+    return ggxNDF(NdotH, alpha) * ggxSmithG1(NdotV, alpha) / (4.0 * NdotV);
 }
 
 float cosinePdf(float3 N, float3 L) {

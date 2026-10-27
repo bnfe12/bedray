@@ -266,6 +266,21 @@ completed or the recording was discarded, and `close()` must run before
 mode, not the final ownership model: the C++ renderer must take over resources,
 recording and lifetime, and the adapter must not grow into a parallel renderer.
 
+### Path-trace shading corrections
+
+Two estimator defects were fixed in `shading/bsdf.slang` and
+`shading/microfacet.slang`.  `bsdfSample` now divides each lobe weight by its
+selection probability (`specularProbability` or its complement) in addition to
+the conditional density; without that divisor indirect dielectric reflection
+and transmission were scaled by the selection probability.  `ggxReflectionPdf`
+now returns the visible-normal density `D * G1 / (4 * NdotV)` that
+`sampleGGXVNDF` actually draws from, instead of the half-vector density
+`D * NdotH / (4 * VdotH)`; the old form disagreed with the sampler whenever
+roughness was not near zero.  Evidence level: the changed modules were compiled
+through the `path_trace` entry point with `slangc` (`cs_6_5`, the same
+arguments as `compileSlang`), but this was a manual SPIR-V compile, not a Gradle
+build, and no GPU frame or image comparison exists yet.
+
 ### Render-graph recording boundary
 
 `native/bedray_render_graph/` is the planned recording layer: it compiles a

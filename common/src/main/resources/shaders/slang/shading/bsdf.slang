@@ -8,9 +8,11 @@
 //   * a Fresnel-selected specular transmission lobe for optical interfaces
 //
 // `bsdfEvaluate` returns f * cos(theta), the quantity a path tracer multiplies
-// by incident radiance.  `bsdfPdf` returns the solid-angle density used by
-// `bsdfSample`.  A delta lobe (perfect mirror or refraction) reports pdf = 1
-// and `delta = true`; a caller must not use it for MIS.
+// by incident radiance.  `bsdfPdf` returns the full reflection mixture density
+// at a direction; `BSDFSample.pdf` is only the selected lobe's density, which
+// is the density the per-lobe `weight` compensates for.  A delta lobe (perfect
+// mirror or refraction) reports pdf = 1 and `delta = true`; a caller must not
+// use it for MIS.
 
 public module bsdf;
 
@@ -157,7 +159,11 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
         result.valid = true;
         result.delta = material.roughness <= 1.0e-3;
         result.direction = L;
-        result.weight = fresnel * (geometry2 / max(geometry1, 1.0e-6));
+        // Each branch carries only its own lobe, so `weight` is that lobe's
+        // f*cos over its sampling density: the selection probability times the
+        // conditional GGX density.  Both have to be divided out.
+        result.weight = fresnel * (geometry2 / max(geometry1, 1.0e-6))
+            / max(specularProbability, 1.0e-6);
         result.pdf = specularProbability *
             ggxReflectionPdf(V, N, L, material.roughness);
         result.eta = 1.0;
@@ -165,6 +171,7 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
         return result;
     }
 
+    float transmissionProbability = max(1.0 - specularProbability, 1.0e-6);
     if (material.alphaMode == AlphaMode.Optical && material.transmission > 0.0) {
         float eta = 1.0 / max(material.ior, 1.0);
         float3 refracted = refract(-V, N, eta);
@@ -175,7 +182,7 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
             result.valid = true;
             result.delta = true;
             result.direction = safeNormalize(reflect(-V, N), N);
-            result.weight = float3(1.0);
+            result.weight = float3(1.0) / transmissionProbability;
             result.pdf = 1.0;
             result.eta = 1.0;
             result.lobe = BSDF_LOBE_SPECULAR;
@@ -186,7 +193,7 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
         result.delta = true;
         result.direction = safeNormalize(refracted, -N);
         result.weight = material.albedo * material.transmission *
-            (float3(1.0) - fresnel) * (eta * eta);
+            (float3(1.0) - fresnel) * (eta * eta) / transmissionProbability;
         result.pdf = 1.0;
         result.eta = eta;
         result.lobe = BSDF_LOBE_TRANSMISSION;
@@ -211,7 +218,7 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
     result.valid = true;
     result.delta = false;
     result.direction = L;
-    result.weight = albedo;
+    result.weight = albedo / transmissionProbability;
     result.pdf = (1.0 - specularProbability) * cosTheta * INV_PI;
     result.eta = 1.0;
     result.lobe = transmit ? BSDF_LOBE_TRANSMISSION : BSDF_LOBE_DIFFUSE;
