@@ -1,5 +1,7 @@
 # Bedray 2.0 — Slang shader architecture
 
+> **Актуальный реестр дефектов и блокеров аудита:** см. [`docs/AUDIT_DEFECTS_AND_ISSUES.md`](AUDIT_DEFECTS_AND_ISSUES.md). Все найденные P0/P1/P2 проблемы верифицированы по коду 27.10.2026.
+
 This document replaces the first Slang migration draft.  The first draft
 described a 1:1 port of the existing GLSL.  Bedray 2.0 is a new shader core:
 the old GLSL stays in the tree as a behavioural reference, not as a source to
