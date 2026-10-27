@@ -172,8 +172,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // With the reservoir on, the primary vertex is lit from it and the composite must not draw the same branch again.
     lights.emittersReusedAtPrimary = directReuse.enabled != 0u;
 
-    GradientSky environment;
-    environment.atmosphere = f.atmosphere;
+    // The dome the path leaves into, with the two bodies the key light already
+    // describes drawn into it.  A reflection or an escaped ray that points at the
+    // sun now shows it; the sampled environment stays the dome alone, because the
+    // sun and moon are discrete entries in the MIS list above.
+    SunMoonSky environment;
+    environment.dome.atmosphere = f.atmosphere;
+    environment.sun = f.sun;
 
     PathTraceOptions options = defaultPathTraceOptions();
     options.maxDepth = max(pc.maxDepth, 1u);

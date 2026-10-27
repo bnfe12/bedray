@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+* Drew the sun and the moon into the path-traced sky: `light/sky.slang` had only `GradientSky`, a two-colour dome with no
+  disc, and it was the pass's sole environment sampler - so a camera ray or a mirror aimed at the sun showed a smooth
+  gradient while the body itself lit the scene through NEE. `celestialRadiance` now adds both bodies to the environment's
+  *evaluated* radiance, reading the exact fields `sun_light.slang`'s `SunMoonSampler` uses (`direction.w` for the angular
+  radius, `color` for radiance times intensity), so a disc can never disagree with the shadow that same body casts.
+  `SunMoonSky` composes the dome and the discs and `passes/path_trace.slang` builds it from `f.sun`, and the split between
+  the two environment entries is the estimator rule: `radiance()` is what an escaped ray pays, while `sample()` keeps the
+  dome alone because its returned radiance is divided by the cosine-dome `pdf()` - a delta-sized body in that draw would
+  be divided by a probability that never covers it. Two details carry the weight: the edge is compared in **sines**, not
+  cosines (the key radius is a few thousandths of a radian - `sun_size_tenths` defaults to 0.0044 - and only about fifty
+  float steps separate `cos(r)` from `cos(0.6r)` at that magnitude, so a cosine test turns the limb into dither that moves
+  with the frame's jitter), and a body whose centre has set is not drawn - the host keeps key
+  intensity at 1 through the night, so `celestialHorizonFactor`, ramping across the body's own diameter, is what stops a
+  phantom sun under the horizon. What is honestly not yet MIS: `tracePath` adds the NEE term and continues the path with the
+  same throughput, so a BSDF-sampled ray that lands on the disc counts the sun twice - the same double count every other
+  light in the list already has, bounded here by the `maxRadiance` firefly clamp. Clouds, stars and the sky texture remain
+  the unported `rt_sky.glsl` display model. Evidence: `compileSlang` unchanged at 11 bindings/96-byte push for
+  `path_trace` (SPIR-V 326000 → 329288 B); `RtSlangSkyDiscTest` (5 tests) pins the field provenance shared with the key
+  light, the sine-based edge with its normalization and hemisphere guard, the horizon gate on both bodies, the disc-free
+  sampled draw and the pass wiring. Each of seven mutations (cosine edge, hemisphere guard dropped, direction not
+  normalized, hardcoded radius, disc folded into `sample()`, the pass rebuilt on a bare dome, the sun no longer
+  horizon-gated) failed exactly the guard that owns it. No owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
 * Made a shadow ray that runs out of budget stop leaking light: `surface/visibility.slang` adds
   `surfaceVisibilityProven`, the single definition of "this sight line was actually proved clear" — the walk's own
   `result.visible` bit **and** `SURFACE_VISIBILITY_FLAG_OVERFLOW` unset. The walk sets that flag when it stops after

@@ -480,11 +480,35 @@ including on resize.
 Source-level findings that the C++ port must not inherit silently. None of them
 has been checked on a GPU; the reference pass was only compiled with `slangc`.
 
-* **Sun/moon are visible only through NEE.** `GradientSky` is a two-colour dome
-  with no disk and is the pass's only environment sampler; `SunMoonSampler` is
-  the only `ILightSampler`. A camera ray or a delta reflection aimed at the sun
-  sees the gradient, not the disk. Adding a disk to `radiance()` requires MIS
-  with NEE, or diffuse paths would count the sun twice.
+* **The sun and moon are now drawn in the sky, not only paid through NEE.**
+  `GradientSky` was a two-colour dome with no disk and the pass's only
+  environment sampler, so a camera ray or a mirror aimed at the sun showed the
+  gradient. `light/sky.slang` adds `celestialDiscCoverage`,
+  `celestialHorizonFactor`, `celestialRadiance` and `SunMoonSky`, and
+  `passes/path_trace.slang` builds the disc-aware sampler from the same
+  `SunState` the shadow rays use - `direction.w` is the angular radius, `color`
+  is radiance times intensity - so a disc cannot disagree with the light that
+  body casts.
+  The estimator rule: the disc belongs to `radiance()`, which is the term an
+  escaped ray pays, and not to `sample()`, whose returned radiance is divided by
+  the cosine-dome `pdf()` it reports; folding a delta-sized body into that draw
+  would divide it by a probability that never covers it. `SunMoonSky.sample`
+  therefore delegates to the dome.
+  What is still not MIS: `tracePath` adds the NEE term and then continues the
+  path with the same throughput, so a BSDF-sampled ray that happens to land on
+  the disc counts the sun twice, exactly as it already double-counts every other
+  light in the list. The disc does not open a new class of bias, but it does put
+  a large value on a rare draw; `maxRadiance` bounds it. A real MIS split between
+  NEE and continuation is a separate task, and the disc should be re-checked when
+  it lands.
+  Two known simplifications: the edge is a smooth ramp over the outer 40 % of the
+  disc (the comparison runs in sines because cosines of sub-centiradian angles
+  round into each other, and the helper normalizes the direction it is given -
+  `length(cross(d, axis))` scales with `|d|`, so a non-unit ray would enlarge the
+  disc rather than tilt it), and a body whose centre has set is not drawn - the
+  host keeps the key intensity at 1 through the night, so the gate is what stops a
+  phantom sun under the horizon. Clouds, stars and the sky texture remain the
+  unported `rt_sky.glsl` display model (`sky_light_model.slang`'s note).
 * **Emission used to be dropped after a diffuse bounce.** The reference pass
   gated emission on the previous bounce being a camera or delta ray, assuming
   emitter NEE; the wired sampler covered only the sun and moon, so glowstone and
@@ -521,9 +545,10 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   interface has no diffuse lobe because its transmission is delta.
   `bsdfEvaluate` still returns zero in the back hemisphere by design, so a
   light behind a pane contributes only through a BSDF-sampled path, never
-  through NEE. The sun is not in the environment, so sunlight through glass
-  remains missing until transmission NEE exists with a shadow ray that starts
-  on the far side of the pane.
+  through NEE. A path that does leave through the pane towards the sun now sees
+  the disc (see the environment note above), but the direct term still cannot
+  reach it: sunlight through glass needs transmission NEE with a shadow ray that
+  starts on the far side of the pane.
 * **Visibility overflow is a light leak, and consumers now treat it as one.**
   `traceFilteredVisibility` stops adding layers once the 16-layer budget runs
   out and returns `visible = true` with the transmittance collected so far, so

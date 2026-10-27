@@ -115,7 +115,7 @@ common/src/main/resources/shaders/slang/
 │   ├── block_emitters.slang           BlockEmitterRecord (the RtEmitters upload) + legacy-look emitter NEE
 │   ├── emitters.slang                 EmitterRecord + UniformEmitterSampler; no host feeds this record yet
 │   ├── sun.slang                      SunMoonSampler
-│   └── sky.slang                      IEnvironmentSampler + GradientSky
+│   └── sky.slang                      IEnvironmentSampler + GradientSky + SunMoonSky (dome with the sun/moon discs)
 ├── surface/
 │   ├── surface.slang                  MaterialAtlas, BlockMaterialTable, decodeSurface
 │   └── visibility.slang               filtered shadow walk (holes + transmittance)
@@ -494,15 +494,17 @@ an independent row would be a switch that does nothing.  Evidence:
 consumer that acts on it, and
 `RtSlangRestirDiTest` + `RtSlangRestirSpatialTest` + `RtSlangBlockEmitterTest` +
 `RtSlangSampleRejectionTest` + `RtSlangVisibilityOverflowTest` +
+`RtSlangSkyDiscTest` +
 `RtPathTraceSlangPassTest` pin the numbers, the
 space and the host contract; no GPU frame or side-by-side screenshot is recorded.
 
 The same audit recorded the remaining systemic gaps in
 `docs/PATH_TRACE_CPP_INTEGRATION_PLAN.md` ("Follow-ups from the 2026-10-27
-shader audit"): sun/moon absent from camera and specular paths, no emitter NEE
+shader audit"): no emitter NEE
 buffer, missing optical medium/eta tracking, thin-pane transmission reachable
-only through BSDF sampling, identity
-`view`/`projection`/`prevViewProjection` in the Java frame block, entities
+only through BSDF sampling, `CameraState.view`/`.projection` still identity (the
+two products no Slang pass reads, since `viewProjection` and
+`prevViewProjection` are filled from the engine pose), entities
 excluded by the `0x01` path-trace instance mask while `RtWorld` writes the
 entity BLAS with `0x02` (widening the mask is not enough:
 `legacyHitToSurface` returns a miss for entity custom indices, so an entity
