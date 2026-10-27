@@ -82,6 +82,8 @@ bool RenderGraph::compile(std::uint64_t enabled_capabilities, CompiledGraph& out
     // per-frame operation, and explicit ordering is more important than a
     // hidden insertion-order dependency in the hot recording path.
     std::vector<std::vector<bool>> precedes(count, std::vector<bool>(count, false));
+    std::uint32_t queue_family = any_queue;
+    PassId queue_family_pass = 0;
     for (std::size_t i = 0; i < count; ++i) {
         const auto& pass = passes_[i];
         if (pass.name.empty()) return fail(error, ErrorCode::empty_name, 0, static_cast<PassId>(i));
@@ -93,6 +95,32 @@ bool RenderGraph::compile(std::uint64_t enabled_capabilities, CompiledGraph& out
         }
         for (std::size_t j = 0; j < i; ++j) {
             if (pass.name == passes_[j].name) return fail(error, ErrorCode::duplicate_name, 0, static_cast<PassId>(i));
+        }
+        if (pass.queue_family != any_queue) {
+            if (queue_family != any_queue && queue_family != pass.queue_family) {
+                return fail(error, ErrorCode::unsupported_multi_queue, 0,
+                            static_cast<PassId>(i), queue_family_pass);
+            }
+            queue_family = pass.queue_family;
+            queue_family_pass = static_cast<PassId>(i);
+        }
+        if (pass.dispatch.x == 0 || pass.dispatch.y == 0 || pass.dispatch.z == 0 ||
+            pass.dispatch.x > 65535 || pass.dispatch.y > 65535 || pass.dispatch.z > 65535) {
+            return fail(error, ErrorCode::invalid_dispatch, 0, static_cast<PassId>(i));
+        }
+        for (std::size_t r = 0; r < pass.push_constants.size(); ++r) {
+            const PushConstantRange& range = pass.push_constants[r];
+            if (range.size == 0 || (range.offset & 3u) != 0 || (range.size & 3u) != 0 ||
+                range.offset > max_push_constant_bytes ||
+                range.size > max_push_constant_bytes - range.offset) {
+                return fail(error, ErrorCode::invalid_push_constant, 0, static_cast<PassId>(i));
+            }
+            for (std::size_t s = 0; s < r; ++s) {
+                const PushConstantRange& other = pass.push_constants[s];
+                if (range.offset < other.offset + other.size && other.offset < range.offset + range.size) {
+                    return fail(error, ErrorCode::invalid_push_constant, 0, static_cast<PassId>(i));
+                }
+            }
         }
         for (PassId dependency : pass.after) {
             if (dependency >= count) return fail(error, ErrorCode::invalid_dependency, 0, static_cast<PassId>(i), dependency);
@@ -132,6 +160,7 @@ bool RenderGraph::compile(std::uint64_t enabled_capabilities, CompiledGraph& out
     result.owner = this;
     result.revision = revision_;
     result.enabled_capabilities = enabled_capabilities;
+    result.queue_family = queue_family;
     result.order.reserve(count);
     std::vector<bool> emitted(count, false);
     for (std::size_t n = 0; n < count; ++n) {

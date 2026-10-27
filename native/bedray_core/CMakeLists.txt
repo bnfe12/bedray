@@ -25,6 +25,10 @@ if(NOT EXISTS "${BEDRAY_VULKAN_HEADERS}/vulkan/vulkan_core.h")
     message(FATAL_ERROR "Vulkan headers not found; pass -DBEDRAY_VULKAN_HEADERS=<include dir>")
 endif()
 
+# Test targets are registered by subdirectories; enable discovery at the root
+# so `ctest --test-dir build` finds them.
+enable_testing()
+
 add_library(bedray_core SHARED
     src/core.cpp
 )

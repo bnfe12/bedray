@@ -1,10 +1,11 @@
 # Vulkan recording adapter integration contract
 
-Status: source candidate only. The core CMake build includes the graph and its
-Vulkan adapter by default, but `core.cpp` does not construct or execute it.
-This wiring has not been built or tested and is not evidence of a rendered
-frame. A standalone graph build enables the Vulkan adapter explicitly and
-supplies Vulkan headers.
+Status: source candidate. The core CMake build includes the graph and its
+Vulkan adapter by default, and the adapter plus its fake-command-buffer
+contract test build and pass at L1. `core.cpp` still does not construct or
+execute the adapter, so this is not evidence of a rendered frame and no GPU or
+driver validation has been performed. A standalone graph build enables the
+Vulkan adapter explicitly and supplies Vulkan headers.
 
 The Minecraft host owns the Vulkan device, command buffer, queue, submission,
 and presentation. The adapter receives the existing `vkCmdPipelineBarrier`
@@ -67,5 +68,6 @@ responsibility to cancel. A failed attach before submission requires rejecting
 the shared ticket and resolving every unattached recording. The guard cannot
 observe a Vulkan call, prove a queue outcome, establish a semaphore or barrier,
 or recover if its registry is destroyed first. It is not yet called by the
-frame path and has not been built or tested. Its completion helper checks only
+frame path; its submission semantics are covered by the L1 contract test. Its
+completion helper checks only
 the history producer serial, not memory visibility or image layout.

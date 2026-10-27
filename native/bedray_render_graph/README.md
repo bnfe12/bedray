@@ -68,6 +68,7 @@ explicit queue assignment, ownership transfer and submission synchronization.
 The graph uses whole-resource uses only; it therefore may reject independent
 subresources, and its pairwise hazards can be redundant. Adding finer ranges
 must preserve explicit ordering and avoid deriving correctness from declaration
-order. The core build references the graph library, but no core frame path
-constructs or executes it and Slang reflection is not connected. It has not
-been built or tested as verification is deferred by the user.
+order. The graph and adapter build as part of the native core, and focused L1 contract
+tests pass (see `RENDER_GRAPH_NOTES.md`). The core frame path still does not
+construct or execute a graph, Slang reflection is not connected to pipeline
+creation, and no Vulkan/Minecraft validation has been performed.

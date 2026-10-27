@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -10,6 +11,9 @@ namespace bedray::graph {
 using ResourceId = std::uint32_t;
 using PassId = std::uint32_t;
 inline constexpr PassId external_pass = std::numeric_limits<PassId>::max();
+inline constexpr std::uint32_t any_queue = std::numeric_limits<std::uint32_t>::max();
+// Vulkan guarantees at least 128 bytes of push-constant storage.
+inline constexpr std::uint32_t max_push_constant_bytes = 128;
 
 enum class ResourceKind : std::uint8_t { buffer, image, acceleration_structure };
 enum class Access : std::uint8_t { read, write, read_write };
@@ -36,6 +40,17 @@ struct ResourceUse {
     std::uint32_t image_layout = 0;
 };
 
+struct PushConstantRange {
+    std::uint32_t offset = 0;
+    std::uint32_t size = 0;
+};
+
+struct DispatchSize {
+    std::uint32_t x = 1;
+    std::uint32_t y = 1;
+    std::uint32_t z = 1;
+};
+
 struct PassDesc {
     std::string name;
     std::vector<ResourceUse> uses;
@@ -44,6 +59,13 @@ struct PassDesc {
     std::vector<PassId> after;
     // The host supplies actually enabled logical-device feature bits.
     std::uint64_t required_capabilities = 0;
+    // any_queue means "the host's recording queue". Different explicit
+    // families are rejected until cross-queue synchronization is modelled.
+    std::uint32_t queue_family = any_queue;
+    // Compute dispatch dimensions. Every pass in this planner is a dispatch.
+    DispatchSize dispatch{};
+    // Shader push-constant ranges in bytes; must match the AOT manifest.
+    std::vector<PushConstantRange> push_constants;
 };
 
 // An ordering constraint, not a ready-to-emit Vulkan barrier. Multiple entries
@@ -76,6 +98,8 @@ struct CompiledGraph {
     const void* owner = nullptr;
     std::uint64_t revision = 0;
     std::uint64_t enabled_capabilities = 0;
+    // Explicit family used by every pass, or any_queue when unspecified.
+    std::uint32_t queue_family = any_queue;
 };
 
 enum class ErrorCode : std::uint8_t {
@@ -92,6 +116,9 @@ enum class ErrorCode : std::uint8_t {
     unordered_hazard,
     uninitialized_read,
     missing_capability,
+    invalid_dispatch,
+    invalid_push_constant,
+    unsupported_multi_queue,
 };
 
 struct Error {
@@ -116,6 +143,8 @@ public:
     // plans are snapshots and must be rebuilt after any graph mutation.
     [[nodiscard]] const ResourceDesc* resource(ResourceId id) const noexcept;
     [[nodiscard]] const PassDesc* pass(PassId id) const noexcept;
+    [[nodiscard]] std::size_t resource_count() const noexcept { return resources_.size(); }
+    [[nodiscard]] std::size_t pass_count() const noexcept { return passes_.size(); }
     [[nodiscard]] bool is_current(const CompiledGraph& plan, std::uint64_t enabled_capabilities) const noexcept {
         return plan.owner == this && plan.revision == revision_ &&
                plan.enabled_capabilities == enabled_capabilities;
