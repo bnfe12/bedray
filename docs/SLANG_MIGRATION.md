@@ -197,7 +197,7 @@ hardware paths agree on foliage and glass.
 |---|---|---|---|
 | Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Java-side candidate has a GLSL fallback; both ownership and fallback need migration to the target C++/Slang architecture. The C++ ownership, mip-lifetime, barrier and missing-ABI plan is in [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no current complete-tree or live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `passes/path_trace.slang` | `RtPathTraceSlangPass` | Host class exists and is contract-tested, but the frame does not call it yet. Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. |
+| Path tracing | `passes/path_trace.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` keeps the legacy GLSL `rt_path.comp` when the AOT passes, device capabilities or a G-buffer denoiser block it. Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. No G-buffer, auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
 
 The host addresses bindings by Slang parameter name (`srcTex`, `dstImg`,
 `finalImg`, `depthTex`), and `RtBloomPass` validates the generated manifest
@@ -207,8 +207,9 @@ GLSL with a log line instead of binding the wrong image.
 
 ### Path-trace host contract
 
-The generated manifest is the authority; this table records what the Java side
-must supply, so the wiring step does not have to re-derive it from reflection.
+The generated manifest is the authority; this table records what the Java host
+supplies, and `RtPathTraceSlangPass` validates the generated manifest against it
+before the first dispatch.
 
 | Name | Binding | Host resource |
 |---|---|---|
@@ -226,11 +227,13 @@ The push block is 40 bytes.  It carries sampling and path limits only: the pass
 writes scene-referred radiance, and `FrameConstants.exposure` is applied once by
 the display/tonemap pass, so accumulation and denoise stay in linear HDR and
 exposure cannot be applied twice.  The pass requires `CAP_RAY_QUERY |
-CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  `RtAtmosphere` currently
-creates the shared `SlangRuntime` with mask 0. The final C++ renderer must
+CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing uses its own
+`SlangRuntime`, created from `SlangDeviceCapabilities.enabledMask`; the mask-0
+runtime in `RtAtmosphere` belongs to bloom only. The final C++ renderer must
 negotiate the features actually enabled on the game's device and select only
-supported methods. If this path is unsupported, report that state explicitly;
-do not fall back to runtime GLSL or `rt_path.comp`.
+supported methods. If this path is unsupported, the Java `AUTO` selector logs
+one fallback line and uses the legacy GLSL `rt_path.comp`; that fallback is a
+detachable compatibility path, not the target architecture.
 
 Depth keeps the legacy sentinel: bloom treats `depth >= 1e5` as sky
 (`BLOOM_SKY_DISTANCE`), and the path-trace entry writes `1e6` whenever the
@@ -246,20 +249,22 @@ invalid or truncated path is not a proven miss.  `firstHitDistance` is a
 distance along the unit primary direction, not linear view depth; a consumer
 that needs view depth must derive it from the camera contract.
 
-The unconnected `RtPathTraceSlangPass` is an existing Java-side candidate, not
-the owner of the final renderer. It creates the RGBA16F radiance and R32F depth images lazily from the
-frame size, keeps a ring of three separate 608-byte uniform buffers (the engine
-keeps at most two frames in flight; separate buffers avoid
-`minUniformBufferOffsetAlignment` issues with a 608-byte stride), zeroes one
-64-byte `BlockMaterial` element, validates the generated manifest against the
-nine bindings above, and records one dispatch followed by a full memory
-barrier.  The class is package-private and not referenced by
-`RtFrameRenderer`: nothing dispatches it yet, and the TLAS, section table and
-atlas views stay owned by the caller. This candidate must be reviewed and
-reworked for C++ ownership before any frame hookup; do not wire it into the
-legacy renderer as the final architecture. Every command buffer passed to `record`
-must reach `releaseRecording` after its submission completed or the recording
-was discarded, and `close()` must run before `SlangRuntime.close()`.
+The wired adapter is `RtSlangPathPass`, a public `RtPass` that
+`RtFrameRenderer` constructs for Path Tracing mode; it owns a package-private
+`RtPathTraceSlangPass` plus the `path_display` program. The adapter owns the
+RGBA32F running-mean image; the trace pass creates the RGBA16F radiance and R32F
+depth images lazily from the frame size, keeps a ring of three separate 608-byte
+uniform buffers (the engine keeps at most two frames in flight; separate buffers
+avoid `minUniformBufferOffsetAlignment` issues with a 608-byte stride), zeroes
+one 64-byte `BlockMaterial` element, validates the generated manifest against
+the nine bindings above, and records the trace dispatch, the display dispatch
+and a full memory barrier. The renderer keeps
+ownership of the TLAS, section table and atlas views. Every command buffer
+passed to `dispatch` must reach `releaseRecording` after its submission
+completed or the recording was discarded, and `close()` must run before
+`SlangRuntime.close()`. This adapter is the current Java host for Path Tracing
+mode, not the final ownership model: the C++ renderer must take over resources,
+recording and lifetime, and the adapter must not grow into a parallel renderer.
 
 ### Render-graph recording boundary
 
@@ -317,7 +322,7 @@ candidates, not a validated or active runtime.
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; no pass yet |
 | Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/segment_store.slang` | typed segment storage is a source candidate; typed trace exists in an isolated agent workspace, but cross-cascade resolve and host integration are unfinished. The old float4 resolve is incompatible with the typed trace. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
-| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ITraversal`, NEE through `ILightSampler`, filtered shadows, Russian roulette, first-hit distance; `RtPathTraceSlangPass` implements the host contract but the frame does not dispatch it yet |
+| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ITraversal`, NEE through `ILightSampler`, filtered shadows, Russian roulette, first-hit distance; `RtSlangPathPass` wraps `RtPathTraceSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
 
 Surface decoding lives in `surface/surface.slang`; the filtered shadow walk lives
 in `surface/visibility.slang`; the BSDF lobes live in `shading/bsdf.slang`.
