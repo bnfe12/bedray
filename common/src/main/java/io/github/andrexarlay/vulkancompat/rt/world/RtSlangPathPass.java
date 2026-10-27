@@ -192,7 +192,7 @@ public final class RtSlangPathPass implements RtPass {
             throw new IllegalStateException(program.name() + " pushes " + manifest.pushConstantBytes() + " B, host block is "
                 + DISPLAY_PUSH_BYTES + " B");
         }
-        for (String name : List.of("radiance", "accum", "outImage", "depth", "historyDepth")) {
+        for (String name : List.of("radiance", "accum", "outImage", "depth", "historyDepth", "motion")) {
             SlangPassManifest.Binding binding = manifest.binding(name);
             if (binding == null || binding.descriptorType() != BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE) {
                 throw new IllegalStateException(program.name() + ": '" + name + "' must be a storage image");
@@ -202,9 +202,9 @@ public final class RtSlangPathPass implements RtPass {
         if (constants == null || constants.descriptorType() != BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
             throw new IllegalStateException(program.name() + ": 'frame' must be the FrameConstants buffer");
         }
-        if (manifest.bindings().size() != 6) {
+        if (manifest.bindings().size() != 7) {
             throw new IllegalStateException(program.name() + " declares " + manifest.bindings().size()
-                + " binding(s), host supplies 6");
+                + " binding(s), host supplies 7");
         }
     }
 
@@ -473,6 +473,7 @@ public final class RtSlangPathPass implements RtPass {
                 SlangProgram.Resource.storageImage("outImage", views.output()),
                 SlangProgram.Resource.storageImage("depth", views.depth()),
                 SlangProgram.Resource.storageImage("historyDepth", historyDepth.view),
+                SlangProgram.Resource.storageImage("motion", trace.motionView()),
                 trace.frameResource()), push);
         }
         historyWritten = true;
@@ -492,7 +493,8 @@ public final class RtSlangPathPass implements RtPass {
         RtEntityGeometryManager.GpuRange indices = eg.frameIndices();
         io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager capture =
             io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance();
-        return new RtPathTraceSlangPass.Entities(entityView(eg.framePositions()), entityView(indices),
+        return new RtPathTraceSlangPass.Entities(entityView(eg.framePositions()),
+            entityView(eg.framePreviousPositions()), entityView(indices),
             entityView(eg.frameAttributes()), entityView(eg.atlasRects()), entityView(eg.atlasTexels()),
             eg.atlasTexelsPerSide(), indices.present() ? capture.selfAvatarTriStart() : 0,
             indices.present() ? capture.selfAvatarTriCount() : 0);

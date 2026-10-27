@@ -129,8 +129,9 @@ class RtSlangRestirDiTest {
         assertTrue(di.contains("previous = receiverPosition + cameraDelta;"),
             "the world of a frame is anchored at that frame's camera, so the previous position is the current one plus"
                 + " the camera delta");
-        assertTrue(display.contains("float3 previous = position + cameraDelta;"),
-            "the running mean already reprojects that way - the reservoir must not invent a second convention");
+        assertTrue(display.contains("float3 previous = position + cameraDelta + surfaceMotion;"),
+            "the running mean reprojects the same way, plus one term the reservoir has no use for: the displacement of"
+                + " the surface itself, which only the tracer's own geometry can name");
         assertTrue(di.contains("mul(previousViewProjection, float4(previous, 1.0))"),
             "and through the same matrix");
         assertTrue(display.contains("mul(f.camera.prevViewProjection, float4(previous, 1.0))"),
@@ -138,6 +139,19 @@ class RtSlangRestirDiTest {
         assertTrue(di.contains("stored.sample.xyz -= cameraDelta;"),
             "a stored light point goes the other way: back into the space of the frame that reads it");
         assertTrue(di.contains("ndc.y = -ndc.y;"), "with the same flipY as the display pass");
+        // ... and the one term the reservoir used to be missing. A mob part's own history lives at the pixel that part's
+        // pixels were in, so merging without the shift would import whatever light stood there a frame ago - a bias,
+        // not just noise. The tracer already knows the displacement, because the surface it committed is the receiver.
+        assertTrue(di.contains("diReprojectReceiver(receiver.position + receiver.motion, cameraDelta,"),
+            "the receiver is shifted by its own motion before the camera delta turns it into last frame's position");
+        String tracer = read(TRACER);
+        assertTrue(tracer.contains("receiver.motion = result.primaryMotion.xyz;"),
+            "filled from the primary surface the tracer just committed, so no second convention is invented");
+        assertTrue(tracer.contains("receiver.primary = result.surfaceHits == 1u;"),
+            "and that is the same surface the record belongs to");
+        String receiverStruct = block(read(CONTRACT), "struct LightReceiver {");
+        assertTrue(receiverStruct.contains("float3 motion;"),
+            "the carrier itself carries the term, so a receiver reaching a reuse pass has an answer to the question");
     }
 
     /**

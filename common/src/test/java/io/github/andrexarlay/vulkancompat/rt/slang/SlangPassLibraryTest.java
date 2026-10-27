@@ -115,12 +115,14 @@ class SlangPassLibraryTest {
         Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
 
         SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        assertEquals(16, manifest.bindings().size(), "path_trace: binding count");
+        assertEquals(18, manifest.bindings().size(), "path_trace: binding count");
         assertBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
         assertBinding(manifest, "outImage", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
         assertEquals(64, manifest.binding("sections").elementBytes(), "LegacySection is the 64-byte RtWorld table entry");
         assertBinding(manifest, "albedoAtlas", 3, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        // The primary surface's own displacement, which is the only way a moved mob can be found again next frame.
+        assertBinding(manifest, "outMotion", 5, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "materialAtlas", 9, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
         assertBinding(manifest, "normalAtlas", 10, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
         assertBinding(manifest, "outDepth", 12, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
@@ -146,6 +148,9 @@ class SlangPassLibraryTest {
         assertEquals(16, manifest.binding("entityRects").elementBytes(), "an atlas rect is a uint4");
         assertBinding(manifest, "entityTexels", 24, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
         assertEquals(4, manifest.binding("entityTexels").elementBytes(), "ABGR8 texels");
+        assertBinding(manifest, "entityPrevious", 25, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        assertEquals(4, manifest.binding("entityPrevious").elementBytes(),
+            "the previous-frame position ring is the same float3 layout as the current one");
         assertEquals(112, manifest.pushConstantBytes(),
             "path_trace: the 96-byte DI block plus the 16-byte entity state of this frame");
         assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS

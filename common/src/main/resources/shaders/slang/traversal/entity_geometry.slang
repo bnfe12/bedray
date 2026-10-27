@@ -6,7 +6,7 @@
 // triangle list of this frame and nothing else.  The legacy path reaches the
 // same records through device addresses in a statistics buffer
 // (`rt_common_core.glsl`: entityTriangle, entityTexel, entitySlot); here they
-// are five bound buffers, which is how the Slang pipeline passes every other
+// are six bound buffers, which is how the Slang pipeline passes every other
 // per-frame list.
 //
 // Layout, per element, as written by RtEntityGeometryManager.uploadInterleaved:
@@ -15,6 +15,12 @@
 //            the same space as the section geometry, because an entity model
 //            comes from vanilla's camera-relative PoseStack.  No section origin,
 //            no 1024 block wrap.
+//   previous   the same layout as positions, but each vertex where *this frame's*
+//            model had it in the PREVIOUS frame, still relative to the CURRENT
+//            camera (RtEntityGeometryManager.writePrevPositions).  A part matched
+//            to its own part last frame carries both its rigid motion and its
+//            animation; an unmatched one carries its current position, so the
+//            difference - the only thing a consumer needs - is exactly zero.
 //   indices    uint per triangle vertex, 3 per primitive, numbering from 0
 //   attrs      uint4 per vertex: colour (packed, low byte red), light
 //            (block | atlas slot << 8 | sky << 16 | flags << 24), u as float
@@ -83,6 +89,7 @@ struct EntityAtlas {
 
 struct EntityGeometry {
     StructuredBuffer<uint> positions;
+    StructuredBuffer<uint> previous;
     StructuredBuffer<uint> indices;
     StructuredBuffer<uint4> attrs;
     EntityAtlas atlas;
@@ -113,6 +120,44 @@ float3 entityPosition(EntityGeometry entities, uint vertex) {
     return float3(asfloat(entities.positions[base]),
         asfloat(entities.positions[base + 1u]),
         asfloat(entities.positions[base + 2u]));
+}
+
+// Vertices the previous-position ring actually covers.  The bound range is this
+// frame's own slice, so a frame with no capture binds a one-element dummy and
+// answers zero - the same authority the triangle count is taken from.
+uint entityPreviousVertexCount(EntityGeometry entities) {
+    uint count;
+    uint stride;
+    entities.previous.GetDimensions(count, stride);
+    return count / ENTITY_FLOATS_PER_VERTEX;
+}
+
+float3 entityPreviousPosition(EntityGeometry entities, uint vertex) {
+    uint base = vertex * ENTITY_FLOATS_PER_VERTEX;
+    return float3(asfloat(entities.previous[base]),
+        asfloat(entities.previous[base + 1u]),
+        asfloat(entities.previous[base + 2u]));
+}
+
+// Where this surface's own geometry had it one frame ago, minus where it is now,
+// in world blocks.  Both halves are interpolated from the same triangle with the
+// same weights `entityHitToSurface` uses, and both are already relative to the
+// current camera, so the camera's own motion cancels out of the difference: what
+// is left is the part's motion and nothing else.
+float3 entityMotion(EntityGeometry entities, uint primitive, float2 bary) {
+    uint vertices = entityPreviousVertexCount(entities);
+    uint3 vi = entityTriangle(entities, primitive);
+    if (vi.x >= vertices || vi.y >= vertices || vi.z >= vertices) {
+        return float3(0.0);
+    }
+    float3 w = float3(1.0 - bary.x - bary.y, bary.x, bary.y);
+    float3 current = entityPosition(entities, vi.x) * w.x
+        + entityPosition(entities, vi.y) * w.y
+        + entityPosition(entities, vi.z) * w.z;
+    float3 previous = entityPreviousPosition(entities, vi.x) * w.x
+        + entityPreviousPosition(entities, vi.y) * w.y
+        + entityPreviousPosition(entities, vi.z) * w.z;
+    return previous - current;
 }
 
 // Packed bytes, low first: the same order `unpackUnorm4x8` gives the legacy

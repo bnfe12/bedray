@@ -37,4 +37,13 @@ interface ITraversal {
     // Distance to the nearest blocker, or ray.tMax on a miss.  This is the
     // cheap form used by AO and short-range GI.
     float traceDistance(Ray ray);
+
+    // Where the surface of a hit had itself one frame ago, minus where it is now,
+    // in world blocks.  A backend whose geometry does not move answers zero, and
+    // zero is exactly what a consumer wants: added to a camera-only reprojection
+    // it changes nothing.  Only the primary hit is ever asked, because the rest
+    // of the path is a sample of this frame, not a surface on a screen.
+    float3 surfaceMotion(SurfaceHit hit) {
+        return float3(0.0);
+    }
 }

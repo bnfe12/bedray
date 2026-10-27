@@ -108,7 +108,7 @@ common/src/main/resources/shaders/slang/
 │   ├── voxel_traversal.slang          BitmaskVoxelTraversal + VoxelWorld
 │   ├── hardware_traversal.slang       HardwareTraversal (VK_KHR_ray_query)
 │   ├── legacy_section_traversal.slang LegacySectionTraversal (RtWorld 64-byte table + device-address arena)
-│   ├── entity_geometry.slang          the captured entity ring: triangle decode, atlas texels, part flags
+│   ├── entity_geometry.slang          the captured entity ring: triangle decode, atlas texels, part flags, motion
 │   └── hybrid_traversal.slang         HybridTraversal<V, H>
 ├── voxel/
 │   └── voxel.slang                    single-section Bitmask HDDA
@@ -230,6 +230,7 @@ before the first dispatch.
 | `outImage` | 1 | **new** RGBA16F storage image (`STORAGE_BIT \| SAMPLED_BIT`), linear radiance — not the legacy RGBA8 display target |
 | `sections` | 2 | the existing 64-byte-per-slot `RtWorld` section table |
 | `albedoAtlas` | 3 | block atlas sampler (legacy binding 3) |
+| `outMotion` | 5 | RGBA16F storage image the tracer owns, sized with the radiance: rgb is the primary surface's own displacement from last frame, `a` marks it as a moving entity part; `path_display` binds the same image as `motion` |
 | `materialAtlas` | 9 | LabPBR `_s` sampler (legacy binding 9) |
 | `normalAtlas` | 10 | LabPBR `_n` sampler (legacy binding 10) |
 | `outDepth` | 12 | R32F storage image; first-hit distance, `1e6` on a miss |
@@ -242,6 +243,7 @@ before the first dispatch.
 | `entityAttrs` | 22 | the same slot of the `uint4` per vertex: packed colour, light (`block \| slot << 8 \| sky << 16 \| flags << 24`), `u` and `v` as float bits |
 | `entityRects` | 23 | the `uint4` per RT entity atlas slot - rect, size and the authored-PBR half - so a held iron sword comes out metallic |
 | `entityTexels` | 24 | the square ABGR atlas `EntityTextureAtlas` uploads |
+| `entityPrevious` | 25 | the same ring slot one frame earlier - same offset, same length as `entityPositions`, so a triangle the previous frame did not have answers no motion rather than reading past the binding |
 
 The push block is 112 bytes.  It carries sampling and path limits plus the
 emitter tail (`emitterCount`, `emitterProbability`, and `emitterCameraRelative`,
@@ -250,8 +252,10 @@ the candidates per call), the ReSTIR DI tail (`diCameraDelta`, the raw camera
 delta of the frame, and `diState`, whose x holds the `PATH_TRACE_DI_*` bits and
 whose y is the half of the ring this dispatch writes) and `entityState` (x: atlas
 texels per side, 0 for none; yz: the first-person body's primitive range).  The
-five entity buffers bind at the ring slot's own offset and length, so a frame
-that captured no model binds a zeroed dummy and cannot walk a stale slot;
+six entity buffers bind at the ring slot's own offset and length — this frame's
+positions and the same vertices one frame earlier, indices, attributes, atlas
+rects and atlas texels — so a frame that captured no model binds a zeroed dummy
+and cannot walk a stale slot;
 `entityState.x == 0` is the shader's own off test for the atlas.  The pass writes
 scene-referred radiance, and
 `FrameConstants.exposure` is applied once by the display/tonemap pass, so
@@ -304,7 +308,14 @@ The running mean is reprojected: `path_display.slang` carries each pixel's
 history through `FrameConstants.prevViewProjection` plus the anchor delta,
 rejects it on a depth discontinuity (`REPROJECTION_TOLERANCE`) and keeps a
 per-pixel sample count, so accumulation continues while the camera moves instead
-of restarting on every frame. The adapter still resets the whole image when the
+of restarting on every frame. A pixel whose surface itself moved needs a third
+term: the tracer writes `outMotion` for the primary hit (`float4`, rgb is the
+displacement of that surface from last frame to this one and `a` says whether the
+surface is a moving entity part), the display pass reads it per pixel and
+reprojects `position + cameraDelta + surfaceMotion`, so a walking mob's pixels
+find the history of that mob's own part rather than the wall it walked past.
+Terrain writes the zero the reprojection already assumes, and a pixel that hit
+nothing writes nothing. The adapter still resets the whole image when the
 scene changes, the key light's direction or colour changes, or the sky colour
 changes — a moving sun must not be averaged into a static dot. The history is
 only trusted after it was written once (`historyWritten`), and the reset path is
@@ -371,7 +382,9 @@ What a port cannot translate one-for-one, and how it was settled:
 
 * **Reaching the records.** The legacy path reads the ring through device
   addresses stored in a statistics buffer; the Slang pipeline passes every other
-  per-frame list as a descriptor, so the ring is five bound buffers (20-24).
+  per-frame list as a descriptor, so the ring is six bound buffers (20-25) -
+  the previous-position ring included, because a motion vector is a geometry
+  question and not a second convention.
   Each binds at the ring slot's own offset and at this frame's length, which
   makes `entityIndices.GetDimensions()` the authoritative triangle count and
   leaves a frame with no capture reading one zeroed element rather than the last
@@ -404,18 +417,34 @@ What a port cannot translate one-for-one, and how it was settled:
   every shadow through while still shading its own colour at 0.35, and the
   fullbright floor (`light > 0.995` on both channels raises emission to 0.4) runs
   after the chain, so a hole stays unlit.
+* **Where a moving part stood.** The host already uploaded the previous position
+  of every captured vertex, relative to *this* frame's camera, so
+  `entityMotion` interpolates the same hit's two halves with the same barycentric
+  weights and returns `previous - current` - the vector a consumer *adds* to
+  today's position to land in yesterday's picture, with camera motion already
+  cancelled by that anchoring. The question belongs to `ITraversal`
+  (`surfaceMotion`, defaulting to zero for a backend that tracks nothing moving),
+  the tracer asks it once for the primary surface and writes `outMotion`, and
+  both consumers - the accumulating display pass and ReSTIR DI temporal reuse -
+  add that vector to their existing `position + cameraDelta`. No new push field,
+  no device address, no second reprojection convention. A triangle the previous
+  slice does not cover, a miss, and terrain all answer zero, which is exactly what
+  a static reprojection already assumes.
 
-Known gaps, all of them visible: an entity hit has **no motion vector** (no Slang
-pass writes velocity for the ring, so a moving mob accumulates as noise rather
-than reprojecting), no **End Portal starfield**, no **Sobel auto-normal**, and an
-emissive part is not yet a **next-event-emission candidate**. Switch:
+Known gaps, all of them visible: no **End Portal starfield**, no **Sobel
+auto-normal**, and an emissive part is not yet a **next-event-emission
+candidate**. Switch:
 `-Dvkbridge.rt.slangEntities` (default true) falls back to a terrain-only trace.
-Evidence: `compileSlang` produces 16 bindings / 112-byte push for `path_trace`
-(414472 B SPIR-V); `RtSlangEntityTest` (8 tests) pins the scene mask, the instance-bit
+Evidence: `compileSlang` produces 18 bindings / 112-byte push for `path_trace`
+(420184 B SPIR-V) and 7 bindings for `path_display` (the motion image the tracer
+owns); `RtSlangEntityTest` (12 tests) pins the scene mask, the instance-bit
 routing in both directions, the anchor arithmetic and the missing identity, the
 primary-only self-avatar skip across all three ray kinds, the alpha bands and the
 fullbright order against the legacy function, the ring-slot offsets and the
-bound-length authority, and the host fallback plus the switch;
+bound-length authority, the host fallback plus the switch, and the motion path -
+the previous ring read through `GetDimensions` with its own bound refusal, the
+`previous - current` direction, the entity-only answer from `surfaceMotion`, the
+third term in both consumers and the buffers that carry the slice.
 `RtPathTraceSlangPassTest` and `SlangPassLibraryTest` pin the push layout and the
 manifest. Nine mutations - the mask back to world-only, the anchor dropped from
 `worldPosition`, the section decoder accepting an entity instance id, the
@@ -423,7 +452,15 @@ self-avatar skip moved into `traceClosest`, the fullbright floor zeroed, the ind
 range bound at the buffer start instead of the ring slot, the triangle count taken
 from a constant rather than `GetDimensions`, the atlas/range cross-check gutted,
 the frame switch forced off - each failed exactly the guard that owns it, and every
-mutated file came back byte-identical. No owner-verified frame yet.
+mutated file came back byte-identical. So did thirteen more, all of them motion:
+the subtraction reversed, the previous-ring refusal deleted, the previous count
+read from the current vertices, the previous binding filled with this frame's
+positions (twice, in the pass and in the host), the slice bound at offset 0,
+`+ surfaceMotion` dropped from the accumulator and `+ receiver.motion` from the
+DI reprojection, the motion lane made to claim every primary hit, the traversal
+default made to answer a non-zero lie, terrain let into the entity decoder, a
+miss allowed to keep writing motion, and the carrier field renamed. No
+owner-verified frame yet.
 
 What a playtest report of "mobs are still missing" can be told apart from: the frame
 logs one line per session, before the dispatch that could fail, either naming the
@@ -503,9 +540,13 @@ one estimator and rejects a record whose quad changed under the reservoir.
 
 Space: a record stores the light point in the camera-anchored space of the frame
 that wrote it, so the history read reprojects the receiver with
-`position + cameraDelta` through `frame.camera.prevViewProjection` — the same
-convention `path_display.slang` already uses for the running mean — and an
-accepted record comes back with `- cameraDelta`.  The view bob needs no term of
+`receiver.position + receiver.motion + cameraDelta` through
+`frame.camera.prevViewProjection` — the same convention `path_display.slang`
+already uses for the running mean, with the surface's own displacement read from
+the vector the tracer committed for that pixel — and an
+accepted record comes back with `- cameraDelta`.  A mob part therefore merges
+with the history of the same part rather than with whatever lit the pixel it
+walked through, which would have been a bias and not noise.  The view bob needs no term of
 its own; it is inside both receivers and differs by centimetres, far below the
 tolerance above.
 
@@ -574,7 +615,9 @@ list).  All four are `RtSettings` booleans, so they persist, obey
 up as `restir(a->b)` in the `resetHistory:` log.  Spatial reuse is offered as a
 child of temporal in both paths because it merges the reservoirs temporal writes —
 an independent row would be a switch that does nothing.  Evidence:
-`compileSlang` produces 16 bindings / 112-byte push for `path_trace` and 6 bindings
+`compileSlang` produces 18 bindings / 112-byte push for `path_trace` — the entity
+ring and its previous-position buffer were bound after this batch, and the DI
+contract they carry is unchanged — and 6 bindings
 / 64-byte push for `restir_spatial`, `RtRestirSettingsTest` pins each switch to the
 consumer that acts on it, and
 `RtSlangRestirDiTest` + `RtSlangRestirSpatialTest` + `RtSlangBlockEmitterTest` +
@@ -793,10 +836,9 @@ because a module has no entry point; that is expected.
    reason belongs to the C++ pass, which owns the buffers.
 3. **ReSTIR PT** — path-space reservoirs on top of `PathVertex`; keep it
    separate from the DI reservoir so the two reuse policies do not merge.
-4. **Entity shading parity** — the ring is traced, four behaviours of
-   `fetchEntitySurface` are not: per-part **motion vectors** (the previous-position
-   ring is uploaded but no Slang pass writes velocity for an entity hit, so a
-   moving mob cannot reproject), the procedural **End Portal starfield**, the
+4. **Entity shading parity** — the ring is traced and moving parts reproject;
+   three behaviours of
+   `fetchEntitySurface` are not: the procedural **End Portal starfield**, the
    **Sobel auto-normal** that gives mob skin its relief, and glowing parts as
    **next-event candidates**, so a lantern held in hand lights nothing but itself.
 5. **Radiance Cascades trace/update** — review the isolated typed trace, align

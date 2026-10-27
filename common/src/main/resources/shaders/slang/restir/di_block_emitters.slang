@@ -55,6 +55,9 @@ bool diSamePosition(float3 a, float3 b) {
 
 // Where the surface this pixel hit now sat in the previous frame, and the pixel that saw it there.  A failed test is a
 // disocclusion or an off-screen pixel and simply means "no history".
+//
+// The receiver arrives where it is NOW, so a surface that moved between frames - a mob part - has to be shifted before
+// the camera delta is added, or the reservoir is merged with the history of whatever stood there instead.
 bool diReprojectReceiver(float3 receiverPosition, float3 cameraDelta, float4x4 previousViewProjection, uint2 size,
         bool flipY, out float3 previous, out float previousDistance, out int2 historyPixel) {
     previous = receiverPosition + cameraDelta;
@@ -181,7 +184,7 @@ struct BlockEmitterDiSampler : IReuseSampler {
             float3 previousReceiver;
             float previousDistance;
             int2 historyPixel;
-            bool onScreen = diReprojectReceiver(receiver.position, cameraDelta, previousViewProjection, size,
+            bool onScreen = diReprojectReceiver(receiver.position + receiver.motion, cameraDelta, previousViewProjection, size,
                 flipY != 0u, previousReceiver, previousDistance, historyPixel);
             DIReservoir history = emptyReservoir();
             if (onScreen && diLoadHistory(reservoirs, historyPixel, size, parity, previousReceiver, previousDistance,

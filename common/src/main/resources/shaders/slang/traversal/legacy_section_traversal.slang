@@ -232,6 +232,14 @@ struct LegacySectionTraversal : ITraversal {
         return traceNearest(ray, true);
     }
 
+    // A section cannot move: its geometry is uploaded once and the world around a
+    // player is static within a frame.  A captured model can, and the ring says
+    // where each of its vertices stood one frame ago.
+    override float3 surfaceMotion(SurfaceHit hit) {
+        if (!hit.hit || hit.kind != HitKind.Entity) return float3(0.0);
+        return entityMotion(entities, hit.primitiveId, hit.barycentrics);
+    }
+
     VisibilityResult traceVisibility(Ray ray) {
         if (ray.tMax <= ray.tMin) return visibleResult(ray.tMax);
 

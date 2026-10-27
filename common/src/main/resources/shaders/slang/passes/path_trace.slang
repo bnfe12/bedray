@@ -16,6 +16,8 @@
 //   3  albedoAtlas      combined image sampler
 //   9  materialAtlas    combined image sampler (LabPBR _s)
 //   10 normalAtlas      combined image sampler (LabPBR _n)
+//   5  outMotion        RGBA16F storage image (where the primary surface stood one frame ago minus where it is now, in
+//                       world blocks; a = 1 when it is a captured model, so a static mob reads 0,1 and terrain 0,0)
 //   12 outDepth         R32F storage image (first accepted surface distance, 1e6 on a miss)
 //   16 frame            ConstantBuffer<FrameConstants> (608 B)
 //   17 blockMaterials   StructuredBuffer<BlockMaterial> (dummy table until voxel materials exist)
@@ -26,8 +28,9 @@
 //   22 entityAttrs      StructuredBuffer<uint4> - colour, light, u, v per captured vertex
 //   23 entityRects      StructuredBuffer<uint4> - one atlas slot's rect and authored PBR
 //   24 entityTexels     StructuredBuffer<uint>  - the RT entity atlas, packed bytes
+//   25 entityPrevious   StructuredBuffer<uint>  - the same float3 layout, one frame earlier
 //
-// The five entity buffers are this frame's ring slot, bound at its own offset:
+// The six entity buffers are this frame's ring slot, bound at its own offset:
 // the bound length is the triangle count, so a frame with nothing captured binds
 // a one-element dummy and reads zero triangles rather than a stale model.
 //
@@ -85,6 +88,7 @@ struct PathTracePush {
 [[vk::image_format("rgba16f")]] [[vk::binding(1, 0)]] RWTexture2D<float4> outImage;
 [[vk::binding(2, 0)]] StructuredBuffer<LegacySection> sections;
 [[vk::binding(3, 0)]] Sampler2D albedoAtlas;
+[[vk::image_format("rgba16f")]] [[vk::binding(5, 0)]] RWTexture2D<float4> outMotion;
 [[vk::binding(9, 0)]] Sampler2D materialAtlas;
 [[vk::binding(10, 0)]] Sampler2D normalAtlas;
 [[vk::image_format("r32f")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;
@@ -97,6 +101,7 @@ struct PathTracePush {
 [[vk::binding(22, 0)]] StructuredBuffer<uint4> entityAttrs;
 [[vk::binding(23, 0)]] StructuredBuffer<uint4> entityRects;
 [[vk::binding(24, 0)]] StructuredBuffer<uint> entityTexels;
+[[vk::binding(25, 0)]] StructuredBuffer<uint> entityPrevious;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -150,6 +155,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     EntityGeometry entities;
     entities.positions = entityPositions;
+    entities.previous = entityPrevious;
     entities.indices = entityIndices;
     entities.attrs = entityAttrs;
     entities.atlas = entityAtlas;
@@ -257,4 +263,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // BLOOM_SKY_DISTANCE (1e5) as sky and the composite pass uses the same buffer.  firstHitDistance alone defaults
     // to the ray far plane on a miss, which is far below that threshold and would make the sky glow.
     outDepth[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u ? result.firstHitDistance : 1.0e6;
+    // The velocity lane belongs to the accumulator, not to the integrand: it says where the surface this pixel
+    // showed had itself been one frame ago.  A miss and terrain both say "nowhere", which is what a camera-only
+    // reprojection already assumes, so no flag and no branch is needed downstream for them.
+    outMotion[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u ? result.primaryMotion : float4(0.0);
 }

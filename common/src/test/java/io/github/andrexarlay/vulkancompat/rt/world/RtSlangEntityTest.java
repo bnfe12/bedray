@@ -23,6 +23,9 @@ class RtSlangEntityTest {
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String ENTITY = SHADERS + "/traversal/entity_geometry.slang";
     private static final String TRAVERSAL = SHADERS + "/traversal/legacy_section_traversal.slang";
+    private static final String CONTRACT_TRAVERSAL = SHADERS + "/traversal/traversal.slang";
+    private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
+    private static final String DISPLAY = SHADERS + "/passes/path_display.slang";
     private static final String SURFACE = SHADERS + "/surface/surface.slang";
     private static final String PASS = SHADERS + "/passes/path_trace.slang";
     private static final String HOST_PASS =
@@ -163,7 +166,7 @@ class RtSlangEntityTest {
 
         String host = read(HOST_PASS);
         assertTrue(host.contains("private static SlangProgram.Resource entityBuffer(String name, BufferView view, RtMemory.Buf dummy) {"),
-            "every one of the five bindings falls back to the pass's own dummy");
+            "every entity binding falls back to the pass's own dummy");
         assertTrue(host.contains("\"rt_path_entity_scalar_dummy\"") && host.contains("\"rt_path_entity_vector_dummy\""),
             "a zeroed element of the right size, so a frame that captured nothing reads zeros");
         assertTrue(host.contains("throw new IllegalArgumentException(\"the push names an entity atlas but no texel range is bound\")"),
@@ -203,6 +206,108 @@ class RtSlangEntityTest {
         assertTrue(frame.contains("capturedEntities.indices().bytes() / 12L"),
             "triangles from the index range the shader itself measures");
         assertTrue(frame.contains("capturedEntities.positions().bytes() / 12L"), "and vertices from the position range");
+    }
+
+    /**
+     * A mob that walked three blocks is not the surface that was there last frame, so its pixels have to be looked up
+     * where that part's own geometry stood. The host already uploads the previous position of every captured vertex;
+     * these guards pin that the shader reads it as a bounded ring, subtracts in the right direction, and stays quiet
+     * when the frame has no previous slice at all.
+     */
+    @Test
+    void aMovingPartIsFoundWhereItStoodLastFrame() {
+        String entity = read(ENTITY);
+        assertTrue(entity.contains("StructuredBuffer<uint> previous;"),
+            "the previous-position ring is a bound buffer, not a device address");
+        String previousCount = block(entity, "uint entityPreviousVertexCount(EntityGeometry entities) {");
+        assertTrue(previousCount.contains("entities.previous.GetDimensions(count, stride);"),
+            "its bound length is the authority, like the triangle count");
+        assertTrue(previousCount.contains("return count / ENTITY_FLOATS_PER_VERTEX;"),
+            "three floats per vertex, so a one-element dummy answers zero vertices");
+        String motion = block(entity, "float3 entityMotion(EntityGeometry entities, uint primitive, float2 bary) {");
+        assertTrue(motion.contains("if (vi.x >= vertices || vi.y >= vertices || vi.z >= vertices) {"),
+            "a triangle the previous ring does not cover has no motion, rather than a read past the binding");
+        assertTrue(motion.contains("return previous - current;"),
+            "previous minus current: the vector a consumer ADDS to this frame's position to land last frame");
+        assertTrue(motion.contains("float3 w = float3(1.0 - bary.x - bary.y, bary.x, bary.y);"),
+            "the same weights the hit itself is decoded with, or the two halves are different points");
+
+        String manager = read(GEOMETRY_MANAGER);
+        String previousRange = block(manager, "public synchronized GpuRange framePreviousPositions() {");
+        assertTrue(previousRange.contains("new GpuRange(ringPrev, ringSlot * ringVertexCap * 12L,"
+            + " (long) frameVertices * 12L)"),
+            "the same slot and the same length as the positions: a motion vector that outlives its model is a lie");
+
+        String host = read(HOST_PASS);
+        assertTrue(host.contains("entityBuffer(\"entityPrevious\", captured.previous(), entityScalarDummy)"),
+            "the previous slice reaches the shader through its own range - binding it as the positions would silently"
+                + " make every motion vector zero");
+
+        String pass = read(PASS);
+        assertTrue(pass.contains("entities.previous = entityPrevious;"),
+            "and the pass hands that buffer to the geometry struct, or the field stays unbound and every"
+                + " motion answer is the zero default");
+    }
+
+    /** Only the ray that left the eye needs a history to reproject into; the rest of the path is a sample, not a pixel. */
+    @Test
+    void onlyTheEyeRayIsAskedWhereItsSurfaceStood() {
+        String tracer = read(TRACER);
+        String primary = block(tracer, "if (!firstSurfaceAccepted) {");
+        assertTrue(primary.contains("result.primaryMotion = float4(traversal.surfaceMotion(hit),"),
+            "recorded once, at the surface the accumulator will look for next frame");
+        assertTrue(primary.contains("hit.kind == HitKind.Entity ? 1.0 : 0.0);"),
+            "and the lane that says so is the hit's own kind, not a guess from the depth");
+        String empty = block(tracer, "PathTraceResult emptyPathTraceResult() {");
+        assertTrue(empty.contains("result.primaryMotion = float4(0.0);"),
+            "a path that never committed a surface carries no motion either");
+
+        String contract = read(CONTRACT_TRAVERSAL);
+        assertTrue(contract.contains("float3 surfaceMotion(SurfaceHit hit) {\n        return float3(0.0);"),
+            "a backend that tracks no moving geometry answers zero, which is what a static reprojection already assumes");
+    }
+
+    /** Terrain does not move within a frame; asking the ring about a block face would invent a displacement. */
+    @Test
+    void terrainIsNeverAskedForMotionAndAMissWritesNothing() {
+        String traversal = read(TRAVERSAL);
+        String motion = block(traversal, "override float3 surfaceMotion(SurfaceHit hit) {");
+        assertTrue(motion.contains("if (!hit.hit || hit.kind != HitKind.Entity) return float3(0.0);"),
+            "the section half of the same instance is static by construction");
+        assertTrue(motion.contains("return entityMotion(entities, hit.primitiveId, hit.barycentrics);"),
+            "and the entity half answers from the ring through the hit's own corner data");
+
+        String pass = read(PASS);
+        assertTrue(pass.contains("outMotion[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u"
+            + " ? result.primaryMotion : float4(0.0);"),
+            "a pixel that hit nothing says nothing, so a moved camera restarts it instead of borrowing the sky's history");
+    }
+
+    /** The accumulator is where a motion vector becomes a pixel: it has to be added, not merely carried. */
+    @Test
+    void theAccumulatorAddsTheSurfacesOwnMotionToTheReprojection() {
+        String display = read(DISPLAY);
+        String reproject = block(display, "PathDisplayHistory pathDisplayReproject(FrameConstants f, int2 p,"
+            + " float2 size, float hitDistance,");
+        assertTrue(reproject.contains("float3 previous = position + cameraDelta + surfaceMotion;"),
+            "camera motion and surface motion are two different terms, and a mob needs both");
+        assertTrue(display.contains("pc.reuse.xyz, motion[p].rgb, pc.reuse.w,"),
+            "read per pixel from the image the tracer wrote this frame");
+        assertTrue(display.contains("[[vk::binding(6, 0)]] RWTexture2D<float4> motion;"),
+            "bound as the image the producer owns, not a copy that could disagree");
+
+        String host = read(HOST_PASS);
+        assertTrue(host.contains("motion = memory.createImage(\"rt_path_motion\", w, h,"
+            + " VK10.VK_FORMAT_R16G16B16A16_SFLOAT,"),
+            "the producer allocates it beside the radiance, at the same size");
+        assertTrue(host.contains("SlangProgram.Resource.storageImage(\"outMotion\", motion.view)"),
+            "and hands its own image to the shader, so no consumer can bind a stale one");
+
+        String frame = read(HOST_FRAME);
+        assertTrue(frame.contains("SlangProgram.Resource.storageImage(\"motion\", trace.motionView())"),
+            "the display step reads the tracer's image rather than a second allocation");
+        assertTrue(frame.contains("entityView(eg.framePreviousPositions())"),
+            "and the previous ring reaches the pass from the same one place as the other slices");
     }
 
     private static String block(String source, String header) {

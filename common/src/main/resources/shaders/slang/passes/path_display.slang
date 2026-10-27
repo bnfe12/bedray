@@ -12,6 +12,9 @@
 //   3 depth        R32F    storage image, read  (path_trace.slang outDepth, ray distance from the bobbed eye)
 //   4 historyDepth R32F    storage image, read/write (depth of the previous frame, for the disocclusion test)
 //   5 frame        ConstantBuffer<FrameConstants>
+//   6 motion       RGBA16F storage image, read (path_trace.slang outMotion: the primary surface's own displacement,
+//                  in world blocks; rgb zero says "the surface moved with the world", which is what the static and
+//                  camera-only reprojection already assume)
 
 public module path_display_pass;
 
@@ -44,6 +47,7 @@ static const float PATH_DISPLAY_MAX_COUNT = 16383.0;
 [[vk::image_format("r32f")]] [[vk::binding(3, 0)]] RWTexture2D<float> depth;
 [[vk::image_format("r32f")]] [[vk::binding(4, 0)]] RWTexture2D<float> historyDepth;
 [[vk::binding(5, 0)]] ConstantBuffer<FrameConstants> frame;
+[[vk::image_format("rgba16f")]] [[vk::binding(6, 0)]] RWTexture2D<float4> motion;
 
 [[vk::push_constant]] PathDisplayPush pc;
 
@@ -74,15 +78,21 @@ struct PathDisplayHistory {
 // Reprojects the pixel into the previous frame and accepts the history only when the previous depth agrees with the
 // distance the reprojected point had there. A wrong match is a disocclusion: the pixel starts over instead of
 // dragging the old surface across the screen.
+//
+// surfaceMotion is the hit surface's own displacement (previous position minus current, in world blocks), which the
+// tracer measured against the geometry it hit. A mob part that walked three blocks is therefore asked for its
+// history three blocks away, where that part's own pixels were, instead of at the pixel the camera-only guess lands
+// on - and the depth test still has to agree, so a part that moved behind a wall loses its history rather than
+// dragging the wall's.
 PathDisplayHistory pathDisplayReproject(FrameConstants f, int2 p, float2 size, float hitDistance,
-        float3 cameraDelta, float tolerance, bool flipY) {
+        float3 cameraDelta, float3 surfaceMotion, float tolerance, bool flipY) {
     PathDisplayHistory history;
     history.valid = false;
     history.radiance = float3(0.0);
     history.count = 0.0;
 
     float3 position = f.camera.origin.xyz + pathDisplayViewDirection(f, p) * hitDistance;
-    float3 previous = position + cameraDelta;
+    float3 previous = position + cameraDelta + surfaceMotion;
     float previousDistance = length(previous);
     float4 clip = mul(f.camera.prevViewProjection, float4(previous, 1.0));
     if (!(clip.w > 1.0e-4)) {
@@ -148,7 +158,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
             }
         } else if (hit) {
             PathDisplayHistory history = pathDisplayReproject(frame, p, float2(size), hitDistance,
-                pc.reuse.xyz, pc.reuse.w, (pc.flags & PATH_DISPLAY_FLAG_FLIP_Y) != 0u);
+                pc.reuse.xyz, motion[p].rgb, pc.reuse.w, (pc.flags & PATH_DISPLAY_FLAG_FLIP_Y) != 0u);
             if (history.valid) {
                 float3 sanitized = pathDisplaySanitize(history.radiance, limit);
                 mean = sanitized + (current - sanitized) * (weight / (history.count + weight));

@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+* Gave a traced mob a motion vector, so walking things denoise instead of boiling: the reprojection the
+  accumulation batch introduced shifts every pixel by the *camera* delta, which is correct for terrain and wrong
+  for a part that moved on its own - a cow that walked three blocks is asked for the wall it passed, so its pixels
+  restart every frame and the running mean never converges on a moving subject (`накопление пикселей трассировки
+  только на статике работает`). The host was already uploading the answer: `RtEntityGeometryManager` keeps a
+  previous-position ring, written relative to *this* frame's camera and matched by entity type, vertex count and
+  nearest origin, so `previous - current` is the part's own displacement with camera motion cancelled - which is
+  why no new capture, no new push field and no device address were needed. `entityMotion` interpolates the two
+  halves of the *same* hit with the *same* barycentric weights and refuses a triangle the previous slice does not
+  cover, so the bound length stays the authority exactly as it does for the triangle count. The question was put
+  where it belongs - `ITraversal.surfaceMotion`, defaulting to zero, which is what a static reprojection already
+  assumes, so `restir_spatial` and `volumetric_march` are untouched and the section half of the instance answers
+  zero because it is static by construction - and the tracer asks it once, for the primary surface the accumulator
+  will look for next frame, recording it with the hit's own `kind` in the alpha lane rather than a guess from the
+  depth, and writing nothing for a pixel that hit nothing. Both consumers then *add* the term instead of inventing
+  a second convention: `path_display` reprojects `position + cameraDelta + surfaceMotion`, and ReSTIR DI temporal
+  reuse reprojects `receiver.position + receiver.motion`, where the receiver is the very surface the record belongs
+  to (`LightReceiver` gained the field, filled from the primary hit) - without it a mob part merged with whatever
+  light stood in its pixel a frame ago, a bias rather than noise. Evidence: `compileSlang` gives `path_trace` 18
+  bindings / 112-byte push / 420184 B SPIR-V (the previous ring at 25, the motion image at 5) and `path_display` 7
+  bindings (it reads the tracer's own image, not a copy that could disagree); `RtSlangEntityTest` is 12 tests, four
+  of them the motion path, and `SlangPassLibraryTest` + `RtSlangRestirDiTest` pin the manifest and the shared
+  reprojection. Thirteen mutations, each a mistake this port could really make, each failed exactly the guard that
+  owns it and every file came back byte-identical by sha256: the subtraction reversed; the previous-ring refusal
+  deleted; the previous count read from the current vertices; the previous binding filled with this frame's
+  positions in the pass and again in the host (both silently zero-motion); the slice bound at the buffer start
+  instead of the ring slot; `+ surfaceMotion` dropped from the accumulator; `+ receiver.motion` dropped from the DI
+  reprojection; the motion lane made to claim every primary hit; the traversal default made to answer a non-zero
+  lie; terrain let into the entity decoder; a miss allowed to keep writing motion; and the carrier field renamed.
+  `RtSlangPathPass` allocates `rt_path_motion` beside the radiance image, at the same size and the same lifetime.
+  No owner-verified frame yet: what to look for is a mob that stops sparkling once it stands still, and - while it
+  walks - a silhouette that stays lit instead of resolving from scratch each frame.
+
 * Taught the Slang path tracer to see living things: `passes/path_trace.slang` traversed with
   `PATH_TRACE_INSTANCE_MASK_WORLD = 0x01`, so every mob, item, armour stand and the first-person body
   were absent from the traced picture - no shadow, no reflection, nothing to bounce off - while the
@@ -45,8 +78,9 @@
   capture at all - and it is emitted before the dispatch that could fail. Five more mutations (the session gate
   removed, either branch of the line deleted, the counts taken from raw bytes instead of the 12-byte strides, the
   line moved after the dispatch) each failed `theFrameReportsWhatTheRingActuallyHolds`.
-  Not ported, and each one visible: entity **motion vectors** (a moving mob accumulates as noise), the
-  **End Portal starfield**, the entity **Sobel auto-normal**, glowing parts as **NEE candidates**. No
+  Not ported, and each one visible: the
+  **End Portal starfield**, the entity **Sobel auto-normal**, glowing parts as
+  **NEE candidates**. No
   owner-verified frame yet. See `docs/SLANG_MIGRATION.md` ("Entity geometry in the traced scene").
 
 * Drew the sun and the moon into the path-traced sky: `light/sky.slang` had only `GradientSky`, a two-colour dome with no

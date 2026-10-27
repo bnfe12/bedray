@@ -562,6 +562,17 @@ public final class RtEntityGeometryManager {
             : GpuRange.NONE;
     }
 
+    /**
+     * Where each vertex of this frame's models stood one frame earlier, still relative to the CURRENT camera, so
+     * subtracting {@link #framePositions()} from it is the part's own motion and nothing else. Bound at the same ring
+     * slot offset and the same length as the positions, because a motion vector that outlives its model is a lie.
+     */
+    public synchronized GpuRange framePreviousPositions() {
+        return ringPrev != null && frameTriangles > 0
+            ? new GpuRange(ringPrev, ringSlot * ringVertexCap * 12L, (long) frameVertices * 12L)
+            : GpuRange.NONE;
+    }
+
     /** Three indices per triangle of this frame, bound at the ring slot's own offset. */
     public synchronized GpuRange frameIndices() {
         return ringIdx != null && frameTriangles > 0

@@ -53,6 +53,8 @@ struct LightReceiver {
     float3 normal;      // shading normal, already flipped to the ray side
     float  emission;    // the receiver's own emissive mask; >= 0.5 is a light face
     bool   primary;     // this is the primary hit of the pixel that owns the reservoir
+    float3 motion;      // this surface's own displacement: where it stood last frame minus where it is now, in
+                        // world blocks; zero for terrain and for a backend that tracks no moving geometry
 };
 
 LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
@@ -62,6 +64,7 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
     receiver.emission = emission;
     // Conservative default: a caller that wants its surface served from the reservoir opts in explicitly.
     receiver.primary = false;
+    receiver.motion = float3(0.0);
     return receiver;
 }
 

@@ -71,6 +71,8 @@ struct PathTraceResult {
     float3 radiance;
     float3 throughput;
     float  firstHitDistance;    // parameter from primary origin; distance when primary direction is unit length
+    float4 primaryMotion;       // xyz: where the primary surface stood one frame ago minus where it is now, in
+                                // world blocks; w: 1 when that surface is a captured model rather than terrain
     uint   depth;
     uint   surfaceHits;
     uint   flags;
@@ -81,6 +83,7 @@ PathTraceResult emptyPathTraceResult() {
     result.radiance = float3(0.0);
     result.throughput = float3(1.0);
     result.firstHitDistance = 0.0;
+    result.primaryMotion = float4(0.0);
     result.depth = 0u;
     result.surfaceHits = 0u;
     result.flags = 0u;
@@ -241,6 +244,11 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
             }
             firstSurfaceAccepted = true;
             result.firstHitDistance = primaryAdvance + hit.t;
+            // What the accumulator needs is not this frame's surface but the same
+            // surface as the previous frame saw it, so the question goes to the
+            // backend that owns the geometry and stops here for every other ray.
+            result.primaryMotion = float4(traversal.surfaceMotion(hit),
+                hit.kind == HitKind.Entity ? 1.0 : 0.0);
             result.flags |= PATH_TRACE_FLAG_PRIMARY_HIT;
         }
         result.surfaceHits++;
@@ -258,6 +266,9 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         // Only the pixel's own first surface owns the screen-space record; a deeper vertex would write someone else's
         // receiver into it and drag that light across the screen.
         receiver.primary = result.surfaceHits == 1u;
+        // The reservoir belongs to this surface, so its history has to be looked up where this surface was - which for
+        // a mob part is not the pixel the camera alone points at.
+        receiver.motion = result.primaryMotion.xyz;
         float3 direct = float3(0.0);
         if (receiver.primary && reuse.reuseActive()) {
             // The reservoir carries the emissive branch across frames, so the composite must not also draw it; the key
