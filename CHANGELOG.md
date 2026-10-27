@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+* Pool block-emitter reservoirs across neighbours in the Slang path tracer: `restir/spatial_block_emitters.slang` and its
+  entry `passes/restir_spatial.slang` (6 bindings, 64-byte push, two checker dispatches per frame) are the port of
+  `rt_restir_spatial.comp`, so a surface picks its direct light from its neighbourhood instead of from that pixel's own
+  draws and the next frame's temporal import starts from a better sample. The numbers are the legacy tuned ones — eight
+  draws from a plus/minus-seven-pixel square forced onto the opposite checker colour (which is what makes the in-place
+  update race-free without a second ring), normal dot 0.85, the same 5 % + 0.1-block plane gate, M cap 20 and spatial
+  ratio cap 5 through the same `mergeReservoirs` primitive — and the stage traces no rays, because visibility stays the
+  shading pass's job. Two contracts the reader cannot recompute are now stored for it: the receiver's own-emission bit
+  (`DI_RECEIVER_SELF_EMISSIVE`, so a wall of lamps does not light itself from its own quad after a neighbour's sample is
+  re-resolved at it) and the receiver normal's z sign; `restirDiTemporal`/`restirDiSpatial` take a `LightReceiver` instead
+  of assuming a non-emissive surface. A merged record keeps the writing pixel's receiver lanes and a non-finite winner is
+  dropped, since next frame reads that slot. `RtSpatialReuseSlangPass` binds the *trace pass's own* `FrameConstants`
+  upload and takes the extent from it — the push carries no size field, so a pooled record cannot be indexed against a
+  resolution the ring no longer has — orders its own two phases and ends with a trailing compute barrier (the legacy
+  stage does the same before its consumers run), and it is optional: a missing artifact or a manifest mismatch closes the
+  program, logs `spatial reuse off: …` once and leaves temporal reuse running. The player switch is `path_restir_spatial` (row
+  enabled only while `path_restir_di` is on, catalog entry, English/Russian text, packed as bit 8 of the per-frame reuse
+  diff so flipping it drops the histories it invalidates). Evidence: `compileSlang` now produces 15 passes including
+  `restir_spatial` (33 968-byte SPIR-V, 6 bindings, 64-byte push); `RtSlangRestirSpatialTest` pins the numbers against the
+  legacy kernel, the checker discipline, the push layout byte by byte (an unwritten offset fails as "offset 28 is never
+  written"), the binding set and the optional degrade; eight mutations (draws 8→4, the colour-forcing shift removed,
+  receiver lanes not preserved, a push lane unpadded, a binding name typoed, the `diFlags` gate dropped, the parity
+  inverted, the self-emission bit swapped) each failed exactly the guard meant to catch it, and all eight were reverted
+  byte-exactly under verified checksums. No owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
 * Offer each ReSTIR technique as its own player switch: `rays_restir_temporal`, `rays_restir_spatial` (Ray Tracing (Fast)) and
   `path_restir_di` (Slang path tracer) are registered `RtSettings` booleans, so they persist under their section prefixes and
   still obey a `-Dvkrtx.rt.<key>` session override. Every one is read where its work is decided, not where the pipeline is
@@ -24,8 +49,8 @@
   re-resolved through `BlockEmitterSampler.evaluate`, so a reused light and a freshly drawn one cannot disagree about
   `p^`, pdf or `Le`. Reprojection uses the same camera-delta convention as `path_display.slang`, so interior torches
   accumulate while walking instead of resetting every frame. `RtFrameParams.emitterFingerprint` carries the list identity;
-  switch `-Dvkbridge.rt.restirDi` (default true) and `restir_di=temporal` in the mode log. Spatial reuse is not ported
-  yet. Evidence: `compileSlang` produces the 11-binding/96-byte manifest and `:common:test` is green (627 tests); no
+  switch `-Dvkbridge.rt.restirDi` (default true) and `restir_di=temporal` in the mode log. Spatial reuse followed in the
+  entry above. Evidence: `compileSlang` produces the 11-binding/96-byte manifest and `:common:test` is green (627 tests); no
   owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
 
 * Give the Slang path tracer block-emitter next-event estimation (`light/block_emitters.slang`, binding 18 over the records

@@ -316,6 +316,14 @@ public final class SettingsCatalog {
                 + "in video memory (about a quarter of a gigabyte at 1080p).",
             "Path Tracing only, and only where glowing blocks are traced.",
             "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_restir_spatial", Tier.ADVANCED, "ReSTIR Spatial Direct Light",
+            "A pixel also borrows light samples from neighbours on the same surface - same facing, same plane - so one "
+                + "torch lights a wall from fewer, better-chosen samples instead of from each pixel's own draws. It pools the "
+                + "records ReSTIR Direct Light writes, so it needs that switch on.",
+            "FPS: low (two full-screen passes over records that already exist; no rays are traced here).",
+            "Path Tracing with ReSTIR Direct Light on, and only where glowing blocks are traced. The pass is optional: a "
+                + "build without its compiled kernel runs temporal reuse alone and says so in the log.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
         putNoImage("adaptive_quality", Tier.ADVANCED, "Adaptive Quality",
             "Keeps Path Tracing inside a GPU frame budget: when the measured time of the traced rays and the denoiser is over it, rays per pixel drop first and then bounces, "
                 + "below the values you chose; when the frame has room again they come back. It never goes above your values. Off by default - turn it on if you want a steadier "

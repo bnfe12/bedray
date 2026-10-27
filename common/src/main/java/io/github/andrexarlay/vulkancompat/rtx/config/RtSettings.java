@@ -167,6 +167,12 @@ public final class RtSettings {
      * frame redraws the emitter list of that pixel (the same list, the same RIS estimator, only no history).
      */
     public static boolean pathRestirDi = true;
+    /**
+     * ReSTIR spatial reuse of the Slang path tracer: the records the temporal stage wrote are pooled with the neighbours
+     * on the same surface, and the next frame's temporal import reads the pooled half. Needs {@link #pathRestirDi}: with
+     * direct-light reuse off there are no records to pool, so this switch alone does nothing.
+     */
+    public static boolean pathRestirSpatial = true;
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
@@ -261,6 +267,7 @@ public final class RtSettings {
         integer("path_spp", () -> pathSpp, v -> pathSpp = v, 1, 8);
         bool("path_accumulate", () -> pathAccumulate, v -> pathAccumulate = v);
         bool("path_restir_di", () -> pathRestirDi, v -> pathRestirDi = v);
+        bool("path_restir_spatial", () -> pathRestirSpatial, v -> pathRestirSpatial = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
@@ -457,6 +464,11 @@ public final class RtSettings {
     public static boolean restirSpatial() { return b("rays_restir_spatial"); }
     /** ReSTIR direct-light reuse of the Slang path tracer (see {@code RtConfig.SLANG_RESTIR_DI} for the session switch). */
     public static boolean pathRestirDi() { return b("path_restir_di"); }
+    /**
+     * Spatial pooling of those same records, as a stage of its own because it costs two full-screen dispatches that trace
+     * no rays. The Slang kernel is optional: without its AOT artifact this reads true and the pass simply never runs.
+     */
+    public static boolean pathRestirSpatial() { return b("path_restir_spatial"); }
     public static int bounces() { return i("path_bounces"); }
     public static int spp() { return i("path_spp"); }
     public static boolean accumulate() { return b("path_accumulate"); }

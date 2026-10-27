@@ -127,6 +127,7 @@ common/src/main/resources/shaders/slang/
 ├── restir/
 │   ├── restir_di.slang                DIReservoir storage + temporal/spatial merge
 │   ├── di_block_emitters.slang        block-emitter adapter: batch, reprojected history, writeback, occlusion decay
+│   ├── spatial_block_emitters.slang   neighbour pooling over those records: checker phases, surface gates, merge
 │   └── direct_light.slang             compatibility re-export of light/emitters.slang
 ├── radiance_cascades/
 │   └── radiance_cascades_store.slang  atlas layout, interval storage, temporal blend
@@ -144,7 +145,16 @@ common/src/main/resources/shaders/slang/
     ├── bloom_up.slang
     ├── bloom_apply.slang
     ├── composite.slang
-    └── path_trace.slang               first path-trace entry over LegacySectionTraversal
+    ├── atrous.slang                   filtered-a-trous depth/albedo denoise
+    ├── temporal_accumulate.slang      running mean over the raster path
+    ├── velocity_reproject.slang       G-buffer reprojection for that mean
+    ├── ssr.slang                      screen-space reflections
+    ├── particles_composite.slang      particle layer over the composite
+    ├── volumetric_march.slang         volumetric radiance cascades
+    ├── volumetric_apply.slang
+    ├── path_trace.slang               first path-trace entry over LegacySectionTraversal
+    ├── path_display.slang             exposure, tone map, accumulation of the path radiance
+    └── restir_spatial.slang           neighbour pooling over the reservoirs path_trace wrote
 ```
 
 `passes/` is the AOT entry-point root: `compileSlang` compiles every
@@ -199,7 +209,7 @@ hardware paths agree on foliage and glass.
 |---|---|---|---|
 | Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Requires AOT Slang; mip and sampler ownership remains in Java and must move to C++. See [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `passes/path_trace.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` keeps the legacy GLSL `rt_path.comp` when the AOT passes, device capabilities or a G-buffer denoiser block it. Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. No G-buffer, auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
+| Path tracing | `passes/path_trace.slang`, `passes/restir_spatial.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` + `RtSpatialReuseSlangPass` (optional) | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` keeps the legacy GLSL `rt_path.comp` when the AOT passes, device capabilities or a G-buffer denoiser block it. Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. No G-buffer, auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
 
 The host addresses bindings by Slang parameter name (`srcTex`, `dstImg`,
 `finalImg`, `depthTex`), and `RtBloomPass` validates the generated manifest
@@ -363,7 +373,7 @@ is not ported. Switches: `-Dvkbridge.rt.blockEmitters` (default true, the whole 
 `-Dvkbridge.rt.emitterCandidates` (1..32, default 8 = `NEE_CANDIDATES`) and
 `-Dvkbridge.rt.emitterProbability` (0..1, default 0.5).
 
-### ReSTIR DI temporal reuse
+### ReSTIR DI temporal and spatial reuse
 
 `restir/di_block_emitters.slang` is the block-emitter adapter over the reservoir
 math of `restir/restir_di.slang`, and `passes/path_trace.slang` binds it at
@@ -386,13 +396,12 @@ shows up as a black screen: the reservoir stays readable and reuse just stops
 filtering.
 
 The merge is the legacy one, in the legacy numbers: `M` capped at 20, a temporal
-ratio cap of 8, an occlusion decay of 0.25 (the spatial cap of 5 is declared but
-not used yet — spatial reuse is the next step over these same records), and the
-receiver gates `normalDot >= 0.8` on a static camera / `0.6` while moving plus a
-5 % + 0.1-block distance and position tolerance.  A stored sample is
-*re-resolved* through `BlockEmitterSampler.evaluate` instead of caching its
-radiance, which both keeps one estimator and rejects a record whose quad changed
-under the reservoir.
+ratio cap of 8, an occlusion decay of 0.25, the spatial ratio cap of 5 (used by
+the spatial stage below), and the receiver gates `normalDot >= 0.8` on a static
+camera / `0.6` while moving plus a 5 % + 0.1-block distance and position
+tolerance.  A stored sample is *re-resolved* through
+`BlockEmitterSampler.evaluate` instead of caching its radiance, which both keeps
+one estimator and rejects a record whose quad changed under the reservoir.
 
 Space: a record stores the light point in the camera-anchored space of the frame
 that wrote it, so the history read reprojects the receiver with
@@ -409,6 +418,40 @@ shader or in host state.  Every path that does not reach the primary NEE — the
 invalid-ray early return and the loop tail — publishes an empty record, so a
 light that left the screen cannot be resurrected by the next frame's history.
 
+Spatial reuse (`restir/spatial_block_emitters.slang`, entry
+`passes/restir_spatial.slang`) pools those records across neighbours before the
+next frame's temporal import reads them: a pixel draws eight neighbours from a
+plus/minus-seven-pixel square, re-resolves each one at *its own* surface and
+merges it through the same `mergeReservoirs` primitive with the legacy caps.  It
+traces no rays — a reservoir is a sample distribution, and visibility stays the
+shading pass's job — so a neighbour only has to prove it belongs to the same
+surface: normal dot at least 0.85 and a plane tolerance of the same 5 % + 0.1
+blocks, measured against the camera distance the record's own receiver lane
+carries.  Because both readers and writers live in the half the trace pass just
+wrote, no reprojection or `cameraDelta` term is involved at all.  The stage runs
+as two dispatches, one per checker colour, and forces every neighbour offset onto
+the opposite colour: the cells a dispatch writes are then never cells another
+thread of the same dispatch reads, so the update is in-place and race-free without
+a second ring, and the second dispatch imports what the first merged.  Two
+contracts the reader cannot recompute are stored for it in `stats.w` — the sign of
+the receiver normal and `DI_RECEIVER_SELF_EMISSIVE`, without which a wall of
+glowing lamps would light itself from its own quad as soon as a neighbour's sample
+was re-resolved at it.  A merged record keeps the *writing* pixel's receiver lanes,
+and a non-finite winner is dropped rather than stored, because next frame's import
+reads that slot.
+
+`RtSpatialReuseSlangPass` owns no memory: it binds the atlases, the emitter list,
+the reservoir ring and — deliberately — the *trace pass's own* `FrameConstants`
+upload, so the extent the pool iterates and the extent the ring was addressed with
+come from one buffer.  The push carries no size field for the same reason.  The
+stage orders its own two dispatches (a compute-to-compute barrier between the
+phases, since phase two imports what phase one merged) and ends with a trailing
+one, so the pooled half is available to the batch that reads it next frame — the
+same shape the legacy stage has.  The stage is optional by design: a missing AOT
+artifact or a manifest that disagrees with the host closes the program again, logs
+`spatial reuse off: …` once and leaves temporal reuse running, exactly as the
+legacy path did when its spatial kernel was compiled out.
+
 `RtSlangPathPass` owns its own ring (`rt_path_restir`, `2 * pixels * 64` bytes)
 rather than sharing the GLSL one: the two record layouts differ, and a mode
 switch must not hand half-written bytes to the other path.  It alternates the
@@ -424,17 +467,21 @@ one button: the ray pass has `rays_restir_temporal` (the ring address handed to
 `rt_rays.comp` goes to zero when off, which is that shader's own off test) and
 `rays_restir_spatial` (gated at the two checker dispatches, since
 `-Dvkrtx.rt.restirSpatial` only decides whether the kernel exists), and the path
-tracer has the `path_restir_di` row above.  All three are `RtSettings` booleans,
-so they persist, obey `-Dvkrtx.rt.<key>`, and are packed into the per-frame change
-diff of `RtFrameRenderer`: any of them moving drops the histories it invalidates
-and shows up as `restir(a->b)` in the `resetHistory:` log.  Spatial reuse is
-offered as a child of temporal because it merges the reservoirs temporal writes —
+tracer has `path_restir_di` above plus `path_restir_spatial` for its pooling stage
+(`spatialRequested()` needs the kernel, the parent and the row; `spatialActive()`
+additionally needs this frame to have written records over a non-empty emitter
+list).  All four are `RtSettings` booleans, so they persist, obey
+`-Dvkrtx.rt.<key>`, and are packed into the per-frame change diff of
+`RtFrameRenderer`: any of them moving drops the histories it invalidates and shows
+up as `restir(a->b)` in the `resetHistory:` log.  Spatial reuse is offered as a
+child of temporal in both paths because it merges the reservoirs temporal writes —
 an independent row would be a switch that does nothing.  Evidence:
-`compileSlang` produces 11 bindings / 96-byte push for `path_trace`,
-`RtRestirSettingsTest` pins each switch to the consumer that acts on it, and
-`RtSlangRestirDiTest` + `RtSlangBlockEmitterTest` + `RtPathTraceSlangPassTest`
-pin the numbers, the space and the host contract; no GPU frame or side-by-side
-screenshot is recorded.
+`compileSlang` produces 11 bindings / 96-byte push for `path_trace` and 6 bindings
+/ 64-byte push for `restir_spatial`, `RtRestirSettingsTest` pins each switch to the
+consumer that acts on it, and
+`RtSlangRestirDiTest` + `RtSlangRestirSpatialTest` + `RtSlangBlockEmitterTest` +
+`RtPathTraceSlangPassTest` pin the numbers, the space and the host contract; no GPU
+frame or side-by-side screenshot is recorded.
 
 The same audit recorded the remaining systemic gaps in
 `docs/PATH_TRACE_CPP_INTEGRATION_PLAN.md` ("Follow-ups from the 2026-10-27
@@ -525,10 +572,10 @@ candidates, not a validated or active runtime.
 
 | Algorithm | Module | State |
 |---|---|---|
-| ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; no pass yet |
+| ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
 | Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/segment_store.slang` | typed segment storage is a source candidate; typed trace exists in an isolated agent workspace, but cross-cascade resolve and host integration are unfinished. The old float4 resolve is incompatible with the typed trace. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
-| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ITraversal`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; `RtSlangPathPass` wraps `RtPathTraceSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
+| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ITraversal`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; `RtSlangPathPass` wraps `RtPathTraceSlangPass`, the optional `RtSpatialReuseSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
 
 Surface decoding lives in `surface/surface.slang`; the filtered shadow walk lives
 in `surface/visibility.slang`; the BSDF lobes live in `shading/bsdf.slang`.

@@ -11,7 +11,8 @@
 // few centimetres, far below the tolerance below, which is why it needs no term of its own - the same convention
 // path_display.slang already reprojects the running mean with.
 //
-// Spatial reuse is not ported yet; the receiver lanes are stored so that pass can be added over these same records.
+// Spatial reuse runs as its own pass over these same records (`restir/spatial_block_emitters.slang`), which is why the
+// receiver lanes and the receiver's own-emission bit are stored rather than recomputed by the reader.
 //
 // The two-call split (store in `reuseSample`, decay in `reuseConfirm`) exists because the path tracer owns the shadow
 // ray: an occluded frame must keep its sample and decay its weight instead of dropping the record.
@@ -206,9 +207,12 @@ struct BlockEmitterDiSampler : IReuseSampler {
         }
 
         // The receiver lanes say which surface this record belongs to, and a merge never touches them: they describe the
-        // receiver, and the receiver of a merged record is always the pixel that is writing it.
+        // receiver, and the receiver of a merged record is always the pixel that is writing it.  The self-emissive bit is
+        // the one lane a *reader* needs that the shading of that reader cannot recover: passes running after this one
+        // (spatial reuse) re-evaluate the sample without the surface's material at hand.
         float3 normal = normalize(receiver.normal);
-        current.stats.w = normal.z < 0.0 ? DI_RECEIVER_NORMAL_DOWN : 0u;
+        current.stats.w = (normal.z < 0.0 ? DI_RECEIVER_NORMAL_DOWN : 0u)
+            | (receiver.emission >= 0.5 ? DI_RECEIVER_SELF_EMISSIVE : 0u);
         current.receiver = float4(receiver.position, reservoirPackNormalXY(normal.xy));
         reservoirs[reservoirSlot()] = current;
 

@@ -76,6 +76,20 @@ public final class RtSlangPathPass implements RtPass {
         return diRequested() && RtSettings.pathRestirDi();
     }
 
+    /**
+     * True when this frame's records should also be pooled across neighbours: the kernel exists, the player left the
+     * stage on, and the trace pass actually wrote a half this frame ({@code diFlags} says it did, an emitter list has
+     * to be behind it). Spatial reuse merges temporal records, so without the first there is nothing to merge.
+     */
+    boolean spatialActive(int diFlags, int emitterCount) {
+        return spatialRequested() && diFlags != 0 && emitterCount > 0;
+    }
+
+    /** The same decision without the frame's own gates: what the mode log reports and what the dispatch refines. */
+    boolean spatialRequested() {
+        return spatialReuse != null && diActive() && RtSettings.pathRestirSpatial();
+    }
+
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
     static boolean isSupported(SlangRuntime runtime) {
         return supportProblem(runtime) == null;
@@ -103,6 +117,12 @@ public final class RtSlangPathPass implements RtPass {
     private final SlangRuntime runtime;
     private final boolean requestedGbuffer;
     private final RtPathTraceSlangPass trace;
+    /**
+     * The second ReSTIR DI stage, or null when the AOT artifact is missing or its manifest disagrees with the host
+     * contract (both logged once at creation). Temporal reuse keeps running without it, exactly as the legacy path
+     * still pools reservoirs when its spatial kernel was compiled out.
+     */
+    private final RtSpatialReuseSlangPass spatialReuse;
     private final SlangProgram display;
     private final long sampler;
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
@@ -156,8 +176,13 @@ public final class RtSlangPathPass implements RtPass {
             trace.close();
             throw e;
         }
-        LOGGER.info("[VKB-RT] path tracing on AOT Slang passes {} + {} (GLSL rt_path.comp not used{})",
-            RtPathTraceSlangPass.PASS_NAME, DISPLAY_PASS, requestedGbuffer ? ", G-buffer denoiser disabled" : "");
+        // Deliberately outside the try above: spatial reuse is an extra stage, not a precondition of path tracing, and a
+        // machine without its artifact still gets the temporal reservoirs.
+        this.spatialReuse = RtSpatialReuseSlangPass.create(runtime, LOGGER).orElse(null);
+        LOGGER.info("[VKB-RT] path tracing on AOT Slang passes {} + {}{} (GLSL rt_path.comp not used{})",
+            RtPathTraceSlangPass.PASS_NAME, DISPLAY_PASS,
+            spatialReuse == null ? "" : " + " + RtSpatialReuseSlangPass.PASS_NAME,
+            requestedGbuffer ? ", G-buffer denoiser disabled" : "");
     }
 
     static void requireDisplayManifest(SlangProgram program) {
@@ -206,7 +231,7 @@ public final class RtSlangPathPass implements RtPass {
     @Override
     public String describe(RtFrameParams p) {
         String restir = !diActive() || reservoirs == null ? "off"
-            : reservoirHistoryWritten ? "temporal" : "fresh";
+            : (reservoirHistoryWritten ? "temporal" : "fresh") + (spatialRequested() ? "+spatial" : "");
         return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
             + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
             + ",frames=" + (accumFrames + 1) + ",denoiser=off)";
@@ -397,6 +422,15 @@ public final class RtSlangPathPass implements RtPass {
             reservoirHistoryWritten = true;
             reservoirFrame++;
         }
+        // Spatial reuse pools the records the trace pass just wrote, in the half it just wrote. Nothing in this frame
+        // reads them - the benefit lands in the next frame's temporal import - so the stage owns its own ordering: the
+        // barrier between its two phases and a trailing one, both inside record().
+        if (spatialReuse != null && spatialActive(diFlags, emitterCount) && reservoirs != null) {
+            spatialReuse.record(cmd, new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(),
+                    views.normal(), sampler), emitters, reservoirRange, trace.frameResource(), width, height,
+                params.frame, diParity, params.emitterCamRelX, params.emitterCamRelY, params.emitterCamRelZ,
+                Math.max(1f, params.rayDistance));
+        }
 
         int flags = DISPLAY_FLAG_TONEMAP | (RtSettings.accumulate() ? DISPLAY_FLAG_ACCUMULATE : 0);
         if (params.cameraStatic) {
@@ -519,6 +553,9 @@ public final class RtSlangPathPass implements RtPass {
             return;
         }
         trace.releaseRecording(commandBuffer);
+        if (spatialReuse != null) {
+            spatialReuse.releaseRecording(commandBuffer);
+        }
         if (!runtime.isClosed()) {
             runtime.releaseRecording(commandBuffer); // the display dispatch shares the command buffer's native record
         }
@@ -539,6 +576,9 @@ public final class RtSlangPathPass implements RtPass {
         VK10.vkDeviceWaitIdle(device);
         releaseRecordings();
         trace.close();
+        if (spatialReuse != null) {
+            spatialReuse.close();
+        }
         if (accum != null && memory != null) {
             memory.destroy(accum);
             accum = null;

@@ -641,6 +641,13 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         // it every frame. This is what makes an interior converge while the camera moves, so it is worth a row of its own.
         pt.addOption(boolOpt(builder, "path_restir_di", true, v -> RtSettings.pathRestirDi = v, () -> RtSettings.pathRestirDi,
             pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st));
+        // The second stage pools the records the first writes, so the row is only live while reuse itself is on - an
+        // independent switch would be a control that changes nothing.
+        Identifier pathDiId = id("path_restir_di");
+        pt.addOption(boolOpt(builder, "path_restir_spatial", true, v -> RtSettings.pathRestirSpatial = v,
+            () -> RtSettings.pathRestirSpatial,
+            s -> pathOn.apply(s) && s.readBooleanOption(pathDiId), rtDependencies(modeId, pathDiId),
+            Mark.PATH, OptionImpact.MEDIUM, false, st));
         EnumOptionBuilder<RtSettings.AdaptiveQuality> aq = builder.createEnumOption(id("adaptive_quality"), RtSettings.AdaptiveQuality.class);
         aq.setName(nameOf("adaptive_quality")).setTooltip(v -> tipOf("adaptive_quality")).setDefaultValue(RtSettings.AdaptiveQuality.OFF)
             .setAllowedValues(EnumSet.allOf(RtSettings.AdaptiveQuality.class))

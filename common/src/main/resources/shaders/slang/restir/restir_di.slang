@@ -29,6 +29,12 @@ static const float RESTIR_DI_MIN_PDF = 1.0e-8;
 // and a merge that imports a record needs to know whether the surface it reprojects onto was a ceiling.
 static const uint DI_RECEIVER_NORMAL_DOWN = 1u << 0u;
 
+// The receiver was itself an emissive face.  A merge re-evaluates the imported sample through the light sampler, and that
+// sampler has to keep its self-quad guard: without this bit, a wall of glowing lamps would light itself from its own quad
+// as soon as spatial reuse re-resolved a neighbour's sample at it.  The temporal merge gets the mask from the surface it
+// is shading, so only the lanes written for the *next* frame's readers need it.
+static const uint DI_RECEIVER_SELF_EMISSIVE = 1u << 1u;
+
 // 64-byte GPU record.  `sample.w` is the target PDF at the receiver that wrote
 // the record, which is exactly what a temporal/spatial merge must rescale.
 // `receiver` is the surface the record belongs to: its position in the frame
@@ -215,15 +221,16 @@ DIReservoir restirDiSample<S : ILightSampler>(S sampler,
     return reservoir;
 }
 
-// Re-evaluates a history sample at the current receiver before merging.
+// Re-evaluates a history sample at the current receiver before merging.  The caller passes the receiver it is shading
+// (position, normal and the surface's own emissive mask), because a sampler built on a guessed receiver is a sampler
+// that lights a glowing face from its own quad.
 DIReservoir restirDiTemporal<S : ILightSampler>(S sampler,
-        DIReservoir current, DIReservoir history,
-        float3 surfacePosition, float3 surfaceNormal,
+        DIReservoir current, DIReservoir history, LightReceiver receiver,
         float mCap, float ratioCap, inout uint seed) {
     if (history.stats.x <= 0.0) return current;
 
-    LightSample historySample = reservoirLightSample(history, surfacePosition);
-    LightEvaluation evaluation = sampler.evaluate(lightReceiver(surfacePosition, surfaceNormal, 0.0), historySample);
+    LightSample historySample = reservoirLightSample(history, receiver.position);
+    LightEvaluation evaluation = sampler.evaluate(receiver, historySample);
     if (!evaluation.valid || evaluation.targetPdf <= 0.0) return current;
 
     DIReservoir merged = mergeReservoirs(current, history, evaluation.targetPdf,
@@ -234,13 +241,12 @@ DIReservoir restirDiTemporal<S : ILightSampler>(S sampler,
 
 // Spatial reuse uses the same merge primitive but does not age the sample.
 DIReservoir restirDiSpatial<S : ILightSampler>(S sampler,
-        DIReservoir current, DIReservoir neighbor,
-        float3 surfacePosition, float3 surfaceNormal,
+        DIReservoir current, DIReservoir neighbor, LightReceiver receiver,
         float mCap, float ratioCap, inout uint seed) {
     if (neighbor.stats.x <= 0.0) return current;
 
-    LightSample neighborSample = reservoirLightSample(neighbor, surfacePosition);
-    LightEvaluation evaluation = sampler.evaluate(lightReceiver(surfacePosition, surfaceNormal, 0.0), neighborSample);
+    LightSample neighborSample = reservoirLightSample(neighbor, receiver.position);
+    LightEvaluation evaluation = sampler.evaluate(receiver, neighborSample);
     if (!evaluation.valid || evaluation.targetPdf <= 0.0) return current;
 
     return mergeReservoirs(current, neighbor, evaluation.targetPdf,

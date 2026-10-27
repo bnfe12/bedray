@@ -407,5 +407,7 @@
   "bedray.opt.rays_restir_temporal": "ReSTIR Temporal Block Light",
   "bedray.opt.rays_restir_temporal.desc": "A pixel keeps the block-light sample it chose last frame and refines it. Off re-samples block light every frame: noisier, and no old record is carried over.",
   "bedray.opt.rays_restir_spatial": "ReSTIR Spatial Block Light",
-  "bedray.opt.rays_restir_spatial.desc": "A pixel also borrows samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Temporal Block Light on."
+  "bedray.opt.rays_restir_spatial.desc": "A pixel also borrows samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Temporal Block Light on.",
+  "bedray.opt.path_restir_spatial": "ReSTIR Spatial Direct Light",
+  "bedray.opt.path_restir_spatial.desc": "A pixel also borrows light samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Direct Light on."
 }

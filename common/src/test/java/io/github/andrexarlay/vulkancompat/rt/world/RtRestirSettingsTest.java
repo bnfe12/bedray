@@ -13,8 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The player chooses each ReSTIR technique on its own, so the three switches have to be real: a key the config file keeps,
- * a getter the renderer actually reads, and a GPU history that is dropped when the choice changes. A toggle wired to
+ * The player chooses each ReSTIR technique on its own, so every switch has to be real: a key the config file keeps, a
+ * getter the renderer actually reads, and a GPU history that is dropped when the choice changes. A toggle wired to
  * nothing is worse than no toggle, which is why every one of them is pinned to the consumer that acts on it.
  */
 class RtRestirSettingsTest {
@@ -35,7 +35,8 @@ class RtRestirSettingsTest {
     private static final String[][] TECHNIQUES = {
         {"rays_restir_temporal", "raysRestirTemporal", "restirTemporal"},
         {"rays_restir_spatial", "raysRestirSpatial", "restirSpatial"},
-        {"path_restir_di", "pathRestirDi", "pathRestirDi"} };
+        {"path_restir_di", "pathRestirDi", "pathRestirDi"},
+        {"path_restir_spatial", "pathRestirSpatial", "pathRestirSpatial"} };
 
     /** A key the writer's prefix loops do not reach is a switch that silently resets on every restart. */
     @Test
@@ -97,8 +98,8 @@ class RtRestirSettingsTest {
     void aReuseChangeDropsEveryHistoryItInvalidates() {
         String renderer = read(RENDERER);
         assertTrue(renderer.contains("int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)\n"
-                + "            | (RtSettings.pathRestirDi() ? 4 : 0);"),
-            "all three switches in one packed int, so a change of any of them is one comparison");
+                + "            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0);"),
+            "every reuse switch in one packed int, so a change of any of them is one comparison");
         assertTrue(renderer.contains("|| curReusePolicy != lastFrameReusePolicy"), "and that comparison gates the reset");
         assertTrue(renderer.contains("private static int lastFrameReusePolicy = -1;"),
             "-1 so the first frame is never counted as a change");
@@ -123,11 +124,28 @@ class RtRestirSettingsTest {
             assertNotNull(ru.get("bedray.opt." + key), key + " has no Russian name");
             assertNotNull(ru.get("bedray.opt." + key + ".desc"), key + " has no Russian description");
         }
-        // Spatial reuse merges the records the temporal stage writes, so the page may not offer it alone.
-        String spatial = lineContaining(ui, "g.addOption(boolOpt(builder, \"rays_restir_spatial\"")
-            + ui.substring(ui.indexOf("g.addOption(boolOpt(builder, \"rays_restir_spatial\""));
-        assertTrue(spatial.contains("s.readBooleanOption(temporalId)"),
-            "the row is only enabled while temporal reuse is on, because that is where its records come from");
+        // Spatial reuse merges the records the temporal stage writes, so neither page may offer it alone.
+        assertRowNeedsParent(ui, "rays_restir_spatial", "rays_restir_temporal");
+        assertRowNeedsParent(ui, "path_restir_spatial", "path_restir_di");
+    }
+
+    /**
+     * A spatial row is only enabled while its temporal row is on, because that is where its records come from. The screen
+     * names the parent through an {@code Identifier} variable, so the pin follows the variable to its key: a row wired to
+     * the wrong parent, or to none, fails here.
+     */
+    private static void assertRowNeedsParent(String ui, String spatialKey, String temporalKey) {
+        int at = ui.indexOf("boolOpt(builder, \"" + spatialKey + "\"");
+        assertTrue(at >= 0, spatialKey + " is not on the settings page");
+        String row = ui.substring(at, ui.indexOf("));", at));
+        java.util.regex.Matcher declared = java.util.regex.Pattern
+            .compile("Identifier (\\w+) = id\\(\"" + temporalKey + "\"\\);").matcher(ui);
+        assertTrue(declared.find(), temporalKey + " has no Identifier the screen can depend on");
+        String variable = declared.group(1);
+        assertTrue(row.contains("s.readBooleanOption(" + variable + ")"),
+            spatialKey + " must be enabled by " + temporalKey + ", not offered on its own");
+        assertTrue(row.contains("rtDependencies(modeId, " + variable + ")"),
+            spatialKey + " must also declare the dependency, or the screen grays it out on a different mode");
     }
 
     private static String lineContaining(String source, String needle) {
