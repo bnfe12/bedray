@@ -183,8 +183,13 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
             if (cosine > 0.0) {
                 float3 bsdf = bsdfEvaluate(surface.material, view, normal, lightDirection);
                 if (bsdf.r + bsdf.g + bsdf.b > 0.0) {
+                    // Offset from the geometric face, not the normal-mapped
+                    // shading normal: a tilted normal can start the shadow ray
+                    // inside the surface and either leak light or self-shadow.
+                    float3 shadowNormal = safeNormalize(surface.hit.geometricNormal, normal);
+                    if (dot(shadowNormal, view) < 0.0) shadowNormal = -shadowNormal;
                     SurfaceVisibility shadow = traceShadowVisibility(traversal,
-                        atlas, blockMaterials, hit.position, normal, lightDirection,
+                        atlas, blockMaterials, hit.position, shadowNormal, lightDirection,
                         light.distance, options.rayBias, materialOptions);
                     float3 transmittance = shadow.result.visible
                         ? shadow.result.transmittance

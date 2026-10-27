@@ -291,6 +291,19 @@ through the `path_trace` entry point with `slangc` (`cs_6_5`, the same
 arguments as `compileSlang`), but this was a manual SPIR-V compile, not a Gradle
 build, and no GPU frame or image comparison exists yet.
 
+`passes/path_trace.slang` now copies the pushed alpha cutoff into
+`MaterialSamplingOptions` before tracing.  The primary path already used the
+pushed 0.1, while material decoding and the filtered shadow walk used the 0.5
+default, so a texel with alpha between them could be visible to the camera but
+transparent to its shadow ray.  The same options now reach both; the pass
+compiled with the same `slangc` invocation.
+
+Shadow rays also bias their origin along the geometric face normal (flipped to
+the receiver side) instead of the normal-mapped shading normal, so a tilted
+normal cannot start the ray inside the surface.  NEE still evaluates the BSDF
+and cosine with the shading normal.  This change is covered by the same
+manual SPIR-V compile.
+
 ### Render-graph recording boundary
 
 `native/bedray_render_graph/` is the planned recording layer: it compiles a

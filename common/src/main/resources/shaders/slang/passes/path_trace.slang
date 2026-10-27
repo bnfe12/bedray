@@ -127,8 +127,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     Ray primary = pathTracePrimaryRay(f, p);
     uint seed = pathTraceSeed(p, f.frame.x, pc.sampleIndex);
+    // One cutoff for the primary path, material decoding and the filtered
+    // shadow walk; otherwise a near-threshold texel can be solid to the camera
+    // and a hole to the shadow ray.
+    MaterialSamplingOptions materialOptions = defaultMaterialSamplingOptions();
+    materialOptions.alphaCutoff = options.alphaCutoff;
     PathTraceResult result = tracePath(traversal, lights, environment, atlas, table,
-        primary, defaultMaterialSamplingOptions(), options, seed);
+        primary, materialOptions, options, seed);
 
     // Scene-referred linear radiance: no exposure and no tone map here.  Exposure lives in FrameConstants.exposure and
     // is applied once by the display/tonemap pass, so accumulation and denoise keep working in linear HDR.
