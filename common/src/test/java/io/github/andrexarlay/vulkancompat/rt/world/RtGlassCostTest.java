@@ -41,7 +41,7 @@ class RtGlassCostTest {
     void theFilteredLayerIsFoldedInWithTheSameFormula() {
         String walk = function(RtShaderCompiler.loadSource(WATER),
             "bool traceThroughInterfacesM(vec3 origin, vec3 dir, float reach,");
-        assertTrue(walk.contains("filterOut *= interfaceTransmittance(c, interfaceReflectance(c, dir));"),
+        assertTrue(walk.contains("filterOut *= interfaceTransmittance(c, interfaceReflectance(c, dir), dir);"),
             "a filtered candidate keeps the Beer-Lambert layer of the per-face walk");
         assertTrue(walk.contains("crossWaterBoundary(m, c, dir);"), "the water medium still toggles at every crossing");
         assertTrue(walk.contains("waterSegment(m, origin + dir * lastT, dir, max(t - lastT, 0.0), T, ins);"),
@@ -120,7 +120,7 @@ class RtGlassCostTest {
     void aFoldedPaneKeepsTheSingleLayerMath() {
         String fn = function(RtShaderCompiler.loadSource(RAYS),
             "bool cameraInterface(Surface s, vec3 rayDir, inout CameraPath cp, inout uint seed)");
-        assertTrue(fn.contains("cp.thr *= interfaceTransmittance(s, F);"), "the tint of every pane still accumulates");
+        assertTrue(fn.contains("cp.thr *= interfaceTransmittance(s, F, rayDir);"), "the tint of every pane still accumulates");
         assertTrue(fn.contains("cp.glassRefl += cp.thr * F * refl;"), "the mirror still carries the Fresnel weight and the throughput");
         assertTrue(fn.contains("cp.glassRefl += cp.thr * ((1.0 - F) * VANILLA_WATER_ALPHA) * vanillaWaterSurface(s, rayDir,"
                 + " emissiveDistance(), seed);"),
@@ -135,7 +135,8 @@ class RtGlassCostTest {
     void realisticWaterStillBendsTheCameraRay() {
         String rays = RtShaderCompiler.loadSource(RAYS);
         assertTrue(rays.contains("hit = cameraWalk(cp, rayOrig, rayDir, seed, s, bend);"), "the caller owns the Snell bend");
-        assertTrue(rays.contains("vec3 rd = refract(rayDir, s.ns, rayDir.y < 0.0 ? 1.0 / WATER_IOR : WATER_IOR);"),
+        assertTrue(rays.contains("float waterIor = surfaceIor(s);"), "the bend reads the IOR of the hit surface, not a global");
+        assertTrue(rays.contains("vec3 rd = refract(rayDir, s.ns, rayDir.y < 0.0 ? 1.0 / waterIor : waterIor);"),
             "entering and leaving the water body use the reciprocal IOR, as the per-face loop did");
         int zero = rays.indexOf("cp.thr = vec3(0.0);");
         int dark = rays.indexOf("hit = false;", zero);

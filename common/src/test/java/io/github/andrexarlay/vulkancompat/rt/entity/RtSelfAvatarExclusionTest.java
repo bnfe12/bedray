@@ -20,9 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class RtSelfAvatarExclusionTest {
 
     private static final String CONFIG = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtConfig.java";
-    private static final String CORE = "src/main/resources/shaders/rt_common_core.glsl";
-    private static final String SURFACE = "src/main/resources/shaders/rt_common_surface.glsl";
-    private static final String WATER = "src/main/resources/shaders/rt_common_water.glsl";
+    private static final String CORE = "src/main/resources/shaders/glsl/rt_common_core.glsl";
+    private static final String SURFACE = "src/main/resources/shaders/glsl/rt_common_surface.glsl";
+    private static final String WATER = "src/main/resources/shaders/glsl/rt_common_water.glsl";
     private static final String PATH = "src/main/resources/shaders/glsl/rt_path.comp";
     private static final String RAYS = "src/main/resources/shaders/glsl/rt_rays.comp";
 
@@ -62,23 +62,28 @@ public class RtSelfAvatarExclusionTest {
     @Test
     public void onlyPrimaryRaysSkipTheAvatar() {
         String path = read(PATH);
-        assertTrue(path.contains("traceSurface(o, d, b == 0u ? 0.001 : 0.0, b == 0u ? 4096.0 : reach, false, b == 0u, s)"),
+        assertTrue(path.contains("gatherPathInterfaces(o, d, tmin, b == 0u ? 4096.0 : reach, b == 0u,"),
             "the path tracer must skip the avatar on the primary hit only: reflections of the player need it");
+        assertTrue(requireBlock(path, "bool gatherPathInterfaces(vec3 origin, vec3 dir, float tmin, float reach, bool camera,")
+                .contains("if (camera && isSelfAvatarPrim(slot, prim)) {\n            continue;"),
+            "the segment walk collects every candidate itself, so the exclusion lives in its candidate loop");
         String rays = read(RAYS);
         String walk = requireBlock(rays, "bool cameraWalk(inout CameraPath cp, vec3 origin, vec3 dir, inout uint seed,"
             + " out Surface s, out bool bend) {");
         assertTrue(walk.contains("if (isSelfAvatarPrim(slot, prim)) {\n            continue;"),
             "the raster-like mode starts its camera ray inside the same body, and the camera walk owns the traversal now");
-        assertFalse(walk.contains("rayQueryConfirmIntersectionEXT"),
-            "the avatar has to be dropped before anything is committed: the walk never commits for that reason");
+        int drop = walk.indexOf("if (isSelfAvatarPrim(slot, prim))");
+        int commit = walk.indexOf("rayQueryConfirmIntersectionEXT(rq)");
+        assertTrue(commit > 0, "the walk commits the terminal surface it really hits");
+        assertTrue(drop < commit,
+            "the avatar has to be dropped before anything is committed: a confirmed candidate can no longer be removed");
         String water = read(WATER);
         assertFalse(requireBlock(water, "bool traceThroughInterfacesM(").contains("isSelfAvatarPrim"),
             "mirrors and GI keep the body: the exclusion belongs to the camera ray, not to the shared interface walk");
-        assertTrue(water.contains("traceWaterBoundary(o, vec3(0.0, 1.0, 0.0), 160.0, true, t, tint)"),
+        assertTrue(water.contains("traceWaterBoundary(o, vec3(0.0, 1.0, 0.0), 160.0, true, t, tint, optical)"),
             "under water the camera-medium probe looks straight up through the player's own head: it would read a blocker and "
                 + "lose the water body");
-        String refracted = requireBlock(water, "uint k = traceWaterBoundary(o, Lw, 200.0, ");
-        assertFalse(refracted.contains(", true,"),
+        assertTrue(water.contains("traceWaterBoundary(o, Lw, 200.0, false, t, tint, optical)"),
             "a sun ray refracted by the water surface must still be shaded by the player, or the body stops casting a shadow in water");
     }
 
