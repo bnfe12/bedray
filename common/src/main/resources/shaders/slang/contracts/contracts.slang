@@ -13,3 +13,4 @@ __exported import "contracts/geometry.slang";
 __exported import "contracts/hit.slang";
 __exported import "contracts/history.slang";
 __exported import "contracts/light.slang";
+__exported import "contracts/scene_tracer.slang";
