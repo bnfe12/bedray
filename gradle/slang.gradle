@@ -16,10 +16,11 @@
 // binding therefore cannot silently desynchronise the host.
 //
 // -PslangPasses=<glob>[,<glob>...] compiles only the matching entry files
-// (default: all). The default stays fail-closed; the filter exists so a pass
-// that is being written by another workstream does not block verifying the
-// finished ones. The generated index then lists only the compiled passes, and
-// the runtime falls back to GLSL for the rest.
+// (default: all). This is a verification aid for work-in-progress passes, not a
+// release configuration: the generated index then lists only those passes, and
+// SlangPassLibrary reports the others as missing AOT artifacts instead of
+// loading a legacy shader in their place. Release builds keep the default
+// fail-closed filter.
 
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
@@ -30,6 +31,11 @@ def passesDir = new File(slangRoot, 'passes')
 def generatedRoot = layout.buildDirectory.dir('generated/slang')
 def slangProfile = (project.findProperty('slangProfile') ?: 'cs_6_5').toString()
 def slangPasses = (project.findProperty('slangPasses') ?: '**/*.slang').toString()
+// The arguments shared by every pass. They are also a declared task input, so a
+// profile or include-path change invalidates cached SPIR-V even when no source
+// file moved.
+def slangArgs = ['-target', 'spirv', '-profile', slangProfile, '-entry', 'main',
+                 '-matrix-layout-column-major', '-I', slangRoot.absolutePath]
 
 def findSlangc = {
     List<File> candidates = []
@@ -198,6 +204,12 @@ def compileSlang = tasks.register('compileSlang') {
     inputs.dir(slangRoot).withPropertyName('slangSources')
     inputs.property('slangProfile', slangProfile)
     inputs.property('slangPasses', slangPasses)
+    inputs.property('slangArguments', slangArgs.join(' '))
+    // The binary participates by content hash, which covers its version and local
+    // rebuilds. The path property records "missing" as a distinct state, so
+    // removing the toolchain invalidates existing outputs and reruns the task
+    // (which then fails) instead of silently accepting an old jar.
+    inputs.property('slangCompilerPath', slangc?.absolutePath ?: '<missing>')
     if (slangc != null) {
         inputs.file(slangc).withPropertyName('slangCompiler')
     }
@@ -234,13 +246,7 @@ def compileSlang = tasks.register('compileSlang') {
             File spv = new File(spvDir, name + '.spv')
             File reflection = new File(reflectionDir, name + '.reflection.json')
 
-            List<String> command = [
-                slangc.absolutePath,
-                '-target', 'spirv',
-                '-profile', slangProfile,
-                '-entry', 'main',
-                '-matrix-layout-column-major',
-                '-I', slangRoot.absolutePath,
+            List<String> command = [slangc.absolutePath] + slangArgs + [
                 '-o', spv.absolutePath,
                 '-reflection-json', reflection.absolutePath,
                 pass.absolutePath
