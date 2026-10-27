@@ -3,6 +3,7 @@
 // accesses and require the caller to synchronize readers and writers.
 public module segment_store;
 
+import "radiance_cascades.slang";
 import "radiance_cascades/radiance_cascades_store.slang";
 import "radiance_cascades/interval_transport.slang";
 
