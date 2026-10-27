@@ -414,6 +414,8 @@ because a module has no entry point; that is expected.
 
 1. **Path-trace native integration** — migrate resource allocation, frame data,
    reflected descriptor mapping, dispatch and retirement into the C++ renderer.
+   The ownership split, scene/shader contract gap, lifetimes and open decisions
+   are recorded in [PATH_TRACE_CPP_INTEGRATION_PLAN.md](PATH_TRACE_CPP_INTEGRATION_PLAN.md).
    Java supplies Minecraft-owned state and the existing command buffer through a
    narrow boundary. Replace the legacy scene representation with the new scene
    contract; the existing `LegacySectionTraversal` is reference-stage work, not
