@@ -823,6 +823,9 @@ public final class RtFrameRenderer {
         params.cameraX = camera.pos.x;
         params.cameraY = camera.pos.y;
         params.cameraZ = camera.pos.z;
+        params.bobX = bobOrigin.x;
+        params.bobY = bobOrigin.y;
+        params.bobZ = bobOrigin.z;
         params.sceneChanged = sceneChanged;
         lastSunAngle = sky.sunAngle;
         boolean hasSky = sky.skybox == DimensionType.Skybox.OVERWORLD;

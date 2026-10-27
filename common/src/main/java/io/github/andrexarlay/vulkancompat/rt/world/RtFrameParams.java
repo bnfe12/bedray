@@ -106,6 +106,10 @@ public final class RtFrameParams {
     public double cameraX;
     public double cameraY;
     public double cameraZ;
+    /** Effective camera origin in raw-camera-relative space (view bob); zero when bob projection is disabled. */
+    public float bobX;
+    public float bobY;
+    public float bobZ;
     public boolean sceneChanged;
     public final RtSky.Key key = new RtSky.Key();
     public final float[] skyColor = {0.47f, 0.65f, 1.0f};

@@ -289,9 +289,13 @@ public final class RtSlangPathPass implements RtPass {
      */
     private void fillFrame(RtFrameParams p, int width, int height) {
         float yUp = p.flipY ? 1f : -1f; // matrix-space NDC y of the top edge (Slang ndc.y = -1)
-        Vector3f centre = unproject(p.invViewProj, 0f, 0f);
-        Vector3f rightEdge = unproject(p.invViewProj, 1f, 0f);
-        Vector3f bottomEdge = unproject(p.invViewProj, 0f, -yUp);
+        // The world, the projection and the TLAS are anchored at the raw camera position; the engine view adds the
+        // view-bob eye offset.  Remove it before deriving the basis and keep it as the ray origin, exactly like the
+        // legacy cameraOrigin()/cameraRay() pair, or walking shifts the whole world against the eye.
+        Vector3f bob = new Vector3f(p.bobX, p.bobY, p.bobZ);
+        Vector3f centre = unproject(p.invViewProj, 0f, 0f).sub(bob);
+        Vector3f rightEdge = unproject(p.invViewProj, 1f, 0f).sub(bob);
+        Vector3f bottomEdge = unproject(p.invViewProj, 0f, -yUp).sub(bob);
         Vector3f rightVec = new Vector3f(rightEdge).sub(centre);
         Vector3f downVec = new Vector3f(bottomEdge).sub(centre);
         float centreLen = Math.max(centre.length(), 1.0e-6f);
@@ -306,7 +310,7 @@ public final class RtSlangPathPass implements RtPass {
         frame.forward.set(forward.x, forward.y, forward.z, downLen / centreLen);
         frame.right.set(right.x, right.y, right.z, rightLen / downLen);
         frame.up.set(up.x, up.y, up.z, 0f);
-        frame.origin.set(0f, 0f, 0f, p.frame / 20f);
+        frame.origin.set(bob.x, bob.y, bob.z, p.frame / 20f);
         // Sub-pixel jitter per frame so the running mean also antialiases; zw is the pixel size the shader uses for NDC.
         float jx = accumFrames == 0 ? 0f : halton(sampleIndex + 1, 2) - 0.5f;
         float jy = accumFrames == 0 ? 0f : halton(sampleIndex + 1, 3) - 0.5f;

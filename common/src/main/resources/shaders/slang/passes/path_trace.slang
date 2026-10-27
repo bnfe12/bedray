@@ -61,8 +61,10 @@ struct PathTracePush {
 [[vk::push_constant]] PathTracePush pc;
 
 // Camera-relative ray through the centre of a jittered pixel.  The camera basis
-// is explicit because FrameConstants keeps the camera at the origin; the
-// jittered inverse view-projection is for reprojection, not for primary rays.
+// is explicit; `origin` is the view-bob eye offset in raw-camera-relative
+// world space, matching the TLAS anchor the host builds around the raw camera
+// position.  The jittered inverse view-projection is for reprojection, not for
+// primary rays.
 Ray pathTracePrimaryRay(FrameConstants f, int2 pixel) {
     float2 jittered = float2(pixel) + 0.5 + f.camera.jitter.xy;
     float2 ndc = jittered * f.camera.jitter.zw * 2.0 - 1.0;
@@ -71,7 +73,7 @@ Ray pathTracePrimaryRay(FrameConstants f, int2 pixel) {
     float3 direction = normalize(f.camera.forward.xyz
         + f.camera.right.xyz * (ndc.x * tanHalf * aspect)
         - f.camera.up.xyz * (ndc.y * tanHalf));
-    return makeRay(float3(0.0), direction, 0.0, max(pc.maxDistance, 1.0));
+    return makeRay(f.camera.origin.xyz, direction, 0.0, max(pc.maxDistance, 1.0));
 }
 
 uint pathTraceSeed(int2 pixel, uint frameIndex, uint sampleIndex) {
