@@ -581,17 +581,25 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   is what `path_display.slang` and the ReSTIR DI history read reproject through, so the "reprojection is unreachable from
   Java" gap is closed. No Slang pass reads the split pair today; a consumer that needs it must also decide whether
   `view` is the engine pose (with view bob) or the camera-relative anchor the world is built on, because the two differ.
-* **Entities are invisible to the path tracer.** `RtWorld.buildTlas` writes the
-  entity BLAS instance with mask `0x02` (`RtWorld.java:1089`), while
-  `passes/path_trace.slang` traverses with
-  `PATH_TRACE_INSTANCE_MASK_WORLD = 0x01` (`path_trace.slang:110`). The
-  reference path trace renders terrain only; mobs, item frames and other
-  entities are absent. Widening the mask to `0x03` is not enough:
-  `legacyHitToSurface` returns a miss for every instance whose custom index has
-  `LEGACY_INSTANCE_TYPE_ENTITY` set (`legacy_section_traversal.slang:93`), so an
-  entity triangle would become a hole that hides the terrain behind it. Entity
-  hit decoding (entity geometry addresses, atlas UVs, material record) is a
-  separate task.
+* **Entities are traced, but only as themselves.** `passes/path_trace.slang`
+  traverses with `PATH_TRACE_INSTANCE_MASK_SCENE = 0x03` and decodes an entity
+  instance through `traversal/entity_geometry.slang`, which ports
+  `fetchEntitySurface` from `rt_common_surface.glsl`: the ring slot's positions,
+  indices and `uint4` attributes plus the RT entity atlas arrive as five
+  `StructuredBuffer` bindings (20-24) bound at the slot's own offset and length,
+  so `GetDimensions` on the index range is the triangle count and a frame that
+  captured nothing reads a zeroed dummy instead of a stale slot. The first-person
+  body stays in the scene - `tracePrimary` skips its primitive range, shadow and
+  bounce rays keep it - and its range travels in the push block's `entityState`,
+  which grew the block from 96 to 112 bytes. Still missing, and each one is a
+  real visual gap: per-part **motion vectors** (the legacy path reads the
+  previous-position ring; no Slang pass writes a velocity for an entity hit, so
+  a moving mob accumulates as noise), the **End Portal starfield** (`rt_common
+  _surface.glsl:377-409`'s procedural layers), the entity **Sobel auto-normal**
+  that adds relief to mob skin, and block-emitter NEE for **glowing parts** - an
+  emissive texel on a model lights nothing but itself. Pinned by
+  `RtSlangEntityTest`, `RtPathTraceSlangPassTest` and
+  `SlangPassLibraryTest`.
 * **Water is a flat thin pane.** The legacy triangle decode maps only the
   redstone and emissive source bits (`surface/surface.slang:237`); no code
   assigns `MATERIAL_SOURCE_FLUID` on this path and no water module is compiled

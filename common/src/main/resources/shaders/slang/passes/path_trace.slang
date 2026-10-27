@@ -21,6 +21,15 @@
 //   17 blockMaterials   StructuredBuffer<BlockMaterial> (dummy table until voxel materials exist)
 //   18 emitters         StructuredBuffer<BlockEmitterRecord> (the RtEmitters list of the legacy path, 96 B per record)
 //   19 reservoirs       RWStructuredBuffer<DIReservoir> (ReSTIR DI: two parity halves, 64 B per pixel)
+//   20 entityPositions  StructuredBuffer<uint>  - float3 per captured vertex, as float bits
+//   21 entityIndices    StructuredBuffer<uint>  - three per entity triangle
+//   22 entityAttrs      StructuredBuffer<uint4> - colour, light, u, v per captured vertex
+//   23 entityRects      StructuredBuffer<uint4> - one atlas slot's rect and authored PBR
+//   24 entityTexels     StructuredBuffer<uint>  - the RT entity atlas, packed bytes
+//
+// The five entity buffers are this frame's ring slot, bound at its own offset:
+// the bound length is the triangle count, so a frame with nothing captured binds
+// a one-element dummy and reads zero triangles rather than a stale model.
 //
 // The manifest records Int64, PhysicalStorageBufferAddresses and RayQueryKHR as
 // required capabilities; the Java host must enable the matching ABI bits.
@@ -36,10 +45,15 @@ import "restir/di_block_emitters.slang";
 import "restir/restir_di.slang";
 import "sampling.slang";
 import "surface/surface.slang";
+import "traversal/entity_geometry.slang";
 import "traversal/legacy_section_traversal.slang";
 import "traversal/traversal.slang";
 
-static const uint PATH_TRACE_INSTANCE_MASK_WORLD = 0x01u;
+// Terrain and the entity ring are one scene: the same TLAS holds both, and the
+// instance's custom-index bit is what tells a mob quad from a section quad.
+// Masking the entity instance out would make the path tracer blind to every
+// creature, item and armour stand in the world.
+static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 
 // Bits of PathTracePush.diState.x.  The reservoir branch is one code path gated by a flag, not a second shader: the host
 // can A/B ReSTIR DI against plain per-frame RIS in the same frame graph.
@@ -64,6 +78,7 @@ struct PathTracePush {
     float4 emitterCameraRelative;   // xyz camera minus the origin the list was rebuilt at, w candidates per call
     float4 diCameraDelta;           // xyz raw camera position minus the previous frame's, w reserved
     uint4  diState;                 // x: PATH_TRACE_DI_* bits, y: parity half this frame writes, zw reserved
+    uint4  entityState;             // x: entity atlas texels per side (0 = no atlas), yz: self-avatar primitive range, w reserved
 };
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;
@@ -77,6 +92,11 @@ struct PathTracePush {
 [[vk::binding(17, 0)]] StructuredBuffer<BlockMaterial> blockMaterials;
 [[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;
 [[vk::binding(19, 0)]] RWStructuredBuffer<DIReservoir> reservoirs;
+[[vk::binding(20, 0)]] StructuredBuffer<uint> entityPositions;
+[[vk::binding(21, 0)]] StructuredBuffer<uint> entityIndices;
+[[vk::binding(22, 0)]] StructuredBuffer<uint4> entityAttrs;
+[[vk::binding(23, 0)]] StructuredBuffer<uint4> entityRects;
+[[vk::binding(24, 0)]] StructuredBuffer<uint> entityTexels;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -119,6 +139,24 @@ void main(uint3 tid : SV_DispatchThreadID) {
     atlas.material = materialAtlas;
     atlas.normal = normalAtlas;
 
+    // This frame's captured models.  The buffers are bound at the ring slot's own
+    // offset, so the bound length is the frame's vertex and triangle count: a
+    // frame with nothing captured binds one-element dummies and decodes zero
+    // triangles rather than a stale model.
+    EntityAtlas entityAtlas;
+    entityAtlas.rects = entityRects;
+    entityAtlas.texels = entityTexels;
+    entityAtlas.atlasSize = pc.entityState.x;
+
+    EntityGeometry entities;
+    entities.positions = entityPositions;
+    entities.indices = entityIndices;
+    entities.attrs = entityAttrs;
+    entities.atlas = entityAtlas;
+    // A mob part is decoded through the same entry as a block face, so the atlas
+    // has to name the entity grid even for a pass that only ever hits terrain.
+    atlas.entities = entities.atlas;
+
     // The legacy triangle path has no voxel hit, so the block-material table is
     // present only to satisfy the shared decodeSurface signature.  A host that
     // later resolves block states fills count and the buffer.
@@ -129,7 +167,18 @@ void main(uint3 tid : SV_DispatchThreadID) {
     LegacySectionTraversal traversal;
     traversal.tlas = tlas;
     traversal.sections = sections;
-    traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_WORLD;
+    traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_SCENE;
+    traversal.entities = entities;
+    // The legacy path rebuilt an entity surface's world position the same way:
+    // `hit + camRel`, where camRel is the camera against the origin the frame was
+    // anchored at.  worldPosition is a wrapped neighbourhood proxy, not a unique
+    // identity, and an entity hit has no section to anchor to, so this is the
+    // whole of what it can be.
+    traversal.cameraAnchor = pc.emitterCameraRelative.xyz;
+    // The first-person body sits around the eye, so only the camera ray looks
+    // past it; every other ray of the path crosses it like any other geometry.
+    traversal.selfAvatarTriStart = pc.entityState.y;
+    traversal.selfAvatarTriCount = pc.entityState.z;
 
     SunMoonSampler keyLight;
     keyLight.sun = f.sun;

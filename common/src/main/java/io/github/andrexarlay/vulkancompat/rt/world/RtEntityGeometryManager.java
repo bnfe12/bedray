@@ -542,6 +542,55 @@ public final class RtEntityGeometryManager {
         return ringAttr != null && frameTriangles > 0 ? ringAttr.address + ringSlot * ringVertexCap * 16L : 0L;
     }
 
+    /**
+     * A byte range of a device buffer, ready to bind as one Slang {@code StructuredBuffer}. The legacy GLSL path reaches
+     * the same records through device addresses in the statistics buffer; a Slang pass names them as descriptors instead,
+     * so it needs the buffer and the offset of the slot in play rather than the summed address.
+     */
+    public record GpuRange(RtMemory.Buf buffer, long offset, long bytes) {
+        static final GpuRange NONE = new GpuRange(null, 0L, 0L);
+
+        public boolean present() {
+            return buffer != null && buffer.handle != 0L && bytes > 0L;
+        }
+    }
+
+    /** This frame's camera-relative positions: the ring slice the entity BLAS was built from. */
+    public synchronized GpuRange framePositions() {
+        return ringPos != null && frameTriangles > 0
+            ? new GpuRange(ringPos, ringSlot * ringVertexCap * 12L, (long) frameVertices * 12L)
+            : GpuRange.NONE;
+    }
+
+    /** Three indices per triangle of this frame, bound at the ring slot's own offset. */
+    public synchronized GpuRange frameIndices() {
+        return ringIdx != null && frameTriangles > 0
+            ? new GpuRange(ringIdx, ringSlot * ringIndexCap * 4L, (long) frameTriangles * 12L)
+            : GpuRange.NONE;
+    }
+
+    /** Colour, light and uv per vertex of this frame. */
+    public synchronized GpuRange frameAttributes() {
+        return ringAttr != null && frameTriangles > 0
+            ? new GpuRange(ringAttr, ringSlot * ringVertexCap * 16L, (long) frameVertices * 16L)
+            : GpuRange.NONE;
+    }
+
+    /** The RT entity atlas. A version swap builds fresh buffers and retires the old pair, so a bound range stays valid. */
+    public synchronized GpuRange atlasTexels() {
+        return atlasBuf != null ? new GpuRange(atlasBuf, 0L, atlasBuf.size) : GpuRange.NONE;
+    }
+
+    public synchronized GpuRange atlasRects() {
+        return rectBuf != null ? new GpuRange(rectBuf, 0L, rectBuf.size) : GpuRange.NONE;
+    }
+
+    /** Texels per side of the bound atlas, 0 while nothing has been uploaded (the shader then reads the fallback texel). */
+    public synchronized int atlasTexelsPerSide() {
+        return atlasBuf != null
+            ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0;
+    }
+
     public synchronized int frameVertices() {
         return frameVertices;
     }

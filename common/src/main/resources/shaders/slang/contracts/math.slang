@@ -57,3 +57,23 @@ void faceTangentFrame(float3 normal, out float3 tangent, out float3 bitangent) {
     tangent = safeNormalize(cross(up, normal), float3(1.0, 0.0, 0.0));
     bitangent = cross(normal, tangent);
 }
+
+// Tangent frame implied by a triangle's own UVs, so a normal or a cutout read
+// along the texture the author mapped rather than along an axis.  A degenerate
+// island - both edges mapping to the same direction, which baked atlases and
+// recoloured parts do produce - has no invertible UV gradient, and the face
+// frame is the honest answer.
+void triangleTangentFrame(float3 p0, float3 p1, float3 p2, float2 uv0, float2 uv1, float2 uv2,
+        float3 normal, out float3 tangent, out float3 bitangent) {
+    float3 e1 = p1 - p0;
+    float3 e2 = p2 - p0;
+    float2 d1 = uv1 - uv0;
+    float2 d2 = uv2 - uv0;
+    float det = d1.x * d2.y - d2.x * d1.y;
+    if (abs(det) > 1.0e-12) {
+        tangent = safeNormalize((e1 * d2.y - e2 * d1.y) / det, normal);
+        bitangent = safeNormalize((e2 * d1.x - e1 * d2.x) / det, normal);
+    } else {
+        faceTangentFrame(normal, tangent, bitangent);
+    }
+}

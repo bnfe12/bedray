@@ -67,6 +67,11 @@ public final class RtConfig {
     public static final float SLANG_EMITTER_PROBABILITY = Math.min(1.0f,
         Math.max(0.0f, Float.parseFloat(System.getProperty("vkbridge.rt.emitterProbability", "0.5"))));
 
+    /** Captured mobs, items and armour stands in the Slang path tracer: the ring {@link RtEntityGeometryManager} uploads
+     * every frame, bound as five buffers instead of reached through the statistics buffer like the legacy shader.
+     * {@code -Dvkbridge.rt.slangEntities=false} traces the terrain alone, which is the fastest A/B for an entity artifact. */
+    public static final boolean SLANG_ENTITIES = Boolean.parseBoolean(System.getProperty("vkbridge.rt.slangEntities", "true"));
+
     /** ReSTIR direct illumination in the Slang path tracer: the block-emitter sample of a pixel is kept in a per-pixel
      * reservoir and reused across frames instead of being redrawn from one batch every time. This is what lets a
      * torch-lit wall converge while the camera moves; {@code -Dvkbridge.rt.restirDi=false} falls back to plain per-frame

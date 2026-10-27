@@ -115,7 +115,7 @@ class SlangPassLibraryTest {
         Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
 
         SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        assertEquals(11, manifest.bindings().size(), "path_trace: binding count");
+        assertEquals(16, manifest.bindings().size(), "path_trace: binding count");
         assertBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
         assertBinding(manifest, "outImage", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -134,7 +134,20 @@ class SlangPassLibraryTest {
         assertBinding(manifest, "reservoirs", 19, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
         assertEquals(64, manifest.binding("reservoirs").elementBytes(),
             "DIReservoir is the 64-byte ReSTIR record: sample, stats, source, receiver");
-        assertEquals(96, manifest.pushConstantBytes(), "path_trace: push constant block");
+        // The entity ring is the second geometry source of the scene: the path tracer reads the same
+        // uploaded vertex/index/attr buffers the GLSL path bound, each at its own device offset.
+        assertBinding(manifest, "entityPositions", 20, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        assertEquals(4, manifest.binding("entityPositions").elementBytes(), "one float bit-pattern per position");
+        assertBinding(manifest, "entityIndices", 21, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        assertEquals(4, manifest.binding("entityIndices").elementBytes(), "one index per corner");
+        assertBinding(manifest, "entityAttrs", 22, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        assertEquals(16, manifest.binding("entityAttrs").elementBytes(), "colour, light and uv as one uint4");
+        assertBinding(manifest, "entityRects", 23, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        assertEquals(16, manifest.binding("entityRects").elementBytes(), "an atlas rect is a uint4");
+        assertBinding(manifest, "entityTexels", 24, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        assertEquals(4, manifest.binding("entityTexels").elementBytes(), "ABGR8 texels");
+        assertEquals(112, manifest.pushConstantBytes(),
+            "path_trace: the 96-byte DI block plus the 16-byte entity state of this frame");
         assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS
             | BedrayCoreLayouts.CAP_SHADER_INT64, manifest.requiredCapabilities(),
             "path_trace: ray query + device addresses + 64-bit integers");

@@ -15,6 +15,7 @@ import "contracts/geometry.slang";
 import "contracts/hit.slang";
 import "contracts/material.slang";
 import "contracts/math.slang";
+import "traversal/entity_geometry.slang";
 
 // ---- Atlas description ----
 
@@ -34,6 +35,13 @@ struct MaterialAtlas {
     Sampler2D albedo;
     Sampler2D material;
     Sampler2D normal;
+
+    // A captured model wears the RT entity atlas rather than the block atlas,
+    // and its texels are an integer grid with no sampler, so they travel beside
+    // the three textures instead of being folded into them.  A pass whose
+    // traversal cannot return an entity hit still has to name them: an entry
+    // pass binds the frame's atlas for every decode it shares.
+    EntityAtlas entities;
 };
 
 // Per-block material.  A voxel hit has no UV, so the host resolves a block
@@ -216,8 +224,97 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         }
         // A block material has no atlas normal map; the provider may still
         // supply a tangent frame for procedural shading.
+    } else if (hit.kind == HitKind.Entity) {
+        // A captured mob, item or armour stand.  Its texture is the RT entity
+        // atlas at the part's own slot, multiplied by the vertex tint vanilla
+        // shaded the model with; there is no normal map and no biome tint.  The
+        // texel's alpha byte does double duty - below the cutout edge it is
+        // transparency, from the cutout edge to 223/255 it is a real pane, and
+        // at 224/255 and above the texel is opaque and the same five bits are an
+        // emission code - so the three bands are decided here rather than left
+        // to the generic alpha rule.
+        bool outline = (hit.flags & HIT_FLAG_ENTITY_OUTLINE) != 0u;
+
+        float3 color = hit.tint;
+        float emission = 0.0;
+        float alpha = 1.0;
+        bool glassy = false;
+        EntitySurfacePbr pbr;
+        pbr.roughness = 0.85;
+        pbr.metallic = 0.0;
+        pbr.f0 = 0.04;
+
+        if (!outline) {
+            float4 texel = entityTexel(atlas.entities, hit.materialId, hit.uv);
+            color = texel.rgb * hit.tint;
+            emission = entityTexelEmission(texel);
+            alpha = texel.a;
+            if ((hit.flags & HIT_FLAG_ENTITY_HURT) != 0u) {
+                color = lerp(color, float3(1.0, 0.05, 0.05), 0.65);
+            }
+            // A black texel is the shadow blob or a decal under the model, not a
+            // pane: taken as glass it would tint nothing at all and the ray walk
+            // would spend a layer on it.
+            glassy = entityTexelTranslucent(texel) && max(color.r, max(color.g, color.b)) > 0.08;
+            pbr = entitySurfacePbr(atlas.entities, hit.materialId);
+            // The authored metal of a held tool is only as good as the texel
+            // under it: the same part carries a dark brown wooden handle.
+            if (pbr.metallic > 0.5 && color.r > color.b * 1.8 && color.r < 0.45 && color.g < 0.30) {
+                pbr.metallic = 0.0;
+                pbr.roughness = 0.85;
+            }
+        }
+
+        material.albedo = color;
+        material.roughness = glassy ? min(pbr.roughness, 0.05) : pbr.roughness;
+        material.metallic = pbr.metallic;
+        material.f0 = pbr.metallic > 0.5 ? float3(0.04) : float3(pbr.f0);
+        material.ior = max(options.defaultIor, 1.0);
+        material.thickness = max(options.defaultThickness, 0.0);
+        material.ambientOcclusion = 1.0;
+        material.emissionMask = emission;
+        material.emission = color * emission;
+        material.materialId = hit.materialId;
+        material.sourceFlags = MATERIAL_SOURCE_NONE;
+        material.flags = pbr.metallic > 0.5 ? MATERIAL_FLAG_METAL : 0u;
+
+        if (outline) {
+            // Geometry the player drew, not geometry the world has: a selection
+            // wireframe must not stop a shadow.  A translucent surface with no
+            // authored thickness passes every ray through unchanged - the
+            // thin-pane absorption is pow(albedo, alpha * transmission) and
+            // alpha is zero - while still shading its own colour.
+            material.alphaMode = AlphaMode.Translucent;
+            material.alpha = 0.0;
+            material.transmission = 0.0;
+            material.emissionMask = ENTITY_OUTLINE_EMISSION;
+            material.emission = color * ENTITY_OUTLINE_EMISSION;
+            material.flags |= MATERIAL_FLAG_EMISSIVE;
+        } else if (alpha < ENTITY_ALPHA_HOLE) {
+            // A hole in the model.  Zero is under every cutoff a pass can be
+            // given, so the texel stays a hole whatever the path asks for; the
+            // vanilla entity cutout is 0.1 and the tracer's own is 0.5.
+            material.alphaMode = AlphaMode.Cutout;
+            material.alpha = 0.0;
+            material.flags |= MATERIAL_FLAG_CUTOUT;
+        } else if (glassy) {
+            material.alphaMode = AlphaMode.Translucent;
+            material.alpha = alpha;
+            material.flags |= MATERIAL_FLAG_THIN_GLASS;
+        } else {
+            material.alphaMode = AlphaMode.Opaque;
+            material.alpha = 1.0;
+        }
+        // The legacy path applies this floor after the outline / hurt / plain
+        // chain, so a fullbright part is raised over 0.35 too - and only a texel
+        // that survived the cutout edge can be one: a hole shades nothing.
+        if (hit.light.x > 0.995 && hit.light.y > 0.995 && alpha >= ENTITY_ALPHA_HOLE) {
+            material.emissionMask = max(material.emissionMask, ENTITY_FULLBRIGHT_EMISSION);
+            material.emission = color * material.emissionMask;
+        }
+        if (material.emissionMask > 0.0) material.flags |= MATERIAL_FLAG_EMISSIVE;
     } else {
-        // Triangle or entity: sample the block atlas at the interpolated UV.
+        // Triangle: sample the block atlas at the interpolated UV.
         float4 albedoTexel = atlas.albedo.SampleLevel(hit.uv, 0.0);
         float4 materialTexel = float4(0.9, 0.04, 0.0, 1.0);
         if ((options.flags & MATERIAL_SAMPLING_FLAG_MATERIAL_ATLAS) != 0u) {

@@ -67,7 +67,7 @@ class RtPathTraceSlangPassTest {
     void pushBlockKeepsTheSlangLayout() {
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(
             8, 32, 5, 0, 0x21, 0.01f, 0.5f, 512f, 1000f, 0.75f, 64, 0.5f, 1.5f, -2.25f, 0.75f, 8,
-            0.25f, -0.5f, 1.75f, 0b1011, 1);
+            0.25f, -0.5f, 1.75f, 0b1011, 1, 2048, 120, 24);
         ByteBuffer out = ByteBuffer.allocate(RtPathTraceSlangPass.PUSH_BYTES);
         dispatch.writeTo(out);
 
@@ -95,8 +95,12 @@ class RtPathTraceSlangPassTest {
         assertEquals(1, out.getInt(84), "diState.y (parity) at 84");
         assertEquals(0, out.getInt(88), "diState.z is a reserved lane");
         assertEquals(0, out.getInt(92), "diState.w is a reserved lane");
+        assertEquals(2048, out.getInt(96), "entityState.x (atlas texels per side) at 96");
+        assertEquals(120, out.getInt(100), "entityState.y (first self-avatar triangle) at 100");
+        assertEquals(24, out.getInt(104), "entityState.z (self-avatar triangle count) at 104");
+        assertEquals(0, out.getInt(108), "entityState.w is the reserved lane");
         assertEquals(RtPathTraceSlangPass.PUSH_BYTES, out.capacity());
-        assertEquals(96, RtPathTraceSlangPass.PUSH_BYTES, "the 64 B block plus the two DI vectors");
+        assertEquals(112, RtPathTraceSlangPass.PUSH_BYTES, "the 96 B DI block plus the entity state of this frame");
     }
 
     /** The DI fields are read only inside the gated branch, but a garbage value there is still an unusable frame. */
@@ -108,6 +112,17 @@ class RtPathTraceSlangPassTest {
             () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, 0f, 0f, 0f, 1, -1));
         assertThrows(IllegalArgumentException.class,
             () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, Float.POSITIVE_INFINITY, 0f, 0f, 1, 0));
+    }
+
+    /** The entity counts address the bound ring slice, so a negative one names geometry the descriptor does not carry. */
+    @Test
+    void entityPushRejectsValuesTheShaderCannotUse() {
+        assertThrows(IllegalArgumentException.class,
+            () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, 0f, 0f, 0f, 0, 0, -1, 0, 0));
+        assertThrows(IllegalArgumentException.class,
+            () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, 0f, 0f, 0f, 0, 0, 2048, -4, 0));
+        assertThrows(IllegalArgumentException.class,
+            () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, 0f, 0f, 0f, 0, 0, 2048, 0, -4));
     }
 
     @Test
@@ -145,9 +160,19 @@ class RtPathTraceSlangPassTest {
                                                           float emitterProbability, int emitterCandidates,
                                                           float diDeltaX, float diDeltaY, float diDeltaZ, int diFlags,
                                                           int diParity) {
+        return dispatch(depth, steps, alphaCutoff, maxDistance, maxRadiance, sunProbability, emitterCount,
+            emitterProbability, emitterCandidates, diDeltaX, diDeltaY, diDeltaZ, diFlags, diParity, 0, 0, 0);
+    }
+
+    private static RtPathTraceSlangPass.Dispatch dispatch(int depth, int steps, float alphaCutoff, float maxDistance,
+                                                          float maxRadiance, float sunProbability, int emitterCount,
+                                                          float emitterProbability, int emitterCandidates,
+                                                          float diDeltaX, float diDeltaY, float diDeltaZ, int diFlags,
+                                                          int diParity, int entityAtlasSize, int avatarTriStart,
+                                                          int avatarTriCount) {
         return new RtPathTraceSlangPass.Dispatch(depth, steps, 0, 0, 0, 0.01f, alphaCutoff, maxDistance, maxRadiance,
             sunProbability, emitterCount, emitterProbability, 0f, 0f, 0f, emitterCandidates,
-            diDeltaX, diDeltaY, diDeltaZ, diFlags, diParity);
+            diDeltaX, diDeltaY, diDeltaZ, diFlags, diParity, entityAtlasSize, avatarTriStart, avatarTriCount);
     }
 
     @Test
@@ -183,6 +208,16 @@ class RtPathTraceSlangPassTest {
             "BlockEmitterRecord: the six vec4 RtEmitters writes, so one buffer serves both paths");
         assertEquals(RtPathTraceSlangPass.RESERVOIR_BYTES, manifest.binding("reservoirs").elementBytes(),
             "DIReservoir: sample, stats, source and receiver");
+        assertEquals(RtPathTraceSlangPass.ENTITY_SCALAR_BYTES, manifest.binding("entityPositions").elementBytes(),
+            "one float of a captured position, as its bits");
+        assertEquals(RtPathTraceSlangPass.ENTITY_SCALAR_BYTES, manifest.binding("entityIndices").elementBytes(),
+            "three vertex indices per captured triangle");
+        assertEquals(RtPathTraceSlangPass.ENTITY_VECTOR_BYTES, manifest.binding("entityAttrs").elementBytes(),
+            "colour, light, u and v of one captured vertex");
+        assertEquals(RtPathTraceSlangPass.ENTITY_VECTOR_BYTES, manifest.binding("entityRects").elementBytes(),
+            "one atlas slot: rect and authored PBR");
+        assertEquals(RtPathTraceSlangPass.ENTITY_SCALAR_BYTES, manifest.binding("entityTexels").elementBytes(),
+            "one packed texel of the RT entity atlas");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[0], "group x");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[1], "group y");
     }

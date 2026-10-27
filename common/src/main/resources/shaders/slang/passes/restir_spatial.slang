@@ -62,6 +62,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     atlas.albedo = albedoAtlas;
     atlas.material = materialAtlas;
     atlas.normal = normalAtlas;
+    // atlas.entities is deliberately left empty: this pass reads block-emitter
+    // texels and traces no ray, so no entity surface is ever decoded here.
 
     BlockEmitterSpatialReuse reuse;
     reuse.records = emitters;

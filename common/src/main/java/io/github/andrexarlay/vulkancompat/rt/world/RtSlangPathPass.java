@@ -407,15 +407,19 @@ public final class RtSlangPathPass implements RtPass {
                 | (params.cameraStatic ? DI_FLAG_STATIC : 0) | (params.flipY ? DI_FLAG_FLIP_Y : 0);
             reservoirRange = new RtPathTraceSlangPass.Reservoirs(reservoirs.handle, reservoirs.size);
         }
+        // The models of this frame: the ring slice the entity BLAS was built from, so a committed primitive index names a
+        // triangle of these buffers and of nothing else. Turning the capture off leaves the terrain alone in the trace.
+        RtPathTraceSlangPass.Entities capturedEntities = entityBindingsOfThisFrame();
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, 0, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
             params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES,
-            params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, diParity);
+            params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, diParity,
+            capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount());
         recordings.add(cmd.address());
         trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
             new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
-            emitters, reservoirRange, views.depth(), frame, dispatch);
+            emitters, reservoirRange, capturedEntities, views.depth(), frame, dispatch);
         if (diFlags == 0) {
             reservoirHistoryWritten = false;
         } else {
@@ -457,6 +461,31 @@ public final class RtSlangPathPass implements RtPass {
         }
         historyWritten = true;
         VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read by the composite, bloom and upscalers next
+    }
+
+    /**
+     * This frame's captured models as the descriptor ranges the trace pass binds, read from the same manager whose
+     * statistics buffer the legacy path reaches them through. An empty ring reports no range at all, which is what makes
+     * the pass substitute its one-element dummy rather than a stale slice.
+     */
+    private static RtPathTraceSlangPass.Entities entityBindingsOfThisFrame() {
+        if (!RtConfig.SLANG_ENTITIES) {
+            return RtPathTraceSlangPass.Entities.NONE;
+        }
+        RtEntityGeometryManager eg = RtEntityGeometryManager.INSTANCE;
+        RtEntityGeometryManager.GpuRange indices = eg.frameIndices();
+        io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager capture =
+            io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance();
+        return new RtPathTraceSlangPass.Entities(entityView(eg.framePositions()), entityView(indices),
+            entityView(eg.frameAttributes()), entityView(eg.atlasRects()), entityView(eg.atlasTexels()),
+            eg.atlasTexelsPerSide(), indices.present() ? capture.selfAvatarTriStart() : 0,
+            indices.present() ? capture.selfAvatarTriCount() : 0);
+    }
+
+    private static RtPathTraceSlangPass.BufferView entityView(RtEntityGeometryManager.GpuRange range) {
+        return range.present()
+            ? new RtPathTraceSlangPass.BufferView(range.buffer().handle, range.offset(), range.bytes())
+            : RtPathTraceSlangPass.BufferView.NONE;
     }
 
     /**

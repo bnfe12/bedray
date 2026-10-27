@@ -24,12 +24,12 @@ public module legacy_section_traversal;
 import "contracts/geometry.slang";
 import "contracts/hit.slang";
 import "contracts/math.slang";
+import "traversal/entity_geometry.slang";
 import "traversal/traversal.slang";
 
 static const uint LEGACY_INSTANCE_MASK_WORLD    = 0x01u;
 static const uint LEGACY_INSTANCE_MASK_ENTITIES = 0x02u;
 static const uint LEGACY_INSTANCE_MASK_ALL      = 0x03u;
-static const uint LEGACY_INSTANCE_TYPE_ENTITY   = 0x800000u;
 
 static const uint LEGACY_VERT_FLAG_VEGETATION   = 0x01000000u;
 static const uint LEGACY_VERT_FLAG_LEAF_CUBE    = 0x02000000u;
@@ -90,7 +90,9 @@ float2 legacyUnpackLight(uint light) {
 SurfaceHit legacyHitToSurface(StructuredBuffer<LegacySection> sections, Ray ray,
         uint instanceId, uint geometryIndex, uint primitiveId, float2 bary, float t) {
     SurfaceHit result = missHit(ray.tMax);
-    if ((instanceId & LEGACY_INSTANCE_TYPE_ENTITY) != 0u) return result;
+    // Safety net only: decodeHit routes an entity instance to its own decoder, so
+    // an instance id with the entity bit must never index the section table.
+    if (entityInstance(instanceId)) return result;
 
     LegacySection section = sections[instanceId];
     if (geometryIndex >= section.quadStart.w) return result;
@@ -150,17 +152,7 @@ SurfaceHit legacyHitToSurface(StructuredBuffer<LegacySection> sections, Ray ray,
 
     float3 tangent;
     float3 bitangent;
-    float3 e1 = p1 - p0;
-    float3 e2 = p2 - p0;
-    float2 d1 = uv1 - uv0;
-    float2 d2 = uv2 - uv0;
-    float det = d1.x * d2.y - d2.x * d1.y;
-    if (abs(det) > 1.0e-12) {
-        tangent = safeNormalize((e1 * d2.y - e2 * d1.y) / det, geometricNormal);
-        bitangent = safeNormalize((e2 * d1.x - e1 * d2.x) / det, geometricNormal);
-    } else {
-        faceTangentFrame(geometricNormal, tangent, bitangent);
-    }
+    triangleTangentFrame(p0, p1, p2, uv0, uv1, uv2, geometricNormal, tangent, bitangent);
     result.tangent = tangent;
     result.bitangent = bitangent;
     result.flags |= HIT_FLAG_TANGENT_VALID;
@@ -172,7 +164,42 @@ struct LegacySectionTraversal : ITraversal {
     StructuredBuffer<LegacySection> sections;
     uint instanceMask;
 
-    SurfaceHit traceClosest(Ray ray) {
+    // The frame's captured entities, in the same TLAS and the same
+    // camera-relative space as the sections.  `cameraAnchor` is the origin the
+    // ring was written around, which is all an entity hit has for a world
+    // position: entity geometry carries no section identity.
+    EntityGeometry entities;
+    float3 cameraAnchor;
+
+    // The local player's own captured body, as a range of entity primitives.
+    // First person uploads it so a reflection can show the avatar, and the eye
+    // sits inside it, so only the ray that leaves the eye skips the range.  A
+    // count of 0 means there is no capture (third person, or the option off).
+    uint selfAvatarTriStart;
+    uint selfAvatarTriCount;
+
+    bool selfAvatarPrimitive(uint instanceId, uint primitive) {
+        if (selfAvatarTriCount == 0u || !entityInstance(instanceId)) return false;
+        return primitive >= selfAvatarTriStart && primitive < selfAvatarTriStart + selfAvatarTriCount;
+    }
+
+    // One committed hit named: the instance bit says whether the triangle came
+    // out of the entity ring or out of a section, and nothing else distinguishes
+    // them because both live in the same acceleration structure.
+    SurfaceHit decodeHit(Ray ray, uint instanceId, uint geometryIndex, uint primitiveId,
+            float2 bary, float t) {
+        if (entityInstance(instanceId)) {
+            return entityHitToSurface(entities, cameraAnchor, ray, instanceId, primitiveId, bary, t);
+        }
+        return legacyHitToSurface(sections, ray, instanceId, geometryIndex, primitiveId, bary, t);
+    }
+
+    // The candidate loop commits selectively for one reason: a primitive the
+    // primary ray is not allowed to see must never become a hit at all, and the
+    // entity ring is the only geometry that has such primitives.  Cutout texels
+    // are not filtered here - they are a material question, and the surface
+    // layer answers it.
+    SurfaceHit traceNearest(Ray ray, bool excludeSelfAvatar) {
         SurfaceHit result = missHit(ray.tMax);
         if (ray.tMax <= ray.tMin) return result;
 
@@ -185,15 +212,24 @@ struct LegacySectionTraversal : ITraversal {
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);
         while (query.Proceed()) {
-            if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
-                query.CommitNonOpaqueTriangleHit();
-            }
+            if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+            if (excludeSelfAvatar && selfAvatarPrimitive(query.CandidateInstanceID(),
+                    query.CandidatePrimitiveIndex())) continue;
+            query.CommitNonOpaqueTriangleHit();
         }
 
         if (query.CommittedStatus() == COMMITTED_NOTHING) return result;
-        return legacyHitToSurface(sections, ray, query.CommittedInstanceID(),
-            query.CommittedGeometryIndex(), query.CommittedPrimitiveIndex(),
-            query.CommittedTriangleBarycentrics(), query.CommittedRayT());
+        return decodeHit(ray, query.CommittedInstanceID(), query.CommittedGeometryIndex(),
+            query.CommittedPrimitiveIndex(), query.CommittedTriangleBarycentrics(),
+            query.CommittedRayT());
+    }
+
+    SurfaceHit traceClosest(Ray ray) {
+        return traceNearest(ray, false);
+    }
+
+    override SurfaceHit tracePrimary(Ray ray) {
+        return traceNearest(ray, true);
     }
 
     VisibilityResult traceVisibility(Ray ray) {
@@ -205,6 +241,8 @@ struct LegacySectionTraversal : ITraversal {
         desc.TMin = ray.tMin;
         desc.TMax = ray.tMax;
 
+        // The body of the local player is geometry a light has to cross, so a
+        // shadow ray keeps it: only the primary ray may look past it.
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
         while (query.Proceed()) {
@@ -214,7 +252,7 @@ struct LegacySectionTraversal : ITraversal {
         }
 
         if (query.CommittedStatus() == COMMITTED_NOTHING) return visibleResult(ray.tMax);
-        SurfaceHit blocker = legacyHitToSurface(sections, ray, query.CommittedInstanceID(),
+        SurfaceHit blocker = decodeHit(ray, query.CommittedInstanceID(),
             query.CommittedGeometryIndex(), query.CommittedPrimitiveIndex(),
             query.CommittedTriangleBarycentrics(), query.CommittedRayT());
         return blockedResult(blocker, float3(0.0));

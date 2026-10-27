@@ -60,6 +60,14 @@ static const uint HIT_FLAG_EMISSIVE     = 1u << 3u;
 static const uint HIT_FLAG_ENTITY       = 1u << 4u;
 static const uint HIT_FLAG_SELF         = 1u << 5u;
 static const uint HIT_FLAG_TANGENT_VALID = 1u << 6u;
+// Carried by an entity hit whose captured part is the vanilla selection
+// wireframe.  It is geometry the player drew, not geometry the world has: the
+// surface layer shades it as its own light and no shadow may stop at it.
+static const uint HIT_FLAG_ENTITY_OUTLINE = 1u << 7u;
+// Carried by an entity hit whose captured part is the damage flash, which
+// vanilla paints over the texture.  Only the colour changes, so the flag stops
+// a decoder from reading emission out of a texel the game never showed.
+static const uint HIT_FLAG_ENTITY_HURT  = 1u << 8u;
 
 SurfaceHit missHit(float tMax) {
     SurfaceHit result;

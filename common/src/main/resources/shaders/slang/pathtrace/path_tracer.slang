@@ -186,7 +186,14 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
             result.flags |= PATH_TRACE_FLAG_TRUNCATED;
             break;
         }
-        SurfaceHit hit = traversal.traceClosest(ray);
+        // The eye's own ray is the one a backend may answer with less geometry:
+        // a first-person capture puts the local player's body around the camera.
+        // A cutout hole does not increment surfaceHits, so a ray that walked
+        // through the body's own skin keeps looking past it, and only the first
+        // accepted surface starts the bounces that must see the body - it is
+        // geometry a light has to cross.
+        SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)
+                                                  : traversal.traceClosest(ray);
         if (!hit.hit) {
             result.radiance += throughput * environment.radiance(ray.direction);
             result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;

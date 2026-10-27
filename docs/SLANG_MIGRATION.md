@@ -108,6 +108,7 @@ common/src/main/resources/shaders/slang/
 │   ├── voxel_traversal.slang          BitmaskVoxelTraversal + VoxelWorld
 │   ├── hardware_traversal.slang       HardwareTraversal (VK_KHR_ray_query)
 │   ├── legacy_section_traversal.slang LegacySectionTraversal (RtWorld 64-byte table + device-address arena)
+│   ├── entity_geometry.slang          the captured entity ring: triangle decode, atlas texels, part flags
 │   └── hybrid_traversal.slang         HybridTraversal<V, H>
 ├── voxel/
 │   └── voxel.slang                    single-section Bitmask HDDA
@@ -236,13 +237,22 @@ before the first dispatch.
 | `blockMaterials` | 17 | dummy `BlockMaterial` table until voxel materials exist: allocate at least one 64-byte element and push `materialCount = 0` |
 | `emitters` | 18 | the `RtEmitters` ring buffer bound at the current segment offset — the same 96-byte records the legacy `rt_path.comp` reads, so one upload serves both paths; a dummy element when the list is empty |
 | `reservoirs` | 19 | the ReSTIR DI ring of `RtSlangPathPass`: two halves of one 64-byte `DIReservoir` per pixel (`2 * width * height * 64`), zeroed when the light list or the render size changes; a one-record dummy when the branch is off |
+| `entityPositions` | 20 | this frame's ring slot of captured vertex positions, 12 bytes per vertex (a `float3` as three float bit-patterns), bound for `frameVertices` elements |
+| `entityIndices` | 21 | this frame's ring slot of triangle indices, three `uint` per primitive; the bound length is the triangle count the decoder reads |
+| `entityAttrs` | 22 | the same slot of the `uint4` per vertex: packed colour, light (`block \| slot << 8 \| sky << 16 \| flags << 24`), `u` and `v` as float bits |
+| `entityRects` | 23 | the `uint4` per RT entity atlas slot - rect, size and the authored-PBR half - so a held iron sword comes out metallic |
+| `entityTexels` | 24 | the square ABGR atlas `EntityTextureAtlas` uploads |
 
-The push block is 96 bytes.  It carries sampling and path limits plus the
+The push block is 112 bytes.  It carries sampling and path limits plus the
 emitter tail (`emitterCount`, `emitterProbability`, and `emitterCameraRelative`,
 whose xyz is the camera minus the origin the list was rebuilt at and whose w is
-the candidates per call) and the ReSTIR DI tail (`diCameraDelta`, the raw camera
+the candidates per call), the ReSTIR DI tail (`diCameraDelta`, the raw camera
 delta of the frame, and `diState`, whose x holds the `PATH_TRACE_DI_*` bits and
-whose y is the half of the ring this dispatch writes): the pass writes
+whose y is the half of the ring this dispatch writes) and `entityState` (x: atlas
+texels per side, 0 for none; yz: the first-person body's primitive range).  The
+five entity buffers bind at the ring slot's own offset and length, so a frame
+that captured no model binds a zeroed dummy and cannot walk a stale slot;
+`entityState.x == 0` is the shader's own off test for the atlas.  The pass writes
 scene-referred radiance, and
 `FrameConstants.exposure` is applied once by the display/tonemap pass, so
 accumulation and denoise stay in linear HDR and exposure cannot be applied twice.  The pass requires `CAP_RAY_QUERY |
@@ -349,6 +359,71 @@ surfaces arrives from emitter NEE. Those are two terms, not a double count,
 provided a glowing face is not lit by its own quad — which is why
 `ILightSampler` takes a `LightReceiver` and the sampler rejects a candidate
 closer than half a block when `receiver.emission > 0.5` (see the next section).
+
+### Entity geometry in the traced scene
+
+`traversal/entity_geometry.slang` is a port of `fetchEntitySurface` from
+`rt_common_surface.glsl`, not a re-derivation: the look the owner iterates on
+lives in that function, so the constants, the bands and the order of the branch
+chain are copied rather than guessed.
+
+What a port cannot translate one-for-one, and how it was settled:
+
+* **Reaching the records.** The legacy path reads the ring through device
+  addresses stored in a statistics buffer; the Slang pipeline passes every other
+  per-frame list as a descriptor, so the ring is five bound buffers (20-24).
+  Each binds at the ring slot's own offset and at this frame's length, which
+  makes `entityIndices.GetDimensions()` the authoritative triangle count and
+  leaves a frame with no capture reading one zeroed element rather than the last
+  thing that was there. Device addresses through the push block were rejected:
+  the block is pinned, and a `uint4 entityState` of counts does the same job.
+* **Naming the geometry.** One TLAS instance holds the whole ring, so the
+  committed `primitiveId` is an index into this frame's triangles and the
+  instance's custom-index bit (`0x800000`) is the only thing that tells a mob
+  quad from a section quad. `decodeHit` routes on that bit; the section decoder
+  returns a miss for an entity id so a routing mistake reads nothing instead of
+  indexing a freed table entry.
+* **World position.** A captured model comes from vanilla's camera-relative
+  `PoseStack`, so the shader's world position is `hit + cameraAnchor`, where the
+  anchor is the same vector the legacy `camRel` held and the block-emitter tail
+  already carries (`emitterCameraRelative.xyz`). It is a wrapped neighbourhood
+  proxy, not an identity, which is why an entity surface reports
+  `sectionId = SECTION_INDEX_NONE` and cannot key a history or an emitter on it.
+* **The first-person body.** It stays in the scene so water and glass still
+  reflect it, but the eye sits inside it. `ITraversal.tracePrimary` therefore
+  takes the ray's own policy, and the candidate loop skips the body's primitive
+  range only for a primary ray; shadow and bounce rays keep it. Traversal stays
+  material-free: cutout, tint and pane decisions are the surface layer's, so an
+  entity part is filtered by `decodeSurface` and the tracer's cutout-advance
+  loop exactly like a block face.
+* **The alpha byte.** `EntityTextureAtlas` writes coverage below 224/255 and an
+  emission code in five bits at or above it, so the three bands are resolved in
+  one place - hole (`alpha < 0.1`, vanilla's entity cutout), thin pane
+  (translucent *and* not a black shadow-blob texel), opaque emissive. The
+  selection wireframe is a translucent pane with `transmission = 0`, which lets
+  every shadow through while still shading its own colour at 0.35, and the
+  fullbright floor (`light > 0.995` on both channels raises emission to 0.4) runs
+  after the chain, so a hole stays unlit.
+
+Known gaps, all of them visible: an entity hit has **no motion vector** (no Slang
+pass writes velocity for the ring, so a moving mob accumulates as noise rather
+than reprojecting), no **End Portal starfield**, no **Sobel auto-normal**, and an
+emissive part is not yet a **next-event-emission candidate**. Switch:
+`-Dvkbridge.rt.slangEntities` (default true) falls back to a terrain-only trace.
+Evidence: `compileSlang` produces 16 bindings / 112-byte push for `path_trace`
+(414472 B SPIR-V); `RtSlangEntityTest` pins the scene mask, the instance-bit
+routing in both directions, the anchor arithmetic and the missing identity, the
+primary-only self-avatar skip across all three ray kinds, the alpha bands and the
+fullbright order against the legacy function, the ring-slot offsets and the
+bound-length authority, and the host fallback plus the switch;
+`RtPathTraceSlangPassTest` and `SlangPassLibraryTest` pin the push layout and the
+manifest. Nine mutations - the mask back to world-only, the anchor dropped from
+`worldPosition`, the section decoder accepting an entity instance id, the
+self-avatar skip moved into `traceClosest`, the fullbright floor zeroed, the index
+range bound at the buffer start instead of the ring slot, the triangle count taken
+from a constant rather than `GetDimensions`, the atlas/range cross-check gutted,
+the frame switch forced off - each failed exactly the guard that owns it, and every
+mutated file came back byte-identical. No owner-verified frame yet.
 
 ### Block-emitter NEE
 
@@ -489,7 +564,7 @@ list).  All four are `RtSettings` booleans, so they persist, obey
 up as `restir(a->b)` in the `resetHistory:` log.  Spatial reuse is offered as a
 child of temporal in both paths because it merges the reservoirs temporal writes —
 an independent row would be a switch that does nothing.  Evidence:
-`compileSlang` produces 11 bindings / 96-byte push for `path_trace` and 6 bindings
+`compileSlang` produces 16 bindings / 112-byte push for `path_trace` and 6 bindings
 / 64-byte push for `restir_spatial`, `RtRestirSettingsTest` pins each switch to the
 consumer that acts on it, and
 `RtSlangRestirDiTest` + `RtSlangRestirSpatialTest` + `RtSlangBlockEmitterTest` +
@@ -590,7 +665,7 @@ candidates, not a validated or active runtime.
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
 | Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/segment_store.slang` | typed segment storage is a source candidate; typed trace exists in an isolated agent workspace, but cross-cascade resolve and host integration are unfinished. The old float4 resolve is incompatible with the typed trace. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
-| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ITraversal`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; `RtSlangPathPass` wraps `RtPathTraceSlangPass`, the optional `RtSpatialReuseSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
+| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ITraversal`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; the traced scene is terrain *and* the captured entity ring (`traversal/entity_geometry.slang`), decoded by the instance's custom-index bit; `RtSlangPathPass` wraps `RtPathTraceSlangPass`, the optional `RtSpatialReuseSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
 
 Surface decoding lives in `surface/surface.slang`; the filtered shadow walk lives
 in `surface/visibility.slang`; the BSDF lobes live in `shading/bsdf.slang`.
@@ -663,7 +738,7 @@ establish that the current, subsequently modified tree compiles. Those checks
 were intended to verify that the ABI struct sizes match between C++ and Java,
 the generated manifests load, and the bloom manifests keep the binding
 numbers, 128-byte push block and 8x8x1 group size the host supplies.  The
-path-trace manifest additionally pins its nine bindings, the 64-byte
+path-trace manifest additionally pins its sixteen bindings, the 64-byte
 `LegacySection` / 64-byte `BlockMaterial` element sizes, the 608-byte
 `FrameConstants` block and the exact capability set.  They do not prove a
 pipeline runs on a GPU.  A live game check is a separate, explicitly requested
@@ -708,12 +783,18 @@ because a module has no entry point; that is expected.
    reason belongs to the C++ pass, which owns the buffers.
 3. **ReSTIR PT** — path-space reservoirs on top of `PathVertex`; keep it
    separate from the DI reservoir so the two reuse policies do not merge.
-4. **Radiance Cascades trace/update** — review the isolated typed trace, align
+4. **Entity shading parity** — the ring is traced, four behaviours of
+   `fetchEntitySurface` are not: per-part **motion vectors** (the previous-position
+   ring is uploaded but no Slang pass writes velocity for an entity hit, so a
+   moving mob cannot reproject), the procedural **End Portal starfield**, the
+   **Sobel auto-normal** that gives mob skin its relief, and glowing parts as
+   **next-event candidates**, so a lantern held in hand lights nothing but itself.
+5. **Radiance Cascades trace/update** — review the isolated typed trace, align
    its segment status and history contracts with the shared store, and define
    cross-cascade reconstruction and host integration before connecting a pass.
-5. **More entry passes** — denoise/composite follow the same one-file-per-entry
+6. **More entry passes** — denoise/composite follow the same one-file-per-entry
    pattern and the same ABI; no second pipeline path.
-6. **Live game check** — only after the above and an explicit request.  A
+7. **Live game check** — only after the above and an explicit request.  A
    compile or a unit test is not a game check.
 
 ## Rules for contributors

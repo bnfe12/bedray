@@ -20,6 +20,16 @@ interface ITraversal {
     // missHit(ray.tMax) when nothing is hit.
     SurfaceHit traceClosest(Ray ray);
 
+    // The ray that leaves the eye.  It is the one ray a backend may answer with
+    // less geometry than a bounce: a first-person capture puts the local
+    // player's own body around the camera, and the centimetres of inner face
+    // between the eye and that body would otherwise fill the screen.  Shadow and
+    // visibility rays keep calling traceClosest, so the body still casts its
+    // shadow and still blocks a light.
+    SurfaceHit tracePrimary(Ray ray) {
+        return traceClosest(ray);
+    }
+
     // Shadow/visibility query.  Translucent surfaces are handled by the
     // material stage; a backend only reports geometric blockers.
     VisibilityResult traceVisibility(Ray ray);

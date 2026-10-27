@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+* Taught the Slang path tracer to see living things: `passes/path_trace.slang` traversed with
+  `PATH_TRACE_INSTANCE_MASK_WORLD = 0x01`, so every mob, item, armour stand and the first-person body
+  were absent from the traced picture - no shadow, no reflection, nothing to bounce off - while the
+  legacy GLSL path traced all of them. Widening the mask was one line, and it was not enough: one TLAS
+  instance holds the whole ring, so a committed entity primitive has no section to index and the section
+  decoder had to be told to refuse an instance whose custom index carries the entity bit (`0x800000`)
+  rather than return a hole that hides the terrain behind it. `traversal/entity_geometry.slang` is a port
+  of `fetchEntitySurface` (`rt_common_surface.glsl`), not a re-derivation: the camera-relative positions,
+  the `uint4` per-vertex attributes, the atlas slot, the tint, the hurt mix at 65%, the three alpha bands
+  (hole under 0.1, thin pane up to 224/255, opaque emissive above it), the authored metal of a held tool
+  and the fullbright floor that raises a `light > 0.995` part to 0.4 emission all come from that function,
+  in its order. Records reach the shader the way every other per-frame list does - five `StructuredBuffer`
+  bindings (20-24) bound at the ring slot's *own* offset and *this frame's* length - so the index range's
+  bound length is the triangle count (`GetDimensions`), a frame with no capture reads one zeroed dummy
+  instead of a stale slot, and the device-address route through the pinned push block was rejected for a
+  16-byte `entityState` that names the atlas size and the first-person primitive range (push 96 → 112 B,
+  bindings 11 → 16). Two decisions carry the look: an entity surface reports `sectionId = SECTION_INDEX_NONE`
+  and its `worldPosition` is `hit + cameraAnchor` (the same vector as the legacy `camRel`, already carried as
+  `emitterCameraRelative.xyz`), because a wrapped neighbourhood proxy must never key a history or an emitter
+  identity; and the first-person body stays *in* the scene so water and glass reflect it - `ITraversal` gained
+  a primary-ray policy, `tracePrimary` skips the body's primitive range while shadow and bounce rays keep it,
+  which is what an `ITraversal.tracePrimary` default could not express before. Traversal stayed material-free:
+  cutout, tint and pane questions are answered by `decodeSurface` and the tracer's own cutout-advance loop,
+  exactly as for a block face, and the selection wireframe is a translucent pane with `transmission = 0` so it
+  shades its own colour at 0.35 without stopping a shadow. Evidence: `compileSlang` gives `path_trace` 16
+  bindings / 112-byte push / 414472 B SPIR-V (`restir_spatial` still 6, `volumetric_march` still 5 - it only
+  calls `traceVisibility`, so its entity reads are dead-code-eliminated and the pass needs no new host
+  descriptors); `RtSlangEntityTest` (7 tests) pins the scene mask, two-way instance-bit routing, the anchor
+  arithmetic and the missing identity, the primary-only self-avatar skip across all three ray kinds, the alpha
+  bands and the fullbright order against the legacy function, the ring-slot offsets and the bound-length
+  authority, and the frame wiring with `-Dvkbridge.rt.slangEntities` (default true; false is a terrain-only
+  A/B); `RtPathTraceSlangPassTest` + `SlangPassLibraryTest` pin the push layout and the generated manifest.
+  Each of nine mutations (the mask back to world-only, the anchor dropped from `worldPosition`, the section
+  decoder accepting an entity instance id, the self-avatar skip moved into `traceClosest`, the fullbright floor
+  zeroed, the index range bound at the buffer start instead of the ring slot, the triangle count taken from a
+  constant rather than `GetDimensions`, the atlas/range cross-check gutted, the frame switch forced off) failed
+  exactly the guard that owns it, and every mutated file came back byte-identical by sha256.
+  Not ported, and each one visible: entity **motion vectors** (a moving mob accumulates as noise), the
+  **End Portal starfield**, the entity **Sobel auto-normal**, glowing parts as **NEE candidates**. No
+  owner-verified frame yet. See `docs/SLANG_MIGRATION.md` ("Entity geometry in the traced scene").
+
 * Drew the sun and the moon into the path-traced sky: `light/sky.slang` had only `GradientSky`, a two-colour dome with no
   disc, and it was the pass's sole environment sampler - so a camera ray or a mirror aimed at the sun showed a smooth
   gradient while the body itself lit the scene through NEE. `celestialRadiance` now adds both bodies to the environment's
