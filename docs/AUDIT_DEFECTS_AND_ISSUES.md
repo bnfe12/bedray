@@ -189,3 +189,30 @@
    * В [`contracts/math.slang:41-43`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/math.slang#L40-L45) проверка `value == value` при оптимизациях `-ffast-math` схлопывается компилятором в `true`. Требуется использовать `!isnan(value) && !isinf(value)`.
 5. **Нарушение взаимности Гельмгольца в диффузном Френеле:**
    * В [`shading/bsdf.slang:93, 229`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/shading/bsdf.slang#L90-L100) диффузный вес умножается на $(1 - F(N \cdot V))$, игнорируя направление падения $L$. Это нарушает симметрию BRDF $f(\omega_i, \omega_o) \neq f(\omega_o, \omega_i)$.
+
+---
+
+## 5. Требования кроссплатформенности: macOS (Apple Silicon M1–M4) и ARM64
+
+Для обеспечения полноценной работы Bedray 2.0 на macOS (чипы M1, M2, M3, M4) и любых других ARM-системах (Qualcomm Snapdragon X Elite, Linux aarch64, Steam Deck) заложены следующие архитектурные стандарты:
+
+### 1. Шейдерный конвейер и API (Slang -> Metal / SPIR-V MoltenVK)
+* **Двойной путь компиляции Slang:**
+  * **Vulkan/MoltenVK:** Slang AOT генерирует стандартизированный SPIR-V 1.4/1.5. На macOS MoltenVK транслирует вызовы в Metal Compute и Ray Tracing (`raytracing::intersector`).
+  * **Native Metal (MSL):** Slang изначально поддерживает целевой генератор `-target metal`. В случае прямого Metal-бэкенда весь шейдерный код компилируется без изменений.
+* **Аппаратный RT vs Software Воксели (M1/M2 vs M3/M4):**
+  * Чипы **Apple M3 и M4** имеют аппаратные RT-ядра в кристалле GPU.
+  * Чипы **Apple M1 и M2**, а также многие мобильные ARM GPU (Mali, базовые Adreno) аппаратных ядер ускорения лучей не имеют.
+  * **Решение:** Воксельный движок **Bitmask HDDA** работает на стандартном Compute Pipeline и не требует расширений трассировки лучей. На M1/M2 и младших ARM-чипах игра работает в режиме Bitmask HDDA, а на M3/M4 и дискретных GPU переключается на аппаратный `VK_KHR_ray_query` / Metal RT.
+
+### 2. Специфика архитектуры TBDR и UMA (Унифицированная память)
+* **Tile-Based Deferred Rendering (TBDR):** Мобильные и M-серии процессоры рендерят изображение тайлами. Грубые глобальные барьеры памяти (`ALL_COMMANDS_BIT`) на TBDR вызывают сброс тайловой памяти (Tile Memory Spill) в медленный LPDDR5 кэш. Переход на точечные барьеры Render Graph критичен для ARM.
+* **Zero-Copy / Coherent Память в UMA:** На чипах Apple Silicon и Snapdragon CPU и GPU делят общую физическую память. Промежуточные staging-буферы для передачи мешей Sodium не нужны: буферы вершин помечаются как `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`, исключая двойное копирование шины.
+* **Размер подгруппы (Subgroup Size):** На Apple Silicon `subgroupSize = 32`. Запрещается хардкодить допущения о ширине варпа (64 для AMD или 16 для Intel); все волшебные операции в Slang оперируют динамическим `WaveGetLaneCount()`.
+
+### 3. Устранение блокировок платформы в кодовой базе
+* **CMake:** Удаление запрета `if(NOT WIN32) message(FATAL_ERROR ...)` во всех нативных проектах. Сборка `.dylib` на macOS (через Apple Clang `-std=c++20 -fPIC`) и `.so` на Linux ARM64.
+* **Java FFM Locator:** Замена зашитого `bedray_core.dll` в [`BedrayCoreLocator.java`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreLocator.java) на кроссплатформенный резолвер (`libbedray_core.dylib` для macOS, `libbedray_core.so` для Linux, `bedray_core.dll` для Windows).
+* **Сборочный тулчейн Gradle:** В `slang.gradle` скачивать и запускать нативный бинарник компилятора (`slangc-macos-arm64`, `slangc-linux-aarch64` и т.д.).
+* **Строгое выравнивание структур (Data Alignment):** Процессоры ARM64 вызывают системное прерывание `SIGBUS` при невыровненных обращениях к памяти. Все нативные структуры C ABI и push-константы Slang стандартизированы с шагом 8 и 16 байт (std430).
+
