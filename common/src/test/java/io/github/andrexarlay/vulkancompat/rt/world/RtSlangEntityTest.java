@@ -186,6 +186,25 @@ class RtSlangEntityTest {
             "on by default: a path tracer blind to mobs is the bug, not the fallback");
     }
 
+    /**
+     * "The mobs are not in the traced picture" has two very different causes - a capture that never filled the ring, and a
+     * trace that ignores a ring that is full - and only the counts say which. The report is one line per session, recorded
+     * before the dispatch, so a pass that then fails on a bad range still leaves the evidence behind.
+     */
+    @Test
+    void theFrameReportsWhatTheRingActuallyHolds() {
+        String frame = read(HOST_FRAME);
+        assertTrue(frame.contains("if (!entityRingReported) {"), "one line per session, not one per frame");
+        assertTrue(frame.contains("Slang path trace reads the entity ring"), "the populated case names its counts");
+        assertTrue(frame.contains("Slang path trace has no entity capture in this frame"),
+            "and the empty case is reported too, because silence is what made this ambiguous before");
+        assertTrue(frame.indexOf("Slang path trace reads the entity ring") < frame.indexOf("trace.record(cmd,"),
+            "the evidence is recorded before the dispatch that may fail");
+        assertTrue(frame.contains("capturedEntities.indices().bytes() / 12L"),
+            "triangles from the index range the shader itself measures");
+        assertTrue(frame.contains("capturedEntities.positions().bytes() / 12L"), "and vertices from the position range");
+    }
+
     private static String block(String source, String header) {
         int at = source.indexOf(header);
         assertTrue(at >= 0, "missing block: " + header);

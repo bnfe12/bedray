@@ -411,7 +411,7 @@ than reprojecting), no **End Portal starfield**, no **Sobel auto-normal**, and a
 emissive part is not yet a **next-event-emission candidate**. Switch:
 `-Dvkbridge.rt.slangEntities` (default true) falls back to a terrain-only trace.
 Evidence: `compileSlang` produces 16 bindings / 112-byte push for `path_trace`
-(414472 B SPIR-V); `RtSlangEntityTest` pins the scene mask, the instance-bit
+(414472 B SPIR-V); `RtSlangEntityTest` (8 tests) pins the scene mask, the instance-bit
 routing in both directions, the anchor arithmetic and the missing identity, the
 primary-only self-avatar skip across all three ray kinds, the alpha bands and the
 fullbright order against the legacy function, the ring-slot offsets and the
@@ -424,6 +424,16 @@ range bound at the buffer start instead of the ring slot, the triangle count tak
 from a constant rather than `GetDimensions`, the atlas/range cross-check gutted,
 the frame switch forced off - each failed exactly the guard that owns it, and every
 mutated file came back byte-identical. No owner-verified frame yet.
+
+What a playtest report of "mobs are still missing" can be told apart from: the frame
+logs one line per session, before the dispatch that could fail, either naming the
+triangle and vertex counts (divided out of the same 12-byte ranges the shader itself
+measures), the atlas size and the first-person range, or saying the frame has no
+entity capture at all and naming the switch. A capture that never filled the ring and
+a trace that ignores a full ring used to look identical in the log; five further
+mutations - the session gate removed, either branch of the line deleted, the counts
+read as raw bytes instead of divided by the stride, and the line moved after the
+dispatch - each failed `theFrameReportsWhatTheRingActuallyHolds`.
 
 ### Block-emitter NEE
 

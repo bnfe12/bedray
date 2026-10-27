@@ -152,6 +152,7 @@ public final class RtSlangPathPass implements RtPass {
     private final float[] lastSkyColor = new float[3];
     private boolean hasLighting;
     private int sampleIndex;
+    private boolean entityRingReported;
     private boolean destroyed;
 
     /**
@@ -410,6 +411,21 @@ public final class RtSlangPathPass implements RtPass {
         // The models of this frame: the ring slice the entity BLAS was built from, so a committed primitive index names a
         // triangle of these buffers and of nothing else. Turning the capture off leaves the terrain alone in the trace.
         RtPathTraceSlangPass.Entities capturedEntities = entityBindingsOfThisFrame();
+        if (!entityRingReported) {
+            entityRingReported = true;
+            // One line for the whole session, before the dispatch: "mobs are not in the picture" splits into a capture
+            // that never filled the ring and a trace that ignores a ring that is full, and only this line tells them apart.
+            if (capturedEntities.indices().bytes() > 0L) {
+                LOGGER.info("[VKB-RT] Slang path trace reads the entity ring: {} triangles, {} vertices,"
+                        + " atlas {} texels per side, first-person body {}+{}",
+                    capturedEntities.indices().bytes() / 12L, capturedEntities.positions().bytes() / 12L,
+                    capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(),
+                    capturedEntities.selfAvatarTriCount());
+            } else {
+                LOGGER.info("[VKB-RT] Slang path trace has no entity capture in this frame (-Dvkbridge.rt.slangEntities"
+                    + " = {}): the trace sees terrain only", RtConfig.SLANG_ENTITIES);
+            }
+        }
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, 0, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,

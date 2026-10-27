@@ -29,7 +29,7 @@
   shades its own colour at 0.35 without stopping a shadow. Evidence: `compileSlang` gives `path_trace` 16
   bindings / 112-byte push / 414472 B SPIR-V (`restir_spatial` still 6, `volumetric_march` still 5 - it only
   calls `traceVisibility`, so its entity reads are dead-code-eliminated and the pass needs no new host
-  descriptors); `RtSlangEntityTest` (7 tests) pins the scene mask, two-way instance-bit routing, the anchor
+  descriptors); `RtSlangEntityTest` (8 tests) pins the scene mask, two-way instance-bit routing, the anchor
   arithmetic and the missing identity, the primary-only self-avatar skip across all three ray kinds, the alpha
   bands and the fullbright order against the legacy function, the ring-slot offsets and the bound-length
   authority, and the frame wiring with `-Dvkbridge.rt.slangEntities` (default true; false is a terrain-only
@@ -38,7 +38,13 @@
   decoder accepting an entity instance id, the self-avatar skip moved into `traceClosest`, the fullbright floor
   zeroed, the index range bound at the buffer start instead of the ring slot, the triangle count taken from a
   constant rather than `GetDimensions`, the atlas/range cross-check gutted, the frame switch forced off) failed
-  exactly the guard that owns it, and every mutated file came back byte-identical by sha256.
+  exactly the guard that owns it, and every mutated file came back byte-identical by sha256. Because "mobs are
+  still not in the picture" then splits into a capture that never filled the ring and a trace that ignores a ring
+  that is full, `RtSlangPathPass` logs one line per session naming the triangle and vertex counts read from the
+  same bound byte ranges the shader measures, the atlas size and the first-person range - or saying there is no
+  capture at all - and it is emitted before the dispatch that could fail. Five more mutations (the session gate
+  removed, either branch of the line deleted, the counts taken from raw bytes instead of the 12-byte strides, the
+  line moved after the dispatch) each failed `theFrameReportsWhatTheRingActuallyHolds`.
   Not ported, and each one visible: entity **motion vectors** (a moving mob accumulates as noise), the
   **End Portal starfield**, the entity **Sobel auto-normal**, glowing parts as **NEE candidates**. No
   owner-verified frame yet. See `docs/SLANG_MIGRATION.md` ("Entity geometry in the traced scene").
