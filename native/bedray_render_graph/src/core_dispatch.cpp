@@ -54,6 +54,39 @@ bool record_core_dispatches(const RenderGraph& graph, const VulkanRecordingPlan&
             error.recording = RecordingError::invalid_plan;
             return false;
         }
+        const PassDesc* pass = graph.pass(entry.pass);
+        if (pass == nullptr || entry.frame->group_count_x != pass->dispatch.x ||
+            entry.frame->group_count_y != pass->dispatch.y ||
+            entry.frame->group_count_z != pass->dispatch.z ||
+            (entry.frame->resource_count != 0 && entry.frame->resources == nullptr) ||
+            (entry.frame->push_constant_bytes != 0 && entry.frame->push_constants == nullptr)) {
+            error.pass = entry.pass;
+            error.recording = RecordingError::invalid_plan;
+            return false;
+        }
+        // This bridge records compute dispatches only. Graph declarations for
+        // transfers or acceleration builds need a different recording adapter.
+        for (const auto& use : pass->uses) {
+            if (use.stage != Stage::compute) {
+                error.pass = entry.pass;
+                error.recording = RecordingError::invalid_plan;
+                return false;
+            }
+        }
+        // ABI v2 pushes one contiguous block from byte zero. Multiple graph
+        // ranges are accepted only if they cover that block without holes.
+        std::uint32_t total = 0;
+        std::uint32_t end = 0;
+        for (const auto& range : pass->push_constants) {
+            total += range.size;
+            const std::uint32_t range_end = range.offset + range.size;
+            if (range_end > end) end = range_end;
+        }
+        if (total != end || end != entry.frame->push_constant_bytes) {
+            error.pass = entry.pass;
+            error.recording = RecordingError::invalid_plan;
+            return false;
+        }
     }
     DispatchContext context{core, dispatch, &passes, &error};
     return record_vulkan_graph(graph, plan, command_buffer, barrier, record_core_pass, &context, error.recording);

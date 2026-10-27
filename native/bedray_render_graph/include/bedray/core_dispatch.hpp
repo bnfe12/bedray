@@ -27,7 +27,8 @@ struct CoreDispatchError {
 
 // Bridges a validated Vulkan recording plan to the existing C ABI dispatch.
 // Every graph pass must have exactly one matching descriptor and all frame
-// command-buffer handles must match. The host must validate descriptor semantics
+// command-buffer handles, dispatch dimensions and push-constant ranges must
+// match. Only compute-stage resource uses are supported. The host must validate descriptor semantics
 // and resources before this call. A failure after recording begins requires
 // discarding the whole command buffer, then releasing its core recording only
 // when it is known not to be in flight. No submission or waiting happens here.

@@ -40,6 +40,15 @@ add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../bedray_history"
 target_sources(bedray_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../bedray_history/src/history_c.cpp")
 target_link_libraries(bedray_core PRIVATE bedray_history)
 
+# Export the native buffer owner's C API from this DLL. The host supplies the
+# already-created device and its entry points; frame submission/retirement is
+# still the host's responsibility and the current frame path does not use it.
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources"
+                 "${CMAKE_CURRENT_BINARY_DIR}/bedray_gpu_resources")
+target_sources(bedray_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources/src/gpu_buffers_c.cpp")
+target_compile_definitions(bedray_core PRIVATE BEDRAY_GPU_RESOURCES_EXPORTS)
+target_link_libraries(bedray_core PRIVATE bedray_gpu_resources)
+
 # Compile the graph with the core; frame execution still needs integration.
 # No second Vulkan loader or device is introduced.
 option(BEDRAY_ENABLE_RENDER_GRAPH "Build the renderer graph with the native core" ON)
