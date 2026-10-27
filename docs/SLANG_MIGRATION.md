@@ -304,6 +304,22 @@ normal cannot start the ray inside the surface.  NEE still evaluates the BSDF
 and cosine with the shading normal.  This change is covered by the same
 manual SPIR-V compile.
 
+`tracePath` now adds a surface's emission on every accepted hit instead of only
+after a camera or delta bounce.  The gate assumed the previous vertex's NEE
+sampled surface emitters, but the only wired sampler is `SunMoonSampler`, so
+indirect light from emissive blocks was dropped entirely.  A future emitter
+sampler must restore the delta/camera gate with MIS to avoid double counting.
+The same manual `slangc` invocation compiles the changed `path_trace` entry
+point (94,184-byte SPIR-V); no Gradle build or GPU frame is recorded.
+
+The same audit recorded the remaining systemic gaps in
+`docs/PATH_TRACE_CPP_INTEGRATION_PLAN.md` ("Follow-ups from the 2026-10-27
+shader audit"): sun/moon absent from camera and specular paths, no emitter NEE
+buffer, missing optical medium/eta tracking, three disagreeing thin-pane lobe
+models, silent visibility-layer overflow, invalid samples that the accumulator
+cannot reject, and identity `view`/`projection`/`prevViewProjection` in the
+Java frame block.
+
 ### Render-graph recording boundary
 
 `native/bedray_render_graph/` is the planned recording layer: it compiles a

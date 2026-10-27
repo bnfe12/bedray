@@ -466,6 +466,57 @@ including on resize.
     Unknown submission outcomes must pin resources. This document records no
     fresh verification result.
 
+### Follow-ups from the 2026-10-27 shader audit
+
+Source-level findings that the C++ port must not inherit silently. None of them
+has been checked on a GPU; the reference pass was only compiled with `slangc`.
+
+* **Sun/moon are visible only through NEE.** `GradientSky` is a two-colour dome
+  with no disk and is the pass's only environment sampler; `SunMoonSampler` is
+  the only `ILightSampler`. A camera ray or a delta reflection aimed at the sun
+  sees the gradient, not the disk. Adding a disk to `radiance()` requires MIS
+  with NEE, or diffuse paths would count the sun twice.
+* **Emission used to be dropped after a diffuse bounce.** The reference pass
+  gated emission on the previous bounce being a camera or delta ray, assuming
+  emitter NEE; the wired sampler covers only the sun and moon, so glowstone and
+  lava hit after a diffuse bounce contributed nothing. `tracePath` now adds
+  emission on every accepted hit. A port that binds an emitter sampler must
+  restore the gate and use MIS, or emitters will be counted twice.
+* **No emitter buffer in the pass.** `light/emitters.slang` defines
+  `UniformEmitterSampler` and `EmitterList`, but `passes/path_trace.slang` has
+  no emitter binding and the manifest has no emitter record. Emissive-face NEE
+  is not connected.
+* **Optical paths do not track the medium.** `bsdfSample` always uses
+  `eta = 1 / ior` with the viewer-facing normal and `tracePath` ignores
+  `BSDFSample.eta`; an exit interface refracts as if it were an entry. Slab
+  absorption from `surfaceTransmittance` is used only by the visibility walk,
+  not by camera paths. An enter/exit eta stack and medium absorption are
+  required before optical transmission is physically correct.
+* **Thin panes have three different lobe models.** For `AlphaMode.Translucent`,
+  `bsdfEvaluate` includes a diffuse reflection lobe weighted by
+  `1 - transmission`; `bsdfSample`'s diffuse branch always transmits and omits
+  that fraction; `bsdfPdf` describes a front-hemisphere diffuse-reflection
+  density that the sampler never produces. The path tracer is unaffected because
+  it uses the sample's precomputed weight and only evaluates front-hemisphere
+  NEE, but any MIS/RIS consumer that pairs `bsdfEvaluate` with `bsdfPdf`
+  (`restir_pt` does) inherits the mismatch. Sampling, evaluation and density
+  must describe one mixture before that reuse is valid.
+* **Visibility overflow is silent.** `traceFilteredVisibility` returns
+  `visible = true` with the accumulated transmittance when the 16-layer budget
+  runs out, so an opaque blocker behind sixteen filters leaks.
+  `SURFACE_VISIBILITY_FLAG_OVERFLOW` exists but the path tracer never reads it;
+  decide whether overflow counts as blocked or the budget must grow.
+* **Invalid samples are diagnostic only.** `tracePath` sets
+  `PATH_TRACE_FLAG_INVALID_SAMPLE` and still returns the radiance accumulated
+  before the fault; `passes/path_trace.slang` writes that radiance without
+  inspecting the flag, so the accumulator cannot reject the sample. Decide
+  whether an invalid sample writes zero radiance or a rejection mask.
+* **The Java frame block leaves three matrices identity.** `fillFrame` writes
+  `invViewProjection` and `viewProjection` but never `view`, `projection` or
+  `prevViewProjection`. `path_trace` derives primary rays from the explicit
+  basis and does not read them today; a reprojection or velocity consumer must
+  fill them (or use the history contract's matrices) before relying on them.
+
 ## 10. Migration sequence
 
 1. **Freeze the reference.** Keep `RtSlangPathPass`, `RtPathTraceSlangPass`,

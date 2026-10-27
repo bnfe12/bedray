@@ -6,9 +6,11 @@
 //
 // Direct lighting uses next-event estimation with the filtered visibility walk,
 // so a cutout hole is skipped and stained glass tints the shadow.  Indirect
-// lighting uses BSDF sampling.  Emission is added on camera rays and after a
-// delta bounce; a diffuse bounce relies on NEE, which avoids double counting an
-// emitter that a BSDF ray could also reach.
+// lighting uses BSDF sampling.  Emission is added on every accepted hit: the
+// caller's light sampler covers only the sun and moon today, so a surface
+// emitter's own radiance has to be carried by the path.  A caller that adds
+// surface emitters to its sampler must restore the "previous bounce was delta"
+// gate and use MIS, or an emitter hit would be counted twice.
 
 public module path_tracer;
 
@@ -103,7 +105,6 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
 
     float3 throughput = float3(1.0);
     Ray ray = primaryRay;
-    bool lastBounceWasDelta = true;
     bool firstSurfaceAccepted = false;
     // Cutout holes move the origin along the current ray. Keep the displacement
     // of the primary ray only, so a later hit is measured from the camera.
@@ -171,9 +172,9 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         float3 view = -ray.direction;
         if (dot(normal, view) < 0.0) normal = -normal;
 
-        if (lastBounceWasDelta) {
-            result.radiance += throughput * surface.material.emission;
-        }
+        // Sun/moon NEE cannot sample a surface emitter, so every accepted hit
+        // carries its own emission; a sampler that adds emitters must gate this.
+        result.radiance += throughput * surface.material.emission;
 
         // ---- Next-event estimation ----
         LightSample light = lights.sample(hit.position, normal, seed);
@@ -211,7 +212,6 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         }
 
         throughput *= bsdf.weight;
-        lastBounceWasDelta = bsdf.delta;
         result.depth++;
 
         if (pathMaxComponent(throughput) <= 0.0) {
