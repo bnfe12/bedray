@@ -90,6 +90,17 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
     PathTraceResult result = emptyPathTraceResult();
     result.firstHitDistance = options.maxDistance;
 
+    // A primary direction is unit length by the caller's contract, so
+    // firstHitDistance is a distance. Reject a degenerate interval or
+    // non-finite primary data instead of letting traversal treat it as a miss.
+    if (!isFinite(primaryRay.origin) || !isFinite(primaryRay.direction) ||
+        !(dot(primaryRay.direction, primaryRay.direction) > 0.0) ||
+        !isFinite(primaryRay.tMin) || !isFinite(primaryRay.tMax) ||
+        primaryRay.tMin < 0.0 || !(primaryRay.tMax > primaryRay.tMin)) {
+        result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+        return result;
+    }
+
     float3 throughput = float3(1.0);
     Ray ray = primaryRay;
     bool lastBounceWasDelta = true;
@@ -100,6 +111,12 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
     uint step = 0u;
 
     for (; step < options.maxSurfaceSteps; ++step) {
+        // Cutout advances shrink tMax. An empty interval means the path was
+        // truncated, not that it escaped into the environment.
+        if (!(ray.tMax > ray.tMin) || !isFinite(ray.tMax)) {
+            result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+            break;
+        }
         SurfaceHit hit = traversal.traceClosest(ray);
         if (!hit.hit) {
             result.radiance += throughput * environment.radiance(ray.direction);
@@ -128,7 +145,12 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
                 break;
             }
             if (!firstSurfaceAccepted) primaryAdvance += advance;
-            ray.origin = ray.origin + ray.direction * advance;
+            float3 advancedOrigin = ray.origin + ray.direction * advance;
+            if (!isFinite(advancedOrigin)) {
+                result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+                break;
+            }
+            ray.origin = advancedOrigin;
             ray.tMax = max(ray.tMax - advance, 0.0);
             ray.tMin = 0.0;
             continue;

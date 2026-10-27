@@ -236,7 +236,15 @@ Depth keeps the legacy sentinel: bloom treats `depth >= 1e5` as sky
 (`BLOOM_SKY_DISTANCE`), and the path-trace entry writes `1e6` whenever the
 primary ray accepted no surface — including a ray that only crossed cutout
 holes, which is why the result carries `PATH_TRACE_FLAG_PRIMARY_HIT` instead of
-letting the host infer a hit from a distance.
+letting the host infer a hit from a distance.  Cutout holes advance the primary
+origin, and the accepted first hit reports `primaryAdvance + hit.t`, so the
+distance stays measured from the camera rather than from the last hole.  A
+primary ray whose data is non-finite, whose interval is empty (`tMin < 0` or
+`tMax <= tMin`), or whose cutout advances exhaust `tMax` sets
+`PATH_TRACE_FLAG_INVALID_SAMPLE` and never adds environment radiance: an
+invalid or truncated path is not a proven miss.  `firstHitDistance` is a
+distance along the unit primary direction, not linear view depth; a consumer
+that needs view depth must derive it from the camera contract.
 
 The unconnected `RtPathTraceSlangPass` is an existing Java-side candidate, not
 the owner of the final renderer. It creates the RGBA16F radiance and R32F depth images lazily from the
@@ -406,10 +414,11 @@ because a module has no entry point; that is expected.
    contract; the existing `LegacySectionTraversal` is reference-stage work, not
    proof of the target architecture. Apply exposure once in the display pass.
    Unsupported device capabilities must be reported, not routed to GLSL.
-   The source now accumulates primary-ray advancement after cutout holes, but
-   that correction has not been compiled or exercised. Agree on view depth
-   versus ray distance and distinguish incomplete traces from proven misses
-   before connecting downstream passes.
+   The cutout-distance correction is in the source and compiles to SPIR-V
+   (`passes/path_trace.slang`, `cs_6_5`); it has not been exercised on a GPU or
+   in game. Invalid/truncated primary paths are flagged and excluded from the
+   sky path. Still agree on view depth versus ray distance before a downstream
+   consumer treats `outDepth` as linear view depth.
 2. **ReSTIR PT** — path-space reservoirs on top of `PathVertex`; keep it
    separate from the DI reservoir so the two reuse policies do not merge.
 3. **Radiance Cascades trace/update** — review the isolated typed trace, align
