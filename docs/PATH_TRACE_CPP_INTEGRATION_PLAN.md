@@ -516,6 +516,22 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   `prevViewProjection`. `path_trace` derives primary rays from the explicit
   basis and does not read them today; a reprojection or velocity consumer must
   fill them (or use the history contract's matrices) before relying on them.
+* **Entities are invisible to the path tracer.** `RtWorld.buildTlas` writes the
+  entity BLAS instance with mask `0x02` (`RtWorld.java:1089`), while
+  `passes/path_trace.slang` traverses with
+  `PATH_TRACE_INSTANCE_MASK_WORLD = 0x01` (`path_trace.slang:110`). The
+  reference path trace renders terrain only; mobs, item frames and other
+  entities are absent. Decide whether the path pass should traverse `0x03` and
+  how entity materials map onto the atlas before widening the mask.
+* **Water is a flat thin pane.** The legacy triangle decode maps only the
+  redstone and emissive source bits (`surface/surface.slang:237`); no code
+  assigns `MATERIAL_SOURCE_FLUID` on this path and no water module is compiled
+  (`bedray.slang` keeps `public import water;` commented out). A water hit
+  decodes as `AlphaMode.Translucent` with `transmission = 1` and the flat face
+  normal, so there are no wave normals, refraction or caustics. The host also
+  passes `pc.flags = 0` (`RtSlangPathPass.java:266`), so the legacy
+  `FLAG_WATER_REALISTIC`/caustics behaviour cannot be recovered by a flag
+  alone; the fluid tag and a shading model have to be connected.
 
 ## 10. Migration sequence
 

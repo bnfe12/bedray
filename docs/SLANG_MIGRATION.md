@@ -317,8 +317,13 @@ The same audit recorded the remaining systemic gaps in
 shader audit"): sun/moon absent from camera and specular paths, no emitter NEE
 buffer, missing optical medium/eta tracking, thin-pane transmission reachable
 only through BSDF sampling, silent visibility-layer overflow, invalid samples
-that the accumulator cannot reject, and identity
-`view`/`projection`/`prevViewProjection` in the Java frame block.
+that the accumulator cannot reject, identity
+`view`/`projection`/`prevViewProjection` in the Java frame block, entities
+excluded by the `0x01` path-trace instance mask while `RtWorld` writes the
+entity BLAS with `0x02`, and water decoded as a flat translucent pane because
+no code assigns `MATERIAL_SOURCE_FLUID` on the triangle path and no water
+module is compiled.  Both later gaps are source findings; neither was checked
+in game.
 
 `bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
 sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
