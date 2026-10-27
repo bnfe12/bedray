@@ -493,14 +493,15 @@ an independent row would be a switch that does nothing.  Evidence:
 / 64-byte push for `restir_spatial`, `RtRestirSettingsTest` pins each switch to the
 consumer that acts on it, and
 `RtSlangRestirDiTest` + `RtSlangRestirSpatialTest` + `RtSlangBlockEmitterTest` +
-`RtSlangSampleRejectionTest` + `RtPathTraceSlangPassTest` pin the numbers, the
+`RtSlangSampleRejectionTest` + `RtSlangVisibilityOverflowTest` +
+`RtPathTraceSlangPassTest` pin the numbers, the
 space and the host contract; no GPU frame or side-by-side screenshot is recorded.
 
 The same audit recorded the remaining systemic gaps in
 `docs/PATH_TRACE_CPP_INTEGRATION_PLAN.md` ("Follow-ups from the 2026-10-27
 shader audit"): sun/moon absent from camera and specular paths, no emitter NEE
 buffer, missing optical medium/eta tracking, thin-pane transmission reachable
-only through BSDF sampling, silent visibility-layer overflow, identity
+only through BSDF sampling, identity
 `view`/`projection`/`prevViewProjection` in the Java frame block, entities
 excluded by the `0x01` path-trace instance mask while `RtWorld` writes the
 entity BLAS with `0x02` (widening the mask is not enough:
@@ -700,8 +701,9 @@ because a module has no entry point; that is expected.
    the radiance image, which the display pass turns into a weight of 0 or 1.
    The host still has no readback of either flag, so a fault that is not
    non-finite - a traversal that returns a hit the decoder cannot name, an
-   exhausted visibility budget - is invisible in a log. A counter per reason
-   belongs to the C++ pass, which owns the buffers.
+   exhausted visibility budget (now rejected by `surfaceVisibilityProven`, so
+   it darkens instead of leaking light) - is invisible in a log. A counter per
+   reason belongs to the C++ pass, which owns the buffers.
 3. **ReSTIR PT** — path-space reservoirs on top of `PathVertex`; keep it
    separate from the DI reservoir so the two reuse policies do not merge.
 4. **Radiance Cascades trace/update** — review the isolated typed trace, align

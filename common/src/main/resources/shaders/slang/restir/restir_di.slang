@@ -288,9 +288,10 @@ DIReservoirResult restirDiResolveVisibleFiltered<T : ITraversal>(DIReservoir res
     SurfaceVisibility visibility = traceShadowVisibility(traversal, atlas,
         blockMaterials, surfacePosition, surfaceNormal, result.direction,
         result.distance, bias, materialOptions);
-    result.valid = visibility.result.visible;
-    result.transmittance = visibility.result.visible
-        ? visibility.result.transmittance
-        : float3(0.0);
+    // The same rule the path tracer applies to its own shadow ray: a walk that ran out of its filter budget proved
+    // nothing, so the record is not visible and decays instead of lighting this receiver through a blocker.
+    bool proven = surfaceVisibilityProven(visibility);
+    result.valid = proven;
+    result.transmittance = proven ? visibility.result.transmittance : float3(0.0);
     return result;
 }

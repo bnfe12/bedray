@@ -154,7 +154,7 @@ float3 rctsShadeSurface<T : ITraversal, L : ILightSampler>(
                     atlas, blockMaterials, surface.hit.position, normal,
                     light.direction, light.distance, options.rayBias,
                     materialOptions);
-                float3 transmittance = shadow.result.visible
+                float3 transmittance = surfaceVisibilityProven(shadow)
                     ? shadow.result.transmittance
                     : float3(0.0);
                 if (transmittance.r + transmittance.g + transmittance.b > 0.0) {

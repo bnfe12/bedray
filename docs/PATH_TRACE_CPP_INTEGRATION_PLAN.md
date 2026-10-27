@@ -524,11 +524,21 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   through NEE. The sun is not in the environment, so sunlight through glass
   remains missing until transmission NEE exists with a shadow ray that starts
   on the far side of the pane.
-* **Visibility overflow is silent.** `traceFilteredVisibility` returns
-  `visible = true` with the accumulated transmittance when the 16-layer budget
-  runs out, so an opaque blocker behind sixteen filters leaks.
-  `SURFACE_VISIBILITY_FLAG_OVERFLOW` exists but the path tracer never reads it;
-  decide whether overflow counts as blocked or the budget must grow.
+* **Visibility overflow is a light leak, and consumers now treat it as one.**
+  `traceFilteredVisibility` stops adding layers once the 16-layer budget runs
+  out and returns `visible = true` with the transmittance collected so far, so
+  an opaque blocker hidden behind sixteen filters used to leak full sunlight.
+  The decision the old note deferred is now made: overflow is *not proof of a
+  clear sight line*, it is a walk that ran out of budget. Consumers ask
+  `surfaceVisibilityProven` - a single-source predicate over
+  `visible && (flags & SURFACE_VISIBILITY_FLAG_OVERFLOW) == 0u` - instead of
+  reading the walk's own visibility bit, so an over-budget shadow ray
+  contributes zero rather than an unchecked light leak. `RtSlangVisibilityOverflowTest`
+  pins the predicate, the budget constant and the fact that every `.slang` file
+  that reads a shadow result either asks for proof or handles the overflow flag
+  itself. Growing `SURFACE_VISIBILITY_MAX_LAYERS` is still the right fix for a
+  scene that genuinely needs more than sixteen coloured filters; that is now a
+  performance-tuning choice, not a correctness one.
 * **Invalid samples are rejected, truncated paths are not.** `tracePath` now separates the two endings:
   `PATH_TRACE_FLAG_INVALID_SAMPLE` means a non-finite ray, hit, advance, interval or throughput - arithmetic that
   cannot be trusted - and `PATH_TRACE_FLAG_TRUNCATED` (bit 7) means a path stopped short for a legitimate reason (no

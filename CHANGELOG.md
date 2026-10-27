@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+* Made a shadow ray that runs out of budget stop leaking light: `surface/visibility.slang` adds
+  `surfaceVisibilityProven`, the single definition of "this sight line was actually proved clear" — the walk's own
+  `result.visible` bit **and** `SURFACE_VISIBILITY_FLAG_OVERFLOW` unset. The walk sets that flag when it stops after
+  `SURFACE_VISIBILITY_MAX_LAYERS = 16` coloured filters, so previously an opaque blocker sitting behind sixteen panes of
+  glass reported "visible" and shipped full sunlight through it. Every consumer now asks for proof instead of reading the
+  bit: `traceFilteredOccluded`, the direct-light term in `pathtrace/path_tracer.slang`, the reused record in
+  `restir/restir_di.slang`'s `restirDiResolveVisibleFiltered`, and the segment NEE in
+  `radiance_cascades/rc_trace_segments.slang`. `radiance_cascades/rc_trace.slang` already carried the flag by hand and
+  keeps doing so. The choice recorded in the plan doc's "Visibility overflow is silent" follow-up is that overflow is
+  *not* proof of a clear line; raising the budget stays a tuning option, not a correctness one. Evidence:
+  `compileSlang` unchanged (15 passes; `path_trace` 11 bindings/96-byte push, `restir_spatial` 6/64);
+  `RtSlangVisibilityOverflowTest` (3 tests) pins the budget and flag value, the predicate's content and its
+  declaration-before-use ordering, and walks every `.slang` under the shader tree to assert that any file reading a
+  shadow `result.visible` either calls the predicate or handles the overflow flag itself. Each of five mutations —
+  path tracer, ReSTIR DI, `traceFilteredOccluded` and `rc_trace_segments` each widened back to the raw bit, plus a
+  predicate that ignores the flag — failed exactly the guard that owns it. No owner-verified frame yet.
+  See `docs/SLANG_MIGRATION.md`.
+
 * Split the two ways a traced path ends badly, so the accumulation history can tell them apart:
   `pathtrace/path_tracer.slang` keeps `PATH_TRACE_FLAG_INVALID_SAMPLE` for arithmetic that cannot be trusted (a
   non-finite primary ray, hit parameter, cutout advance, interval or throughput) and adds `PATH_TRACE_FLAG_TRUNCATED`

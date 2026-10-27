@@ -110,6 +110,17 @@ SurfaceVisibility traceFilteredVisibility<T : ITraversal>(T traversal,
     return visibility;
 }
 
+// A walk that ran out of its layer budget proved nothing: it stopped counting
+// filters, it did not reach the light.  Reading that as a clean ray leaks an
+// opaque blocker sitting behind the filters, so every consumer asks this
+// predicate instead of trusting the walk's own visibility bit.  The energy the
+// walk did gather stays in `transmittance` for a caller that wants a soft
+// fallback.
+bool surfaceVisibilityProven(SurfaceVisibility visibility) {
+    return visibility.result.visible
+        && (visibility.flags & SURFACE_VISIBILITY_FLAG_OVERFLOW) == 0u;
+}
+
 // Boolean form for callers that only need "is anything opaque in the way".
 // The transmittance is intentionally discarded; use the full form when a
 // coloured shadow is required.
@@ -117,7 +128,7 @@ bool traceFilteredOccluded<T : ITraversal>(T traversal, MaterialAtlas atlas,
         BlockMaterialTable blockMaterials, Ray ray, MaterialSamplingOptions options) {
     SurfaceVisibility visibility = traceFilteredVisibility(traversal, atlas,
         blockMaterials, ray, options);
-    return !visibility.result.visible;
+    return !surfaceVisibilityProven(visibility);
 }
 
 // Convenience wrapper that also builds the shadow ray.  `surfacePosition` is

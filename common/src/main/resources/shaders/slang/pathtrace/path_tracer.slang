@@ -128,7 +128,10 @@ float3 pathTraceDirectTerm<T : ITraversal>(T traversal, MaterialAtlas atlas, Blo
     traced = true;
     SurfaceVisibility shadow = traceShadowVisibility(traversal, atlas, blockMaterials, position, shadowNormal,
         lightDirection, light.distance, rayBias, materialOptions);
-    float3 transmittance = shadow.result.visible ? shadow.result.transmittance : float3(0.0);
+    // Sixteen filters deep the walk gives up and keeps the energy it collected.  That is not a proven sight line:
+    // calling it one would light this surface through an opaque blocker hidden behind the glass.  Reporting it as
+    // occluded also lets a reused record fade instead of persisting.
+    float3 transmittance = surfaceVisibilityProven(shadow) ? shadow.result.transmittance : float3(0.0);
     if (transmittance.r + transmittance.g + transmittance.b <= 0.0) {
         occluded = true;
         return zero;
