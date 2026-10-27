@@ -177,18 +177,59 @@
 
 ---
 
-## 4. Замечания по стандартам и переносимости P2
+## 4. Замечания по стандартам, переносимости и тестированию P2
 
-1. **Хардкод путей разработчика в CMake:**
-   * В [`bedray_core/CMakeLists.txt:20`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/CMakeLists.txt#L20), [`bedray_render_graph/CMakeLists.txt:56`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_render_graph/CMakeLists.txt#L56) и [`bedray_scene/CMakeLists.txt:18`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_scene/CMakeLists.txt#L18) зашит локальный путь `C:/Dev/Sky/tools/sdk/Vulkan-Headers/include`.
-2. **Несовместимость с не-Windows платформами в Gradle:**
-   * В [`gradle/slang.gradle:49`](file:///C:/Users/andre/Downloads/bedray-slang/gradle/slang.gradle#L45-L55) жестко прописан бинарник `bin/slangc.exe`, что ломает сборку на Linux.
-3. **Ловушка выравнивания std430 в `VelocityPush`:**
-   * В [`passes/velocity_reproject.slang:59`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/passes/velocity_reproject.slang#L55-L65) поле `float2 jitterPrevious` расположено по смещению 60 байт (не кратно 8). Компилятор Vulkan вставляет 4 байта невидимого паддинга, сдвигая данные.
-4. **Ненадежная проверка NaN в `math.slang`:**
-   * В [`contracts/math.slang:41-43`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/math.slang#L40-L45) проверка `value == value` при оптимизациях `-ffast-math` схлопывается компилятором в `true`. Требуется использовать `!isnan(value) && !isinf(value)`.
-5. **Нарушение взаимности Гельмгольца в диффузном Френеле:**
-   * В [`shading/bsdf.slang:93, 229`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/shading/bsdf.slang#L90-L100) диффузный вес умножается на $(1 - F(N \cdot V))$, игнорируя направление падения $L$. Это нарушает симметрию BRDF $f(\omega_i, \omega_o) \neq f(\omega_o, \omega_i)$.
+### [P2-1] Хардкод путей разработчика в CMake
+* **Файлы:**
+  * [`bedray_core/CMakeLists.txt:20`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/CMakeLists.txt#L20)
+  * [`bedray_render_graph/CMakeLists.txt:56`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_render_graph/CMakeLists.txt#L56)
+  * [`bedray_scene/CMakeLists.txt:18`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_scene/CMakeLists.txt#L18)
+* **Проблема:** Зашит абсолютный локальный путь `C:/Dev/Sky/tools/sdk/Vulkan-Headers/include`.
+* **Угроза:** При сборке на чистой машине или CI/CD сборочный скрипт падает, если системные переменные `VULKAN_SDK` не экспортированы глобально.
+
+### [P2-2] Блокировка сборки на не-Windows платформах в CMake (macOS / Linux / ARM)
+* **Файлы:**
+  * [`bedray_core/CMakeLists.txt:7-9`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/CMakeLists.txt#L7-L9)
+  * [`bedray_scene/CMakeLists.txt:5-7`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_scene/CMakeLists.txt#L5-L7)
+* **Проблема:** Присутствует директива `if(NOT WIN32) message(FATAL_ERROR "... currently supports Windows only") endif()`.
+* **Угроза:** Прямой запрет на компиляцию нативных библиотек на macOS (Apple Silicon M1–M4) и Linux (Steam Deck, ARM64).
+
+### [P2-3] Хардкод расширения `.dll` в Java Native Loader
+* **Файл:** [`BedrayCoreLocator.java:20`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreLocator.java#L20)
+* **Проблема:** Константа `DLL = "bedray_core.dll"` жестко зашита в коде загрузчика.
+* **Угроза:** Игра не может загрузить `libbedray_core.dylib` на macOS или `libbedray_core.so` на Linux, завершая запуск с ошибкой `resolved, but bedray_core.dll is not in the file list`.
+
+### [P2-4] Хардкод бинарника `slangc.exe` в Gradle
+* **Файл:** [`gradle/slang.gradle:49`](file:///C:/Users/andre/Downloads/bedray-slang/gradle/slang.gradle#L45-L55)
+* **Проблема:** Задача AOT-компиляции вызывает исключительно `bin/slangc.exe`.
+* **Угроза:** На macOS и Linux Gradle падает с ошибкой `Cannot run program "bin/slangc.exe"`.
+
+### [P2-5] Ловушка выравнивания std430 в структуре `VelocityPush`
+* **Файл:** [`passes/velocity_reproject.slang:59`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/passes/velocity_reproject.slang#L55-L65)
+* **Проблема:** Поле `float2 jitterPrevious` расположено по смещению 60 байт (не кратно 8).
+* **Угроза:** Компилятор SPIR-V вставляет 4 байта невидимого паддинга, сдвигая данные `jitterPrevious` и `renderSize` относительно Java Push Constants. На ARM64 это может приводить к прерываниям невыровненного доступа.
+
+### [P2-6] Ненадежная проверка NaN в `math.slang` при fast-math
+* **Файл:** [`contracts/math.slang:41-43`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/math.slang#L40-L45)
+* **Проблема:** Проверка `value == value` при оптимизациях `-ffast-math` схлопывается компилятором в `true`.
+* **Угроза:** Пропуск значений `NaN`/`Inf` в буферы рендеринга и денойзер.
+
+### [P2-7] Нарушение взаимности Гельмгольца в диффузном Френеле
+* **Файл:** [`shading/bsdf.slang:93, 229`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/shading/bsdf.slang#L90-L100)
+* **Проблема:** Диффузный вес умножается на $(1 - F(N \cdot V))$, игнорируя угол падения света $N \cdot L$.
+* **Угроза:** Нарушение симметрии BRDF $f(\omega_i, \omega_o) \neq f(\omega_o, \omega_i)$ в обратных путях и NEE.
+
+### [P2-8] Конфликт статического CRT (`/MT`) и динамического CRT (`/MD`)
+* **Файлы:**
+  * [`bedray_core/CMakeLists.txt:77`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/CMakeLists.txt#L77)
+  * [`bedray_scene/CMakeLists.txt:44`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_scene/CMakeLists.txt#L44)
+* **Проблема:** Использование флага `/MT` принудительно линкует независимые копии рантайма C++ в разные DLL.
+* **Угроза:** Передача объектов STL или освобождение памяти, выделенной в одной библиотеке, из другой приводит к повреждению кучи MSVCRT.
+
+### [P2-9] Отсутствие автоматизированного тестового контура и профилирования Tracy
+* **Файлы:** [`docs/TESTING.md`](file:///C:/Users/andre/Downloads/bedray-slang/docs/TESTING.md), [`scripts/`](file:///C:/Users/andre/Downloads/bedray-slang/scripts/)
+* **Проблема:** Ранее в проекте тестирование выполнялось исключительно вручную через параметры `-Dvkbridge.autotest=...` без централизованного сбора перцентилей фреймтайма (1% Low, 0.1% Low) и телеметрии зон Tracy.
+* **Решение:** Внедрен выделенный модуль автоматизации [`tools/automation/`](file:///C:/Users/andre/Downloads/bedray-slang/tools/automation/) на базе **Python 3.15+** под управлением менеджера **`uv`**, управляющий игровыми сессиями, съемкой трасс Tracy Profiler (TCP 8086) и автоматической генерацией отчетов.
 
 ---
 
