@@ -266,6 +266,16 @@ completed or the recording was discarded, and `close()` must run before
 mode, not the final ownership model: the C++ renderer must take over resources,
 recording and lifetime, and the adapter must not grow into a parallel renderer.
 
+The running mean is not reprojected, so the adapter resets it to zero when the
+camera moves, the scene changes, the key light's direction or colour changes, or
+the sky colour changes. Without the lighting check a moving sun would be averaged
+into a static dot instead of restarting accumulation. The sun/moon cone uses
+`RtSettings.sunRadiusRad()` (the `sun_size_tenths` setting, default 0.0044 rad)
+like the GLSL path; the earlier hardcoded 0.0093 rad was about twice that radius,
+or roughly 4.5x the solid angle. Evidence level for both fixes: the adapter was
+type-checked with `javac` against the previous build output; no Gradle build,
+game launch or GPU frame is recorded.
+
 ### Path-trace shading corrections
 
 Two estimator defects were fixed in `shading/bsdf.slang` and

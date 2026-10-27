@@ -49,7 +49,6 @@ public final class RtSlangPathPass implements RtPass {
     static final int DISPLAY_FLAG_ACCUMULATE = 1;
     static final int DISPLAY_FLAG_TONEMAP = 1 << 1;
     static final float MAX_RADIANCE = 64f;
-    static final float SUN_ANGULAR_RADIUS = 0.0093f;
 
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
     static boolean isSupported(SlangRuntime runtime) {
@@ -94,6 +93,10 @@ public final class RtSlangPathPass implements RtPass {
     private double lastCamX = Double.NaN;
     private double lastCamY;
     private double lastCamZ;
+    private final float[] lastSunDirection = new float[3];
+    private final float[] lastSunColor = new float[3];
+    private final float[] lastSkyColor = new float[3];
+    private boolean hasLighting;
     private int sampleIndex;
     private boolean destroyed;
 
@@ -201,9 +204,14 @@ public final class RtSlangPathPass implements RtPass {
             || Math.abs(params.cameraY - lastCamY) > RtAccumulation.POS_EPS
             || Math.abs(params.cameraZ - lastCamZ) > RtAccumulation.POS_EPS
             || !params.invViewProjStable.equals(lastInvViewProj, RtAccumulation.MATRIX_EPS));
+        // The running mean is not reprojected: any lighting change starts it over instead of ghosting the old sun.
+        boolean lightingChanged = hasLighting
+            && (differs(params.key.dir, lastSunDirection)
+                || differs(params.key.color, lastSunColor)
+                || differs(params.skyColor, lastSkyColor));
         int settingsHash = Objects.hash(params.bounces, params.rayDistance, RtSettings.accumulate(), params.mode,
             RtSettings.pathPreset, RtSettings.preset);
-        if (forceReset || cameraMoved || params.sceneChanged || settingsHash != lastSettingsHash
+        if (forceReset || cameraMoved || lightingChanged || params.sceneChanged || settingsHash != lastSettingsHash
             || !RtSettings.accumulate()) {
             accumFrames = 0;
         } else if (accumFrames < RtFrameParams.MAX_ACCUM) {
@@ -215,7 +223,17 @@ public final class RtSlangPathPass implements RtPass {
         lastCamY = params.cameraY;
         lastCamZ = params.cameraZ;
         lastInvViewProj.set(params.invViewProjStable);
+        System.arraycopy(params.key.dir, 0, lastSunDirection, 0, 3);
+        System.arraycopy(params.key.color, 0, lastSunColor, 0, 3);
+        System.arraycopy(params.skyColor, 0, lastSkyColor, 0, 3);
+        hasLighting = true;
         params.accumCount = accumFrames;
+    }
+
+    private static boolean differs(float[] a, float[] b) {
+        return Math.abs(a[0] - b[0]) > RtAccumulation.SUN_EPS
+            || Math.abs(a[1] - b[1]) > RtAccumulation.SUN_EPS
+            || Math.abs(a[2] - b[2]) > RtAccumulation.SUN_EPS;
     }
 
     @Override
@@ -300,9 +318,10 @@ public final class RtSlangPathPass implements RtPass {
 
         float[] dir = p.key.dir;
         float[] color = p.key.color;
-        frame.sunDirection.set(dir[0], dir[1], dir[2], SUN_ANGULAR_RADIUS);
+        float sunRadius = Math.max(RtSettings.sunRadiusRad(), 1.0e-4f);
+        frame.sunDirection.set(dir[0], dir[1], dir[2], sunRadius);
         frame.sunColor.set(color[0], color[1], color[2], 1f);
-        frame.moonDirection.set(-dir[0], -dir[1], -dir[2], SUN_ANGULAR_RADIUS);
+        frame.moonDirection.set(-dir[0], -dir[1], -dir[2], sunRadius);
         frame.moonColor.set(0f, 0f, 0f, 0f);
 
         float[] sky = p.skyColor;
