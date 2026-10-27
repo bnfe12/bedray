@@ -117,7 +117,7 @@ public final class RtFrameRenderer {
     private static SlangRuntime pathSlangRuntime;
     private static boolean pathSlangUnavailable;
     private static String pathSlangUnavailableReason = "Slang path runtime is not initialized";
-    private static boolean pathSlangFallbackLogged;
+    private static boolean pathSlangUnavailableLogged;
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtMemory.Buf entityMotionBuf;
@@ -1176,24 +1176,18 @@ public final class RtFrameRenderer {
      */
     private static DenoiserMode resolveDenoiseMode() {
         RtSettings.PathDenoiser want = RtSettings.denoiser();
-        if (RtConfig.mode() == RtMode.PATH_TRACED && RtConfig.PATH_TRACER != RtConfig.PathTracer.LEGACY
-            && want != RtSettings.PathDenoiser.OFF) {
-            // The Slang path writes no G-buffer, so it can feed neither NRD nor DLSS-RR. With AUTO the Slang pass is the
-            // primary path: keep the requested setting visible but disable the denoiser for this mode instead of silently
-            // staying on GLSL. -Dbedray.pathTracer=legacy is the way back to the denoised GLSL tracer.
-            boolean forced = RtConfig.PATH_TRACER == RtConfig.PathTracer.SLANG;
-            String blocker = forced ? null : slangPathBlocker();
-            if (forced || blocker == null) {
-                String reason = forced ? "slang_path_has_no_gbuffer" : "auto_slang_path_has_no_gbuffer";
-                String line = "requested=" + want + " active=off reason=" + reason
-                    + (forced ? "" : " (-Dbedray.pathTracer=legacy keeps the G-buffer denoiser)");
-                denoiserResolutionReason = reason;
-                if (!line.equals(lastDenoiserLog)) {
-                    lastDenoiserLog = line;
-                    LOGGER.info("[VKB-RT] denoiser {}", line);
-                }
-                return DenoiserMode.OFF;
+        if (RtConfig.mode() == RtMode.PATH_TRACED && want != RtSettings.PathDenoiser.OFF) {
+            // The new path does not yet supply the guides required by NRD/DLSS-RR.
+            // Preserve the requested setting, report the disabled stage and never
+            // select a different renderer to make that request appear supported.
+            String reason = "slang_path_has_no_gbuffer";
+            String line = "requested=" + want + " active=off reason=" + reason;
+            denoiserResolutionReason = reason;
+            if (!line.equals(lastDenoiserLog)) {
+                lastDenoiserLog = line;
+                LOGGER.info("[VKB-RT] denoiser {}", line);
             }
+            return DenoiserMode.OFF;
         }
         DenoiserMode mode = DenoiserMode.OFF;
         String reason = "setting";
@@ -1338,25 +1332,21 @@ public final class RtFrameRenderer {
             if (slang != null) {
                 return slang;
             }
-            if (RtConfig.PATH_TRACER == RtConfig.PathTracer.SLANG) {
-                throw new RtFailure("slang_path", pathSlangUnavailableReason);
-            }
-            if (!gbuffer && RtSettings.denoiser() == RtSettings.PathDenoiser.NRD) {
-                LOGGER.warn("[VKB-NRD] path_tracing denoiser=nrd requested but NRD is not active ({}): accumulation only",
-                    denoiseMode.isNrd() ? "?" : "start the game with -Dvkrtx.denoiser=nrd and the NRD natives");
-            }
-            return new RtPathTracerPass(device, gbuffer);
+            throw new RtFailure("slang_path", pathSlangUnavailableReason);
         }
-        return new RtRayEffectsPass(device, gbuffer);
+        // The old effect pass compiles GLSL at runtime. Keep its source as a
+        // reference, but do not silently route the new renderer through it.
+        throw new RtFailure("slang_ray", "ray effects are not yet available in the Slang renderer");
     }
 
     /**
-     * Slang Path Tracing pass when the selector allows it; {@code null} means the caller must use GLSL. In
-     * {@code slang} mode a null result becomes a hard {@link RtFailure}, so a forced Slang run never silently falls back.
+     * Creates the AOT Slang path or reports why it cannot run. A missing path
+     * never silently selects runtime-compiled GLSL.
      */
     private static RtPass createSlangPathPass(VkDevice device, boolean gbuffer) {
         RtConfig.PathTracer selector = RtConfig.PATH_TRACER;
         if (selector == RtConfig.PathTracer.LEGACY) {
+            pathSlangUnavailableReason = "legacy GLSL path tracing is not supported by the new renderer";
             return null;
         }
         if (gbuffer) {
@@ -1366,20 +1356,21 @@ public final class RtFrameRenderer {
             pathSlangUnavailableReason = blocker != null ? blocker
                 : "a G-buffer denoiser is selected and the Slang path writes no G-buffer";
             if (selector == RtConfig.PathTracer.AUTO) {
-                logSlangFallback(pathSlangUnavailableReason);
+                logSlangUnavailable(pathSlangUnavailableReason);
             }
             return null;
         }
         String debugView = RtConfig.currentDebugView();
-        if (selector == RtConfig.PathTracer.AUTO && !debugView.isEmpty()) {
-            logSlangFallback("debug view '" + debugView + "' is not implemented in the Slang path");
+        if (!debugView.isEmpty()) {
+            pathSlangUnavailableReason = "debug view '" + debugView + "' is not implemented in the Slang path";
+            logSlangUnavailable(pathSlangUnavailableReason);
             return null;
         }
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             pathSlangUnavailableReason = "VulkanDevice is not available";
             if (selector == RtConfig.PathTracer.AUTO) {
-                logSlangFallback(pathSlangUnavailableReason);
+                logSlangUnavailable(pathSlangUnavailableReason);
             }
             return null;
         }
@@ -1389,19 +1380,16 @@ public final class RtFrameRenderer {
             if (problem != null) {
                 pathSlangUnavailableReason = problem;
                 if (selector == RtConfig.PathTracer.AUTO) {
-                    logSlangFallback(problem);
+                    logSlangUnavailable(problem);
                 }
                 return null;
             }
             if (world == null) {
                 pathSlangUnavailableReason = "the RT world is not initialized";
                 if (selector == RtConfig.PathTracer.AUTO) {
-                    logSlangFallback(pathSlangUnavailableReason);
+                    logSlangUnavailable(pathSlangUnavailableReason);
                 }
                 return null;
-            }
-            if (!debugView.isEmpty()) {
-                LOGGER.warn("[VKB-RT] path_tracer=slang ignores debug view '{}'", debugView);
             }
             RtSlangPathPass slang = new RtSlangPathPass(device, runtime, world.memory(), gbuffer);
             LOGGER.info("[VKB-RT] path_tracer selector={} on AOT Slang passes {}+{} (gbuffer={})",
@@ -1416,14 +1404,14 @@ public final class RtFrameRenderer {
                 }
                 throw new RtFailure("slang_path", reason, e);
             }
-            logSlangFallback(reason);
+            logSlangUnavailable(reason);
             return null;
         }
     }
 
     /**
-     * Null when AUTO can render Path Tracing through the Slang pass now, otherwise why it must stay on GLSL. Never logs:
-     * the pass creation path owns the single fallback line. The runtime is created here on first use, so a missing native
+     * Null when AUTO can render Path Tracing through the Slang pass, otherwise the reason it is unavailable. Never logs:
+     * the pass creation path owns the diagnostic. The runtime is created here on first use, so a missing native
      * or AOT artifact is discovered before the denoiser is switched off.
      */
     private static String slangPathBlocker() {
@@ -1464,10 +1452,10 @@ public final class RtFrameRenderer {
         }
     }
 
-    private static void logSlangFallback(String reason) {
-        if (!pathSlangFallbackLogged) {
-            pathSlangFallbackLogged = true;
-            LOGGER.info("[VKB-RT] path tracing on GLSL rt_path.comp: {}", reason);
+    private static void logSlangUnavailable(String reason) {
+        if (!pathSlangUnavailableLogged) {
+            pathSlangUnavailableLogged = true;
+            LOGGER.info("[VKB-RT] Slang path tracing unavailable: {}", reason);
         }
     }
 
@@ -1693,7 +1681,7 @@ public final class RtFrameRenderer {
                 pathSlangRuntime = null;
             }
             pathSlangUnavailable = false;
-            pathSlangFallbackLogged = false;
+            pathSlangUnavailableLogged = false;
             pathSlangUnavailableReason = "Slang path runtime is not initialized";
             atmosphere.destroy();
             if (gpuTimer != null) {

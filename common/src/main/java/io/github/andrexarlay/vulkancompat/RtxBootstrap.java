@@ -9,7 +9,6 @@ import io.github.andrexarlay.vulkancompat.rtx.raytracing.RtDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessDeviceRequirements;
-import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -111,7 +110,6 @@ public final class RtxBootstrap {
         registry.addLateProvider(FSR_PROVIDER_ID, FsrDeviceRequirements::register);
         // only adds the storage-image features when -Dvkrtx.denoiser=nrd* is set; a default run leaves the device unchanged
         registry.addLateProvider(NRD_PROVIDER_ID, NrdDeviceRequirements::register);
-        RtShaderCompiler.prewarmAsync();
         RtxAutotest.registerAll();
         // Shader hosts (Iris post, Dirt RT, custom RT stage): select before the device so their device groups can register.
         io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostStartup.run(Platforms.get().gameDir(), registry);

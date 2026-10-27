@@ -8,8 +8,8 @@ copy line by line.
 **Current whole-migration evidence: L0 — source and build wiring.** Prior
 agents reported scoped compilation and unit tests for particular revisions;
 those results do not establish that the current complete tree builds. Existing
-bloom code contains a legacy GLSL fallback that conflicts with the target
-architecture and is not the final integration. A compile or test is not proof
+bloom now requires AOT Slang and fails when unavailable, but other legacy
+GLSL consumers still exist and must be migrated. A compile or test is not proof
 of rendering in Minecraft; that requires a fresh matching live run and evidence.
 
 ## Design rules
@@ -195,7 +195,7 @@ hardware paths agree on foliage and glass.
 
 | Pass | Slang entry files | Host | State |
 |---|---|---|---|
-| Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Java-side candidate has a GLSL fallback; both ownership and fallback need migration to the target C++/Slang architecture. The C++ ownership, mip-lifetime, barrier and missing-ABI plan is in [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no current complete-tree or live validation. |
+| Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Requires AOT Slang; mip and sampler ownership remains in Java and must move to C++. See [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
 | Path tracing | `passes/path_trace.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` keeps the legacy GLSL `rt_path.comp` when the AOT passes, device capabilities or a G-buffer denoiser block it. Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. No G-buffer, auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
 
@@ -231,9 +231,11 @@ CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing uses its own
 `SlangRuntime`, created from `SlangDeviceCapabilities.enabledMask`; the mask-0
 runtime in `RtAtmosphere` belongs to bloom only. The final C++ renderer must
 negotiate the features actually enabled on the game's device and select only
-supported methods. If this path is unsupported, the Java `AUTO` selector logs
-one fallback line and uses the legacy GLSL `rt_path.comp`; that fallback is a
-detachable compatibility path, not the target architecture.
+supported methods. If this path is unsupported, the Java selector reports the
+reason; it no longer falls back to legacy GLSL `rt_path.comp`. The legacy ray
+effects pass is likewise reported unavailable until its Slang replacement is
+connected. The Slang volumetric passes compile but are not yet connected, so
+god rays are currently reported unavailable.
 
 Depth keeps the legacy sentinel: bloom treats `depth >= 1e5` as sky
 (`BLOOM_SKY_DISTANCE`), and the path-trace entry writes `1e6` whenever the

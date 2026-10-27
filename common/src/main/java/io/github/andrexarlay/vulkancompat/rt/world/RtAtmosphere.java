@@ -10,9 +10,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Owner of the atmosphere post passes of {@link RtFrameRenderer}: light shafts ({@link RtVolumetricPass}), then bloom and sun glare
- * ({@link RtBloomPass}), both on the final image after the denoiser, in this order (so the shafts bloom). Everything is switched by
- * {@link RtAtmosphereSettings}; a disabled effect costs nothing and its objects are only created when first needed.
+ * Temporary Minecraft-side adapter for bloom and sun glare after the main pass.
+ * The new Slang volumetric passes are not connected yet; requested god rays are
+ * reported unavailable rather than selecting a runtime-compiled GLSL pass.
  *
  * <p>Order of a frame: main pass (rt_rays / rt_path) -> denoiser (NRD / DLSS-RR G-buffer path) -> this -> copy to the engine target ->
  * the temporal upscaler / frame generation of the engine. The passes see the denoised image at render resolution; they write only
@@ -21,14 +21,13 @@ import org.slf4j.LoggerFactory;
  */
 final class RtAtmosphere {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
-    private static final int SPAN_GODRAYS = 0;
     private static final int SPAN_BLOOM = 1;
 
-    private RtVolumetricPass volumetric;
     private RtBloomPass bloom;
     /** Native Slang runtime, created with the first bloom pass; {@code null} until then and when unavailable. */
     private SlangRuntime slangRuntime;
     private boolean slangUnavailableLogged;
+    private boolean volumetricUnavailableLogged;
     private RtGpuTimer timer;
     private String lastLogged = "";
     /**
@@ -50,8 +49,15 @@ final class RtAtmosphere {
             return; // debug views show the raw buffer
         }
         RtAtmosphereSettings.GodRays gr = RtAtmosphereSettings.godRays();
-        boolean shafts = gr == RtAtmosphereSettings.GodRays.POST && p.volumetricFogEnabled && p.fogDensity > 0f
+        boolean shaftsRequested = gr == RtAtmosphereSettings.GodRays.POST && p.volumetricFogEnabled && p.fogDensity > 0f
             && RtAtmosphereSettings.godRayStrength() > 0f;
+        if (shaftsRequested && !volumetricUnavailableLogged) {
+            LOGGER.warn("[VKB-ATMO] Slang volumetric passes are not connected; god rays are unavailable");
+            volumetricUnavailableLogged = true;
+        } else if (!shaftsRequested) {
+            volumetricUnavailableLogged = false;
+        }
+        boolean shafts = false;
         boolean glow = RtAtmosphereSettings.bloom();
         boolean glare = RtAtmosphereSettings.sunGlare();
         logIfChanged(shafts);
@@ -69,19 +75,6 @@ final class RtAtmosphere {
             timer.beginFrame(cmd);
         }
         io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.fullMemoryBarrier(cmd);   // the denoiser / main pass wrote the image
-        if (shafts) {
-            if (volumetric == null) {
-                volumetric = new RtVolumetricPass(device);
-            }
-            if (timer != null) {
-                timer.stamp(cmd, SPAN_GODRAYS, false);
-            }
-            volumetric.record(cmd, mem, p, views, w, h, RtAtmosphereSettings.godRaySteps(), RtAtmosphereSettings.godRayStrength(),
-                RtAtmosphereSettings.godRayRange());
-            if (timer != null) {
-                timer.stamp(cmd, SPAN_GODRAYS, true);
-            }
-        }
         if (glow || glare) {
             if (bloom == null) {
                 bloom = new RtBloomPass(device, slangRuntime(vulkanDevice));
@@ -152,8 +145,8 @@ final class RtAtmosphere {
     }
 
     /**
-     * Creates the native runtime on first use. A missing DLL or a jar without AOT passes is not fatal: bloom keeps
-     * the legacy GLSL path, and the reason is logged once instead of every frame.
+     * Creates the native runtime on first use. A missing DLL or AOT bundle is
+     * reported; the new renderer does not compile a legacy GLSL replacement.
      */
     private SlangRuntime slangRuntime(VulkanDevice device) {
         if (slangRuntime != null || slangUnavailableLogged) {
@@ -164,18 +157,18 @@ final class RtAtmosphere {
         try {
             compiled = SlangRuntime.hasCompiledPasses();
         } catch (RuntimeException e) {
-            LOGGER.warn("[VKB-ATMO] Slang pass index is unreadable, bloom stays on rt_bloom.comp: {}", e.getMessage());
+            LOGGER.warn("[VKB-ATMO] Slang pass index is unreadable; bloom is unavailable: {}", e.getMessage());
             return null;
         }
         if (!compiled) {
-            LOGGER.info("[VKB-ATMO] no AOT Slang passes in the jar, bloom stays on rt_bloom.comp");
+            LOGGER.info("[VKB-ATMO] no AOT Slang passes in the jar; bloom is unavailable");
             return null;
         }
         try {
             // Bloom needs no optional device feature: compute, combined image samplers and storage images are core.
             slangRuntime = SlangRuntime.create(device, 0);
         } catch (RuntimeException e) {
-            LOGGER.warn("[VKB-ATMO] native Slang runtime unavailable, bloom stays on rt_bloom.comp: {}", e.getMessage());
+            LOGGER.warn("[VKB-ATMO] native Slang runtime unavailable; bloom is unavailable: {}", e.getMessage());
         }
         return slangRuntime;
     }
@@ -188,16 +181,10 @@ final class RtAtmosphere {
     }
 
     void resetHistory() {
-        if (volumetric != null) {
-            volumetric.resetHistory();
-        }
+        // No volumetric history until the Slang passes are integrated.
     }
 
     void destroy() {
-        if (volumetric != null) {
-            volumetric.destroy();
-            volumetric = null;
-        }
         if (bloom != null) {
             bloom.destroy(); // releases the remaining recordings before the runtime shuts down
             bloom = null;

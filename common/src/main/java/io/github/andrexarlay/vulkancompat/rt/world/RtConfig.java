@@ -93,7 +93,7 @@ public final class RtConfig {
     public static final String DEBUG_NAME = System.getProperty("vkbridge.rt.debug", "").trim().toLowerCase(Locale.ROOT);
     public static final int DEBUG_MODE = parseMode(DEBUG_NAME);
 
-    /** Path Tracing implementation: {@code auto} (Slang with GLSL fallback), {@code slang} (Slang only), {@code legacy}. */
+    /** Path Tracing selector. {@code auto} and {@code slang} select Slang; {@code legacy} is unsupported. */
     public enum PathTracer {
         AUTO,
         SLANG,
