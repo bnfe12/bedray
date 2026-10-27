@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+* Offer each ReSTIR technique as its own player switch: `rays_restir_temporal`, `rays_restir_spatial` (Ray Tracing (Fast)) and
+  `path_restir_di` (Slang path tracer) are registered `RtSettings` booleans, so they persist under their section prefixes and
+  still obey a `-Dvkrtx.rt.<key>` session override. Every one is read where its work is decided, not where the pipeline is
+  built: the legacy ring is skipped by handing the shader a zero reservoir address (its own "off" test), the legacy spatial
+  pass is gated at the two checker dispatches, and `RtSlangPathPass` splits `diRequested()` (allocation, static) from
+  `diActive()` (per frame, the player's) so a flip never costs a `vkDeviceWaitIdle` mid-frame; `describe()` reports
+  `restir_di=off` for the switch, not only for the missing ring. `RtFrameRenderer` packs all three into the per-frame change
+  diff, so any reuse change drops the histories it invalidates and names them in the `resetHistory:` log. The Bedray screen
+  gets three rows (spatial only enabled while temporal is on, because it merges the records temporal writes) with catalog
+  entries and English/Russian text; presets leave them alone so a preset change does not silently re-enable reuse. Evidence:
+  `RtRestirSettingsTest` pins each switch to its consumer, and each of the three mutations (row renamed, getter bypassed,
+  dispatch ungated) failed the test that should catch it. No owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
 * Reuse block-emitter samples across frames in the Slang path tracer: `restir/di_block_emitters.slang` implements the
   `IReuseSampler` contract over `restir/restir_di.slang`, `passes/path_trace.slang` binds a per-pixel reservoir ring
   (binding 19, 96-byte push) and `RtSlangPathPass` owns `rt_path_restir` — two halves, parity advanced only by a dispatch

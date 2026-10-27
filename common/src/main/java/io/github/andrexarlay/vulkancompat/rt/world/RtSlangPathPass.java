@@ -62,9 +62,18 @@ public final class RtSlangPathPass implements RtPass {
     static final int DI_FLAG_STATIC = 1 << 2;
     static final int DI_FLAG_FLIP_Y = 1 << 3;
 
-    /** True when this frame should run the ReSTIR DI branch: the emitter list is bound and the switch is on. */
+    /**
+     * True when this runtime wants a reservoir ring at all: the emitter list is bound and the session switch is on. This
+     * decides allocation only - it is a {@code static final}, so it cannot change while a frame is being recorded, and
+     * freeing the ring on a settings flip would cost a {@code vkDeviceWaitIdle} exactly when the player is watching.
+     */
     static boolean diRequested() {
         return RtConfig.SLANG_BLOCK_EMITTERS && RtConfig.SLANG_RESTIR_DI;
+    }
+
+    /** True when this frame should read and write the reservoirs: allocated above, and the player left reuse switched on. */
+    static boolean diActive() {
+        return diRequested() && RtSettings.pathRestirDi();
     }
 
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
@@ -196,7 +205,7 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public String describe(RtFrameParams p) {
-        String restir = !diRequested() || reservoirs == null ? "off"
+        String restir = !diActive() || reservoirs == null ? "off"
             : reservoirHistoryWritten ? "temporal" : "fresh";
         return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
             + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
@@ -363,7 +372,7 @@ public final class RtSlangPathPass implements RtPass {
         RtPathTraceSlangPass.Reservoirs reservoirRange = RtPathTraceSlangPass.Reservoirs.NONE;
         int diFlags = 0;
         int diParity = reservoirFrame & 1;
-        if (emitterCount > 0 && diRequested() && reservoirs != null) {
+        if (emitterCount > 0 && diActive() && reservoirs != null) {
             if (reservoirResetRequested) {
                 VK10.vkCmdFillBuffer(cmd, reservoirs.handle, 0L, reservoirs.size, 0);
                 VkBarriers.fullMemoryBarrier(cmd);

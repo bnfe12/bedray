@@ -216,8 +216,8 @@ class RtSlangRestirDiTest {
         assertEquals(RtSlangPathPass.DI_FLAG_FLIP_Y, flag(pass, "PATH_TRACE_DI_FLIP_Y"), "flipY bit");
         assertTrue(game.contains("diFlags = DI_FLAG_ENABLED | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)"),
             "the host never claims a history it did not write");
-        assertTrue(game.contains("if (emitterCount > 0 && diRequested() && reservoirs != null)"),
-            "reuse needs the ring, the switch and a list to reuse: without emitters there is nothing to carry over");
+        assertTrue(game.contains("if (emitterCount > 0 && diActive() && reservoirs != null)"),
+            "reuse needs the ring, the player's switch and a list to reuse: without emitters there is nothing to carry over");
         assertTrue(read(CONFIG).contains("\"vkbridge.rt.restirDi\", \"true\""),
             "the A/B switch is there for the owner, on by default");
         assertTrue(game.contains("return RtConfig.SLANG_BLOCK_EMITTERS && RtConfig.SLANG_RESTIR_DI;"),

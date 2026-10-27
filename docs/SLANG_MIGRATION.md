@@ -415,9 +415,24 @@ switch must not hand half-written bytes to the other path.  It alternates the
 parity only after a dispatch that really wrote records, and drops the whole ring
 when the light-list fingerprint (now also carried as `RtFrameParams.
 emitterFingerprint`) or the render size changes.  Switch: `-Dvkbridge.rt.restirDi`
-(default true; false falls back to the per-frame RIS draw of the same list).
-Evidence: `compileSlang` produces 11 bindings / 96-byte push for `path_trace`,
-and `RtSlangRestirDiTest` + `RtSlangBlockEmitterTest` + `RtPathTraceSlangPassTest`
+(default true; false falls back to the per-frame RIS draw of the same list) is the
+session capability and decides allocation, the player's `path_restir_di` row
+(`RtSettings.pathRestirDi()`) is the per-frame decision — `diRequested()` versus
+`diActive()`, so switching at runtime costs no reallocation and no
+`vkDeviceWaitIdle` inside a recorded frame.  Reuse is a choice per technique, not
+one button: the ray pass has `rays_restir_temporal` (the ring address handed to
+`rt_rays.comp` goes to zero when off, which is that shader's own off test) and
+`rays_restir_spatial` (gated at the two checker dispatches, since
+`-Dvkrtx.rt.restirSpatial` only decides whether the kernel exists), and the path
+tracer has the `path_restir_di` row above.  All three are `RtSettings` booleans,
+so they persist, obey `-Dvkrtx.rt.<key>`, and are packed into the per-frame change
+diff of `RtFrameRenderer`: any of them moving drops the histories it invalidates
+and shows up as `restir(a->b)` in the `resetHistory:` log.  Spatial reuse is
+offered as a child of temporal because it merges the reservoirs temporal writes —
+an independent row would be a switch that does nothing.  Evidence:
+`compileSlang` produces 11 bindings / 96-byte push for `path_trace`,
+`RtRestirSettingsTest` pins each switch to the consumer that acts on it, and
+`RtSlangRestirDiTest` + `RtSlangBlockEmitterTest` + `RtPathTraceSlangPassTest`
 pin the numbers, the space and the host contract; no GPU frame or side-by-side
 screenshot is recorded.
 

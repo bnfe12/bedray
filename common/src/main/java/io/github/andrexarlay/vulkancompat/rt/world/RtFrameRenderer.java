@@ -202,6 +202,8 @@ public final class RtFrameRenderer {
     private static int lastFrameSpp = -1;
     private static boolean lastFrameAutoExposure = true;
     private static int lastFrameTransparencyPolicy = -1;
+    /** The three ReSTIR technique switches of this frame, packed; a change of any of them invalidates every reservoir. */
+    private static int lastFrameReusePolicy = -1;
 
     /**
      * Screen-space depth composite pipeline for legacy raster entity compositing.
@@ -528,6 +530,10 @@ public final class RtFrameRenderer {
         int curTransparencyPolicy = (RtSettings.opticalMaterials() ? 1 : 0)
             | (RtSettings.directTranslucentShadows() ? 2 : 0)
             | (RtSettings.indirectTranslucentShadows() ? 4 : 0);
+        // ReSTIR is a per-technique switch, and every one of them changes what a stored record means: turning reuse on or
+        // off, or pooling neighbours on top of it, must not continue an accumulation that was built without it.
+        int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)
+            | (RtSettings.pathRestirDi() ? 4 : 0);
 
         boolean presetOrDenoiserChanged = (lastFrameBounces != -1) && (
             curPreset != lastFramePreset
@@ -538,13 +544,14 @@ public final class RtFrameRenderer {
             || curSpp != lastFrameSpp
             || curAutoExposure != lastFrameAutoExposure
             || curTransparencyPolicy != lastFrameTransparencyPolicy
+            || curReusePolicy != lastFrameReusePolicy
         );
 
         if (presetOrDenoiserChanged) {
-            LOGGER.info("[VKB-RT] resetHistory: preset({}->{}) pt_preset({}->{}) denoiser({}->{}) denoiseMode({}->{}) bounces({}->{}) spp({}->{}) autoExp({}->{}) transparency({}->{})",
+            LOGGER.info("[VKB-RT] resetHistory: preset({}->{}) pt_preset({}->{}) denoiser({}->{}) denoiseMode({}->{}) bounces({}->{}) spp({}->{}) autoExp({}->{}) transparency({}->{}) restir({}->{})",
                 lastFramePreset, curPreset, lastFramePathPreset, curPathPreset, lastFramePathDenoiser, curPathDenoiser,
                 lastFrameDenoiseMode, denoiseMode, lastFrameBounces, curBounces, lastFrameSpp, curSpp, lastFrameAutoExposure, curAutoExposure,
-                lastFrameTransparencyPolicy, curTransparencyPolicy);
+                lastFrameTransparencyPolicy, curTransparencyPolicy, lastFrameReusePolicy, curReusePolicy);
             resetHistory();
         }
 
@@ -556,6 +563,7 @@ public final class RtFrameRenderer {
         lastFrameSpp = curSpp;
         lastFrameAutoExposure = curAutoExposure;
         lastFrameTransparencyPolicy = curTransparencyPolicy;
+        lastFrameReusePolicy = curReusePolicy;
 
         if (denoiseMode != DenoiserMode.DLSS_RR && dlssRrDenoiser != null) {
             dlssRrDenoiser.destroy();
@@ -873,9 +881,12 @@ public final class RtFrameRenderer {
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.transparencyStats()) params.flags |= RtFrameParams.FLAG_TRANSPARENCY_STATS;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials()) params.flags |= RtFrameParams.FLAG_OPTICAL_MATERIALS;
         // ReSTIR DI: one reservoir per pixel, two parity halves. Only the ray pass reads it; path tracing keeps plain RIS.
+        // With reuse switched off the shader is handed a zero reservoir address, which is the shader's own "off" test, and
+        // the ring is not even filled - so switching back on converges from nothing rather than from stale records.
         long reservoirAddr = 0L;
         long reservoirAuxAddr = 0L;
-        if (pass.mode() == RtMode.RAY_TRACED && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {
+        if (pass.mode() == RtMode.RAY_TRACED && RtSettings.restirTemporal()
+            && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {
             long pixels = (long) w * h;
             long need = pixels * 2L * RESERVOIR_BYTES;
             boolean reset = false;

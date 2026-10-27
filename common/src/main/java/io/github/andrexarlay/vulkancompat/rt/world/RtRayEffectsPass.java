@@ -202,7 +202,7 @@ public final class RtRayEffectsPass implements RtPass {
     @Override
     public void dispatch(VkCommandBuffer cmd, RtFrameParams params, int width, int height) {
         pipeline.dispatch(cmd, params, width, height);
-        if (restirSpatial != null && params.mode == RtConfig.MODE_LIT
+        if (restirSpatial != null && RtSettings.restirSpatial() && params.mode == RtConfig.MODE_LIT
             && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0
             && (params.flags & RtFrameParams.FLAG_MATERIALS) != 0) {
             // Two checker phases (params2 bits 16-19, the nibble the a-trous filter borrows for its own iterations):

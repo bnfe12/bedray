@@ -308,6 +308,14 @@ public final class SettingsCatalog {
                 p("nrd", "NRD", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.NRD),
                 p("dlss_rr", "DLSS Ray Reconstruction", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.DLSS_RR)),
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
+        putNoImage("path_restir_di", Tier.ADVANCED, "ReSTIR Direct Light",
+            "Reuses the light sample of a pixel over frames instead of drawing a new one every frame: light from torches, "
+                + "lanterns and glowing blocks settles in a few frames while you walk, instead of only while you stand still. "
+                + "Off redraws every light sample per frame, which is noisier but never reuses an old record.",
+            "FPS: none to very low - it replaces several light samples of a frame by one, at the cost of a per-pixel record "
+                + "in video memory (about a quarter of a gigabyte at 1080p).",
+            "Path Tracing only, and only where glowing blocks are traced.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
         putNoImage("adaptive_quality", Tier.ADVANCED, "Adaptive Quality",
             "Keeps Path Tracing inside a GPU frame budget: when the measured time of the traced rays and the denoiser is over it, rays per pixel drop first and then bounces, "
                 + "below the values you chose; when the frame has room again they come back. It never goes above your values. Off by default - turn it on if you want a steadier "
@@ -420,6 +428,19 @@ public final class SettingsCatalog {
             putNoImage(e[0], Tier.EXPERT, e[1], e[2], "", "Hidden mode: Ray Tracing (Fast) is in development.",
                 "The Ray Tracing (Fast) mode is not public yet, so it has no screenshots.");
         }
+        // The two ReSTIR stages of the ray pass, catalogued apart from the list above because each needs its own wording.
+        putNoImage("rays_restir_temporal", Tier.EXPERT, "ReSTIR Temporal Block Light",
+            "A pixel keeps the glowing-block sample it chose last frame and refines it, instead of drawing a new sample every "
+                + "frame. Off, block light is re-sampled per frame: noisier, and never carries an old record over.",
+            "FPS: none to low (it replaces per-frame light samples by one reservoir read and write).",
+            "Ray Tracing (Fast) with RT Block Light on.",
+            "A still cannot show reuse: the difference is the noise over several frames.");
+        putNoImage("rays_restir_spatial", Tier.EXPERT, "ReSTIR Spatial Block Light",
+            "A pixel also borrows samples from neighbours on the same surface (same normal, same plane), so one torch lights "
+                + "a wall from fewer, better-chosen samples. It merges the records the temporal stage writes, so it needs it on.",
+            "FPS: low (two full-screen merges of already computed reservoirs, no rays).",
+            "Ray Tracing (Fast) with RT Block Light and ReSTIR Temporal Block Light on.",
+            "A still cannot show reuse: the difference is the noise over several frames.");
         // A look option, not a cost option: the only added work is one short ray (at most half a cell) that checks the
         // shared origin still sees the fragment it replaces.
         putNoImage("rays_pixel_shadows", Tier.EXPERT, "RT Pixel Shadows",

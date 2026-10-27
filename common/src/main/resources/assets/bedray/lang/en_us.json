@@ -401,5 +401,11 @@
   "bedray.opt.rays_transparency_stats": "Transparency Counters",
   "bedray.opt.rays_transparency_stats.desc": "Show delayed GPU query, candidate, layer and overflow counts in F3. Atomic counters add GPU overhead; off by default. Counts are not timings.",
   "bedray.opt.rays_optical_materials": "Optical Materials",
-  "bedray.opt.rays_optical_materials.desc": "Use authored IOR, thickness and absorption profiles, including dielectric clear-glass centres. Off restores legacy shader optics for comparison; clear interfaces can increase ray work."
+  "bedray.opt.rays_optical_materials.desc": "Use authored IOR, thickness and absorption profiles, including dielectric clear-glass centres. Off restores legacy shader optics for comparison; clear interfaces can increase ray work.",
+  "bedray.opt.path_restir_di": "ReSTIR Direct Light",
+  "bedray.opt.path_restir_di.desc": "Reuses each pixel's glowing-block sample over frames instead of drawing a new one every frame, so torch light settles while the camera moves. Off re-samples every light per frame: noisier, and never carries an old record over.",
+  "bedray.opt.rays_restir_temporal": "ReSTIR Temporal Block Light",
+  "bedray.opt.rays_restir_temporal.desc": "A pixel keeps the block-light sample it chose last frame and refines it. Off re-samples block light every frame: noisier, and no old record is carried over.",
+  "bedray.opt.rays_restir_spatial": "ReSTIR Spatial Block Light",
+  "bedray.opt.rays_restir_spatial.desc": "A pixel also borrows samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Temporal Block Light on."
 }

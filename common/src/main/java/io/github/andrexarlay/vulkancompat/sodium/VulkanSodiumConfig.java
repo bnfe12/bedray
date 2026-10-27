@@ -637,6 +637,10 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setBinding(customPath(v -> RtSettings.pathDenoiser = v, () -> RtSettings.pathDenoiser), () -> RtSettings.pathDenoiser)
             .setImpact(OptionImpact.HIGH).setStorageHandler(st);
         pt.addOption(track("path_denoiser", den));
+        // ReSTIR for the direct light of the path tracer: a pixel keeps its torch sample across frames instead of redrawing
+        // it every frame. This is what makes an interior converge while the camera moves, so it is worth a row of its own.
+        pt.addOption(boolOpt(builder, "path_restir_di", true, v -> RtSettings.pathRestirDi = v, () -> RtSettings.pathRestirDi,
+            pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st));
         EnumOptionBuilder<RtSettings.AdaptiveQuality> aq = builder.createEnumOption(id("adaptive_quality"), RtSettings.AdaptiveQuality.class);
         aq.setName(nameOf("adaptive_quality")).setTooltip(v -> tipOf("adaptive_quality")).setDefaultValue(RtSettings.AdaptiveQuality.OFF)
             .setAllowedValues(EnumSet.allOf(RtSettings.AdaptiveQuality.class))
@@ -867,6 +871,16 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         for (int i = 0; i < names.length; i++) {
             g.addOption(boolOpt(builder, names[i], defs[i], sets.get(i), gets.get(i), raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
         }
+        // The two ReSTIR stages of the ray pass, offered separately because each one is a different kind of reuse: temporal
+        // keeps a pixel's own light sample across frames, spatial pools the samples of neighbouring pixels. Spatial merges
+        // the records the temporal stage writes, so it is only ever useful with temporal on.
+        Identifier temporalId = id("rays_restir_temporal");
+        g.addOption(boolOpt(builder, "rays_restir_temporal", true, v -> RtSettings.raysRestirTemporal = v,
+            () -> RtSettings.raysRestirTemporal, raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
+        g.addOption(boolOpt(builder, "rays_restir_spatial", true, v -> RtSettings.raysRestirSpatial = v,
+            () -> RtSettings.raysRestirSpatial,
+            s -> raysOn.apply(s) && s.readBooleanOption(temporalId), rtDependencies(modeId, temporalId),
+            Mark.RT, OptionImpact.MEDIUM, false, st));
     }
 
     private void addExpertOptions(ConfigBuilder builder, OptionGroupBuilder ex, Function<ConfigState, Boolean> raysOn,

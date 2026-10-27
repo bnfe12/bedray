@@ -95,6 +95,14 @@ public final class RtSettings {
     public static int raysGiDistance = 64;
     /** Temporal accumulation of the stochastic effects while the camera and the scene stand still. */
     public static boolean raysAccumulate = true;
+    /**
+     * ReSTIR temporal reuse of the ray pass: one reservoir per pixel keeps a torch sample across frames instead of
+     * redrawn every frame. Off, the emissive term is sampled per frame again - noisier while moving, but free of any
+     * chance that a stale record lights a surface it never belonged to.
+     */
+    public static boolean raysRestirTemporal = true;
+    /** ReSTIR spatial reuse of the ray pass: the two checker phases pool the reservoirs of neighbouring pixels. */
+    public static boolean raysRestirSpatial = true;
 
     // ---- Scene (both modes) ----
     /** RT distance = the game render distance (horizontal), 8 sections up and down. */
@@ -153,6 +161,12 @@ public final class RtSettings {
     public static int pathBounces = 3;
     public static int pathSpp = 1;
     public static boolean pathAccumulate = true;
+    /**
+     * ReSTIR direct-light reuse of the Slang path tracer: the block-emitter sample of a pixel lives in a per-pixel
+     * reservoir and is reprojected into the next frame, so an interior converges while the camera moves. Off, every
+     * frame redraws the emitter list of that pixel (the same list, the same RIS estimator, only no history).
+     */
+    public static boolean pathRestirDi = true;
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
@@ -241,9 +255,12 @@ public final class RtSettings {
         integer("rays_gi_quality", () -> raysGiQuality, v -> raysGiQuality = v, 1, 8);
         integer("rays_gi_distance", () -> raysGiDistance, v -> raysGiDistance = v, DISTANCE_MIN, 256);
         bool("rays_accumulate", () -> raysAccumulate, v -> raysAccumulate = v);
+        bool("rays_restir_temporal", () -> raysRestirTemporal, v -> raysRestirTemporal = v);
+        bool("rays_restir_spatial", () -> raysRestirSpatial, v -> raysRestirSpatial = v);
         integer("path_bounces", () -> pathBounces, v -> pathBounces = v, 1, 8);
         integer("path_spp", () -> pathSpp, v -> pathSpp = v, 1, 8);
         bool("path_accumulate", () -> pathAccumulate, v -> pathAccumulate = v);
+        bool("path_restir_di", () -> pathRestirDi, v -> pathRestirDi = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
@@ -428,6 +445,18 @@ public final class RtSettings {
     public static int giQuality() { return i("rays_gi_quality"); }
     public static int giDistance() { return i("rays_gi_distance"); }
     public static boolean raysAccumulation() { return b("rays_accumulate"); }
+    /**
+     * ReSTIR temporal reuse of the ray pass. A {@code -Dvkrtx.rt.rays_restir_temporal=false} session override wins, exactly
+     * like the other keys, and the renderer turns the feature off by handing the shader a zero reservoir address.
+     */
+    public static boolean restirTemporal() { return b("rays_restir_temporal"); }
+    /**
+     * ReSTIR spatial reuse of the ray pass. The kernel itself is only built when the session kept
+     * {@code -Dvkrtx.rt.restirSpatial} on, so this decides whether the two checker phases are dispatched.
+     */
+    public static boolean restirSpatial() { return b("rays_restir_spatial"); }
+    /** ReSTIR direct-light reuse of the Slang path tracer (see {@code RtConfig.SLANG_RESTIR_DI} for the session switch). */
+    public static boolean pathRestirDi() { return b("path_restir_di"); }
     public static int bounces() { return i("path_bounces"); }
     public static int spp() { return i("path_spp"); }
     public static boolean accumulate() { return b("path_accumulate"); }
