@@ -46,10 +46,12 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     static final String PASS_NAME = "path_trace";
     static final int FRAME_CONSTANTS_BYTES = 608;
-    static final int PUSH_BYTES = 64;
+    static final int PUSH_BYTES = 96;
     static final int BLOCK_MATERIAL_BYTES = 64;
     /** {@code light/block_emitters.slang}: the RtEmitters record, six vec4. */
     static final int EMITTER_BYTES = 96;
+    /** {@code restir/restir_di.slang}: one ReSTIR DI reservoir per pixel, pinned by {@code gradle/slang.gradle}. */
+    static final int RESERVOIR_BYTES = 64;
     static final int SECTION_BYTES = 64;
     static final int THREAD_GROUP = 8;
     /** Frame-constant ring slots; the engine keeps at most two frames in flight, one slot is spare. */
@@ -74,7 +76,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         new Expected("outDepth", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("frame", BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER),
         new Expected("blockMaterials", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        new Expected("emitters", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        new Expected("emitters", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("reservoirs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
 
     /** Scene inputs the host must supply: the frame TLAS and the section table written by {@link RtWorld}. */
     record Scene(long tlas, RtMemory.Buf sectionTable) {
@@ -94,6 +97,15 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      */
     record Emitters(long buffer, long offset, int count) {
         static final Emitters NONE = new Emitters(0L, 0L, 0);
+    }
+
+    /**
+     * The ReSTIR DI ring of the path tracer: two parity halves of {@link #RESERVOIR_BYTES} per render pixel, owned by
+     * {@link RtSlangPathPass}. Switching reuse off is a zero handle, and the pass then binds a one-record dummy: the
+     * shader reads the bound length, so an inactive binding cannot be mistaken for a ring.
+     */
+    record Reservoirs(long buffer, long bytes) {
+        static final Reservoirs NONE = new Reservoirs(0L, 0L);
     }
 
     /**
@@ -202,15 +214,16 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     }
 
     /**
-     * The 64-byte push block of {@code passes/path_trace.slang}: path limits, sampling inputs and the emitter list of the
-     * frame. Exposure is not
+     * The 96-byte push block of {@code passes/path_trace.slang}: path limits, sampling inputs, the emitter list of the
+     * frame and the ReSTIR DI temporal state. Exposure is not
      * here on purpose: the pass writes scene-referred radiance and the display step applies {@code FrameConstants.exposure}
      * exactly once.
      */
     record Dispatch(int maxDepth, int maxSurfaceSteps, int sampleIndex, int materialCount, int flags,
                     float rayBias, float alphaCutoff, float maxDistance, float maxRadiance, float sunProbability,
                     int emitterCount, float emitterProbability, float emitterCamRelX, float emitterCamRelY,
-                    float emitterCamRelZ, int emitterCandidates) {
+                    float emitterCamRelZ, int emitterCandidates,
+                    float diCamDeltaX, float diCamDeltaY, float diCamDeltaZ, int diFlags, int diParity) {
         Dispatch {
             if (maxDepth < 1) {
                 throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
@@ -248,6 +261,12 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             if (!Float.isFinite(emitterCamRelX) || !Float.isFinite(emitterCamRelY) || !Float.isFinite(emitterCamRelZ)) {
                 throw new IllegalArgumentException("the emitter camera offset must be finite");
             }
+            if (diParity < 0 || diParity > 1) {
+                throw new IllegalArgumentException("the reservoir parity selects one of two halves, got " + diParity);
+            }
+            if (!Float.isFinite(diCamDeltaX) || !Float.isFinite(diCamDeltaY) || !Float.isFinite(diCamDeltaZ)) {
+                throw new IllegalArgumentException("the camera delta of a reused reservoir must be finite");
+            }
         }
 
         void writeTo(ByteBuffer out) {
@@ -272,6 +291,14 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             out.putFloat(base + 52, emitterCamRelY);
             out.putFloat(base + 56, emitterCamRelZ);
             out.putFloat(base + 60, emitterCandidates);
+            out.putFloat(base + 64, diCamDeltaX);
+            out.putFloat(base + 68, diCamDeltaY);
+            out.putFloat(base + 72, diCamDeltaZ);
+            out.putInt(base + 76, 0);
+            out.putInt(base + 80, diFlags);
+            out.putInt(base + 84, diParity);
+            out.putInt(base + 88, 0);
+            out.putInt(base + 92, 0);
         }
     }
 
@@ -309,6 +336,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         requireElementBytes(manifest, "frame", FRAME_CONSTANTS_BYTES);
         requireElementBytes(manifest, "blockMaterials", BLOCK_MATERIAL_BYTES);
         requireElementBytes(manifest, "emitters", EMITTER_BYTES);
+        requireElementBytes(manifest, "reservoirs", RESERVOIR_BYTES);
     }
 
     private static void requireElementBytes(SlangPassManifest manifest, String name, int expected) {
@@ -328,6 +356,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private final RtMemory memory;
     private final RtMemory.Buf[] frameConstants = new RtMemory.Buf[SLOT_COUNT];
     private final RtMemory.Buf blockMaterials;
+    private final RtMemory.Buf reservoirDummy;
     private final Set<Long> recordings = new LinkedHashSet<>();
     private int slot = -1;
     private RtMemory.Img radiance;
@@ -354,6 +383,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         requireManifest(program);
 
         RtMemory.Buf materials = null;
+        RtMemory.Buf dummyReservoirs = null;
         try {
             for (int i = 0; i < SLOT_COUNT; i++) {
                 frameConstants[i] = memory.createBuffer("rt_path_frame_constants" + i, FRAME_CONSTANTS_BYTES,
@@ -363,6 +393,10 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
             // The table is only present to satisfy decodeSurface; materialCount = 0 means no shader ever reads it.
             MemoryUtil.memSet(materials.mapped, 0, BLOCK_MATERIAL_BYTES);
+            dummyReservoirs = memory.createBuffer("rt_path_reservoir_dummy", RESERVOIR_BYTES,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            // One zeroed record: ReSTIR DI off still needs a descriptor, and the shader's own slot bound is this length.
+            MemoryUtil.memSet(dummyReservoirs.mapped, 0, RESERVOIR_BYTES);
         } catch (RuntimeException e) {
             for (RtMemory.Buf constants : frameConstants) {
                 if (constants != null) {
@@ -372,9 +406,13 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             if (materials != null) {
                 memory.destroy(materials);
             }
+            if (dummyReservoirs != null) {
+                memory.destroy(dummyReservoirs);
+            }
             throw e;
         }
         this.blockMaterials = materials;
+        this.reservoirDummy = dummyReservoirs;
     }
 
     long radianceView() {
@@ -395,8 +433,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * path uses and must keep its own barriers around the dispatch; this method adds the trailing full memory barrier
      * that makes both outputs visible to their consumers.
      */
-    void record(VkCommandBuffer cmd, Scene scene, Atlases atlases, Emitters emitters, long depthView, Frame frame,
-                Dispatch dispatch) {
+    void record(VkCommandBuffer cmd, Scene scene, Atlases atlases, Emitters emitters, Reservoirs reservoirs,
+                long depthView, Frame frame, Dispatch dispatch) {
         if (closed) {
             throw new IllegalStateException("path trace pass is closed");
         }
@@ -420,6 +458,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             throw new IllegalArgumentException("the push promises " + dispatch.emitterCount()
                 + " emitter(s) but no emitter buffer is bound");
         }
+        if (dispatch.diFlags() != 0 && (reservoirs == null || reservoirs.buffer() == 0L)) {
+            throw new IllegalArgumentException("the push enables ReSTIR DI but no reservoir ring is bound");
+        }
         ensure(cmd, frame.width, frame.height);
         // Rotate the frame-constant slot: the engine can have two frames in flight, and the GPU must not read this
         // frame's block after the next frame overwrote it.
@@ -432,7 +473,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             // pool that has to be released on the discard path.
             recordings.add(cmd.address());
             program.dispatch(cmd.address(), program.groups(width, 0), program.groups(height, 1), 1,
-                resources(scene, atlases, emitters, depthView, slot), push);
+                resources(scene, atlases, emitters, reservoirs, depthView, slot), push);
         }
         VkBarriers.fullMemoryBarrier(cmd);
     }
@@ -449,8 +490,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         return SlangProgram.Resource.uniformBuffer("frame", frameConstants[slot].handle, 0, FRAME_CONSTANTS_BYTES);
     }
 
-    private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters, long depthView,
-                                                   int frameSlot) {
+    private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters,
+                                                   Reservoirs reservoirs, long depthView, int frameSlot) {
         RtMemory.Buf table = scene.sectionTable();
         // An empty list still needs a descriptor. The dummy table is 64 B, so the fallback range is clamped to it: the
         // shader never indexes past pc.emitterCount, which is 0 for exactly this case.
@@ -458,6 +499,11 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         long emitterOffset = emitterBuffer == blockMaterials.handle ? 0L : emitters.offset();
         long emitterBytes = emitterBuffer == blockMaterials.handle ? BLOCK_MATERIAL_BYTES
             : Math.max(1, emitters.count()) * (long) EMITTER_BYTES;
+        // The ReSTIR DI ring, or the one-record dummy when reuse is switched off: the shader reads the bound length, so
+        // it can never address past what the host handed it.
+        long reservoirBuffer = reservoirs != null && reservoirs.buffer() != 0L
+            ? reservoirs.buffer() : reservoirDummy.handle;
+        long reservoirBytes = reservoirBuffer == reservoirDummy.handle ? RESERVOIR_BYTES : reservoirs.bytes();
         return List.of(
             SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
             SlangProgram.Resource.storageImage("outImage", radiance.view),
@@ -468,7 +514,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             SlangProgram.Resource.storageImage("outDepth", depthView),
             SlangProgram.Resource.uniformBuffer("frame", frameConstants[frameSlot].handle, 0, FRAME_CONSTANTS_BYTES),
             SlangProgram.Resource.storageBuffer("blockMaterials", blockMaterials.handle, 0, BLOCK_MATERIAL_BYTES),
-            SlangProgram.Resource.storageBuffer("emitters", emitterBuffer, emitterOffset, emitterBytes));
+            SlangProgram.Resource.storageBuffer("emitters", emitterBuffer, emitterOffset, emitterBytes),
+            SlangProgram.Resource.storageBuffer("reservoirs", reservoirBuffer, 0L, reservoirBytes));
     }
 
     /** (Re)creates the radiance output when the render size changed; the old image is destroyed only after the device is idle. */
@@ -528,6 +575,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             memory.destroy(constants);
         }
         memory.destroy(blockMaterials);
+        memory.destroy(reservoirDummy);
         width = 0;
         height = 0;
     }

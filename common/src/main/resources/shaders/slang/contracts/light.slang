@@ -43,10 +43,16 @@ struct LightEvaluation {
 // can see today; `emission` is the one piece of receiver state it cannot infer,
 // and an emitter sampler needs it: a face that is itself a light must not be lit
 // by its own quad, or a torch glows twice (once as `emitted`, once as NEE).
+//
+// `primary` is the pixel's own first surface.  A screen-space reservoir (ReSTIR
+// DI) is indexed by pixel, so it belongs to that surface alone: a path vertex
+// deeper in the path would write a sample of some other receiver into this
+// pixel's record and drag that light across the screen.
 struct LightReceiver {
     float3 position;
     float3 normal;      // shading normal, already flipped to the ray side
     float  emission;    // the receiver's own emissive mask; >= 0.5 is a light face
+    bool   primary;     // this is the primary hit of the pixel that owns the reservoir
 };
 
 LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
@@ -54,12 +60,46 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
     receiver.position = position;
     receiver.normal = normal;
     receiver.emission = emission;
+    // Conservative default: a caller that wants its surface served from the reservoir opts in explicitly.
+    receiver.primary = false;
     return receiver;
 }
 
 interface ILightSampler {
     LightSample sample(LightReceiver receiver, inout uint seed);
     LightEvaluation evaluate(LightReceiver receiver, LightSample sample);
+};
+
+// Cross-frame reuse of one direct-light sample.  The record lives in screen
+// space, so only the pixel's own primary surface reads and writes it, and the
+// write cannot finish inside `sample`: the path tracer owns the shadow ray and
+// an occluded frame must decay the stored weight instead of dropping the
+// sample.  `reuseSample` therefore stores the record with its full weight and
+// `reuseConfirm` applies the outcome of the ray that followed it.
+interface IReuseSampler {
+    bool reuseActive();
+    LightSample reuseSample(LightReceiver receiver, inout uint seed);
+    void reuseConfirm(bool occluded);
+    // Publishes an empty record for a pixel that shaded no surface, so a stale history cannot resurrect a light that
+    // has left the screen.
+    void reuseClear();
+};
+
+// The sampler a caller that does not reuse passes to the path tracer: no record, no second branch.
+struct NoReuseSampler : IReuseSampler {
+    bool reuseActive() {
+        return false;
+    }
+
+    LightSample reuseSample(LightReceiver receiver, inout uint seed) {
+        return invalidLightSample();
+    }
+
+    void reuseConfirm(bool occluded) {
+    }
+
+    void reuseClear() {
+    }
 };
 
 LightSample invalidLightSample() {

@@ -109,7 +109,9 @@ def elementBytesOf = { param ->
 def STRUCT_LAYOUTS = [
     LegacySection: [size: 64, fields: [posAddr: 0, uvAddr: 8, colAddr: 16, lightAddr: 24, quadStart: 32, origin: 48]],
     FrameConstants: [size: 608, fields: [camera: 0, sun: 416, atmosphere: 480, exposure: 560, frame: 592]],
-    BlockMaterial: [size: 64, fields: [albedo: 0, surface: 16, optical: 32, meta: 48]]
+    BlockMaterial: [size: 64, fields: [albedo: 0, surface: 16, optical: 32, meta: 48]],
+    // The ReSTIR DI record the Slang path tracer reads and writes; the Java host allocates the ring with this stride.
+    DIReservoir: [size: 64, fields: [sample: 0, stats: 16, source: 32, receiver: 48]]
 ]
 
 def validateStructLayout = { String relative, String bindingName, struct ->

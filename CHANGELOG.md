@@ -2,15 +2,28 @@
 
 ## Unreleased
 
+* Reuse block-emitter samples across frames in the Slang path tracer: `restir/di_block_emitters.slang` implements the
+  `IReuseSampler` contract over `restir/restir_di.slang`, `passes/path_trace.slang` binds a per-pixel reservoir ring
+  (binding 19, 96-byte push) and `RtSlangPathPass` owns `rt_path_restir` — two halves, parity advanced only by a dispatch
+  that wrote records, dropped when the light list or the render size changes. The merge numbers, the receiver gates and the
+  occlusion fade-out are the legacy ones (M cap 20, temporal ratio 8, decay 0.25, normal dot 0.8 static / 0.6 moving,
+  5 % + 0.1-block tolerance), pinned by `RtSlangRestirDiTest` against `rt_common_emitters.glsl`; a stored point is
+  re-resolved through `BlockEmitterSampler.evaluate`, so a reused light and a freshly drawn one cannot disagree about
+  `p^`, pdf or `Le`. Reprojection uses the same camera-delta convention as `path_display.slang`, so interior torches
+  accumulate while walking instead of resetting every frame. `RtFrameParams.emitterFingerprint` carries the list identity;
+  switch `-Dvkbridge.rt.restirDi` (default true) and `restir_di=temporal` in the mode log. Spatial reuse is not ported
+  yet. Evidence: `compileSlang` produces the 11-binding/96-byte manifest and `:common:test` is green (627 tests); no
+  owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
 * Give the Slang path tracer block-emitter next-event estimation (`light/block_emitters.slang`, binding 18 over the records
   `RtEmitters` already uploads): a torch-lit interior is no longer black in Path Tracing mode. The transport kernel, the eight
   chromatic categories, the two-sided floor, the redstone bit test and the open-source shadow end bias are the legacy tuned
   ones, pinned on both sides by `RtSlangBlockEmitterTest`; `RtSlangPathPass` samples the list under
   `-Dvkbridge.rt.blockEmitters` with `-Dvkbridge.rt.emitterCandidates` and `-Dvkbridge.rt.emitterProbability`.
   `ILightSampler` now takes a `LightReceiver` so a glowing face rejects its own quad instead of being lit twice, and
-  `MaterialSample` carries the scalar emission mask. Entity-atlas emitters and the pixelated cell shadow stay unported; no
-  reservoir yet. Evidence: `:common:test` green (615 tests) and `compileSlang` produces the 10-binding/64-byte manifest; no
-  owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+  `MaterialSample` carries the scalar emission mask. Entity-atlas emitters and the pixelated cell shadow stay unported; at
+  this point each call still sampled the list on its own. Evidence: `:common:test` green (615 tests) and `compileSlang`
+  produces the 10-binding/64-byte manifest; no owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
 
 * Integrate the 15 later ReSTIR/barriers commits through `1ae6580`: finite temporal/denoiser inputs, entity buffer retirement,
   primitive entity capture, native exception containment, DLL/load-path checks, backend escape-hatch and teardown fixes,

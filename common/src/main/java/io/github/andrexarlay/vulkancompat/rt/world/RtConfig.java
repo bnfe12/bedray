@@ -67,6 +67,12 @@ public final class RtConfig {
     public static final float SLANG_EMITTER_PROBABILITY = Math.min(1.0f,
         Math.max(0.0f, Float.parseFloat(System.getProperty("vkbridge.rt.emitterProbability", "0.5"))));
 
+    /** ReSTIR direct illumination in the Slang path tracer: the block-emitter sample of a pixel is kept in a per-pixel
+     * reservoir and reused across frames instead of being redrawn from one batch every time. This is what lets a
+     * torch-lit wall converge while the camera moves; {@code -Dvkbridge.rt.restirDi=false} falls back to plain per-frame
+     * RIS sampling of the same emitter list. */
+    public static final boolean SLANG_RESTIR_DI = Boolean.parseBoolean(System.getProperty("vkbridge.rt.restirDi", "true"));
+
     /** Horizontal RT radius in sections: override, else the game render distance ("As in game"), else the manual value. */
     public static int radiusXz(int gameRenderDistanceChunks) {
         if (RADIUS_XZ_OVERRIDE > 0) {

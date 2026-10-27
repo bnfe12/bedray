@@ -19,6 +19,7 @@
 //   16 frame            ConstantBuffer<FrameConstants> (608 B)
 //   17 blockMaterials   StructuredBuffer<BlockMaterial> (dummy table until voxel materials exist)
 //   18 emitters         StructuredBuffer<BlockEmitterRecord> (the RtEmitters list of the legacy path, 96 B per record)
+//   19 reservoirs       RWStructuredBuffer<DIReservoir> (ReSTIR DI: two parity halves, 64 B per pixel)
 //
 // The manifest records Int64, PhysicalStorageBufferAddresses and RayQueryKHR as
 // required capabilities; the Java host must enable the matching ABI bits.
@@ -30,12 +31,21 @@ import "light/block_emitters.slang";
 import "light/sky.slang";
 import "light/sun.slang";
 import "pathtrace/path_tracer.slang";
+import "restir/di_block_emitters.slang";
+import "restir/restir_di.slang";
 import "sampling.slang";
 import "surface/surface.slang";
 import "traversal/legacy_section_traversal.slang";
 import "traversal/traversal.slang";
 
 static const uint PATH_TRACE_INSTANCE_MASK_WORLD = 0x01u;
+
+// Bits of PathTracePush.diState.x.  The reservoir branch is one code path gated by a flag, not a second shader: the host
+// can A/B ReSTIR DI against plain per-frame RIS in the same frame graph.
+static const uint PATH_TRACE_DI_ENABLED      = 1u << 0u;
+static const uint PATH_TRACE_DI_HISTORY      = 1u << 1u;   // the previous dispatch wrote records of this convention
+static const uint PATH_TRACE_DI_STATIC       = 1u << 2u;   // camera did not move: the history is the same pixel
+static const uint PATH_TRACE_DI_FLIP_Y       = 1u << 3u;   // the reprojection has to mirror the previous-frame y
 
 struct PathTracePush {
     uint  maxDepth;
@@ -51,6 +61,8 @@ struct PathTracePush {
     uint  emitterCount;
     float emitterProbability;
     float4 emitterCameraRelative;   // xyz camera minus the origin the list was rebuilt at, w candidates per call
+    float4 diCameraDelta;           // xyz raw camera position minus the previous frame's, w reserved
+    uint4  diState;                 // x: PATH_TRACE_DI_* bits, y: parity half this frame writes, zw reserved
 };
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;
@@ -63,6 +75,7 @@ struct PathTracePush {
 [[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;
 [[vk::binding(17, 0)]] StructuredBuffer<BlockMaterial> blockMaterials;
 [[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;
+[[vk::binding(19, 0)]] RWStructuredBuffer<DIReservoir> reservoirs;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -123,19 +136,40 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     // Block emitters of this frame, in the list RtEmitters uploads for the legacy path as well. The receiver's own
     // emission reaches the sampler through LightReceiver, so a glowing face is not lit by its own quad.
+    uint emitterCandidates = uint(max(pc.emitterCameraRelative.w, 1.0));
     BlockEmitterSampler emitterSampler;
     emitterSampler.records = emitters;
     emitterSampler.atlas = atlas;
-    emitterSampler.count = pc.emitterCount;
-    emitterSampler.candidates = uint(max(pc.emitterCameraRelative.w, 1.0));
+    emitterSampler.candidates = emitterCandidates;
     emitterSampler.cameraRelative = pc.emitterCameraRelative.xyz;
     emitterSampler.maxDistance = max(pc.maxDistance, 1.0);
+
+    // ReSTIR DI over the same list: one reservoir of this pixel, the reprojected history of the same surface.  The pass
+    // always builds it and the push flag decides whether it is consulted, so one instantiation covers both branches.
+    BlockEmitterDiSampler directReuse;
+    directReuse.records = emitters;
+    directReuse.reservoirs = reservoirs;
+    directReuse.atlas = atlas;
+    directReuse.candidates = emitterCandidates;
+    directReuse.cameraRelative = pc.emitterCameraRelative.xyz;
+    directReuse.maxDistance = max(pc.maxDistance, 1.0);
+    directReuse.enabled = (pc.diState.x & PATH_TRACE_DI_ENABLED) != 0u ? 1u : 0u;
+    directReuse.historyValid = (pc.diState.x & PATH_TRACE_DI_HISTORY) != 0u ? 1u : 0u;
+    directReuse.cameraStatic = (pc.diState.x & PATH_TRACE_DI_STATIC) != 0u ? 1u : 0u;
+    directReuse.flipY = (pc.diState.x & PATH_TRACE_DI_FLIP_Y) != 0u ? 1u : 0u;
+    directReuse.parity = pc.diState.y;
+    directReuse.pixel = p;
+    directReuse.size = size;
+    directReuse.cameraDelta = pc.diCameraDelta.xyz;
+    directReuse.previousViewProjection = f.camera.prevViewProjection;
 
     SunAndBlockEmitterSampler lights;
     lights.keyLight = keyLight;
     lights.emitters = emitterSampler;
     // No list, no share: the sun keeps the whole density instead of being renormalised by a branch that never wins.
     lights.emitterProbability = pc.emitterCount > 0u ? clamp(pc.emitterProbability, 0.0, 1.0) : 0.0;
+    // With the reservoir on, the primary vertex is lit from it and the composite must not draw the same branch again.
+    lights.emittersReusedAtPrimary = directReuse.enabled != 0u;
 
     GradientSky environment;
     environment.atmosphere = f.atmosphere;
@@ -156,7 +190,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // and a hole to the shadow ray.
     MaterialSamplingOptions materialOptions = defaultMaterialSamplingOptions();
     materialOptions.alphaCutoff = options.alphaCutoff;
-    PathTraceResult result = tracePath(traversal, lights, environment, atlas, table,
+    PathTraceResult result = tracePath(traversal, lights, environment, directReuse, atlas, table,
         primary, materialOptions, options, seed);
 
     // Scene-referred linear radiance: no exposure and no tone map here.  Exposure lives in FrameConstants.exposure and

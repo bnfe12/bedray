@@ -56,6 +56,17 @@ public final class RtSlangPathPass implements RtPass {
     /** Relative depth disagreement (in blocks at unit distance) that still counts as the same surface when reprojecting. */
     static final float REPROJECTION_TOLERANCE = 0.02f;
 
+    /** Bits of {@code PathTracePush.diState.x}; mirrors the {@code PATH_TRACE_DI_*} constants of the shader. */
+    static final int DI_FLAG_ENABLED = 1;
+    static final int DI_FLAG_HISTORY = 1 << 1;
+    static final int DI_FLAG_STATIC = 1 << 2;
+    static final int DI_FLAG_FLIP_Y = 1 << 3;
+
+    /** True when this frame should run the ReSTIR DI branch: the emitter list is bound and the switch is on. */
+    static boolean diRequested() {
+        return RtConfig.SLANG_BLOCK_EMITTERS && RtConfig.SLANG_RESTIR_DI;
+    }
+
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
     static boolean isSupported(SlangRuntime runtime) {
         return supportProblem(runtime) == null;
@@ -90,11 +101,20 @@ public final class RtSlangPathPass implements RtPass {
     private RtMemory memory;
     private RtMemory.Img accum;
     private RtMemory.Img historyDepth;
+    /** Two halves of per-pixel ReSTIR DI reservoirs, owned here so the Slang ring never aliases the GLSL one. */
+    private RtMemory.Buf reservoirs;
     private RtPipeline.Views views;
     private int accumFrames;
     private boolean forceReset = true;
     /** True when the previous display dispatch left a mean and a depth history that reprojection can read. */
     private boolean historyWritten;
+    private long reservoirPixels;
+    private long reservoirFingerprint = Long.MIN_VALUE;
+    private boolean reservoirResetRequested = true;
+    /** True when the previous traced dispatch wrote the half the other parity reads. */
+    private boolean reservoirHistoryWritten;
+    /** Advanced only by a dispatch that actually wrote reservoirs, so a skipped frame leaves the ring consistent. */
+    private int reservoirFrame;
     private int lastSettingsHash;
     private int lastWidth;
     private int lastHeight;
@@ -176,13 +196,17 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public String describe(RtFrameParams p) {
+        String restir = !diRequested() || reservoirs == null ? "off"
+            : reservoirHistoryWritten ? "temporal" : "fresh";
         return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
-            + (RtSettings.accumulate() ? ",accumulate" : "") + ",frames=" + (accumFrames + 1) + ",denoiser=off)";
+            + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
+            + ",frames=" + (accumFrames + 1) + ",denoiser=off)";
     }
 
     @Override
     public void prepare(VkCommandBuffer cmd, RtMemory mem, int width, int height) {
         memory = mem;
+        prepareReservoirs(mem, width, height);
         if (accum != null && historyDepth != null && lastWidth == width && lastHeight == height) {
             return;
         }
@@ -212,6 +236,46 @@ public final class RtSlangPathPass implements RtPass {
         forceReset = true;
     }
 
+    /**
+     * The reservoir ring of the DI branch: two halves of one 64-byte record per pixel, device-local because the reset is
+     * a command-buffer fill. Turning ReSTIR DI off frees it again - the buffer is 250 MB at 1080p and holding it unused
+     * would compete with the section arenas.
+     */
+    private void prepareReservoirs(RtMemory mem, int width, int height) {
+        long pixels = (long) width * height;
+        long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;
+        if (!diRequested()) {
+            if (reservoirs != null) {
+                VK10.vkDeviceWaitIdle(device); // the previous frames in flight still read the records
+                mem.destroy(reservoirs);
+                reservoirs = null;
+            }
+            reservoirHistoryWritten = false;
+            reservoirPixels = 0L;
+            return;
+        }
+        if (reservoirs != null && reservoirs.size >= need) {
+            if (pixels != reservoirPixels) {
+                // A smaller render scale moves every pixel index, so the records of the old layout must not be read.
+                reservoirPixels = pixels;
+                reservoirResetRequested = true;
+                reservoirHistoryWritten = false;
+            }
+            return;
+        }
+        VK10.vkDeviceWaitIdle(device);
+        if (reservoirs != null) {
+            mem.destroy(reservoirs);
+        }
+        reservoirs = mem.createBuffer("rt_path_restir", need,
+            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+        reservoirPixels = pixels;
+        reservoirResetRequested = true;
+        reservoirHistoryWritten = false;
+        LOGGER.info("[VKB-RT] Slang ReSTIR DI reservoirs {}x{} x2 = {} MiB", width, height,
+            Math.max(1L, need / (1024L * 1024L)));
+    }
+
     @Override
     public void configure(RtFrameParams params, boolean denoising) {
         params.mode = RtConfig.effectiveMode();
@@ -235,6 +299,15 @@ public final class RtSlangPathPass implements RtPass {
         } else if (accumFrames < RtFrameParams.MAX_ACCUM) {
             accumFrames++;
         }
+        // The reservoir ring has its own, much narrower invalidation rule: only a real reset (start, resize, a change of
+        // what is being traced) or a different light list makes a stored sample wrong. A removed torch would otherwise
+        // keep glowing through history forever, while streaming sections and the accumulate switch leave it valid - and
+        // filling hundreds of MB every frame would cost far more than the reuse saves.
+        if (forceReset || settingsHash != lastSettingsHash || params.emitterFingerprint != reservoirFingerprint) {
+            reservoirResetRequested = true;
+            reservoirHistoryWritten = false;
+        }
+        reservoirFingerprint = params.emitterFingerprint;
         forceReset = false;
         lastSettingsHash = settingsHash;
         System.arraycopy(params.key.dir, 0, lastSunDirection, 0, 3);
@@ -269,6 +342,8 @@ public final class RtSlangPathPass implements RtPass {
     public void resetHistory() {
         forceReset = true;
         historyWritten = false;
+        reservoirResetRequested = true;
+        reservoirHistoryWritten = false;
     }
 
     @Override
@@ -282,14 +357,37 @@ public final class RtSlangPathPass implements RtPass {
         int emitterCount = RtConfig.SLANG_BLOCK_EMITTERS ? Math.max(0, params.emitterCount) : 0;
         RtPathTraceSlangPass.Emitters emitters = new RtPathTraceSlangPass.Emitters(
             emitterCount > 0 ? params.emitterHandle : 0L, params.emitterOffset, emitterCount);
+        // ReSTIR DI reuses the emitter samples of the previous dispatch, so it needs both a bound list and the ring.
+        // The half written this frame is the opposite of the half read, which is why the parity only advances on a
+        // dispatch that actually wrote records.
+        RtPathTraceSlangPass.Reservoirs reservoirRange = RtPathTraceSlangPass.Reservoirs.NONE;
+        int diFlags = 0;
+        int diParity = reservoirFrame & 1;
+        if (emitterCount > 0 && diRequested() && reservoirs != null) {
+            if (reservoirResetRequested) {
+                VK10.vkCmdFillBuffer(cmd, reservoirs.handle, 0L, reservoirs.size, 0);
+                VkBarriers.fullMemoryBarrier(cmd);
+                reservoirResetRequested = false;
+            }
+            diFlags = DI_FLAG_ENABLED | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)
+                | (params.cameraStatic ? DI_FLAG_STATIC : 0) | (params.flipY ? DI_FLAG_FLIP_Y : 0);
+            reservoirRange = new RtPathTraceSlangPass.Reservoirs(reservoirs.handle, reservoirs.size);
+        }
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, 0, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
-            params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES);
+            params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES,
+            params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, diParity);
         recordings.add(cmd.address());
         trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
             new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
-            emitters, views.depth(), frame, dispatch);
+            emitters, reservoirRange, views.depth(), frame, dispatch);
+        if (diFlags == 0) {
+            reservoirHistoryWritten = false;
+        } else {
+            reservoirHistoryWritten = true;
+            reservoirFrame++;
+        }
 
         int flags = DISPLAY_FLAG_TONEMAP | (RtSettings.accumulate() ? DISPLAY_FLAG_ACCUMULATE : 0);
         if (params.cameraStatic) {
@@ -439,6 +537,12 @@ public final class RtSlangPathPass implements RtPass {
             historyDepth = null;
         }
         historyWritten = false;
+        if (reservoirs != null && memory != null) {
+            memory.destroy(reservoirs);
+            reservoirs = null;
+        }
+        reservoirHistoryWritten = false;
+        reservoirPixels = 0L;
         VK10.vkDestroySampler(device, sampler, null);
     }
 }

@@ -7,7 +7,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -67,49 +66,62 @@ class RtSlangBlockEmitterTest {
     @Test
     void theEstimatorCancelsTheCosineTheBsdfAlreadyApplies() {
         String slang = read(EMITTERS);
-        String sample = block(slang, "LightSample sample(LightReceiver receiver, inout uint seed) {");
-        assertTrue(sample.contains("float risWeight = (weightSum / float(candidates)) / max(chosenCosReceiver, 1.0e-4);"),
+        String estimate = estimateBlock(slang);
+        assertTrue(estimate.contains("float risWeight = (weightSum / max(sampleCount, 1.0)) / max(cosReceiver, 1.0e-4);"),
             "the legacy p-hat folds the receiver cosine into the target density and its albedo/PI term has no cosine of its"
                 + " own, while bsdfEvaluate returns the diffuse lobe multiplied by NdotL: dividing here is what keeps the"
                 + " product equal to the legacy integrand instead of squaring the cosine");
-        assertTrue(sample.contains("result.radiance = chosenColor * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN) * risWeight"),
+        assertTrue(estimate.contains("result.radiance = e.radiancePerEmission * risWeight * e.solidAnglePdf;"),
             "radiance divided by this sourcePdf leaves Le * W / K");
-        assertTrue(sample.contains("result.sourcePdf = solidAnglePdf;"), "the density itself stays the honest one");
-        assertTrue(sample.contains("(chosenProbability / chosenArea) * chosenDistance * chosenDistance / chosenCosGeometry"),
+        assertTrue(estimate.contains("result.sourcePdf = e.solidAnglePdf;"), "the density itself stays the honest one");
+        String pdf = block(slang, "float blockEmitterSolidAnglePdf(BlockEmitterPoint p, float distance2,"
+            + " float cosGeometry) {");
+        assertTrue(pdf.contains("(probability / area) * distance2 / max(cosGeometry, 1.0e-5)"),
             "area sampling to solid angle: P(index) / area * d^2 / cos(emitter)");
-        assertTrue(sample.contains("float pIndex = (sqrt(float(index + 1u)) - sqrt(float(index))) * rsqrt(floatCount);"),
+        String indexProbability = block(slang, "float blockEmitterIndexProbability(uint index, uint count) {");
+        assertTrue(indexProbability.contains("(sqrt(float(index + 1u)) - sqrt(float(index))) * rsqrt(float(count))"),
             "the list is importance-sorted, so u^2 picks it and P(i) = sqrt((i+1)/n) - sqrt(i/n)");
-        assertTrue(sample.contains("float2 r2shift = float2(rand01(seed), rand01(seed));"),
+        String batch = block(slang, "BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<BlockEmitterRecord> records,");
+        assertTrue(batch.contains("float2 r2shift = float2(rand01(seed), rand01(seed));"),
             "one per-call R2 shift stratifies the quads of one torch instead of flickering on them");
     }
 
     @Test
     void theTwoSidedSourcesKeepTheirFloorAndTheirEndBias() {
         String slang = read(EMITTERS);
-        String sample = block(slang, "LightSample sample(LightReceiver receiver, inout uint seed) {");
-        assertTrue(sample.contains("float cosGeometry = twoSided ? abs(cosEmitter) : max(cosEmitter, 0.0);"),
+        String phat = block(slang, "float blockEmitterPhat(BlockEmitterPoint p, LightReceiver receiver, float distance2,"
+            + " float lightRadius) {");
+        assertTrue(phat.contains("float cosGeometry = p.twoSided ? abs(cosEmitter) : max(cosEmitter, 0.0);"),
             "the density uses the true projection");
-        assertTrue(sample.contains("float cosKernel = twoSided ? max(abs(cosEmitter), 0.25) : max(cosEmitter, 0.0);"),
+        assertTrue(phat.contains("float cosKernel = p.twoSided ? max(abs(cosEmitter), 0.25) : max(cosEmitter, 0.0);"),
             "the look kernel keeps the 0.25 floor so an edge-on flame does not switch off");
-        assertTrue(sample.contains("float endBias = clamp(0.02 * distanceTo, 0.002, 0.03);"), "the legacy shadow bias");
-        assertTrue(sample.contains("endBias = max(endBias, min(0.2, 0.45 * distanceTo));"),
+        String endBias = block(slang, "float blockEmitterEndBias(BlockEmitterPoint p, float distanceTo) {");
+        assertTrue(endBias.contains("float endBias = clamp(0.02 * distanceTo, 0.002, 0.03);"), "the legacy shadow bias");
+        assertTrue(endBias.contains("return p.twoSided ? max(endBias, min(0.2, 0.45 * distanceTo)) : endBias;"),
             "a torch flame on its stick must not be shadowed by its own stick");
-        assertTrue(sample.contains("result.position = receiver.position + result.direction * max(chosenDistance - chosenEndBias, 0.001);"),
+        String estimate = estimateBlock(slang);
+        assertTrue(estimate.contains("float shadowDistance = max(distanceTo - e.endBias, 0.001);"),
             "the shadow ray of the path tracer ends where the legacy one did");
-        assertFalse(sample.contains("result.distance = chosenDistance;"), "an unbiased endpoint would re-add the self-shadow");
+        assertTrue(estimate.contains("result.position = receiver.position + direction * shadowDistance;"),
+            "short of the emitter body");
+        assertTrue(estimate.contains("result.distance = shadowDistance;"),
+            "and the same shortened distance, not the full one");
     }
 
     @Test
     void aGlowingFaceIsNotLitByItsOwnQuad() {
-        String sample = block(read(EMITTERS), "LightSample sample(LightReceiver receiver, inout uint seed) {");
-        assertTrue(sample.contains("distance2 < (receiver.emission > 0.5 ? 0.25 : 1.0e-6)"),
+        String slang = read(EMITTERS);
+        String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord> records,");
+        assertTrue(candidate.contains("distance2 < (receiver.emission > 0.5 ? 0.25 : 1.0e-6)"),
             "the legacy half-block self-rejection: without it a torch face samples its own quad at d -> 0, the d^-1.5"
                 + " kernel blows that candidate up and it wins the roulette on top of the emission term already added");
         assertTrue(read(CONTRACT).contains("float  emission;"),
             "the receiver carries the one piece of state a sampler cannot infer from a position and a normal");
         String tracer = read(TRACER);
-        assertTrue(tracer.contains("lights.sample(lightReceiver(hit.position, normal, surface.material.emissionMask), seed);"),
-            "the path tracer hands the mask of the face it is shading to the sampler");
+        assertTrue(tracer.contains("receiver.primary = result.surfaceHits == 1u;"),
+            "the path tracer marks the primary vertex, the only one whose light point is reused");
+        assertTrue(tracer.contains("lights.sample(receiver, seed)"),
+            "and passes the receiver, so the emission mask of the face being shaded travels with the call");
         assertTrue(tracer.contains("result.radiance += throughput * surface.material.emission;"),
             "and still adds the face it sees: the look of an emitter and the light it casts are two terms");
         assertTrue(read(SURFACE).contains("material.emissionMask = max(materialTexel.b, 0.0);"),
@@ -119,14 +131,18 @@ class RtSlangBlockEmitterTest {
     @Test
     void entityEmittersAreRejectedBeforeTheyTakeWeight() {
         String slang = read(EMITTERS);
-        String sample = block(slang, "LightSample sample(LightReceiver receiver, inout uint seed) {");
-        int reject = sample.indexOf("if (uint(emitter.uvCorner.w + 0.5) != 0u) {");
-        int weight = sample.indexOf("weightSum += weight;");
+        String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord> records,");
+        int reject = candidate.indexOf("if (uint(emitter.uvCorner.w + 0.5) != 0u) {");
+        int atlasFetch = candidate.indexOf("atlas.material.SampleLevel(point.uv, 0.0)");
         assertTrue(reject >= 0, "the entity-atlas records are skipped");
-        assertTrue(reject < weight, "a candidate that cannot be evaluated must not enter the sum or the roulette");
-        int atlasFetch = sample.indexOf("atlas.material.SampleLevel(uv, 0.0)");
-        assertTrue(atlasFetch > reject, "the skip happens before the fetch the rejection makes pointless");
-        assertTrue(sample.contains("distance2 > lightRadius * lightRadius"), "the radius test also precedes the fetch");
+        assertTrue(reject < atlasFetch, "the skip happens before the fetch the rejection makes pointless");
+        assertTrue(candidate.contains("distance2 > lightRadius * lightRadius"),
+            "the radius test also precedes the fetch");
+        String batch = block(slang, "BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<BlockEmitterRecord> records,");
+        int validity = batch.indexOf("if (!blockEmitterCandidateValid(candidate)) {");
+        int weight = batch.indexOf("winner.weightSum += weight;");
+        assertTrue(validity >= 0 && validity < weight,
+            "a candidate that cannot be evaluated must not enter the sum or the roulette");
     }
 
     @Test
@@ -163,14 +179,24 @@ class RtSlangBlockEmitterTest {
             "an empty list must not steal half of the draws for a light that is never there");
         assertTrue(pass.contains("[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;"),
             "the host promises exactly this binding number");
-        assertTrue(pass.contains("emitterSampler.candidates = uint(max(pc.emitterCameraRelative.w, 1.0));"),
+        assertTrue(pass.contains("uint emitterCandidates = uint(max(pc.emitterCameraRelative.w, 1.0));"),
             "the candidate count travels in the free component of the camera-relative vec4");
+        assertTrue(pass.contains("emitterSampler.candidates = emitterCandidates;")
+            && pass.contains("directReuse.candidates = emitterCandidates;"),
+            "the plain RIS draw and the ReSTIR DI batch read the same number of candidates, so the A/B is one switch");
         assertTrue(pass.indexOf("receiverEmission") < 0,
             "the sampler has no per-frame receiver state: the emission of the face being shaded travels with the call");
+        assertTrue(composite.contains("&& !(receiver.primary && emittersReusedAtPrimary);"),
+            "with the reservoir on, the composite leaves the emitter branch to it at the primary vertex instead of"
+                + " drawing the same list a second time");
     }
 
-    private static int count(String source, String needle) {
-        int at = 0;
+    /** The body of the shared estimator, which turns one reservoir record or one fresh draw into a light sample. */
+    private static String estimateBlock(String emittersSource) {
+        return block(emittersSource, "LightSample blockEmitterEstimateSample(");
+    }
+
+    private static int count(String source, String needle) {        int at = 0;
         int hits = 0;
         while (true) {
             int found = source.indexOf(needle, at);

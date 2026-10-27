@@ -66,7 +66,8 @@ class RtPathTraceSlangPassTest {
     @Test
     void pushBlockKeepsTheSlangLayout() {
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(
-            8, 32, 5, 0, 0x21, 0.01f, 0.5f, 512f, 1000f, 0.75f, 64, 0.5f, 1.5f, -2.25f, 0.75f, 8);
+            8, 32, 5, 0, 0x21, 0.01f, 0.5f, 512f, 1000f, 0.75f, 64, 0.5f, 1.5f, -2.25f, 0.75f, 8,
+            0.25f, -0.5f, 1.75f, 0b1011, 1);
         ByteBuffer out = ByteBuffer.allocate(RtPathTraceSlangPass.PUSH_BYTES);
         dispatch.writeTo(out);
 
@@ -86,8 +87,27 @@ class RtPathTraceSlangPassTest {
         assertEquals(-2.25f, out.getFloat(52), "camRel.y at 52");
         assertEquals(0.75f, out.getFloat(56), "camRel.z at 56");
         assertEquals(8f, out.getFloat(60), "candidates at 60");
+        assertEquals(0.25f, out.getFloat(64), "diCameraDelta.x at 64");
+        assertEquals(-0.5f, out.getFloat(68), "diCameraDelta.y at 68");
+        assertEquals(1.75f, out.getFloat(72), "diCameraDelta.z at 72");
+        assertEquals(0, out.getInt(76), "diCameraDelta.w is the reserved lane");
+        assertEquals(0b1011, out.getInt(80), "diState.x at 80");
+        assertEquals(1, out.getInt(84), "diState.y (parity) at 84");
+        assertEquals(0, out.getInt(88), "diState.z is a reserved lane");
+        assertEquals(0, out.getInt(92), "diState.w is a reserved lane");
         assertEquals(RtPathTraceSlangPass.PUSH_BYTES, out.capacity());
-        assertEquals(64, RtPathTraceSlangPass.PUSH_BYTES, "ten scalars, the emitter pair and one float4");
+        assertEquals(96, RtPathTraceSlangPass.PUSH_BYTES, "the 64 B block plus the two DI vectors");
+    }
+
+    /** The DI fields are read only inside the gated branch, but a garbage value there is still an unusable frame. */
+    @Test
+    void diPushRejectsValuesTheShaderCannotUse() {
+        assertThrows(IllegalArgumentException.class,
+            () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, 0f, 0f, 0f, 1, 2));
+        assertThrows(IllegalArgumentException.class,
+            () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, 0f, 0f, 0f, 1, -1));
+        assertThrows(IllegalArgumentException.class,
+            () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, Float.POSITIVE_INFINITY, 0f, 0f, 1, 0));
     }
 
     @Test
@@ -116,8 +136,18 @@ class RtPathTraceSlangPassTest {
     private static RtPathTraceSlangPass.Dispatch dispatch(int depth, int steps, float alphaCutoff, float maxDistance,
                                                           float maxRadiance, float sunProbability, int emitterCount,
                                                           float emitterProbability, int emitterCandidates) {
+        return dispatch(depth, steps, alphaCutoff, maxDistance, maxRadiance, sunProbability, emitterCount,
+            emitterProbability, emitterCandidates, 0f, 0f, 0f, 0, 0);
+    }
+
+    private static RtPathTraceSlangPass.Dispatch dispatch(int depth, int steps, float alphaCutoff, float maxDistance,
+                                                          float maxRadiance, float sunProbability, int emitterCount,
+                                                          float emitterProbability, int emitterCandidates,
+                                                          float diDeltaX, float diDeltaY, float diDeltaZ, int diFlags,
+                                                          int diParity) {
         return new RtPathTraceSlangPass.Dispatch(depth, steps, 0, 0, 0, 0.01f, alphaCutoff, maxDistance, maxRadiance,
-            sunProbability, emitterCount, emitterProbability, 0f, 0f, 0f, emitterCandidates);
+            sunProbability, emitterCount, emitterProbability, 0f, 0f, 0f, emitterCandidates,
+            diDeltaX, diDeltaY, diDeltaZ, diFlags, diParity);
     }
 
     @Test
@@ -151,6 +181,8 @@ class RtPathTraceSlangPassTest {
             "BlockMaterial");
         assertEquals(RtPathTraceSlangPass.EMITTER_BYTES, manifest.binding("emitters").elementBytes(),
             "BlockEmitterRecord: the six vec4 RtEmitters writes, so one buffer serves both paths");
+        assertEquals(RtPathTraceSlangPass.RESERVOIR_BYTES, manifest.binding("reservoirs").elementBytes(),
+            "DIReservoir: sample, stats, source and receiver");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[0], "group x");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[1], "group y");
     }

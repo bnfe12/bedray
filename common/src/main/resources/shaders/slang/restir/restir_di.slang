@@ -25,12 +25,24 @@ static const float RESTIR_DI_SPATIAL_RATIO_CAP = 5.0;
 static const float RESTIR_DI_OCCLUSION_DECAY = 0.25;
 static const float RESTIR_DI_MIN_PDF = 1.0e-8;
 
-// 48-byte GPU record.  `sample.w` is the target PDF at the receiver that wrote
+// `receiver` bits of `stats.w`: the packed normal in `receiver.w` only holds x and y, so the sign of z travels here,
+// and a merge that imports a record needs to know whether the surface it reprojects onto was a ceiling.
+static const uint DI_RECEIVER_NORMAL_DOWN = 1u << 0u;
+
+// 64-byte GPU record.  `sample.w` is the target PDF at the receiver that wrote
 // the record, which is exactly what a temporal/spatial merge must rescale.
+// `receiver` is the surface the record belongs to: its position in the frame
+// that wrote it (so a temporal merge can test the reprojected pixel against the
+// surface it actually came from instead of trusting a depth match alone) and, in
+// `w`, the two components of that surface's normal that a snorm pair can carry
+// (the sign of the third travels in `stats.w`, see DI_RECEIVER_NORMAL_DOWN).
+// A merge never touches these two lanes: they describe the *receiver*, and the
+// receiver of a merged record is always the pixel that is writing it.
 struct DIReservoir {
-    float4 sample;   // xyz: light position, w: targetPdf at the writing receiver
-    float4 stats;    // x: sample count M, y: weight sum, z: confidence, w: flags
-    uint4  source;   // x: lightIndex, y: age, z: LightKind, w: sample flags
+    float4 sample;     // xyz: light position, w: targetPdf at the writing receiver
+    float4 stats;      // x: sample count M, y: weight sum, z: confidence, w: receiver flags
+    uint4  source;     // x: lightIndex, y: age, z: LightKind, w: sample flags
+    float4 receiver;   // xyz: receiver position, w: packed normal xy
 };
 
 struct DIReservoirResult {
@@ -50,7 +62,39 @@ DIReservoir emptyReservoir() {
     reservoir.sample = float4(0.0);
     reservoir.stats = float4(0.0);
     reservoir.source = uint4(0u);
+    reservoir.receiver = float4(0.0);
     return reservoir;
+}
+
+// The two components of a unit vector that fit a snorm pair: quantised to 1/32767 with ties moved up and the two halves
+// in the low and high 16 bits.  The SDK has no intrinsic for it.
+float reservoirPackNormalXY(float2 xy) {
+    float2 clamped = clamp(xy, float2(-1.0), float2(1.0));
+    int2 quantised = int2(int(floor(clamped.x * 32767.0 + 0.5)), int(floor(clamped.y * 32767.0 + 0.5)));
+    // `asfloat` is the bitcast.  `asuint` of a uint is the numeric int-to-float conversion, so the packer would store the
+    // value of the bits as a real number - rounded away above 2^24 - and the unpacker would read a different word back.
+    uint bits = (uint(quantised.y & 0xFFFF) << 16) | uint(quantised.x & 0xFFFF);
+    return asfloat(bits);
+}
+
+// The halves are signed, so `0xFFFF` is -1 and not 65535: read without the sign a wall facing -x decodes to a component
+// above one, the reconstruction below goes imaginary, and the temporal normal gate stops meaning anything.
+float2 reservoirUnpackNormalXY(float packed) {
+    uint bits = asuint(packed);
+    return float2(reservoirUnpackSnorm16(bits & 0xFFFFu), reservoirUnpackSnorm16(bits >> 16u));
+}
+
+float reservoirUnpackSnorm16(uint half) {
+    int signedHalf = int(half);
+    return float(signedHalf >= 32768 ? signedHalf - 65536 : signedHalf) / 32767.0;
+}
+
+// The receiver normal a record was written for.  A zeroed reservoir packs to (0, 0) and decodes to (0, 0, 1); its M is 0,
+// so a merge rejects it before it ever compares normals.
+float3 reservoirReceiverNormal(DIReservoir reservoir) {
+    float2 xy = clamp(reservoirUnpackNormalXY(reservoir.receiver.w), float2(-1.0), float2(1.0));
+    float zSign = (uint(reservoir.stats.w + 0.5) & DI_RECEIVER_NORMAL_DOWN) != 0u ? -1.0 : 1.0;
+    return float3(xy.x, xy.y, zSign * sqrt(max(0.0, 1.0 - dot(xy, xy))));
 }
 
 // Reconstructs the light sample stored in a reservoir at a new receiver.  For

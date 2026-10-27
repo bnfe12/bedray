@@ -126,6 +126,7 @@ common/src/main/resources/shaders/slang/
 │   └── path_tracer.slang              iterative path loop, NEE, Russian roulette
 ├── restir/
 │   ├── restir_di.slang                DIReservoir storage + temporal/spatial merge
+│   ├── di_block_emitters.slang        block-emitter adapter: batch, reprojected history, writeback, occlusion decay
 │   └── direct_light.slang             compatibility re-export of light/emitters.slang
 ├── radiance_cascades/
 │   └── radiance_cascades_store.slang  atlas layout, interval storage, temporal blend
@@ -224,11 +225,15 @@ before the first dispatch.
 | `frame` | 16 | 608-byte `FrameConstants` uniform buffer, one upload per frame |
 | `blockMaterials` | 17 | dummy `BlockMaterial` table until voxel materials exist: allocate at least one 64-byte element and push `materialCount = 0` |
 | `emitters` | 18 | the `RtEmitters` ring buffer bound at the current segment offset — the same 96-byte records the legacy `rt_path.comp` reads, so one upload serves both paths; a dummy element when the list is empty |
+| `reservoirs` | 19 | the ReSTIR DI ring of `RtSlangPathPass`: two halves of one 64-byte `DIReservoir` per pixel (`2 * width * height * 64`), zeroed when the light list or the render size changes; a one-record dummy when the branch is off |
 
-The push block is 64 bytes.  It carries sampling and path limits plus the
+The push block is 96 bytes.  It carries sampling and path limits plus the
 emitter tail (`emitterCount`, `emitterProbability`, and `emitterCameraRelative`,
 whose xyz is the camera minus the origin the list was rebuilt at and whose w is
-the candidates per call): the pass writes scene-referred radiance, and
+the candidates per call) and the ReSTIR DI tail (`diCameraDelta`, the raw camera
+delta of the frame, and `diState`, whose x holds the `PATH_TRACE_DI_*` bits and
+whose y is the half of the ring this dispatch writes): the pass writes
+scene-referred radiance, and
 `FrameConstants.exposure` is applied once by the display/tonemap pass, so
 accumulation and denoise stay in linear HDR and exposure cannot be applied twice.  The pass requires `CAP_RAY_QUERY |
 CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing uses its own
@@ -341,22 +346,80 @@ were tuned by the owner against real screens, so `RtSlangBlockEmitterTest` pins
 each of them on both sides — retune one file and the test names the other.
 
 Estimator contract: `radiance` carries the legacy `p^`-folded weight
-(`wsum / candidates` divided by the receiver cosine, because `bsdfEvaluate`
-applies that cosine again) multiplied by the solid-angle density, and
-`sourcePdf` stays the honest density of the chosen point so ReSTIR can reuse the
-sample without re-deriving it. For one candidate per call this reproduces the
-legacy integrand exactly; for more it is its RIS average.
+(`wsum / M` divided by the receiver cosine, because `bsdfEvaluate` applies that
+cosine again) multiplied by the solid-angle density, and `sourcePdf` stays the
+honest density of the chosen point so ReSTIR can reuse the sample without
+re-deriving it. For one candidate per call this reproduces the legacy integrand
+exactly; for more it is its RIS average.  `blockEmitterEstimateSample` is the
+single place that turns a (position, `p^`, pdf, `Le/texelEmission`, end bias)
+tuple into that pair, and both the fresh batch winner and a reused reservoir
+record are reduced to the same tuple, so the shading of a pixel cannot depend on
+which of the two produced its light.
 
 Known deviations from the legacy path: entity-atlas emitters (`uvc.w != 0`) are
 skipped, because the entity texture is not bound to this pass and a candidate
 that cannot be evaluated must not take weight; the pixelated-cell shadow origin
-is not ported; there is no reservoir yet, so each call samples the list
-independently (`restir/restir_di.slang` is not wired to this pass). Switches: `-Dvkbridge.rt.blockEmitters` (default true, the whole feature),
+is not ported. Switches: `-Dvkbridge.rt.blockEmitters` (default true, the whole feature),
 `-Dvkbridge.rt.emitterCandidates` (1..32, default 8 = `NEE_CANDIDATES`) and
-`-Dvkbridge.rt.emitterProbability` (0..1, default 0.5). Evidence: `compileSlang`
-produces 10 bindings / 64-byte push for `path_trace`, and
-`RtSlangBlockEmitterTest` + `RtPathTraceSlangPassTest` pass; no GPU frame or
-side-by-side screenshot is recorded.
+`-Dvkbridge.rt.emitterProbability` (0..1, default 0.5).
+
+### ReSTIR DI temporal reuse
+
+`restir/di_block_emitters.slang` is the block-emitter adapter over the reservoir
+math of `restir/restir_di.slang`, and `passes/path_trace.slang` binds it at
+binding 19.  One `DIReservoir` per pixel and per frame half holds the light
+point, `p^`, `M`, the weight sum, the record index, the age, the receiver
+position and the packed receiver normal — 64 bytes, pinned in
+`gradle/slang.gradle` and re-checked against the generated manifest before the
+first dispatch.
+
+The normal is the one lane with a hand-written encoding, and Slang has two ways
+to get it silently wrong, so `reservoirPackNormalXY` / `reservoirUnpackNormalXY`
+are pinned by `RtSlangRestirDiTest`.  `asuint` of a `uint` is the *numeric*
+int-to-float conversion, not a bitcast: a packer returning it stores a real
+number (rounded away above 2^24) that `asuint(float)` on the read side turns into
+something else again — `asfloat` is the bitcast.  And the two halves of a snorm
+pair are signed, so `0xFFFF` must decode to `-1`; read as unsigned, any surface
+facing `-x` or `-y` produced a component above one, the reconstructed `z` went to
+zero and the normal gate compared noise.  Neither mistake breaks a compile or
+shows up as a black screen: the reservoir stays readable and reuse just stops
+filtering.
+
+The merge is the legacy one, in the legacy numbers: `M` capped at 20, a temporal
+ratio cap of 8, an occlusion decay of 0.25 (the spatial cap of 5 is declared but
+not used yet — spatial reuse is the next step over these same records), and the
+receiver gates `normalDot >= 0.8` on a static camera / `0.6` while moving plus a
+5 % + 0.1-block distance and position tolerance.  A stored sample is
+*re-resolved* through `BlockEmitterSampler.evaluate` instead of caching its
+radiance, which both keeps one estimator and rejects a record whose quad changed
+under the reservoir.
+
+Space: a record stores the light point in the camera-anchored space of the frame
+that wrote it, so the history read reprojects the receiver with
+`position + cameraDelta` through `frame.camera.prevViewProjection` — the same
+convention `path_display.slang` already uses for the running mean — and an
+accepted record comes back with `- cameraDelta`.  The view bob needs no term of
+its own; it is inside both receivers and differs by centimetres, far below the
+tolerance above.
+
+Two calls, not one: `reuseSample` publishes the reservoir with its full weight
+and `reuseConfirm(occluded)` re-reads that slot and decays it, because the path
+tracer owns the shadow ray and nothing may be carried between the two calls in
+shader or in host state.  Every path that does not reach the primary NEE — the
+invalid-ray early return and the loop tail — publishes an empty record, so a
+light that left the screen cannot be resurrected by the next frame's history.
+
+`RtSlangPathPass` owns its own ring (`rt_path_restir`, `2 * pixels * 64` bytes)
+rather than sharing the GLSL one: the two record layouts differ, and a mode
+switch must not hand half-written bytes to the other path.  It alternates the
+parity only after a dispatch that really wrote records, and drops the whole ring
+when the light-list fingerprint (now also carried as `RtFrameParams.
+emitterFingerprint`) or the render size changes.  Switch: `-Dvkbridge.rt.restirDi`
+(default true; false falls back to the per-frame RIS draw of the same list).
+Evidence: `compileSlang` produces 11 bindings / 96-byte push for `path_trace`,
+and `RtSlangRestirDiTest` + `RtSlangBlockEmitterTest` + `RtPathTraceSlangPassTest`
+pin the numbers, the space and the host contract; no GPU frame or side-by-side
+screenshot is recorded.
 
 The same audit recorded the remaining systemic gaps in
 `docs/PATH_TRACE_CPP_INTEGRATION_PLAN.md` ("Follow-ups from the 2026-10-27

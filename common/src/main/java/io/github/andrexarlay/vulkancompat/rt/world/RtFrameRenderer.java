@@ -812,6 +812,7 @@ public final class RtFrameRenderer {
         params.emitterHandle = emitters.handle();
         params.emitterOffset = emitters.segmentOffset();
         params.emitterCount = emitters.count();
+        params.emitterFingerprint = emitters.fingerprint();
         params.emitterCamRelX = MemoryUtil.memGetFloat(hdr + RtStatsLayout.CAM_REL);
         params.emitterCamRelY = MemoryUtil.memGetFloat(hdr + RtStatsLayout.CAM_REL + 4);
         params.emitterCamRelZ = MemoryUtil.memGetFloat(hdr + RtStatsLayout.CAM_REL + 8);

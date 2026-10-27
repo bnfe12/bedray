@@ -1,16 +1,18 @@
 // Iterative path tracer for Bedray 2.0.
 //
-// The loop is written against ITraversal, ILightSampler and IEnvironmentSampler.
+// The loop is written against ITraversal, ILightSampler, IEnvironmentSampler and IReuseSampler.
 // It never names a backend, a GPU or a material atlas layout: surface decoding
 // is delegated to surface.slang and lobe selection to shading/bsdf.slang.
 //
 // Direct lighting uses next-event estimation with the filtered visibility walk,
-// so a cutout hole is skipped and stained glass tints the shadow.  Indirect
-// lighting uses BSDF sampling.  Emission is added on every accepted hit: the
-// caller's light sampler covers only the sun and moon today, so a surface
-// emitter's own radiance has to be carried by the path.  A caller that adds
-// surface emitters to its sampler must restore the "previous bounce was delta"
-// gate and use MIS, or an emitter hit would be counted twice.
+// so a cutout hole is skipped and stained glass tints the shadow.  The pixel's
+// own first surface may instead be served from a cross-frame reservoir (the
+// IReuseSampler branch); the loop then shades both branches it owns and reports
+// the shadow outcome back to the record, without knowing what a reservoir is.
+// Indirect lighting uses BSDF sampling.  Emission is added on every accepted
+// hit, so a caller whose sampler also draws surface emitters must restore the
+// "previous bounce was delta" gate and use MIS, or an emitter hit would be
+// counted twice.
 
 public module path_tracer;
 
@@ -82,15 +84,59 @@ float pathMaxComponent(float3 value) {
     return max(value.r, max(value.g, value.b));
 }
 
+// Shades one direct-light sample: the BSDF term of the legacy NEE times the filtered visibility walk.  The caller
+// multiplies the result by its throughput.  `traced` says a shadow ray really ran, `occluded` that it came back
+// blocked; a reservoir needs both, because a sample this receiver cannot even see must fade instead of persisting.
+float3 pathTraceDirectTerm<T : ITraversal>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
+        SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light, float rayBias,
+        MaterialSamplingOptions materialOptions, out bool traced, out bool occluded) {
+    float3 zero = float3(0.0);
+    traced = false;
+    occluded = false;
+    if (!light.valid || !(light.sourcePdf > 0.0)) {
+        return zero;
+    }
+    float3 lightDirection = light.direction;
+    float cosine = max(dot(normal, lightDirection), 0.0);
+    if (cosine <= 0.0) {
+        return zero;
+    }
+    float3 bsdf = bsdfEvaluate(surface.material, view, normal, lightDirection);
+    if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
+        return zero;
+    }
+    // Offset from the geometric face, not the normal-mapped
+    // shading normal: a tilted normal can start the shadow ray
+    // inside the surface and either leak light or self-shadow.
+    float3 shadowNormal = safeNormalize(surface.hit.geometricNormal, normal);
+    if (dot(shadowNormal, view) < 0.0) {
+        shadowNormal = -shadowNormal;
+    }
+    traced = true;
+    SurfaceVisibility shadow = traceShadowVisibility(traversal, atlas, blockMaterials, position, shadowNormal,
+        lightDirection, light.distance, rayBias, materialOptions);
+    float3 transmittance = shadow.result.visible ? shadow.result.transmittance : float3(0.0);
+    if (transmittance.r + transmittance.g + transmittance.b <= 0.0) {
+        occluded = true;
+        return zero;
+    }
+    return bsdf * light.radiance * transmittance / max(light.sourcePdf, 1.0e-6);
+}
+
 // Traces one path.  `seed` is advanced in place so a caller can derive the next
 // path's seed without a global random stream.
-PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
-        T traversal, L lights, E environment,
+PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
+        T traversal, L lights, E environment, R reuse,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         Ray primaryRay, MaterialSamplingOptions materialOptions,
         PathTraceOptions options, inout uint seed) {
     PathTraceResult result = emptyPathTraceResult();
     result.firstHitDistance = options.maxDistance;
+
+    // A path that never reaches a surface has no sample of its own to publish, and the pixel's record still has to be
+    // rewritten: a stale history would resurrect a light that has left the screen.  `reuseHandled` is set by the branch
+    // that wrote it.
+    bool reuseHandled = false;
 
     // A primary direction is unit length by the caller's contract, so
     // firstHitDistance is a distance. Reject a degenerate interval or
@@ -100,6 +146,9 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         !isFinite(primaryRay.tMin) || !isFinite(primaryRay.tMax) ||
         primaryRay.tMin < 0.0 || !(primaryRay.tMax > primaryRay.tMin)) {
         result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+        if (reuse.reuseActive()) {
+            reuse.reuseClear();
+        }
         return result;
     }
 
@@ -177,32 +226,37 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         result.radiance += throughput * surface.material.emission;
 
         // ---- Next-event estimation ----
-        LightSample light = lights.sample(lightReceiver(hit.position, normal, surface.material.emissionMask), seed);
-        if (light.valid && light.sourcePdf > 0.0) {
-            float3 lightDirection = light.direction;
-            float cosine = max(dot(normal, lightDirection), 0.0);
-            if (cosine > 0.0) {
-                float3 bsdf = bsdfEvaluate(surface.material, view, normal, lightDirection);
-                if (bsdf.r + bsdf.g + bsdf.b > 0.0) {
-                    // Offset from the geometric face, not the normal-mapped
-                    // shading normal: a tilted normal can start the shadow ray
-                    // inside the surface and either leak light or self-shadow.
-                    float3 shadowNormal = safeNormalize(surface.hit.geometricNormal, normal);
-                    if (dot(shadowNormal, view) < 0.0) shadowNormal = -shadowNormal;
-                    SurfaceVisibility shadow = traceShadowVisibility(traversal,
-                        atlas, blockMaterials, hit.position, shadowNormal, lightDirection,
-                        light.distance, options.rayBias, materialOptions);
-                    float3 transmittance = shadow.result.visible
-                        ? shadow.result.transmittance
-                        : float3(0.0);
-                    if (transmittance.r + transmittance.g + transmittance.b > 0.0) {
-                        result.radiance += throughput * bsdf * light.radiance *
-                            transmittance / max(light.sourcePdf, 1.0e-6);
-                        result.flags |= PATH_TRACE_FLAG_FILTERED_SHADOW;
-                    }
-                }
-            }
+        LightReceiver receiver = lightReceiver(hit.position, normal, surface.material.emissionMask);
+        // Only the pixel's own first surface owns the screen-space record; a deeper vertex would write someone else's
+        // receiver into it and drag that light across the screen.
+        receiver.primary = result.surfaceHits == 1u;
+        float3 direct = float3(0.0);
+        if (receiver.primary && reuse.reuseActive()) {
+            // The reservoir carries the emissive branch across frames, so the composite must not also draw it; the key
+            // light is still sampled the plain way.  One extra shadow ray per pixel, no duplicated emitter batch.
+            bool reusedTraced;
+            bool reusedOccluded;
+            LightSample reused = reuse.reuseSample(receiver, seed);
+            reuseHandled = true;
+            direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
+                reused, options.rayBias, materialOptions, reusedTraced, reusedOccluded);
+            // A sample this receiver could not even shade has not been proven visible either: decaying it lets a record
+            // that lost its light fade out instead of sitting at full weight until the surface changes.
+            reuse.reuseConfirm(!reusedTraced || reusedOccluded);
+            bool keyTraced;
+            bool keyOccluded;
+            direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
+                lights.sample(receiver, seed), options.rayBias, materialOptions, keyTraced, keyOccluded);
+        } else {
+            bool lightTraced;
+            bool lightOccluded;
+            direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
+                lights.sample(receiver, seed), options.rayBias, materialOptions, lightTraced, lightOccluded);
         }
+        if (direct.r + direct.g + direct.b > 0.0) {
+            result.flags |= PATH_TRACE_FLAG_FILTERED_SHADOW;
+        }
+        result.radiance += throughput * direct;
 
         // ---- BSDF sampling ----
         BSDFSample bsdf = bsdfSample(surface.material, view, normal, seed);
@@ -249,6 +303,11 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         result.flags |= PATH_TRACE_FLAG_SURFACE_LIMIT;
     }
 
+    // Nothing wrote this pixel's record (a sky pixel, a truncated interval, an invalid decode): publish an empty one.
+    if (!reuseHandled && reuse.reuseActive()) {
+        reuse.reuseClear();
+    }
+
     result.throughput = throughput;
     if (!isFinite(result.radiance)) {
         result.radiance = float3(0.0);
@@ -259,11 +318,11 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
 }
 
 // Radiance-only convenience for passes that do not need the diagnostics.
-float3 tracePathRadiance<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
-        T traversal, L lights, E environment,
+float3 tracePathRadiance<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
+        T traversal, L lights, E environment, R reuse,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         Ray primaryRay, MaterialSamplingOptions materialOptions,
         PathTraceOptions options, inout uint seed) {
-    return tracePath(traversal, lights, environment, atlas, blockMaterials,
+    return tracePath(traversal, lights, environment, reuse, atlas, blockMaterials,
         primaryRay, materialOptions, options, seed).radiance;
 }

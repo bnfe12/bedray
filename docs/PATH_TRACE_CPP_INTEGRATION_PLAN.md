@@ -531,11 +531,12 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   before the fault; `passes/path_trace.slang` writes that radiance without
   inspecting the flag, so the accumulator cannot reject the sample. Decide
   whether an invalid sample writes zero radiance or a rejection mask.
-* **The Java frame block leaves three matrices identity.** `fillFrame` writes
-  `invViewProjection` and `viewProjection` but never `view`, `projection` or
-  `prevViewProjection`. `path_trace` derives primary rays from the explicit
-  basis and does not read them today; a reprojection or velocity consumer must
-  fill them (or use the history contract's matrices) before relying on them.
+* **`CameraState.view` and `.projection` are still the identity** - but they are the only two matrices in the block
+  that are. `fillFrame` writes `viewProjection` and `invViewProjection` from the engine pose and `prevViewProjection`
+  from the previous frame's `frameProjection * camera.viewRotationMatrix` (kept on the host in `RtFrameRenderer`), which
+  is what `path_display.slang` and the ReSTIR DI history read reproject through, so the "reprojection is unreachable from
+  Java" gap is closed. No Slang pass reads the split pair today; a consumer that needs it must also decide whether
+  `view` is the engine pose (with view bob) or the camera-relative anchor the world is built on, because the two differ.
 * **Entities are invisible to the path tracer.** `RtWorld.buildTlas` writes the
   entity BLAS instance with mask `0x02` (`RtWorld.java:1089`), while
   `passes/path_trace.slang` traverses with

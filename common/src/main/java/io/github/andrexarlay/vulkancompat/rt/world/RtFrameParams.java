@@ -124,6 +124,9 @@ public final class RtFrameParams {
     public long emitterHandle;
     public long emitterOffset;
     public int emitterCount;
+    /** Identity of the emitter list ({@link RtEmitters#fingerprint()}). A reused reservoir record only stays valid while
+     * the lights themselves are unchanged; copied every frame, not only when the ray pass allocates its own ring. */
+    public long emitterFingerprint;
     /** Camera position minus the block origin the list was rebuilt at: the shader subtracts it from every stored corner. */
     public float emitterCamRelX;
     public float emitterCamRelY;
