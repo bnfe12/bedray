@@ -492,15 +492,15 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   absorption from `surfaceTransmittance` is used only by the visibility walk,
   not by camera paths. An enter/exit eta stack and medium absorption are
   required before optical transmission is physically correct.
-* **Thin panes have three different lobe models.** For `AlphaMode.Translucent`,
-  `bsdfEvaluate` includes a diffuse reflection lobe weighted by
-  `1 - transmission`; `bsdfSample`'s diffuse branch always transmits and omits
-  that fraction; `bsdfPdf` describes a front-hemisphere diffuse-reflection
-  density that the sampler never produces. The path tracer is unaffected because
-  it uses the sample's precomputed weight and only evaluates front-hemisphere
-  NEE, but any MIS/RIS consumer that pairs `bsdfEvaluate` with `bsdfPdf`
-  (`restir_pt` does) inherits the mismatch. Sampling, evaluation and density
-  must describe one mixture before that reuse is valid.
+* **Thin-pane transmission is not sampled by NEE.** `bsdfSample` and
+  `bsdfPdf` now describe one mixture: a thin pane splits its diffuse branch
+  between transmission and reflection by `transmission`, and an optical
+  interface has no diffuse lobe because its transmission is delta.
+  `bsdfEvaluate` still returns zero in the back hemisphere by design, so a
+  light behind a pane contributes only through a BSDF-sampled path, never
+  through NEE. The sun is not in the environment, so sunlight through glass
+  remains missing until transmission NEE exists with a shadow ray that starts
+  on the far side of the pane.
 * **Visibility overflow is silent.** `traceFilteredVisibility` returns
   `visible = true` with the accumulated transmittance when the 16-layer budget
   runs out, so an opaque blocker behind sixteen filters leaks.

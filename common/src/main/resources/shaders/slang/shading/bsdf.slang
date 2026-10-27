@@ -91,8 +91,11 @@ float3 bsdfEvaluate(MaterialSample material, float3 V, float3 N, float3 L) {
     float3 f0 = bsdfF0(material);
     float3 fresnel = fresnelSchlick(VdotH, f0);
     float3 fresnelView = fresnelSchlick(NdotV, f0);
-    float3 diffuse = bsdfReflectionAlbedo(material) *
-        (float3(1.0) - fresnelView) * INV_PI;
+    // A delta optical transmission has no diffuse reflection lobe to evaluate;
+    // otherwise NEE would light a lobe the sampler cannot produce.
+    bool optical = material.alphaMode == AlphaMode.Optical && material.transmission > 0.0;
+    float3 diffuse = optical ? float3(0.0)
+        : bsdfReflectionAlbedo(material) * (float3(1.0) - fresnelView) * INV_PI;
 
     float distribution = ggxNDF(NdotH, alpha);
     float geometry = ggxSmithG2(NdotV, max(NdotL, 1.0e-4), alpha);
@@ -108,16 +111,28 @@ float3 bsdfEvaluate(MaterialSample material, float3 V, float3 N, float3 L) {
 float bsdfPdf(MaterialSample material, float3 V, float3 N, float3 L) {
     float NdotL = dot(N, L);
     float specularProbability = bsdfSpecularProbability(material, V, N);
+    bool thinPane = material.alphaMode == AlphaMode.Translucent;
+    bool optical = material.alphaMode == AlphaMode.Optical && material.transmission > 0.0;
 
     if (NdotL <= 0.0) {
-        if (materialIsTranslucent(material) &&
-            material.alphaMode == AlphaMode.Translucent) {
-            return (1.0 - specularProbability) * cosinePdf(-N, L);
+        // A thin pane samples diffuse transmission through the back side; an
+        // optical interface refracts as a delta lobe, which has no density.
+        if (thinPane) {
+            float transmission = clamp(material.transmission, 0.0, 1.0);
+            return (1.0 - specularProbability) * transmission * cosinePdf(-N, L);
         }
         return 0.0;
     }
 
-    float pdf = (1.0 - specularProbability) * cosinePdf(N, L);
+    float pdf = 0.0;
+    if (!optical) {
+        // An optical transmission sample is delta, so it contributes no diffuse
+        // reflection lobe either; a thin pane splits the diffuse branch between
+        // reflection and transmission by the same weight the sampler uses.
+        float diffuseFraction = thinPane
+            ? max(1.0 - material.transmission, 0.0) : 1.0;
+        pdf += (1.0 - specularProbability) * diffuseFraction * cosinePdf(N, L);
+    }
     if (specularProbability > 0.0) {
         pdf += specularProbability *
             ggxReflectionPdf(V, N, L, material.roughness);
@@ -200,26 +215,34 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
         return result;
     }
 
-    // Diffuse reflection, or diffuse transmission for a thin pane.
-    bool transmit = materialIsTranslucent(material) &&
-        material.alphaMode == AlphaMode.Translucent;
+    // Diffuse reflection, or diffuse transmission for a thin pane.  The pane
+    // splits its diffuse energy by transmission, so the density and weight
+    // carry the branch probability exactly as bsdfPdf reports it.
+    bool thinPane = material.alphaMode == AlphaMode.Translucent;
+    float transmission = thinPane ? clamp(material.transmission, 0.0, 1.0) : 0.0;
+    bool transmit = thinPane && (transmission >= 1.0 || rand01(seed) < transmission);
     float3 lobeNormal = transmit ? -N : N;
     float3 L = cosineAround(lobeNormal, seed);
     float cosTheta = max(dot(lobeNormal, L), 0.0);
     if (cosTheta <= 0.0) return result;
 
     float3 fresnelView = fresnelSchlick(NdotV, bsdfF0(material));
-    float3 albedo = bsdfReflectionAlbedo(material) * (float3(1.0) - fresnelView);
+    float branchProbability = transmissionProbability;
+    float3 albedo;
     if (transmit) {
-        albedo = material.albedo * material.transmission *
+        albedo = material.albedo * (1.0 - material.metallic) * transmission *
             (float3(1.0) - fresnelView);
+        branchProbability *= transmission;
+    } else {
+        albedo = bsdfReflectionAlbedo(material) * (float3(1.0) - fresnelView);
+        if (thinPane) branchProbability *= max(1.0 - transmission, 0.0);
     }
 
     result.valid = true;
     result.delta = false;
     result.direction = L;
-    result.weight = albedo / transmissionProbability;
-    result.pdf = (1.0 - specularProbability) * cosTheta * INV_PI;
+    result.weight = albedo / max(branchProbability, 1.0e-6);
+    result.pdf = branchProbability * cosTheta * INV_PI;
     result.eta = 1.0;
     result.lobe = transmit ? BSDF_LOBE_TRANSMISSION : BSDF_LOBE_DIFFUSE;
     return result;

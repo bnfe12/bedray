@@ -315,10 +315,22 @@ point (94,184-byte SPIR-V); no Gradle build or GPU frame is recorded.
 The same audit recorded the remaining systemic gaps in
 `docs/PATH_TRACE_CPP_INTEGRATION_PLAN.md` ("Follow-ups from the 2026-10-27
 shader audit"): sun/moon absent from camera and specular paths, no emitter NEE
-buffer, missing optical medium/eta tracking, three disagreeing thin-pane lobe
-models, silent visibility-layer overflow, invalid samples that the accumulator
-cannot reject, and identity `view`/`projection`/`prevViewProjection` in the
-Java frame block.
+buffer, missing optical medium/eta tracking, thin-pane transmission reachable
+only through BSDF sampling, silent visibility-layer overflow, invalid samples
+that the accumulator cannot reject, and identity
+`view`/`projection`/`prevViewProjection` in the Java frame block.
+
+`bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
+sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
+front-hemisphere diffuse-reflection density that no sample could produce; an
+optical interface similarly reported a diffuse density even though its
+transmission is delta.  The pane now splits the branch by `transmission`, the
+density carries the branch probability, and `bsdfEvaluate` omits the diffuse
+lobe for optical transmission.  The live triangle path forces translucent
+panes to `transmission = 1`, so its camera output is unchanged; ReSTIR PT's
+reverse density now matches the sampler.  Evidence: the same manual `slangc`
+compile through `path_trace` produced 95,068-byte SPIR-V; no Gradle build or
+GPU frame was verified.
 
 ### Render-graph recording boundary
 
