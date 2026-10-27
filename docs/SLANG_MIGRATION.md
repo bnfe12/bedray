@@ -195,7 +195,7 @@ hardware paths agree on foliage and glass.
 
 | Pass | Slang entry files | Host | State |
 |---|---|---|---|
-| Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Java-side candidate has a GLSL fallback; both ownership and fallback need migration to the target C++/Slang architecture. No current complete-tree or live validation. |
+| Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Java-side candidate has a GLSL fallback; both ownership and fallback need migration to the target C++/Slang architecture. The C++ ownership, mip-lifetime, barrier and missing-ABI plan is in [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no current complete-tree or live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
 | Path tracing | `passes/path_trace.slang` | `RtPathTraceSlangPass` | Host class exists and is contract-tested, but the frame does not call it yet. Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. |
 
