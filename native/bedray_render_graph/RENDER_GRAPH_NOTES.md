@@ -198,8 +198,97 @@ Graph-side rules:
   GPU completion; the host must not mutate a prepared plan.
 - Per-frame transient GPU allocations are not implemented in the graph planner.
   The scene subsystem owns transient staging/scratch with its frame slots, and
-  the core dispatch adapter owns transient descriptor allocation. A graph-wide
-  transient allocator remains an integration gap.
+  the core dispatch adapter owns transient descriptor allocation. `FrameScheduler`
+  (below) supplies the shared slot and completion policy; it does not allocate
+  memory. A graph-wide memory allocator remains an integration gap.
+
+## Frame scheduler and transient lifetime
+
+`FrameScheduler` is the frame-level transaction around one host command buffer.
+It owns no Vulkan objects, never submits, presents or waits, and never treats a
+frame number, ring position, recording return or fence value it guessed as
+completion. It is built only when the Vulkan adapter and history targets exist
+(`bedray_graph_frame`).
+
+Schedule binding:
+
+- `bind_schedule` copies a `CompiledGraph` snapshot and requires the graph to
+  outlive the scheduler. The snapshot must be current, belong to the supplied
+  graph and match the supplied capability mask.
+- Rebinding is refused while any frame is outstanding (`schedule_busy`).
+- Every `begin_frame` re-checks `is_current`; mutating the graph after binding
+  fails the next frame with `stale_schedule` before any command is recorded.
+- `record_frame` additionally requires the recording plan's owner, revision and
+  capability mask to match the bound snapshot.
+
+Transient slots:
+
+- The scheduler owns a fixed set of 1..8 slots. A slot is the host's identity
+  for one set of per-frame resources (scene transient buffers/scratch, core
+  descriptor recordings, per-frame images). The scheduler allocates no GPU
+  memory; it only leases slot indices.
+- Each lease carries a monotonically increasing slot generation. A ticket from
+  an earlier lease, or with a different frame/recording identity, is rejected
+  as `invalid_ticket`.
+- A slot becomes reusable only after one of: an explicit discard of a provably
+  unsubmitted recording, a host-proven completion high-water mark at or above
+  the frame's serial, or a host-proven device idle/loss. Exhausting the slots
+  fails with `slot_unavailable`; the scheduler never silently reuses one.
+- Each ticket may attempt `record_frame` once. A failure after recording begins
+  means the host must discard the whole command buffer, then close the ticket
+  with `finish_frame(discarded)`. A history-gate refusal happens before any
+  command is recorded and leaves the ticket retryable.
+
+Submission outcomes and serials:
+
+- `discarded` requires serial 0 and releases the slot and release callback
+  immediately.
+- `submitted` and `unknown` require a nonzero serial strictly above both the
+  highest serial already reserved by the scheduler and the completion
+  high-water mark. `complete(serial)` is monotonic and releases submitted
+  frames whose last use is not later.
+- `unknown` is never released by `complete`; only `device_idle` or `device_lost`
+  release it. This keeps a possibly-submitted recording from being recycled.
+- The same serial must be used for the actual queue submission, for
+  `HistorySubmission`, and for this scheduler; each subsystem enforces its own
+  part of that shared contract. `complete` is only called with host fence or
+  timeline evidence, exactly like `HistoryRegistry::complete`.
+
+Recording release callback:
+
+- The owner supplies one callback at construction; it is invoked exactly once
+  per recording, either when an unsubmitted recording is discarded, when its
+  submitted use is proven complete, or when a proven idle/lost device releases
+  an unknown use. It is the integration point for
+  `bedray_core_release_recording`.
+- The callback may re-enter the scheduler; the slot being released stays
+  non-reusable until the callback returns. A throwing callback is contained,
+  all own state is still freed, and the call reports `release_failed`.
+
+Persistent history:
+
+- `FrameHistoryReads` optionally carries the recordings prepared by
+  `HistoryRegistry` plus the authoritative `QueueTimeline`. Before recording any
+  command, every recording with a history read must satisfy
+  `history_read_producer_completed`; reset recordings (`read_slot < 0`) require
+  an active timeline but no producer. This is the explicit `completed_only`
+  integration the history reviews require.
+- The gate does not insert a semaphore, availability operation or layout
+  transition. The graph adapter still records the layout transitions, and the
+  host still owns memory visibility and submission ordering.
+- History write-slot selection, aliasing, budgets, tokens and device epochs stay
+  with `HistoryRegistry`; the scheduler does not duplicate them.
+
+Teardown:
+
+- `device_idle` (successful `vkDeviceWaitIdle` or every queue fence) releases
+  submitted and unknown frames. `device_lost` releases the same CPU bookkeeping
+  without claiming completion; history orphans remain registry-owned.
+- Neither call releases an open recording: GPU idleness does not make an
+  unsubmitted recording safe to forget. The host must discard it first.
+- Destroying the scheduler does not fabricate completion or run callbacks. The
+  owner must drain outstanding frames; the core destruction contract already
+  fails while recordings remain.
 
 ## Java reference mapping
 
@@ -237,6 +326,13 @@ pass structure must not be ported line by line.
   need an ABI-level design; the current planner rejects mixed explicit families.
 - Push-constant and dispatch values are host/native-executor inputs. The graph
   validates ranges and dimensions but does not store the bytes.
+- `FrameScheduler` is an internal C++ coordinator; no C entry point exposes
+  slots, tickets or release callbacks yet. The integrating agent must decide how
+  the host frame index, queue serial and history ticket are carried across the
+  ABI, and map `FrameErrorCode`/`RecordingError` to `BedrayStatus`.
+- The scheduler's per-slot resources remain host/scene/core-owned. A future
+  graph-wide memory allocator must keep the same completion and slot-generation
+  semantics rather than reusing memory after a fixed frame count.
 - Do not edit shared Java renderer files or the shared core ABI while ownership
   is coordinated; this batch intentionally stays inside native graph sources,
   tests and notes.
@@ -254,16 +350,17 @@ cmake --build build --config Release
 
 Result: `bedray_core.dll`, `bedray_abi_probe.exe`,
 `bedray_render_graph.lib`, `bedray_graph_vulkan.lib`,
-`bedray_graph_history.lib` and the test executables built successfully with no
-compile errors. (Warnings were not exhaustively archived; targets compile with
-`/W4 /permissive-`.)
+`bedray_graph_history.lib`, `bedray_graph_frame.lib` and the test executables
+built successfully with no compile errors. (Warnings were not exhaustively
+archived; targets compile with `/W4 /permissive-`.)
 
 ```
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Result: 3/3 passed — `bedray_render_graph_contract` (0.10 s),
-`bedray_history_submission` (0.01 s), `bedray_vulkan_recording` (0.01 s).
+Result: 4/4 passed — `bedray_render_graph_contract` (0.01 s),
+`bedray_history_submission` (0.01 s), `bedray_vulkan_recording` (0.01 s),
+`bedray_frame_scheduler` (0.08 s).
 
 Covered by the no-GPU tests:
 
@@ -285,13 +382,21 @@ Covered by the no-GPU tests:
   and null arguments.
 - History submission ticket semantics (implicit unknown close, explicit
   rejection releasing the serial).
+- Frame scheduler slot leasing and reuse after discard, completion and
+  idle/loss; stale schedule rejection after graph mutation; frame-index and
+  serial monotonicity; slot exhaustion; stale-ticket rejection; one recording
+  attempt per ticket; plan ownership/capability checks; history producer gate;
+  unknown submissions surviving completion but not idle/loss; rebinding refusal
+  with outstanding frames; throwing release callbacks contained and reported.
 
 Files added or updated for this batch:
 
 - `include/bedray/render_plan.hpp`, `src/render_plan.cpp`
 - `include/bedray/reflection_manifest.hpp`, `src/reflection_manifest.cpp`
 - `include/bedray/render_graph.hpp`, `src/render_graph.cpp`
-- `tests/render_graph_contract_test.cpp`, `tests/vulkan_recording_test.cpp`
+- `include/bedray/frame_scheduler.hpp`, `src/frame_scheduler.cpp`
+- `tests/render_graph_contract_test.cpp`, `tests/vulkan_recording_test.cpp`,
+  `tests/frame_scheduler_test.cpp`
 - `CMakeLists.txt` in `native/bedray_render_graph`
 - `enable_testing()` in `native/bedray_core/CMakeLists.txt` so root CTest
   discovers subdirectory tests
@@ -301,5 +406,7 @@ Live-validation gap: none of this has been executed against a real Vulkan
 driver, a real device, Minecraft, Sodium, a denoiser or an upscaler. The adapter
 records only images in a limited layout set, uses broad barriers, supports one
 queue, does not prove aliasing safety, and is not wired into the Java frame
-path. The core DLL still exposes ABI v2 only. GPU performance and correctness
+path. The frame scheduler is not constructed by `core.cpp`; its serials are
+host-supplied and unverified by this module, and its slots do not allocate GPU
+memory. The core DLL still exposes ABI v2 only. GPU performance and correctness
 remain unmeasured.

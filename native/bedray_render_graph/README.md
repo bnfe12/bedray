@@ -42,7 +42,8 @@ the writer. The adapter supports only explicitly ranged colour images and a
 limited set of layouts; it does not handle ownership transfers, presentation,
 subresource aliasing, or arbitrary external image layouts. Its public recording
 plan is internal trusted data and must not be modified between preparation and
-recording. No driver validation or compilation has been performed.
+recording. The adapter and its fake-command-buffer test compile and pass at L1;
+no driver or live-renderer validation has been performed.
 
 Pairwise hazards are transitive constraints, not a sequence of barriers:
 emitting every listed image transition would use stale old-layouts. The graph
@@ -65,10 +66,20 @@ or correctly synchronize overlapping memory. All planned passes currently
 assume a single host-owned queue; a future multi-queue implementation requires
 explicit queue assignment, ownership transfer and submission synchronization.
 
+The opt-in `bedray_graph_frame` target adds `FrameScheduler`, a frame-level
+transaction over the recording adapter. It leases a bounded set of transient
+slots whose reuse requires a discard, host-proven completion or a proven idle
+or lost device; rejects stale schedules, stale tickets and regressing serials;
+records at most once per ticket; and holds a one-shot release callback for the
+core recording. It refuses history reads whose producer is not proven complete
+on the supplied timeline. It does not allocate GPU memory, insert cross-queue
+semaphores, submit or wait, and it is not constructed by the current frame path.
+
 The graph uses whole-resource uses only; it therefore may reject independent
 subresources, and its pairwise hazards can be redundant. Adding finer ranges
 must preserve explicit ordering and avoid deriving correctness from declaration
-order. The graph and adapter build as part of the native core, and focused L1 contract
-tests pass (see `RENDER_GRAPH_NOTES.md`). The core frame path still does not
-construct or execute a graph, Slang reflection is not connected to pipeline
-creation, and no Vulkan/Minecraft validation has been performed.
+order. The graph, adapter, history bridge and frame scheduler build as part of
+the native core, and four focused L1 contract tests pass (see
+`RENDER_GRAPH_NOTES.md`). The core frame path still does not construct or
+execute a graph, Slang reflection is not connected to pipeline creation, and no
+Vulkan/Minecraft validation has been performed.

@@ -49,13 +49,26 @@ not roll back GPU commands. It does not build frame descriptors, allocate
 scene images, validate shader semantics, or select the graph. It is not yet
 called by `bedray_core_render_frame` or a Minecraft frame hook.
 
+`FrameScheduler` (built as `bedray_graph_frame`) is the frame-level transaction
+above the adapter. It leases one of a fixed number of transient slots, checks
+that the bound graph snapshot is still current, records the plan into the host
+command buffer, and holds the slot plus a one-shot release callback until the
+host proves completion, discards an unsubmitted recording, or proves the device
+idle or lost. It never infers completion from a frame number. It also refuses
+to record when a supplied `HistoryRecording` read producer is not proven
+complete under the `QueueTimeline` (`completed_only`). The scheduler does not
+allocate GPU memory, insert semaphores, submit work or wait; the host owns the
+serial that it passes to the queue, to `HistorySubmission` and to the scheduler.
+It is not yet constructed by the core frame path.
+
 The adapter emits broad `ALL_COMMANDS` memory barriers before each pass. It is
 not tuned and does not claim an optimized synchronization schedule. In
 particular, it does not consume `HistoryRegistry` tickets or queue serials.
 `completed_only` remains the only history write-selection policy supported by
 the integrated design until actual cross-submission dependencies and host
 submission outcomes are connected and reviewed. A history read still needs an
-actual dependency on its producer and a correct layout.
+actual dependency on its producer and a correct layout; `FrameScheduler` only
+refuses to record when the producer serial is not proven complete.
 
 `HistorySubmission` is a CPU-side source candidate for the ticket boundary.
 After `begin` and successful `attach`, the owner marks the submission attempt
