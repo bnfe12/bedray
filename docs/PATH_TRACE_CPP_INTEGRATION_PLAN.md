@@ -88,9 +88,12 @@ Both programs use 8x8x1 workgroups. The trace program requires
 
 Depth contract: `firstHitDistance` is a distance along the unit primary
 direction, not linear view depth. A true primary miss writes `1e6`, which is the
-sky sentinel bloom (`>= 1e5`) and the composite already understand. Invalid or
-truncated primary paths set `PATH_TRACE_FLAG_INVALID_SAMPLE` and never add
-environment radiance. The Java velocity path already declares this convention
+sky sentinel bloom (`>= 1e5`) and the composite already understand. A primary
+ray whose arithmetic is not finite sets `PATH_TRACE_FLAG_INVALID_SAMPLE`, which
+the display pass turns into a weight of zero for that pixel; a path that only
+stopped short sets `PATH_TRACE_FLAG_TRUNCATED` and keeps its radiance. Neither
+adds environment radiance, because a path that never proved a miss is not a sky
+sample. The Java velocity path already declares this convention
 as `DEPTH_RAY_DISTANCE`; a consumer that needs linear view depth must convert
 explicitly.
 
@@ -526,11 +529,17 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   runs out, so an opaque blocker behind sixteen filters leaks.
   `SURFACE_VISIBILITY_FLAG_OVERFLOW` exists but the path tracer never reads it;
   decide whether overflow counts as blocked or the budget must grow.
-* **Invalid samples are diagnostic only.** `tracePath` sets
-  `PATH_TRACE_FLAG_INVALID_SAMPLE` and still returns the radiance accumulated
-  before the fault; `passes/path_trace.slang` writes that radiance without
-  inspecting the flag, so the accumulator cannot reject the sample. Decide
-  whether an invalid sample writes zero radiance or a rejection mask.
+* **Invalid samples are rejected, truncated paths are not.** `tracePath` now separates the two endings:
+  `PATH_TRACE_FLAG_INVALID_SAMPLE` means a non-finite ray, hit, advance, interval or throughput - arithmetic that
+  cannot be trusted - and `PATH_TRACE_FLAG_TRUNCATED` (bit 7) means a path stopped short for a legitimate reason (no
+  lobe left to sample, cutout advances used up the interval, an unnamed hit, the `maxRadiance` firefly guard), whose
+  radiance up to that point stays a real sample. `passes/path_trace.slang` publishes the verdict through the alpha lane
+  of the radiance image (`pathTraceSampleRejected`, the single definition of the rule) and `passes/path_display.slang`
+  folds it into a weight: a rejected sample adds nothing to the running mean, does not advance its count, and does not
+  overwrite `historyDepth` with a far-plane depth the primary guard left behind. The radiance image has exactly one
+  consumer, so the lane is free; a second consumer needs a real rejection buffer. Pinned by
+  `RtSlangSampleRejectionTest`. The same split already existed in `radiance_cascades/rc_trace.slang`, so both
+  tracers now use one vocabulary.
 * **`CameraState.view` and `.projection` are still the identity** - but they are the only two matrices in the block
   that are. `fillFrame` writes `viewProjection` and `invViewProjection` from the engine pose and `prevViewProjection`
   from the previous frame's `frameProjection * camera.viewRotationMatrix` (kept on the host in `RtFrameRenderer`), which

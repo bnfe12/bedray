@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+* Split the two ways a traced path ends badly, so the accumulation history can tell them apart:
+  `pathtrace/path_tracer.slang` keeps `PATH_TRACE_FLAG_INVALID_SAMPLE` for arithmetic that cannot be trusted (a
+  non-finite primary ray, hit parameter, cutout advance, interval or throughput) and adds `PATH_TRACE_FLAG_TRUNCATED`
+  (bit 7) for a path that only stopped short — no lobe left to sample, an interval used up by cutout advances, a hit the
+  surface decoder cannot name, or the `maxRadiance` firefly guard. The distinction is the one
+  `radiance_cascades/rc_trace.slang` already drew, and it matters because a truncated path's radiance up to that point
+  is still a real sample: throwing it away would bias every short path in the image. `pathTraceSampleRejected` states
+  the rule once and `passes/path_trace.slang` publishes its answer in the alpha lane of the radiance image — free,
+  because that image has exactly one consumer — where `passes/path_display.slang` reads it as a weight of 0 or 1: a
+  rejected sample leaves both the running mean and its per-pixel count exactly as the history had them (so the next
+  accepted sample still divides by N+1 instead of N), and it does not overwrite `historyDepth` with the far plane a
+  rejected primary ray leaves behind, which would otherwise make the next frame's reprojection discard a history the
+  pixel still holds. The firefly clamp and the non-finite-to-zero guard stay, but a fabricated black now always
+  arrives tagged instead of posing as a measured one. Evidence: `compileSlang` still produces 11 bindings/96-byte push
+  for `path_trace` and 6/32 for `path_display`; `RtSlangSampleRejectionTest` (8 tests) pins the bit split, that every
+  rejection sits under a finiteness check, that the four short stops do not, the alpha-lane publication, the weighted
+  merge arithmetic, the depth-lane guard and the single consumer of the lane; each of five mutations (truncation site
+  flipped to invalid, verdict helper widened to truncated, alpha hardcoded to 1.0, weight hardcoded to 1.0, depth guard
+  removed) failed exactly the guard that owns it, and a sixth (a second `radianceView` consumer) failed the consumer
+  pin. No owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
 * Pool block-emitter reservoirs across neighbours in the Slang path tracer: `restir/spatial_block_emitters.slang` and its
   entry `passes/restir_spatial.slang` (6 bindings, 64-byte push, two checker dispatches per frame) are the port of
   `rt_restir_spatial.comp`, so a surface picks its direct light from its neighbourhood instead of from that pixel's own

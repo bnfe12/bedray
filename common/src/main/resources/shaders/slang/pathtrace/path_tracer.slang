@@ -33,6 +33,13 @@ static const uint PATH_TRACE_FLAG_FILTERED_SHADOW  = 1u << 5u;
 // The primary ray hit an accepted surface, so firstHitDistance is a real depth rather than the far plane.  A depth
 // buffer cannot infer this from surfaceHits: a path that only crosses cutout holes never accepted a surface.
 static const uint PATH_TRACE_FLAG_PRIMARY_HIT      = 1u << 6u;
+// The two ways a path ends badly are not the same fault.  INVALID_SAMPLE means the arithmetic could not be trusted -
+// a non-finite ray, hit, advance or throughput, or a hit outside the interval the caller gave.  TRUNCATED means the
+// path stopped for a legitimate reason: the block decode refused the surface, the lobe had nothing to sample, cutout
+// advances used up the interval, or the throughput reached the firefly guard.  The radiance gathered before a
+// truncation is a short but honest sample of the integrand, so it stays in the mean; only a non-finite fault is worth
+// dropping from a history that lives for thousands of frames.
+static const uint PATH_TRACE_FLAG_TRUNCATED        = 1u << 7u;
 
 struct PathTraceOptions {
     uint  maxDepth;             // scattering events before the path stops
@@ -82,6 +89,12 @@ PathTraceResult emptyPathTraceResult() {
 
 float pathMaxComponent(float3 value) {
     return max(value.r, max(value.g, value.b));
+}
+
+// The one place "do not show this sample to the accumulator" is spelled out, so a pass cannot invent its own rule and
+// silently start dropping truncated paths.
+bool pathTraceSampleRejected(uint flags) {
+    return (flags & PATH_TRACE_FLAG_INVALID_SAMPLE) != 0u;
 }
 
 // Shades one direct-light sample: the BSDF term of the legacy NEE times the filtered visibility walk.  The caller
@@ -161,10 +174,13 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
     uint step = 0u;
 
     for (; step < options.maxSurfaceSteps; ++step) {
-        // Cutout advances shrink tMax. An empty interval means the path was
-        // truncated, not that it escaped into the environment.
-        if (!(ray.tMax > ray.tMin) || !isFinite(ray.tMax)) {
+        // A non-finite interval cannot be traced at all; an empty one is a path cut short by the cutout advances.
+        if (!isFinite(ray.tMax)) {
             result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+            break;
+        }
+        if (!(ray.tMax > ray.tMin)) {
+            result.flags |= PATH_TRACE_FLAG_TRUNCATED;
             break;
         }
         SurfaceHit hit = traversal.traceClosest(ray);
@@ -181,7 +197,9 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
 
         SurfaceSample surface = decodeSurface(atlas, blockMaterials, hit, materialOptions);
         if (!surface.valid) {
-            result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+            // A hit this decoder cannot name.  Nothing produced a bad number, so the radiance gathered up to here is
+            // still a sample; the path simply stops short.
+            result.flags |= PATH_TRACE_FLAG_TRUNCATED;
             break;
         }
 
@@ -261,7 +279,8 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         // ---- BSDF sampling ----
         BSDFSample bsdf = bsdfSample(surface.material, view, normal, seed);
         if (!bsdf.valid || bsdf.pdf <= 0.0) {
-            result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+            // No lobe left to sample (an albedo that reflects nothing).  A short path, not a broken one.
+            result.flags |= PATH_TRACE_FLAG_TRUNCATED;
             break;
         }
 
@@ -287,8 +306,14 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
             throughput /= max(survival, 1.0e-4);
         }
 
-        if (!isFinite(throughput) || pathMaxComponent(throughput) > options.maxRadiance) {
+        if (!isFinite(throughput)) {
             result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+            break;
+        }
+        if (pathMaxComponent(throughput) > options.maxRadiance) {
+            // The firefly guard.  The path would blow up, so it ends here, but the tail clamps what came before to a
+            // finite value: a bright bounce is a real sample, not a broken one.
+            result.flags |= PATH_TRACE_FLAG_TRUNCATED;
             break;
         }
 
@@ -303,7 +328,8 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
         result.flags |= PATH_TRACE_FLAG_SURFACE_LIMIT;
     }
 
-    // Nothing wrote this pixel's record (a sky pixel, a truncated interval, an invalid decode): publish an empty one.
+    // Nothing wrote this pixel's record (a sky pixel, a truncated interval, a surface that stopped the path): publish an
+    // empty one.
     if (!reuseHandled && reuse.reuseActive()) {
         reuse.reuseClear();
     }

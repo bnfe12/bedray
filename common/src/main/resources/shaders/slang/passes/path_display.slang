@@ -6,7 +6,7 @@
 // settings or scene changed) and passes accumFrames = 0; the pass never invents a global reset for camera motion:
 // a moved camera reprojects each pixel through the previous view-projection and keeps the history it can prove.
 //
-//   0 radiance     RGBA16F storage image, read  (path_trace.slang outImage, this frame)
+//   0 radiance     RGBA16F storage image, read  (path_trace.slang outImage, this frame; a = 0 rejects the sample)
 //   1 accum        RGBA32F storage image, read/write (rgb running mean, a per-pixel sample count)
 //   2 outImage     RGBA8   storage image, write (rt_output, the image the composite and the denoisers read)
 //   3 depth        R32F    storage image, read  (path_trace.slang outDepth, ray distance from the bobbed eye)
@@ -125,9 +125,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     float limit = pc.maxRadiance > 0.0 ? pc.maxRadiance : 65000.0;
     float3 current = pathDisplaySanitize(radiance[p].rgb, limit);
+    // The tracer put its verdict in the alpha lane: a path whose arithmetic went non-finite is not a sample of the
+    // integrand, and one bad frame would sit in this pixel's mean for the rest of the history's life. Weight 0 keeps
+    // both the mean and the count exactly as the history had them, so the next accepted sample still divides by N+1.
+    float weight = radiance[p].a > 0.0 ? 1.0 : 0.0;
+    bool rejected = weight == 0.0;
 
-    float3 mean = current;
-    float count = 1.0;
+    float3 mean = current * weight;
+    float count = weight;
     bool accumulate = (pc.flags & PATH_DISPLAY_FLAG_ACCUMULATE) != 0u && pc.accumFrames > 0u;
     if (accumulate) {
         float hitDistance = depth[p];
@@ -137,24 +142,29 @@ void main(uint3 tid : SV_DispatchThreadID) {
         if (samePixel) {
             float4 history = accum[p];
             if (history.a > 0.0) {
-                mean = pathDisplaySanitize(history.rgb, limit)
-                    + (current - pathDisplaySanitize(history.rgb, limit)) / (history.a + 1.0);
-                count = min(history.a + 1.0, PATH_DISPLAY_MAX_COUNT);
+                float3 previous = pathDisplaySanitize(history.rgb, limit);
+                mean = previous + (current - previous) * (weight / (history.a + weight));
+                count = min(history.a + weight, PATH_DISPLAY_MAX_COUNT);
             }
         } else if (hit) {
             PathDisplayHistory history = pathDisplayReproject(frame, p, float2(size), hitDistance,
                 pc.reuse.xyz, pc.reuse.w, (pc.flags & PATH_DISPLAY_FLAG_FLIP_Y) != 0u);
             if (history.valid) {
                 float3 sanitized = pathDisplaySanitize(history.radiance, limit);
-                mean = sanitized + (current - sanitized) / (history.count + 1.0);
-                count = min(history.count + 1.0, PATH_DISPLAY_MAX_COUNT);
+                mean = sanitized + (current - sanitized) * (weight / (history.count + weight));
+                count = min(history.count + weight, PATH_DISPLAY_MAX_COUNT);
             }
         }
         // A sky pixel seen by a moved camera has no depth to reproject, so it restarts; a static camera keeps it.
     }
 
     accum[p] = float4(mean, count);
-    historyDepth[p] = depth[p];
+    // The depth lane has to describe the surface the stored mean came from, because the next frame finds that history by
+    // matching it. A rejected sample kept the old mean, and the depth this frame traced may be the far plane the primary
+    // guard left behind - so a rejected pixel only takes the new depth when the tracer proved one.
+    if (!rejected || depth[p] < PATH_DISPLAY_SKY_DEPTH) {
+        historyDepth[p] = depth[p];
+    }
 
     float3 exposed = mean * max(pc.exposure, 0.0);
     float3 display = (pc.flags & PATH_DISPLAY_FLAG_TONEMAP) != 0u ? tonemapColor(exposed) : saturate(exposed);

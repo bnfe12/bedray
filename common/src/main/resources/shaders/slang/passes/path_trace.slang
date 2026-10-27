@@ -10,7 +10,8 @@
 // (FrameConstants and the block-material table) live above the legacy range.
 //
 //   0  tlas             acceleration structure
-//   1  outImage         RGBA16F storage image (scene-referred linear radiance, no exposure or tone map)
+//   1  outImage         RGBA16F storage image (scene-referred linear radiance, no exposure or tone map; a = 0 for a
+//                       sample the tracer could not trust, which the display pass then leaves out of the mean)
 //   2  sections         StructuredBuffer<LegacySection>
 //   3  albedoAtlas      combined image sampler
 //   9  materialAtlas    combined image sampler (LabPBR _s)
@@ -195,7 +196,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     // Scene-referred linear radiance: no exposure and no tone map here.  Exposure lives in FrameConstants.exposure and
     // is applied once by the display/tonemap pass, so accumulation and denoise keep working in linear HDR.
-    outImage[p] = float4(result.radiance, 1.0);
+    // The alpha lane is the sample's verdict, not coverage: rgb has no room left to say "this path could not be
+    // trusted", and a non-finite fault must not dilute a running mean that lives for thousands of frames.
+    outImage[p] = float4(result.radiance, pathTraceSampleRejected(result.flags) ? 0.0 : 1.0);
     // Legacy depth contract (rt_path.comp): a miss writes 1e6, because bloom.slang treats anything at or beyond
     // BLOOM_SKY_DISTANCE (1e5) as sky and the composite pass uses the same buffer.  firstHitDistance alone defaults
     // to the ray far plane on a miss, which is far below that threshold and would make the sky glow.

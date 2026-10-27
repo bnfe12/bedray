@@ -264,9 +264,12 @@ letting the host infer a hit from a distance.  Cutout holes advance the primary
 origin, and the accepted first hit reports `primaryAdvance + hit.t`, so the
 distance stays measured from the camera rather than from the last hole.  A
 primary ray whose data is non-finite, whose interval is empty (`tMin < 0` or
-`tMax <= tMin`), or whose cutout advances exhaust `tMax` sets
-`PATH_TRACE_FLAG_INVALID_SAMPLE` and never adds environment radiance: an
-invalid or truncated path is not a proven miss.  `firstHitDistance` is a
+`tMax <= tMin`) sets `PATH_TRACE_FLAG_INVALID_SAMPLE`, and so does a hit
+parameter, cutout advance or throughput that stops being a number; an interval
+the cutout advances merely used up sets `PATH_TRACE_FLAG_TRUNCATED`.  Neither
+adds environment radiance: a path that never proved a miss is not a proven miss.
+Only the first of those is dropped from the running mean, which is what
+`pathTraceSampleRejected` and the alpha lane are for.  `firstHitDistance` is a
 distance along the unit primary direction, not linear view depth; a consumer
 that needs view depth must derive it from the camera contract.
 
@@ -295,7 +298,17 @@ of restarting on every frame. The adapter still resets the whole image when the
 scene changes, the key light's direction or colour changes, or the sky colour
 changes — a moving sun must not be averaged into a static dot. The history is
 only trusted after it was written once (`historyWritten`), and the reset path is
-`RtSlangPathPass.resetHistory`. The sun/moon cone uses
+`RtSlangPathPass.resetHistory`. A mean that lives for thousands of frames also has
+to refuse a sample it cannot trust: `tracePath` separates a non-finite fault
+(`PATH_TRACE_FLAG_INVALID_SAMPLE`) from a path that merely stopped short
+(`PATH_TRACE_FLAG_TRUNCATED` — no lobe left, an interval used up by cutout
+advances, an unnamed hit, the firefly guard), `pathTraceSampleRejected` states the
+rule once, `passes/path_trace.slang` publishes the answer in the alpha lane of the
+radiance image (its only consumer is the display pass), and the display pass folds
+that lane into a weight of 0 or 1, so a rejected sample changes neither the mean nor
+its count and does not overwrite `historyDepth` with the far plane a rejected
+primary ray leaves behind. Truncated paths keep their radiance: dropping them would
+bias every short path in the image. The sun/moon cone uses
 `RtSettings.sunRadiusRad()` (the `sun_size_tenths` setting, default 0.0044 rad)
 like the GLSL path; the earlier hardcoded 0.0093 rad was about twice that radius,
 or roughly 4.5x the solid angle. Evidence level: both fixes compile through
@@ -480,15 +493,14 @@ an independent row would be a switch that does nothing.  Evidence:
 / 64-byte push for `restir_spatial`, `RtRestirSettingsTest` pins each switch to the
 consumer that acts on it, and
 `RtSlangRestirDiTest` + `RtSlangRestirSpatialTest` + `RtSlangBlockEmitterTest` +
-`RtPathTraceSlangPassTest` pin the numbers, the space and the host contract; no GPU
-frame or side-by-side screenshot is recorded.
+`RtSlangSampleRejectionTest` + `RtPathTraceSlangPassTest` pin the numbers, the
+space and the host contract; no GPU frame or side-by-side screenshot is recorded.
 
 The same audit recorded the remaining systemic gaps in
 `docs/PATH_TRACE_CPP_INTEGRATION_PLAN.md` ("Follow-ups from the 2026-10-27
 shader audit"): sun/moon absent from camera and specular paths, no emitter NEE
 buffer, missing optical medium/eta tracking, thin-pane transmission reachable
-only through BSDF sampling, silent visibility-layer overflow, invalid samples
-that the accumulator cannot reject, identity
+only through BSDF sampling, silent visibility-layer overflow, identity
 `view`/`projection`/`prevViewProjection` in the Java frame block, entities
 excluded by the `0x01` path-trace instance mask while `RtWorld` writes the
 entity BLAS with `0x02` (widening the mask is not enough:
@@ -681,14 +693,23 @@ because a module has no entry point; that is expected.
    in game. Invalid/truncated primary paths are flagged and excluded from the
    sky path. Still agree on view depth versus ray distance before a downstream
    consumer treats `outDepth` as linear view depth.
-2. **ReSTIR PT** — path-space reservoirs on top of `PathVertex`; keep it
+2. **Sample rejection** — the tracer keeps the two bad endings apart
+   (`PATH_TRACE_FLAG_INVALID_SAMPLE` for a non-finite fault,
+   `PATH_TRACE_FLAG_TRUNCATED` for a path that only stopped short) and
+   `pathTraceSampleRejected` publishes that verdict through the alpha lane of
+   the radiance image, which the display pass turns into a weight of 0 or 1.
+   The host still has no readback of either flag, so a fault that is not
+   non-finite - a traversal that returns a hit the decoder cannot name, an
+   exhausted visibility budget - is invisible in a log. A counter per reason
+   belongs to the C++ pass, which owns the buffers.
+3. **ReSTIR PT** — path-space reservoirs on top of `PathVertex`; keep it
    separate from the DI reservoir so the two reuse policies do not merge.
-3. **Radiance Cascades trace/update** — review the isolated typed trace, align
+4. **Radiance Cascades trace/update** — review the isolated typed trace, align
    its segment status and history contracts with the shared store, and define
    cross-cascade reconstruction and host integration before connecting a pass.
-4. **More entry passes** — denoise/composite follow the same one-file-per-entry
+5. **More entry passes** — denoise/composite follow the same one-file-per-entry
    pattern and the same ABI; no second pipeline path.
-5. **Live game check** — only after the above and an explicit request.  A
+6. **Live game check** — only after the above and an explicit request.  A
    compile or a unit test is not a game check.
 
 ## Rules for contributors
