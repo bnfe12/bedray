@@ -1,7 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
-import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuImagesNative;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
@@ -405,7 +404,6 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private final SlangRuntime runtime;
     private final SlangProgram program;
     private final RtMemory memory;
-    private final BedrayGpuImagesNative nativeImages;
     private final RtMemory.Buf[] frameConstants = new RtMemory.Buf[SLOT_COUNT];
     private final RtMemory.Buf blockMaterials;
     private final RtMemory.Buf reservoirDummy;
@@ -413,8 +411,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private final RtMemory.Buf entityVectorDummy;
     private final Set<Long> recordings = new LinkedHashSet<>();
     private int slot = -1;
-    private BedrayGpuImagesNative.Image radiance;
-    private BedrayGpuImagesNative.Image motion;
+    private RtMemory.Img radiance;
+    private RtMemory.Img motion;
     private int width;
     private int height;
     private boolean closed;
@@ -436,9 +434,6 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         }
         this.program = pass.get();
         requireManifest(program);
-        long deviceBytes = runtime.capabilities().deviceMemoryBytes();
-        long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 256L << 20;
-        this.nativeImages = runtime.createImageOwner(imageBudget);
 
         RtMemory.Buf materials = null;
         RtMemory.Buf dummyReservoirs = null;
@@ -483,7 +478,6 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             if (dummyVector != null) {
                 memory.destroy(dummyVector);
             }
-            nativeImages.close();
             throw e;
         }
         this.blockMaterials = materials;
@@ -493,12 +487,12 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     }
 
     long radianceView() {
-        return radiance == null ? 0L : radiance.view();
+        return radiance == null ? 0L : radiance.view;
     }
 
     /** This frame's primary-surface displacement image, as the display pass has to read it under its own binding name. */
     long motionView() {
-        return motion == null ? 0L : motion.view();
+        return motion == null ? 0L : motion.view;
     }
 
     int width() {
@@ -551,12 +545,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (dispatch.entityAtlasSize() > 0 && (entities == null || entities.texels().bytes() == 0L)) {
             throw new IllegalArgumentException("the push names an entity atlas but no texel range is bound");
         }
-        // Include allocation/transition failures in the recording's discard
-        // lifecycle, before any native image use is reserved.
-        recordings.add(cmd.address());
         ensure(cmd, frame.width, frame.height);
-        nativeImages.retain(cmd.address(), radiance);
-        nativeImages.retain(cmd.address(), motion);
         // Rotate the frame-constant slot: the engine can have two frames in flight, and the GPU must not read this
         // frame's block after the next frame overwrote it.
         slot = (slot + 1) % SLOT_COUNT;
@@ -603,10 +592,10 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         Entities captured = entities == null ? Entities.NONE : entities;
         return List.of(
             SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
-            SlangProgram.Resource.storageImage("outImage", radiance.view()),
+            SlangProgram.Resource.storageImage("outImage", radiance.view),
             SlangProgram.Resource.storageBuffer("sections", table.handle, 0, table.size),
             SlangProgram.Resource.sampled("albedoAtlas", atlases.albedoView(), atlases.sampler()),
-            SlangProgram.Resource.storageImage("outMotion", motion.view()),
+            SlangProgram.Resource.storageImage("outMotion", motion.view),
             SlangProgram.Resource.sampled("materialAtlas", atlases.materialView(), atlases.sampler()),
             SlangProgram.Resource.sampled("normalAtlas", atlases.normalView(), atlases.sampler()),
             SlangProgram.Resource.storageImage("outDepth", depthView),
@@ -634,31 +623,28 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         return SlangProgram.Resource.storageBuffer(name, view.buffer(), view.offset(), view.bytes());
     }
 
-    /** Replaces output images without a device wait; native use tokens retain old generations until completion. */
+    /** (Re)creates the radiance output when the render size changed; the old image is destroyed only after the device is idle. */
     private void ensure(VkCommandBuffer cmd, int w, int h) {
         if (radiance != null && width == w && height == h) {
             return;
         }
-        BedrayGpuImagesNative.Image nextRadiance = nativeImages.create(w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
-        BedrayGpuImagesNative.Image nextMotion;
-        try {
-            nextMotion = nativeImages.create(w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
-        } catch (RuntimeException | Error e) {
-            nativeImages.retire(nextRadiance);
-            throw e;
+        VK10.vkDeviceWaitIdle(device);
+        releaseRecordings();
+        if (radiance != null) {
+            memory.destroy(radiance);
+            radiance = null;
         }
-        nativeImages.retain(cmd.address(), nextRadiance);
-        nativeImages.retain(cmd.address(), nextMotion);
-        nativeImages.retire(radiance);
-        nativeImages.retire(motion);
-        radiance = nextRadiance;
-        motion = nextMotion;
-        VkBarriers.transition(cmd, radiance.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+        if (motion != null) {
+            memory.destroy(motion);
+            motion = null;
+        }
+        radiance = memory.createImage("rt_path_radiance", w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
+        VkBarriers.transition(cmd, radiance.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
             VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
-        // The tracer writes it and only the display step reads it, both as storage images in GENERAL, so it needs no
-        // sampled usage and no second layout. It is cleared by the first dispatch of every frame it runs in.
-        VkBarriers.transition(cmd, motion.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+        motion = memory.createImage("rt_path_motion", w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+        VkBarriers.transition(cmd, motion.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
             VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
         width = w;
         height = h;
@@ -677,7 +663,6 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (!runtime.isClosed()) {
             runtime.releaseRecording(commandBuffer);
         }
-        nativeImages.releaseRecording(commandBuffer);
         recordings.remove(commandBuffer);
     }
 
@@ -693,14 +678,14 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             return;
         }
         closed = true;
-        RtFailure.check(VK10.vkDeviceWaitIdle(device), "close_path_trace_wait");
+        VK10.vkDeviceWaitIdle(device);
         releaseRecordings();
         if (radiance != null) {
-            nativeImages.retire(radiance);
+            memory.destroy(radiance);
             radiance = null;
         }
         if (motion != null) {
-            nativeImages.retire(motion);
+            memory.destroy(motion);
             motion = null;
         }
         for (RtMemory.Buf constants : frameConstants) {
@@ -710,7 +695,6 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         memory.destroy(reservoirDummy);
         memory.destroy(entityScalarDummy);
         memory.destroy(entityVectorDummy);
-        nativeImages.close();
         width = 0;
         height = 0;
     }
