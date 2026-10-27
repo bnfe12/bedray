@@ -320,10 +320,12 @@ only through BSDF sampling, silent visibility-layer overflow, invalid samples
 that the accumulator cannot reject, identity
 `view`/`projection`/`prevViewProjection` in the Java frame block, entities
 excluded by the `0x01` path-trace instance mask while `RtWorld` writes the
-entity BLAS with `0x02`, and water decoded as a flat translucent pane because
-no code assigns `MATERIAL_SOURCE_FLUID` on the triangle path and no water
-module is compiled.  Both later gaps are source findings; neither was checked
-in game.
+entity BLAS with `0x02` (widening the mask is not enough:
+`legacyHitToSurface` returns a miss for entity custom indices, so an entity
+would hide the terrain behind it), and water decoded as a flat translucent
+pane because no code assigns `MATERIAL_SOURCE_FLUID` on the triangle path and
+no water module is compiled.  Both later gaps are source findings; neither was
+checked in game.
 
 `bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
 sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
@@ -336,6 +338,15 @@ panes to `transmission = 1`, so its camera output is unchanged; ReSTIR PT's
 reverse density now matches the sampler.  Evidence: the same manual `slangc`
 compile through `path_trace` produced 95,068-byte SPIR-V; no Gradle build or
 GPU frame was verified.
+
+`RtSlangPathPass.fillFrame` now converts the display-referred
+`SkyRenderState.skyColor` to radiance with `RtTonemap.invert` before writing
+`FrameConstants`.  `GradientSky` consumes radiance, but the pass wrote the
+vanilla display colour and the display pass tone-mapped it again, applying the
+gain and shoulder to an already display-referred value; the legacy sky
+converts with `tonemapInverse` for the same reason.  The sun/moon key colour is
+already radiance and is left unchanged.  This is a source-only Java change
+(no Gradle build, GPU frame or image comparison).
 
 ### Render-graph recording boundary
 

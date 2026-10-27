@@ -324,9 +324,14 @@ public final class RtSlangPathPass implements RtPass {
         frame.moonDirection.set(-dir[0], -dir[1], -dir[2], sunRadius);
         frame.moonColor.set(0f, 0f, 0f, 0f);
 
+        // SkyRenderState.skyColor is the colour vanilla draws (display space); the legacy sky converts it to radiance with
+        // tonemapInverse before shading.  The display pass tone-maps this frame again, so writing the raw colour here would
+        // tone-map the sky twice (gain 1.2 + shoulder on an already display-referred value) and wash it out.
         float[] sky = p.skyColor;
-        frame.zenithColor.set(sky[0], sky[1], sky[2], 1f);
-        frame.horizonColor.set(sky[0] * 0.7f + 0.3f, sky[1] * 0.7f + 0.3f, sky[2] * 0.7f + 0.3f, 1f);
+        float[] zenith = RtTonemap.invert(sky[0], sky[1], sky[2]);
+        float[] horizon = RtTonemap.invert(sky[0] * 0.7f + 0.3f, sky[1] * 0.7f + 0.3f, sky[2] * 0.7f + 0.3f);
+        frame.zenithColor.set(zenith[0], zenith[1], zenith[2], 1f);
+        frame.horizonColor.set(horizon[0], horizon[1], horizon[2], 1f);
         frame.fogColor.set(frame.horizonColor);
         frame.fog.set(0f, 0f, 0f, 0f);
         frame.cloud.set(0f, 0f, 0f, 0f);

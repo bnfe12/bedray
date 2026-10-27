@@ -486,6 +486,13 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   `UniformEmitterSampler` and `EmitterList`, but `passes/path_trace.slang` has
   no emitter binding and the manifest has no emitter record. Emissive-face NEE
   is not connected.
+* **Sky colours are display-referred.** `SkyRenderState.skyColor` is the colour
+  vanilla draws, not radiance; the legacy sky converts it with
+  `tonemapInverse` (`rt_sky.glsl:39`). `GradientSky` consumes radiance and the
+  display pass tone-maps afterwards, so a port must invert the display colour
+  exactly once (the Java pass now uses `RtTonemap.invert`) or the sky is
+  tone-mapped twice and washes out. The sun/moon key colour is already
+  radiance and is not inverted.
 * **Optical paths do not track the medium.** `bsdfSample` always uses
   `eta = 1 / ior` with the viewer-facing normal and `tracePath` ignores
   `BSDFSample.eta`; an exit interface refracts as if it were an entry. Slab
@@ -521,8 +528,12 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   `passes/path_trace.slang` traverses with
   `PATH_TRACE_INSTANCE_MASK_WORLD = 0x01` (`path_trace.slang:110`). The
   reference path trace renders terrain only; mobs, item frames and other
-  entities are absent. Decide whether the path pass should traverse `0x03` and
-  how entity materials map onto the atlas before widening the mask.
+  entities are absent. Widening the mask to `0x03` is not enough:
+  `legacyHitToSurface` returns a miss for every instance whose custom index has
+  `LEGACY_INSTANCE_TYPE_ENTITY` set (`legacy_section_traversal.slang:93`), so an
+  entity triangle would become a hole that hides the terrain behind it. Entity
+  hit decoding (entity geometry addresses, atlas UVs, material record) is a
+  separate task.
 * **Water is a flat thin pane.** The legacy triangle decode maps only the
   redstone and emissive source bits (`surface/surface.slang:237`); no code
   assigns `MATERIAL_SOURCE_FLUID` on this path and no water module is compiled
