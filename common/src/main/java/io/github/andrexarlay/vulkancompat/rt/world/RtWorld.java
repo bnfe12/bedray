@@ -394,7 +394,7 @@ public final class RtWorld {
         scratchCursor = scratchBase;
 
         // Build dynamic entity BLAS at the beginning of the frame update
-        RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ);
+        RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ, cmd.address());
         entityBlas.build(cmd, RtEntityGeometryManager.INSTANCE, scratch, scratchCursor);
 
         long t0 = System.nanoTime();
@@ -449,7 +449,7 @@ public final class RtWorld {
 
     private FrameStats updateNative(VkCommandBuffer cmd, double camX, double camY, double camZ, long tUpdate) {
         nativeSceneFrameActive = false;
-        RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ);
+        RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ, cmd.address());
         nativeScene.updateEntities(frameIndex);
         long started = System.nanoTime();
         NativeSectionCapture.Result captures = nativeCapture.update(InstanceMath.sectionCoord(camX),
@@ -1243,6 +1243,7 @@ public final class RtWorld {
     public void releaseRecording(long commandBuffer) {
         if (dequantize != null) dequantize.releaseRecording(commandBuffer);
         if (nativeScene != null) nativeScene.releaseRecording(commandBuffer);
+        RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
     }
 
     public void discardRecording(long commandBuffer) {
@@ -1251,6 +1252,7 @@ public final class RtWorld {
             nativeSceneFrameActive = false;
         }
         if (dequantize != null) dequantize.releaseRecording(commandBuffer);
+        RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
     }
 
     /** The caller has drained host submissions and excluded future resubmission. */

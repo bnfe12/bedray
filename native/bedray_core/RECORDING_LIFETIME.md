@@ -97,14 +97,26 @@ executed. It does not free other outstanding frames.
   semantics; do not reuse individual sets merely after a fixed frame count.
 - External images, buffers, and acceleration structures remain owned by the
   host/scene. Their owners must retain them until the same completion event.
+- Host entity capture follows that same event. `EntityCaptureBuffers` leases
+  exclusive writable geometry slices and pins shared immutable atlas generations
+  through `RecordingResourceOwner`. Slot exhaustion creates another generation;
+  neither the three-slot capacity nor a frame delay permits reuse or destruction.
+  `RtWorld.releaseRecording`/`discardRecording` release capture leases through the
+  generation-specific `RecordingCompletion` action. An upload failure leaves its
+  ticket pending until discard. Partial allocation/destruction keeps retryable
+  ownership; close refuses outstanding tickets. Public upload overloads without a
+  command buffer reject GPU work and retain only their null-memory compatibility
+  behavior. These resources are still host capture storage borrowed by the native
+  scene/pass, rather than a second scene or native history owner.
 - The ABI assumes calls are externally synchronized on the render thread.
 - Program handles are monotonically assigned per core and are not native
   addresses. Destroying a program invalidates the handle for new dispatches;
   already-recorded work retains the actual program until release.
 - `SlangRuntime.create` requires the host to supply the actual enabled feature
-  mask. Physical device support is not proof that a logical device enabled a
-  feature. The current host has not yet wired an authoritative enabled-feature
-  mapping; never substitute a physical-support query for that fact.
+  mask. `SlangDeviceCapabilities.enabledMask` maps the game's enabled feature set
+  through its mixin accessor and returns zero if unreadable. Physical device
+  support is not proof that a logical device enabled a feature; never substitute
+  a physical-support query for that fact. This mapping still needs live validation.
 - The ABI v2 sources build as the Windows x64 Release `bedray_core.dll` and the
   contract tests pass (`bedray_path_trace_pass_test`, 2026-10-28); no GPU or
   live-game correctness claim is made.

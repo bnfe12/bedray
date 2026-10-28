@@ -4,7 +4,6 @@ import io.github.andrexarlay.vulkancompat.rt.entity.EntityGeometryFrame;
 import io.github.andrexarlay.vulkancompat.rt.entity.EntityGpuFrame;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.vulkan.VK10;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -117,35 +116,56 @@ public final class RtEntityGeometryManager {
         return currentFrameQuads;
     }
 
+    @Deprecated(forRemoval = true)
     public synchronized void upload(EntityGeometryFrame frame, RtMemory mem) {
         setFrame(frame);
-        uploadToGpu(mem, null);
+        requireRecordingAwareUpload(mem);
+    }
+
+    public synchronized void upload(EntityGeometryFrame frame, RtMemory mem, long commandBuffer) {
+        setFrame(frame);
+        uploadToGpu(mem, 0, 0, 0, commandBuffer);
     }
 
     private double curCamX, curCamY, curCamZ;
 
-    /** As {@link #uploadToGpu(RtMemory, RtArena)} with the camera of the frame (previous-position matching of moving entities). */
+    private EntityCaptureBuffers captureBuffers;
+
+    /** Legacy callers must provide the exact recording through the new overload. */
+    @Deprecated(forRemoval = true)
     public synchronized void uploadToGpu(RtMemory mem, double camX, double camY, double camZ) {
+        requireRecordingAwareUpload(mem);
+    }
+
+    @Deprecated(forRemoval = true)
+    public synchronized void uploadToGpu(RtMemory mem, RtArena ignored) {
+        requireRecordingAwareUpload(mem);
+    }
+
+    private static void requireRecordingAwareUpload(RtMemory mem) {
+        if (mem != null) throw new IllegalStateException(
+            "entity GPU upload requires uploadToGpu(memory, camX, camY, camZ, commandBuffer) and completion/discard release");
+    }
+
+    /** Begins an exact recording before allocating/writing capture buffers; failures retain ownership for discard. */
+    public synchronized void uploadToGpu(RtMemory mem, double camX, double camY, double camZ, long commandBuffer) {
+        if (mem == null || commandBuffer == 0) throw new IllegalArgumentException("memory and recording are required");
+        if (captureBuffers == null) captureBuffers = new EntityCaptureBuffers(mem);
+        if (!captureBuffers.belongsTo(mem)) throw new IllegalStateException("previous device capture owner must be drained/closed");
+        captureBuffers.begin(commandBuffer);
         curCamX = camX;
         curCamY = camY;
         curCamZ = camZ;
-        uploadToGpu(mem, null);
-        uploadAtlas(mem);
+        uploadGeometry(commandBuffer);
+        uploadAtlas(commandBuffer);
     }
 
-    public synchronized void uploadToGpu(RtMemory mem, RtArena geomArena) {
-        if (mem == null) {
-            return;
-        }
-        // The retire queue must drain on every frame, not only on a grow: growth is logarithmic, so once the working set stops
-        // expanding (player standing still, entity-free area) the last grown-out ring set would sit at device memory forever.
-        tickRingRetire(mem);
-
+    private void uploadGeometry(long commandBuffer) {
         // Case 1: captured frame (EntityCaptureManager): interleaved 10 floats per vertex
         // [x, y, z, colour(ABGR bits), u, v, light(bits), nx, ny, nz], camera-relative positions
         if (currentFrame != null && currentFrame.vertexData() != null && currentFrame.totalVertices() > 0
                 && currentFrame.indexData() != null && currentFrame.totalIndices() >= 3) {
-            uploadInterleaved(mem);
+            uploadInterleaved(commandBuffer);
             return;
         }
         frameVertices = 0;
@@ -154,62 +174,13 @@ public final class RtEntityGeometryManager {
         // Case 2: Staged QuadGeometry
         if (!currentFrameQuads.isEmpty()) {
             int qCount = currentFrameQuads.size();
-            long vertexBytes = (long) qCount * 4L * 12L;
-            long indexBytes = (long) qCount * 6L * 4L;
-            long uvBytes = (long) qCount * 4L * 8L;
-            long colBytes = (long) qCount * 4L * 4L;
-            long lightBytes = (long) qCount * 4L * 4L;
-
-            if (vertexBuf == null || vertexBuf.size < vertexBytes) {
-                if (vertexBuf != null) {
-                    mem.destroy(vertexBuf);
-                }
-                vertexBuf = mem.createBuffer("entity_vertex", Math.max(vertexBytes, 1L << 20),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | RtMemory.USAGE_AS_INPUT, true);
-            }
-
-            if (indexBuf == null || indexBuf.size < indexBytes) {
-                if (indexBuf != null) {
-                    mem.destroy(indexBuf);
-                }
-                indexBuf = mem.createBuffer("entity_index", Math.max(indexBytes, 256L << 10),
-                    VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | RtMemory.USAGE_AS_INPUT, true);
-                IntBuffer ib = MemoryUtil.memIntBuffer(indexBuf.mapped, 65536 * 6);
-                ib.position(0);
-                for (int i = 0; i < 65536; i++) {
-                    int base = i * 4;
-                    ib.put(base);
-                    ib.put(base + 1);
-                    ib.put(base + 2);
-                    ib.put(base + 2);
-                    ib.put(base + 3);
-                    ib.put(base);
-                }
-            }
-
-            if (uvBuf == null || uvBuf.size < uvBytes) {
-                if (uvBuf != null) {
-                    mem.destroy(uvBuf);
-                }
-                uvBuf = mem.createBuffer("entity_uv", Math.max(uvBytes, 256L << 10),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
-            }
-
-            if (colBuf == null || colBuf.size < colBytes) {
-                if (colBuf != null) {
-                    mem.destroy(colBuf);
-                }
-                colBuf = mem.createBuffer("entity_col", Math.max(colBytes, 256L << 10),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
-            }
-
-            if (lightBuf == null || lightBuf.size < lightBytes) {
-                if (lightBuf != null) {
-                    mem.destroy(lightBuf);
-                }
-                lightBuf = mem.createBuffer("entity_light", Math.max(lightBytes, 256L << 10),
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
-            }
+            RtMemory.Buf[] buffers = captureBuffers.quads(commandBuffer, qCount);
+            vertexBuf = buffers[0];
+            indexBuf = buffers[1];
+            uvBuf = buffers[2];
+            colBuf = buffers[3];
+            lightBuf = buffers[4];
+            EntityQuadIndices.write(MemoryUtil.memIntBuffer(indexBuf.mapped, qCount * 6), qCount);
 
             FloatBuffer vb = MemoryUtil.memFloatBuffer(vertexBuf.mapped, qCount * 12);
             FloatBuffer ub = MemoryUtil.memFloatBuffer(uvBuf.mapped, qCount * 8);
@@ -245,7 +216,7 @@ public final class RtEntityGeometryManager {
         quadCount = 0;
     }
 
-    /** Ring of {@link #RING} slices so that the CPU never overwrites data a frame still in flight reads (BLAS build, shader). */
+    /** Writable slots per buffer generation; exact leases, not this count, decide when a slot is reusable. */
     public static final int RING = 3;
     public static final int FLOATS_PER_VERTEX = 10;
     private RtMemory.Buf ringPos;
@@ -279,40 +250,7 @@ public final class RtEntityGeometryManager {
     private int frameTriangles;
     private long uploadedBytes;
 
-    /**
-     * Ring buffers replaced by a bigger generation. A grow must NOT destroy them where it stands: the previous frames'
-     * command buffers still read these device addresses (the shader through {@code buffer_reference}, the entity BLAS
-     * build through the recorded geometry), and freeing a buffer an in-flight submission touches is undefined and has
-     * shown up as {@code VK_ERROR_DEVICE_LOST}. They go to the same deferred queue as the atlas versions.
-     */
-    private record RetiredRing(long frame, RtMemory.Buf[] buffers) {}
-    private final java.util.ArrayDeque<RetiredRing> retiredRing = new java.util.ArrayDeque<>();
-    private long ringFrame;
-
-    /** Advances the ring-retire clock once per frame and destroys grown-out sets past the window. */
-    private void tickRingRetire(RtMemory mem) {
-        ringFrame++;
-        while (!retiredRing.isEmpty() && ringFrame - retiredRing.peekFirst().frame() > RETIRE_FRAMES) {
-            for (RtMemory.Buf buf : retiredRing.removeFirst().buffers()) {
-                if (buf != null) {
-                    mem.destroy(buf);
-                }
-            }
-        }
-    }
-
-    private void retireRing() {
-        RtMemory.Buf[] bufs = {ringPos, ringIdx, ringAttr, ringPrev};
-        if (ringPos != null) {
-            // ArrayDeque rejects null elements. Keep a possibly partial allocation inside one non-null generation record.
-            retiredRing.addLast(new RetiredRing(ringFrame, bufs));
-        }
-        ringPos = ringIdx = ringAttr = ringPrev = null;
-        frameVertices = 0;
-        frameTriangles = 0;
-    }
-
-    private void uploadInterleaved(RtMemory mem) {
+    private void uploadInterleaved(long commandBuffer) {
         float[] src = currentFrame.vertexData();
         int[] idx = currentFrame.indexData();
         int verts = Math.min(currentFrame.totalVertices(), src.length / FLOATS_PER_VERTEX);
@@ -322,21 +260,14 @@ public final class RtEntityGeometryManager {
             frameTriangles = 0;
             return;
         }
-        if (ringPos == null || ringIdx == null || ringAttr == null || ringPrev == null
-            || verts > ringVertexCap || indices > ringIndexCap) {
-            // only the ring is recycled here: close() would also drop the staged-quad buffers and currentFrame, which
-            // the atlas upload and the next frame's motion matching still need
-            retireRing();
-            ringVertexCap = Math.max(65536L, Long.highestOneBit((long) verts) << 1);
-            ringIndexCap = Math.max(98304L, Long.highestOneBit((long) indices) << 1);
-            int addr = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            ringPos = mem.createBuffer("entity_pos_ring", RING * ringVertexCap * 12L, addr | RtMemory.USAGE_AS_INPUT, true);
-            ringIdx = mem.createBuffer("entity_idx_ring", RING * ringIndexCap * 4L, addr | RtMemory.USAGE_AS_INPUT, true);
-            // per vertex: colour (uint ABGR) + light (uint, block | sky << 16) + uv (2 floats)
-            ringAttr = mem.createBuffer("entity_attr_ring", RING * ringVertexCap * 16L, addr, true);
-            ringPrev = mem.createBuffer("entity_prev_ring", RING * ringVertexCap * 12L, addr, true);
-        }
-        ringSlot = (ringSlot + 1) % RING;
+        var geometry = captureBuffers.geometry(commandBuffer, verts, indices);
+        ringPos = geometry.positions();
+        ringIdx = geometry.indices();
+        ringAttr = geometry.attributes();
+        ringPrev = geometry.previous();
+        ringVertexCap = geometry.vertexCapacity();
+        ringIndexCap = geometry.indexCapacity();
+        ringSlot = geometry.slot();
         long pos = ringPos.mapped + ringSlot * ringVertexCap * 12L;
         long attr = ringAttr.mapped + ringSlot * ringVertexCap * 16L;
         for (int v = 0; v < verts; v++) {
@@ -467,46 +398,24 @@ public final class RtEntityGeometryManager {
         prevCamZ = curCamZ;
     }
 
-    /** Atlas buffers replaced by a newer version, destroyed once no frame in flight can read them. */
-    private final java.util.ArrayDeque<long[]> retiredAtlas = new java.util.ArrayDeque<>();
-    private final java.util.ArrayDeque<RtMemory.Buf> retiredBufs = new java.util.ArrayDeque<>();
-    private long uploadFrame;
-    /** Frames that may still be in flight when a buffer is retired (ring of 3 + margin). */
-    private static final int RETIRE_FRAMES = RING + 2;
     private long atlasSwaps;
 
-    private void uploadAtlas(RtMemory mem) {
-        if (mem == null) {
-            return;
-        }
-        io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas atlas = io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.INSTANCE;
-        uploadFrame++;
-        while (!retiredAtlas.isEmpty() && uploadFrame - retiredAtlas.peekFirst()[0] > RETIRE_FRAMES) {
-            retiredAtlas.pollFirst();
-            mem.destroy(retiredBufs.pollFirst());
-            mem.destroy(retiredBufs.pollFirst());
-        }
-        long v = atlas.version();
-        if (v != atlasVersion) {
-            // versioned double buffering: the new version goes into FRESH buffers; the old ones stay untouched (frames in
-            // flight keep reading them through the StatsBuf addresses of their slot) and are destroyed RETIRE_FRAMES later
-            int addr = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            int n = io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE;
-            RtMemory.Buf na = mem.createBuffer("entity_tex_atlas", (long) n * n * 4L, addr, true);
-            RtMemory.Buf nr = mem.createBuffer("entity_tex_rects", io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.MAX_SLOTS * 16L, addr, true);
-            atlas.copyTo(na.mapped, nr.mapped);
-            if (atlasBuf != null) {
-                retiredAtlas.addLast(new long[] {uploadFrame});
-                retiredBufs.addLast(atlasBuf);
-                retiredBufs.addLast(rectBuf);
-            }
-            atlasBuf = na;
-            rectBuf = nr;
+    private void uploadAtlas(long commandBuffer) {
+        var source = io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.INSTANCE;
+        var atlas = captureBuffers.atlas(commandBuffer, source);
+        atlasBuf = atlas.texels();
+        rectBuf = atlas.rects();
+        if (atlasVersion != atlas.version()) {
+            atlasVersion = atlas.version();
             atlasSwaps++;
-            atlasVersion = v;
-            LOGGER.info("[VK-ENTITY-ATLAS] uploaded version={} slots={} bytes={} addr=0x{}", v, atlas.slotCount(),
-                atlasBuf.size, Long.toHexString(atlasBuf.address));
+            LOGGER.info("[VK-ENTITY-ATLAS] uploaded version={} slots={} bytes={} addr=0x{}", atlasVersion,
+                source.slotCount(), atlasBuf.size, Long.toHexString(atlasBuf.address));
         }
+    }
+
+    /** Exact completion/discard proof is supplied by RtFrameRenderer's generation-specific host ticket. */
+    public synchronized void releaseRecording(RtMemory memory, long commandBuffer) {
+        if (captureBuffers != null && captureBuffers.belongsTo(memory)) captureBuffers.releaseRecording(commandBuffer);
     }
 
     public synchronized long framePrevAddress() {
@@ -525,7 +434,7 @@ public final class RtEntityGeometryManager {
     public synchronized String uploadTelemetry() {
         return String.format(java.util.Locale.ROOT,
             "atlasSwaps=%d retired=%d uploadBytes=%d posAddr=0x%x idxAddr=0x%x attrAddr=0x%x prevAddr=0x%x atlasSlots=%d atlasAddr=0x%x matched=%d unmatched=%d",
-            atlasSwaps, retiredAtlas.size(), uploadedBytes, framePosAddress(), frameIndexAddress(), frameAttrAddress(), framePrevAddress(),
+            atlasSwaps, captureBuffers == null ? 0 : captureBuffers.retiredCount(), uploadedBytes, framePosAddress(), frameIndexAddress(), frameAttrAddress(), framePrevAddress(),
             io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.INSTANCE.slotCount(), atlasAddress(), matchedEntities, unmatchedEntities);
     }
 
@@ -634,62 +543,30 @@ public final class RtEntityGeometryManager {
         return lightBuf != null ? lightBuf.address : (vertexBuf != null ? vertexBuf.address : 0L);
     }
 
-    /** World shutdown: GPU idle (RtWorld.destroy waits), everything incl. the atlas versions can go. */
-    public synchronized void closeAll(RtMemory mem) {
-        close(mem);
-        for (RtMemory.Buf b : retiredBufs) {
-            mem.destroy(b);
-        }
-        retiredBufs.clear();
-        retiredAtlas.clear();
-        for (RetiredRing generation : retiredRing) {
-            for (RtMemory.Buf b : generation.buffers()) {
-                if (b != null) {
-                    mem.destroy(b);
-                }
-            }
-        }
-        retiredRing.clear();
-        if (atlasBuf != null) {
-            mem.destroy(atlasBuf);
-            mem.destroy(rectBuf);
-        }
-        atlasBuf = rectBuf = null;
-        atlasVersion = -1;
-    }
+    /** Host drained submissions and excluded resubmission; outstanding capture tickets still refuse close. */
+    public synchronized void closeAll(RtMemory mem) { close(mem); }
 
-    public void close(RtMemory mem) {
-        for (RtMemory.Buf b : new RtMemory.Buf[] {ringPos, ringIdx, ringAttr, ringPrev}) {
-            if (b != null) {
-                mem.destroy(b);
-            }
+    public synchronized void close(RtMemory mem) {
+        if (captureBuffers != null) {
+            if (!captureBuffers.belongsTo(mem)) throw new IllegalStateException("capture owner belongs to another device");
+            if (captureBuffers.pendingCount() != 0) throw new IllegalStateException("capture recordings require completion/discard");
+            invalidateGpuViews();
+            captureBuffers.close();
+            captureBuffers = null;
         }
-        ringPos = ringIdx = ringAttr = ringPrev = null;
-        frameVertices = 0;
-        frameTriangles = 0;
-        if (vertexBuf != null) {
-            mem.destroy(vertexBuf);
-            vertexBuf = null;
-        }
-        if (indexBuf != null) {
-            mem.destroy(indexBuf);
-            indexBuf = null;
-        }
-        if (uvBuf != null) {
-            mem.destroy(uvBuf);
-            uvBuf = null;
-        }
-        if (colBuf != null) {
-            mem.destroy(colBuf);
-            colBuf = null;
-        }
-        if (lightBuf != null) {
-            mem.destroy(lightBuf);
-            lightBuf = null;
-        }
-        currentFrame = EntityGeometryFrame.EMPTY;
+        invalidateGpuViews();
+        currentFrame = prevFrame = EntityGeometryFrame.EMPTY;
         currentFrameQuads.clear();
         quadCount = 0;
+    }
+
+    private void invalidateGpuViews() {
+        ringPos = ringIdx = ringAttr = ringPrev = null;
+        atlasBuf = rectBuf = null;
+        vertexBuf = indexBuf = uvBuf = colBuf = lightBuf = null;
+        atlasVersion = -1;
+        frameVertices = frameTriangles = 0;
+        lastGpuFrame = EntityGpuFrame.EMPTY;
     }
     /**
      * Returns the last EntityGpuFrame built from uploadToGpu (may be EMPTY if no geometry this frame).
@@ -701,12 +578,17 @@ public final class RtEntityGeometryManager {
 
     private EntityGpuFrame lastGpuFrame = EntityGpuFrame.EMPTY;
 
-    /**
-     * Uploads the current frame geometry to GPU ring-buffer and returns an EntityGpuFrame
-     * with real buffer device addresses. This is the single canonical upload path.
-     */
+    /** Compatibility no-op for null memory; GPU callers must use the recording-aware overload. */
+    @Deprecated(forRemoval = true)
     public synchronized EntityGpuFrame uploadAndGetGpuFrame(RtMemory mem, double camX, double camY, double camZ) {
-        uploadToGpu(mem, camX, camY, camZ);
+        requireRecordingAwareUpload(mem);
+        return EntityGpuFrame.EMPTY;
+    }
+
+    /** Uploads capture storage leased to this recording and returns its borrowed device addresses. */
+    public synchronized EntityGpuFrame uploadAndGetGpuFrame(RtMemory mem, double camX, double camY, double camZ,
+                                                           long commandBuffer) {
+        uploadToGpu(mem, camX, camY, camZ, commandBuffer);
         if (ringPos == null || frameVertices <= 0) {
             lastGpuFrame = EntityGpuFrame.EMPTY;
             return lastGpuFrame;
@@ -715,9 +597,6 @@ public final class RtEntityGeometryManager {
         long posAddr  = ringPos  != null ? (ringPos.address  + slotOffset * 12L) : 0L;
         long idxAddr  = ringIdx  != null ? (ringIdx.address  + (long) ringSlot * ringIndexCap * 4L) : 0L;
         long attrAddr = ringAttr != null ? (ringAttr.address + slotOffset * 16L) : 0L;
-        long prevAddr = ringPrev != null ? (ringPrev.address + slotOffset * 12L) : 0L;
-        long atlAddr  = atlasBuf != null ? atlasBuf.address : 0L;
-        long rectAddr = rectBuf  != null ? rectBuf.address  : 0L;
         lastGpuFrame = new EntityGpuFrame(
             currentFrame != null ? currentFrame.frameId() : 0L,
             posAddr, idxAddr, attrAddr,
