@@ -3,7 +3,7 @@ name: Native Windows contracts
 on:
   workflow_dispatch:
   push:
-    branches: [codex/native-ci-abi-exceptions]
+    branches: [codex/native-ci-abi-exceptions, 'codex/migration-*']
 
 permissions:
   contents: read
@@ -30,7 +30,7 @@ jobs:
       - name: Checkout source revision
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ matrix.revision == 'baseline' && 'aaaf00cb4ad90887739c2f4813841c13f14b62e1' || github.sha }}
+          ref: ${{ matrix.revision == 'baseline' && '4236c75ab72fded1347dd19d88f38a3804742a38' || github.sha }}
           path: source
           persist-credentials: false
       - name: Checkout pinned Vulkan-Headers

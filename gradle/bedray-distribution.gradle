@@ -4,8 +4,8 @@
 def nativeSource = rootProject.file('native/bedray_core')
 def nativeBuild = layout.buildDirectory.dir('bedray-native/windows-x64')
 def nativeDll = nativeBuild.map { it.file('Release/bedray_core.dll') }
-// The GPU scene is a second, optional DLL: the host keeps the Java scene when
-// it is missing, and enables the native one with -Dvkbridge.rt.nativeScene=true.
+// Scene exports are embedded in the core DLL. The standalone build remains a
+// developer ABI target; the player distribution loads one renderer library.
 def nativeSceneSource = rootProject.file('native/bedray_scene')
 def nativeSceneBuild = layout.buildDirectory.dir('bedray-native-scene/windows-x64')
 def nativeSceneDll = nativeSceneBuild.map { it.file('Release/bedray_scene.dll') }
@@ -17,6 +17,9 @@ def buildNative = tasks.register('buildBedrayNative') {
     description = 'Builds the Windows x64 Bedray renderer core from this checkout'
     inputs.files(fileTree(nativeSource) { include 'CMakeLists.txt', 'include/**', 'src/**' })
     inputs.files(rootProject.fileTree('native/bedray_gpu_resources') { include 'CMakeLists.txt', 'include/**', 'src/**' })
+    ['bedray_scene', 'bedray_history', 'bedray_render_graph'].each { module ->
+        inputs.files(rootProject.fileTree("native/${module}") { include 'CMakeLists.txt', 'include/**', 'src/**' })
+    }
     inputs.property('cmakeExecutable', cmakeExecutable)
     inputs.property('vulkanHeaders', headersPath.orElse(''))
     outputs.file(nativeDll)
@@ -77,9 +80,8 @@ def buildNativeScene = tasks.register('buildBedrayScene') {
     tasks.register("${loader}BedrayDistribution", Copy) {
         group = 'build'
         description = "Builds the ${loader} JAR and Windows renderer DLLs for manual installation"
-        dependsOn buildNative, buildNativeScene, ":${loader}:combinedJar"
+        dependsOn buildNative, ":${loader}:combinedJar"
         from(nativeDll)
-        from(nativeSceneDll)
         from({ project(":${loader}").tasks.named('combinedJar').get().archiveFile.get().asFile }) {
             rename { "bedray-${loader}.jar" }
         }

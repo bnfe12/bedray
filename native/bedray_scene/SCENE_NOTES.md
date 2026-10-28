@@ -6,6 +6,17 @@ passes (`bedray_scene_contract`, 2026-10-28). It has not been integrated into
 `bedray_core`, run on a real GPU, or exercised by Minecraft. Nothing in this
 document is a claim of live rendering correctness.
 
+Integration follow-up (2026-10-28): the scene implementation now builds as one
+object target embedded in `bedray_core.dll`; a standalone DLL remains for the
+existing ABI contract tests. `NativeSceneBridge` loads the scene symbols from
+the already validated core path, and player distributions contain one renderer
+DLL. ABI v2 layouts/signatures remain unchanged. Memory backing every BDA buffer
+is allocated with `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`; staging allocations
+remain ordinary. A zero device address is rejected before publication/builds.
+The fake driver checks allocation flags against every bound buffer's usage, and
+a core-DLL export probe checks all ten scene entry points without a GPU.
+See `docs/VERIFICATION_LOG.md` for matching build/test evidence.
+
 ## Files
 
 | File | Purpose |

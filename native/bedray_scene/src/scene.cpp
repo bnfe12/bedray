@@ -1669,11 +1669,13 @@ extern "C" {
 
 using namespace bedray_scene;
 
-BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_abi_version(void) {
+BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_abi_version(void) try {
     return BEDRAY_SCENE_ABI_VERSION;
+} catch (...) {
+    return 0;
 }
 
-BEDRAY_SCENE_API void BEDRAY_SCENE_CALL bedray_scene_abi_info(BedraySceneAbiInfo* out_info) {
+BEDRAY_SCENE_API void BEDRAY_SCENE_CALL bedray_scene_abi_info(BedraySceneAbiInfo* out_info) try {
     if (out_info == nullptr) {
         return;
     }
@@ -1689,6 +1691,8 @@ BEDRAY_SCENE_API void BEDRAY_SCENE_CALL bedray_scene_abi_info(BedraySceneAbiInfo
     out_info->sizeof_section_record = static_cast<uint32_t>(sizeof(BedraySceneSectionRecord));
     out_info->sizeof_error = static_cast<uint32_t>(sizeof(BedraySceneError));
     out_info->reserved = 0;
+} catch (...) {
+    // Preserve the existing void discovery ABI; never unwind into FFM.
 }
 
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_create(
