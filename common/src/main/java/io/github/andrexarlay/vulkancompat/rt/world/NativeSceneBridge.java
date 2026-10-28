@@ -80,7 +80,6 @@ final class NativeSceneBridge implements AutoCloseable {
     private final Map<Long, Long> recordingFrames = new LinkedHashMap<>();
     private long nextSectionId = 1;
     private long nextRevision = 1;
-    private long frameIndex;
     private boolean entityPresent;
     private long tlas;
     private RtMemory.Buf table;
@@ -168,18 +167,10 @@ final class NativeSceneBridge implements AutoCloseable {
      */
     void sectionBuilt(DecodedSection section, int[] tagged) {
         Long removed = removals.remove(section.key);
-        long id;
         if (removed != null) {
-            id = removed;
-            sectionIds.put(section.key, id);
-        } else {
-            Long existing = sectionIds.get(section.key);
-            if (existing == null) {
-                id = nextSectionId++;
-                sectionIds.put(section.key, id);
-            } else {
-                id = existing;
-            }
+            sectionIds.put(section.key, removed);
+        } else if (!sectionIds.containsKey(section.key)) {
+            sectionIds.put(section.key, nextSectionId++);
         }
         // RtWorld reuses one per-quad scratch array for every section of the frame,
         // so the queue has to keep its own copy until the scene copies it.
@@ -203,7 +194,6 @@ final class NativeSceneBridge implements AutoCloseable {
      * the scene rebuilds the entity BLAS exactly as the legacy path does.
      */
     void updateEntities(long frameIndex) {
-        this.frameIndex = frameIndex;
         RtEntityGeometryManager manager = RtEntityGeometryManager.INSTANCE;
         RtEntityGeometryManager.GpuRange positions = manager.framePositions();
         RtEntityGeometryManager.GpuRange indices = manager.frameIndices();
@@ -268,8 +258,8 @@ final class NativeSceneBridge implements AutoCloseable {
         if (handle == 0L || bytes <= 0L) {
             table = null;
         } else if (table == null || table.handle != handle || table.size != bytes) {
-            // Borrowed: the scene owns the buffer and keeps it alive until the next
-            // table rebuild; the host must never destroy it through RtMemory. The
+            // Borrowed: the scene retires the buffer only after referencing frames
+            // complete or are discarded; the host must not destroy it through RtMemory. The
             // flag is also what tells the Slang path which program to dispatch.
             table = new RtMemory.Buf(handle, 0L, bytes, resources.sectionTableAddress(), 0L, false, true);
         }

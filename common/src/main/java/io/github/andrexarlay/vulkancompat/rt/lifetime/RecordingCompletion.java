@@ -10,14 +10,17 @@ import java.util.function.Consumer;
 public final class RecordingCompletion {
     private enum State { RECORDING, UNKNOWN, SUBMITTED, DISCARD_PROVEN }
     public record Retirement(Runnable completed, Runnable discarded) {
-        public Retirement { Objects.requireNonNull(completed); Objects.requireNonNull(discarded); }
+        public Retirement {
+            Objects.requireNonNull(completed);
+            Objects.requireNonNull(discarded);
+        }
     }
 
     public static final class Ticket {
         private final long commandBuffer;
         private final Retirement[] release;
         private final boolean[] released;
-        private Boolean discardedProof;
+        private Boolean discardedProof; // Fixed by the first proof, including across failed cleanup retries.
         private State state = State.RECORDING;
 
         private Ticket(long commandBuffer, Retirement[] release) {

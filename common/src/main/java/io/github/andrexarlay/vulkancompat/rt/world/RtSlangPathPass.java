@@ -135,7 +135,6 @@ public final class RtSlangPathPass implements RtPass {
     private BedrayPathTraceNative pathTraceNative;
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
     private final Set<Long> recordings = new LinkedHashSet<>();
-    private RtMemory memory;
     private final BedrayGpuImagesNative historyImages;
     private final BedrayGpuBuffersNative nativeBuffers;
     private final BedrayGpuImagesNative.Image[] accum = new BedrayGpuImagesNative.Image[2];
@@ -170,7 +169,7 @@ public final class RtSlangPathPass implements RtPass {
      * {@code requestedGbuffer}: what the renderer asked for. This pass never writes the G-buffer, but it remembers the
      * request so the renderer does not rebuild it every frame for not matching (see {@link #builtFor(boolean)}).
      */
-    RtSlangPathPass(VkDevice device, SlangRuntime runtime, RtMemory memory, boolean requestedGbuffer) {
+    RtSlangPathPass(VkDevice device, SlangRuntime runtime, boolean requestedGbuffer) {
         this.runtime = runtime;
         if (runtime == null) {
             throw new IllegalArgumentException("path trace needs a SlangRuntime");
@@ -181,7 +180,6 @@ public final class RtSlangPathPass implements RtPass {
             LOGGER.warn("[VKB-RT] vkbridge.rt.nativePathTrace=true but the loaded bedray_core has no path-trace"
                 + " exports; keeping the Java path");
         }
-        this.memory = memory;
         this.requestedGbuffer = requestedGbuffer;
         this.trace = new RtPathTraceSlangPass(device, runtime);
         BedrayGpuImagesNative allocatedHistory = null;
@@ -243,8 +241,11 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public String describe(RtFrameParams p) {
-        String restir = !diActive() || (!nativeReservoirs && reservoirs == null) ? "off"
-            : (reservoirHistoryWritten ? "temporal" : "fresh") + (spatialRequested() ? "+spatial" : "");
+        String restir = "off";
+        if (diActive() && (nativeReservoirs || reservoirs != null)) {
+            restir = (nativeReservoirs ? "native" : reservoirHistoryWritten ? "temporal" : "fresh")
+                + (spatialRequested() ? "+spatial" : "");
+        }
         return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
             + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
             + ",frames=" + (accumFrames + 1) + ",denoiser=off)";
@@ -252,13 +253,11 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public void prepare(VkCommandBuffer cmd, RtMemory mem, int width, int height) {
-        memory = mem;
-        prepareReservoirs(mem, width, height);
+        prepareReservoirs(width, height);
         if (nativePathTrace) {
             // The native pass owns radiance, motion, accumulation and history
-            // depth, and it resets them itself when the extent changes. The host
-            // still owns the DI ring above, so only its size bookkeeping stays
-            // here.
+            // depth, and resets them when the extent changes. Older cores still
+            // use the external DI ring prepared above; NATIVE_DI cores own it too.
             if (lastWidth != width || lastHeight != height) {
                 lastWidth = width;
                 lastHeight = height;
@@ -305,7 +304,7 @@ public final class RtSlangPathPass implements RtPass {
      * a command-buffer fill. Turning ReSTIR DI off frees it again - the buffer is 250 MB at 1080p and holding it unused
      * would compete with the section arenas.
      */
-    private void prepareReservoirs(RtMemory mem, int width, int height) {
+    private void prepareReservoirs(int width, int height) {
         if (nativeReservoirs) return;
         long pixels = (long) width * height;
         long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;

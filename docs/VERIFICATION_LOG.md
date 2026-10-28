@@ -499,3 +499,36 @@ with no native test failures. Same limits: native L2 only, no shader compile,
 GPU, game or visual claim. A final shader sweep on the published tree at
 `913e4e0` repeated all 17 `passes/*.slang` plus the five harnesses with exit 0;
 the shader sources are still identical to `b1137fd`.
+
+## 2026-10-28 — migration code cleanliness review
+
+Reviewed the integrated migration from base `a8f796b95f4b3dcb1866669d521586d45a4f6323`,
+with focus on Java FFM/host ownership, scene capture, completion/discard bookkeeping,
+PathTracePass pin/retirement and the graph owner. Removed write-only frame/memory
+fields and unused internal memory arguments; simplified section ID preservation;
+made the chosen world scene owner final. Corrected stale DI/table-lifetime comments,
+misplaced/duplicated API JavaDoc and verbose repeated type names. Native DI telemetry
+now says native rather than claiming fresh Java-owned history every frame.
+
+`git diff --check` passes. Searches found no conflict markers or empty catch blocks
+in the reviewed ABI/scene code, nor submit/queue-wait/device-idle calls in native
+core/scene. No dedicated formatter/linter configuration was found. The focused
+review found no additional critical defect; this is not an audit of every subsystem.
+
+Executed `:common:compileJava :common:test` with RecordingCompletionTest,
+BedraySceneGeometryTest, RtSceneApiTest, RtPathTraceSlangPassTest and
+SlangPassLibraryTest: BUILD SUCCESSFUL, 23 tests, zero failures/errors/skips.
+Local dependency paths match the preceding verification batch. Existing Java
+API/JOML Unsafe deprecation diagnostics remain. Native sources and shader sources
+are byte-for-byte unchanged from the preceding passing native/AOT evidence;
+identical native CI is deliberately skipped for this Java cleanup. No GPU/game
+result is claimed. ABI layouts, native lifetime protocol and shader math are unchanged.
+
+The integration base advanced to `6632bca4219c13937e9f19fed7f65983e670f5be`
+(RC shader-owner PR #10) during review. Merged it without editing its sources;
+the sole conflict was the append-only verification journal and both records are
+preserved. Repeated the same Java compile/23-test command on `e4eea40`: success,
+zero test failures/errors/skips. The default AOT build freshly compiled all
+18 production passes, including rc_probe_trace, with reflection validation.
+The final follow-up only clarifies the stale migration-status documentation.
+Relative to the refreshed base, cleanup changes no native or shader sources.
