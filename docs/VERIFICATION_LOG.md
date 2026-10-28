@@ -104,3 +104,27 @@ The native path remains opt-in. No graph/history live path is enabled and no
 queue/device/submission/wait operation is introduced. If the baseline fails,
 preserve its logs and resolve that baseline separately before claiming a
 candidate regression or moving on to live integration.
+
+### Executed CI result — run 40712959065
+
+[Windows CI run](https://github.com/bnfe12/bedray/actions/runs/40712959065)
+completed successfully on 2026-10-28. Candidate commit:
+`0a076fb1cfb2195521174a3b0b03bb61539f6d2c`.
+
+| Revision | Core CTest | Scene CTest | Frame lifetime CTest | ABI probe |
+|---|---:|---:|---:|---|
+| Base `aaaf00cb4ad90887739c2f4813841c13f14b62e1` | 12/12 | 1/1 | 1/1 | v2, exit 0 |
+| Candidate `0a076fb1cfb2195521174a3b0b03bb61539f6d2c` | 15/15 | 1/1 | 1/1 | v2, exit 0 |
+
+Every configure/build/CTest command exited 0 on both revisions. Candidate's
+additional CTest entries are `bedray_abi_probe`, `bedray_abi_exception` and
+`bedray_gpu_dynamic_c`. The core sampler test also executed its new exception
+cases. Both dependency checksum/version steps and text artifact uploads passed.
+Baseline compiled without C compiler warnings reported in the job log;
+candidate reported three C4389 signed/unsigned comparison warnings in the new
+test. A follow-up makes those comparisons explicitly use the public status type;
+that source change requires its own matching run before extending this evidence.
+
+Evidence for the tested native modules at the named commits is **L2**, with no
+GPU. The whole Slang/C++ migration remains incomplete; Java, shader compilation,
+driver behaviour, real resources and game rendering were not checked.

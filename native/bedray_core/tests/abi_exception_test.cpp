@@ -54,21 +54,21 @@ int main() {
         next_fault = fault;
         const auto bs = bedray_gpu_owner_create(&buffer, &b);
         CHECK(next_fault == Fault::none);
-        CHECK(bs == (fault == Fault::allocation ? BEDRAY_GPU_OUT_OF_MEMORY : BEDRAY_GPU_INTERNAL_ERROR));
+        CHECK(bs == static_cast<BedrayGpuStatus>(fault == Fault::allocation ? BEDRAY_GPU_OUT_OF_MEMORY : BEDRAY_GPU_INTERNAL_ERROR));
         CHECK(b == nullptr);
 
         BedrayGpuImageOwner* i = reinterpret_cast<BedrayGpuImageOwner*>(1);
         next_fault = fault;
         const auto is = bedray_gpu_image_owner_create(&image, &i);
         CHECK(next_fault == Fault::none);
-        CHECK(is == (fault == Fault::allocation ? BEDRAY_GPU_OUT_OF_MEMORY : BEDRAY_GPU_INTERNAL_ERROR));
+        CHECK(is == static_cast<BedrayGpuStatus>(fault == Fault::allocation ? BEDRAY_GPU_OUT_OF_MEMORY : BEDRAY_GPU_INTERNAL_ERROR));
         CHECK(i == nullptr);
 
         BedrayHistory* h = reinterpret_cast<BedrayHistory*>(1);
         next_fault = fault;
         const auto hs = bedray_history_create(1024, &h);
         CHECK(next_fault == Fault::none);
-        CHECK(hs == (fault == Fault::allocation ? BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY : BEDRAY_HISTORY_INTERNAL_ERROR));
+        CHECK(hs == static_cast<BedrayHistoryStatus>(fault == Fault::allocation ? BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY : BEDRAY_HISTORY_INTERNAL_ERROR));
         CHECK(h == nullptr);
     }
 
