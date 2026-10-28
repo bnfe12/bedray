@@ -354,8 +354,8 @@ Journal-only follow-up skips identical native CI. Native switches remain opt-in.
 
 ## 2026-10-28 — ReSTIR DI ring state
 
-Base `a8f796b` (`refactor/slang-pipeline`, working tree; nothing pushed by this
-entry). `RestirDiState` replaces the five host fields that carried the DI ring's
+Base `a8f796b` (`refactor/slang-pipeline`); branch `codex/restir-di-ring-state`,
+PR #17. `RestirDiState` replaces the five host fields that carried the DI ring's
 bookkeeping (`nativeReservoirs`, `reservoirPixels`, `reservoirResetRequested`,
 `reservoirHistoryWritten`, `reservoirFrame`) with one device-free class that
 knows the owner, the parity, the history bit, the pending clear and the extent
@@ -385,4 +385,6 @@ reflective JUnit harness, 35 tests in total (`RtSlangRestirDiTest` 11,
 `:common:compileJava` is unavailable here because the Minecraft, Sodium and Iris
 artifacts are not resolvable in this environment, so this is L0/L1/L2 only: no
 CI run, no GPU/game result, and live parity plus visual reuse remain unverified
-(L3–L5).
+(L3–L5). The native workflow triggers on `codex/migration-*` and manual dispatch
+only and this change touches no native source, so the branch carries no run; the
+Java build is not part of that workflow.
