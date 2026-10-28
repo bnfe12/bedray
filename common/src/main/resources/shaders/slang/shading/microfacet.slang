@@ -75,6 +75,9 @@ float3 sampleReflection(float3 V, float3 N, float roughness, float f0,
     float3 He = sampleGGXVNDF(Ve, alpha, u);
     float3 Le = reflect(-Ve, He);
     if (Le.z <= 0.0) {
+        // Zero single-scattering BRDF in this direction.  The sample is valid
+        // but carries no energy; resampling without the conditional density
+        // would bias the lobe brighter.
         weight = float3(0.0);
         return float3(0.0);
     }

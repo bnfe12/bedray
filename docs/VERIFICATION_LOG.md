@@ -4,6 +4,98 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-28 — typed RC store split and entry status (L1 compile)
+
+Branch: `feat/slang-rc-transport-20261028`, commit `bcf77b7`.
+Tool: `slangc` 2026.20, `-target spirv -profile cs_6_5 -entry main
+-matrix-layout-column-major -I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `radiance_cascades/segment_store.slang` is now a facade; the implementation
+  lives in `segment_record.slang` (whole-record read/write, shared
+  `IRCSegmentSource` for read-only and writable buffers, ray composition) and
+  `probe_resolve.slang` (`RCProbeRadiance`, `rcResolveProbe`,
+  `rcProbeComplete`).
+- `rc_atlas_layout.slang` owns `rcLayoutCanonical`, the named interval
+  constants and `rcUncheckedIntervalIndex`; the old `rcIntervalIndex` name is
+  gone and `layout.flags` is validated.
+- Fresh probe/dispatch entries return `RCTraceEntryStatus`; blended entries
+  return `RCTraceBlendedStatus` with `RCTemporalStatus`.  They no longer return
+  a bare failure count that could be mistaken for "the atlas is usable".
+- `rcApplyCascadeOwnershipBand` writes an out parameter and reports success.
+- `passes/rc_probe_trace.slang` is the first typed-RC consumer: one dispatch
+  item decodes to one probe ray, writes the typed records and one status
+  element.  It is host-agnostic and is not wired into the render loop.
+- `RCSegment` and `RCTraceEntryStatus` are pinned in `STRUCT_LAYOUTS`.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | includes `rc_probe_trace.slang` |
+| RC/root harnesses | 5 | 5 | typed, environment, full trace API, both roots, scene tracer |
+
+Reflection on `rc_probe_trace.slang` (layout evidence, not a runtime check):
+`RCSegment` is 32 bytes at offsets 0/12/16/28; `RCTraceEntryStatus` is 32 bytes
+at offsets 0/4/8/12/16/20/24/28; `RCProbeTracePush` is 112 bytes; the pass has
+16 descriptors in one set plus the push block.
+
+`rc_trace_segments.slang` remains obsolete and excluded from the sweep:
+`RtSlangVisibilityOverflowTest.java` requires the `surfaceVisibilityProven(`
+string in that path.  `path_trace.slang` and `path_trace_scene.slang` remain
+duplicated because existing Java source-scan tests assert exact lines in
+`passes/path_trace.slang`; deduplicating them is still blocked on changing
+those tests.
+
+This is L1 only.  It proves module resolution, re-exports, generic
+instantiation and the reflected record layout above.  It does not prove a GPU
+dispatch, the host descriptor range or stride, a live frame or visual parity.
+`gradlew :common:test` cannot configure in this checkout because
+`fabric/build.gradle` requires the missing `fabric-loader-0.19.5.jar`; native
+CI does not compile shaders.  PR #10 remains open and unmerged.
+
+## 2026-10-28 — shader module cleanup (L1 compile)
+
+Branch: `feat/slang-rc-transport-20261028`.  Verified on cleanup commit
+`b1137fd`; merged with the moving base `175515f` in `09e601b`.  The base merge
+did not change any shader source, so the compile state below is the same tree
+for the shader modules.
+Tool: `slangc` 2026.20, `-target spirv -profile cs_6_5 -entry main
+-matrix-layout-column-major -I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `radiance_cascades/rc_trace.slang` is now a facade over
+  `rc_trace_options`, `rc_trace_shade`, `rc_trace_walk`, `rc_trace_dispatch`,
+  `rc_trace_history` and `rc_trace_ownership`.
+- `rc_atlas_layout.slang` owns the shared addressing; `segment_store.slang`
+  no longer imports the legacy float4 store.
+- The legacy float4 implementation moved to `legacy_float4_store.slang`;
+  `radiance_cascades_store.slang` is a compatibility facade. Its resolve is
+  named `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`.
+- `bedray.slang` is the curated typed root; `bedray_legacy.slang` is the
+  explicit compatibility root.
+- `radiance_cascades.slang` no longer imports the legacy `types` module; the
+  addressing path defines its own layout records.
+- New harnesses: `verify_rc_trace_api.slang` and `verify_bedray_roots.slang`.
+  `verify_rc_typed.slang` now imports `rc_atlas_layout.slang`, not the legacy
+  store.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 17 | 17 | unchanged pass sources |
+| RC/root harnesses | 5 | 5 | typed, environment, full trace API, both roots, scene tracer |
+
+`rc_trace_segments.slang` is obsolete and was deliberately not compiled.
+
+This is L1 only. It proves module resolution, re-exports and generic
+instantiation. It does not prove a GPU dispatch, the reflected 32-byte stride,
+a descriptor range, a live frame or visual parity. The native CI on `102ddae`
+(L2) remains the latest host/ABI evidence and does not compile shaders.
+
 ## 2026-10-28 — native CI and P0-2 exception containment
 
 Base: `refactor/slang-pipeline` at
@@ -155,6 +247,35 @@ completed successfully for candidate
 The following journal-only commit does not alter tested code or CI scripts;
 its `[skip ci]` marker avoids rerunning identical native tests solely to record
 their result. Review code evidence against the exact candidate SHA above.
+
+## 2026-10-28 — RC transport branch, native CI on the merged revision
+
+Branch: `feat/slang-rc-transport-20261028` (PR #10).
+Candidate: `554c77d2cb5cebeaef7c339eb30efa97639b1266` — merge of
+`refactor/slang-pipeline` at `16a675a` into
+the Radiance Cascades transport branch.
+Baseline: `aaaf00cb4ad90887739c2f4813841c13f14b62e1`.
+
+[Windows CI run 40717925815](https://github.com/bnfe12/bedray/actions/runs/40717925815)
+completed successfully on 2026-10-28. The workflow has no `pull_request`
+trigger yet, so it was started manually with `workflow_dispatch`. Both jobs
+fetched and checksum-verified the pinned Vulkan-Headers and Slang dependencies.
+
+| Revision | Core CTest | Scene CTest | Frame lifetime CTest | ABI probe |
+|---|---:|---:|---:|---|
+| Base `aaaf00c` | 12/12 | 1/1 | 1/1 | v2, exit 0 |
+| Candidate `554c77d` | 15/15 | 1/1 | 1/1 | v2, exit 0 |
+
+Every logged configure/build/CTest command exited 0. Candidate's additional
+core entries are `bedray_abi_probe`, `bedray_abi_exception` and
+`bedray_gpu_dynamic_c`. The text evidence artifacts uploaded.
+
+Evidence for the tested native modules at `554c77d` is **L2**, no GPU. This
+does not validate the Slang shader changes in the same branch; their evidence
+is the separate L1 `slangc` 2026.20 compile sweep recorded in
+`SLANG_MIGRATION.md`. Java, shader dispatch, driver behaviour and game rendering
+were not checked. The RC runtime contract (stride, barriers, cross-cascade
+resolve, environment boundary supplied by the host) remains unproven.
 
 ## 2026-10-28 — host recording completion bridge
 
@@ -351,6 +472,33 @@ suite executes the standalone completion/discard transition checks. All 17 AOT
 passes compiled in this worktree; the unchanged final shader sources reused
 those outputs. This is native/Java CPU L2 and compiler L1, not GPU/game evidence.
 Journal-only follow-up skips identical native CI. Native switches remain opt-in.
+
+## 2026-10-28 — native CI on the typed RC cleanup head (L2)
+
+[Run 40727076703](https://github.com/bnfe12/bedray/actions/runs/40727076703)
+executed on `c5ce8c6`, the published head of `feat/slang-rc-transport-20261028`
+after the cleanup `b1137fd` and the base merge `09e601b`. The merge changed no
+shader source (`git diff b1137fd..c5ce8c6 -- common/src/main/resources/shaders
+common/src/test/resources/shaders` is empty).
+
+Baseline `4236c75`: core 15/15, standalone scene 1/1, frame lifetime 1/1.
+Candidate `c5ce8c6`: core **18/18**, standalone scene **1/1**, frame lifetime
+**1/1**, ABI probe v2 exit 0. All configure/build/CTest commands exit 0 and there
+are no native test failures in either job. The workflow is manual
+(`workflow_dispatch`), does not compile or run shaders, and provides no GPU,
+game, performance or visual evidence. Shader L1 is recorded in the section above;
+the Java source-scan tests were checked manually because `:common:test` cannot
+configure without the Fabric launcher jars.
+
+The base advanced again to `a8f796b` (PR #16, recording discard) and was merged
+in `eda6e19`; that merge also changed no shader source. Final head
+[run 40727836738](https://github.com/bnfe12/bedray/actions/runs/40727836738):
+baseline `4236c75` core 15/15, candidate `eda6e19` core **18/18**, standalone
+scene **1/1**, frame lifetime **1/1**, ABI probe v2 exit 0. Both jobs succeeded
+with no native test failures. Same limits: native L2 only, no shader compile,
+GPU, game or visual claim. A final shader sweep on the published tree at
+`913e4e0` repeated all 17 `passes/*.slang` plus the five harnesses with exit 0;
+the shader sources are still identical to `b1137fd`.
 
 ## 2026-10-28 — migration code cleanliness review
 

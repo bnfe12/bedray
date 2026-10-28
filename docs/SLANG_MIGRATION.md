@@ -47,6 +47,26 @@ intervals are skipped. The shader harness in
 `common/src/test/resources/shaders/slang/verify_scene_tracer.slang` checks generic
 code generation only; it does not execute a GPU dispatch or prove visual output.
 
+The typed Radiance Cascades atlas has the same kind of harness in
+`common/src/test/resources/shaders/slang/verify_rc_typed.slang`. It instantiates
+the typed store API against both `RWStructuredBuffer<RCSegment>` and
+`StructuredBuffer<RCSegment>`; it is a compile check, not a stride, layout or
+runtime test. The legacy float4 atlas is a different record format and is not
+imported there. `verify_rc_environment.slang` keeps the opt-in environment
+policy reachable: the default is `Disabled`, a zero boundary is rejected, a
+short window cannot add sky, and a positive boundary that `tFar` reaches can.
+`verify_rc_trace_api.slang` instantiates every public typed trace entry with
+mock backends, including the provisional history and ownership proposal.
+`verify_bedray_roots.slang` compiles the curated `bedray.slang` and the opt-in
+`bedray_legacy.slang` together so the typed and legacy resolve names cannot
+silently converge.
+
+The shader module map, dependency rules, host contract and extension checklist
+are in
+[`common/src/main/resources/shaders/slang/ARCHITECTURE.md`](../common/src/main/resources/shaders/slang/ARCHITECTURE.md).
+The typed RC contract is in
+[`radiance_cascades/RC_TRACE_API.md`](../common/src/main/resources/shaders/slang/radiance_cascades/RC_TRACE_API.md).
+
 Architecture target: [ARCHITECTURE_MANIFESTO.md](ARCHITECTURE_MANIFESTO.md).
 Audit findings and their original source-only evidence are recorded in
 [AUDIT_DEFECTS_AND_ISSUES.md](AUDIT_DEFECTS_AND_ISSUES.md); each finding still
@@ -153,7 +173,8 @@ directory are gitignored; `BedrayCoreLocator` finds the installed DLL through
 
 ```
 common/src/main/resources/shaders/slang/
-├── bedray.slang                       root: re-exports the modules
+├── bedray.slang                       root: curated typed public surface
+├── bedray_legacy.slang                opt-in legacy compatibility root
 ├── contracts/
 │   ├── contracts.slang                aggregate import
 │   ├── frame.slang                    FrameConstants, CameraState, SunState
@@ -191,7 +212,21 @@ common/src/main/resources/shaders/slang/
 │   ├── spatial_block_emitters.slang   neighbour pooling over those records: checker phases, surface gates, merge
 │   └── direct_light.slang             compatibility re-export of light/emitters.slang
 ├── radiance_cascades/
-│   └── radiance_cascades_store.slang  atlas layout, interval storage, temporal blend
+│   ├── rc_atlas_layout.slang          shared atlas addressing (record-format neutral)
+│   ├── interval_transport.slang       RCSegment, validity flags, front-to-back composition
+│   ├── segment_record.slang           typed whole-record read/write and ray composition
+│   ├── probe_resolve.slang            typed probe radiance and completeness
+│   ├── segment_store.slang            facade over segment_record + probe_resolve
+│   ├── rc_trace_options.slang         trace options, events, result, entry status, environment policy
+│   ├── rc_trace_shade.slang           first-surface emission + NEE
+│   ├── rc_trace_walk.slang            segment finalization + interval walk
+│   ├── rc_trace_dispatch.slang        store, probe and dispatch entries
+│   ├── rc_trace_history.slang         provisional temporal history (opt-in)
+│   ├── rc_trace_ownership.slang       distance-band proposal (opt-in)
+│   ├── rc_trace.slang                 public facade over the six rc_trace_* modules
+│   ├── legacy_float4_store.slang      legacy float4 record + confidence-weighted resolve
+│   ├── radiance_cascades_store.slang  legacy compatibility facade
+│   └── rc_trace_segments.slang        obsolete experiment, not exported, not compiled by default
 ├── radiance_cascades.slang            cascade/probe/ray addressing (existing)
 ├── render_plan.slang                  RenderPlan, modes, capability mask (existing)
 ├── types.slang, bindings.slang        legacy 1:1 scaffold, kept as reference
@@ -221,8 +256,11 @@ common/src/main/resources/shaders/slang/
 `passes/` is the AOT entry-point root: `compileSlang` compiles every
 `**/*.slang` below it, so a new stage is a new file, not another `#define` in
 an existing shader.  The four bloom files share `bloom/bloom.slang` and
-`tonemap_curve.slang`; imports are not transitive, so an entry file imports
-every module whose symbols it uses.
+`tonemap_curve.slang`; a plain `import` is not transitive, so an entry file
+imports every module whose symbols it uses.  A module may re-export the types in
+its public signatures with `__exported import` (the typed RC store does this for
+`RCSegment` and `RadianceCascadeLayout`); that is an explicit API decision, not
+automatic transitive visibility.
 
 `MaterialAtlas` now holds combined `Sampler2D` fields, not `Texture2D` +
 `SamplerState`: ABI v2 binds `COMBINED_IMAGE_SAMPLER` and has no separate
@@ -837,7 +875,7 @@ candidates, not a validated or active runtime.
 | Algorithm | Module | State |
 |---|---|---|
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
-| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/segment_store.slang` | typed segment storage is a source candidate; typed trace exists in an isolated agent workspace, but cross-cascade resolve and host integration are unfinished. The old float4 resolve is incompatible with the typed trace. |
+| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_atlas_layout.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace facade split into options/shade/walk/dispatch/history/ownership; `segment_store.slang` is a facade over `segment_record.slang` and `probe_resolve.slang`, and the typed probe resolve is `rcResolveProbe`/`rcProbeComplete` returning `RCProbeRadiance`; these are source-only in this checkout. The legacy float4 store is isolated behind `legacy_float4_store.slang`/`radiance_cascades_store.slang` and its resolve is named `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`; it is incompatible with the typed atlas. Environment is opt-in on a positive world boundary, so a terminal-cascade miss under a roof is not treated as sky. Cross-cascade reconstruction, unbiased temporal reuse and host integration are unfinished. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
 | Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ISceneTracer`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; the traced scene is terrain *and* the captured entity ring (`traversal/entity_geometry.slang`), decoded by the instance's custom-index bit; `RtSlangPathPass` wraps `RtPathTraceSlangPass`, the optional `RtSpatialReuseSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
 
@@ -929,6 +967,15 @@ slangc -target spirv -I common/src/main/resources/shaders/slang `
 The root compile ends with `E57004: SPIR-V output contains no exported symbols`
 because a module has no entry point; that is expected.
 
+On 2026-10-28 the shader-owner branch `feat/slang-rc-transport-20261028`
+manually compiled all 17 `passes/*.slang` with the `compileSlang` arguments
+(`slangc` 2026.20, `-target spirv -profile cs_6_5 -entry main
+-matrix-layout-column-major`), each exit 0. The same compiler built
+`verify_rc_typed.slang` and `verify_rc_environment.slang`. This is L1
+code-generation evidence for that revision only: it is not a Gradle build, no
+manifest was validated by `compileSlang`, and no GPU dispatch, stride check,
+cross-cascade resolve or image comparison was run.
+
 ## Next steps
 
 1. **Path-trace native integration** — migrate resource allocation, frame data,
@@ -962,9 +1009,13 @@ because a module has no entry point; that is expected.
    `fetchEntitySurface` are not: the procedural **End Portal starfield**, the
    **Sobel auto-normal** that gives mob skin its relief, and glowing parts as
    **next-event candidates**, so a lantern held in hand lights nothing but itself.
-5. **Radiance Cascades trace/update** — review the isolated typed trace, align
-   its segment status and history contracts with the shared store, and define
-   cross-cascade reconstruction and host integration before connecting a pass.
+5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
+   are now in the shared checkout as source-only. Environment is opt-in on a
+   positive world boundary that the terminal window reaches; a zero boundary
+   adds no sky, because a terminal-cascade miss can end inside a cave. Align
+   temporal history and prove that boundary, then define cross-cascade
+   reconstruction and host integration before connecting a pass. Do not wire
+   the legacy float4 resolve to the typed atlas.
 6. **More entry passes** — denoise/composite follow the same one-file-per-entry
    pattern and the same ABI; no second pipeline path.
 7. **Live game check** — only after the above and an explicit request.  A
