@@ -159,6 +159,8 @@ bool create_buffer_impl(
         }
     }
 
+    buffer.allocation_bytes = requirements.size;
+    scene.resident_bytes += buffer.allocation_bytes;
     out = buffer;
     return true;
 }
@@ -289,6 +291,7 @@ void destroy_buffer(Scene& scene, Buffer& buffer) {
     }
     if (buffer.memory != VK_NULL_HANDLE) {
         scene.fns.free_memory(scene.device, buffer.memory, nullptr);
+        scene.resident_bytes -= buffer.allocation_bytes;
     }
     buffer = Buffer{};
 }

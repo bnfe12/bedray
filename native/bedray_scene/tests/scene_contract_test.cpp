@@ -860,6 +860,10 @@ struct Fixture {
     BedraySceneResources resources() {
         BedraySceneResources out{};
         CHECK_STATUS(bedray_scene_query_resources(scene, &out), BEDRAY_SCENE_OK);
+        uint64_t resident = 0, driver_bytes = 0;
+        for (const auto& entry : fake::g.memories) driver_bytes += entry.second.size;
+        CHECK_STATUS(bedray_scene_resident_bytes(scene, &resident), BEDRAY_SCENE_OK);
+        CHECK(resident == driver_bytes);
         return out;
     }
 };
@@ -1163,6 +1167,15 @@ static void test_idle_frame_reuses_slot_state() {
     CHECK_STATUS(fixture.add_entity(entity_input(5, 1, 1, mesh)), BEDRAY_SCENE_OK);
     const BedraySceneFrameInfo first = fixture.prepare(1, 0x100);
     CHECK(first.flags != 0);
+    const auto resources = fixture.resources();
+    CHECK(resources.section_count == 0);
+    CHECK(resources.section_table_buffer != 0);
+    CHECK(resources.section_table_bytes == BEDRAY_SCENE_SECTION_RECORD_BYTES);
+    const auto* dummy = fake::bytes_at_address(resources.section_table_address);
+    CHECK(dummy != nullptr && dummy->size() >= BEDRAY_SCENE_SECTION_RECORD_BYTES);
+    if (dummy != nullptr) {
+        for (size_t i = 0; i < BEDRAY_SCENE_SECTION_RECORD_BYTES; ++i) CHECK((*dummy)[i] == 0);
+    }
     const size_t builds_after_first = fake::g.builds.size();
     const size_t copies_after_first = fake::g.copies.size();
     const size_t barriers_after_first = fake::g.barriers.size();

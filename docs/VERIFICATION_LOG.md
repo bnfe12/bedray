@@ -284,3 +284,23 @@ Executed result: [run 40723147943](https://github.com/bnfe12/bedray/actions/runs
 code `7dc6521`: core 18/18, scene 1/1, frame lifetime 1/1; no native test
 failures. Local `:common:compileJava` exits 0 (Java L1). Native evidence is L2;
 no live claim. Journal-only follow-up skips unchanged CI.
+
+## 2026-10-28 — single native scene owner
+
+Base `0181549b3537659c6d83bbc3ac655d81cff53ebd`. Opt-in native scene mode now
+paces CPU section captures and serializes POD directly into bedray_scene. It
+allocates no Java geometry/BLAS arenas, TLAS, decode pipeline, scratch, instance
+table or entity BLAS. The existing Java mode remains the reference when native
+scene is not selected/available at initialization. A failure after native scene
+activation propagates, retains pending updates and never silently omits geometry
+or switches to unallocated Java resources. Emitter scanning visits accepted CPU
+captures. Native AS counters and actual VkDeviceMemory bytes feed telemetry.
+
+An additive resident-bytes query leaves ABI v2 layouts intact. Entity-only/empty
+section sets publish a real zeroed 64-byte section descriptor while section_count
+stays zero. Driver tests compare reported resident bytes against all actual fake
+allocations, including retired/pinned generations, and check entity-only tables.
+A POD packing test checks pass-local indices and vertex attributes. Native scene
+is closed after host drain before unloading core; world teardown no longer calls
+vkDeviceWaitIdle. Native CI and Java/AOT verification are pending; no GPU/game
+or visual evidence is claimed.
