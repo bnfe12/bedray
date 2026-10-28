@@ -68,6 +68,9 @@ public final class BedrayCoreLayouts {
     public static final int PATH_TRACE_FRAME_SPATIAL = 1 << 4;
     /** {@code scene.sections} is bedray_scene's 64-byte GeometrySection table and the trace uses path_trace_scene.slang. */
     public static final int PATH_TRACE_FRAME_NATIVE_SCENE = 1 << 5;
+    public static final int PATH_TRACE_FRAME_NATIVE_DI = 1 << 6;
+    public static final int PATH_TRACE_FRAME_RESET_DI = 1 << 7;
+    public static final int PATH_TRACE_FEATURE_NATIVE_DI = 1 << 0;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;

@@ -263,3 +263,19 @@ log has no C/C++ compiler warnings/errors. Workflow's pinned comparison baseline
 is `4236c75` (15/15 + 1/1 + 1/1), while this PR is based on `7a06dd7` whose
 native code was separately checked by the preceding scene run. Native evidence
 is L2 for the named code. The following journal-only commit skips identical CI.
+
+## 2026-10-28 — native DI reservoir ownership
+
+Base `6fb04a27a2255d1a18e57e9609bef6cd5f14389b`. Adds an optional feature-mask
+query and host-only NATIVE_DI/RESET_DI bits without changing ABI v2 structures
+or shader push/binding layouts. PathTracePass allocates and pins its two-parity
+ring, clears it through the borrowed command buffer and owns history/parity.
+Resize/disable retire allocations through the existing completion-proof owner.
+Java sends reset requests and scene captures; older DLLs keep the external-ring
+contract. The native path remains opt-in. Buffer ranges now validate overflow,
+reserved words and complete material/emitter/reservoir records before recording.
+
+Fake-driver checks cover native clear/history/parity, reset, resize with three
+outstanding recordings, disable retirement and conflicting host ownership.
+Windows native compilation/CTest and local Java compilation are pending.
+No GPU, driver, game, performance or visual result is claimed.

@@ -51,6 +51,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle configurePathTraceHandle;
     private final MethodHandle renderPathTraceHandle;
     private final MethodHandle destroyPathTraceHandle;
+    private final MethodHandle pathTraceFeatureMaskHandle;
 
     /** Values reported by {@code bedray_core_abi_info}. */
     public record AbiInfo(int abiVersion, int sizeofCoreDesc, int sizeofCapabilities, int sizeofProgramDesc,
@@ -111,6 +112,8 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             destroyPathTraceHandle = bindOptional(linker, lookup, "bedray_core_destroy_path_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS));
+            pathTraceFeatureMaskHandle = bindOptional(linker, lookup, "bedray_core_path_trace_feature_mask",
+                FunctionDescriptor.of(JAVA_INT));
         } catch (RuntimeException | Error e) {
             arena.close();
             throw e;
@@ -544,6 +547,17 @@ public final class BedrayCoreNative implements AutoCloseable {
     }
 
     /** True when the loaded DLL exports the additive path-trace pass ABI. */
+    public boolean hasNativeReservoirs() {
+        ensureOpen();
+        if (pathTraceFeatureMaskHandle == null) return false;
+        try {
+            int features = (int) pathTraceFeatureMaskHandle.invokeExact();
+            return (features & BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_DI) != 0;
+        } catch (Throwable t) {
+            throw rethrow("path_trace_feature_mask", t);
+        }
+    }
+
     public boolean hasPathTrace() {
         return configurePathTraceHandle != null
             && renderPathTraceHandle != null
