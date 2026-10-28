@@ -387,11 +387,16 @@ Ownership:
   images; per-recording `FrameConstants` upload; the 64-byte block-material and
   reservoir dummies; the 4/16-byte entity dummies; the trace, optional spatial
   and display dispatches; image transitions and entry/compute/exit barriers;
-  per-recording image/buffer pins.
-* **Java host:** TLAS, 64-byte section table, the three atlas views and the
-  atlas sampler, emitter list, ReSTIR DI reservoir ring, entity rings, output
-  and depth. It also owns the DI ring's parity and reset; the pass forwards
-  `di_state` verbatim instead of advancing a parity of its own.
+  per-recording image/buffer pins. Native DI owns its reservoir allocation,
+  parity, extent changes, reset and history validity. External-ring ABI clients
+  remain supported, but the current Java native backend requires NATIVE_DI.
+* **C++ scene/core:** native mode owns section geometry, section table,
+  BLAS/TLAS and the atlas sampler. `path_trace_scene` reads the native table;
+  the Java reference scene/table has a separate traversal entry.
+* **Java host:** Minecraft/Sodium/entity capture, settings/camera/POD preparation,
+  borrowed game atlas views, output/depth and submission/completion evidence.
+  Host entity and emitter capture storage is leased to exact recordings;
+  neither modulo rings nor elapsed frame counts release it.
 * **C++ pass, history:** the pass owns accumulation parity and
   `history_written`. The host signals a reset with `accum_frames == 0` or
   `BEDRAY_PATH_TRACE_FRAME_RESET_HISTORY`; a host resize also zeroes the host's
@@ -420,10 +425,10 @@ is no frame-count recycle and no `vkDeviceWaitIdle`.
 
 Selection: `-Dvkbridge.rt.nativePathTrace=true`
 (`RtConfig.SLANG_PATH_TRACE_CPP`) uses the native pass only when the loaded DLL
-exports all three functions. A DLL without them logs a warning and keeps the
-Java path. The switch is off by default until live evidence exists. The native
-scene records and `SceneTraversal` replacement are still missing, so the pass
-currently reads the same `LegacySectionTraversal` table as the Java path.
+exports the coarse pass and NATIVE_DI support. An explicitly requested native
+path reports a mismatched DLL as unsupported. The switch is off by default
+until owner live evidence exists. The embedded native scene is connected and
+selects `path_trace_scene` through the native-scene frame flag.
 
 Depth keeps the legacy sentinel: bloom treats `depth >= 1e5` as sky
 (`BLOOM_SKY_DISTANCE`), and the path-trace entry writes `1e6` whenever the
@@ -442,30 +447,28 @@ Only the first of those is dropped from the running mean, which is what
 distance along the unit primary direction, not linear view depth; a consumer
 that needs view depth must derive it from the camera contract.
 
-The wired adapter is `RtSlangPathPass`, a public `RtPass` that
-`RtFrameRenderer` constructs for Path Tracing mode; it owns a package-private
-`RtPathTraceSlangPass` plus the `path_display` program. The adapter owns the
-running mean and history depth as two independent image pairs. Allocation and
-retirement now live in `native/bedray_gpu_resources`: the trace adapter uses
-C++ radiance/motion owners and a native frame-upload pool; the display adapter
-uses C++ history images and device-local DI reservoirs. Each 608-byte upload is
-pinned to its recording and reused only after completion/discard proof, without
-a fixed three-frame ring. Inactive bindings use zeroed native buffers. The
-trace manifest has eighteen bindings; display has nine, including separate
-`previousAccum` and `previousDepth` sources. Cross-pixel reprojection never reads
-an image that the same dispatch writes. The renderer keeps
-ownership of the TLAS, section table and atlas views. Every command buffer
-passed to `dispatch` must reach `releaseRecording` after its submission
-completed or the recording was discarded, and `close()` must run before
-`SlangRuntime.close()`. This adapter is the current Java host for Path Tracing
-mode, not the final ownership model: the C++ renderer must take over resources,
-recording and lifetime, and the adapter must not grow into a parallel renderer.
-Image resize retires old extents without a device wait. Bulk shutdown and mode
-switches drain Minecraft's pending submission builder, then check device-idle
-success before releasing recordings. Failure preserves strong references and
-quarantines the renderer. This conservative host integration does not implement
-the native graph/history submission protocol. Device-loss teardown APIs exist
-in the bindings; automatic game-device recovery is unfinished.
+`RtFrameRenderer` constructs `RtSlangPathPass`, which prepares Minecraft inputs
+and delegates through `PathTraceBackend`. `NativePathTraceBackend` holds borrowed
+program handles, coarse ABI state and recording identities; it creates no Java
+GPU owners, descriptor tables or Vulkan commands. `ReferencePathTraceBackend`
+contains the Java orchestration retained as the default until owner live
+acceptance. Its allocations also use native buffer/image owners. SlangRuntime
+alone owns cached programs; wrappers borrow them.
+
+Both paths use the eighteen-binding trace and nine-binding display contracts,
+including separate `previousAccum`/`previousDepth` sources. Native frame recording
+uses an opaque graph node and exact scheduler leases. PathTracePass remains the
+single authority for its private barriers and history; it does not fabricate a
+second HistoryRegistry submission. See MIGRATION_INTEGRATION_DECISIONS.md.
+
+Every recording must reach completion or discard retirement before reuse or
+teardown. The host registers a generation-specific RecordingCompletion action
+after attaching the command buffer to the shared Minecraft encoder. Shutdown,
+resize and mode switches submit/await the host fence before releasing dependent
+resources. A timeout preserves strong references and quarantines the renderer;
+there is no device-idle lifetime mechanism. Unknown execution uses conservative
+discard invalidation after host drain. Device-loss APIs exist; automatic game
+device recovery remains unfinished. None of this substitutes for a GPU/game run.
 
 The running mean is reprojected: `path_display.slang` carries each pixel's
 history through `FrameConstants.prevViewProjection` plus the anchor delta,

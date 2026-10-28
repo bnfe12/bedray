@@ -641,3 +641,25 @@ and a late completion callback after command-handle reuse through the real host
 ticket bridge. `git diff --check` passes. The existing native/18-pass AOT evidence
 applies to unchanged implementation sources; no identical native CI repeated.
 This changes allocation behavior but has no measured GPU/performance/game result.
+
+## 2026-10-28 — reconcile migration contracts with the backend boundary
+
+Base `65ad244eb3ffd131525778053cd13dfc389a8fda`. Refreshed native ownership,
+explicit selection failure, embedded scene, DI, graph/scheduler and host-fence
+descriptions in SLANG_MIGRATION and the integration plan. The earlier graph gap
+analysis is retained as a clearly superseded historical checkpoint, with the
+current implementation/decision document taking precedence. Supporting post
+passes, arbitrary cross-node image contracts, shader parity and GPU/game
+acceptance are not declared complete.
+
+RtRestirSettingsTest still searched for allocation/dispatch code in the old
+controller. Baseline command `:common:test --tests '*RtRestirSettingsTest'`
+ran five cases: four pass, thePathTracerSplitsTheRingFromTheReuse fails at the
+obsolete dispatch source assertion. Updated that guard to follow the real
+controller request, reference allocation/dispatch and required native-DI coarse
+flag; persistence, UI/dependency, reset and ray-pass checks remain intact.
+
+Candidate repeats the preceding 134-test command with RtRestirSettingsTest:
+139 tests pass, zero failures/errors/skips, Gradle exits 0. `git diff --check`
+passes. Production Java, native implementation, shader sources and ABI layouts
+are unchanged in this contract/documentation change. No new GPU/game evidence.
