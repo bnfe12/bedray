@@ -254,3 +254,12 @@ release failure/retry and unknown-handle idempotence. Scheduler tests now requir
 lease retention when release fails and reject stale exact-ticket proof.
 Matching Windows build/CTest results are pending publication. No GPU, driver,
 Minecraft, performance or visual evidence is claimed; opt-in stays unchanged.
+
+Executed result: [run 40720124561](https://github.com/bnfe12/bedray/actions/runs/40720124561),
+code `5fb4ad1aababe224013ed908eb108358c047fbb0`: core **18/18** (including the
+new frame-graph owner), standalone scene **1/1**, frame lifetime **1/1**.
+All configure/build/CTest commands exit 0; ABI probe remains v2. Candidate job
+log has no C/C++ compiler warnings/errors. Workflow's pinned comparison baseline
+is `4236c75` (15/15 + 1/1 + 1/1), while this PR is based on `7a06dd7` whose
+native code was separately checked by the preceding scene run. Native evidence
+is L2 for the named code. The following journal-only commit skips identical CI.
