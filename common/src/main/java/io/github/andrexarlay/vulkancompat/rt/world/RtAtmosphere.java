@@ -173,11 +173,16 @@ final class RtAtmosphere {
         return slangRuntime;
     }
 
-    /** The command buffer is about to be re-recorded: its previous native recording completed two submits ago. */
+    /** The exact host ticket proved completion and excluded resubmission. */
     void releaseRecording(long commandBuffer) {
         if (bloom != null) {
             bloom.releaseRecording(commandBuffer);
         }
+    }
+
+    void discardRecording(long commandBuffer) {
+        resetHistory();
+        if (bloom != null) bloom.discardRecording(commandBuffer);
     }
 
     void resetHistory() {
