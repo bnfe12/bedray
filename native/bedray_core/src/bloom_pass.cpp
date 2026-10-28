@@ -50,7 +50,8 @@ BedrayStatus BloomPass::gpu_status(gpu::Status status, VkResult vk, BedrayError*
     if (status == gpu::Status::ok) return BEDRAY_OK;
     if (status == gpu::Status::device_lost || vk == VK_ERROR_DEVICE_LOST) {
         lost_ = true;
-        if (images_) images_->device_lost();
+        // Existing recordings still need their individual host proofs. Mark the
+        // image owner lost only at final cleanup after every such use is gone.
         return bloom_error(error, BEDRAY_ERROR_DEVICE_LOST, "bloom device lost");
     }
     if (status == gpu::Status::in_use) return bloom_error(error, BEDRAY_ERROR_IN_USE, "bloom images in use");
@@ -175,6 +176,7 @@ BedrayStatus BloomPass::render(const BedrayBloomFrameDesc& frame, BedrayError* e
         call.resources = resources.data(); call.resource_count = stage == 0 || stage == 3 ? 3 : 2;
         call.push_constants = push.data(); call.push_constant_bytes = static_cast<std::uint32_t>(push.size());
         const auto result = bedray_core_render_frame(core_, &call, error);
+        if (result == BEDRAY_ERROR_DEVICE_LOST) lost_ = true;
         if (result == BEDRAY_OK) memory_barrier(fns_, command, stage == 3);
         return result;
     };
@@ -219,6 +221,7 @@ BedrayStatus BloomPass::destroy() noexcept {
         const auto collected = images_->collect();
         if (collected != gpu::Status::ok) return gpu_status(collected, VK_SUCCESS, nullptr);
     }
+    if (lost_) images_->device_lost();
     const auto result = lost_ ? images_->release_after_device_loss() : images_->close();
     if (result != gpu::Status::ok) return gpu_status(result, VK_SUCCESS, nullptr);
     images_.reset(); recordings_.clear(); ids_ = {}; views_ = {}; desc_ = {}; core_ = nullptr;

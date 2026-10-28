@@ -39,6 +39,13 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_bloom(BedrayCore*);
 
 #ifdef __cplusplus
 }
+#include <cstddef>
 static_assert(sizeof(BedrayBloomDesc) == 64);
 static_assert(sizeof(BedrayBloomFrameDesc) == 56);
+static_assert(offsetof(BedrayBloomDesc, programs) == 8);
+static_assert(offsetof(BedrayBloomDesc, linear_sampler) == 40);
+static_assert(offsetof(BedrayBloomDesc, image_budget_bytes) == 56);
+static_assert(offsetof(BedrayBloomFrameDesc, command_buffer) == 8);
+static_assert(offsetof(BedrayBloomFrameDesc, output_view) == 24);
+static_assert(offsetof(BedrayBloomFrameDesc, push_constants) == 48);
 #endif
