@@ -265,3 +265,120 @@ Verification (no GPU):
   checks. No shader source was changed by this host-lifetime patch.
 - Evidence: L1 Java/AOT compilation and L2 CPU lifecycle/heap-direct checks.
   No GPU dispatch, validation layers, game startup or rendered effect checked.
+
+## 2026-10-28 — scene embedded in core and BDA allocation safety
+
+Base `4236c75ab72fded1347dd19d88f38a3804742a38` includes the host-completion
+bridge (PR #11). Scene's two implementation sources are now compiled once into
+an object target and embedded in core; the standalone scene DLL is retained
+for ABI testing. FFM uses the validated core path for scene exports; the player
+distribution builds/packages core alone. Gradle inputs include all linked native
+modules. No existing C ABI layout/signature changes, no Vulkan loader link,
+second device/queue or new submission API.
+
+P0-8 is confirmed in the baseline scene allocator: a BDA usage flag was not
+accompanied by the memory allocation flag. The patch attaches the device-address
+allocation flags only for buffers that use BDA and rejects a zero returned
+address with cleanup before publication. The fake driver checks each memory
+binding's usage/allocation flags (including staging without BDA), and the scene
+test exercises zero-address failure without recording AS builds. A new dynamic
+core test checks all ten scene exports and ABI v2 sizes from the actual core DLL.
+
+Windows native CI now also runs on `codex/migration-*` branches and compares
+against this integration base. Native compilation/tests are pending publication
+for this patch. No GPU/driver/Minecraft or visual result is claimed.
+
+Executed result: [run 40718040730](https://github.com/bnfe12/bedray/actions/runs/40718040730),
+candidate `5e892753d62eeb72a85f732b3ffca9880af08db2`: core **17/17**,
+standalone scene **1/1**, frame lifetime **1/1**, ABI probe v2 exit 0.
+Baseline core 15/15 + scene 1/1 + lifetime 1/1. Both job logs contain no C/C++
+compiler warnings/errors; configure/build/CTest, dependency checks and artifact
+uploads all succeed. The embedded scene export probe passes against core DLL.
+Local `:common:compileJava` also exits 0 with the same ignored local dependencies
+as the host-completion batch. Scoped native evidence is L2, Java compilation L1.
+The following journal-only commit skips identical native CI.
+
+## 2026-10-28 — native opaque frame graph and scheduler
+
+Base `7a06dd7b996815fdf3c2177aec6b0cf328260065`. The native coarse path now
+constructs `FrameGraphOwner`, compiles one opaque recording group for the real
+`PathTracePass::render` callback and leases its recording through FrameScheduler.
+The existing completion/discard C ABI release reaches the scheduler's exact
+ticket and calls back into `bedray_core_release_recording` to drop descriptors
+and pass resource pins. A guarded reentrant path avoids a second ticket release.
+Configuration/destruction refuse outstanding graph tickets, including failed
+partial recordings. Failed release callbacks retain their ticket/slot for retry.
+
+[MIGRATION_INTEGRATION_DECISIONS.md](MIGRATION_INTEGRATION_DECISIONS.md) records
+all eight live-path decisions: pass-owned allocator/private barriers/history,
+opaque dispatch group, enabled capability mapping, exact host proof, eight
+leases over shared pass image generations, one graphics family, unchanged v2
+coarse ABI. No synthetic serial or frame index is used as completion proof.
+
+New no-GPU tests exercise opaque-node barrier suppression, capability rejection,
+slot exhaustion, duplicate recording rejection, partial recording failure,
+release failure/retry and unknown-handle idempotence. Scheduler tests now require
+lease retention when release fails and reject stale exact-ticket proof.
+Matching Windows build/CTest results are pending publication. No GPU, driver,
+Minecraft, performance or visual evidence is claimed; opt-in stays unchanged.
+
+Executed result: [run 40720124561](https://github.com/bnfe12/bedray/actions/runs/40720124561),
+code `5fb4ad1aababe224013ed908eb108358c047fbb0`: core **18/18** (including the
+new frame-graph owner), standalone scene **1/1**, frame lifetime **1/1**.
+All configure/build/CTest commands exit 0; ABI probe remains v2. Candidate job
+log has no C/C++ compiler warnings/errors. Workflow's pinned comparison baseline
+is `4236c75` (15/15 + 1/1 + 1/1), while this PR is based on `7a06dd7` whose
+native code was separately checked by the preceding scene run. Native evidence
+is L2 for the named code. The following journal-only commit skips identical CI.
+
+## 2026-10-28 — native DI reservoir ownership
+
+Base `6fb04a27a2255d1a18e57e9609bef6cd5f14389b`. Adds an optional feature-mask
+query and host-only NATIVE_DI/RESET_DI bits without changing ABI v2 structures
+or shader push/binding layouts. PathTracePass allocates and pins its two-parity
+ring, clears it through the borrowed command buffer and owns history/parity.
+Resize/disable retire allocations through the existing completion-proof owner.
+Java sends reset requests and scene captures; older DLLs keep the external-ring
+contract. The native path remains opt-in. Buffer ranges now validate overflow,
+reserved words and complete material/emitter/reservoir records before recording.
+
+Fake-driver checks cover native clear/history/parity, reset, resize with three
+outstanding recordings, disable retirement and conflicting host ownership.
+Windows native compilation/CTest and local Java compilation are pending.
+No GPU, driver, game, performance or visual result is claimed.
+
+Executed result: [run 40723147943](https://github.com/bnfe12/bedray/actions/runs/40723147943),
+code `7dc6521`: core 18/18, scene 1/1, frame lifetime 1/1; no native test
+failures. Local `:common:compileJava` exits 0 (Java L1). Native evidence is L2;
+no live claim. Journal-only follow-up skips unchanged CI.
+
+## 2026-10-28 — single native scene owner
+
+Base `0181549b3537659c6d83bbc3ac655d81cff53ebd`. Opt-in native scene mode now
+paces CPU section captures and serializes POD directly into bedray_scene. It
+allocates no Java geometry/BLAS arenas, TLAS, decode pipeline, scratch, instance
+table or entity BLAS. The existing Java mode remains the reference when native
+scene is not selected/available at initialization. A failure after native scene
+activation propagates, retains pending updates and never silently omits geometry
+or switches to unallocated Java resources. Emitter scanning visits accepted CPU
+captures. Native AS counters and actual VkDeviceMemory bytes feed telemetry.
+
+An additive resident-bytes query leaves ABI v2 layouts intact. Entity-only/empty
+section sets publish a real zeroed 64-byte section descriptor while section_count
+stays zero. Driver tests compare reported resident bytes against all actual fake
+allocations, including retired/pinned generations, and check entity-only tables.
+A POD packing test checks pass-local indices and vertex attributes. Native scene
+is closed after host drain before unloading core; world teardown no longer calls
+vkDeviceWaitIdle. Native CI and Java/AOT verification are pending; no GPU/game
+or visual evidence is claimed.
+
+Executed result: candidate `ae45bf9`, [run 40724808514](https://github.com/bnfe12/bedray/actions/runs/40724808514)
+passes core 18/18 + standalone scene 1/1 + frame lifetime 1/1, ABI v2 probe.
+No C/C++ compiler warnings/errors in either job log. The first candidate run
+40724238754 correctly caught an old table-test assertion (one upload); publishing
+the valid empty section descriptor adds a second upload. That expectation was
+updated and the complete native run repeated successfully. Local Java compile
+and all 17 AOT passes compile successfully. Targeted JUnit: 19 recording/manifest/
+path-contract tests plus 4 scene API/POD packing tests pass. Existing Iris test
+Unsafe warnings and JOML deprecation diagnostics remain. Evidence: native/CPU L2,
+AOT/Java L1. No GPU/game result. Journal-only follow-up skips unchanged native CI.

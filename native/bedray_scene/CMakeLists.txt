@@ -23,24 +23,32 @@ if(NOT EXISTS "${BEDRAY_VULKAN_HEADERS}/vulkan/vulkan_core.h")
     message(FATAL_ERROR "Vulkan headers not found; pass -DBEDRAY_VULKAN_HEADERS=<include dir>")
 endif()
 
-add_library(bedray_scene SHARED
+add_library(bedray_scene_objects OBJECT
     src/scene.cpp
     src/acceleration_scene.cpp
 )
 
-target_include_directories(bedray_scene
+target_include_directories(bedray_scene_objects
     PUBLIC  include
     PRIVATE "${BEDRAY_VULKAN_HEADERS}"
 )
 
-target_compile_definitions(bedray_scene PRIVATE
+target_compile_definitions(bedray_scene_objects PRIVATE
     BEDRAY_SCENE_BUILD
     WIN32_LEAN_AND_MEAN
     NOMINMAX
 )
 
 if(MSVC)
-    target_compile_options(bedray_scene PRIVATE /W4 /permissive- /EHsc /utf-8)
+    target_compile_options(bedray_scene_objects PRIVATE /W4 /permissive- /EHsc /utf-8)
+    set_property(TARGET bedray_scene_objects PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# Embed the same implementation in core; keep the standalone DLL for ABI tests
+# and old consumers. No Vulkan loader or second device is linked or created.
+add_library(bedray_scene SHARED)
+target_link_libraries(bedray_scene PUBLIC bedray_scene_objects)
+if(MSVC)
     set_property(TARGET bedray_scene PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 

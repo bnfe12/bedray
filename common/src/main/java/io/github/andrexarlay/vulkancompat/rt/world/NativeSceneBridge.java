@@ -1,13 +1,10 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneLayouts;
-import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneLocator;
 import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneNative;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
-import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
-import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,7 +19,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Host facade over {@code bedray_scene.dll}: the native owner of the section BLAS,
+ * Host facade over the scene exports in {@code bedray_core.dll}: owner of the section BLAS,
  * the TLAS and the 64-byte {@code GeometrySection} table.
  *
  * <p>The scene never creates a device, submits or waits.  It records uploads,
@@ -30,10 +27,9 @@ import java.util.Set;
  * has, and publishes the TLAS plus the section-table buffer this class hands to
  * the path trace pass as a borrowed {@link RtMemory.Buf}.
  *
- * <p>Geometry is fed in the same paced order the legacy world builds it: a section
- * enters the scene when {@link RtWorld} succeeds in staging it, and leaves when the
- * rescan evicts it.  The bridge therefore keeps both scenes in lockstep, which is
- * what makes the native table a drop-in replacement for the legacy one.
+ * <p>Java paces CPU captures and serializes POD input. C++ is the sole owner of
+ * AS builds and scene GPU resources in native mode. Update failures remain queued
+ * and propagate to the host; geometry is never silently omitted.
  *
  * <p>Lifetime: every prepared frame is queued on the host encoder's destruction
  * queue, which flushes an entry only after the submission that consumed it has
@@ -92,6 +88,8 @@ final class NativeSceneBridge implements AutoCloseable {
     private boolean activeThisFrame;
     private long lastLogNanos;
     private long lastInstances;
+    private int lastBlasBuilds;
+    private int entityTriangles;
     private double lastViewX;
     private double lastViewY;
     private double lastViewZ;
@@ -103,7 +101,7 @@ final class NativeSceneBridge implements AutoCloseable {
     }
 
     /**
-     * Loads the optional scene DLL and creates a scene on the host's Vulkan objects.
+     * Loads the optional scene exports from the already validated core DLL.
      * Returns null (with one log line) when the feature is unavailable; the caller
      * keeps the legacy scene in that case.
      */
@@ -116,23 +114,9 @@ final class NativeSceneBridge implements AutoCloseable {
                 + " keeping the Java scene", SCENE_PASS);
             return null;
         }
-        NativeLibraries libraries;
-        try {
-            libraries = VulkanBridge.libraries();
-        } catch (RuntimeException e) {
-            LOGGER.warn("[VKB-RT] native scene unavailable: Bedray NativeLibraries are not available: {}",
-                e.getMessage());
-            return null;
-        }
-        BedraySceneLocator.Location location = BedraySceneLocator.locate(libraries);
-        if (!location.usable()) {
-            LOGGER.warn("[VKB-RT] native scene unavailable: {} is not installed in {} ({})",
-                BedraySceneLocator.DLL, libraries.nativesDirectory(), location.detail());
-            return null;
-        }
         BedraySceneNative library = null;
         try {
-            library = BedraySceneNative.load(location.dll());
+            library = BedraySceneNative.load(runtime.library().libraryPath());
             int capabilities = BedraySceneLayouts.CAP_ACCELERATION_STRUCTURE | BedraySceneLayouts.CAP_DEVICE_ADDRESS;
             long scene = library.create(runtime.instance().address(), runtime.physicalDevice().address(),
                 runtime.device().address(), runtime.apiVersion(), runtime.getInstanceProcAddr(),
@@ -172,8 +156,13 @@ final class NativeSceneBridge implements AutoCloseable {
         return sectionCount;
     }
 
+    int instanceCount() { return Math.toIntExact(lastInstances); }
+    int blasBuilds() { return lastBlasBuilds; }
+    int entityTriangles() { return entityTriangles; }
+    long residentBytes() { return library.residentBytes(scene); }
+
     /**
-     * Queues a section the legacy world just staged.  The bridge keeps the same
+     * Queues a paced CPU section capture. The bridge keeps the same
      * id for the section across rebuilds, so the native record's identity (and
      * therefore the path tracer's history) survives a re-mesh.
      */
@@ -236,6 +225,7 @@ final class NativeSceneBridge implements AutoCloseable {
             ENTITY_INSTANCE_MASK, IDENTITY_TRANSFORM);
         library.update(scene, null, null, List.of(entity), null);
         entityPresent = true;
+        entityTriangles = Math.toIntExact(indexCount / 3);
     }
 
     private void removeEntity() {
@@ -244,6 +234,7 @@ final class NativeSceneBridge implements AutoCloseable {
         }
         library.update(scene, null, null, null, new long[] {ENTITY_ID});
         entityPresent = false;
+        entityTriangles = 0;
     }
 
     /**
@@ -287,6 +278,7 @@ final class NativeSceneBridge implements AutoCloseable {
         lastViewY = camY;
         lastViewZ = camZ;
         lastInstances = info.instanceCount();
+        lastBlasBuilds = Math.toIntExact(info.blasBuilds());
         logActivePeriodically();
     }
 
@@ -323,17 +315,16 @@ final class NativeSceneBridge implements AutoCloseable {
     }
 
     private void flushUpdates() {
-        for (Map.Entry<Long, Long> removal : removals.entrySet()) {
-            try {
-                library.update(scene, null, new long[] {removal.getValue()}, null, null);
-            } catch (RuntimeException e) {
-                LOGGER.warn("[VKB-RT] native_scene remove section key={} failed: {}", removal.getKey(), e.getMessage());
-            }
+        for (Iterator<Map.Entry<Long, Long>> it = removals.entrySet().iterator(); it.hasNext();) {
+            Map.Entry<Long, Long> removal = it.next();
+            library.update(scene, null, new long[] {removal.getValue()}, null, null);
+            it.remove();
         }
-        removals.clear();
-        for (Map.Entry<Long, PendingSection> update : updates.entrySet()) {
+        for (Iterator<Map.Entry<Long, PendingSection>> it = updates.entrySet().iterator(); it.hasNext();) {
+            Map.Entry<Long, PendingSection> update = it.next();
             Long id = sectionIds.get(update.getKey());
             if (id == null) {
+                it.remove();
                 continue;
             }
             PendingSection pending = update.getValue();
@@ -341,15 +332,9 @@ final class NativeSceneBridge implements AutoCloseable {
                 BedraySceneNative.Section section = BedraySceneGeometry.build(pending.section(), pending.tagged(),
                     arena, id, nextRevision++);
                 library.update(scene, List.of(section), null, null, null);
-            } catch (RuntimeException e) {
-                // A section the native scene rejects (more than 65535 quads, a
-                // validation failure) must not retry every frame: the legacy world
-                // keeps it, the native scene logs it once and goes without it.
-                LOGGER.error("[VKB-RT] native_scene section key={} id={} rejected: {}",
-                    update.getKey(), id, e.getMessage());
             }
+            it.remove();
         }
-        updates.clear();
     }
 
     /** Releases every prepared frame after the host proved completion or discard. */

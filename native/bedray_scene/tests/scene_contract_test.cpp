@@ -76,10 +76,12 @@ namespace fake {
 struct MemoryState {
     uint64_t size = 0;
     uint32_t type_index = 0;
+    VkMemoryAllocateFlags flags = 0;
     std::vector<uint8_t> bytes;
 };
 
 struct BufferState {
+    VkBufferUsageFlags usage = 0;
     uint64_t size = 0;
     uint64_t memory = 0;
     uint64_t address = 0;
@@ -158,6 +160,7 @@ struct State {
     uint64_t next_buffer_address = 0x100000000ull;
     uint64_t next_accel_address = 0x200000000ull;
     int fail_create_buffer_countdown = -1;
+    bool zero_device_address = false;
     int faults = 0;
 };
 
@@ -278,6 +281,7 @@ static VkResult VKAPI_CALL fakeCreateBuffer(
     const uint64_t id = fake::g.next_buffer++;
     fake::BufferState state;
     state.size = info->size;
+    state.usage = info->usage;
     fake::g.buffers.emplace(id, state);
     *out = reinterpret_cast<VkBuffer>(static_cast<uintptr_t>(id));
     return VK_SUCCESS;
@@ -311,6 +315,11 @@ static VkResult VKAPI_CALL fakeAllocateMemory(
     fake::MemoryState state;
     state.size = info->allocationSize;
     state.type_index = info->memoryTypeIndex;
+    if (info->pNext != nullptr) {
+        const auto* flags = static_cast<const VkMemoryAllocateFlagsInfo*>(info->pNext);
+        CHECK(flags->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO);
+        state.flags = flags->flags;
+    }
     state.bytes.resize(static_cast<size_t>(info->allocationSize));
     fake::g.memories.emplace(id, std::move(state));
     *out = reinterpret_cast<VkDeviceMemory>(static_cast<uintptr_t>(id));
@@ -334,6 +343,12 @@ static VkResult VKAPI_CALL fakeBindBufferMemory(
         return VK_ERROR_UNKNOWN;
     }
     state->memory = fake::memory_id(memory);
+    const auto found = fake::g.memories.find(state->memory);
+    CHECK(found != fake::g.memories.end());
+    if (found != fake::g.memories.end()) {
+        CHECK(((state->usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0)
+            == ((found->second.flags & VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT) != 0));
+    }
     return VK_SUCCESS;
 }
 
@@ -364,6 +379,7 @@ static VkResult VKAPI_CALL fakeFlushMappedMemoryRanges(
 
 static VkDeviceAddress VKAPI_CALL fakeGetBufferDeviceAddress(
     VkDevice, const VkBufferDeviceAddressInfo* info) {
+    if (fake::g.zero_device_address) return 0;
     fake::BufferState* state = fake::find_buffer(info->buffer);
     if (state == nullptr) {
         fake::fault("vkGetBufferDeviceAddress on an unknown handle");
@@ -844,6 +860,10 @@ struct Fixture {
     BedraySceneResources resources() {
         BedraySceneResources out{};
         CHECK_STATUS(bedray_scene_query_resources(scene, &out), BEDRAY_SCENE_OK);
+        uint64_t resident = 0, driver_bytes = 0;
+        for (const auto& entry : fake::g.memories) driver_bytes += entry.second.size;
+        CHECK_STATUS(bedray_scene_resident_bytes(scene, &resident), BEDRAY_SCENE_OK);
+        CHECK(resident == driver_bytes);
         return out;
     }
 };
@@ -1147,6 +1167,15 @@ static void test_idle_frame_reuses_slot_state() {
     CHECK_STATUS(fixture.add_entity(entity_input(5, 1, 1, mesh)), BEDRAY_SCENE_OK);
     const BedraySceneFrameInfo first = fixture.prepare(1, 0x100);
     CHECK(first.flags != 0);
+    const auto resources = fixture.resources();
+    CHECK(resources.section_count == 0);
+    CHECK(resources.section_table_buffer != 0);
+    CHECK(resources.section_table_bytes == BEDRAY_SCENE_SECTION_RECORD_BYTES);
+    const auto* dummy = fake::bytes_at_address(resources.section_table_address);
+    CHECK(dummy != nullptr && dummy->size() >= BEDRAY_SCENE_SECTION_RECORD_BYTES);
+    if (dummy != nullptr) {
+        for (size_t i = 0; i < BEDRAY_SCENE_SECTION_RECORD_BYTES; ++i) CHECK((*dummy)[i] == 0);
+    }
     const size_t builds_after_first = fake::g.builds.size();
     const size_t copies_after_first = fake::g.copies.size();
     const size_t barriers_after_first = fake::g.barriers.size();
@@ -1450,7 +1479,7 @@ static void test_table_coalescing_and_clear() {
     CHECK(resources.material_table_bytes == second.size());
     CHECK(fake::find_copy(second) >= 0);
     CHECK(fake::find_copy(ignored) < 0);
-    CHECK(fake::g.copies.size() == 1);
+    CHECK(fake::g.copies.size() == 2); // material upload plus zeroed section descriptor
     std::vector<uint8_t>* table_bytes = fake::bytes_at_address(resources.material_table_address);
     CHECK(bytes_start_with(table_bytes, second));
     fixture.release(1);
@@ -1874,7 +1903,17 @@ static void test_section_quad_limit() {
     CHECK(fake::g.buffers.empty());
 }
 
+static void test_zero_device_address_is_rejected() {
+    Fixture fixture(1);
+    const Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    fake::g.zero_device_address = true;
+    CHECK_STATUS(fixture.prepare_status(1, 0xF01), BEDRAY_SCENE_ERROR_UNSUPPORTED);
+    CHECK(fake::g.builds.empty());
+}
+
 int main() {
+    test_zero_device_address_is_rejected();
     test_abi_layout();
     test_create_validation();
     test_section_contract_validation();

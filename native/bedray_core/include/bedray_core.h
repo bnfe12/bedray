@@ -180,7 +180,8 @@ typedef struct BedrayFrameDesc {
  * Ownership:
  *   - the core owns radiance, motion, the two accumulation images, the two
  *     history-depth images, FrameConstants uploads and one-element dummies;
- *   - the host owns the TLAS, section table, atlases, emitters, reservoirs,
+ *   - with NATIVE_DI the core also owns the DI ring, reset and parity;
+ *   - the host owns the TLAS, section table, atlases, emitters, external reservoirs,
  *     entity rings, output view and depth view, and keeps them alive and in the
  *     declared layouts until bedray_core_release_recording for the command
  *     buffer;
@@ -197,6 +198,13 @@ typedef struct BedrayFrameDesc {
  * pass traces with program_trace_scene (path_trace_scene.slang). The flag is
  * host-only: it never reaches the shader push block. */
 #define BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE  (1u << 5)
+/* Optional host-only extension. With NATIVE_DI, scene.reservoirs and input
+ * di_state.y must be zero. C++ owns the ring, clear, history bit and parity.
+ * Query the feature mask before use; RESET_DI invalidates native DI contents. */
+#define BEDRAY_PATH_TRACE_FRAME_NATIVE_DI      (1u << 6)
+#define BEDRAY_PATH_TRACE_FRAME_RESET_DI       (1u << 7)
+#define BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI    (1u << 0)
+BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)
 #define BEDRAY_PATH_DISPLAY_TONEMAP        (1u << 1)
@@ -285,9 +293,8 @@ typedef struct BedrayPathTraceAtmosphere {
     float cloud[4];
 } BedrayPathTraceAtmosphere;
 
-/* Mirror of passes/path_trace.slang PathTracePush (112 B). di_state is
- * forwarded verbatim: the host owns the reservoir ring, its parity and its
- * reset. */
+/* Mirror of passes/path_trace.slang PathTracePush (112 B). With NATIVE_DI,
+ * the core derives the HISTORY bit and parity; otherwise forwarded verbatim. */
 typedef struct BedrayPathTracePath {
     uint32_t max_depth;
     uint32_t max_surface_steps;
@@ -303,7 +310,7 @@ typedef struct BedrayPathTracePath {
     float emitter_probability;
     float emitter_camera_relative[4]; /* xyz camera minus emitter-list origin, w candidates */
     float di_camera_delta[4];         /* xyz current minus previous camera, w reserved */
-    uint32_t di_state[4];             /* x: BEDRAY_PATH_TRACE_DI_*, y: host-owned parity */
+    uint32_t di_state[4];             /* x: BEDRAY_PATH_TRACE_DI_*, y: external parity or zero for NATIVE_DI */
     uint32_t entity_state[4];         /* x atlas texels per side, yz self-avatar range, w reserved */
 } BedrayPathTracePath;
 

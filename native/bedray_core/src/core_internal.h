@@ -23,6 +23,7 @@ struct DeviceFns {
     gpu::ImageFunctions image_functions{};
     gpu::BufferFunctions buffer_functions{};
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
+    PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
 };
 
 struct ProgramContract {

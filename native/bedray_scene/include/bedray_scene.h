@@ -1,5 +1,5 @@
 /*
- * Bedray native GPU scene — candidate C ABI (not yet exported by bedray_core).
+ * Bedray native GPU scene — C ABI exported by bedray_core and a standalone test DLL.
  *
  * The host owns the VkDevice, the queue and every command buffer. This library
  * owns the Bedray scene representation, section/entity geometry buffers, BLAS
@@ -370,6 +370,10 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_query_resources(
     BedrayScene* scene,
     BedraySceneResources* out_resources);
+
+/* Actual VkDeviceMemory allocation bytes, including pinned retired generations and uploads. */
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_resident_bytes(
+    BedrayScene* scene, uint64_t* out_bytes);
 
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_destroy(
     BedrayScene* scene);
