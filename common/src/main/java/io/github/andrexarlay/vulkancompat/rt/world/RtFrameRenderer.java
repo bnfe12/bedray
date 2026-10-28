@@ -609,6 +609,8 @@ public final class RtFrameRenderer {
             lastPassLog = "";
         }
         long frameStart = System.nanoTime();
+        if (emitters == null) emitters = new RtEmitters(world.memory());
+        RtEmitters recordingEmitters = emitters;
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
         RtWorld recordingWorld = world;
@@ -624,6 +626,8 @@ public final class RtFrameRenderer {
                 () -> recordingPass.releaseRecording(cmd.address()), () -> recordingPass.discardRecording(cmd.address())),
             new Retirement(
                 () -> recordingWorld.releaseRecording(cmd.address()), () -> recordingWorld.discardRecording(cmd.address())),
+            new Retirement(
+                () -> recordingEmitters.releaseRecording(cmd.address()), () -> recordingEmitters.releaseRecording(cmd.address())),
             new Retirement(
                 () -> particleRelease[0].run(), () -> particleRelease[0].run()));
         boolean executeAttempted = false;
@@ -846,9 +850,6 @@ public final class RtFrameRenderer {
         // zeroing the slot would keep the count of the frame that used it three slots ago.
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.LEAF_BACKLIT, 4, 0);
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.TRANS_QUERIES, 24, 0);
-        if (emitters == null) {
-            emitters = new RtEmitters(world.memory());
-        }
         float lightRange = RtConfig.mode() == RtMode.PATH_TRACED
             ? Math.min(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathMaxDistance(), 128)
             : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.emissiveDistance() + 8f;
@@ -860,6 +861,7 @@ public final class RtFrameRenderer {
         emitters.update(world, materials.lastBake(), camera.pos.x, camera.pos.y, camera.pos.z, lightRange,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.lightBudget(), entityEmitters,
             entityEmitters.length / RtEmitters.FLOATS);
+        emitters.retainForRecording(cmd.address());
         long hdr = statsBuf.mapped + writeOffset;
         MemoryUtil.memPutLong(hdr + RtStatsLayout.OPTICAL_ADDR,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials() ? materials.opticalAddress() : 0L);
