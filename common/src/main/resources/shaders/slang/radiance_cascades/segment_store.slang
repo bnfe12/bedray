@@ -112,3 +112,101 @@ RCSegment rcResolveRay(RWStructuredBuffer<RCSegment> records, RadianceCascadeLay
     RCSegment back = rcReadSegment(records, layout, capacity, cascade, probeIndex, rayIndex, 1u);
     return rcComposeSegments(front, back);
 }
+
+// ---- Typed probe resolve ----------------------------------------------------
+//
+// Reconstructs a cosine-weighted average radiance for a shading normal from the
+// typed atlas.  Each ray contributes the radiance of its composed near/far
+// transport (`rcComposeSegments`), never a confidence-weighted average of the
+// two records: confidence is validity metadata, and an opaque near interval
+// must extinguish the far one regardless of how confident either sample is.
+// Rays whose composition is unresolved are skipped.  A caller that must know
+// whether the probe was complete uses rcProbeComplete; a caller that needs
+// distance-dependent GI resolves the individual rays with rcResolveRay.
+//
+// This resolves one probe's two intervals per ray.  It does not interpolate
+// across cascades or probe positions; that mapping belongs to the integration.
+float3 rcProbeIrradiance(StructuredBuffer<RCSegment> records, RadianceCascadeLayout layout,
+        uint capacity, uint cascade, uint probeIndex, float3 normal, uint rotation) {
+    if (cascade >= RADIANCE_CASCADE_COUNT) return float3(0.0);
+
+    float normalLengthSquared = dot(normal, normal);
+    if (!(normalLengthSquared > 0.0) || !isfinite(normalLengthSquared)) return float3(0.0);
+    float3 unitNormal = normalize(normal);
+
+    RadianceCascadeDesc desc = radianceCascade(cascade);
+    float3 sum = float3(0.0);
+    float weightSum = 0.0;
+
+    for (uint ray = 0u; ray < desc.rayCount; ++ray) {
+        float3 direction = cascadeDirection(ray, desc.rayCount, rotation);
+        float cosine = max(dot(unitNormal, direction), 0.0);
+        if (cosine <= 0.0) continue;
+
+        RCSegment segment = rcResolveRay(records, layout, capacity, cascade, probeIndex, ray);
+        if (!rcSegmentValid(segment)) continue;
+
+        sum += segment.radiance * cosine;
+        weightSum += cosine;
+    }
+
+    return sum / max(weightSum, 1.0e-6);
+}
+
+// Writable-buffer overload: a pass that owns the atlas does not need a second
+// read-only binding just to reconstruct irradiance.
+float3 rcProbeIrradiance(RWStructuredBuffer<RCSegment> records, RadianceCascadeLayout layout,
+        uint capacity, uint cascade, uint probeIndex, float3 normal, uint rotation) {
+    if (cascade >= RADIANCE_CASCADE_COUNT) return float3(0.0);
+
+    float normalLengthSquared = dot(normal, normal);
+    if (!(normalLengthSquared > 0.0) || !isfinite(normalLengthSquared)) return float3(0.0);
+    float3 unitNormal = normalize(normal);
+
+    RadianceCascadeDesc desc = radianceCascade(cascade);
+    float3 sum = float3(0.0);
+    float weightSum = 0.0;
+
+    for (uint ray = 0u; ray < desc.rayCount; ++ray) {
+        float3 direction = cascadeDirection(ray, desc.rayCount, rotation);
+        float cosine = max(dot(unitNormal, direction), 0.0);
+        if (cosine <= 0.0) continue;
+
+        RCSegment segment = rcResolveRay(records, layout, capacity, cascade, probeIndex, ray);
+        if (!rcSegmentValid(segment)) continue;
+
+        sum += segment.radiance * cosine;
+        weightSum += cosine;
+    }
+
+    return sum / max(weightSum, 1.0e-6);
+}
+
+// A probe is complete only when every ray composes to a valid segment.  An
+// exactly opaque front segment is complete without a back sample; a
+// transmissive front with an unresolved back is not.  rcSegmentIndex validates
+// the canonical layout and capacity, so an invalid layout fails the first ray
+// instead of reading outside the descriptor range.
+bool rcProbeComplete(StructuredBuffer<RCSegment> records, RadianceCascadeLayout layout,
+        uint capacity, uint cascade, uint probeIndex) {
+    if (cascade >= RADIANCE_CASCADE_COUNT) return false;
+
+    RadianceCascadeDesc desc = radianceCascade(cascade);
+    for (uint ray = 0u; ray < desc.rayCount; ++ray) {
+        RCSegment segment = rcResolveRay(records, layout, capacity, cascade, probeIndex, ray);
+        if (!rcSegmentValid(segment)) return false;
+    }
+    return true;
+}
+
+bool rcProbeComplete(RWStructuredBuffer<RCSegment> records, RadianceCascadeLayout layout,
+        uint capacity, uint cascade, uint probeIndex) {
+    if (cascade >= RADIANCE_CASCADE_COUNT) return false;
+
+    RadianceCascadeDesc desc = radianceCascade(cascade);
+    for (uint ray = 0u; ray < desc.rayCount; ++ray) {
+        RCSegment segment = rcResolveRay(records, layout, capacity, cascade, probeIndex, ray);
+        if (!rcSegmentValid(segment)) return false;
+    }
+    return true;
+}

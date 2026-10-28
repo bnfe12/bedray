@@ -26,6 +26,8 @@ __exported import "traversal/hybrid_traversal.slang";
 __exported import "restir/restir_di.slang";
 __exported import "restir/direct_light.slang";
 __exported import "radiance_cascades/radiance_cascades_store.slang";
+__exported import "radiance_cascades/interval_transport.slang";
+__exported import "radiance_cascades/segment_store.slang";
 __exported import radiance_cascades;
 __exported import render_plan;
 __exported import "light/emitters.slang";

@@ -25,7 +25,9 @@
 //   T_total = T_near * T_far
 //
 // The old float4 atlas and its confidence-weighted rcProbeIrradiance are not
-// touched or called.  This module stores only through rcWriteRaySegments.
+// touched or called.  This module stores only through rcWriteRaySegments; the
+// typed resolve (rcProbeIrradiance over RCSegment) lives in
+// radiance_cascades/segment_store.slang.
 //
 // Status scopes
 // -------------

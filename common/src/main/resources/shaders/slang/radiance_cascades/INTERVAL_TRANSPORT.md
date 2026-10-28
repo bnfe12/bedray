@@ -6,15 +6,29 @@ the segment or composed segments; they are not an exclusive terminal-state
 enum. An unresolved or truncated input cannot become a resolved black sample.
 Exactly opaque foreground transport can be resolved without a back sample.
 
-`segment_store.slang` provides typed record access, clearing and near/far
-composition using the current canonical cascade addressing. Its capacity is a
-host-supplied descriptor-range element count, not a GPU bounds query; the host
-must validate that count and the reflected stride. Record writes require
-exclusive ownership and GPU synchronization. A failed valid-address write
-normalizes the record to unresolved; invalid addresses do not write. Unresolved
-records have zero values and preserve `TRUNCATED` when supplied. Other trace
-events, including invalid-input diagnostics, are not represented by this atlas.
-There is no temporal blending or cross-cascade resolve.
+`segment_store.slang` provides typed record access, clearing, near/far
+composition and probe resolve using the current canonical cascade addressing.
+Its capacity is a host-supplied descriptor-range element count, not a GPU bounds
+query; the host must validate that count and the reflected stride. Record writes
+require exclusive ownership and GPU synchronization. A failed valid-address
+write normalizes the record to unresolved; invalid addresses do not write.
+Unresolved records have zero values and preserve `TRUNCATED` when supplied.
+Other trace events, including invalid-input diagnostics, are not represented by
+this atlas.
+
+`rcProbeIrradiance` integrates only rays whose composed segment is valid. Each
+ray contributes the radiance of `rcComposeSegments(front, back)` with a cosine
+weight; confidence is never used as a blend weight, so an opaque front interval
+cannot be averaged with a bright back interval. Rays that do not resolve are
+skipped rather than treated as black. `rcProbeComplete` is the matching
+predicate: it requires every ray to resolve, and an exactly opaque front
+resolves without a back sample. There is no temporal blending or cross-cascade
+resolve yet.
+
+The resolve contract can be checked without a GPU: opaque near (`T = 0`) plus
+any far must return the near radiance; transparent near (`L = 0`, `T = 1`) must
+return the far radiance; a transmissive near with an unresolved far must remain
+unresolved and make the probe incomplete.
 
 `rcWriteRaySegments` validates both addresses before writing and preserves a
 valid interval even if the other is unresolved. Its success result means the
@@ -22,11 +36,12 @@ addresses were written, not that the ray resolved. The two writes are not an
 atomic transaction; a consumer must not read them until the producer pass is
 complete and the host has supplied the required GPU memory dependency.
 
-These are uncompiled, unintegrated source candidates. They do not change the
-existing `float4` atlas, trace workspace, temporal blending or resolve. The
-trace owner and storage owner must agree on a single record and flags before
-using it, and shader reflection must establish the actual buffer layout. In
-particular, never feed the transitional pre-attenuated far record from the
+These typed modules and their resolve remain uncompiled, unintegrated source
+candidates; the old `float4` atlas is unchanged except for a legacy marker on
+its confidence-weighted resolve.  `rc_trace.slang` is the typed trace that
+writes these records.  Shader reflection must still establish the actual buffer
+layout, and the trace/storage owners must keep the record and flags aligned.  In
+particular, never feed the transitional pre-attenuated far record from the old
 trace workspace to this composition: it requires segment-local far radiance.
 
 Cross-cascade resolve requires more than composing successive records. Current

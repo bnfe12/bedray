@@ -60,6 +60,7 @@
   $$L_{\text{total}} = L_{\text{near}} + T_{\text{near}} \cdot L_{\text{far}}$$
   где $T_{\text{near}} = 1.0 - \text{opacity}_{\text{near}}$. Если ближний интервал уперся в непрозрачный блок ($\text{near.a} = 1.0$), свет дальнего интервала обязан быть полностью заблокирован ($T_{\text{near}} = 0$). В текущей реализации стена толщиной в 1 блок усредняется с солнцем: $(L_{\text{wall}} + L_{\text{sun}}) / 2$, вызывая сквозную засветку закрытых помещений.
 * **Причина:** Ошибочное понимание альфа-канала интервала как "статистической уверенности" (confidence) вместо коэффициента поглощения/непрозрачности.
+* **Статус на 2026-10-28 (source-only):** в дерево добавлен typed-путь: `RCSegment` и `rcComposeSegments` (`L_front + T_front * L_back`) в `interval_transport.slang`, typed `rcProbeIrradiance`/`rcProbeComplete` в `segment_store.slang`, typed trace `rc_trace.slang`. Старый float4 resolve помечен legacy. Компиляции и тестов на этой машине не было (L0); typed-путь не подключён к живому кадру, поэтому P0-4 нельзя считать закрытым до сборки, теста и интеграции.
 
 ### [P0-5] Двойной оффсет квадов в аппаратном пересечении геометрии (чтение мусора)
 * **Файл:** [`geometry.slang:218`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/geometry.slang#L214-L220)

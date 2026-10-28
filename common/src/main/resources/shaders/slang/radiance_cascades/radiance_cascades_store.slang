@@ -12,6 +12,11 @@
 // The record is float4 so a cascade atlas is one contiguous buffer regardless
 // of cascade size.  `a` is confidence, not alpha: a zero-confidence interval
 // has never been traced and must not contribute to reconstruction.
+//
+// LEGACY FORMAT: this float4 atlas is not the typed RCSegment atlas.  New
+// passes must use radiance_cascades/segment_store.slang; the resolve functions
+// below are kept only while the old atlas still has a consumer.  Do not bind a
+// typed RCSegment buffer to these signatures.
 
 public module radiance_cascades_store;
 
@@ -150,6 +155,10 @@ void rcClearProbe(RWStructuredBuffer<float4> intervals, RadianceCascadeLayout la
     }
 }
 
+// LEGACY float4 resolve.  The confidence-weighted average below is physically
+// wrong for opaque intervals; the typed equivalent in segment_store.slang
+// composes near/far with `L_near + T_near * L_far`.  Do not use this with the
+// RCSegment atlas and do not port this math to a new pass.
 // Reconstructs irradiance for a shading normal by integrating the near/far
 // intervals.  The two intervals are merged by confidence; a caller that needs
 // distance-dependent GI can read the intervals directly instead.
@@ -196,6 +205,8 @@ bool rcProbeComplete(StructuredBuffer<float4> intervals, RadianceCascadeLayout l
 
 // Writable-buffer overloads.  A pass that owns the atlas does not need a second
 // read-only binding just to reconstruct irradiance.
+// LEGACY float4 resolve: see the read-only overload above.  The typed overloads
+// live in segment_store.slang and must be used with RCSegment records.
 float3 rcProbeIrradiance(RWStructuredBuffer<float4> intervals, RadianceCascadeLayout layout,
         uint cascade, uint probeIndex, float3 normal, uint rotation) {
     if (cascade >= RADIANCE_CASCADE_COUNT) return float3(0.0);

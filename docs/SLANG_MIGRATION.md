@@ -191,7 +191,11 @@ common/src/main/resources/shaders/slang/
 │   ├── spatial_block_emitters.slang   neighbour pooling over those records: checker phases, surface gates, merge
 │   └── direct_light.slang             compatibility re-export of light/emitters.slang
 ├── radiance_cascades/
-│   └── radiance_cascades_store.slang  atlas layout, interval storage, temporal blend
+│   ├── radiance_cascades_store.slang  legacy float4 atlas layout, interval storage, temporal blend
+│   ├── interval_transport.slang       RCSegment, validity flags, front-to-back composition
+│   ├── segment_store.slang            typed atlas access, ray composition, typed probe resolve
+│   ├── rc_trace.slang                 typed probe-ray trace, writes two RCSegment records
+│   └── rc_trace_segments.slang        obsolete experiment, retained as WIP reference only
 ├── radiance_cascades.slang            cascade/probe/ray addressing (existing)
 ├── render_plan.slang                  RenderPlan, modes, capability mask (existing)
 ├── types.slang, bindings.slang        legacy 1:1 scaffold, kept as reference
@@ -837,7 +841,7 @@ candidates, not a validated or active runtime.
 | Algorithm | Module | State |
 |---|---|---|
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
-| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/segment_store.slang` | typed segment storage is a source candidate; typed trace exists in an isolated agent workspace, but cross-cascade resolve and host integration are unfinished. The old float4 resolve is incompatible with the typed trace. |
+| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace, segment store and typed probe resolve (`rcProbeIrradiance`/`rcProbeComplete`) are source-only in this checkout; the old float4 resolve is marked legacy and is incompatible with the typed trace. Cross-cascade reconstruction, temporal reuse and host integration are unfinished. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
 | Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ISceneTracer`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; the traced scene is terrain *and* the captured entity ring (`traversal/entity_geometry.slang`), decoded by the instance's custom-index bit; `RtSlangPathPass` wraps `RtPathTraceSlangPass`, the optional `RtSpatialReuseSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
 
@@ -962,9 +966,11 @@ because a module has no entry point; that is expected.
    `fetchEntitySurface` are not: the procedural **End Portal starfield**, the
    **Sobel auto-normal** that gives mob skin its relief, and glowing parts as
    **next-event candidates**, so a lantern held in hand lights nothing but itself.
-5. **Radiance Cascades trace/update** — review the isolated typed trace, align
-   its segment status and history contracts with the shared store, and define
-   cross-cascade reconstruction and host integration before connecting a pass.
+5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
+   are now in the shared checkout as source-only; align temporal history and
+   environment ownership, then define cross-cascade reconstruction and host
+   integration before connecting a pass. Do not wire the legacy float4 resolve
+   to the typed atlas.
 6. **More entry passes** — denoise/composite follow the same one-file-per-entry
    pattern and the same ABI; no second pipeline path.
 7. **Live game check** — only after the above and an explicit request.  A
