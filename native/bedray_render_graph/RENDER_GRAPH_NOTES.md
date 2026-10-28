@@ -337,7 +337,31 @@ pass structure must not be ported line by line.
   is coordinated; this batch intentionally stays inside native graph sources,
   tests and notes.
 
-## Path-trace pass as a graph node — live-path gap (2026-10-28)
+## Path-trace graph integration (2026-10-28)
+
+Current integration: `native/bedray_core/src/frame_graph_owner.cpp` constructs
+an opaque-group node around PathTracePass and drives it through FrameScheduler.
+The pass alone owns private images, layout/history state and barriers. The graph
+orders that node and leases up to eight exact recordings on the host graphics
+family; it neither allocates another image set nor registers those images with
+HistoryRegistry. Enabled core capabilities are explicitly mapped to plan bits.
+The existing coarse ABI remains the Java boundary. Its completion/discard call
+releases the exact internal ticket through the scheduler callback, without a
+fabricated submission serial or ABI v3. Failed releases retain the ticket.
+
+These decisions are described in
+[`docs/MIGRATION_INTEGRATION_DECISIONS.md`](../../docs/MIGRATION_INTEGRATION_DECISIONS.md).
+Native contract tests cover the connection; revision-specific counts/results are
+in VERIFICATION_LOG.md. Final host image copy, arbitrary cross-node image
+consumers and every post effect are still outside this opaque node. They need
+explicit image identity/state contracts before graph hazard ownership can grow.
+There is no GPU/driver/game evidence for this integration.
+
+### Original live-path gap analysis (superseded)
+
+The following audit explains the original design alternatives. Statements about
+missing wiring or undecided policies describe that earlier checkpoint; the
+current implementation above and the integration decisions take precedence.
 
 `PathTracePass` (`native/bedray_core/src/path_trace_pass.cpp`) is the only
 internal recorder above the single-dispatch entry points. It owns six images
