@@ -4,6 +4,9 @@
 #include <vulkan/vulkan_core.h>
 
 #include "path_trace_pass.h"
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+#include "frame_graph_owner.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -115,6 +118,9 @@ struct BedrayCore {
 
     bedray::core::DeviceFns device_fns{};
     std::unique_ptr<bedray::core::PathTracePass> path_trace;
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    std::unique_ptr<bedray::core::FrameGraphOwner> frame_graph;
+#endif
 
     PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
     PFN_vkGetDeviceProcAddr get_device_proc_addr = nullptr;
@@ -614,6 +620,9 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
     if (!core->recordings.empty()) return BEDRAY_ERROR_IN_USE;
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && core->frame_graph->has_recordings()) return BEDRAY_ERROR_IN_USE;
+#endif
     if (core->path_trace) {
         const BedrayStatus status = core->path_trace->destroy();
         if (status != BEDRAY_OK) return status;
@@ -931,6 +940,12 @@ BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
     BedrayCore* core, uint64_t command_buffer) try {
     if (core == nullptr || command_buffer == 0) return BEDRAY_ERROR_INVALID_ARGUMENT;
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && !core->frame_graph->releasing(command_buffer)) {
+        const BedrayStatus released = core->frame_graph->release_proven(command_buffer, nullptr);
+        if (released != BEDRAY_OK) return released;
+    }
+#endif
     const auto command = reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(command_buffer));
     for (auto it = core->recordings.begin(); it != core->recordings.end();) {
         if (it->command_buffer == command) {
@@ -1236,6 +1251,10 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
         return fail(error, BEDRAY_ERROR_IN_USE,
             "path-trace recordings must be released before reconfiguration");
     }
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && core->frame_graph->has_recordings())
+        return fail(error, BEDRAY_ERROR_IN_USE, "native graph recordings must be released before reconfiguration");
+#endif
     if (core->path_trace) {
         const BedrayStatus status = core->path_trace->destroy();
         if (status != BEDRAY_OK) {
@@ -1249,6 +1268,19 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
     if (status != BEDRAY_OK) {
         return status;
     }
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    auto frame_graph = std::make_unique<bedray::core::FrameGraphOwner>();
+    const auto record = [](void* pointer, const BedrayPathTraceFrameDesc& frame, BedrayError* err) {
+        return static_cast<BedrayCore*>(pointer)->path_trace->render(frame, err);
+    };
+    const auto release = [](void* pointer, std::uint64_t command) {
+        return bedray_core_release_recording(static_cast<BedrayCore*>(pointer), command);
+    };
+    const BedrayStatus graph_status = frame_graph->configure(core->capabilities, core->queue_family,
+        core->cmd_pipeline_barrier, record, release, core, error);
+    if (graph_status != BEDRAY_OK) return graph_status;
+    core->frame_graph = std::move(frame_graph);
+#endif
     core->path_trace = std::move(pass);
     return BEDRAY_OK;
 } catch (const std::bad_alloc&) {
@@ -1272,7 +1304,11 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
     if (!core->path_trace) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
     }
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    return core->frame_graph->record(*desc, error);
+#else
     return core->path_trace->render(*desc, error);
+#endif
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame");
 } catch (...) {
@@ -1289,11 +1325,17 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* c
     if (core->path_trace->has_recordings()) {
         return BEDRAY_ERROR_IN_USE;
     }
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && core->frame_graph->has_recordings()) return BEDRAY_ERROR_IN_USE;
+#endif
     const BedrayStatus status = core->path_trace->destroy();
     if (status != BEDRAY_OK) {
         return status;
     }
     core->path_trace.reset();
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    core->frame_graph.reset();
+#endif
     return BEDRAY_OK;
 } catch (const std::bad_alloc&) {
     return BEDRAY_ERROR_OUT_OF_MEMORY;

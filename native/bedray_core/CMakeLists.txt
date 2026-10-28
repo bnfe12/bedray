@@ -64,6 +64,18 @@ if(BEDRAY_ENABLE_RENDER_GRAPH)
                      "${CMAKE_CURRENT_BINARY_DIR}/bedray_render_graph")
     target_link_libraries(bedray_core PRIVATE bedray_graph_vulkan)
     target_link_libraries(bedray_core PRIVATE bedray_graph_history)
+    target_link_libraries(bedray_core PRIVATE bedray_graph_frame)
+    target_sources(bedray_core PRIVATE src/frame_graph_owner.cpp)
+    target_compile_definitions(bedray_core PRIVATE BEDRAY_CORE_FRAME_GRAPH)
+
+    add_executable(bedray_frame_graph_owner_test tests/frame_graph_owner_test.cpp src/frame_graph_owner.cpp)
+    target_include_directories(bedray_frame_graph_owner_test PRIVATE include src)
+    target_link_libraries(bedray_frame_graph_owner_test PRIVATE bedray_graph_frame)
+    if(MSVC)
+        target_compile_options(bedray_frame_graph_owner_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+        set_property(TARGET bedray_frame_graph_owner_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+    add_test(NAME bedray_frame_graph_owner COMMAND bedray_frame_graph_owner_test)
 endif()
 
 target_include_directories(bedray_core

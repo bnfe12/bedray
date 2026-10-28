@@ -226,11 +226,9 @@ std::size_t FrameScheduler::free_slot() const noexcept {
 }
 
 bool FrameScheduler::release_slot(Slot& slot) noexcept {
+    const SlotState previous_state = slot.state;
     slot.state = SlotState::releasing;
     const FrameTicket ticket = slot.ticket;
-    slot.ticket = {};
-    slot.last_use = 0;
-    slot.record_attempted = false;
     bool released = true;
     if (release_) {
         try {
@@ -239,8 +237,35 @@ bool FrameScheduler::release_slot(Slot& slot) noexcept {
             released = false;
         }
     }
-    slot.state = SlotState::free;
+    if (released) {
+        slot.ticket = {};
+        slot.last_use = 0;
+        slot.record_attempted = false;
+        slot.state = SlotState::free;
+    } else {
+        slot.state = previous_state;
+    }
     return released;
+}
+
+bool FrameScheduler::release_proven(const FrameTicket& ticket, FrameError& error) {
+    error = {};
+    if (ticket.slot >= slots_.size()) {
+        error.code = FrameErrorCode::invalid_ticket;
+        return false;
+    }
+    Slot& slot = slots_[ticket.slot];
+    if (slot.state == SlotState::free || slot.state == SlotState::releasing
+        || ticket.slot_generation == 0 || slot.generation != ticket.slot_generation
+        || slot.ticket.recording != ticket.recording || slot.ticket.frame_index != ticket.frame_index) {
+        error.code = FrameErrorCode::invalid_ticket;
+        return false;
+    }
+    if (!release_slot(slot)) {
+        error.code = FrameErrorCode::release_failed;
+        return false;
+    }
+    return true;
 }
 
 bool FrameScheduler::release_ready(bool include_unknown) noexcept {

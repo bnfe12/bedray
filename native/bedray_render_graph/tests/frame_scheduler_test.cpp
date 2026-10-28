@@ -453,29 +453,34 @@ void refuses_rebinding_with_outstanding_frames() {
 void reports_release_callback_failure_without_leaking() {
     Fixture fixture;
     int calls = 0;
-    FrameScheduler scheduler(1, [&calls](const FrameTicket&) {
+    bool fail_release = true;
+    FrameScheduler scheduler(1, [&calls, &fail_release](const FrameTicket&) {
         ++calls;
-        throw std::runtime_error("release failure");
+        if (fail_release) throw std::runtime_error("release failure");
     });
     FrameError error;
     check(bind(scheduler, fixture, error), "schedule binds");
-
-    FrameTicket ticket;
+    FrameTicket ticket, next;
     check(scheduler.begin_frame(1, ticket, error), "frame begins");
-    check(!scheduler.finish_frame(ticket, FrameSubmitState::discarded, 0, error) &&
-              error.code == FrameErrorCode::release_failed,
-          "throwing release callback is reported");
-    check(calls == 1 && scheduler.outstanding_frames() == 0,
-          "throwing callback still frees the slot");
-
-    FrameTicket next;
-    check(scheduler.begin_frame(2, next, error), "slot is reusable after the failure");
-    check(scheduler.finish_frame(next, FrameSubmitState::submitted, 5, error),
-          "next frame submits");
+    check(!scheduler.finish_frame(ticket, FrameSubmitState::discarded, 0, error)
+        && error.code == FrameErrorCode::release_failed, "release failure is reported");
+    check(calls == 1 && scheduler.outstanding_frames() == 1, "failed release retains the lease");
+    check(!scheduler.begin_frame(2, next, error) && error.code == FrameErrorCode::slot_unavailable,
+        "failed release cannot recycle its slot");
+    fail_release = false;
+    check(scheduler.release_proven(ticket, error), "host proof retries retained release");
+    check(!scheduler.release_proven(ticket, error) && error.code == FrameErrorCode::invalid_ticket,
+        "a stale exact-ticket proof cannot release another generation");
+    check(calls == 2 && scheduler.outstanding_frames() == 0, "successful retry frees the lease");
+    check(scheduler.begin_frame(2, next, error), "next frame begins");
+    check(scheduler.finish_frame(next, FrameSubmitState::submitted, 5, error), "next frame submits");
+    fail_release = true;
     check(!scheduler.complete(5, error) && error.code == FrameErrorCode::release_failed,
-          "completion reports the throwing callback");
-    check(calls == 2 && scheduler.outstanding_frames() == 0,
-          "completion still frees the slot");
+        "completion reports release failure");
+    check(calls == 3 && scheduler.outstanding_frames() == 1, "completion failure retains its lease");
+    fail_release = false;
+    check(scheduler.complete(5, error), "same completion proof retries release");
+    check(calls == 4 && scheduler.outstanding_frames() == 0, "completion retry frees the lease");
 }
 
 void clamps_slot_count() {

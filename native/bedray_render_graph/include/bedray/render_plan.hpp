@@ -39,6 +39,8 @@ enum class PlanCapability : std::uint64_t {
     radiance_cascades = 1ull << 6,
     denoise = 1ull << 7,
     upscale = 1ull << 8,
+    buffer_device_address = 1ull << 9,
+    shader_int64 = 1ull << 10,
 };
 
 // Traversal is a hard requirement: a plan that asks for an unavailable mode is

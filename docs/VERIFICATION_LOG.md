@@ -230,3 +230,27 @@ uploads all succeed. The embedded scene export probe passes against core DLL.
 Local `:common:compileJava` also exits 0 with the same ignored local dependencies
 as the host-completion batch. Scoped native evidence is L2, Java compilation L1.
 The following journal-only commit skips identical native CI.
+
+## 2026-10-28 — native opaque frame graph and scheduler
+
+Base `7a06dd7b996815fdf3c2177aec6b0cf328260065`. The native coarse path now
+constructs `FrameGraphOwner`, compiles one opaque recording group for the real
+`PathTracePass::render` callback and leases its recording through FrameScheduler.
+The existing completion/discard C ABI release reaches the scheduler's exact
+ticket and calls back into `bedray_core_release_recording` to drop descriptors
+and pass resource pins. A guarded reentrant path avoids a second ticket release.
+Configuration/destruction refuse outstanding graph tickets, including failed
+partial recordings. Failed release callbacks retain their ticket/slot for retry.
+
+[MIGRATION_INTEGRATION_DECISIONS.md](MIGRATION_INTEGRATION_DECISIONS.md) records
+all eight live-path decisions: pass-owned allocator/private barriers/history,
+opaque dispatch group, enabled capability mapping, exact host proof, eight
+leases over shared pass image generations, one graphics family, unchanged v2
+coarse ABI. No synthetic serial or frame index is used as completion proof.
+
+New no-GPU tests exercise opaque-node barrier suppression, capability rejection,
+slot exhaustion, duplicate recording rejection, partial recording failure,
+release failure/retry and unknown-handle idempotence. Scheduler tests now require
+lease retention when release fails and reject stale exact-ticket proof.
+Matching Windows build/CTest results are pending publication. No GPU, driver,
+Minecraft, performance or visual evidence is claimed; opt-in stays unchanged.
