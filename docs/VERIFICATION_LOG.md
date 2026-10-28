@@ -618,3 +618,26 @@ An initial broader `*RtEntity*Test` run was interrupted while the unchanged
 RtEntityHermeticityTest.testShaderCompilation spent several minutes in native
 shaderc compiling legacy GLSL. That interrupted run is not passing evidence;
 the subsequent focused command completed successfully. No GPU/game claim.
+
+## 2026-10-28 — immutable emitter publications with completion leases
+
+Base `fcc0f799e4f10dcb86fd15da4a06d0246490bde9`. Replaced the unproven three-
+segment emitter overwrite rule with EmitterCaptureBuffers. Each selected list
+is copied into fresh immutable storage; unchanged lists share storage and every
+reading recording pins it through RecordingResourceOwner. Publications allocate
+only the selected record bytes, empty lists allocate nothing, and old storage
+retires only after all readers' completion/discard. The frame ticket captures
+the exact RtEmitters owner before recording begins. Selection/scan logic stays
+in RtEmitters; GPU allocation/copy/retirement is in the separate storage module.
+Published origin/count/fingerprint change after the copy. No emitter math,
+record layout, shader source, native implementation or ABI layout changed.
+
+Java compilation and 134 selected tests pass, zero failures/errors/skips.
+Command repeats the preceding 109-test filters and adds EmitterCaptureBuffersTest
+(7), RtEmittersStabilityTest (10), RtEmitterScanPassTest (6), and QuadEmitterBuilderTest
+(2). New no-GPU tests cover shared lists, ten outstanding readers, byte-exact
+packing/range guards, empty lists, allocation/copy/cleanup failures, close refusal
+and a late completion callback after command-handle reuse through the real host
+ticket bridge. `git diff --check` passes. The existing native/18-pass AOT evidence
+applies to unchanged implementation sources; no identical native CI repeated.
+This changes allocation behavior but has no measured GPU/performance/game result.

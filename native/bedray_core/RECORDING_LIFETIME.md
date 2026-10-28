@@ -108,6 +108,15 @@ executed. It does not free other outstanding frames.
   command buffer reject GPU work and retain only their null-memory compatibility
   behavior. These resources are still host capture storage borrowed by the native
   scene/pass, rather than a second scene or native history owner.
+- Published emitter lists use `EmitterCaptureBuffers` and the same proof owner.
+  A publication copies into fresh storage sized for the selected records; frames
+  that share a list pin that immutable generation. An empty list allocates no GPU
+  buffer. The frame's host ticket captures the exact RtEmitters instance, and
+  retains it before either backend can read the list. Later publication cannot
+  overwrite it, even with more than three outstanding readers/publications.
+  Destruction refuses pending readers; late host callbacks cannot release a
+  newer recording that reused the command-buffer address. The record layout,
+  CPU selection/fingerprint rules and shader light sampling are unchanged.
 - The ABI assumes calls are externally synchronized on the render thread.
 - Program handles are monotonically assigned per core and are not native
   addresses. Destroying a program invalidates the handle for new dispatches;
