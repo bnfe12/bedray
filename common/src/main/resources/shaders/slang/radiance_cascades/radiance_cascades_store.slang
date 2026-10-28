@@ -168,11 +168,11 @@ float3 rcProbeIrradiance(StructuredBuffer<float4> intervals, RadianceCascadeLayo
 
         float4 nearInterval = rcLoadInterval(intervals, layout, cascade, probeIndex, ray, 0u);
         float4 farInterval = rcLoadInterval(intervals, layout, cascade, probeIndex, ray, 1u);
-        float nearOpacity = saturate(nearInterval.a);
-        if (nearOpacity <= 0.0 && saturate(farInterval.a) <= 0.0) continue;
+        float confidence = nearInterval.a + farInterval.a;
+        if (confidence <= 0.0) continue;
 
-        float3 radiance = nearInterval.rgb + (1.0 - nearOpacity) * farInterval.rgb;
-
+        float3 radiance = (nearInterval.rgb * nearInterval.a +
+                           farInterval.rgb * farInterval.a) / confidence;
         sum += radiance * cosine;
         weightSum += cosine;
     }
@@ -211,11 +211,11 @@ float3 rcProbeIrradiance(RWStructuredBuffer<float4> intervals, RadianceCascadeLa
 
         float4 nearInterval = rcLoadInterval(intervals, layout, cascade, probeIndex, ray, 0u);
         float4 farInterval = rcLoadInterval(intervals, layout, cascade, probeIndex, ray, 1u);
-        float nearOpacity = saturate(nearInterval.a);
-        if (nearOpacity <= 0.0 && saturate(farInterval.a) <= 0.0) continue;
+        float confidence = nearInterval.a + farInterval.a;
+        if (confidence <= 0.0) continue;
 
-        float3 radiance = nearInterval.rgb + (1.0 - nearOpacity) * farInterval.rgb;
-
+        float3 radiance = (nearInterval.rgb * nearInterval.a +
+                           farInterval.rgb * farInterval.a) / confidence;
         sum += radiance * cosine;
         weightSum += cosine;
     }

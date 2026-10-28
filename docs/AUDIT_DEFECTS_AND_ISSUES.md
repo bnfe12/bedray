@@ -23,86 +23,66 @@
 
 ### [P0-1] FFM падение JVM при передаче on-heap `pushConstants`
 * **Файлы:**
-  * [`SlangProgram.java:146-154`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/slang/SlangProgram.java#L146-L154)
+  * [`SlangProgram.java:171-203`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/slang/SlangProgram.java#L171-L203)
   * [`BedrayCoreNative.java:324`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreNative.java#L320-L330)
-* **Поведение:** В `SlangProgram.java` вызывался `push = MemorySegment.ofBuffer(pushConstants)`. Если вызывающий код передал heap-буфер (`ByteBuffer.allocate(...)`), сегмент создавался как on-heap (`push.isNative() == false`). В `BedrayCoreNative.java:324` вызов `desc.set(ADDRESS, BedrayCoreLayouts.FD_PUSH_CONSTANTS, push)` выбрасывал `java.lang.IllegalArgumentException: Not a native address` (в Java 22+ Panama FFM структуры нативных вызовов запрещают некопированные адреса из кучи JVM без фиксации GC). Рендер-поток мгновенно падал.
+* **Поведение:** Если вызывающий код передал heap-буфер (`ByteBuffer.allocate(...)`), сегмент создается как on-heap (`push.isNative() == false`). В `BedrayCoreNative.java:324` вызов `desc.set(ADDRESS, BedrayCoreLayouts.FD_PUSH_CONSTANTS, push)` выбрасывает `java.lang.IllegalArgumentException: Not a native address` (в Java 22+ Panama FFM структуры нативных вызовов запрещают некопированные адреса из кучи JVM без фиксации GC). Рендер-поток мгновенно падает.
 * **Причина:** Отсутствие валидации `pushConstants.isDirect()` и копирования в нативную память `Arena`.
-* **Статус:** **ИСПРАВЛЕНО** (добавлена проверка `isDirect()`, аллокация в `arena` и копирование байтов).
+* **Статус:** Закрыто в ветке коммитом `3ca8722d` через внедрение `nativePushConstants(arena, buffer, bytes)`.
 
 ### [P0-2] Побег C++ исключений через границу C ABI в Java FFM (JVM Crash `0xE06D7363`)
 * **Файлы:**
   * [`core.cpp:466, 482, 704, 722`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/src/core.cpp#L466) (`bedray_core_destroy`, `bedray_core_query_capabilities`, `bedray_core_destroy_program`, `bedray_core_release_recording`)
   * [`gpu_buffers_c.cpp:1-150`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_gpu_resources/src/gpu_buffers_c.cpp) (все 16 экспортных функций)
   * [`history_c.cpp:1-150`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_history/src/history_c.cpp) (все 20 экспортных функций)
-* **Поведение:** Экспортные C-функции не имели блоков `try { ... } catch (...)`. При `std::bad_alloc`, `std::out_of_range` или системном сбое C++ исключение пересекало границу C ABI. На платформе Windows/MSVC это генерирует системное SEH-исключение `0xE06D7363`, которое FFM-рантайм Java не может перехватить, вызывая немедленный жесткий краш процесса JVM с генерацией `hs_err_pid.log`.
-* **Причина:** Иллюзия того, что C++ код внутри C-оберток "не бросает исключений".
-* **Статус:** **ИСПРАВЛЕНО** в `core.cpp` (все экспортные точки ядра защищены `try { ... } catch (...)` с возвратом `BEDRAY_ERROR_INTERNAL`).
+* **Поведение:** Экспортные C-функции не имеют блоков `try { ... } catch (...)`. При `std::bad_alloc`, `std::out_of_range` или системном сбое C++ исключение пересекает границу C ABI. На платформе Windows/MSVC это генерирует системное SEH-исключение `0xE06D7363`, которое FFM-рантайм Java не может перехватить, вызывая немедленный жесткий краш процесса JVM с генерацией `hs_err_pid.log`.
+* **Причина:** Отсутствие `try / catch` на C ABI интерфейсе `bedray_core`.
+* **Статус:** **НЕ ИСПРАВЛЕН** (выявлен в ходе аудита, требует отдельного исправления).
 
 ### [P0-3] Инверсия вероятности смеси в ReSTIR DI (Свет темнее в $1/q$ раз)
 * **Файлы:**
-  * [`block_emitters.slang:499, 508, 514`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/light/block_emitters.slang#L490-L517)
+  * [`block_emitters.slang:494-517`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/light/block_emitters.slang#L494-L517)
   * [`path_tracer.slang:142`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/pathtrace/path_tracer.slang#L140-L150)
-* **Поведение:** При сэмплировании дискретной смеси эмиттеров и солнца с вероятностью ветвления $q = \text{emitterProbability}$ плотность вероятности выбранного семпла равна $p_{\text{mix}} = q \cdot p_{\text{branch}}$.
-  В `block_emitters.slang` вместо умножения было выполнено деление:
-  ```hlsl
-  emitterSample.sourcePdf /= emitterProbability; // Было: PDF = p / q
-  sunSample.sourcePdf /= 1.0 - emitterProbability; // Было: PDF = p / (1 - q)
-  ```
-  В `path_tracer.slang:142` вес Монте-Карло вычисляется как `1.0 / sourcePdf`. В итоге вес был равен $\frac{1}{p / q} = \frac{q}{p}$. Вместо деления на вероятность ветки свет **умножался** на неё. При $q = 0.25$ эмиттеры светили ровно в 4 раза слабее физической нормы.
-  На строке 499 деление на `emitterProbability` выполнялось даже при `sunIntensity <= 0.0`.
+* **Поведение:** При сэмплировании дискретной смеси эмиттеров и солнца с вероятностью ветвления $q = \text{emitterProbability}$ плотность вероятности выбранного семпла равна $p_{\text{mix}} = q \cdot p_{\text{branch}}$. Ранее выполнялось деление вместо умножения (`sourcePdf /= emitterProbability`), что из-за $W = 1/p$ занижало свет в 4 раза при $q = 0.25$.
 * **Причина:** Путаница между коррекцией веса сэмпла $W = 1/p$ и плотностью вероятности $p$.
-* **Статус:** **ИСПРАВЛЕНО** (заменено на умножение `*= emitterProbability`, убрана перенормализация при нулевом солнце).
+* **Статус:** Закрыто в ветке коммитом `3ca8722d` (деление заменено на умножение).
 
 ### [P0-4] Radiance Cascades: арифметическое среднее вместо окклюзии лучевого транспорта
 * **Файл:** [`radiance_cascades_store.slang:171-176, 214-220`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/radiance_cascades_store.slang#L170-L180)
-* **Поведение:** Слияние ближнего и дальнего интервалов каскада было реализовано через взвешенное среднее:
+* **Поведение:** Слияние ближнего и дальнего интервалов каскада реализовано через взвешенное среднее:
   ```hlsl
   float confidence = nearInterval.a + farInterval.a;
   float3 radiance = (nearInterval.rgb * nearInterval.a + farInterval.rgb * farInterval.a) / confidence;
   ```
   В физике переноса излучения вдоль луча каскада ($r_0 \to r_1 \to r_2$) действует уравнение:
   $$L_{\text{total}} = L_{\text{near}} + (1.0 - \text{opacity}_{\text{near}}) \cdot L_{\text{far}}$$
-  Если ближний интервал уперся в непрозрачный блок ($\text{near.a} = 1.0$), свет дальнего интервала обязан быть полностью заблокирован. Стена толщиной в 1 блок усреднялась с солнцем: $(L_{\text{wall}} + L_{\text{sun}}) / 2$, вызывая сквозную засветку закрытых помещений.
+  Если ближний интервал уперся в непрозрачный блок ($\text{near.a} = 1.0$), свет дальнего интервала обязан быть полностью заблокирован. Стена толщиной в 1 блок сейчас усредняется с солнцем: $(L_{\text{wall}} + L_{\text{sun}}) / 2$, вызывая сквозную засветку закрытых помещений.
 * **Причина:** Ошибочное понимание альфа-канала интервала как "статистической уверенности" (confidence) вместо коэффициента поглощения/непрозрачности.
-* **Статус:** **ИСПРАВЛЕНО** в обоих перегрузках `rcProbeIrradiance` (заменено на честное уравнение переноса излучения).
+* **Статус:** **НЕ ИСПРАВЛЕН** (сохраняется в кодовой базе).
 
 ### [P0-5] Двойной оффсет квадов в аппаратном пересечении геометрии (чтение мусора)
-* **Файл:** [`geometry.slang:218`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/geometry.slang#L214-L220)
-* **Поведение:** Функция `geometryVertexBase` вычисляла базовый индекс вершины:
-  ```hlsl
-  int rangeIndex = geometryRangeForPrimitive(section, primitive);
-  if (rangeIndex < 0) return 0u;
-  GeometryRange range = section.ranges[uint(rangeIndex)];
-  return section.meta.x + (range.firstQuad + (primitive >> 1u)) * 4u;
-  ```
-  В `geometryRangeForPrimitive` (строки 203–208) переменная `quad = primitive >> 1u` уже сопоставляется с `range.firstQuad` и является **абсолютным** индексом квада внутри секции. Сложение `range.firstQuad + quad` добавляло `range.firstQuad` **дважды**. Для любых мешей со смещением диапазонов (прозрачные блоки, вода, декали) видеокарта читала чужие вершины со сдвигом на $4 \times \text{firstQuad}$ позиций, вызывая графические артефакты геометрии и битые UV.
-* **Причина:** Потеря семантики относительного vs абсолютного индекса при рефакторинге структур Sodium.
-* **Статус:** **ИСПРАВЛЕНО** (убрано повторное сложение, индекс вычисляется как `section.meta.x + (primitive >> 1u) * 4u`).
+* **Файл:** [`geometry.slang:214-230`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/geometry.slang#L214-L230)
+* **Поведение:** При сопоставлении абсолютного и локального индекса квада в секции прибавлялся `range.firstQuad` повторно.
+* **Причина:** Потеря семантики относительного vs абсолютного индекса.
+* **Статус:** Закрыто в ветке коммитом `b00dc38a` через переход на локальные индексы диапазонов геометрии нативной сцены.
 
 ### [P0-6] Spatial ReSTIR DI сбрасывает локальные обновления при победе своего семпла
-* **Файл:** [`spatial_block_emitters.slang:160-162`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/restir/spatial_block_emitters.slang#L150-L165)
-* **Поведение:** При пространственном объединении резервуаров с соседями код делал:
-  ```hlsl
-  if (!won) {
-      return; // no neighbour won the roulette
-  }
-  ```
-  Если собственный семпл пикселя оказывался ярче/лучше семплов всех соседей, флаг `won` оставался `false`. Шейдер завершал работу без записи в текстуру. При этом отбрасывались все учтенные соседские испытания ($M$ и $W_{\text{sum}}$). В результате на экране возникали резкие полосы дисперсии между соседними пикселями и временное мерцание (flicker).
-* **Причина:** Неверная интерпретация рулетки Рестира: резервуар обязан сохранять результат объединения даже тогда, когда выбранным остался исходный кандидат.
-* **Статус:** **ИСПРАВЛЕНО** (ранний выход удален; объединенный резервуар всегда валидируется и сохраняется).
+* **Файл:** [`spatial_block_emitters.slang:150-165`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/restir/spatial_block_emitters.slang#L150-L165)
+* **Поведение:** Если собственный семпл пикселя оказывался лучше соседей, шейдер завершал работу без записи (`return;`), отбрасывая накопленный соседский вес $W_{\text{sum}}$ и счетчик $M$, что порождало полосы дисперсии и мерцание.
+* **Причина:** Неверная интерпретация рулетки Рестира.
+* **Статус:** Закрыто в ветке коммитом `3ca8722d` (ранний выход удален, объединенный резервуар всегда валидируется и сохраняется).
 
 ### [P0-7] NRD Bridge: Гонка данных при перезаписи буфера констант кадра (GPU Crash TDR)
 * **Файлы:** [`vkb_nrd.cpp:411-429, 910-932`](file:///C:/Users/andre/Downloads/bedray-slang/native/nrd_bridge/src/vkb_nrd.cpp#L411-L429)
 * **Поведение:** Буфер констант `d->cbBuffer` выделен с размером `cbStride * cbSlots` (рассчитан только на 1 кадр). При этом движок поддерживает от 1 до 8 кадров в полете. В функции `vkb_nrd_dispatch` счетчик слотов `nextSlot` каждый кадр сбрасывается в 0. При записи кадра $N+1$ вызов `vkCmdUpdateBuffer` перезаписывает смещение 0, пока GPU еще выполняет кадр $N$. Это приводит к гонке памяти, графическим артефактам денойзинга и зависанию GPU (TDR).
 * **Причина:** Отсутствие циклического кольца буферов констант по кадрам в полете (`d->ring`).
-* **Статус:** Открыт.
+* **Статус:** **НЕ ИСПРАВЛЕН** (выявлен в ходе аудита).
 
 ### [P0-8] Нарушение Vulkan VUID-03332 при аллокации памяти структур ускорения BLAS
 * **Файлы:** [`acceleration_scene.cpp:84-90, 282-285`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_scene/src/acceleration_scene.cpp#L84-L90)
 * **Поведение:** Буферы для структур ускорения и секций создаются с флагом `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT`. Однако при выделении памяти `vkAllocateMemory` вызывается со структурой `VkMemoryAllocateInfo` без добавления в цепочку `pNext` структуры `VkMemoryAllocateFlagsInfo` с флагом `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`.
 * **Причина:** Нарушение обязательного требования спецификации Vulkan VUID-VkMemoryAllocateInfo-pNext-03332.
-* **Угроза:** На драйверах NVIDIA, RADV и Intel вызовы построения BLAS завершаются с ошибкой `VK_ERROR_INITIALIZATION_FAILED` или сбоем устройства.
-* **Статус:** Открыт.
+* **Угроза:** На строгих драйверах (NVIDIA, RADV, Intel) вызовы построения BLAS завершаются с ошибкой `VK_ERROR_INITIALIZATION_FAILED` или сбоем устройства.
+* **Статус:** **НЕ ИСПРАВЛЕН** (выявлен в ходе аудита).
 
 ---
 
@@ -187,8 +167,8 @@
 
 ### [P2-6] Ненадежная проверка NaN в `math.slang` при fast-math
 * **Файл:** [`contracts/math.slang:41-43`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/math.slang#L40-L45)
-* **Поведение:** `value == value` при оптимизациях схлопывалось в `true`.
-* **Статус:** **ИСПРАВЛЕНО** (заменено на `!isnan(value) && !isinf(value)`).
+* **Поведение:** `value == value` при оптимизациях схлопывается в `true`.
+* **Статус:** **НЕ ИСПРАВЛЕН** (выявлен в ходе аудита).
 
 ### [P2-7] Нарушение взаимности Гельмгольца в диффузном Френеле
 * **Файл:** [`shading/bsdf.slang:93, 229`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/shading/bsdf.slang#L90-L100)
@@ -205,32 +185,29 @@
 |---|---|---|:---:|
 | **Глава 1. Масштабируемость** | `ISceneTracer`: Tier 1 Voxel, Tier 2 Hybrid, Tier 3 Path Tracing | Интерфейс написан, но проходы жестко завязаны на `LegacySectionTraversal`. | **15%** |
 | **Глава 2. Геометрия чанков** | Bitmask HDDA Мортон; Zero-Mesh PalettedContainer; треугольный BLAS | Zero-Mesh отсутствует; меши извлекаются полигонами Sodium; Morton изолирован. | **25%** |
-| **Глава 3. Освещение и оптика** | ReSTIR DI + Light Grid; Radiance Cascades SPWI; Thin-Slab SSS, каустика | P0-3, P0-4 исправлены; `light_grid.slang` и `optics.slang` изолированы; RC в коде — 3D сетка. | **35%** |
+| **Глава 3. Освещение и оптика** | ReSTIR DI + Light Grid; Radiance Cascades SPWI; Thin-Slab SSS, каустика | P0-4 открыт; `light_grid.slang` и `optics.slang` изолированы; RC в коде — 3D сетка. | **35%** |
 | **Глава 4. Атмосфера и дальность** | Фроксели $160\times 90\times 64$; LOD Clipmaps 256 чанков | Фроксели отсутствуют; объемный марш на старом GLSL; клипмапы отсутствуют. | **15%** |
 | **Глава 5. Vulkan и память** | BDA 64-bit; Reverse-Z; VMA Slab Allocator; `VK_KHR_pipeline_binary` | BDA отсутствует в push constants; VMA нет (dedicated); aliasing заблокирован в коде; кэш null. | **20%** |
 | **Глава 6. Микро-оптимизации** | Octahedral snorm16x2; FP16; Subgroup Wave Voting; Branchless DDA | Octahedral изолирован; Subgroup HDDA изолирован; FP16 в каскадах не включен. | **30%** |
-| **Глава 7. Minecraft edge-cases** | Динамические блоки; факел в руке; Dirty Epoch; UV сдвиг лавы | Факел в ReSTIR не инжектится; Dirty Epoch отсутствует; координаты резались `& 1023`. | **25%** |
+| **Глава 7. Minecraft edge-cases** | Динамические блоки; факел в руке; Dirty Epoch; UV сдвиг лавы | Факел в ReSTIR не инжектится; Dirty Epoch отсутствует; координаты режутся `& 1023`. | **25%** |
 | **Глава 8. Денойзинг и апскейл** | DLSS RR / NRD ReBLUR; Karis-Bloom; AgX Tone Mapping | Karis-Bloom на Slang; NRD и DLSS-RR падают в Slang; A-Trous на GLSL. | **45%** |
 | **Глава 9. DX и FFM** | Live Hot-Reload F8; F3+R heatmaps; Panama `critical(true)`; Tracy harness | Python/uv/Tracy харнесс готов; F8 и оверлеи отсутствуют; `critical(true)` не выставлен. | **35%** |
-| **Глава 10. Верификация** | Double-Verification Gate; 5-фильтровый шлюз самокритики | Протокол внедрен в документацию; выявленные P0 закрываются по результатам аудита. | **40%** |
+| **Глава 10. Верификация** | Double-Verification Gate; 5-фильтровый шлюз самокритики | Протокол внедрен в документацию; выявленные P0 зафиксированы для планомерного устранения. | **40%** |
 
 ---
 
 ## 6. Пошаговый план устранения (Remediation Roadmap)
 
-1. **Фаза 1 (Выполнено):**
-   * Закрыть P0-1 (валидация памяти в `SlangProgram.java`).
+1. **Фаза 1 (Срочные P0 блокеры стабильности и физики):**
    * Закрыть P0-2 (защита C ABI в `core.cpp`).
-   * Закрыть P0-3 (инверсия ReSTIR DI в `block_emitters.slang`).
    * Закрыть P0-4 (уравнение переноса в `radiance_cascades_store.slang`).
-   * Закрыть P0-5 (двойной оффсет геометрии в `geometry.slang`).
-   * Закрыть P0-6 (сохранение резервуара в `spatial_block_emitters.slang`).
-   * Закрыть P2-6 (числовая стабильность в `math.slang`).
-2. **Фаза 2 (Срочные нативные исправления):**
    * Закрыть P0-7 (кольцевой буфер констант NRD в `vkb_nrd.cpp`).
    * Закрыть P0-8 (флаг `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` в `acceleration_scene.cpp`).
+   * Закрыть P2-6 (числовая стабильность в `math.slang`).
+2. **Фаза 2 (Стабилизация Vulkan-бэкенда):**
    * Заменить аллокацию `VkDescriptorPool` на каждый диспатч в `core.cpp` (P1-2) на Ring Descriptor Pool.
    * Добавить `Linker.Option.critical(true)` в `BedrayCoreNative.java`.
+   * Устранить краши при выборе режимов `RAY_TRACED` (P1-12) и G-buffer денойзера (P1-13).
 3. **Фаза 3 (Интеграция изолированных модулей):**
    * Подключить `optics.slang` к `path_trace.slang` (активация SSS и каустики).
    * Подключить `light_grid.slang` к ReSTIR DI вместо плоского сэмплирования.
