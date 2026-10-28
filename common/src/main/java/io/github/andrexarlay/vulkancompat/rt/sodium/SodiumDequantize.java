@@ -51,9 +51,15 @@ public final class SodiumDequantize {
     /** Only after the host drained submissions and forbids resubmission. */
     public void releaseRecordingsAfterHostDrain() {
         for (long cmd : List.copyOf(recordings)) {
-            runtime.releaseRecording(cmd);
-            recordings.remove(cmd);
+            releaseRecording(cmd);
         }
+    }
+
+    /** Host proof of completion or deliberate discard for this recording. */
+    public void releaseRecording(long commandBuffer) {
+        if (!recordings.contains(commandBuffer)) return;
+        runtime.releaseRecording(commandBuffer);
+        recordings.remove(commandBuffer);
     }
 
     public void destroy() {

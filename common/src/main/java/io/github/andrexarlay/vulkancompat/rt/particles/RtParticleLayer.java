@@ -244,9 +244,15 @@ public final class RtParticleLayer {
         return !retiredLayers.isEmpty();
     }
 
-    /** Same completed-transient-pool proof required by the main RT pass. */
+    /** Caller proves completion or discard, never merely command-buffer reuse. */
     public static void releaseRecording(long commandBuffer) {
         if (composite != null) composite.releaseRecording(commandBuffer);
+    }
+
+    /** Capture the recorded owner so a late completion cannot target its replacement. */
+    public static Runnable recordingRelease(long commandBuffer) {
+        RtParticleComposite recorded = composite;
+        return () -> { if (recorded != null) recorded.releaseRecording(commandBuffer); };
     }
 
     /** Caller has drained the game's submissions and excluded resubmission. */
