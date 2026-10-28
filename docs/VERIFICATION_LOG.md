@@ -6,7 +6,10 @@ confirmation. Historical results do not validate a different source revision.
 
 ## 2026-10-28 — shader module cleanup (L1 compile)
 
-Branch: `feat/slang-rc-transport-20261028` (working tree on top of `102ddae`).
+Branch: `feat/slang-rc-transport-20261028`.  Verified on cleanup commit
+`b1137fd`; merged with the moving base `175515f` in `09e601b`.  The base merge
+did not change any shader source, so the compile state below is the same tree
+for the shader modules.
 Tool: `slangc` 2026.20, `-target spirv -profile cs_6_5 -entry main
 -matrix-layout-column-major -I common/src/main/resources/shaders/slang`.
 
