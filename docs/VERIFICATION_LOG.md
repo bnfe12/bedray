@@ -4,6 +4,57 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-28 — typed RC store split and entry status (L1 compile)
+
+Branch: `feat/slang-rc-transport-20261028`, commit `bcf77b7`.
+Tool: `slangc` 2026.20, `-target spirv -profile cs_6_5 -entry main
+-matrix-layout-column-major -I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `radiance_cascades/segment_store.slang` is now a facade; the implementation
+  lives in `segment_record.slang` (whole-record read/write, shared
+  `IRCSegmentSource` for read-only and writable buffers, ray composition) and
+  `probe_resolve.slang` (`RCProbeRadiance`, `rcResolveProbe`,
+  `rcProbeComplete`).
+- `rc_atlas_layout.slang` owns `rcLayoutCanonical`, the named interval
+  constants and `rcUncheckedIntervalIndex`; the old `rcIntervalIndex` name is
+  gone and `layout.flags` is validated.
+- Fresh probe/dispatch entries return `RCTraceEntryStatus`; blended entries
+  return `RCTraceBlendedStatus` with `RCTemporalStatus`.  They no longer return
+  a bare failure count that could be mistaken for "the atlas is usable".
+- `rcApplyCascadeOwnershipBand` writes an out parameter and reports success.
+- `passes/rc_probe_trace.slang` is the first typed-RC consumer: one dispatch
+  item decodes to one probe ray, writes the typed records and one status
+  element.  It is host-agnostic and is not wired into the render loop.
+- `RCSegment` and `RCTraceEntryStatus` are pinned in `STRUCT_LAYOUTS`.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | includes `rc_probe_trace.slang` |
+| RC/root harnesses | 5 | 5 | typed, environment, full trace API, both roots, scene tracer |
+
+Reflection on `rc_probe_trace.slang` (layout evidence, not a runtime check):
+`RCSegment` is 32 bytes at offsets 0/12/16/28; `RCTraceEntryStatus` is 32 bytes
+at offsets 0/4/8/12/16/20/24/28; `RCProbeTracePush` is 112 bytes; the pass has
+16 descriptors in one set plus the push block.
+
+`rc_trace_segments.slang` remains obsolete and excluded from the sweep:
+`RtSlangVisibilityOverflowTest.java` requires the `surfaceVisibilityProven(`
+string in that path.  `path_trace.slang` and `path_trace_scene.slang` remain
+duplicated because existing Java source-scan tests assert exact lines in
+`passes/path_trace.slang`; deduplicating them is still blocked on changing
+those tests.
+
+This is L1 only.  It proves module resolution, re-exports, generic
+instantiation and the reflected record layout above.  It does not prove a GPU
+dispatch, the host descriptor range or stride, a live frame or visual parity.
+`gradlew :common:test` cannot configure in this checkout because
+`fabric/build.gradle` requires the missing `fabric-loader-0.19.5.jar`; native
+CI does not compile shaders.  PR #10 remains open and unmerged.
+
 ## 2026-10-28 — shader module cleanup (L1 compile)
 
 Branch: `feat/slang-rc-transport-20261028`.  Verified on cleanup commit
