@@ -385,3 +385,20 @@ and all 17 AOT passes compile successfully. Targeted JUnit: 19 recording/manifes
 path-contract tests plus 4 scene API/POD packing tests pass. Existing Iris test
 Unsafe warnings and JOML deprecation diagnostics remain. Evidence: native/CPU L2,
 AOT/Java L1. No GPU/game result. Journal-only follow-up skips unchanged native CI.
+
+## 2026-10-28 — native CI on the typed RC cleanup head (L2)
+
+[Run 40727076703](https://github.com/bnfe12/bedray/actions/runs/40727076703)
+executed on `c5ce8c6`, the published head of `feat/slang-rc-transport-20261028`
+after the cleanup `b1137fd` and the base merge `09e601b`. The merge changed no
+shader source (`git diff b1137fd..c5ce8c6 -- common/src/main/resources/shaders
+common/src/test/resources/shaders` is empty).
+
+Baseline `4236c75`: core 15/15, standalone scene 1/1, frame lifetime 1/1.
+Candidate `c5ce8c6`: core **18/18**, standalone scene **1/1**, frame lifetime
+**1/1**, ABI probe v2 exit 0. All configure/build/CTest commands exit 0 and there
+are no native test failures in either job. The workflow is manual
+(`workflow_dispatch`), does not compile or run shaders, and provides no GPU,
+game, performance or visual evidence. Shader L1 is recorded in the section above;
+the Java source-scan tests were checked manually because `:common:test` cannot
+configure without the Fabric launcher jars.
