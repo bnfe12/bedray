@@ -4,6 +4,44 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-28 — shader module cleanup (L1 compile)
+
+Branch: `feat/slang-rc-transport-20261028` (working tree on top of `102ddae`).
+Tool: `slangc` 2026.20, `-target spirv -profile cs_6_5 -entry main
+-matrix-layout-column-major -I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `radiance_cascades/rc_trace.slang` is now a facade over
+  `rc_trace_options`, `rc_trace_shade`, `rc_trace_walk`, `rc_trace_dispatch`,
+  `rc_trace_history` and `rc_trace_ownership`.
+- `rc_atlas_layout.slang` owns the shared addressing; `segment_store.slang`
+  no longer imports the legacy float4 store.
+- The legacy float4 implementation moved to `legacy_float4_store.slang`;
+  `radiance_cascades_store.slang` is a compatibility facade. Its resolve is
+  named `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`.
+- `bedray.slang` is the curated typed root; `bedray_legacy.slang` is the
+  explicit compatibility root.
+- `radiance_cascades.slang` no longer imports the legacy `types` module; the
+  addressing path defines its own layout records.
+- New harnesses: `verify_rc_trace_api.slang` and `verify_bedray_roots.slang`.
+  `verify_rc_typed.slang` now imports `rc_atlas_layout.slang`, not the legacy
+  store.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 17 | 17 | unchanged pass sources |
+| RC/root harnesses | 5 | 5 | typed, environment, full trace API, both roots, scene tracer |
+
+`rc_trace_segments.slang` is obsolete and was deliberately not compiled.
+
+This is L1 only. It proves module resolution, re-exports and generic
+instantiation. It does not prove a GPU dispatch, the reflected 32-byte stride,
+a descriptor range, a live frame or visual parity. The native CI on `102ddae`
+(L2) remains the latest host/ABI evidence and does not compile shaders.
+
 ## 2026-10-28 — native CI and P0-2 exception containment
 
 Base: `refactor/slang-pipeline` at

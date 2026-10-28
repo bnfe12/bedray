@@ -6,6 +6,11 @@
 // rcResolveRay, rcProbeIrradiance and rcProbeComplete.  The old float4 atlas is
 // deliberately not imported here: it is a different record format.
 //
+// The layout comes from rc_atlas_layout.slang, not from the legacy store, so
+// this harness also proves that the typed path has no dependency on the float4
+// module.  Importing segment_store.slang alone is enough for RCSegment and
+// RadianceCascadeLayout because the module re-exports both owners.
+//
 // Usage (same arguments as gradle/slang.gradle):
 //   slangc -target spirv -profile cs_6_5 -entry main ^
 //     -matrix-layout-column-major -I common/src/main/resources/shaders/slang ^
@@ -16,7 +21,7 @@
 // validate the reflected record stride, or prove any visual result.
 
 import "radiance_cascades.slang";
-import "radiance_cascades/radiance_cascades_store.slang";
+import "radiance_cascades/rc_atlas_layout.slang";
 import "radiance_cascades/interval_transport.slang";
 import "radiance_cascades/segment_store.slang";
 

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+* Split the typed Radiance Cascades trace into modules with one owner each: `rc_trace_options.slang`
+  keeps the host policy, diagnostics and result; `rc_trace_shade.slang` owns the first-surface
+  emission/NEE sample; `rc_trace_walk.slang` owns segment finalization and the interval walk;
+  `rc_trace_dispatch.slang` owns the store/probe/dispatch entries; `rc_trace_history.slang` keeps the
+  explicitly provisional temporal blend; `rc_trace_ownership.slang` keeps the distance-band proposal.
+  `rc_trace.slang` is now a facade, so existing imports keep working while a reader can open the
+  600-line walk instead of a 1300-line file. The atlas addressing moved to `rc_atlas_layout.slang`,
+  which means the typed store no longer imports the legacy float4 store; the legacy implementation
+  moved to `legacy_float4_store.slang`, `radiance_cascades_store.slang` became a compatibility
+  facade, and the old resolve was renamed `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete` so it
+  cannot be mistaken for the typed resolve. `bedray.slang` is now the curated typed root and
+  `bedray_legacy.slang` is the explicit opt-in for the 1:1 scaffold, `LegacySectionTraversal` and the
+  float4 atlas. Developer documentation lives in `shaders/slang/ARCHITECTURE.md` and
+  `radiance_cascades/RC_TRACE_API.md`. Evidence: `slangc` 2026.20 compiled all 17 `passes/*.slang`
+  and five harnesses (`verify_rc_typed`, `verify_rc_environment`, `verify_rc_trace_api`,
+  `verify_bedray_roots`, `verify_scene_tracer`) with exit 0; this is L1 compile evidence only, with
+  no GPU dispatch, reflected-stride check or live-frame result.
+
 * Gave a traced mob a motion vector, so walking things denoise instead of boiling: the reprojection the
   accumulation batch introduced shifts every pixel by the *camera* delta, which is correct for terrain and wrong
   for a part that moved on its own - a cow that walked three blocks is asked for the wall it passed, so its pixels

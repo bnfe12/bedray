@@ -1,11 +1,15 @@
 // Typed interval atlas. This is a separate format from the old float4 atlas;
 // binding one format as the other is invalid. All operations are whole-record
 // accesses and require the caller to synchronize readers and writers.
+//
+// The public signatures mention RCSegment and RadianceCascadeLayout, so this
+// module re-exports both owners.  Importing segment_store.slang alone is enough
+// to declare a typed atlas binding; the legacy float4 store is not involved.
 public module segment_store;
 
 import "radiance_cascades.slang";
-import "radiance_cascades/radiance_cascades_store.slang";
-import "radiance_cascades/interval_transport.slang";
+__exported import "radiance_cascades/rc_atlas_layout.slang";
+__exported import "radiance_cascades/interval_transport.slang";
 
 // capacity is the number of RCSegment elements in the bound descriptor range,
 // not bytes or the allocation's full size. The host must validate the reflected
