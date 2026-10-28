@@ -588,3 +588,33 @@ exercise quota/order, failed copy and eviction retry, identical remesh/tag chang
 stale snapshots, camera changes, budget enforcement and clear/rescan. Shader and
 native sources are unchanged; native/AOT evidence is reused for those exact
 sources. Matching GPU/game verification remains outstanding; native stays opt-in.
+
+## 2026-10-28 — entity capture leases follow exact recording proof
+
+Base `99228bcff711ceb037a7675fb875819a541df18b`. Extracted host entity GPU
+storage into EntityCaptureBuffers, using RecordingResourceOwner for exclusive
+writable slices and shared immutable atlas generations. Exhausted slots allocate
+a new generation. Replaced modulo slot overwrite and fixed-frame destruction
+with release through RtWorld's exact completion/discard action. World/device
+identity is checked; close refuses outstanding recordings. Partial allocation,
+atlas-copy and destructor failure retain retryable ownership. Untracked GPU
+upload overloads now reject work; null-memory compatibility remains available.
+
+Also corrected staged-quad index packing: it previously wrote the 65,536-quad
+template into an allocation that could be only 256 KiB. EntityQuadIndices now
+checks the mapped range before writing the actual quad count. No shader math,
+bindings, native implementation or ABI layout changed.
+
+Executed Java compilation and 109 selected tests, zero failures/errors/skips:
+the preceding 92 checks, RecordingResourceOwnerTest (6), EntityCaptureBuffersTest
+(6), and RtEntityUploadTest (5). The fault-injection cases cover slot pressure,
+shared atlas readers, stale tickets, foreign owners, partial create/copy/destroy,
+close retry, quad-buffer reuse and bounded index writes. Command uses the same
+local dependencies/JDK/Slang SDK, `--offline --max-workers=2 :common:test` with
+the preceding test filters plus the three classes above. `git diff --check`
+passes. Native sources and all 18 AOT pass sources are unchanged.
+
+An initial broader `*RtEntity*Test` run was interrupted while the unchanged
+RtEntityHermeticityTest.testShaderCompilation spent several minutes in native
+shaderc compiling legacy GLSL. That interrupted run is not passing evidence;
+the subsequent focused command completed successfully. No GPU/game claim.
