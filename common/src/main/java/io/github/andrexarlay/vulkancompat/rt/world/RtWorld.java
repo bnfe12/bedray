@@ -40,8 +40,8 @@ import java.util.Map;
  * {@link SectionGeometryRegistry}, one BLAS per section, and a TLAS rebuilt every frame.
  *
  * <p>Everything is recorded into the command buffer passed to {@link #update}; nothing is submitted here. Resources of
- * removed/replaced sections are released {@link #DEFER_FRAMES} frames later (the engine keeps up to 2 submissions in
- * flight). Render thread only.
+ * removed/replaced Java sections are released {@link #DEFER_FRAMES} frames later. The opt-in native scene instead
+ * retires generations after explicit host completion/discard proof. Render thread only.
  *
  * <p>Per section a block of the geometry arena holds {@code [positions float3 x 4Q][uv float2 x 4Q]}; the BLAS has one
  * triangle geometry per non-empty pass (SOLID: OPAQUE, CUTOUT/TRANSLUCENT: non-opaque) reading a slice of the
@@ -165,7 +165,7 @@ public final class RtWorld {
      * it has a TLAS for this frame the facade below returns its handles and the
      * Slang path dispatches {@code path_trace_scene}. Null keeps the legacy scene.
      */
-    private NativeSceneBridge nativeScene;
+    private final NativeSceneBridge nativeScene;
     /** True when the handles published by the last {@link #update} belong to {@link #nativeScene}. */
     private boolean nativeSceneFrameActive;
     /** CPU captures accepted for the native scene; no parallel Java AS resources. */
@@ -173,7 +173,7 @@ public final class RtWorld {
     private final Map<Long, Long> nativeTagHashes = new HashMap<>();
 
     private final Map<Long, SectionGpu> gpu = new HashMap<>();
-    /** Incremented whenever a section enters, leaves or is replaced in {@link #gpu} (emitter list rebuilds key off it). */
+    /** Changes with the active scene's section captures; emitter list rebuilds key off it. */
     private long structureVersion;
     private final ArrayDeque<Deferred> deferred = new ArrayDeque<>();
     private final ArrayDeque<Integer> freeSlots = new ArrayDeque<>();
@@ -451,14 +451,16 @@ public final class RtWorld {
         RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ);
         nativeScene.updateEntities(frameIndex);
         long started = System.nanoTime();
-        int sx = InstanceMath.sectionCoord(camX), sy = InstanceMath.sectionCoord(camY), sz = InstanceMath.sectionCoord(camZ);
+        int sx = InstanceMath.sectionCoord(camX);
+        int sy = InstanceMath.sectionCoord(camY);
+        int sz = InstanceMath.sectionCoord(camZ);
         SectionGeometryRegistry reg = SectionGeometryRegistry.INSTANCE;
         if (radiusChanged || reg.version() != lastVersion || sx != lastCamSx || sy != lastCamSy || sz != lastCamSz) {
             lastVersion = reg.version();
             lastCamSx = sx;
             lastCamSy = sy;
             lastCamSz = sz;
-            for (Iterator<DecodedSection> it = nativeSections.values().iterator(); it.hasNext();) {
+            for (Iterator<DecodedSection> it = nativeSections.values().iterator(); it.hasNext(); ) {
                 DecodedSection d = it.next();
                 if (reg.get(d.key) == null || !InstanceMath.inRadius(d.sectionX, d.sectionY, d.sectionZ,
                         sx, sy, sz, radiusXz + RtConfig.EVICT_MARGIN, radiusY + RtConfig.EVICT_MARGIN)) {
@@ -471,10 +473,14 @@ public final class RtWorld {
             ArrayList<DecodedSection> next = new ArrayList<>();
             reg.forEachSection(d -> {
                 if (nativeSections.get(d.key) != d && InstanceMath.inRadius(d.sectionX, d.sectionY, d.sectionZ,
-                        sx, sy, sz, radiusXz, radiusY)) next.add(d);
+                        sx, sy, sz, radiusXz, radiusY)) {
+                    next.add(d);
+                }
             });
             next.sort(Comparator.comparingLong(d -> {
-                long dx = (long)d.sectionX - sx, dy = ((long)d.sectionY - sy) * 2, dz = (long)d.sectionZ - sz;
+                long dx = (long) d.sectionX - sx;
+                long dy = ((long) d.sectionY - sy) * 2;
+                long dz = (long) d.sectionZ - sz;
                 return dx * dx + dy * dy + dz * dz;
             }));
             pending = next;
@@ -483,7 +489,7 @@ public final class RtWorld {
         }
         nearestBuiltSq = Long.MAX_VALUE;
         int built = 0;
-        long deadline = System.nanoTime() + (long)(CPU_BUDGET_MS * 1e6);
+        long deadline = System.nanoTime() + (long) (CPU_BUDGET_MS * 1e6);
         while (pendingIdx < pending.size() && built < RtConfig.BLAS_PER_FRAME) {
             if (built > 0 && System.nanoTime() > deadline) break;
             DecodedSection d = pending.get(pendingIdx++);
@@ -501,7 +507,9 @@ public final class RtWorld {
             nativeSections.put(d.key, d);
             nativeTagHashes.put(d.key, hash);
             structureVersion++;
-            long dx = (long)d.sectionX - sx, dy = (long)d.sectionY - sy, dz = (long)d.sectionZ - sz;
+            long dx = (long) d.sectionX - sx;
+            long dy = (long) d.sectionY - sy;
+            long dz = (long) d.sectionZ - sz;
             nearestBuiltSq = Math.min(nearestBuiltSq, dx * dx + dy * dy + dz * dz);
             built++;
         }

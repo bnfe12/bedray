@@ -435,9 +435,8 @@ public final class BedrayCoreNative implements AutoCloseable {
     }
 
     /**
-     * Releases resources for a recording after all its GPU submissions have
-     * completed and it cannot be submitted again, or after discarding an
-     * unsubmitted recording. Call before re-recording this command buffer.
+     * Invalidates temporal state and releases a recording after proven discard,
+     * or after host completion with unknown execution and no future resubmission.
      */
     public void discardRecording(long core, long commandBuffer) {
         ensureOpen();
@@ -448,11 +447,13 @@ public final class BedrayCoreNative implements AutoCloseable {
         }
         try {
             int status = (int) discardRecordingHandle.invokeExact(handle(core), commandBuffer);
-            if (status != BedrayCoreLayouts.STATUS_OK)
-                throw new BedrayCoreException("discard_recording", status, "", null);
-        } catch (Throwable t) { throw rethrow("discard_recording", t); }
+            check("discard_recording", status, MemorySegment.NULL);
+        } catch (Throwable t) {
+            throw rethrow("discard_recording", t);
+        }
     }
 
+    /** Releases a completed recording that cannot be submitted again. */
     public void releaseRecording(long core, long commandBuffer) {
         ensureOpen();
         requireHandle(core, "core");
@@ -466,15 +467,6 @@ public final class BedrayCoreNative implements AutoCloseable {
     }
 
     /**
-     * Configures the native path-trace pass on {@code core}. The three program
-     * handles come from {@link #registerProgram}; {@code programSpatial} may be
-     * zero to disable the ReSTIR spatial stage.
-     *
-     * <p>The pass then owns its radiance/motion/accumulation/history images, the
-     * per-recording FrameConstants upload and the one-element dummies. It records
-     * into a host command buffer and never submits or waits.
-     */
-    /**
      * Legacy-signature overload: keeps existing callers on the legacy section
      * table until they explicitly pass {@code program_trace_scene}. The native
      * descriptor still carries the new field at offset 64; zero selects the
@@ -486,6 +478,10 @@ public final class BedrayCoreNative implements AutoCloseable {
             imageBudgetBytes, bufferBudgetBytes, width, height);
     }
 
+    /**
+     * Configures the native pass with registered program handles. Scene/spatial programs may be zero.
+     * The pass owns private images, uploads and dummies and only records into host command buffers.
+     */
     public void configurePathTrace(long core, long programTrace, long programTraceScene, long programSpatial,
                                    long programDisplay, long imageBudgetBytes, long bufferBudgetBytes,
                                    int width, int height) {
@@ -563,7 +559,7 @@ public final class BedrayCoreNative implements AutoCloseable {
         }
     }
 
-    /** True when the loaded DLL exports the additive path-trace pass ABI. */
+    /** True when the loaded core advertises ownership of DI allocation, history and parity. */
     public boolean hasNativeReservoirs() {
         ensureOpen();
         if (pathTraceFeatureMaskHandle == null) return false;
@@ -575,6 +571,7 @@ public final class BedrayCoreNative implements AutoCloseable {
         }
     }
 
+    /** True when the loaded DLL exports the additive path-trace pass ABI. */
     public boolean hasPathTrace() {
         return configurePathTraceHandle != null
             && renderPathTraceHandle != null
