@@ -41,7 +41,7 @@ import java.util.Set;
  * drained submissions. The scene refuses destruction while a frame is
  * unreleased.
  */
-final class NativeSceneBridge implements AutoCloseable {
+final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sink {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
 
     /** AOT program that decodes the native record; the bridge is pointless without it. */
@@ -165,7 +165,7 @@ final class NativeSceneBridge implements AutoCloseable {
      * id for the section across rebuilds, so the native record's identity (and
      * therefore the path tracer's history) survives a re-mesh.
      */
-    void sectionBuilt(DecodedSection section, int[] tagged) {
+    @Override public void sectionBuilt(DecodedSection section, int[] tagged) {
         Long removed = removals.remove(section.key);
         if (removed != null) {
             sectionIds.put(section.key, removed);
@@ -179,7 +179,7 @@ final class NativeSceneBridge implements AutoCloseable {
     }
 
     /** Queues the removal of a section the rescan evicted or that Sodium dropped. */
-    void sectionRemoved(long key) {
+    @Override public void sectionRemoved(long key) {
         Long id = sectionIds.remove(key);
         if (id == null) {
             return;
