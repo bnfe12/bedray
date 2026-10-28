@@ -9,9 +9,6 @@
 // d^-1.25 beyond, windowed at EMITTER_RADIUS. That kernel, and the RIS weight of the whole candidate batch, is folded into
 // `radiance` because the legacy p-hat carries the receiver cosine inside the target density while bsdfEvaluate multiplies
 // the cosine again; `sourcePdf` stays the honest solid-angle density of the chosen point so ReSTIR can reuse the sample.
-//
-// Entity-atlas emitters (uvc.w != 0) are skipped: the entity texture is not bound to this pass yet, and a candidate that
-// cannot be evaluated must not take part in the weight sum.
 
 public module block_emitters;
 
@@ -20,6 +17,7 @@ import "contracts/math.slang";
 import "light/sun.slang";
 import "sampling.slang";
 import "surface/surface.slang";
+import "traversal/entity_geometry.slang";
 
 static const float EMITTER_RADIUS = 24.0;
 static const float EMISSIVE_GAIN = 3.0;
@@ -115,6 +113,8 @@ struct BlockEmitterPoint {
     float3 edge1;
     float3 edge2;
     uint   recordIndex;
+    uint   atlasSlotPlus1;
+    float4 tint;
     float  texelEmission;
     float  area;
     float  indexProbability;
@@ -164,7 +164,13 @@ float3 blockEmitterRadiance(BlockEmitterPoint p, MaterialAtlas atlas) {
     if (p.redstone) {
         return float3(1.0, 0.04, 0.02) * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN);
     }
-    float3 tex = atlas.albedo.SampleLevel(p.uv, 0.0).rgb;
+    float3 tex;
+    if (p.atlasSlotPlus1 != 0u) {
+        tex = entityTexel(atlas.entities, p.atlasSlotPlus1 - 1u, p.uv).rgb;
+        tex *= p.tint.rgb * p.tint.a;
+    } else {
+        tex = atlas.albedo.SampleLevel(p.uv, 0.0).rgb;
+    }
     return emitterAttenuationColor(tex) * p.texelEmission * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN);
 }
 
@@ -195,6 +201,8 @@ BlockEmitterPoint blockEmitterEmptyPoint(uint index) {
     point.edge1 = float3(0.0);
     point.edge2 = float3(0.0);
     point.recordIndex = index;
+    point.atlasSlotPlus1 = 0u;
+    point.tint = float4(1.0);
     point.texelEmission = 0.0;
     point.area = 0.0;
     point.indexProbability = 0.0;
@@ -268,9 +276,6 @@ BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord>
     }
 
     BlockEmitterRecord emitter = records[index];
-    if (uint(emitter.uvCorner.w + 0.5) != 0u) {
-        return candidate;   // entity-atlas emitter: not evaluable in this pass
-    }
     point.position = emitter.corner.xyz - cameraRelative
         + emitter.edge1.xyz * quad.x + emitter.edge2.xyz * quad.y;
     point.uv = emitter.uvCorner.xy + emitter.uvEdges.xy * quad.x + emitter.uvEdges.zw * quad.y;
@@ -279,6 +284,8 @@ BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord>
     point.edge2 = emitter.edge2.xyz;
     point.area = max(emitter.corner.w, 1.0e-6);
     point.twoSided = emitter.edge2.w > 0.5;
+    point.atlasSlotPlus1 = uint(emitter.uvCorner.w + 0.5);
+    point.tint = emitter.tint;
     point.indexProbability = blockEmitterIndexProbability(index, blockEmitterCount(records));
     candidate.point = point;
 
@@ -292,9 +299,16 @@ BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord>
     }
     candidate.distance2 = distance2;
 
-    float4 materialTexel = atlas.material.SampleLevel(point.uv, 0.0);
-    point.redstone = emitter.edge2.w > 1.5 && ((255u - uint(materialTexel.a * 255.0 + 0.5)) & 4u) != 0u;
-    point.texelEmission = point.redstone ? emitter.uvCorner.z : materialTexel.b * emitter.edge1.w;
+    uint slotPlus1 = point.atlasSlotPlus1;
+    if (slotPlus1 != 0u) {
+        float4 sampledEntityTexel = entityTexel(atlas.entities, slotPlus1 - 1u, point.uv);
+        float4 entityTexel = sampledEntityTexel;
+        point.texelEmission = entityTexelEmission(entityTexel) * emitter.edge1.w;
+    } else {
+        float4 materialTexel = atlas.material.SampleLevel(point.uv, 0.0);
+        point.redstone = emitter.edge2.w > 1.5 && ((255u - uint(materialTexel.a * 255.0 + 0.5)) & 4u) != 0u;
+        point.texelEmission = point.redstone ? emitter.uvCorner.z : materialTexel.b * emitter.edge1.w;
+    }
     candidate.point = point;
     if (point.texelEmission <= 0.0) {
         return candidate;

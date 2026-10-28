@@ -208,7 +208,7 @@ PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentS
             break;
         }
 
-        SurfaceSample surface = decodeSurface(atlas, blockMaterials, hit, materialOptions);
+        SurfaceSample surface = decodeSurface(atlas, blockMaterials, hit, materialOptions, ray.direction);
         if (!surface.valid) {
             // A hit this decoder cannot name.  Nothing produced a bad number, so the radiance gathered up to here is
             // still a sample; the path simply stops short.

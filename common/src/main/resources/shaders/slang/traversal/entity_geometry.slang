@@ -43,12 +43,11 @@ import "contracts/math.slang";
 static const uint ENTITY_INSTANCE_TYPE_BIT = 0x800000u;
 
 // Bits 24..31 of the per-vertex light word (CapturedVertexConsumer.setFlags).
-// These are the two that change how a surface shades; the glowing and fire bits
-// already reach the shader as the atlas texel's own emission code, and the End
-// Portal flag drives a procedural starfield the Slang path does not have yet -
-// such a part shades as its plain captured quad.
-static const uint ENTITY_VERTEX_FLAG_OUTLINE = 0x08u;
-static const uint ENTITY_VERTEX_FLAG_HURT    = 0x40u;
+// The glowing and fire bits already reach the shader as the atlas texel's own
+// emission code; these three tags change how the material layer decodes a part.
+static const uint ENTITY_VERTEX_FLAG_OUTLINE    = 0x08u;
+static const uint ENTITY_VERTEX_FLAG_HURT       = 0x40u;
+static const uint ENTITY_VERTEX_FLAG_END_PORTAL = 0x80u;
 
 // The texel alpha bands of the RT entity atlas (EntityTextureAtlas).  A texel
 // below the cutout edge is a hole in the model; one between the cutout edge and
@@ -313,5 +312,6 @@ SurfaceHit entityHitToSurface(EntityGeometry entities, float3 cameraAnchor, Ray 
     result.flags = HIT_FLAG_ENTITY | HIT_FLAG_TANGENT_VALID;
     if ((vertexFlags & ENTITY_VERTEX_FLAG_OUTLINE) != 0u) result.flags |= HIT_FLAG_ENTITY_OUTLINE;
     if ((vertexFlags & ENTITY_VERTEX_FLAG_HURT) != 0u) result.flags |= HIT_FLAG_ENTITY_HURT;
+    if ((vertexFlags & ENTITY_VERTEX_FLAG_END_PORTAL) != 0u) result.flags |= HIT_FLAG_ENTITY_END_PORTAL;
     return result;
 }

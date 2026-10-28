@@ -600,7 +600,7 @@ void rcWalkRay<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         if (!inNear) nearComplete = true;
 
         SurfaceSample surface = decodeSurface(atlas, blockMaterials, hitValue,
-            materialOptions);
+            materialOptions, ray.direction);
         if (!surface.valid) {
             // Unlike the visibility walk, the typed transport record must not
             // claim a resolved zero-throughput result for a material it could

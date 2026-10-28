@@ -67,7 +67,7 @@ class RtPathTraceSlangPassTest {
     void pushBlockKeepsTheSlangLayout() {
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(
             8, 32, 5, 0, 0x21, 0.01f, 0.5f, 512f, 1000f, 0.75f, 64, 0.5f, 1.5f, -2.25f, 0.75f, 8,
-            0.25f, -0.5f, 1.75f, 0b1011, 1, 2048, 120, 24);
+            0.25f, -0.5f, 1.75f, 0b1011, 1, 2048, 120, 24, 1.75f);
         ByteBuffer out = ByteBuffer.allocate(RtPathTraceSlangPass.PUSH_BYTES);
         dispatch.writeTo(out);
 
@@ -98,7 +98,7 @@ class RtPathTraceSlangPassTest {
         assertEquals(2048, out.getInt(96), "entityState.x (atlas texels per side) at 96");
         assertEquals(120, out.getInt(100), "entityState.y (first self-avatar triangle) at 100");
         assertEquals(24, out.getInt(104), "entityState.z (self-avatar triangle count) at 104");
-        assertEquals(0, out.getInt(108), "entityState.w is the reserved lane");
+        assertEquals(1.75f, out.getFloat(108), "entityState.w carries auto-normal strength as float bits");
         assertEquals(RtPathTraceSlangPass.PUSH_BYTES, out.capacity());
         assertEquals(112, RtPathTraceSlangPass.PUSH_BYTES, "the 96 B DI block plus the entity state of this frame");
     }
@@ -123,6 +123,16 @@ class RtPathTraceSlangPassTest {
             () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, 0f, 0f, 0f, 0, 0, 2048, -4, 0));
         assertThrows(IllegalArgumentException.class,
             () -> dispatch(8, 1, 0.5f, 100f, 1f, 0.5f, 4, 0.5f, 8, 0f, 0f, 0f, 0, 0, 2048, 0, -4));
+    }
+
+    @Test
+    void autoNormalStrengthMustBeFiniteAndNonNegative() {
+        assertThrows(IllegalArgumentException.class, () -> new RtPathTraceSlangPass.Dispatch(
+            8, 32, 0, 0, 0, 0.01f, 0.1f, 100f, 1000f, 0.5f, 0, 0f, 0f, 0f, 0f, 8,
+            0f, 0f, 0f, 0, 0, 0, 0, 0, Float.NaN));
+        assertThrows(IllegalArgumentException.class, () -> new RtPathTraceSlangPass.Dispatch(
+            8, 32, 0, 0, 0, 0.01f, 0.1f, 100f, 1000f, 0.5f, 0, 0f, 0f, 0f, 0f, 8,
+            0f, 0f, 0f, 0, 0, 0, 0, 0, -0.1f));
     }
 
     @Test
@@ -172,7 +182,7 @@ class RtPathTraceSlangPassTest {
                                                           int avatarTriCount) {
         return new RtPathTraceSlangPass.Dispatch(depth, steps, 0, 0, 0, 0.01f, alphaCutoff, maxDistance, maxRadiance,
             sunProbability, emitterCount, emitterProbability, 0f, 0f, 0f, emitterCandidates,
-            diDeltaX, diDeltaY, diDeltaZ, diFlags, diParity, entityAtlasSize, avatarTriStart, avatarTriCount);
+            diDeltaX, diDeltaY, diDeltaZ, diFlags, diParity, entityAtlasSize, avatarTriStart, avatarTriCount, 1f);
     }
 
     @Test

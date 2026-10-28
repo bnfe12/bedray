@@ -251,6 +251,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // and a hole to the shadow ray.
     MaterialSamplingOptions materialOptions = defaultMaterialSamplingOptions();
     materialOptions.alphaCutoff = options.alphaCutoff;
+    materialOptions.portalTime = f.camera.origin.w;
+    materialOptions.autoNormalStrength = asfloat(pc.entityState.w);
     PathTraceResult result = tracePath(traversal, lights, environment, directReuse, atlas, table,
         primary, materialOptions, options, seed);
 

@@ -63,7 +63,7 @@ SurfaceVisibility traceFilteredVisibility<T : ISceneTracer>(T traversal,
             return visibility;
         }
 
-        SurfaceSample surface = decodeSurface(atlas, blockMaterials, hit, options);
+        SurfaceSample surface = decodeSurface(atlas, blockMaterials, hit, options, current.direction);
         if (!surface.valid) {
             // A malformed hit is safer to treat as opaque than to let light
             // through an unknown surface.

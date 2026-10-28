@@ -266,7 +266,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                     int emitterCount, float emitterProbability, float emitterCamRelX, float emitterCamRelY,
                     float emitterCamRelZ, int emitterCandidates,
                     float diCamDeltaX, float diCamDeltaY, float diCamDeltaZ, int diFlags, int diParity,
-                    int entityAtlasSize, int selfAvatarTriStart, int selfAvatarTriCount) {
+                    int entityAtlasSize, int selfAvatarTriStart, int selfAvatarTriCount, float autoNormalStrength) {
         Dispatch {
             if (maxDepth < 1) {
                 throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
@@ -314,6 +314,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                 throw new IllegalArgumentException("the entity state of a frame cannot be negative, got "
                     + entityAtlasSize + "/" + selfAvatarTriStart + "/" + selfAvatarTriCount);
             }
+            if (!(autoNormalStrength >= 0f) || !Float.isFinite(autoNormalStrength)) {
+                throw new IllegalArgumentException("auto-normal strength must be finite and >= 0, got " + autoNormalStrength);
+            }
         }
 
         void writeTo(ByteBuffer out) {
@@ -349,7 +352,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             out.putInt(base + 96, entityAtlasSize);
             out.putInt(base + 100, selfAvatarTriStart);
             out.putInt(base + 104, selfAvatarTriCount);
-            out.putInt(base + 108, 0);
+            out.putFloat(base + 108, autoNormalStrength);
         }
     }
 

@@ -88,12 +88,14 @@ static const uint MATERIAL_SAMPLING_FLAG_APPLY_TINT     = 1u << 2u;
 static const uint MATERIAL_SAMPLING_FLAG_EMISSIVE       = 1u << 3u;
 
 struct MaterialSamplingOptions {
-    float alphaCutoff;       // cutout threshold, 0.5 matches the legacy path
-    float emissionScale;     // host exposure / emissive gain
-    float normalStrength;    // 0 disables the normal map
-    float defaultIor;        // dielectric IOR when the atlas has no optical profile
-    float defaultThickness;  // slab thickness in blocks
-    uint  flags;             // MATERIAL_SAMPLING_FLAG_*
+    float alphaCutoff;        // cutout threshold, 0.5 matches the legacy path
+    float emissionScale;      // host exposure / emissive gain
+    float normalStrength;     // 0 disables the normal map
+    float autoNormalStrength; // 0 disables generated entity normals
+    float portalTime;         // frame clock in seconds
+    float defaultIor;         // dielectric IOR when the atlas has no optical profile
+    float defaultThickness;   // slab thickness in blocks
+    uint  flags;              // MATERIAL_SAMPLING_FLAG_*
 };
 
 MaterialSamplingOptions defaultMaterialSamplingOptions() {
@@ -101,6 +103,8 @@ MaterialSamplingOptions defaultMaterialSamplingOptions() {
     options.alphaCutoff = 0.5;
     options.emissionScale = 1.0;
     options.normalStrength = 1.0;
+    options.autoNormalStrength = 0.0;
+    options.portalTime = 0.0;
     options.defaultIor = 1.5;
     options.defaultThickness = 1.0;
     options.flags = MATERIAL_SAMPLING_FLAG_NORMAL_MAP |
@@ -165,11 +169,97 @@ float3 decodeAtlasNormal(MaterialAtlas atlas, MaterialSamplingOptions options,
     return orientNormal(normal, geometricNormal);
 }
 
+float3 entityPortalColor(float3 worldPosition, float3 rayDirection, float portalTime) {
+    float pt = portalTime * 0.015;
+    float3 parallax = rayDirection / max(abs(rayDirection.y), 0.25);
+    float3 color = float3(0.015, 0.035, 0.065);
+    float3 layerColors[6] = {
+        float3(0.22, 0.58, 0.72),
+        float3(0.45, 0.28, 0.85),
+        float3(0.18, 0.82, 0.75),
+        float3(0.75, 0.42, 0.95),
+        float3(0.35, 0.92, 0.88),
+        float3(0.95, 0.88, 1.00)
+    };
+    for (uint layer = 0u; layer < 6u; ++layer) {
+        float fl = float(layer + 1u);
+        float2 puv = worldPosition.xz * (1.8 + fl * 0.85) + parallax.xz * (0.12 * fl)
+            + float2(sin(pt * (0.7 + 0.2 * fl) + fl * 1.7),
+                cos(pt * (0.6 + 0.15 * fl) - fl * 2.3)) * 0.45;
+        float2 cell = floor(puv * 8.0);
+        float2 local = frac(puv * 8.0) - 0.5;
+        uint h = uint(int(cell.x)) * 73856093u ^ uint(int(cell.y)) * 19349663u ^ layer * 83492791u;
+        h ^= h >> 16u;
+        h *= 0x7feb352du;
+        h ^= h >> 15u;
+        float2 starOffset = (float2(float(h & 0xFFu), float((h >> 8u) & 0xFFu)) / 255.0 - 0.5) * 0.55;
+        float probability = float((h >> 16u) & 0xFFu) / 255.0;
+        if (probability > 0.72) {
+            float2 delta = local - starOffset;
+            float star = exp(-dot(delta, delta) * (90.0 + fl * 25.0))
+                * (0.6 + 0.4 * sin(pt * 3.0 + float(h & 63u)));
+            color += layerColors[layer] * star * (1.25 - 0.10 * fl);
+        }
+    }
+    return clamp(color, float3(0.01), float3(1.0));
+}
+
+float entityAtlasLuminanceOffset(EntityAtlas atlas, uint slot, float2 uv, int2 offset) {
+    uint rectCount;
+    uint rectStride;
+    atlas.rects.GetDimensions(rectCount, rectStride);
+    if (atlas.atlasSize == 0u || slot >= rectCount) return -1.0;
+
+    uint4 rect = atlas.rects[slot];
+    uint2 size = uint2(rect.z & 0xFFFFu, rect.w & 0xFFFFu);
+    if (size.x == 0u || size.y == 0u) return -1.0;
+
+    int2 texel = int2(clamp(uv, float2(0.0), float2(0.99999)) * float2(size));
+    texel = clamp(texel + offset, int2(0), int2(size) - int2(1));
+    uint index = (rect.y + uint(texel.y)) * atlas.atlasSize + rect.x + uint(texel.x);
+    float4 color = entityUnpackPacked(atlas.texels[index]);
+    if (color.a < ENTITY_ALPHA_HOLE) return -1.0;
+    return dot(color.rgb, float3(0.299, 0.587, 0.114));
+}
+
+float3 decodeEntityAutoNormal(EntityAtlas atlas, SurfaceHit hit,
+        float3 geometricNormal, float strength) {
+    if (strength <= 0.0 || (hit.flags & HIT_FLAG_TANGENT_VALID) == 0u) return geometricNormal;
+
+    float center = dot(entityTexel(atlas, hit.materialId, hit.uv).rgb, float3(0.299, 0.587, 0.114));
+    float lxn = entityAtlasLuminanceOffset(atlas, hit.materialId, hit.uv, int2(-1, 0));
+    float lxp = entityAtlasLuminanceOffset(atlas, hit.materialId, hit.uv, int2(1, 0));
+    float lyn = entityAtlasLuminanceOffset(atlas, hit.materialId, hit.uv, int2(0, -1));
+    float lyp = entityAtlasLuminanceOffset(atlas, hit.materialId, hit.uv, int2(0, 1));
+    if (lxn < 0.0) lxn = center;
+    if (lxp < 0.0) lxp = center;
+    if (lyn < 0.0) lyn = center;
+    if (lyp < 0.0) lyp = center;
+
+    float2 gradient = float2(lxn - lxp, lyp - lyn);
+    gradient *= smoothstep(0.025, 0.08, length(gradient)) * (0.28 * strength);
+    float gradientLength2 = dot(gradient, gradient);
+    if (gradientLength2 > 0.25) gradient *= 0.5 * rsqrt(gradientLength2);
+    if (dot(gradient, gradient) <= 1.0e-4) return geometricNormal;
+
+    float3 tangent = safeNormalize(hit.tangent, geometricNormal);
+    float3 bitangent = safeNormalize(hit.bitangent, geometricNormal);
+    tangent = safeNormalize(tangent - geometricNormal * dot(geometricNormal, tangent), geometricNormal);
+    bitangent = safeNormalize(bitangent - geometricNormal * dot(geometricNormal, bitangent), geometricNormal);
+    float z = sqrt(max(0.25, 1.0 - dot(gradient, gradient)));
+    float3 normal = safeNormalize(tangent * gradient.x + bitangent * gradient.y + geometricNormal * z,
+        geometricNormal);
+    float3 candidate = dot(normal, geometricNormal) > 0.0 ? normal : reflect(normal, geometricNormal);
+    float normalDot = dot(candidate, geometricNormal);
+    return safeNormalize(lerp(geometricNormal, candidate, smoothstep(0.20, 0.65, normalDot)),
+        geometricNormal);
+}
+
 // Decodes one hit.  A miss or a malformed hit returns valid = false; a cutout
 // hole is still a valid surface (surfaceIsHole decides whether it is a hole),
 // because a visibility walk must distinguish a hole from a filter.
 SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMaterials,
-        SurfaceHit hit, MaterialSamplingOptions options) {
+        SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection) {
     SurfaceSample surface;
     surface.valid = false;
     surface.hit = hit;
@@ -234,6 +324,7 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         // emission code - so the three bands are decided here rather than left
         // to the generic alpha rule.
         bool outline = (hit.flags & HIT_FLAG_ENTITY_OUTLINE) != 0u;
+        bool endPortal = (hit.flags & HIT_FLAG_ENTITY_END_PORTAL) != 0u;
 
         float3 color = hit.tint;
         float emission = 0.0;
@@ -263,6 +354,16 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
                 pbr.metallic = 0.0;
                 pbr.roughness = 0.85;
             }
+        }
+        if (endPortal) {
+            color = entityPortalColor(hit.worldPosition, rayDirection, options.portalTime);
+            emission = 0.95;
+            alpha = 1.0;
+            glassy = false;
+            pbr.roughness = 0.05;
+        }
+        if (!endPortal && !outline && alpha >= ENTITY_ALPHA_HOLE) {
+            shadingNormal = decodeEntityAutoNormal(atlas.entities, hit, geometricNormal, options.autoNormalStrength);
         }
 
         material.albedo = color;

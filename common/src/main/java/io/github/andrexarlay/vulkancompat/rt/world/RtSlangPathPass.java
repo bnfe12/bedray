@@ -457,7 +457,8 @@ public final class RtSlangPathPass implements RtPass {
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
             params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES,
             params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, diParity,
-            capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount());
+            capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount(),
+            RtSettings.autoNormalsOn() ? RtSettings.autoNormalStrengthPercent() / 100f : 0f);
         if (nativePathTrace) {
             recordNative(cmd, params, emitters, reservoirRange, capturedEntities, dispatch);
             // The ring is the host's: the native pass only forwards the parity it
