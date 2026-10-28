@@ -279,3 +279,8 @@ Fake-driver checks cover native clear/history/parity, reset, resize with three
 outstanding recordings, disable retirement and conflicting host ownership.
 Windows native compilation/CTest and local Java compilation are pending.
 No GPU, driver, game, performance or visual result is claimed.
+
+Executed result: [run 40723147943](https://github.com/bnfe12/bedray/actions/runs/40723147943),
+code `7dc6521`: core 18/18, scene 1/1, frame lifetime 1/1; no native test
+failures. Local `:common:compileJava` exits 0 (Java L1). Native evidence is L2;
+no live claim. Journal-only follow-up skips unchanged CI.
