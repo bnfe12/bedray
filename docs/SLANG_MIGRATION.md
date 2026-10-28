@@ -382,6 +382,12 @@ effects pass is likewise reported unavailable until its Slang replacement is
 connected. The Slang volumetric passes compile but are not yet connected, so
 god rays are currently reported unavailable.
 
+The current `volumetric_march` binding 2 explicitly reads `LegacySection` through
+`LegacySectionTraversal`. The native scene publishes a different GeometrySection
+record, despite both records being 64 bytes. Connecting that pass to native scene
+requires a shader-owner-reviewed native-scene entry/contract; it must not bind the
+native table to the existing legacy descriptor by size alone.
+
 #### Native C++ path-trace pass (opt-in)
 
 `native/bedray_core/src/path_trace_pass.cpp` records the same three dispatches

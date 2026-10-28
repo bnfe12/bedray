@@ -663,3 +663,50 @@ Candidate repeats the preceding 134-test command with RtRestirSettingsTest:
 139 tests pass, zero failures/errors/skips, Gradle exits 0. `git diff --check`
 passes. Production Java, native implementation, shader sources and ABI layouts
 are unchanged in this contract/documentation change. No new GPU/game evidence.
+
+## 2026-10-28 — coarse native bloom recorder
+
+Base `bc1bf8d36e6e9bba2a7a1e9ecd294775fc5aa66e`. BloomPass now owns the existing
+six-mip prefilter/down/up/apply chain, transitions, entry/inter-dispatch/exit
+barriers and exact image-generation pins. RtBloomPass supplies borrowed runtime
+programs/samplers, host views and the unchanged 128-byte push payload through
+BedrayBloomNative. One coarse call records twelve dispatches with bloom or one
+glare-only apply. The adapter contains no image owner, per-dispatch binding table,
+dispatch loop or Vulkan barrier. Removed its duplicate mip-size implementation;
+the corresponding old Java helper checks now exercise the native implementation
+in bloom_pass_test.cpp. Path trace and bloom tests share one fake pass driver.
+
+The additive bedray_bloom.h descriptors are 64/56 bytes with version/size guards,
+native offset assertions and Java FFM layout/slice tests. Existing ABI v2 layouts,
+shader bindings and shader math are unchanged. Programs remain borrowed from
+SlangRuntime. Matching bloom exports are required; no GLSL fallback is added.
+
+Resize retains old pinned generations. A discarded current generation forces
+fresh mip images because its transitions may not have executed; discarding an
+older generation cannot invalidate a newer one. Close/reconfigure refuse pending
+recordings. Device loss stops new recording and retains the whole lost pool until
+every affected command buffer receives host completion/discard proof, then frees
+it together. An intermediate CI run on 5faae45 exposed that the lost image owner
+rejects ordinary complete_use calls; this final bulk cleanup follows all host
+proofs instead of assuming individual lost-owner operations still work.
+
+Final native implementation/test revision `b8186f9092b1b56165e2177741691bb855f7862e`:
+[Windows CI run 40787939814](https://github.com/bnfe12/bedray/actions/runs/40787939814)
+passes baseline core 15/15 + scene 1/1 + lifetime 1/1 and candidate core 19/19 +
+scene 1/1 + lifetime 1/1; ABI probe v2 exits 0. Tests include dispatch order/groups,
+binding contracts, byte-exact pushes, glare-only mode, resize, partial allocation/
+recording failure, discard, unsupported extent and loss with two pending readers.
+
+Final Java command repeats the preceding 139-test filters with BedrayBloomNativeTest
+(3): 142 tests pass, zero failures/errors/skips; Java/test compilation exits 0.
+It uses `--offline --max-workers=1`, JDK25 and the same local dependencies, with
+Gradle JVM `-Xms32m -Xmx768m -XX:MaxMetaspaceSize=384m -XX:+UseSerialGC
+-XX:ActiveProcessorCount=2`. Earlier attempts failed before tests when Windows
+commit memory was exhausted (JVM native allocation/metaspace failures); those are
+not passing evidence. The completed retry and final run succeed. A source-body
+comparison also confirms fillPushConstants is unchanged from the base.
+
+`git diff --check` passes. All 18 AOT shader sources are unchanged. No GPU/game,
+visual parity or performance claim. Supporting volumetric integration remains
+blocked on its legacy-section shader boundary; it cannot consume a native table
+merely because the record byte size matches.
