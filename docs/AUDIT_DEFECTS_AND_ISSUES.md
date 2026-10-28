@@ -166,6 +166,7 @@
 * **Файл:** [`path_tracer.slang:228, 246`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/pathtrace/path_tracer.slang#L220-L250)
 * **Проблема:** При прохождении листвы/решеток `advance = hit.t + options.rayBias;` накапливается в `primaryAdvance`.
 * **Угроза:** Измеренное расстояние `firstHitDistance` систематически завышается на $N_{\text{cutout}} \times \text{rayBias}$, искажая линейную глубину G-буфера для денойзера NRD/SVGF.
+* **Статус на 2026-10-28 (source-only):** в заявленном виде не воспроизводится. После каждого hole `ray.origin` сдвигается на `hit.t + rayBias`, поэтому следующий `hit.t` отсчитывается уже от новой точки и уменьшается на накопленное смещение. `primaryAdvance` хранит фактическое расстояние от камеры до текущего origin, а `primaryAdvance + hit.t` даёт расстояние до той же поверхности; $N \times \text{rayBias}$ не накапливается. Компиляции/теста не было (L0); для уверенности нужен тест с несколькими cutout-слоями и известной глубиной.
 
 ### [P1-10] Засветка пещер скайбоксом в Radiance Cascades
 * **Файл:** [`radiance_cascades/rc_trace.slang:363-367`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/rc_trace.slang#L360-L368)
