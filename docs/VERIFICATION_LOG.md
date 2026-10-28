@@ -564,3 +564,27 @@ retry, display-bit translation and byte-exact preservation of other push fields.
 Java compilation exits 0. All 18 unchanged AOT passes also compile on the baseline.
 Native C++ is unchanged, so the existing 20-test native evidence remains scoped
 to the same sources and identical native CI is skipped. No GPU/game claim.
+
+## 2026-10-28 — isolated native section capture queue
+
+Base `446622916bb3d75c3f7ecded5571ab4a59c92760`. NativeSectionCapture now owns
+CPU selection, stable nearest-first ordering, pacing, accepted capture snapshots
+and retry bookkeeping. RtWorld delegates capture selection then calls the native
+scene owner; capture acceptance never denotes GPU completion. SectionGeometryIdentity
+shares geometry/tag-hash rules between reference and native paths. Capture has no
+Vulkan handles, allocations or native resource destruction. Construction rollback
+also closes an empty scene if capture-module construction fails.
+
+The CPU budget now includes stale/identical queued captures, which previously
+could bypass it. Sink failure leaves that capture pending and the accepted
+snapshot/version unchanged. Scan-key publication follows successful eviction/
+queue construction, so an eviction failure is retried. Camera/radius changes
+rescan even with an unchanged source version. Equal-distance order uses the
+section key for deterministic selection.
+
+Executed the previous 83 checks plus NativeSectionCaptureTest and RtSceneApiTest:
+92 tests, zero failures/errors/skips; Java build exits 0. Six new no-GPU cases
+exercise quota/order, failed copy and eviction retry, identical remesh/tag changes,
+stale snapshots, camera changes, budget enforcement and clear/rescan. Shader and
+native sources are unchanged; native/AOT evidence is reused for those exact
+sources. Matching GPU/game verification remains outstanding; native stays opt-in.

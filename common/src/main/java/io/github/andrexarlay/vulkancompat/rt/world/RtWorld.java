@@ -46,7 +46,7 @@ import java.util.Map;
  * <p>Per section a block of the geometry arena holds {@code [positions float3 x 4Q][uv float2 x 4Q]}; the BLAS has one
  * triangle geometry per non-empty pass (SOLID: OPAQUE, CUTOUT/TRANSLUCENT: non-opaque) reading a slice of the
  * positions with the shared quad index buffer. The shader finds the section through
- * {@code instanceCustomIndex = slot} in the section table (48 bytes per slot).
+ * {@code instanceCustomIndex = slot} in the section table (64 bytes per slot).
  */
 public final class RtWorld {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
@@ -169,8 +169,7 @@ public final class RtWorld {
     /** True when the handles published by the last {@link #update} belong to {@link #nativeScene}. */
     private boolean nativeSceneFrameActive;
     /** CPU captures accepted for the native scene; no parallel Java AS resources. */
-    private final Map<Long, DecodedSection> nativeSections = new HashMap<>();
-    private final Map<Long, Long> nativeTagHashes = new HashMap<>();
+    private final NativeSectionCapture nativeCapture;
 
     private final Map<Long, SectionGpu> gpu = new HashMap<>();
     /** Changes with the active scene's section captures; emitter list rebuilds key off it. */
@@ -209,6 +208,8 @@ public final class RtWorld {
         try {
             this.nativeScene = createNativeScene(runtime);
             if (nativeScene != null) {
+                rollback.push(nativeScene::close);
+                nativeCapture = new NativeSectionCapture(SectionGeometryRegistry.INSTANCE, nativeScene, this::quadFlags);
                 // Native mode has one AS owner. Java keeps only CPU captures and the entity upload ring.
                 this.dequantize = null;
                 this.geomArena = null;
@@ -227,6 +228,7 @@ public final class RtWorld {
                 rollback.clear();
                 return;
             }
+            nativeCapture = null;
             // Validate/register the AOT decoder before allocating scene resources.
             this.dequantize = new io.github.andrexarlay.vulkancompat.rt.sodium.SodiumDequantize(runtime);
             rollback.push(dequantize::destroy);
@@ -386,7 +388,7 @@ public final class RtWorld {
         this.radiusY = radiusY;
         long tUpdate = RtTimings.start();
         frameIndex++;
-        if (nativeScene != null) return updateNative(cmd, camX, camY, camZ, radiusChanged, tUpdate);
+        if (nativeScene != null) return updateNative(cmd, camX, camY, camZ, tUpdate);
         releaseDeferred(false);
         stagingCursor = (frameIndex % STAGING_SEGMENTS) * STAGING_SEGMENT_BYTES;
         scratchCursor = scratchBase;
@@ -445,74 +447,16 @@ public final class RtWorld {
             (t1 - t0) / 1.0e6, (t2 - t1) / 1.0e6, mem.reservedBytes(), failedSections);
     }
 
-    private FrameStats updateNative(VkCommandBuffer cmd, double camX, double camY, double camZ,
-                                    boolean radiusChanged, long tUpdate) {
+    private FrameStats updateNative(VkCommandBuffer cmd, double camX, double camY, double camZ, long tUpdate) {
         nativeSceneFrameActive = false;
         RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ);
         nativeScene.updateEntities(frameIndex);
         long started = System.nanoTime();
-        int sx = InstanceMath.sectionCoord(camX);
-        int sy = InstanceMath.sectionCoord(camY);
-        int sz = InstanceMath.sectionCoord(camZ);
-        SectionGeometryRegistry reg = SectionGeometryRegistry.INSTANCE;
-        if (radiusChanged || reg.version() != lastVersion || sx != lastCamSx || sy != lastCamSy || sz != lastCamSz) {
-            lastVersion = reg.version();
-            lastCamSx = sx;
-            lastCamSy = sy;
-            lastCamSz = sz;
-            for (Iterator<DecodedSection> it = nativeSections.values().iterator(); it.hasNext(); ) {
-                DecodedSection d = it.next();
-                if (reg.get(d.key) == null || !InstanceMath.inRadius(d.sectionX, d.sectionY, d.sectionZ,
-                        sx, sy, sz, radiusXz + RtConfig.EVICT_MARGIN, radiusY + RtConfig.EVICT_MARGIN)) {
-                    nativeScene.sectionRemoved(d.key);
-                    it.remove();
-                    nativeTagHashes.remove(d.key);
-                    structureVersion++;
-                }
-            }
-            ArrayList<DecodedSection> next = new ArrayList<>();
-            reg.forEachSection(d -> {
-                if (nativeSections.get(d.key) != d && InstanceMath.inRadius(d.sectionX, d.sectionY, d.sectionZ,
-                        sx, sy, sz, radiusXz, radiusY)) {
-                    next.add(d);
-                }
-            });
-            next.sort(Comparator.comparingLong(d -> {
-                long dx = (long) d.sectionX - sx;
-                long dy = ((long) d.sectionY - sy) * 2;
-                long dz = (long) d.sectionZ - sz;
-                return dx * dx + dy * dy + dz * dz;
-            }));
-            pending = next;
-            pendingIdx = 0;
-            RtTimings.countRescan();
-        }
-        nearestBuiltSq = Long.MAX_VALUE;
-        int built = 0;
-        long deadline = System.nanoTime() + (long) (CPU_BUDGET_MS * 1e6);
-        while (pendingIdx < pending.size() && built < RtConfig.BLAS_PER_FRAME) {
-            if (built > 0 && System.nanoTime() > deadline) break;
-            DecodedSection d = pending.get(pendingIdx++);
-            if (reg.get(d.key) != d) continue;
-            int[] flags = quadFlags(d);
-            long hash = lightHash(d.light, flags, d.totalQuads() * 4);
-            DecodedSection previous = nativeSections.get(d.key);
-            if (previous != null && sameGeometry(previous, d)
-                    && java.util.Objects.equals(nativeTagHashes.get(d.key), hash)) {
-                nativeSections.put(d.key, d);
-                identicalSkipped++;
-                continue;
-            }
-            nativeScene.sectionBuilt(d, flags);
-            nativeSections.put(d.key, d);
-            nativeTagHashes.put(d.key, hash);
-            structureVersion++;
-            long dx = (long) d.sectionX - sx;
-            long dy = (long) d.sectionY - sy;
-            long dz = (long) d.sectionZ - sz;
-            nearestBuiltSq = Math.min(nearestBuiltSq, dx * dx + dy * dy + dz * dz);
-            built++;
-        }
+        NativeSectionCapture.Result captures = nativeCapture.update(InstanceMath.sectionCoord(camX),
+            InstanceMath.sectionCoord(camY), InstanceMath.sectionCoord(camZ), radiusXz, radiusY,
+            RtConfig.BLAS_PER_FRAME, (long) (CPU_BUDGET_MS * 1e6));
+        if (captures.rescanned()) RtTimings.countRescan();
+        nearestBuiltSq = captures.nearestSq();
         long prepared = System.nanoTime();
         nativeScene.prepareFrame(cmd.address(), frameIndex, camX, camY, camZ);
         nativeSceneFrameActive = nativeScene.activeThisFrame();
@@ -523,7 +467,7 @@ public final class RtWorld {
         RtTimings.countBlas(nativeScene.blasBuilds());
         RtTimings.stop(RtTimings.Phase.UPDATE_TOTAL, tUpdate);
         RtTimings.endFrame();
-        return new FrameStats(nativeScene.blasBuilds(), nativeScene.sectionCount(), pending.size() - pendingIdx,
+        return new FrameStats(nativeScene.blasBuilds(), nativeScene.sectionCount(), captures.pending(),
             instances, (prepared - started) / 1e6, (System.nanoTime() - prepared) / 1e6,
             mem.reservedBytes() + nativeScene.residentBytes(), failedSections);
     }
@@ -538,7 +482,7 @@ public final class RtWorld {
     private long identicalSkipped;
 
     public long identicalSkipped() {
-        return identicalSkipped;
+        return nativeCapture != null ? nativeCapture.identicalSkipped() : identicalSkipped;
     }
 
     /** Cutout quads tagged as vegetation since start (cumulative; a rebuild tags again). Zero means the classifier is dead. */
@@ -692,43 +636,24 @@ public final class RtWorld {
         return lightHash(d.light, flags, d.totalQuads() * 4);
     }
 
-    private static long lightHash(int[] words, int count) {
-        return lightHash(words, null, count);
-    }
-
     /** Hash of the words the GPU will stage: {@code light[i] | flags[i >> 2]} (flags null = untagged). */
     private static long lightHash(int[] words, int[] flags, int count) {
-        long h = 0xcbf29ce484222325L;
-        for (int i = 0; i < count; i++) {
-            int w = words[i] | (flags != null ? flags[i >> 2] : 0);
-            h = (h ^ (w & 0xFFFFFFFFL)) * 0x100000001b3L;
-        }
-        return h;
+        return SectionGeometryIdentity.lightHash(words, flags, count);
     }
 
     static boolean sameGeometry(DecodedSection a, DecodedSection b) {
-        if (a.totalQuads() != b.totalQuads()) {
-            return false;
-        }
-        for (int p = 0; p < DecodedSection.PASS_COUNT; p++) {
-            if (a.quadsInPass(p) != b.quadsInPass(p)) {
-                return false;
-            }
-        }
-        // Raw words carry the whole geometry identity (the section index byte is pre-masked in the capture): one
-        // array compare replaces the four decoded-array compares.
-        return java.util.Arrays.equals(a.rawWords, b.rawWords);
+        return SectionGeometryIdentity.same(a, b);
     }
 
     /** Version of the set of sections that have a BLAS (changes on build, replace and evict). */
     public long structureVersion() {
-        return structureVersion;
+        return nativeCapture != null ? nativeCapture.structureVersion() : structureVersion;
     }
 
     /** Visits the decoded geometry of every section that currently has a BLAS (render thread). */
     public void forEachBuiltSection(java.util.function.Consumer<DecodedSection> consumer) {
         if (nativeScene != null) {
-            nativeSections.values().forEach(consumer);
+            nativeCapture.forEach(consumer);
             return;
         }
         for (SectionGpu g : gpu.values()) {
@@ -1359,8 +1284,7 @@ public final class RtWorld {
         if (nativeScene != null) {
             nativeScene.close();
             nativeSceneFrameActive = false;
-            nativeSections.clear();
-            nativeTagHashes.clear();
+            nativeCapture.clear();
             RtEntityGeometryManager.INSTANCE.closeAll(mem);
             mem.close();
             return;
