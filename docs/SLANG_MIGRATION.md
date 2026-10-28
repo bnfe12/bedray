@@ -52,7 +52,9 @@ The typed Radiance Cascades atlas has the same kind of harness in
 the typed store API against both `RWStructuredBuffer<RCSegment>` and
 `StructuredBuffer<RCSegment>`; it is a compile check, not a stride, layout or
 runtime test. The legacy float4 atlas is a different record format and is not
-imported there.
+imported there. `verify_rc_environment.slang` keeps the opt-in environment
+policy reachable: the default is `Disabled`, a zero boundary is rejected, a
+short window cannot add sky, and a positive boundary that `tFar` reaches can.
 
 Architecture target: [ARCHITECTURE_MANIFESTO.md](ARCHITECTURE_MANIFESTO.md).
 Audit findings and their original source-only evidence are recorded in
