@@ -155,3 +155,32 @@ completed successfully for candidate
 The following journal-only commit does not alter tested code or CI scripts;
 its `[skip ci]` marker avoids rerunning identical native tests solely to record
 their result. Review code evidence against the exact candidate SHA above.
+
+## 2026-10-28 — RC transport branch, native CI on the merged revision
+
+Branch: `feat/slang-rc-transport-20261028` (PR #10).
+Candidate: `554c77d2cb5cebeaef7c339eb30efa97639b1266` — merge of
+`refactor/slang-pipeline` at `16a675a` into
+the Radiance Cascades transport branch.
+Baseline: `aaaf00cb4ad90887739c2f4813841c13f14b62e1`.
+
+[Windows CI run 40717925815](https://github.com/bnfe12/bedray/actions/runs/40717925815)
+completed successfully on 2026-10-28. The workflow has no `pull_request`
+trigger yet, so it was started manually with `workflow_dispatch`. Both jobs
+fetched and checksum-verified the pinned Vulkan-Headers and Slang dependencies.
+
+| Revision | Core CTest | Scene CTest | Frame lifetime CTest | ABI probe |
+|---|---:|---:|---:|---|
+| Base `aaaf00c` | 12/12 | 1/1 | 1/1 | v2, exit 0 |
+| Candidate `554c77d` | 15/15 | 1/1 | 1/1 | v2, exit 0 |
+
+Every logged configure/build/CTest command exited 0. Candidate's additional
+core entries are `bedray_abi_probe`, `bedray_abi_exception` and
+`bedray_gpu_dynamic_c`. The text evidence artifacts uploaded.
+
+Evidence for the tested native modules at `554c77d` is **L2**, no GPU. This
+does not validate the Slang shader changes in the same branch; their evidence
+is the separate L1 `slangc` 2026.20 compile sweep recorded in
+`SLANG_MIGRATION.md`. Java, shader dispatch, driver behaviour and game rendering
+were not checked. The RC runtime contract (stride, barriers, cross-cascade
+resolve, environment boundary supplied by the host) remains unproven.
