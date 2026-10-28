@@ -942,6 +942,15 @@ slangc -target spirv -I common/src/main/resources/shaders/slang `
 The root compile ends with `E57004: SPIR-V output contains no exported symbols`
 because a module has no entry point; that is expected.
 
+On 2026-10-28 the shader-owner branch `feat/slang-rc-transport-20261028`
+manually compiled all 17 `passes/*.slang` with the `compileSlang` arguments
+(`slangc` 2026.20, `-target spirv -profile cs_6_5 -entry main
+-matrix-layout-column-major`), each exit 0. The same compiler built
+`verify_rc_typed.slang` and `verify_rc_environment.slang`. This is L1
+code-generation evidence for that revision only: it is not a Gradle build, no
+manifest was validated by `compileSlang`, and no GPU dispatch, stride check,
+cross-cascade resolve or image comparison was run.
+
 ## Next steps
 
 1. **Path-trace native integration** — migrate resource allocation, frame data,
