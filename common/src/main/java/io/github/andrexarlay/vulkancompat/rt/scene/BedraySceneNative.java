@@ -14,6 +14,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
@@ -44,6 +45,7 @@ public final class BedraySceneNative implements AutoCloseable {
     private final MethodHandle createHandle;
     private final MethodHandle updateHandle;
     private final MethodHandle updateTableHandle;
+    private final MethodHandle setViewHandle;
     private final MethodHandle prepareFrameHandle;
     private final MethodHandle releaseFrameHandle;
     private final MethodHandle queryResourcesHandle;
@@ -141,6 +143,8 @@ public final class BedraySceneNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             updateTableHandle = bind(linker, lookup, "bedray_scene_update_table",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            setViewHandle = bind(linker, lookup, "bedray_scene_set_view",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS));
             prepareFrameHandle = bind(linker, lookup, "bedray_scene_prepare_frame",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             releaseFrameHandle = bind(linker, lookup, "bedray_scene_release_frame",
@@ -373,6 +377,31 @@ public final class BedraySceneNative implements AutoCloseable {
             check("update_table", status, error);
         } catch (Throwable t) {
             throw rethrow("update_table", t);
+        }
+    }
+
+    /**
+     * Sets the camera position static sections are placed against. The renderer
+     * traces camera-relative rays while a section's vertex stream is
+     * section-local, so the scene writes each section instance as
+     * {@code translate(origin - eye)} — the placement
+     * {@code InstanceMath.sectionTransform} gives the legacy TLAS. A section's
+     * own transform is identity, which is correct only for the per-frame entity
+     * ring the host re-centres around the camera. Call before every
+     * {@link #prepareFrame}; without a view the scene keeps identity placement.
+     */
+    public void setView(long scene, double eyeX, double eyeY, double eyeZ) {
+        ensureOpen();
+        requireHandle(scene, "scene");
+        if (!Double.isFinite(eyeX) || !Double.isFinite(eyeY) || !Double.isFinite(eyeZ)) {
+            throw new IllegalArgumentException("the view position must be finite");
+        }
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment error = a.allocate(BedraySceneLayouts.ERROR);
+            int status = (int) setViewHandle.invokeExact(handle(scene), eyeX, eyeY, eyeZ, error);
+            check("set_view", status, error);
+        } catch (Throwable t) {
+            throw rethrow("set_view", t);
         }
     }
 

@@ -457,6 +457,33 @@ const std::array<float, 12>& effective_transform(const Entity& entity) {
     return entity.transform_pending ? entity.pending_transform : entity.transform;
 }
 
+const std::array<int32_t, 3>& effective_origin(const Section& section) {
+    return section.has_pending ? section.pending.origin : section.origin;
+}
+
+/* Camera-relative section placement. The renderer traces rays from the eye at
+   the origin, so a section is placed at translate(originBlocks - view); the
+   subtraction happens in double and rounds once, matching the legacy
+   InstanceMath.sectionTransform. */
+std::array<float, 12> section_transform(
+    const std::array<int32_t, 3>& origin, const std::array<double, 3>& view) {
+    return { 1.0f, 0.0f, 0.0f, static_cast<float>(static_cast<double>(origin[0]) - view[0]),
+             0.0f, 1.0f, 0.0f, static_cast<float>(static_cast<double>(origin[1]) - view[1]),
+             0.0f, 0.0f, 1.0f, static_cast<float>(static_cast<double>(origin[2]) - view[2]) };
+}
+
+bool view_differs(const Scene& scene, const FrameSlot& slot) {
+    if (scene.view_set != slot.view_valid) {
+        return true;
+    }
+    if (!scene.view_set) {
+        return false;
+    }
+    return scene.view[0] != slot.view[0]
+        || scene.view[1] != slot.view[1]
+        || scene.view[2] != slot.view[2];
+}
+
 uint32_t effective_mask(const Entity& entity) {
     return entity.transform_pending ? entity.pending_mask : entity.instance_mask;
 }
@@ -715,7 +742,9 @@ void plan_instances(Scene& scene, PreparePlan& plan) {
             continue;
         }
         InstanceEntry instance{};
-        instance.transform = identity_transform();
+        instance.transform = scene.view_set
+            ? section_transform(effective_origin(section), scene.view)
+            : identity_transform();
         instance.blas_address = geometry.blas_address;
         instance.blas_handle = geometry.blas_handle;
         instance.custom_index = slot->second;
@@ -903,9 +932,14 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
     }
 
     plan.fingerprint = instance_fingerprint(plan.instances);
+    /* A view change rewrites every section transform, but the instance
+       fingerprint (BLAS, custom index, mask) is unchanged, so the slot takes
+       the same TLAS work path as a transform-only scene change and can update
+       in place. */
     const bool need = !slot.tlas_valid
         || slot.built_version != plan.target_version
-        || slot.instance_count != plan.instance_count;
+        || slot.instance_count != plan.instance_count
+        || view_differs(scene, slot);
     if (!need) {
         return true;
     }
@@ -1283,6 +1317,8 @@ void commit_plan(
     slot.built_version = plan.target_version;
     slot.fingerprint = plan.fingerprint;
     slot.instance_count = plan.instance_count;
+    slot.view = scene.view;
+    slot.view_valid = scene.view_set;
     slot.blas_in_use.clear();
     for (const InstanceEntry& instance : plan.instances) {
         slot.blas_in_use.push_back(instance.blas_handle);
@@ -1902,6 +1938,33 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_update_table(
     return fail(error, BEDRAY_SCENE_ERROR_OUT_OF_MEMORY, "cannot store scene table");
 } catch (...) {
     return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception updating scene table");
+}
+
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_set_view(
+    BedrayScene* scene,
+    double eye_x,
+    double eye_y,
+    double eye_z,
+    BedraySceneError* error) try {
+    BedraySceneError local;
+    BedraySceneError* err = error != nullptr ? error : &local;
+    clear_error(err);
+    if (scene == nullptr) {
+        return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "scene is null");
+    }
+    if (!std::isfinite(eye_x) || !std::isfinite(eye_y) || !std::isfinite(eye_z)) {
+        return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+            "view components must be finite (got %g, %g, %g)", eye_x, eye_y, eye_z);
+    }
+    Scene& impl = scene->impl;
+    if (impl.failed) {
+        return failed_status(impl, err);
+    }
+    impl.view = { eye_x, eye_y, eye_z };
+    impl.view_set = true;
+    return BEDRAY_SCENE_OK;
+} catch (...) {
+    return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception setting scene view");
 }
 
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(

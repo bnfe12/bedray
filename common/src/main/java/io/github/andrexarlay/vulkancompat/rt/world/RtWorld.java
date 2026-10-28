@@ -434,7 +434,7 @@ public final class RtWorld {
         // so the facade drops back to it and the session keeps rendering.
         if (nativeScene != null && !nativeSceneFailed) {
             try {
-                nativeScene.prepareFrame(cmd.address(), frameIndex);
+                nativeScene.prepareFrame(cmd.address(), frameIndex, camX, camY, camZ);
                 nativeSceneFrameActive = nativeScene.activeThisFrame();
             } catch (RuntimeException | LinkageError e) {
                 failNativeScene("prepare_frame", e);

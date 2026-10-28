@@ -176,6 +176,11 @@ signal a hit needs to tell a mob quad from a section quad.
 - returns counters: instance count, BLAS builds, refits, deferred updates,
   upload bytes, section count.
 
+The camera eye used to place section instances is set separately with
+`bedray_scene_set_view`. It is view state, not scene content: it never bumps the
+scene version and only invalidates the slots that prepared with a different
+view.
+
 `bedray_scene_release_frame` must be called only after the host has proven GPU
 completion of that submission (or discarded an unsubmitted recording). It
 frees that frame's transient staging and BLAS scratch buffers, releases the
@@ -299,13 +304,25 @@ The policy is capability-driven (`AS_UPDATE`), never GPU-name-driven.
 
 Each record is the 64-byte `VkAccelerationStructureInstanceKHR` layout:
 
-- row-major 3x4 transform (sections use identity);
+- row-major 3x4 transform (sections are placed camera-relative, see below);
 - section `instanceCustomIndex` is the section table slot; entity
   `instanceCustomIndex` is `0x800000 | entity_slot`; the value is masked to
   24 bits when written;
 - `mask` defaults to `0xFF` and is limited to the low 8 bits;
 - SBT record offset 0, `TRIANGLE_FACING_CULL_DISABLE` set;
 - BLAS device address from the acceleration structure.
+
+Section placement is camera-relative: `bedray_scene_set_view` stores the camera
+eye in the same world space as section origins, and every prepared frame writes
+a section instance as `translate(origin - view)` (subtraction in `double`,
+rounded once to `float`). The view defaults to unset, which keeps the
+historical identity placement. A view change rewrites the slot's instance
+buffer and forces the TLAS work path; because the instance fingerprint excludes
+transforms, it is an in-place TLAS update whenever `AS_UPDATE` is enabled and
+the instance count and fingerprint are unchanged, with no BLAS work. This is
+needed because the path tracer traces camera-relative rays from the eye at the
+origin while section vertices stay section-local; entities already carry a
+camera-relative transform from the host.
 
 Slot compaction is intentional: adding or removing a section can renumber
 later sections, which changes their custom indices and therefore the instance

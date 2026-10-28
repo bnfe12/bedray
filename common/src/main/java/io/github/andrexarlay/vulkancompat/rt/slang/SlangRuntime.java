@@ -49,12 +49,13 @@ public final class SlangRuntime implements AutoCloseable {
     private final long getInstanceProcAddr;
     private final long getDeviceProcAddr;
     private final int apiVersion;
+    private final VulkanDevice hostDevice;
     private final Map<String, SlangProgram> programs = new HashMap<>();
     private boolean closed;
 
     private SlangRuntime(BedrayCoreNative library, long core, BedrayCoreNative.Capabilities capabilities,
                          int enabledCapabilities, VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
-                         long getInstanceProcAddr, long getDeviceProcAddr, int apiVersion) {
+                         long getInstanceProcAddr, long getDeviceProcAddr, int apiVersion, VulkanDevice hostDevice) {
         this.library = library;
         this.core = core;
         this.capabilities = capabilities;
@@ -65,6 +66,7 @@ public final class SlangRuntime implements AutoCloseable {
         this.getInstanceProcAddr = getInstanceProcAddr;
         this.getDeviceProcAddr = getDeviceProcAddr;
         this.apiVersion = apiVersion;
+        this.hostDevice = hostDevice;
     }
 
     /**
@@ -113,7 +115,7 @@ public final class SlangRuntime implements AutoCloseable {
                 capabilities.maxComputeWorkGroupCountY(), capabilities.maxComputeWorkGroupCountZ(),
                 capabilities.maxComputeWorkGroupInvocations());
             return new SlangRuntime(library, core, capabilities, enabledCapabilities, instance, physical, vkDevice,
-                getInstanceProcAddr, getDeviceProcAddr, apiVersion);
+                getInstanceProcAddr, getDeviceProcAddr, apiVersion, device);
         } catch (RuntimeException | Error e) {
             library.close();
             throw e;
@@ -230,6 +232,16 @@ public final class SlangRuntime implements AutoCloseable {
     public VkDevice device() {
         if (closed) throw new IllegalStateException("SlangRuntime is closed");
         return device;
+    }
+
+    /**
+     * The renderpearl device this runtime was created on. Its shared command
+     * encoder owns the destruction queue that proves when a recording's
+     * submission completed.
+     */
+    public VulkanDevice hostDevice() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return hostDevice;
     }
 
     /** Address of {@code vkGetInstanceProcAddr}, as the core received it. */

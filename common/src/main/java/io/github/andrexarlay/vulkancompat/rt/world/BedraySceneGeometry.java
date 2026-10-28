@@ -17,8 +17,9 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * <p>This is the one place where the legacy Sodium capture (four planar arrays per
  * section) is repacked into the native record: position, uv/light, tint and meta,
  * 64 bytes per vertex, four vertices per quad.  The index stream is the shared quad
- * template {@code 4q+(0,1,2,2,3,0)} local to each pass range, exactly the layout the
- * scene's {@code primitiveOffset = quad_start*6*4} assumes.
+ * template {@code 4k+(0,1,2,2,3,0)} taken range-local (k counts inside the pass
+ * range), exactly the layout the scene's {@code primitiveOffset = quad_start*6*4}
+ * and {@code firstVertex = quad_start*4} assume.
  *
  * <p>Light words keep the legacy encoding: each byte is {@code level*16+8}, so the
  * shader-facing value is {@code (byte-8)/240}.  The material id is byte 2 of the
@@ -101,18 +102,25 @@ final class BedraySceneGeometry {
             }
         }
 
-        // Local per quad, exactly what the scene's BLAS build expects: its build
-        // range carries the range start (primitiveOffset and firstVertex), so an
-        // absolute index here would move every vertex of the range twice.
+        // Local to the pass range, exactly what the scene's BLAS build expects:
+        // its range carries primitiveOffset = quad_start*6*4 and firstVertex =
+        // quad_start*4, so the range-local quad k must index 4k+(0,1,2,2,3,0).
+        // A per-quad-constant template would build every quad of the range from
+        // the range's first four vertices; an absolute one would shift twice.
         MemorySegment indices = arena.allocate((long) quads * 6L * INDEX_BYTES);
         int index = 0;
+        int range = 0;
         for (int q = 0; q < quads; q++) {
-            indices.setAtIndex(JAVA_INT, index++, 0);
-            indices.setAtIndex(JAVA_INT, index++, 1);
-            indices.setAtIndex(JAVA_INT, index++, 2);
-            indices.setAtIndex(JAVA_INT, index++, 2);
-            indices.setAtIndex(JAVA_INT, index++, 3);
-            indices.setAtIndex(JAVA_INT, index++, 0);
+            while (range + 1 < geometryCount && q >= passStart[range + 1]) {
+                range++;
+            }
+            long base = (long) (q - passStart[range]) * 4L;
+            indices.setAtIndex(JAVA_INT, index++, (int) base);
+            indices.setAtIndex(JAVA_INT, index++, (int) base + 1);
+            indices.setAtIndex(JAVA_INT, index++, (int) base + 2);
+            indices.setAtIndex(JAVA_INT, index++, (int) base + 2);
+            indices.setAtIndex(JAVA_INT, index++, (int) base + 3);
+            indices.setAtIndex(JAVA_INT, index++, (int) base);
         }
 
         int passBits = 0;

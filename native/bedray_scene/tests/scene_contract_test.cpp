@@ -879,6 +879,32 @@ static uint32_t instance_custom_index(const BedraySceneResources& resources, siz
     return value & 0xFFFFFFu;
 }
 
+static void read_instance_transform(
+    const BedraySceneResources& resources, size_t index, float out[12]) {
+    std::memset(out, 0, 12 * sizeof(float));
+    std::vector<uint8_t>* bytes = fake::bytes_at_address(resources.instance_buffer_address);
+    if (bytes != nullptr && (index + 1) * BEDRAY_SCENE_INSTANCE_RECORD_BYTES <= bytes->size()) {
+        std::memcpy(out, bytes->data() + index * BEDRAY_SCENE_INSTANCE_RECORD_BYTES,
+            sizeof(float) * 12);
+    }
+}
+
+static bool near_value(float actual, double expected) {
+    return std::fabs(static_cast<double>(actual) - expected) <= 1e-4;
+}
+
+static void check_identity_rotation(const float transform[12]) {
+    CHECK(near_value(transform[0], 1.0));
+    CHECK(near_value(transform[1], 0.0));
+    CHECK(near_value(transform[2], 0.0));
+    CHECK(near_value(transform[4], 0.0));
+    CHECK(near_value(transform[5], 1.0));
+    CHECK(near_value(transform[6], 0.0));
+    CHECK(near_value(transform[8], 0.0));
+    CHECK(near_value(transform[9], 0.0));
+    CHECK(near_value(transform[10], 1.0));
+}
+
 static void test_abi_layout() {
     CHECK(bedray_scene_abi_version() == BEDRAY_SCENE_ABI_VERSION);
     BedraySceneAbiInfo info{};
@@ -1196,6 +1222,110 @@ static void test_transform_update_touches_only_tlas() {
     CHECK(masked.blas_builds == 0);
     CHECK(masked.blas_refits == 0);
     fixture.release(3);
+}
+
+static void test_section_instances_follow_view() {
+    Fixture fixture(1);
+    const Mesh section_mesh = quad_mesh(0.0f, 0.0f, 0.0f);
+    const Mesh entity_mesh = triangle_mesh(4.0f, 0.0f, 0.0f);
+    BedraySceneSectionInput section = section_input(1, 1, section_mesh);
+    section.origin[0] = 16;
+    section.origin[1] = 32;
+    section.origin[2] = -8;
+    CHECK_STATUS(fixture.add_section_input(section), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_entity(entity_input(2, 1, 1, entity_mesh, 5.0f, 6.0f, 7.0f)),
+        BEDRAY_SCENE_OK);
+
+    /* set_view validates its arguments and leaves the scene unchanged. */
+    g_error = BedraySceneError{};
+    CHECK_STATUS(bedray_scene_set_view(nullptr, 1.0, 2.0, 3.0, &g_error),
+        BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+    g_error = BedraySceneError{};
+    CHECK_STATUS(bedray_scene_set_view(fixture.scene, std::nan(""), 70.25, -3.0, &g_error),
+        BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+    g_error = BedraySceneError{};
+    CHECK_STATUS(bedray_scene_set_view(fixture.scene, 100.5, INFINITY, -3.0, &g_error),
+        BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    /* Without a view the section keeps the historical identity placement even
+       though its origin is not zero; the entity keeps its own transform. */
+    const BedraySceneFrameInfo unset = fixture.prepare(1, 0xC00);
+    CHECK((unset.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
+    BedraySceneResources resources = fixture.resources();
+    float transform[12] = {};
+    read_instance_transform(resources, 0, transform);
+    check_identity_rotation(transform);
+    CHECK(near_value(transform[3], 0.0));
+    CHECK(near_value(transform[7], 0.0));
+    CHECK(near_value(transform[11], 0.0));
+    read_instance_transform(resources, 1, transform);
+    check_identity_rotation(transform);
+    CHECK(near_value(transform[3], 5.0));
+    CHECK(near_value(transform[7], 6.0));
+    CHECK(near_value(transform[11], 7.0));
+    fixture.release(1);
+
+    /* A section is placed at translate(origin - view) in the camera-relative
+       space the renderer traces; the entity transform is unchanged. */
+    g_error = BedraySceneError{};
+    CHECK_STATUS(bedray_scene_set_view(fixture.scene, 100.5, 70.25, -3.0, &g_error),
+        BEDRAY_SCENE_OK);
+    const BedraySceneFrameInfo placed = fixture.prepare(2, 0xC01);
+    CHECK((placed.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+    CHECK(placed.blas_builds == 0);
+    CHECK(placed.blas_refits == 0);
+    resources = fixture.resources();
+    read_instance_transform(resources, 0, transform);
+    check_identity_rotation(transform);
+    CHECK(near_value(transform[3], 16.0 - 100.5));
+    CHECK(near_value(transform[7], 32.0 - 70.25));
+    CHECK(near_value(transform[11], -8.0 - (-3.0)));
+    read_instance_transform(resources, 1, transform);
+    check_identity_rotation(transform);
+    CHECK(near_value(transform[3], 5.0));
+    CHECK(near_value(transform[7], 6.0));
+    CHECK(near_value(transform[11], 7.0));
+    fixture.release(2);
+
+    /* A different eye forces the slot to rewrite its instance buffer and take
+       the in-place TLAS update path, with no BLAS work at all. The null error
+       pointer must be tolerated. */
+    CHECK_STATUS(bedray_scene_set_view(fixture.scene, 110.0, 72.5, -4.0, nullptr),
+        BEDRAY_SCENE_OK);
+    const size_t builds_before = fake::g.builds.size();
+    const BedraySceneFrameInfo moved = fixture.prepare(3, 0xC02);
+    CHECK((moved.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+    CHECK((moved.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) == 0);
+    CHECK(moved.blas_builds == 0);
+    CHECK(moved.blas_refits == 0);
+    CHECK(moved.upload_bytes == 0);
+    CHECK(moved.tlas == placed.tlas);
+    CHECK(fake::g.builds.size() == builds_before + 1);
+    if (fake::g.builds.size() == builds_before + 1) {
+        const fake::BuildRecord& build = fake::g.builds.back();
+        CHECK(build.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
+        CHECK(build.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR);
+        CHECK(build.src == build.dst);
+    }
+    resources = fixture.resources();
+    read_instance_transform(resources, 0, transform);
+    check_identity_rotation(transform);
+    CHECK(near_value(transform[3], 16.0 - 110.0));
+    CHECK(near_value(transform[7], 32.0 - 72.5));
+    CHECK(near_value(transform[11], -8.0 - (-4.0)));
+    read_instance_transform(resources, 1, transform);
+    CHECK(near_value(transform[3], 5.0));
+    CHECK(near_value(transform[7], 6.0));
+    CHECK(near_value(transform[11], 7.0));
+
+    /* The slot remembers the view it prepared with, so an unchanged view
+       returns to an idle frame. */
+    fixture.release(3);
+    const BedraySceneFrameInfo idle = fixture.prepare(4, 0xC03);
+    CHECK(idle.flags == BEDRAY_SCENE_FRAME_IDLE);
+    CHECK(idle.blas_builds == 0);
+    CHECK(idle.blas_refits == 0);
+    fixture.release(4);
 }
 
 static void test_refit_defers_while_in_flight_then_updates() {
@@ -1756,6 +1886,7 @@ int main() {
     test_idle_frame_reuses_slot_state();
     test_update_copies_inputs_and_coalesces_pending();
     test_transform_update_touches_only_tlas();
+    test_section_instances_follow_view();
     test_refit_defers_while_in_flight_then_updates();
     test_rebuild_without_update_capability_retires_after_frame();
     test_table_coalescing_and_clear();

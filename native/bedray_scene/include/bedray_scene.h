@@ -339,6 +339,23 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_update_table(
     const BedraySceneTableDesc* desc,
     BedraySceneError* error);
 
+/*
+ * Sets the camera eye position in blocks, in the same world space as section
+ * origins. The renderer traces camera-relative rays, so each section instance
+ * is placed at translate(origin - view) in every prepared frame. The view
+ * defaults to unset, which keeps the historical identity section placement;
+ * entities keep their own transforms either way. All three components must be
+ * finite. A view change rewrites the instance buffer and takes the TLAS work
+ * path on the next prepare (an in-place update when AS_UPDATE is enabled),
+ * without any BLAS work.
+ */
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_set_view(
+    BedrayScene* scene,
+    double eye_x,
+    double eye_y,
+    double eye_z,
+    BedraySceneError* error);
+
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
     BedrayScene* scene,
     const BedraySceneFrameDesc* desc,

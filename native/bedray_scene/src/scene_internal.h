@@ -160,6 +160,11 @@ struct FrameSlot {
     uint32_t instance_count = 0;
     bool tlas_valid = false;
     uint64_t built_version = 0;
+    /* The view this slot last prepared its instance buffer and TLAS with. A
+       differing scene view forces the slot to rewrite instances and take the
+       TLAS work path even when the scene version and fingerprint match. */
+    std::array<double, 3> view{};
+    bool view_valid = false;
     std::vector<VkAccelerationStructureKHR> blas_in_use;
 };
 
@@ -180,6 +185,14 @@ struct Scene {
     std::map<uint64_t, Section> sections;
     std::map<uint64_t, Entity> entities;
     std::array<Table, BEDRAY_SCENE_TABLE_COUNT> tables;
+
+    /* Camera eye in blocks, in the same world space as section origins. A
+       section instance is placed at translate(origin - view) because the
+       renderer traces camera-relative rays. view_set == false keeps the
+       historical identity placement so scenes that never call set_view are
+       unchanged. */
+    std::array<double, 3> view{};
+    bool view_set = false;
 
     std::vector<FrameSlot> slots;
     std::vector<RetiredBuffer> retired_buffers;
