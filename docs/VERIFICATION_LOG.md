@@ -55,9 +55,18 @@ with CTest as well as built.
 P0-1: `SlangProgram.nativePushConstants` and
 `SlangPassLibraryTest.heapAndDirectPushConstantsHaveNativeStorageAndKeepTheInputPosition`
 already exist at the base. Heap and direct input coverage is present; no fresh
-Java execution is claimed. P0-3/5/6 remain separate shader-owner review items;
-P0-4 requires shader-owner investigation. This PR changes no shader code and
-does not certify shader math.
+Java execution is claimed. Source recheck of P0-3 finds branch probability
+multiplication and the sole-branch return, guarded by the existing
+`RtSlangBlockEmitterTest.theBranchProbabilityIsFoldedIntoTheDensity`. P0-5 now
+uses geometry-local primitive IDs with `geometryIndex` selecting the range,
+adding `firstQuad` once; the scene contract test checks range-local AS builds.
+P0-6 publishes the merged reservoir when the original sample survives,
+guarded by the existing `RtSlangRestirSpatialTest` source checks. These are
+source observations, not executed Slang or fresh Java evidence. P0-4's old
+float4 confidence-weighted resolve still exists and requires shader-owner
+investigation alongside the typed segment path; do not connect the two as if
+their contracts matched. This PR changes no shader code and does not certify
+shader math.
 
 ### Reproducible native CI
 
@@ -128,3 +137,21 @@ that source change requires its own matching run before extending this evidence.
 Evidence for the tested native modules at the named commits is **L2**, with no
 GPU. The whole Slang/C++ migration remains incomplete; Java, shader compilation,
 driver behaviour, real resources and game rendering were not checked.
+
+### Clean follow-up — run 40713467738
+
+[Windows CI run](https://github.com/bnfe12/bedray/actions/runs/40713467738)
+completed successfully for candidate
+`32794834789a974b5726603b4ffb9bd721882d51` on 2026-10-28.
+
+- Baseline: core 12/12, scene 1/1, frame lifetime 1/1; ABI v2 probe exit 0.
+- Candidate: core 15/15, scene 1/1, frame lifetime 1/1; ABI v2 probe exit 0.
+- Both job logs contain no C compiler or linker warnings/errors. All logged
+  configure/build/test commands exit 0; dependency and evidence-upload steps pass.
+- CMake/CTest 3.31.6, MSVC 19.44.35229.0, Windows SDK 10.0.26100.0,
+  Visual Studio 17 2022 x64 Release on `windows-2022`.
+- Native evidence remains L2. No additional Java, shader or game evidence.
+
+The following journal-only commit does not alter tested code or CI scripts;
+its `[skip ci]` marker avoids rerunning identical native tests solely to record
+their result. Review code evidence against the exact candidate SHA above.
