@@ -65,16 +65,23 @@ passing, 2026-10-28).
 
 Current limitations:
 
-- Minecraft 26.3's `VulkanCommandEncoder.queueForDestroy` is a candidate host
+- Minecraft 26.3's `VulkanCommandEncoder.queueForDestroy` is the host
   completion bridge: bytecode shows `submit()` waits for a completed submission
-  before rotating its destruction queue. `SlangRuntime.retireSubmittedRecording`
-  exposes this route, but no game pass has wired it yet. It must be scheduled
+  before rotating its destruction queue. `RtFrameRenderer` now attaches one
+  generation-specific `RecordingCompletion` callback after `execute`, covering
+  atmosphere, path pass, Sodium decode, scene frames and the captured particle
+  composite owner. An `execute`/enqueue failure retains an unknown recording;
+  a deliberate never-executed discard can release immediately. It is scheduled
   after the recording is added to the same encoder submission and before that
   submission is sent; unsubmitted discarded recordings use direct release.
-  `VulkanCommandEncoder.destroy()` closes its submission builder, waits for its
-  graphics queue, then drains the destruction queue. The inspected bytecode is
-  from `libs/minecraft-26.3-client.jar`; other versions need separate review.
-  Confirm error paths and encoder ownership during integration.
+  `VulkanDevice.createCommandEncoder()` returns the shared encoder. Its fence
+  snapshots the current submission index, and `awaitCompletion` waits for that
+  index. Host drains now submit and await this fence, retaining resources on a
+  five-second timeout instead of using `vkDeviceWaitIdle`. The inspected client
+  jar is 26.3, SHA-256
+  `4508d006323f24fa02876310c192d739af56516eb259000ac50f0909a68c9a2d`;
+  other versions need separate review. This is bytecode and no-GPU test evidence,
+  not a live completion/driver validation.
 - Per-dispatch pool allocation favours correctness and isolation. A future
   pooled allocator must retain the same completion and recording-generation
   semantics; do not reuse individual sets merely after a fixed frame count.

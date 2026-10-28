@@ -39,8 +39,8 @@ import java.util.Set;
  * survives camera motion but restarts on disocclusion.
  *
  * <p>Recording lifetime: every command buffer passed to {@link #dispatch} keeps native descriptor pools until
- * {@link #releaseRecording(long)}; the renderer calls it when the same transient handle comes back from the pool reset
- * after its previous submission completed, exactly as for the Slang bloom.
+ * {@link #releaseRecording(long)}; the renderer calls it from the same submission's completion callback or after
+ * deliberately discarding an unsubmitted recording. Handle reuse supplies no completion proof.
  */
 public final class RtSlangPathPass implements RtPass {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");

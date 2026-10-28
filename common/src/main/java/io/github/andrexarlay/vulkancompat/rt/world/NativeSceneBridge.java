@@ -8,7 +8,6 @@ import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
-import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -77,12 +76,12 @@ final class NativeSceneBridge implements AutoCloseable {
 
     private final BedraySceneNative library;
     private final long scene;
-    private final VulkanCommandEncoder encoder;
     private final Map<Long, Long> sectionIds = new LinkedHashMap<>();
     private final Map<Long, PendingSection> updates = new LinkedHashMap<>();
     private final Map<Long, Long> removals = new LinkedHashMap<>();
     /** Frame indices the scene accepted and has not released yet. */
     private final Set<Long> frames = new LinkedHashSet<>();
+    private final Map<Long, Long> recordingFrames = new LinkedHashMap<>();
     private long nextSectionId = 1;
     private long nextRevision = 1;
     private long frameIndex;
@@ -98,10 +97,9 @@ final class NativeSceneBridge implements AutoCloseable {
     private double lastViewZ;
     private boolean closed;
 
-    private NativeSceneBridge(BedraySceneNative library, long scene, VulkanCommandEncoder encoder) {
+    private NativeSceneBridge(BedraySceneNative library, long scene) {
         this.library = library;
         this.scene = scene;
-        this.encoder = encoder;
     }
 
     /**
@@ -143,7 +141,7 @@ final class NativeSceneBridge implements AutoCloseable {
             LOGGER.info("[VKB-RT] native scene ready: dll={} abi={} frames={} max_sections={} max_geometry_mb={}",
                 library.libraryPath().getFileName(), BedraySceneLayouts.ABI_VERSION, FRAMES_IN_FLIGHT,
                 RtConfig.MAX_INSTANCES, MAX_GEOMETRY_BYTES >> 20);
-            return new NativeSceneBridge(library, scene, runtime.hostDevice().createCommandEncoder());
+            return new NativeSceneBridge(library, scene);
         } catch (RuntimeException e) {
             LOGGER.error("[VKB-RT] native scene unavailable: {}; keeping the Java scene", e.getMessage(), e);
             if (library != null) {
@@ -258,6 +256,9 @@ final class NativeSceneBridge implements AutoCloseable {
      * piles all section-local geometry at the origin instead.
      */
     void prepareFrame(long commandBuffer, long frameIndex, double camX, double camY, double camZ) {
+        if (recordingFrames.containsKey(commandBuffer)) {
+            throw new IllegalStateException("native scene recording still requires completion/discard");
+        }
         library.setView(scene, camX, camY, camZ);
         flushUpdates();
         BedraySceneNative.FrameInfo info = library.prepareFrame(scene, frameIndex, commandBuffer);
@@ -265,12 +266,9 @@ final class NativeSceneBridge implements AutoCloseable {
         // only releaseFrame may free its transient uploads. A query failure below
         // must not leave an untracked outstanding frame that blocks close().
         frames.add(frameIndex);
-        // The shared encoder flushes this entry only after the submission that
-        // consumed the recording has been waited for. That wait is the GPU
-        // completion proof the scene needs before it recycles the frame's
-        // transient uploads; a command-buffer address coming back from the pool
-        // is not, because the backend interleaves many allocations per frame.
-        encoder.queueForDestroy(() -> releaseFrameAfterSubmit(frameIndex));
+        recordingFrames.put(commandBuffer, frameIndex);
+        // RtFrameRenderer attaches one completion callback AFTER execute accepts
+        // this command buffer. Scene and compute resources share that proof.
         BedraySceneNative.Resources resources = library.queryResources(scene);
         tlas = resources.tlas();
         sectionCount = resources.sectionCount();
@@ -316,16 +314,12 @@ final class NativeSceneBridge implements AutoCloseable {
      * touch the destroyed scene, and a failed release stays tracked so drain or
      * close can retry it.
      */
-    private void releaseFrameAfterSubmit(long frameIndex) {
-        if (closed || !frames.contains(frameIndex)) {
-            return;
-        }
-        try {
-            library.releaseFrame(scene, frameIndex);
-            frames.remove(frameIndex);
-        } catch (RuntimeException e) {
-            LOGGER.warn("[VKB-RT] native_scene release frame {} failed: {}", frameIndex, e.getMessage());
-        }
+    void releaseRecording(long commandBuffer) {
+        Long frame = recordingFrames.get(commandBuffer);
+        if (frame == null) return;
+        library.releaseFrame(scene, frame);
+        frames.remove(frame);
+        recordingFrames.remove(commandBuffer);
     }
 
     private void flushUpdates() {
@@ -366,6 +360,7 @@ final class NativeSceneBridge implements AutoCloseable {
             try {
                 library.releaseFrame(scene, frame);
                 it.remove();
+                recordingFrames.values().removeIf(value -> value == frame);
             } catch (RuntimeException e) {
                 if (failure == null) {
                     failure = e;
@@ -384,11 +379,10 @@ final class NativeSceneBridge implements AutoCloseable {
         if (closed) {
             return;
         }
-        // Late destruction-queue callbacks must become no-ops before the scene dies.
-        closed = true;
         releaseAllFrames();
         library.destroy(scene);
         library.close();
+        closed = true;
         tlas = 0L;
         table = null;
         sectionCount = 0;
