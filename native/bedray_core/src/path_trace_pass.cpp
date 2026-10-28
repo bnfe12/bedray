@@ -1199,6 +1199,16 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path trace");
 }
 
+void PathTracePass::discard_recording(std::uint64_t command_buffer) noexcept {
+    if (recordings_.find(command_buffer) == recordings_.end()) return;
+    history_written_ = false;
+    history_parity_ = 0;
+    images_initialized_ = false;
+    owned_di_history_ = false;
+    owned_di_needs_clear_ = true;
+    owned_di_parity_ = 0;
+}
+
 BedrayStatus PathTracePass::release_recording(std::uint64_t command_buffer) noexcept {
     const auto it = recordings_.find(command_buffer);
     if (it == recordings_.end()) {

@@ -314,6 +314,17 @@ final class NativeSceneBridge implements AutoCloseable {
         recordingFrames.remove(commandBuffer);
     }
 
+    void discardRecording(long commandBuffer) {
+        Long frame = recordingFrames.get(commandBuffer);
+        if (frame == null) return;
+        library.discardFrame(scene, frame);
+        frames.remove(frame);
+        recordingFrames.remove(commandBuffer);
+        activeThisFrame = false;
+        tlas = 0;
+        table = null;
+    }
+
     private void flushUpdates() {
         for (Iterator<Map.Entry<Long, Long>> it = removals.entrySet().iterator(); it.hasNext();) {
             Map.Entry<Long, Long> removal = it.next();

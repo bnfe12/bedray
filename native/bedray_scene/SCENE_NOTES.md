@@ -1,10 +1,10 @@
 # Bedray Scene — candidate native GPU scene subsystem
 
-Status: **candidate component, L1 evidence only**. ABI v2 builds as a Windows
-x64 Release DLL with MSVC 14.44 (`/W4` clean) and its no-GPU contract test
-passes (`bedray_scene_contract`, 2026-10-28). It has not been integrated into
-`bedray_core`, run on a real GPU, or exercised by Minecraft. Nothing in this
-document is a claim of live rendering correctness.
+Status: **integrated opt-in component, scoped L2 CPU evidence**. ABI v2 builds
+on Windows x64 and its fake-driver contract tests pass; it is embedded in
+`bedray_core`. It has not run on a real GPU or been exercised by Minecraft.
+Nothing here claims live rendering correctness; exact revisions and results
+are recorded in `docs/VERIFICATION_LOG.md`.
 
 Integration follow-up (2026-10-28): the scene implementation now builds as one
 object target embedded in `bedray_core.dll`; a standalone DLL remains for the
@@ -14,8 +14,18 @@ DLL. ABI v2 layouts/signatures remain unchanged. Memory backing every BDA buffer
 is allocated with `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`; staging allocations
 remain ordinary. A zero device address is rejected before publication/builds.
 The fake driver checks allocation flags against every bound buffer's usage, and
-a core-DLL export probe checks all ten scene entry points without a GPU.
+a core-DLL export probe checks the scene entry points without a GPU.
 See `docs/VERIFICATION_LOG.md` for matching build/test evidence.
+
+Native scene mode now paces CPU captures without allocating a duplicate Java
+BLAS/TLAS scene. Errors remain queued and propagate. An entity-only frame binds
+a real zeroed 64-byte section table with logical section count zero. The additive
+resident-bytes query includes all actual allocations, including pinned retirement.
+Use `bedray_scene_discard_frame` for abandoned GPU work: it releases that exact
+frame and poisons further scene updates/prepares/queries. Other frames remain
+pinned until their own proof; after release, destroy and recreate from captures.
+Discard cannot publish unexecuted uploads as reusable geometry. A normal
+`release_frame` denotes completion, or cleanup immediately before destruction.
 
 ## Files
 

@@ -19,7 +19,9 @@
  *   - a frame prepared with bedray_scene_prepare_frame keeps its transient
  *     upload buffers, scratch memory and retired resources alive until the host
  *     calls bedray_scene_release_frame after proving GPU completion (or after
- *     discarding an unsubmitted recording);
+ *     discarding an unsubmitted recording and then destroying the scene);
+ *   - use bedray_scene_discard_frame for an abandoned frame: it also poisons
+ *     scene reuse, since its recorded uploads/AS writes may never have executed;
  *   - at most frames_in_flight frames may be outstanding;
  *   - bedray_scene_destroy fails with BEDRAY_SCENE_ERROR_IN_USE while frames
  *     are outstanding.
@@ -366,6 +368,13 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
     BedrayScene* scene,
     uint64_t frame_index,
     BedraySceneError* error);
+
+/* Abandons a prepared frame after proven discard or completion with unknown execution.
+ * Its uploads/AS writes may not have executed,
+ * so the scene is poisoned against reuse; release other frames, destroy and
+ * recreate from host captures. No resources are freed without this proof. */
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_discard_frame(
+    BedrayScene* scene, uint64_t frame_index, BedraySceneError* error);
 
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_query_resources(
     BedrayScene* scene,

@@ -405,12 +405,19 @@ BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
 
 /* Release every use recorded into this command buffer ONLY after all its GPU
  * submissions completed and it will not be resubmitted, or after an unsubmitted
- * recording was discarded/reset. Call before re-recording the same handle.
+ * recording was discarded/reset and no recorded uploads/history will be reused.
+ * For a discarded path-trace frame use discard_recording below. Call before re-recording the same handle.
  * The caller must externally synchronize these operations on the render thread.
  * destroy_program defers destruction while recordings still reference it.
  * Before core_destroy, the host must ensure all recordings are no longer in use.
  */
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
+    BedrayCore* core, uint64_t command_buffer);
+
+/* Proven discard, or unknown execution after completion/exclusion of resubmission:
+ * invalidate pass history/layout state before releasing this recording.
+ * Never use for an in-flight or resubmittable buffer. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_discard_recording(
     BedrayCore* core, uint64_t command_buffer);
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
