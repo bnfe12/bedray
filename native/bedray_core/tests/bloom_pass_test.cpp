@@ -51,6 +51,10 @@ void chain_and_validation() {
     CHECK(pass.render(input, &error) == BEDRAY_ERROR_INVALID_ARGUMENT);
     CHECK(fake::images.empty()); CHECK(!pass.has_recordings());
     input.push_bytes = 128;
+    input.width = 60000;
+    CHECK(pass.render(input, &error) == BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(fake::images.empty()); CHECK(!pass.has_recordings());
+    input.width = 19;
     CHECK(pass.render(input, &error) == BEDRAY_OK);
     CHECK(fake::images.size() == 6); CHECK(fake::render_calls.size() == 12); CHECK(fake::barriers == 19);
     CHECK(fake::render_calls.front().program == 1); CHECK(fake::render_calls.back().program == 4);

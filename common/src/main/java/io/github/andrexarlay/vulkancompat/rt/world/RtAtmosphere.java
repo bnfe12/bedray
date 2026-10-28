@@ -74,7 +74,6 @@ final class RtAtmosphere {
         if (timer != null) {
             timer.beginFrame(cmd);
         }
-        io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.fullMemoryBarrier(cmd);   // the denoiser / main pass wrote the image
         if (glow || glare) {
             if (bloom == null) {
                 bloom = new RtBloomPass(slangRuntime(vulkanDevice));

@@ -31,6 +31,15 @@ adapter through `bedray_core_atlas_sampler`. The core releases it after all its
 recordings and descriptor pools. This is an additive export with unchanged ABI
 structure layouts; the updated Java host requires the matching new DLL.
 
+Bloom also uses coarse native configure/render/destroy calls from
+`native/bedray_core/include/bedray_bloom.h`. C++ owns its twelve-dispatch chain,
+mip generations, barriers and recording pins. RtBloomPass registers borrowed
+runtime programs, validates their existing manifests and supplies the unchanged
+128-byte push data. Discard invalidates the affected generation rather than
+assuming its transitions executed. The host owns output/depth and completion
+proof; it must use a DLL with the new bloom exports. This moves orchestration,
+not shader math, and has no GPU/game acceptance yet.
+
 ## Scene query migration
 
 Scene query migration: `contracts/scene_tracer.slang` is the single geometric

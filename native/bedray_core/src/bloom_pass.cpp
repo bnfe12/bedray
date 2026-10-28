@@ -55,6 +55,10 @@ BedrayStatus BloomPass::gpu_status(gpu::Status status, VkResult vk, BedrayError*
         return bloom_error(error, BEDRAY_ERROR_DEVICE_LOST, "bloom device lost");
     }
     if (status == gpu::Status::in_use) return bloom_error(error, BEDRAY_ERROR_IN_USE, "bloom images in use");
+    if (status == gpu::Status::unsupported || status == gpu::Status::unavailable)
+        return bloom_error(error, BEDRAY_ERROR_UNSUPPORTED, "bloom image contract unsupported");
+    if (status == gpu::Status::invalid_argument)
+        return bloom_error(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid bloom image contract");
     if (status == gpu::Status::out_of_memory || status == gpu::Status::budget_exceeded)
         return bloom_error(error, BEDRAY_ERROR_OUT_OF_MEMORY, "bloom image allocation failed");
     return bloom_error(error, BEDRAY_ERROR_VULKAN, "bloom image operation failed");
