@@ -50,8 +50,8 @@ BedrayStatus BloomPass::gpu_status(gpu::Status status, VkResult vk, BedrayError*
     if (status == gpu::Status::ok) return BEDRAY_OK;
     if (status == gpu::Status::device_lost || vk == VK_ERROR_DEVICE_LOST) {
         lost_ = true;
-        // Existing recordings still need their individual host proofs. Mark the
-        // image owner lost only at final cleanup after every such use is gone.
+        // The image owner may already be lost and refuse individual use APIs.
+        // Keep every allocation until all outstanding host recordings are proven.
         return bloom_error(error, BEDRAY_ERROR_DEVICE_LOST, "bloom device lost");
     }
     if (status == gpu::Status::in_use) return bloom_error(error, BEDRAY_ERROR_IN_USE, "bloom images in use");
@@ -203,6 +203,20 @@ void BloomPass::discard_recording(std::uint64_t command) noexcept {
 BedrayStatus BloomPass::release_recording(std::uint64_t command) noexcept {
     const auto found = recordings_.find(command);
     if (found == recordings_.end()) return BEDRAY_OK;
+    if (lost_) {
+        if (recordings_.size() > 1) {
+            recordings_.erase(found); // This proof is known; other recordings still keep the whole pool alive.
+            return BEDRAY_OK;
+        }
+        images_->device_lost();
+        const auto result = gpu_status(images_->release_after_device_loss(), VK_SUCCESS, nullptr);
+        if (result == BEDRAY_OK) {
+            recordings_.erase(found);
+            images_.reset();
+            ids_ = {}; views_ = {};
+        }
+        return result; // Retain the last proven ticket if final cleanup needs retry.
+    }
     for (auto& use : found->second.uses) if (use.serial) {
         const auto result = images_->complete_use(use);
         if (result != gpu::Status::ok) return gpu_status(result, VK_SUCCESS, nullptr);
@@ -214,8 +228,12 @@ BedrayStatus BloomPass::release_recording(std::uint64_t command) noexcept {
 }
 
 BedrayStatus BloomPass::destroy() noexcept {
-    if (!images_) return BEDRAY_OK;
     if (has_recordings()) return BEDRAY_ERROR_IN_USE;
+    if (!images_) {
+        desc_ = {}; core_ = nullptr; width_ = height_ = 0;
+        initialize_ = invalidated_ = lost_ = false;
+        return BEDRAY_OK;
+    }
     if (!lost_) {
         for (auto id : ids_) if (id.serial) (void)images_->retire(id);
         const auto collected = images_->collect();

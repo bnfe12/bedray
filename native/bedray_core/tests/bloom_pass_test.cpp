@@ -122,6 +122,7 @@ void device_loss_keeps_other_recordings_until_proof() {
     CHECK(pass.configure(&core, make_device_fns(), configuration(), &error) == BEDRAY_OK);
     std::array<unsigned char,128> push{};
     CHECK(pass.render(frame(1, push.data()), &error) == BEDRAY_OK);
+    CHECK(pass.render(frame(4, push.data()), &error) == BEDRAY_OK);
     auto resized = frame(2, push.data()); resized.width = 40;
     fake::fail_allocate_after = 0; fake::fail_result = VK_ERROR_DEVICE_LOST;
     CHECK(pass.render(resized, &error) == BEDRAY_ERROR_DEVICE_LOST);
@@ -129,6 +130,8 @@ void device_loss_keeps_other_recordings_until_proof() {
     CHECK(pass.render(frame(3, push.data()), &error) == BEDRAY_ERROR_UNSUPPORTED);
     CHECK(pass.destroy() == BEDRAY_ERROR_IN_USE);
     CHECK(pass.release_recording(1) == BEDRAY_OK);
+    CHECK(fake::images.size() == 6); CHECK(pass.has_recordings());
+    CHECK(pass.release_recording(4) == BEDRAY_OK);
     CHECK(pass.destroy() == BEDRAY_OK); clean();
 }
 }
