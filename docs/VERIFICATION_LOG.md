@@ -198,3 +198,25 @@ Verification (no GPU):
   checks. No shader source was changed by this host-lifetime patch.
 - Evidence: L1 Java/AOT compilation and L2 CPU lifecycle/heap-direct checks.
   No GPU dispatch, validation layers, game startup or rendered effect checked.
+
+## 2026-10-28 — scene embedded in core and BDA allocation safety
+
+Base `4236c75ab72fded1347dd19d88f38a3804742a38` includes the host-completion
+bridge (PR #11). Scene's two implementation sources are now compiled once into
+an object target and embedded in core; the standalone scene DLL is retained
+for ABI testing. FFM uses the validated core path for scene exports; the player
+distribution builds/packages core alone. Gradle inputs include all linked native
+modules. No existing C ABI layout/signature changes, no Vulkan loader link,
+second device/queue or new submission API.
+
+P0-8 is confirmed in the baseline scene allocator: a BDA usage flag was not
+accompanied by the memory allocation flag. The patch attaches the device-address
+allocation flags only for buffers that use BDA and rejects a zero returned
+address with cleanup before publication. The fake driver checks each memory
+binding's usage/allocation flags (including staging without BDA), and the scene
+test exercises zero-address failure without recording AS builds. A new dynamic
+core test checks all ten scene exports and ABI v2 sizes from the actual core DLL.
+
+Windows native CI now also runs on `codex/migration-*` branches and compares
+against this integration base. Native compilation/tests are pending publication
+for this patch. No GPU/driver/Minecraft or visual result is claimed.

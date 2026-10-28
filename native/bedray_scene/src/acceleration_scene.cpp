@@ -95,6 +95,12 @@ bool create_buffer_impl(
     allocate.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocate.allocationSize = requirements.size;
     allocate.memoryTypeIndex = static_cast<uint32_t>(memory_type);
+    VkMemoryAllocateFlagsInfo address_flags{};
+    if ((usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0) {
+        address_flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+        address_flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        allocate.pNext = &address_flags;
+    }
 
     VkDeviceMemory memory = VK_NULL_HANDLE;
     result = scene.fns.allocate_memory(scene.device, &allocate, nullptr, &memory);
@@ -146,6 +152,11 @@ bool create_buffer_impl(
         address_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
         address_info.buffer = handle;
         buffer.address = scene.fns.get_buffer_device_address(scene.device, &address_info);
+        if (buffer.address == 0) {
+            destroy_buffer(scene, buffer);
+            return fail(error, BEDRAY_SCENE_ERROR_UNSUPPORTED,
+                "device address unavailable for scene buffer") == BEDRAY_SCENE_OK;
+        }
     }
 
     out = buffer;

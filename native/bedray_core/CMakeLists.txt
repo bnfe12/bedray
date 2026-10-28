@@ -51,6 +51,10 @@ target_sources(bedray_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_reso
 target_compile_definitions(bedray_core PRIVATE BEDRAY_GPU_RESOURCES_EXPORTS)
 target_link_libraries(bedray_core PRIVATE bedray_gpu_resources)
 
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../bedray_scene"
+                 "${CMAKE_CURRENT_BINARY_DIR}/bedray_scene")
+target_link_libraries(bedray_core PRIVATE bedray_scene_objects)
+
 # Compile the graph with the core; frame execution still needs integration.
 # No second Vulkan loader or device is introduced.
 option(BEDRAY_ENABLE_RENDER_GRAPH "Build the renderer graph with the native core" ON)
@@ -149,3 +153,12 @@ if(MSVC)
     set_property(TARGET bedray_abi_exception_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 add_test(NAME bedray_abi_exception COMMAND bedray_abi_exception_test)
+
+add_executable(bedray_core_scene_exports_test tests/core_scene_exports_test.cpp)
+target_include_directories(bedray_core_scene_exports_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../bedray_scene/include")
+target_compile_definitions(bedray_core_scene_exports_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+if(MSVC)
+    target_compile_options(bedray_core_scene_exports_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+endif()
+add_test(NAME bedray_core_scene_exports COMMAND bedray_core_scene_exports_test $<TARGET_FILE:bedray_core>)

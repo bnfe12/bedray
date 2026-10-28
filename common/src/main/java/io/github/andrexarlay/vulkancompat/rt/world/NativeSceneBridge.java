@@ -1,13 +1,10 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneLayouts;
-import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneLocator;
 import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneNative;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
-import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
-import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,7 +19,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Host facade over {@code bedray_scene.dll}: the native owner of the section BLAS,
+ * Host facade over the scene exports in {@code bedray_core.dll}: owner of the section BLAS,
  * the TLAS and the 64-byte {@code GeometrySection} table.
  *
  * <p>The scene never creates a device, submits or waits.  It records uploads,
@@ -103,7 +100,7 @@ final class NativeSceneBridge implements AutoCloseable {
     }
 
     /**
-     * Loads the optional scene DLL and creates a scene on the host's Vulkan objects.
+     * Loads the optional scene exports from the already validated core DLL.
      * Returns null (with one log line) when the feature is unavailable; the caller
      * keeps the legacy scene in that case.
      */
@@ -116,23 +113,9 @@ final class NativeSceneBridge implements AutoCloseable {
                 + " keeping the Java scene", SCENE_PASS);
             return null;
         }
-        NativeLibraries libraries;
-        try {
-            libraries = VulkanBridge.libraries();
-        } catch (RuntimeException e) {
-            LOGGER.warn("[VKB-RT] native scene unavailable: Bedray NativeLibraries are not available: {}",
-                e.getMessage());
-            return null;
-        }
-        BedraySceneLocator.Location location = BedraySceneLocator.locate(libraries);
-        if (!location.usable()) {
-            LOGGER.warn("[VKB-RT] native scene unavailable: {} is not installed in {} ({})",
-                BedraySceneLocator.DLL, libraries.nativesDirectory(), location.detail());
-            return null;
-        }
         BedraySceneNative library = null;
         try {
-            library = BedraySceneNative.load(location.dll());
+            library = BedraySceneNative.load(runtime.library().libraryPath());
             int capabilities = BedraySceneLayouts.CAP_ACCELERATION_STRUCTURE | BedraySceneLayouts.CAP_DEVICE_ADDRESS;
             long scene = library.create(runtime.instance().address(), runtime.physicalDevice().address(),
                 runtime.device().address(), runtime.apiVersion(), runtime.getInstanceProcAddr(),

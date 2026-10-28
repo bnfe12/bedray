@@ -76,10 +76,12 @@ namespace fake {
 struct MemoryState {
     uint64_t size = 0;
     uint32_t type_index = 0;
+    VkMemoryAllocateFlags flags = 0;
     std::vector<uint8_t> bytes;
 };
 
 struct BufferState {
+    VkBufferUsageFlags usage = 0;
     uint64_t size = 0;
     uint64_t memory = 0;
     uint64_t address = 0;
@@ -158,6 +160,7 @@ struct State {
     uint64_t next_buffer_address = 0x100000000ull;
     uint64_t next_accel_address = 0x200000000ull;
     int fail_create_buffer_countdown = -1;
+    bool zero_device_address = false;
     int faults = 0;
 };
 
@@ -278,6 +281,7 @@ static VkResult VKAPI_CALL fakeCreateBuffer(
     const uint64_t id = fake::g.next_buffer++;
     fake::BufferState state;
     state.size = info->size;
+    state.usage = info->usage;
     fake::g.buffers.emplace(id, state);
     *out = reinterpret_cast<VkBuffer>(static_cast<uintptr_t>(id));
     return VK_SUCCESS;
@@ -311,6 +315,11 @@ static VkResult VKAPI_CALL fakeAllocateMemory(
     fake::MemoryState state;
     state.size = info->allocationSize;
     state.type_index = info->memoryTypeIndex;
+    if (info->pNext != nullptr) {
+        const auto* flags = static_cast<const VkMemoryAllocateFlagsInfo*>(info->pNext);
+        CHECK(flags->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO);
+        state.flags = flags->flags;
+    }
     state.bytes.resize(static_cast<size_t>(info->allocationSize));
     fake::g.memories.emplace(id, std::move(state));
     *out = reinterpret_cast<VkDeviceMemory>(static_cast<uintptr_t>(id));
@@ -334,6 +343,12 @@ static VkResult VKAPI_CALL fakeBindBufferMemory(
         return VK_ERROR_UNKNOWN;
     }
     state->memory = fake::memory_id(memory);
+    const auto found = fake::g.memories.find(state->memory);
+    CHECK(found != fake::g.memories.end());
+    if (found != fake::g.memories.end()) {
+        CHECK(((state->usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0)
+            == ((found->second.flags & VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT) != 0));
+    }
     return VK_SUCCESS;
 }
 
@@ -364,6 +379,7 @@ static VkResult VKAPI_CALL fakeFlushMappedMemoryRanges(
 
 static VkDeviceAddress VKAPI_CALL fakeGetBufferDeviceAddress(
     VkDevice, const VkBufferDeviceAddressInfo* info) {
+    if (fake::g.zero_device_address) return 0;
     fake::BufferState* state = fake::find_buffer(info->buffer);
     if (state == nullptr) {
         fake::fault("vkGetBufferDeviceAddress on an unknown handle");
@@ -1874,7 +1890,17 @@ static void test_section_quad_limit() {
     CHECK(fake::g.buffers.empty());
 }
 
+static void test_zero_device_address_is_rejected() {
+    Fixture fixture(1);
+    const Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    fake::g.zero_device_address = true;
+    CHECK_STATUS(fixture.prepare_status(1, 0xF01), BEDRAY_SCENE_ERROR_UNSUPPORTED);
+    CHECK(fake::g.builds.empty());
+}
+
 int main() {
+    test_zero_device_address_is_rejected();
     test_abi_layout();
     test_create_validation();
     test_section_contract_validation();
