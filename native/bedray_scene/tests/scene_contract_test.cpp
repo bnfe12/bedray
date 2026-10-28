@@ -1479,7 +1479,7 @@ static void test_table_coalescing_and_clear() {
     CHECK(resources.material_table_bytes == second.size());
     CHECK(fake::find_copy(second) >= 0);
     CHECK(fake::find_copy(ignored) < 0);
-    CHECK(fake::g.copies.size() == 1);
+    CHECK(fake::g.copies.size() == 2); // material upload plus zeroed section descriptor
     std::vector<uint8_t>* table_bytes = fake::bytes_at_address(resources.material_table_address);
     CHECK(bytes_start_with(table_bytes, second));
     fixture.release(1);

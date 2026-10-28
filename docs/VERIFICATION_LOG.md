@@ -305,6 +305,17 @@ is closed after host drain before unloading core; world teardown no longer calls
 vkDeviceWaitIdle. Native CI and Java/AOT verification are pending; no GPU/game
 or visual evidence is claimed.
 
+Executed result: candidate `ae45bf9`, [run 40724808514](https://github.com/bnfe12/bedray/actions/runs/40724808514)
+passes core 18/18 + standalone scene 1/1 + frame lifetime 1/1, ABI v2 probe.
+No C/C++ compiler warnings/errors in either job log. The first candidate run
+40724238754 correctly caught an old table-test assertion (one upload); publishing
+the valid empty section descriptor adds a second upload. That expectation was
+updated and the complete native run repeated successfully. Local Java compile
+and all 17 AOT passes compile successfully. Targeted JUnit: 19 recording/manifest/
+path-contract tests plus 4 scene API/POD packing tests pass. Existing Iris test
+Unsafe warnings and JOML deprecation diagnostics remain. Evidence: native/CPU L2,
+AOT/Java L1. No GPU/game result. Journal-only follow-up skips unchanged native CI.
+
 ## 2026-10-28 — completion versus abandoned native writes
 
 Follow-up to the single-owner scene batch. RecordingCompletion now carries
