@@ -304,3 +304,26 @@ A POD packing test checks pass-local indices and vertex attributes. Native scene
 is closed after host drain before unloading core; world teardown no longer calls
 vkDeviceWaitIdle. Native CI and Java/AOT verification are pending; no GPU/game
 or visual evidence is claimed.
+
+## 2026-10-28 — completion versus abandoned native writes
+
+Follow-up to the single-owner scene batch. RecordingCompletion now carries
+separate completed/discarded actions per owner and retains both disposition and
+successful actions across cleanup retries. UNKNOWN execution stays pinned until
+host drain, then uses conservative abandonment cleanup. Open recordings stay
+pinned; late callbacks cannot retire a reused handle generation.
+
+Additive core discard invalidates image initialization/accumulation and DI
+history/parity before exact graph/scheduler release. Additive scene discard
+poisons further update/prepare/resource queries, since its committed uploads/AS
+builds may never have executed; unrelated outstanding frames stay pinned and
+must still be released before scene recreation. Normal completion keeps caches.
+Java routes proof type to each owner. ABI v2 layouts and shader interfaces remain
+unchanged. The native-buffer fallback budget now covers the native DI ring when
+device-memory telemetry is absent (512 MiB rather than the old constants-only
+16 MiB). No submit/wait/device-wide idle is introduced in core/scene.
+
+No-GPU checks cover successful versus abandoned cleanup, unknown execution,
+discard retry, stale callbacks, pass history/parity invalidation and scene reuse
+refusal while another frame remains pinned. Java/native results pending for the
+final source revision; no GPU/game/visual correctness is claimed.

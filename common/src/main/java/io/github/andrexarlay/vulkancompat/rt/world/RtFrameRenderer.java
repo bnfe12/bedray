@@ -612,11 +612,18 @@ public final class RtFrameRenderer {
         RtWorld recordingWorld = world;
         RtPass recordingPass = pass;
         Runnable[] particleRelease = {() -> {}};
-        var recording = recordingCompletion.begin(cmd.address(),
-            () -> atmosphere.releaseRecording(cmd.address()),
-            () -> recordingPass.releaseRecording(cmd.address()),
-            () -> recordingWorld.releaseRecording(cmd.address()),
-            () -> particleRelease[0].run());
+        var recording = recordingCompletion.beginWithDiscard(cmd.address(),
+            new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement(
+                () -> atmosphere.releaseRecording(cmd.address()), () -> {
+                    atmosphere.resetHistory();
+                    atmosphere.releaseRecording(cmd.address());
+                }),
+            new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement(
+                () -> recordingPass.releaseRecording(cmd.address()), () -> recordingPass.discardRecording(cmd.address())),
+            new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement(
+                () -> recordingWorld.releaseRecording(cmd.address()), () -> recordingWorld.discardRecording(cmd.address())),
+            new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement(
+                () -> particleRelease[0].run(), () -> particleRelease[0].run()));
         boolean executeAttempted = false;
         RtWorld.FrameStats stats;
         boolean traced = false;

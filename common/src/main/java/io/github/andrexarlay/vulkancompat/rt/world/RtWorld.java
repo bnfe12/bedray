@@ -1312,6 +1312,14 @@ public final class RtWorld {
         if (nativeScene != null) nativeScene.releaseRecording(commandBuffer);
     }
 
+    public void discardRecording(long commandBuffer) {
+        if (nativeScene != null) {
+            nativeScene.discardRecording(commandBuffer);
+            nativeSceneFrameActive = false;
+        }
+        if (dequantize != null) dequantize.releaseRecording(commandBuffer);
+    }
+
     /** The caller has drained host submissions and excluded future resubmission. */
     public void releaseComputeRecordingsAfterHostDrain() {
         if (dequantize != null) dequantize.releaseRecordingsAfterHostDrain();

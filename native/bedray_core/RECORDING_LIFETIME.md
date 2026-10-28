@@ -65,6 +65,16 @@ passing, 2026-10-28).
 
 Current limitations:
 
+The host distinguishes successful completion from abandonment. The additive
+`bedray_core_discard_recording` invalidates private image layout/history and DI
+ring history/parity before using the same exact scheduler release path. A late
+or unknown command handle cannot invalidate a newer pass recording. Host drain
+with UNKNOWN execution conservatively uses abandonment cleanup; a completed
+callback uses completion cleanup. Each ticket remembers its chosen disposition
+and successful owner actions across retries. Native scene abandonment poisons
+scene reuse until recreation, because committed uploads/AS builds may not have
+executed. It does not free other outstanding frames.
+
 - Minecraft 26.3's `VulkanCommandEncoder.queueForDestroy` is the host
   completion bridge: bytecode shows `submit()` waits for a completed submission
   before rotating its destruction queue. `RtFrameRenderer` now attaches one

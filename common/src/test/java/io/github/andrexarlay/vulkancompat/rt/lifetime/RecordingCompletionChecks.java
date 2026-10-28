@@ -65,6 +65,27 @@ public final class RecordingCompletionChecks {
         check(owner.pendingCount() == 1);
         owner.afterHostDrain();
         check(discardRetry[0] == 2 && owner.pendingCount() == 0);
+        int[] dispositions = {0, 0};
+        var actions = new RecordingCompletion.Retirement(() -> dispositions[0]++, () -> dispositions[1]++);
+        var abandoned = owner.beginWithDiscard(12, actions);
+        owner.discard(abandoned);
+        check(dispositions[0] == 0 && dispositions[1] == 1);
+        var completed = owner.beginWithDiscard(12, actions);
+        owner.submissionAttempted(completed);
+        owner.submitted(completed, queue::add);
+        queue.getLast().run();
+        check(dispositions[0] == 1 && dispositions[1] == 1);
+        var uncertain = owner.beginWithDiscard(13, actions);
+        owner.submissionAttempted(uncertain);
+        owner.afterHostDrain();
+        check(dispositions[0] == 1 && dispositions[1] == 2);
+        int[] discardFailure = {0};
+        var retryDisposition = owner.beginWithDiscard(14, new RecordingCompletion.Retirement(
+            () -> { throw new AssertionError("discard retry cannot become completion"); },
+            () -> { if (discardFailure[0]++ == 0) throw new IllegalStateException("retry disposition"); }));
+        refuses(() -> owner.discard(retryDisposition));
+        owner.afterHostDrain();
+        check(discardFailure[0] == 2);
         System.out.println("Recording completion transitions passed (no GPU)");
     }
 }

@@ -41,6 +41,7 @@ public:
 
     // Idempotent for an unknown command buffer. Completes the pass's own
     // image/buffer uses for that recording and then collects retired objects.
+    void discard_recording(std::uint64_t command_buffer) noexcept;
     BedrayStatus release_recording(std::uint64_t command_buffer) noexcept;
 
     [[nodiscard]] bool has_recordings() const noexcept { return !recordings_.empty(); }

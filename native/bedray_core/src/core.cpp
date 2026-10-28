@@ -989,6 +989,15 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
     return BEDRAY_ERROR_INTERNAL;
 }
 
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_discard_recording(
+    BedrayCore* core, uint64_t command_buffer) try {
+    if (core == nullptr || command_buffer == 0) return BEDRAY_ERROR_INVALID_ARGUMENT;
+    if (core->path_trace) core->path_trace->discard_recording(command_buffer);
+    return bedray_core_release_recording(core, command_buffer);
+} catch (...) {
+    return BEDRAY_ERROR_INTERNAL;
+}
+
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
     BedrayCore* core,
     const BedrayFrameDesc* desc,

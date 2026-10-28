@@ -9,14 +9,18 @@ import java.util.function.Consumer;
 /** Render-thread bridge from host completion evidence to native recording retirement. */
 public final class RecordingCompletion {
     private enum State { RECORDING, UNKNOWN, SUBMITTED, DISCARD_PROVEN }
+    public record Retirement(Runnable completed, Runnable discarded) {
+        public Retirement { Objects.requireNonNull(completed); Objects.requireNonNull(discarded); }
+    }
 
     public static final class Ticket {
         private final long commandBuffer;
-        private final Runnable[] release;
+        private final Retirement[] release;
         private final boolean[] released;
+        private Boolean discardedProof;
         private State state = State.RECORDING;
 
-        private Ticket(long commandBuffer, Runnable[] release) {
+        private Ticket(long commandBuffer, Retirement[] release) {
             this.commandBuffer = commandBuffer;
             this.release = release.clone();
             this.released = new boolean[release.length];
@@ -32,10 +36,16 @@ public final class RecordingCompletion {
 
     /** A reused handle cannot replace an unreleased recording generation. */
     public Ticket begin(long commandBuffer, Runnable... release) {
+        Retirement[] actions = new Retirement[release.length];
+        for (int i = 0; i < release.length; ++i) actions[i] = new Retirement(release[i], release[i]);
+        return beginWithDiscard(commandBuffer, actions);
+    }
+
+    public Ticket beginWithDiscard(long commandBuffer, Retirement... release) {
         if (commandBuffer == 0 || pending.containsKey(commandBuffer)) {
             throw new IllegalStateException("command buffer has no completed/discarded prior recording");
         }
-        for (Runnable action : release) Objects.requireNonNull(action);
+        for (Retirement action : release) Objects.requireNonNull(action);
         Ticket ticket = new Ticket(commandBuffer, release);
         pending.put(commandBuffer, ticket);
         return ticket;
@@ -53,7 +63,7 @@ public final class RecordingCompletion {
         // If enqueue throws, retain UNKNOWN and its strong owner references.
         queueAfterCompletion.accept(() -> {
             try {
-                releaseProven(ticket);
+                releaseProven(ticket, false);
             } catch (RuntimeException | Error failure) {
                 // A failed native release must not abort the host destruction queue.
                 reportFailure.accept(failure);
@@ -66,7 +76,7 @@ public final class RecordingCompletion {
     public void discard(Ticket ticket) {
         require(ticket, State.RECORDING);
         ticket.state = State.DISCARD_PROVEN;
-        releaseProven(ticket);
+        releaseProven(ticket, true);
     }
 
     /** Whole-device completion proof, excluding resubmission; open recordings stay pinned. */
@@ -75,7 +85,7 @@ public final class RecordingCompletion {
         for (Ticket ticket : List.copyOf(pending.values())) {
             if (ticket.state == State.RECORDING) continue;
             try {
-                releaseProven(ticket);
+                releaseProven(ticket, ticket.state != State.SUBMITTED);
             } catch (RuntimeException | Error failure) {
                 if (failures == null) failures = new IllegalStateException("native recording retirement failed");
                 failures.addSuppressed(failure);
@@ -92,14 +102,16 @@ public final class RecordingCompletion {
         }
     }
 
-    private void releaseProven(Ticket ticket) {
+    private void releaseProven(Ticket ticket, boolean discarded) {
         // A late callback names its ticket, never a newer recording of the same address.
         if (pending.get(ticket.commandBuffer) != ticket) return;
+        if (ticket.discardedProof == null) ticket.discardedProof = discarded;
         RuntimeException failures = null;
         for (int i = 0; i < ticket.release.length; ++i) {
             if (ticket.released[i]) continue;
             try {
-                ticket.release[i].run();
+                Retirement action = ticket.release[i];
+                (ticket.discardedProof ? action.discarded() : action.completed()).run();
                 ticket.released[i] = true;
             } catch (RuntimeException | Error failure) {
                 if (failures == null) failures = new IllegalStateException("recording owner release failed");

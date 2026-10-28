@@ -2138,6 +2138,17 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
     return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception releasing a scene frame");
 }
 
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_discard_frame(
+    BedrayScene* scene, uint64_t frame_index, BedraySceneError* error) try {
+    if (scene == nullptr || find_slot(scene->impl, frame_index) == nullptr)
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "discarded frame is not outstanding");
+    mark_failed(scene->impl, BEDRAY_SCENE_ERROR_INTERNAL,
+        "prepared GPU writes were discarded; recreate the scene from host captures");
+    return bedray_scene_release_frame(scene, frame_index, error);
+} catch (...) {
+    return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception discarding scene frame");
+}
+
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_query_resources(
     BedrayScene* scene,
     BedraySceneResources* out_resources) try {
@@ -2145,6 +2156,11 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_query_resource
         return BEDRAY_SCENE_ERROR_INVALID_ARGUMENT;
     }
     const Scene& impl = scene->impl;
+    if (impl.failed) {
+        std::memset(out_resources, 0, sizeof(*out_resources));
+        out_resources->abi_version = BEDRAY_SCENE_ABI_VERSION;
+        return impl.failure_status;
+    }
     if (!impl.has_last_resources) {
         std::memset(out_resources, 0, sizeof(*out_resources));
         out_resources->abi_version = BEDRAY_SCENE_ABI_VERSION;
