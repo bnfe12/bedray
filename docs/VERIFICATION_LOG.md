@@ -445,4 +445,6 @@ in `eda6e19`; that merge also changed no shader source. Final head
 baseline `4236c75` core 15/15, candidate `eda6e19` core **18/18**, standalone
 scene **1/1**, frame lifetime **1/1**, ABI probe v2 exit 0. Both jobs succeeded
 with no native test failures. Same limits: native L2 only, no shader compile,
-GPU, game or visual claim.
+GPU, game or visual claim. A final shader sweep on the published tree at
+`913e4e0` repeated all 17 `passes/*.slang` plus the five harnesses with exit 0;
+the shader sources are still identical to `b1137fd`.
