@@ -39,7 +39,7 @@ float3 orientNormal(float3 normal, float3 geometricNormal) {
 }
 
 bool isFinite(float value) {
-    return !isnan(value) && !isinf(value);
+    return value == value && abs(value) < 3.402823466e+38;
 }
 
 bool isFinite(float3 value) {

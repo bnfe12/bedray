@@ -605,7 +605,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception creating core");
 }
 
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) {
     if (core == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
@@ -625,8 +625,6 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
         core->destroy_sampler(core->device, core->linear_sampler, nullptr);
     delete core;
     return BEDRAY_OK;
-} catch (...) {
-    return BEDRAY_ERROR_INTERNAL;
 }
 
 static BedrayStatus acquire_sampler(
@@ -669,7 +667,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_linear_sampler(
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(
     BedrayCore* core,
-    BedrayCapabilities* out_capabilities) try {
+    BedrayCapabilities* out_capabilities) {
     if (core == nullptr || out_capabilities == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
@@ -689,8 +687,6 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(
     out_capabilities->max_uniform_buffer_range = core->properties.limits.maxUniformBufferRange;
     out_capabilities->device_memory_bytes = device_memory;
     return BEDRAY_OK;
-} catch (...) {
-    return BEDRAY_ERROR_INTERNAL;
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
@@ -890,7 +886,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
 
 BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
     BedrayCore* core,
-    uint64_t program_handle) try {
+    uint64_t program_handle) {
     if (core == nullptr || program_handle == 0) {
         return;
     }
@@ -906,10 +902,10 @@ BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
         core->programs.erase(std::remove(core->programs.begin(), core->programs.end(), program), core->programs.end());
         destroy_program(core, program);
     }
-} catch (...) {}
+}
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
-    BedrayCore* core, uint64_t command_buffer) try {
+    BedrayCore* core, uint64_t command_buffer) {
     if (core == nullptr || command_buffer == 0) return BEDRAY_ERROR_INVALID_ARGUMENT;
     const auto command = reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(command_buffer));
     for (auto it = core->recordings.begin(); it != core->recordings.end();) {
@@ -939,8 +935,6 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
         }
     }
     return BEDRAY_OK;
-} catch (...) {
-    return BEDRAY_ERROR_INTERNAL;
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
