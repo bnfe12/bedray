@@ -523,3 +523,12 @@ API/JOML Unsafe deprecation diagnostics remain. Native sources and shader source
 are byte-for-byte unchanged from the preceding passing native/AOT evidence;
 identical native CI is deliberately skipped for this Java cleanup. No GPU/game
 result is claimed. ABI layouts, native lifetime protocol and shader math are unchanged.
+
+The integration base advanced to `6632bca4219c13937e9f19fed7f65983e670f5be`
+(RC shader-owner PR #10) during review. Merged it without editing its sources;
+the sole conflict was the append-only verification journal and both records are
+preserved. Repeated the same Java compile/23-test command on `e4eea40`: success,
+zero test failures/errors/skips. The default AOT build freshly compiled all
+18 production passes, including rc_probe_trace, with reflection validation.
+The final follow-up only clarifies the stale migration-status documentation.
+Relative to the refreshed base, cleanup changes no native or shader sources.

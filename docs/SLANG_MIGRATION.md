@@ -9,13 +9,15 @@ Existing-feature transfers in the current working tree:
   the planar arena contract and the compute-to-AS/attribute-read dependencies.
   It requires the enabled BDA and shaderInt64 features of the current RT path.
   Descriptor-free dispatches retain one program use per command buffer until
-  host-proven completion/discard. Scene allocation and BLAS ownership are still
-  Java migration work. World construction rolls back allocated resources on
+  host-proven completion/discard. Opt-in native scene mode owns scene allocation
+  and BLAS/TLAS builds; the Java scene remains the reference/default. World
+  construction rolls back allocated resources on
   failure before publishing the world.
 * Spatial ReSTIR's existing two checker phases are recorded through one native
   `bedray_core_render_phases` call. C++ owns the phase-word updates and barriers;
-  Java supplies scene resources and the initial parameters. The general frame
-  graph and frame-history ownership have not yet been connected by this change.
+  Java supplies scene resources and the initial parameters. The native coarse
+  path also uses an opaque frame-graph node and scheduler; its private histories
+  remain owned by PathTracePass, as recorded in MIGRATION_INTEGRATION_DECISIONS.md.
 
 Finish migrating the existing renderer functionality into the new Slang/C++
 architecture first, starting with path tracing. Java retains Minecraft capture,
@@ -73,9 +75,11 @@ Audit findings and their original source-only evidence are recorded in
 needs confirmation against the current working tree before being marked fixed.
 
 The native core now builds as C++23. Incoming modules from `81a06a2` remain
-isolated drafts, not active path-tracing implementations. The current live
-path still uses the existing scene adapter; new scene ownership and a complete
-primary-hit contract are outstanding migration work.
+isolated drafts, not active path-tracing implementations. The default path
+keeps the Java reference. The opt-in native path uses the embedded
+scene owner, graph/scheduler and explicit completion/discard retirement. Scoped
+build/CPU evidence is in VERIFICATION_LOG.md; GPU/game and complete shader parity
+remain separate acceptance work.
 
 This document replaces the first Slang migration draft.  The first draft
 described a 1:1 port of the existing GLSL.  Bedray 2.0 is a new shader core:
