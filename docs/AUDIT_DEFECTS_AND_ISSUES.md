@@ -48,6 +48,7 @@
   В `path_tracer.slang:142` вес Монте-Карло вычисляется как `1.0 / sourcePdf`. В итоге вес равен $\frac{1}{p / q} = \frac{q}{p}$. Вместо деления на вероятность ветки свет **умножается** на неё. При $q = 0.25$ эмиттеры светят ровно в 4 раза слабее физической нормы.
   На строке 499 деление на `emitterProbability` выполняется даже при `sunIntensity <= 0.0`, хотя строкой выше авторский комментарий гласит: `// One branch only: its density is already the whole density, so nothing to renormalise`. В результате в пещерах и ночью факелы ошибочно тускнеют.
 * **Причина:** Путаница между коррекцией веса сэмпла $W = 1/p$ и плотностью вероятности $p$.
+* **Статус на 2026-10-28 (source-only):** на HEAD плотности умножаются на вероятность ветки (`sourcePdf *= emitterProbability`, `*= 1.0 - emitterProbability`), а single-branch путь не ренормируется. По коду это соответствует $p_{mix} = q \cdot p_{branch}$; вес $1/sourcePdf$ больше не умножается на $q$ ошибочно. Компиляции/теста не было (L0); нужен тест PDF для $q = 0.25, 0, 1$ и сравнение с эталоном.
 
 ### [P0-4] Radiance Cascades: арифметическое среднее вместо окклюзии лучевого транспорта
 * **Файл:** [`radiance_cascades_store.slang:174-175`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/radiance_cascades_store.slang#L168-L180)
@@ -73,6 +74,7 @@
   ```
   В `geometryRangeForPrimitive` (строки 203–208) переменная `quad = primitive >> 1u` уже сопоставляется с `range.firstQuad` и является **абсолютным** индексом квада внутри секции. Сложение `range.firstQuad + quad` добавляет `range.firstQuad` **дважды**. Для любых мешей со смещением диапазонов (прозрачные блоки, вода, декали) видеокарта читает чужие вершины со сдвигом на $4 \times \text{firstQuad}$ позиций, вызывая графические артефакты геометрии и битые UV.
 * **Причина:** Потеря семантики относительного vs абсолютного индекса при рефакторинге структур Sodium.
+* **Статус на 2026-10-28 (source-only):** на HEAD `geometryRangeForPrimitive` возвращает индекс диапазона, а `geometryVertexBase` вычисляет `(range.firstQuad + (primitive >> 1u)) * 4u` без повторного `firstQuad` и без `section.meta.x`. C++ producer использует `primitiveOffset = quad_start * 6 * index_bytes` и `firstVertex = quad_start * 4`, а индексы локальны для quad. По коду offset согласован; компиляции/теста не было (L0), нужен layout/contract test на несколько диапазонов.
 
 ### [P0-6] Spatial ReSTIR DI сбрасывает локальные обновления при победе своего семпла
 * **Файл:** [`spatial_block_emitters.slang:160-162`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/restir/spatial_block_emitters.slang#L150-L165)
@@ -84,6 +86,7 @@
   ```
   Если собственный семпл пикселя оказался ярче/лучше семплов всех соседей, флаг `won` остается `false`. Шейдер завершает работу без записи в текстуру. При этом отбрасываются все учтенные соседские испытания ($M$ и $W_{\text{sum}}$). В результате на экране возникают резкие полосы дисперсии между соседними пикселями и временное мерцание (flicker).
 * **Причина:** Неверная интерпретация рулетки Рестира: резервуар обязан сохранять результат объединения даже тогда, когда выбранным остался исходный кандидат.
+* **Статус на 2026-10-28 (source-only):** на HEAD `spatial_block_emitters.slang` публикует merged reservoir всегда, когда он конечен и валиден, независимо от того, победил ли собственный sample; `mergeReservoirs` обновляет `M`/`W_sum` даже при сохранении текущего sample, а receiver lanes восстанавливаются из `own`. Ранний `if (!won) return;` отсутствует. Компиляции/теста не было (L0); нужен регрессионный тест на собственный winner и на не-конечный вес.
 
 ---
 
