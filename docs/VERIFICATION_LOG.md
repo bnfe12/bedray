@@ -220,3 +220,13 @@ core test checks all ten scene exports and ABI v2 sizes from the actual core DLL
 Windows native CI now also runs on `codex/migration-*` branches and compares
 against this integration base. Native compilation/tests are pending publication
 for this patch. No GPU/driver/Minecraft or visual result is claimed.
+
+Executed result: [run 40718040730](https://github.com/bnfe12/bedray/actions/runs/40718040730),
+candidate `5e892753d62eeb72a85f732b3ffca9880af08db2`: core **17/17**,
+standalone scene **1/1**, frame lifetime **1/1**, ABI probe v2 exit 0.
+Baseline core 15/15 + scene 1/1 + lifetime 1/1. Both job logs contain no C/C++
+compiler warnings/errors; configure/build/CTest, dependency checks and artifact
+uploads all succeed. The embedded scene export probe passes against core DLL.
+Local `:common:compileJava` also exits 0 with the same ignored local dependencies
+as the host-completion batch. Scoped native evidence is L2, Java compilation L1.
+The following journal-only commit skips identical native CI.
