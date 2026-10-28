@@ -56,12 +56,6 @@ public final class RtSlangPathPass implements RtPass {
     /** Relative depth disagreement (in blocks at unit distance) that still counts as the same surface when reprojecting. */
     static final float REPROJECTION_TOLERANCE = 0.02f;
 
-    /** Bits of {@code PathTracePush.diState.x}; mirrors the {@code PATH_TRACE_DI_*} constants of the shader. */
-    static final int DI_FLAG_ENABLED = 1;
-    static final int DI_FLAG_HISTORY = 1 << 1;
-    static final int DI_FLAG_STATIC = 1 << 2;
-    static final int DI_FLAG_FLIP_Y = 1 << 3;
-
     /**
      * True when this runtime wants a reservoir ring at all: the emitter list is bound and the session switch is on. This
      * decides allocation only - it is a {@code static final}, so it cannot change while a frame is being recorded, and
@@ -131,30 +125,27 @@ public final class RtSlangPathPass implements RtPass {
      * native pass has live evidence.
      */
     private final boolean nativePathTrace;
-    private final boolean nativeReservoirs;
+    /** The ring's ownership, parity, history and reset bookkeeping; see {@link RestirDiState}. */
+    private final RestirDiState di;
     private BedrayPathTraceNative pathTraceNative;
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
     private final Set<Long> recordings = new LinkedHashSet<>();
-    private RtMemory memory;
     private final BedrayGpuImagesNative historyImages;
     private final BedrayGpuBuffersNative nativeBuffers;
     private final BedrayGpuImagesNative.Image[] accum = new BedrayGpuImagesNative.Image[2];
     private final BedrayGpuImagesNative.Image[] historyDepth = new BedrayGpuImagesNative.Image[2];
     private int historyParity;
-    /** Two halves of per-pixel ReSTIR DI reservoirs, owned here so the Slang ring never aliases the GLSL one. */
+    /**
+     * Host-owned halves of per-pixel ReSTIR DI reservoirs. Cores with {@code NATIVE_DI} allocate and
+     * reset their own ring inside the pass, so this stays null there.
+     */
     private BedrayGpuBuffersNative.Buffer reservoirs;
     private RtPipeline.Views views;
     private int accumFrames;
     private boolean forceReset = true;
     /** True when the previous display dispatch left a mean and a depth history that reprojection can read. */
     private boolean historyWritten;
-    private long reservoirPixels;
     private long reservoirFingerprint = Long.MIN_VALUE;
-    private boolean reservoirResetRequested = true;
-    /** True when the previous traced dispatch wrote the half the other parity reads. */
-    private boolean reservoirHistoryWritten;
-    /** Advanced only by a dispatch that actually wrote reservoirs, so a skipped frame leaves the ring consistent. */
-    private int reservoirFrame;
     private int lastSettingsHash;
     private int lastWidth;
     private int lastHeight;
@@ -170,18 +161,17 @@ public final class RtSlangPathPass implements RtPass {
      * {@code requestedGbuffer}: what the renderer asked for. This pass never writes the G-buffer, but it remembers the
      * request so the renderer does not rebuild it every frame for not matching (see {@link #builtFor(boolean)}).
      */
-    RtSlangPathPass(VkDevice device, SlangRuntime runtime, RtMemory memory, boolean requestedGbuffer) {
+    RtSlangPathPass(VkDevice device, SlangRuntime runtime, boolean requestedGbuffer) {
         this.runtime = runtime;
         if (runtime == null) {
             throw new IllegalArgumentException("path trace needs a SlangRuntime");
         }
         this.nativePathTrace = RtConfig.SLANG_PATH_TRACE_CPP && runtime.library().hasPathTrace();
-        this.nativeReservoirs = nativePathTrace && runtime.library().hasNativeReservoirs();
+        this.di = new RestirDiState(nativePathTrace && runtime.library().hasNativeReservoirs());
         if (RtConfig.SLANG_PATH_TRACE_CPP && !nativePathTrace) {
             LOGGER.warn("[VKB-RT] vkbridge.rt.nativePathTrace=true but the loaded bedray_core has no path-trace"
                 + " exports; keeping the Java path");
         }
-        this.memory = memory;
         this.requestedGbuffer = requestedGbuffer;
         this.trace = new RtPathTraceSlangPass(device, runtime);
         BedrayGpuImagesNative allocatedHistory = null;
@@ -243,8 +233,7 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public String describe(RtFrameParams p) {
-        String restir = !diActive() || (!nativeReservoirs && reservoirs == null) ? "off"
-            : (reservoirHistoryWritten ? "temporal" : "fresh") + (spatialRequested() ? "+spatial" : "");
+        String restir = di.mode(diActive(), reservoirs != null, spatialRequested());
         return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
             + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
             + ",frames=" + (accumFrames + 1) + ",denoiser=off)";
@@ -252,13 +241,10 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public void prepare(VkCommandBuffer cmd, RtMemory mem, int width, int height) {
-        memory = mem;
-        prepareReservoirs(mem, width, height);
+        prepareReservoirs(width, height);
         if (nativePathTrace) {
-            // The native pass owns radiance, motion, accumulation and history
-            // depth, and it resets them itself when the extent changes. The host
-            // still owns the DI ring above, so only its size bookkeeping stays
-            // here.
+            // The native pass owns radiance, motion, accumulation and history depth and resets them itself on an
+            // extent change. With NATIVE_DI it owns the DI ring too; only the request to clear it stays here.
             if (lastWidth != width || lastHeight != height) {
                 lastWidth = width;
                 lastHeight = height;
@@ -267,6 +253,7 @@ public final class RtSlangPathPass implements RtPass {
                 // sample count keeps this frame from reading a half that was
                 // just recreated.
                 accumFrames = 0;
+                di.layoutFor(width, height);
             }
             return;
         }
@@ -301,29 +288,26 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     /**
-     * The reservoir ring of the DI branch: two halves of one 64-byte record per pixel, device-local because the reset is
-     * a command-buffer fill. Turning ReSTIR DI off frees it again - the buffer is 250 MB at 1080p and holding it unused
-     * would compete with the section arenas.
+     * The external, host-owned reservoir ring of the DI branch: two halves of one 64-byte record per pixel,
+     * device-local because the reset is a command-buffer fill. Cores with {@code NATIVE_DI} own an
+     * equivalent ring inside the pass, so this method does nothing for them. Turning ReSTIR DI off frees
+     * the external ring again - the buffer is 250 MB at 1080p and holding it unused would compete with the
+     * section arenas.
      */
-    private void prepareReservoirs(RtMemory mem, int width, int height) {
-        if (nativeReservoirs) return;
-        long pixels = (long) width * height;
-        long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;
+    private void prepareReservoirs(int width, int height) {
+        if (di.nativeRing()) return;
         if (!diRequested()) {
-            if (reservoirs != null) {
-                nativeBuffers.retire(reservoirs);
-                reservoirs = null;
-            }
-            reservoirHistoryWritten = false;
-            reservoirPixels = 0L;
+            nativeBuffers.retire(reservoirs);
+            reservoirs = null;
             return;
         }
+        long pixels = (long) width * height;
+        long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;
         if (reservoirs != null && reservoirs.size() >= need) {
-            if (pixels != reservoirPixels) {
-                // A smaller render scale moves every pixel index, so the records of the old layout must not be read.
-                reservoirPixels = pixels;
-                reservoirResetRequested = true;
-                reservoirHistoryWritten = false;
+            // Every record is addressed by its pixel, so an extent change moves all of them even when the
+            // pixel count happens to be the same; the storage is reused, the contents are not.
+            if (di.extentDiffers(width, height)) {
+                di.layoutFor(width, height);
             }
             return;
         }
@@ -331,9 +315,7 @@ public final class RtSlangPathPass implements RtPass {
             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         nativeBuffers.retire(reservoirs);
         reservoirs = next;
-        reservoirPixels = pixels;
-        reservoirResetRequested = true;
-        reservoirHistoryWritten = false;
+        di.layoutFor(width, height);
         LOGGER.info("[VKB-RT] Slang ReSTIR DI reservoirs {}x{} x2 = {} MiB", width, height,
             Math.max(1L, need / (1024L * 1024L)));
     }
@@ -366,8 +348,7 @@ public final class RtSlangPathPass implements RtPass {
         // keep glowing through history forever, while streaming sections and the accumulate switch leave it valid - and
         // filling hundreds of MB every frame would cost far more than the reuse saves.
         if (forceReset || settingsHash != lastSettingsHash || params.emitterFingerprint != reservoirFingerprint) {
-            reservoirResetRequested = true;
-            reservoirHistoryWritten = false;
+            di.reset();
         }
         reservoirFingerprint = params.emitterFingerprint;
         forceReset = false;
@@ -404,8 +385,7 @@ public final class RtSlangPathPass implements RtPass {
     public void resetHistory() {
         forceReset = true;
         historyWritten = false;
-        reservoirResetRequested = true;
-        reservoirHistoryWritten = false;
+        di.reset();
     }
 
     @Override
@@ -421,22 +401,22 @@ public final class RtSlangPathPass implements RtPass {
         int emitterCount = RtConfig.SLANG_BLOCK_EMITTERS ? Math.max(0, params.emitterCount) : 0;
         RtPathTraceSlangPass.Emitters emitters = new RtPathTraceSlangPass.Emitters(
             emitterCount > 0 ? params.emitterHandle : 0L, params.emitterOffset, emitterCount);
-        // ReSTIR DI reuses the emitter samples of the previous dispatch, so it needs both a bound list and the ring.
-        // The half written this frame is the opposite of the half read, which is why the parity only advances on a
-        // dispatch that actually wrote records.
+        // ReSTIR DI reuses the emitter samples of a previous dispatch, so it needs both a bound list and a reservoir
+        // ring: the external ring on older cores, the pass-owned ring with NATIVE_DI. The half written this frame is
+        // the opposite of the half read, which is why parity only advances on a dispatch that actually wrote records.
         RtPathTraceSlangPass.Reservoirs reservoirRange = RtPathTraceSlangPass.Reservoirs.NONE;
         int diFlags = 0;
-        int diParity = nativeReservoirs ? 0 : reservoirFrame & 1;
-        if (emitterCount > 0 && diActive() && (nativeReservoirs || reservoirs != null)) {
-            if (!nativeReservoirs && reservoirResetRequested) {
+        int diParity = di.parity();
+        if (emitterCount > 0 && diActive() && di.available(reservoirs != null)) {
+            if (!di.nativeRing() && di.resetPending()) {
                 VK10.vkCmdFillBuffer(cmd, reservoirs.handle(), 0L, reservoirs.size(), 0);
                 VkBarriers.fullMemoryBarrier(cmd);
-                reservoirResetRequested = false;
+                di.ringCleared();
             }
-            diFlags = DI_FLAG_ENABLED | (!nativeReservoirs && reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)
-                | (params.cameraStatic ? DI_FLAG_STATIC : 0) | (params.flipY ? DI_FLAG_FLIP_Y : 0);
-            if (!nativeReservoirs)
+            diFlags = di.flags(params.cameraStatic, params.flipY);
+            if (!di.nativeRing()) {
                 reservoirRange = new RtPathTraceSlangPass.Reservoirs(reservoirs.handle(), reservoirs.size());
+            }
         }
         // The models of this frame: the ring slice the entity BLAS was built from, so a committed primitive index names a
         // triangle of these buffers and of nothing else. Turning the capture off leaves the terrain alone in the trace.
@@ -464,25 +444,13 @@ public final class RtSlangPathPass implements RtPass {
             capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount());
         if (nativePathTrace) {
             recordNative(cmd, params, emitters, reservoirRange, capturedEntities, dispatch);
-            if (nativeReservoirs) {
-                reservoirResetRequested = false;
-            } else if (diFlags == 0) {
-                reservoirHistoryWritten = false;
-            } else {
-                reservoirHistoryWritten = true;
-                reservoirFrame++;
-            }
+            di.afterDispatch(diFlags != 0);
             return;
         }
         trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
             new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
             emitters, reservoirRange, capturedEntities, views.depth(), frame, dispatch);
-        if (diFlags == 0) {
-            reservoirHistoryWritten = false;
-        } else {
-            reservoirHistoryWritten = true;
-            reservoirFrame++;
-        }
+        di.afterDispatch(diFlags != 0);
         // Spatial reuse pools the records the trace pass just wrote, in the half it just wrote. Nothing in this frame
         // reads them - the benefit lands in the next frame's temporal import - so the stage owns its own ordering: the
         // barrier between its two phases and a trailing one, both inside record().
@@ -560,8 +528,8 @@ public final class RtSlangPathPass implements RtPass {
             | (params.flipY ? BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y : 0)
             | (spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0)
             | (nativeScene ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE : 0)
-            | (nativeReservoirs ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI : 0)
-            | (nativeReservoirs && reservoirResetRequested ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0);
+            | (di.nativeRing() ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI : 0)
+            | (di.nativeRing() && di.resetPending() ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0);
         // The pass derives the display bits from these same frame bits, so the host contributes none of its own: there
         // is one definition of TONEMAP/ACCUMULATE/CAMERA_STATIC/REPROJECT/FLIP_Y, in the pass.
         pathTraceNative.render(new BedrayPathTraceNative.FrameInput(cmd.address(), views, frame, dispatch,
@@ -737,8 +705,7 @@ public final class RtSlangPathPass implements RtPass {
         historyWritten = false;
         nativeBuffers.close();
         reservoirs = null;
-        reservoirHistoryWritten = false;
-        reservoirPixels = 0L;
+        di.reset();
         destroyed = true;
     }
 }

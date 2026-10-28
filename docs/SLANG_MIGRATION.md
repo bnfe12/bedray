@@ -297,7 +297,7 @@ before the first dispatch.
 | `frame` | 16 | 608-byte `FrameConstants` uniform buffer, one upload per frame |
 | `blockMaterials` | 17 | dummy `BlockMaterial` table until voxel materials exist: allocate at least one 64-byte element and push `materialCount = 0` |
 | `emitters` | 18 | the `RtEmitters` ring buffer bound at the current segment offset — the same 96-byte records the legacy `rt_path.comp` reads, so one upload serves both paths; a dummy element when the list is empty |
-| `reservoirs` | 19 | the ReSTIR DI ring of `RtSlangPathPass`: two halves of one 64-byte `DIReservoir` per pixel (`2 * width * height * 64`), zeroed when the light list or the render size changes; a one-record dummy when the branch is off |
+| `reservoirs` | 19 | the ReSTIR DI ring of `RtSlangPathPass`: two halves of one 64-byte `DIReservoir` per pixel (`2 * width * height * 64`), zeroed on a new allocation, on any extent change, on a settings change and on a new light-list fingerprint; a one-record dummy when the branch is off. A core with `NATIVE_DI` allocates and clears its own ring, so the host binds no buffer there |
 | `entityPositions` | 20 | this frame's ring slot of captured vertex positions, 12 bytes per vertex (a `float3` as three float bit-patterns), bound for `frameVertices` elements |
 | `entityIndices` | 21 | this frame's ring slot of triangle indices, three `uint` per primitive; the bound length is the triangle count the decoder reads |
 | `entityAttrs` | 22 | the same slot of the `uint4` per vertex: packed colour, light (`block \| slot << 8 \| sky << 16 \| flags << 24`), `u` and `v` as float bits |
@@ -311,7 +311,8 @@ whose xyz is the camera minus the origin the list was rebuilt at and whose w is
 the candidates per call), the ReSTIR DI tail (`diCameraDelta`, the raw camera
 delta of the frame, and `diState`, whose x holds the `PATH_TRACE_DI_*` bits and
 whose y is the half of the ring this dispatch writes, chosen and advanced by the
-host) and `entityState` (x: atlas
+host - or zero when the core owns the ring, because then the parity is the
+core's own) and `entityState` (x: atlas
 texels per side, 0 for none; yz: the first-person body's primitive range).  The
 six entity buffers bind at the ring slot's own offset and length — this frame's
 positions and the same vertices one frame earlier, indices, attributes, atlas
@@ -347,9 +348,12 @@ Ownership:
   and display dispatches; image transitions and entry/compute/exit barriers;
   per-recording image/buffer pins.
 * **Java host:** TLAS, 64-byte section table, the three atlas views and the
-  atlas sampler, emitter list, ReSTIR DI reservoir ring, entity rings, output
-  and depth. It also owns the DI ring's parity and reset; the pass forwards
-  `di_state` verbatim instead of advancing a parity of its own.
+  atlas sampler, emitter list, entity rings, output and depth, and the ReSTIR DI
+  ring unless the core advertises `NATIVE_DI`. `RestirDiState` owns the ring's
+  parity, history bit, reset request and extent layout; without `NATIVE_DI` the
+  pass forwards those words and the core uses them as given, with `NATIVE_DI`
+  the core keeps parity and history itself and the host forwards only a reset
+  request.
 * **C++ pass, history:** the pass owns accumulation parity and
   `history_written`. The host signals a reset with `accum_frames == 0` or
   `BEDRAY_PATH_TRACE_FRAME_RESET_HISTORY`; a host resize also zeroes the host's
@@ -382,6 +386,23 @@ exports all three functions. A DLL without them logs a warning and keeps the
 Java path. The switch is off by default until live evidence exists. The native
 scene records and `SceneTraversal` replacement are still missing, so the pass
 currently reads the same `LegacySectionTraversal` table as the Java path.
+
+#### ReSTIR DI ring state
+
+`RestirDiState` answers the four questions the ring asks every frame - which half
+is read, whether it holds records, whether it must be cleared, and which extent
+its records were laid out for - once, for both owners. With the external ring the
+pass fills it on the first dispatch after a reset and its parity advances only on
+a dispatch that wrote records. With `NATIVE_DI` the core allocates, clears and
+alternates the ring; the host forwards `BEDRAY_PATH_TRACE_FRAME_RESET_DI` until a
+dispatch that actually ran DI consumes it, so a frame without emitters cannot
+swallow the request. Any extent change invalidates every record even when the
+pixel count is unchanged (a transposed resize moves every slot), and a newly
+allocated buffer is always cleared before it is read. The reset triggers stay
+narrow on purpose - settings, the emitter-list fingerprint, a resize or an
+explicit `resetHistory` - so camera motion and streaming sections keep the
+records. `RestirDiStateTest` exercises both owners without a device; live parity
+and visual reuse remain unverified.
 
 Depth keeps the legacy sentinel: bloom treats `depth >= 1e5` as sky
 (`BLOOM_SKY_DISTANCE`), and the path-trace entry writes `1e6` whenever the

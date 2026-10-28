@@ -331,8 +331,7 @@ class RtSlangRestirSpatialTest {
     void theStageIsAChildOfTheReuseItPools() {
         String game = read(GAME_PASS);
         String spatial = read(SPATIAL);
-        assertTrue(game.contains(": (reservoirHistoryWritten ? \"temporal\" : \"fresh\")"
-            + " + (spatialRequested() ? \"+spatial\" : \"\");"),
+        assertTrue(game.contains("String restir = di.mode(diActive(), reservoirs != null, spatialRequested());"),
             "the frame description only reports spatial on top of a reservoir stage that is running");
         assertTrue(spatial.contains("diReservoirSlot(pixel, size, parity) < diReservoirCount(reservoirs)"),
             "the spatial reader bounds the slot through the same helper the temporal stage uses");

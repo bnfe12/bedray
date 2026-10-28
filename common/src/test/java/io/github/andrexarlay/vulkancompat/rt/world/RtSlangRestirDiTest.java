@@ -31,6 +31,8 @@ class RtSlangRestirDiTest {
         + "RtPathTraceSlangPass.java";
     private static final String GAME_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
+    private static final String STATE = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "RestirDiState.java";
     private static final String CONFIG = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtConfig.java";
     private static final String FRAME_PARAMS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtFrameParams.java";
@@ -89,9 +91,15 @@ class RtSlangRestirDiTest {
         String game = read(GAME_PASS);
         assertTrue(game.contains("long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;"),
             "the host reserves both halves");
-        assertTrue(game.contains("int diParity = reservoirFrame & 1;"), "the host alternates the half");
-        assertTrue(game.contains("reservoirFrame++;"),
-            "and only advances it after a dispatch that really wrote records");
+        assertTrue(game.contains("int diParity = di.parity();"),
+            "the host asks the ring state which half this frame reads; a native ring reports zero there");
+        assertTrue(game.contains("di.afterDispatch(diFlags != 0);"),
+            "and the ring advances only after a dispatch that really wrote records");
+        String state = block(read(STATE), "void afterDispatch(boolean wrote) {");
+        assertTrue(state.contains("frame++;"),
+            "the external parity lives in the ring state, not beside it, and moves with the write");
+        assertTrue(state.indexOf("frame++;") > state.indexOf("if (!wrote)"),
+            "a skipped frame returns before the parity moves, so the half it did not write stays the read half");
         assertTrue(game.contains("nativeBuffers.createDeviceLocal(need,"),
             "the Slang ring is its own buffer: the GLSL records have a different layout and a mode switch must not"
                 + " cross-feed them");
@@ -224,13 +232,16 @@ class RtSlangRestirDiTest {
         assertTrue(pass.contains("directReuse.enabled = (pc.diState.x & PATH_TRACE_DI_ENABLED) != 0u ? 1u : 0u;"),
             "and the sampler is built either way");
         String game = read(GAME_PASS);
-        assertEquals(RtSlangPathPass.DI_FLAG_ENABLED, flag(pass, "PATH_TRACE_DI_ENABLED"), "enabled bit");
-        assertEquals(RtSlangPathPass.DI_FLAG_HISTORY, flag(pass, "PATH_TRACE_DI_HISTORY"), "history bit");
-        assertEquals(RtSlangPathPass.DI_FLAG_STATIC, flag(pass, "PATH_TRACE_DI_STATIC"), "static bit");
-        assertEquals(RtSlangPathPass.DI_FLAG_FLIP_Y, flag(pass, "PATH_TRACE_DI_FLIP_Y"), "flipY bit");
-        assertTrue(game.contains("diFlags = DI_FLAG_ENABLED | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)"),
-            "the host never claims a history it did not write");
-        assertTrue(game.contains("if (emitterCount > 0 && diActive() && reservoirs != null)"),
+        assertEquals(RestirDiState.FLAG_ENABLED, flag(pass, "PATH_TRACE_DI_ENABLED"), "enabled bit");
+        assertEquals(RestirDiState.FLAG_HISTORY, flag(pass, "PATH_TRACE_DI_HISTORY"), "history bit");
+        assertEquals(RestirDiState.FLAG_STATIC, flag(pass, "PATH_TRACE_DI_STATIC"), "static bit");
+        assertEquals(RestirDiState.FLAG_FLIP_Y, flag(pass, "PATH_TRACE_DI_FLIP_Y"), "flipY bit");
+        String state = block(read(STATE), "int flags(boolean cameraStatic, boolean flipY) {");
+        assertTrue(state.contains("if (!nativeRing && historyWritten) {"),
+            "the host never claims a history it did not write, and the native ring keeps its own parity and history bit");
+        assertTrue(game.contains("diFlags = di.flags(params.cameraStatic, params.flipY);"),
+            "the word is built in one place, from the state that knows what was written");
+        assertTrue(game.contains("if (emitterCount > 0 && diActive() && di.available(reservoirs != null))"),
             "reuse needs the ring, the player's switch and a list to reuse: without emitters there is nothing to carry over");
         assertTrue(read(CONFIG).contains("\"vkbridge.rt.restirDi\", \"true\""),
             "the A/B switch is there for the owner, on by default");

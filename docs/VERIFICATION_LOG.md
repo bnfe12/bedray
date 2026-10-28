@@ -351,3 +351,38 @@ suite executes the standalone completion/discard transition checks. All 17 AOT
 passes compiled in this worktree; the unchanged final shader sources reused
 those outputs. This is native/Java CPU L2 and compiler L1, not GPU/game evidence.
 Journal-only follow-up skips identical native CI. Native switches remain opt-in.
+
+## 2026-10-28 — ReSTIR DI ring state
+
+Base `a8f796b` (`refactor/slang-pipeline`, working tree; nothing pushed by this
+entry). `RestirDiState` replaces the five host fields that carried the DI ring's
+bookkeeping (`nativeReservoirs`, `reservoirPixels`, `reservoirResetRequested`,
+`reservoirHistoryWritten`, `reservoirFrame`) with one device-free class that
+knows the owner, the parity, the history bit, the pending clear and the extent
+the records were laid out for. `RtSlangPathPass` asks it instead of maintaining
+those flags across `prepare`, `configure`, `dispatch` and `recordNative`; the
+shader's `PATH_TRACE_DI_*` bits and the push/binding layouts are unchanged.
+
+Three defects fall out of that consolidation:
+
+* A native ring was never invalidated on an extent change. The core sizes its
+  ring by byte count (`ensure_reservoirs`), so a transposed resize kept the same
+  buffer and the same `owned_di_history_`, and the next frame imported records
+  addressed for the previous layout. The host now forwards `RESET_DI` on any
+  extent change, including under `NATIVE_DI`.
+* The external ring reset only when the pixel count changed, which misses the
+  same case for the same reason. The extent, not the count, now decides.
+* A forwarded `RESET_DI` was cleared after `recordNative` even on a frame that
+  dispatched no DI (empty emitter list or the switch off, which the core skips),
+  so the core never received the clear. The request now survives until a
+  dispatch that actually ran DI.
+
+Local evidence: `RtSlangPathPass` and `RestirDiState` pass a javac parse gate;
+`RestirDiStateTest` (7 tests: both owners, parity, history, reset survival,
+extent, mode log) and the three affected scan suites run green through a
+reflective JUnit harness, 35 tests in total (`RtSlangRestirDiTest` 11,
+`RtSlangRestirSpatialTest` 12, `RtRestirSettingsTest` 5, `RestirDiStateTest` 7).
+`:common:compileJava` is unavailable here because the Minecraft, Sodium and Iris
+artifacts are not resolvable in this environment, so this is L0/L1/L2 only: no
+CI run, no GPU/game result, and live parity plus visual reuse remain unverified
+(L3–L5).

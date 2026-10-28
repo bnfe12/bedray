@@ -1471,7 +1471,7 @@ public final class RtFrameRenderer {
                 }
                 return null;
             }
-            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, world.memory(), gbuffer);
+            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, gbuffer);
             LOGGER.info("[VKB-RT] path_tracer selector={} on AOT Slang passes {}+{} (gbuffer={})",
                 selector.name().toLowerCase(Locale.ROOT), RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
             return slang;

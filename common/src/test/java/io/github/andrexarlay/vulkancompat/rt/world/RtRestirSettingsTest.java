@@ -68,9 +68,9 @@ class RtRestirSettingsTest {
             "diRequested() stays the static capability, so flipping the switch never frees a ring mid-frame");
         assertTrue(pass.contains("return diRequested() && RtSettings.pathRestirDi();"),
             "diActive() is the per-frame decision the player controls");
-        assertTrue(pass.contains("if (emitterCount > 0 && diActive() && reservoirs != null)"),
+        assertTrue(pass.contains("if (emitterCount > 0 && diActive() && di.available(reservoirs != null))"),
             "the dispatch is the consumer: without the flag the shader takes the plain per-frame branch");
-        assertTrue(pass.contains("String restir = !diActive() || reservoirs == null ? \"off\""),
+        assertTrue(pass.contains("String restir = di.mode(diActive(), reservoirs != null, spatialRequested());"),
             "and the mode log says what is really running, so a frame can be checked after the fact");
         String prepare = block(pass, "private void prepareReservoirs(");
         int staticBranch = prepare.indexOf("if (!diRequested()) {");
