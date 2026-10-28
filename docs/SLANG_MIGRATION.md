@@ -47,6 +47,13 @@ intervals are skipped. The shader harness in
 `common/src/test/resources/shaders/slang/verify_scene_tracer.slang` checks generic
 code generation only; it does not execute a GPU dispatch or prove visual output.
 
+The typed Radiance Cascades atlas has the same kind of harness in
+`common/src/test/resources/shaders/slang/verify_rc_typed.slang`. It instantiates
+the typed store API against both `RWStructuredBuffer<RCSegment>` and
+`StructuredBuffer<RCSegment>`; it is a compile check, not a stride, layout or
+runtime test. The legacy float4 atlas is a different record format and is not
+imported there.
+
 Architecture target: [ARCHITECTURE_MANIFESTO.md](ARCHITECTURE_MANIFESTO.md).
 Audit findings and their original source-only evidence are recorded in
 [AUDIT_DEFECTS_AND_ISSUES.md](AUDIT_DEFECTS_AND_ISSUES.md); each finding still
