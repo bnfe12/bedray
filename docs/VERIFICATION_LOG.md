@@ -284,3 +284,34 @@ Executed result: [run 40723147943](https://github.com/bnfe12/bedray/actions/runs
 code `7dc6521`: core 18/18, scene 1/1, frame lifetime 1/1; no native test
 failures. Local `:common:compileJava` exits 0 (Java L1). Native evidence is L2;
 no live claim. Journal-only follow-up skips unchanged CI.
+
+## 2026-10-28 — single native scene owner
+
+Base `0181549b3537659c6d83bbc3ac655d81cff53ebd`. Opt-in native scene mode now
+paces CPU section captures and serializes POD directly into bedray_scene. It
+allocates no Java geometry/BLAS arenas, TLAS, decode pipeline, scratch, instance
+table or entity BLAS. The existing Java mode remains the reference when native
+scene is not selected/available at initialization. A failure after native scene
+activation propagates, retains pending updates and never silently omits geometry
+or switches to unallocated Java resources. Emitter scanning visits accepted CPU
+captures. Native AS counters and actual VkDeviceMemory bytes feed telemetry.
+
+An additive resident-bytes query leaves ABI v2 layouts intact. Entity-only/empty
+section sets publish a real zeroed 64-byte section descriptor while section_count
+stays zero. Driver tests compare reported resident bytes against all actual fake
+allocations, including retired/pinned generations, and check entity-only tables.
+A POD packing test checks pass-local indices and vertex attributes. Native scene
+is closed after host drain before unloading core; world teardown no longer calls
+vkDeviceWaitIdle. Native CI and Java/AOT verification are pending; no GPU/game
+or visual evidence is claimed.
+
+Executed result: candidate `ae45bf9`, [run 40724808514](https://github.com/bnfe12/bedray/actions/runs/40724808514)
+passes core 18/18 + standalone scene 1/1 + frame lifetime 1/1, ABI v2 probe.
+No C/C++ compiler warnings/errors in either job log. The first candidate run
+40724238754 correctly caught an old table-test assertion (one upload); publishing
+the valid empty section descriptor adds a second upload. That expectation was
+updated and the complete native run repeated successfully. Local Java compile
+and all 17 AOT passes compile successfully. Targeted JUnit: 19 recording/manifest/
+path-contract tests plus 4 scene API/POD packing tests pass. Existing Iris test
+Unsafe warnings and JOML deprecation diagnostics remain. Evidence: native/CPU L2,
+AOT/Java L1. No GPU/game result. Journal-only follow-up skips unchanged native CI.

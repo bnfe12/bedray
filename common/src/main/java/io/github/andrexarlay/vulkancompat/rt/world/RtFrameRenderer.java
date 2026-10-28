@@ -237,7 +237,7 @@ public final class RtFrameRenderer {
     }
 
     public static io.github.andrexarlay.vulkancompat.rt.entity.RuntimeFeatureStatus getEntityInstanceStatus() {
-        if (world != null && world.entityBlas() != null && world.entityBlas().getBlasAddress() != 0L && world.entityBlas().getPrimitiveCount() > 0) {
+        if (world != null && world.entityPrimitiveCount() > 0) {
             return io.github.andrexarlay.vulkancompat.rt.entity.RuntimeFeatureStatus.READY;
         }
         return io.github.andrexarlay.vulkancompat.rt.entity.RuntimeFeatureStatus.EMPTY;
@@ -1035,7 +1035,7 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.FOG_DISTANCE_SCALE, params.fogDistanceScale);
         // entity geometry of this frame (RtEntityGeometryManager ring slice; the same slice the entity BLAS was built from)
         RtEntityGeometryManager eg = RtEntityGeometryManager.INSTANCE;
-        boolean entOk = world.entityBlas().getPrimitiveCount() > 0;
+        boolean entOk = world.entityPrimitiveCount() > 0;
         MemoryUtil.memPutInt(hdr + RtStatsLayout.ENTITY_TRIS, entOk ? eg.frameTriangles() : 0);
         // Triangle range of the local player's body captured for this frame: the primary rays skip it (an inside face of the
         // avatar at 0.001 from the eye is what the first-person screen would otherwise show).

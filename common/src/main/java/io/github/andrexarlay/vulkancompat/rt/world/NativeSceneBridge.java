@@ -27,10 +27,9 @@ import java.util.Set;
  * has, and publishes the TLAS plus the section-table buffer this class hands to
  * the path trace pass as a borrowed {@link RtMemory.Buf}.
  *
- * <p>Geometry is fed in the same paced order the legacy world builds it: a section
- * enters the scene when {@link RtWorld} succeeds in staging it, and leaves when the
- * rescan evicts it.  The bridge therefore keeps both scenes in lockstep, which is
- * what makes the native table a drop-in replacement for the legacy one.
+ * <p>Java paces CPU captures and serializes POD input. C++ is the sole owner of
+ * AS builds and scene GPU resources in native mode. Update failures remain queued
+ * and propagate to the host; geometry is never silently omitted.
  *
  * <p>Lifetime: every prepared frame is queued on the host encoder's destruction
  * queue, which flushes an entry only after the submission that consumed it has
@@ -89,6 +88,8 @@ final class NativeSceneBridge implements AutoCloseable {
     private boolean activeThisFrame;
     private long lastLogNanos;
     private long lastInstances;
+    private int lastBlasBuilds;
+    private int entityTriangles;
     private double lastViewX;
     private double lastViewY;
     private double lastViewZ;
@@ -155,8 +156,13 @@ final class NativeSceneBridge implements AutoCloseable {
         return sectionCount;
     }
 
+    int instanceCount() { return Math.toIntExact(lastInstances); }
+    int blasBuilds() { return lastBlasBuilds; }
+    int entityTriangles() { return entityTriangles; }
+    long residentBytes() { return library.residentBytes(scene); }
+
     /**
-     * Queues a section the legacy world just staged.  The bridge keeps the same
+     * Queues a paced CPU section capture. The bridge keeps the same
      * id for the section across rebuilds, so the native record's identity (and
      * therefore the path tracer's history) survives a re-mesh.
      */
@@ -219,6 +225,7 @@ final class NativeSceneBridge implements AutoCloseable {
             ENTITY_INSTANCE_MASK, IDENTITY_TRANSFORM);
         library.update(scene, null, null, List.of(entity), null);
         entityPresent = true;
+        entityTriangles = Math.toIntExact(indexCount / 3);
     }
 
     private void removeEntity() {
@@ -227,6 +234,7 @@ final class NativeSceneBridge implements AutoCloseable {
         }
         library.update(scene, null, null, null, new long[] {ENTITY_ID});
         entityPresent = false;
+        entityTriangles = 0;
     }
 
     /**
@@ -270,6 +278,7 @@ final class NativeSceneBridge implements AutoCloseable {
         lastViewY = camY;
         lastViewZ = camZ;
         lastInstances = info.instanceCount();
+        lastBlasBuilds = Math.toIntExact(info.blasBuilds());
         logActivePeriodically();
     }
 
@@ -306,17 +315,16 @@ final class NativeSceneBridge implements AutoCloseable {
     }
 
     private void flushUpdates() {
-        for (Map.Entry<Long, Long> removal : removals.entrySet()) {
-            try {
-                library.update(scene, null, new long[] {removal.getValue()}, null, null);
-            } catch (RuntimeException e) {
-                LOGGER.warn("[VKB-RT] native_scene remove section key={} failed: {}", removal.getKey(), e.getMessage());
-            }
+        for (Iterator<Map.Entry<Long, Long>> it = removals.entrySet().iterator(); it.hasNext();) {
+            Map.Entry<Long, Long> removal = it.next();
+            library.update(scene, null, new long[] {removal.getValue()}, null, null);
+            it.remove();
         }
-        removals.clear();
-        for (Map.Entry<Long, PendingSection> update : updates.entrySet()) {
+        for (Iterator<Map.Entry<Long, PendingSection>> it = updates.entrySet().iterator(); it.hasNext();) {
+            Map.Entry<Long, PendingSection> update = it.next();
             Long id = sectionIds.get(update.getKey());
             if (id == null) {
+                it.remove();
                 continue;
             }
             PendingSection pending = update.getValue();
@@ -324,15 +332,9 @@ final class NativeSceneBridge implements AutoCloseable {
                 BedraySceneNative.Section section = BedraySceneGeometry.build(pending.section(), pending.tagged(),
                     arena, id, nextRevision++);
                 library.update(scene, List.of(section), null, null, null);
-            } catch (RuntimeException e) {
-                // A section the native scene rejects (more than 65535 quads, a
-                // validation failure) must not retry every frame: the legacy world
-                // keeps it, the native scene logs it once and goes without it.
-                LOGGER.error("[VKB-RT] native_scene section key={} id={} rejected: {}",
-                    update.getKey(), id, e.getMessage());
             }
+            it.remove();
         }
-        updates.clear();
     }
 
     /** Releases every prepared frame after the host proved completion or discard. */

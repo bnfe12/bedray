@@ -371,6 +371,10 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_query_resource
     BedrayScene* scene,
     BedraySceneResources* out_resources);
 
+/* Actual VkDeviceMemory allocation bytes, including pinned retired generations and uploads. */
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_resident_bytes(
+    BedrayScene* scene, uint64_t* out_bytes);
+
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_destroy(
     BedrayScene* scene);
 

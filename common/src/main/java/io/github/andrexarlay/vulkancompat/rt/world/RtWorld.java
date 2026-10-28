@@ -161,15 +161,16 @@ public final class RtWorld {
     private final OpacityMicromapCache omm;
     /**
      * Optional native GPU scene ({@code -Dvkbridge.rt.nativeScene=true}). It owns a
-     * second section BLAS/TLAS and the 64-byte {@code GeometrySection} table; while
+     * section BLAS/TLAS and the 64-byte {@code GeometrySection} table; while
      * it has a TLAS for this frame the facade below returns its handles and the
      * Slang path dispatches {@code path_trace_scene}. Null keeps the legacy scene.
      */
     private NativeSceneBridge nativeScene;
     /** True when the handles published by the last {@link #update} belong to {@link #nativeScene}. */
     private boolean nativeSceneFrameActive;
-    /** Set once the native scene failed mid-session: the legacy scene keeps rendering. */
-    private boolean nativeSceneFailed;
+    /** CPU captures accepted for the native scene; no parallel Java AS resources. */
+    private final Map<Long, DecodedSection> nativeSections = new HashMap<>();
+    private final Map<Long, Long> nativeTagHashes = new HashMap<>();
 
     private final Map<Long, SectionGpu> gpu = new HashMap<>();
     /** Incremented whenever a section enters, leaves or is replaced in {@link #gpu} (emitter list rebuilds key off it). */
@@ -206,6 +207,26 @@ public final class RtWorld {
         ArrayDeque<Runnable> rollback = new ArrayDeque<>();
         rollback.push(mem::close);
         try {
+            this.nativeScene = createNativeScene(runtime);
+            if (nativeScene != null) {
+                // Native mode has one AS owner. Java keeps only CPU captures and the entity upload ring.
+                this.dequantize = null;
+                this.geomArena = null;
+                this.blasArena = null;
+                this.indexBuf = null;
+                this.staging = null;
+                this.scratch = null;
+                this.table = null;
+                this.instances = null;
+                this.tlasBuf = null;
+                this.tlasHandle = 0;
+                this.tlasAddress = 0;
+                this.scratchBase = 0;
+                this.entityBlas = null;
+                this.omm = null;
+                rollback.clear();
+                return;
+            }
             // Validate/register the AOT decoder before allocating scene resources.
             this.dequantize = new io.github.andrexarlay.vulkancompat.rt.sodium.SodiumDequantize(runtime);
             rollback.push(dequantize::destroy);
@@ -238,10 +259,6 @@ public final class RtWorld {
             rollback.push(entityBlas::close);
             this.omm = OpacityMicromapCache.create(mem);
             if (omm != null) rollback.push(omm::destroy);
-            // The native scene is optional and opt-in: a missing DLL, an ABI
-            // mismatch or a Vulkan failure leaves the legacy scene in place.
-            this.nativeScene = createNativeScene(runtime);
-            if (nativeScene != null) rollback.push(nativeScene::close);
 
             long tlasSize;
             long tlasScratch;
@@ -308,22 +325,6 @@ public final class RtWorld {
         }
     }
 
-    /**
-     * Disables the native scene for the rest of the session after a failure that
-     * cannot be retried safely. The legacy scene keeps rendering: the facade
-     * returns its TLAS/table from now on, and every later call into the bridge is
-     * skipped. The bridge itself stays allocated (it may still own GPU objects
-     * referenced by submissions in flight) and is closed by {@link #destroy()}.
-     */
-    private void failNativeScene(String what, Throwable failure) {
-        if (!nativeSceneFailed) {
-            nativeSceneFailed = true;
-            LOGGER.error("[VKB-RT] native_scene {} failed; falling back to the Java scene for this session: {}",
-                what, failure.getMessage(), failure);
-        }
-        nativeSceneFrameActive = false;
-    }
-
     private long asAddress(MemoryStack stack, long handle) {
         VkAccelerationStructureDeviceAddressInfoKHR info = VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack)
             .sType$Default().accelerationStructure(handle);
@@ -385,6 +386,7 @@ public final class RtWorld {
         this.radiusY = radiusY;
         long tUpdate = RtTimings.start();
         frameIndex++;
+        if (nativeScene != null) return updateNative(cmd, camX, camY, camZ, radiusChanged, tUpdate);
         releaseDeferred(false);
         stagingCursor = (frameIndex % STAGING_SEGMENTS) * STAGING_SEGMENT_BYTES;
         scratchCursor = scratchBase;
@@ -392,15 +394,6 @@ public final class RtWorld {
         // Build dynamic entity BLAS at the beginning of the frame update
         RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ);
         entityBlas.build(cmd, RtEntityGeometryManager.INSTANCE, scratch, scratchCursor);
-        // The native scene copies the same host-visible ring during update(), so a
-        // frame with no capture removes the entity instead of leaving last frame's.
-        if (nativeScene != null && !nativeSceneFailed) {
-            try {
-                nativeScene.updateEntities(frameIndex);
-            } catch (RuntimeException | LinkageError e) {
-                failNativeScene("update_entities", e);
-            }
-        }
 
         long t0 = System.nanoTime();
         int camSx = InstanceMath.sectionCoord(camX);
@@ -427,21 +420,6 @@ public final class RtWorld {
         int built = buildPending(cmd, reg, copied);
         long t1 = System.nanoTime();
         int instanceCount = buildTlas(cmd, camX, camY, camZ);
-        // Applies the section updates queued by tryBuildSection, records the native
-        // BLAS/TLAS builds into this command buffer and republishes the handles.
-        // Running after the legacy TLAS keeps both scenes on the same frame order.
-        // Any failure here is fail-soft: the legacy TLAS built above stays valid,
-        // so the facade drops back to it and the session keeps rendering.
-        if (nativeScene != null && !nativeSceneFailed) {
-            try {
-                nativeScene.prepareFrame(cmd.address(), frameIndex, camX, camY, camZ);
-                nativeSceneFrameActive = nativeScene.activeThisFrame();
-            } catch (RuntimeException | LinkageError e) {
-                failNativeScene("prepare_frame", e);
-            }
-        } else {
-            nativeSceneFrameActive = false;
-        }
         long t2 = System.nanoTime();
         RtTimings.countBlas(built);
         RtTimings.stop(RtTimings.Phase.UPDATE_TOTAL, tUpdate);
@@ -465,6 +443,81 @@ public final class RtWorld {
 
         return new FrameStats(built, gpu.size(), pending.size() - pendingIdx, instanceCount,
             (t1 - t0) / 1.0e6, (t2 - t1) / 1.0e6, mem.reservedBytes(), failedSections);
+    }
+
+    private FrameStats updateNative(VkCommandBuffer cmd, double camX, double camY, double camZ,
+                                    boolean radiusChanged, long tUpdate) {
+        nativeSceneFrameActive = false;
+        RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ);
+        nativeScene.updateEntities(frameIndex);
+        long started = System.nanoTime();
+        int sx = InstanceMath.sectionCoord(camX), sy = InstanceMath.sectionCoord(camY), sz = InstanceMath.sectionCoord(camZ);
+        SectionGeometryRegistry reg = SectionGeometryRegistry.INSTANCE;
+        if (radiusChanged || reg.version() != lastVersion || sx != lastCamSx || sy != lastCamSy || sz != lastCamSz) {
+            lastVersion = reg.version();
+            lastCamSx = sx;
+            lastCamSy = sy;
+            lastCamSz = sz;
+            for (Iterator<DecodedSection> it = nativeSections.values().iterator(); it.hasNext();) {
+                DecodedSection d = it.next();
+                if (reg.get(d.key) == null || !InstanceMath.inRadius(d.sectionX, d.sectionY, d.sectionZ,
+                        sx, sy, sz, radiusXz + RtConfig.EVICT_MARGIN, radiusY + RtConfig.EVICT_MARGIN)) {
+                    nativeScene.sectionRemoved(d.key);
+                    it.remove();
+                    nativeTagHashes.remove(d.key);
+                    structureVersion++;
+                }
+            }
+            ArrayList<DecodedSection> next = new ArrayList<>();
+            reg.forEachSection(d -> {
+                if (nativeSections.get(d.key) != d && InstanceMath.inRadius(d.sectionX, d.sectionY, d.sectionZ,
+                        sx, sy, sz, radiusXz, radiusY)) next.add(d);
+            });
+            next.sort(Comparator.comparingLong(d -> {
+                long dx = (long)d.sectionX - sx, dy = ((long)d.sectionY - sy) * 2, dz = (long)d.sectionZ - sz;
+                return dx * dx + dy * dy + dz * dz;
+            }));
+            pending = next;
+            pendingIdx = 0;
+            RtTimings.countRescan();
+        }
+        nearestBuiltSq = Long.MAX_VALUE;
+        int built = 0;
+        long deadline = System.nanoTime() + (long)(CPU_BUDGET_MS * 1e6);
+        while (pendingIdx < pending.size() && built < RtConfig.BLAS_PER_FRAME) {
+            if (built > 0 && System.nanoTime() > deadline) break;
+            DecodedSection d = pending.get(pendingIdx++);
+            if (reg.get(d.key) != d) continue;
+            int[] flags = quadFlags(d);
+            long hash = lightHash(d.light, flags, d.totalQuads() * 4);
+            DecodedSection previous = nativeSections.get(d.key);
+            if (previous != null && sameGeometry(previous, d)
+                    && java.util.Objects.equals(nativeTagHashes.get(d.key), hash)) {
+                nativeSections.put(d.key, d);
+                identicalSkipped++;
+                continue;
+            }
+            nativeScene.sectionBuilt(d, flags);
+            nativeSections.put(d.key, d);
+            nativeTagHashes.put(d.key, hash);
+            structureVersion++;
+            long dx = (long)d.sectionX - sx, dy = (long)d.sectionY - sy, dz = (long)d.sectionZ - sz;
+            nearestBuiltSq = Math.min(nearestBuiltSq, dx * dx + dy * dy + dz * dz);
+            built++;
+        }
+        long prepared = System.nanoTime();
+        nativeScene.prepareFrame(cmd.address(), frameIndex, camX, camY, camZ);
+        nativeSceneFrameActive = nativeScene.activeThisFrame();
+        int instances = nativeScene.instanceCount();
+        lastEntityTelemetry = "[VK-ENTITY-AS] owner=native captured="
+            + RtEntityGeometryManager.INSTANCE.getCapturedEntityCount() + " triangles=" + nativeScene.entityTriangles()
+            + " instances=" + instances + " " + RtEntityGeometryManager.INSTANCE.uploadTelemetry();
+        RtTimings.countBlas(nativeScene.blasBuilds());
+        RtTimings.stop(RtTimings.Phase.UPDATE_TOTAL, tUpdate);
+        RtTimings.endFrame();
+        return new FrameStats(nativeScene.blasBuilds(), nativeScene.sectionCount(), pending.size() - pendingIdx,
+            instances, (prepared - started) / 1e6, (System.nanoTime() - prepared) / 1e6,
+            mem.reservedBytes() + nativeScene.residentBytes(), failedSections);
     }
 
     /** Last [VK-ENTITY-AS] line (production counters of this frame), read by the autotest. */
@@ -666,6 +719,10 @@ public final class RtWorld {
 
     /** Visits the decoded geometry of every section that currently has a BLAS (render thread). */
     public void forEachBuiltSection(java.util.function.Consumer<DecodedSection> consumer) {
+        if (nativeScene != null) {
+            nativeSections.values().forEach(consumer);
+            return;
+        }
         for (SectionGpu g : gpu.values()) {
             consumer.accept(g.src);
         }
@@ -690,11 +747,6 @@ public final class RtWorld {
                 it.remove();
                 structureVersion++;
                 deferred.add(new Deferred(frameIndex, g));
-                if (nativeScene != null && !nativeSceneFailed) {
-                    // Same frame as the legacy eviction: the native table must not
-                    // keep a section the path tracer can no longer see.
-                    nativeScene.sectionRemoved(g.key);
-                }
             }
         }
         ArrayList<DecodedSection> list = new ArrayList<>();
@@ -1089,17 +1141,6 @@ public final class RtWorld {
                 if (old != null) {
                     deferred.add(new Deferred(frameIndex, old));
                 }
-                if (nativeScene != null && !nativeSceneFailed) {
-                    // The native scene consumes the same staged section, in the same
-                    // paced order as the legacy build, so the two tables stay in step.
-                    // A queueing failure must not turn a completed legacy build into
-                    // a rollback: the entry is already in `gpu`.
-                    try {
-                        nativeScene.sectionBuilt(d, tagged);
-                    } catch (RuntimeException | LinkageError e) {
-                        failNativeScene("section key=" + d.key, e);
-                    }
-                }
             }
             return item;
         } catch (RuntimeException e) {
@@ -1267,29 +1308,21 @@ public final class RtWorld {
 
     /** Called only with host proof of completion or deliberate unsubmitted discard. */
     public void releaseRecording(long commandBuffer) {
-        dequantize.releaseRecording(commandBuffer);
+        if (dequantize != null) dequantize.releaseRecording(commandBuffer);
         if (nativeScene != null) nativeScene.releaseRecording(commandBuffer);
     }
 
     /** The caller has drained host submissions and excluded future resubmission. */
     public void releaseComputeRecordingsAfterHostDrain() {
-        dequantize.releaseRecordingsAfterHostDrain();
-        // Every prepared native frame is now provably complete (or discarded), so
-        // the scene may recycle its transient uploads and scratch memory. A failure
-        // here disables the scene, it never aborts the host's drain.
-        if (nativeScene != null && !nativeSceneFailed) {
-            try {
-                nativeScene.releaseAllFrames();
-            } catch (RuntimeException | LinkageError e) {
-                failNativeScene("release_frames", e);
-            }
-        }
+        if (dequantize != null) dequantize.releaseRecordingsAfterHostDrain();
+        if (nativeScene != null) nativeScene.releaseAllFrames();
     }
 
     /** Close compute programs before the shared native runtime is closed. */
     public void closeComputeAfterHostDrain() {
         releaseComputeRecordingsAfterHostDrain();
-        dequantize.destroy();
+        if (dequantize != null) dequantize.destroy();
+        if (nativeScene != null) nativeScene.close();
     }
 
     private void releaseDeferred(boolean all) {
@@ -1305,19 +1338,18 @@ public final class RtWorld {
         }
     }
 
-    /** Waits for the GPU and releases everything. Safe to call once; the object is unusable afterwards. */
+    /** Releases resources after the caller drained host submissions and excluded resubmission. */
     public void destroy() {
-        dequantize.destroy();
-        VK10.vkDeviceWaitIdle(device);
         if (nativeScene != null) {
-            try {
-                nativeScene.close();
-            } catch (RuntimeException | LinkageError e) {
-                LOGGER.error("[VKB-RT] native scene close failed; leaking it rather than corrupting the device", e);
-            }
-            nativeScene = null;
+            nativeScene.close();
             nativeSceneFrameActive = false;
+            nativeSections.clear();
+            nativeTagHashes.clear();
+            RtEntityGeometryManager.INSTANCE.closeAll(mem);
+            mem.close();
+            return;
         }
+        dequantize.destroy();
         for (SectionGpu g : gpu.values()) {
             deferred.add(new Deferred(frameIndex, g));
         }
@@ -1342,6 +1374,10 @@ public final class RtWorld {
 
     public RtEntityBlas entityBlas() {
         return entityBlas;
+    }
+
+    public int entityPrimitiveCount() {
+        return nativeScene != null ? (nativeSceneFrameActive ? nativeScene.entityTriangles() : 0) : entityBlas.getPrimitiveCount();
     }
 
     /** Opacity micromap cache of this world (null when the session gate failed; also the material atlas sink). */
