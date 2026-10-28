@@ -532,3 +532,35 @@ zero test failures/errors/skips. The default AOT build freshly compiled all
 18 production passes, including rc_probe_trace, with reflection validation.
 The final follow-up only clarifies the stale migration-status documentation.
 Relative to the refreshed base, cleanup changes no native or shader sources.
+
+## 2026-10-28 — explicit native/reference path execution boundary
+
+Base `a7f91404132d9abed9607867ff94c5374b82480a`. RtSlangPathPass now captures
+camera/settings/scene POD and delegates execution through PathTraceBackend.
+NativePathTraceBackend registers borrowed runtime programs and calls the coarse
+C++ pass; it creates no Java GPU owner, dummy buffers, descriptors or Vulkan
+commands. ReferencePathTraceBackend contains the existing Java orchestration,
+private images and DI ring. The native implementation therefore no longer
+constructs the reference pass just to obtain program handles. Matching native
+cores must advertise NATIVE_DI; explicit native selection reports unsupported
+cores instead of silently selecting reference execution. The default stays Java
+until owner GPU/game verification. ABI v2 layouts and shader sources are unchanged.
+
+Spatial wrappers now borrow cached programs from SlangRuntime. Closing a wrapper
+cannot close a still-cached program; pending recording retirement is required
+before wrapper close. The controller publishes successful history/reset
+consumption only after record returns. Unknown discard handles do not reset it.
+
+Executed comparison with the same local dependencies/JDK/Slang SDK as above:
+`:common:test --tests '*RtSlang*Test' --tests '*RtPathTraceSlangPassTest'
+--tests '*SlangPassLibraryTest' --tests '*RecordingCompletionTest'
+--tests '*BedraySceneGeometryTest'`. Base runs 80 tests, 3 failing obsolete Java
+source assertions in RtSlangRestirDiTest and RtSlangRestirSpatialTest (native DI
+ownership from the earlier integration); no shader math test fails. This change
+updates those ownership/file-boundary assertions and adds PathTraceBackendTest.
+Candidate command adds `--tests '*PathTraceBackendTest'`: 83/83 pass, zero
+errors/skips, including record failure/reset latching, resize/discard, close
+retry, display-bit translation and byte-exact preservation of other push fields.
+Java compilation exits 0. All 18 unchanged AOT passes also compile on the baseline.
+Native C++ is unchanged, so the existing 20-test native evidence remains scoped
+to the same sources and identical native CI is skipped. No GPU/game claim.

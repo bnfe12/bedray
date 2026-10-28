@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtSlangSampleRejectionTest {
 
+    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
     private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
@@ -171,7 +172,7 @@ class RtSlangSampleRejectionTest {
             + " radiance;"), "the display pass reads the image the trace pass wrote");
         assertTrue(display.contains("pathDisplaySanitize(radiance[p].rgb, limit)"),
             "and only its rgb for radiance, so the alpha lane is not double-used");
-        String game = read(GAME_PASS);
+        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(game.contains("SlangProgram.Resource.storageImage(\"radiance\", trace.radianceView())"),
             "the host binds it to exactly one pass");
         assertEquals(2, javaFilesMentioning("radianceView"),

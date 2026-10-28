@@ -1480,7 +1480,7 @@ public final class RtFrameRenderer {
         } catch (RuntimeException e) {
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             pathSlangUnavailableReason = reason;
-            if (selector == RtConfig.PathTracer.SLANG) {
+            if (selector == RtConfig.PathTracer.SLANG || RtConfig.SLANG_PATH_TRACE_CPP) {
                 if (e instanceof RtFailure failure) {
                     throw failure;
                 }
