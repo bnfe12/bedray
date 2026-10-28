@@ -147,6 +147,7 @@
   * [`traversal/hardware_traversal.slang:62`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/traversal/hardware_traversal.slang#L60-L65)
 * **Проблема:** Позиция в мире вычисляется со сверткой координат: `result.worldPosition = float3(section.origin.xyz & 1023) + localPosition;`. При этом `reprojectToHistory` умножает этот вектор на `header.prevViewProjection`.
 * **Угроза:** Как только игрок перемещается за пределы блока с координатой $X, Z > 1023$, координаты сбрасываются в 0, проецируя точку на 1024 блока назад. Временное накопление (TAA, SVGF) взрывается шлейфами и сбросом истории по всему экрану.
+* **Статус на 2026-10-28 (source-only):** в заявленном виде на HEAD не воспроизводится. `reprojectToHistory` вызывается только из `passes/temporal_accumulate.slang`, который читает отдельный `positionImg` (RGBA32F, абсолютные мировые координаты), а не `SurfaceHit.worldPosition`. Сам `worldPosition` уже документирован как 1024-обёрнутый neighbourhood proxy и запрещён как identity для history; единственный потребитель — не подключённый `restir_pt`. Латентный риск остаётся, если `restir_pt` подключат к `worldPosition` без развёртки; это host/contract-задача. Компиляции/теста не было (L0).
 
 ### [P1-7] ReSTIR PT: раздутый резервуар (465 МБ VRAM) и отсутствие детерминанта Якоби
 * **Файл:** [`restir/restir_pt.slang`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/restir/restir_pt.slang)
@@ -159,6 +160,7 @@
   * [`path_tracer.slang:302-306`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/pathtrace/path_tracer.slang#L300-L310)
 * **Проблема:** Если сгенерированное микрогранью отражение уходит под горизонт геометрии (`lightLocal.z <= 0.0`), `bsdfSample` возвращает `result.valid = false`. Трейсер путей при `!bsdf.valid` полностью прекращает трассировку луча (`break;`).
 * **Угроза:** На шероховатых материалах и на силуэтах под скользящими углами пути массово погибают на первом же отскоке, вызывая неестественное затемнение кромок объектов.
+* **Статус на 2026-10-28 (source-only):** заявленное затемнение кодом не подтверждается. При `lightLocal.z <= 0.0` вклад single-scattering GGX BRDF равен нулю (`NdotL <= 0`), а `break` происходит уже после накопления emission и NEE текущей вершины; продолжение пути с нулевым throughput дало бы тот же результат. `valid=false` здесь семантически неточно (это валидный нулевой сэмпл, а не сломанный путь), но на радианс не влияет. Реальная потеря энергии на силуэтах — отсутствие multiscatter-компенсации, отдельная задача. Компиляции/теста не было (L0); для уверенности нужен unit-тест на то, что ниже-горизонтный сэмпл не меняет сумму пути.
 
 ### [P1-9] Накопление смещения луча в вырезах (Cutout Holes) искажает ViewZ
 * **Файл:** [`path_tracer.slang:228, 246`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/pathtrace/path_tracer.slang#L220-L250)
@@ -169,6 +171,7 @@
 * **Файл:** [`radiance_cascades/rc_trace.slang:363-367`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/rc_trace.slang#L360-L368)
 * **Проблема:** При `options.worldBoundaryDistance == 0.0` любой промах луча в терминальном каскаде считается выходом в открытое небо.
 * **Угроза:** В глубоких пещерах с длинными пролетами луч терминального каскада достигает своего максимального радиуса ($r_{\text{far}} = 64$ блока), не встретив стену, и ошибочно добавляет солнечный/дневной свет в подземные локации.
+* **Статус на 2026-10-28 (source-only):** исправлено в `rc_trace.slang`. Environment теперь opt-in: `TerminalCascade` требует положительный `worldBoundaryDistance`, `rcEnvironmentAllowed` дополнительно требует `tFar >= worldBoundaryDistance`, а `defaultRCTraceOptions()` выбирает `Disabled`. Нулевая граница больше не означает «доверяем терминальному каскаду» — это отсутствие доказательства, и небо не добавляется. Host, которому нужен sky в RC, обязан задать реальную границу и поднять far override терминального каскада до неё. Компиляции/теста не было (L0); это изменение контракта `RCTraceOptions`, его нужно согласовать с host-интеграцией.
 
 ### [P1-11] Рудименты рантайм-компиляции GLSL через Shaderc
 * **Файлы:**

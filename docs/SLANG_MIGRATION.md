@@ -841,7 +841,7 @@ candidates, not a validated or active runtime.
 | Algorithm | Module | State |
 |---|---|---|
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
-| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace, segment store and typed probe resolve (`rcProbeIrradiance`/`rcProbeComplete`) are source-only in this checkout; the old float4 resolve is marked legacy and is incompatible with the typed trace. Cross-cascade reconstruction, temporal reuse and host integration are unfinished. |
+| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace, segment store and typed probe resolve (`rcProbeIrradiance`/`rcProbeComplete`) are source-only in this checkout; the old float4 resolve is marked legacy and is incompatible with the typed trace. Environment is opt-in on a positive world boundary, so a terminal-cascade miss under a roof is not treated as sky. Cross-cascade reconstruction, temporal reuse and host integration are unfinished. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
 | Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ISceneTracer`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; the traced scene is terrain *and* the captured entity ring (`traversal/entity_geometry.slang`), decoded by the instance's custom-index bit; `RtSlangPathPass` wraps `RtPathTraceSlangPass`, the optional `RtSpatialReuseSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
 
@@ -967,10 +967,12 @@ because a module has no entry point; that is expected.
    **Sobel auto-normal** that gives mob skin its relief, and glowing parts as
    **next-event candidates**, so a lantern held in hand lights nothing but itself.
 5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
-   are now in the shared checkout as source-only; align temporal history and
-   environment ownership, then define cross-cascade reconstruction and host
-   integration before connecting a pass. Do not wire the legacy float4 resolve
-   to the typed atlas.
+   are now in the shared checkout as source-only. Environment is opt-in on a
+   positive world boundary that the terminal window reaches; a zero boundary
+   adds no sky, because a terminal-cascade miss can end inside a cave. Align
+   temporal history and prove that boundary, then define cross-cascade
+   reconstruction and host integration before connecting a pass. Do not wire
+   the legacy float4 resolve to the typed atlas.
 6. **More entry passes** — denoise/composite follow the same one-file-per-entry
    pattern and the same ABI; no second pipeline path.
 7. **Live game check** — only after the above and an explicit request.  A

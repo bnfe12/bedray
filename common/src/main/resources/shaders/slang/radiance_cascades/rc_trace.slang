@@ -87,16 +87,19 @@
 // ------------------
 // A bounded interval that misses must not add sky in every cascade.  The walk
 // is given the cascade index; options.environmentPolicy = TerminalCascade
-// permits environment radiance only for options.environmentCascade (default:
-// the farthest cascade).  If options.worldBoundaryDistance > 0, the trace's
-// tFar must also reach that distance.  Environment is added to the far segment
-// only, after the far filter, and the ENVIRONMENT bit prevents any further
-// back segment from being composed behind it.
+// permits environment radiance only for options.environmentCascade, and only
+// when options.worldBoundaryDistance is positive and the trace's tFar reaches
+// it.  A miss inside a cave is not proof of open sky: a terminal cascade can
+// run out of its own range while still under a roof.  Environment is added to
+// the far segment only, after the far filter, and the ENVIRONMENT bit prevents
+// any further back segment from being composed behind it.
 //
-// With the native cascade ranges (c4 far = 64 blocks) environment is counted
-// only if the world boundary is at most 64 blocks away, or if the host raises
-// the terminal cascade's far override to the boundary distance.  That is a
-// host/resolve decision, not a guarantee of this module.
+// A zero boundary disables environment (the safe default) rather than acting
+// as "trusted terminal cascade"; the host must assert a real boundary and,
+// for the native c4 range, raise the terminal cascade's far override to reach
+// it.  That assertion is a host/resolve decision, not a guarantee of this
+// module.  A host that composites environment separately keeps the default
+// Disabled policy.
 //
 // Temporal history
 // ----------------
@@ -206,7 +209,7 @@ struct RCTraceOptions {
     float maxRadiance;            // per-segment firefly clamp
     uint  environmentPolicy;      // RCEnvironmentPolicy
     uint  environmentCascade;     // cascade that owns the environment
-    float worldBoundaryDistance;  // >0: the miss window must reach it; 0 = trusted terminal cascade
+    float worldBoundaryDistance;  // >0: the miss window must reach it; 0 = no proven boundary, no environment
     uint  flags;                  // reserved, must be 0 today
 };
 
@@ -217,7 +220,10 @@ RCTraceOptions defaultRCTraceOptions() {
     result.nearDistance = 0.0;
     result.farDistance = 0.0;
     result.maxRadiance = 1.0e6;
-    result.environmentPolicy = uint(RCEnvironmentPolicy.TerminalCascade);
+    // No boundary is known here, so the safe default adds no environment.  A
+    // host that wants sky in the terminal cascade opts in explicitly with a
+    // positive worldBoundaryDistance and a far window that reaches it.
+    result.environmentPolicy = uint(RCEnvironmentPolicy.Disabled);
     result.environmentCascade = RADIANCE_CASCADE_COUNT - 1u;
     result.worldBoundaryDistance = 0.0;
     result.flags = 0u;
@@ -267,6 +273,10 @@ bool rcTraceOptionsValid(RCTraceOptions options) {
     if (options.flags != 0u) return false;
     if (options.environmentPolicy == uint(RCEnvironmentPolicy.TerminalCascade)) {
         if (options.environmentCascade >= RADIANCE_CASCADE_COUNT) return false;
+        // A terminal-cascade miss may still be inside a cave.  Environment
+        // needs a positive boundary that the far window can reach; there is
+        // no "trust the terminal cascade" shortcut.
+        if (!(options.worldBoundaryDistance > 0.0)) return false;
     } else if (options.environmentPolicy != uint(RCEnvironmentPolicy.Disabled)) {
         return false;
     }
@@ -365,7 +375,10 @@ float rcTraceFar(RCTraceOptions options, RadianceRay rayValue) {
 bool rcEnvironmentAllowed(RCTraceOptions options, uint cascade, float tFar) {
     if (options.environmentPolicy != uint(RCEnvironmentPolicy.TerminalCascade)) return false;
     if (cascade != options.environmentCascade) return false;
-    if (options.worldBoundaryDistance > 0.0 && tFar < options.worldBoundaryDistance) return false;
+    // A miss that stops short of the world boundary may still be under a roof.
+    // Zero is not a trusted boundary; it is the absence of proof.
+    if (!(options.worldBoundaryDistance > 0.0)) return false;
+    if (tFar < options.worldBoundaryDistance) return false;
     return true;
 }
 
@@ -914,11 +927,11 @@ RCTraceResult rcBuildTraceResult(RadianceRay rayValue, uint cascade,
 
 // Traces the full [tNear, tFar] range and returns both segment records plus
 // their shared composition.  Both resources are required: there is no neutral
-// sampler that turns a missing light or environment binding into black.  A
-// host that composites environment in a separate pass selects
-// RCEnvironmentPolicy.Disabled; the environment sampler is then not consulted.
-// A host without a light sampler cannot call this entry.  `cascade` identifies
-// the level for the environment policy.
+// sampler that turns a missing light or environment binding into black.  The
+// default options select RCEnvironmentPolicy.Disabled, so the environment
+// sampler is not consulted until the host opts in with TerminalCascade and a
+// positive world boundary.  A host without a light sampler cannot call this
+// entry.  `cascade` identifies the level for the environment policy.
 RCTraceResult traceCascadeRay<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
