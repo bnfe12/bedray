@@ -149,6 +149,7 @@ struct BedrayCore {
     PFN_vkCmdPushConstants cmd_push_constants = nullptr;
     PFN_vkCmdDispatch cmd_dispatch = nullptr;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
+    PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
 };
 
 namespace {
@@ -315,6 +316,12 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_abi_version(void) try {
     return 0;
 }
 
+BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
+    return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI;
+} catch (...) {
+    return 0;
+}
+
 BEDRAY_API void BEDRAY_CALL bedray_core_abi_info(BedrayAbiInfo* out_info) try {
     if (out_info == nullptr) {
         return;
@@ -397,6 +404,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
         || !load_device(core.get(), core->create_sampler, "vkCreateSampler")
         || !load_device(core.get(), core->destroy_sampler, "vkDestroySampler")
         || !load_device(core.get(), core->cmd_pipeline_barrier, "vkCmdPipelineBarrier")
+        || !load_device(core.get(), core->cmd_fill_buffer, "vkCmdFillBuffer")
         || !load_device(core.get(), core->allocate_descriptor_sets, "vkAllocateDescriptorSets")
         || !load_device(core.get(), core->update_descriptor_sets, "vkUpdateDescriptorSets")
         || !load_device(core.get(), core->cmd_bind_pipeline, "vkCmdBindPipeline")
@@ -453,6 +461,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
     core->device_fns.non_coherent_atom_size = core->properties.limits.nonCoherentAtomSize;
     core->device_fns.generation = next_resource_generation();
     core->device_fns.cmd_pipeline_barrier = core->cmd_pipeline_barrier;
+    core->device_fns.cmd_fill_buffer = core->cmd_fill_buffer;
 
     uint32_t extension_count = 0;
     VkResult result = core->enumerate_device_extension_properties(

@@ -67,6 +67,7 @@ private:
     BedrayStatus ensure_images(std::uint32_t width, std::uint32_t height, BedrayError* error);
     BedrayStatus create_dummy(VkDeviceSize bytes, gpu::BufferId& id,
         gpu::BufferView& view, BedrayError* error);
+    BedrayStatus ensure_reservoirs(std::uint64_t bytes, BedrayError* error);
     BedrayStatus pin_image(gpu::ImageId id, RecordingPins& pins, BedrayError* error);
     BedrayStatus pin_buffer(gpu::BufferId id, RecordingPins& pins, BedrayError* error);
     void device_lost() noexcept;
@@ -104,6 +105,11 @@ private:
     gpu::BufferView reservoir_dummy_view_{};
     gpu::BufferView entity_scalar_view_{};
     gpu::BufferView entity_vector_view_{};
+    gpu::BufferId owned_reservoirs_id_{};
+    gpu::BufferView owned_reservoirs_view_{};
+    std::uint32_t owned_di_parity_ = 0;
+    bool owned_di_history_ = false;
+    bool owned_di_needs_clear_ = false;
 
     std::uint32_t history_parity_ = 0;
     bool history_written_ = false;

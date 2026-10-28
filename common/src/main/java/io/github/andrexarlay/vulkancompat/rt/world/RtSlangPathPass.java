@@ -131,6 +131,7 @@ public final class RtSlangPathPass implements RtPass {
      * native pass has live evidence.
      */
     private final boolean nativePathTrace;
+    private final boolean nativeReservoirs;
     private BedrayPathTraceNative pathTraceNative;
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
     private final Set<Long> recordings = new LinkedHashSet<>();
@@ -175,6 +176,7 @@ public final class RtSlangPathPass implements RtPass {
             throw new IllegalArgumentException("path trace needs a SlangRuntime");
         }
         this.nativePathTrace = RtConfig.SLANG_PATH_TRACE_CPP && runtime.library().hasPathTrace();
+        this.nativeReservoirs = nativePathTrace && runtime.library().hasNativeReservoirs();
         if (RtConfig.SLANG_PATH_TRACE_CPP && !nativePathTrace) {
             LOGGER.warn("[VKB-RT] vkbridge.rt.nativePathTrace=true but the loaded bedray_core has no path-trace"
                 + " exports; keeping the Java path");
@@ -241,7 +243,7 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public String describe(RtFrameParams p) {
-        String restir = !diActive() || reservoirs == null ? "off"
+        String restir = !diActive() || (!nativeReservoirs && reservoirs == null) ? "off"
             : (reservoirHistoryWritten ? "temporal" : "fresh") + (spatialRequested() ? "+spatial" : "");
         return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
             + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
@@ -304,6 +306,7 @@ public final class RtSlangPathPass implements RtPass {
      * would compete with the section arenas.
      */
     private void prepareReservoirs(RtMemory mem, int width, int height) {
+        if (nativeReservoirs) return;
         long pixels = (long) width * height;
         long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;
         if (!diRequested()) {
@@ -423,16 +426,17 @@ public final class RtSlangPathPass implements RtPass {
         // dispatch that actually wrote records.
         RtPathTraceSlangPass.Reservoirs reservoirRange = RtPathTraceSlangPass.Reservoirs.NONE;
         int diFlags = 0;
-        int diParity = reservoirFrame & 1;
-        if (emitterCount > 0 && diActive() && reservoirs != null) {
-            if (reservoirResetRequested) {
+        int diParity = nativeReservoirs ? 0 : reservoirFrame & 1;
+        if (emitterCount > 0 && diActive() && (nativeReservoirs || reservoirs != null)) {
+            if (!nativeReservoirs && reservoirResetRequested) {
                 VK10.vkCmdFillBuffer(cmd, reservoirs.handle(), 0L, reservoirs.size(), 0);
                 VkBarriers.fullMemoryBarrier(cmd);
                 reservoirResetRequested = false;
             }
-            diFlags = DI_FLAG_ENABLED | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)
+            diFlags = DI_FLAG_ENABLED | (!nativeReservoirs && reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)
                 | (params.cameraStatic ? DI_FLAG_STATIC : 0) | (params.flipY ? DI_FLAG_FLIP_Y : 0);
-            reservoirRange = new RtPathTraceSlangPass.Reservoirs(reservoirs.handle(), reservoirs.size());
+            if (!nativeReservoirs)
+                reservoirRange = new RtPathTraceSlangPass.Reservoirs(reservoirs.handle(), reservoirs.size());
         }
         // The models of this frame: the ring slice the entity BLAS was built from, so a committed primitive index names a
         // triangle of these buffers and of nothing else. Turning the capture off leaves the terrain alone in the trace.
@@ -460,10 +464,9 @@ public final class RtSlangPathPass implements RtPass {
             capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount());
         if (nativePathTrace) {
             recordNative(cmd, params, emitters, reservoirRange, capturedEntities, dispatch);
-            // The ring is the host's: the native pass only forwards the parity it
-            // was given, so the host still decides when a written half becomes
-            // readable history.
-            if (diFlags == 0) {
+            if (nativeReservoirs) {
+                reservoirResetRequested = false;
+            } else if (diFlags == 0) {
                 reservoirHistoryWritten = false;
             } else {
                 reservoirHistoryWritten = true;
@@ -537,9 +540,8 @@ public final class RtSlangPathPass implements RtPass {
 
     /**
      * Records trace → optional spatial → display through the additive native pass. The pass owns the radiance, motion,
-     * accumulation and history-depth images and its own history parity; the host supplies the scene it already owns, the
-     * DI ring and the path limits, exactly as for the Java path. The host still owns the ring's parity: the pass forwards
-     * {@code dispatch.diParity()} verbatim instead of advancing one of its own.
+     * accumulation and history-depth images. Cores advertising NATIVE_DI also own the DI ring and parity;
+     * older cores retain the external-ring contract. The host supplies scene captures and reset requests.
      */
     private void recordNative(VkCommandBuffer cmd, RtFrameParams params, RtPathTraceSlangPass.Emitters emitters,
                               RtPathTraceSlangPass.Reservoirs reservoirRange,
@@ -557,7 +559,9 @@ public final class RtSlangPathPass implements RtPass {
             | (params.cameraStatic ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_STATIC : 0)
             | (params.flipY ? BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y : 0)
             | (spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0)
-            | (nativeScene ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE : 0);
+            | (nativeScene ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE : 0)
+            | (nativeReservoirs ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI : 0)
+            | (nativeReservoirs && reservoirResetRequested ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0);
         // The pass derives the display bits from these same frame bits, so the host contributes none of its own: there
         // is one definition of TONEMAP/ACCUMULATE/CAMERA_STATIC/REPROJECT/FLIP_Y, in the pass.
         pathTraceNative.render(new BedrayPathTraceNative.FrameInput(cmd.address(), views, frame, dispatch,
