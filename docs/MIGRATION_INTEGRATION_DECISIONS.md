@@ -58,3 +58,15 @@ This connects the native path to an actual graph/scheduler call. It does not
 claim that every other effect is a graph node, that arbitrary downstream image
 consumers can use the opaque pass's private history, or that unimplemented
 shader algorithms become available through graph wiring.
+
+## Java host execution boundary
+
+`RtSlangPathPass` retains capture/settings/POD preparation and delegates through
+`PathTraceBackend`. `NativePathTraceBackend` holds only borrowed program handles,
+coarse ABI state and recording identities; it never constructs Java image/buffer
+owners or the reference recorder. `ReferencePathTraceBackend` contains the Java
+recording/resource path used as the default before live acceptance. Mutable frame
+inputs are borrowed synchronously, never retained by either backend. The native
+backend requires the additive NATIVE_DI feature; the C ABI still supports external
+rings for independent older clients, but this opt-in Java backend requires the
+matching current core. SlangRuntime is the sole owner of cached programs.
