@@ -438,3 +438,11 @@ are no native test failures in either job. The workflow is manual
 game, performance or visual evidence. Shader L1 is recorded in the section above;
 the Java source-scan tests were checked manually because `:common:test` cannot
 configure without the Fabric launcher jars.
+
+The base advanced again to `a8f796b` (PR #16, recording discard) and was merged
+in `eda6e19`; that merge also changed no shader source. Final head
+[run 40727836738](https://github.com/bnfe12/bedray/actions/runs/40727836738):
+baseline `4236c75` core 15/15, candidate `eda6e19` core **18/18**, standalone
+scene **1/1**, frame lifetime **1/1**, ABI probe v2 exit 0. Both jobs succeeded
+with no native test failures. Same limits: native L2 only, no shader compile,
+GPU, game or visual claim.
