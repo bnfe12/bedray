@@ -20,6 +20,14 @@ constexpr uint64_t kBufferAlignment = 256;
 constexpr uint64_t kDefaultScratchAlignment = 256;
 constexpr uint64_t kNoRevision = ~0ull;
 
+/* TLAS instanceCustomIndex is a single 24-bit namespace. A section instance
+   stores its section-table slot raw; an entity instance stores its slot with
+   this tag set, which is the only bit a hit needs to tell a mob quad from a
+   section quad. Slots therefore live in 0..0x7FFFFF for both kinds. */
+constexpr uint32_t kEntityInstanceBit = 0x800000u;
+constexpr uint32_t kInstanceCustomIndexMask = 0xFFFFFFu;
+constexpr uint32_t kInstanceSlotLimit = kEntityInstanceBit;
+
 struct Scene;
 
 struct VulkanFns {
@@ -77,6 +85,12 @@ struct PendingMesh {
     uint32_t index_type = BEDRAY_SCENE_INDEX_NONE;
     uint64_t geometry_revision = 0;
     uint64_t topology_revision = 0;
+    /* Section-only shader metadata. Entities leave it zeroed. */
+    std::array<int32_t, 3> origin{};
+    uint32_t geometry_count = 1;
+    std::array<uint32_t, BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> quad_start{};
+    uint32_t pass_bits = 0;
+    uint32_t flags = 0;
 };
 
 struct Section {
@@ -89,6 +103,12 @@ struct Section {
     std::unique_ptr<GeometryResource> geometry;
     bool has_pending = false;
     PendingMesh pending;
+    /* Committed shader metadata, copied from the pending mesh at commit. */
+    std::array<int32_t, 3> origin{};
+    uint32_t geometry_count = 1;
+    std::array<uint32_t, BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> quad_start{};
+    uint32_t pass_bits = 0;
+    uint32_t flags = 0;
 };
 
 struct Entity {
@@ -185,6 +205,12 @@ struct BlasView {
     uint64_t index_count = 0;
     uint32_t vertex_stride = 0;
     uint32_t index_type = BEDRAY_SCENE_INDEX_NONE;
+    /* Section streams are one BLAS geometry per non-empty pass range; entities
+       leave quad_stream false and are one triangle geometry. */
+    bool quad_stream = false;
+    uint32_t geometry_count = 1;
+    std::array<uint32_t, BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> quad_start{};
+    uint32_t pass_bits = 0;
 };
 
 struct InstanceEntry {

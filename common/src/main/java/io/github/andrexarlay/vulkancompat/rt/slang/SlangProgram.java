@@ -42,6 +42,11 @@ public final class SlangProgram implements AutoCloseable {
                 BedrayCoreLayouts.VK_IMAGE_LAYOUT_GENERAL, imageView, 0L, 0L, 0L);
         }
 
+        public static Resource sampledImage(String name, long imageView) {
+            return new Resource(name, BedrayCoreLayouts.DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                BedrayCoreLayouts.VK_IMAGE_LAYOUT_GENERAL, imageView, 0L, 0L, 0L);
+        }
+
         public static Resource storageBuffer(String name, long buffer, long offset, long range) {
             return new Resource(name, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, buffer, 0L, offset, range);
         }
@@ -99,6 +104,15 @@ public final class SlangProgram implements AutoCloseable {
         return manifest.name();
     }
 
+    /**
+     * The core's opaque program handle. The native pass adapters configure
+     * themselves with it; it stays owned by this instance and is invalid after
+     * {@link #close()}.
+     */
+    public long nativeHandle() {
+        return handle;
+    }
+
     /** Dispatch group count covering {@code pixels} along {@code axis} (0 = x, 1 = y, 2 = z). */
     public int groups(int pixels, int axis) {
         return manifest.groups(pixels, axis);
@@ -110,6 +124,20 @@ public final class SlangProgram implements AutoCloseable {
      */
     public void dispatch(long commandBuffer, int groupCountX, int groupCountY, int groupCountZ,
                          List<Resource> resources, ByteBuffer pushConstants) {
+        dispatchPhases(commandBuffer, groupCountX, groupCountY, groupCountZ, resources, pushConstants, -1, 1);
+    }
+
+    /**
+     * Native compute scheduling; phase word and inter-phase barriers are owned by C++.
+     * An exception may follow a partially recorded sequence: discard that entire
+     * unsubmitted command recording before releasing it; never submit its prefix.
+     */
+    public void dispatchPhases(long commandBuffer, int groupCountX, int groupCountY, int groupCountZ,
+                               List<Resource> resources, ByteBuffer pushConstants, int phaseOffset, int phaseCount) {
+        if (phaseCount < 1 || phaseCount > 8 || (phaseOffset < 0 && phaseCount != 1)
+            || (phaseOffset >= 0 && ((phaseOffset & 3) != 0 || phaseOffset > manifest.pushConstantBytes() - 4))) {
+            throw new IllegalArgumentException("invalid compute phase range");
+        }
         if (closed) {
             throw new IllegalStateException("SlangProgram " + name() + " is closed");
         }
@@ -143,14 +171,20 @@ public final class SlangProgram implements AutoCloseable {
                     throw new IllegalArgumentException(name() + " needs " + pushBytes + " push constant byte(s), got "
                         + (pushConstants == null ? 0 : pushConstants.remaining()));
                 }
-                push = MemorySegment.ofBuffer(pushConstants);
-                if (push.byteSize() > pushBytes) {
-                    push = push.asSlice(0, pushBytes);
-                }
+                push = nativePushConstants(arena, pushConstants, pushBytes);
             }
-            library.renderFrame(core, commandBuffer, handle, groupCountX, groupCountY, groupCountZ,
-                array, bindings.size(), push, pushBytes);
+            library.renderPhases(core, commandBuffer, handle, groupCountX, groupCountY, groupCountZ,
+                array, bindings.size(), push, pushBytes, phaseOffset, phaseCount);
         }
+    }
+
+    /** Copies heap-backed data into native memory while borrowing direct buffers. */
+    static MemorySegment nativePushConstants(Arena arena, ByteBuffer buffer, int bytes) {
+        MemorySegment source = MemorySegment.ofBuffer(buffer).asSlice(0, bytes);
+        if (source.isNative()) return source;
+        MemorySegment target = arena.allocate(bytes, 4);
+        target.copyFrom(source);
+        return target;
     }
 
     private static Resource find(List<Resource> resources, String name) {

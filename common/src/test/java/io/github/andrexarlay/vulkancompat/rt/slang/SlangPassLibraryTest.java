@@ -6,6 +6,9 @@ import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Optional;
 
@@ -16,9 +19,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Checks the AOT Slang artifacts the {@code compileSlang} task produces. Skips when the build had no Slang SDK,
- * because then there is nothing to load and the runtime correctly falls back to the legacy GLSL path.
+ * because then there is nothing to load and the runtime reports the missing AOT path.
  */
 class SlangPassLibraryTest {
+    @Test
+    void heapAndDirectPushConstantsHaveNativeStorageAndKeepTheInputPosition() {
+        try (Arena arena = Arena.ofConfined()) {
+            for (ByteBuffer buffer : List.of(ByteBuffer.allocate(12), ByteBuffer.allocateDirect(12))) {
+                buffer.position(2);
+                buffer.put(2, (byte) 0x42).put(5, (byte) 0x7f);
+                MemorySegment bytes = SlangProgram.nativePushConstants(arena, buffer, 4);
+                assertTrue(bytes.isNative());
+                assertEquals(4, bytes.byteSize());
+                assertEquals((byte) 0x42, bytes.get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0));
+                assertEquals((byte) 0x7f, bytes.get(java.lang.foreign.ValueLayout.JAVA_BYTE, 3));
+                assertEquals(2, buffer.position());
+            }
+        }
+    }
+
     @Test
     void everyIndexedPassLoadsWithAConsistentManifest() {
         List<String> names = SlangPassLibrary.names();
@@ -48,6 +67,16 @@ class SlangPassLibraryTest {
                 }
             }
         }
+    }
+
+    @Test
+    void displayHistorySourcesHaveSeparateBindingsFromDestinations() {
+        SlangPassManifest manifest = SlangPassLibrary.load("path_display").orElseThrow().manifest();
+        assertEquals(9, manifest.bindings().size());
+        assertBinding(manifest, "accum", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "historyDepth", 4, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "previousAccum", 7, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "previousDepth", 8, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
     }
 
     @Test

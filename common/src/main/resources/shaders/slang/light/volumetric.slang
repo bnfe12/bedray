@@ -2,7 +2,7 @@
 //
 // Port of the legacy GLSL `rt_volumetric.comp` + the fog helpers of
 // `rt_common_light.glsl`, rewritten against the Bedray 2.0 contracts: the
-// march takes an `ITraversal` for the shaft's shadow rays and the host passes
+// march takes an `ISceneTracer` for the shaft's shadow rays and the host passes
 // every input explicitly (there are no bindings and no global state here).
 // The two compute entries that drive it live in
 // `passes/volumetric_march.slang` (half resolution march + temporal store) and
@@ -106,7 +106,7 @@ float volumetricDarkness(float exposure) {
 //
 // The loop is bounded by `steps` (the legacy entry clamps 2..48); no
 // recursion, no allocation.
-float3 marchLightShaft<T : ITraversal>(T traversal, float3 dir, float tEnd,
+float3 marchLightShaft<T : ISceneTracer>(T traversal, float3 dir, float tEnd,
         uint steps, float jitter, float3 keyDir, float3 keyColor,
         float worldHeightOffset, float densityMul, float dark, float inscatter,
         float strength, float rayBias) {

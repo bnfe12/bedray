@@ -5,7 +5,6 @@ import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.slf4j.Logger;
@@ -29,9 +28,8 @@ import java.util.Set;
  * disagrees with this class, and the caller then runs temporal reuse alone - the same degrade the legacy path uses when
  * the spatial kernel was switched off at build time.
  *
- * <p>Like every Slang pass here, the core inserts no barriers. This method owns the ordering of its own stage: a
- * compute-to-compute barrier between the two phases, because phase one imports what phase zero merged, and a trailing
- * one, because the next frame's trace dispatch reads this frame's pooled half of the ring.
+ * <p>The native phased-dispatch operation owns the checker loop and compute memory dependencies,
+ * including availability after the final phase for next frame's temporal import.
  */
 final class RtSpatialReuseSlangPass implements AutoCloseable {
     static final String PASS_NAME = "restir_spatial";
@@ -179,25 +177,15 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
             throw new IllegalArgumentException("spatial reuse needs the three block atlases and their sampler");
         }
         int flags = SPATIAL_ENABLED;
-        for (int phase = 0; phase < PHASES; phase++) {
-            Spatial spatial = new Spatial(frameIndex, parity, phase, flags, cameraRelativeX, cameraRelativeY,
-                cameraRelativeZ, maxDistance);
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                ByteBuffer push = stack.malloc(PUSH_BYTES);
-                spatial.writeTo(push);
-                recordings.add(cmd.address());
-                program.dispatch(cmd.address(), program.groups(width, 0), program.groups(height, 1), 1,
-                    resources(atlases, emitters, reservoirs, frame), push);
-            }
-            if (phase + 1 < PHASES) {
-                // Phase 1 imports the records phase 0 just merged, so it must not read them before they are written.
-                VkBarriers.computeToCompute(cmd);
-            }
+        Spatial spatial = new Spatial(frameIndex, parity, 0, flags, cameraRelativeX, cameraRelativeY,
+            cameraRelativeZ, maxDistance);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer push = stack.malloc(PUSH_BYTES);
+            spatial.writeTo(push);
+            recordings.add(cmd.address());
+            program.dispatchPhases(cmd.address(), program.groups(width, 0), program.groups(height, 1), 1,
+                resources(atlases, emitters, reservoirs, frame), push, 8, PHASES);
         }
-        // Nothing in this frame reads the pooled records - the benefit lands in the next frame's temporal import - but the
-        // ring is a buffer, so the writes need an availability point before the batch ends. The legacy stage ends the same
-        // way after its second dispatch.
-        VkBarriers.computeToCompute(cmd);
     }
 
     private List<SlangProgram.Resource> resources(RtPathTraceSlangPass.Atlases atlases,
@@ -236,6 +224,11 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
 
     String passName() {
         return program.name();
+    }
+
+    /** The core program handle the native pass configures itself with. */
+    long programHandle() {
+        return program.nativeHandle();
     }
 
     @Override

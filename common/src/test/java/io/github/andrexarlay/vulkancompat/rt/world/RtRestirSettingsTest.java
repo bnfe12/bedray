@@ -72,9 +72,12 @@ class RtRestirSettingsTest {
             "the dispatch is the consumer: without the flag the shader takes the plain per-frame branch");
         assertTrue(pass.contains("String restir = !diActive() || reservoirs == null ? \"off\""),
             "and the mode log says what is really running, so a frame can be checked after the fact");
-        assertTrue(pass.contains("if (!diRequested()) {")
-                && block(pass, "private void prepareReservoirs(").contains("VK10.vkDeviceWaitIdle(device)"),
-            "allocation follows the static switch only: a settings flip must not wait for the device inside a recorded frame");
+        String prepare = block(pass, "private void prepareReservoirs(");
+        int staticBranch = prepare.indexOf("if (!diRequested()) {");
+        assertTrue(staticBranch >= 0 && prepare.indexOf("nativeBuffers.retire(reservoirs)", staticBranch) > staticBranch,
+            "allocation follows the static switch only: a settings flip must not free the ring inside a recorded frame");
+        assertTrue(!prepare.contains("vkDeviceWaitIdle"),
+            "and the retired ring waits for the native owner to drain its uses, never for the whole device");
     }
 
     /** The ray pass reads the same two switches, each at the place where its own work is decided. */

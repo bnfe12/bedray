@@ -1,8 +1,7 @@
 // Particle layer composite for Bedray 2.0.
 //
-// Port of the legacy GLSL `rt_particles_composite.comp` (behaviour kept
-// bit-identical): lays the vanilla particle layer over the final ray traced
-// image.
+// Lays the Minecraft particle/weather layer over the final ray-traced image.
+// Pipeline/descriptors are native-owned; the host supplies game layer views.
 //
 // The layer is cleared to (0,0,0,0) and the game's particle pipelines blend
 // into it with their own blend functions, so a pixel holds premultiplied

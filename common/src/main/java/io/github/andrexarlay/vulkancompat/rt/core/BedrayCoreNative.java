@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
@@ -27,9 +28,12 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * thread only, like the rest of the RT frame driver.
  */
 public final class BedrayCoreNative implements AutoCloseable {
+    private static final AtomicLong RESOURCE_GENERATIONS = new AtomicLong(1);
     private final Arena arena;
     private final Path libraryPath;
     private final Set<Long> liveCores = ConcurrentHashMap.newKeySet();
+    private final Set<Long> liveResourceOwners = ConcurrentHashMap.newKeySet();
+    private final SymbolLookup symbols;
     private volatile boolean closed;
 
     private final MethodHandle abiVersionHandle;
@@ -41,6 +45,12 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle destroyProgramHandle;
     private final MethodHandle renderFrameHandle;
     private final MethodHandle releaseRecordingHandle;
+    private final MethodHandle atlasSamplerHandle;
+    private final MethodHandle linearSamplerHandle;
+    private final MethodHandle renderPhasesHandle;
+    private final MethodHandle configurePathTraceHandle;
+    private final MethodHandle renderPathTraceHandle;
+    private final MethodHandle destroyPathTraceHandle;
 
     /** Values reported by {@code bedray_core_abi_info}. */
     public record AbiInfo(int abiVersion, int sizeofCoreDesc, int sizeofCapabilities, int sizeofProgramDesc,
@@ -68,6 +78,7 @@ public final class BedrayCoreNative implements AutoCloseable {
             throw new BedrayCoreException("load", -1,
                 "cannot load " + libraryPath + " (x64 DLL expected): " + e.getMessage(), e);
         }
+        symbols = lookup;
 
         Linker linker = Linker.nativeLinker();
         try {
@@ -86,6 +97,20 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             releaseRecordingHandle = bind(linker, lookup, "bedray_core_release_recording",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
+            atlasSamplerHandle = bind(linker, lookup, "bedray_core_atlas_sampler",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            linearSamplerHandle = bind(linker, lookup, "bedray_core_linear_sampler",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            renderPhasesHandle = bind(linker, lookup, "bedray_core_render_phases",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));
+            // The path-trace pass ABI is additive: a DLL built before it simply
+            // has no export, and the Java path keeps running unchanged.
+            configurePathTraceHandle = bindOptional(linker, lookup, "bedray_core_configure_path_trace",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            renderPathTraceHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            destroyPathTraceHandle = bindOptional(linker, lookup, "bedray_core_destroy_path_trace",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS));
         } catch (RuntimeException | Error e) {
             arena.close();
             throw e;
@@ -124,6 +149,43 @@ public final class BedrayCoreNative implements AutoCloseable {
         MemorySegment symbol = lookup.find(name)
             .orElseThrow(() -> new BedrayCoreException("load", -1, "DLL has no export " + name, null));
         return linker.downcallHandle(symbol, descriptor);
+    }
+
+    /** Like {@link #bind} but returns null when the DLL predates the export. */
+    private static MethodHandle bindOptional(Linker linker, SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
+        return lookup.find(name).map(symbol -> linker.downcallHandle(symbol, descriptor)).orElse(null);
+    }
+
+    MethodHandle resourceFunction(String name, FunctionDescriptor descriptor) {
+        ensureOpen();
+        return bind(Linker.nativeLinker(), symbols, name, descriptor);
+    }
+
+    static long nextResourceGeneration() {
+        for (;;) {
+            long value = RESOURCE_GENERATIONS.get();
+            if (value <= 0 || value == Long.MAX_VALUE) throw new IllegalStateException("native resource generations exhausted");
+            if (RESOURCE_GENERATIONS.compareAndSet(value, value + 1)) return value;
+        }
+    }
+
+    void retainResourceOwner(long owner) {
+        ensureOpen();
+        if (owner == 0 || !liveResourceOwners.add(owner)) {
+            throw new IllegalStateException("invalid or duplicate native resource owner");
+        }
+    }
+
+    void releaseResourceOwner(long owner) {
+        if (!liveResourceOwners.remove(owner)) throw new IllegalStateException("unknown native resource owner");
+    }
+
+    public void requireResourceOwnersReleased() {
+        ensureOpen();
+        if (!liveResourceOwners.isEmpty()) {
+            throw new BedrayCoreException("close", BedrayCoreLayouts.STATUS_IN_USE,
+                "native resource owners must be closed before unloading bedray_core", null);
+        }
     }
 
     private static void verifyReportedAbi(AbiInfo info) {
@@ -200,6 +262,31 @@ public final class BedrayCoreNative implements AutoCloseable {
             return core;
         } catch (Throwable t) {
             throw rethrow("create", t);
+        }
+    }
+
+    /** Borrows the core-owned nearest/clamp atlas sampler; the caller must not destroy it. */
+    public long atlasSampler(long core) {
+        return borrowSampler(core, atlasSamplerHandle);
+    }
+
+    public long linearSampler(long core) {
+        return borrowSampler(core, linearSamplerHandle);
+    }
+
+    private long borrowSampler(long core, MethodHandle function) {
+        ensureOpen();
+        requireHandle(core, "core");
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment out = a.allocate(JAVA_LONG);
+            MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) function.invokeExact(handle(core), out, error);
+            check("atlas_sampler", status, error);
+            long sampler = out.get(JAVA_LONG, 0);
+            requireHandle(sampler, "atlas sampler");
+            return sampler;
+        } catch (Throwable t) {
+            throw rethrow("atlas_sampler", t);
         }
     }
 
@@ -289,6 +376,13 @@ public final class BedrayCoreNative implements AutoCloseable {
      */
     public void renderFrame(long core, long commandBuffer, long program, int groupCountX, int groupCountY, int groupCountZ,
                             MemorySegment resources, int resourceCount, MemorySegment pushConstants, int pushConstantBytes) {
+        renderPhases(core, commandBuffer, program, groupCountX, groupCountY, groupCountZ,
+            resources, resourceCount, pushConstants, pushConstantBytes, -1, 1);
+    }
+
+    public void renderPhases(long core, long commandBuffer, long program, int groupCountX, int groupCountY, int groupCountZ,
+                             MemorySegment resources, int resourceCount, MemorySegment pushConstants, int pushConstantBytes,
+                             int phaseOffset, int phaseCount) {
         ensureOpen();
         requireHandle(core, "core");
         if (commandBuffer == 0) {
@@ -325,7 +419,9 @@ public final class BedrayCoreNative implements AutoCloseable {
             desc.set(JAVA_INT, BedrayCoreLayouts.FD_PUSH_CONSTANT_BYTES, pushConstantBytes);
 
             MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
-            int status = (int) renderFrameHandle.invokeExact(handle(core), desc, error);
+            int status = phaseOffset < 0
+                ? (int) renderFrameHandle.invokeExact(handle(core), desc, error)
+                : (int) renderPhasesHandle.invokeExact(handle(core), desc, phaseOffset, phaseCount, error);
             check("render_frame", status, error);
         } catch (Throwable t) {
             throw rethrow("render_frame", t);
@@ -346,6 +442,118 @@ public final class BedrayCoreNative implements AutoCloseable {
             check("release_recording", status, MemorySegment.NULL);
         } catch (Throwable t) {
             throw rethrow("release_recording", t);
+        }
+    }
+
+    /**
+     * Configures the native path-trace pass on {@code core}. The three program
+     * handles come from {@link #registerProgram}; {@code programSpatial} may be
+     * zero to disable the ReSTIR spatial stage.
+     *
+     * <p>The pass then owns its radiance/motion/accumulation/history images, the
+     * per-recording FrameConstants upload and the one-element dummies. It records
+     * into a host command buffer and never submits or waits.
+     */
+    /**
+     * Legacy-signature overload: keeps existing callers on the legacy section
+     * table until they explicitly pass {@code program_trace_scene}. The native
+     * descriptor still carries the new field at offset 64; zero selects the
+     * legacy path in the C++ pass.
+     */
+    public void configurePathTrace(long core, long programTrace, long programSpatial, long programDisplay,
+                                   long imageBudgetBytes, long bufferBudgetBytes, int width, int height) {
+        configurePathTrace(core, programTrace, 0L, programSpatial, programDisplay,
+            imageBudgetBytes, bufferBudgetBytes, width, height);
+    }
+
+    public void configurePathTrace(long core, long programTrace, long programTraceScene, long programSpatial,
+                                   long programDisplay, long imageBudgetBytes, long bufferBudgetBytes,
+                                   int width, int height) {
+        ensureOpen();
+        requireHandle(core, "core");
+        requirePathTrace();
+        requireHandle(programTrace, "programTrace");
+        requireHandle(programDisplay, "programDisplay");
+        if (imageBudgetBytes < 0 || bufferBudgetBytes < 0) {
+            throw new IllegalArgumentException("path-trace budgets must not be negative");
+        }
+        if (width < 0 || height < 0) {
+            throw new IllegalArgumentException("path-trace extent hint must not be negative");
+        }
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment desc = a.allocate(BedrayCoreLayouts.PT_DESC);
+            desc.set(JAVA_INT, BedrayCoreLayouts.PTD_ABI_VERSION, BedrayCoreLayouts.ABI_VERSION);
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_TRACE, programTrace);
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_SPATIAL, programSpatial);
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_DISPLAY, programDisplay);
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_IMAGE_BUDGET_BYTES, imageBudgetBytes);
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_BUFFER_BUDGET_BYTES, bufferBudgetBytes);
+            desc.set(JAVA_INT, BedrayCoreLayouts.PTD_WIDTH, width);
+            desc.set(JAVA_INT, BedrayCoreLayouts.PTD_HEIGHT, height);
+            // Zero keeps every frame on the legacy section table.
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_TRACE_SCENE, programTraceScene);
+            MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) configurePathTraceHandle.invokeExact(handle(core), desc, error);
+            check("configure_path_trace", status, error);
+        } catch (Throwable t) {
+            throw rethrow("configure_path_trace", t);
+        }
+    }
+
+    /**
+     * Records trace → optional spatial → display for one frame. {@code frameDesc}
+     * must be a native segment holding a fully initialised
+     * {@code BedrayPathTraceFrameDesc}; the caller keeps every borrowed resource
+     * alive and in GENERAL until {@link #releaseRecording} for the same command
+     * buffer.
+     */
+    public void renderPathTrace(long core, MemorySegment frameDesc) {
+        ensureOpen();
+        requireHandle(core, "core");
+        requirePathTrace();
+        if (frameDesc == null || frameDesc.equals(MemorySegment.NULL)
+            || frameDesc.byteSize() < BedrayCoreLayouts.PT_FRAME_DESC.byteSize()) {
+            throw new IllegalArgumentException("frameDesc must hold a BedrayPathTraceFrameDesc");
+        }
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) renderPathTraceHandle.invokeExact(handle(core), frameDesc, error);
+            check("render_path_trace", status, error);
+        } catch (Throwable t) {
+            throw rethrow("render_path_trace", t);
+        }
+    }
+
+    /** Destroys the native pass. Refuses while one of its recordings is unreleased. */
+    public void destroyPathTrace(long core) {
+        ensureOpen();
+        if (core == 0) {
+            return;
+        }
+        requirePathTrace();
+        try {
+            int status = (int) destroyPathTraceHandle.invokeExact(handle(core));
+            if (status == BedrayCoreLayouts.STATUS_IN_USE) {
+                throw new BedrayCoreException("destroy_path_trace", status,
+                    "path-trace recordings still reference the pass; release them after GPU completion or discard", null);
+            }
+            check("destroy_path_trace", status, MemorySegment.NULL);
+        } catch (Throwable t) {
+            throw rethrow("destroy_path_trace", t);
+        }
+    }
+
+    /** True when the loaded DLL exports the additive path-trace pass ABI. */
+    public boolean hasPathTrace() {
+        return configurePathTraceHandle != null
+            && renderPathTraceHandle != null
+            && destroyPathTraceHandle != null;
+    }
+
+    private void requirePathTrace() {
+        if (!hasPathTrace()) {
+            throw new BedrayCoreException("path_trace", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+                "the loaded bedray_core has no path-trace pass exports", null);
         }
     }
 
@@ -384,6 +592,7 @@ public final class BedrayCoreNative implements AutoCloseable {
         if (closed) {
             return;
         }
+        requireResourceOwnersReleased();
         for (long core : Set.copyOf(liveCores)) {
             destroy(core);
         }

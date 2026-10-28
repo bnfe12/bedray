@@ -77,7 +77,7 @@ final class RtAtmosphere {
         io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.fullMemoryBarrier(cmd);   // the denoiser / main pass wrote the image
         if (glow || glare) {
             if (bloom == null) {
-                bloom = new RtBloomPass(device, slangRuntime(vulkanDevice));
+                bloom = new RtBloomPass(slangRuntime(vulkanDevice));
             }
             float[] dir = p.key.dir;
             boolean keyOn = Math.max(p.key.color[0], Math.max(p.key.color[1], p.key.color[2])) > 1.0e-3f;
@@ -102,7 +102,7 @@ final class RtAtmosphere {
             if (timer != null) {
                 timer.stamp(cmd, SPAN_BLOOM, false);
             }
-            bloom.record(cmd, mem, w, h, views.output(), views.depth(), bp, glow);
+            bloom.record(cmd, w, h, views.output(), views.depth(), bp, glow);
             if (timer != null) {
                 timer.stamp(cmd, SPAN_BLOOM, true);
             }

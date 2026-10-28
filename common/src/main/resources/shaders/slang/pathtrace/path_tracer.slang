@@ -1,6 +1,6 @@
 // Iterative path tracer for Bedray 2.0.
 //
-// The loop is written against ITraversal, ILightSampler, IEnvironmentSampler and IReuseSampler.
+// The loop is written against ISceneTracer, ILightSampler, IEnvironmentSampler and IReuseSampler.
 // It never names a backend, a GPU or a material atlas layout: surface decoding
 // is delegated to surface.slang and lobe selection to shading/bsdf.slang.
 //
@@ -103,7 +103,7 @@ bool pathTraceSampleRejected(uint flags) {
 // Shades one direct-light sample: the BSDF term of the legacy NEE times the filtered visibility walk.  The caller
 // multiplies the result by its throughput.  `traced` says a shadow ray really ran, `occluded` that it came back
 // blocked; a reservoir needs both, because a sample this receiver cannot even see must fade instead of persisting.
-float3 pathTraceDirectTerm<T : ITraversal>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
+float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light, float rayBias,
         MaterialSamplingOptions materialOptions, out bool traced, out bool occluded) {
     float3 zero = float3(0.0);
@@ -144,7 +144,7 @@ float3 pathTraceDirectTerm<T : ITraversal>(T traversal, MaterialAtlas atlas, Blo
 
 // Traces one path.  `seed` is advanced in place so a caller can derive the next
 // path's seed without a global random stream.
-PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
+PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
         T traversal, L lights, E environment, R reuse,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         Ray primaryRay, MaterialSamplingOptions materialOptions,
@@ -365,7 +365,7 @@ PathTraceResult tracePath<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
 }
 
 // Radiance-only convenience for passes that do not need the diagnostics.
-float3 tracePathRadiance<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
+float3 tracePathRadiance<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
         T traversal, L lights, E environment, R reuse,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         Ray primaryRay, MaterialSamplingOptions materialOptions,

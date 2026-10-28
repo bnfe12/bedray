@@ -139,12 +139,25 @@ class RtSlangSampleRejectionTest {
      * actually stored - which, for a rejected sample, is still the old one.
      */
     @Test
+    void reprojectionReadsOnlyImmutableHistoryImages() {
+        String shader = read(DISPLAY);
+        assertTrue(shader.contains("float stored = previousDepth[q];"));
+        assertTrue(shader.contains("float4 sample = previousAccum[q];"));
+        assertTrue(shader.contains("float4 history = previousAccum[p];"));
+        assertFalse(shader.contains("= accum["), "a destination cannot also be a cross-pixel source");
+        assertFalse(shader.contains("= historyDepth["));
+        assertFalse(shader.contains("previousAccum[p] ="));
+        assertFalse(shader.contains("previousDepth[p] ="));
+    }
+
+    @Test
     void aRejectedPixelKeepsTheDepthThatDescribesItsHistory() {
         String display = block(read(DISPLAY), "void main(uint3 tid : SV_DispatchThreadID) {");
-        assertTrue(display.contains("if (!rejected || depth[p] < PATH_DISPLAY_SKY_DEPTH) {"),
-            "a rejected pixel takes the new depth only when the tracer proved one, so the far plane a primary-ray"
-                + " fault leaves behind cannot erase a history the pixel still holds");
-        assertEquals(1, count(display, "historyDepth[p] = depth[p];"), "and only one writer of the lane");
+        assertTrue(display.contains("if (rejected && !(nextDepth > 0.0 && nextDepth < PATH_DISPLAY_SKY_DEPTH))"),
+            "a rejected pixel cannot publish unproven primary depth");
+        assertTrue(display.contains("nextDepth = previousDepth[p];"),
+            "a retained same-pixel mean keeps the immutable source depth that describes it");
+        assertEquals(1, count(display, "historyDepth[p] = nextDepth;"), "every destination texel has one writer");
         assertTrue(display.contains("bool rejected = weight == 0.0;"),
             "the flag is the same decision the weight already made");
     }

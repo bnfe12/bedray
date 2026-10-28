@@ -7,14 +7,16 @@
 // a moved camera reprojects each pixel through the previous view-projection and keeps the history it can prove.
 //
 //   0 radiance     RGBA16F storage image, read  (path_trace.slang outImage, this frame; a = 0 rejects the sample)
-//   1 accum        RGBA32F storage image, read/write (rgb running mean, a per-pixel sample count)
+//   1 accum        RGBA32F storage image, write (current mean and per-pixel sample count)
 //   2 outImage     RGBA8   storage image, write (rt_output, the image the composite and the denoisers read)
 //   3 depth        R32F    storage image, read  (path_trace.slang outDepth, ray distance from the bobbed eye)
-//   4 historyDepth R32F    storage image, read/write (depth of the previous frame, for the disocclusion test)
+//   4 historyDepth R32F    storage image, write (current history depth)
 //   5 frame        ConstantBuffer<FrameConstants>
 //   6 motion       RGBA16F storage image, read (path_trace.slang outMotion: the primary surface's own displacement,
 //                  in world blocks; rgb zero says "the surface moved with the world", which is what the static and
 //                  camera-only reprojection already assume)
+//   7 previousAccum RGBA32F storage image, read (previous frame, distinct from accum)
+//   8 previousDepth R32F storage image, read (previous frame, distinct from historyDepth)
 
 public module path_display_pass;
 
@@ -48,6 +50,8 @@ static const float PATH_DISPLAY_MAX_COUNT = 16383.0;
 [[vk::image_format("r32f")]] [[vk::binding(4, 0)]] RWTexture2D<float> historyDepth;
 [[vk::binding(5, 0)]] ConstantBuffer<FrameConstants> frame;
 [[vk::image_format("rgba16f")]] [[vk::binding(6, 0)]] RWTexture2D<float4> motion;
+[[vk::image_format("rgba32f")]] [[vk::binding(7, 0)]] RWTexture2D<float4> previousAccum;
+[[vk::image_format("r32f")]] [[vk::binding(8, 0)]] RWTexture2D<float> previousDepth;
 
 [[vk::push_constant]] PathDisplayPush pc;
 
@@ -95,26 +99,34 @@ PathDisplayHistory pathDisplayReproject(FrameConstants f, int2 p, float2 size, f
     float3 previous = position + cameraDelta + surfaceMotion;
     float previousDistance = length(previous);
     float4 clip = mul(f.camera.prevViewProjection, float4(previous, 1.0));
-    if (!(clip.w > 1.0e-4)) {
+    if (!(clip.w > 1.0e-4) || any(isnan(clip)) || any(isinf(clip))
+        || isnan(previousDistance) || isinf(previousDistance)
+        || isnan(tolerance) || isinf(tolerance)) {
         return history;
     }
     float2 ndc = clip.xy / clip.w;
     if (flipY) {
         ndc.y = -ndc.y;
     }
-    int2 q = int2(floor((ndc * 0.5 + 0.5) * size));
+    float2 uv = ndc * 0.5 + 0.5;
+    // Reject before converting to integer: NaN, infinity and huge projected
+    // coordinates must never become an image index.
+    if (any(isnan(uv)) || any(isinf(uv)) || any(uv < 0.0) || any(uv >= 1.0)) {
+        return history;
+    }
+    int2 q = int2(floor(uv * size));
     if (q.x < 0 || q.y < 0 || q.x >= int(size.x) || q.y >= int(size.y)) {
         return history;
     }
-    float stored = historyDepth[q];
+    float stored = previousDepth[q];
     if (!(stored > 0.0) || stored >= PATH_DISPLAY_SKY_DEPTH) {
         return history;
     }
     if (abs(stored - previousDistance) > max(tolerance, 0.0) * max(previousDistance, 1.0)) {
         return history;
     }
-    float4 sample = accum[q];
-    if (!(sample.a > 0.0)) {
+    float4 sample = previousAccum[q];
+    if (!(sample.a > 0.0) || any(isnan(sample)) || any(isinf(sample))) {
         return history;
     }
     history.valid = true;
@@ -140,6 +152,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // both the mean and the count exactly as the history had them, so the next accepted sample still divides by N+1.
     float weight = radiance[p].a > 0.0 ? 1.0 : 0.0;
     bool rejected = weight == 0.0;
+    float nextDepth = depth[p];
+    if (rejected && !(nextDepth > 0.0 && nextDepth < PATH_DISPLAY_SKY_DEPTH)) {
+        nextDepth = PATH_DISPLAY_SKY_DEPTH;
+    }
 
     float3 mean = current * weight;
     float count = weight;
@@ -147,18 +163,32 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (accumulate) {
         float hitDistance = depth[p];
         bool hit = hitDistance > 0.0 && hitDistance < PATH_DISPLAY_SKY_DEPTH;
-        bool samePixel = (pc.flags & PATH_DISPLAY_FLAG_CAMERA_STATIC) != 0u
-            || (pc.flags & PATH_DISPLAY_FLAG_REPROJECT) == 0u;
+        float3 surfaceMotion = motion[p].rgb;
+        bool motionValid = !any(isnan(surfaceMotion)) && !any(isinf(surfaceMotion));
+        bool surfaceStatic = motionValid && all(surfaceMotion == float3(0.0));
+        bool samePixel = (pc.flags & PATH_DISPLAY_FLAG_CAMERA_STATIC) != 0u && surfaceStatic;
         if (samePixel) {
-            float4 history = accum[p];
-            if (history.a > 0.0) {
+            float4 history = previousAccum[p];
+            float oldDepth = previousDepth[p];
+            bool oldHit = oldDepth > 0.0 && oldDepth < PATH_DISPLAY_SKY_DEPTH;
+            bool bothSky = hitDistance >= PATH_DISPLAY_SKY_DEPTH && !isinf(hitDistance)
+                && oldDepth >= PATH_DISPLAY_SKY_DEPTH && !isinf(oldDepth);
+            bool depthsAgree = hit && oldHit
+                && abs(oldDepth - hitDistance) <= max(pc.reuse.w, 0.0) * max(hitDistance, 1.0);
+            // A stationary camera can still see a newly uncovered background.
+            // Keep rejected samples only when no new depth was established.
+            bool compatible = bothSky || depthsAgree || (rejected && !hit);
+            if (compatible && history.a > 0.0 && !any(isnan(history)) && !any(isinf(history))) {
                 float3 previous = pathDisplaySanitize(history.rgb, limit);
                 mean = previous + (current - previous) * (weight / (history.a + weight));
                 count = min(history.a + weight, PATH_DISPLAY_MAX_COUNT);
+                if (rejected && nextDepth >= PATH_DISPLAY_SKY_DEPTH) {
+                    nextDepth = previousDepth[p];
+                }
             }
-        } else if (hit) {
+        } else if (hit && motionValid && (pc.flags & PATH_DISPLAY_FLAG_REPROJECT) != 0u) {
             PathDisplayHistory history = pathDisplayReproject(frame, p, float2(size), hitDistance,
-                pc.reuse.xyz, motion[p].rgb, pc.reuse.w, (pc.flags & PATH_DISPLAY_FLAG_FLIP_Y) != 0u);
+                pc.reuse.xyz, surfaceMotion, pc.reuse.w, (pc.flags & PATH_DISPLAY_FLAG_FLIP_Y) != 0u);
             if (history.valid) {
                 float3 sanitized = pathDisplaySanitize(history.radiance, limit);
                 mean = sanitized + (current - sanitized) * (weight / (history.count + weight));
@@ -169,12 +199,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     accum[p] = float4(mean, count);
-    // The depth lane has to describe the surface the stored mean came from, because the next frame finds that history by
-    // matching it. A rejected sample kept the old mean, and the depth this frame traced may be the far plane the primary
-    // guard left behind - so a rejected pixel only takes the new depth when the tracer proved one.
-    if (!rejected || depth[p] < PATH_DISPLAY_SKY_DEPTH) {
-        historyDepth[p] = depth[p];
-    }
+    // Every destination texel is written, including a rejected sample. Previous
+    // images are immutable throughout this dispatch; cross-pixel reprojection
+    // must never read an image that another invocation is overwriting.
+    historyDepth[p] = nextDepth;
 
     float3 exposed = mean * max(pc.exposure, 0.0);
     float3 display = (pc.flags & PATH_DISPLAY_FLAG_TONEMAP) != 0u ? tonemapColor(exposed) : saturate(exposed);

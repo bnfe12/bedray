@@ -210,9 +210,29 @@ void c_abi_loss() {
     require(bedray_gpu_release_after_device_loss(owner) == BEDRAY_GPU_OK);
     require(bedray_gpu_owner_destroy(owner) == BEDRAY_GPU_OK);
 }
+void upload_pool_completion() {
+    GpuBuffers buffers(context(), 512);
+    unsigned char data[]{1, 2, 3, 4};
+    BufferId a{}, b{}, c{}; BufferView view{}; UseId use_a{}, use_b{}, use_c{}; VkResult error{};
+    int before = created;
+    require(buffers.upload(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, data, sizeof(data), a, view, use_a, error) == Status::ok);
+    require(buffers.upload(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, data, sizeof(data), b, view, use_b, error) == Status::ok);
+    require(a != b && created == before + 2);
+    require(buffers.upload(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, data, sizeof(data), c, view, use_c, error) == Status::budget_exceeded);
+    int before_reuse = created;
+    require(buffers.complete_use(use_a) == Status::ok);
+    require(buffers.upload(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, data, sizeof(data), c, view, use_c, error) == Status::ok);
+    require(c == a && created == before_reuse && use_c != use_a);
+    require(buffers.write(c, 0, data, sizeof(data), error) == Status::in_use);
+    require(buffers.retire_uploads() == Status::ok && buffers.collect() == Status::ok);
+    require(buffers.resident_bytes() == 512); // retired slots remain pinned
+    require(buffers.complete_use(use_b) == Status::ok && buffers.complete_use(use_c) == Status::ok);
+    require(buffers.collect() == Status::ok && buffers.resident_bytes() == 0);
+    require(buffers.close() == Status::ok);
+}
 }
 
 int main() {
     normal_lifecycle(); loss_and_budget(); owner_generations_reject_stale_handles(); device_address_capability();
-    c_abi_contract(); c_abi_loss();
+    c_abi_contract(); c_abi_loss(); upload_pool_completion();
 }

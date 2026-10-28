@@ -149,6 +149,10 @@ SurfaceHit legacyHitToSurface(StructuredBuffer<LegacySection> sections, Ray ray,
     uint geometryPass = (uint(section.origin.w) >> (2u * geometryIndex)) & 3u;
     if (geometryPass == 1u) result.flags |= HIT_FLAG_CUTOUT;
     if (geometryPass == 2u) result.flags |= HIT_FLAG_TRANSLUCENT;
+    // The legacy light word carries the same two tags the native GeometryVertex
+    // stores in meta.y, so both backends report the same hit flags.
+    if ((light0 & LEGACY_VERT_FLAG_VEGETATION) != 0u) result.flags |= HIT_FLAG_FOLIAGE;
+    if ((light0 & LEGACY_VERT_FLAG_LEAF_CUBE) != 0u) result.flags |= HIT_FLAG_LEAF_CUBE;
 
     float3 tangent;
     float3 bitangent;
@@ -159,7 +163,7 @@ SurfaceHit legacyHitToSurface(StructuredBuffer<LegacySection> sections, Ray ray,
     return result;
 }
 
-struct LegacySectionTraversal : ITraversal {
+struct LegacySectionTraversal : ISceneTracer {
     RaytracingAccelerationStructure tlas;
     StructuredBuffer<LegacySection> sections;
     uint instanceMask;

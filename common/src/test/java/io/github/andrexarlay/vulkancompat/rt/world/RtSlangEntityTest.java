@@ -23,7 +23,7 @@ class RtSlangEntityTest {
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String ENTITY = SHADERS + "/traversal/entity_geometry.slang";
     private static final String TRAVERSAL = SHADERS + "/traversal/legacy_section_traversal.slang";
-    private static final String CONTRACT_TRAVERSAL = SHADERS + "/traversal/traversal.slang";
+    private static final String CONTRACT_TRAVERSAL = SHADERS + "/contracts/scene_tracer.slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
     private static final String DISPLAY = SHADERS + "/passes/path_display.slang";
     private static final String SURFACE = SHADERS + "/surface/surface.slang";
@@ -165,9 +165,11 @@ class RtSlangEntityTest {
         assertTrue(count.contains("return count / ENTITY_INDICES_PER_TRIANGLE;"));
 
         String host = read(HOST_PASS);
-        assertTrue(host.contains("private static SlangProgram.Resource entityBuffer(String name, BufferView view, RtMemory.Buf dummy) {"),
+        assertTrue(host.contains("private static SlangProgram.Resource entityBuffer(String name, BufferView view, BedrayGpuBuffersNative.Buffer dummy) {"),
             "every entity binding falls back to the pass's own dummy");
-        assertTrue(host.contains("\"rt_path_entity_scalar_dummy\"") && host.contains("\"rt_path_entity_vector_dummy\""),
+        assertTrue(host.contains("entityScalarDummy = zeroedBuffer(ENTITY_SCALAR_BYTES);")
+                && host.contains("entityVectorDummy = zeroedBuffer(ENTITY_VECTOR_BYTES);")
+                && host.contains("nativeBuffers.write(buffer, 0, stack.calloc(bytes));"),
             "a zeroed element of the right size, so a frame that captured nothing reads zeros");
         assertTrue(host.contains("throw new IllegalArgumentException(\"the push names an entity atlas but no texel range is bound\")"),
             "and a push that names a count with no buffer behind it is rejected before the dispatch");
@@ -291,16 +293,16 @@ class RtSlangEntityTest {
             + " float2 size, float hitDistance,");
         assertTrue(reproject.contains("float3 previous = position + cameraDelta + surfaceMotion;"),
             "camera motion and surface motion are two different terms, and a mob needs both");
-        assertTrue(display.contains("pc.reuse.xyz, motion[p].rgb, pc.reuse.w,"),
+        assertTrue(display.contains("float3 surfaceMotion = motion[p].rgb;")
+                && display.contains("pc.reuse.xyz, surfaceMotion, pc.reuse.w,"),
             "read per pixel from the image the tracer wrote this frame");
         assertTrue(display.contains("[[vk::binding(6, 0)]] RWTexture2D<float4> motion;"),
             "bound as the image the producer owns, not a copy that could disagree");
 
         String host = read(HOST_PASS);
-        assertTrue(host.contains("motion = memory.createImage(\"rt_path_motion\", w, h,"
-            + " VK10.VK_FORMAT_R16G16B16A16_SFLOAT,"),
+        assertTrue(host.contains("nextMotion = nativeImages.create(w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,"),
             "the producer allocates it beside the radiance, at the same size");
-        assertTrue(host.contains("SlangProgram.Resource.storageImage(\"outMotion\", motion.view)"),
+        assertTrue(host.contains("SlangProgram.Resource.storageImage(\"outMotion\", motion.view())"),
             "and hands its own image to the shader, so no consumer can bind a stale one");
 
         String frame = read(HOST_FRAME);

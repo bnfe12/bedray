@@ -53,10 +53,18 @@ public interface RtPass {
     default void releaseRecording(long commandBuffer) {
     }
 
+    /**
+     * Host flushed its pending submission builder, proved GPU idle and guarantees
+     * that discarded local recordings cannot later be submitted. Idle alone is
+     * insufficient while the engine still owns queued, unsubmitted commands.
+     */
+    default void releaseRecordingsAfterHostDrain() {
+    }
+
     /** Resets temporal accumulation history (if any) when settings, presets, or denoisers change. */
     default void resetHistory() {
     }
 
-    /** Waits for the device to go idle and frees the pipeline objects and pass-owned images. */
+    /** Frees pass resources after the host completed or discarded every recording. */
     void destroy();
 }

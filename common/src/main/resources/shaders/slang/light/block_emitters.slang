@@ -494,24 +494,20 @@ struct SunAndBlockEmitterSampler : ILightSampler {
         if (!hasEmitters || sunIntensity <= 0.0) {
             // One branch only: its density is already the whole density, so nothing to renormalise.
             if (hasEmitters && sunIntensity <= 0.0) {
-                LightSample emitterSample = emitters.sample(receiver, seed);
-                if (emitterSample.valid && emitterProbability < 1.0) {
-                    emitterSample.sourcePdf /= emitterProbability;
-                }
-                return emitterSample;
+                return emitters.sample(receiver, seed);
             }
             return keyLight.sample(receiver, seed);
         }
         if (rand01(seed) < emitterProbability) {
             LightSample emitterSample = emitters.sample(receiver, seed);
             if (emitterSample.valid) {
-                emitterSample.sourcePdf /= emitterProbability;
+                emitterSample.sourcePdf *= emitterProbability;
             }
             return emitterSample;
         }
         LightSample sunSample = keyLight.sample(receiver, seed);
         if (sunSample.valid) {
-            sunSample.sourcePdf /= 1.0 - emitterProbability;
+            sunSample.sourcePdf *= 1.0 - emitterProbability;
         }
         return sunSample;
     }

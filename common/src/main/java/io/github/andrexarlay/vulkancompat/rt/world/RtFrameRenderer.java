@@ -427,6 +427,7 @@ public final class RtFrameRenderer {
 
     /** The compute diagnostic owns this frame; close capture and retire hardware-only resources. */
     public static void suspendForComputeDiagnostic() {
+        if (drainingHostSubmissions) return;
         io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().endFrame();
         if (world != null) {
             shutdown("compute_diagnostic_scene");
@@ -434,6 +435,13 @@ public final class RtFrameRenderer {
     }
 
     public static void render(CameraRenderState camera, RenderTarget target, LevelRenderState levelState) {
+        if (drainingHostSubmissions) return;
+        if (teardownPending) {
+            // A settings toggle cannot turn an unknown submission outcome into
+            // reusable state. Only a successful teardown removes quarantine.
+            if (!RtGeometryGate.enabled()) shutdown("retry_gate_off");
+            return;
+        }
         displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
         // publish this frame's captured entity geometry (also closes the capture: the hand pass that follows is not world geometry)
         if (io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().isOpen()) {
@@ -477,14 +485,19 @@ public final class RtFrameRenderer {
     }
 
     private static void frame(CameraRenderState camera, RenderTarget target, LevelRenderState levelState) {
+        if (drainingHostSubmissions) return;
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             return;
         }
         VkDevice device = vulkanDevice.vkDevice();
+        if (io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.needsHostDrain()) {
+            drainHostSubmissions(device, "particle_resources_drain");
+            io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.collectAfterHostDrain(false);
+        }
         if (world == null) {
             requireRayTracingDevice(device);
-            world = new RtWorld(device);
+            world = new RtWorld(device, pathSlangRuntime(vulkanDevice));
             // The leaf transmission is a plant property, not a render-pass one: tag the cutout quads while they are staged.
             world.setBlockLookup(VegetationBlocks::foliageKindAt);
             if (RtGpuTimer.ENABLED) {
@@ -565,21 +578,28 @@ public final class RtFrameRenderer {
         lastFrameTransparencyPolicy = curTransparencyPolicy;
         lastFrameReusePolicy = curReusePolicy;
 
-        if (denoiseMode != DenoiserMode.DLSS_RR && dlssRrDenoiser != null) {
+        boolean retireRr = denoiseMode != DenoiserMode.DLSS_RR && dlssRrDenoiser != null;
+        boolean retireNrd = (!denoiseMode.isNrd() || (denoiser != null && denoiser.mode() != denoiseMode)) && denoiser != null;
+        if (retireRr || retireNrd) drainHostSubmissions(device, "denoiser_switch_drain");
+        if (retireRr) {
             dlssRrDenoiser.destroy();
             dlssRrDenoiser = null;
         }
-        if ((!denoiseMode.isNrd() || (denoiser != null && denoiser.mode() != denoiseMode)) && denoiser != null) {
+        if (retireNrd) {
             denoiser.destroy();
             denoiser = null;
         }
 
         RtMode want = passModeFor(RtConfig.mode());
         boolean wantGb = wantGbuffer(want);
-        if (pass != null && (pass.mode() != want || !pass.builtFor(wantGb))) {
+        if (pass != null && (rebuildPassNext || pass.mode() != want || !pass.builtFor(wantGb))) {
             LOGGER.info("[VKB-RT] mode_switch from={} to={} nrd_gbuffer={}", pass.mode().logName(), want.logName(), wantGb);
+            drainHostSubmissions(device, "mode_switch_drain");
+            world.releaseComputeRecordingsAfterHostDrain();
+            pass.releaseRecordingsAfterHostDrain();
             pass.destroy();
             pass = createPass(device, want, wantGb);
+            rebuildPassNext = false;
             resetHistory();
             lastPassLog = "";
         }
@@ -590,6 +610,7 @@ public final class RtFrameRenderer {
         // native bloom and path-tracer recordings made into it are no longer in flight and can release their pools now.
         atmosphere.releaseRecording(cmd.address());
         pass.releaseRecording(cmd.address());
+        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.releaseRecording(cmd.address());
         VkBarriers.fullMemoryBarrier(cmd);
         if (gpuTimer != null) {
             gpuTimer.beginFrame(cmd);
@@ -1143,7 +1164,7 @@ public final class RtFrameRenderer {
         }
 
         // particles of the game (drawn into their own layer by RtParticleLayer.replay) over the denoised image, before bloom / god rays
-        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, device, output.view, w, h);
+        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, pathSlangRuntime(vulkanDevice), output.view, w, h);
 
         // god rays + bloom + sun glare on the denoised final image (reads the ray distance, writes only rt_output)
         if (gpuTimer != null) {
@@ -1285,6 +1306,7 @@ public final class RtFrameRenderer {
     private static void dropDlssRrDenoiser(VkDevice device) {
         dropDlssRrDenoiserNext = false;
         if (dlssRrDenoiser != null) {
+            drainHostSubmissions(device, "drop_rr_drain");
             dlssRrDenoiser.destroy();
             dlssRrDenoiser = null;
         }
@@ -1316,6 +1338,7 @@ public final class RtFrameRenderer {
     private static void dropDenoiser(VkDevice device) {
         dropDenoiserNext = false;
         if (denoiser != null) {
+            drainHostSubmissions(device, "drop_nrd_drain");
             denoiser.destroy();
             denoiser = null;
         }
@@ -1328,10 +1351,9 @@ public final class RtFrameRenderer {
     }
 
     private static void rebuildPlainPipeline(VkDevice device) {
-        if (pass != null) {
-            pass.destroy();   // waits for the device to go idle
-        }
-        pass = createPass(device, passModeFor(RtConfig.mode()), false);
+        // May be requested while a local command buffer is being recorded.
+        // Rebuild only at the next frame boundary, before allocating that buffer.
+        rebuildPassNext = true;
     }
 
     /** Ray Tracing unless Path Tracing is selected (also the pass of the legacy debug-view-only runs, mode off). */
@@ -1686,24 +1708,84 @@ public final class RtFrameRenderer {
         shutdown("failed");
     }
 
+    private static boolean drainingHostSubmissions;
+    private static boolean rebuildPassNext;
+    private static boolean teardownPending;
+
+    /** Called outside a local recording: pending encoder work must be submitted before idle can prove completion. */
+    private static void drainHostSubmissions(VkDevice device, String stage) {
+        if (drainingHostSubmissions) throw new RtFailure(stage, "recursive host submission drain");
+        VulkanDevice host = VulkanCapabilityChecker.getVulkanDevice();
+        if (host == null || host.vkDevice().address() != device.address()) {
+            throw new RtFailure(stage, "host device is unavailable or changed");
+        }
+        // execute(cmd) only appends to the game's submission builder. The host's
+        // own submit drains it; no second queue or native submission is created.
+        drainingHostSubmissions = true;
+        try {
+            host.createCommandEncoder().submit();
+            RtFailure.check(VK10.vkDeviceWaitIdle(device), stage);
+        } finally {
+            drainingHostSubmissions = false;
+        }
+    }
+
     private static void shutdown(String reason) {
+        if (drainingHostSubmissions) return;
         displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
-        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.release(reason);
         RtPass pl = pass;
         RtWorld w = world;
-        pass = null;
-        lastPassLog = "";
-        world = null;
-        lastStats = null;
+        if (w != null) {
+            teardownPending = true;
+            try {
+                drainHostSubmissions(w.memory().device(), "shutdown_drain");
+            } catch (RuntimeException | LinkageError e) {
+                // Keep strong references for an explicit later shutdown. A
+                // failed flush/idle is not permission to free pending resources.
+                RtGeometryGate.markFailed("shutdown_drain", String.valueOf(e.getMessage()));
+                LOGGER.error("[VKB-RT] shutdown drain refused; retaining renderer resources reason={}", reason, e);
+                return;
+            }
+        }
+        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.release(reason);
         if (w == null) {
+            // Replay can have queued game commands even when scene creation failed.
+            try {
+                if (io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.needsHostDrain()) {
+                    VulkanDevice host = VulkanCapabilityChecker.getVulkanDevice();
+                    if (host == null) {
+                        teardownPending = true;
+                        return;
+                    }
+                    drainHostSubmissions(host.vkDevice(), "particle_startup_failure_drain");
+                    io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.collectAfterHostDrain(true);
+                }
+                if (pathSlangRuntime != null) {
+                    pathSlangRuntime.close();
+                    if (!pathSlangRuntime.isClosed()) {
+                        teardownPending = true;
+                        return;
+                    }
+                    pathSlangRuntime = null;
+                }
+                teardownPending = false;
+            } catch (RuntimeException | LinkageError e) {
+                teardownPending = true;
+                LOGGER.error("[VKB-RT] runtime cleanup failed before world publication", e);
+            }
             return;
         }
         try {
+            io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.collectAfterHostDrain(true);
             if (pl != null) {
-                pl.destroy(); // waits for the device to go idle first
+                pl.releaseRecordingsAfterHostDrain();
+                pl.destroy();
+                pass = null;
             }
             if (pathSlangRuntime != null) {
+                w.closeComputeAfterHostDrain();
                 pathSlangRuntime.close(); // the pass released its recordings in destroy()
+                if (!pathSlangRuntime.isClosed()) throw new RtFailure("destroy_slang_runtime", "recordings are still in use");
                 pathSlangRuntime = null;
             }
             pathSlangUnavailable = false;
@@ -1712,74 +1794,79 @@ public final class RtFrameRenderer {
             atmosphere.destroy();
             if (gpuTimer != null) {
                 gpuTimer.destroy();
+                gpuTimer = null;
             }
             if (denoiser != null) {
                 denoiser.destroy();
+                denoiser = null;
             }
             // [DLSS-RR]
             if (dlssRrDenoiser != null) {
                 dlssRrDenoiser.destroy();
+                dlssRrDenoiser = null;
             }
             if (materials != null) {
                 materials.destroy();
+                materials = null;
             }
             if (emitters != null) {
                 emitters.destroy();
+                emitters = null;
             }
             if (output != null) {
                 w.memory().destroy(output);
+                output = null;
             }
             if (outputDepth != null) {
                 w.memory().destroy(outputDepth);
+                outputDepth = null;
             }
             if (compositeOutput != null) {
                 w.memory().destroy(compositeOutput);
+                compositeOutput = null;
             }
             if (compositePipeline != null) {
                 compositePipeline.destroy();
+                compositePipeline = null;
             }
             if (statsBuf != null) {
                 w.memory().destroy(statsBuf);
+                statsBuf = null;
             }
             if (skyTextures != null) {
                 skyTextures.destroy();
+                skyTextures = null;
             }
             if (entityMotionBuf != null) {
                 w.memory().destroy(entityMotionBuf);
+                entityMotionBuf = null;
             }
             if (reservoirBuf != null) {
                 w.memory().destroy(reservoirBuf);
+                reservoirBuf = null;
             }
             w.destroy();
+            world = null;
             LOGGER.info("[VKB-RT] world_destroyed reason={}", reason);
         } catch (RuntimeException | LinkageError e) {
             LOGGER.error("[VKB-RT] FAILED stage=destroy result={} reason={}", e.getMessage(), reason, e);
-        } finally {
-            denoiser = null;
-            gpuTimer = null;
-            // [DLSS-RR]
-            dlssRrDenoiser = null;
-            dropDlssRrDenoiserNext = false;
-            compositePipeline = null;
-            materials = null;
-            emitters = null;
-            lastPassMode = null;
-            dropDenoiserNext = false;
-            output = null;
-            outputDepth = null;
-            compositeOutput = null;
-            entityMotionBuf = null;
-            reservoirBuf = null;
-            reservoirPixels = -1L;
-            reservoirLightFingerprint = Long.MIN_VALUE;
-            reservoirResetRequested = true;
-            statsBuf = null;
-            skyTextures = null;
-            outputReady = false;
-            java.util.Arrays.fill(statsWritten, false);
-            java.util.Arrays.fill(statsTransparency, false);
-            lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
-            java.util.Arrays.fill(statsAccumulated, false);
+            RtGeometryGate.markFailed("destroy", String.valueOf(e.getMessage()));
+            return;
         }
+        teardownPending = false;
+        lastStats = null;
+        lastPassLog = "";
+        rebuildPassNext = false;
+        dropDlssRrDenoiserNext = false;
+        lastPassMode = null;
+        dropDenoiserNext = false;
+        reservoirPixels = -1L;
+        reservoirLightFingerprint = Long.MIN_VALUE;
+        reservoirResetRequested = true;
+        outputReady = false;
+        java.util.Arrays.fill(statsWritten, false);
+        java.util.Arrays.fill(statsTransparency, false);
+        lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
+        java.util.Arrays.fill(statsAccumulated, false);
     }
 }

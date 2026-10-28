@@ -1,15 +1,16 @@
 # Bedray Scene — candidate native GPU scene subsystem
 
-Status: **candidate component, L1 evidence only**. It compiles and passes a
-no-GPU contract test; it has not been integrated into `bedray_core`, run on a
-real GPU, or exercised by Minecraft. Nothing in this document is a claim of
-live rendering correctness.
+Status: **candidate component, L1 evidence only**. ABI v2 builds as a Windows
+x64 Release DLL with MSVC 14.44 (`/W4` clean) and its no-GPU contract test
+passes (`bedray_scene_contract`, 2026-10-28). It has not been integrated into
+`bedray_core`, run on a real GPU, or exercised by Minecraft. Nothing in this
+document is a claim of live rendering correctness.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `include/bedray_scene.h` | Public C ABI v1 (POD records, opaque `BedrayScene`) |
+| `include/bedray_scene.h` | Public C ABI v2 (POD records, opaque `BedrayScene`) |
 | `src/scene_internal.h` | Internal C++ state: buffers, AS, sections, entities, tables, frame slots, plans |
 | `src/scene.cpp` | Updates and coalescing, frame planning, command recording, commit and retirement |
 | `src/acceleration_scene.cpp` | Vulkan function loading, buffer/AS creation and destruction, size queries, command helpers |
@@ -34,16 +35,24 @@ Compile-time layout checks in `scene.cpp`:
 | `BedraySceneError` | 1028 |
 | `BedraySceneAbiInfo` | 48 |
 | `BedraySceneDesc` | 88 |
-| `BedraySceneSectionInput` | 64 |
+| `BedraySceneSectionInput` | 96 |
 | `BedraySceneEntityInput` | 120 |
 | `BedraySceneUpdate` | 56 |
 | `BedraySceneTableDesc` | 40 |
 | `BedraySceneFrameDesc` | 24 |
 | `BedraySceneFrameInfo` | 80 |
 | `BedraySceneResources` | 112 |
-| `BedraySceneSectionRecord` | 48 |
+| `BedraySceneSectionRange` | 8 |
+| `BedraySceneSectionRecord` | 64 |
+| `GeometryVertex` (section vertex stream) | 64 |
 | `BedraySceneStatus` | 4 |
 | TLAS instance record (`VkAccelerationStructureInstanceKHR`) | 64 |
+
+Field offsets are also compile-time checked (`origin` at 56,
+`geometry_count` at 68, `quad_start` at 72, `pass_bits` at 84, `flags` at 88,
+`reserved` at 92 in the section input; `origin` at 0, `meta` at 16,
+`vertex_address` at 32, `ranges` at 40 in the section record; `first_quad` at 0
+and `quad_count_pass` at 4 in the range).
 
 ### Create
 
@@ -63,7 +72,14 @@ Validation rules enforced at create:
 - `max_sections`, `max_entities`, `max_instances` non-zero,
   `max_sections <= max_instances`, `max_entities <= max_instances`,
   `max_instances <= 0xFFFFFF` (24-bit `instanceCustomIndex`);
-- `max_table_bytes` and `max_geometry_bytes` non-zero.
+- `max_sections <= 0x800000` and `max_entities <= 0x800000`: slot values must
+  stay clear of the entity tag bit (`0x800000`) in the shared custom-index
+  namespace;
+- `max_table_bytes` and `max_geometry_bytes` non-zero. These are the only
+  budgets: one geometry's vertex+index bytes and one table's bytes are bounded
+  at update time; capacities (`max_sections`, `max_entities`,
+  `max_instances`) are fixed at create. There is no global VRAM budget
+  accounting.
 
 ### Batched update
 
@@ -95,6 +111,55 @@ light table. Revision numbers identify content and coalesce repeated calls.
 `size == 0` clears the table. Revision `0` is a valid revision; an internal
 sentinel (`~0ull`) distinguishes "never uploaded". `max_table_bytes` bounds
 each table. The bytes are not interpreted by the scene.
+
+### Section geometry contract (ABI v2)
+
+A section input is a single mesh whose vertex stream is one quad per four
+vertices. Validation enforces:
+
+- `index_type` is `UINT16` or `UINT32`, `index_count == quads * 6`,
+  `vertex_count % 4 == 0`, and `quads <= 65535` (the record's range count is
+  16 bits);
+- `geometry_count` is 1..3 and `quad_start[0] == 0`; each geometry's range is
+  non-empty and ranges are contiguous by construction
+  (`quad_start[g]` .. `quad_start[g+1]`, last ends at `quads`);
+- `pass_bits` holds two bits per geometry, values 0 solid, 1 cutout,
+  2 translucent, strictly increasing across geometries; bits beyond
+  `geometry_count` are zero;
+- `BEDRAY_SCENE_SECTION_FLAG_GEOMETRY_VERTEX` requires `vertex_stride == 64`
+  and describes the `GeometryVertex` stream: position float4 at 0,
+  uvLight float4 at 16 (xy uv, zw block/sky), tint float4 at 32, meta uint4
+  at 48 (x material id, y flags, zw zero).
+
+One BLAS geometry is created per non-empty pass range. Every geometry points
+at the same vertex/index buffers and differs only in its build range;
+`VK_GEOMETRY_OPAQUE_BIT_KHR` is set only for the solid (pass 0) range.
+
+**Native-scene indices are local to the pass range that contains them.** Each
+quad is indexed as the pattern `(0,1,2, 2,3,0)` relative to the range start:
+quad `k` inside a range writes `4k + (0,1,2, 2,3,0)`. The build range supplies
+the offset instead: `firstVertex = quad_start * 4` and
+`primitiveOffset = quad_start * 6 * index_bytes`. A producer that writes
+absolute (section-global) indices double-offsets the vertices and corrupts the
+range; a producer that restarts at zero for every quad in a multi-quad range
+collapses the range onto its first quad.
+
+The shader-facing section table is rebuilt when membership, geometry
+addresses or geometry metadata change. Records are written in ascending
+`section_id` order, so a record's index (its slot) is exactly the
+`instanceCustomIndex` of the section's TLAS instance:
+
+- `origin.xyz` block origin, `origin.w` stable 32-bit identity hash of the
+  section id (not the slot; it survives reordering);
+- `meta.x` vertex count, `meta.y` geometry count, `meta.z` section flags,
+  `meta.w` zero;
+- `vertex_address` BDA of the vertex stream;
+- `ranges[g].first_quad`, `ranges[g].quad_count_pass` with bits 0..15 count,
+  16..17 pass, 18..31 flags.
+
+Entity instances share the TLAS but not the namespace: their
+`instanceCustomIndex` is `0x800000 | entity_slot`. The tag bit is the only
+signal a hit needs to tell a mob quad from a section quad.
 
 ### Frame preparation
 
@@ -149,7 +214,7 @@ VkDevice                             buffer + BLAS
 queue                              entities: id -> committed GeometryResource
 VkCommandBuffers                     plus pending transform/mask/mesh
 VkFences / submissions             tables[2]: GPU buffer + pending bytes
-                                   section table: GPU buffer (48-byte records)
+                                   section table: GPU buffer (64-byte records)
                                    frame slots[frames_in_flight]:
                                      TLAS, TLAS scratch, host-visible instance
                                      buffer, transient staging/BLAS scratch,
@@ -235,11 +300,18 @@ The policy is capability-driven (`AS_UPDATE`), never GPU-name-driven.
 Each record is the 64-byte `VkAccelerationStructureInstanceKHR` layout:
 
 - row-major 3x4 transform (sections use identity);
-- `instanceCustomIndex` is the section order followed by the entity order,
-  masked to 24 bits;
-- `mask` defaults to `0xFF`;
+- section `instanceCustomIndex` is the section table slot; entity
+  `instanceCustomIndex` is `0x800000 | entity_slot`; the value is masked to
+  24 bits when written;
+- `mask` defaults to `0xFF` and is limited to the low 8 bits;
 - SBT record offset 0, `TRIANGLE_FACING_CULL_DISABLE` set;
 - BLAS device address from the acceleration structure.
+
+Slot compaction is intentional: adding or removing a section can renumber
+later sections, which changes their custom indices and therefore the instance
+fingerprint (forcing a TLAS rebuild). The shader must resolve a section through
+the section table by slot, never treat the custom index as a stable section id;
+`origin.w` is the stable identity.
 
 ## 4. Required Vulkan functions and barriers
 
@@ -325,7 +397,7 @@ complete. The scene never synchronizes Minecraft/Sodium resources.
 | `rt/world/RtEntityBlas.java` | Entity BLAS rebuilt every frame with `PREFER_FAST_BUILD` | Per-entity BLAS with capability-driven refit/rebuild and deferred refit; the per-frame fast-build policy is intentionally not carried over |
 | `rt/world/RtEntityGeometryManager.java` | CPU ring buffers, atlas swaps, retire queue | Scene-owned per-frame staging, per-slot instance buffers, frame-index retirement; the scene does not manage entity capture or atlases |
 | `rt/core/BedrayCoreNative.java` | FFM segments, status/error convention, recording release | Same ABI style: POD inputs, `uint64_t` handles, status plus fixed message, prepare/release recording pair. The scene is not yet exported by `bedray_core` |
-| `RtWorld` section table (48 bytes/slot) | Shader lookup by `instanceCustomIndex` | `BedraySceneSectionRecord` (provisional 48-byte layout), sections sorted by `section_id`, buffer address/count exposed via `BedraySceneResources` |
+| `RtWorld` section table (48 bytes/slot) | Shader lookup by `instanceCustomIndex` | `BedraySceneSectionRecord` (64-byte ABI v2 layout), sections sorted by `section_id`, custom index equals the table slot, buffer address/count exposed via `BedraySceneResources` |
 | `RtWorld` light hash / vegetation bits / OMM micromaps | Shader-side flags and micromap objects | Not modelled in this candidate; open integration gap |
 
 ## 6. Open ABI decisions for the integrating agent
@@ -333,14 +405,15 @@ complete. The scene never synchronizes Minecraft/Sodium resources.
 1. **Packaging**: ship as a separate `bedray_scene.dll` (current candidate) or
    fold the implementation into `bedray_core` behind a versioned extension of
    `bedray_core.h`. The addendum forbids editing the core ABI header now.
-2. **Section record**: `BedraySceneSectionRecord` is explicitly provisional.
-   The final shader-facing section/material representation must be agreed with
-   the Slang path tracer before it becomes permanent.
-3. **Custom index stability**: `instanceCustomIndex` is derived from map order
-   (sections, then entities). Insertions/removals can renumber later
-   instances. The shader must resolve sections through the section table, not
-   through a stable per-section index, unless the ABI later accepts an explicit
-   custom index/slot.
+2. **Section record**: ABI v2 fixes the 64-byte record and the 8-byte range
+   (count 16 bits, pass 2 bits, flags 14 bits). The shader-side field semantics
+   must still be confirmed against the Slang `SceneTraversal`; any change is an
+   ABI v3 addition coordinated with the Java and Slang agents.
+3. **Custom index stability**: section slots are compacted by `section_id`
+   order, so membership changes renumber later slots. The shader resolves
+   sections through the table by slot; `origin.w` is the stable identity. The
+   entity tag bit `0x800000` is a fixed convention of the entity ring path and
+   part of this contract.
 4. **Table schema**: table bytes are opaque. Alignment, std430 layout and
    element counts must be defined together with the shader; the scene only
    guarantees byte-identical upload and BDA exposure.
@@ -379,11 +452,33 @@ ctest --test-dir build -C Release --output-on-failure
 The MSVC build uses `/W4 /permissive- /EHsc /utf-8` and completes without
 warnings. The shared library is `build/Release/bedray_scene.dll`.
 
-Latest result: **1/1 tests passed** (`bedray_scene_contract`, 0.04 s), exit
-code 0. The contract test uses a fake Vulkan proc table (no GPU, no driver):
+Latest executed result (ABI v2, 2026-10-28): **1/1 tests passed**
+(`bedray_scene_contract`), exit code 0, no compiler warnings. The contract
+test uses a fake Vulkan proc table (no GPU, no driver).
 
-- static ABI layout checks;
-- create validation (capabilities, frames, capacities, reserved fields);
+Staged artifact: `bedray_scene.dll`, 221 184 bytes, SHA-256
+`5cabb51c2bbb354d0d61c5377f90a9edf74871227aee9ac37239cdd87f2e12ee`
+(x64, static CRT, imports only `KERNEL32.dll`).
+
+Contract coverage (every item below executes in `bedray_scene_contract`):
+
+- static ABI layout checks, including every documented field offset;
+- create validation (capabilities, frames, capacities, reserved fields,
+  23-bit slot space for sections/entities);
+- section-contract rejection: `quad_start[0] != 0`, empty range, unordered or
+  out-of-range passes, `pass_bits` beyond `geometry_count`, bad
+  `geometry_count`, unknown flags, `GEOMETRY_VERTEX` with the wrong stride,
+  `vertex_count % 4`, `index_count != quads*6`, non-indexed sections,
+  quad count above `0xFFFF` (boundary `0xFFFF` accepted);
+- one BLAS geometry per non-empty pass range with per-range
+  `primitiveCount`/`primitiveOffset`/`firstVertex`, shared vertex/index
+  addresses, `OPAQUE` only on pass 0, and matching size-query max counts;
+- section record meta/origin/ranges and stable `origin.w` identity across
+  rebuilds;
+- section table records ordered by `section_id`, TLAS custom index equal to
+  the table slot, entity tag `0x800000`, slot compaction after removal;
+- `GeometryVertex` section stream with 64-byte stride;
+- UNKNOWN_ID on removing an unknown section;
 - first frame records copies, BLAS builds, TLAS build and the full barrier
   chain;
 - idle frame reuses slot state and reports `IDLE`;

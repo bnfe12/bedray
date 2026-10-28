@@ -68,6 +68,12 @@ static const uint HIT_FLAG_ENTITY_OUTLINE = 1u << 7u;
 // vanilla paints over the texture.  Only the colour changes, so the flag stops
 // a decoder from reading emission out of a texel the game never showed.
 static const uint HIT_FLAG_ENTITY_HURT  = 1u << 8u;
+// Vertex tags the host classified while staging: a plant or leaf quad
+// (HIT_FLAG_FOLIAGE) and a full leaf cube rather than a flat card
+// (HIT_FLAG_LEAF_CUBE).  They do not change geometry, so a consumer that only
+// needs the cutout rule can keep using HIT_FLAG_CUTOUT.
+static const uint HIT_FLAG_FOLIAGE      = 1u << 9u;
+static const uint HIT_FLAG_LEAF_CUBE    = 1u << 10u;
 
 SurfaceHit missHit(float tMax) {
     SurfaceHit result;

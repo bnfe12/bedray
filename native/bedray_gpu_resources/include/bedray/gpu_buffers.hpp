@@ -19,7 +19,8 @@ struct UseId {
 
 enum class Status : std::uint32_t {
     ok, invalid_argument, unavailable, unknown_buffer, unknown_use, in_use,
-    retired, budget_exceeded, unsupported, exhausted, out_of_memory, device_lost, vulkan_error
+    retired, budget_exceeded, unsupported, exhausted, out_of_memory, device_lost, vulkan_error,
+    unknown_image
 };
 
 // Supplied by the game-owned device. No loader, instance, queue, command pool,
@@ -83,6 +84,11 @@ public:
     [[nodiscard]] Status view(BufferId id, BufferView& out) const noexcept;
     [[nodiscard]] Status write(BufferId id, VkDeviceSize offset, const void* data, VkDeviceSize bytes, VkResult& error) noexcept;
     [[nodiscard]] Status read(BufferId id, VkDeviceSize offset, void* data, VkDeviceSize bytes, VkResult& error) noexcept;
+    // Upload and reserve one read-only use atomically. Pool slots are reused
+    // only after every previous use completed; no frame-count assumption.
+    [[nodiscard]] Status upload(VkBufferUsageFlags usage, const void* data, VkDeviceSize bytes,
+        BufferId& id, BufferView& view, UseId& use, VkResult& error) noexcept;
+    [[nodiscard]] Status retire_uploads() noexcept;
     [[nodiscard]] Status begin_use(BufferId id, UseId& token) noexcept;
     // The host must have proven completed-or-discarded as described above;
     // completing an unknown token without such proof is unsafe.
@@ -111,6 +117,8 @@ private:
         VkDeviceAddress device_address = 0;
         void* mapped = nullptr;
         bool retired = false;
+        VkBufferUsageFlags usage = 0;
+        bool upload_slot = false;
     };
     struct Use { UseId id; BufferId buffer; };
     [[nodiscard]] Buffer* find(BufferId id) noexcept;

@@ -8,7 +8,7 @@ if(NOT WIN32)
     message(FATAL_ERROR "bedray_core currently supports Windows only")
 endif()
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -31,6 +31,7 @@ enable_testing()
 
 add_library(bedray_core SHARED
     src/core.cpp
+    src/path_trace_pass.cpp
 )
 
 # History exposes a C API implemented by the core DLL. The registry remains a
@@ -40,12 +41,13 @@ add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../bedray_history"
 target_sources(bedray_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../bedray_history/src/history_c.cpp")
 target_link_libraries(bedray_core PRIVATE bedray_history)
 
-# Export the native buffer owner's C API from this DLL. The host supplies the
-# already-created device and its entry points; frame submission/retirement is
-# still the host's responsibility and the current frame path does not use it.
+# Export the native resource owners' C APIs. Slang frame adapters supply the
+# game-owned device and entry points; submission/completion proof remains
+# with the host, allocation and deferred destruction with C++.
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources"
                  "${CMAKE_CURRENT_BINARY_DIR}/bedray_gpu_resources")
 target_sources(bedray_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources/src/gpu_buffers_c.cpp")
+target_sources(bedray_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources/src/gpu_images_c.cpp")
 target_compile_definitions(bedray_core PRIVATE BEDRAY_GPU_RESOURCES_EXPORTS)
 target_link_libraries(bedray_core PRIVATE bedray_gpu_resources)
 
@@ -91,3 +93,46 @@ target_include_directories(bedray_abi_probe PRIVATE include)
 if(MSVC)
     set_property(TARGET bedray_abi_probe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
+
+add_executable(bedray_descriptor_cache_test tests/descriptor_cache_test.cpp src/path_trace_pass.cpp)
+target_link_libraries(bedray_descriptor_cache_test PRIVATE bedray_gpu_resources)
+target_include_directories(bedray_descriptor_cache_test PRIVATE
+    include
+    "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources/include"
+    "${BEDRAY_VULKAN_HEADERS}"
+)
+target_compile_definitions(bedray_descriptor_cache_test PRIVATE BEDRAY_CORE_BUILD WIN32_LEAN_AND_MEAN NOMINMAX)
+if(MSVC)
+    set_property(TARGET bedray_descriptor_cache_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_test(NAME bedray_descriptor_cache_test COMMAND bedray_descriptor_cache_test)
+
+add_executable(bedray_sampler_ownership_test tests/sampler_ownership_test.cpp src/path_trace_pass.cpp)
+target_link_libraries(bedray_sampler_ownership_test PRIVATE bedray_gpu_resources)
+target_include_directories(bedray_sampler_ownership_test PRIVATE
+    include
+    "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources/include"
+    "${BEDRAY_VULKAN_HEADERS}"
+)
+target_compile_definitions(bedray_sampler_ownership_test PRIVATE BEDRAY_CORE_BUILD WIN32_LEAN_AND_MEAN NOMINMAX)
+if(MSVC)
+    set_property(TARGET bedray_sampler_ownership_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_test(NAME bedray_sampler_ownership_test COMMAND bedray_sampler_ownership_test)
+
+# White-box test: includes src/path_trace_pass.cpp directly, stubs the core's
+# render entry points and program registry, and drives the pass through a fake
+# Vulkan driver supplied by bedray_gpu_resources' function tables.
+add_executable(bedray_path_trace_pass_test tests/path_trace_pass_test.cpp)
+target_link_libraries(bedray_path_trace_pass_test PRIVATE bedray_gpu_resources)
+target_include_directories(bedray_path_trace_pass_test PRIVATE
+    include
+    "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources/include"
+    "${BEDRAY_VULKAN_HEADERS}"
+)
+target_compile_definitions(bedray_path_trace_pass_test PRIVATE BEDRAY_CORE_BUILD WIN32_LEAN_AND_MEAN NOMINMAX)
+if(MSVC)
+    target_compile_options(bedray_path_trace_pass_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+    set_property(TARGET bedray_path_trace_pass_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_test(NAME bedray_path_trace_pass_test COMMAND bedray_path_trace_pass_test)

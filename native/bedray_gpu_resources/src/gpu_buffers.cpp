@@ -138,7 +138,7 @@ Status GpuBuffers::create(const BufferDesc& desc, BufferId& id, BufferView& view
     }
     const BufferId new_id{context_.generation, next_buffer_++};
     const auto flags = context_.memory_properties.memoryTypes[index].propertyFlags;
-    buffers_.push_back(Buffer{new_id, handle, memory, desc.size, requirements.size, flags, device_address, mapped, false});
+    buffers_.push_back(Buffer{new_id, handle, memory, desc.size, requirements.size, flags, device_address, mapped, false, desc.usage, false});
     resident_bytes_ += requirements.size;
     id = new_id;
     view_out = BufferView{handle, desc.size, flags, device_address};
@@ -201,6 +201,47 @@ Status GpuBuffers::write(BufferId id, VkDeviceSize offset, const void* data, VkD
 }
 Status GpuBuffers::read(BufferId id, VkDeviceSize offset, void* data, VkDeviceSize bytes, VkResult& error) noexcept {
     return mapped_transfer(id, offset, data, bytes, false, error);
+}
+Status GpuBuffers::upload(VkBufferUsageFlags usage, const void* data, VkDeviceSize bytes,
+                         BufferId& id, BufferView& out, UseId& use, VkResult& error) noexcept {
+    error = VK_SUCCESS;
+    if (lost_) return Status::device_lost;
+    if (!valid()) return Status::unavailable;
+    constexpr auto allowed = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (!data || bytes == 0 || usage == 0 || (usage & ~allowed) != 0)
+        return Status::invalid_argument;
+    Buffer* selected = nullptr;
+    for (auto& buffer : buffers_) {
+        if (buffer.upload_slot && !buffer.retired && buffer.usage == usage &&
+            buffer.size >= bytes && !has_use(buffer.id) && (!selected || buffer.size < selected->size))
+            selected = &buffer;
+    }
+    BufferId selected_id{};
+    BufferView selected_view{};
+    if (selected) {
+        selected_id = selected->id;
+        selected_view = {selected->buffer, selected->size, selected->flags, selected->device_address};
+    } else {
+        const BufferDesc desc{bytes, usage, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true};
+        const Status created = create(desc, selected_id, selected_view, error);
+        if (created != Status::ok) return created;
+        find(selected_id)->upload_slot = true;
+    }
+    const Status copied = write(selected_id, 0, data, bytes, error);
+    if (copied != Status::ok) return copied;
+    UseId token{};
+    const Status pinned = begin_use(selected_id, token);
+    if (pinned != Status::ok) return pinned;
+    id = selected_id; out = selected_view; use = token;
+    return Status::ok;
+}
+Status GpuBuffers::retire_uploads() noexcept {
+    if (lost_) return Status::device_lost;
+    if (!valid()) return Status::unavailable;
+    for (auto& buffer : buffers_) if (buffer.upload_slot) buffer.retired = true;
+    return Status::ok;
 }
 Status GpuBuffers::begin_use(BufferId id, UseId& token) noexcept {
     if (lost_) return Status::device_lost;

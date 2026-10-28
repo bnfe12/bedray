@@ -1,6 +1,16 @@
 #include "scene_internal.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
+
+/* The section record stores one 2-bit pass per geometry, and the input stores
+   quad_start[3]. The arrays and the pass-bit packing must agree. */
+static_assert(BEDRAY_SCENE_MAX_SECTION_GEOMETRIES >= 1
+    && BEDRAY_SCENE_MAX_SECTION_GEOMETRIES <= 16,
+    "scene: section geometry count must fit the 2-bit pass packing");
+static_assert(2 * BEDRAY_SCENE_MAX_SECTION_GEOMETRIES <= 32,
+    "scene: pass_bits is a 32-bit field with two bits per geometry");
 
 namespace bedray_scene {
 namespace {
@@ -347,6 +357,29 @@ bool create_geometry_buffer(
     return create_buffer_impl(scene, total, usage, false, out, error);
 }
 
+uint32_t blas_geometry_count(const BlasView& view) {
+    if (!view.quad_stream) {
+        return 1u;
+    }
+    return std::clamp(view.geometry_count, 1u, BEDRAY_SCENE_MAX_SECTION_GEOMETRIES);
+}
+
+uint32_t blas_quad_count(const BlasView& view, uint32_t geometry) {
+    const uint32_t total = static_cast<uint32_t>(view.vertex_count / 4);
+    const uint32_t count = blas_geometry_count(view);
+    const uint32_t start = view.quad_start[geometry];
+    const uint32_t end = geometry + 1u < count ? view.quad_start[geometry + 1u] : total;
+    return end > start ? end - start : 0u;
+}
+
+uint32_t blas_index_bytes(const BlasView& view) {
+    return view.index_type == BEDRAY_SCENE_INDEX_UINT16 ? 2u : 4u;
+}
+
+uint32_t blas_pass(const BlasView& view, uint32_t geometry) {
+    return (view.pass_bits >> (2u * geometry)) & 0x3u;
+}
+
 bool query_blas_sizes(
     Scene& scene,
     const BlasView& view,
@@ -358,31 +391,50 @@ bool query_blas_sizes(
         return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "BLAS has no vertices") == BEDRAY_SCENE_OK;
     }
 
-    VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
-    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    triangles.vertexData.deviceAddress = view.vertex_address;
-    triangles.vertexStride = view.vertex_stride;
-    triangles.maxVertex = static_cast<uint32_t>(view.vertex_count - 1);
-    switch (view.index_type) {
-        case BEDRAY_SCENE_INDEX_UINT16:
-            triangles.indexType = VK_INDEX_TYPE_UINT16;
-            triangles.indexData.deviceAddress = view.index_address;
-            break;
-        case BEDRAY_SCENE_INDEX_UINT32:
-            triangles.indexType = VK_INDEX_TYPE_UINT32;
-            triangles.indexData.deviceAddress = view.index_address;
-            break;
-        default:
-            triangles.indexType = VK_INDEX_TYPE_NONE_KHR;
-            break;
-    }
+    const uint32_t geometry_count = blas_geometry_count(view);
+    std::array<VkAccelerationStructureGeometryTrianglesDataKHR,
+        BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> triangles{};
+    std::array<VkAccelerationStructureGeometryKHR,
+        BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> geometries{};
+    std::array<uint32_t, BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> primitive_counts{};
 
-    VkAccelerationStructureGeometryKHR geometry{};
-    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    geometry.flags = 0;
-    geometry.geometry.triangles = triangles;
+    /* One BLAS geometry per non-empty pass range. Every geometry sees the same
+       vertex/index stream; the build ranges below cut it into pass ranges. */
+    for (uint32_t geometry = 0; geometry < geometry_count; ++geometry) {
+        VkAccelerationStructureGeometryTrianglesDataKHR& data = triangles[geometry];
+        data.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+        data.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        data.vertexData.deviceAddress = view.vertex_address;
+        data.vertexStride = view.vertex_stride;
+        data.maxVertex = static_cast<uint32_t>(view.vertex_count - 1);
+        switch (view.index_type) {
+            case BEDRAY_SCENE_INDEX_UINT16:
+                data.indexType = VK_INDEX_TYPE_UINT16;
+                data.indexData.deviceAddress = view.index_address;
+                break;
+            case BEDRAY_SCENE_INDEX_UINT32:
+                data.indexType = VK_INDEX_TYPE_UINT32;
+                data.indexData.deviceAddress = view.index_address;
+                break;
+            default:
+                data.indexType = VK_INDEX_TYPE_NONE_KHR;
+                break;
+        }
+
+        VkAccelerationStructureGeometryKHR& out = geometries[geometry];
+        out.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        out.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        out.flags = view.quad_stream && blas_pass(view, geometry) == 0u
+            ? VK_GEOMETRY_OPAQUE_BIT_KHR
+            : 0;
+        out.geometry.triangles = data;
+
+        primitive_counts[geometry] = view.quad_stream
+            ? blas_quad_count(view, geometry) * 2u
+            : (view.index_count > 0
+                ? static_cast<uint32_t>(view.index_count / 3)
+                : static_cast<uint32_t>(view.vertex_count / 3));
+    }
 
     VkAccelerationStructureBuildGeometryInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -390,17 +442,13 @@ bool query_blas_sizes(
     info.flags = (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
         ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR
         : 0;
-    info.geometryCount = 1;
-    info.pGeometries = &geometry;
-
-    const uint32_t primitive_count = view.index_count > 0
-        ? static_cast<uint32_t>(view.index_count / 3)
-        : static_cast<uint32_t>(view.vertex_count / 3);
+    info.geometryCount = geometry_count;
+    info.pGeometries = geometries.data();
 
     VkAccelerationStructureBuildSizesInfoKHR sizes{};
     sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
     scene.fns.get_as_build_sizes(scene.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-        &info, &primitive_count, &sizes);
+        &info, primitive_counts.data(), &sizes);
 
     storage_size = sizes.accelerationStructureSize;
     build_scratch = sizes.buildScratchSize;
@@ -500,30 +548,67 @@ void record_blas_build(
     VkAccelerationStructureKHR src,
     bool update,
     uint64_t scratch_address) {
-    VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
-    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    triangles.vertexData.deviceAddress = view.vertex_address;
-    triangles.vertexStride = view.vertex_stride;
-    triangles.maxVertex = static_cast<uint32_t>(view.vertex_count - 1);
-    switch (view.index_type) {
-        case BEDRAY_SCENE_INDEX_UINT16:
-            triangles.indexType = VK_INDEX_TYPE_UINT16;
-            triangles.indexData.deviceAddress = view.index_address;
-            break;
-        case BEDRAY_SCENE_INDEX_UINT32:
-            triangles.indexType = VK_INDEX_TYPE_UINT32;
-            triangles.indexData.deviceAddress = view.index_address;
-            break;
-        default:
-            triangles.indexType = VK_INDEX_TYPE_NONE_KHR;
-            break;
-    }
+    const uint32_t geometry_count = blas_geometry_count(view);
+    std::array<VkAccelerationStructureGeometryTrianglesDataKHR,
+        BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> triangles{};
+    std::array<VkAccelerationStructureGeometryKHR,
+        BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> geometries{};
+    std::array<VkAccelerationStructureBuildRangeInfoKHR,
+        BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> ranges{};
+    std::array<const VkAccelerationStructureBuildRangeInfoKHR*,
+        BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> range_ptrs{};
 
-    VkAccelerationStructureGeometryKHR geometry{};
-    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    geometry.geometry.triangles = triangles;
+    /* Native-scene indices are LOCAL per quad: every quad is indexed as
+       (0,1,2, 2,3,0) relative to its first vertex. The build range carries the
+       range start instead: primitiveOffset addresses the first index of the
+       range (quad_start*6*index_bytes) and firstVertex offsets the stream by
+       quad_start*4. A producer that writes absolute indices here would move
+       every vertex of the range, so the shader traversal and the producer must
+       both keep indices local. */
+    for (uint32_t geometry = 0; geometry < geometry_count; ++geometry) {
+        VkAccelerationStructureGeometryTrianglesDataKHR& data = triangles[geometry];
+        data.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+        data.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        data.vertexData.deviceAddress = view.vertex_address;
+        data.vertexStride = view.vertex_stride;
+        data.maxVertex = static_cast<uint32_t>(view.vertex_count - 1);
+        switch (view.index_type) {
+            case BEDRAY_SCENE_INDEX_UINT16:
+                data.indexType = VK_INDEX_TYPE_UINT16;
+                data.indexData.deviceAddress = view.index_address;
+                break;
+            case BEDRAY_SCENE_INDEX_UINT32:
+                data.indexType = VK_INDEX_TYPE_UINT32;
+                data.indexData.deviceAddress = view.index_address;
+                break;
+            default:
+                data.indexType = VK_INDEX_TYPE_NONE_KHR;
+                break;
+        }
+
+        VkAccelerationStructureGeometryKHR& out = geometries[geometry];
+        out.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        out.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        out.flags = view.quad_stream && blas_pass(view, geometry) == 0u
+            ? VK_GEOMETRY_OPAQUE_BIT_KHR
+            : 0;
+        out.geometry.triangles = data;
+
+        VkAccelerationStructureBuildRangeInfoKHR& range = ranges[geometry];
+        if (view.quad_stream) {
+            range.primitiveCount = blas_quad_count(view, geometry) * 2u;
+            range.primitiveOffset = view.quad_start[geometry] * 6u * blas_index_bytes(view);
+            range.firstVertex = view.quad_start[geometry] * 4u;
+        } else {
+            range.primitiveCount = view.index_count > 0
+                ? static_cast<uint32_t>(view.index_count / 3)
+                : static_cast<uint32_t>(view.vertex_count / 3);
+            range.primitiveOffset = 0;
+            range.firstVertex = 0;
+        }
+        range.transformOffset = 0;
+        range_ptrs[geometry] = &range;
+    }
 
     VkAccelerationStructureBuildGeometryInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -536,17 +621,11 @@ void record_blas_build(
         : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     info.srcAccelerationStructure = src;
     info.dstAccelerationStructure = dst;
-    info.geometryCount = 1;
-    info.pGeometries = &geometry;
+    info.geometryCount = geometry_count;
+    info.pGeometries = geometries.data();
     info.scratchData.deviceAddress = scratch_address;
 
-    VkAccelerationStructureBuildRangeInfoKHR range{};
-    range.primitiveCount = view.index_count > 0
-        ? static_cast<uint32_t>(view.index_count / 3)
-        : static_cast<uint32_t>(view.vertex_count / 3);
-
-    const VkAccelerationStructureBuildRangeInfoKHR* ranges[] = { &range };
-    scene.fns.cmd_build_as(command_buffer, 1, &info, ranges);
+    scene.fns.cmd_build_as(command_buffer, 1, &info, range_ptrs.data());
 }
 
 void record_tlas_build(

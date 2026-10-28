@@ -46,12 +46,26 @@
 extern "C" {
 #endif
 
-#define BEDRAY_SCENE_ABI_VERSION 1u
+#define BEDRAY_SCENE_ABI_VERSION 2u
 #define BEDRAY_SCENE_ERROR_MESSAGE_BYTES 1024u
 #define BEDRAY_SCENE_MAX_FRAMES_IN_FLIGHT 8u
 #define BEDRAY_SCENE_TABLE_COUNT 2u
-#define BEDRAY_SCENE_SECTION_RECORD_BYTES 48u
+#define BEDRAY_SCENE_MAX_SECTION_GEOMETRIES 3u
+#define BEDRAY_SCENE_SECTION_RECORD_BYTES 64u
 #define BEDRAY_SCENE_INSTANCE_RECORD_BYTES 64u
+
+/* BedraySceneSectionInput.flags. A zero flags word is valid. */
+enum {
+    /* vertices points at GeometryVertex records (64 B stride, see
+       BEDRAY_SCENE_GEOMETRY_VERTEX_BYTES). The path tracer requires this
+       flag; the scene itself only validates the stride. */
+    BEDRAY_SCENE_SECTION_FLAG_GEOMETRY_VERTEX = 1u << 0
+};
+
+/* Shader-facing GeometryVertex record: position, uv/light, tint, meta.
+   The scene never decodes it; it only copies the stream and builds the BLAS
+   with position at offset 0 and this stride. */
+#define BEDRAY_SCENE_GEOMETRY_VERTEX_BYTES 64u
 
 typedef struct BedrayScene BedrayScene;
 
@@ -153,6 +167,16 @@ typedef struct BedraySceneDesc {
 /*
  * A section is a static terrain chunk. Its BLAS is rebuilt only when
  * geometry_revision changes. All pointers are copied during the call.
+ *
+ * The vertex stream is opaque to the scene. When flags has
+ * BEDRAY_SCENE_SECTION_FLAG_GEOMETRY_VERTEX, it is an array of 64-byte
+ * GeometryVertex records (position at offset 0), which is also the stream the
+ * Slang SceneTraversal reads through the section record's device address.
+ *
+ * origin is the section origin in blocks (16-block sections). geometry_count is
+ * 1..3; quad_start[g] is the first quad of geometry g in the vertex stream and
+ * the ranges are contiguous in pass order. pass_bits stores 2 bits per geometry
+ * (0 solid, 1 cutout, 2 translucent), the same encoding as the legacy table.
  */
 typedef struct BedraySceneSectionInput {
     uint64_t section_id;
@@ -163,7 +187,12 @@ typedef struct BedraySceneSectionInput {
     uint32_t index_type;
     const void* indices;
     uint64_t index_count;
-    uint64_t reserved;
+    int32_t origin[3];
+    uint32_t geometry_count;
+    uint32_t quad_start[BEDRAY_SCENE_MAX_SECTION_GEOMETRIES];
+    uint32_t pass_bits;
+    uint32_t flags;
+    uint32_t reserved;
 } BedraySceneSectionInput;
 
 /*
@@ -171,6 +200,11 @@ typedef struct BedraySceneSectionInput {
  * touch the BLAS; geometry_revision changes may refit and topology_revision
  * changes rebuild. transform is a row-major 3x4 matrix (VkTransformMatrixKHR).
  * instance_mask 0 selects the default 0xFF.
+ *
+ * TLAS instances of entities carry bit 0x800000 in instanceCustomIndex; the
+ * remaining bits are the entity slot. Section instances store their section
+ * table slot raw, so the bit is the only thing a hit needs to tell a mob quad
+ * from a section quad. The scene rejects more than 0x800000 sections/entities.
  */
 typedef struct BedraySceneEntityInput {
     uint64_t entity_id;
@@ -258,18 +292,33 @@ typedef struct BedraySceneResources {
 } BedraySceneResources;
 
 /*
- * Provisional shader-facing section table record (48 bytes). Sections are
- * sorted by section_id. The record layout is not final until the path tracer
- * switches from the legacy section representation.
+ * Shader-facing section record (64 bytes). Sections are sorted by section_id and
+ * the TLAS instanceCustomIndex of a world instance is this table slot.
+ *
+ *   origin.xyz  section origin in blocks; origin.w stable section id
+ *   meta.x      vertex count in the section's GeometryVertex stream
+ *   meta.y      geometry count (1..3)
+ *   meta.z      BEDRAY_SCENE_SECTION_* flags
+ *   meta.w      reserved, zero
+ *   vertexAddress  device address of the GeometryVertex stream (BDA)
+ *   ranges[g].firstQuad  first quad of geometry g
+ *   ranges[g].quadCountPass  bits 0..15 quad count, bits 16..17 pass,
+ *                            bits 18..31 reserved flags
+ *
+ * GeometryVertex is 64 bytes: float4 position (xyz section-local), float4
+ * uvLight (xy uv, zw block/sky light 0..1), float4 tint (rgb), uint4 meta
+ * (x material id, y vertex flags, zw reserved).
  */
+typedef struct BedraySceneSectionRange {
+    uint32_t first_quad;
+    uint32_t quad_count_pass;
+} BedraySceneSectionRange;
+
 typedef struct BedraySceneSectionRecord {
+    int32_t origin[4];
+    uint32_t meta[4];
     uint64_t vertex_address;
-    uint64_t index_address;
-    uint64_t blas_address;
-    uint64_t vertex_count;
-    uint64_t index_count;
-    uint32_t vertex_stride;
-    uint32_t index_type;
+    BedraySceneSectionRange ranges[BEDRAY_SCENE_MAX_SECTION_GEOMETRIES];
 } BedraySceneSectionRecord;
 
 BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_abi_version(void);

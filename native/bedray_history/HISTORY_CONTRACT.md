@@ -1,8 +1,11 @@
 # Temporal history contract — Bedray alpha 0.2.0
 
-Source-level contract for `native/bedray_history`. Nothing here has been
-compiled or verified (L1). Where this module needs something another
-component does not provide yet, section 7 says so instead of assuming it.
+Contract for `native/bedray_history`. The module is compiled into
+`bedray_core.dll` and both layers are contract-tested (L1, 2026-10-28): the
+C++ registry by `bedray_history_submission`, the exported C surface by
+`bedray_history_c`. It is not wired into the frame path and no GPU run has
+validated it. Where this module needs something another component does not
+provide yet, section 7 says so instead of assuming it.
 
 ## 1. Components
 
@@ -134,8 +137,9 @@ old data is wrong for the current frame.
   all its uses are finished, or if its unfinished uses are allowed by
   `HistoryOrdering`. Unknown uses never qualify. Otherwise the result is
   `write_unavailable`.
-- **The current render graph** (`native/bedray_render_graph`, source-only,
-  single queue, ordering constraints rather than emitted barriers) can't
+- **The current render graph** (`native/bedray_render_graph`, compiled and
+  contract-tested but not wired, single queue, ordering constraints rather than
+  emitted barriers) can't
   honour `same_queue_barrier` or `cross_queue_semaphore`. Until a barrier
   adapter exists, integration must use `completed_only`, and still give the read
   a dependency on `(read_producer_queue, read_producer_serial)`.
@@ -284,7 +288,9 @@ not treat a wrapped world position as unique.
 
 ## 10. Known limitations
 
-- Source only. No compiler, CMake, test or GPU run has checked it.
+- Compiled into `bedray_core.dll`; the C++ registry is contract-tested by
+  `bedray_history_submission` and every exported C function by
+  `bedray_history_c`. No GPU run has checked it.
 - Single-threaded, with one open submission ticket at a time.
 - Linear searches over signals and records. No performance claim.
 - `add` and `configure` allocate. `std::bad_alloc` becomes `out_of_memory` with

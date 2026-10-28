@@ -1,6 +1,6 @@
 # Vulkan recording adapter integration contract
 
-Status: source candidate. The core CMake build includes the graph and its
+Status: L1 build/contract-test candidate. The core CMake build includes the graph and its
 Vulkan adapter by default, and the adapter plus its fake-command-buffer
 contract test build and pass at L1. `core.cpp` still does not construct or
 execute the adapter, so this is not evidence of a rendered frame and no GPU or

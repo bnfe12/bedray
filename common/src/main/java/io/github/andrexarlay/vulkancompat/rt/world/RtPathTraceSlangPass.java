@@ -1,6 +1,8 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuBuffersNative;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuImagesNative;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
@@ -9,7 +11,6 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
@@ -26,7 +27,7 @@ import java.util.Set;
  * Host side of {@code passes/path_trace.slang}: owns the radiance output, the frame-constant upload and the dummy
  * block-material table, and records one compute dispatch into the caller's command buffer.
  *
- * <p>Driven by {@link RtSlangPathPass}, which plugs it into the frame as the Path Tracing pass. The host contract (sixteen
+ * <p>Driven by {@link RtSlangPathPass}, which plugs it into the frame as the Path Tracing pass. The host contract (eighteen
  * bindings, 608-byte {@code FrameConstants}, 112-byte push block, capability mask 517) is expressed here once instead
  * of being re-derived at the call site. The scene, the atlases, this frame's captured models and the depth target are
  * passed to every {@link #record}: the TLAS is rebuilt as chunks change, and depth goes straight into the renderer's
@@ -37,7 +38,9 @@ import java.util.Set;
  * synchronization it had with the legacy {@code rt_path.comp} path; the pass leaves its two outputs in
  * {@code GENERAL} behind a full memory barrier.
  *
- * <p>Lifecycle: create after the {@link SlangRuntime}, call {@link #releaseRecording(long)} once the GPU finished (or
+ * <p>Vulkan images, mapped buffers, upload pooling and deferred destruction are owned by C++. This adapter packs
+ * Minecraft data and supplies borrowed scene resources. Lifecycle: create after the {@link SlangRuntime},
+ * call {@link #releaseRecording(long)} once the GPU finished (or
  * the recording was discarded) for every command buffer passed to {@link #record}, and {@link #close()} before the
  * runtime is closed.
  */
@@ -45,6 +48,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
 
     static final String PASS_NAME = "path_trace";
+    /** Native-scene twin of {@link #PASS_NAME}: same bindings, {@code GeometrySection} table and vertex stream. */
+    static final String SCENE_PASS_NAME = "path_trace_scene";
     static final int FRAME_CONSTANTS_BYTES = 608;
     static final int PUSH_BYTES = 112;
     static final int BLOCK_MATERIAL_BYTES = 64;
@@ -58,8 +63,6 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     /** {@code traversal/entity_geometry.slang}: colour, light, u, v of one captured vertex, and one atlas rect. */
     static final int ENTITY_VECTOR_BYTES = 16;
     static final int THREAD_GROUP = 8;
-    /** Frame-constant ring slots; the engine keeps at most two frames in flight, one slot is spare. */
-    static final int SLOT_COUNT = 3;
 
     /** Optional device capabilities the generated manifest requires; see {@code bedray_core.h}. */
     static final int REQUIRED_CAPABILITIES = BedrayCoreLayouts.CAP_RAY_QUERY
@@ -92,6 +95,10 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     /** Scene inputs the host must supply: the frame TLAS and the section table written by {@link RtWorld}. */
     record Scene(long tlas, RtMemory.Buf sectionTable) {
+        /** True when the table is {@code bedray_scene}'s 64-byte record and needs {@link #SCENE_PASS_NAME}. */
+        boolean nativeScene() {
+            return sectionTable != null && sectionTable.sceneOwned;
+        }
     }
 
     /**
@@ -403,16 +410,19 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private final VkDevice device;
     private final SlangRuntime runtime;
     private final SlangProgram program;
-    private final RtMemory memory;
-    private final RtMemory.Buf[] frameConstants = new RtMemory.Buf[SLOT_COUNT];
-    private final RtMemory.Buf blockMaterials;
-    private final RtMemory.Buf reservoirDummy;
-    private final RtMemory.Buf entityScalarDummy;
-    private final RtMemory.Buf entityVectorDummy;
+    /** Native-scene twin, or null when this jar was built without its artifact. */
+    private final SlangProgram sceneProgram;
+    private final BedrayGpuImagesNative nativeImages;
+    private final BedrayGpuBuffersNative nativeBuffers;
+    private final BedrayGpuBuffersNative.Buffer blockMaterials;
+    private final BedrayGpuBuffersNative.Buffer reservoirDummy;
+    private final BedrayGpuBuffersNative.Buffer entityScalarDummy;
+    private final BedrayGpuBuffersNative.Buffer entityVectorDummy;
     private final Set<Long> recordings = new LinkedHashSet<>();
-    private int slot = -1;
-    private RtMemory.Img radiance;
-    private RtMemory.Img motion;
+    private BedrayGpuBuffersNative.Buffer frameConstants;
+    private long frameRecording;
+    private BedrayGpuImagesNative.Image radiance;
+    private BedrayGpuImagesNative.Image motion;
     private int width;
     private int height;
     private boolean closed;
@@ -421,78 +431,79 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * Creates the radiance image lazily on the first {@link #record} (its size comes from the frame) and the constant
      * buffers eagerly. The section table, the TLAS, the atlases and the depth target stay owned by the caller.
      */
-    RtPathTraceSlangPass(VkDevice device, SlangRuntime runtime, RtMemory memory) {
+    RtPathTraceSlangPass(VkDevice device, SlangRuntime runtime) {
         if (runtime == null) {
             throw new IllegalArgumentException("path trace needs a SlangRuntime");
         }
         this.device = device;
         this.runtime = runtime;
-        this.memory = memory;
         Optional<SlangProgram> pass = runtime.program(PASS_NAME);
         if (pass.isEmpty()) {
             throw new IllegalStateException("missing Slang pass " + PASS_NAME);
         }
         this.program = pass.get();
         requireManifest(program);
-
-        RtMemory.Buf materials = null;
-        RtMemory.Buf dummyReservoirs = null;
-        RtMemory.Buf dummyScalar = null;
-        RtMemory.Buf dummyVector = null;
+        // Optional: only a jar that compiled the native-scene entry point can trace
+        // the bedray_scene table. Without it the host keeps the Java scene.
+        Optional<SlangProgram> scene = SlangPassLibrary.available(SCENE_PASS_NAME)
+            ? runtime.program(SCENE_PASS_NAME) : Optional.empty();
+        this.sceneProgram = scene.orElse(null);
+        if (sceneProgram != null) {
+            requireManifest(sceneProgram);
+        }
+        long deviceBytes = runtime.capabilities().deviceMemoryBytes();
+        long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 256L << 20;
+        nativeImages = runtime.createImageOwner(imageBudget);
         try {
-            for (int i = 0; i < SLOT_COUNT; i++) {
-                frameConstants[i] = memory.createBuffer("rt_path_frame_constants" + i, FRAME_CONSTANTS_BYTES,
-                    VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
-            }
-            materials = memory.createBuffer("rt_path_block_materials", BLOCK_MATERIAL_BYTES,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-            // The table is only present to satisfy decodeSurface; materialCount = 0 means no shader ever reads it.
-            MemoryUtil.memSet(materials.mapped, 0, BLOCK_MATERIAL_BYTES);
-            dummyReservoirs = memory.createBuffer("rt_path_reservoir_dummy", RESERVOIR_BYTES,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-            // One zeroed record: ReSTIR DI off still needs a descriptor, and the shader's own slot bound is this length.
-            MemoryUtil.memSet(dummyReservoirs.mapped, 0, RESERVOIR_BYTES);
-            // One zeroed element each: a frame that captured no model still needs all five entity descriptors, and a
-            // one-element range is the shortest thing that makes the shader's own count read zero.
-            dummyScalar = memory.createBuffer("rt_path_entity_scalar_dummy", ENTITY_SCALAR_BYTES,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-            MemoryUtil.memSet(dummyScalar.mapped, 0, ENTITY_SCALAR_BYTES);
-            dummyVector = memory.createBuffer("rt_path_entity_vector_dummy", ENTITY_VECTOR_BYTES,
-                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-            MemoryUtil.memSet(dummyVector.mapped, 0, ENTITY_VECTOR_BYTES);
-        } catch (RuntimeException e) {
-            for (RtMemory.Buf constants : frameConstants) {
-                if (constants != null) {
-                    memory.destroy(constants);
-                }
-            }
-            if (materials != null) {
-                memory.destroy(materials);
-            }
-            if (dummyReservoirs != null) {
-                memory.destroy(dummyReservoirs);
-            }
-            if (dummyScalar != null) {
-                memory.destroy(dummyScalar);
-            }
-            if (dummyVector != null) {
-                memory.destroy(dummyVector);
-            }
+            nativeBuffers = runtime.createBufferOwner(16L << 20);
+        } catch (RuntimeException | Error e) {
+            nativeImages.close();
             throw e;
         }
-        this.blockMaterials = materials;
-        this.reservoirDummy = dummyReservoirs;
-        this.entityScalarDummy = dummyScalar;
-        this.entityVectorDummy = dummyVector;
+        try {
+            // Inactive bindings still need valid descriptors. The shader reads
+            // their bound lengths/counts and never indexes absent scene data.
+            blockMaterials = zeroedBuffer(BLOCK_MATERIAL_BYTES);
+            reservoirDummy = zeroedBuffer(RESERVOIR_BYTES);
+            entityScalarDummy = zeroedBuffer(ENTITY_SCALAR_BYTES);
+            entityVectorDummy = zeroedBuffer(ENTITY_VECTOR_BYTES);
+        } catch (RuntimeException | Error e) {
+            nativeBuffers.close();
+            nativeImages.close();
+            throw e;
+        }
+    }
+
+    private BedrayGpuBuffersNative.Buffer zeroedBuffer(int bytes) {
+        BedrayGpuBuffersNative.Buffer buffer = nativeBuffers.create(bytes, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            nativeBuffers.write(buffer, 0, stack.calloc(bytes));
+        }
+        return buffer;
     }
 
     long radianceView() {
-        return radiance == null ? 0L : radiance.view;
+        return radiance == null ? 0L : radiance.view();
+    }
+
+    /** The core program handle the native pass configures itself with. */
+    long programHandle() {
+        return program.nativeHandle();
+    }
+
+    /** The native-scene program handle, or 0 when this jar has no {@code path_trace_scene}. */
+    long sceneProgramHandle() {
+        return sceneProgram == null ? 0L : sceneProgram.nativeHandle();
+    }
+
+    /** True when a section table marked {@link RtMemory.Buf#sceneOwned} can be dispatched. */
+    boolean hasSceneProgram() {
+        return sceneProgram != null;
     }
 
     /** This frame's primary-surface displacement image, as the display pass has to read it under its own binding name. */
     long motionView() {
-        return motion == null ? 0L : motion.view;
+        return motion == null ? 0L : motion.view();
     }
 
     int width() {
@@ -545,19 +556,37 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (dispatch.entityAtlasSize() > 0 && (entities == null || entities.texels().bytes() == 0L)) {
             throw new IllegalArgumentException("the push names an entity atlas but no texel range is bound");
         }
-        ensure(cmd, frame.width, frame.height);
-        // Rotate the frame-constant slot: the engine can have two frames in flight, and the GPU must not read this
-        // frame's block after the next frame overwrote it.
-        slot = (slot + 1) % SLOT_COUNT;
-        frame.writeTo(MemoryUtil.memByteBuffer(frameConstants[slot].mapped, FRAME_CONSTANTS_BYTES));
+        // Register before native use reservation so allocation/recording errors
+        // remain drainable on the host's confirmed-discard path.
+        recordings.add(cmd.address());
+        ensure(frame.width, frame.height);
+        nativeImages.retain(cmd.address(), radiance);
+        nativeImages.retain(cmd.address(), motion);
+        nativeBuffers.retain(cmd.address(), blockMaterials);
+        nativeBuffers.retain(cmd.address(), reservoirDummy);
+        nativeBuffers.retain(cmd.address(), entityScalarDummy);
+        nativeBuffers.retain(cmd.address(), entityVectorDummy);
+        // Both images are fully overwritten. Declaring their old contents
+        // undefined on every recording also handles a discarded first recording.
+        VkBarriers.transition(cmd, radiance.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+            VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+        VkBarriers.transition(cmd, motion.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+            VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer constants = stack.malloc(FRAME_CONSTANTS_BYTES);
+            frame.writeTo(constants);
+            frameConstants = nativeBuffers.upload(cmd.address(), VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, constants);
+            frameRecording = cmd.address();
             ByteBuffer push = stack.malloc(PUSH_BYTES);
             dispatch.writeTo(push);
             // Track before the dispatch: if recording fails midway, the command buffer still holds a native descriptor
             // pool that has to be released on the discard path.
             recordings.add(cmd.address());
-            program.dispatch(cmd.address(), program.groups(width, 0), program.groups(height, 1), 1,
-                resources(scene, atlases, emitters, reservoirs, entities, depthView, slot), push);
+            // The legacy and native tables are different layouts, so the program
+            // follows the table the host actually bound, not a global switch.
+            SlangProgram active = activeProgram(scene);
+            active.dispatch(cmd.address(), active.groups(width, 0), active.groups(height, 1), 1,
+                resources(scene, atlases, emitters, reservoirs, entities, depthView), push);
         }
         VkBarriers.fullMemoryBarrier(cmd);
     }
@@ -568,39 +597,49 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * disagree with the traced frame.
      */
     SlangProgram.Resource frameResource() {
-        if (slot < 0 || frameConstants[slot] == null) {
+        if (frameConstants == null) {
             throw new IllegalStateException("path trace has not uploaded frame constants yet");
         }
-        return SlangProgram.Resource.uniformBuffer("frame", frameConstants[slot].handle, 0, FRAME_CONSTANTS_BYTES);
+        return SlangProgram.Resource.uniformBuffer("frame", frameConstants.handle(), 0, FRAME_CONSTANTS_BYTES);
+    }
+
+    private SlangProgram activeProgram(Scene scene) {
+        if (!scene.nativeScene()) {
+            return program;
+        }
+        if (sceneProgram == null) {
+            throw new IllegalStateException("the native scene table needs Slang pass " + SCENE_PASS_NAME
+                + ", which this jar did not compile");
+        }
+        return sceneProgram;
     }
 
     private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters,
-                                                   Reservoirs reservoirs, Entities entities, long depthView,
-                                                   int frameSlot) {
+                                                   Reservoirs reservoirs, Entities entities, long depthView) {
         RtMemory.Buf table = scene.sectionTable();
         // An empty list still needs a descriptor. The dummy table is 64 B, so the fallback range is clamped to it: the
         // shader never indexes past pc.emitterCount, which is 0 for exactly this case.
-        long emitterBuffer = emitters != null && emitters.buffer() != 0L ? emitters.buffer() : blockMaterials.handle;
-        long emitterOffset = emitterBuffer == blockMaterials.handle ? 0L : emitters.offset();
-        long emitterBytes = emitterBuffer == blockMaterials.handle ? BLOCK_MATERIAL_BYTES
+        long emitterBuffer = emitters != null && emitters.buffer() != 0L ? emitters.buffer() : blockMaterials.handle();
+        long emitterOffset = emitterBuffer == blockMaterials.handle() ? 0L : emitters.offset();
+        long emitterBytes = emitterBuffer == blockMaterials.handle() ? BLOCK_MATERIAL_BYTES
             : Math.max(1, emitters.count()) * (long) EMITTER_BYTES;
         // The ReSTIR DI ring, or the one-record dummy when reuse is switched off: the shader reads the bound length, so
         // it can never address past what the host handed it.
         long reservoirBuffer = reservoirs != null && reservoirs.buffer() != 0L
-            ? reservoirs.buffer() : reservoirDummy.handle;
-        long reservoirBytes = reservoirBuffer == reservoirDummy.handle ? RESERVOIR_BYTES : reservoirs.bytes();
+            ? reservoirs.buffer() : reservoirDummy.handle();
+        long reservoirBytes = reservoirBuffer == reservoirDummy.handle() ? RESERVOIR_BYTES : reservoirs.bytes();
         Entities captured = entities == null ? Entities.NONE : entities;
         return List.of(
             SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
-            SlangProgram.Resource.storageImage("outImage", radiance.view),
+            SlangProgram.Resource.storageImage("outImage", radiance.view()),
             SlangProgram.Resource.storageBuffer("sections", table.handle, 0, table.size),
             SlangProgram.Resource.sampled("albedoAtlas", atlases.albedoView(), atlases.sampler()),
-            SlangProgram.Resource.storageImage("outMotion", motion.view),
+            SlangProgram.Resource.storageImage("outMotion", motion.view()),
             SlangProgram.Resource.sampled("materialAtlas", atlases.materialView(), atlases.sampler()),
             SlangProgram.Resource.sampled("normalAtlas", atlases.normalView(), atlases.sampler()),
             SlangProgram.Resource.storageImage("outDepth", depthView),
-            SlangProgram.Resource.uniformBuffer("frame", frameConstants[frameSlot].handle, 0, FRAME_CONSTANTS_BYTES),
-            SlangProgram.Resource.storageBuffer("blockMaterials", blockMaterials.handle, 0, BLOCK_MATERIAL_BYTES),
+            frameResource(),
+            SlangProgram.Resource.storageBuffer("blockMaterials", blockMaterials.handle(), 0, BLOCK_MATERIAL_BYTES),
             SlangProgram.Resource.storageBuffer("emitters", emitterBuffer, emitterOffset, emitterBytes),
             SlangProgram.Resource.storageBuffer("reservoirs", reservoirBuffer, 0L, reservoirBytes),
             entityBuffer("entityPositions", captured.positions(), entityScalarDummy),
@@ -616,36 +655,31 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * element, which is the shortest range that makes the shader's own counts read zero triangles and no filled atlas
      * slot: a zero-length descriptor is not legal, and a stale ring slice would trace a model the world left behind.
      */
-    private static SlangProgram.Resource entityBuffer(String name, BufferView view, RtMemory.Buf dummy) {
+    private static SlangProgram.Resource entityBuffer(String name, BufferView view, BedrayGpuBuffersNative.Buffer dummy) {
         if (view == null || view.buffer() == 0L || view.bytes() <= 0L) {
-            return SlangProgram.Resource.storageBuffer(name, dummy.handle, 0L, dummy.size);
+            return SlangProgram.Resource.storageBuffer(name, dummy.handle(), 0L, dummy.size());
         }
         return SlangProgram.Resource.storageBuffer(name, view.buffer(), view.offset(), view.bytes());
     }
 
-    /** (Re)creates the radiance output when the render size changed; the old image is destroyed only after the device is idle. */
-    private void ensure(VkCommandBuffer cmd, int w, int h) {
+    /** Native use tokens retain old extents until their recordings complete. */
+    private void ensure(int w, int h) {
         if (radiance != null && width == w && height == h) {
             return;
         }
-        VK10.vkDeviceWaitIdle(device);
-        releaseRecordings();
-        if (radiance != null) {
-            memory.destroy(radiance);
-            radiance = null;
-        }
-        if (motion != null) {
-            memory.destroy(motion);
-            motion = null;
-        }
-        radiance = memory.createImage("rt_path_radiance", w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+        BedrayGpuImagesNative.Image nextRadiance = nativeImages.create(w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
             VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
-        VkBarriers.transition(cmd, radiance.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
-            VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
-        motion = memory.createImage("rt_path_motion", w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK10.VK_IMAGE_USAGE_STORAGE_BIT);
-        VkBarriers.transition(cmd, motion.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
-            VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+        BedrayGpuImagesNative.Image nextMotion;
+        try {
+            nextMotion = nativeImages.create(w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+        } catch (RuntimeException | Error e) {
+            nativeImages.retire(nextRadiance);
+            throw e;
+        }
+        nativeImages.retire(radiance);
+        nativeImages.retire(motion);
+        radiance = nextRadiance;
+        motion = nextMotion;
         width = w;
         height = h;
         LOGGER.info("[VKB-RT] rt_path_trace {}x{} RGBA16F radiance, depth into rt_depth (Slang, {} binding(s))",
@@ -663,13 +697,13 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (!runtime.isClosed()) {
             runtime.releaseRecording(commandBuffer);
         }
-        recordings.remove(commandBuffer);
-    }
-
-    private void releaseRecordings() {
-        for (Long commandBuffer : List.copyOf(recordings)) {
-            releaseRecording(commandBuffer);
+        nativeImages.releaseRecording(commandBuffer);
+        nativeBuffers.releaseRecording(commandBuffer);
+        if (frameRecording == commandBuffer) {
+            frameConstants = null;
+            frameRecording = 0;
         }
+        recordings.remove(commandBuffer);
     }
 
     @Override
@@ -677,24 +711,20 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (closed) {
             return;
         }
-        closed = true;
-        VK10.vkDeviceWaitIdle(device);
-        releaseRecordings();
+        if (!recordings.isEmpty()) {
+            throw new IllegalStateException("path trace shutdown requires recording completion or confirmed discard");
+        }
         if (radiance != null) {
-            memory.destroy(radiance);
+            nativeImages.retire(radiance);
             radiance = null;
         }
         if (motion != null) {
-            memory.destroy(motion);
+            nativeImages.retire(motion);
             motion = null;
         }
-        for (RtMemory.Buf constants : frameConstants) {
-            memory.destroy(constants);
-        }
-        memory.destroy(blockMaterials);
-        memory.destroy(reservoirDummy);
-        memory.destroy(entityScalarDummy);
-        memory.destroy(entityVectorDummy);
+        nativeBuffers.close();
+        nativeImages.close();
+        closed = true;
         width = 0;
         height = 0;
     }

@@ -5,6 +5,8 @@ import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuImagesNative;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuBuffersNative;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.joml.Matrix4f;
@@ -14,12 +16,10 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
-import java.nio.LongBuffer;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -113,7 +113,6 @@ public final class RtSlangPathPass implements RtPass {
         return null;
     }
 
-    private final VkDevice device;
     private final SlangRuntime runtime;
     private final boolean requestedGbuffer;
     private final RtPathTraceSlangPass trace;
@@ -125,13 +124,24 @@ public final class RtSlangPathPass implements RtPass {
     private final RtSpatialReuseSlangPass spatialReuse;
     private final SlangProgram display;
     private final long sampler;
+    /**
+     * True when the native core records the whole path-trace frame: radiance,
+     * motion, accumulation and history images, the ReSTIR spatial stage and the
+     * display step. The Java orchestration below stays as the default until the
+     * native pass has live evidence.
+     */
+    private final boolean nativePathTrace;
+    private BedrayPathTraceNative pathTraceNative;
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
     private final Set<Long> recordings = new LinkedHashSet<>();
     private RtMemory memory;
-    private RtMemory.Img accum;
-    private RtMemory.Img historyDepth;
+    private final BedrayGpuImagesNative historyImages;
+    private final BedrayGpuBuffersNative nativeBuffers;
+    private final BedrayGpuImagesNative.Image[] accum = new BedrayGpuImagesNative.Image[2];
+    private final BedrayGpuImagesNative.Image[] historyDepth = new BedrayGpuImagesNative.Image[2];
+    private int historyParity;
     /** Two halves of per-pixel ReSTIR DI reservoirs, owned here so the Slang ring never aliases the GLSL one. */
-    private RtMemory.Buf reservoirs;
+    private BedrayGpuBuffersNative.Buffer reservoirs;
     private RtPipeline.Views views;
     private int accumFrames;
     private boolean forceReset = true;
@@ -160,23 +170,39 @@ public final class RtSlangPathPass implements RtPass {
      * request so the renderer does not rebuild it every frame for not matching (see {@link #builtFor(boolean)}).
      */
     RtSlangPathPass(VkDevice device, SlangRuntime runtime, RtMemory memory, boolean requestedGbuffer) {
-        this.device = device;
         this.runtime = runtime;
+        if (runtime == null) {
+            throw new IllegalArgumentException("path trace needs a SlangRuntime");
+        }
+        this.nativePathTrace = RtConfig.SLANG_PATH_TRACE_CPP && runtime.library().hasPathTrace();
+        if (RtConfig.SLANG_PATH_TRACE_CPP && !nativePathTrace) {
+            LOGGER.warn("[VKB-RT] vkbridge.rt.nativePathTrace=true but the loaded bedray_core has no path-trace"
+                + " exports; keeping the Java path");
+        }
         this.memory = memory;
         this.requestedGbuffer = requestedGbuffer;
-        this.trace = new RtPathTraceSlangPass(device, runtime, memory);
+        this.trace = new RtPathTraceSlangPass(device, runtime);
+        BedrayGpuImagesNative allocatedHistory = null;
+        BedrayGpuBuffersNative allocatedBuffers = null;
         try {
+            long deviceBytes = runtime.capabilities().deviceMemoryBytes();
+            allocatedHistory = runtime.createImageOwner(deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 256L << 20);
+            allocatedBuffers = runtime.createBufferOwner(deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 4) : 512L << 20);
             Optional<SlangProgram> program = runtime.program(DISPLAY_PASS);
             if (program.isEmpty()) {
                 throw new IllegalStateException("missing Slang pass " + DISPLAY_PASS);
             }
             this.display = program.get();
             requireDisplayManifest(display);
-            this.sampler = createAtlasSampler(device);
-        } catch (RuntimeException e) {
+            this.sampler = runtime.atlasSampler();
+        } catch (RuntimeException | Error e) {
+            if (allocatedBuffers != null) allocatedBuffers.close();
+            if (allocatedHistory != null) allocatedHistory.close();
             trace.close();
             throw e;
         }
+        historyImages = allocatedHistory;
+        nativeBuffers = allocatedBuffers;
         // Deliberately outside the try above: spatial reuse is an extra stage, not a precondition of path tracing, and a
         // machine without its artifact still gets the temporal reservoirs.
         this.spatialReuse = RtSpatialReuseSlangPass.create(runtime, LOGGER).orElse(null);
@@ -192,7 +218,7 @@ public final class RtSlangPathPass implements RtPass {
             throw new IllegalStateException(program.name() + " pushes " + manifest.pushConstantBytes() + " B, host block is "
                 + DISPLAY_PUSH_BYTES + " B");
         }
-        for (String name : List.of("radiance", "accum", "outImage", "depth", "historyDepth", "motion")) {
+        for (String name : List.of("radiance", "accum", "outImage", "depth", "historyDepth", "motion", "previousAccum", "previousDepth")) {
             SlangPassManifest.Binding binding = manifest.binding(name);
             if (binding == null || binding.descriptorType() != BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE) {
                 throw new IllegalStateException(program.name() + ": '" + name + "' must be a storage image");
@@ -202,25 +228,9 @@ public final class RtSlangPathPass implements RtPass {
         if (constants == null || constants.descriptorType() != BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
             throw new IllegalStateException(program.name() + ": 'frame' must be the FrameConstants buffer");
         }
-        if (manifest.bindings().size() != 7) {
+        if (manifest.bindings().size() != 9) {
             throw new IllegalStateException(program.name() + " declares " + manifest.bindings().size()
-                + " binding(s), host supplies 7");
-        }
-    }
-
-    /** Same sampler as the GLSL pipeline uses for the block atlases: nearest, clamp, level 0 only. */
-    private static long createAtlasSampler(VkDevice device) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
-                .magFilter(VK10.VK_FILTER_NEAREST).minFilter(VK10.VK_FILTER_NEAREST)
-                .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
-                .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                .minLod(0f).maxLod(0f).unnormalizedCoordinates(false);
-            LongBuffer p = stack.mallocLong(1);
-            RtFailure.check(VK10.vkCreateSampler(device, info, null, p), "create_sampler");
-            return p.get(0);
+                + " binding(s), host supplies 9");
         }
     }
 
@@ -242,30 +252,47 @@ public final class RtSlangPathPass implements RtPass {
     public void prepare(VkCommandBuffer cmd, RtMemory mem, int width, int height) {
         memory = mem;
         prepareReservoirs(mem, width, height);
-        if (accum != null && historyDepth != null && lastWidth == width && lastHeight == height) {
+        if (nativePathTrace) {
+            // The native pass owns radiance, motion, accumulation and history
+            // depth, and it resets them itself when the extent changes. The host
+            // still owns the DI ring above, so only its size bookkeeping stays
+            // here.
+            if (lastWidth != width || lastHeight != height) {
+                lastWidth = width;
+                lastHeight = height;
+                historyWritten = false;
+                // The pass retires its own images on an extent change; a zero
+                // sample count keeps this frame from reading a half that was
+                // just recreated.
+                accumFrames = 0;
+            }
             return;
         }
-        if (accum != null || historyDepth != null) {
-            VK10.vkDeviceWaitIdle(device); // frames in flight may still read the old running mean
-            releaseRecordings();
-            if (accum != null) {
-                mem.destroy(accum);
-                accum = null;
-            }
-            if (historyDepth != null) {
-                mem.destroy(historyDepth);
-                historyDepth = null;
-            }
-            historyWritten = false;
+        if (accum[0] != null && lastWidth == width && lastHeight == height) {
+            return;
         }
-        accum = mem.createImage("rt_path_slang_accum", width, height, VK10.VK_FORMAT_R32G32B32A32_SFLOAT,
-            VK10.VK_IMAGE_USAGE_STORAGE_BIT);
-        VkBarriers.transition(cmd, accum.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
-            VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
-        historyDepth = mem.createImage("rt_path_slang_history_depth", width, height, VK10.VK_FORMAT_R32_SFLOAT,
-            VK10.VK_IMAGE_USAGE_STORAGE_BIT);
-        VkBarriers.transition(cmd, historyDepth.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
-            VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+        BedrayGpuImagesNative.Image[] nextAccum = new BedrayGpuImagesNative.Image[2];
+        BedrayGpuImagesNative.Image[] nextDepth = new BedrayGpuImagesNative.Image[2];
+        try {
+            for (int i = 0; i < 2; ++i) {
+                nextAccum[i] = historyImages.create(width, height, VK10.VK_FORMAT_R32G32B32A32_SFLOAT, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+                nextDepth[i] = historyImages.create(width, height, VK10.VK_FORMAT_R32_SFLOAT, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+            }
+        } catch (RuntimeException | Error e) {
+            for (int i = 0; i < 2; ++i) {
+                historyImages.retire(nextAccum[i]);
+                historyImages.retire(nextDepth[i]);
+            }
+            throw e;
+        }
+        for (int i = 0; i < 2; ++i) {
+            historyImages.retire(accum[i]);
+            historyImages.retire(historyDepth[i]);
+            accum[i] = nextAccum[i];
+            historyDepth[i] = nextDepth[i];
+        }
+        historyWritten = false;
+        historyParity = 0;
         lastWidth = width;
         lastHeight = height;
         forceReset = true;
@@ -281,15 +308,14 @@ public final class RtSlangPathPass implements RtPass {
         long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;
         if (!diRequested()) {
             if (reservoirs != null) {
-                VK10.vkDeviceWaitIdle(device); // the previous frames in flight still read the records
-                mem.destroy(reservoirs);
+                nativeBuffers.retire(reservoirs);
                 reservoirs = null;
             }
             reservoirHistoryWritten = false;
             reservoirPixels = 0L;
             return;
         }
-        if (reservoirs != null && reservoirs.size >= need) {
+        if (reservoirs != null && reservoirs.size() >= need) {
             if (pixels != reservoirPixels) {
                 // A smaller render scale moves every pixel index, so the records of the old layout must not be read.
                 reservoirPixels = pixels;
@@ -298,12 +324,10 @@ public final class RtSlangPathPass implements RtPass {
             }
             return;
         }
-        VK10.vkDeviceWaitIdle(device);
-        if (reservoirs != null) {
-            mem.destroy(reservoirs);
-        }
-        reservoirs = mem.createBuffer("rt_path_restir", need,
-            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+        BedrayGpuBuffersNative.Buffer next = nativeBuffers.createDeviceLocal(need,
+            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        nativeBuffers.retire(reservoirs);
+        reservoirs = next;
         reservoirPixels = pixels;
         reservoirResetRequested = true;
         reservoirHistoryWritten = false;
@@ -383,9 +407,11 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public void dispatch(VkCommandBuffer cmd, RtFrameParams params, int width, int height) {
-        if (views == null || accum == null) {
+        if (views == null || (!nativePathTrace && accum[0] == null)) {
             throw new IllegalStateException("path_slang dispatched before prepare/bind");
         }
+        recordings.add(cmd.address());
+        if (reservoirs != null) nativeBuffers.retain(cmd.address(), reservoirs);
         fillFrame(params, width, height);
         // The emitter list of the legacy path, bound as a second descriptor range: switching block emitters off is an A/B
         // on the shader's NEE branch only, the list keeps being rebuilt either way.
@@ -400,13 +426,13 @@ public final class RtSlangPathPass implements RtPass {
         int diParity = reservoirFrame & 1;
         if (emitterCount > 0 && diActive() && reservoirs != null) {
             if (reservoirResetRequested) {
-                VK10.vkCmdFillBuffer(cmd, reservoirs.handle, 0L, reservoirs.size, 0);
+                VK10.vkCmdFillBuffer(cmd, reservoirs.handle(), 0L, reservoirs.size(), 0);
                 VkBarriers.fullMemoryBarrier(cmd);
                 reservoirResetRequested = false;
             }
             diFlags = DI_FLAG_ENABLED | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)
                 | (params.cameraStatic ? DI_FLAG_STATIC : 0) | (params.flipY ? DI_FLAG_FLIP_Y : 0);
-            reservoirRange = new RtPathTraceSlangPass.Reservoirs(reservoirs.handle, reservoirs.size);
+            reservoirRange = new RtPathTraceSlangPass.Reservoirs(reservoirs.handle(), reservoirs.size());
         }
         // The models of this frame: the ring slice the entity BLAS was built from, so a committed primitive index names a
         // triangle of these buffers and of nothing else. Turning the capture off leaves the terrain alone in the trace.
@@ -432,7 +458,19 @@ public final class RtSlangPathPass implements RtPass {
             params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES,
             params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, diParity,
             capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount());
-        recordings.add(cmd.address());
+        if (nativePathTrace) {
+            recordNative(cmd, params, emitters, reservoirRange, capturedEntities, dispatch);
+            // The ring is the host's: the native pass only forwards the parity it
+            // was given, so the host still decides when a written half becomes
+            // readable history.
+            if (diFlags == 0) {
+                reservoirHistoryWritten = false;
+            } else {
+                reservoirHistoryWritten = true;
+                reservoirFrame++;
+            }
+            return;
+        }
         trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
             new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
             emitters, reservoirRange, capturedEntities, views.depth(), frame, dispatch);
@@ -456,11 +494,25 @@ public final class RtSlangPathPass implements RtPass {
         if (params.cameraStatic) {
             flags |= DISPLAY_FLAG_CAMERA_STATIC;
         }
-        if (historyWritten && !params.cameraStatic) {
+        // Surface motion also needs reprojection when the camera is stationary.
+        if (historyWritten) {
             flags |= DISPLAY_FLAG_REPROJECT;
         }
         if (params.flipY) {
             flags |= DISPLAY_FLAG_FLIP_Y;
+        }
+        int write = historyParity, read = write ^ 1;
+        for (int i = 0; i < 2; ++i) {
+            historyImages.retain(cmd.address(), accum[i]);
+            historyImages.retain(cmd.address(), historyDepth[i]);
+            // Destinations are overwritten completely. The source needs an
+            // initial layout only after a reset; valid history is kept intact.
+            if (i == write || !historyWritten) {
+                VkBarriers.transition(cmd, accum[i].image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+                VkBarriers.transition(cmd, historyDepth[i].image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+            }
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer push = stack.malloc(DISPLAY_PUSH_BYTES);
@@ -469,15 +521,50 @@ public final class RtSlangPathPass implements RtPass {
                 .putFloat(24, params.cameraDeltaZ).putFloat(28, REPROJECTION_TOLERANCE);
             display.dispatch(cmd.address(), display.groups(width, 0), display.groups(height, 1), 1, List.of(
                 SlangProgram.Resource.storageImage("radiance", trace.radianceView()),
-                SlangProgram.Resource.storageImage("accum", accum.view),
+                SlangProgram.Resource.storageImage("accum", accum[write].view()),
                 SlangProgram.Resource.storageImage("outImage", views.output()),
                 SlangProgram.Resource.storageImage("depth", views.depth()),
-                SlangProgram.Resource.storageImage("historyDepth", historyDepth.view),
+                SlangProgram.Resource.storageImage("historyDepth", historyDepth[write].view()),
                 SlangProgram.Resource.storageImage("motion", trace.motionView()),
+                SlangProgram.Resource.storageImage("previousAccum", accum[read].view()),
+                SlangProgram.Resource.storageImage("previousDepth", historyDepth[read].view()),
                 trace.frameResource()), push);
         }
         historyWritten = true;
+        historyParity ^= 1;
         VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read by the composite, bloom and upscalers next
+    }
+
+    /**
+     * Records trace → optional spatial → display through the additive native pass. The pass owns the radiance, motion,
+     * accumulation and history-depth images and its own history parity; the host supplies the scene it already owns, the
+     * DI ring and the path limits, exactly as for the Java path. The host still owns the ring's parity: the pass forwards
+     * {@code dispatch.diParity()} verbatim instead of advancing one of its own.
+     */
+    private void recordNative(VkCommandBuffer cmd, RtFrameParams params, RtPathTraceSlangPass.Emitters emitters,
+                              RtPathTraceSlangPass.Reservoirs reservoirRange,
+                              RtPathTraceSlangPass.Entities entities,
+                              RtPathTraceSlangPass.Dispatch dispatch) {
+        if (pathTraceNative == null) {
+            pathTraceNative = new BedrayPathTraceNative(runtime, trace.programHandle(), trace.sceneProgramHandle(),
+                spatialReuse == null ? 0L : spatialReuse.programHandle(), display.nativeHandle(), sampler);
+        }
+        // The native table is a different record layout: the core has to dispatch
+        // path_trace_scene for this frame, not just bind a different buffer.
+        boolean nativeScene = views.table() != null && views.table().sceneOwned;
+        int flags = (historyWritten ? 0 : BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY)
+            | (RtSettings.accumulate() ? BedrayCoreLayouts.PATH_TRACE_FRAME_ACCUMULATE : 0)
+            | (params.cameraStatic ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_STATIC : 0)
+            | (params.flipY ? BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y : 0)
+            | (spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0)
+            | (nativeScene ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE : 0);
+        // The pass derives the display bits from these same frame bits, so the host contributes none of its own: there
+        // is one definition of TONEMAP/ACCUMULATE/CAMERA_STATIC/REPROJECT/FLIP_Y, in the pass.
+        pathTraceNative.render(new BedrayPathTraceNative.FrameInput(cmd.address(), views, frame, dispatch,
+            emitters, reservoirRange, entities, flags, accumFrames, 0, MAX_RADIANCE, REPROJECTION_TOLERANCE));
+        historyWritten = true;
+        // The pass already ends with a full memory barrier; the Java path keeps this one for the composite and bloom.
+        VkBarriers.fullMemoryBarrier(cmd);
     }
 
     /**
@@ -596,19 +683,23 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public void releaseRecording(long commandBuffer) {
-        if (!recordings.remove(commandBuffer)) {
+        if (!recordings.contains(commandBuffer)) {
             return;
         }
         trace.releaseRecording(commandBuffer);
+        historyImages.releaseRecording(commandBuffer);
+        nativeBuffers.releaseRecording(commandBuffer);
         if (spatialReuse != null) {
             spatialReuse.releaseRecording(commandBuffer);
         }
         if (!runtime.isClosed()) {
             runtime.releaseRecording(commandBuffer); // the display dispatch shares the command buffer's native record
         }
+        recordings.remove(commandBuffer);
     }
 
-    private void releaseRecordings() {
+    @Override
+    public void releaseRecordingsAfterHostDrain() {
         for (Long commandBuffer : List.copyOf(recordings)) {
             releaseRecording(commandBuffer);
         }
@@ -619,26 +710,23 @@ public final class RtSlangPathPass implements RtPass {
         if (destroyed) {
             return;
         }
-        destroyed = true;
-        VK10.vkDeviceWaitIdle(device);
-        releaseRecordings();
+        if (!recordings.isEmpty()) {
+            throw new IllegalStateException("Slang path shutdown requires a completed host submission drain");
+        }
+        if (pathTraceNative != null) {
+            pathTraceNative.close();
+            pathTraceNative = null;
+        }
         trace.close();
         if (spatialReuse != null) {
             spatialReuse.close();
         }
-        if (accum != null && memory != null) {
-            memory.destroy(accum);
-            accum = null;
-            memory.destroy(historyDepth);
-            historyDepth = null;
-        }
+        historyImages.close();
         historyWritten = false;
-        if (reservoirs != null && memory != null) {
-            memory.destroy(reservoirs);
-            reservoirs = null;
-        }
+        nativeBuffers.close();
+        reservoirs = null;
         reservoirHistoryWritten = false;
         reservoirPixels = 0L;
-        VK10.vkDestroySampler(device, sampler, null);
+        destroyed = true;
     }
 }

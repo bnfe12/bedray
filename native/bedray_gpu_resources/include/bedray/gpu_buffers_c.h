@@ -49,7 +49,7 @@ enum {
     BEDRAY_GPU_RETIRED = 6, BEDRAY_GPU_BUDGET_EXCEEDED = 7,
     BEDRAY_GPU_UNSUPPORTED = 8, BEDRAY_GPU_EXHAUSTED = 9,
     BEDRAY_GPU_OUT_OF_MEMORY = 10, BEDRAY_GPU_DEVICE_LOST = 11,
-    BEDRAY_GPU_VULKAN_ERROR = 12, BEDRAY_GPU_ABI_MISMATCH = 0x100
+    BEDRAY_GPU_VULKAN_ERROR = 12, BEDRAY_GPU_UNKNOWN_IMAGE = 13, BEDRAY_GPU_ABI_MISMATCH = 0x100
 };
 
 typedef struct BedrayGpuOwner BedrayGpuOwner;
@@ -83,7 +83,8 @@ typedef struct BedrayGpuAbiInfo {
 } BedrayGpuAbiInfo;
 /* Offset arrays follow declaration order, including grouped declarations.
  * Array offsets identify the first element; memory flags stride=4, functions
- * stride=8. Size/offset metadata is provisional until checked in a build. */
+ * stride=8. Consumers must check sizes, alignment and every used offset before
+ * creating an owner; natural layout is not a cross-platform promise. */
 
 BEDRAY_GPU_API uint32_t BEDRAY_GPU_CALL bedray_gpu_abi_version(void);
 BEDRAY_GPU_API BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_abi_info(BedrayGpuAbiInfo* out, uint32_t out_size);
@@ -99,6 +100,12 @@ BEDRAY_GPU_API BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_buffer_write(BedrayGpu
     uint64_t offset, const void* data, uint64_t bytes, int32_t* vk_result);
 BEDRAY_GPU_API BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_buffer_read(BedrayGpuOwner*, uint64_t generation, uint64_t serial,
     uint64_t offset, void* data, uint64_t bytes, int32_t* vk_result);
+/* Copies the bytes into a native upload-pool slot and reserves its use before
+ * returning. Complete the returned token under the same recording proof as
+ * use_begin. The pool retains its slots until uploads_retire + collect. */
+BEDRAY_GPU_API BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_buffer_upload(BedrayGpuOwner*, uint32_t usage,
+    const void* data, uint64_t bytes, BedrayGpuBufferInfo* out, BedrayGpuUseToken* use, int32_t* vk_result);
+BEDRAY_GPU_API BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_uploads_retire(BedrayGpuOwner*);
 BEDRAY_GPU_API BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_use_begin(BedrayGpuOwner*, uint64_t generation, uint64_t serial,
     BedrayGpuUseToken* out);
 /* Only call after proving discard before submit, or completion of all submits

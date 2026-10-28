@@ -81,7 +81,7 @@ class RtSlangVisibilityOverflowTest {
     @Test
     void adroppedTermStillFadesTheReusedRecord() {
         String tracer = read(SHADERS + "/pathtrace/path_tracer.slang");
-        String term = block(tracer, "float3 pathTraceDirectTerm<T : ITraversal>(T traversal,");
+        String term = block(tracer, "float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal,");
         int proven = term.indexOf("float3 transmittance = surfaceVisibilityProven(shadow)");
         int occluded = term.indexOf("occluded = true;");
         assertTrue(proven >= 0, "the direct term asks the walk for proof");

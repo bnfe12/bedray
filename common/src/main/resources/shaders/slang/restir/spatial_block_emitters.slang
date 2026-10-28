@@ -126,7 +126,6 @@ struct BlockEmitterSpatialReuse {
 
         uint seed = blockEmitterSpatialSeed(pixel, frameIndex);
         DIReservoir merged = own;
-        bool won = false;
         for (uint draw = 0u; draw < SPATIAL_DRAWS; draw += 1u) {
             int2 offset = blockEmitterSpatialOffset(seed, SPATIAL_OFFSET_RADIUS);
             // The shift that forced the opposite colour can push the offset one cell past the radius; the legacy kernel
@@ -152,14 +151,10 @@ struct BlockEmitterSpatialReuse {
             }
             merged = restirDiSpatial(emitters(), merged, neighbour, receiver,
                 RESTIR_DI_M_CAP, RESTIR_DI_SPATIAL_RATIO_CAP, seed);
-            if (!diSamePosition(merged.sample.xyz, own.sample.xyz)) {
-                won = true;
-            }
         }
 
-        if (!won) {
-            return;   // no neighbour won the roulette: the pre-spatial record keeps its own accumulated weight
-        }
+        // Every accepted merge changes the reservoir's weight/count even when
+        // roulette retains its original sample. Publish that state as well.
         if (!(merged.stats.y >= 0.0) || !(merged.stats.x > 0.0) || !(merged.sample.w > 0.0)
             || !isFinite(merged.sample.xyz) || !isFinite(merged.stats.xyz)) {
             return;

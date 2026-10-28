@@ -168,6 +168,21 @@ BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_use_begin(BedrayGpuOwner* owner, uint
     if (result == Status::ok) *out = BedrayGpuUseToken{token.owner_generation, token.serial};
     return status(result);
 }
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_buffer_upload(BedrayGpuOwner* owner, uint32_t usage,
+    const void* data, uint64_t bytes, BedrayGpuBufferInfo* out, BedrayGpuUseToken* use, int32_t* vk_result) {
+    if (!owner || !out || !use || !vk_result) return BEDRAY_GPU_INVALID_ARGUMENT;
+    VkResult vk = VK_SUCCESS; BufferId id{}; BufferView view{}; UseId token{};
+    const Status result = owner->buffers.upload(usage, data, bytes, id, view, token, vk);
+    *vk_result = static_cast<int32_t>(vk);
+    if (result == Status::ok) {
+        *out = buffer_info(id, view);
+        *use = {token.owner_generation, token.serial};
+    }
+    return status(result);
+}
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_uploads_retire(BedrayGpuOwner* owner) {
+    return owner ? status(owner->buffers.retire_uploads()) : BEDRAY_GPU_INVALID_ARGUMENT;
+}
 BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_use_complete(BedrayGpuOwner* owner, uint64_t generation, uint64_t serial) {
     return owner ? status(owner->buffers.complete_use({generation, serial})) : BEDRAY_GPU_INVALID_ARGUMENT;
 }

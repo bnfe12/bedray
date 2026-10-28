@@ -78,6 +78,19 @@ public final class RtConfig {
      * RIS sampling of the same emitter list. */
     public static final boolean SLANG_RESTIR_DI = Boolean.parseBoolean(System.getProperty("vkbridge.rt.restirDi", "true"));
 
+    /** Record the whole path-trace frame (radiance, motion, accumulation, history depth, ReSTIR spatial and the
+     * display step) inside {@code bedray_core} instead of this Java host. The ABI is additive: a DLL without the
+     * exports keeps the Java path, and the switch exists so the two can be compared on the same frame.
+     * {@code -Dvkbridge.rt.nativePathTrace=true} opts in. */
+    public static final boolean SLANG_PATH_TRACE_CPP =
+        Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativePathTrace", "false"));
+
+    /** {@code bedray_scene.dll} owns the section BLAS, the TLAS and the 64-byte section table; the path tracer then
+     * dispatches {@code path_trace_scene}. {@code -Dvkbridge.rt.nativeScene=true} opts in. The scene is optional: a
+     * missing DLL, ABI mismatch or missing {@code path_trace_scene} artifact keeps the Java scene and logs why. */
+    public static final boolean SLANG_NATIVE_SCENE =
+        Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativeScene", "false"));
+
     /** Horizontal RT radius in sections: override, else the game render distance ("As in game"), else the manual value. */
     public static int radiusXz(int gameRenderDistanceChunks) {
         if (RADIUS_XZ_OVERRIDE > 0) {

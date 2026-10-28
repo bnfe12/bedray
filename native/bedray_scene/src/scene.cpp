@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -18,17 +19,47 @@
 static_assert(sizeof(BedraySceneError) == 1028, "scene ABI: BedraySceneError must stay 1028 bytes");
 static_assert(sizeof(BedraySceneAbiInfo) == 48, "scene ABI: BedraySceneAbiInfo must stay 48 bytes");
 static_assert(sizeof(BedraySceneDesc) == 88, "scene ABI: BedraySceneDesc must stay 88 bytes");
-static_assert(sizeof(BedraySceneSectionInput) == 64, "scene ABI: section input must stay 64 bytes");
+static_assert(sizeof(BedraySceneSectionInput) == 96, "scene ABI: section input must stay 96 bytes");
 static_assert(sizeof(BedraySceneEntityInput) == 120, "scene ABI: entity input must stay 120 bytes");
 static_assert(sizeof(BedraySceneUpdate) == 56, "scene ABI: update must stay 56 bytes");
 static_assert(sizeof(BedraySceneTableDesc) == 40, "scene ABI: table desc must stay 40 bytes");
 static_assert(sizeof(BedraySceneFrameDesc) == 24, "scene ABI: frame desc must stay 24 bytes");
 static_assert(sizeof(BedraySceneFrameInfo) == 80, "scene ABI: frame info must stay 80 bytes");
 static_assert(sizeof(BedraySceneResources) == 112, "scene ABI: resources must stay 112 bytes");
-static_assert(sizeof(BedraySceneSectionRecord) == 48, "scene ABI: section record must stay 48 bytes");
+static_assert(sizeof(BedraySceneSectionRange) == 8, "scene ABI: section range must stay 8 bytes");
+static_assert(sizeof(BedraySceneSectionRecord) == 64, "scene ABI: section record must stay 64 bytes");
 static_assert(sizeof(BedraySceneStatus) == 4, "scene ABI: status enum must stay 4 bytes");
 static_assert(sizeof(VkAccelerationStructureInstanceKHR) == 64,
     "scene ABI: a TLAS instance record must stay 64 bytes");
+
+/* The shader reads both records as raw bytes, so field offsets are part of the
+   ABI just like their sizes. */
+static_assert(offsetof(BedraySceneSectionInput, section_id) == 0,
+    "scene ABI: section_id must start the section input");
+static_assert(offsetof(BedraySceneSectionInput, origin) == 56,
+    "scene ABI: section origin must stay at offset 56");
+static_assert(offsetof(BedraySceneSectionInput, geometry_count) == 68,
+    "scene ABI: geometry_count must stay at offset 68");
+static_assert(offsetof(BedraySceneSectionInput, quad_start) == 72,
+    "scene ABI: quad_start must stay at offset 72");
+static_assert(offsetof(BedraySceneSectionInput, pass_bits) == 84,
+    "scene ABI: pass_bits must stay at offset 84");
+static_assert(offsetof(BedraySceneSectionInput, flags) == 88,
+    "scene ABI: section flags must stay at offset 88");
+static_assert(offsetof(BedraySceneSectionInput, reserved) == 92,
+    "scene ABI: section reserved must stay at offset 92");
+static_assert(offsetof(BedraySceneSectionRecord, origin) == 0,
+    "scene ABI: record origin must start the record");
+static_assert(offsetof(BedraySceneSectionRecord, meta) == 16,
+    "scene ABI: record meta must stay at offset 16");
+static_assert(offsetof(BedraySceneSectionRecord, vertex_address) == 32,
+    "scene ABI: record vertex address must stay at offset 32");
+static_assert(offsetof(BedraySceneSectionRecord, ranges) == 40,
+    "scene ABI: record ranges must stay at offset 40");
+static_assert(offsetof(BedraySceneSectionRange, first_quad) == 0,
+    "scene ABI: range first quad must start the range");
+static_assert(offsetof(BedraySceneSectionRange, quad_count_pass) == 4,
+    "scene ABI: range count/pass must stay at offset 4");
 
 namespace bedray_scene {
 
@@ -129,6 +160,10 @@ struct PreparePlan {
 
     std::vector<InstanceEntry> instances;
     std::vector<BedraySceneSectionRecord> section_records;
+    /* section id -> slot in the append-ordered section table. The TLAS
+       instanceCustomIndex of a section is exactly this slot, so the table and
+       the instances must be generated from one map. */
+    std::map<uint64_t, uint32_t> section_slots;
 
     uint64_t upload_bytes = 0;
     uint64_t blas_rebuilds = 0;
@@ -292,6 +327,95 @@ BedraySceneStatus validate_mesh(
     return BEDRAY_SCENE_OK;
 }
 
+BedraySceneStatus validate_section_contract(
+    const BedraySceneSectionInput& input,
+    BedraySceneError* error) {
+    if (input.geometry_count < 1 || input.geometry_count > BEDRAY_SCENE_MAX_SECTION_GEOMETRIES) {
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+            "section %llu geometry_count %u must be between 1 and %u",
+            static_cast<unsigned long long>(input.section_id), input.geometry_count,
+            BEDRAY_SCENE_MAX_SECTION_GEOMETRIES);
+    }
+    if ((input.flags & ~static_cast<uint32_t>(BEDRAY_SCENE_SECTION_FLAG_GEOMETRY_VERTEX)) != 0) {
+        return fail(error, BEDRAY_SCENE_ERROR_UNSUPPORTED,
+            "section %llu has unknown flags 0x%08x",
+            static_cast<unsigned long long>(input.section_id), input.flags);
+    }
+    if ((input.flags & BEDRAY_SCENE_SECTION_FLAG_GEOMETRY_VERTEX) != 0
+        && input.vertex_stride != BEDRAY_SCENE_GEOMETRY_VERTEX_BYTES) {
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+            "section %llu requests GeometryVertex but has stride %u (need %u)",
+            static_cast<unsigned long long>(input.section_id), input.vertex_stride,
+            BEDRAY_SCENE_GEOMETRY_VERTEX_BYTES);
+    }
+    /* The shader-facing stream is one quad per four vertices and two triangles
+       per quad. A generic triangle section would decode as a different stream,
+       so it is rejected here rather than silently mis-rendered. */
+    if ((input.vertex_count % 4) != 0) {
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+            "section %llu vertex_count %llu is not a multiple of four",
+            static_cast<unsigned long long>(input.section_id),
+            static_cast<unsigned long long>(input.vertex_count));
+    }
+    const uint64_t quads = input.vertex_count / 4;
+    if (quads > 0xFFFFu) {
+        return fail(error, BEDRAY_SCENE_ERROR_LIMIT,
+            "section %llu has %llu quads; the shader range count is 16-bit",
+            static_cast<unsigned long long>(input.section_id),
+            static_cast<unsigned long long>(quads));
+    }
+    if (input.index_type == BEDRAY_SCENE_INDEX_NONE || input.index_count != quads * 6) {
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+            "section %llu needs six indices per quad (index_type=%u, index_count=%llu, quads=%llu)",
+            static_cast<unsigned long long>(input.section_id), input.index_type,
+            static_cast<unsigned long long>(input.index_count),
+            static_cast<unsigned long long>(quads));
+    }
+    if (input.quad_start[0] != 0) {
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+            "section %llu first quad range must start at zero",
+            static_cast<unsigned long long>(input.section_id));
+    }
+    uint32_t previous = 0;
+    uint32_t previous_pass = 0;
+    for (uint32_t geometry = 0; geometry < input.geometry_count; ++geometry) {
+        const uint32_t start = input.quad_start[geometry];
+        if (start > quads || (geometry > 0 && start < previous)) {
+            return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+                "section %llu quad_start[%u]=%u is outside the %llu-quad stream",
+                static_cast<unsigned long long>(input.section_id), geometry, start,
+                static_cast<unsigned long long>(quads));
+        }
+        const uint32_t end = geometry + 1u < input.geometry_count
+            ? input.quad_start[geometry + 1u]
+            : static_cast<uint32_t>(quads);
+        if (start >= end) {
+            return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+                "section %llu geometry %u has no quads (start=%u end=%u)",
+                static_cast<unsigned long long>(input.section_id), geometry, start, end);
+        }
+        previous = start;
+        const uint32_t pass = (input.pass_bits >> (2u * geometry)) & 0x3u;
+        if (pass > 2u) {
+            return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+                "section %llu geometry %u has unknown pass %u",
+                static_cast<unsigned long long>(input.section_id), geometry, pass);
+        }
+        if (geometry > 0 && pass <= previous_pass) {
+            return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+                "section %llu geometry %u pass %u is not after pass %u",
+                static_cast<unsigned long long>(input.section_id), geometry, pass, previous_pass);
+        }
+        previous_pass = pass;
+    }
+    if ((input.pass_bits >> (2u * input.geometry_count)) != 0) {
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+            "section %llu pass_bits has bits beyond geometry_count",
+            static_cast<unsigned long long>(input.section_id));
+    }
+    return BEDRAY_SCENE_OK;
+}
+
 void copy_mesh(
     PendingMesh& mesh,
     const void* vertices,
@@ -341,7 +465,7 @@ uint32_t normalize_mask(uint32_t mask) {
     return mask == 0 ? 0xFFu : (mask & 0xFFu);
 }
 
-BlasView blas_view(const PendingMesh& mesh, const Buffer& buffer, uint64_t index_offset) {
+BlasView blas_view(const PendingMesh& mesh, const Buffer& buffer, uint64_t index_offset, bool quad_stream) {
     BlasView view{};
     view.vertex_address = buffer.address;
     view.index_address = index_offset > 0 ? buffer.address + index_offset : 0;
@@ -349,7 +473,24 @@ BlasView blas_view(const PendingMesh& mesh, const Buffer& buffer, uint64_t index
     view.index_count = mesh.index_count;
     view.vertex_stride = mesh.vertex_stride;
     view.index_type = mesh.index_type;
+    view.quad_stream = quad_stream;
+    view.geometry_count = mesh.geometry_count;
+    view.quad_start = mesh.quad_start;
+    view.pass_bits = mesh.pass_bits;
     return view;
+}
+
+// Stable 32-bit identity of a 64-bit section key for the shader record. The
+// table slot is the lookup index; this value only has to survive membership
+// changes for history/emitter identity, so it is a hash, not a truncation.
+uint32_t section_identity(uint64_t id) {
+    uint64_t value = id;
+    value ^= value >> 33u;
+    value *= 0xff51afd7ed558ccdull;
+    value ^= value >> 33u;
+    value *= 0xc4ceb9fe1a85ec53ull;
+    value ^= value >> 33u;
+    return static_cast<uint32_t>(value);
 }
 
 uint64_t instance_fingerprint(const std::vector<InstanceEntry>& instances) {
@@ -380,7 +521,7 @@ bool build_job_resource(Scene& scene, GeometryJob& job, BedraySceneError* error)
     created->vertex_address = created->gpu.address;
     created->index_address = index_offset > 0 ? created->gpu.address + index_offset : 0;
 
-    const BlasView view = blas_view(mesh, created->gpu, index_offset);
+    const BlasView view = blas_view(mesh, created->gpu, index_offset, job.is_section);
     uint64_t storage_size = 0;
     if (!query_blas_sizes(scene, view, storage_size, job.build_scratch, job.update_scratch, error)) {
         destroy_buffer(scene, created->gpu);
@@ -549,21 +690,35 @@ GeometryRef job_blas(const PreparePlan& plan, bool is_section, uint64_t id, cons
     return {};
 }
 
+void plan_section_slots(Scene& scene, PreparePlan& plan) {
+    plan.section_slots.clear();
+    uint32_t slot = 0;
+    for (auto& [id, section] : scene.sections) {
+        if (job_geometry(plan, true, id, section.geometry.get()) == nullptr) {
+            continue;
+        }
+        plan.section_slots.emplace(id, slot++);
+    }
+}
+
 void plan_instances(Scene& scene, PreparePlan& plan) {
     plan.instances.clear();
     plan.instances.reserve(scene.sections.size() + scene.entities.size());
 
-    uint32_t custom_index = 0;
     for (auto& [id, section] : scene.sections) {
         const GeometryRef geometry = job_blas(plan, true, id, section.geometry.get());
         if (geometry.blas_handle == VK_NULL_HANDLE) {
+            continue;
+        }
+        const auto slot = plan.section_slots.find(id);
+        if (slot == plan.section_slots.end()) {
             continue;
         }
         InstanceEntry instance{};
         instance.transform = identity_transform();
         instance.blas_address = geometry.blas_address;
         instance.blas_handle = geometry.blas_handle;
-        instance.custom_index = custom_index++;
+        instance.custom_index = slot->second;
         instance.mask = 0xFF;
         plan.instances.push_back(instance);
     }
@@ -578,7 +733,7 @@ void plan_instances(Scene& scene, PreparePlan& plan) {
         instance.transform = effective_transform(entity);
         instance.blas_address = geometry.blas_address;
         instance.blas_handle = geometry.blas_handle;
-        instance.custom_index = custom_index + entity_index;
+        instance.custom_index = kEntityInstanceBit | entity_index;
         instance.mask = effective_mask(entity);
         entity_index++;
         plan.instances.push_back(instance);
@@ -593,26 +748,47 @@ void plan_section_records(Scene& scene, PreparePlan& plan) {
     if (!plan.section_table_rebuild) {
         return;
     }
-    plan.section_records.reserve(scene.sections.size());
-    for (auto& [id, section] : scene.sections) {
+    plan.section_records.reserve(plan.section_slots.size());
+    /* Iterating the slot map keeps the record order (and therefore every
+       record's index) equal to the TLAS custom index of its section. */
+    for (const auto& [id, slot] : plan.section_slots) {
+        (void)slot;
+        auto it = scene.sections.find(id);
+        if (it == scene.sections.end()) {
+            continue;
+        }
+        Section& section = it->second;
         GeometryResource* geometry = job_geometry(plan, true, id, section.geometry.get());
         if (geometry == nullptr) {
             continue;
         }
         BedraySceneSectionRecord record{};
+        record.origin[0] = section.has_pending ? section.pending.origin[0] : section.origin[0];
+        record.origin[1] = section.has_pending ? section.pending.origin[1] : section.origin[1];
+        record.origin[2] = section.has_pending ? section.pending.origin[2] : section.origin[2];
+        record.origin[3] = static_cast<int32_t>(section_identity(section.id));
+        const uint64_t vertex_count = section.has_pending
+            ? section.pending.vertex_count : section.vertex_count;
+        const uint32_t geometry_count = section.has_pending
+            ? section.pending.geometry_count : section.geometry_count;
+        record.meta[0] = static_cast<uint32_t>(
+            std::min<uint64_t>(vertex_count, std::numeric_limits<uint32_t>::max()));
+        record.meta[1] = geometry_count;
+        record.meta[2] = section.has_pending ? section.pending.flags : section.flags;
+        record.meta[3] = 0;
         record.vertex_address = geometry->vertex_address;
-        record.index_address = geometry->index_address;
-        record.blas_address = geometry->blas.address;
-        if (section.has_pending) {
-            record.vertex_count = section.pending.vertex_count;
-            record.index_count = section.pending.index_count;
-            record.vertex_stride = section.pending.vertex_stride;
-            record.index_type = section.pending.index_type;
-        } else {
-            record.vertex_count = section.vertex_count;
-            record.index_count = section.index_count;
-            record.vertex_stride = section.vertex_stride;
-            record.index_type = section.index_type;
+        const uint64_t quads = vertex_count / 4;
+        for (uint32_t g = 0; g < geometry_count && g < BEDRAY_SCENE_MAX_SECTION_GEOMETRIES; ++g) {
+            const uint32_t start = section.has_pending
+                ? section.pending.quad_start[g] : section.quad_start[g];
+            const uint32_t next = (g + 1 < geometry_count)
+                ? (section.has_pending ? section.pending.quad_start[g + 1] : section.quad_start[g + 1])
+                : static_cast<uint32_t>(std::min<uint64_t>(quads, 0xFFFFu));
+            const uint32_t count = next > start ? next - start : 0;
+            const uint32_t pass = (section.has_pending ? section.pending.pass_bits : section.pass_bits)
+                >> (2u * g) & 0x3u;
+            record.ranges[g].first_quad = start;
+            record.ranges[g].quad_count_pass = (count & 0xFFFFu) | ((pass & 0x3u) << 16u);
         }
         plan.section_records.push_back(record);
     }
@@ -792,7 +968,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         const InstanceEntry& instance = plan.instances[i];
         VkAccelerationStructureInstanceKHR record{};
         std::memcpy(&record.transform, instance.transform.data(), sizeof(record.transform));
-        record.instanceCustomIndex = instance.custom_index & 0xFFFFFFu;
+        record.instanceCustomIndex = instance.custom_index & kInstanceCustomIndexMask;
         record.mask = instance.mask & 0xFFu;
         record.instanceShaderBindingTableRecordOffset = 0;
         record.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -968,7 +1144,8 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
 BlasView blas_view_of(const GeometryJob& job) {
     return blas_view(*job.mesh, job.created->gpu,
         static_cast<uint64_t>(job.created->index_address > 0
-            ? job.created->index_address - job.created->gpu.address : 0));
+            ? job.created->index_address - job.created->gpu.address : 0),
+        job.is_section);
 }
 
 void commit_plan(
@@ -1006,6 +1183,11 @@ void commit_plan(
             section.index_count = job.mesh->index_count;
             section.vertex_stride = job.mesh->vertex_stride;
             section.index_type = job.mesh->index_type;
+            section.origin = job.mesh->origin;
+            section.geometry_count = job.mesh->geometry_count;
+            section.quad_start = job.mesh->quad_start;
+            section.pass_bits = job.mesh->pass_bits;
+            section.flags = job.mesh->flags;
             section.has_pending = false;
             section.pending = PendingMesh{};
         } else {
@@ -1243,9 +1425,19 @@ BedraySceneStatus prepare_sections(
             if (status != BEDRAY_SCENE_OK) {
                 return status;
             }
+            const BedraySceneStatus contract = validate_section_contract(input, error);
+            if (contract != BEDRAY_SCENE_OK) {
+                return contract;
+            }
             copy_mesh(entry.mesh, input.vertices, input.vertex_count, input.vertex_stride,
                 input.indices, input.index_count, input.index_type, vertex_bytes, index_bytes);
             entry.mesh.geometry_revision = input.geometry_revision;
+            entry.mesh.origin = { input.origin[0], input.origin[1], input.origin[2] };
+            entry.mesh.geometry_count = input.geometry_count;
+            entry.mesh.quad_start = {
+                input.quad_start[0], input.quad_start[1], input.quad_start[2] };
+            entry.mesh.pass_bits = input.pass_bits;
+            entry.mesh.flags = input.flags;
         }
         prepared.push_back(std::move(entry));
     }
@@ -1516,6 +1708,13 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_create(
         return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
             "max_instances exceeds the 24-bit instanceCustomIndex limit");
     }
+    /* Slots must stay clear of the entity tag bit: section slots are stored
+       raw and entity slots are OR-ed with kEntityInstanceBit. */
+    if (desc->max_sections > kInstanceSlotLimit || desc->max_entities > kInstanceSlotLimit) {
+        return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+            "max_sections/max_entities exceed the 23-bit instance slot space (%u)",
+            kInstanceSlotLimit);
+    }
     if (desc->max_table_bytes == 0 || desc->max_geometry_bytes == 0) {
         return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
             "max_table_bytes and max_geometry_bytes must be non-zero");
@@ -1768,6 +1967,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
         if (impl.membership_changed) {
             tlas_changed = true;
         }
+        plan_section_slots(impl, plan);
         plan_instances(impl, plan);
         plan_section_records(impl, plan);
         if (!plan_uploads(impl, plan, err)) {

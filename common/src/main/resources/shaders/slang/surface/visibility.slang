@@ -1,6 +1,6 @@
 // Material-filtered visibility for Bedray 2.0.
 //
-// ITraversal reports the first geometric blocker.  That is not enough for a
+// ISceneTracer reports the first geometric blocker.  That is not enough for a
 // shadow ray: a cutout hole must be skipped, a stained-glass pane must tint the
 // light, and an opaque wall must end the ray.  This module walks the geometric
 // candidates one by one, applies the material rules from surface.slang, and
@@ -40,7 +40,7 @@ Ray skipSurfaceCandidate(Ray ray, float hitDistance, float bias) {
     return ray;
 }
 
-SurfaceVisibility traceFilteredVisibility<T : ITraversal>(T traversal,
+SurfaceVisibility traceFilteredVisibility<T : ISceneTracer>(T traversal,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         Ray ray, MaterialSamplingOptions options) {
     SurfaceVisibility visibility;
@@ -124,7 +124,7 @@ bool surfaceVisibilityProven(SurfaceVisibility visibility) {
 // Boolean form for callers that only need "is anything opaque in the way".
 // The transmittance is intentionally discarded; use the full form when a
 // coloured shadow is required.
-bool traceFilteredOccluded<T : ITraversal>(T traversal, MaterialAtlas atlas,
+bool traceFilteredOccluded<T : ISceneTracer>(T traversal, MaterialAtlas atlas,
         BlockMaterialTable blockMaterials, Ray ray, MaterialSamplingOptions options) {
     SurfaceVisibility visibility = traceFilteredVisibility(traversal, atlas,
         blockMaterials, ray, options);
@@ -135,7 +135,7 @@ bool traceFilteredOccluded<T : ITraversal>(T traversal, MaterialAtlas atlas,
 // the receiver, `normal` is its shading normal and `direction` points to the
 // light.  `distance` is the light distance; the returned transmittance is the
 // colour that reaches the receiver.
-SurfaceVisibility traceShadowVisibility<T : ITraversal>(T traversal,
+SurfaceVisibility traceShadowVisibility<T : ISceneTracer>(T traversal,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         float3 surfacePosition, float3 normal, float3 direction,
         float distance, float bias, MaterialSamplingOptions options) {

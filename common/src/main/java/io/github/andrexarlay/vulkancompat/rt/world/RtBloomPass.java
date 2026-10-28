@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuImagesNative;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
@@ -9,13 +10,10 @@ import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
-import java.nio.LongBuffer;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -28,8 +26,7 @@ import java.util.Set;
  * no guide buffer of NRD / DLSS Ray Reconstruction is touched. All sizes derive from the image size, so the glow radius scales with
  * the render resolution and works the same with an upscaler (applied at render resolution, before the upscale).
  *
- * <p>The AOT Slang programs ({@code passes/bloom_*.slang}) are mandatory. Mips and samplers remain host-owned
- * until the native renderer resource owner replaces this adapter.
+ * <p>The AOT Slang programs ({@code passes/bloom_*.slang}) are mandatory. Mips and samplers are native-owned; this adapter supplies Minecraft frame parameters.
  */
 final class RtBloomPass {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
@@ -53,7 +50,6 @@ final class RtBloomPass {
                   float sunNdcY) {
     }
 
-    private final VkDevice device;
     private final SlangRuntime slangRuntime;
     /** Four AOT programs in stage order. */
     private final SlangProgram[] slangPrograms;
@@ -61,38 +57,23 @@ final class RtBloomPass {
     private final long nearestSampler;
     /** Command buffers with live native recordings; released before the handle is reused or the mips are recreated. */
     private final Set<Long> recordings = new LinkedHashSet<>();
-    private RtMemory memory;
-    private final RtMemory.Img[] mips = new RtMemory.Img[LEVELS];
+    private final BedrayGpuImagesNative images;
+    private final BedrayGpuImagesNative.Image[] mips = new BedrayGpuImagesNative.Image[LEVELS];
+    private boolean initializeMips;
+    private boolean destroyed;
     private int w;
     private int h;
 
-    RtBloomPass(VkDevice device, SlangRuntime slangRuntime) {
-        this.device = device;
+    RtBloomPass(SlangRuntime slangRuntime) {
         this.slangRuntime = slangRuntime;
         this.slangPrograms = trySlang(slangRuntime);
         if (slangPrograms == null) {
             throw new RtFailure("slang_bloom", "AOT Slang bloom programs are unavailable or incompatible");
         }
-        long createdLinear = 0L;
-        long createdNearest = 0L;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            LongBuffer p = stack.mallocLong(1);
-            VkSamplerCreateInfo si = VkSamplerCreateInfo.calloc(stack).sType$Default()
-                .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR).mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
-                .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).minLod(0f).maxLod(0f);
-            RtFailure.check(VK10.vkCreateSampler(device, si, null, p), "create_bloom_sampler");
-            createdLinear = p.get(0);
-            si.magFilter(VK10.VK_FILTER_NEAREST).minFilter(VK10.VK_FILTER_NEAREST);
-            RtFailure.check(VK10.vkCreateSampler(device, si, null, p), "create_bloom_sampler_nearest");
-            createdNearest = p.get(0);
-        } catch (RuntimeException e) {
-            if (createdNearest != 0L) VK10.vkDestroySampler(device, createdNearest, null);
-            if (createdLinear != 0L) VK10.vkDestroySampler(device, createdLinear, null);
-            throw e;
-        }
-        linearSampler = createdLinear;
-        nearestSampler = createdNearest;
+        linearSampler = slangRuntime.linearSampler();
+        nearestSampler = slangRuntime.atlasSampler();
+        long deviceBytes = slangRuntime.capabilities().deviceMemoryBytes();
+        images = slangRuntime.createImageOwner(deviceBytes > 0 ? Math.min(512L << 20, deviceBytes / 8) : 256L << 20);
         LOGGER.info("[VKB-ATMO] bloom on AOT Slang passes {}", String.join(", ", SLANG_NAMES));
     }
 
@@ -155,38 +136,43 @@ final class RtBloomPass {
     }
 
     /**
-     * Slang path: only the mips are host-owned; the native core allocates the descriptor set of every dispatch. Old
-     * mips are destroyed only after the device is idle and the recordings that reference their views are released.
+     * C++ owns mip storage and deferred retirement. Resizing allocates a new generation;
+     * old images remain pinned by the recordings that reference their views.
      */
-    private void ensureMips(VkCommandBuffer cmd, RtMemory mem, int width, int height) {
-        if (mips[0] != null && w == width && h == height) {
-            return;
-        }
-        VK10.vkDeviceWaitIdle(device);
-        releaseRecordings();
-        RtMemory old = memory;
-        for (int i = 0; i < LEVELS; i++) {
-            if (mips[i] != null && old != null) {
-                old.destroy(mips[i]);
+    private void ensureMips(int width, int height) {
+        if (mips[0] != null && w == width && h == height) return;
+        BedrayGpuImagesNative.Image[] next = new BedrayGpuImagesNative.Image[LEVELS];
+        try {
+            for (int i = 0; i < LEVELS; i++) {
+                next[i] = images.create(mipSize(width, i), mipSize(height, i), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                    VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
             }
-            mips[i] = mem.createImage("rt_bloom_mip" + i, mipSize(width, i), mipSize(height, i),
-                VK10.VK_FORMAT_R16G16B16A16_SFLOAT, VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
-            VkBarriers.transition(cmd, mips[i].image, VK10.VK_IMAGE_ASPECT_COLOR_BIT, VK10.VK_IMAGE_LAYOUT_UNDEFINED,
-                VK10.VK_IMAGE_LAYOUT_GENERAL);
+        } catch (RuntimeException | Error failure) {
+            for (var image : next) images.retire(image);
+            throw failure;
         }
-        memory = mem;
+        // The native owner keeps every old image until all recorded uses retire.
+        for (var image : mips) images.retire(image);
+        System.arraycopy(next, 0, mips, 0, LEVELS);
+        initializeMips = true;
         w = width;
         h = height;
-        LOGGER.info("[VKB-ATMO] rt_bloom {}x{} mips={} smallest={}x{} RGBA16F (Slang)", width, height, LEVELS,
-            mips[LEVELS - 1].width, mips[LEVELS - 1].height);
     }
 
     /**
      * Records the chain and the apply dispatch. With {@code bloom == false} only the sun glare is applied (the chain is skipped and
      * the bloom strength pushed as 0). {@code output} must be in GENERAL and hold the final image.
      */
-    void record(VkCommandBuffer cmd, RtMemory mem, int width, int height, long outputView, long depthView, Params pr, boolean bloom) {
-        ensureMips(cmd, mem, width, height);
+    void record(VkCommandBuffer cmd, int width, int height, long outputView, long depthView, Params pr, boolean bloom) {
+        if (destroyed) throw new IllegalStateException("Bloom pass is destroyed");
+        ensureMips(width, height);
+        recordings.add(cmd.address());
+        for (var image : mips) {
+            images.retain(cmd.address(), image);
+            if (initializeMips) VkBarriers.transition(cmd, image.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+                VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+        }
+        initializeMips = false;
         recordSlang(cmd, width, height, outputView, depthView, pr, bloom);
     }
 
@@ -204,27 +190,27 @@ final class RtBloomPass {
             // native descriptor pools that must be released on the discard path.
             recordings.add(cmd.address());
             if (bloom) {
-                dispatchSlang(slangPrograms[0], cmd, mips[0].width, mips[0].height, pc,
+                dispatchSlang(slangPrograms[0], cmd, mips[0].width(), mips[0].height(), pc,
                     List.of(SlangProgram.Resource.sampled("srcTex", outputView, linearSampler),
-                        SlangProgram.Resource.storageImage("dstImg", mips[0].view),
+                        SlangProgram.Resource.storageImage("dstImg", mips[0].view()),
                         SlangProgram.Resource.sampled("depthTex", depthView, nearestSampler)));
                 VkBarriers.computeToCompute(cmd);
                 for (int i = 1; i < LEVELS; i++) {
-                    dispatchSlang(slangPrograms[1], cmd, mips[i].width, mips[i].height, pc,
-                        List.of(SlangProgram.Resource.sampled("srcTex", mips[i - 1].view, linearSampler),
-                            SlangProgram.Resource.storageImage("dstImg", mips[i].view)));
+                    dispatchSlang(slangPrograms[1], cmd, mips[i].width(), mips[i].height(), pc,
+                        List.of(SlangProgram.Resource.sampled("srcTex", mips[i - 1].view(), linearSampler),
+                            SlangProgram.Resource.storageImage("dstImg", mips[i].view())));
                     VkBarriers.computeToCompute(cmd);
                 }
                 for (int i = LEVELS - 2; i >= 0; i--) {
-                    dispatchSlang(slangPrograms[2], cmd, mips[i].width, mips[i].height, pc,
-                        List.of(SlangProgram.Resource.sampled("srcTex", mips[i + 1].view, linearSampler),
-                            SlangProgram.Resource.storageImage("dstImg", mips[i].view)));
+                    dispatchSlang(slangPrograms[2], cmd, mips[i].width(), mips[i].height(), pc,
+                        List.of(SlangProgram.Resource.sampled("srcTex", mips[i + 1].view(), linearSampler),
+                            SlangProgram.Resource.storageImage("dstImg", mips[i].view())));
                     VkBarriers.computeToCompute(cmd);
                 }
             }
             // the apply dispatch is the exit of the pass: its barrier must stay full-scope for the consumers of the output image
             dispatchSlang(slangPrograms[3], cmd, width, height, pc,
-                List.of(SlangProgram.Resource.sampled("srcTex", mips[0].view, linearSampler),
+                List.of(SlangProgram.Resource.sampled("srcTex", mips[0].view(), linearSampler),
                     SlangProgram.Resource.storageImage("finalImg", outputView),
                     SlangProgram.Resource.sampled("depthTex", depthView, nearestSampler)));
             VkBarriers.fullMemoryBarrier(cmd);
@@ -237,7 +223,7 @@ final class RtBloomPass {
         pr.invViewProj.get(0, pc);
         pc.putFloat(64, pr.sunDir[0]).putFloat(68, pr.sunDir[1]).putFloat(72, pr.sunDir[2]).putFloat(76, pr.glareStrength);
         pc.putFloat(80, pr.camX).putFloat(84, pr.camY).putFloat(88, pr.camZ).putFloat(92, pr.flipY ? 1f : 0f);
-        pc.putFloat(96, pr.threshold).putFloat(100, pr.knee).putFloat(104, bloom ? pr.strength : 0f);
+        pc.putFloat(96, pr.threshold).putFloat(100, pr.knee).putFloat(104, bloom ? pr.strength : 0f).putFloat(108, 0f);
         pc.putFloat(112, pr.tonemapped ? 1f : 0f).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
     }
 
@@ -246,23 +232,13 @@ final class RtBloomPass {
         program.dispatch(cmd.address(), program.groups(gx, 0), program.groups(gy, 1), 1, resources, pc);
     }
 
+    /** Only after host submission drain, including discard of unsubmitted recordings. */
     void destroy() {
-        VK10.vkDeviceWaitIdle(device);
-        // The device is idle, so every recording (including one of a discarded frame) can be released here; the
-        // runtime refuses to shut down while any recording is still registered.
+        if (destroyed) return;
         releaseRecordings();
-        RtMemory mem = memory;
-        for (int i = 0; i < LEVELS; i++) {
-            if (mips[i] != null) {
-                if (mem != null) {
-                    mem.destroy(mips[i]);
-                }
-                mips[i] = null;
-            }
-        }
-        memory = null;
-        VK10.vkDestroySampler(device, linearSampler, null);
-        VK10.vkDestroySampler(device, nearestSampler, null);
+        images.close();
+        java.util.Arrays.fill(mips, null);
+        destroyed = true;
     }
 
     /**
@@ -274,6 +250,7 @@ final class RtBloomPass {
             return;
         }
         slangRuntime.releaseRecording(commandBuffer);
+        images.releaseRecording(commandBuffer);
         recordings.remove(commandBuffer);
     }
 

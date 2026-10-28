@@ -92,7 +92,7 @@ class RtSlangRestirDiTest {
         assertTrue(game.contains("int diParity = reservoirFrame & 1;"), "the host alternates the half");
         assertTrue(game.contains("reservoirFrame++;"),
             "and only advances it after a dispatch that really wrote records");
-        assertTrue(game.contains("mem.createBuffer(\"rt_path_restir\""),
+        assertTrue(game.contains("nativeBuffers.createDeviceLocal(need,"),
             "the Slang ring is its own buffer: the GLSL records have a different layout and a mode switch must not"
                 + " cross-feed them");
     }
@@ -246,13 +246,13 @@ class RtSlangRestirDiTest {
             "a flag without a buffer fails at record time, not as a device-side out-of-bounds read");
         assertTrue(host.contains("new Expected(\"reservoirs\", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER)"),
             "the manifest is checked for the binding the host fills");
-        assertTrue(host.contains("rt_path_reservoir_dummy"),
+        assertTrue(host.contains("reservoirDummy = zeroedBuffer(RESERVOIR_BYTES);"),
             "with the branch off a one-record zeroed buffer still satisfies the descriptor");
         String game = read(GAME_PASS);
         assertTrue(game.contains("RtPathTraceSlangPass.Reservoirs reservoirRange ="
             + " RtPathTraceSlangPass.Reservoirs.NONE;"),
             "and the game pass starts from that empty range every frame");
-        assertTrue(game.contains("VK10.vkCmdFillBuffer(cmd, reservoirs.handle, 0L, reservoirs.size, 0)"),
+        assertTrue(game.contains("VK10.vkCmdFillBuffer(cmd, reservoirs.handle(), 0L, reservoirs.size(), 0)"),
             "a reset zeroes both halves, which is the only way to drop history a change of lights invalidates");
         assertTrue(read(FRAME_PARAMS).contains("public long emitterFingerprint;"),
             "the frame carries the identity of the light list the ring is keyed on");

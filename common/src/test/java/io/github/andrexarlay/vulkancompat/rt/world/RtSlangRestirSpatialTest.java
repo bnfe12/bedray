@@ -158,9 +158,8 @@ class RtSlangRestirSpatialTest {
         String spatial = block(read(SPATIAL), "void run() {");
         assertTrue(spatial.contains("merged.receiver = own.receiver;\n        merged.stats.w = own.stats.w;"),
             "the receiver position, packed normal and flags stay this pixel's: the merge primitive never writes them");
-        assertTrue(spatial.contains("if (!won) {"), "nothing won means the pre-spatial record keeps its weight");
-        assertTrue(spatial.contains("if (!diSamePosition(merged.sample.xyz, own.sample.xyz))"),
-            "and winning is detected on the stored sample, not on a flag the merge would have to maintain");
+        assertFalse(spatial.contains("if (!won) {"),
+            "neighbour counts and weights must survive even when the existing sample wins");
         assertTrue(spatial.contains("if (!(merged.stats.y >= 0.0) || !(merged.stats.x > 0.0) || !(merged.sample.w > 0.0)\n"
             + "            || !isFinite(merged.sample.xyz) || !isFinite(merged.stats.xyz))"),
             "a NaN count passes a plain comparison, so every lane is tested before the store");
@@ -293,12 +292,11 @@ class RtSlangRestirSpatialTest {
             "and takes the resources from the trace pass's own records");
         assertTrue(host.contains("program.groups(width, 0), program.groups(height, 1), 1"),
             "dispatched with x from width and y from height");
-        assertTrue(host.contains("VkBarriers.computeToCompute(cmd);"),
-            "the stage orders itself: phase two must not read what phase one is still merging");
-        assertEquals(2, count(block(host, "record(VkCommandBuffer cmd, RtPathTraceSlangPass.Atlases atlases,"),
-            "VkBarriers.computeToCompute(cmd);"),
-            "one barrier between the two phases and a trailing one, so the pooled records are available to the batch "
-                + "that reads them next frame");
+        assertTrue(host.contains("program.dispatchPhases(cmd.address()")
+                && host.contains("frame), push, 8, PHASES);"),
+            "native scheduling owns both phases with the phase word at offset 8");
+        assertFalse(host.contains("VkBarriers.computeToCompute(cmd);"),
+            "inter-phase barriers moved with the checker loop into the native recorder");
     }
 
     /**

@@ -3,7 +3,7 @@
 // This module owns the reservoir math only.  Light selection and target-PDF
 // evaluation live behind ILightSampler, so the same reservoir code works for
 // block emitters, entity emitters, the sun and the moon.  Visibility is queried
-// through ITraversal; the reservoir never knows which backend produced the
+// through ISceneTracer; the reservoir never knows which backend produced the
 // shadow ray.
 //
 // Temporal and spatial reuse both use the same merge primitive.  The ratio cap
@@ -261,7 +261,7 @@ DIReservoir restirDiOcclusionFeedback(DIReservoir reservoir, bool occluded) {
 
 // Resolves the reservoir and traces one shadow ray.  The bias keeps the ray
 // origin outside the emitter's own surface.
-DIReservoirResult restirDiResolveVisible<T : ITraversal>(DIReservoir reservoir,
+DIReservoirResult restirDiResolveVisible<T : ISceneTracer>(DIReservoir reservoir,
         T traversal, float3 surfacePosition, float bias) {
     DIReservoirResult result = reservoirResolve(reservoir, surfacePosition);
     if (!result.valid) return result;
@@ -278,7 +278,7 @@ DIReservoirResult restirDiResolveVisible<T : ITraversal>(DIReservoir reservoir,
 // Material-aware variant.  The raw form above is the cheap geometric query;
 // this one applies cutout and translucent rules through the shared surface
 // layer, so a reservoir cannot be rejected by a leaf card or a glass pane.
-DIReservoirResult restirDiResolveVisibleFiltered<T : ITraversal>(DIReservoir reservoir,
+DIReservoirResult restirDiResolveVisibleFiltered<T : ISceneTracer>(DIReservoir reservoir,
         T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         float3 surfacePosition, float3 surfaceNormal, float bias,
         MaterialSamplingOptions materialOptions) {

@@ -60,6 +60,28 @@ public final class BedrayCoreLayouts {
     public static final int DESCRIPTOR_TYPE_STORAGE_BUFFER = 7;
     public static final int DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR = 1000150000;
 
+    /** {@code BEDRAY_PATH_TRACE_FRAME_*} frame bits of the additive path-trace ABI. */
+    public static final int PATH_TRACE_FRAME_RESET_HISTORY = 1 << 0;
+    public static final int PATH_TRACE_FRAME_ACCUMULATE = 1 << 1;
+    public static final int PATH_TRACE_FRAME_CAMERA_STATIC = 1 << 2;
+    public static final int PATH_TRACE_FRAME_FLIP_Y = 1 << 3;
+    public static final int PATH_TRACE_FRAME_SPATIAL = 1 << 4;
+    /** {@code scene.sections} is bedray_scene's 64-byte GeometrySection table and the trace uses path_trace_scene.slang. */
+    public static final int PATH_TRACE_FRAME_NATIVE_SCENE = 1 << 5;
+
+    /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
+    public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;
+    public static final int PATH_DISPLAY_TONEMAP = 1 << 1;
+    public static final int PATH_DISPLAY_REPROJECT = 1 << 2;
+    public static final int PATH_DISPLAY_CAMERA_STATIC = 1 << 3;
+    public static final int PATH_DISPLAY_FLIP_Y = 1 << 4;
+
+    /** {@code BEDRAY_PATH_TRACE_DI_*} bits of {@code BedrayPathTracePath.di_state[0]}. */
+    public static final int PATH_TRACE_DI_ENABLED = 1 << 0;
+    public static final int PATH_TRACE_DI_HISTORY = 1 << 1;
+    public static final int PATH_TRACE_DI_STATIC = 1 << 2;
+    public static final int PATH_TRACE_DI_FLIP_Y = 1 << 3;
+
     static final StructLayout ERROR = MemoryLayout.structLayout(
         ValueLayout.JAVA_INT.withName("status"),
         MemoryLayout.sequenceLayout(ERROR_MESSAGE_BYTES, ValueLayout.JAVA_BYTE).withName("message")
@@ -150,6 +172,131 @@ public final class BedrayCoreLayouts {
         ValueLayout.JAVA_INT.withName("reserved")
     ).withName("BedrayFrameDesc");
 
+    // ---- additive path-trace ABI (see the "Additive path-trace pass ABI" block
+    // in bedray_core.h). These layouts do not touch any ABI v2 struct above.
+
+    public static final StructLayout PT_BUFFER = MemoryLayout.structLayout(
+        ValueLayout.JAVA_LONG.withName("handle"),
+        ValueLayout.JAVA_LONG.withName("offset"),
+        ValueLayout.JAVA_LONG.withName("bytes"),
+        ValueLayout.JAVA_INT.withName("flags"),
+        ValueLayout.JAVA_INT.withName("reserved")
+    ).withName("BedrayPathTraceBuffer");
+
+    public static final StructLayout PT_RANGE = MemoryLayout.structLayout(
+        ValueLayout.JAVA_LONG.withName("handle"),
+        ValueLayout.JAVA_LONG.withName("offset"),
+        ValueLayout.JAVA_LONG.withName("bytes")
+    ).withName("BedrayPathTraceRange");
+
+    public static final StructLayout PT_SCENE = MemoryLayout.structLayout(
+        ValueLayout.JAVA_LONG.withName("tlas"),
+        PT_BUFFER.withName("sections"),
+        ValueLayout.JAVA_LONG.withName("albedo_view"),
+        ValueLayout.JAVA_LONG.withName("material_view"),
+        ValueLayout.JAVA_LONG.withName("normal_view"),
+        ValueLayout.JAVA_LONG.withName("atlas_sampler"),
+        PT_BUFFER.withName("block_materials"),
+        PT_BUFFER.withName("emitters"),
+        PT_BUFFER.withName("reservoirs"),
+        PT_RANGE.withName("entity_positions"),
+        PT_RANGE.withName("entity_indices"),
+        PT_RANGE.withName("entity_attrs"),
+        PT_RANGE.withName("entity_rects"),
+        PT_RANGE.withName("entity_texels"),
+        PT_RANGE.withName("entity_previous")
+    ).withName("BedrayPathTraceScene");
+
+    public static final StructLayout PT_CAMERA = MemoryLayout.structLayout(
+        MemoryLayout.sequenceLayout(16, ValueLayout.JAVA_FLOAT).withName("view"),
+        MemoryLayout.sequenceLayout(16, ValueLayout.JAVA_FLOAT).withName("projection"),
+        MemoryLayout.sequenceLayout(16, ValueLayout.JAVA_FLOAT).withName("view_projection"),
+        MemoryLayout.sequenceLayout(16, ValueLayout.JAVA_FLOAT).withName("inv_view_projection"),
+        MemoryLayout.sequenceLayout(16, ValueLayout.JAVA_FLOAT).withName("prev_view_projection"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("origin"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("forward"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("right"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("up"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("jitter"),
+        ValueLayout.JAVA_INT.withName("width"),
+        ValueLayout.JAVA_INT.withName("height"),
+        ValueLayout.JAVA_INT.withName("display_width"),
+        ValueLayout.JAVA_INT.withName("display_height")
+    ).withName("BedrayPathTraceCamera");
+
+    public static final StructLayout PT_LIGHTING = MemoryLayout.structLayout(
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("sun_direction"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("sun_color"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("moon_direction"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("moon_color"),
+        ValueLayout.JAVA_FLOAT.withName("exposure"),
+        ValueLayout.JAVA_FLOAT.withName("max_radiance"),
+        ValueLayout.JAVA_FLOAT.withName("reprojection_tolerance"),
+        ValueLayout.JAVA_INT.withName("reserved")
+    ).withName("BedrayPathTraceLighting");
+
+    public static final StructLayout PT_ATMOSPHERE = MemoryLayout.structLayout(
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("zenith_color"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("horizon_color"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("fog_color"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("fog"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("cloud")
+    ).withName("BedrayPathTraceAtmosphere");
+
+    public static final StructLayout PT_PATH = MemoryLayout.structLayout(
+        ValueLayout.JAVA_INT.withName("max_depth"),
+        ValueLayout.JAVA_INT.withName("max_surface_steps"),
+        ValueLayout.JAVA_INT.withName("sample_index"),
+        ValueLayout.JAVA_INT.withName("material_count"),
+        ValueLayout.JAVA_INT.withName("flags"),
+        ValueLayout.JAVA_FLOAT.withName("ray_bias"),
+        ValueLayout.JAVA_FLOAT.withName("alpha_cutoff"),
+        ValueLayout.JAVA_FLOAT.withName("max_distance"),
+        ValueLayout.JAVA_FLOAT.withName("max_radiance"),
+        ValueLayout.JAVA_FLOAT.withName("sun_probability"),
+        ValueLayout.JAVA_INT.withName("emitter_count"),
+        ValueLayout.JAVA_FLOAT.withName("emitter_probability"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("emitter_camera_relative"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_FLOAT).withName("di_camera_delta"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_INT).withName("di_state"),
+        MemoryLayout.sequenceLayout(4, ValueLayout.JAVA_INT).withName("entity_state")
+    ).withName("BedrayPathTracePath");
+
+    public static final StructLayout PT_FRAME_DESC = MemoryLayout.structLayout(
+        ValueLayout.JAVA_INT.withName("abi_version"),
+        ValueLayout.JAVA_INT.withName("flags"),
+        ValueLayout.JAVA_LONG.withName("command_buffer"),
+        ValueLayout.JAVA_LONG.withName("output_view"),
+        ValueLayout.JAVA_LONG.withName("depth_view"),
+        PT_SCENE.withName("scene"),
+        PT_CAMERA.withName("camera"),
+        PT_LIGHTING.withName("lighting"),
+        PT_ATMOSPHERE.withName("atmosphere"),
+        PT_PATH.withName("path"),
+        ValueLayout.JAVA_INT.withName("frame_index"),
+        ValueLayout.JAVA_INT.withName("samples_per_frame"),
+        ValueLayout.JAVA_INT.withName("accum_frames"),
+        ValueLayout.JAVA_INT.withName("display_flags"),
+        ValueLayout.JAVA_FLOAT.withName("frame_time"),
+        MemoryLayout.sequenceLayout(5, ValueLayout.JAVA_INT).withName("reserved")
+    ).withName("BedrayPathTraceFrameDesc");
+
+    public static final StructLayout PT_DESC = MemoryLayout.structLayout(
+        ValueLayout.JAVA_INT.withName("abi_version"),
+        ValueLayout.JAVA_INT.withName("flags"),
+        ValueLayout.JAVA_LONG.withName("program_trace"),
+        ValueLayout.JAVA_LONG.withName("program_spatial"),
+        ValueLayout.JAVA_LONG.withName("program_display"),
+        ValueLayout.JAVA_LONG.withName("image_budget_bytes"),
+        ValueLayout.JAVA_LONG.withName("buffer_budget_bytes"),
+        ValueLayout.JAVA_INT.withName("width"),
+        ValueLayout.JAVA_INT.withName("height"),
+        ValueLayout.JAVA_INT.withName("reserved0"),
+        ValueLayout.JAVA_INT.withName("reserved1"),
+        ValueLayout.JAVA_LONG.withName("program_trace_scene"),
+        ValueLayout.JAVA_LONG.withName("reserved")
+    ).withName("BedrayPathTraceDesc");
+
     static final long ERROR_STATUS = ERROR.byteOffset(groupElement("status"));
     static final long ERROR_MESSAGE = ERROR.byteOffset(groupElement("message"));
 
@@ -216,6 +363,104 @@ public final class BedrayCoreLayouts {
     static final long FD_PUSH_CONSTANTS = FRAME_DESC.byteOffset(groupElement("push_constants"));
     static final long FD_PUSH_CONSTANT_BYTES = FRAME_DESC.byteOffset(groupElement("push_constant_bytes"));
 
+    // ---- path-trace offsets
+
+    public static final long PTFD_ABI_VERSION = PT_FRAME_DESC.byteOffset(groupElement("abi_version"));
+    public static final long PTFD_FLAGS = PT_FRAME_DESC.byteOffset(groupElement("flags"));
+    public static final long PTFD_COMMAND_BUFFER = PT_FRAME_DESC.byteOffset(groupElement("command_buffer"));
+    public static final long PTFD_OUTPUT_VIEW = PT_FRAME_DESC.byteOffset(groupElement("output_view"));
+    public static final long PTFD_DEPTH_VIEW = PT_FRAME_DESC.byteOffset(groupElement("depth_view"));
+    public static final long PTFD_SCENE = PT_FRAME_DESC.byteOffset(groupElement("scene"));
+    public static final long PTFD_CAMERA = PT_FRAME_DESC.byteOffset(groupElement("camera"));
+    public static final long PTFD_LIGHTING = PT_FRAME_DESC.byteOffset(groupElement("lighting"));
+    public static final long PTFD_ATMOSPHERE = PT_FRAME_DESC.byteOffset(groupElement("atmosphere"));
+    public static final long PTFD_PATH = PT_FRAME_DESC.byteOffset(groupElement("path"));
+    public static final long PTFD_FRAME_INDEX = PT_FRAME_DESC.byteOffset(groupElement("frame_index"));
+    public static final long PTFD_SAMPLES_PER_FRAME = PT_FRAME_DESC.byteOffset(groupElement("samples_per_frame"));
+    public static final long PTFD_ACCUM_FRAMES = PT_FRAME_DESC.byteOffset(groupElement("accum_frames"));
+    public static final long PTFD_DISPLAY_FLAGS = PT_FRAME_DESC.byteOffset(groupElement("display_flags"));
+    public static final long PTFD_FRAME_TIME = PT_FRAME_DESC.byteOffset(groupElement("frame_time"));
+
+    public static final long PTS_TLAS = PT_SCENE.byteOffset(groupElement("tlas"));
+    public static final long PTS_SECTIONS = PT_SCENE.byteOffset(groupElement("sections"));
+    public static final long PTS_ALBEDO_VIEW = PT_SCENE.byteOffset(groupElement("albedo_view"));
+    public static final long PTS_MATERIAL_VIEW = PT_SCENE.byteOffset(groupElement("material_view"));
+    public static final long PTS_NORMAL_VIEW = PT_SCENE.byteOffset(groupElement("normal_view"));
+    public static final long PTS_ATLAS_SAMPLER = PT_SCENE.byteOffset(groupElement("atlas_sampler"));
+    public static final long PTS_BLOCK_MATERIALS = PT_SCENE.byteOffset(groupElement("block_materials"));
+    public static final long PTS_EMITTERS = PT_SCENE.byteOffset(groupElement("emitters"));
+    public static final long PTS_RESERVOIRS = PT_SCENE.byteOffset(groupElement("reservoirs"));
+    public static final long PTS_ENTITY_POSITIONS = PT_SCENE.byteOffset(groupElement("entity_positions"));
+    public static final long PTS_ENTITY_INDICES = PT_SCENE.byteOffset(groupElement("entity_indices"));
+    public static final long PTS_ENTITY_ATTRS = PT_SCENE.byteOffset(groupElement("entity_attrs"));
+    public static final long PTS_ENTITY_RECTS = PT_SCENE.byteOffset(groupElement("entity_rects"));
+    public static final long PTS_ENTITY_TEXELS = PT_SCENE.byteOffset(groupElement("entity_texels"));
+    public static final long PTS_ENTITY_PREVIOUS = PT_SCENE.byteOffset(groupElement("entity_previous"));
+
+    public static final long PTB_HANDLE = PT_BUFFER.byteOffset(groupElement("handle"));
+    public static final long PTB_OFFSET = PT_BUFFER.byteOffset(groupElement("offset"));
+    public static final long PTB_BYTES = PT_BUFFER.byteOffset(groupElement("bytes"));
+
+    public static final long PTR_HANDLE = PT_RANGE.byteOffset(groupElement("handle"));
+    public static final long PTR_OFFSET = PT_RANGE.byteOffset(groupElement("offset"));
+    public static final long PTR_BYTES = PT_RANGE.byteOffset(groupElement("bytes"));
+
+    public static final long PTC_VIEW = PT_CAMERA.byteOffset(groupElement("view"));
+    public static final long PTC_PROJECTION = PT_CAMERA.byteOffset(groupElement("projection"));
+    public static final long PTC_VIEW_PROJECTION = PT_CAMERA.byteOffset(groupElement("view_projection"));
+    public static final long PTC_INV_VIEW_PROJECTION = PT_CAMERA.byteOffset(groupElement("inv_view_projection"));
+    public static final long PTC_PREV_VIEW_PROJECTION = PT_CAMERA.byteOffset(groupElement("prev_view_projection"));
+    public static final long PTC_ORIGIN = PT_CAMERA.byteOffset(groupElement("origin"));
+    public static final long PTC_FORWARD = PT_CAMERA.byteOffset(groupElement("forward"));
+    public static final long PTC_RIGHT = PT_CAMERA.byteOffset(groupElement("right"));
+    public static final long PTC_UP = PT_CAMERA.byteOffset(groupElement("up"));
+    public static final long PTC_JITTER = PT_CAMERA.byteOffset(groupElement("jitter"));
+    public static final long PTC_WIDTH = PT_CAMERA.byteOffset(groupElement("width"));
+    public static final long PTC_HEIGHT = PT_CAMERA.byteOffset(groupElement("height"));
+    public static final long PTC_DISPLAY_WIDTH = PT_CAMERA.byteOffset(groupElement("display_width"));
+    public static final long PTC_DISPLAY_HEIGHT = PT_CAMERA.byteOffset(groupElement("display_height"));
+
+    public static final long PTL_SUN_DIRECTION = PT_LIGHTING.byteOffset(groupElement("sun_direction"));
+    public static final long PTL_SUN_COLOR = PT_LIGHTING.byteOffset(groupElement("sun_color"));
+    public static final long PTL_MOON_DIRECTION = PT_LIGHTING.byteOffset(groupElement("moon_direction"));
+    public static final long PTL_MOON_COLOR = PT_LIGHTING.byteOffset(groupElement("moon_color"));
+    public static final long PTL_EXPOSURE = PT_LIGHTING.byteOffset(groupElement("exposure"));
+    public static final long PTL_MAX_RADIANCE = PT_LIGHTING.byteOffset(groupElement("max_radiance"));
+    public static final long PTL_REPROJECTION_TOLERANCE = PT_LIGHTING.byteOffset(groupElement("reprojection_tolerance"));
+
+    public static final long PTA_ZENITH_COLOR = PT_ATMOSPHERE.byteOffset(groupElement("zenith_color"));
+    public static final long PTA_HORIZON_COLOR = PT_ATMOSPHERE.byteOffset(groupElement("horizon_color"));
+    public static final long PTA_FOG_COLOR = PT_ATMOSPHERE.byteOffset(groupElement("fog_color"));
+    public static final long PTA_FOG = PT_ATMOSPHERE.byteOffset(groupElement("fog"));
+    public static final long PTA_CLOUD = PT_ATMOSPHERE.byteOffset(groupElement("cloud"));
+
+    public static final long PTP_MAX_DEPTH = PT_PATH.byteOffset(groupElement("max_depth"));
+    public static final long PTP_MAX_SURFACE_STEPS = PT_PATH.byteOffset(groupElement("max_surface_steps"));
+    public static final long PTP_SAMPLE_INDEX = PT_PATH.byteOffset(groupElement("sample_index"));
+    public static final long PTP_MATERIAL_COUNT = PT_PATH.byteOffset(groupElement("material_count"));
+    public static final long PTP_FLAGS = PT_PATH.byteOffset(groupElement("flags"));
+    public static final long PTP_RAY_BIAS = PT_PATH.byteOffset(groupElement("ray_bias"));
+    public static final long PTP_ALPHA_CUTOFF = PT_PATH.byteOffset(groupElement("alpha_cutoff"));
+    public static final long PTP_MAX_DISTANCE = PT_PATH.byteOffset(groupElement("max_distance"));
+    public static final long PTP_MAX_RADIANCE = PT_PATH.byteOffset(groupElement("max_radiance"));
+    public static final long PTP_SUN_PROBABILITY = PT_PATH.byteOffset(groupElement("sun_probability"));
+    public static final long PTP_EMITTER_COUNT = PT_PATH.byteOffset(groupElement("emitter_count"));
+    public static final long PTP_EMITTER_PROBABILITY = PT_PATH.byteOffset(groupElement("emitter_probability"));
+    public static final long PTP_EMITTER_CAMERA_RELATIVE = PT_PATH.byteOffset(groupElement("emitter_camera_relative"));
+    public static final long PTP_DI_CAMERA_DELTA = PT_PATH.byteOffset(groupElement("di_camera_delta"));
+    public static final long PTP_DI_STATE = PT_PATH.byteOffset(groupElement("di_state"));
+    public static final long PTP_ENTITY_STATE = PT_PATH.byteOffset(groupElement("entity_state"));
+
+    public static final long PTD_ABI_VERSION = PT_DESC.byteOffset(groupElement("abi_version"));
+    public static final long PTD_PROGRAM_TRACE = PT_DESC.byteOffset(groupElement("program_trace"));
+    public static final long PTD_PROGRAM_SPATIAL = PT_DESC.byteOffset(groupElement("program_spatial"));
+    public static final long PTD_PROGRAM_DISPLAY = PT_DESC.byteOffset(groupElement("program_display"));
+    public static final long PTD_IMAGE_BUDGET_BYTES = PT_DESC.byteOffset(groupElement("image_budget_bytes"));
+    public static final long PTD_BUFFER_BUDGET_BYTES = PT_DESC.byteOffset(groupElement("buffer_budget_bytes"));
+    public static final long PTD_WIDTH = PT_DESC.byteOffset(groupElement("width"));
+    public static final long PTD_HEIGHT = PT_DESC.byteOffset(groupElement("height"));
+    public static final long PTD_PROGRAM_TRACE_SCENE = PT_DESC.byteOffset(groupElement("program_trace_scene"));
+
     private BedrayCoreLayouts() {
     }
 
@@ -229,6 +474,33 @@ public final class BedrayCoreLayouts {
         require("BedrayProgramDesc", PROGRAM_DESC.byteSize(), 56);
         require("BedrayResource", RESOURCE.byteSize(), 48);
         require("BedrayFrameDesc", FRAME_DESC.byteSize(), 64);
+        require("BedrayPathTraceBuffer", PT_BUFFER.byteSize(), 32);
+        require("BedrayPathTraceRange", PT_RANGE.byteSize(), 24);
+        require("BedrayPathTraceScene", PT_SCENE.byteSize(), 312);
+        require("BedrayPathTraceCamera", PT_CAMERA.byteSize(), 416);
+        require("BedrayPathTraceLighting", PT_LIGHTING.byteSize(), 80);
+        require("BedrayPathTraceAtmosphere", PT_ATMOSPHERE.byteSize(), 80);
+        require("BedrayPathTracePath", PT_PATH.byteSize(), 112);
+        require("BedrayPathTraceFrameDesc", PT_FRAME_DESC.byteSize(), 1072);
+        require("BedrayPathTraceDesc", PT_DESC.byteSize(), 80);
+        require("BedrayPathTraceDesc.program_trace_scene", PTD_PROGRAM_TRACE_SCENE, 64);
+        require("BedrayPathTraceFrameDesc.scene", PTFD_SCENE, 32);
+        require("BedrayPathTraceFrameDesc.camera", PTFD_CAMERA, 344);
+        require("BedrayPathTraceFrameDesc.lighting", PTFD_LIGHTING, 760);
+        require("BedrayPathTraceFrameDesc.atmosphere", PTFD_ATMOSPHERE, 840);
+        require("BedrayPathTraceFrameDesc.path", PTFD_PATH, 920);
+        require("BedrayPathTraceFrameDesc.frame_index", PTFD_FRAME_INDEX, 1032);
+        require("BedrayPathTraceFrameDesc.frame_time", PTFD_FRAME_TIME, 1048);
+        require("BedrayPathTraceScene.sections", PTS_SECTIONS, 8);
+        require("BedrayPathTraceScene.albedo_view", PTS_ALBEDO_VIEW, 40);
+        require("BedrayPathTraceScene.block_materials", PTS_BLOCK_MATERIALS, 72);
+        require("BedrayPathTraceScene.emitters", PTS_EMITTERS, 104);
+        require("BedrayPathTraceScene.reservoirs", PTS_RESERVOIRS, 136);
+        require("BedrayPathTraceScene.entity_positions", PTS_ENTITY_POSITIONS, 168);
+        require("BedrayPathTracePath.emitter_camera_relative", PTP_EMITTER_CAMERA_RELATIVE, 48);
+        require("BedrayPathTracePath.di_camera_delta", PTP_DI_CAMERA_DELTA, 64);
+        require("BedrayPathTracePath.di_state", PTP_DI_STATE, 80);
+        require("BedrayPathTracePath.entity_state", PTP_ENTITY_STATE, 96);
     }
 
     private static void require(String name, long actual, long expected) {

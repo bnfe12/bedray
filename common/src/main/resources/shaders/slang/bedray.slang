@@ -19,6 +19,7 @@ __exported import "contracts/contracts.slang";
 __exported import "voxel/voxel.slang";
 __exported import "traversal/traversal.slang";
 __exported import "traversal/voxel_traversal.slang";
+__exported import "traversal/software_tracer.slang";
 __exported import "traversal/hardware_traversal.slang";
 __exported import "traversal/legacy_section_traversal.slang";
 __exported import "traversal/hybrid_traversal.slang";

@@ -133,7 +133,7 @@ RCSegment rctsResolved(float3 radiance, float3 transmittance, uint extraFlags,
 // one NEE sample through the material-filtered visibility walk.  NEE carries
 // no segment flag: the transport record only describes transport events, and
 // a direct-light sample is not one.
-float3 rctsShadeSurface<T : ITraversal, L : ILightSampler>(
+float3 rctsShadeSurface<T : ISceneTracer, L : ILightSampler>(
         T traversal, L lights,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         SurfaceSample surface, float3 view,
@@ -175,7 +175,7 @@ float3 rctsShadeSurface<T : ITraversal, L : ILightSampler>(
 // records once, at the end - no record is written mid-walk, so every exit
 // path (contribution, miss, absorption, budget) funnels through the same
 // construction.
-void rctsWalkRay<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+void rctsWalkRay<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceRay rayValue, MaterialSamplingOptions materialOptions,
@@ -327,7 +327,7 @@ void rctsWalkRay<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
 // Traces one probe ray and stores its near/far segment records.  A true return
 // means both addresses were written, not that the ray resolved (the storage
 // owner's contract).
-bool rctsTraceRay<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+bool rctsTraceRay<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> records,
@@ -344,7 +344,7 @@ bool rctsTraceRay<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
 
 // Dispatch entry: one item per probe ray (decodeRadianceDispatch splits the
 // flat index).  A stale oversized dispatch touches nothing.
-bool rctsTraceDispatch<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+bool rctsTraceDispatch<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> records,
@@ -365,7 +365,7 @@ bool rctsTraceDispatch<T : ITraversal, L : ILightSampler, E : IEnvironmentSample
 
 // Plain dispatch form without light sampler or environment: shares the walk
 // through the neutral stand-ins.
-bool rctsTraceDispatch<T : ITraversal>(T traversal,
+bool rctsTraceDispatch<T : ISceneTracer>(T traversal,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> records,
         uint capacity, uint globalIndex, float3 cameraOrigin, uint frameRotation,

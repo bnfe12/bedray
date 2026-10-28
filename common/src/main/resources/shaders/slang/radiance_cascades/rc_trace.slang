@@ -399,7 +399,7 @@ struct RCShadedSurface {
 // direct term is not, so the caller must mark the segment TRUNCATED.  Invalid
 // data (non-finite or negative radiance, non-finite/non-positive light PDF, a
 // non-unit direction/filter value) invalidates the sample; it is never black.
-RCShadedSurface rcShadeSurface<T : ITraversal, L : ILightSampler>(
+RCShadedSurface rcShadeSurface<T : ISceneTracer, L : ILightSampler>(
         T traversal, L lights,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         SurfaceSample surface, float3 view,
@@ -487,7 +487,7 @@ RCShadedSurface rcShadeSurface<T : ITraversal, L : ILightSampler>(
 // drifts.  One opaque/cutout surface ends the walk; translucent surfaces are
 // filters whose emissions are preserved.  Every exit path leaves both segment
 // records in a state that either composes or is explicitly untrusted.
-void rcWalkRay<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+void rcWalkRay<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceRay rayValue, uint cascade, MaterialSamplingOptions materialOptions,
@@ -917,7 +917,7 @@ RCTraceResult rcBuildTraceResult(RadianceRay rayValue, uint cascade,
 // RCEnvironmentPolicy.Disabled; the environment sampler is then not consulted.
 // A host without a light sampler cannot call this entry.  `cascade` identifies
 // the level for the environment policy.
-RCTraceResult traceCascadeRay<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+RCTraceResult traceCascadeRay<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceRay rayValue, uint cascade, MaterialSamplingOptions materialOptions,
@@ -943,7 +943,7 @@ RCTraceResult traceCascadeRay<T : ITraversal, L : ILightSampler, E : IEnvironmen
 // when present; `stored` reports address success, not ray validity.  If the
 // pair cannot be addressed (non-canonical layout, capacity too small, invalid
 // dispatch), nothing is written and STORE_FAILED is set.
-RCTraceResult rcTraceAndStoreRay<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+RCTraceResult rcTraceAndStoreRay<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,
@@ -1218,7 +1218,7 @@ RCTraceOptions rcApplyCascadeOwnershipBand(RCTraceOptions options, uint cascade)
 // store address pair was not written (non-canonical layout, insufficient
 // capacity).  A zero count does not mean every segment resolved; read the
 // typed records or use the single-ray entry for status.
-uint traceCascadeProbe<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+uint traceCascadeProbe<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,
@@ -1245,7 +1245,7 @@ uint traceCascadeProbe<T : ITraversal, L : ILightSampler, E : IEnvironmentSample
 // Probe trace with the provisional typed history blend.  The history mapping
 // and status checks are real; the lerp is explicitly a heuristic and is not a
 // guarantee of the resolve owner.
-uint traceCascadeProbeBlended<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+uint traceCascadeProbeBlended<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,
@@ -1279,7 +1279,7 @@ uint traceCascadeProbeBlended<T : ITraversal, L : ILightSampler, E : IEnvironmen
 // decodeRadianceDispatch splits a flat dispatch index into cascade / probe /
 // ray, so one compute dispatch covers the whole cascade set.  The sentinel
 // cascade means a stale oversized dispatch: the store is not touched.
-uint traceCascadeDispatch<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+uint traceCascadeDispatch<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,
@@ -1303,7 +1303,7 @@ uint traceCascadeDispatch<T : ITraversal, L : ILightSampler, E : IEnvironmentSam
 // Dispatch trace with the provisional typed history blend.  The caller must
 // supply the previous-frame camera origin, rotation and scene revision; the
 // same array index is not a stable world position after clipmap scrolling.
-uint traceCascadeDispatchBlended<T : ITraversal, L : ILightSampler, E : IEnvironmentSampler>(
+uint traceCascadeDispatchBlended<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,

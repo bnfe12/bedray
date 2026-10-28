@@ -32,6 +32,37 @@ ABI v2 keeps the v1 struct sizes but adds the release function and changes
 loaded by the v2 Java wrapper. There is no inferred compatibility from equal
 structure sizes.
 
+## Path-trace pass recordings (internal pass, ABI v2 coarse calls)
+
+`PathTracePass` (`src/path_trace_pass.cpp`) is the core's only internal recorder
+above the single-dispatch calls. It keeps one recording per command buffer in
+`recordings_` and pins six images and up to five buffers (four dummies plus the
+per-recording FrameConstants upload) on it.
+
+- `bedray_core_release_recording` remains the only release call: the core drops
+  its dispatch records and the pass completes its image/buffer pins in the same
+  function. An unknown command buffer is a no-op.
+- A failure before the first dispatch was recorded — image creation, the
+  FrameConstants upload, a pin failure — is provably discardable: the pass
+  completes its own pins and leaves no recording.
+- A failure returned by `bedray_core_render_frame`/`_render_phases` (trace,
+  spatial phases or display) may already have recorded work, so the pass keeps
+  the recording and its pins. The host must discard the whole command buffer,
+  then call `bedray_core_release_recording`; there is no partial release.
+- `bedray_core_destroy_path_trace`, `bedray_core_configure_path_trace` and
+  `bedray_core_destroy` refuse while a recording exists (the last through the
+  pass's own `BEDRAY_ERROR_IN_USE`).
+- An extent change retires the previous image set but does not destroy it while
+  a recording pins it; `release_recording` collects the retired images. No
+  `vkDeviceWaitIdle` is used and no frame count recycles a recording.
+- On `VK_ERROR_DEVICE_LOST` the pass marks both owners lost; destroying it
+  routes them through `release_after_device_loss`, which destroys the
+  still-owned objects and clears the bookkeeping without claiming the device
+  works.
+
+Covered by `native/bedray_core/tests/path_trace_pass_test.cpp` (built and
+passing, 2026-10-28).
+
 Current limitations:
 
 - Minecraft 26.3's `VulkanCommandEncoder.queueForDestroy` is a candidate host
@@ -57,5 +88,6 @@ Current limitations:
   mask. Physical device support is not proof that a logical device enabled a
   feature. The current host has not yet wired an authoritative enabled-feature
   mapping; never substitute a physical-support query for that fact.
-- This source has not been compiled or tested after the ABI v2 change; no GPU
-  or live-game correctness claim is made.
+- The ABI v2 sources build as the Windows x64 Release `bedray_core.dll` and the
+  contract tests pass (`bedray_path_trace_pass_test`, 2026-10-28); no GPU or
+  live-game correctness claim is made.

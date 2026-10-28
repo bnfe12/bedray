@@ -1,17 +1,45 @@
 # Path tracing C++ pass — integration plan
 
-Status: **source-only plan**. No build, test, `slangc` run, Minecraft launch or
-deployment was performed for this document, and no Java renderer file or shared
-ABI was edited. A plan is not evidence that a C++ path-trace pass compiles or
-renders.
+Status: **source-only implementation**. The C++ pass, its additive ABI and the
+Java opt-in adapter exist in the working tree, but no build, test, `slangc` run,
+Minecraft launch or deployment was performed for this document, and no
+compilation is claimed. The pass is off by default.
 
 Scope: move the wired Java path-tracing host (`RtSlangPathPass` plus the
 package-private `RtPathTraceSlangPass`) into a C++ pass that owns its pipelines,
 descriptors, images, frame uploads and barriers, while the host API stays coarse.
-The Slang programs `passes/path_trace.slang` and `passes/path_display.slang`
-remain the algorithm. This document records the current state, target ownership,
-resource lifetime, synchronization, the scene/shader contract gap, and the
-decisions that need an owner before code is written.
+The Slang programs `passes/path_trace.slang`, `passes/restir_spatial.slang` and
+`passes/path_display.slang` remain the algorithm. This document records the
+current state, target ownership, resource lifetime, synchronization, the
+scene/shader contract gap, and the decisions that need an owner before code is
+written.
+
+Current implementation state (source review only):
+
+* `native/bedray_core/src/path_trace_pass.{h,cpp}` owns the radiance, motion,
+  accumulation and history-depth images, the per-recording `FrameConstants`
+  upload, the one-element dummies, the trace → optional spatial → display
+  recording and the trailing barrier.
+* `bedray_core.h` carries an **additive** path-trace ABI; every ABI v2 struct
+  layout is unchanged. `BedrayPathTraceBuffer` 32 B, `BedrayPathTraceRange`
+  24 B, `BedrayPathTraceScene` 312 B, `BedrayPathTraceCamera` 416 B,
+  `BedrayPathTraceLighting` 80 B, `BedrayPathTraceAtmosphere` 80 B,
+  `BedrayPathTracePath` 112 B, `BedrayPathTraceFrameDesc` 1072 B,
+  `BedrayPathTraceDesc` 80 B. The Java mirror in `BedrayCoreLayouts` asserts
+  these sizes and field offsets.
+* `BedrayPathTraceNative` packs the host frame and calls
+  `bedray_core_configure_path_trace` / `bedray_core_render_path_trace`; a DLL
+  without the exports keeps the Java path.
+* `RtSlangPathPass` selects the native pass only with
+  `-Dvkbridge.rt.nativePathTrace=true` (`RtConfig.SLANG_PATH_TRACE_CPP`); the
+  Java orchestration stays the default until live evidence exists.
+* The host still owns the TLAS, section table, atlases, emitter list, ReSTIR DI
+  ring, entity rings, output and depth. The native scene recorder
+  (`native/bedray_scene`, ABI v2) and the pass's `program_trace_scene` /
+  `BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE` selection exist source-only; the Java
+  host has not switched to them, and the render-graph connection remains open
+  (gap list: `native/bedray_render_graph/RENDER_GRAPH_NOTES.md`, "Path-trace
+  pass as a graph node").
 
 Related documents:
 
@@ -246,18 +274,24 @@ This is the main unresolved contract, not a mechanical port.
 
 The current `path_trace.slang` traversal expects `LegacySection`, a 64-byte
 record with device addresses for positions, UVs, colours, lights, quads and an
-origin, plus the planar arena. The candidate native scene exposes
-[BedraySceneSectionRecord](../native/bedray_scene/include/bedray_scene.h#L260),
-a 48-byte record with vertex/index/BLAS addresses, counts, stride and index
-type, and opaque material/light tables. The two layouts are not interchangeable:
+origin, plus the planar arena. The native scene now exposes ABI v2
+[BedraySceneSectionRecord](../native/bedray_scene/include/bedray_scene.h),
+a 64-byte record (`origin[4]`, `meta[4]`, `vertex_address`, `ranges[3]`) with
+the section-local `GeometryVertex` stream (64 bytes: position float4, uvLight
+float4, tint float4, meta uint4) and opaque material/light tables. The two
+layouts are not interchangeable:
 
-* the scene does not yet define the vertex attribute layout (position, normal,
-  UV, tint/colour), so a hardware hit cannot be decoded into a `SurfaceHit`;
+* the vertex attribute layout is defined now, but the record has no
+  index/BLAS addresses and no per-range stride/index type: the shader must take
+  index data from the vertex stream convention (one BLAS geometry per pass
+  range, local `(0,1,2, 2,3,0)` indices, `firstVertex = quad_start*4`) and must
+  not assume the legacy `LegacySection` fields;
 * the scene's material and light tables are opaque blobs; Slang needs stable
   record layouts, emitter identity/emission semantics and a revision rule;
-* the scene does not expose a section/entity identity on the hit. The current
-  legacy table lookup and `instanceCustomIndex` mapping need an explicit
-  contract for material lookup, texture atlas coordinates and world position;
+* section identity is `origin.w` (stable 32-bit hash of the section id) and the
+  TLAS `instanceCustomIndex` is the section table slot; entity instances carry
+  the `0x800000` tag. The traversal must use the slot for the table lookup and
+  the tag to route entity hits, not a legacy index;
 * `SurfaceHit.worldPosition` currently wraps section origins at 1024 blocks in
   both backends. It is not a globally stable identity for reprojection,
   temporal reuse or emitter lookup; the scene must provide an unwrapped or
@@ -428,8 +462,10 @@ including on resize.
 ## 9. Missing contracts and decisions for the owner
 
 1. **Scene traversal and vertex layout.** `LegacySection` (64 B) is not
-   `BedraySceneSectionRecord` (48 B). Define the vertex attributes, hit decoding,
-   instance identity and the replacement traversal before changing
+   `BedraySceneSectionRecord` (ABI v2, 64 B: `origin[4]`, `meta[4]`,
+   `vertex_address`, three 8-byte ranges). The `GeometryVertex` attributes are
+   defined; hit decoding, the section-table lookup by slot, the entity tag and
+   the replacement traversal still have to be agreed before changing
    `path_trace.slang`. This is the largest open item.
 2. **Material and light records.** The scene tables are opaque. Define stable
    record layouts, revisions, emitter identity/emission and the block-material
@@ -471,9 +507,13 @@ including on resize.
     10-bit Slang mask. These must be designed before path tracing is declared a
     graph pass.
 12. **Completion and validation.** The Java path is the only implemented
-    reference; there is no C++ pass, contract test, GPU run or game run for it.
-    Unknown submission outcomes must pin resources. This document records no
-    fresh verification result.
+    reference. The C++ pass exists source-only and is covered by two unrun
+    contract tests: `native/bedray_core/tests/path_trace_pass_test.cpp` (fake
+    Vulkan, white-box) and `native/bedray_scene/tests/scene_contract_test.cpp`
+    (fake Vulkan, ABI v2; its last recorded run predates the current ABI-v2
+    revision). Neither test has been compiled or run for this document, and no
+    GPU run or game run exists. Unknown submission outcomes must pin resources.
+    This document records no fresh verification result.
 
 ### Follow-ups from the 2026-10-27 shader audit
 
@@ -613,19 +653,26 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
 ## 10. Migration sequence
 
 1. **Freeze the reference.** Keep `RtSlangPathPass`, `RtPathTraceSlangPass`,
-   `RtFrameRenderer`, `RtBloomPass`, `RtAtmosphere` and the shared ABI
-   untouched while ownership is coordinated. Record the current behaviour; do
-   not extend the GLSL fallback.
+   `RtFrameRenderer`, `RtBloomPass`, `RtAtmosphere` and the existing ABI v2
+   structs untouched while ownership is coordinated. The only shared-header
+   change is the additive path-trace block, which does not alter a v2 layout.
+   Record the current behaviour; do not extend the GLSL fallback.
 2. **Scene traversal contract.** Define the vertex/material/light records and
    the replacement traversal; add a source-level contract test for the shader
    table layout. No GPU calls.
-3. **Pass skeleton.** Add the internal module with extent/generation logic,
-   frame-constant ownership, push packing and a fake-Vulkan barrier/dispatch
-   plan test. No real images or GPU calls.
-4. **Allocator and coarse call.** Add the C++ image/memory/sampler/barrier
-   function table and generation retirement, then the proposed coarse host
-   call behind an opt-in switch with the Java path still default. No public ABI
-   change until the owner approves versioning.
+3. **Pass skeleton — source implemented, uncompiled.** The internal module now
+   owns extent/generation logic, frame constants, push packing, image/buffer
+   pins and the trace → optional spatial → display recording. The fake-Vulkan
+   plan/barrier test exists source-only as
+   `native/bedray_core/tests/path_trace_pass_test.cpp`: it drives the pass
+   through a fake driver, checks the three-dispatch recording, push payloads,
+   barrier sequence, pin lifetime on failure, resize retirement and device-loss
+   cleanup. It has not been compiled or run.
+4. **Allocator and coarse call — source implemented, uncompiled.** The C++
+   image/buffer function table, generation retirement and the additive coarse
+   calls exist behind an opt-in switch; the Java path remains default. The ABI
+   is additive, not a v2 layout change, and still needs owner review before it
+   is treated as stable.
 5. **In-game switch.** After the user explicitly starts verification, enable the
    C++ pass for Path Tracing mode, compare output against the Java reference,
    and fix only evidence-backed differences. Then remove Java image/descriptor/
@@ -634,7 +681,10 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
 6. **Graph integration.** Add the path-trace/post pass kind, per-pass program and
    push contract, external boundary contract and scheduler release hook;
    replace the conservative entry/exit barriers with graph hazards once the
-   graph owns the final image copy and display.
+   graph owns the final image copy and display. The concrete gaps between the
+   live pass and the graph/history modules are itemised in
+   `native/bedray_render_graph/RENDER_GRAPH_NOTES.md`, section "Path-trace pass
+   as a graph node — live-path gap (2026-10-28)".
 
 Exit criteria for each step: a source review plus a relevant contract test or a
 recorded verification result. A compile is not a game check, and a plan is not a

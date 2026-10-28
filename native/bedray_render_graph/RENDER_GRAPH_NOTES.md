@@ -337,6 +337,102 @@ pass structure must not be ported line by line.
   is coordinated; this batch intentionally stays inside native graph sources,
   tests and notes.
 
+## Path-trace pass as a graph node — live-path gap (2026-10-28)
+
+`PathTracePass` (`native/bedray_core/src/path_trace_pass.cpp`) is the only
+internal recorder above the single-dispatch entry points. It owns six images
+and four dummy buffers, records trace -> optional `restir_spatial` -> display
+through `bedray_core_render_frame`/`bedray_core_render_phases`, transitions its
+own images and pins them per command buffer. The graph planner, the Vulkan
+adapter and `FrameScheduler` are the intended owners of ordering, layouts and
+slot lifetime. Both halves build and their contract tests pass
+(`bedray_path_trace_pass_test`, `bedray_render_graph_contract`,
+`bedray_frame_scheduler`, 2026-10-28), but neither is wired into the other and
+no GPU, driver or game result exists for either.
+
+The decisions below are required before the graph can become the live path.
+None of them is implemented in this batch.
+
+1. **Pass kind and dispatch shape.** `PlanPassKind` has no path-trace/post kind,
+   and `PassDesc` describes exactly one compute dispatch with one
+   `DispatchSize`, no program handle and no push bytes. The live pass records
+   three dispatches into one command buffer (trace, optional two-phase spatial,
+   display) with three different push blocks (112 B, 48/64 B, 32 B). Either a
+   pass kind whose callback is the whole `PathTracePass::render`, or a
+   recording group that can declare three dispatches, must exist. Registering
+   them as three graph passes is not equivalent: the trace pass's internal
+   image transitions would then be unordered against the spatial and display
+   passes.
+2. **Resource identity bridge.** The graph addresses resources by graph-local
+   IDs and semantics; the pass binds `BedrayResource` arrays by descriptor
+   binding number, sampler, layout, offset and range. There is no mapping from
+   `ResourceDesc::semantic` (`scene.tlas`, `history.radiance`, `output.color`)
+   to the pass's 18/9/6 binding tables, no plan-time declaration of which graph
+   resource is an image, buffer or acceleration structure at which binding, and
+   no C representation of either. The tables in `path_trace_pass.cpp` are
+   hand-maintained mirrors of the shader manifests; the reflection manifest
+   validates the same set at build time, but it never reaches the native core.
+3. **One barrier authority.** The Vulkan adapter emits an ALL->ALL memory
+   dependency before every pass and tracks image layouts from the initial
+   layout it is given; the pass independently transitions UNDEFINED->GENERAL on
+   first use and re-transitions the write-parity images every frame, then adds
+   entry/compute/exit barriers. If both own the same image, the adapter's
+   tracked old layout goes stale on the second frame. Either the graph owns all
+   layouts and the pass receives explicit initial/final layouts, or the pass
+   owns its internal images and the graph may not bind them. The second option
+   is not free: accumulation and history depth are exactly what a
+   denoiser/upscaler pass would read next.
+4. **History authority collision.** `HistoryRegistry` is the device-epoch and
+   serial authority for persistent history (`prepare`, `invalidate`, tickets);
+   `PathTracePass` keeps its own accumulation parity, `history_written_` and
+   reset rule (`accum_frames == 0` or `BEDRAY_PATH_TRACE_FRAME_RESET_HISTORY`),
+   and recreates both parities on extent change. Two authorities would disagree
+   after a resize, a device epoch or a host reset. Either the pass's
+   accum/history-depth images are registered as history resources and the pass
+   consumes `prepare` tokens, or the registry is not used for this pass and the
+   decision is written down. Running both is a defect.
+5. **Submission ticket to release.** `FrameScheduler::ReleaseRecording` is the
+   designed hook for `bedray_core_release_recording`, and it must be exactly
+   that call: the core drops its descriptor records and the pass completes its
+   image/buffer pins in the same function. But `core.cpp` never constructs a
+   `FrameScheduler`, the callback type is internal C++, and neither a serial
+   nor a ticket identity crosses the ABI, so the host cannot name the
+   recording the callback refers to.
+6. **Capability masks.** `PlanCapability` is a 64-bit traversal/feature mask;
+   `BEDRAY_CAP_*` is a 10-bit logical-device/Slang mask. A resolved plan cannot
+   be checked against the core's enabled capabilities without a mapping and a
+   degradation rule. The graph omits unsupported optional feature passes; the
+   pass has no optional-program mechanism beyond a zero `program_spatial`.
+7. **Slots and reallocation.** The scheduler leases 1..8 slots but allocates
+   nothing. The pass creates its images on the first frame and on every extent
+   change, retires the old set and lets `release_recording` collect it. With
+   one pass shared by all slots, a resize between two live frames keeps both
+   image sets alive until both recordings are released (covered by
+   `native/bedray_core/tests/path_trace_pass_test.cpp`, which builds and
+   passes); with one pass per slot, the scheduler must own those instances.
+   Neither policy is chosen yet.
+8. **Java boundary.** ABI v2 exposes only the coarse configure/render/destroy
+   calls; `CompiledGraph`, `VulkanRecordingPlan` and `FrameScheduler` have no C
+   entry points. Until a new ABI version defines an opaque plan/slot handle and
+   maps `FrameErrorCode`/`RecordingError` to `BedrayStatus`, the host can only
+   drive the pass directly — which is the current opt-in path and must remain
+   the only executable one.
+
+Safe integration order, without a second Vulkan path at any step:
+
+1. Keep the coarse calls as the only executable path.
+2. Make the pass the owner of its internal images and barriers; the graph
+   declares it as one opaque node with external image entry/exit states.
+3. Add the pass kind / recording group whose callback is
+   `PathTracePass::render`.
+4. Wire the scheduler's release callback to `bedray_core_release_recording`
+   (internal C++ first, ABI later).
+5. Decide the history authority (pass-owned vs registry-owned) and delete the
+   other one.
+
+Non-goals: no second device/queue/swapchain/submission, no graph-side memory
+allocator, and no second barrier stream for the pass's own images.
+
 ## Build and test evidence
 
 Toolchain: MSVC 19.x via Visual Studio 17 2022 generator, Windows SDK

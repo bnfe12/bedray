@@ -3,8 +3,13 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include "path_trace_pass.h"
+
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -24,9 +29,44 @@ static_assert(sizeof(BedrayProgramDesc) == 56, "ABI v2: BedrayProgramDesc must s
 static_assert(sizeof(BedrayResource) == 48, "ABI v2: BedrayResource must stay 48 bytes");
 static_assert(sizeof(BedrayFrameDesc) == 64, "ABI v2: BedrayFrameDesc must stay 64 bytes");
 
+static_assert(sizeof(BedrayPathTraceBuffer) == 32, "path-trace ABI: buffer range must stay 32 bytes");
+static_assert(sizeof(BedrayPathTraceRange) == 24, "path-trace ABI: entity range must stay 24 bytes");
+static_assert(sizeof(BedrayPathTraceScene) == 312, "path-trace ABI: scene must stay 312 bytes");
+static_assert(offsetof(BedrayPathTraceScene, sections) == 8, "path-trace ABI: scene.sections offset");
+static_assert(offsetof(BedrayPathTraceScene, albedo_view) == 40, "path-trace ABI: scene.albedo_view offset");
+static_assert(offsetof(BedrayPathTraceScene, block_materials) == 72, "path-trace ABI: scene.block_materials offset");
+static_assert(offsetof(BedrayPathTraceScene, emitters) == 104, "path-trace ABI: scene.emitters offset");
+static_assert(offsetof(BedrayPathTraceScene, reservoirs) == 136, "path-trace ABI: scene.reservoirs offset");
+static_assert(offsetof(BedrayPathTraceScene, entity_positions) == 168, "path-trace ABI: scene.entity_positions offset");
+static_assert(sizeof(BedrayPathTraceCamera) == 416, "path-trace ABI: camera must stay 416 bytes");
+static_assert(sizeof(BedrayPathTraceLighting) == 80, "path-trace ABI: lighting must stay 80 bytes");
+static_assert(sizeof(BedrayPathTraceAtmosphere) == 80, "path-trace ABI: atmosphere must stay 80 bytes");
+static_assert(sizeof(BedrayPathTracePath) == 112, "path-trace ABI: path must stay 112 bytes");
+static_assert(sizeof(BedrayPathTraceFrameDesc) == 1072, "path-trace ABI: frame desc must stay 1072 bytes");
+static_assert(offsetof(BedrayPathTraceFrameDesc, scene) == 32, "path-trace ABI: frame.scene offset");
+static_assert(offsetof(BedrayPathTraceFrameDesc, camera) == 344, "path-trace ABI: frame.camera offset");
+static_assert(offsetof(BedrayPathTraceFrameDesc, lighting) == 760, "path-trace ABI: frame.lighting offset");
+static_assert(offsetof(BedrayPathTraceFrameDesc, atmosphere) == 840, "path-trace ABI: frame.atmosphere offset");
+static_assert(offsetof(BedrayPathTraceFrameDesc, path) == 920, "path-trace ABI: frame.path offset");
+static_assert(sizeof(BedrayPathTraceDesc) == 80, "path-trace ABI: configure desc must stay 80 bytes");
+
 namespace {
 
 constexpr uint32_t kSpirvMagic = 0x07230203u;
+
+uint64_t next_resource_generation() {
+    static std::atomic<uint64_t> next{1};
+    uint64_t value = next.fetch_add(1, std::memory_order_relaxed);
+    if (value == 0) {
+        value = next.fetch_add(1, std::memory_order_relaxed);
+    }
+    return value;
+}
+
+struct DescriptorAllocation {
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+};
 
 struct BedrayProgram {
     uint64_t handle = 0;
@@ -40,12 +80,18 @@ struct BedrayProgram {
     std::vector<VkDescriptorPoolSize> pool_sizes;
     uint32_t push_constant_bytes = 0;
     bool retired = false;
+    // Only explicitly released recordings enter this bounded cache. In-flight
+    // sets remain immutable and never appear here. Fixed storage keeps release
+    // allocation-free, including at the C ABI boundary.
+    std::array<DescriptorAllocation, 8> available_descriptors{};
+    size_t available_descriptor_count = 0;
 };
 
 struct RecordingUse {
     VkCommandBuffer command_buffer;
     VkDescriptorPool pool;
     BedrayProgram* program;
+    VkDescriptorSet set;
 };
 
 } // namespace
@@ -64,6 +110,11 @@ struct BedrayCore {
     std::vector<BedrayProgram*> programs;
     std::vector<RecordingUse> recordings;
     uint64_t next_program_handle = 1;
+    VkSampler atlas_sampler = VK_NULL_HANDLE;
+    VkSampler linear_sampler = VK_NULL_HANDLE;
+
+    bedray::core::DeviceFns device_fns{};
+    std::unique_ptr<bedray::core::PathTracePass> path_trace;
 
     PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
     PFN_vkGetDeviceProcAddr get_device_proc_addr = nullptr;
@@ -83,12 +134,15 @@ struct BedrayCore {
     PFN_vkDestroyPipeline destroy_pipeline = nullptr;
     PFN_vkCreateDescriptorPool create_descriptor_pool = nullptr;
     PFN_vkDestroyDescriptorPool destroy_descriptor_pool = nullptr;
+    PFN_vkCreateSampler create_sampler = nullptr;
+    PFN_vkDestroySampler destroy_sampler = nullptr;
     PFN_vkAllocateDescriptorSets allocate_descriptor_sets = nullptr;
     PFN_vkUpdateDescriptorSets update_descriptor_sets = nullptr;
     PFN_vkCmdBindPipeline cmd_bind_pipeline = nullptr;
     PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets = nullptr;
     PFN_vkCmdPushConstants cmd_push_constants = nullptr;
     PFN_vkCmdDispatch cmd_dispatch = nullptr;
+    PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
 };
 
 namespace {
@@ -176,6 +230,9 @@ void destroy_program(BedrayCore* core, BedrayProgram* program) {
     if (program == nullptr) {
         return;
     }
+    for (size_t i = 0; i < program->available_descriptor_count; ++i) {
+        core->destroy_descriptor_pool(core->device, program->available_descriptors[i].pool, nullptr);
+    }
     if (program->pipeline != VK_NULL_HANDLE) {
         core->destroy_pipeline(core->device, program->pipeline, nullptr);
     }
@@ -191,6 +248,17 @@ void destroy_program(BedrayCore* core, BedrayProgram* program) {
     delete program;
 }
 
+void recycle_descriptors(BedrayCore* core, BedrayProgram* program,
+    VkDescriptorPool pool, VkDescriptorSet set) noexcept {
+    if (pool == VK_NULL_HANDLE) return;
+    if (!program->retired && set != VK_NULL_HANDLE
+        && program->available_descriptor_count < program->available_descriptors.size()) {
+        program->available_descriptors[program->available_descriptor_count++] = {pool, set};
+    } else {
+        core->destroy_descriptor_pool(core->device, pool, nullptr);
+    }
+}
+
 BedrayProgram* find_program(BedrayCore* core, uint64_t handle) {
     for (BedrayProgram* candidate : core->programs) {
         if (candidate->handle == handle && !candidate->retired) {
@@ -201,6 +269,37 @@ BedrayProgram* find_program(BedrayCore* core, uint64_t handle) {
 }
 
 } // namespace
+
+namespace bedray::core {
+
+bool program_contract(BedrayCore* core, uint64_t handle, ProgramContract& out) noexcept {
+    out = {};
+    if (core == nullptr || handle == 0) {
+        return false;
+    }
+    BedrayProgram* program = find_program(core, handle);
+    if (program == nullptr) {
+        return false;
+    }
+    out.push_constant_bytes = program->push_constant_bytes;
+    out.binding_count = static_cast<uint32_t>(program->bindings.size());
+    return true;
+}
+
+bool program_has_binding(BedrayCore* core, uint64_t handle,
+    uint32_t binding, uint32_t descriptor_type) noexcept {
+    if (core == nullptr || handle == 0) {
+        return false;
+    }
+    BedrayProgram* program = find_program(core, handle);
+    if (program == nullptr) {
+        return false;
+    }
+    const BedrayDescriptorBinding* declared = find_binding(program, binding);
+    return declared != nullptr && declared->descriptor_type == descriptor_type;
+}
+
+} // namespace bedray::core
 
 extern "C" {
 
@@ -285,6 +384,9 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
         || !load_device(core.get(), core->destroy_pipeline, "vkDestroyPipeline")
         || !load_device(core.get(), core->create_descriptor_pool, "vkCreateDescriptorPool")
         || !load_device(core.get(), core->destroy_descriptor_pool, "vkDestroyDescriptorPool")
+        || !load_device(core.get(), core->create_sampler, "vkCreateSampler")
+        || !load_device(core.get(), core->destroy_sampler, "vkDestroySampler")
+        || !load_device(core.get(), core->cmd_pipeline_barrier, "vkCmdPipelineBarrier")
         || !load_device(core.get(), core->allocate_descriptor_sets, "vkAllocateDescriptorSets")
         || !load_device(core.get(), core->update_descriptor_sets, "vkUpdateDescriptorSets")
         || !load_device(core.get(), core->cmd_bind_pipeline, "vkCmdBindPipeline")
@@ -295,12 +397,52 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
             "required Vulkan device functions are missing");
     }
 
+    // Image/buffer owners used by the internal path-trace pass. The core still
+    // creates no device, queue or submission; these are the host device's own
+    // entry points.
+    if (!load_instance(core.get(), core->device_fns.image_functions.image_format_properties,
+            "vkGetPhysicalDeviceImageFormatProperties")
+        || !load_device(core.get(), core->device_fns.image_functions.create_image, "vkCreateImage")
+        || !load_device(core.get(), core->device_fns.image_functions.destroy_image, "vkDestroyImage")
+        || !load_device(core.get(), core->device_fns.image_functions.get_requirements,
+            "vkGetImageMemoryRequirements")
+        || !load_device(core.get(), core->device_fns.image_functions.allocate_memory, "vkAllocateMemory")
+        || !load_device(core.get(), core->device_fns.image_functions.free_memory, "vkFreeMemory")
+        || !load_device(core.get(), core->device_fns.image_functions.bind_image_memory,
+            "vkBindImageMemory")
+        || !load_device(core.get(), core->device_fns.image_functions.create_view, "vkCreateImageView")
+        || !load_device(core.get(), core->device_fns.image_functions.destroy_view, "vkDestroyImageView")
+        || !load_device(core.get(), core->device_fns.buffer_functions.create_buffer, "vkCreateBuffer")
+        || !load_device(core.get(), core->device_fns.buffer_functions.destroy_buffer, "vkDestroyBuffer")
+        || !load_device(core.get(), core->device_fns.buffer_functions.get_requirements,
+            "vkGetBufferMemoryRequirements")
+        || !load_device(core.get(), core->device_fns.buffer_functions.allocate_memory, "vkAllocateMemory")
+        || !load_device(core.get(), core->device_fns.buffer_functions.free_memory, "vkFreeMemory")
+        || !load_device(core.get(), core->device_fns.buffer_functions.bind_buffer_memory,
+            "vkBindBufferMemory")
+        || !load_device(core.get(), core->device_fns.buffer_functions.map_memory, "vkMapMemory")
+        || !load_device(core.get(), core->device_fns.buffer_functions.unmap_memory, "vkUnmapMemory")
+        || !load_device(core.get(), core->device_fns.buffer_functions.flush,
+            "vkFlushMappedMemoryRanges")
+        || !load_device(core.get(), core->device_fns.buffer_functions.invalidate,
+            "vkInvalidateMappedMemoryRanges")) {
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED,
+            "required Vulkan image/buffer functions are missing");
+    }
+
     VkPhysicalDeviceProperties2 properties{};
     properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     core->get_physical_device_properties2(core->physical_device, &properties);
     core->properties = properties.properties;
 
     core->get_physical_device_memory_properties(core->physical_device, &core->memory_properties);
+
+    core->device_fns.physical_device = core->physical_device;
+    core->device_fns.device = core->device;
+    core->device_fns.memory_properties = core->memory_properties;
+    core->device_fns.non_coherent_atom_size = core->properties.limits.nonCoherentAtomSize;
+    core->device_fns.generation = next_resource_generation();
+    core->device_fns.cmd_pipeline_barrier = core->cmd_pipeline_barrier;
 
     uint32_t extension_count = 0;
     VkResult result = core->enumerate_device_extension_properties(
@@ -468,12 +610,59 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
     if (!core->recordings.empty()) return BEDRAY_ERROR_IN_USE;
+    if (core->path_trace) {
+        const BedrayStatus status = core->path_trace->destroy();
+        if (status != BEDRAY_OK) return status;
+        core->path_trace.reset();
+    }
     for (BedrayProgram* program : core->programs) {
         destroy_program(core, program);
     }
     core->programs.clear();
+    if (core->atlas_sampler != VK_NULL_HANDLE)
+        core->destroy_sampler(core->device, core->atlas_sampler, nullptr);
+    if (core->linear_sampler != VK_NULL_HANDLE)
+        core->destroy_sampler(core->device, core->linear_sampler, nullptr);
     delete core;
     return BEDRAY_OK;
+}
+
+static BedrayStatus acquire_sampler(
+    BedrayCore* core, bool linear, uint64_t* out_sampler, BedrayError* error) try {
+    clear_error(error);
+    if (out_sampler != nullptr) *out_sampler = 0;
+    if (core == nullptr || out_sampler == nullptr)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/out_sampler is null");
+    VkSampler& cached = linear ? core->linear_sampler : core->atlas_sampler;
+    if (cached == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        info.magFilter = info.minFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        info.addressModeU = info.addressModeV = info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.maxAnisotropy = 1.0f;
+        info.compareOp = VK_COMPARE_OP_NEVER;
+        // Zero LOD range, normalized coordinates, no comparison/anisotropy.
+        VkSampler sampler = VK_NULL_HANDLE;
+        VkResult result = core->create_sampler(core->device, &info, nullptr, &sampler);
+        if (result != VK_SUCCESS)
+            return fail(error, vk_status(result), "vkCreateSampler failed: VkResult=%d", static_cast<int>(result));
+        cached = sampler;
+    }
+    *out_sampler = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(cached));
+    return BEDRAY_OK;
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception creating atlas sampler");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_atlas_sampler(
+    BedrayCore* core, uint64_t* out_sampler, BedrayError* error) {
+    return acquire_sampler(core, false, out_sampler, error);
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_linear_sampler(
+    BedrayCore* core, uint64_t* out_sampler, BedrayError* error) {
+    return acquire_sampler(core, true, out_sampler, error);
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(
@@ -707,7 +896,8 @@ BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
     }
     program->retired = true;
     const bool in_use = std::any_of(core->recordings.begin(), core->recordings.end(),
-        [program](const RecordingUse& use) { return use.program == program; });
+        [program](const RecordingUse& use) { return use.program == program; })
+        || (core->path_trace && core->path_trace->uses_program(program_handle));
     if (!in_use) {
         core->programs.erase(std::remove(core->programs.begin(), core->programs.end(), program), core->programs.end());
         destroy_program(core, program);
@@ -720,7 +910,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
     const auto command = reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(command_buffer));
     for (auto it = core->recordings.begin(); it != core->recordings.end();) {
         if (it->command_buffer == command) {
-            if (it->pool != VK_NULL_HANDLE) core->destroy_descriptor_pool(core->device, it->pool, nullptr);
+            recycle_descriptors(core, it->program, it->pool, it->set);
             it = core->recordings.erase(it);
         } else {
             ++it;
@@ -729,12 +919,19 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
     for (auto it = core->programs.begin(); it != core->programs.end();) {
         BedrayProgram* program = *it;
         const bool in_use = std::any_of(core->recordings.begin(), core->recordings.end(),
-            [program](const RecordingUse& use) { return use.program == program; });
+            [program](const RecordingUse& use) { return use.program == program; })
+            || (core->path_trace && core->path_trace->uses_program(program->handle));
         if (program->retired && !in_use) {
             it = core->programs.erase(it);
             destroy_program(core, program);
         } else {
             ++it;
+        }
+    }
+    if (core->path_trace) {
+        const BedrayStatus status = core->path_trace->release_recording(command_buffer);
+        if (status != BEDRAY_OK) {
+            return status;
         }
     }
     return BEDRAY_OK;
@@ -821,11 +1018,16 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
 
     VkDescriptorPool dispatch_pool = VK_NULL_HANDLE;
     VkDescriptorSet dispatch_set = VK_NULL_HANDLE;
-    auto pool_deleter = [core](VkDescriptorPool_T* pool) {
-        if (pool != VK_NULL_HANDLE) core->destroy_descriptor_pool(core->device, pool, nullptr);
+    auto pool_deleter = [core, program, &dispatch_set](VkDescriptorPool_T* pool) {
+        recycle_descriptors(core, program, pool, dispatch_set);
     };
     std::unique_ptr<VkDescriptorPool_T, decltype(pool_deleter)> pool_owner(nullptr, pool_deleter);
-    if (program->set_layout != VK_NULL_HANDLE) {
+    if (program->set_layout != VK_NULL_HANDLE && program->available_descriptor_count > 0) {
+        const DescriptorAllocation cached = program->available_descriptors[--program->available_descriptor_count];
+        dispatch_pool = cached.pool;
+        dispatch_set = cached.set;
+        pool_owner.reset(dispatch_pool);
+    } else if (program->set_layout != VK_NULL_HANDLE) {
         VkDescriptorPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool_info.maxSets = 1;
@@ -922,7 +1124,16 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
         reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(desc->command_buffer));
     // Register before recording: allocation failure must leave the caller's
     // command buffer untouched. This also retains programs without bindings.
-    core->recordings.push_back(RecordingUse{command_buffer, dispatch_pool, program});
+    // Descriptor-free kernels can run for many sections in one command buffer.
+    // One retained program reference covers all those dispatches until release;
+    // descriptor-bearing dispatches still require one exclusive allocation each.
+    const bool already_retained = dispatch_pool == VK_NULL_HANDLE
+        && std::any_of(core->recordings.begin(), core->recordings.end(),
+            [command_buffer, program](const RecordingUse& use) {
+                return use.command_buffer == command_buffer && use.program == program && use.pool == VK_NULL_HANDLE;
+            });
+    if (!already_retained)
+        core->recordings.push_back(RecordingUse{command_buffer, dispatch_pool, program, dispatch_set});
     pool_owner.release();
     if (!writes.empty()) {
         core->update_descriptor_sets(core->device,
@@ -945,6 +1156,117 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate frame state");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording frame");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_phases(
+    BedrayCore* core, const BedrayFrameDesc* desc, uint32_t phase_offset,
+    uint32_t phase_count, BedrayError* error) try {
+    clear_error(error);
+    if (core == nullptr || desc == nullptr || desc->push_constants == nullptr
+        || phase_count == 0 || phase_count > 8 || (phase_offset & 3u) != 0
+        || desc->push_constant_bytes < 4 || phase_offset > desc->push_constant_bytes - 4)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid compute phase range");
+    BedrayProgram* program = find_program(core, desc->program);
+    if (program == nullptr || desc->push_constant_bytes > program->push_constant_bytes)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid compute phase program/push size");
+    std::vector<unsigned char> push(desc->push_constant_bytes);
+    std::memcpy(push.data(), desc->push_constants, push.size());
+    BedrayFrameDesc phase_desc = *desc;
+    phase_desc.push_constants = push.data();
+    const VkCommandBuffer command = reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(desc->command_buffer));
+    VkMemoryBarrier memory{};
+    memory.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    memory.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    memory.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    for (uint32_t phase = 0; phase < phase_count; ++phase) {
+        std::memcpy(push.data() + phase_offset, &phase, sizeof(phase));
+        BedrayStatus status = bedray_core_render_frame(core, &phase_desc, error);
+        if (status != BEDRAY_OK) return status;
+        core->cmd_pipeline_barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &memory, 0, nullptr, 0, nullptr);
+    }
+    return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate compute phase state");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording compute phases");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
+    BedrayCore* core,
+    const BedrayPathTraceDesc* desc,
+    BedrayError* error) try {
+    clear_error(error);
+    if (core == nullptr || desc == nullptr) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/desc is null");
+    }
+    if (desc->abi_version != BEDRAY_CORE_ABI_VERSION) {
+        return fail(error, BEDRAY_ERROR_ABI_MISMATCH,
+            "ABI mismatch: host=%u core=%u", desc->abi_version, BEDRAY_CORE_ABI_VERSION);
+    }
+    if (core->path_trace && core->path_trace->has_recordings()) {
+        return fail(error, BEDRAY_ERROR_IN_USE,
+            "path-trace recordings must be released before reconfiguration");
+    }
+    if (core->path_trace) {
+        const BedrayStatus status = core->path_trace->destroy();
+        if (status != BEDRAY_OK) {
+            return status;
+        }
+        core->path_trace.reset();
+    }
+
+    auto pass = std::make_unique<bedray::core::PathTracePass>();
+    const BedrayStatus status = pass->configure(core, core->device_fns, *desc, error);
+    if (status != BEDRAY_OK) {
+        return status;
+    }
+    core->path_trace = std::move(pass);
+    return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace pass");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring path trace");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
+    BedrayCore* core,
+    const BedrayPathTraceFrameDesc* desc,
+    BedrayError* error) try {
+    clear_error(error);
+    if (core == nullptr || desc == nullptr) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/desc is null");
+    }
+    if (desc->abi_version != BEDRAY_CORE_ABI_VERSION) {
+        return fail(error, BEDRAY_ERROR_ABI_MISMATCH,
+            "ABI mismatch: host=%u core=%u", desc->abi_version, BEDRAY_CORE_ABI_VERSION);
+    }
+    if (!core->path_trace) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
+    }
+    return core->path_trace->render(*desc, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path trace");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* core) {
+    if (core == nullptr) {
+        return BEDRAY_ERROR_INVALID_ARGUMENT;
+    }
+    if (!core->path_trace) {
+        return BEDRAY_OK;
+    }
+    if (core->path_trace->has_recordings()) {
+        return BEDRAY_ERROR_IN_USE;
+    }
+    const BedrayStatus status = core->path_trace->destroy();
+    if (status != BEDRAY_OK) {
+        return status;
+    }
+    core->path_trace.reset();
+    return BEDRAY_OK;
 }
 
 } // extern "C"

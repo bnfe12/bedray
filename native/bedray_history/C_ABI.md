@@ -1,10 +1,15 @@
-# History C ABI — source candidate
+# History C ABI — exported and contract-tested, no caller yet
 
 `include/bedray/history_c.h` and `src/history_c.cpp` expose the registry through
 an opaque handle, fixed-width structures and status values. The core CMake
-target compiles the wrapper into the DLL and links the history library; neither
-the frame path nor the Java host calls it yet. This source and build wiring have
-not been compiled or tested. ABI version 2 is provisional until verified.
+target compiles the wrapper into `bedray_core.dll` (22 `bedray_history_*`
+exports, 2026-10-28) and links the history library; neither the frame path nor
+the Java host calls it yet. The exported surface is itself contract-tested:
+`bedray_history_c` (built with `-DBEDRAY_HISTORY_BUILD_TESTS=ON`, 2026-10-28)
+compiles `history_c.cpp` over the static registry and drives every export —
+layout discovery, argument validation, the full prepare/attach/submit lifecycle,
+retention, device loss, an unknown submit outcome and null handles. The C++ and
+C layers both pass; ABI version 2 stays provisional until a real caller uses it.
 The static libraries request position-independent code, but the core CMake
 configuration still explicitly targets Windows; this is not Linux/macOS support.
 

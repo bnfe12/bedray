@@ -173,19 +173,36 @@ struct GeometryVertex {
     uint4  meta;        // x: materialId, y: flags, z: reserved, w: reserved
 };
 
+// GeometryVertex.meta.y flags.  The host sets them per quad while staging, so
+// all four vertices of a quad carry the same word.
+static const uint GEOMETRY_VERTEX_FLAG_VEGETATION = 1u << 0u;   // plant or leaf
+static const uint GEOMETRY_VERTEX_FLAG_LEAF_CUBE  = 1u << 1u;   // full leaf cube, not a card
+
 struct GeometryRange {
-    uint firstQuad;     // first quad in the section's vertex stream
-    uint quadCount;     // number of quads in this pass
-    GeometryPass pass;
-    uint flags;
+    uint firstQuad;       // first quad of this pass in the section stream
+    uint quadCountPass;   // bits 0..15: quad count, bits 16..17: GeometryPass,
+                          // bits 18..31: reserved flags
 };
 
 struct GeometrySection {
-    int4  origin;          // xyz: section origin in blocks, w: sectionId
-    uint4 meta;            // x: vertexOffset, y: vertexCount,
-                           // z: geometryCount, w: flags
+    int4  origin;          // xyz: section origin in blocks, w: stable sectionId
+    uint4 meta;            // x: vertexCount, y: geometryCount,
+                           // z: flags, w: reserved
+    uint64_t vertexAddress; // GeometryVertex stream, 64 B stride (BDA)
     GeometryRange ranges[MAX_SECTION_GEOMETRIES];
 };
+
+uint geometryRangeQuadCount(GeometryRange range) {
+    return range.quadCountPass & 0xFFFFu;
+}
+
+GeometryPass geometryRangePass(GeometryRange range) {
+    return GeometryPass((range.quadCountPass >> 16u) & 0x3u);
+}
+
+uint geometryRangeFlags(GeometryRange range) {
+    return range.quadCountPass >> 18u;
+}
 
 // A TLAS instance points at one GeometrySection.  The mask is stored with the
 // instance so hybrid traversal can exclude entity-only geometry from world
@@ -197,40 +214,35 @@ struct GeometryInstance {
     uint flags;
 };
 
-// Returns -1 when the primitive does not belong to any declared range.  Ranges
-// may be non-contiguous; the loop is three iterations at most.
-int geometryRangeForPrimitive(GeometrySection section, uint primitive) {
-    uint quad = primitive >> 1u;
-    uint count = min(section.meta.z, MAX_SECTION_GEOMETRIES);
-    for (uint g = 0u; g < count; ++g) {
-        GeometryRange range = section.ranges[g];
-        if (quad >= range.firstQuad && quad < range.firstQuad + range.quadCount) {
-            return int(g);
-        }
-    }
-    return -1;
+// The native scene builds one BLAS geometry per non-empty pass range, exactly
+// like the legacy world, so the hit's geometryIndex names ranges[geometryIndex]
+// and its primitive id is local to that geometry.  Returns -1 when the geometry
+// index is outside the declared ranges (a stale hit after a table update).
+int geometryRangeForPrimitive(GeometrySection section, uint geometryIndex) {
+    uint count = min(section.meta.y, MAX_SECTION_GEOMETRIES);
+    return geometryIndex < count ? int(geometryIndex) : -1;
 }
 
-uint geometryVertexBase(GeometrySection section, uint primitive) {
-    int rangeIndex = geometryRangeForPrimitive(section, primitive);
+uint geometryVertexBase(GeometrySection section, uint geometryIndex, uint primitive) {
+    int rangeIndex = geometryRangeForPrimitive(section, geometryIndex);
     if (rangeIndex < 0) return 0u;
     GeometryRange range = section.ranges[uint(rangeIndex)];
-    return section.meta.x + (range.firstQuad + (primitive >> 1u)) * 4u;
+    return (range.firstQuad + (primitive >> 1u)) * 4u;
 }
 
 // Triangle `primitive` is one half of a quad.  The vertex order matches the
 // legacy triangleVertices() helper so atlas UVs and winding are unchanged.
-uint3 geometryTriangleVertices(GeometrySection section, uint primitive) {
-    uint base = geometryVertexBase(section, primitive);
+uint3 geometryTriangleVertices(GeometrySection section, uint geometryIndex, uint primitive) {
+    uint base = geometryVertexBase(section, geometryIndex, primitive);
     bool second = (primitive & 1u) != 0u;
     return uint3(base + (second ? 2u : 0u),
                  base + (second ? 3u : 1u),
                  base + (second ? 0u : 2u));
 }
 
-GeometryVertex geometryVertexAt(StructuredBuffer<GeometryVertex> vertices,
-        GeometrySection section, uint primitive, uint corner) {
-    uint3 triangle = geometryTriangleVertices(section, primitive);
+GeometryVertex geometryVertexAt(GeometrySection section, uint geometryIndex, uint primitive, uint corner) {
+    uint3 triangle = geometryTriangleVertices(section, geometryIndex, primitive);
     uint index = corner == 0u ? triangle.x : (corner == 1u ? triangle.y : triangle.z);
+    GeometryVertex* vertices = (GeometryVertex*)section.vertexAddress;
     return vertices[index];
 }

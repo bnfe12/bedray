@@ -1,20 +1,23 @@
-# Bedray native GPU buffer owner
+# Bedray native GPU resource owners
 
-Source candidate for per-device Vulkan buffer allocation with a provisional
-C ABI. The core DLL now builds and exports that ABI, but the graph, Java host
-and Minecraft frame path do not yet call it. The optional test uses mock Vulkan
-functions, not a driver; a successful build/test does not prove GPU execution or
-in-game rendering. Vulkan images and scene upload are not yet implemented here.
+Per-device Vulkan buffer and colour-image ownership behind C ABIs exported by
+`bedray_core`. The Slang frame adapters call these owners through
+`BedrayGpuBuffersNative` and `BedrayGpuImagesNative`: radiance, motion, paired
+accumulation/depth history, frame uploads, inactive bindings and ReSTIR DI
+reservoirs are allocated here. Geometry, TLAS, atlases and the final renderer
+targets still come from the host. The native graph/history registry does not
+yet drive this frame path. Mock-driver and actual-DLL FFM layout checks prove
+contracts, not GPU execution or in-game rendering.
 
 The host supplies an already-created device, enabled feature guarantees,
 physical memory properties, `nonCoherentAtomSize` and Vulkan device functions.
 It owns queue submissions, memory barriers, queue-family ownership and all
-graphics lifecycle. The module uses one dedicated allocation per buffer so a
+graphics lifecycle. The module uses one dedicated allocation per resource so a
 driver requiring dedicated memory is supported; suballocation and VMA are not
 implemented. Device-address usage requests allocation flags and returns the
 queried address only when the host declares the feature enabled and supplies
-the corresponding device function. Per-device heap/budget telemetry and image
-allocation need separate owners.
+the corresponding device function. Budgets count actual allocation sizes per
+owner, including retired generations; global heap telemetry is not implemented.
 
 The host assigns an in-process-unique nonzero generation to each owner instance;
 buffer/use handles carry this generation and monotonically assigned counters.
@@ -45,7 +48,35 @@ replace the required Vulkan execution/memory dependency between CPU and GPU.
 The host must validate image/buffer aliasing and producer-consumer visibility.
 
 For local source verification, configure with `BEDRAY_VULKAN_HEADERS` and
-`BEDRAY_GPU_RESOURCES_TESTS=ON`, build, then run `bedray_gpu_buffers_test`.
+`BEDRAY_GPU_RESOURCES_TESTS=ON`, build, then run `bedray_gpu_buffers_test`,
+`bedray_gpu_images_test` and `bedray_gpu_c_header_test`.
+
+## Frame uploads and colour images
+
+`upload` copies and flushes host data, then reserves a use before returning. It
+reuses a compatible mapped slot only when it has no outstanding uses, otherwise
+allocating another slot within budget. Completion returns a slot to the pool;
+there is no fixed frame-count delay and no allocation per frame after warm-up.
+`retire_uploads` retires the pool without bypassing use accounting. An upload
+remains pinned even when later dispatch recording fails.
+
+Images are optimal 2D, one mip, layer and sample, with an owned colour view.
+Formats are RGBA16F, RGBA32F, R32F and RGBA8 UNORM. Usage includes storage or
+sampled access, optionally transfer; attachment-only, transfer-only, depth and
+multisampled images are rejected. Format/extent limits are queried before
+creation; failed allocations, binds and views are rolled back. Layouts,
+barriers and queue ownership remain with the caller.
+
+The image C ABI metadata and the shared use-token layout are checked before
+owner creation. Java errors after native allocation roll the resource back.
+Both FFM owners prevent DLL unload while native owners remain alive. Explicit
+`closeAfterDeviceLoss` requires observed loss and quiesced callers; automatic
+game-device recovery is unfinished.
+
+The frame host flushes Minecraft's pending submission builder and checks GPU
+idle before bulk teardown. Idle alone does not cover an `execute` that merely
+queued a command. Failed drain keeps strong references in quarantine; changing
+settings cannot turn that unknown state into reusable resources.
 
 ## Provisional C ABI
 

@@ -4,6 +4,11 @@
 def nativeSource = rootProject.file('native/bedray_core')
 def nativeBuild = layout.buildDirectory.dir('bedray-native/windows-x64')
 def nativeDll = nativeBuild.map { it.file('Release/bedray_core.dll') }
+// The GPU scene is a second, optional DLL: the host keeps the Java scene when
+// it is missing, and enables the native one with -Dvkbridge.rt.nativeScene=true.
+def nativeSceneSource = rootProject.file('native/bedray_scene')
+def nativeSceneBuild = layout.buildDirectory.dir('bedray-native-scene/windows-x64')
+def nativeSceneDll = nativeSceneBuild.map { it.file('Release/bedray_scene.dll') }
 def cmakeExecutable = providers.gradleProperty('bedrayCmake').orElse('cmake')
 def headersPath = providers.gradleProperty('bedrayVulkanHeaders')
 
@@ -11,6 +16,7 @@ def buildNative = tasks.register('buildBedrayNative') {
     group = 'build'
     description = 'Builds the Windows x64 Bedray renderer core from this checkout'
     inputs.files(fileTree(nativeSource) { include 'CMakeLists.txt', 'include/**', 'src/**' })
+    inputs.files(rootProject.fileTree('native/bedray_gpu_resources') { include 'CMakeLists.txt', 'include/**', 'src/**' })
     inputs.property('cmakeExecutable', cmakeExecutable)
     inputs.property('vulkanHeaders', headersPath.orElse(''))
     outputs.file(nativeDll)
@@ -37,14 +43,43 @@ def buildNative = tasks.register('buildBedrayNative') {
     }
 }
 
-// The loader JAR and DLL are separate artifacts because the current native
+def buildNativeScene = tasks.register('buildBedrayScene') {
+    group = 'build'
+    description = 'Builds the Windows x64 Bedray GPU scene from this checkout'
+    inputs.files(fileTree(nativeSceneSource) { include 'CMakeLists.txt', 'include/**', 'src/**' })
+    inputs.property('cmakeExecutable', cmakeExecutable)
+    inputs.property('vulkanHeaders', headersPath.orElse(''))
+    outputs.file(nativeSceneDll)
+    outputs.upToDateWhen { false }
+    doLast {
+        if (!System.getProperty('os.name').toLowerCase(Locale.ROOT).startsWith('windows')) {
+            throw new GradleException('bedray_scene currently requires Windows x64')
+        }
+        def configure = [cmakeExecutable.get(), '-S', nativeSceneSource.absolutePath,
+                         '-B', nativeSceneBuild.get().asFile.absolutePath, '-A', 'x64']
+        if (headersPath.isPresent()) {
+            configure.add("-DBEDRAY_VULKAN_HEADERS=${rootProject.file(headersPath.get()).absolutePath}".toString())
+        }
+        providers.exec { commandLine configure }.result.get().assertNormalExitValue()
+        providers.exec {
+            commandLine cmakeExecutable.get(), '--build', nativeSceneBuild.get().asFile.absolutePath,
+                '--config', 'Release', '--target', 'bedray_scene'
+        }.result.get().assertNormalExitValue()
+        if (!nativeSceneDll.get().asFile.isFile()) {
+            throw new GradleException('CMake completed without producing the expected bedray_scene.dll')
+        }
+    }
+}
+
+// The loader JAR and DLLs are separate artifacts because the current native
 // resolver validates DLLs in <gameDir>/bedray/natives. Nothing is installed.
 ['fabric', 'neoforge'].each { loader ->
     tasks.register("${loader}BedrayDistribution", Copy) {
         group = 'build'
-        description = "Builds the ${loader} JAR and Windows renderer DLL for manual installation"
-        dependsOn buildNative, ":${loader}:combinedJar"
+        description = "Builds the ${loader} JAR and Windows renderer DLLs for manual installation"
+        dependsOn buildNative, buildNativeScene, ":${loader}:combinedJar"
         from(nativeDll)
+        from(nativeSceneDll)
         from({ project(":${loader}").tasks.named('combinedJar').get().archiveFile.get().asFile }) {
             rename { "bedray-${loader}.jar" }
         }

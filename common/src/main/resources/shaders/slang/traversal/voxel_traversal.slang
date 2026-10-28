@@ -155,7 +155,7 @@ SurfaceHit voxelHitToSurface(VoxelWorld world, Ray ray, VoxelWorldHit worldHit) 
     return result;
 }
 
-struct BitmaskVoxelTraversal : ITraversal {
+struct BitmaskVoxelTraversal : ISceneTracer {
     VoxelWorld world;
 
     SurfaceHit traceClosest(Ray ray) {

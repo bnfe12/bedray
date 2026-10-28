@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -169,9 +170,15 @@ class RtSlangBlockEmitterTest {
     void theBranchProbabilityIsFoldedIntoTheDensity() {
         String slang = read(EMITTERS);
         String composite = block(slang, "struct SunAndBlockEmitterSampler : ILightSampler {");
-        assertTrue(composite.contains("emitterSample.sourcePdf /= emitterProbability;"),
+        assertTrue(composite.contains("emitterSample.sourcePdf *= emitterProbability;"),
             "the composite picks the branch, so the density of the sample is the branch density times the branch share");
-        assertTrue(composite.contains("sunSample.sourcePdf /= 1.0 - emitterProbability;"), "the sun side needs it too");
+        assertTrue(composite.contains("sunSample.sourcePdf *= 1.0 - emitterProbability;"), "the sun side needs it too");
+        assertFalse(composite.contains("sourcePdf /= emitterProbability"));
+        assertTrue(composite.contains("return emitters.sample(receiver, seed);"), "a sole active branch has probability one");
+        for (double q : new double[]{0.1, 0.25, 0.5, 0.9}) {
+            double expected = q * (1.0 / q) + (1.0 - q) * (1.0 / (1.0 - q));
+            assertEquals(2.0, expected, 1e-12, "both source estimates remain unbiased across mixture choices");
+        }
         assertTrue(composite.contains("if (!hasEmitters || sunIntensity <= 0.0)"),
             "with one live branch there is nothing to renormalise, and the sun keeps its own sun/moon split");
         String pass = read(PASS);

@@ -14,6 +14,7 @@
 #include "bedray_scene.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -47,14 +48,28 @@ static BedraySceneError g_error{};
 static_assert(sizeof(BedraySceneError) == 1028, "error layout");
 static_assert(sizeof(BedraySceneAbiInfo) == 48, "abi info layout");
 static_assert(sizeof(BedraySceneDesc) == 88, "desc layout");
-static_assert(sizeof(BedraySceneSectionInput) == 64, "section input layout");
+static_assert(sizeof(BedraySceneSectionInput) == 96, "section input layout");
 static_assert(sizeof(BedraySceneEntityInput) == 120, "entity input layout");
 static_assert(sizeof(BedraySceneUpdate) == 56, "update layout");
 static_assert(sizeof(BedraySceneTableDesc) == 40, "table desc layout");
 static_assert(sizeof(BedraySceneFrameDesc) == 24, "frame desc layout");
 static_assert(sizeof(BedraySceneFrameInfo) == 80, "frame info layout");
 static_assert(sizeof(BedraySceneResources) == 112, "resources layout");
-static_assert(sizeof(BedraySceneSectionRecord) == 48, "section record layout");
+static_assert(sizeof(BedraySceneSectionRange) == 8, "section range layout");
+static_assert(sizeof(BedraySceneSectionRecord) == 64, "section record layout");
+
+static_assert(offsetof(BedraySceneSectionInput, origin) == 56, "section origin offset");
+static_assert(offsetof(BedraySceneSectionInput, geometry_count) == 68, "geometry count offset");
+static_assert(offsetof(BedraySceneSectionInput, quad_start) == 72, "quad start offset");
+static_assert(offsetof(BedraySceneSectionInput, pass_bits) == 84, "pass bits offset");
+static_assert(offsetof(BedraySceneSectionInput, flags) == 88, "section flags offset");
+static_assert(offsetof(BedraySceneSectionInput, reserved) == 92, "section reserved offset");
+static_assert(offsetof(BedraySceneSectionRecord, origin) == 0, "record origin offset");
+static_assert(offsetof(BedraySceneSectionRecord, meta) == 16, "record meta offset");
+static_assert(offsetof(BedraySceneSectionRecord, vertex_address) == 32, "record vertex offset");
+static_assert(offsetof(BedraySceneSectionRecord, ranges) == 40, "record ranges offset");
+static_assert(offsetof(BedraySceneSectionRange, first_quad) == 0, "range first quad offset");
+static_assert(offsetof(BedraySceneSectionRange, quad_count_pass) == 4, "range count/pass offset");
 
 namespace fake {
 
@@ -76,6 +91,19 @@ struct AsState {
     uint64_t address = 0;
 };
 
+struct BuildGeometryRecord {
+    VkGeometryFlagsKHR flags = 0;
+    uint32_t primitive_count = 0;
+    uint32_t primitive_offset = 0;
+    uint32_t first_vertex = 0;
+    uint32_t max_vertex = 0;
+    uint32_t vertex_stride = 0;
+    uint64_t vertex_address = 0;
+    uint64_t index_address = 0;
+    uint32_t index_type = VK_INDEX_TYPE_NONE_KHR;
+    uint64_t instance_address = 0;
+};
+
 struct BuildRecord {
     VkAccelerationStructureTypeKHR type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
     VkBuildAccelerationStructureModeKHR mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
@@ -88,6 +116,14 @@ struct BuildRecord {
     uint64_t index_address = 0;
     uint32_t index_type = VK_INDEX_TYPE_NONE_KHR;
     uint64_t instance_buffer_address = 0;
+    uint32_t geometry_count = 0;
+    std::vector<BuildGeometryRecord> geometries;
+};
+
+struct SizeQueryRecord {
+    VkAccelerationStructureTypeKHR type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    uint32_t geometry_count = 0;
+    std::vector<uint32_t> max_counts;
 };
 
 struct CopyRecord {
@@ -112,6 +148,7 @@ struct State {
     std::map<uint64_t, MemoryState> memories;
     std::map<uint64_t, AsState> accels;
     std::vector<BuildRecord> builds;
+    std::vector<SizeQueryRecord> size_queries;
     std::vector<CopyRecord> copies;
     std::vector<BarrierRecord> barriers;
     std::vector<std::string> unknown_proc_requests;
@@ -342,9 +379,18 @@ static VkDeviceAddress VKAPI_CALL fakeGetBufferDeviceAddress(
 static void VKAPI_CALL fakeGetAccelerationStructureBuildSizes(
     VkDevice,
     VkAccelerationStructureBuildTypeKHR,
-    const VkAccelerationStructureBuildGeometryInfoKHR*,
+    const VkAccelerationStructureBuildGeometryInfoKHR* info,
     const uint32_t* max_counts,
     VkAccelerationStructureBuildSizesInfoKHR* out) {
+    fake::SizeQueryRecord query;
+    if (info != nullptr) {
+        query.type = info->type;
+        query.geometry_count = info->geometryCount;
+        for (uint32_t i = 0; i < info->geometryCount; ++i) {
+            query.max_counts.push_back(max_counts != nullptr ? max_counts[i] : 0);
+        }
+    }
+    fake::g.size_queries.push_back(std::move(query));
     const uint64_t count = max_counts != nullptr ? *max_counts : 0;
     out->accelerationStructureSize = 4096 + 256 * count;
     out->updateScratchSize = 1024 + 64 * count;
@@ -401,17 +447,38 @@ static void VKAPI_CALL fakeCmdBuildAccelerationStructures(
         record.src = info.srcAccelerationStructure;
         record.dst = info.dstAccelerationStructure;
         record.scratch = info.scratchData.deviceAddress;
-        record.primitive_count = ranges != nullptr && ranges[i] != nullptr
-            ? ranges[i]->primitiveCount : 0;
-        if (info.geometryCount > 0 && info.pGeometries != nullptr) {
-            const VkAccelerationStructureGeometryKHR& geometry = info.pGeometries[0];
-            if (geometry.geometryType == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
-                record.vertex_address = geometry.geometry.triangles.vertexData.deviceAddress;
-                record.index_address = geometry.geometry.triangles.indexData.deviceAddress;
-                record.index_type = static_cast<uint32_t>(geometry.geometry.triangles.indexType);
-            } else if (geometry.geometryType == VK_GEOMETRY_TYPE_INSTANCES_KHR) {
-                record.instance_buffer_address = geometry.geometry.instances.data.deviceAddress;
+        record.geometry_count = info.geometryCount;
+        for (uint32_t g = 0; g < info.geometryCount; ++g) {
+            fake::BuildGeometryRecord geometry_record;
+            if (ranges != nullptr && ranges[i] != nullptr) {
+                geometry_record.primitive_count = ranges[i][g].primitiveCount;
+                geometry_record.primitive_offset = ranges[i][g].primitiveOffset;
+                geometry_record.first_vertex = ranges[i][g].firstVertex;
             }
+            if (info.pGeometries != nullptr) {
+                const VkAccelerationStructureGeometryKHR& geometry = info.pGeometries[g];
+                geometry_record.flags = geometry.flags;
+                if (geometry.geometryType == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
+                    geometry_record.vertex_address = geometry.geometry.triangles.vertexData.deviceAddress;
+                    geometry_record.index_address = geometry.geometry.triangles.indexData.deviceAddress;
+                    geometry_record.index_type =
+                        static_cast<uint32_t>(geometry.geometry.triangles.indexType);
+                    geometry_record.max_vertex = geometry.geometry.triangles.maxVertex;
+                    geometry_record.vertex_stride =
+                        static_cast<uint32_t>(geometry.geometry.triangles.vertexStride);
+                } else if (geometry.geometryType == VK_GEOMETRY_TYPE_INSTANCES_KHR) {
+                    geometry_record.instance_address =
+                        geometry.geometry.instances.data.deviceAddress;
+                }
+            }
+            record.geometries.push_back(geometry_record);
+        }
+        if (!record.geometries.empty()) {
+            record.primitive_count = record.geometries[0].primitive_count;
+            record.vertex_address = record.geometries[0].vertex_address;
+            record.index_address = record.geometries[0].index_address;
+            record.index_type = record.geometries[0].index_type;
+            record.instance_buffer_address = record.geometries[0].instance_address;
         }
         fake::g.builds.push_back(record);
     }
@@ -588,6 +655,15 @@ BedraySceneSectionInput section_input(
     input.index_type = BEDRAY_SCENE_INDEX_UINT16;
     input.indices = mesh.indices.data();
     input.index_count = mesh.indices.size();
+    input.origin[0] = 0;
+    input.origin[1] = 0;
+    input.origin[2] = 0;
+    input.geometry_count = 1;
+    input.quad_start[0] = 0;
+    input.quad_start[1] = 0;
+    input.quad_start[2] = 0;
+    input.pass_bits = 0;
+    input.flags = 0;
     return input;
 }
 
@@ -624,7 +700,10 @@ struct Fixture {
     BedrayScene* scene = nullptr;
     uint32_t frames = 0;
 
-    explicit Fixture(uint32_t frames_in_flight, uint32_t capabilities = 0) {
+    explicit Fixture(
+        uint32_t frames_in_flight,
+        uint32_t capabilities = 0,
+        uint32_t max_geometry_bytes = 1u << 20) {
         fake::reset();
         frames = frames_in_flight;
         if (capabilities == 0) {
@@ -648,7 +727,7 @@ struct Fixture {
         desc.max_entities = 16;
         desc.max_instances = 64;
         desc.max_table_bytes = 4096;
-        desc.max_geometry_bytes = 1u << 20;
+        desc.max_geometry_bytes = max_geometry_bytes;
         g_error = BedraySceneError{};
         const BedraySceneStatus status = bedray_scene_create(&desc, &scene, &g_error);
         if (status != BEDRAY_SCENE_OK) {
@@ -724,6 +803,24 @@ struct Fixture {
         return bedray_scene_update(scene, &update, &g_error);
     }
 
+    BedraySceneStatus add_section_input(const BedraySceneSectionInput& input) {
+        BedraySceneUpdate update{};
+        update.abi_version = BEDRAY_SCENE_ABI_VERSION;
+        update.sections = &input;
+        update.section_count = 1;
+        g_error = BedraySceneError{};
+        return bedray_scene_update(scene, &update, &g_error);
+    }
+
+    BedraySceneStatus remove_section(uint64_t id) {
+        BedraySceneUpdate update{};
+        update.abi_version = BEDRAY_SCENE_ABI_VERSION;
+        update.removed_sections = &id;
+        update.removed_section_count = 1;
+        g_error = BedraySceneError{};
+        return bedray_scene_update(scene, &update, &g_error);
+    }
+
     BedraySceneStatus add_entity(const BedraySceneEntityInput& input) {
         BedraySceneUpdate update{};
         update.abi_version = BEDRAY_SCENE_ABI_VERSION;
@@ -757,6 +854,29 @@ static bool bytes_start_with(
     const std::vector<uint8_t>* buffer, const std::vector<uint8_t>& expected) {
     return buffer != nullptr && buffer->size() >= expected.size()
         && std::memcmp(buffer->data(), expected.data(), expected.size()) == 0;
+}
+
+static BedraySceneSectionRecord read_section_record(
+    const BedraySceneResources& resources, size_t index) {
+    BedraySceneSectionRecord record{};
+    std::vector<uint8_t>* table = fake::bytes_at_address(resources.section_table_address);
+    if (table != nullptr
+        && (index + 1) * BEDRAY_SCENE_SECTION_RECORD_BYTES <= table->size()) {
+        std::memcpy(&record, table->data() + index * BEDRAY_SCENE_SECTION_RECORD_BYTES,
+            sizeof(record));
+    }
+    return record;
+}
+
+static uint32_t instance_custom_index(const BedraySceneResources& resources, size_t index) {
+    uint32_t value = 0;
+    std::vector<uint8_t>* bytes = fake::bytes_at_address(resources.instance_buffer_address);
+    if (bytes != nullptr && (index + 1) * BEDRAY_SCENE_INSTANCE_RECORD_BYTES <= bytes->size()) {
+        std::memcpy(&value, bytes->data() + index * BEDRAY_SCENE_INSTANCE_RECORD_BYTES + 48,
+            sizeof(value));
+    }
+    /* The 32-bit word packs instanceCustomIndex:24 | mask:8. */
+    return value & 0xFFFFFFu;
 }
 
 static void test_abi_layout() {
@@ -824,6 +944,19 @@ static void test_create_validation() {
     CHECK_STATUS(bedray_scene_create(&desc, nullptr, &g_error),
         BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
 
+    /* Entity instance custom indices spend bit 0x800000 as a tag, so both
+       slot spaces are capped below it. */
+    desc.max_instances = 0xFFFFFFu;
+    desc.max_sections = 0x800001u;
+    CHECK_STATUS(bedray_scene_create(&desc, &scene, &g_error),
+        BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+    desc.max_sections = 4;
+    desc.max_entities = 0x800001u;
+    CHECK_STATUS(bedray_scene_create(&desc, &scene, &g_error),
+        BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+    desc.max_entities = 4;
+    desc.max_instances = 8;
+
     desc.max_sections = 0;
     CHECK_STATUS(bedray_scene_create(&desc, &scene, &g_error),
         BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
@@ -887,8 +1020,20 @@ static void test_first_frame_records_full_pipeline() {
         CHECK(section_build.index_type == VK_INDEX_TYPE_UINT16);
         CHECK(section_build.vertex_address != 0);
         CHECK(section_build.index_address != 0);
+        CHECK(section_build.geometry_count == 1);
+        if (section_build.geometries.size() == 1) {
+            const fake::BuildGeometryRecord& range = section_build.geometries[0];
+            CHECK(range.primitive_count == 2);
+            CHECK(range.primitive_offset == 0);
+            CHECK(range.first_vertex == 0);
+            CHECK(range.max_vertex == 3);
+            CHECK(range.vertex_stride == 12);
+            CHECK(range.index_type == VK_INDEX_TYPE_UINT16);
+            CHECK((range.flags & VK_GEOMETRY_OPAQUE_BIT_KHR) != 0);
+        }
         CHECK(entity_build.type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
         CHECK(entity_build.primitive_count == 1);
+        CHECK(entity_build.geometry_count == 1);
         CHECK(tlas_build.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
         CHECK(tlas_build.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR);
         CHECK(tlas_build.primitive_count == 2);
@@ -932,16 +1077,14 @@ static void test_first_frame_records_full_pipeline() {
     if (section_table != nullptr && section_table->size() >= BEDRAY_SCENE_SECTION_RECORD_BYTES) {
         BedraySceneSectionRecord record{};
         std::memcpy(&record, section_table->data(), sizeof(record));
-        CHECK(record.vertex_count == section_mesh.vertices.size() / 3);
-        CHECK(record.index_count == section_mesh.indices.size());
-        CHECK(record.vertex_stride == 12);
-        CHECK(record.index_type == BEDRAY_SCENE_INDEX_UINT16);
+        CHECK(record.meta[0] == section_mesh.vertices.size() / 3);
+        CHECK(record.meta[1] == 1);
+        CHECK(record.meta[2] == 0);
+        CHECK(record.origin[3] != 0);
+        CHECK(record.ranges[0].first_quad == 0);
+        CHECK((record.ranges[0].quad_count_pass & 0xFFFFu) == 1);
+        CHECK(((record.ranges[0].quad_count_pass >> 16u) & 0x3u) == 0);
         CHECK(record.vertex_address == fake::g.builds[0].vertex_address);
-        const fake::AsState* section_accel = fake::find_accel(fake::g.builds[0].dst);
-        CHECK(section_accel != nullptr);
-        if (section_accel != nullptr) {
-            CHECK(record.blas_address == section_accel->address);
-        }
     }
 
     std::vector<uint8_t>* material_table = fake::bytes_at_address(resources.material_table_address);
@@ -950,9 +1093,15 @@ static void test_first_frame_records_full_pipeline() {
     std::vector<uint8_t>* instance_bytes = fake::bytes_at_address(resources.instance_buffer_address);
     CHECK(instance_bytes != nullptr);
     if (instance_bytes != nullptr && instance_bytes->size() >= 2 * 64) {
+        /* Instance 0 is the section: its custom index is the section table
+           slot (0). Instance 1 is the entity: slot 0 plus the entity tag. */
+        uint32_t section_word = 0;
+        std::memcpy(&section_word, instance_bytes->data() + 48, sizeof(section_word));
+        CHECK((section_word & 0xFFFFFFu) == 0);
+        CHECK((section_word >> 24) == 0xFF);
         uint32_t packed = 0;
         std::memcpy(&packed, instance_bytes->data() + 64 + 48, sizeof(packed));
-        CHECK((packed & 0xFFFFFFu) == 1);
+        CHECK((packed & 0xFFFFFFu) == 0x800000u);
         CHECK((packed >> 24) == 0xFF);
         uint64_t reference = 0;
         std::memcpy(&reference, instance_bytes->data() + 64 + 56, sizeof(reference));
@@ -1213,7 +1362,7 @@ static void test_stale_in_use_and_destroy() {
 
 static void test_update_is_transactional() {
     Fixture fixture(1);
-    const Mesh mesh = triangle_mesh(0.0f, 0.0f, 0.0f);
+    const Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
     CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
 
     const Mesh second = quad_mesh(2.0f, 0.0f, 0.0f);
@@ -1239,7 +1388,7 @@ static void test_update_is_transactional() {
 
 static void test_capacity_limits() {
     Fixture fixture(1);
-    const Mesh mesh = triangle_mesh(0.0f, 0.0f, 0.0f);
+    const Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
     BedraySceneSectionInput sections[17];
     for (uint32_t i = 0; i < 17; ++i) {
         sections[i] = section_input(i + 1, 1, mesh);
@@ -1302,10 +1451,308 @@ static void test_device_loss_poisons_scene() {
     fake::g.fail_create_buffer_countdown = -1;
 }
 
+static Mesh section_quad_mesh(uint32_t quad_count) {
+    Mesh mesh;
+    for (uint32_t quad = 0; quad < quad_count; ++quad) {
+        const float x = static_cast<float>(quad);
+        const float vertices[12] = {
+            x, 0.0f, 0.0f,
+            x + 1.0f, 0.0f, 0.0f,
+            x + 1.0f, 1.0f, 0.0f,
+            x, 1.0f, 0.0f,
+        };
+        mesh.vertices.insert(mesh.vertices.end(), vertices, vertices + 12);
+        /* Index data is local to the start of the pass range that contains the
+           quad. With one quad per range this is the section-local
+           (0,1,2, 2,3,0) pattern named by the contract. */
+        mesh.indices.insert(mesh.indices.end(), { 0, 1, 2, 0, 2, 3 });
+    }
+    return mesh;
+}
+
+static void test_section_contract_validation() {
+    Fixture fixture(1);
+    CHECK_STATUS(fixture.remove_section(1234), BEDRAY_SCENE_ERROR_UNKNOWN_ID);
+    const Mesh quad = quad_mesh(0.0f, 0.0f, 0.0f);
+    const Mesh two_quads = section_quad_mesh(2);
+    const Mesh triangle = triangle_mesh(0.0f, 0.0f, 0.0f);
+
+    BedraySceneSectionInput input = section_input(1, 1, quad);
+    input.quad_start[0] = 1;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, two_quads);
+    input.geometry_count = 2;
+    input.quad_start[0] = 0;
+    input.quad_start[1] = 2;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, two_quads);
+    input.geometry_count = 2;
+    input.quad_start[0] = 0;
+    input.quad_start[1] = 1;
+    input.pass_bits = 1u; /* first range pass 1, second range pass 0 */
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, two_quads);
+    input.geometry_count = 2;
+    input.quad_start[0] = 0;
+    input.quad_start[1] = 0;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, quad);
+    input.pass_bits = 3u; /* pass 3 does not exist */
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, quad);
+    input.pass_bits = 1u << 2u; /* bits beyond geometry_count */
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, quad);
+    input.geometry_count = 0;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, quad);
+    input.geometry_count = BEDRAY_SCENE_MAX_SECTION_GEOMETRIES + 1u;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, quad);
+    input.flags = 0x2u;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_UNSUPPORTED);
+
+    input = section_input(1, 1, quad);
+    input.flags = BEDRAY_SCENE_SECTION_FLAG_GEOMETRY_VERTEX;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, triangle);
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, quad);
+    input.index_count = 3;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, quad);
+    input.index_type = BEDRAY_SCENE_INDEX_NONE;
+    input.index_count = 0;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    input = section_input(1, 1, quad);
+    input.vertex_stride = 8;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+
+    /* Rejected updates are transactional: nothing was created or committed. */
+    BedraySceneResources resources{};
+    CHECK_STATUS(bedray_scene_query_resources(fixture.scene, &resources), BEDRAY_SCENE_OK);
+    CHECK(resources.section_count == 0);
+    CHECK(resources.instance_count == 0);
+    CHECK(fake::g.buffers.empty());
+}
+
+static void test_section_pass_ranges() {
+    Fixture fixture(1);
+    const Mesh mesh = section_quad_mesh(3);
+    BedraySceneSectionInput input = section_input(11, 1, mesh);
+    input.geometry_count = 3;
+    input.quad_start[0] = 0;
+    input.quad_start[1] = 1;
+    input.quad_start[2] = 2;
+    input.pass_bits = (1u << 2u) | (2u << 4u); /* solid, cutout, translucent */
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_OK);
+
+    const BedraySceneFrameInfo info = fixture.prepare(1, 0xB10);
+    CHECK(info.blas_builds == 1);
+    CHECK(fake::g.builds.size() == 2);
+
+    /* The size query must ask for one geometry per non-empty pass range. */
+    CHECK(fake::g.size_queries.size() == 2);
+    if (fake::g.size_queries.size() == 2) {
+        const fake::SizeQueryRecord& blas = fake::g.size_queries[0];
+        CHECK(blas.type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
+        CHECK(blas.geometry_count == 3);
+        CHECK(blas.max_counts.size() == 3);
+        if (blas.max_counts.size() == 3) {
+            CHECK(blas.max_counts[0] == 2);
+            CHECK(blas.max_counts[1] == 2);
+            CHECK(blas.max_counts[2] == 2);
+        }
+        const fake::SizeQueryRecord& tlas = fake::g.size_queries[1];
+        CHECK(tlas.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
+        CHECK(tlas.geometry_count == 1);
+        CHECK(tlas.max_counts.size() == 1);
+        if (tlas.max_counts.size() == 1) {
+            CHECK(tlas.max_counts[0] == 1);
+        }
+    }
+
+    if (fake::g.builds.size() == 2) {
+        const fake::BuildRecord& build = fake::g.builds[0];
+        CHECK(build.geometry_count == 3);
+        CHECK(build.geometries.size() == 3);
+        if (build.geometries.size() == 3) {
+            const uint32_t expected_offsets[3] = { 0, 12, 24 };
+            const uint32_t expected_first[3] = { 0, 4, 8 };
+            for (uint32_t g = 0; g < 3; ++g) {
+                const fake::BuildGeometryRecord& range = build.geometries[g];
+                CHECK(range.primitive_count == 2);
+                CHECK(range.primitive_offset == expected_offsets[g]);
+                CHECK(range.first_vertex == expected_first[g]);
+                CHECK(range.max_vertex == 11);
+                CHECK(range.vertex_stride == 12);
+                CHECK(range.index_type == VK_INDEX_TYPE_UINT16);
+                CHECK(range.vertex_address == build.vertex_address);
+                CHECK(range.index_address == build.index_address);
+                const bool opaque = (range.flags & VK_GEOMETRY_OPAQUE_BIT_KHR) != 0;
+                CHECK(opaque == (g == 0));
+            }
+        }
+    }
+
+    const BedraySceneResources resources = fixture.resources();
+    const BedraySceneSectionRecord record = read_section_record(resources, 0);
+    CHECK(record.meta[0] == 12);
+    CHECK(record.meta[1] == 3);
+    CHECK(record.meta[2] == 0);
+    CHECK(record.meta[3] == 0);
+    CHECK(record.origin[0] == 0);
+    CHECK(record.origin[1] == 0);
+    CHECK(record.origin[2] == 0);
+    CHECK(record.origin[3] != 0);
+    CHECK(record.vertex_address == fake::g.builds[0].vertex_address);
+    for (uint32_t g = 0; g < 3; ++g) {
+        CHECK(record.ranges[g].first_quad == g);
+        CHECK((record.ranges[g].quad_count_pass & 0xFFFFu) == 1);
+        CHECK(((record.ranges[g].quad_count_pass >> 16u) & 0x3u) == g);
+        CHECK(((record.ranges[g].quad_count_pass >> 18u) & 0x3FFFu) == 0);
+    }
+    /* The section instance points at its table slot, not a compact index. */
+    CHECK(instance_custom_index(resources, 0) == 0);
+    const int32_t identity = record.origin[3];
+
+    fixture.release(1);
+
+    /* A content update of the same section rebuilds the table but must keep
+       the identity hash stable. */
+    CHECK_STATUS(fixture.add_section(11, 2, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(2, 0xB11);
+    const BedraySceneSectionRecord rebuilt = read_section_record(fixture.resources(), 0);
+    CHECK(rebuilt.origin[3] == identity);
+    fixture.release(2);
+}
+
+static void test_tlas_custom_indices_follow_table_slots() {
+    Fixture fixture(1);
+    CHECK_STATUS(fixture.add_section(30, 1, quad_mesh(0.0f, 0.0f, 0.0f)), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(10, 1, quad_mesh(1.0f, 0.0f, 0.0f)), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(20, 1, quad_mesh(2.0f, 0.0f, 0.0f)), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_entity(entity_input(5, 1, 1, triangle_mesh(4.0f, 0.0f, 0.0f))),
+        BEDRAY_SCENE_OK);
+
+    const BedraySceneFrameInfo info = fixture.prepare(1, 0xB20);
+    CHECK(info.instance_count == 4);
+    /* Builds: sections in id order (10, 20, 30), the entity, then the TLAS. */
+    CHECK(fake::g.builds.size() == 5);
+    const BedraySceneResources resources = fixture.resources();
+    CHECK(resources.section_table_bytes == 3 * BEDRAY_SCENE_SECTION_RECORD_BYTES);
+
+    if (fake::g.builds.size() == 5) {
+        for (size_t slot = 0; slot < 3; ++slot) {
+            const BedraySceneSectionRecord record = read_section_record(resources, slot);
+            CHECK(record.vertex_address == fake::g.builds[slot].vertex_address);
+            CHECK(instance_custom_index(resources, slot) == slot);
+            CHECK(record.origin[3] != 0);
+            CHECK(record.origin[3] != static_cast<int32_t>(slot));
+        }
+        CHECK(instance_custom_index(resources, 3) == 0x800000u);
+    }
+    const int32_t identity20 = read_section_record(resources, 1).origin[3];
+    fixture.release(1);
+
+    /* Removing the lowest id compacts the slots: id 20 moves from slot 1 to
+       slot 0, keeps its identity hash, and the instances follow the table. */
+    CHECK_STATUS(fixture.remove_section(10), BEDRAY_SCENE_OK);
+    const BedraySceneFrameInfo after = fixture.prepare(2, 0xB21);
+    CHECK(after.instance_count == 3);
+    const BedraySceneResources compacted = fixture.resources();
+    CHECK(compacted.section_table_bytes == 2 * BEDRAY_SCENE_SECTION_RECORD_BYTES);
+    const BedraySceneSectionRecord record20 = read_section_record(compacted, 0);
+    CHECK(record20.origin[3] == identity20);
+    CHECK(instance_custom_index(compacted, 0) == 0);
+    CHECK(instance_custom_index(compacted, 1) == 1);
+    CHECK(instance_custom_index(compacted, 2) == 0x800000u);
+    fixture.release(2);
+}
+
+static void test_geometry_vertex_section_stride() {
+    Fixture fixture(1);
+    std::vector<uint8_t> vertices(4u * BEDRAY_SCENE_GEOMETRY_VERTEX_BYTES, 0);
+    for (int vertex = 0; vertex < 4; ++vertex) {
+        const float position[3] = {
+            static_cast<float>(vertex & 1), static_cast<float>((vertex >> 1) & 1), 0.0f };
+        std::memcpy(vertices.data() + vertex * BEDRAY_SCENE_GEOMETRY_VERTEX_BYTES,
+            position, sizeof(position));
+    }
+    std::vector<uint16_t> indices = { 0, 1, 2, 0, 2, 3 };
+
+    BedraySceneSectionInput input{};
+    input.section_id = 21;
+    input.geometry_revision = 1;
+    input.vertices = vertices.data();
+    input.vertex_count = 4;
+    input.vertex_stride = BEDRAY_SCENE_GEOMETRY_VERTEX_BYTES;
+    input.index_type = BEDRAY_SCENE_INDEX_UINT16;
+    input.indices = indices.data();
+    input.index_count = indices.size();
+    input.geometry_count = 1;
+    input.quad_start[0] = 0;
+    input.flags = BEDRAY_SCENE_SECTION_FLAG_GEOMETRY_VERTEX;
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_OK);
+
+    fixture.prepare(1, 0xB30);
+    CHECK(fake::g.builds.size() == 2);
+    if (fake::g.builds.size() == 2) {
+        CHECK(fake::g.builds[0].geometry_count == 1);
+        if (fake::g.builds[0].geometries.size() == 1) {
+            const fake::BuildGeometryRecord& range = fake::g.builds[0].geometries[0];
+            CHECK(range.vertex_stride == BEDRAY_SCENE_GEOMETRY_VERTEX_BYTES);
+            CHECK(range.max_vertex == 3);
+            CHECK(range.primitive_count == 2);
+        }
+    }
+    CHECK(fake::find_copy(vertices) >= 0);
+    const BedraySceneSectionRecord record = read_section_record(fixture.resources(), 0);
+    CHECK(record.meta[0] == 4);
+    CHECK(record.meta[2] == BEDRAY_SCENE_SECTION_FLAG_GEOMETRY_VERTEX);
+    fixture.release(1);
+}
+
+static void test_section_quad_limit() {
+    Fixture fixture(1, 0, 8u << 20);
+    Mesh mesh;
+    mesh.vertices.assign(static_cast<size_t>(0x10000u) * 4u * 3u, 0.0f);
+    mesh.indices.assign(static_cast<size_t>(0x10000u) * 6u, 0);
+    BedraySceneSectionInput input = section_input(1, 1, mesh);
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_ERROR_LIMIT);
+    CHECK(fake::g.buffers.empty());
+
+    /* Exactly 65535 quads is the supported maximum: the record stores the
+       range count in 16 bits. The boundary is validated at update time; it is
+       not prepared here to keep the fake allocations small. */
+    mesh.vertices.assign(static_cast<size_t>(0xFFFFu) * 4u * 3u, 0.0f);
+    mesh.indices.assign(static_cast<size_t>(0xFFFFu) * 6u, 0);
+    input = section_input(1, 1, mesh);
+    CHECK_STATUS(fixture.add_section_input(input), BEDRAY_SCENE_OK);
+    CHECK(fake::g.buffers.empty());
+}
+
 int main() {
     test_abi_layout();
     test_create_validation();
+    test_section_contract_validation();
     test_first_frame_records_full_pipeline();
+    test_section_pass_ranges();
+    test_tlas_custom_indices_follow_table_slots();
+    test_geometry_vertex_section_stride();
+    test_section_quad_limit();
     test_idle_frame_reuses_slot_state();
     test_update_copies_inputs_and_coalesces_pending();
     test_transform_update_touches_only_tlas();

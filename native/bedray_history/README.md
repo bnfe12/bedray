@@ -6,9 +6,11 @@ transitions or synchronizes Vulkan objects, never submits, and never replaces
 the shader-side reprojection/disocclusion checks. Pixel validation stays with
 each method's Slang module.
 
-**Status: L1, source only.** Not compiled, not tested, not wired into
-`bedray_core`, the C ABI or the Java host. Verification is deferred by the
-user. No GPU or game behaviour is claimed.
+**Status: L1, compiled and contract-tested.** The registry builds into
+`bedray_core.dll`; `bedray_history_submission` exercises the C++ registry and
+`bedray_history_c` drives all 22 exported C functions (2026-10-28). It is not
+wired into the frame path, the exported C ABI has no Java caller yet, and no
+GPU or game behaviour is claimed.
 
 The full lifecycle, state transitions and cross-component contract are in
 [HISTORY_CONTRACT.md](HISTORY_CONTRACT.md).

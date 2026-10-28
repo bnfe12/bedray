@@ -642,7 +642,7 @@ RestirPtReservoir ptTemporalReuse(RestirPtReservoir current, RestirPtReservoir h
 // sky path needs no ray (the edge was traced when the path was sampled), but a
 // *reused* sky edge may cross geometry that appeared between the two
 // receivers, so the resolve and the spatial acceptance test trace it.
-bool ptFirstEdgeVisible<T : ITraversal>(T traversal, MaterialAtlas atlas,
+bool ptFirstEdgeVisible<T : ISceneTracer>(T traversal, MaterialAtlas atlas,
         BlockMaterialTable blockMaterials, RestirPtReceiver receiver,
         float3 direction, float distance, float bias, MaterialSamplingOptions options,
         out float3 transmittance, out uint flags) {
@@ -684,7 +684,7 @@ bool ptFirstEdgeVisible<T : ITraversal>(T traversal, MaterialAtlas atlas,
 // way to tell a duplicate from a second draw of the same path, and the
 // duplicate's weight is added again.  A fixed, distinct set of neighbours per
 // pixel is the contract.
-RestirPtReservoir ptSpatialReuse<T : ITraversal>(RestirPtReservoir current,
+RestirPtReservoir ptSpatialReuse<T : ISceneTracer>(RestirPtReservoir current,
         RestirPtReservoir neighbor, RestirPtReceiver receiver, T traversal,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials, float bias,
         MaterialSamplingOptions options, inout uint seed) {
@@ -824,13 +824,13 @@ bool ptResolve(RestirPtReservoir reservoir, float3 surfacePosition,
     return result.valid;
 }
 
-// Geometric-only resolve through ITraversal.traceVisibility.  Cheapest form;
+// Geometric-only resolve through ISceneTracer.traceVisibility.  Cheapest form;
 // it treats a leaf card or a glass pane as a blocker, so use it only where the
 // extra traversal cost matters more than correctness at foliage.
 //
 // v2: sky paths are traced like every other path — the edge to the recorded
 // escape point is a real ray with real occluders once the path is reused.
-RestirPtResolveResult ptResolveVisible<T : ITraversal>(RestirPtReservoir reservoir,
+RestirPtResolveResult ptResolveVisible<T : ISceneTracer>(RestirPtReservoir reservoir,
         T traversal, RestirPtReceiver receiver, float bias) {
     RestirPtResolveResult result = ptResolveDetailed(reservoir, receiver.position,
         receiver.normal);
@@ -865,7 +865,7 @@ RestirPtResolveResult ptResolveVisible<T : ITraversal>(RestirPtReservoir reservo
 // visibility walk.  The suffix itself is not re-traced: that is the assumption
 // a reused path already carries.  v2: sky paths are included — their edge is
 // traced to the recorded escape point.
-RestirPtResolveResult ptResolveFiltered<T : ITraversal>(RestirPtReservoir reservoir,
+RestirPtResolveResult ptResolveFiltered<T : ISceneTracer>(RestirPtReservoir reservoir,
         T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RestirPtReceiver receiver, float bias, MaterialSamplingOptions options) {
     RestirPtResolveResult result = ptResolveDetailed(reservoir, receiver.position,

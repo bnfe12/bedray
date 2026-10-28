@@ -6,6 +6,8 @@ import com.mojang.renderpearl.backend.vulkan.VulkanQueue;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLocator;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreNative;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuImagesNative;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuBuffersNative;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import org.lwjgl.system.FunctionProvider;
@@ -27,7 +29,7 @@ import java.util.Optional;
  * Device-bound Slang runtime: owns one native Bedray core ({@code bedray_core.dll}, ABI v2) and the compute
  * programs registered with it.
  *
- * <p>The core never creates a Vulkan object of its own and never submits: the host passes its {@code VkInstance},
+ * <p>The core owns renderer resources and never submits: the host passes its {@code VkInstance},
  * {@code VkDevice} and queue, and records the dispatches into the frame's command buffer. This class is the only
  * place where the two sides meet.
  *
@@ -41,15 +43,28 @@ public final class SlangRuntime implements AutoCloseable {
     private final long core;
     private final BedrayCoreNative.Capabilities capabilities;
     private final int enabledCapabilities;
+    private final VkInstance instance;
+    private final VkPhysicalDevice physicalDevice;
+    private final VkDevice device;
+    private final long getInstanceProcAddr;
+    private final long getDeviceProcAddr;
+    private final int apiVersion;
     private final Map<String, SlangProgram> programs = new HashMap<>();
     private boolean closed;
 
     private SlangRuntime(BedrayCoreNative library, long core, BedrayCoreNative.Capabilities capabilities,
-                         int enabledCapabilities) {
+                         int enabledCapabilities, VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
+                         long getInstanceProcAddr, long getDeviceProcAddr, int apiVersion) {
         this.library = library;
         this.core = core;
         this.capabilities = capabilities;
         this.enabledCapabilities = enabledCapabilities;
+        this.instance = instance;
+        this.physicalDevice = physicalDevice;
+        this.device = device;
+        this.getInstanceProcAddr = getInstanceProcAddr;
+        this.getDeviceProcAddr = getDeviceProcAddr;
+        this.apiVersion = apiVersion;
     }
 
     /**
@@ -97,7 +112,8 @@ public final class SlangRuntime implements AutoCloseable {
                 capabilities.abiVersion(), capabilities.maxPushConstants(), capabilities.maxComputeWorkGroupCountX(),
                 capabilities.maxComputeWorkGroupCountY(), capabilities.maxComputeWorkGroupCountZ(),
                 capabilities.maxComputeWorkGroupInvocations());
-            return new SlangRuntime(library, core, capabilities, enabledCapabilities);
+            return new SlangRuntime(library, core, capabilities, enabledCapabilities, instance, physical, vkDevice,
+                getInstanceProcAddr, getDeviceProcAddr, apiVersion);
         } catch (RuntimeException | Error e) {
             library.close();
             throw e;
@@ -158,6 +174,82 @@ public final class SlangRuntime implements AutoCloseable {
         return closed;
     }
 
+    /** Sampler lifetime is tied to this runtime's native core and its recordings. */
+    public long atlasSampler() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return library.atlasSampler(core);
+    }
+
+    public long linearSampler() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return library.linearSampler(core);
+    }
+
+    /** Creates a native image owner on the same game-owned logical device. */
+    public BedrayGpuImagesNative createImageOwner(long budgetBytes) {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return new BedrayGpuImagesNative(library, physicalDevice, device, budgetBytes);
+    }
+
+    public BedrayGpuBuffersNative createBufferOwner(long budgetBytes) {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return new BedrayGpuBuffersNative(library, physicalDevice, device, budgetBytes);
+    }
+
+    /**
+     * The FFM library and core handle this runtime owns. Native pass adapters
+     * need them to call their own additive ABI entry points; both stay owned by
+     * this runtime and are invalid after {@link #close()}.
+     */
+    public BedrayCoreNative library() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return library;
+    }
+
+    /** @see #library() */
+    public long core() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return core;
+    }
+
+    /**
+     * The host objects a second native renderer (the GPU scene) has to borrow.
+     * They stay owned by the game; nothing here may create, replace or destroy
+     * a device, queue or swapchain.
+     */
+    public VkInstance instance() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return instance;
+    }
+
+    public VkPhysicalDevice physicalDevice() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return physicalDevice;
+    }
+
+    public VkDevice device() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return device;
+    }
+
+    /** Address of {@code vkGetInstanceProcAddr}, as the core received it. */
+    public long getInstanceProcAddr() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return getInstanceProcAddr;
+    }
+
+    /** Address of {@code vkGetDeviceProcAddr}, as the core received it. */
+    public long getDeviceProcAddr() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return getDeviceProcAddr;
+    }
+
+    /** Vulkan API version of the physical device, as the core received it. */
+    public int apiVersion() {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        return apiVersion;
+    }
+
     /** Host calls this only after completion or discard of this recording. */
     public void releaseRecording(long commandBuffer) {
         if (closed) throw new IllegalStateException("SlangRuntime is closed");
@@ -182,6 +274,7 @@ public final class SlangRuntime implements AutoCloseable {
         if (closed) {
             return;
         }
+        library.requireResourceOwnersReleased();
         for (SlangProgram program : programs.values()) {
             try {
                 program.close();
@@ -199,7 +292,6 @@ public final class SlangRuntime implements AutoCloseable {
         } catch (RuntimeException e) {
             LOGGER.error("[VKB-SLANG] core shutdown refused ({}); keeping {} loaded", e.getMessage(),
                 BedrayCoreLocator.DLL);
-            closed = true;
             return;
         }
         library.close();

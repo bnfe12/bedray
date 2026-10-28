@@ -18,22 +18,34 @@ static const uint HARDWARE_INSTANCE_MASK_ALL      = 0x03u;
 
 // The provider owns the triangle stream, not the traversal loop.  A hardware
 // backend can therefore shade a hit without importing the legacy Section
-// records or any descriptor binding.
+// records or any descriptor binding.  The TLAS instanceCustomIndex of a world
+// instance is the section table slot; entity instances are routed by
+// SceneTraversal before this decoder is reached.
 struct GeometryProvider {
-    StructuredBuffer<GeometryVertex> vertices;
     StructuredBuffer<GeometrySection> sections;
-    StructuredBuffer<GeometryInstance> instances;
 };
 
 SurfaceHit hardwareHitToSurface(GeometryProvider geometry, Ray ray,
-        uint instanceId, uint primitiveId, float2 bary, float t) {
+        uint instanceId, uint geometryIndex, uint primitiveId, float2 bary, float t) {
     SurfaceHit result = missHit(ray.tMax);
-    GeometryInstance instance = geometry.instances[instanceId];
-    GeometrySection section = geometry.sections[instance.sectionIndex];
+    // Safety net only: a world instance's custom index is the section table slot.
+    // An entity instance (or a stale slot after a section was removed) must not
+    // index the table, so the bound length decides.
+    uint sectionCount;
+    uint sectionStride;
+    geometry.sections.GetDimensions(sectionCount, sectionStride);
+    if (instanceId >= sectionCount) return result;
+    GeometrySection section = geometry.sections[instanceId];
+    // The scene builds one BLAS geometry per non-empty pass range, so the hit's
+    // geometry index is the range index and the primitive id is local to it.
+    int rangeIndex = geometryRangeForPrimitive(section, geometryIndex);
+    if (rangeIndex < 0) return result;
+    GeometryRange range = section.ranges[uint(rangeIndex)];
+    if ((primitiveId >> 1u) >= geometryRangeQuadCount(range)) return result;
 
-    GeometryVertex v0 = geometryVertexAt(geometry.vertices, section, primitiveId, 0u);
-    GeometryVertex v1 = geometryVertexAt(geometry.vertices, section, primitiveId, 1u);
-    GeometryVertex v2 = geometryVertexAt(geometry.vertices, section, primitiveId, 2u);
+    GeometryVertex v0 = geometryVertexAt(section, geometryIndex, primitiveId, 0u);
+    GeometryVertex v1 = geometryVertexAt(section, geometryIndex, primitiveId, 1u);
+    GeometryVertex v2 = geometryVertexAt(section, geometryIndex, primitiveId, 2u);
 
     float3 p0 = v0.position.xyz;
     float3 p1 = v1.position.xyz;
@@ -72,12 +84,14 @@ SurfaceHit hardwareHitToSurface(GeometryProvider geometry, Ray ray,
     result.materialId = v0.meta.x;
     result.flags = frontFace ? HIT_FLAG_FRONT_FACE : 0u;
 
-    int rangeIndex = geometryRangeForPrimitive(section, primitiveId);
-    if (rangeIndex >= 0) {
-        GeometryPass pass = section.ranges[uint(rangeIndex)].pass;
-        if (pass == GeometryPass.Cutout) result.flags |= HIT_FLAG_CUTOUT;
-        if (pass == GeometryPass.Translucent) result.flags |= HIT_FLAG_TRANSLUCENT;
-    }
+    GeometryPass pass = geometryRangePass(range);
+    if (pass == GeometryPass.Cutout) result.flags |= HIT_FLAG_CUTOUT;
+    if (pass == GeometryPass.Translucent) result.flags |= HIT_FLAG_TRANSLUCENT;
+    // The host's per-quad tags: every vertex of a quad carries the same word, so
+    // reading the first one is exact and does not depend on the barycentrics.
+    uint vertexFlags = v0.meta.y;
+    if ((vertexFlags & GEOMETRY_VERTEX_FLAG_VEGETATION) != 0u) result.flags |= HIT_FLAG_FOLIAGE;
+    if ((vertexFlags & GEOMETRY_VERTEX_FLAG_LEAF_CUBE) != 0u) result.flags |= HIT_FLAG_LEAF_CUBE;
 
     float3 tangent;
     float3 bitangent;
@@ -98,7 +112,7 @@ SurfaceHit hardwareHitToSurface(GeometryProvider geometry, Ray ray,
     return result;
 }
 
-struct HardwareTraversal : ITraversal {
+struct HardwareTraversal : ISceneTracer {
     RaytracingAccelerationStructure tlas;
     GeometryProvider geometry;
     uint instanceMask;
@@ -123,8 +137,8 @@ struct HardwareTraversal : ITraversal {
 
         if (query.CommittedStatus() == COMMITTED_NOTHING) return result;
         return hardwareHitToSurface(geometry, ray, query.CommittedInstanceID(),
-            query.CommittedPrimitiveIndex(), query.CommittedTriangleBarycentrics(),
-            query.CommittedRayT());
+            query.CommittedGeometryIndex(), query.CommittedPrimitiveIndex(),
+            query.CommittedTriangleBarycentrics(), query.CommittedRayT());
     }
 
     VisibilityResult traceVisibility(Ray ray) {
@@ -146,8 +160,8 @@ struct HardwareTraversal : ITraversal {
 
         if (query.CommittedStatus() == COMMITTED_NOTHING) return visibleResult(ray.tMax);
         SurfaceHit blocker = hardwareHitToSurface(geometry, ray, query.CommittedInstanceID(),
-            query.CommittedPrimitiveIndex(), query.CommittedTriangleBarycentrics(),
-            query.CommittedRayT());
+            query.CommittedGeometryIndex(), query.CommittedPrimitiveIndex(),
+            query.CommittedTriangleBarycentrics(), query.CommittedRayT());
         return blockedResult(blocker, float3(0.0));
     }
 

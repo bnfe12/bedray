@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class SodiumDequantizeLayoutTest {
 
-    private static final Path SHADER = Path.of("src/main/resources/shaders/glsl/sodium_dequantize.comp");
+    private static final Path SHADER = Path.of("src/main/resources/shaders/slang/passes/sodium_dequantize.slang");
     private static final Path WORLD = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtWorld.java");
 
     private static String read(Path path) {
@@ -43,13 +43,16 @@ public class SodiumDequantizeLayoutTest {
         int colourBytes = 96;
         int lightBytes = 112;
         assertEquals(112, lightBytes, "GEOM_BYTES_PER_QUAD");
-        assertTrue(shader.contains("uint posBase = q * " + (posBytes / 4) + "u;"),
+        assertTrue(shader.contains("arena[output * 3u + axis]"),
             "positions are a plane of 3 floats per vertex at word offset q*12");
-        assertTrue(shader.contains("uint uvBase = quads * " + (posBytes / 4) + "u + q * " + ((uvBytes - posBytes) / 4) + "u;"),
+        assertTrue(shader.contains("uint uvBase = pc.quadCount * " + (posBytes / 4) + "u;")
+                && shader.contains("arena[uvBase + output * 2u]"),
             "uvs start after the whole position plane and take 2 floats per vertex");
-        assertTrue(shader.contains("uint colBase = quads * " + (uvBytes / 4) + "u + q * " + ((colourBytes - uvBytes) / 4) + "u;"),
+        assertTrue(shader.contains("uint colourBase = pc.quadCount * " + (uvBytes / 4) + "u;")
+                && shader.contains("arena[colourBase + output]"),
             "colours start after the uv plane, one uint per vertex");
-        assertTrue(shader.contains("uint lightBase = quads * " + (colourBytes / 4) + "u + q * " + ((lightBytes - colourBytes) / 4) + "u;"),
+        assertTrue(shader.contains("uint lightBase = pc.quadCount * " + (colourBytes / 4) + "u;")
+                && shader.contains("arena[lightBase + output]"),
             "light starts after the colour plane, one uint per vertex");
         assertFalse(shader.contains("q * 28u"),
             "a quad's attributes must not be written interleaved: the arena is planar");
@@ -69,7 +72,7 @@ public class SodiumDequantizeLayoutTest {
         assertEquals(20, SodiumMeshDecoder.STRIDE, "Sodium compact vertex stride in bytes");
         assertEquals(80, SodiumMeshDecoder.QUAD_BYTES, "four vertices per quad");
         assertEquals(20, SodiumMeshDecoder.QUAD_BYTES / 4, "words per vertex");
-        assertTrue(shader.contains("uint o = q * 20u + v * 5u;"),
+        assertTrue(shader.contains("uint input = q * 20u + vertex * 5u;"),
             "one quad is 20 words, one vertex 5 words");
         assertEquals(32, SodiumDequantize.PUSH_BYTES, "three uvec2 addresses + quadCount + pad");
     }

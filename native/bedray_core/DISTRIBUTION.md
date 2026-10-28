@@ -16,6 +16,14 @@ Set `-PbedrayCmake=<path-to-cmake.exe>` when CMake is not on PATH and
 by `native/bedray_core/CMakeLists.txt`. Slang and launcher dependencies have
 their own build requirements.
 
-These tasks are source-only preparation. The presence of build instructions
-does not prove that migration, compilation, installation or game rendering is
-complete. The C++/Slang renderer still has to be integrated and verified.
+`bedray_core.dll` has been built from this checkout with the same CMake
+configure line the Gradle task uses, and its contract tests pass (2026-10-28).
+`fabricBedrayDistribution`/`neoforgeBedrayDistribution` have been executed and
+both DLLs plus the loader JAR were staged into the test instance on 2026-10-28;
+the C++/Slang renderer is still not verified in game. Build and installation
+evidence does not prove live rendering correctness.
+
+The GPU scene (`native/bedray_scene`) is a separate CMake project and a second
+DLL. `buildBedrayScene` configures and builds it, and both distribution tasks
+copy `bedray_scene.dll` next to `bedray_core.dll`; `BedraySceneLocator` resolves
+it from `<gameDir>/bedray/natives`, so the pair is installed together.

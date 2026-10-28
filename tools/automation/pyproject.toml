@@ -1,0 +1,20 @@
+[project]
+name = "bedray-automation"
+version = "0.1.0"
+description = "Bedray 2.0 automated test bench, game session runner, and Tracy Profiler capture controller"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "psutil>=6.0.0",
+    "rich>=13.7.0",
+]
+
+[project.scripts]
+bedray-bench = "run_bench:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+managed = true
