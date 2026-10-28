@@ -10,7 +10,8 @@ import static java.lang.foreign.ValueLayout.*;
 
 /** Coarse bloom ABI. Native core owns the pass, images, barriers and recorded uses. */
 public final class BedrayBloomNative implements AutoCloseable {
-    static final int CONFIG_BYTES = 64, FRAME_BYTES = 56, PUSH_BYTES = 128;
+    public static final int PUSH_BYTES = 128;
+    static final int CONFIG_BYTES = 64, FRAME_BYTES = 56;
     private final long core;
     private final MethodHandle render, destroy;
     private boolean closed;

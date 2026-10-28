@@ -16,9 +16,11 @@ import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
 
+import static io.github.andrexarlay.vulkancompat.rt.core.BedrayBloomNative.PUSH_BYTES;
+
 /**
  * Bloom and sun glare on the final image ({@code rt_bloom.comp}, see its header): prefilter + 13 tap downsample chain of
- * {@link #LEVELS} RGBA16F mips, in-place scatter-weighted upsample, then one apply dispatch that adds the glow (and the optional sun
+ * six RGBA16F mips, in-place scatter-weighted upsample, then one apply dispatch that adds the glow (and the optional sun
  * halo) before the tone map shoulder. Like {@link RtVolumetricPass} it only reads and writes the final image after the denoiser, so
  * no guide buffer of NRD / DLSS Ray Reconstruction is touched. All sizes derive from the image size, so the glow radius scales with
  * the render resolution and works the same with an upscaler (applied at render resolution, before the upscale).
@@ -27,8 +29,6 @@ import java.util.Set;
  */
 final class RtBloomPass {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
-    static final int LEVELS = 6;
-    static final int PUSH_BYTES = 128;
     private static final int STAGES = 4;
     private static final String[] SLANG_NAMES = {"bloom_prefilter_down", "bloom_down", "bloom_up", "bloom_apply"};
 
@@ -116,11 +116,6 @@ final class RtBloomPass {
                     + BedrayCoreLayouts.descriptorTypeName(want.descriptorType()));
             }
         }
-    }
-
-    /** Size of mip {@code i} (0 = half resolution) of a {@code size}-wide image. */
-    static int mipSize(int size, int i) {
-        return Math.max(1, (size + (1 << (i + 1)) - 1) >> (i + 1));
     }
 
     /** Records one coarse native call. On failure the whole host recording must be discarded. */

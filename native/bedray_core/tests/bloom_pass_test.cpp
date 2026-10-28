@@ -35,6 +35,17 @@ void clean() {
     CHECK(fake::images.empty()); CHECK(fake::views.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
 }
 void chain_and_validation() {
+    using bedray::core::BloomPass;
+    CHECK(BloomPass::mip_size(1920, 0) == 960); CHECK(BloomPass::mip_size(1920, 5) == 30);
+    CHECK(BloomPass::mip_size(1, 5) == 1); CHECK(BloomPass::mip_size(1081, 0) == 541);
+    for (const std::uint32_t size : {1u, 7u, 640u, 1080u, 3840u}) {
+        auto previous = size;
+        for (std::uint32_t level = 0; level < 6; ++level) {
+            auto current = BloomPass::mip_size(size, level);
+            CHECK(current >= 1 && current <= (previous + 1) / 2);
+            previous = current;
+        }
+    }
     fake::reset();
     BedrayCore core;
     BedrayError error{};
