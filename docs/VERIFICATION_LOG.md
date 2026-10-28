@@ -4,6 +4,45 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-28 — ReSTIR source tests and the first runnable :common:test (L2, no GPU)
+
+Branch: `fix/stale-restir-source-tests-20261028`, commit `248a7e1`, on top of
+the merged PR #10 (`6632bca`).
+
+The earlier configuration blocker (missing Fabric/NeoForge launcher jars) was
+resolved locally without adding anything to the repository:
+`fabric-loader-0.19.5`, NeoForge `26.3.0.57-beta`, FML `12.0.9`, bus `8.0.5`,
+mergetool `2.0.7`, and the gitignored `libs/` client/Iris/Sodium jars.
+`:common:test` now configures and runs `:common:compileSlang` first (18 passes).
+
+Three source-scan tests were stale relative to the host's native-reservoir path,
+which already existed on the base before PR #10 (`a8f796b` has
+`nativeReservoirs`). The tests still asserted the pre-native strings:
+
+- `diParity = nativeReservoirs ? 0 : reservoirFrame & 1` (the Slang ring still
+  alternates; the native path owns its parity).
+- `diFlags = DI_FLAG_ENABLED | (!nativeReservoirs && reservoirHistoryWritten ? ...)`
+  (the native path must not claim a history it did not write).
+- the dispatch guard and mode log likewise admit the native ring.
+
+The fix changes only those assertions; shader and host behaviour is unchanged.
+
+Full-suite status is deliberately not claimed green:
+
+- Without the shaderc natives jar, 57 of 681 tests fail: 54 are `shaderc.dll`
+  load failures, 3 were the stale assertions above.
+- With `lwjgl-shaderc-3.3.3-natives-windows.jar` added only to the local test
+  classpath, the run stops in `RtVolumetricFogTest` and was killed after 40
+  minutes. That is an environment/harness limitation, not evidence about the
+  typed RC shaders.
+- The Gradle test worker mangles the non-ASCII project path on this machine, so
+  the run was executed from an ASCII worktree of the same commit.
+
+Targeted evidence after the fix: `74 tests, 0 failures` for `RtSlang*`,
+`RtRestirSettingsTest` and `SlangPassLibraryTest`, `BUILD SUCCESSFUL`. This is
+L2 (Java source scans, no GPU, no game). It does not change the L1 shader
+compile evidence or prove runtime behaviour.
+
 ## 2026-10-28 — typed RC store split and entry status (L1 compile)
 
 Branch: `feat/slang-rc-transport-20261028`, commit `bcf77b7`.
