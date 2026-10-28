@@ -80,7 +80,6 @@ final class NativeSceneBridge implements AutoCloseable {
     private final Map<Long, Long> recordingFrames = new LinkedHashMap<>();
     private long nextSectionId = 1;
     private long nextRevision = 1;
-    private long frameIndex;
     private boolean entityPresent;
     private long tlas;
     private RtMemory.Buf table;
@@ -203,7 +202,6 @@ final class NativeSceneBridge implements AutoCloseable {
      * the scene rebuilds the entity BLAS exactly as the legacy path does.
      */
     void updateEntities(long frameIndex) {
-        this.frameIndex = frameIndex;
         RtEntityGeometryManager manager = RtEntityGeometryManager.INSTANCE;
         RtEntityGeometryManager.GpuRange positions = manager.framePositions();
         RtEntityGeometryManager.GpuRange indices = manager.frameIndices();

@@ -212,9 +212,9 @@ final class BedrayPathTraceNative implements AutoCloseable {
         desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_DI_CAMERA_DELTA + 4, dispatch.diCamDeltaY());
         desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_DI_CAMERA_DELTA + 8, dispatch.diCamDeltaZ());
         desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_DI_CAMERA_DELTA + 12, 0f);
-        // The pass forwards diState verbatim: the host owns the reservoir ring,
-        // its parity and its reset, so a host-side fill can never disagree with
-        // a parity the pass advanced on its own.
+        // Without NATIVE_DI the host owns the reservoir ring, its parity and its reset, and the core forwards
+        // diState verbatim. With NATIVE_DI the core ignores the parity word, derives the HISTORY bit and
+        // parity from its own ring state, and treats RESET_DI as a request to clear it.
         desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_DI_STATE, dispatch.diFlags());
         desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_DI_STATE + 4, dispatch.diParity());
         desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_DI_STATE + 8, 0);

@@ -155,7 +155,6 @@ public final class RtWorld {
     private final RtMemory.Buf instances;
     private final RtMemory.Buf tlasBuf;
     private final long tlasHandle;
-    private final long tlasAddress;
     private final long scratchBase;
     private final RtEntityBlas entityBlas;
     private final OpacityMicromapCache omm;
@@ -220,7 +219,6 @@ public final class RtWorld {
                 this.instances = null;
                 this.tlasBuf = null;
                 this.tlasHandle = 0;
-                this.tlasAddress = 0;
                 this.scratchBase = 0;
                 this.entityBlas = null;
                 this.omm = null;
@@ -296,7 +294,6 @@ public final class RtWorld {
                 RtFailure.check(KHRAccelerationStructure.vkCreateAccelerationStructureKHR(device, ci, null, p), "create_tlas");
                 this.tlasHandle = p.get(0);
                 rollback.push(() -> KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, tlasHandle, null));
-                this.tlasAddress = asAddress(stack, tlasHandle);
             }
             LOGGER.info("[VKB-RT] world_init tlas_bytes={} tlas_scratch_bytes={} scratch_bytes={} scratch_align={} max_instances={} radius_xz={} radius_y={} omm={}",
                 tlasSize, tlasScratch, scratchBytes, mem.scratchAlignment, RtConfig.MAX_INSTANCES, "dynamic", "dynamic",

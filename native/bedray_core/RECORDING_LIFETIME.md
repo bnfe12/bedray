@@ -39,9 +39,11 @@ above the single-dispatch calls. It keeps one recording per command buffer in
 `recordings_` and pins six images and up to five buffers (four dummies plus the
 per-recording FrameConstants upload) on it.
 
-- `bedray_core_release_recording` remains the only release call: the core drops
-  its dispatch records and the pass completes its image/buffer pins in the same
-  function. An unknown command buffer is a no-op.
+- `bedray_core_release_recording` is the completion release: the core drops its
+  dispatch records and the pass completes its image/buffer pins in the same
+  function. An unknown command buffer is a no-op. The additive
+  `bedray_core_discard_recording` below invalidates history first and then uses
+  the same release path; nothing else frees a recording.
 - A failure before the first dispatch was recorded — image creation, the
   FrameConstants upload, a pin failure — is provably discardable: the pass
   completes its own pins and leaves no recording.
