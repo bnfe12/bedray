@@ -1265,6 +1265,12 @@ public final class RtWorld {
 
     // --------------------------------------------------------------------------------------------- release
 
+    /** Called only with host proof of completion or deliberate unsubmitted discard. */
+    public void releaseRecording(long commandBuffer) {
+        dequantize.releaseRecording(commandBuffer);
+        if (nativeScene != null) nativeScene.releaseRecording(commandBuffer);
+    }
+
     /** The caller has drained host submissions and excluded future resubmission. */
     public void releaseComputeRecordingsAfterHostDrain() {
         dequantize.releaseRecordingsAfterHostDrain();

@@ -184,3 +184,46 @@ is the separate L1 `slangc` 2026.20 compile sweep recorded in
 `SLANG_MIGRATION.md`. Java, shader dispatch, driver behaviour and game rendering
 were not checked. The RC runtime contract (stride, barriers, cross-cascade
 resolve, environment boundary supplied by the host) remains unproven.
+
+## 2026-10-28 — host recording completion bridge
+
+Integration base: `16a675afb13a775c7b706d2eec0799ca6a2d2087` (PR #9 merged
+after preserving the newer audit commits through `5fc969e`). PR #9 was rebuilt
+successfully after conflict resolution in
+[run 40716123286](https://github.com/bnfe12/bedray/actions/runs/40716123286).
+
+`RtFrameRenderer` now retires one captured owner set through the same encoder's
+post-submission destruction callback, rather than releasing by reused command
+buffer address. The CPU `RecordingCompletion` ticket rejects handle reuse while
+pending; an old callback cannot free a newer generation. Unsubmitted abandon
+releases immediately. Exceptions during execute or callback registration keep
+UNKNOWN resources for host-proven completion. Independent release failures
+retain their own strong references and can be retried without repeating already
+successful owner releases. Scene and Sodium resources use the same callback;
+the particle callback captures its recorded composite owner. Scene close remains
+retryable when release/destroy fails.
+
+The existing host drain now creates a host fence for the pending shared encoder
+submission, submits through the host and awaits its completion. Timeout/failure
+retains resources. No native submit/wait or `vkDeviceWaitIdle` is introduced;
+the old device-wide wait in this host drain is removed.
+
+Verification (no GPU):
+
+- JDK 25.0.3, Gradle 9.5.1; local launcher-provided 26.3/Sodium/Iris JARs kept
+  in ignored `libs/`, Slang 2026.20 verified against the SDK SHA-256 above.
+- Baseline and candidate `:common:compileJava`: exit 0, both completed.
+- Standalone `javac`/`java` RecordingCompletionChecks: exit 0. Covers completion,
+  discard, unknown execute, enqueue failure, duplicate/stale tickets, late
+  callbacks, release failure/retry and retention of open recordings during idle.
+- `:common:test --tests '*RecordingCompletionTest' --tests
+  '*SlangPassLibraryTest.heapAndDirectPushConstantsHaveNativeStorageAndKeepTheInputPosition'
+  --tests '*BedrayScene*Test'`: exit 0, **2 tests executed and passed** (the last
+  selector matched no test class). Existing Unsafe warnings in Iris test sources
+  remain. The invocation sets `BEDRAY_LAUNCHER_LIBRARIES`,
+  `-Pneoforge_libs_dir=<local downloaded public loader dependencies>`, `SLANG_DIR`,
+  and scopes `-PslangPasses=path_trace.slang,path_trace_scene.slang,path_display.slang,restir_spatial.slang,bloom_*.slang,sodium_dequantize.slang`.
+- Those nine AOT programs compile and pass the build-time reflection/layout
+  checks. No shader source was changed by this host-lifetime patch.
+- Evidence: L1 Java/AOT compilation and L2 CPU lifecycle/heap-direct checks.
+  No GPU dispatch, validation layers, game startup or rendered effect checked.
