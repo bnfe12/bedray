@@ -1912,7 +1912,25 @@ static void test_zero_device_address_is_rejected() {
     CHECK(fake::g.builds.empty());
 }
 
+static void test_discarded_writes_cannot_be_reused() {
+    Fixture fixture(2);
+    const Mesh mesh = quad_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0xDA01);
+    fixture.prepare(2, 0xDA02);
+    CHECK_STATUS(bedray_scene_discard_frame(fixture.scene, 99, &g_error), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+    CHECK_STATUS(bedray_scene_discard_frame(fixture.scene, 2, &g_error), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.prepare_status(3, 0xDA03), BEDRAY_SCENE_ERROR_INTERNAL);
+    BedraySceneResources resources{};
+    CHECK_STATUS(bedray_scene_query_resources(fixture.scene, &resources), BEDRAY_SCENE_ERROR_INTERNAL);
+    CHECK(resources.tlas == 0 && resources.section_table_buffer == 0);
+    CHECK_STATUS(fixture.add_section(1, 2, mesh), BEDRAY_SCENE_ERROR_INTERNAL);
+    CHECK_STATUS(bedray_scene_destroy(fixture.scene), BEDRAY_SCENE_ERROR_IN_USE);
+    fixture.release(1); // completion/release remains available on a poisoned scene
+}
+
 int main() {
+    test_discarded_writes_cannot_be_reused();
     test_zero_device_address_is_rejected();
     test_abi_layout();
     test_create_validation();

@@ -686,6 +686,14 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     @Override
+    public void discardRecording(long commandBuffer) {
+        if (!recordings.contains(commandBuffer)) return;
+        resetHistory();
+        if (!runtime.isClosed()) runtime.discardRecording(commandBuffer);
+        releaseRecording(commandBuffer);
+    }
+
+    @Override
     public void releaseRecording(long commandBuffer) {
         if (!recordings.contains(commandBuffer)) {
             return;

@@ -45,6 +45,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle destroyProgramHandle;
     private final MethodHandle renderFrameHandle;
     private final MethodHandle releaseRecordingHandle;
+    private final MethodHandle discardRecordingHandle;
     private final MethodHandle atlasSamplerHandle;
     private final MethodHandle linearSamplerHandle;
     private final MethodHandle renderPhasesHandle;
@@ -97,6 +98,8 @@ public final class BedrayCoreNative implements AutoCloseable {
             renderFrameHandle = bind(linker, lookup, "bedray_core_render_frame",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             releaseRecordingHandle = bind(linker, lookup, "bedray_core_release_recording",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
+            discardRecordingHandle = bindOptional(linker, lookup, "bedray_core_discard_recording",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG));
             atlasSamplerHandle = bind(linker, lookup, "bedray_core_atlas_sampler",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
@@ -436,6 +439,20 @@ public final class BedrayCoreNative implements AutoCloseable {
      * completed and it cannot be submitted again, or after discarding an
      * unsubmitted recording. Call before re-recording this command buffer.
      */
+    public void discardRecording(long core, long commandBuffer) {
+        ensureOpen();
+        requireHandle(core, "core");
+        if (discardRecordingHandle == null) {
+            releaseRecording(core, commandBuffer); // Older cores are torn down after host failure.
+            return;
+        }
+        try {
+            int status = (int) discardRecordingHandle.invokeExact(handle(core), commandBuffer);
+            if (status != BedrayCoreLayouts.STATUS_OK)
+                throw new BedrayCoreException("discard_recording", status, "", null);
+        } catch (Throwable t) { throw rethrow("discard_recording", t); }
+    }
+
     public void releaseRecording(long core, long commandBuffer) {
         ensureOpen();
         requireHandle(core, "core");

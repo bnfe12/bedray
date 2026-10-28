@@ -53,6 +53,12 @@ public interface RtPass {
     default void releaseRecording(long commandBuffer) {
     }
 
+    /** Proven unsubmitted discard; invalidate temporal state before releasing pins. */
+    default void discardRecording(long commandBuffer) {
+        resetHistory();
+        releaseRecording(commandBuffer);
+    }
+
     /**
      * Host flushed its pending submission builder, proved GPU idle and guarantees
      * that discarded local recordings cannot later be submitted. Idle alone is

@@ -1176,17 +1176,20 @@ void test_native_reservoir_owner() {
     CHECK(resource_range(fake::render_calls[0].resources, 19) == 64 * 64 * 128);
     CHECK(push_u32(fake::render_calls[0].push, 80) == BEDRAY_PATH_TRACE_DI_ENABLED);
     CHECK(push_u32(fake::render_calls[0].push, 84) == 0);
+    fixture.pass.discard_recording(0xDEAD);
     frame.command_buffer++;
     CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
     CHECK(fake::fills == 1);
     CHECK(resource_handle(fake::render_calls[2].resources, 19) == ring);
     CHECK(push_u32(fake::render_calls[2].push, 80) & BEDRAY_PATH_TRACE_DI_HISTORY);
     CHECK(push_u32(fake::render_calls[2].push, 84) == 1);
+    fixture.pass.discard_recording(frame.command_buffer);
+    CHECK_STATUS(fixture.release(frame.command_buffer), BEDRAY_OK);
     frame.command_buffer++;
-    frame.flags |= BEDRAY_PATH_TRACE_FRAME_RESET_DI;
     CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
     CHECK(fake::fills == 2);
     CHECK(!(push_u32(fake::render_calls[4].push, 80) & BEDRAY_PATH_TRACE_DI_HISTORY));
+    CHECK(push_u32(fake::render_calls[4].push, 84) == 0);
     frame.command_buffer++;
     frame.flags &= ~BEDRAY_PATH_TRACE_FRAME_RESET_DI;
     frame.camera.width = 32;
@@ -1207,6 +1210,15 @@ void test_native_reservoir_owner() {
     CHECK(fake::buffers.count(resized) == 1);
     CHECK_STATUS(fixture.release(0xD004), BEDRAY_OK);
     CHECK(fake::buffers.count(resized) == 0);
+    frame.command_buffer++;
+    frame.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::fills == 4);
+    frame.command_buffer++;
+    frame.flags |= BEDRAY_PATH_TRACE_FRAME_RESET_DI;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::fills == 5);
+    CHECK(!(push_u32(fake::render_calls[fake::render_calls.size() - 2].push, 80) & BEDRAY_PATH_TRACE_DI_HISTORY));
 }
 
 void test_extent_change_keeps_pinned_images() {

@@ -7,9 +7,10 @@ int wmain(int argc, wchar_t** argv) {
     HMODULE library = LoadLibraryW(argv[1]);
     if (!library) return 2;
     const char* exports[] = {
+        "bedray_core_discard_recording",
         "bedray_scene_abi_version", "bedray_scene_abi_info", "bedray_scene_create",
         "bedray_scene_update", "bedray_scene_update_table", "bedray_scene_set_view",
-        "bedray_scene_prepare_frame", "bedray_scene_release_frame",
+        "bedray_scene_prepare_frame", "bedray_scene_release_frame", "bedray_scene_discard_frame",
         "bedray_scene_query_resources", "bedray_scene_resident_bytes", "bedray_scene_destroy"
     };
     for (const char* name : exports) {

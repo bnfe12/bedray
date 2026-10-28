@@ -48,6 +48,7 @@ public final class BedraySceneNative implements AutoCloseable {
     private final MethodHandle setViewHandle;
     private final MethodHandle prepareFrameHandle;
     private final MethodHandle releaseFrameHandle;
+    private final MethodHandle discardFrameHandle;
     private final MethodHandle queryResourcesHandle;
     private final MethodHandle residentBytesHandle;
     private final MethodHandle destroyHandle;
@@ -149,6 +150,8 @@ public final class BedraySceneNative implements AutoCloseable {
             prepareFrameHandle = bind(linker, lookup, "bedray_scene_prepare_frame",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             releaseFrameHandle = bind(linker, lookup, "bedray_scene_release_frame",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+            discardFrameHandle = bind(linker, lookup, "bedray_scene_discard_frame",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
             queryResourcesHandle = bind(linker, lookup, "bedray_scene_query_resources",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
@@ -408,10 +411,19 @@ public final class BedraySceneNative implements AutoCloseable {
         }
     }
 
-    /**
-     * Records this frame's uploads, BLAS/TLAS builds and barriers into
-     * {@code commandBuffer} and publishes the resulting resources.
-     */
+    /** Abandons a proven non-resubmittable frame and poisons scene reuse until recreation. */
+    public void discardFrame(long scene, long frameIndex) {
+        ensureOpen();
+        requireHandle(scene, "scene");
+        requireHandle(frameIndex, "frameIndex");
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment error = a.allocate(BedraySceneLayouts.ERROR);
+            int status = (int) discardFrameHandle.invokeExact(handle(scene), frameIndex, error);
+            check("discard_frame", status, error);
+        } catch (Throwable t) { throw rethrow("discard_frame", t); }
+    }
+
+    /** Actual native allocations, including pinned and retired generations. */
     public long residentBytes(long scene) {
         ensureOpen();
         try (Arena a = Arena.ofConfined()) {
@@ -425,6 +437,7 @@ public final class BedraySceneNative implements AutoCloseable {
         }
     }
 
+    /** Records uploads/AS builds into the host buffer and publishes borrowed resources. */
     public FrameInfo prepareFrame(long scene, long frameIndex, long commandBuffer) {
         ensureOpen();
         requireHandle(scene, "scene");

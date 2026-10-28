@@ -81,7 +81,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
     private void configure(RtPathTraceSlangPass.Frame frame) {
         long deviceBytes = runtime.capabilities().deviceMemoryBytes();
         long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 512L << 20;
-        long bufferBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 4) : 16L << 20;
+        long bufferBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 4) : 512L << 20;
         library.configurePathTrace(core, programTrace, programTraceScene, programSpatial, programDisplay,
             imageBudget, bufferBudget, frame.width, frame.height);
         configured = true;

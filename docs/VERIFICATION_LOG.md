@@ -315,3 +315,39 @@ and all 17 AOT passes compile successfully. Targeted JUnit: 19 recording/manifes
 path-contract tests plus 4 scene API/POD packing tests pass. Existing Iris test
 Unsafe warnings and JOML deprecation diagnostics remain. Evidence: native/CPU L2,
 AOT/Java L1. No GPU/game result. Journal-only follow-up skips unchanged native CI.
+
+## 2026-10-28 — completion versus abandoned native writes
+
+Follow-up to the single-owner scene batch. RecordingCompletion now carries
+separate completed/discarded actions per owner and retains both disposition and
+successful actions across cleanup retries. UNKNOWN execution stays pinned until
+host drain, then uses conservative abandonment cleanup. Open recordings stay
+pinned; late callbacks cannot retire a reused handle generation.
+
+Additive core discard invalidates image initialization/accumulation and DI
+history/parity before exact graph/scheduler release. Additive scene discard
+poisons further update/prepare/resource queries, since its committed uploads/AS
+builds may never have executed; unrelated outstanding frames stay pinned and
+must still be released before scene recreation. Normal completion keeps caches.
+Java routes proof type to each owner. ABI v2 layouts and shader interfaces remain
+unchanged. The native-buffer fallback budget now covers the native DI ring when
+device-memory telemetry is absent (512 MiB rather than the old constants-only
+16 MiB). No submit/wait/device-wide idle is introduced in core/scene.
+
+No-GPU checks cover successful versus abandoned cleanup, unknown execution,
+discard retry, stale callbacks, pass history/parity invalidation and scene reuse
+refusal while another frame remains pinned. Java/native results pending for the
+final source revision; no GPU/game/visual correctness is claimed.
+
+Executed result: source `2ce6c6249180ad171556541a9e8bd466c21cf584`,
+[run 40725919179](https://github.com/bnfe12/bedray/actions/runs/40725919179):
+core 18/18, standalone scene 1/1, frame lifetime 1/1; ABI v2 probe exit 0.
+Both native jobs have no C/C++ compiler warnings/errors. GitHub reports the
+pinned actions' Node 20 runtime deprecation, separate from compiler/test results.
+Final local `:common:compileJava :common:test` with RecordingCompletionTest,
+BedraySceneGeometryTest, RtSceneApiTest, RtPathTraceSlangPassTest and
+SlangPassLibraryTest exits 0: 23 tests, zero failures/errors/skips. The recording
+suite executes the standalone completion/discard transition checks. All 17 AOT
+passes compiled in this worktree; the unchanged final shader sources reused
+those outputs. This is native/Java CPU L2 and compiler L1, not GPU/game evidence.
+Journal-only follow-up skips identical native CI. Native switches remain opt-in.
