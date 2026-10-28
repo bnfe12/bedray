@@ -214,8 +214,10 @@ common/src/main/resources/shaders/slang/
 ├── radiance_cascades/
 │   ├── rc_atlas_layout.slang          shared atlas addressing (record-format neutral)
 │   ├── interval_transport.slang       RCSegment, validity flags, front-to-back composition
-│   ├── segment_store.slang            typed atlas access, ray composition, typed probe resolve
-│   ├── rc_trace_options.slang         trace options, events, result, environment policy
+│   ├── segment_record.slang           typed whole-record read/write and ray composition
+│   ├── probe_resolve.slang            typed probe radiance and completeness
+│   ├── segment_store.slang            facade over segment_record + probe_resolve
+│   ├── rc_trace_options.slang         trace options, events, result, entry status, environment policy
 │   ├── rc_trace_shade.slang           first-surface emission + NEE
 │   ├── rc_trace_walk.slang            segment finalization + interval walk
 │   ├── rc_trace_dispatch.slang        store, probe and dispatch entries
@@ -873,7 +875,7 @@ candidates, not a validated or active runtime.
 | Algorithm | Module | State |
 |---|---|---|
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
-| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_atlas_layout.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace facade split into options/shade/walk/dispatch/history/ownership; segment store and typed probe resolve (`rcProbeIrradiance`/`rcProbeComplete`) are source-only in this checkout. The legacy float4 store is isolated behind `legacy_float4_store.slang`/`radiance_cascades_store.slang` and its resolve is named `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`; it is incompatible with the typed atlas. Environment is opt-in on a positive world boundary, so a terminal-cascade miss under a roof is not treated as sky. Cross-cascade reconstruction, unbiased temporal reuse and host integration are unfinished. |
+| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_atlas_layout.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace facade split into options/shade/walk/dispatch/history/ownership; `segment_store.slang` is a facade over `segment_record.slang` and `probe_resolve.slang`, and the typed probe resolve is `rcResolveProbe`/`rcProbeComplete` returning `RCProbeRadiance`; these are source-only in this checkout. The legacy float4 store is isolated behind `legacy_float4_store.slang`/`radiance_cascades_store.slang` and its resolve is named `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`; it is incompatible with the typed atlas. Environment is opt-in on a positive world boundary, so a terminal-cascade miss under a roof is not treated as sky. Cross-cascade reconstruction, unbiased temporal reuse and host integration are unfinished. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
 | Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ISceneTracer`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; the traced scene is terrain *and* the captured entity ring (`traversal/entity_geometry.slang`), decoded by the instance's custom-index bit; `RtSlangPathPass` wraps `RtPathTraceSlangPass`, the optional `RtSpatialReuseSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked |
 

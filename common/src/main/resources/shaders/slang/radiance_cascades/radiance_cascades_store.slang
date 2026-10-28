@@ -10,7 +10,7 @@
 // "radiance_cascades/radiance_cascades_store.slang" keeps compiling.  It
 // exposes only the legacy float4 API.  The resolve functions are named
 // rcLegacyProbeIrradiance / rcLegacyProbeComplete; the typed resolve keeps the
-// unqualified rcProbeIrradiance / rcProbeComplete names in segment_store.slang.
+// unqualified rcResolveProbe / rcProbeComplete names in probe_resolve.slang.
 //
 // The default bedray.slang root does not export this module.  A host that
 // deliberately keeps the old atlas imports bedray_legacy.slang or this path.

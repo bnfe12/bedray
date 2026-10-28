@@ -22,6 +22,14 @@
 // `current` and history.segments must be distinct buffers; the caller must
 // have completed the previous frame's writes and supplied the GPU memory
 // dependency.
+//
+// History telemetry
+// -----------------
+// Every blend attempt returns RCTemporalBlendCode; the blended entries fold the
+// codes into RCTemporalStatus.  A host that runs the provisional path needs the
+// acceptance rate and the rejection buckets, otherwise a history that is never
+// accepted is indistinguishable from one that is always accepted.  The status
+// is diagnostic only: it never changes the blend math.
 
 public module rc_trace_history;
 
@@ -49,6 +57,67 @@ struct RCTemporalHistory {
     uint   currentSceneRevision;
     float  weight;                    // history weight in (0, 1]
     bool   valid;                     // caller reprojection/disocclusion result
+};
+
+// Why one provisional blend did or did not commit.  The names are deliberately
+// specific: "rejected" alone cannot tell a disocclusion from a topology change.
+enum RCTemporalBlendCode : uint {
+    Accepted              = 0u,
+    InvalidCascade        = 1u,
+    HistoryUnusable       = 2u,
+    InvalidLayout         = 3u,
+    FreshInvalid          = 4u,
+    SegmentInvalid        = 5u,
+    InvalidWeight         = 6u,
+    TerminalClassMismatch = 7u,
+    OpacityMismatch       = 8u,
+    StoreFailed           = 9u,
+    InvalidAddress        = 10u,   // probe/ray outside the canonical grid
+};
+
+// Diagnostic counters for a probe or dispatch blended entry.  Exactly one
+// counter is incremented per blend attempt, so the five buckets sum to the
+// number of attempts.  `storeFailed` is a blend that was accepted but whose
+// records could not be written; it is not folded into `accepted`.
+struct RCTemporalStatus {
+    uint accepted;
+    uint rejectedMapping;   // history invalid, off-lattice, revision changed
+    uint rejectedInvalid;   // layout/address/weight/segment data invalid
+    uint rejectedClass;     // terminal class or opacity changed
+    uint storeFailed;
+};
+
+RCTemporalStatus emptyRCTemporalStatus() {
+    RCTemporalStatus status;
+    status.accepted = 0u;
+    status.rejectedMapping = 0u;
+    status.rejectedInvalid = 0u;
+    status.rejectedClass = 0u;
+    status.storeFailed = 0u;
+    return status;
+}
+
+void rcAccumulateTemporalStatus(inout RCTemporalStatus status,
+        RCTemporalBlendCode code) {
+    if (code == RCTemporalBlendCode.Accepted) {
+        status.accepted++;
+    } else if (code == RCTemporalBlendCode.HistoryUnusable) {
+        status.rejectedMapping++;
+    } else if (code == RCTemporalBlendCode.TerminalClassMismatch ||
+               code == RCTemporalBlendCode.OpacityMismatch) {
+        status.rejectedClass++;
+    } else if (code == RCTemporalBlendCode.StoreFailed) {
+        status.storeFailed++;
+    } else {
+        status.rejectedInvalid++;
+    }
+}
+
+// One trace entry plus the history counters it produced.  `trace` is the same
+// status a fresh entry returns; `history` is zero when no blend was attempted.
+struct RCTraceBlendedStatus {
+    RCTraceEntryStatus trace;
+    RCTemporalStatus history;
 };
 
 // Inverse of cascadeProbePosition for a previous-frame clipmap.  Returns false
@@ -99,28 +168,37 @@ uint rcHistoryRayIndex(uint rayIndex, uint currentRotation,
     return (directionIndex + rayCount - historyRotation % rayCount) % rayCount;
 }
 
-bool rcReadMappedHistoryRay(RCTemporalHistory history,
+RCTemporalBlendCode rcReadMappedHistoryRay(RCTemporalHistory history,
         RadianceCascadeLayout layout, uint cascade, uint rayIndex,
         float3 probePosition, uint currentRotation,
         out RCSegment nearSegment, out RCSegment farSegment) {
     nearSegment = rcUnresolvedSegment();
     farSegment = rcUnresolvedSegment();
-    if (cascade >= RADIANCE_CASCADE_COUNT) return false;
+    if (!rcLayoutCanonical(layout, history.historyCapacity)) {
+        return RCTemporalBlendCode.InvalidLayout;
+    }
+    if (cascade >= RADIANCE_CASCADE_COUNT) return RCTemporalBlendCode.InvalidCascade;
 
     RadianceCascadeDesc desc = radianceCascade(cascade);
+    if (rayIndex >= desc.rayCount) return RCTemporalBlendCode.InvalidAddress;
     uint historyProbeIndex;
     if (!rcHistoryUsable(history, desc, probePosition, historyProbeIndex)) {
-        return false;
+        return RCTemporalBlendCode.HistoryUnusable;
     }
     uint historyRayIndex = rcHistoryRayIndex(rayIndex, currentRotation,
         history.previousRotation, desc.rayCount);
-    nearSegment = rcReadSegment(history.segments, layout,
-        history.historyCapacity, cascade, historyProbeIndex, historyRayIndex,
-        RCT_INTERVAL_NEAR);
-    farSegment = rcReadSegment(history.segments, layout,
-        history.historyCapacity, cascade, historyProbeIndex, historyRayIndex,
-        RCT_INTERVAL_FAR);
-    return true;
+    uint nearIndex = rcUncheckedIntervalIndex(layout, cascade, historyProbeIndex,
+        historyRayIndex, RC_INTERVAL_NEAR);
+    uint farIndex = rcUncheckedIntervalIndex(layout, cascade, historyProbeIndex,
+        historyRayIndex, RC_INTERVAL_FAR);
+    if (nearIndex == RC_INVALID_RECORD || farIndex == RC_INVALID_RECORD) {
+        return RCTemporalBlendCode.InvalidAddress;
+    }
+    RCReadOnlySegmentSource source;
+    source.records = history.segments;
+    nearSegment = source.rcLoadSegment(nearIndex);
+    farSegment = source.rcLoadSegment(farIndex);
+    return RCTemporalBlendCode.Accepted;
 }
 
 // BLOCKED / BOUNDED_MISS / ENVIRONMENT describe the terminal topology of a
@@ -144,84 +222,107 @@ RCSegment rcLerpSegment(RCSegment fresh, RCSegment history, float alpha) {
 // valid and their terminal classes must match; an opaque near segment is
 // blended without requiring a far record.  The lerp is performed on L and T
 // independently, which ignores filter-stack and geometric path differences;
-// that bias is not removed by these checks.  Returns false (and leaves the
-// caller's fresh records untouched) when any precondition fails.
-bool rcProvisionalBlendRaySegments(RCSegment freshNear, RCSegment freshFar,
+// that bias is not removed by these checks.  On any rejection the caller's
+// fresh records are left untouched and the returned code names the reason.
+RCTemporalBlendCode rcProvisionalBlendRaySegments(RCSegment freshNear, RCSegment freshFar,
         RCSegment historyNear, RCSegment historyFar, float historyWeight,
         out RCSegment blendedNear, out RCSegment blendedFar) {
     blendedNear = freshNear;
     blendedFar = freshFar;
     if (!isFinite(historyWeight) || historyWeight <= 0.0 || historyWeight > 1.0) {
-        return false;
+        return RCTemporalBlendCode.InvalidWeight;
     }
-    if (!rcSegmentValid(freshNear) || !rcSegmentValid(historyNear)) return false;
+    if (!rcSegmentValid(freshNear) || !rcSegmentValid(historyNear)) {
+        return RCTemporalBlendCode.SegmentInvalid;
+    }
     if (rcSegmentTerminalClass(freshNear) != rcSegmentTerminalClass(historyNear)) {
-        return false;
+        return RCTemporalBlendCode.TerminalClassMismatch;
     }
 
     bool freshNearOpaque = all(freshNear.transmittance == float3(0.0));
     bool historyNearOpaque = all(historyNear.transmittance == float3(0.0));
-    if (freshNearOpaque != historyNearOpaque) return false;
+    if (freshNearOpaque != historyNearOpaque) return RCTemporalBlendCode.OpacityMismatch;
 
     float alpha = 1.0 - historyWeight;
     if (freshNearOpaque) {
         RCSegment mixedNear = rcLerpSegment(freshNear, historyNear, alpha);
-        if (!rcSegmentValid(mixedNear)) return false;
+        if (!rcSegmentValid(mixedNear)) return RCTemporalBlendCode.SegmentInvalid;
         blendedNear = mixedNear;
         blendedFar = rcUnresolvedSegment();
-        return true;
+        return RCTemporalBlendCode.Accepted;
     }
 
-    if (!rcSegmentValid(freshFar) || !rcSegmentValid(historyFar)) return false;
+    if (!rcSegmentValid(freshFar) || !rcSegmentValid(historyFar)) {
+        return RCTemporalBlendCode.SegmentInvalid;
+    }
     if (rcSegmentTerminalClass(freshFar) != rcSegmentTerminalClass(historyFar)) {
-        return false;
+        return RCTemporalBlendCode.TerminalClassMismatch;
     }
 
     RCSegment mixedNear = rcLerpSegment(freshNear, historyNear, alpha);
     RCSegment mixedFar = rcLerpSegment(freshFar, historyFar, alpha);
-    if (!rcSegmentValid(mixedNear) || !rcSegmentValid(mixedFar)) return false;
+    if (!rcSegmentValid(mixedNear) || !rcSegmentValid(mixedFar)) {
+        return RCTemporalBlendCode.SegmentInvalid;
+    }
     blendedNear = mixedNear;
     blendedFar = mixedFar;
-    return true;
+    return RCTemporalBlendCode.Accepted;
 }
 
 // Reads the mapped history and rewrites both current records only when the
 // provisional blend accepts them.  This is not an unbiased temporal resolve
 // and does not define clipping, disocclusion beyond `history.valid`, or
 // cross-cascade history.
-bool rcProvisionalBlendRayHistory(RWStructuredBuffer<RCSegment> current,
+RCTemporalBlendCode rcProvisionalBlendRayHistory(RWStructuredBuffer<RCSegment> current,
         RCTemporalHistory history, RadianceCascadeLayout layout, uint capacity,
         uint cascade, uint probeIndex, uint rayIndex, float3 probePosition,
         uint currentRotation) {
-    if (cascade >= RADIANCE_CASCADE_COUNT || !history.valid) return false;
+    if (!rcLayoutCanonical(layout, capacity)) return RCTemporalBlendCode.InvalidLayout;
+    if (cascade >= RADIANCE_CASCADE_COUNT) return RCTemporalBlendCode.InvalidCascade;
+    if (probeIndex >= layout.probeCount[cascade] ||
+        rayIndex >= layout.rayCount[cascade]) {
+        return RCTemporalBlendCode.InvalidAddress;
+    }
+    if (!isFinite(history.weight) || history.weight <= 0.0 || history.weight > 1.0) {
+        return RCTemporalBlendCode.InvalidWeight;
+    }
+    if (!history.valid) return RCTemporalBlendCode.HistoryUnusable;
 
-    RCSegment freshNear = rcReadSegment(current, layout, capacity, cascade,
-        probeIndex, rayIndex, RCT_INTERVAL_NEAR);
-    RCSegment freshFar = rcReadSegment(current, layout, capacity, cascade,
-        probeIndex, rayIndex, RCT_INTERVAL_FAR);
-    if (!rcSegmentValid(freshNear)) return false;
+    RCReadWriteSegmentSource currentSource;
+    currentSource.records = current;
+    uint nearIndex = rcUncheckedIntervalIndex(layout, cascade, probeIndex, rayIndex,
+        RC_INTERVAL_NEAR);
+    uint farIndex = rcUncheckedIntervalIndex(layout, cascade, probeIndex, rayIndex,
+        RC_INTERVAL_FAR);
+    if (nearIndex == RC_INVALID_RECORD || farIndex == RC_INVALID_RECORD) {
+        return RCTemporalBlendCode.InvalidAddress;
+    }
+    RCSegment freshNear = currentSource.rcLoadSegment(nearIndex);
+    RCSegment freshFar = currentSource.rcLoadSegment(farIndex);
+    if (!rcSegmentValid(freshNear)) return RCTemporalBlendCode.FreshInvalid;
 
     RCSegment historyNear;
     RCSegment historyFar;
-    if (!rcReadMappedHistoryRay(history, layout, cascade, rayIndex,
-            probePosition, currentRotation, historyNear, historyFar)) {
-        return false;
-    }
-
+    RCTemporalBlendCode code = rcReadMappedHistoryRay(history, layout, cascade,
+        rayIndex, probePosition, currentRotation, historyNear, historyFar);
+    if (code != RCTemporalBlendCode.Accepted) return code;
     RCSegment blendedNear;
     RCSegment blendedFar;
-    if (!rcProvisionalBlendRaySegments(freshNear, freshFar, historyNear,
-            historyFar, history.weight, blendedNear, blendedFar)) {
-        return false;
+    code = rcProvisionalBlendRaySegments(freshNear, freshFar, historyNear,
+        historyFar, history.weight, blendedNear, blendedFar);
+    if (code != RCTemporalBlendCode.Accepted) return code;
+
+    if (!rcWriteRaySegments(current, layout, capacity, cascade, probeIndex,
+            rayIndex, blendedNear, blendedFar)) {
+        return RCTemporalBlendCode.StoreFailed;
     }
-    return rcWriteRaySegments(current, layout, capacity, cascade, probeIndex,
-        rayIndex, blendedNear, blendedFar);
+    return RCTemporalBlendCode.Accepted;
 }
 
 // Probe trace with the provisional typed history blend.  The history mapping
 // and status checks are real; the lerp is explicitly a heuristic and is not a
 // guarantee of the resolve owner.
-uint traceCascadeProbeBlended<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
+RCTraceBlendedStatus traceCascadeProbeBlended<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,
@@ -229,33 +330,47 @@ uint traceCascadeProbeBlended<T : ISceneTracer, L : ILightSampler, E : IEnvironm
         float3 cameraOrigin, uint frameRotation,
         MaterialSamplingOptions materialOptions, RCTraceOptions options,
         inout uint seed) {
-    if (cascade >= RADIANCE_CASCADE_COUNT || cascade >= layout.cascadeCount) {
-        return 0u;
+    RCTraceBlendedStatus status;
+    status.trace = emptyRCTraceEntryStatus();
+    status.history = emptyRCTemporalStatus();
+
+    if (!rcLayoutCanonical(layout, capacity)) {
+        status.trace.code = uint(RCTraceEntryCode.InvalidLayout);
+        return status;
     }
+    if (cascade >= RADIANCE_CASCADE_COUNT) {
+        status.trace.code = uint(RCTraceEntryCode.InvalidDispatch);
+        return status;
+    }
+
     RadianceCascadeDesc desc = radianceCascade(cascade);
-    if (probeIndex >= probeCount(desc)) return 0u;
+    if (probeIndex >= probeCount(desc)) {
+        status.trace.code = uint(RCTraceEntryCode.InvalidDispatch);
+        return status;
+    }
 
     float3 probePosition = cascadeProbePosition(desc, probeIndex, cameraOrigin);
-    uint storeFailures = 0u;
+    status.trace.rays = desc.rayCount;
     for (uint rayIndex = 0u; rayIndex < desc.rayCount; ++rayIndex) {
         RCTraceResult result = rcTraceAndStoreRay(traversal, lights, environment,
             atlas, blockMaterials, layout, segments, capacity, cascade,
             probeIndex, rayIndex, cameraOrigin, frameRotation, materialOptions,
             options, seed);
-        if (!result.stored) {
-            storeFailures++;
-            continue;
-        }
-        rcProvisionalBlendRayHistory(segments, history, layout, capacity,
-            cascade, probeIndex, rayIndex, probePosition, frameRotation);
+        rcAccumulateTraceStatus(status.trace, result);
+        if (!result.stored) continue;
+
+        RCTemporalBlendCode code = rcProvisionalBlendRayHistory(segments, history,
+            layout, capacity, cascade, probeIndex, rayIndex, probePosition,
+            frameRotation);
+        rcAccumulateTemporalStatus(status.history, code);
     }
-    return storeFailures;
+    return status;
 }
 
 // Dispatch trace with the provisional typed history blend.  The caller must
 // supply the previous-frame camera origin, rotation and scene revision; the
 // same array index is not a stable world position after clipmap scrolling.
-uint traceCascadeDispatchBlended<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
+RCTraceBlendedStatus traceCascadeDispatchBlended<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,
@@ -263,23 +378,40 @@ uint traceCascadeDispatchBlended<T : ISceneTracer, L : ILightSampler, E : IEnvir
         float3 cameraOrigin, uint frameRotation,
         MaterialSamplingOptions materialOptions, RCTraceOptions options,
         inout uint seed) {
+    RCTraceBlendedStatus status;
+    status.trace = emptyRCTraceEntryStatus();
+    status.history = emptyRCTemporalStatus();
+
+    if (!rcLayoutCanonical(layout, capacity)) {
+        status.trace.code = uint(RCTraceEntryCode.InvalidLayout);
+        return status;
+    }
     RadianceProbeAddress address = decodeRadianceDispatch(globalIndex);
-    if (address.cascade >= RADIANCE_CASCADE_COUNT ||
-        address.cascade >= layout.cascadeCount) return 0u;
+    if (address.cascade >= RADIANCE_CASCADE_COUNT) {
+        status.trace.code = uint(RCTraceEntryCode.InvalidDispatch);
+        return status;
+    }
+
     RadianceCascadeDesc desc = radianceCascade(address.cascade);
     if (address.probeIndex >= probeCount(desc) ||
-        address.rayIndex >= desc.rayCount) return 0u;
+        address.rayIndex >= desc.rayCount) {
+        status.trace.code = uint(RCTraceEntryCode.InvalidDispatch);
+        return status;
+    }
 
+    status.trace.rays = 1u;
     RCTraceResult result = rcTraceAndStoreRay(traversal, lights, environment,
         atlas, blockMaterials, layout, segments, capacity, address.cascade,
         address.probeIndex, address.rayIndex, cameraOrigin, frameRotation,
         materialOptions, options, seed);
-    if (!result.stored) return 1u;
+    rcAccumulateTraceStatus(status.trace, result);
+    if (!result.stored) return status;
 
     float3 probePosition = cascadeProbePosition(desc, address.probeIndex,
         cameraOrigin);
-    rcProvisionalBlendRayHistory(segments, history, layout, capacity,
-        address.cascade, address.probeIndex, address.rayIndex, probePosition,
-        frameRotation);
-    return 0u;
+    RCTemporalBlendCode code = rcProvisionalBlendRayHistory(segments, history,
+        layout, capacity, address.cascade, address.probeIndex, address.rayIndex,
+        probePosition, frameRotation);
+    rcAccumulateTemporalStatus(status.history, code);
+    return status;
 }

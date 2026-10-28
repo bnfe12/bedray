@@ -12,7 +12,9 @@ Exactly opaque foreground transport can be resolved without a back sample.
 |---|---|
 | `rc_atlas_layout.slang` | record-neutral `(cascade, probe, ray, interval)` addressing shared by both atlases |
 | `interval_transport.slang` | `RCSegment`, validity flags, `rcComposeSegments` |
-| `segment_store.slang` | typed record access, ray composition, typed probe resolve |
+| `segment_record.slang` | typed whole-record read/write and near/far ray composition |
+| `probe_resolve.slang` | typed probe radiance/completeness resolve |
+| `segment_store.slang` | facade re-exporting `segment_record` and `probe_resolve` |
 | `rc_trace.slang` | typed probe-ray trace facade (see `RC_TRACE_API.md`) |
 | `legacy_float4_store.slang` | **legacy** float4 records and confidence-weighted resolve |
 | `radiance_cascades_store.slang` | **legacy** compatibility facade over the float4 store |
@@ -45,9 +47,9 @@ zero, and refuses to compose anything behind an `ENVIRONMENT` segment.
 
 ## Typed store contract
 
-`segment_store.slang` provides typed record access, clearing, near/far
-composition and probe resolve using the canonical cascade addressing.  Its
-capacity is a host-supplied descriptor-range element count, not a GPU bounds
+`segment_store.slang` is a facade over `segment_record.slang` (whole-record
+access and ray composition) and `probe_resolve.slang` (probe reconstruction).
+Its capacity is a host-supplied descriptor-range element count, not a GPU bounds
 query; the host must validate that count and the reflected stride.  Record
 writes require exclusive ownership and GPU synchronization.  A failed
 valid-address write normalizes the record to unresolved; invalid addresses do
@@ -55,14 +57,17 @@ not write.  Unresolved records have zero values and preserve `TRUNCATED` when
 supplied.  Other trace events, including invalid-input diagnostics, are not
 represented by this atlas.
 
-`rcProbeIrradiance` integrates only rays whose composed segment is valid.  Each
+`rcResolveProbe` integrates only rays whose composed segment is valid.  Each
 ray contributes the radiance of `rcComposeSegments(front, back)` with a cosine
 weight; confidence is never used as a blend weight, so an opaque front interval
 cannot be averaged with a bright back interval.  Rays that do not resolve are
-skipped rather than treated as black.  `rcProbeComplete` is the matching
-predicate: it requires every ray to resolve, and an exactly opaque front
-resolves without a back sample.  `rcProbeIrradiance` returns a cosine-weighted
-average radiance, not a π-scaled irradiance.
+skipped rather than treated as black.  It returns `RCProbeRadiance`, which
+separates `radiance`, `validRays`, `totalRays`, `complete`, `layoutValid` and
+`probeValid`; a partial probe is a biased estimate and the caller must check
+`complete`.  `rcProbeComplete` is the matching predicate: it requires every ray
+to resolve, and an exactly opaque front resolves without a back sample.
+`rcResolveProbe` returns a cosine-weighted average radiance, not a π-scaled
+irradiance.
 
 `rcWriteRaySegments` validates both addresses before writing and preserves a
 valid interval even if the other is unresolved.  Its success result means the

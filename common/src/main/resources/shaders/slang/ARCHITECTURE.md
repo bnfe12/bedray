@@ -73,6 +73,8 @@ The arrows are one-way.  A lower layer never imports a higher layer:
 - `surface/` imports `contracts/` and `traversal/entity_geometry` (data only).
 - `radiance_cascades.slang` is standalone addressing: it defines its own layout
   records and imports no traversal, surface or binding module.
+- `rc_atlas_layout` <- `interval_transport` <- `segment_record` <-
+  `probe_resolve`; `segment_store` is a facade over the last two.
 - `rc_trace_*` follows `options <- shade <- walk <- dispatch <- history`;
   `ownership` depends only on `options`.
 
@@ -129,8 +131,10 @@ owns the concept, not import "upward" from a pass.
 | `radiance_cascades.slang` | cascade/probe/ray addressing, Fibonacci directions, dispatch decode |
 | `radiance_cascades/rc_atlas_layout.slang` | shared linear atlas addressing; record-format neutral |
 | `radiance_cascades/interval_transport.slang` | `RCSegment`, validity flags, front-to-back composition |
-| `radiance_cascades/segment_store.slang` | typed record read/write, ray compose, typed probe resolve |
-| `radiance_cascades/rc_trace_options.slang` | options, diagnostics, result, environment policy |
+| `radiance_cascades/segment_record.slang` | typed whole-record read/write, sources, ray composition |
+| `radiance_cascades/probe_resolve.slang` | typed probe radiance/completeness resolve |
+| `radiance_cascades/segment_store.slang` | facade re-exporting `segment_record` + `probe_resolve` |
+| `radiance_cascades/rc_trace_options.slang` | options, diagnostics, result, entry status, environment policy |
 | `radiance_cascades/rc_trace_shade.slang` | first-surface emission + NEE |
 | `radiance_cascades/rc_trace_walk.slang` | segment finalization and the interval walk |
 | `radiance_cascades/rc_trace_dispatch.slang` | store, probe and dispatch trace entries |
@@ -140,6 +144,20 @@ owns the concept, not import "upward" from a pass.
 | `radiance_cascades/legacy_float4_store.slang` | **legacy** float4 record, confidence-weighted resolve |
 | `radiance_cascades/radiance_cascades_store.slang` | **legacy** compatibility facade over the float4 store |
 | `radiance_cascades/rc_trace_segments.slang` | **obsolete** experiment; not exported, not in the compile set |
+
+`segment_record.slang` is generic over `IRCSegmentSource`; the two concrete
+sources are `RCReadOnlySegmentSource` and `RCReadWriteSegmentSource`, so the
+read-only and writable buffer flavours share one implementation.  A pass that
+owns the writable atlas need not declare a second read-only binding just to
+compose a ray.
+
+`RCSegment` is pinned in the Gradle `STRUCT_LAYOUTS` table at 32 bytes with
+offsets 0/12/16/28.  The host still has to verify the reflected descriptor
+stride; the table only fails the build when the shader declaration drifts.
+
+The first typed-RC consumer is `passes/rc_probe_trace.slang`: one dispatch item
+decodes to one probe ray and calls `traceCascadeDispatch`.  It is a compile-only
+producer example, not a wired host pass.
 
 The typed and legacy atlases are different formats.  A `float4` record is
 `(radiance.rgb, confidence)`; an `RCSegment` is 32 bytes
@@ -176,10 +194,15 @@ short version:
 |---|---|---|
 | `traceCascadeRay` | nothing | `RCTraceResult` with near/far/composed |
 | `rcTraceAndStoreRay` | two `RCSegment` records | result plus `stored` |
-| `traceCascadeProbe` | one probe's ray records | count of address-pair failures |
-| `traceCascadeDispatch` | one decoded dispatch item | 0/1 store failure |
-| `traceCascadeProbeBlended` | fresh records then provisional history blend | count of address-pair failures |
-| `traceCascadeDispatchBlended` | fresh record then provisional history blend | 0/1 store failure |
+| `traceCascadeProbe` | one probe's ray records | `RCTraceEntryStatus` counters |
+| `traceCascadeDispatch` | one decoded dispatch item | `RCTraceEntryStatus` counters |
+| `traceCascadeProbeBlended` | fresh records then provisional history blend | `RCTraceBlendedStatus` |
+| `traceCascadeDispatchBlended` | fresh record then provisional history blend | `RCTraceBlendedStatus` |
+
+`RCTraceEntryStatus.code` says whether the entry arguments were accepted;
+`stored` counts address success, not ray validity.  `RCTraceBlendedStatus`
+separates the fresh trace status from the temporal acceptance/rejection
+buckets.  A zero store-failure count is not proof that the atlas is usable.
 
 Host responsibilities that the shader cannot check:
 
@@ -224,7 +247,8 @@ Host responsibilities that the shader cannot check:
 2. Read whole records with `rcReadSegment` or `rcResolveRay`.
 3. Compose only with `rcComposeSegments`.
 4. Skip invalid records; do not average confidence.
-5. Use `rcProbeComplete` when the consumer needs a completeness verdict.
+5. Use `rcResolveProbe` when a probe value is needed, and check `complete` (or
+   call `rcProbeComplete`) before treating it as trustworthy.
 
 ### Add a pass
 
@@ -280,7 +304,7 @@ Current harnesses:
 
 | Harness | Checks |
 |---|---|
-| `verify_rc_typed.slang` | typed store, typed resolve, layout without the legacy store |
+| `verify_rc_typed.slang` | typed store, both source flavours, `rcResolveProbe`, layout without the legacy store |
 | `verify_rc_environment.slang` | environment opt-in and zero-boundary rejection |
 | `verify_rc_trace_api.slang` | every public RC trace entry, options, history, ownership |
 | `verify_bedray_roots.slang` | both public roots compile together; typed and legacy resolve names stay distinct |

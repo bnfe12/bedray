@@ -37,10 +37,12 @@
 public module rc_trace_options;
 
 __exported import "radiance_cascades.slang";
+__exported import "radiance_cascades/rc_atlas_layout.slang";
 __exported import "radiance_cascades/interval_transport.slang";
 import "contracts/math.slang";
-static const uint RCT_INTERVAL_NEAR = 0u;
-static const uint RCT_INTERVAL_FAR  = 1u;
+// Trace-facing aliases of the canonical atlas interval indices.
+static const uint RCT_INTERVAL_NEAR = RC_INTERVAL_NEAR;
+static const uint RCT_INTERVAL_FAR  = RC_INTERVAL_FAR;
 
 // Sentinel for "this world position has no address in the previous grid".
 static const uint RCT_INVALID_PROBE = 0xFFFFFFFFu;
@@ -143,6 +145,54 @@ RCTraceResult emptyRCTraceResult() {
     result.farEvents = 0u;
     result.stored = false;
     return result;
+}
+
+// Entry-level outcome.  This is deliberately separate from RCTraceResult:
+// a probe entry covers many rays, and a dispatch entry either addressed one ray
+// or rejected the item before tracing.  "stored" never means "resolved"; an
+// invalid option set still writes unresolved records, so a host must read
+// invalidInput and unresolved, not only storeFailed.
+enum RCTraceEntryCode : uint {
+    Ok              = 0u,
+    InvalidLayout   = 1u,   // layout/capacity is not radianceCascadeLayout()
+    InvalidDispatch = 2u,   // cascade/probe/ray outside the canonical grid
+};
+
+struct RCTraceEntryStatus {
+    uint code;          // RCTraceEntryCode
+    uint rays;          // rays attempted; 0 when code != Ok
+    uint stored;        // address pairs written (not "resolved")
+    uint storeFailed;   // address pairs rejected
+    uint invalidInput;  // rays rejected by options/ray validation or dispatch decode
+    uint unresolved;    // stored rays whose composed record is not valid
+    uint clamped;       // stored rays with at least one clamped segment
+    uint truncated;     // stored rays with at least one truncated segment
+};
+
+RCTraceEntryStatus emptyRCTraceEntryStatus() {
+    RCTraceEntryStatus status;
+    status.code = uint(RCTraceEntryCode.Ok);
+    status.rays = 0u;
+    status.stored = 0u;
+    status.storeFailed = 0u;
+    status.invalidInput = 0u;
+    status.unresolved = 0u;
+    status.clamped = 0u;
+    status.truncated = 0u;
+    return status;
+}
+
+// Fold one ray result into an entry status.  The categories overlap on purpose:
+// an invalid-input ray is also stored and unresolved, because the store wrote a
+// fail-closed record.  A host that wants "usable rays" uses stored - unresolved.
+void rcAccumulateTraceStatus(inout RCTraceEntryStatus status, RCTraceResult result) {
+    const uint invalidMask = RC_TRACE_FLAG_INVALID_INPUT | RC_TRACE_FLAG_INVALID_DISPATCH;
+    if ((result.flags & invalidMask) != 0u) status.invalidInput++;
+    if (result.stored) status.stored++; else status.storeFailed++;
+    if (result.stored && !rcSegmentValid(result.composed)) status.unresolved++;
+    if ((result.flags & RC_TRACE_FLAG_CLAMPED) != 0u) status.clamped++;
+    if (((result.nearSegment.flags | result.farSegment.flags) &
+         RC_SEGMENT_TRUNCATED) != 0u) status.truncated++;
 }
 
 bool rcTraceOptionsValid(RCTraceOptions options) {

@@ -118,13 +118,22 @@ void main(uint3 tid : SV_DispatchThreadID) {
         blockMaterials, layout, segments, capacity, cascade, 0u, 0u,
         float3(0.0), 0u, materialOptions, options, seed);
 
-    uint probeFailures = traceCascadeProbe(tracer, lights, environment, atlas,
-        blockMaterials, layout, segments, capacity, cascade, 0u, float3(0.0),
-        0u, materialOptions, options, seed);
+    // Every entry reports an explicit status.  Reading all counters keeps the
+    // vocabulary pinned: adding or renaming a counter must break this harness.
+    RCTraceEntryStatus probeStatus = traceCascadeProbe(tracer, lights,
+        environment, atlas, blockMaterials, layout, segments, capacity, cascade,
+        0u, float3(0.0), 0u, materialOptions, options, seed);
 
-    uint dispatchFailures = traceCascadeDispatch(tracer, lights, environment,
-        atlas, blockMaterials, layout, segments, capacity, 0u, float3(0.0), 0u,
-        materialOptions, options, seed);
+    RCTraceEntryStatus dispatchStatus = traceCascadeDispatch(tracer, lights,
+        environment, atlas, blockMaterials, layout, segments, capacity, 0u,
+        float3(0.0), 0u, materialOptions, options, seed);
+
+    RCTraceEntryStatus foldedTrace = emptyRCTraceEntryStatus();
+    rcAccumulateTraceStatus(foldedTrace, stored);
+    rcAccumulateTraceStatus(foldedTrace, single);
+    bool traceCodeIsEnum = probeStatus.code == uint(RCTraceEntryCode.Ok) ||
+        probeStatus.code == uint(RCTraceEntryCode.InvalidLayout) ||
+        probeStatus.code == uint(RCTraceEntryCode.InvalidDispatch);
 
     RCTemporalHistory history;
     history.segments = historySegments;
@@ -136,17 +145,31 @@ void main(uint3 tid : SV_DispatchThreadID) {
     history.weight = 0.9;
     history.valid = true;
 
-    uint blendedProbeFailures = traceCascadeProbeBlended(tracer, lights,
+    RCTraceBlendedStatus blendedProbe = traceCascadeProbeBlended(tracer, lights,
         environment, atlas, blockMaterials, layout, segments, capacity, history,
         cascade, 0u, float3(0.0), 0u, materialOptions, options, seed);
 
-    uint blendedDispatchFailures = traceCascadeDispatchBlended(tracer, lights,
-        environment, atlas, blockMaterials, layout, segments, capacity, history,
-        0u, float3(0.0), 0u, materialOptions, options, seed);
+    RCTraceBlendedStatus blendedDispatch = traceCascadeDispatchBlended(tracer,
+        lights, environment, atlas, blockMaterials, layout, segments, capacity,
+        history, 0u, float3(0.0), 0u, materialOptions, options, seed);
+
+    RCTemporalStatus foldedHistory = emptyRCTemporalStatus();
+    rcAccumulateTemporalStatus(foldedHistory, RCTemporalBlendCode.Accepted);
+    rcAccumulateTemporalStatus(foldedHistory, RCTemporalBlendCode.HistoryUnusable);
+    rcAccumulateTemporalStatus(foldedHistory, RCTemporalBlendCode.TerminalClassMismatch);
+    rcAccumulateTemporalStatus(foldedHistory, RCTemporalBlendCode.InvalidWeight);
+    rcAccumulateTemporalStatus(foldedHistory, RCTemporalBlendCode.InvalidAddress);
+    rcAccumulateTemporalStatus(foldedHistory, RCTemporalBlendCode.StoreFailed);
+
+    // The typed probe resolve is the current name; the float4 resolve keeps the
+    // rcLegacyProbeIrradiance name and is not imported by this harness.
+    RCProbeRadiance probeRadiance = rcResolveProbe(historySegments, layout,
+        capacity, cascade, 0u, float3(0.0, 1.0, 0.0), 0u);
 
     RCCascadeOwnershipBand band;
     bool bandValid = rcCascadeOwnershipBand(cascade, band);
-    RCTraceOptions bandOptions = rcApplyCascadeOwnershipBand(options, cascade);
+    RCTraceOptions bandOptions;
+    bool bandApplied = rcApplyCascadeOwnershipBand(options, cascade, bandOptions);
 
     RCSegment composed = rcComposeSegments(single.nearSegment, single.farSegment);
     bool optionsValid = rcTraceOptionsValid(options);
@@ -157,9 +180,32 @@ void main(uint3 tid : SV_DispatchThreadID) {
     sink[0] = float4(single.distance, stored.distance, band.nearDistance,
         band.farDistance);
     sink[1] = float4(composed.radiance, composed.confidence);
-    sink[2] = float4(float(probeFailures + dispatchFailures),
-        float(blendedProbeFailures + blendedDispatchFailures),
+    sink[2] = float4(float(probeStatus.rays + dispatchStatus.rays),
+        float(probeStatus.stored + dispatchStatus.stored),
         optionsValid ? 1.0 : 0.0, environmentAllowed ? 1.0 : 0.0);
     sink[3] = float4(bandValid ? band.splitDistance : 0.0,
-        bandOptions.farDistance, historyRayMapped ? 1.0 : 0.0, 1.0);
+        bandApplied ? bandOptions.farDistance : 0.0,
+        historyRayMapped ? 1.0 : 0.0, traceCodeIsEnum ? 1.0 : 0.0);
+    sink[4] = float4(float(probeStatus.unresolved + dispatchStatus.unresolved),
+        float(probeStatus.storeFailed + dispatchStatus.storeFailed),
+        float(probeStatus.invalidInput + dispatchStatus.invalidInput),
+        float(probeStatus.truncated + dispatchStatus.truncated));
+    sink[5] = float4(float(blendedProbe.trace.stored + blendedDispatch.trace.stored),
+        float(blendedProbe.history.accepted + blendedDispatch.history.accepted),
+        float(blendedProbe.history.rejectedMapping +
+              blendedDispatch.history.rejectedMapping),
+        float(blendedProbe.history.rejectedInvalid +
+              blendedDispatch.history.rejectedInvalid));
+    sink[6] = float4(float(blendedProbe.history.rejectedClass +
+                           blendedDispatch.history.rejectedClass),
+        float(blendedProbe.history.storeFailed +
+              blendedDispatch.history.storeFailed),
+        float(foldedTrace.rays),
+        float(foldedHistory.accepted + foldedHistory.rejectedMapping +
+              foldedHistory.rejectedInvalid + foldedHistory.rejectedClass +
+              foldedHistory.storeFailed));
+    sink[7] = float4(probeRadiance.radiance, probeRadiance.complete ? 1.0 : 0.0);
+    sink[8] = float4(float(probeRadiance.validRays), float(probeRadiance.totalRays),
+        probeRadiance.layoutValid ? 1.0 : 0.0,
+        probeRadiance.probeValid ? 1.0 : 0.0);
 }

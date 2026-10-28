@@ -100,8 +100,12 @@ RCShadedSurface rcShadeSurface<T : ISceneTracer, L : ILightSampler>(
                             any(transmittance > float3(1.0))) return result;
                     }
                     if (transmittance.r + transmittance.g + transmittance.b > 0.0) {
+                        // sourcePdf was validated positive above; a floor here
+                        // would only hide a malformed sampler behind a biased
+                        // estimate.  The finite check below still rejects an
+                        // overflowed division.
                         float3 contribution = bsdf * light.radiance * transmittance /
-                            max(light.sourcePdf, 1.0e-6);
+                            light.sourcePdf;
                         if (!isFinite(contribution) ||
                             any(contribution < float3(0.0))) return result;
                         radiance += contribution;

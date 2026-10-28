@@ -48,11 +48,17 @@ bool rcCascadeOwnershipBand(uint cascade, out RCCascadeOwnershipBand band) {
     return true;
 }
 
-RCTraceOptions rcApplyCascadeOwnershipBand(RCTraceOptions options, uint cascade) {
+// Writes the band into `outOptions` and returns true only when the cascade is
+// valid and its band is non-empty.  On false, `outOptions` is left unchanged, so
+// a caller cannot accidentally trace a malformed band.  The existing options
+// are preserved except for nearDistance/farDistance; the caller remains
+// responsible for every other policy field.
+bool rcApplyCascadeOwnershipBand(RCTraceOptions options, uint cascade,
+        out RCTraceOptions outOptions) {
+    outOptions = options;
     RCCascadeOwnershipBand band;
-    if (rcCascadeOwnershipBand(cascade, band)) {
-        options.nearDistance = band.nearDistance;
-        options.farDistance = band.farDistance;
-    }
-    return options;
+    if (!rcCascadeOwnershipBand(cascade, band)) return false;
+    outOptions.nearDistance = band.nearDistance;
+    outOptions.farDistance = band.farDistance;
+    return true;
 }

@@ -13,9 +13,9 @@
 //   segment_store.slang     typed atlas read/write/resolve
 //
 // The resolve entry points are deliberately named rcLegacyProbeIrradiance and
-// rcLegacyProbeComplete.  The unqualified rcProbeIrradiance/rcProbeComplete
-// names belong to the typed store; keeping one vocabulary per atlas prevents a
-// host from wiring the float4 resolve to a typed descriptor.
+// rcLegacyProbeComplete.  The unqualified rcResolveProbe/rcProbeComplete names
+// belong to the typed store; keeping one vocabulary per atlas prevents a host
+// from wiring the float4 resolve to a typed descriptor.
 
 public module legacy_float4_store;
 
@@ -26,7 +26,7 @@ static const float RC_MAX_CONFIDENCE = 64.0;
 
 float4 rcLoadInterval(StructuredBuffer<float4> intervals, RadianceCascadeLayout layout,
         uint cascade, uint probeIndex, uint rayIndex, uint interval) {
-    uint index = rcIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
+    uint index = rcUncheckedIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
     if (index == RC_INVALID_RECORD) return float4(0.0);
     return intervals[index];
 }
@@ -35,7 +35,7 @@ float4 rcLoadInterval(StructuredBuffer<float4> intervals, RadianceCascadeLayout 
 // reconstruction).  This overload avoids binding the same buffer twice.
 float4 rcLoadInterval(RWStructuredBuffer<float4> intervals, RadianceCascadeLayout layout,
         uint cascade, uint probeIndex, uint rayIndex, uint interval) {
-    uint index = rcIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
+    uint index = rcUncheckedIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
     if (index == RC_INVALID_RECORD) return float4(0.0);
     return intervals[index];
 }
@@ -43,7 +43,7 @@ float4 rcLoadInterval(RWStructuredBuffer<float4> intervals, RadianceCascadeLayou
 void rcStoreInterval(RWStructuredBuffer<float4> intervals, RadianceCascadeLayout layout,
         uint cascade, uint probeIndex, uint rayIndex, uint interval,
         float3 radiance, float confidence) {
-    uint index = rcIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
+    uint index = rcUncheckedIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
     if (index == RC_INVALID_RECORD) return;
     intervals[index] = float4(radiance, clamp(confidence, 0.0, RC_MAX_CONFIDENCE));
 }
@@ -54,7 +54,7 @@ void rcStoreInterval(RWStructuredBuffer<float4> intervals, RadianceCascadeLayout
 void rcAccumulateInterval(RWStructuredBuffer<float4> intervals, RadianceCascadeLayout layout,
         uint cascade, uint probeIndex, uint rayIndex, uint interval,
         float3 radiance, float weight) {
-    uint index = rcIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
+    uint index = rcUncheckedIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
     if (index == RC_INVALID_RECORD || weight <= 0.0) return;
 
     float4 previous = intervals[index];
@@ -74,7 +74,7 @@ void rcTemporalBlend(RWStructuredBuffer<float4> current, StructuredBuffer<float4
         RadianceCascadeLayout layout, uint cascade, uint probeIndex, uint rayIndex,
         uint interval, uint historyProbeIndex, uint currentRotation, uint historyRotation,
         bool historyValid, float historyWeight) {
-    uint index = rcIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
+    uint index = rcUncheckedIntervalIndex(layout, cascade, probeIndex, rayIndex, interval);
     if (index == RC_INVALID_RECORD) return;
 
     float4 fresh = current[index];
@@ -84,7 +84,7 @@ void rcTemporalBlend(RWStructuredBuffer<float4> current, StructuredBuffer<float4
     uint directionIndex = (rayIndex + currentRotation % count) % count;
     uint oldRotation = historyRotation % count;
     uint historyRay = (directionIndex + count - oldRotation) % count;
-    uint historyIndex = rcIntervalIndex(layout, cascade, historyProbeIndex, historyRay, interval);
+    uint historyIndex = rcUncheckedIntervalIndex(layout, cascade, historyProbeIndex, historyRay, interval);
     if (historyIndex == RC_INVALID_RECORD) return;
     float4 previous = history[historyIndex];
     if (previous.a <= 0.0) return;
@@ -110,7 +110,7 @@ void rcClearProbe(RWStructuredBuffer<float4> intervals, RadianceCascadeLayout la
 }
 
 // LEGACY confidence-weighted resolve.  The caller must bind the float4 atlas;
-// the typed equivalent is rcProbeIrradiance over RCSegment in segment_store.
+// the typed equivalent is rcResolveProbe over RCSegment in probe_resolve.
 // Reconstructs irradiance for a shading normal by integrating the near/far
 // intervals.  The two intervals are merged by confidence; a caller that needs
 // distance-dependent GI can read the intervals directly instead.

@@ -1,7 +1,7 @@
 // Typed Radiance Cascades trace: store, probe and dispatch entries.
 //
 // These entries are the host-facing producer boundary.  They trace one ray or
-// one probe and write whole RCSegment records through segment_store.slang.
+// one probe and write whole RCSegment records through segment_record.slang.
 // Temporal reuse is deliberately absent; see rc_trace_history.slang for the
 // explicitly provisional blend.
 //
@@ -24,13 +24,18 @@
 // writes (not accumulates); cross-frame accumulation belongs to the resolve
 // owner.
 //
-// Dispatch contract
-// -----------------
-// traceCascadeProbe returns the number of rays whose address pair was not
-// written (non-canonical layout, insufficient capacity).  Zero does not mean
-// every segment resolved; read the typed records or use traceCascadeRay for
-// status.  traceCascadeDispatch decodes a flat dispatch index; a stale
-// oversized dispatch returns the cascade sentinel and writes nothing.
+// Entry status
+// ------------
+// traceCascadeProbe and traceCascadeDispatch return RCTraceEntryStatus, not a
+// bare failure count.  `code` says whether the entry arguments were accepted
+// at all; the counters then separate store failures, invalid options/rays,
+// unresolved compositions, clamps and truncations.  This is required because
+// an invalid option set still writes unresolved records: a "0 failures" return
+// must never be read as "the atlas is usable".
+//
+// traceCascadeProbe traces every ray of one probe.  traceCascadeDispatch decodes
+// one flat dispatch index; a stale oversized dispatch returns
+// InvalidDispatch and touches neither the atlas nor the status counters.
 
 public module rc_trace_dispatch;
 
@@ -81,53 +86,78 @@ RCTraceResult rcTraceAndStoreRay<T : ISceneTracer, L : ILightSampler, E : IEnvir
     return result;
 }
 
-// Fresh probe trace, no temporal reuse.  Returns the number of rays whose
-// store address pair was not written.  A zero count does not mean every
-// segment resolved; read the typed records or use traceCascadeRay for status.
-uint traceCascadeProbe<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
+// Fresh probe trace, no temporal reuse.  The returned status is the only
+// supported way to distinguish "all rays stored" from "all rays were invalid".
+RCTraceEntryStatus traceCascadeProbe<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,
         uint capacity, uint cascade, uint probeIndex, float3 cameraOrigin,
         uint frameRotation, MaterialSamplingOptions materialOptions,
         RCTraceOptions options, inout uint seed) {
-    if (cascade >= RADIANCE_CASCADE_COUNT || cascade >= layout.cascadeCount) {
-        return 0u;
+    RCTraceEntryStatus status = emptyRCTraceEntryStatus();
+    // The layout is the global precondition: a host with a bad layout always
+    // gets InvalidLayout, even when the requested cascade is also out of range.
+    if (!rcLayoutCanonical(layout, capacity)) {
+        status.code = uint(RCTraceEntryCode.InvalidLayout);
+        return status;
     }
-    RadianceCascadeDesc desc = radianceCascade(cascade);
-    if (probeIndex >= probeCount(desc)) return 0u;
+    if (cascade >= RADIANCE_CASCADE_COUNT) {
+        status.code = uint(RCTraceEntryCode.InvalidDispatch);
+        return status;
+    }
 
-    uint storeFailures = 0u;
+    RadianceCascadeDesc desc = radianceCascade(cascade);
+    if (probeIndex >= probeCount(desc)) {
+        status.code = uint(RCTraceEntryCode.InvalidDispatch);
+        return status;
+    }
+
+    status.rays = desc.rayCount;
     for (uint rayIndex = 0u; rayIndex < desc.rayCount; ++rayIndex) {
         RCTraceResult result = rcTraceAndStoreRay(traversal, lights, environment,
             atlas, blockMaterials, layout, segments, capacity, cascade,
             probeIndex, rayIndex, cameraOrigin, frameRotation, materialOptions,
             options, seed);
-        if (!result.stored) storeFailures++;
+        rcAccumulateTraceStatus(status, result);
     }
-    return storeFailures;
+    return status;
 }
 
 // decodeRadianceDispatch splits a flat dispatch index into cascade / probe /
-// ray, so one compute dispatch covers the whole cascade set.  The sentinel
-// cascade means a stale oversized dispatch: the store is not touched.
-uint traceCascadeDispatch<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
+// ray, so one compute dispatch covers the whole cascade set.  A stale oversized
+// dispatch returns InvalidDispatch and touches neither the atlas nor the
+// counters.
+RCTraceEntryStatus traceCascadeDispatch<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         RadianceCascadeLayout layout, RWStructuredBuffer<RCSegment> segments,
         uint capacity, uint globalIndex, float3 cameraOrigin, uint frameRotation,
         MaterialSamplingOptions materialOptions, RCTraceOptions options,
         inout uint seed) {
+    RCTraceEntryStatus status = emptyRCTraceEntryStatus();
+    if (!rcLayoutCanonical(layout, capacity)) {
+        status.code = uint(RCTraceEntryCode.InvalidLayout);
+        return status;
+    }
     RadianceProbeAddress address = decodeRadianceDispatch(globalIndex);
-    if (address.cascade >= RADIANCE_CASCADE_COUNT ||
-        address.cascade >= layout.cascadeCount) return 0u;
+    if (address.cascade >= RADIANCE_CASCADE_COUNT) {
+        status.code = uint(RCTraceEntryCode.InvalidDispatch);
+        return status;
+    }
+
     RadianceCascadeDesc desc = radianceCascade(address.cascade);
     if (address.probeIndex >= probeCount(desc) ||
-        address.rayIndex >= desc.rayCount) return 0u;
+        address.rayIndex >= desc.rayCount) {
+        status.code = uint(RCTraceEntryCode.InvalidDispatch);
+        return status;
+    }
 
+    status.rays = 1u;
     RCTraceResult result = rcTraceAndStoreRay(traversal, lights, environment,
         atlas, blockMaterials, layout, segments, capacity, address.cascade,
         address.probeIndex, address.rayIndex, cameraOrigin, frameRotation,
         materialOptions, options, seed);
-    return result.stored ? 0u : 1u;
+    rcAccumulateTraceStatus(status, result);
+    return status;
 }
