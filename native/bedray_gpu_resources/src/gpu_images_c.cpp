@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <new>
+#include <memory>
 #include <type_traits>
 
 struct BedrayGpuImageOwner {
@@ -29,8 +30,8 @@ BedrayGpuImageInfo image_info(ImageId id, const ImageView& view) noexcept {
 }
 
 extern "C" {
-uint32_t BEDRAY_GPU_CALL bedray_gpu_image_abi_version(void) { return BEDRAY_GPU_IMAGE_ABI_VERSION; }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_abi_info(BedrayGpuImageAbiInfo* out, uint32_t size) {
+uint32_t BEDRAY_GPU_CALL bedray_gpu_image_abi_version(void) try { return BEDRAY_GPU_IMAGE_ABI_VERSION; } catch (...) { return 0; }
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_abi_info(BedrayGpuImageAbiInfo* out, uint32_t size) try {
     if (!out || size < sizeof(BedrayGpuImageAbiInfo)) return BEDRAY_GPU_INVALID_ARGUMENT;
     BedrayGpuImageAbiInfo info{};
     info.version = BEDRAY_GPU_IMAGE_ABI_VERSION; info.sizeof_info = sizeof(info);
@@ -48,8 +49,12 @@ BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_abi_info(BedrayGpuImageAbiInfo*
 #undef IMAGE_OFFSET
     std::copy_n(owner, 10, info.owner_offsets); std::copy_n(image, 8, info.image_offsets);
     *out = info; return BEDRAY_GPU_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_owner_create(const BedrayGpuImageOwnerDesc* desc, BedrayGpuImageOwner** out) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_owner_create(const BedrayGpuImageOwnerDesc* desc, BedrayGpuImageOwner** out) try {
     if (!desc || !out) return BEDRAY_GPU_INVALID_ARGUMENT;
     *out = nullptr;
     if (desc->abi_version != BEDRAY_GPU_IMAGE_ABI_VERSION || desc->struct_size < sizeof(BedrayGpuImageOwnerDesc))
@@ -75,67 +80,114 @@ BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_owner_create(const BedrayGpuIma
     f.create_view = address<PFN_vkCreateImageView>(desc->functions[BEDRAY_GPU_CREATE_IMAGE_VIEW]);
     f.destroy_view = address<PFN_vkDestroyImageView>(desc->functions[BEDRAY_GPU_DESTROY_IMAGE_VIEW]);
     f.image_format_properties = address<PFN_vkGetPhysicalDeviceImageFormatProperties>(desc->functions[BEDRAY_GPU_IMAGE_FORMAT_PROPERTIES]);
-    auto* result = new (std::nothrow) BedrayGpuImageOwner(context, desc->budget_bytes);
-    if (!result) return BEDRAY_GPU_OUT_OF_MEMORY;
-    if (!result->images.valid()) { delete result; return BEDRAY_GPU_INVALID_ARGUMENT; }
-    *out = result; return BEDRAY_GPU_OK;
+    auto result = std::make_unique<BedrayGpuImageOwner>(context, desc->budget_bytes);
+    if (!result->images.valid()) return BEDRAY_GPU_INVALID_ARGUMENT;
+    *out = result.release(); return BEDRAY_GPU_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_owner_destroy(BedrayGpuImageOwner* owner) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_owner_destroy(BedrayGpuImageOwner* owner) try {
     if (!owner) return BEDRAY_GPU_INVALID_ARGUMENT;
     if (!owner->released) {
         const Status closed = owner->images.close();
         if (closed != Status::ok) return status(closed);
     }
     delete owner; return BEDRAY_GPU_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
 BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_create(BedrayGpuImageOwner* owner, uint32_t width, uint32_t height,
-    uint32_t format, uint32_t usage, uint32_t required, uint32_t preferred, BedrayGpuImageInfo* out, int32_t* vk_result) {
+    uint32_t format, uint32_t usage, uint32_t required, uint32_t preferred, BedrayGpuImageInfo* out, int32_t* vk_result) try {
     if (!owner || !out || !vk_result) return BEDRAY_GPU_INVALID_ARGUMENT;
     ImageId id{}; ImageView view{}; VkResult vk = VK_SUCCESS;
     const Status result = owner->images.create({width, height, static_cast<VkFormat>(format), usage, required, preferred}, id, view, vk);
     *vk_result = static_cast<int32_t>(vk);
     if (result == Status::ok) *out = image_info(id, view);
     return status(result);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
 BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_view(BedrayGpuImageOwner* owner, uint64_t generation, uint64_t serial,
-    BedrayGpuImageInfo* out) {
+    BedrayGpuImageInfo* out) try {
     if (!owner || !out) return BEDRAY_GPU_INVALID_ARGUMENT;
     ImageView view{}; const ImageId id{generation, serial};
     const Status result = owner->images.view(id, view);
     if (result == Status::ok) *out = image_info(id, view);
     return status(result);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
 BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_use_begin(BedrayGpuImageOwner* owner, uint64_t generation, uint64_t serial,
-    BedrayGpuUseToken* out) {
+    BedrayGpuUseToken* out) try {
     if (!owner || !out) return BEDRAY_GPU_INVALID_ARGUMENT;
     UseId token{}; const Status result = owner->images.begin_use({generation, serial}, token);
     if (result == Status::ok) *out = {token.owner_generation, token.serial};
     return status(result);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_use_complete(BedrayGpuImageOwner* owner, uint64_t generation, uint64_t serial) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_use_complete(BedrayGpuImageOwner* owner, uint64_t generation, uint64_t serial) try {
     return owner ? status(owner->images.complete_use({generation, serial})) : BEDRAY_GPU_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_retire(BedrayGpuImageOwner* owner, uint64_t generation, uint64_t serial) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_retire(BedrayGpuImageOwner* owner, uint64_t generation, uint64_t serial) try {
     return owner ? status(owner->images.retire({generation, serial})) : BEDRAY_GPU_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_collect(BedrayGpuImageOwner* owner) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_collect(BedrayGpuImageOwner* owner) try {
     return owner ? status(owner->images.collect()) : BEDRAY_GPU_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_resident_bytes(BedrayGpuImageOwner* owner, uint64_t* out) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_resident_bytes(BedrayGpuImageOwner* owner, uint64_t* out) try {
     if (!owner || !out) return BEDRAY_GPU_INVALID_ARGUMENT;
     *out = owner->images.resident_bytes(); return BEDRAY_GPU_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_device_idle(BedrayGpuImageOwner* owner) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_device_idle(BedrayGpuImageOwner* owner) try {
     return owner ? status(owner->images.device_idle()) : BEDRAY_GPU_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_device_lost(BedrayGpuImageOwner* owner) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_device_lost(BedrayGpuImageOwner* owner) try {
     if (!owner) return BEDRAY_GPU_INVALID_ARGUMENT;
     owner->images.device_lost(); return BEDRAY_GPU_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
-BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_release_after_device_loss(BedrayGpuImageOwner* owner) {
+BedrayGpuStatus BEDRAY_GPU_CALL bedray_gpu_image_release_after_device_loss(BedrayGpuImageOwner* owner) try {
     if (!owner) return BEDRAY_GPU_INVALID_ARGUMENT;
     const Status result = owner->images.release_after_device_loss();
     if (result == Status::ok) owner->released = true;
     return status(result);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_GPU_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_GPU_INTERNAL_ERROR;
 }
 }

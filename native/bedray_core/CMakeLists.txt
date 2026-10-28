@@ -90,6 +90,7 @@ set_target_properties(bedray_core PROPERTIES
 add_executable(bedray_abi_probe tools/abi_probe.cpp)
 target_link_libraries(bedray_abi_probe PRIVATE bedray_core)
 target_include_directories(bedray_abi_probe PRIVATE include)
+add_test(NAME bedray_abi_probe COMMAND bedray_abi_probe)
 if(MSVC)
     set_property(TARGET bedray_abi_probe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
@@ -136,3 +137,15 @@ if(MSVC)
     set_property(TARGET bedray_path_trace_pass_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 add_test(NAME bedray_path_trace_pass_test COMMAND bedray_path_trace_pass_test)
+
+# Compile the real C wrappers into the test process so the allocation fault
+# injector controls their operator new (the DLL has its own static CRT).
+add_executable(bedray_abi_exception_test tests/abi_exception_test.cpp
+    "${CMAKE_CURRENT_LIST_DIR}/../bedray_history/src/history_c.cpp")
+target_link_libraries(bedray_abi_exception_test PRIVATE bedray_gpu_resources_c bedray_history)
+target_compile_definitions(bedray_abi_exception_test PRIVATE BEDRAY_CORE_BUILD)
+if(MSVC)
+    target_compile_options(bedray_abi_exception_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+    set_property(TARGET bedray_abi_exception_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_test(NAME bedray_abi_exception COMMAND bedray_abi_exception_test)

@@ -46,7 +46,9 @@ enum {
     BEDRAY_HISTORY_TICKETS_EXHAUSTED = 17,
     BEDRAY_HISTORY_INVALID_ARGUMENT = 0x100,
     BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY = 0x101,
-    BEDRAY_HISTORY_IN_USE = 0x102
+    BEDRAY_HISTORY_IN_USE = 0x102,
+    /* Unexpected C++ exception in the wrapper; no successful output is published. */
+    BEDRAY_HISTORY_INTERNAL_ERROR = 0x103
 };
 /* Explicit default: zero intentionally disables the four optional resets. */
 #define BEDRAY_HISTORY_DEFAULT_SENSITIVITY (BEDRAY_HISTORY_RESET_TARGET | BEDRAY_HISTORY_RESET_SCENE | \
