@@ -55,6 +55,16 @@ The three live runs wrote fresh `autotest/world/02_world_{a,b,c}.png`
 (2560x1440) and left no new crash dump. The C++ run exercised the 8-binding
 contract at dispatch time, not just at build time.
 
+Rebased onto `4dc68d5` (PR #27, native guide outputs) and then `0898b00`
+(PR #28, native particle composite). The one semantic merge change is the
+renderer's NRD guard: the Java Slang path fills motion now, while the C++
+backend forwards the seven guides but still writes no world-space motion, so
+`RtFrameRenderer` refuses NRD only when `SLANG_PATH_TRACE_CPP` is set.
+`RtSlangGbufferGuidesTest` pins that split. After the second rebase the merged
+tree re-ran 745 Java tests (0 failures, 0 errors, 3 skipped), 19/19 CTest, and a
+live `nativeScene + nativePathTrace` world run (`result=PASS`,
+`restir_di=native+spatial`, `restir_spatial` 8 bindings / 64 B push, no crash).
+
 ## 2026-10-29 — NRD IN_MV motion channel from the typed path (L1 compile, L2 unit)
 
 Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20,
