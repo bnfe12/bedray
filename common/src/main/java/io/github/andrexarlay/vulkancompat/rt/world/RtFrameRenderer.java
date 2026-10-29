@@ -612,6 +612,10 @@ public final class RtFrameRenderer {
             consumeCompletedStats();
             if (!statsReadbacks.hasFreeSlot()) throw new RtFailure("stats_slots", "completion proof unavailable; stats slots retained");
         }
+        if (world.requiresLegacyHostDrain()) {
+            drainHostSubmissions(device, "legacy_world_inputs_drain");
+            world.prepareLegacyFrameAfterHostDrain();
+        }
         long frameStart = System.nanoTime();
         if (emitters == null) emitters = new RtEmitters(world.memory());
         RtEmitters recordingEmitters = emitters;
