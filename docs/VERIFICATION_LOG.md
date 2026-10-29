@@ -43,27 +43,31 @@ Result:
 
 | Check | Expected | Observed |
 |---|---|---|
-| `:common:test` (native lib + slangc) | 0 failures | 735 tests, 0 failures, 0 errors, 3 skipped; all 12 `RtSlangRestirSpatialTest` cases pass |
-| CTest `build/bedray-native/windows-x64` | 18/18 | 18/18 pass |
-| `vkCreateComputePipelines` on the final jar's `restir_spatial` | 0 | 0 (OK) |
-| Live `-Dvkbridge.autotest=world -Dvkbridge.rt.nativeScene=true` | PASS, spatial on | `restir_spatial, 8 binding(s), 64 B push`; `restir_di=fresh+spatial` then `temporal+spatial`; entity ring `atlas 2048 texels per side`; 3 shots 2560x1440; `result=PASS`; no `hs_err` |
-| Same with `nativeScene=true nativePathTrace=true` | PASS, C++ DI + spatial | `restir_di=native+spatial`; `result=PASS` |
+| `:common:test` (native lib + slangc) on final HEAD `01aadc9` | 0 failures | 753 tests / 121 suites, 0 failures, 0 errors, 3 skipped; all 12 `RtSlangRestirSpatialTest` cases pass |
+| CTest `build/bedray-native/windows-x64` on final HEAD | 19/19 | 19/19 pass |
+| `vkCreateComputePipelines` on the final jar's `restir_spatial` | 0 | 0 (OK); manifest 8 bindings, 64 B push |
+| Live `-Dvkbridge.autotest=world -Dvkbridge.rt.nativeScene=true -Dvkbridge.rt.nativePathTrace=true` | PASS, C++ DI + spatial | `restir_spatial, 8 binding(s), 64 B push`; `restir_di=native+spatial`; 3 shots 2560x1440; `result=PASS`; no `hs_err` |
 | Same with `nativePathTrace=true` only | PASS, C++ DI + spatial | `restir_di=native+spatial`; `result=PASS` |
 | Same with neither (Java Slang host) | PASS | `restir_di=fresh+spatial` then `temporal+spatial`; `result=PASS` |
 
-The three live runs wrote fresh `autotest/world/02_world_{a,b,c}.png`
-(2560x1440) and left no new crash dump. The C++ run exercised the 8-binding
-contract at dispatch time, not just at build time.
+The final matrix was re-run on the exact pushed HEAD after PR #29 (renderer
+statistics readback slots) landed, because that PR changed `RtFrameRenderer`
+after the previous build. All three live runs wrote fresh
+`autotest/world/02_world_{a,b,c}.png` (2560x1440, non-uniform: per-image mean
+458/464/474, stdev ~150) and left no new crash dump — the only `hs_err` in the
+instance is the historical `hs_err_pid26912.log` from 00:45. The C++ runs
+exercised the 8-binding contract at dispatch time, not just at build time.
 
-Rebased onto `4dc68d5` (PR #27, native guide outputs) and then `0898b00`
-(PR #28, native particle composite). The one semantic merge change is the
-renderer's NRD guard: the Java Slang path fills motion now, while the C++
-backend forwards the seven guides but still writes no world-space motion, so
-`RtFrameRenderer` refuses NRD only when `SLANG_PATH_TRACE_CPP` is set.
-`RtSlangGbufferGuidesTest` pins that split. After the second rebase the merged
-tree re-ran 745 Java tests (0 failures, 0 errors, 3 skipped), 19/19 CTest, and a
-live `nativeScene + nativePathTrace` world run (`result=PASS`,
-`restir_di=native+spatial`, `restir_spatial` 8 bindings / 64 B push, no crash).
+Earlier intermediate trees during this batch gave 735 tests / 18 CTest
+(pre-rebase) and 745 tests / 19 CTest (after PR #28); those are superseded by
+the 753 / 19 result above.
+
+Rebased onto `4dc68d5` (PR #27, native guide outputs), `0898b00` (PR #28,
+native particle composite) and `fc1861d` (PR #29, proven stats slots). The one
+semantic merge change is the renderer's NRD guard: the Java Slang path fills
+motion now, while the C++ backend forwards the seven guides but still writes no
+world-space motion, so `RtFrameRenderer` refuses NRD only when
+`SLANG_PATH_TRACE_CPP` is set. `RtSlangGbufferGuidesTest` pins that split.
 
 ## 2026-10-29 — NRD IN_MV motion channel from the typed path (L1 compile, L2 unit)
 
