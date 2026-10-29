@@ -190,8 +190,37 @@ class SlangPassLibraryTest {
         assertEquals(1, manifest.threadGroupSize()[2], "path_trace: group z");
     }
 
-    private static void assertBinding(SlangPassManifest manifest, String name, int binding, int type) {
-        SlangPassManifest.Binding actual = manifest.binding(name);
+    /**
+     * The native-scene entry is the same program with a different binding 2 and traversal backend. Both manifests must
+     * agree on every descriptor, the push block, the capability bits and the workgroup, otherwise the host would need a
+     * second contract and the two entries could silently drift apart.
+     */
+    @Test
+    void pathTraceScenePassKeepsTheSameHostContractAsTheLegacyEntry() {
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene.slang was not compiled");
+
+        SlangPassManifest legacy = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
+        SlangPassManifest scene = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
+
+        assertEquals(legacy.bindings().size(), scene.bindings().size(), "path_trace_scene: binding count");
+        for (SlangPassManifest.Binding want : legacy.bindings()) {
+            SlangPassManifest.Binding actual = scene.binding(want.name());
+            assertTrue(actual != null, () -> "path_trace_scene has no binding '" + want.name() + "'");
+            assertEquals(want.binding(), actual.binding(), "path_trace_scene: binding of " + want.name());
+            assertEquals(want.descriptorType(), actual.descriptorType(), "path_trace_scene: type of " + want.name());
+            assertEquals(want.count(), actual.count(), "path_trace_scene: count of " + want.name());
+            assertEquals(want.elementBytes(), actual.elementBytes(), "path_trace_scene: element of " + want.name());
+        }
+        assertEquals(legacy.pushConstantBytes(), scene.pushConstantBytes(), "path_trace_scene: push block");
+        assertEquals(legacy.requiredCapabilities(), scene.requiredCapabilities(),
+            "path_trace_scene: capability bits must match the shared body");
+        assertEquals(legacy.threadGroupSize()[0], scene.threadGroupSize()[0], "path_trace_scene: group x");
+        assertEquals(legacy.threadGroupSize()[1], scene.threadGroupSize()[1], "path_trace_scene: group y");
+        assertEquals(legacy.threadGroupSize()[2], scene.threadGroupSize()[2], "path_trace_scene: group z");
+    }
+
+    private static void assertBinding(SlangPassManifest manifest, String name, int binding, int type) {        SlangPassManifest.Binding actual = manifest.binding(name);
         assertTrue(actual != null, () -> manifest.name() + " has no binding '" + name + "'");
         assertEquals(binding, actual.binding(), manifest.name() + ": binding of " + name);
         assertEquals(type, actual.descriptorType(), manifest.name() + ": type of " + name);
