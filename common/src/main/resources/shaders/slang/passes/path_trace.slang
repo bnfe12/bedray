@@ -81,7 +81,8 @@ struct PathTracePush {
     float4 emitterCameraRelative;   // xyz camera minus the origin the list was rebuilt at, w candidates per call
     float4 diCameraDelta;           // xyz raw camera position minus the previous frame's, w reserved
     uint4  diState;                 // x: PATH_TRACE_DI_* bits, y: parity half this frame writes, zw reserved
-    uint4  entityState;             // x: entity atlas texels per side (0 = no atlas), yz: self-avatar primitive range, w reserved
+    uint4  entityState;             // x: entity atlas texels per side (0 = no atlas), yz: self-avatar primitive range,
+                                    // w: auto-normal strength as float bits (0 = off)
 };
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;

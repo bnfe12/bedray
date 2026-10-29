@@ -15,6 +15,7 @@ import "contracts/geometry.slang";
 import "contracts/hit.slang";
 import "contracts/material.slang";
 import "contracts/math.slang";
+import "surface/water.slang";
 import "traversal/entity_geometry.slang";
 
 // ---- Atlas description ----
@@ -469,6 +470,36 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         shadingNormal = decodeAtlasNormal(atlas, options, hit, geometricNormal,
             ambientOcclusion);
         material.ambientOcclusion = ambientOcclusion;
+        // A fluid is not a tinted pane.  The auto-PBR atlas tags it with water's
+        // reflectance and roughness, the sheet takes the analytic wave normal
+        // and the Fresnel split of an optical interface, and its transmission is
+        // tinted by the biome colour instead of by the opaque 16x16 sprite.
+        if ((hit.flags & HIT_FLAG_TRANSLUCENT) != 0u
+                && waterIsSurface(true, material.f0, material.roughness, material.metallic)) {
+            float footprint = hit.t * WATER_PIXEL_ANGLE /
+                max(abs(dot(rayDirection, geometricNormal)), 0.06);
+            float lostVar = 0.0;
+            float3 waveNormal = waterWaveNormal(hit.worldPosition, geometricNormal,
+                options.portalTime, footprint, lostVar);
+            material.sourceFlags |= MATERIAL_SOURCE_FLUID;
+            material.alphaMode = AlphaMode.Optical;
+            material.ior = WATER_IOR;
+            // The realistic style is the default (RtSettings.waterStyle): the
+            // full wave normal and a sheen roughened by the slopes the pixel
+            // footprint filtered out.
+            material.roughness = clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30);
+            material.metallic = 0.0;
+            material.f0 = float3(0.02);
+            material.flags &= ~MATERIAL_FLAG_METAL;
+            material.transmission = 1.0;
+            material.thickness = 0.0;
+            // Until the medium lands, the sheet filters by the biome tint the
+            // realistic style uses for its water column (tint * 0.85), not by
+            // the opaque 16x16 sprite.
+            material.albedo = clamp(waterBiomeTint(hit.tint, geometricNormal) * 0.85,
+                float3(0.001), float3(1.0));
+            shadingNormal = waveNormal;
+        }
     }
 
     // Source flags are authoritative for tags that do not change geometry:
@@ -546,6 +577,12 @@ float3 surfaceTransmittance(SurfaceSample surface, float3 direction) {
 
     float f0 = clamp(luminance(material.f0), 0.0, 1.0);
     float fresnel = f0 + (1.0 - f0) * pow5(1.0 - cosine);
+    if ((material.sourceFlags & MATERIAL_SOURCE_FLUID) != 0u) {
+        // A water sheet filters with its biome tint over the whole interface:
+        // the legacy rule, independent of the opaque sprite alpha and of the
+        // slab thickness the thin-pane branch would read out of it.
+        return (1.0 - fresnel) * clamp(material.albedo, float3(0.001), float3(1.0));
+    }
     float3 absorption = pow(clamp(material.albedo, float3(0.001), float3(1.0)),
         float3(max(slabLength * material.transmission, 0.0)));
 

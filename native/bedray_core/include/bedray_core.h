@@ -311,7 +311,8 @@ typedef struct BedrayPathTracePath {
     float emitter_camera_relative[4]; /* xyz camera minus emitter-list origin, w candidates */
     float di_camera_delta[4];         /* xyz current minus previous camera, w reserved */
     uint32_t di_state[4];             /* x: BEDRAY_PATH_TRACE_DI_*, y: external parity or zero for NATIVE_DI */
-    uint32_t entity_state[4];         /* x atlas texels per side, yz self-avatar range, w reserved */
+    uint32_t entity_state[4];         /* x atlas texels per side, yz self-avatar range,
+                                       * w auto-normal strength as float bits, 0 = off */
 } BedrayPathTracePath;
 
 typedef struct BedrayPathTraceFrameDesc {

@@ -648,6 +648,9 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   emissive texel on a model lights nothing but itself. Pinned by
   `RtSlangEntityTest`, `RtPathTraceSlangPassTest` and
   `SlangPassLibraryTest`.
+  *Status update (2026-10-29): motion vectors, the End Portal starfield, the
+  Sobel auto-normal and glowing parts as NEE candidates all landed in
+  `e1bcd82`; no owner-verified frame of them is recorded yet.*
 * **Water is a flat thin pane.** The legacy triangle decode maps only the
   redstone and emissive source bits (`surface/surface.slang:237`); no code
   assigns `MATERIAL_SOURCE_FLUID` on this path and no water module is compiled
@@ -657,6 +660,13 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   passes `pc.flags = 0` (`RtSlangPathPass.java:266`), so the legacy
   `FLAG_WATER_REALISTIC`/caustics behaviour cannot be recovered by a flag
   alone; the fluid tag and a shading model have to be connected.
+  *Status update (2026-10-29): the surface half is connected.
+  `surface/water.slang` compiles as part of both path roots and ports the
+  legacy wave field, `waterWaveNormal`, the biome tint and the classification;
+  `decodeSurface` now assigns `MATERIAL_SOURCE_FLUID`, `AlphaMode.Optical`, IOR
+  1.333 and a Fresnel transmission tinted by `waterBiomeTint * 0.85`. The
+  volumetric medium (depth absorption, in-scattering, Snell refraction,
+  caustics) and the `waterStyle` switch remain open.*
 
 ## 10. Migration sequence
 

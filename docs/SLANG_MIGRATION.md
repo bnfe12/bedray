@@ -61,7 +61,10 @@ short window cannot add sky, and a positive boundary that `tFar` reaches can.
 mock backends, including the provisional history and ownership proposal.
 `verify_bedray_roots.slang` compiles the curated `bedray.slang` and the opt-in
 `bedray_legacy.slang` together so the typed and legacy resolve names cannot
-silently converge.
+silently converge. `verify_water.slang` compiles `surface/water.slang` on its own
+and reads every public entry the surface decoder uses: both slope overloads, the
+wave normal on the top, underside and vertical faces, the biome tint and the
+fluid classification predicate.
 
 The shader module map, dependency rules, host contract and extension checklist
 are in
@@ -597,12 +600,13 @@ What a port cannot translate one-for-one, and how it was settled:
   slice does not cover, a miss, and terrain all answer zero, which is exactly what
   a static reprojection already assumes.
 
-Known gaps, all of them visible: no **End Portal starfield**, no **Sobel
-auto-normal**, and an emissive part is not yet a **next-event-emission
-candidate**. Switch:
+The procedural **End Portal starfield**, the **Sobel auto-normal** and glowing
+parts as **next-event-emission candidates** shipped in `e1bcd82`; the entity
+decode now matches `fetchEntitySurface` on every behaviour the legacy function
+had. Switch:
 `-Dvkbridge.rt.slangEntities` (default true) falls back to a terrain-only trace.
 Evidence: `compileSlang` produces 18 bindings / 112-byte push for `path_trace`
-(420184 B SPIR-V) and 9 bindings for `path_display` (the motion image the tracer
+(523968 B SPIR-V) and 9 bindings for `path_display` (the motion image the tracer
 owns); `RtSlangEntityTest` (12 tests) pins the scene mask, the instance-bit
 routing in both directions, the anchor arithmetic and the missing identity, the
 primary-only self-avatar skip across all three ray kinds, the alpha bands and the
@@ -806,6 +810,22 @@ would hide the terrain behind it), and water decoded as a flat translucent
 pane because no code assigns `MATERIAL_SOURCE_FLUID` on the triangle path and
 no water module is compiled.  Both later gaps are source findings; neither was
 checked in game.
+
+Status update (2026-10-29). Entities are traced by the typed path through the
+`0x02` mesh mask with their own decode, motion vectors and NEE candidates
+(`e1bcd82`), so `legacyHitToSurface` no longer decides their fate. Water is no
+longer a flat pane either: `surface/water.slang` ports the legacy wave field,
+the biome tint and the fluid classification, and `decodeSurface` assigns
+`MATERIAL_SOURCE_FLUID`, the optical alpha mode, IOR 1.333 and a Fresnel
+transmission tinted by the biome colour (`waterBiomeTint * 0.85`, the realistic
+style the legacy default selects). What remains of the water item is the
+volumetric medium: depth absorption, in-scattering, Snell refraction of the
+camera ray and caustics are not modelled, so a deep lake filters with one tint
+instead of a colour gradient, and the legacy `waterStyle` switch is not wired
+into the typed path. Block-emitter NEE landed in an earlier batch with its own
+recording buffers (`RtSlangBlockEmitterTest`); the optical medium/eta item, the
+`CameraState.view`/`.projection` identity and the missing G-buffer are still
+open. None of the closed items has an owner-verified frame yet.
 
 `bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
 sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
@@ -1011,11 +1031,15 @@ cross-cascade resolve or image comparison was run.
    reason belongs to the C++ pass, which owns the buffers.
 3. **ReSTIR PT** — path-space reservoirs on top of `PathVertex`; keep it
    separate from the DI reservoir so the two reuse policies do not merge.
-4. **Entity shading parity** — the ring is traced and moving parts reproject;
-   three behaviours of
-   `fetchEntitySurface` are not: the procedural **End Portal starfield**, the
-   **Sobel auto-normal** that gives mob skin its relief, and glowing parts as
-   **next-event candidates**, so a lantern held in hand lights nothing but itself.
+4. **Entity shading parity** — closed in `e1bcd82`: the ring is traced, moving
+   parts reproject, an End Portal is drawn as the procedural starfield, mob skin
+   gets its **Sobel auto-normal**, and glowing parts are **next-event
+   candidates**. No owner-verified frame of these behaviours is recorded yet.
+4a. **Water** — the surface model is ported (wave field, biome tint,
+   classification, Fresnel transmission). The volumetric medium — depth
+   absorption, in-scattering, Snell refraction and caustics from
+   `traceThroughInterfacesM` — is the remaining half of the legacy realistic
+   style, and `RtSettings.waterStyle` does not reach the typed path.
 5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
    are now in the shared checkout as source-only. Environment is opt-in on a
    positive world boundary that the terminal window reaches; a zero boundary

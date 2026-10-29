@@ -309,6 +309,7 @@ Current harnesses:
 | `verify_rc_trace_api.slang` | every public RC trace entry, options, history, ownership |
 | `verify_bedray_roots.slang` | both public roots compile together; typed and legacy resolve names stay distinct |
 | `verify_scene_tracer.slang` | `HybridTraversal` and mock backends |
+| `verify_water.slang` | both slope overloads, wave normal on top/underside/vertical faces, biome tint, fluid classification |
 
 Evidence levels: L0 source review, L1 shader compile, L2 native unit/ABI
 tests, L3 shader execution on a GPU, L4 live frame, L5 visual comparison.  This

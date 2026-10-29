@@ -4,6 +4,45 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — water surface model in the typed path (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline` (merge `cbe478f`). Tool: `slangc` 2026.20,
+`-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major
+-I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `surface/water.slang` is new: the six-wave slope field with pixel-footprint
+  filtering and the filtered-out slope variance, `waterWaveNormal` (horizontal
+  faces only, downhill shift on flowing top quads, same-side guard),
+  `cardinalFaceShade`/`waterBiomeTint` (the legacy division of the baked face
+  shade out of the vertex colour) and `waterIsSurface` (translucent,
+  `luminance(f0) <= 0.025`, `roughness <= 0.035`, `metallic < 0.5` - glass at
+  f0 0.04 and ice at roughness 0.05 stay panes). Ported from
+  `rt_caustics.glsl`, `rt_common_surface.glsl` and `rt_common_water.glsl`.
+- `surface/surface.slang` assigns `MATERIAL_SOURCE_FLUID`, `AlphaMode.Optical`,
+  IOR 1.333 and the realistic-style surface (full wave normal, sheen from the
+  lost variance) when the triangle is a fluid, and `surfaceTransmittance`
+  filters a fluid by `(1 - F) * waterBiomeTint * 0.85` instead of the sprite
+  alpha slab.
+- Not ported, documented in the module header: the volumetric medium (depth
+  absorption, in-scattering, Snell refraction, caustics) and the legacy
+  `waterStyle` switch.
+- New compile harness `verify_water.slang`.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | `path_trace` 523968 B, `path_trace_scene` 535784 B, 18 bindings, 112 B push |
+| Harnesses | 6 | 6 | `verify_water.slang` added to the five existing ones |
+| `:common:test` | 712 tests | 0 failures | 3 skipped |
+
+This is L1/L2 only.  It proves module resolution, both path roots compiling
+with the water decode, and that no Java contract test regressed.  No GPU
+dispatch, frame or side-by-side screenshot exists; a flat pane and a wave
+surface compile identically.
+
 ## 2026-10-28 — typed RC store split and entry status (L1 compile)
 
 Branch: `feat/slang-rc-transport-20261028`, commit `bcf77b7`.
