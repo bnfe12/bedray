@@ -7,6 +7,8 @@
 #include "bloom_pass.h"
 #include "particles_pass.h"
 #include "sodium_pass.h"
+#include "velocity_pass.h"
+#include "nrd_pack_pass.h"
 #include "volumetric_pass.h"
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
 #include "frame_graph_owner.h"
@@ -124,6 +126,7 @@ struct BedrayCore {
     std::unique_ptr<bedray::core::PathTracePass> path_trace;
     std::unique_ptr<bedray::core::BloomPass> bloom;
     std::unique_ptr<bedray::core::VolumetricPass> volumetric;
+    std::unique_ptr<bedray::core::VelocityPass> velocity;
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
     std::unique_ptr<bedray::core::FrameGraphOwner> frame_graph;
 #endif
@@ -499,6 +502,9 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
     if (core_features.features.shaderInt64 == VK_TRUE) {
         detected |= BEDRAY_CAP_SHADER_INT64;
     }
+    if (core_features.features.shaderStorageImageExtendedFormats == VK_TRUE) {
+        detected |= BEDRAY_CAP_STORAGE_IMAGE_EXTENDED_FORMATS;
+    }
 
     if (has_extension(extension_names, VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
         VkPhysicalDeviceRayQueryFeaturesKHR features{};
@@ -640,6 +646,11 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
     if (core->frame_graph && core->frame_graph->has_recordings()) return BEDRAY_ERROR_IN_USE;
 #endif
+    if (core->velocity) {
+        const auto status = core->velocity->destroy();
+        if (status != BEDRAY_OK) return status;
+        core->velocity.reset();
+    }
     if (core->volumetric) {
         const auto status = core->volumetric->destroy();
         if (status != BEDRAY_OK) return status;
@@ -957,7 +968,8 @@ BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
         [program](const RecordingUse& use) { return use.program == program; })
         || (core->path_trace && core->path_trace->uses_program(program_handle))
         || (core->bloom && core->bloom->uses_program(program_handle))
-        || (core->volumetric && core->volumetric->uses_program(program_handle));
+        || (core->volumetric && core->volumetric->uses_program(program_handle))
+        || (core->velocity && core->velocity->uses_program(program_handle));
     if (!in_use) {
         core->programs.erase(std::remove(core->programs.begin(), core->programs.end(), program), core->programs.end());
         destroy_program(core, program);
@@ -990,7 +1002,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
             [program](const RecordingUse& use) { return use.program == program; })
             || (core->path_trace && core->path_trace->uses_program(program->handle))
             || (core->bloom && core->bloom->uses_program(program->handle))
-            || (core->volumetric && core->volumetric->uses_program(program->handle));
+            || (core->volumetric && core->volumetric->uses_program(program->handle))
+            || (core->velocity && core->velocity->uses_program(program->handle));
         if (program->retired && !in_use) {
             it = core->programs.erase(it);
             destroy_program(core, program);
@@ -998,18 +1011,13 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
             ++it;
         }
     }
-    if (core->path_trace) {
-        const BedrayStatus status = core->path_trace->release_recording(command_buffer);
-        if (status != BEDRAY_OK) {
-            return status;
-        }
-    }
-    if (core->bloom) {
-        const auto status = core->bloom->release_recording(command_buffer);
-        if (status != BEDRAY_OK) return status;
-    }
-    if (core->volumetric) return core->volumetric->release_recording(command_buffer);
-    return BEDRAY_OK;
+    BedrayStatus result = BEDRAY_OK;
+    auto collect = [&](BedrayStatus status) { if (result == BEDRAY_OK) result = status; };
+    if (core->path_trace) collect(core->path_trace->release_recording(command_buffer));
+    if (core->bloom) collect(core->bloom->release_recording(command_buffer));
+    if (core->volumetric) collect(core->volumetric->release_recording(command_buffer));
+    if (core->velocity) collect(core->velocity->release_recording(command_buffer));
+    return result;
 } catch (const std::bad_alloc&) {
     return BEDRAY_ERROR_OUT_OF_MEMORY;
 } catch (...) {
@@ -1022,6 +1030,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_discard_recording(
     if (core->path_trace) core->path_trace->discard_recording(command_buffer);
     if (core->bloom) core->bloom->discard_recording(command_buffer);
     if (core->volumetric) core->volumetric->discard_recording(command_buffer);
+    if (core->velocity) core->velocity->discard_recording(command_buffer);
     return bedray_core_release_recording(core, command_buffer);
 } catch (...) {
     return BEDRAY_ERROR_INTERNAL;
@@ -1449,6 +1458,57 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_particles(
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate particle recording");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording particles");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_velocity(
+    BedrayCore* core, const BedrayVelocityDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/velocity descriptor is null");
+    constexpr auto required = BEDRAY_CAP_BUFFER_DEVICE_ADDRESS | BEDRAY_CAP_SHADER_INT64
+        | BEDRAY_CAP_STORAGE_IMAGE_EXTENDED_FORMATS;
+    if ((core->capabilities & required) != required)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "velocity BDA/Int64/extended image formats are not enabled");
+    if (!core->velocity) core->velocity = std::make_unique<bedray::core::VelocityPass>();
+    return core->velocity->configure(core, core->device_fns, *desc, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate velocity owner");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring velocity");
+}
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_velocity(
+    BedrayCore* core, const BedrayVelocityFrameDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc || !core->velocity)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "velocity owner/frame is missing");
+    return core->velocity->render(*desc,error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate velocity recording");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording velocity");
+}
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_velocity(BedrayCore* core) try {
+    if (!core) return BEDRAY_ERROR_INVALID_ARGUMENT;
+    if (!core->velocity) return BEDRAY_OK;
+    auto status = core->velocity->destroy();
+    if (status == BEDRAY_OK) core->velocity.reset();
+    return status;
+} catch (...) { return BEDRAY_ERROR_INTERNAL; }
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_nrd_pack(
+    BedrayCore* core, const BedrayNrdPackFrameDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc) return fail(error,BEDRAY_ERROR_INVALID_ARGUMENT,"core/NRD pack descriptor is null");
+    if (desc->phase == BEDRAY_NRD_PACK) {
+        const auto required = BEDRAY_CAP_BUFFER_DEVICE_ADDRESS | BEDRAY_CAP_SHADER_INT64
+            | (desc->denoiser != 2u ? BEDRAY_CAP_STORAGE_IMAGE_EXTENDED_FORMATS : 0u);
+        if ((core->capabilities & required) != required)
+            return fail(error,BEDRAY_ERROR_UNSUPPORTED,"NRD pack shader features are not enabled");
+    }
+    return bedray::core::record_nrd_pack(core,core->cmd_pipeline_barrier,*desc,error);
+} catch (const std::bad_alloc&) {
+    return fail(error,BEDRAY_ERROR_OUT_OF_MEMORY,"cannot allocate NRD pack recording");
+} catch (...) {
+    return fail(error,BEDRAY_ERROR_INTERNAL,"unexpected exception recording NRD pack");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_decode_sodium(
