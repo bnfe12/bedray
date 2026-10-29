@@ -1490,19 +1490,12 @@ public final class RtFrameRenderer {
             return null;
         }
         if (gbuffer) {
-            // The Java Slang path fills the DLSS-RR guides and, for the NRD layouts, the primary hit's world-space
-            // motion (the renderer binds {@code entity_motion_px} into the frame's views for exactly those modes).
-            // The C++ backend forwards the seven guides through GUIDE_OUTPUTS but writes no motion yet, so it is
-            // refused for NRD only.  AUTO declines the Slang denoiser path until a live frame has
-            // validated the guides; it still reports a real Slang blocker instead of blaming the denoiser.
+            // Both backends supply guide outputs; native NRD additionally requires its motion-output export below.
+            // AUTO remains conservative until a live frame validates the denoiser inputs.
             String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
-            if (blocker == null) {
-                if (RtConfig.SLANG_PATH_TRACE_CPP && denoiseMode != DenoiserMode.DLSS_RR) {
-                    blocker = "the C++ path backend writes no world-space motion for " + denoiseMode;
-                } else if (selector == RtConfig.PathTracer.AUTO) {
-                    blocker = "AUTO does not select the Slang path while a denoiser is enabled;"
-                        + " set bedray.pathTracer=slang to test the guides";
-                }
+            if (blocker == null && selector == RtConfig.PathTracer.AUTO) {
+                blocker = "AUTO does not select the Slang path while a denoiser is enabled;"
+                    + " set bedray.pathTracer=slang to test the guides";
             }
             if (blocker != null) {
                 pathSlangUnavailableReason = blocker;
@@ -1529,6 +1522,9 @@ public final class RtFrameRenderer {
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
             String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
+            if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && denoiseMode.isNrd()
+                && !runtime.library().hasNativeMotion())
+                problem = "native NRD requires a matching core with NRD_MOTION";
             if (problem != null) {
                 pathSlangUnavailableReason = problem;
                 if (selector == RtConfig.PathTracer.AUTO) {

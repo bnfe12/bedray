@@ -1102,6 +1102,37 @@ date from the preceding 18-pass run; shader sources are unchanged in this batch.
 `git diff --check` passes. No GPU/game, visual parity or performance evidence;
 native remains opt-in. The volumetric native-scene boundary remains separate.
 
+## 2026-10-29 — real native NRD motion output
+
+Base `4ffc145` includes the consolidated audit and all preceding native passes.
+Additive NRD_MOTION feature/export forwards the seven guide images plus the
+existing 32-byte BedrayPathTraceBuffer range through the same opaque path graph.
+Binding 33 now receives the real borrowed host vec4-per-pixel buffer. Both option
+bits, complete guides, nonzero buffer and sufficient range are validated before
+pins/commands; inactive bindings still use a pinned stand-in. Old calls explicitly
+reject enabled motion writes rather than letting a full frame write into that
+one-vec4 stand-in. No existing ABI-v2 layout or shader arithmetic changes.
+
+Java packs the range with overflow checks, requires matching feature/export and
+validates buffer/flag agreement before configuring the pass. Explicit native
+SLANG + NRD can now be selected; AUTO remains gated on live acceptance. Host
+buffer ownership and downstream denoiser lifetime remain under the existing
+exact recording proof.
+
+[Native CI 40842844371](https://github.com/bnfe12/bedray/actions/runs/40842844371)
+passes on `42c737270da84e0d9052f04e0c3e584b4f907df2`: candidate core21 + scene1 +
+lifetime1, baseline core15 + scene1 + lifetime1; ABI-v2 probes exit0. Tests cover
+missing/short/invalid targets before commands, exact range binding, both scene
+variants, inactive descriptor replacement, partial failure/discard and synchronous
+graph forwarding. No C++ warnings reported.
+
+Full Java suite passes: 787 tests, 778 passed, 9 skipped, zero failures/errors
+(65s). The extra case verifies heap/native motion-range packing, both guards,
+reserved words and multiplication overflow. A final equivalent host-condition
+cleanup recompiles and passes the targeted guide/motion/packet checks (21s).
+All 19 AOT entries retain their compiled contracts. No GPU/game, visual or
+performance evidence; native remains opt-in.
+
 ## 2026-10-29 — remaining ReSTIR branches integrated on the current backend boundary
 
 PR #17 is reconciled with base `4dc68d5aea060da5be1823925a523f702b5b2bcd`.

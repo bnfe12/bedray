@@ -336,7 +336,7 @@ hardware paths agree on foliage and glass.
 |---|---|---|---|
 | Bloom + sun glare | `bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` -> coarse native `BloomPass` | C++ owns mip images, descriptor/push packing, dispatch/barriers and exact retirement; programs/samplers remain runtime-owned. L1/L2, no live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides are supported; native NRD motion output remains unavailable. Java reference consumes the NRD motion buffer. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
+| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
 | Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
 | Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
 
@@ -977,7 +977,7 @@ candidates, not a validated or active runtime.
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
 | Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_atlas_layout.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace facade split into options/shade/walk/dispatch/history/ownership; `segment_store.slang` is a facade over `segment_record.slang` and `probe_resolve.slang`, and the typed probe resolve is `rcResolveProbe`/`rcProbeComplete` returning `RCProbeRadiance`; these are source-only in this checkout. The legacy float4 store is isolated behind `legacy_float4_store.slang`/`radiance_cascades_store.slang` and its resolve is named `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`; it is incompatible with the typed atlas. Environment is opt-in on a positive world boundary, so a terminal-cascade miss under a roof is not treated as sky. Cross-cascade reconstruction, unbiased temporal reuse and host integration are unfinished. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
-| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides are supported; native NRD motion output remains unavailable. Java reference consumes the NRD motion buffer. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
+| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
 | Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
 | Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
 
@@ -1125,11 +1125,11 @@ cross-cascade resolve or image comparison was run.
    `SLANG` + `DLSS_RR` and `SLANG` + `NRD` are accepted, and `AUTO` declines the Slang denoiser path until a live frame consumes the guides. The C++ backend forwards
    the seven guides through the additive
    `bedray_core_render_path_trace_guides` call (`GUIDE_OUTPUTS`), so
-   `nativePathTrace` + `DLSS_RR` no longer blocks on missing outputs. It still
-   binds the binding-33 stand-in and sets no motion option bit, so
-   `RtFrameRenderer` refuses NRD only when `SLANG_PATH_TRACE_CPP` is set.
-   Open: a rejected (invalid/truncated) sample can still carry a guide, and
-   the C++ pass has no world-space motion output yet.
+   `nativePathTrace` + `DLSS_RR` no longer blocks on missing outputs. The additive NRD_MOTION feature and
+   `bedray_core_render_path_trace_motion` also forward the borrowed vec4-per-pixel
+   buffer at binding 33. Native NRD requires that matching feature/export; the
+   old calls reject enabled motion writes without real targets. Open: a rejected
+   (invalid/truncated) sample can still carry a guide.
 5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
    are now in the shared checkout as source-only. Environment is opt-in on a
    positive world boundary that the terminal window reaches; a zero boundary

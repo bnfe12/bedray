@@ -10,6 +10,27 @@ import static java.lang.foreign.ValueLayout.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BedrayPathTraceNativeTest {
+    @Test void motionRangeIsOneVec4PerPixelOnHeapAndNativeMemory() {
+        try (Arena arena = Arena.ofConfined()) {
+            for (var storage : new MemorySegment[]{arena.allocate(48, 8), MemorySegment.ofArray(new byte[48])}) {
+                storage.fill((byte)0x5a);
+                var out = storage.asSlice(8, 32);
+                BedrayPathTraceNative.fillMotion(out, 71, 3, 5);
+                assertEquals(71, out.get(JAVA_LONG_UNALIGNED, 0));
+                assertEquals(0, out.get(JAVA_LONG_UNALIGNED, 8));
+                assertEquals(240, out.get(JAVA_LONG_UNALIGNED, 16));
+                assertEquals(0, out.get(JAVA_LONG_UNALIGNED, 24));
+                for (int i = 0; i < 8; i++) {
+                    assertEquals((byte)0x5a, storage.get(JAVA_BYTE, i));
+                    assertEquals((byte)0x5a, storage.get(JAVA_BYTE, 40 + i));
+                }
+                assertThrows(IllegalArgumentException.class, () -> BedrayPathTraceNative.fillMotion(out, 0, 3, 5));
+                assertThrows(IllegalArgumentException.class, () -> BedrayPathTraceNative.fillMotion(out, 71, 0, 5));
+                assertThrows(ArithmeticException.class,
+                    () -> BedrayPathTraceNative.fillMotion(out, 71, Integer.MAX_VALUE, Integer.MAX_VALUE));
+            }
+        }
+    }
     private static RtPathTraceSlangPass.Dispatch dispatch(int atlas, int first, int count) {
         return new RtPathTraceSlangPass.Dispatch(3, 8, 7, 5, 6, 0.01f, 0.5f, 72f, 64f, 0.5f,
             2, 0.25f, 1f, 2f, 3f, 8, 4f, 5f, 6f, 1, 0, atlas, first, count, 1.25f);

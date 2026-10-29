@@ -52,6 +52,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle configurePathTraceHandle;
     private final MethodHandle renderPathTraceHandle;
     private final MethodHandle renderPathTraceGuidesHandle;
+    private final MethodHandle renderPathTraceMotionHandle;
     private final MethodHandle destroyPathTraceHandle;
     private final MethodHandle pathTraceFeatureMaskHandle;
 
@@ -116,6 +117,8 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceGuidesHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_guides",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+            renderPathTraceMotionHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_motion",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             destroyPathTraceHandle = bindOptional(linker, lookup, "bedray_core_destroy_path_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS));
             pathTraceFeatureMaskHandle = bindOptional(linker, lookup, "bedray_core_path_trace_feature_mask",
@@ -592,6 +595,24 @@ public final class BedrayCoreNative implements AutoCloseable {
 
     public boolean hasNativeGuideOutputs() {
         return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_GUIDE_OUTPUTS) && renderPathTraceGuidesHandle != null;
+    }
+
+    public boolean hasNativeMotion() {
+        return renderPathTraceMotionHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_NRD_MOTION);
+    }
+
+    public void renderPathTraceMotion(long core, MemorySegment frame, MemorySegment guides, MemorySegment motion) {
+        ensureOpen(); requireHandle(core, "core"); requirePathTrace();
+        if (!hasNativeMotion()) throw new BedrayCoreException("render_path_trace_motion", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+            "matching NRD_MOTION native exports are required", null);
+        if (frame == null || !frame.isNative() || frame.byteSize() < BedrayCoreLayouts.PT_FRAME_DESC.byteSize()
+            || guides == null || !guides.isNative() || guides.byteSize() < BedrayCoreLayouts.PT_GUIDES_DESC.byteSize()
+            || motion == null || !motion.isNative() || motion.byteSize() < BedrayCoreLayouts.PT_BUFFER.byteSize())
+            throw new IllegalArgumentException("native frame, guides and motion range are required");
+        try (Arena arena = Arena.ofConfined()) {
+            var error = arena.allocate(BedrayCoreLayouts.ERROR);
+            check("render_path_trace_motion", (int) renderPathTraceMotionHandle.invokeExact(handle(core), frame, guides, motion, error), error);
+        } catch (Throwable failure) { throw rethrow("render_path_trace_motion", failure); }
     }
 
     private boolean hasPathTraceFeature(int feature) {

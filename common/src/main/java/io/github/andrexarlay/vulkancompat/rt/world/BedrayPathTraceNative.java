@@ -114,6 +114,11 @@ final class BedrayPathTraceNative implements AutoCloseable {
         if (wantsGuides && !library.hasNativeGuideOutputs()) {
             throw new IllegalStateException("native denoiser guides need a core with GUIDE_OUTPUTS");
         }
+        boolean wantsMotion = (input.dispatch().flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0;
+        if (wantsMotion != (input.views().motion() != 0L) || (wantsMotion && !completeGuides))
+            throw new IllegalArgumentException("NRD motion option, buffer and guide outputs must agree");
+        if (wantsMotion && !library.hasNativeMotion())
+            throw new IllegalStateException("native NRD needs a matching core with NRD_MOTION");
         if (!configured) {
             configure(frame);
         }
@@ -123,7 +128,13 @@ final class BedrayPathTraceNative implements AutoCloseable {
             if (wantsGuides) {
                 MemorySegment targets = arena.allocate(BedrayCoreLayouts.PT_GUIDES_DESC);
                 fillGuides(targets, guides);
-                library.renderPathTraceGuides(core, desc, targets);
+                if (wantsMotion) {
+                    var motion = arena.allocate(BedrayCoreLayouts.PT_BUFFER);
+                    fillMotion(motion, input.views().motion(), frame.width, frame.height);
+                    library.renderPathTraceMotion(core, desc, targets, motion);
+                } else {
+                    library.renderPathTraceGuides(core, desc, targets);
+                }
             } else {
                 library.renderPathTrace(core, desc);
             }
@@ -249,6 +260,14 @@ final class BedrayPathTraceNative implements AutoCloseable {
         packet.putLong(40, guides.albedo());
         packet.putLong(48, guides.direct());
         packet.putLong(56, guides.specAlbedo());
+    }
+
+    static void fillMotion(MemorySegment out, long buffer, int width, int height) {
+        if (out.byteSize() != BedrayCoreLayouts.PT_BUFFER.byteSize() || buffer == 0 || width <= 0 || height <= 0)
+            throw new IllegalArgumentException("NRD needs a buffer and a positive frame extent");
+        long bytes = Math.multiplyExact(Math.multiplyExact((long) width, height), 16L);
+        var packet = out.asByteBuffer().order(ByteOrder.nativeOrder());
+        packet.putLong(0, buffer).putLong(8, 0).putLong(16, bytes).putInt(24, 0).putInt(28, 0);
     }
 
     private static void putBuffer(MemorySegment at, long base, long handle, long offset, long bytes) {

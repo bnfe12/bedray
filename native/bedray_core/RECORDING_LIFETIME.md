@@ -83,6 +83,16 @@ passing, 2026-10-28).
 
 ## Bloom recordings (additive coarse calls)
 
+The additive `bedray_core_render_path_trace_motion` entry forwards guides and a
+borrowed BedrayPathTraceBuffer range through the same opaque graph. NRD_MOTION
+feature/export, both guide/motion option bits, all guides and a complete
+W*H*16-byte storage range are required together. The native pass binds that range
+at 33 and never pins, retires or destroys the host buffer. Its host owner retains
+it through the same exact completion/discard proof and downstream NRD reads.
+Inactive motion bindings still use a pinned stand-in. Older render calls reject
+enabled motion writes before commands; a one-vec4 stand-in cannot satisfy them.
+Existing ABI-v2 structures, shader math and history/barrier authority are unchanged.
+
 `BloomPass` owns the complete existing prefilter/down/up/apply sequence, its six
 RGBA16F mip images, transitions and entry/compute/exit barriers. Java supplies
 the four registered AOT program handles, borrowed core samplers, host output/
