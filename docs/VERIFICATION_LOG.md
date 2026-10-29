@@ -21,8 +21,9 @@ advance.
 This is not L1 for the native bridge: NRD and Vulkan headers are external
 (`VKB_NRD_SRC`, `VKB_VK_HEADERS`) and are not installed on this machine, so
 `native/nrd_bridge/build.bat` was not run. The Java source contract is L2 and
-the C++ change itself is L0-reviewed only. No GPU dispatch, TDR repro or
-denoised frame exists.
+the C++ change itself is L0-reviewed only. Full `:common:test` after the
+change: **740 tests, 0 failures, 0 errors, 9 skipped, 121 classes**. No GPU
+dispatch, TDR repro or denoised frame exists.
 
 ## 2026-10-29 — origin merge: guides + water + native bloom on the deduplicated entry (L1 compile, L2 no GPU)
 

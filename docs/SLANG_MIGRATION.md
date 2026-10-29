@@ -108,16 +108,16 @@ copy line by line.
 
 **Current whole-migration evidence: L1 build + L2 no-GPU tests (2026-10-29, merged tree).**
 On the `fix/audit-remediation-20261029` branch, merge commit `84b1697` joins
-`origin/refactor/slang-pipeline` (`4dc68d5`) with the P2 audit batch.
-`:common:compileSlang` builds 18 passes and `:common:test` reports 739 tests,
-0 failures, 0 errors and 9 skipped from an ASCII worktree. Both path entries
-compile to 25 bindings and a 112-byte push block, with the seven guide images
-at bindings 26-32. That proves the tree configures, the AOT passes compile and
-the Java/source contracts hold; it does not prove a Vulkan dispatch or
-rendering in Minecraft. Existing bloom now requires AOT Slang and fails when
-unavailable, and other legacy GLSL consumers still exist and must be migrated.
-A compile or test is not proof of rendering in Minecraft; that requires a fresh
-matching live run and evidence.
+`origin/refactor/slang-pipeline` (`4dc68d5`) with the P2 audit batch; `7fbfbda`
+adds the NRD constant-buffer ring. `:common:compileSlang` builds 18 passes and
+`:common:test` reports 740 tests, 0 failures, 0 errors and 9 skipped from an
+ASCII worktree. Both path entries compile to 25 bindings and a 112-byte push
+block, with the seven guide images at bindings 26-32. That proves the tree
+configures, the AOT passes compile and the Java/source contracts hold; it does
+not prove a Vulkan dispatch or rendering in Minecraft. Existing bloom now
+requires AOT Slang and fails when unavailable, and other legacy GLSL consumers
+still exist and must be migrated. A compile or test is not proof of rendering
+in Minecraft; that requires a fresh matching live run and evidence.
 
 ## Design rules
 
