@@ -77,18 +77,12 @@ bool materialIsTranslucent(MaterialSample material) {
 }
 
 // Cutout decision lives here, not in the traversal backend, so every backend
-// applies exactly the same rule.
+// applies exactly the same rule.  Visibility/shadow rays reuse this function
+// with the pass's alphaCutoff; there is deliberately no second hard-coded rule.
 bool materialAcceptsAlpha(MaterialSample material, float cutoff) {
     if (material.alphaMode == AlphaMode.Opaque) return true;
     if (material.alphaMode == AlphaMode.Cutout) return material.alpha >= cutoff;
     return true;
-}
-
-// Shadow/visibility rays treat translucent and optical surfaces as filters.
-bool materialBlocksVisibility(MaterialSample material) {
-    if (material.alphaMode == AlphaMode.Opaque) return true;
-    if (material.alphaMode == AlphaMode.Cutout) return material.alpha >= 0.5;
-    return false;
 }
 
 MaterialKey materialKey(MaterialSample material) {

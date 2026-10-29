@@ -26,6 +26,9 @@ dependencies {
     testImplementation "org.lwjgl:lwjgl-spvc:${rootProject.lwjgl_version}"
     testRuntimeOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}:natives-windows"
     testRuntimeOnly "org.lwjgl:lwjgl-opengl:${rootProject.lwjgl_version}:natives-windows"
+    // shaderc.dll ships as a classified native artifact, not in the plain lwjgl-shaderc jar. Keeping it on the
+    // test runtime classpath makes :common:test self-contained instead of depending on a launcher installation.
+    testRuntimeOnly "org.lwjgl:lwjgl-shaderc:${rootProject.lwjgl_version}:natives-windows"
 
     testImplementation "org.spongepowered:mixin:${rootProject.mixin_version}"
     testImplementation 'org.ow2.asm:asm:9.7.1'
@@ -56,6 +59,15 @@ dependencies {
 test {
     useJUnitPlatform()
     jvmArgs '--enable-native-access=ALL-UNNAMED'
+    // A test that blocks in native code must fail the run, not hold the whole gate forever. JUnit's default timeout
+    // applies to every test in this module; individual tests may override it with a shorter @Timeout.
+    systemProperty 'junit.jupiter.execution.timeout.default', '120 s'
+    // The Gradle test worker mangles non-ASCII classpath entries on Windows (observed with the Cyrillic project path).
+    // The build itself works; this warning points at the ASCII-worktree workaround before the first test failure.
+    if (rootProject.projectDir.absolutePath.toCharArray().any { (int) it > 127 }) {
+        logger.warn('[bedray] project path contains non-ASCII characters; Gradle test workers may fail to load test '
+            + 'classes. Run tests from an ASCII path/worktree (see docs/BUILDING.md).')
+    }
     if (project.hasProperty('bedrayCoreLibrary')) {
         systemProperty 'bedray.core.library', project.property('bedrayCoreLibrary')
         outputs.upToDateWhen { false }
@@ -76,14 +88,9 @@ tasks.register('runShimTests', JavaExec) {
     group = 'verification'
     description = 'Executes the Vulkan RTX Java-level test suite (no GPU, not in-game evidence)'
     dependsOn tasks.named('testClasses')
-    // shaderc natives (shaderc.dll) are not on the Maven test classpath; take them from the launcher libraries.
-    def shadercNative = file("${rootProject.lwjgl_libs_dir}/lwjgl-shaderc-natives-windows/${rootProject.lwjgl_natives_version}/lwjgl-shaderc-natives-windows-${rootProject.lwjgl_natives_version}.jar")
-    doFirst {
-        if (!shadercNative.isFile()) {
-            throw new GradleException("LWJGL shaderc natives jar not found (set BEDRAY_LAUNCHER_LIBRARIES or lwjgl_libs_dir, see docs/BUILDING.md): " + shadercNative)
-        }
-    }
-    classpath = sourceSets.test.runtimeClasspath + files(shadercNative)
+    // The shaderc native is a normal testRuntimeOnly dependency (classified Maven artifact), so this classpath is
+    // self-contained and does not need a launcher installation.
+    classpath = sourceSets.test.runtimeClasspath
     mainClass = 'io.github.andrexarlay.vulkancompat.ShimTestRunner'
     jvmArgs = [
         '--enable-native-access=ALL-UNNAMED'

@@ -36,6 +36,11 @@ public final class RtShaderCompiler {
     private record CompilerProfile(String extensionPrefix, int targetSpirv) {}
     private static volatile CompilerProfile compilerProfile = new CompilerProfile("", Shaderc.shaderc_spirv_version_1_4);
     private static volatile Boolean ommProbeResult;
+    /**
+     * shaderc's SPIR-V optimizer makes the large expanded GLSL sources effectively non-terminating; see
+     * {@link #compileSpirv(String, String, int)}. Package-private so a regression test can pin the choice.
+     */
+    static final int RUNTIME_OPTIMIZATION_LEVEL = Shaderc.shaderc_optimization_level_zero;
 
     public static ByteBuffer compileResource(String resourcePath, String name) {
         return compileResource(resourcePath, name, "");
@@ -320,10 +325,15 @@ public final class RtShaderCompiler {
             Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan,
                 Shaderc.shaderc_env_version_vulkan_1_2);
             Shaderc.shaderc_compile_options_set_target_spirv(options, spirvVersion);
-            Shaderc.shaderc_compile_options_set_optimization_level(options, Shaderc.shaderc_optimization_level_performance);
+            // Keep the SPIR-V optimizer off. With lwjgl-shaderc 3.3.3 and 3.4.3 the expanded rt_rays source (261 KB after
+            // include expansion) does not finish `optimization_level_performance` or `..._size` within minutes (native
+            // glslang loop, not a JVM hang); `level_zero` compiles both variants in under 1.3 s. The Vulkan driver still
+            // optimises the module when it builds the pipeline, and the AOT Slang passes are optimised by slangc, so this
+            // only removes a redundant, pathological pass from the runtime fallback compiler.
+            Shaderc.shaderc_compile_options_set_optimization_level(options, RUNTIME_OPTIMIZATION_LEVEL);
             // The CharSequence overload encodes the text on the thread's MemoryStack (LWJGL default 64 KiB): the expanded
-            // rt_rays/rt_path sources (~66 KiB) overflowed it ("OutOfMemoryError: Out of stack space" in
-            // shaderc_compile_into_spv, render thread hung). Heap-encoded buffers, ByteBuffer overload (javap lwjgl-shaderc 3.4.3:
+            // rt_rays/rt_path sources (~255 KiB) overflowed it ("OutOfMemoryError: Out of stack space" in
+            // shaderc_compile_into_spv, render thread hung). Heap-encoded buffers, ByteBuffer overload
             // shaderc_compile_into_spv(long, ByteBuffer, int, ByteBuffer, ByteBuffer, long); names null-terminated).
             java.nio.ByteBuffer src = org.lwjgl.system.MemoryUtil.memUTF8(source, false);
             java.nio.ByteBuffer fileName = org.lwjgl.system.MemoryUtil.memUTF8(name, true);

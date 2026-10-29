@@ -16,7 +16,9 @@ import java.util.HexFormat;
 /** Local, hardware-independent cache of shaderc's SPIR-V output. */
 final class RtShaderDiskCache {
     private static final int MAX_SHADER_BYTES = 32 * 1024 * 1024;
-    private static final String KEY_PROFILE = "bedray-spirv-cache-v2\nvulkan=1.2\noptimization=performance\n";
+    // The optimisation level is part of the cache identity: changing it can change the emitted SPIR-V, and a cache written
+    // by the previous (performance) pipeline must not be served after the compiler switched to level_zero.
+    private static final String KEY_PROFILE = "bedray-spirv-cache-v3\nvulkan=1.2\noptimization=zero\n";
     /** shaderc_spirv_version_1_4 (0x00010400), the default compile target. */
     private static final int DEFAULT_SPIRV_TARGET = 0x00010400;
 
