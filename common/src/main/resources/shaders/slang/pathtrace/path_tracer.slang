@@ -411,8 +411,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (field.active() && receiver.primary && result.depth + 1u < options.maxDepth
             && bsdf.lobe == BSDF_LOBE_DIFFUSE && !medium.inside
             && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u) {
+            float3 fieldOffsetNormal = safeNormalize(surface.hit.geometricNormal, normal);
+            if (dot(fieldOffsetNormal, view) < 0.0) fieldOffsetNormal = -fieldOffsetNormal;
             DiffuseFieldSample incoming = field.evaluate(traversal, lights, environment,
-                atlas, blockMaterials, hit.position, normal, materialOptions,
+                atlas, blockMaterials, hit.position, normal, fieldOffsetNormal, materialOptions,
                 options.rayBias, options.maxRadiance, seed);
             if (incoming.status == DIFFUSE_FIELD_INVALID) {
                 result.flags |= PATH_TRACE_FLAG_RC_UNRESOLVED;

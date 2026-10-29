@@ -141,6 +141,21 @@ class RtSlangRcFieldTest {
         assertTrue(tracer.contains("throughput * bsdf.weight * incoming.cosineMean"));
     }
 
+    @Test void aTiltedShadingNormalCannotMoveTheGatherOriginBehindItsGeometricFace() throws Exception {
+        var geometric = new RcGeometry.Vec3(0,1,0);
+        var shading = new RcGeometry.Vec3(0.99,-0.1,0).normalized();
+        var view = new RcGeometry.Vec3(1,0.2,0).normalized();
+        assertTrue(shading.dot(view)>0, "the normal map still faces the viewer");
+        assertTrue(shading.scale(0.001).dot(geometric)<0, "shading-normal offset enters the triangle's back side");
+        assertEquals(0.001,geometric.scale(0.001).dot(geometric),1e-12);
+        String tracer=source(SHADERS+"pathtrace/path_tracer.slang");
+        String gather=source(SHADERS+"radiance_cascades/field_gather.slang");
+        assertTrue(tracer.contains("safeNormalize(surface.hit.geometricNormal, normal)"));
+        assertTrue(tracer.contains("if (dot(fieldOffsetNormal, view) < 0.0)"));
+        assertTrue(gather.contains("position + normalize(offsetNormal) * rayBias"));
+        assertTrue(gather.contains("rcFieldProjectedArea(corners, normal)"), "radiometry still uses the shading normal");
+    }
+
     @Test void endpointOwnershipCompletenessAndConfidenceStayIndependentOfSkyAndQuadrature() throws Exception {
         String transport = compact(source(SHADERS + "radiance_cascades/field_transport.slang"));
         assertTrue(transport.contains("ray.nearDistance=0.0"));

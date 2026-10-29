@@ -17,14 +17,14 @@ interface IPathDiffuseField {
     bool active();
     DiffuseFieldSample evaluate<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment, MaterialAtlas atlas, BlockMaterialTable table,
-        float3 position, float3 normal, MaterialSamplingOptions materialOptions,
+        float3 position, float3 normal, float3 offsetNormal, MaterialSamplingOptions materialOptions,
         float rayBias, float maxRadiance, inout uint seed);
 }
 struct NoPathDiffuseField : IPathDiffuseField {
     bool active() { return false; }
     DiffuseFieldSample evaluate<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         T traversal, L lights, E environment, MaterialAtlas atlas, BlockMaterialTable table,
-        float3 position, float3 normal, MaterialSamplingOptions materialOptions,
+        float3 position, float3 normal, float3 offsetNormal, MaterialSamplingOptions materialOptions,
         float rayBias, float maxRadiance, inout uint seed) {
         DiffuseFieldSample result;
         result.cosineMean = float3(0.0); result.status = DIFFUSE_FIELD_OUTSIDE;

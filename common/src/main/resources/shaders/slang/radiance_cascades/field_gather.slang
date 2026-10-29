@@ -11,7 +11,7 @@ struct RCPathDiffuseField : IPathDiffuseField {
 
     DiffuseFieldSample evaluate<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
             T traversal, L lights, E environment, MaterialAtlas atlas, BlockMaterialTable table,
-            float3 position, float3 normal, MaterialSamplingOptions materialOptions,
+            float3 position, float3 normal, float3 offsetNormal, MaterialSamplingOptions materialOptions,
             float rayBias, float maxRadiance, inout uint seed) {
         DiffuseFieldSample result;
         result.cosineMean = float3(0.0); result.terminalKnown = false;
@@ -19,6 +19,8 @@ struct RCPathDiffuseField : IPathDiffuseField {
         if (!rcFieldMetadataValid(field) || field.tag.x != frameIndex
             || !all(isfinite(position)) || !all(isfinite(normal))
             || !(dot(normal,normal) > 0.0) || !isfinite(dot(normal,normal))
+            || !all(isfinite(offsetNormal)) || !(dot(offsetNormal,offsetNormal) > 0.0)
+            || !isfinite(dot(offsetNormal,offsetNormal))
             || !isfinite(rayBias) || !(rayBias > 0.0)
             || !isfinite(maxRadiance) || !(maxRadiance > 0.0)) return result;
         int3 base; float3 fraction;
@@ -28,7 +30,9 @@ struct RCPathDiffuseField : IPathDiffuseField {
             result.status = DIFFUSE_FIELD_OUTSIDE; return result;
         }
         normal = normalize(normal);
-        float3 origin = position + normal * rayBias;
+        // Cosine uses the shading normal; numerical offset uses the geometric
+        // face, which a normal map cannot tilt through its own triangle.
+        float3 origin = position + normalize(offsetNormal) * rayBias;
         if (!all(isfinite(origin))) return result;
         RCTraceOptions options = defaultRCTraceOptions();
         options.rayBias = rayBias; options.maxRadiance = maxRadiance;

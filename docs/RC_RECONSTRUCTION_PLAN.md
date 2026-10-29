@@ -7,6 +7,7 @@ The user explicitly authorized implementing RC shader mathematics on 2026-10-29.
 
 Enable explicitly with `vkbridge.rt.nativePathTrace=true`,
 `vkbridge.rt.nativeScene=true`, and `vkbridge.rt.radianceCascades=true`.
+Select `bedray.pathTracer=slang` when a denoiser is enabled; its AUTO gate remains.
 `vkbridge.rt.rcBaseAxis` accepts 8 (default), 16 or 32. Missing native ownership,
 AOT contracts, enabled capabilities or matching exports fail explicitly. The
 ordinary native path remains opt-in pending owner live acceptance.
