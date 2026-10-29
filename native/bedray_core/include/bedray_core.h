@@ -204,6 +204,9 @@ typedef struct BedrayFrameDesc {
 #define BEDRAY_PATH_TRACE_FRAME_NATIVE_DI      (1u << 6)
 #define BEDRAY_PATH_TRACE_FRAME_RESET_DI       (1u << 7)
 #define BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI    (1u << 0)
+/* Accepts 25-binding trace programs with inactive, native-owned guide stand-ins.
+ * Does not enable G-buffer writes or change any ABI-v2 structure layout. */
+#define BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS (1u << 1)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)

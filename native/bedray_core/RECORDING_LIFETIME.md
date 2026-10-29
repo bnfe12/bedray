@@ -36,8 +36,13 @@ structure sizes.
 
 `PathTracePass` (`src/path_trace_pass.cpp`) is the native path recorder
 above the single-dispatch calls. It keeps one recording per command buffer in
-`recordings_` and pins six images and up to five buffers (four dummies plus the
-per-recording FrameConstants upload) on it.
+`recordings_` and pins six private images plus the selected buffer uses (dummy
+buffers, frame upload and an active native DI ring). Current 25-binding trace
+programs additionally pin three one-texel guide stand-ins of R32F, RGBA16F and
+RGBA8. They satisfy inactive bindings, never an enabled G-buffer-write request.
+Their transitions are recorded before use and invalidated on discard; retirement
+still follows exact recording proof. Legacy 18-binding programs are accepted
+independently for both scene-table variants.
 
 - `bedray_core_release_recording` remains the only release call: the core drops
   its dispatch records and the pass completes its image/buffer pins in the same

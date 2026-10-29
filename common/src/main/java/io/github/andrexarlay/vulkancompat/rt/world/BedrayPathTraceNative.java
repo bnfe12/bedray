@@ -9,6 +9,7 @@ import org.joml.Vector4f;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.nio.ByteOrder;
 
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
@@ -191,37 +192,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
         putVector(desc, atmosphere + BedrayCoreLayouts.PTA_FOG, frame.fog);
         putVector(desc, atmosphere + BedrayCoreLayouts.PTA_CLOUD, frame.cloud);
 
-        long path = BedrayCoreLayouts.PTFD_PATH;
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_MAX_DEPTH, dispatch.maxDepth());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_MAX_SURFACE_STEPS, dispatch.maxSurfaceSteps());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_SAMPLE_INDEX, dispatch.sampleIndex());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_MATERIAL_COUNT, dispatch.materialCount());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_FLAGS, dispatch.flags());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_RAY_BIAS, dispatch.rayBias());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_ALPHA_CUTOFF, dispatch.alphaCutoff());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_MAX_DISTANCE, dispatch.maxDistance());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_MAX_RADIANCE, dispatch.maxRadiance());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_SUN_PROBABILITY, dispatch.sunProbability());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_EMITTER_COUNT, dispatch.emitterCount());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_EMITTER_PROBABILITY, dispatch.emitterProbability());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_EMITTER_CAMERA_RELATIVE, dispatch.emitterCamRelX());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_EMITTER_CAMERA_RELATIVE + 4, dispatch.emitterCamRelY());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_EMITTER_CAMERA_RELATIVE + 8, dispatch.emitterCamRelZ());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_EMITTER_CAMERA_RELATIVE + 12, dispatch.emitterCandidates());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_DI_CAMERA_DELTA, dispatch.diCamDeltaX());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_DI_CAMERA_DELTA + 4, dispatch.diCamDeltaY());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_DI_CAMERA_DELTA + 8, dispatch.diCamDeltaZ());
-        desc.set(JAVA_FLOAT, path + BedrayCoreLayouts.PTP_DI_CAMERA_DELTA + 12, 0f);
-        // NATIVE_DI cores derive history/parity from their own ring. Otherwise
-        // these fields describe the external ring maintained by the Java path.
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_DI_STATE, dispatch.diFlags());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_DI_STATE + 4, dispatch.diParity());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_DI_STATE + 8, 0);
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_DI_STATE + 12, 0);
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_ENTITY_STATE, entities.atlasSize());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_ENTITY_STATE + 4, entities.selfAvatarTriStart());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_ENTITY_STATE + 8, entities.selfAvatarTriCount());
-        desc.set(JAVA_INT, path + BedrayCoreLayouts.PTP_ENTITY_STATE + 12, 0);
+        fillPath(desc.asSlice(BedrayCoreLayouts.PTFD_PATH, BedrayCoreLayouts.PT_PATH.byteSize()), dispatch, entities);
 
         desc.set(JAVA_INT, BedrayCoreLayouts.PTFD_FRAME_INDEX, frame.frameIndex);
         desc.set(JAVA_INT, BedrayCoreLayouts.PTFD_SAMPLES_PER_FRAME, frame.samplesPerFrame);
@@ -230,6 +201,19 @@ final class BedrayPathTraceNative implements AutoCloseable {
         // exposure.values.w is a delta time in the frame contract; the Java path
         // leaves it zero and keeps the absolute frame time in origin.w.
         desc.set(JAVA_FLOAT, BedrayCoreLayouts.PTFD_FRAME_TIME, 0f);
+    }
+
+    /** The native ABI path block mirrors the shader push; share its canonical writer to preserve every lane. */
+    static void fillPath(MemorySegment out, RtPathTraceSlangPass.Dispatch dispatch, RtPathTraceSlangPass.Entities entities) {
+        if (out.byteSize() != BedrayCoreLayouts.PT_PATH.byteSize())
+            throw new IllegalArgumentException("native path block must be 112 bytes");
+        var packet = out.asByteBuffer().order(ByteOrder.nativeOrder());
+        dispatch.writeTo(packet);
+        // Match the resource ranges actually bound by this native frame, as before.
+        int state = Math.toIntExact(BedrayCoreLayouts.PTP_ENTITY_STATE);
+        packet.putInt(state, entities.atlasSize());
+        packet.putInt(state + 4, entities.selfAvatarTriStart());
+        packet.putInt(state + 8, entities.selfAvatarTriCount());
     }
 
     private static void putBuffer(MemorySegment at, long base, long handle, long offset, long bytes) {

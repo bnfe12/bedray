@@ -1003,6 +1003,66 @@ void test_device_lost_configure_cleanup() {
     CHECK(pass.destroy() == BEDRAY_OK);
 }
 
+void test_guide_aware_program_contract() {
+    reset_all();
+    std::vector<ProgramBinding> bindings(std::begin(kTraceBindings), std::end(kTraceBindings));
+    for (std::uint32_t binding = 26; binding <= 32; ++binding)
+        bindings.push_back({binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
+    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
+    register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
+    BedrayCore core{};
+    PathTracePass pass;
+    // A 25-binding declaration does not excuse a missing/wrong guide type.
+    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK(fake::images.empty()); CHECK(fake::buffers.empty());
+    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    // Four buffer dummies, then one image succeeds and the next allocation fails.
+    fake::fail_allocate_after = 5;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_OUT_OF_MEMORY);
+    CHECK(fake::images.empty()); CHECK(fake::buffers.empty()); CHECK(fake::memories.empty());
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    CHECK(fake::images.size() == 3);
+    auto frame = valid_frame(1);
+    frame.path.flags = 1; // Stand-ins cannot satisfy an explicit G-buffer-write request.
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(!pass.has_recordings()); CHECK(fake::render_calls.empty()); CHECK(fake::images.size() == 3);
+    frame.path.flags = 0;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::images.size() == 9);
+    const auto& trace = fake::render_calls.front();
+    CHECK(trace.resources.size() == 25); CHECK(trace.push_bytes == 112);
+    constexpr VkFormat formats[] = {VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM};
+    for (std::size_t i = 0; i < std::size(formats); ++i) {
+        const auto& resource = trace.resources[18 + i];
+        CHECK(resource.binding == 26 + i); CHECK(resource.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        CHECK(resource.image_layout == VK_IMAGE_LAYOUT_GENERAL);
+        const auto& image = fake::images.at(fake::view_images.at(resource.handle));
+        CHECK(image.width == 1 && image.height == 1); CHECK(image.format == formats[i]);
+    }
+    CHECK_STATUS(pass.destroy(), BEDRAY_ERROR_IN_USE);
+    pass.discard_recording(1);
+    CHECK_STATUS(pass.release_recording(1), BEDRAY_OK);
+    frame.command_buffer = 2;
+    frame.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::render_calls[fake::render_calls.size() - 2].program == kTraceSceneProgram);
+    CHECK(fake::render_calls[fake::render_calls.size() - 2].resources.size() == 25);
+    CHECK_STATUS(pass.release_recording(2), BEDRAY_OK);
+    // An older 18-binding native-scene program remains independently supported.
+    register_program(kTraceSceneProgram, 112, kTraceBindings, std::size(kTraceBindings));
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    frame.command_buffer = 3;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::render_calls[fake::render_calls.size() - 2].resources.size() == 18);
+    CHECK_STATUS(pass.release_recording(3), BEDRAY_OK);
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    CHECK(fake::images.empty()); CHECK(fake::views.empty()); CHECK(fake::view_images.empty());
+    CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
+}
+
 } // namespace
 
 int main() {
@@ -1016,6 +1076,7 @@ int main() {
     test_failure_after_dispatch_keeps_pins();
     test_upload_failure_releases_pins();
     test_device_lost_configure_cleanup();
+    test_guide_aware_program_contract();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "bedray_path_trace_pass_test FAILED: %d failure(s)\n", g_failures);

@@ -57,6 +57,7 @@ VKAPI_ATTR void VKAPI_CALL destroy(VkDevice, VkSampler sampler, const VkAllocati
 }
 
 int main() {
+    require((bedray_core_path_trace_feature_mask() & BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS) != 0);
     exception_boundaries();
     auto* core = new BedrayCore;
     BedrayBloomDesc bloom{};

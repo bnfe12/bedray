@@ -17,8 +17,9 @@ final class NativePathTraceBackend implements PathTraceBackend {
     private boolean closed;
 
     NativePathTraceBackend(SlangRuntime runtime) {
-        if (!runtime.library().hasPathTrace() || !runtime.library().hasNativeReservoirs()) {
-            throw new IllegalStateException("nativePathTrace requires a core with path-trace and NATIVE_DI exports");
+        if (!runtime.library().hasPathTrace() || !runtime.library().hasNativeReservoirs()
+            || !runtime.library().hasGuideBindings()) {
+            throw new IllegalStateException("nativePathTrace requires a core with NATIVE_DI and the 25-binding guide contract");
         }
         this.runtime = runtime;
         SlangProgram trace = runtime.program(RtPathTraceSlangPass.PASS_NAME).orElseThrow();

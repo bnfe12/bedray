@@ -24,6 +24,8 @@ struct MemoryState {
 struct ImageState {
     VkDeviceSize allocation = 0;
     std::uint64_t memory = 0;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    std::uint32_t width = 0, height = 0;
 };
 
 struct RenderCall {
@@ -51,6 +53,7 @@ std::map<std::uint64_t, BufferState> buffers;
 std::map<std::uint64_t, MemoryState> memories;
 std::map<std::uint64_t, ImageState> images;
 std::set<std::uint64_t> views;
+std::map<std::uint64_t, std::uint64_t> view_images;
 
 std::vector<RenderCall> render_calls;
 std::vector<PhaseCall> phase_calls;
@@ -92,6 +95,7 @@ void reset() {
     memories.clear();
     images.clear();
     views.clear();
+    view_images.clear();
     render_calls.clear();
     phase_calls.clear();
     fills = 0;
@@ -240,7 +244,8 @@ VKAPI_ATTR VkResult VKAPI_CALL create_image(
     const VkDeviceSize pixels =
         static_cast<VkDeviceSize>(info->extent.width) * static_cast<VkDeviceSize>(info->extent.height);
     const std::uint64_t id = next_handle++;
-    images.emplace(id, ImageState{pixels * 16u < 4096u ? 4096u : pixels * 16u, 0});
+    images.emplace(id, ImageState{pixels * 16u < 4096u ? 4096u : pixels * 16u, 0,
+        info->format, info->extent.width, info->extent.height});
     *out = make_handle<VkImage>(id);
     return VK_SUCCESS;
 }
@@ -283,12 +288,14 @@ VKAPI_ATTR VkResult VKAPI_CALL create_view(
     }
     const std::uint64_t id = next_handle++;
     views.insert(id);
+    view_images.emplace(id, handle_id(info->image));
     *out = make_handle<VkImageView>(id);
     return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL destroy_view(
     VkDevice, VkImageView view, const VkAllocationCallbacks*) {
+    if (view_images.erase(handle_id(view)) != 1) ++faults;
     if (views.erase(handle_id(view)) != 1) {
         ++faults;
     }

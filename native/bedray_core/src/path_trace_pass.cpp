@@ -18,6 +18,7 @@ namespace {
 using gpu::Status;
 
 constexpr std::uint32_t kThreadGroup = 8u;
+constexpr std::uint32_t kPathOptionGbuffer = 1u << 0u;
 constexpr std::uint32_t kFrameFlagHistoryValid = 1u << 0u;
 constexpr std::uint32_t kFrameFlagResetTemporal = 1u << 2u;
 // restir_spatial.slang: RESTIR_SPATIAL_ENABLED, the state.w bit that lets the
@@ -417,29 +418,35 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     // path_trace.slang and path_trace_scene.slang share the binding set, the
     // push block and the outputs; only binding 2's record layout and the
     // traversal differ, and that is the program's own business.
-    auto validate_trace_program = [&](std::uint64_t program, const char* label) -> BedrayStatus {
+    bool trace_guides = false, scene_guides = false;
+    auto validate_trace_program = [&](std::uint64_t program, const char* label, bool& guides) -> BedrayStatus {
         ProgramContract contract{};
         if (!program_contract(core, program, contract)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "%s is not registered", label);
         }
-        if (contract.binding_count != 18u
+        if ((contract.binding_count != 18u && contract.binding_count != 25u)
             || contract.push_constant_bytes < sizeof(PathTracePush)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s contract mismatch: %u bindings, %u push bytes (need 18, %zu)",
+                "%s contract mismatch: %u bindings, %u push bytes (need 18/25, %zu)",
                 label, contract.binding_count, contract.push_constant_bytes, sizeof(PathTracePush));
         }
         if (!has_bindings(core, program, kTraceBindings, std::size(kTraceBindings))) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
                 "%s does not declare the path_trace.slang binding set", label);
         }
+        guides = contract.binding_count == 25u;
+        if (guides) for (std::uint32_t binding = 26; binding <= 32; ++binding) {
+            if (!program_has_binding(core, program, binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE))
+                return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "%s guide binding %u must be a storage image", label, binding);
+        }
         return BEDRAY_OK;
     };
-    BedrayStatus trace_status = validate_trace_program(desc.program_trace, "program_trace");
+    BedrayStatus trace_status = validate_trace_program(desc.program_trace, "program_trace", trace_guides);
     if (trace_status != BEDRAY_OK) {
         return trace_status;
     }
     if (desc.program_trace_scene != 0) {
-        BedrayStatus scene_status = validate_trace_program(desc.program_trace_scene, "program_trace_scene");
+        BedrayStatus scene_status = validate_trace_program(desc.program_trace_scene, "program_trace_scene", scene_guides);
         if (scene_status != BEDRAY_OK) {
             return scene_status;
         }
@@ -549,6 +556,8 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     images_ = std::move(images);
     buffers_ = std::move(buffers);
     reset_state();
+    trace_guide_bindings_ = trace_guides;
+    scene_guide_bindings_ = scene_guides;
 
     BedrayStatus status = create_dummy(64u, block_materials_id_, block_materials_view_, error);
     if (status == BEDRAY_OK) {
@@ -560,6 +569,7 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     if (status == BEDRAY_OK) {
         status = create_dummy(16u, entity_vector_id_, entity_vector_view_, error);
     }
+    if (status == BEDRAY_OK && (trace_guides || scene_guides)) status = create_guide_dummies(error);
     if (status != BEDRAY_OK) {
         destroy();
         return status;
@@ -569,6 +579,23 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace pass state");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring path trace");
+}
+
+BedrayStatus PathTracePass::create_guide_dummies(BedrayError* error) {
+    constexpr std::array<VkFormat, 3> formats{VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM};
+    for (std::size_t i = 0; i < formats.size(); ++i) {
+        gpu::ImageDesc desc{};
+        desc.width = desc.height = 1;
+        desc.format = formats[i];
+        desc.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+        VkResult vk = VK_SUCCESS;
+        const Status status = images_->create(desc, guide_dummy_ids_[i], guide_dummy_views_[i], vk);
+        if (status != Status::ok) {
+            if (status == Status::device_lost) device_lost();
+            return fail(error, status_of(status), "cannot create native guide stand-in: VkResult=%d", static_cast<int>(vk));
+        }
+    }
+    return BEDRAY_OK;
 }
 
 BedrayStatus PathTracePass::create_dummy(VkDeviceSize bytes, gpu::BufferId& id,
@@ -764,6 +791,9 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     // and must have been configured with path_trace_scene.slang. A table that is
     // not a whole number of records would decode as a different section.
     const bool native_scene = (desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE) != 0;
+    const bool guide_bindings = native_scene ? scene_guide_bindings_ : trace_guide_bindings_;
+    if (guide_bindings && (desc.path.flags & kPathOptionGbuffer) != 0)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "native guide bindings are inactive stand-ins, not G-buffer outputs");
     if (native_scene) {
         if (program_trace_scene_ == 0) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
@@ -927,7 +957,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         : range_from_view(entity_scalar_view_);
 
     RecordingPins pins{};
-    pins.image_uses.reserve(6);
+    pins.image_uses.reserve(9);
     pins.buffer_uses.reserve(8);
     recordings_.emplace(command_handle, std::move(pins));
     RecordingPins& recording = recordings_.at(command_handle);
@@ -938,6 +968,13 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         if (status != BEDRAY_OK) {
             // No command has been recorded yet, so this recording is provably
             // discarded and its partial pins can be completed immediately.
+            release_recording(command_handle);
+            return status;
+        }
+    }
+    if (guide_bindings) for (auto id : guide_dummy_ids_) {
+        status = pin_image(id, recording, error);
+        if (status != BEDRAY_OK) {
             release_recording(command_handle);
             return status;
         }
@@ -998,6 +1035,11 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     std::memcpy(trace_push.entity_state, desc.path.entity_state, sizeof(trace_push.entity_state));
 
     const VkCommandBuffer command = as_command_buffer(desc.command_buffer);
+    if (guide_bindings && !guide_dummies_initialized_) {
+        for (const auto& view : guide_dummy_views_)
+            transition_image(fns_, command, view.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+        guide_dummies_initialized_ = true;
+    }
 
     // Publication happens only after the complete group records successfully.
     // A partial failure cannot leave the next dispatch importing its writes.
@@ -1025,7 +1067,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         fns_.cmd_fill_buffer(command, owned_reservoirs_view_.buffer, 0, owned_reservoirs_view_.size, 0);
     entry_barrier(fns_, command);
 
-    std::array<BedrayResource, 18> trace_resources{};
+    std::array<BedrayResource, 25> trace_resources{};
     trace_resources[0] = acceleration_resource(0, as_acceleration(desc.scene.tlas));
     trace_resources[1] = image_resource(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, radiance_view_.view);
     trace_resources[2] = buffer_resource(2, as_buffer(desc.scene.sections.handle),
@@ -1057,6 +1099,12 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         entity_texels.offset, entity_texels.bytes);
     trace_resources[17] = buffer_resource(25, as_buffer(entity_previous.handle),
         entity_previous.offset, entity_previous.bytes);
+    if (guide_bindings) {
+        constexpr std::array<std::size_t, 7> format_index{0, 1, 1, 1, 2, 1, 2};
+        for (std::size_t i = 0; i < format_index.size(); ++i)
+            trace_resources[18 + i] = image_resource(static_cast<std::uint32_t>(26 + i),
+                VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, guide_dummy_views_[format_index[i]].view);
+    }
 
     BedrayFrameDesc trace_desc{};
     trace_desc.abi_version = BEDRAY_CORE_ABI_VERSION;
@@ -1065,7 +1113,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     trace_desc.group_count_x = groups(desc.camera.width);
     trace_desc.group_count_y = groups(desc.camera.height);
     trace_desc.group_count_z = 1;
-    trace_desc.resource_count = static_cast<std::uint32_t>(trace_resources.size());
+    trace_desc.resource_count = guide_bindings ? 25u : 18u;
     trace_desc.resources = trace_resources.data();
     trace_desc.push_constants = &trace_push;
     trace_desc.push_constant_bytes = static_cast<std::uint32_t>(sizeof(trace_push));
@@ -1204,6 +1252,7 @@ void PathTracePass::discard_recording(std::uint64_t command_buffer) noexcept {
     history_written_ = false;
     history_parity_ = 0;
     images_initialized_ = false;
+    guide_dummies_initialized_ = false;
     owned_di_history_ = false;
     owned_di_needs_clear_ = true;
     owned_di_parity_ = 0;
@@ -1242,6 +1291,7 @@ BedrayStatus PathTracePass::destroy() noexcept {
         if (lost_) {
             static_cast<void>(images_->release_after_device_loss());
         } else {
+            for (auto id : guide_dummy_ids_) if (id.serial != 0) static_cast<void>(images_->retire(id));
             if (images_ready_) {
                 for (const gpu::ImageId id : {radiance_id_, motion_id_, accum_id_[0], accum_id_[1],
                          history_depth_id_[0], history_depth_id_[1]}) {
@@ -1299,6 +1349,8 @@ void PathTracePass::device_lost() noexcept {
 }
 
 void PathTracePass::reset_state() noexcept {
+    trace_guide_bindings_ = scene_guide_bindings_ = guide_dummies_initialized_ = false;
+    guide_dummy_ids_ = {}; guide_dummy_views_ = {};
     radiance_id_ = {};
     motion_id_ = {};
     accum_id_[0] = {};

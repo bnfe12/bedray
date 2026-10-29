@@ -12,7 +12,7 @@ native path; L1/L2 checks do not establish GPU/game behavior or visual parity.
 2. **Pass shape and resource identity.** `RecordingKind::opaque_group` wraps
    `PathTracePass::render`, including trace, optional two-checker spatial and
    display. It has no pretend single-dispatch shape/push block or graph-local
-   bindings for its private images. Its real 18/6/9 descriptor and push contracts
+   bindings for its private images. Its real 18-or-25/6/9 descriptor and push contracts
    are validated by the existing program registry/pass before recording. The
    native scene flag selects the existing `path_trace_scene` contract. Output
    and depth views remain host-owned, GENERAL and retained through completion.
@@ -67,6 +67,15 @@ coarse ABI state and recording identities; it never constructs Java image/buffer
 owners or the reference recorder. `ReferencePathTraceBackend` contains the Java
 recording/resource path used as the default before live acceptance. Mutable frame
 inputs are borrowed synchronously, never retained by either backend. The native
-backend requires the additive NATIVE_DI feature; the C ABI still supports external
+backend requires the additive NATIVE_DI and GUIDE_BINDINGS features; the C ABI still supports external
 rings for independent older clients, but this opt-in Java backend requires the
 matching current core. SlangRuntime is the sole owner of cached programs.
+
+GUIDE_BINDINGS accepts the shader owner's current 25-binding trace programs
+with native-owned one-texel R32F/RGBA16F/RGBA8 stand-ins for bindings 26..32 when
+guide writes are off. It does not advertise real G-buffer output. An explicit
+G-buffer-write bit is rejected before resource pins/commands; the existing host
+selector still refuses native denoising. Independent 18-binding ABI clients stay
+supported. Native FFM path packing shares Dispatch.writeTo, preserving the
+auto-normal strength bits in entityState.w while normalizing entity metadata to
+the ranges actually bound. Existing ABI-v2 structures are unchanged.

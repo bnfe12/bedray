@@ -561,11 +561,20 @@ public final class BedrayCoreNative implements AutoCloseable {
 
     /** True when the loaded core advertises ownership of DI allocation, history and parity. */
     public boolean hasNativeReservoirs() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_DI);
+    }
+
+    /** Accepts current 25-binding programs with inactive native guide stand-ins; does not enable guide writes. */
+    public boolean hasGuideBindings() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_GUIDE_BINDINGS);
+    }
+
+    private boolean hasPathTraceFeature(int feature) {
         ensureOpen();
         if (pathTraceFeatureMaskHandle == null) return false;
         try {
             int features = (int) pathTraceFeatureMaskHandle.invokeExact();
-            return (features & BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_DI) != 0;
+            return (features & feature) == feature;
         } catch (Throwable t) {
             throw rethrow("path_trace_feature_mask", t);
         }
