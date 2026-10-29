@@ -63,7 +63,7 @@ BedrayStatus FrameGraphOwner::configure(std::uint32_t core_mask, std::uint32_t q
 }
 
 BedrayStatus FrameGraphOwner::record(const BedrayPathTraceFrameDesc& desc, BedrayError* error,
-    const BedrayPathTraceGuides* guides) {
+    const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion) {
     if (!ready_ || desc.command_buffer == 0)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "native frame graph is not configured or command buffer is null");
     if (recordings_.contains(desc.command_buffer))
@@ -83,13 +83,14 @@ BedrayStatus FrameGraphOwner::record(const BedrayPathTraceFrameDesc& desc, Bedra
         FrameGraphOwner* owner;
         const BedrayPathTraceFrameDesc* desc;
         const BedrayPathTraceGuides* guides;
+        const BedrayPathTraceBuffer* motion;
         BedrayError* error;
         BedrayStatus status = BEDRAY_OK;
-    } call{this, &desc, guides, error};
+    } call{this, &desc, guides, motion, error};
     const auto callback = [](void* pointer, graph::PassId pass, VkCommandBuffer) -> bool {
         auto& c = *static_cast<Call*>(pointer);
         if (pass != 0) { c.status = BEDRAY_ERROR_INTERNAL; return false; }
-        c.status = c.owner->record_(c.owner->context_, *c.desc, c.guides, c.error);
+        c.status = c.owner->record_(c.owner->context_, *c.desc, c.guides, c.motion, c.error);
         return c.status == BEDRAY_OK;
     };
     if (!scheduler_.record_frame(entry->second, plan_,

@@ -209,6 +209,7 @@ typedef struct BedrayFrameDesc {
 #define BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS (1u << 1)
 /* Additive render_path_trace_guides call binds seven real borrowed outputs. */
 #define BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS  (1u << 2)
+#define BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION     (1u << 3)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)
@@ -387,6 +388,13 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_guides(
     BedrayCore* core, const BedrayPathTraceFrameDesc* desc,
     const BedrayPathTraceGuides* guides, BedrayError* error);
+
+/* Additive NRD output: borrowed storage-buffer range of at least W*H*16 bytes.
+ * Both G-buffer and NRD motion option bits must be enabled. Existing buffer
+ * flags/reserved stay zero; the host retains all outputs through exact proof. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_motion(
+    BedrayCore* core, const BedrayPathTraceFrameDesc* desc,
+    const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion, BedrayError* error);
 
 /* Refuses while a path-trace recording remains. Programs stay host-owned and
  * must not be destroyed while the pass can still record with them. */

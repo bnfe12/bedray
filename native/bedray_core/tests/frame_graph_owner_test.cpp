@@ -16,7 +16,8 @@ struct Context {
     std::uint64_t last_guide_view = 0;
     BedrayStatus record_status = BEDRAY_OK, release_status = BEDRAY_OK;
 };
-BedrayStatus record(void* pointer, const BedrayPathTraceFrameDesc&, const BedrayPathTraceGuides* guides, BedrayError* error) {
+BedrayStatus record(void* pointer, const BedrayPathTraceFrameDesc&, const BedrayPathTraceGuides* guides,
+    const BedrayPathTraceBuffer*, BedrayError* error) {
     auto& c = *static_cast<Context*>(pointer);
     ++c.records;
     c.last_guide_view = guides ? guides->view_z : 0;

@@ -795,7 +795,7 @@ BedrayStatus PathTracePass::ensure_reservoirs(std::uint64_t bytes, BedrayError* 
 }
 
 BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, BedrayError* error,
-    const BedrayPathTraceGuides* guides) try {
+    const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion) try {
     BedrayPathTraceFrameDesc desc = input;
     if (core_ == nullptr || images_ == nullptr || buffers_ == nullptr) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
@@ -844,6 +844,18 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         return fail(error, BEDRAY_ERROR_UNSUPPORTED, "G-buffer writes require the additive guide-output call");
     }
     const bool motion_binding = native_scene ? scene_motion_bindings_ : trace_motion_bindings_;
+    const bool wants_motion = (desc.path.flags & (1u << 1u)) != 0;
+    if (motion) {
+        if (!motion_binding) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "selected program has no NRD motion binding");
+        const auto pixels = static_cast<std::uint64_t>(desc.camera.width) * desc.camera.height;
+        if (!guides || !wants_motion || (desc.path.flags & kPathOptionGbuffer) == 0
+            || !motion->handle || motion->flags || motion->reserved
+            || pixels > std::numeric_limits<std::uint64_t>::max() / 16u || motion->bytes < pixels * 16u
+            || motion->offset > std::numeric_limits<std::uint64_t>::max() - motion->bytes || motion->offset % 16u != 0)
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "NRD motion needs guides, matching option bits and a complete vec4 range");
+    } else if (wants_motion) {
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "NRD motion writes require the additive motion-output call");
+    }
     if (native_scene) {
         if (program_trace_scene_ == 0) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
@@ -1042,7 +1054,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     }
     if (status == BEDRAY_OK && native_di_active)
         status = pin_buffer(owned_reservoirs_id_, recording, error);
-    if (status == BEDRAY_OK && motion_binding)
+    if (status == BEDRAY_OK && motion_binding && !motion)
         status = pin_buffer(motion_dummy_id_, recording, error);
     if (status != BEDRAY_OK) {
         release_recording(command_handle);
@@ -1158,8 +1170,8 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, guides ? as_view(guide_views[i]) : guide_dummy_views_[format_index[i]].view);
     }
     if (motion_binding) {
-        trace_resources[25] = buffer_resource(33, motion_dummy_view_.buffer, 0,
-            motion_dummy_view_.size);
+        trace_resources[25] = motion ? buffer_resource(33, as_buffer(motion->handle), motion->offset, motion->bytes)
+            : buffer_resource(33, motion_dummy_view_.buffer, 0, motion_dummy_view_.size);
     }
 
     BedrayFrameDesc trace_desc{};
