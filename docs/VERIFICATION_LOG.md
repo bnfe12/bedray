@@ -4,6 +4,26 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — NRD constant-buffer ring (L0 source contract; native build not run)
+
+P0-7 in [AUDIT_DEFECTS_AND_ISSUES.md](AUDIT_DEFECTS_AND_ISSUES.md): every
+`vkb_nrd_dispatch` call uploaded its constant blocks from slot 0 of a buffer
+sized for one frame, while the host may keep 1-8 frames in flight. Frame N+1
+could overwrite bytes that frame N's command buffer was still reading.
+
+The buffer is now `cbStride * cbSlots * d->frames`, the upload base is
+`d->ring * d->cbSlots`, and the ring advances after the upload, in lockstep
+with the per-frame descriptor pool. `dispatchN <= cbSlots` still bounds one
+frame's slots. `NrdConstantRingSourceTest` pins the allocation, the base, the
+slot arithmetic, the old expression's absence and the order of the ring
+advance.
+
+This is not L1 for the native bridge: NRD and Vulkan headers are external
+(`VKB_NRD_SRC`, `VKB_VK_HEADERS`) and are not installed on this machine, so
+`native/nrd_bridge/build.bat` was not run. The Java source contract is L2 and
+the C++ change itself is L0-reviewed only. No GPU dispatch, TDR repro or
+denoised frame exists.
+
 ## 2026-10-29 — origin merge: guides + water + native bloom on the deduplicated entry (L1 compile, L2 no GPU)
 
 Branch: `fix/audit-remediation-20261029`, merge commit `84b1697`, merging

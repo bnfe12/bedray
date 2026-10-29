@@ -135,7 +135,7 @@ typedef struct VkbNrdCreateInfo {
     uint32_t struct_size;
     uint32_t width, height;         /* resource size of the pools = max render rectangle */
     uint32_t mode_mask;             /* VKB_NRD_MODE_* */
-    uint32_t frames_in_flight;      /* descriptor pool ring size, 1..8 */
+    uint32_t frames_in_flight;      /* descriptor-pool and constant-buffer ring size, 1..8 */
     uint32_t flags;                 /* reserved, 0 */
 } VkbNrdCreateInfo;
 

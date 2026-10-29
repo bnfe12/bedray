@@ -408,12 +408,14 @@ static int createPipelinesAndSets(Denoiser* d) {
         d->samplerCount = s + 1;
     }
 
-    // constant buffer: dynamic uniform buffer with one slot per possible dispatch
+    // constant buffer: dynamic uniform buffer with one block per possible
+    // dispatch, multiplied by the frames-in-flight ring.  Frame N+1 must not
+    // overwrite a block that frame N's in-flight command buffer still reads.
     d->cbSlots = std::max<uint32_t>(id->descriptorPoolDesc.setsMaxNum, 1);
     d->cbStride = (VkDeviceSize(id->constantBufferMaxDataSize) + g.uboAlign - 1) / g.uboAlign * g.uboAlign;
     {
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bci.size = d->cbStride * d->cbSlots;
+        bci.size = d->cbStride * d->cbSlots * d->frames;
         bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         VKC(g.vk.CreateBuffer(g.device, &bci, nullptr, &d->cbBuffer));
@@ -907,6 +909,10 @@ VKB_NRD_API int32_t vkb_nrd_dispatch(uint64_t handle, uint64_t command_buffer, u
         if (any) {
             globalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                           VK_ACCESS_TRANSFER_WRITE_BIT);
+            // The descriptor pool and this constant block use the same ring
+            // index: frame N's blocks stay untouched until the ring returns to
+            // them `frames` dispatch calls later.
+            const uint64_t cbSlotBase = static_cast<uint64_t>(d->ring) * d->cbSlots;
             uint32_t lastOffset = 0, nextSlot = 0;
             std::vector<uint8_t> padded(d->idesc->constantBufferMaxDataSize + 4);
             for (uint32_t i = 0; i < dispatchN; ++i) {
@@ -925,7 +931,8 @@ VKB_NRD_API int32_t vkb_nrd_dispatch(uint64_t handle, uint64_t command_buffer, u
                     std::memcpy(padded.data(), dd.constantBufferData, dd.constantBufferDataSize);
                     src = padded.data();
                 }
-                lastOffset = static_cast<uint32_t>(d->cbStride * nextSlot++);
+                const uint64_t slot = cbSlotBase + nextSlot++;
+                lastOffset = static_cast<uint32_t>(d->cbStride * slot);
                 cbOffset[i] = lastOffset;
                 g.vk.CmdUpdateBuffer(cmd, d->cbBuffer, lastOffset, size4, src);
                 constantBytes += size4;
