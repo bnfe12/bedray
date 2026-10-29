@@ -4,6 +4,32 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — Union trace guards are load-bearing (L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`, on top of `39c8653`. No source change: this
+run proves the three guards already in `native/bedray_core/src/path_trace_pass.cpp`
+actually decide the outcome. CMake Release, `ctest -R bedray_path_trace_pass`
+per mutation.
+
+| Guard | Mutation | Result |
+|---|---|---|
+| `binding_count != 18u && != 25u && != 26u` accepts the 26-binding Java-built program | drop `!= 26u` | FAILED (SEGFAULT) |
+| `program_has_binding(core, program, 33, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)` | replace with `(void)motion;` | FAILED (clean) |
+| `create_dummy(16u, motion_dummy_id_, …)` for the NRD `IN_MV` stand-in | gate with `if (false)` | FAILED (SEGFAULT) |
+
+Two of the three die by segfault rather than a clean assertion: when
+`configure` refuses, `bedray_path_trace_pass_test` continues and dereferences a
+pass that was never set up. So these prove the guards are load-bearing — a
+regression there is caught — but they do not identify which `CHECK` breaks, and
+the harness's own failure reporting is worse than it should be for the
+rejection paths. The middle case fails cleanly because it is a per-program
+validation, not setup.
+
+Restored `path_trace_pass.cpp` is byte-identical to the committed file
+(`37cca8b35742ca7d…`), rebuilt after `touch` (a restored file keeps an older
+mtime and MSBuild would otherwise relink the mutated object), and the full
+native suite is back to 21/21.
+
 ## 2026-10-29 — Borrowed Slang programs stay borrowed (L2 unit)
 
 Branch: `refactor/slang-pipeline`, on top of `39e0365`. Tool: `slangc` 2026.20
