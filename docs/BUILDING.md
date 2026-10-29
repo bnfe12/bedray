@@ -61,12 +61,30 @@ Only Minecraft and the mods you download yourself from their official pages belo
 ## 4. Build and test
 
 ```
-gradlew clean :core:test :common:runShimTests :neoforge:jar :fabric:jar
+gradlew clean :core:test :common:test :common:runShimTests :neoforge:jar :fabric:jar
 ```
 
 Jars appear in `neoforge/build/libs/` and `fabric/build/libs/`, named `bedray-neoforge-mc26.3.0-<version>.jar` and
 `bedray-fabric-mc26.3-<version>.jar`. `runShimTests` checks Java-level logic and compiles the shaders with shaderc; it does not use
 the GPU and is **not** evidence that a feature works in the game.
+
+### The JUnit suite (`:common:test`)
+
+`:common:test` is the no-GPU Java suite. It compiles the Slang passes first when `slangc` is configured, and it declares the
+LWJGL shaderc native artifact itself, so no launcher installation is needed to load `shaderc.dll` at test runtime. `libs/` is
+still required for the game classes the tests compile against.
+
+Two build guards keep a native or classpath failure from looking like a slow test:
+
+* every test has a 120 s JUnit timeout; a native hang fails the run instead of holding the gate;
+* on Windows the Gradle test worker can mangle non-ASCII classpath entries. Run the suite from an ASCII worktree
+  (`git worktree add C:\Temp\bedray-wt HEAD` and run Gradle there). The build prints a warning when the project path
+  contains non-ASCII characters.
+
+The runtime GLSL fallback compiler pins `shaderc_optimization_level_zero`: shaderc's SPIR-V optimizer does not terminate on the
+~261 KB expanded `rt_rays`/`rt_path` sources (reproduced with LWJGL shaderc 3.3.3 and 3.4.3, `performance` and `size` levels).
+Do not raise it; `RtShaderCompilerOptionsTest` enforces this. The AOT Slang passes are unaffected because `slangc` optimises them.
+A passing `:common:test` is L2 evidence (Java logic and source scans without a GPU), not a game check.
 
 The `combinedJar` task of each loader module builds the canonical player artifact with the Bedray Compute provider
 nested inside (`bedray-neoforge-mc26.3.0-<version>.jar`, `bedray-fabric-mc26.3-<version>.jar`):

@@ -94,7 +94,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.cameraAnchor = pc.emitterCameraRelative.xyz;
     traversal.selfAvatarTriStart = pc.entityState.y;
     traversal.selfAvatarTriCount = pc.entityState.z;
-    pathTraceEntry(traversal, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
-        outDepth, frame, blockMaterials, emitters, reservoirs, entityPositions, entityIndices,
-        entityAttrs, entityRects, entityTexels, entityPrevious, pc);
+    pathTraceEntry(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
+        outDepth, frame, blockMaterials, emitters, reservoirs, pc);
 }

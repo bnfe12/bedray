@@ -23,6 +23,7 @@ class RtSlangRestirDiTest {
     private static final String RESERVOIR = "src/main/resources/shaders/slang/restir/restir_di.slang";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
     private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
     private static final String CONTRACT = "src/main/resources/shaders/slang/contracts/light.slang";
     private static final String LEGACY = "src/main/resources/shaders/glsl/rt_common_emitters.glsl";
@@ -211,24 +212,24 @@ class RtSlangRestirDiTest {
         assertTrue(reuse.contains("current = mergeReservoirs(current, history, evaluation.targetPdf,")
             && reuse.contains("RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed)"),
             "the import is capped by the legacy ratio, so one bright history cannot swallow this frame's draws");
-        String pass = read(PASS);
-        assertTrue(pass.contains("lights.emittersReusedAtPrimary = directReuse.enabled != 0u;"),
+        String entry = read(ENTRY);
+        assertTrue(entry.contains("lights.emittersReusedAtPrimary = directReuse.enabled != 0u;"),
             "with the reservoir on, the composite stops drawing the emitter branch a second time at the primary vertex");
     }
 
     /** One shader, two branches: the switch is host state, not a second compiled program. */
     @Test
     void theBranchIsAFlagAndNotAShaderVariant() {
-        String pass = read(PASS);
-        assertTrue(pass.contains("static const uint PATH_TRACE_DI_ENABLED      = 1u << 0u;"),
+        String entry = read(ENTRY);
+        assertTrue(entry.contains("static const uint PATH_TRACE_DI_ENABLED      = 1u << 0u;"),
             "the shader names the bit the host promises to set");
-        assertTrue(pass.contains("directReuse.enabled = (pc.diState.x & PATH_TRACE_DI_ENABLED) != 0u ? 1u : 0u;"),
+        assertTrue(entry.contains("directReuse.enabled = (pc.diState.x & PATH_TRACE_DI_ENABLED) != 0u ? 1u : 0u;"),
             "and the sampler is built either way");
         String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
-        assertEquals(RtSlangPathPass.DI_FLAG_ENABLED, flag(pass, "PATH_TRACE_DI_ENABLED"), "enabled bit");
-        assertEquals(RtSlangPathPass.DI_FLAG_HISTORY, flag(pass, "PATH_TRACE_DI_HISTORY"), "history bit");
-        assertEquals(RtSlangPathPass.DI_FLAG_STATIC, flag(pass, "PATH_TRACE_DI_STATIC"), "static bit");
-        assertEquals(RtSlangPathPass.DI_FLAG_FLIP_Y, flag(pass, "PATH_TRACE_DI_FLIP_Y"), "flipY bit");
+        assertEquals(RtSlangPathPass.DI_FLAG_ENABLED, flag(entry, "PATH_TRACE_DI_ENABLED"), "enabled bit");
+        assertEquals(RtSlangPathPass.DI_FLAG_HISTORY, flag(entry, "PATH_TRACE_DI_HISTORY"), "history bit");
+        assertEquals(RtSlangPathPass.DI_FLAG_STATIC, flag(entry, "PATH_TRACE_DI_STATIC"), "static bit");
+        assertEquals(RtSlangPathPass.DI_FLAG_FLIP_Y, flag(entry, "PATH_TRACE_DI_FLIP_Y"), "flipY bit");
         assertTrue(game.contains("diFlags = dispatch.diFlags() | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)"),
             "the host never claims a history it did not write");
         assertTrue(game.contains("if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null)"),

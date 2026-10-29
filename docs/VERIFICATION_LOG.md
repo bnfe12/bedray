@@ -4,6 +4,92 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — shaderc optimizer hang and the shared path entry (L1 compile, L2 no GPU)
+
+Branch: `fix/audit-remediation-20261029`, commits `f631326` and `6209614`, on
+top of `cc3c0db`. The run used an ASCII worktree of the same commit because the
+Gradle test worker mangles the Cyrillic project path on this machine. Tool:
+`slangc` 2026.20 via `-Pslangc=...`.
+
+### The shaderc hang was the SPIR-V optimizer
+
+`RtVolumetricFogTest.testShaderCompilation` did not merely run slowly: the test
+worker was blocked inside native `shaderc_compile_into_spv` on the expanded
+`rt_rays.comp` source (261,010 characters without `VKB_GBUFFER`). A standalone
+reproducer over the same include expansion isolated the stage:
+
+| Compiler | Variant | Level | Result |
+|---|---|---|---|
+| lwjgl-shaderc 3.3.3 | plain | `performance` | no result after 90 s (killed) |
+| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `performance` | no result after 90 s (killed) |
+| lwjgl-shaderc 3.3.3 | plain | `size` | no result after 60 s (killed) |
+| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `size` | no result after 60 s (killed) |
+| lwjgl-shaderc 3.3.3 | plain | `zero` | 448 ms, 400,760 B SPIR-V |
+| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `zero` | 930 ms, 409,768 B SPIR-V |
+| lwjgl-shaderc 3.4.3 | plain | `performance` | no result after 120 s (killed) |
+| lwjgl-shaderc 3.4.3 | `VKB_GBUFFER` | `performance` | no result after 120 s (killed) |
+| lwjgl-shaderc 3.4.3 | `VKB_GBUFFER` | `zero` | 1,271 ms, 409,696 B SPIR-V |
+
+The regression is in shaderc's SPIR-V optimizer, not in the shader and not in a
+particular LWJGL build. `RtShaderCompiler` now pins
+`shaderc_optimization_level_zero` (`RUNTIME_OPTIMIZATION_LEVEL`), and the disk
+cache profile moved to `bedray-spirv-cache-v3 ... optimization=zero`, so a
+performance-era cache cannot mask the change. `RtShaderCompilerOptionsTest`
+fails if the optimizer level is raised again. This affects only the runtime
+GLSL fallback compiler: the AOT Slang passes are optimised by `slangc`, and the
+Vulkan driver still optimises the module when it builds the pipeline.
+
+### Test gate
+
+- `lwjgl-shaderc:<version>:natives-windows` is now a `testRuntimeOnly`
+  dependency, so `:common:test` no longer needs a launcher installation to load
+  `shaderc.dll`.
+- JUnit's default timeout is 120 s; a future native hang fails the run instead
+  of holding the whole gate.
+- `runShimTests` no longer requires the launcher (`testClasses` only).
+- The build warns when the project path contains non-ASCII characters and
+  points at the ASCII-worktree workaround, now documented in BUILDING.md.
+
+### One path-trace entry body
+
+`passes/path_trace.slang` and `passes/path_trace_scene.slang` were 270/271-line
+copies differing only in binding 2 and the traversal backend. The shared
+integration now lives in `pathtrace/path_trace_entry.slang`; each pass file
+declares its own bindings and backend and calls `pathTraceEntry`.
+
+```
+[slang] path_trace:       420,476 B SPIR-V, 18 binding(s), 112 B push
+[slang] path_trace_scene: 431,924 B SPIR-V, 18 binding(s), 112 B push
+```
+
+`SlangPassLibraryTest.pathTraceScenePassKeepsTheSameHostContractAsTheLegacyEntry`
+compares every descriptor, the push size, capability bits and workgroup;
+`PathTraceEntryDedupTest` rejects a copied `tracePath(` call in either wrapper;
+`RtSlangBlockEmitterTest` reads the shared body. `:common:compileSlang` builds
+18 passes.
+
+### Targeted result
+
+`:common:test` with `SlangPassLibraryTest`, `PathTraceEntryDedupTest`,
+`RtPathTraceSlangPassTest`, `RtSlangBlockEmitterTest` and
+`RtShaderCompilerOptionsTest`: 29 tests, 0 failures. An earlier targeted run of
+`RtVolumetricFogTest` (including `testShaderCompilation`),
+`RtShaderDiskCacheTest` and `RtShaderCompilerOptionsTest` was also green.
+
+This is L1 (Slang/GLSL compile) and L2 (no-GPU Java tests). No Vulkan device,
+game launch, visual parity, denoiser, Fast RT, auto-exposure, volumetric,
+composite or sky/fog output was verified on this revision. The historical
+2026-10-28 note that `path_trace`/`path_trace_scene` deduplication was blocked is
+superseded by this entry.
+
+### Full suite
+
+`:common:test` from the ASCII worktree after the entry-body cleanup: **693
+tests, 0 failures, 0 errors, 9 skipped, 111 test classes**, `BUILD SUCCESSFUL`
+(58 s with warm Gradle). The nine skips are the optional pack/GPU-gated tests,
+not ignored failures. This is the first full-suite green run on a revision with
+the shaderc natives on the test runtime classpath.
+
 ## 2026-10-28 — ReSTIR source tests and the first runnable :common:test (L2, no GPU)
 
 Branch: `fix/stale-restir-source-tests-20261028`, commit `248a7e1`, on top of

@@ -23,6 +23,7 @@ class RtSlangSkyDiscTest {
     private static final String SKY = "src/main/resources/shaders/slang/light/sky.slang";
     private static final String SUN = "src/main/resources/shaders/slang/light/sun.slang";
     private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
 
     /** A disc is the key light seen from the outside: same direction, same radius, same radiance times intensity. */
     @Test
@@ -113,14 +114,14 @@ class RtSlangSkyDiscTest {
     /** The pass must actually build the disc-aware sampler, or all of the above is dead code. */
     @Test
     void thePassHandsTheSamplerItsSun() throws IOException {
-        String pass = read(PASS);
-        assertTrue(pass.contains("SunMoonSky environment;"),
+        String entry = read(ENTRY);
+        assertTrue(entry.contains("SunMoonSky environment;"),
             "the path-trace entry builds the dome-plus-disc sampler");
-        assertTrue(pass.contains("environment.dome.atmosphere = f.atmosphere;"),
+        assertTrue(entry.contains("environment.dome.atmosphere = f.atmosphere;"),
             "the dome comes from the frame's atmosphere");
-        assertTrue(pass.contains("environment.sun = f.sun;"),
+        assertTrue(entry.contains("environment.sun = f.sun;"),
             "the bodies come from the frame's key light - the same SunState the shadow rays use");
-        assertEquals(0, count(pass, "GradientSky environment;"),
+        assertEquals(0, count(entry, "GradientSky environment;"),
             "no pass builds a bare gradient dome any more");
 
         try (var files = Files.walk(Path.of("src/main/resources/shaders/slang/passes"))) {

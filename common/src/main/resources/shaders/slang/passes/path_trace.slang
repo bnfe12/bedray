@@ -102,7 +102,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // past it; every other ray of the path crosses it like any other geometry.
     traversal.selfAvatarTriStart = pc.entityState.y;
     traversal.selfAvatarTriCount = pc.entityState.z;
-    pathTraceEntry(traversal, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
-        outDepth, frame, blockMaterials, emitters, reservoirs, entityPositions, entityIndices,
-        entityAttrs, entityRects, entityTexels, entityPrevious, pc);
+    pathTraceEntry(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
+        outDepth, frame, blockMaterials, emitters, reservoirs, pc);
 }

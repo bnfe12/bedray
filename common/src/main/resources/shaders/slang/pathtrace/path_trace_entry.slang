@@ -70,6 +70,7 @@ uint pathTraceSeed(int2 pixel, uint frameIndex, uint sampleIndex) {
 // is shared between the two backends is filled here, so adding a field cannot be forgotten in one entry point.
 public void pathTraceEntry<T : ISceneTracer>(
     T traversal,
+    EntityGeometry entities,
     uint3 tid,
     RWTexture2D<float4> outImage,
     Sampler2D albedoAtlas,
@@ -81,12 +82,6 @@ public void pathTraceEntry<T : ISceneTracer>(
     StructuredBuffer<BlockMaterial> blockMaterials,
     StructuredBuffer<BlockEmitterRecord> emitters,
     RWStructuredBuffer<DIReservoir> reservoirs,
-    StructuredBuffer<uint> entityPositions,
-    StructuredBuffer<uint> entityIndices,
-    StructuredBuffer<uint4> entityAttrs,
-    StructuredBuffer<uint4> entityRects,
-    StructuredBuffer<uint> entityTexels,
-    StructuredBuffer<uint> entityPrevious,
     PathTracePush pc) {
     uint2 size;
     outImage.GetDimensions(size.x, size.y);
@@ -102,21 +97,6 @@ public void pathTraceEntry<T : ISceneTracer>(
     atlas.material = materialAtlas;
     atlas.normal = normalAtlas;
 
-    // This frame's captured models.  The buffers are bound at the ring slot's own
-    // offset, so the bound length is the frame's vertex and triangle count: a
-    // frame with nothing captured binds one-element dummies and decodes zero
-    // triangles rather than a stale model.
-    EntityAtlas entityAtlas;
-    entityAtlas.rects = entityRects;
-    entityAtlas.texels = entityTexels;
-    entityAtlas.atlasSize = pc.entityState.x;
-
-    EntityGeometry entities;
-    entities.positions = entityPositions;
-    entities.previous = entityPrevious;
-    entities.indices = entityIndices;
-    entities.attrs = entityAttrs;
-    entities.atlas = entityAtlas;
     // A mob part is decoded through the same entry as a block face, so the atlas
     // has to name the entity grid even for a pass that only ever hits terrain.
     atlas.entities = entities.atlas;

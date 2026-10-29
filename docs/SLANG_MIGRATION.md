@@ -86,12 +86,15 @@ described a 1:1 port of the existing GLSL.  Bedray 2.0 is a new shader core:
 the old GLSL stays in the tree as a behavioural reference, not as a source to
 copy line by line.
 
-**Current whole-migration evidence: L0 — source and build wiring.** Prior
-agents reported scoped compilation and unit tests for particular revisions;
-those results do not establish that the current complete tree builds. Existing
-bloom now requires AOT Slang and fails when unavailable, but other legacy
-GLSL consumers still exist and must be migrated. A compile or test is not proof
-of rendering in Minecraft; that requires a fresh matching live run and evidence.
+**Current whole-migration evidence: L1 build + L2 no-GPU tests (2026-10-29).**
+On the `fix/audit-remediation-20261029` branch `:common:compileSlang` builds 18
+passes and `:common:test` reports 693 tests, 0 failures, 0 errors and 9 skipped
+from an ASCII worktree. That proves the tree configures, the AOT passes compile
+and the Java/source contracts hold; it does not prove a Vulkan dispatch or
+rendering in Minecraft. Existing bloom now requires AOT Slang and fails when
+unavailable, and other legacy GLSL consumers still exist and must be migrated.
+A compile or test is not proof of rendering in Minecraft; that requires a fresh
+matching live run and evidence.
 
 ## Design rules
 
@@ -312,7 +315,7 @@ hardware paths agree on foliage and glass.
 |---|---|---|---|
 | Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Requires AOT Slang; mip and sampler ownership remains in Java and must move to C++. See [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `passes/path_trace.slang`, `passes/restir_spatial.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` + `RtSpatialReuseSlangPass` (optional); opt-in native pass in `bedray_core` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` keeps the legacy GLSL `rt_path.comp` when the AOT passes, device capabilities or a G-buffer denoiser block it. Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. `-Dvkbridge.rt.nativePathTrace=true` moves the same three dispatches into the C++ pass when the DLL exports the additive ABI; the Java path stays default. No G-buffer, auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
+| Path tracing | `passes/path_trace.slang`, `passes/path_trace_scene.slang`, `passes/restir_spatial.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` + `RtSpatialReuseSlangPass` (optional); opt-in native pass in `bedray_core` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` keeps the legacy GLSL `rt_path.comp` when the AOT passes, device capabilities or a G-buffer denoiser block it. Both path entries are thin wrappers over `pathtrace/path_trace_entry.slang` and differ only in binding 2 and the traversal backend (`LegacySectionTraversal` versus the native `SceneTraversal`). Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. `-Dvkbridge.rt.nativePathTrace=true` moves the same three dispatches into the C++ pass when the DLL exports the additive ABI; the Java path stays default. No G-buffer, auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
 
 The host addresses bindings by Slang parameter name (`srcTex`, `dstImg`,
 `finalImg`, `depthTex`), and `RtBloomPass` validates the generated manifest
@@ -910,6 +913,25 @@ the deployed jar in the real instance — a compile or a unit test is never
 recorded as a game check. Pass `-Pslangc=<path to slangc.exe>` (or set
 `SLANG_DIR`): without it `:common:compileSlang` fails closed in about a second
 and the whole suite goes with it.
+
+The runtime GLSL fallback (`RtShaderCompiler`) pins
+`shaderc_optimization_level_zero`. With LWJGL shaderc 3.3.3 and 3.4.3 the
+SPIR-V optimizer does not finish on the ~261 KB expanded `rt_rays`/`rt_path`
+sources at `performance` or `size`; `zero` compiles the same variants in about
+a second. The AOT Slang passes are optimised by `slangc`, and the Vulkan driver
+still optimises the module at pipeline creation. `RtShaderCompilerOptionsTest`
+fails if the level is raised again, and the disk-cache profile
+(`bedray-spirv-cache-v3`) is part of the cache identity.
+
+`passes/path_trace.slang` and `passes/path_trace_scene.slang` share one body in
+`pathtrace/path_trace_entry.slang`; the pass files own only their binding 2 and
+traversal backend. `SlangPassLibraryTest` compares both generated manifests,
+and `PathTraceEntryDedupTest` rejects a copied integrator call.
+
+On Windows the Gradle test worker can mangle non-ASCII classpath entries. Run
+the suite from an ASCII worktree when the checkout path contains non-ASCII
+characters; the build prints a warning with that instruction. The full-suite
+boundary and the exact targeted counts are in VERIFICATION_LOG.md.
 
 `slangc` 2026.20 is not committed; install the Slang SDK outside the
 repository and point `SLANG_DIR` at it.
