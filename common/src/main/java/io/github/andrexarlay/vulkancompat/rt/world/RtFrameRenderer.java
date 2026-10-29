@@ -1434,15 +1434,28 @@ public final class RtFrameRenderer {
             return null;
         }
         if (gbuffer) {
-            // AUTO only keeps the denoiser when the Slang pass is blocked; report that real blocker instead of blaming
+            // The Slang path fills the DLSS-RR guides; the NRD layouts additionally take the primary hit's world-space
+            // motion from a buffer this path does not write yet, and AUTO keeps the denoiser on the proven GLSL pass
+            // until a live frame has validated the guides.  AUTO still reports a real Slang blocker instead of blaming
             // the denoiser, which is the consequence, not the cause.
             String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
-            pathSlangUnavailableReason = blocker != null ? blocker
-                : "a G-buffer denoiser is selected and the Slang path writes no G-buffer";
-            if (selector == RtConfig.PathTracer.AUTO) {
-                logSlangUnavailable(pathSlangUnavailableReason);
+            if (blocker == null) {
+                if (RtConfig.SLANG_PATH_TRACE_CPP) {
+                    blocker = "the C++ path backend writes no G-buffer guides";
+                } else if (denoiseMode != DenoiserMode.DLSS_RR) {
+                    blocker = "the " + denoiseMode + " layout needs the world-space motion buffer"
+                        + " the Slang path does not fill yet";
+                } else if (selector == RtConfig.PathTracer.AUTO) {
+                    blocker = "AUTO keeps the GLSL path when a denoiser is selected";
+                }
             }
-            return null;
+            if (blocker != null) {
+                pathSlangUnavailableReason = blocker;
+                if (selector == RtConfig.PathTracer.AUTO) {
+                    logSlangUnavailable(blocker);
+                }
+                return null;
+            }
         }
         String debugView = RtConfig.currentDebugView();
         if (!debugView.isEmpty()) {

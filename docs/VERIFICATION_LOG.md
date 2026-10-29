@@ -4,6 +4,67 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — DLSS-RR guide channels from the typed path (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20, same flags as below.
+
+Source changes covered by this run:
+
+- `pathtrace/path_tracer.slang` fills `PathTraceResult.primary`
+  (`PathPrimaryGuide`: position, view-facing normal, albedo floored at 0.02,
+  F0, direct NEE, roughness, metallic) at the primary vertex, after the
+  filtered-shadow mask and before `result.radiance += throughput * direct`, so
+  the guide describes exactly the surface the radiance was shaded on.
+  `PATH_TRACE_OPTION_GBUFFER` (bit 0) reuses the `PathTraceOptions.flags` word
+  that was always 0 and no shader reads as a sample property; the push stays
+  112 B.
+- `passes/path_trace.slang` and `passes/path_trace_scene.slang` gained
+  bindings 26–32 in the denoiser order: `outViewZ` (R32F),
+  `outNormalRough`, `outSpecular`, `outDiffuse`, `outDirect` (RGBA16F),
+  `outAlbedo`, `outSpecAlbedo` (RGBA8), and `pathTraceWriteGuides`, which
+  follows `rt_path.comp`: view Z from the camera forward, sky as
+  1e6 / (0,0,1,1) / zeros, `diffuse = radiance - direct` with the primary hit
+  distance in `.a`, specular zero for the path tracer, and the legacy specular
+  albedo rule (`metal > 0.5 || roughness < 0.6 ? (metal ? albedo : F0) : 0`).
+  The call is gated by the option bit, not by the pixel.
+- `RtPathTraceSlangPass` gained `Guides` (seven views, all-or-nothing),
+  three pass-owned 1×1 dummy images (R32F, RGBA16F, RGBA8) so the descriptor
+  set is complete in either mode, and a `record` check that throws when the
+  option bit and the bound guides disagree. `ReferencePathTraceBackend` and
+  `RtSlangPathPass` pass `views.gbuffer()` and set the bit only when all seven
+  views exist; `RtFrameRenderer` now allows explicit `SLANG` + `DLSS_RR`,
+  still refuses `NRD` (the RR packer consumes images only, but the NRD layout
+  also reads the primary hit's world-space motion from `pc.motionAddr`, which
+  the Slang path does not fill), refuses the C++ path backend (writes no
+  guides), and keeps `AUTO` on the GLSL pass while a denoiser is selected.
+- New `RtSlangGbufferGuidesTest` (7 guards) pins the capture point, the
+  split-radiance identity, the sky pattern, the option gating on both sides,
+  the short-array rejection, the denoiser channel order and the renderer
+  policy. `SlangPassLibraryTest` pins 25 bindings; the entity guard that named
+  the `record` argument list was updated for the new `Guides` argument.
+
+The first full-suite run of this batch failed exactly that entity guard
+(`theFrameHandsTheCapturedRingToThePass`, argument list pinned without the new
+`Guides` argument); the guard was updated and both the targeted test and the
+full suite below were rerun on the fixed source.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | `path_trace` 550704 B, `path_trace_scene` 562520 B, 25 bindings, 112 B push |
+| Harnesses | 6 | 6 | unchanged |
+| Targeted `:common:test` | 26 tests | 0 failures | `RtSlangGbufferGuidesTest` 7, `SlangPassLibraryTest` 9, `RtPathTraceSlangPassTest` 10 |
+| `:common:test` | 725 tests | 0 failures | 3 skipped |
+
+This is L1/L2 only. It proves the guides compile in both path roots and the
+source/host guards agree; no GPU dispatch, frame or screenshot exists, the
+denoiser has not consumed these images, and no owner-verified image of the
+Slang path exists. The guides were captured at the primary vertex of a path
+whose radiance may still be rejected by the display pass (invalid/truncated
+samples), so a rejected pixel can carry a guide; the denoiser's own history
+rejection is expected to absorb that once a live frame is measured.
+
 ## 2026-10-29 — water volumetric medium in the typed path (L1 compile, L2 unit)
 
 Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20,

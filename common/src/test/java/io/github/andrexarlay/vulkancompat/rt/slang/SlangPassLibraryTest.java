@@ -144,7 +144,7 @@ class SlangPassLibraryTest {
         Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
 
         SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        assertEquals(18, manifest.bindings().size(), "path_trace: binding count");
+        assertEquals(25, manifest.bindings().size(), "path_trace: binding count");
         assertBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
         assertBinding(manifest, "outImage", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -180,6 +180,15 @@ class SlangPassLibraryTest {
         assertBinding(manifest, "entityPrevious", 25, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
         assertEquals(4, manifest.binding("entityPrevious").elementBytes(),
             "the previous-frame position ring is the same float3 layout as the current one");
+        // The seven DLSS-RR guide channels, in the order the denoiser exposes gbufferViews(): view depth, normal +
+        // roughness, specular radiance, diffuse radiance + hit distance, albedo, direct light, specular albedo.
+        assertBinding(manifest, "outViewZ", 26, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "outNormalRough", 27, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "outSpecular", 28, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "outDiffuse", 29, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "outAlbedo", 30, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "outDirect", 31, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        assertBinding(manifest, "outSpecAlbedo", 32, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertEquals(112, manifest.pushConstantBytes(),
             "path_trace: the 96-byte DI block plus the 16-byte entity state of this frame");
         assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS

@@ -23,9 +23,10 @@ import java.util.Objects;
  * writes exposure + tone curve into the renderer's RGBA8 {@code rt_output}. Depth goes straight into {@code rt_depth},
  * so the composite, bloom, particles and upscalers downstream are unchanged.
  *
- * <p>What this pass does not do yet, compared with the GLSL {@link RtPathTracerPass}: no NRD / DLSS-RR G-buffer (the
- * renderer only selects this pass when no G-buffer denoiser is wanted, or when the Slang path is forced), no auto
- * exposure (the GLSL shader feeds the luminance statistics; exposure is fixed at 1), a two-colour sky instead of
+ * <p>The pass fills the seven DLSS-RR guide images when the host binds them ({@code PATH_TRACE_OPTION_GBUFFER}); NRD
+ * additionally needs the world-space motion of the primary hit, which this pass does not write, so the renderer only
+ * accepts {@code DLSS_RR} here. Not done yet, compared with the GLSL {@link RtPathTracerPass}: no auto exposure (the
+ * GLSL shader feeds the luminance statistics; exposure is fixed at 1), a two-colour sky instead of
  * {@code rt_sky.glsl}; the mean is reprojected per pixel through the previous view-projection, so accumulation
  * survives camera motion but restarts on disocclusion.
  *
@@ -113,8 +114,8 @@ public final class RtSlangPathPass implements RtPass {
     private boolean destroyed;
 
     /**
-     * {@code requestedGbuffer}: what the renderer asked for. This pass never writes the G-buffer, but it remembers the
-     * request so the renderer does not rebuild it every frame for not matching (see {@link #builtFor(boolean)}).
+     * {@code requestedGbuffer}: what the renderer asked for. The pass fills the DLSS-RR guides when the frame carries
+     * them and records the request so the renderer does not rebuild it every frame (see {@link #builtFor(boolean)}).
      */
     RtSlangPathPass(VkDevice device, SlangRuntime runtime, boolean requestedGbuffer) {
         this(createBackend(device, runtime), requestedGbuffer);
@@ -123,8 +124,9 @@ public final class RtSlangPathPass implements RtPass {
     RtSlangPathPass(PathTraceBackend backend, boolean requestedGbuffer) {
         this.requestedGbuffer = requestedGbuffer;
         this.backend = Objects.requireNonNull(backend);
-        LOGGER.info("[VKB-RT] path tracing backend={} spatial={} gbuffer=off",
-            backend.getClass().getSimpleName(), backend.spatialAvailable());
+        LOGGER.info("[VKB-RT] path tracing backend={} spatial={} gbuffer={}",
+            backend.getClass().getSimpleName(), backend.spatialAvailable(),
+            requestedGbuffer ? "dlss_rr guides" : "off");
     }
 
     private static PathTraceBackend createBackend(VkDevice device, SlangRuntime runtime) {
@@ -166,7 +168,7 @@ public final class RtSlangPathPass implements RtPass {
         if (!restir.equals("off") && spatialRequested()) restir += "+spatial";
         return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
             + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
-            + ",frames=" + (accumFrames + 1) + ",denoiser=off)";
+            + ",frames=" + (accumFrames + 1) + ",denoiser=" + (requestedGbuffer ? "dlss_rr" : "off") + ")";
     }
 
     @Override
@@ -234,7 +236,7 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public boolean usesGbuffer() {
-        return false;
+        return requestedGbuffer;
     }
 
     @Override
@@ -278,8 +280,12 @@ public final class RtSlangPathPass implements RtPass {
                     + " = {}): the trace sees terrain only", RtConfig.SLANG_ENTITIES);
             }
         }
+        // The renderer hands over the denoiser's guide images only when it built this pass for a G-buffer; the push
+        // flag and the bindings then agree, which is what the record validates.
+        RtPathTraceSlangPass.Guides guides = RtPathTraceSlangPass.Guides.of(views.gbuffer());
+        int optionFlags = guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0;
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
-            8, sampleIndex++, 0, 0, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
+            8, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
             params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES,
             params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, 0,

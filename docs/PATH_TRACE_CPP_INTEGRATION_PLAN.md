@@ -127,8 +127,10 @@ explicitly.
 
 Known limits of the current Java host:
 
-* no G-buffer, so NRD and DLSS-RR cannot run on this pass; Path Tracing mode
-  disables the G-buffer denoiser while Slang is active;
+* the seven DLSS-RR guide channels are written by the entry pass when the host
+  binds them, but `AUTO` still disables the G-buffer denoiser while Slang is
+  active until a live frame consumes them; NRD stays refused because the
+  primary hit's world-space motion is not filled;
 * no auto exposure; `FrameConstants.exposure` is fixed at 1 and the display
   push also uses 1;
 * a two-colour gradient sky derived from one game sky colour, not `rt_sky.glsl`;
@@ -426,9 +428,11 @@ the pass must not silently reinterpret `rt_depth`.
   decides resets from camera movement, scene changes and settings. A C++ reset
   policy must use stable identity (camera/scene revisions) and must not infer
   history validity from a frame count.
-* G-buffer denoisers: path tracing has no G-buffer, so NRD/DLSS-RR cannot be
-  selected on top of it without a separate guide pass. The plan does not add
-  one; the mode resolver must report the unsupported combination instead of
+* G-buffer denoisers: the Slang entry pass now writes the seven DLSS-RR guide
+  channels in-shader when the host binds them, so DLSS-RR no longer needs a
+  separate guide pass; NRD additionally needs the primary hit's world-space
+  motion, which nothing fills yet. The C++ pass does not bind the guides, so
+  the mode resolver must report the unsupported combination instead of
   silently disabling the denoiser. The existing Java `AUTO` fallback is
   reference behaviour, not the target selection policy.
 

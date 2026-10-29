@@ -163,7 +163,8 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         dispatch = dispatch.withDiState(diFlags, diParity);
         trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
             new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
-            emitters, reservoirRange, capturedEntities, views.depth(), frame, dispatch);
+            emitters, reservoirRange, capturedEntities, RtPathTraceSlangPass.Guides.of(views.gbuffer()),
+            views.depth(), frame, dispatch);
         if (diFlags == 0) {
             reservoirHistoryWritten = false;
         } else {

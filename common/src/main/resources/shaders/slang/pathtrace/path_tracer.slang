@@ -54,6 +54,11 @@ static const uint PATH_TRACE_FLAG_TRUNCATED        = 1u << 7u;
 // frame that never sets it is a frame where the fluid was not recognised.
 static const uint PATH_TRACE_FLAG_WATER_MEDIUM     = 1u << 8u;
 
+// Bits of PathTraceOptions.flags.  These are pass options (what the host asks the
+// pass to produce), not properties of a sample: the tracer ignores them and the
+// entry pass reads them.
+static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;  // fill PathTraceResult.primary for the denoiser guides
+
 struct PathTraceOptions {
     uint  maxDepth;             // scattering events before the path stops
     uint  maxSurfaceSteps;      // geometric candidates, including cutout holes
@@ -80,12 +85,27 @@ PathTraceOptions defaultPathTraceOptions() {
     return options;
 }
 
+// The primary surface as a denoiser sees it: the guide channels an NRD / DLSS-RR input pack needs, captured at the
+// vertex the camera actually sees rather than re-derived by the pass.  A pass cannot recompute these without a second
+// primary trace whose hit could disagree with the one the radiance came from.
+struct PathPrimaryGuide {
+    float3 position;      // camera-relative world position of the primary surface
+    float3 normal;        // view-facing shading normal
+    float3 albedo;        // linear diffuse albedo, floored for the demodulation
+    float3 specularF0;    // interface reflectance at normal incidence
+    float3 direct;        // this sample's next-event estimate at the primary vertex
+    float  roughness;     // linear roughness (0..1)
+    float  metallic;      // 0 = dielectric, 1 = metal
+    bool   valid;
+};
+
 struct PathTraceResult {
     float3 radiance;
     float3 throughput;
     float  firstHitDistance;    // parameter from primary origin; distance when primary direction is unit length
     float4 primaryMotion;       // xyz: where the primary surface stood one frame ago minus where it is now, in
                                 // world blocks; w: 1 when that surface is a captured model rather than terrain
+    PathPrimaryGuide primary;   // guide channels, filled only when the primary ray hit a decodable surface
     uint   depth;
     uint   surfaceHits;
     uint   flags;
@@ -97,6 +117,14 @@ PathTraceResult emptyPathTraceResult() {
     result.throughput = float3(1.0);
     result.firstHitDistance = 0.0;
     result.primaryMotion = float4(0.0);
+    result.primary.position = float3(0.0);
+    result.primary.normal = float3(0.0, 0.0, 1.0);
+    result.primary.albedo = float3(0.0);
+    result.primary.specularF0 = float3(0.0);
+    result.primary.direct = float3(0.0);
+    result.primary.roughness = 1.0;
+    result.primary.metallic = 0.0;
+    result.primary.valid = false;
     result.depth = 0u;
     result.surfaceHits = 0u;
     result.flags = 0u;
@@ -343,6 +371,19 @@ PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentS
         }
         if (direct.r + direct.g + direct.b > 0.0) {
             result.flags |= PATH_TRACE_FLAG_FILTERED_SHADOW;
+        }
+        // The guide channels of the surface the camera sees, captured here because this is where its material, its
+        // view-facing normal and its own next-event estimate exist.  `receiver.primary` is true exactly once per path,
+        // at the first accepted surface; the throughput there is still 1, so `direct` is the primary vertex's own term.
+        if (receiver.primary) {
+            result.primary.valid = true;
+            result.primary.position = hit.position;
+            result.primary.normal = normal;
+            result.primary.albedo = clamp(surface.material.albedo, float3(0.02), float3(1.0));
+            result.primary.specularF0 = surface.material.f0;
+            result.primary.roughness = surface.material.roughness;
+            result.primary.metallic = surface.material.metallic;
+            result.primary.direct = direct;
         }
         result.radiance += throughput * direct;
 
