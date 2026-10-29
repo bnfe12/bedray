@@ -144,8 +144,8 @@ class RtSlangGbufferGuidesTest {
         String backend = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/NativePathTraceBackend.java");
         assertTrue(backend.contains("guides && !runtime.library().hasNativeGuideOutputs()"),
             "a guide request needs the additive native feature and export");
-        assertTrue(renderer.contains("AUTO keeps the GLSL path when a denoiser is selected"),
-            "AUTO does not silently move a denoiser onto unproven guides");
+        assertTrue(renderer.contains("AUTO does not select the Slang path while a denoiser is enabled"),
+            "AUTO does not silently move a denoiser onto unproven guides, and the message says what it actually does");
         String pass = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");
         String uses = block(pass, "public boolean usesGbuffer() {");
         assertTrue(uses.contains("return requestedGbuffer;"),

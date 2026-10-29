@@ -24,7 +24,8 @@ Existing-feature transfers in the current working tree:
   the primary vertex when the host sets `PATH_TRACE_OPTION_GBUFFER`, so an
   explicit `SLANG` path with `DLSS_RR` is no longer refused. `NRD` stays
   refused until the pass fills the primary hit's world-space motion, and
-  `AUTO` keeps the GLSL pass until a live frame consumes the guides.
+  `AUTO` declines the Slang path while a denoiser is selected instead of
+  feeding guides no live frame has consumed.
 
 Finish migrating the existing renderer functionality into the new Slang/C++
 architecture first, starting with path tracing. Java retains Minecraft capture,
@@ -338,7 +339,7 @@ hardware paths agree on foliage and glass.
 |---|---|---|---|
 | Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Requires AOT Slang; mip and sampler ownership remains in Java and must move to C++. See [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `passes/path_trace.slang`, `passes/path_trace_scene.slang`, `passes/restir_spatial.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` + `RtSpatialReuseSlangPass` (optional); opt-in native pass in `bedray_core` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` keeps the legacy GLSL `rt_path.comp` when the AOT passes, device capabilities or a G-buffer denoiser block it. Both path entries are thin wrappers over `pathtrace/path_trace_entry.slang` and differ only in binding 2 and the traversal backend (`LegacySectionTraversal` versus the native `SceneTraversal`). Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. `-Dvkbridge.rt.nativePathTrace=true` moves the same three dispatches into the C++ pass when the DLL exports the additive ABI; the Java path stays default. Fills the seven DLSS-RR guide images (bindings 26-32) when the host binds them; `AUTO` stays on GLSL while a denoiser is selected because no live frame has consumed the guides yet, and NRD needs the primary hit's world-space motion, which this pass does not fill. No auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
+| Path tracing | `passes/path_trace.slang`, `passes/path_trace_scene.slang`, `passes/restir_spatial.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` + `RtSpatialReuseSlangPass` (optional); opt-in native pass in `bedray_core` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` uses the Slang pass when it is available; if the AOT passes or device capabilities block it, the renderer reports the blocker and disables RT for the session instead of routing through legacy GLSL. Both path entries are thin wrappers over `pathtrace/path_trace_entry.slang` and differ only in binding 2 and the traversal backend (`LegacySectionTraversal` versus the native `SceneTraversal`). Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. `-Dvkbridge.rt.nativePathTrace=true` moves the same three dispatches into the C++ pass when the DLL exports the additive ABI; the Java path stays default. Fills the seven DLSS-RR guide images (bindings 26-32) when the host binds them; `AUTO` declines the Slang path while a denoiser is selected because no live frame has consumed the guides yet, so testing them requires an explicit `SLANG` selector. NRD needs the primary hit's world-space motion, which this pass does not fill. No auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
 
 The host addresses bindings by Slang parameter name (`srcTex`, `dstImg`,
 `finalImg`, `depthTex`), and `RtBloomPass` validates the generated manifest
@@ -883,7 +884,8 @@ buffers (`RtSlangBlockEmitterTest`); the optical medium/eta item, the
 open, and the denoiser G-buffer is only half there: the entry pass writes the
 seven DLSS-RR guide channels, while the primary hit's world-space motion (the
 `StatsBuf` channel an NRD layout reads) is not filled, so NRD stays refused and
-`AUTO` keeps the GLSL pass until a live frame validates the guides.
+`AUTO` declines the Slang path while a denoiser is selected instead of feeding
+guides no live frame has validated.
 
 `bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
 sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
@@ -1122,8 +1124,9 @@ cross-cascade resolve or image comparison was run.
 4b. **Denoiser G-buffer** — the entry pass now writes the seven DLSS-RR guide
    channels (`outViewZ`, `outNormalRough`, `outDiffuse`, `outAlbedo`,
    `outDirect`, `outSpecular`, `outSpecAlbedo`, bindings 26–32) at the primary
-   vertex and explicit `SLANG` + `DLSS_RR` is accepted; `AUTO` still keeps the
-   GLSL pass until a live frame consumes them, and no live frame exists. Open:
+   vertex and explicit `SLANG` + `DLSS_RR` is accepted; `AUTO` declines the
+   Slang path while a denoiser is selected instead of feeding guides no live
+   frame has consumed. Open:
    the primary hit's world-space motion in the `StatsBuf` layout NRD reads
    (`pc.motionAddr`), which is also what blocks NRD; the C++ path backend
    writes no guides; a rejected (invalid/truncated) sample can still carry a

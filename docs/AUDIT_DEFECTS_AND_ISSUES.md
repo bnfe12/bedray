@@ -145,10 +145,12 @@
 ### [P1-12] Краш игры при выборе режима Ray Tracing (`RtMode.RAY_TRACED`)
 * **Файл:** [`RtFrameRenderer.java:1365`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java#L1365)
 * **Проблема:** При попытке выбрать режим Ray Tracing выбрасывается: `throw new RtFailure("slang_ray", "ray effects are not yet available in the Slang renderer");`.
+* **Статус:** **ПРИНЯТОЕ ОГРАНИЧЕНИЕ (2026-10-29).** Режим скрыт из релизного UI (`RtMode.RAY_TRACED.isPublic() == false`, unlock через `experimental_rays`), а исключение ловится в `RtFrameRenderer.render()`: кадр логирует `[VKB-RT] FAILED stage=slang_ray` и выключает RT на сессию через `RtGeometryGate.markFailed`, игра не падает. Полноценного Slang-прохода ray effects в текущей миграции нет; реализовывать его без GPU-валидации нельзя.
 
 ### [P1-13] Краш Slang при включении G-buffer денойзера (NRD / DLSS-RR)
 * **Файл:** [`RtFrameRenderer.java:1378-1388`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java#L1378-L1388)
 * **Проблема:** Если включен NRD или DLSS-RR, метод сообщает `"a G-buffer denoiser is selected and the Slang path writes no G-buffer"` и выбрасывает исключение.
+* **Статус:** **ЧАСТИЧНО ЗАКРЫТО (2026-10-29).** Прохода с таким сообщением больше нет: path-entry пишет семь DLSS-RR guide-каналов (bindings 26-32), а `createSlangPathPass` при `AUTO` и денойзере явно отказывается от Slang-пути с новым сообщением `"AUTO does not select the Slang path while a denoiser is enabled"`; исключение ловится и выключает RT, а не игру. `SLANG + DLSS_RR` разрешён, `SLANG + NRD` по-прежнему отклоняется честной причиной — нет world-space motion buffer. Это остаётся feature gap (P1-13b): без него NRD нельзя включить на Slang-пути.
 
 ---
 

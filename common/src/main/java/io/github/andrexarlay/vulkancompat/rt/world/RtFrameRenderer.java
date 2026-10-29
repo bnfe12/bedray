@@ -1431,17 +1431,20 @@ public final class RtFrameRenderer {
             return null;
         }
         if (gbuffer) {
-            // The Slang path fills the DLSS-RR guides; the NRD layouts additionally take the primary hit's world-space
-            // motion from a buffer this path does not write yet, and AUTO keeps the denoiser on the proven GLSL pass
-            // until a live frame has validated the guides.  AUTO still reports a real Slang blocker instead of blaming
-            // the denoiser, which is the consequence, not the cause.
+            // The Slang path fills the DLSS-RR guides. AUTO is conservative:
+            // with a denoiser selected it declines the Slang path instead of
+            // feeding guides no live frame has consumed. An explicit slang
+            // selector may use DLSS-RR, but NRD's layouts additionally need
+            // the primary hit's world-space motion from a buffer this path
+            // does not write yet, so they are refused with that real reason.
             String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
             if (blocker == null) {
                 if (denoiseMode != DenoiserMode.DLSS_RR) {
                     blocker = "the " + denoiseMode + " layout needs the world-space motion buffer"
                         + " the Slang path does not fill yet";
                 } else if (selector == RtConfig.PathTracer.AUTO) {
-                    blocker = "AUTO keeps the GLSL path when a denoiser is selected";
+                    blocker = "AUTO does not select the Slang path while a denoiser is enabled;"
+                        + " set bedray.pathTracer=slang to test the guides";
                 }
             }
             if (blocker != null) {
