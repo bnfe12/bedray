@@ -4,6 +4,57 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — Spatial reuse binds the captured entity atlas (L1 compile, L2 unit, L3 game, L4 visible effect)
+
+Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20, same target and
+include flags as the batch below; jar `bedray-fabric-mc26.3-0.2.0-alpha.jar`,
+`bedray_core.dll` rebuilt from the same checkout.
+
+Root cause of the world-creation crash recorded in `hs_err_pid26912.log`:
+`passes/restir_spatial.slang` built a `MaterialAtlas` without setting
+`atlas.entities`, and Slang materialised the unset `EntityAtlas` members as
+`OpUndef` pointers. The stage does re-evaluate pooled records through the
+emitter list, so an entity emitter's record can address that atlas; NVIDIA
+617.42 faulted in `vkCreateComputePipelines` on the resulting SPIR-V. A
+standalone Vulkan harness (`vkpipe2.py`) reproduced it byte-exactly: the
+43324 B artifact crashed pipeline creation, the 38964 B pre-entity artifact and
+a variant with the entity path removed did not.
+
+Source changes covered by this run:
+
+- `passes/restir_spatial.slang` now declares bindings 23 `entityRects` and 24
+  `entityTexels`, imports `traversal/entity_geometry.slang`, and fills
+  `EntityAtlas{rects, texels, atlasSize}` in `main`. `atlasSize == 0` makes
+  `entityTexel` return its fallback before touching either buffer, which is the
+  no-entity-capture case. 8 bindings, 64 B push.
+- `RestirSpatialPush` carries `uint entityAtlasSize` at byte 48. The block is
+  std430, so a `float3`/`uint3` pad would be 16-byte aligned and move the lane
+  to byte 60; the padding is six scalars and the struct is exactly 64 B.
+- `RtSpatialReuseSlangPass` takes the trace pass's `Entities` fallback at
+  creation, binds the frame's rects/texels or the one-element stand-ins, and
+  validates `ENTITY_VECTOR_BYTES`/`ENTITY_SCALAR_BYTES` from the manifest.
+  `ReferencePathTraceBackend` passes `capturedEntities` to `record`.
+- The C++ `PathTracePass` validates the 8-binding spatial manifest, keeps
+  `SpatialPush64.entity_atlas_size` at offset 48, and binds 23/24 in the spatial
+  dispatch from `desc.path.entity_state[0]`. `path_trace_pass_test.cpp` mirrors
+  the eight bindings, the resource count and the push lane.
+
+Result:
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test` (native lib + slangc) | 0 failures | 735 tests, 0 failures, 0 errors, 3 skipped; all 12 `RtSlangRestirSpatialTest` cases pass |
+| CTest `build/bedray-native/windows-x64` | 18/18 | 18/18 pass |
+| `vkCreateComputePipelines` on the final jar's `restir_spatial` | 0 | 0 (OK) |
+| Live `-Dvkbridge.autotest=world -Dvkbridge.rt.nativeScene=true` | PASS, spatial on | `restir_spatial, 8 binding(s), 64 B push`; `restir_di=fresh+spatial` then `temporal+spatial`; entity ring `atlas 2048 texels per side`; 3 shots 2560x1440; `result=PASS`; no `hs_err` |
+| Same with `nativeScene=true nativePathTrace=true` | PASS, C++ DI + spatial | `restir_di=native+spatial`; `result=PASS` |
+| Same with `nativePathTrace=true` only | PASS, C++ DI + spatial | `restir_di=native+spatial`; `result=PASS` |
+| Same with neither (Java Slang host) | PASS | `restir_di=fresh+spatial` then `temporal+spatial`; `result=PASS` |
+
+The three live runs wrote fresh `autotest/world/02_world_{a,b,c}.png`
+(2560x1440) and left no new crash dump. The C++ run exercised the 8-binding
+contract at dispatch time, not just at build time.
+
 ## 2026-10-29 — NRD IN_MV motion channel from the typed path (L1 compile, L2 unit)
 
 Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20,

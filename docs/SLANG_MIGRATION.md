@@ -799,10 +799,16 @@ and a non-finite winner is dropped rather than stored, because next frame's impo
 reads that slot.
 
 `RtSpatialReuseSlangPass` owns no memory: it binds the atlases, the emitter list,
-the reservoir ring and — deliberately — the *trace pass's own* `FrameConstants`
-upload, so the extent the pool iterates and the extent the ring was addressed with
-come from one buffer.  The push carries no size field for the same reason.  The
-stage orders its own two dispatches (a compute-to-compute barrier between the
+the reservoir ring, the trace pass's captured entity atlas (bindings 23/24, or
+the trace pass's one-element stand-ins when a frame captured nothing) and —
+deliberately — the *trace pass's own* `FrameConstants` upload, so the extent the
+pool iterates and the extent the ring was addressed with come from one buffer.
+The push carries no width/height field for the same reason; it does carry
+`entityAtlasSize` at byte 48, because a pooled record can belong to an entity
+emitter and re-resolving it has to decode that atlas.  The block stays exactly
+64 B: the layout is std430, where a `float3`/`uint3` would be 16-byte aligned and
+move the lane to byte 60, so the padding is scalar.  The stage orders its own
+two dispatches (a compute-to-compute barrier between the
 phases, since phase two imports what phase one merged) and ends with a trailing
 one, so the pooled half is available to the batch that reads it next frame — the
 same shape the legacy stage has.  The stage is optional by design: a missing AOT
