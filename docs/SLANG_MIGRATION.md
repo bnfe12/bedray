@@ -88,7 +88,7 @@ copy line by line.
 
 **Current whole-migration evidence: L1 build + L2 no-GPU tests (2026-10-29).**
 On the `fix/audit-remediation-20261029` branch `:common:compileSlang` builds 18
-passes and `:common:test` reports 693 tests, 0 failures, 0 errors and 9 skipped
+passes and `:common:test` reports 697 tests, 0 failures, 0 errors and 9 skipped
 from an ASCII worktree. That proves the tree configures, the AOT passes compile
 and the Java/source contracts hold; it does not prove a Vulkan dispatch or
 rendering in Minecraft. Existing bloom now requires AOT Slang and fails when

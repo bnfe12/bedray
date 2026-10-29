@@ -173,15 +173,17 @@
 ### [P2-5] Ловушка выравнивания std430 в структуре `VelocityPush`
 * **Файл:** [`passes/velocity_reproject.slang:59`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/passes/velocity_reproject.slang#L55-L65)
 * **Проблема:** Поле `float2 jitterPrevious` расположено по смещению 60 байт (не кратно 8). SPIR-V вставляет 4 байта невидимого паддинга, сдвигая данные.
+* **Статус:** **ИСПРАВЛЕНО (2026-10-29).** Оба неявных промежутка названы полями `padJitter` (offset 60) и `pad2` (offset 88); отражение по-прежнему даёт 96 байт, `jitterPrevious` остаётся на offset 64. Контракт закреплён `VelocityPushLayoutTest`.
 
 ### [P2-6] Ненадежная проверка NaN в `math.slang` при fast-math
 * **Файл:** [`contracts/math.slang:41-43`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/math.slang#L40-L45)
 * **Поведение:** `value == value` при оптимизациях схлопывается в `true`.
-* **Статус:** **НЕ ИСПРАВЛЕН** (выявлен в ходе аудита).
+* **Статус:** **ИСПРАВЛЕНО (2026-10-29).** `isFinite` классифицирует биты экспоненты: `(asuint(value) & 0x7f800000u) != 0x7f800000u`; целочисленная операция не зависит от fast-math. Контракт закреплён `SlangFiniteContractTest`.
 
 ### [P2-7] Нарушение взаимности Гельмгольца в диффузном Френеле
 * **Файл:** [`shading/bsdf.slang:93, 229`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/shading/bsdf.slang#L90-L100)
 * **Проблема:** Диффузный вес умножается на $(1 - F(N \cdot V))$, игнорируя угол падения света $N \cdot L$.
+* **Статус:** **ОСТАВЛЕНО ОСОЗНАННО (2026-10-29).** Формула совпадает с owner-tuned legacy GLSL и не меняется без GPU A/B: замена на зависящий от $L$ множитель — визуальное изменение, которое нельзя подтвердить текущим L1/L2-прогоном. Зафиксировано комментарием в `bsdf.slang` и разделом Image в `KNOWN_ISSUES.md`.
 
 ### [P2-8] Конфликт статического CRT (`/MT`) и динамического CRT (`/MD`)
 * **Файлы:** [`bedray_core/CMakeLists.txt:77`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/CMakeLists.txt#L77), [`bedray_scene/CMakeLists.txt:44`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_scene/CMakeLists.txt#L44)

@@ -90,6 +90,27 @@ tests, 0 failures, 0 errors, 9 skipped, 111 test classes**, `BUILD SUCCESSFUL`
 not ignored failures. This is the first full-suite green run on a revision with
 the shaderc natives on the test runtime classpath.
 
+### P2 safety batch
+
+Three P2 findings from the audit are closed without changing rendering
+behaviour:
+
+- `contracts/math.slang`: `isFinite` classifies the IEEE-754 exponent
+  (`(asuint(value) & 0x7f800000u) != 0x7f800000u`) instead of testing
+  `value == value`, which fast-math may fold to `true`.
+- `passes/velocity_reproject.slang`: the four-byte gap before `jitterPrevious`
+  and the eight tail bytes are now named fields (`padJitter`, `pad2`). The
+  reflected block is still 96 B, `jitterPrevious` is still at offset 64, and
+  `VelocityPushLayoutTest` checks both the source declaration and the compiled
+  manifest.
+- `shading/bsdf.slang`: the diffuse Fresnel factor stays view-angle based for
+  parity with the owner-tuned legacy GLSL. This is not strictly
+  Helmholtz-reciprocal and is documented in `KNOWN_ISSUES.md`; changing it
+  needs a GPU A/B that this gate cannot provide.
+
+Full suite after the batch: **697 tests, 0 failures, 0 errors, 9 skipped, 113
+test classes**, `BUILD SUCCESSFUL` (1 m 37 s, including the Slang rebuild).
+
 ## 2026-10-28 — ReSTIR source tests and the first runnable :common:test (L2, no GPU)
 
 Branch: `fix/stale-restir-source-tests-20261028`, commit `248a7e1`, on top of

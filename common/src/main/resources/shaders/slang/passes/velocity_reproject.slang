@@ -56,10 +56,12 @@ struct VelocityPush {
     uint   entityCustomIndex; // depth g-channel id of the tracked entity, 0 = none
     uint   entityHistoryReset;// 1 = spawn/teleport this frame
     float  entityTeleportThreshold; // blocks per frame; 0 = module default
+    uint   padJitter;         // explicit std430 gap: float2 aligns to 8 bytes
     float2 jitterPrevious;    // previous frame's sub-pixel jitter, render pixels
     float2 renderSize;        // render resolution (same as frame.camera.size.xy)
     uint   pad0;
     uint   pad1;
+    uint2  pad2;              // explicit tail to the 96-byte, 16-byte-aligned block
 };
 
 [[vk::push_constant]] VelocityPush pc;
