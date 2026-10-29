@@ -34,6 +34,7 @@ add_library(bedray_core SHARED
     src/path_trace_pass.cpp
     src/bloom_pass.cpp
     src/particles_pass.cpp
+    src/volumetric_pass.cpp
 )
 
 # History exposes a C API implemented by the core DLL. The registry remains a
@@ -113,7 +114,7 @@ if(MSVC)
     set_property(TARGET bedray_abi_probe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-add_executable(bedray_descriptor_cache_test tests/descriptor_cache_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp)
+add_executable(bedray_descriptor_cache_test tests/descriptor_cache_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp src/volumetric_pass.cpp)
 target_link_libraries(bedray_descriptor_cache_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_descriptor_cache_test PRIVATE
     include
@@ -126,7 +127,7 @@ if(MSVC)
 endif()
 add_test(NAME bedray_descriptor_cache_test COMMAND bedray_descriptor_cache_test)
 
-add_executable(bedray_sampler_ownership_test tests/sampler_ownership_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp)
+add_executable(bedray_sampler_ownership_test tests/sampler_ownership_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp src/volumetric_pass.cpp)
 target_link_libraries(bedray_sampler_ownership_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_sampler_ownership_test PRIVATE
     include
@@ -175,6 +176,16 @@ if(MSVC)
     set_property(TARGET bedray_particles_pass_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 add_test(NAME bedray_particles_pass_test COMMAND bedray_particles_pass_test)
+
+add_executable(bedray_volumetric_pass_test tests/volumetric_pass_test.cpp src/volumetric_pass.cpp)
+target_link_libraries(bedray_volumetric_pass_test PRIVATE bedray_gpu_resources)
+target_include_directories(bedray_volumetric_pass_test PRIVATE include "${BEDRAY_VULKAN_HEADERS}")
+target_compile_definitions(bedray_volumetric_pass_test PRIVATE BEDRAY_CORE_BUILD WIN32_LEAN_AND_MEAN NOMINMAX)
+if(MSVC)
+    target_compile_options(bedray_volumetric_pass_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+    set_property(TARGET bedray_volumetric_pass_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_test(NAME bedray_volumetric_pass_test COMMAND bedray_volumetric_pass_test)
 
 # Compile the real C wrappers into the test process so the allocation fault
 # injector controls their operator new (the DLL has its own static CRT).
