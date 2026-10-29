@@ -11,11 +11,13 @@
 //   * the biome tint: the vertex colour with the baked vanilla face shade
 //     divided out.
 //
-// What is *not* here: the volumetric medium (depth absorption, in-scattering,
-// Snell refraction of the camera ray, caustics) that the legacy realistic style
-// runs through traceThroughInterfacesM.  The typed path tracer has no medium
-// state yet, so water is shaded as a Fresnel interface with a biome-tinted
-// transmission; the medium is a separate follow-up.
+// The volumetric medium (depth absorption and in-scattering) is here too:
+// `waterSigmaT` turns a biome tint into an extinction coefficient, and
+// `waterSegmentTransmittance` / `waterInScatter` evaluate one segment inside
+// the body.  The path tracer and the visibility walk own the state (when a ray
+// is inside a body and which body); this module only does the arithmetic.
+// Caustics are still missing: they need the refracted sun footprint on the
+// bottom, which belongs to the lighting path, not to the medium.
 
 public module water;
 
@@ -107,4 +109,81 @@ float3 waterBiomeTint(float3 vertexColor, float3 geometricNormal) {
 // lives in the render pass.
 bool waterIsSurface(bool translucent, float3 f0, float roughness, float metallic) {
     return translucent && luminance(f0) <= 0.025 && roughness <= 0.035 && metallic < 0.5;
+}
+
+// ---- volumetric medium -----------------------------------------------------
+//
+// Ported from rt_common_water.glsl.  Clear water absorbs red first and blue
+// last, a biome tint adds a dye on top (swamp green, warm ocean turquoise), and
+// a weak grey scattering term gives deep water a body: with absorption alone
+// there is nothing left to see once the bottom is attenuated away, which is
+// what made deep oceans black in an earlier revision.
+
+static const float3 WATER_CLEAR_ABSORPTION = float3(0.17, 0.036, 0.013); // 1/block
+static const float WATER_SCATTERING = 0.055;                             // 1/block, nearly grey
+static const float WATER_MULTIPLE_SCATTER_FLOOR = 0.65;                  // share of the sky that reaches any depth
+
+// Extinction of the body for a biome tint (the vertex colour with the baked
+// face shade undone).  The dye term reuses the same tint the surface filter
+// used, so a swamp and an ocean differ in colour and in how fast they darken.
+float3 waterSigmaT(float3 tintIn) {
+    float3 tint = clamp(tintIn, float3(0.02), float3(1.0));
+    float3 dye = clamp(0.05 * (-log(tint)), float3(0.0), float3(0.20));
+    return WATER_CLEAR_ABSORPTION + dye + float3(WATER_SCATTERING);
+}
+
+// One segment inside a water body.  `surfY` is the camera-relative height of
+// the surface the ray entered through; the in-scatter uses the depth at the
+// segment's midpoint so a column darkens with depth instead of one flat tint.
+struct WaterMedium {
+    bool   inside;
+    float3 sigmaT;
+    float3 scatterAlbedo;
+    float  surfY;
+};
+
+WaterMedium noWaterMedium() {
+    WaterMedium medium;
+    medium.inside = false;
+    medium.sigmaT = float3(0.0);
+    medium.scatterAlbedo = float3(0.0);
+    medium.surfY = 0.0;
+    return medium;
+}
+
+WaterMedium waterMediumFrom(float3 tintIn, float surfY) {
+    WaterMedium medium;
+    medium.inside = true;
+    medium.sigmaT = waterSigmaT(tintIn);
+    medium.scatterAlbedo = float3(WATER_SCATTERING) / medium.sigmaT;
+    medium.surfY = surfY;
+    return medium;
+}
+
+// A boundary toggles the medium only on horizontal faces (the sides of flowing
+// water are thin sheets, not a surface the body can be entered through), and
+// only in the direction the face allows: down enters, up leaves.
+bool waterEntersMedium(bool inside, float faceNormalY, float directionY) {
+    return abs(faceNormalY) > 0.5 && directionY < 0.0 && !inside;
+}
+
+bool waterLeavesMedium(bool inside, float faceNormalY, float directionY) {
+    return abs(faceNormalY) > 0.5 && directionY > 0.0 && inside;
+}
+
+float3 waterSegmentTransmittance(WaterMedium medium, float length) {
+    return medium.inside ? exp(-medium.sigmaT * max(length, 0.0)) : float3(1.0);
+}
+
+// Radiance the segment scatters towards the eye.  `downRadiance` is the light
+// arriving at the surface from above (the environment dome), attenuated by the
+// column above the segment; the multiple-scatter floor keeps deep water blue
+// instead of fading to black.
+float3 waterInScatter(WaterMedium medium, float segmentMidY, float3 downRadiance, float length) {
+    if (!medium.inside) return float3(0.0);
+    float3 transmittance = waterSegmentTransmittance(medium, length);
+    float depth = max(medium.surfY - segmentMidY, 0.0);
+    float3 column = WATER_MULTIPLE_SCATTER_FLOOR
+        + (1.0 - WATER_MULTIPLE_SCATTER_FLOOR) * exp(-medium.sigmaT * depth * 0.65);
+    return downRadiance * medium.scatterAlbedo * column * (float3(1.0) - transmittance);
 }

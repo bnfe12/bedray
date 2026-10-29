@@ -62,9 +62,10 @@ mock backends, including the provisional history and ownership proposal.
 `verify_bedray_roots.slang` compiles the curated `bedray.slang` and the opt-in
 `bedray_legacy.slang` together so the typed and legacy resolve names cannot
 silently converge. `verify_water.slang` compiles `surface/water.slang` on its own
-and reads every public entry the surface decoder uses: both slope overloads, the
-wave normal on the top, underside and vertical faces, the biome tint and the
-fluid classification predicate.
+and reads every public entry the surface decoder and the path tracer use: both
+slope overloads, the wave normal on the top, underside and vertical faces, the
+biome tint, the fluid classification predicate, and the medium (extinction per
+tint, segment transmittance and in-scatter, the enter/leave boundary rules).
 
 The shader module map, dependency rules, host contract and extension checklist
 are in
@@ -816,16 +817,28 @@ Status update (2026-10-29). Entities are traced by the typed path through the
 (`e1bcd82`), so `legacyHitToSurface` no longer decides their fate. Water is no
 longer a flat pane either: `surface/water.slang` ports the legacy wave field,
 the biome tint and the fluid classification, and `decodeSurface` assigns
-`MATERIAL_SOURCE_FLUID`, the optical alpha mode, IOR 1.333 and a Fresnel
-transmission tinted by the biome colour (`waterBiomeTint * 0.85`, the realistic
-style the legacy default selects). What remains of the water item is the
-volumetric medium: depth absorption, in-scattering, Snell refraction of the
-camera ray and caustics are not modelled, so a deep lake filters with one tint
-instead of a colour gradient, and the legacy `waterStyle` switch is not wired
-into the typed path. Block-emitter NEE landed in an earlier batch with its own
-recording buffers (`RtSlangBlockEmitterTest`); the optical medium/eta item, the
+`MATERIAL_SOURCE_FLUID`, the optical alpha mode, IOR 1.333 and a **clear**
+Fresnel interface. The volumetric medium landed in the same module and the
+typed path: `waterSigmaT` (clear absorption + biome dye + grey scattering),
+`waterInScatter` with the multiple-scatter floor, a `WaterMedium` carried by
+`tracePath`, per-segment absorption and in-scatter, entry/exit on a refracted
+transmission through a horizontal fluid face, and a medium-aware NEE
+(`traceShadowVisibilityMedium`) so an underwater receiver is shadowed through
+its own column. A caller without medium state still gets the legacy tinted
+sheet (`waterBiomeTint * 0.85`). Evidence: `slangc` 2026.20 compiles all 18
+roots (path_trace 546,524 B / path_trace_scene 558,340 B, 18 bindings, 112 B
+push), `verify_water.slang` compiles with the medium entries, and
+`RtSlangWaterMediumTest` (6 guards) plus `RtWaterMediumTest` (7 numeric tests)
+pass; the full suite is green. What remains of the water item is the camera
+medium (a camera *inside* water starts in air, because the medium is only
+entered through a surface transmission), Snell refraction and caustics of the
+NEE beam under water (the shadow ray is straight), side-aware IOR on the exit
+face (the BSDF assumes air-to-material), and `RtSettings.waterStyle` is still
+not wired into the typed path. No owner-verified frame of any of this exists
+yet. Block-emitter NEE landed in an earlier batch with its own recording
+buffers (`RtSlangBlockEmitterTest`); the optical medium/eta item, the
 `CameraState.view`/`.projection` identity and the missing G-buffer are still
-open. None of the closed items has an owner-verified frame yet.
+open.
 
 `bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
 sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
@@ -1035,11 +1048,13 @@ cross-cascade resolve or image comparison was run.
    parts reproject, an End Portal is drawn as the procedural starfield, mob skin
    gets its **Sobel auto-normal**, and glowing parts are **next-event
    candidates**. No owner-verified frame of these behaviours is recorded yet.
-4a. **Water** — the surface model is ported (wave field, biome tint,
-   classification, Fresnel transmission). The volumetric medium — depth
-   absorption, in-scattering, Snell refraction and caustics from
-   `traceThroughInterfacesM` — is the remaining half of the legacy realistic
-   style, and `RtSettings.waterStyle` does not reach the typed path.
+4a. **Water** — the surface model and the volumetric medium are ported: wave
+   field, biome tint, classification, Fresnel interface, depth absorption,
+   in-scattering with the multiple-scatter floor, and a medium-aware shadow
+   walk. Still open: a camera that starts *inside* water (the medium is only
+   entered by a transmission through a surface), Snell refraction and caustics
+   of the underwater NEE beam, side-aware IOR when a path leaves the water, and
+   wiring `RtSettings.waterStyle` into the typed path.
 5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
    are now in the shared checkout as source-only. Environment is opt-in on a
    positive world boundary that the terminal window reaches; a zero boundary

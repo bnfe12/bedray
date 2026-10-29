@@ -493,11 +493,12 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
             material.flags &= ~MATERIAL_FLAG_METAL;
             material.transmission = 1.0;
             material.thickness = 0.0;
-            // Until the medium lands, the sheet filters by the biome tint the
-            // realistic style uses for its water column (tint * 0.85), not by
-            // the opaque 16x16 sprite.
-            material.albedo = clamp(waterBiomeTint(hit.tint, geometricNormal) * 0.85,
-                float3(0.001), float3(1.0));
+            // The interface itself is clear: the colour of the water is the
+            // medium, and a caller that tracks it (the path tracer, the
+            // visibility walk) applies the tint as distance absorption.  A
+            // caller that does not gets the tint from surfaceTransmittance,
+            // which reads the biome colour off the hit.
+            material.albedo = float3(1.0);
             shadingNormal = waveNormal;
         }
     }
@@ -578,10 +579,12 @@ float3 surfaceTransmittance(SurfaceSample surface, float3 direction) {
     float f0 = clamp(luminance(material.f0), 0.0, 1.0);
     float fresnel = f0 + (1.0 - f0) * pow5(1.0 - cosine);
     if ((material.sourceFlags & MATERIAL_SOURCE_FLUID) != 0u) {
-        // A water sheet filters with its biome tint over the whole interface:
-        // the legacy rule, independent of the opaque sprite alpha and of the
-        // slab thickness the thin-pane branch would read out of it.
-        return (1.0 - fresnel) * clamp(material.albedo, float3(0.001), float3(1.0));
+        // A caller that does not track the medium still gets the legacy
+        // biome-tinted sheet (tint * 0.85, the realistic style).  The tint is
+        // read from the hit, because the interface albedo is now clear.
+        float3 tint = clamp(waterBiomeTint(surface.hit.tint,
+            surface.hit.geometricNormal) * 0.85, float3(0.001), float3(1.0));
+        return (1.0 - fresnel) * tint;
     }
     float3 absorption = pow(clamp(material.albedo, float3(0.001), float3(1.0)),
         float3(max(slabLength * material.transmission, 0.0)));
@@ -595,6 +598,23 @@ float3 surfaceTransmittance(SurfaceSample surface, float3 direction) {
     }
 
     return (1.0 - fresnel) * absorption;
+}
+
+// Interface-only filter for a caller that tracks the fluid medium itself.  The
+// Fresnel share belongs to the interface; the colour is distance absorption
+// along the segment, applied by the caller, so tinting here would darken the
+// water twice.  Every other material keeps the full filter.
+float3 surfaceInterfaceTransmittance(SurfaceSample surface, float3 direction) {
+    if (!surface.valid || !materialIsTranslucent(surface.material)) {
+        return float3(1.0);
+    }
+    if ((surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u) {
+        return surfaceTransmittance(surface, direction);
+    }
+    float cosine = clamp(abs(dot(surface.hit.geometricNormal, direction)), 0.05, 1.0);
+    float f0 = clamp(luminance(surface.material.f0), 0.0, 1.0);
+    float fresnel = f0 + (1.0 - f0) * pow5(1.0 - cosine);
+    return float3(1.0 - fresnel);
 }
 
 // Convenience for a pass that has only a MaterialSample and no SurfaceHit.

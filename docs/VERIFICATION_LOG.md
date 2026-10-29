@@ -4,6 +4,64 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — water volumetric medium in the typed path (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20,
+`-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major
+-I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `surface/water.slang` gained the medium: `WATER_CLEAR_ABSORPTION`
+  (0.17, 0.036, 0.013), `WATER_SCATTERING` 0.055 and
+  `WATER_MULTIPLE_SCATTER_FLOOR` 0.65 (the legacy `rt_common_water.glsl`
+  values), `waterSigmaT` (clear absorption + biome dye + scattering),
+  `WaterMedium {inside, sigmaT, scatterAlbedo, surfY}`, `noWaterMedium`,
+  `waterMediumFrom`, `waterSegmentTransmittance`, `waterInScatter` (depth at
+  the segment midpoint, 0.65 depth falloff) and the horizontal-face
+  `waterEntersMedium`/`waterLeavesMedium` rules.
+- `surface/surface.slang` makes the fluid interface clear
+  (`material.albedo = float3(1.0)`, IOR 1.333, transmission 1) so the colour is
+  distance absorption rather than a painted tint; `surfaceTransmittance` keeps
+  the legacy `(1 - F) * waterBiomeTint * 0.85` sheet for callers without medium
+  state, and the new `surfaceInterfaceTransmittance` returns only the Fresnel
+  share for a fluid.
+- `surface/visibility.slang` gained `traceFilteredVisibilityMedium` and
+  `traceShadowVisibilityMedium`: segment absorption between the receiver and
+  each candidate, fluid interfaces as Fresnel-only filters, medium toggling on
+  horizontal fluid faces, tail absorption on a miss. Shadow rays add no
+  in-scatter. The medium-blind walk is unchanged.
+- `pathtrace/path_tracer.slang` carries `WaterMedium` along the path: a
+  refracted transmission (`BSDF_LOBE_TRANSMISSION`) through a horizontal fluid
+  face enters or leaves the body (reflections and TIR do not), every segment
+  inside is absorbed by `waterSegmentTransmittance` and adds
+  `waterInScatter` (downwelling from `environment.radiance(up)`), and
+  `pathTraceDirectTerm` shadows through `traceShadowVisibilityMedium`. A cutout
+  advance moves the ray origin, so the segment start tracks `-rayBias`.
+  `PATH_TRACE_FLAG_WATER_MEDIUM` marks a path that entered the body.
+- `verify_water.slang` extended with the medium entries (dye dominance,
+  scatter albedo below one, outside body clear and non-scattering, absorption
+  falling with length, positive in-scatter, enter/leave truth table).
+- New `RtSlangWaterMediumTest` (6 guards) keeps the Slang constants on the
+  legacy numerics and pins the interface-clear, shadow-medium and
+  toggle-on-refraction rules.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | `path_trace` 546524 B, `path_trace_scene` 558340 B, 18 bindings, 112 B push |
+| Harnesses | 6 | 6 | `verify_water.slang` now also reads the medium |
+| Targeted `:common:test` | 16 tests | 0 failures | `RtSlangWaterMediumTest` 6, `RtWaterMediumTest` 7, `RtSlangVisibilityOverflowTest` 3 |
+| `:common:test` | 718 tests | 0 failures | 3 skipped |
+
+This is L1/L2 only.  It proves the medium compiles in both path roots and the
+source guards hold; no GPU dispatch, frame or screenshot exists, and the
+underwater look is not owner-verified.  Not modelled, documented in the module
+header: a camera that starts inside water, Snell refraction and caustics of the
+underwater NEE beam, side-aware IOR on an exit face, and the `waterStyle`
+switch.
+
 ## 2026-10-29 — water surface model in the typed path (L1 compile, L2 unit)
 
 Branch: `refactor/slang-pipeline` (merge `cbe478f`). Tool: `slangc` 2026.20,

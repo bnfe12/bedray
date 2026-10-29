@@ -664,9 +664,15 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   `surface/water.slang` compiles as part of both path roots and ports the
   legacy wave field, `waterWaveNormal`, the biome tint and the classification;
   `decodeSurface` now assigns `MATERIAL_SOURCE_FLUID`, `AlphaMode.Optical`, IOR
-  1.333 and a Fresnel transmission tinted by `waterBiomeTint * 0.85`. The
-  volumetric medium (depth absorption, in-scattering, Snell refraction,
-  caustics) and the `waterStyle` switch remain open.*
+  1.333 and a clear Fresnel interface. The volumetric medium followed in the
+  same module (`waterSigmaT`, `waterInScatter` with the 0.65 multiple-scatter
+  floor) and in `tracePath`: per-segment absorption and in-scatter, entry/exit
+  on a refracted transmission through a horizontal fluid face, and a
+  medium-aware NEE (`traceShadowVisibilityMedium`) so an underwater receiver is
+  shadowed through its own column. The straight shadow ray has no Snell
+  refraction or caustics, a camera that starts inside water is not given a
+  medium, the BSDF still assumes air-to-material IOR on an exit face, and the
+  `waterStyle` switch is open.*
 
 ## 10. Migration sequence
 

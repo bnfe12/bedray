@@ -10,6 +10,12 @@
 // never crosses to the far side of its geometric normal, and the two slope
 // overloads agree when the footprint is zero.
 //
+// The second half reads the medium: the extinction of a darker tint dominates a
+// whiter one (the biome dye), a non-scattering or outside segment adds nothing,
+// an inside segment adds a finite positive colour, transmittance falls with
+// length but stays positive, and the enter/leave rules only fire on horizontal
+// faces in the direction that crosses them.
+//
 // Usage (same arguments as gradle/slang.gradle):
 //   slangc -target spirv -profile cs_6_5 -entry main ^
 //     -matrix-layout-column-major -I common/src/main/resources/shaders/slang ^
@@ -57,6 +63,29 @@ void main() {
     bool flatSide = dot(vertical, side) > 0.999;
     bool slopeAgree = length(slopeExplicit - slopeFull) <= 1.0e-6 * max(1.0, length(slopeFull));
 
+    // ---- medium ----
+    float3 clearSigma = waterSigmaT(float3(0.95));
+    float3 swampSigma = waterSigmaT(float3(0.30, 0.45, 0.20));
+    bool dyeDominates = swampSigma.r > clearSigma.r && swampSigma.r > swampSigma.g;
+    bool scatterBelowOne = all(waterMediumFrom(float3(1.0), 64.0).scatterAlbedo < float3(1.0));
+
+    WaterMedium outside = noWaterMedium();
+    WaterMedium inside = waterMediumFrom(tint, 62.0);
+    bool outsideIsClear = !outside.inside &&
+        dot(waterSegmentTransmittance(outside, 3.0), float3(1.0)) > 2.999;
+    bool outsideScattersNothing = dot(waterInScatter(outside, 60.0, float3(1.0), 3.0), float3(1.0)) == 0.0;
+
+    float3 nearT = waterSegmentTransmittance(inside, 1.0);
+    float3 farT = waterSegmentTransmittance(inside, 8.0);
+    bool absorptionFalls = farT.r < nearT.r && farT.r > 0.0 && farT.b > 0.0;
+    float3 scatter = waterInScatter(inside, 61.0, float3(1.0), 2.0);
+    bool scatterPositive = all(scatter >= float3(0.0)) && max(scatter.r, max(scatter.g, scatter.b)) > 0.0;
+
+    bool enters = waterEntersMedium(false, 1.0, -1.0) && !waterEntersMedium(true, 1.0, -1.0)
+        && !waterEntersMedium(false, 0.0, -1.0) && !waterEntersMedium(false, 1.0, 1.0);
+    bool leaves = waterLeavesMedium(true, 1.0, 1.0) && !waterLeavesMedium(false, 1.0, 1.0)
+        && !waterLeavesMedium(true, 0.0, 1.0) && !waterLeavesMedium(true, 1.0, -1.0);
+
     sink[0] = float4(slopeFiltered.x, slopeFiltered.y, lostFiltered, lostTop);
     sink[1] = float4(top.x, top.y, top.z, lostBottom + lostSide);
     sink[2] = float4(bottom.x, bottom.y, bottom.z, vertical.x);
@@ -64,4 +93,9 @@ void main() {
         (isGlass ? 2.0 : 0.0) + (isRough ? 4.0 : 0.0) + (isOpaque ? 8.0 : 0.0));
     sink[4] = float4(sameSideTop ? 1.0 : 0.0, sameSideBottom ? 1.0 : 0.0,
         flatSide ? 1.0 : 0.0, slopeAgree ? 1.0 : 0.0);
+    sink[5] = float4(clearSigma.x, swampSigma.x, swampSigma.g, swampSigma.b);
+    sink[6] = float4(dyeDominates ? 1.0 : 0.0, scatterBelowOne ? 1.0 : 0.0,
+        outsideIsClear ? 1.0 : 0.0, outsideScattersNothing ? 1.0 : 0.0);
+    sink[7] = float4(absorptionFalls ? 1.0 : 0.0, scatterPositive ? 1.0 : 0.0,
+        enters ? 1.0 : 0.0, leaves ? 1.0 : 0.0);
 }
