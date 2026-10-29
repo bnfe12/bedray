@@ -40,8 +40,9 @@ public final class BedrayCoreLayouts {
     public static final int CAP_DESCRIPTOR_BUFFER = 1 << 8;
     /** {@code shaderInt64}; required by physical-storage-buffer addressing and 64-bit shader work. */
     public static final int CAP_SHADER_INT64 = 1 << 9;
+    public static final int CAP_STORAGE_IMAGE_EXTENDED_FORMATS = 1 << 10;
     /** Every capability bit this ABI version defines. */
-    public static final int CAP_ALL = (1 << 10) - 1;
+    public static final int CAP_ALL = (1 << 11) - 1;
 
     /** {@code VkShaderStageFlagBits#VK_SHADER_STAGE_COMPUTE_BIT}; ABI v2 registers compute programs only. */
     public static final int VK_SHADER_STAGE_COMPUTE_BIT = 0x20;

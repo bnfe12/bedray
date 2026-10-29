@@ -2,7 +2,7 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
-import io.github.andrexarlay.vulkancompat.rt.slang.SlangDeviceCapabilities;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -27,6 +27,7 @@ final class RtAtmosphere {
     private RtSlangVolumetricPass volumetric;
     /** Native Slang runtime, created with the first bloom pass; {@code null} until then and when unavailable. */
     private SlangRuntime slangRuntime;
+    private SlangRuntimePool.Lease slangLease;
     private boolean slangUnavailableLogged;
     private RtGpuTimer timer;
     private String lastLogged = "";
@@ -164,7 +165,8 @@ final class RtAtmosphere {
         }
         try {
             // Bloom is feature-free; volumetric visibility needs the host's actually enabled RQ/BDA/Int64 features.
-            slangRuntime = SlangRuntime.create(device, SlangDeviceCapabilities.enabledMask(device));
+            slangLease = SlangRuntimePool.acquire(device);
+            slangRuntime = slangLease.runtime();
         } catch (RuntimeException e) {
             LOGGER.warn("[VKB-ATMO] native Slang runtime unavailable; bloom is unavailable: {}", e.getMessage());
         }
@@ -196,7 +198,8 @@ final class RtAtmosphere {
             bloom = null;
         }
         if (slangRuntime != null) {
-            slangRuntime.close();
+            slangLease.close();
+            slangLease = null;
             slangRuntime = null;
         }
         if (timer != null) {

@@ -66,7 +66,8 @@ typedef enum BedrayCapability {
     BEDRAY_CAP_DESCRIPTOR_BUFFER = 1u << 8,
     /* Needed by SPIR-V that does 64-bit integer work, including physical-storage-buffer
        addressing (the legacy section table stores device addresses). */
-    BEDRAY_CAP_SHADER_INT64 = 1u << 9
+    BEDRAY_CAP_SHADER_INT64 = 1u << 9,
+    BEDRAY_CAP_STORAGE_IMAGE_EXTENDED_FORMATS = 1u << 10
 } BedrayCapability;
 
 typedef struct BedrayError {

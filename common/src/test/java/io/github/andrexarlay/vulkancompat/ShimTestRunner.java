@@ -720,8 +720,9 @@ public class ShimTestRunner {
     }
 
     private static void testVelocityShaderCompiles() {
-        java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline.compileShaderToSpirv();
-        assertTrue(spv != null && spv.remaining() > 0, "velocity_reproject.comp must compile to SPIR-V");
+        var pass = io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary
+            .load(io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline.PROGRAM_NAME).orElseThrow();
+        assertTrue(pass.spirv().length > 0, "live velocity AOT SPIR-V must be packaged");
     }
 
     /**

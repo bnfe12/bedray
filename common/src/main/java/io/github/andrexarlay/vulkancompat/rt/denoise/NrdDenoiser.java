@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rt.denoise;
 
 import io.github.andrexarlay.vulkancompat.rt.world.CameraBobPose;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
@@ -76,6 +77,7 @@ public final class NrdDenoiser {
     /** Per-pixel entity motion Vec4Buf of the ray shader (device address, 0 = none, then IN_MV is static-world only). */
     public long entityMotionAddress;
     private boolean imagesReady;
+    private long imageInitRecording;
     private boolean restartNext;
     private boolean havePrev;
     private int frameCounter;
@@ -99,7 +101,7 @@ public final class NrdDenoiser {
      *                      {@code [VKB-NRD] status=disabled reason=...} and continues without a denoiser)
      */
     public NrdDenoiser(VkDevice device, RtMemory memory, DenoiserMode mode, NrdAvailability availability, int width, int height,
-                       long outputView) {
+                       long outputView, SlangRuntime runtime) {
         if (!mode.isNrd()) {
             throw new IllegalArgumentException("mode must be an NRD mode");
         }
@@ -119,7 +121,7 @@ public final class NrdDenoiser {
         requireStorageFormat(info.normalRoughnessVkFormat(), "IN_NORMAL_ROUGHNESS");
         requireStorageFormat(FMT_RGBA16F, "RGBA16F");
         requireStorageFormat(FMT_R32F, "R32F");
-        this.packPipeline = new NrdPackPipeline(device);
+        this.packPipeline = new NrdPackPipeline(runtime);
         try {
             createAll(width, height, outputView);
         } catch (RuntimeException e) {
@@ -188,6 +190,7 @@ public final class NrdDenoiser {
         fillResources();
         writeSet(outputView);
         imagesReady = false;
+        imageInitRecording = 0;
         restartNext = true;
         havePrev = false;
     }
@@ -265,6 +268,7 @@ public final class NrdDenoiser {
         if (!imagesReady) {
             initImages(cmd);
             imagesReady = true;
+            imageInitRecording = cmd.address();
         }
         buildFrameSettings(projection, fullProjection, viewRotation, camX, camY, camZ,
             jitterX, jitterY, jitterPrevX, jitterPrevY);
@@ -395,7 +399,28 @@ public final class NrdDenoiser {
         destroyImages();
     }
 
-    /** Waits for the device and releases everything this instance owns (vkb_nrd stays loaded for the process). */
+    /** Exact host recording proof, including the native pack/compose descriptors. */
+    public void releaseRecording(long command) {
+        packPipeline.releaseRecording(command);
+        if (imageInitRecording == command) imageInitRecording = 0;
+    }
+
+    public void discardRecording(long command) {
+        packPipeline.discardRecording(command);
+        if (imageInitRecording == command) {
+            imageInitRecording = 0;
+            imagesReady = false;
+        }
+        restartNext = true;
+        havePrev = false;
+    }
+
+    public void releaseRecordingsAfterHostDrain() {
+        packPipeline.releaseRecordingsAfterHostDrain();
+        imageInitRecording = 0;
+    }
+
+    /** Caller first closes/discards open recordings and drains host submissions. */
     public void destroy() {
         VK10.vkDeviceWaitIdle(device);
         destroyAll();

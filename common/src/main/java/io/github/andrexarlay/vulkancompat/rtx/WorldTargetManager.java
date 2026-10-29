@@ -13,6 +13,9 @@ import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanRtExperimentEngine;
@@ -66,6 +69,10 @@ public final class WorldTargetManager {
     private static RenderTarget savedHud3DTarget;
 
     private static VelocityPipeline velocityPipeline;
+    private static SlangRuntimePool.Lease velocityRuntimeLease;
+    private static final RecordingCompletion velocityCompletion = new RecordingCompletion(
+        failure -> LOGGER.warn("[WorldTargetManager] velocity retirement failed; resources retained", failure));
+    private static boolean recordingVelocity, drainingVelocity;
 
     /**
      * The dedicated worldTarget colour texture is ALWAYS created with STORAGE usage (see {@link TargetLifecyclePolicy}), so
@@ -666,10 +673,8 @@ public final class WorldTargetManager {
         depthCopiedThisFrame = false;
         ensureXessOutput(fullMain.width, fullMain.height);
         computeMatrices();
-        Vec3 camDelta = Vec3.ZERO;
-        if (currCameraPos != null && prevCameraPos != null && !resetHistory) {
-            camDelta = currCameraPos.subtract(prevCameraPos);
-        }
+        final Vec3 camDelta = currCameraPos != null && prevCameraPos != null && !resetHistory
+            ? currCameraPos.subtract(prevCameraPos) : Vec3.ZERO;
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             throw new IllegalStateException("XeSS: no Vulkan device");
@@ -700,9 +705,7 @@ public final class WorldTargetManager {
                 + " mvView=" + mvView + " colorView=" + colorView + " outView=" + outView + " color=" + colorImg
                 + " depth=" + rasterDepthImg + " mv=" + mvImg + " out=" + outImg + ")");
         }
-        if (velocityPipeline == null) {
-            velocityPipeline = new VelocityPipeline(vulkanDevice.vkDevice());
-        }
+        ensureVelocityPipeline(vulkanDevice);
 
         final int inW = worldTarget.width;
         final int inH = worldTarget.height;
@@ -713,46 +716,40 @@ public final class WorldTargetManager {
         final int fmtDepth = com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(GpuFormat.D32_FLOAT);
         final int fmtMv = com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(GpuFormat.RG16_FLOAT);
 
-        VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
-        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        VkBarriers.fullMemoryBarrier(cmd);
-        // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
-        velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
-        VkBarriers.fullMemoryBarrier(cmd);
-        if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
-            && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
-            io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
-                invViewProj, prevViewProj, camDelta, resetHistory,
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
-            VkBarriers.fullMemoryBarrier(cmd);
-        }
-        io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
-
         final boolean reset = resetHistory;
         // A denoiser-resolved image is already back on the pixel grid: it must reach DLSS-SR with zero jitter.
         final float srJitterX = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterX());
         final float srJitterY = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterY());
-        FrameContext ctx = new FrameContext(
-            cmd,
-            new FrameContext.ImageRef(colorImg, colorView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
-            new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, inW, inH),
-            new FrameContext.ImageRef(srMvImg, srMvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
-            new FrameContext.ImageRef(outImg, outView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, outW, outH),
-            srJitterX, srJitterY,
-            inW, inH, outW, outH,
-            (float) TemporalUpscaler.scale(),
-            TemporalUpscaler.modeName(),
-            1.0f,
-            reset);
-        boolean ok = backend.dispatch(ctx);
+        boolean ok = recordVelocityCommands(vulkanDevice, cmd -> {
+            VkBarriers.fullMemoryBarrier(cmd);
+            // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
+            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            VkBarriers.fullMemoryBarrier(cmd);
+            if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
+                && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
+                io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
+                    invViewProj, prevViewProj, camDelta, resetHistory,
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
+            io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
 
-        int endErr = VK10.vkEndCommandBuffer(cmd);
-        if (endErr != VK10.VK_SUCCESS) {
-            throw new IllegalStateException("XeSS: vkEndCommandBuffer failed: " + endErr);
-        }
-        encoder.execute(cmd);
+            FrameContext ctx = new FrameContext(
+                cmd,
+                new FrameContext.ImageRef(colorImg, colorView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
+                new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, inW, inH),
+                new FrameContext.ImageRef(srMvImg, srMvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
+                new FrameContext.ImageRef(outImg, outView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, outW, outH),
+                srJitterX, srJitterY,
+                inW, inH, outW, outH,
+                (float) TemporalUpscaler.scale(),
+                TemporalUpscaler.modeName(),
+                1.0f,
+                reset);
+            return backend.dispatch(ctx);
+        });
         if (!ok) {
             return false; // the backend's dispatch already logged stage=execute and disabled itself
         }
@@ -780,10 +777,8 @@ public final class WorldTargetManager {
             return;
         }
         computeMatrices();
-        Vec3 camDelta = Vec3.ZERO;
-        if (currCameraPos != null && prevCameraPos != null && !resetHistory) {
-            camDelta = currCameraPos.subtract(prevCameraPos);
-        }
+        final Vec3 camDelta = currCameraPos != null && prevCameraPos != null && !resetHistory
+            ? currCameraPos.subtract(prevCameraPos) : Vec3.ZERO;
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             return;
@@ -796,34 +791,91 @@ public final class WorldTargetManager {
         if (rasterDepthView == 0L || mvView == 0L || rasterDepthImg == 0L || mvImg == 0L) {
             return;
         }
-        if (velocityPipeline == null) {
-            velocityPipeline = new VelocityPipeline(vulkanDevice.vkDevice());
-        }
+        ensureVelocityPipeline(vulkanDevice);
 
         final int inW = worldTarget.width;
         final int inH = worldTarget.height;
 
-        VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
-        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        VkBarriers.fullMemoryBarrier(cmd);
-        velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
-        VkBarriers.fullMemoryBarrier(cmd);
-        if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
-            && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
-            io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
-                invViewProj, prevViewProj, camDelta, resetHistory,
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
+        recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
-        }
-        io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
+            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            VkBarriers.fullMemoryBarrier(cmd);
+            if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
+                && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
+                io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
+                    invViewProj, prevViewProj, camDelta, resetHistory,
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
+            io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
 
-        int endErr = VK10.vkEndCommandBuffer(cmd);
-        if (endErr != VK10.VK_SUCCESS) {
-            throw new IllegalStateException("FrameGen MV: vkEndCommandBuffer failed: " + endErr);
+            return true;
+        });
+    }
+
+    private static void ensureVelocityPipeline(VulkanDevice device) {
+        if (velocityRuntimeLease != null && velocityRuntimeLease.runtime().hostDevice() != device)
+            throw new IllegalStateException("velocity runtime belongs to a different host device");
+        if (velocityRuntimeLease == null) velocityRuntimeLease = SlangRuntimePool.acquire(device);
+        if (velocityPipeline == null) velocityPipeline = new VelocityPipeline(velocityRuntimeLease.runtime());
+    }
+
+    /** Attaches immutable velocity uploads to this encoder's exact destruction proof. */
+    private static boolean recordVelocityCommands(VulkanDevice device, java.util.function.Function<VkCommandBuffer, Boolean> commands) {
+        if (recordingVelocity || drainingVelocity) throw new IllegalStateException("recursive velocity recording/drain");
+        VelocityPipeline pass = velocityPipeline;
+        if (pass == null) throw new IllegalStateException("velocity pass is unavailable");
+        VulkanCommandEncoder encoder = device.createCommandEncoder();
+        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
+        var ticket = velocityCompletion.beginWithDiscard(cmd.address(), new Retirement(
+            () -> pass.releaseRecording(cmd.address()), () -> pass.discardRecording(cmd.address())));
+        boolean executeAttempted = false;
+        recordingVelocity = true;
+        try {
+            boolean result = commands.apply(cmd);
+            int status = VK10.vkEndCommandBuffer(cmd);
+            if (status != VK10.VK_SUCCESS) throw new IllegalStateException("velocity vkEndCommandBuffer failed: " + status);
+            velocityCompletion.submissionAttempted(ticket);
+            executeAttempted = true;
+            encoder.execute(cmd);
+            velocityCompletion.submitted(ticket, action -> encoder.queueForDestroy(action::run));
+            return result;
+        } catch (RuntimeException | Error failure) {
+            if (!executeAttempted) {
+                // This local recording was never passed to execute and is abandoned permanently.
+                try { velocityCompletion.discard(ticket); }
+                catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
+            }
+            throw failure; // An execute/enqueue exception stays UNKNOWN until the host drain.
+        } finally {
+            recordingVelocity = false;
         }
-        encoder.execute(cmd);
+    }
+
+    /** Pending encoder work must be submitted before its fence can prove retirement. */
+    private static void drainVelocityRecordings() {
+        if (velocityCompletion.pendingCount() == 0) return;
+        if (recordingVelocity || drainingVelocity) throw new IllegalStateException("velocity drain during an active recording");
+        if (velocityRuntimeLease == null) throw new IllegalStateException("velocity recordings lost their runtime lease");
+        VulkanDevice device = velocityRuntimeLease.runtime().hostDevice();
+        if (VulkanCapabilityChecker.getVulkanDevice() != device)
+            throw new IllegalStateException("velocity host device changed; resources retained");
+        drainingVelocity = true;
+        try {
+            VulkanCommandEncoder encoder = device.createCommandEncoder();
+            try (var completion = encoder.createFence()) {
+                encoder.submit();
+                if (!completion.awaitCompletion(5_000_000_000L))
+                    throw new IllegalStateException("velocity host submission completion timed out; resources retained");
+                velocityCompletion.afterHostDrain();
+            }
+            if (velocityCompletion.pendingCount() != 0)
+                throw new IllegalStateException("velocity recording proof unavailable; resources retained");
+        } finally {
+            drainingVelocity = false;
+        }
     }
 
     /** Display-size RGBA8 STORAGE image between FSR 1 EASU and RCAS (created only when RCAS runs). */
@@ -976,6 +1028,15 @@ public final class WorldTargetManager {
 
     private static void releaseTargets() {
         RenderSystem.assertOnRenderThread();
+        drainVelocityRecordings();
+        if (velocityPipeline != null) {
+            velocityPipeline.cleanup();
+            velocityPipeline = null;
+        }
+        if (velocityRuntimeLease != null) {
+            velocityRuntimeLease.close();
+            velocityRuntimeLease = null;
+        }
         TemporalUpscaler.cleanup();
         UpscalerBackend active = VulkanRtxConfig.activeBackend;
         if (active != null && active != UpscalerBackend.BILINEAR) {
@@ -994,14 +1055,6 @@ public final class WorldTargetManager {
         if (spatialTmp != null) {
             spatialTmp.destroyBuffers();
             spatialTmp = null;
-        }
-        if (velocityPipeline != null) {
-            try {
-                velocityPipeline.cleanup();
-            } catch (Throwable t) {
-                LOGGER.warn("[WorldTargetManager] Error cleaning up VelocityPipeline: {}", t.getMessage());
-            }
-            velocityPipeline = null;
         }
         if (worldTarget != null) {
             worldTarget.destroyBuffers();

@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * P1-11: the migration target is AOT Slang, but runtime GLSL -> SPIR-V through Shaderc is still load-bearing in
- * code that is not the Slang renderer. The register claimed one file was left; a scan of the module found nine, so
+ * code that is not the Slang renderer. After the velocity transfer eight compiler users remain, so
  * the inventory is frozen here instead of being re-guessed every audit.
  *
  * <p>Ways this silently breaks: a new pass reaches for Shaderc because it is the shortest way to get a compute
@@ -34,7 +34,6 @@ class ShadercSurfaceTest {
         "io/github/andrexarlay/vulkancompat/rt/poc/RtTestPipeline.java",
         "io/github/andrexarlay/vulkancompat/rt/world/RtShaderCompiler.java",
         "io/github/andrexarlay/vulkancompat/rtx/framegen/FrameGenGpu.java",
-        "io/github/andrexarlay/vulkancompat/rtx/upscaler/VelocityPipeline.java",
         "io/github/andrexarlay/vulkancompat/rtx/upscaler/spatial/SpatialComputePass.java",
         "io/github/andrexarlay/vulkancompat/shaderhost/glsl/IrisSourcePreprocessor.java",
         "io/github/andrexarlay/vulkancompat/shaderhost/glsl/SpirvCompiler.java",

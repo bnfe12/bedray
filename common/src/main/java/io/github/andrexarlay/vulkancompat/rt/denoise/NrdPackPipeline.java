@@ -1,156 +1,118 @@
 package io.github.andrexarlay.vulkancompat.rt.denoise;
 
-import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
-import io.github.andrexarlay.vulkancompat.rt.world.RtFailure;
-import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VK10;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayNrdPackNative;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorImageInfo;
-import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorPoolSize;
-import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
-import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
-import org.lwjgl.vulkan.VkPushConstantRange;
-import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
-import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
 import java.nio.ByteBuffer;
-import java.nio.LongBuffer;
+import java.nio.ByteOrder;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
-/**
- * The two compute pipelines of {@code rt_pack_nrd.comp} (pack: raw G-buffer to denoiser inputs; compose: denoiser output plus
- * noise-free light to the final image) with ONE shared descriptor set of 14 storage images:
- * 0 viewZ, 1 normal+roughness, 2 diffuse+hit distance, 3 albedo, 4 direct light, 5 denoiser in normal/roughness, 6 denoiser in
- * diffuse, 7 denoiser out diffuse, 8 RT output, 9 specular+hit distance, 10 denoiser in specular (NRD specular radiance / RR
- * specular albedo), 11 denoiser out specular, 12 denoiser in motion (NRD only; DLSS-RR takes screen-space motion from the
- * velocity pass), 13 specular albedo (F0) guide. The set is written when the images change (after a device-idle wait by the caller).
- */
+/** Borrowed game images/settings; native core owns AOT pipelines and immutable descriptors. */
 final class NrdPackPipeline {
-    static final String SHADER_PATH = "/shaders/glsl/rt_pack_nrd.comp";
-    static final int BINDINGS = 14;
-    /** 4 uint + vec4 + uvec2 + float + vec2 (motion address), see the PC block of the shader. */
-    static final int PUSH_BYTES = 56;
+    static final int BINDINGS = BedrayNrdPackNative.VIEW_COUNT;
+    static final int PUSH_BYTES = BedrayNrdPackNative.PUSH_BYTES;
+    private static final int[] PACK_BINDINGS = {0,1,2,3,4,5,6,9,10,12,13};
+    private static final int[] RR_BINDINGS = {0,1,2,4,5,6,9,10,13};
+    private static final int[] COMPOSE_BINDINGS = {0,3,4,7,8,11};
+    private final SlangRuntime runtime;
+    private final BedrayNrdPackNative nativePass;
+    private final Map<String, SlangProgram> programs = new LinkedHashMap<>();
+    private final Map<Long, Integer> recordings = new LinkedHashMap<>();
+    private long[] views;
+    private boolean closed;
 
-    private final VkDevice device;
-    private long packModule;
-    private long composeModule;
-    private long setLayout;
-    private long pipelineLayout;
-    private long packPipeline;
-    private long composePipeline;
-    private long pool;
-    private long set;
+    NrdPackPipeline(SlangRuntime runtime) {
+        this.runtime = Objects.requireNonNull(runtime, "NRD pack needs the existing SlangRuntime");
+        nativePass = new BedrayNrdPackNative(runtime.library(), runtime.core());
+        program("nrd_compose", COMPOSE_BINDINGS);
+    }
 
-    NrdPackPipeline(VkDevice device) {
-        this.device = device;
-        ByteBuffer packSpv = RtShaderCompiler.compileResource(SHADER_PATH, "rt_pack_nrd.comp:pack", "#define VKB_PASS_PACK 1\n");
-        ByteBuffer composeSpv = RtShaderCompiler.compileResource(SHADER_PATH, "rt_pack_nrd.comp:compose", "#define VKB_PASS_COMPOSE 1\n");
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            LongBuffer p = stack.mallocLong(1);
-            RtFailure.check(VK10.vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(packSpv), null, p),
-                "nrd_pack_shader_module");
-            packModule = p.get(0);
-            RtFailure.check(VK10.vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(composeSpv), null, p),
-                "nrd_compose_shader_module");
-            composeModule = p.get(0);
-
-            VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(BINDINGS, stack);
-            for (int i = 0; i < BINDINGS; i++) {
-                bindings.get(i).binding(i).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1)
-                    .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+    private SlangProgram program(String name, int[] bindings) {
+        return programs.computeIfAbsent(name, ignored -> {
+            var result = runtime.program(name).orElseThrow(() -> new IllegalStateException("Missing AOT " + name));
+            var manifest = result.manifest();
+            if (manifest.pushConstantBytes() != PUSH_BYTES || manifest.bindings().size() != bindings.length
+                || !Arrays.equals(manifest.threadGroupSize(), new int[]{8,8,1}))
+                throw new IllegalStateException("Invalid NRD pass manifest: " + name);
+            for (int binding : bindings) {
+                boolean present = manifest.bindings().stream().anyMatch(item -> item.binding() == binding
+                    && item.descriptorType() == BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+                if (!present) throw new IllegalStateException(name + " missing storage binding " + binding);
             }
-            RtFailure.check(VK10.vkCreateDescriptorSetLayout(device,
-                VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings), null, p), "nrd_pack_set_layout");
-            setLayout = p.get(0);
-
-            VkPushConstantRange.Buffer push = VkPushConstantRange.calloc(1, stack);
-            push.get(0).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(PUSH_BYTES);
-            RtFailure.check(VK10.vkCreatePipelineLayout(device, VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
-                .pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(push), null, p), "nrd_pack_pipeline_layout");
-            pipelineLayout = p.get(0);
-
-            packPipeline = createPipeline(stack, packModule, "nrd_pack_pipeline");
-            composePipeline = createPipeline(stack, composeModule, "nrd_compose_pipeline");
-
-            VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(1, stack);
-            sizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(BINDINGS);
-            RtFailure.check(VK10.vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
-                .maxSets(1).pPoolSizes(sizes), null, p), "nrd_pack_pool");
-            pool = p.get(0);
-            RtFailure.check(VK10.vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
-                .descriptorPool(pool).pSetLayouts(stack.longs(setLayout)), p), "nrd_pack_alloc_set");
-            set = p.get(0);
-        }
+            return result;
+        });
     }
 
-    private long createPipeline(MemoryStack stack, long module, String stage) {
-        VkComputePipelineCreateInfo.Buffer pi = VkComputePipelineCreateInfo.calloc(1, stack);
-        pi.get(0).sType$Default().layout(pipelineLayout);
-        pi.get(0).stage().sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(module).pName(stack.UTF8("main"));
-        LongBuffer p = stack.mallocLong(1);
-        RtFailure.check(RtVulkanPipelineCache.createCompute(device, pi, null, p), stage);
-        return p.get(0);
+    /** Copies identities only; previously recorded descriptors remain immutable. */
+    void writeViews(long[] nextViews) {
+        if (closed) throw new IllegalStateException("NRD pack is closed");
+        if (nextViews == null || nextViews.length != BINDINGS) throw new IllegalArgumentException("need 14 NRD views");
+        for (long view : nextViews) if (view == 0) throw new IllegalArgumentException("missing NRD view");
+        views = nextViews.clone();
     }
 
-    /** Writes the 14 views (all in GENERAL). The caller guarantees no frame in flight uses the set. */
-    void writeViews(long[] views) {
-        if (views.length != BINDINGS) {
-            throw new IllegalArgumentException("need " + BINDINGS + " views, got " + views.length);
-        }
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer infos = VkDescriptorImageInfo.calloc(BINDINGS, stack);
-            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(BINDINGS, stack);
-            for (int i = 0; i < BINDINGS; i++) {
-                infos.get(i).imageView(views[i]).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-                writes.get(i).sType$Default().dstSet(set).dstBinding(i).dstArrayElement(0).descriptorCount(1)
-                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(infos.slice(i, 1));
-            }
-            VK10.vkUpdateDescriptorSets(device, writes, null);
-        }
+    /** Compatibility input; C++ repacks scalar settings into its reflected push. */
+    static void writePush(ByteBuffer input, int normalEncoding, int roughnessEncoding, int denoiser, int flags,
+                          NrdReblurParams params, float range, int width, int height, float exposure, long motionAddress) {
+        input.order(ByteOrder.nativeOrder());
+        input.putInt(0, normalEncoding).putInt(4, roughnessEncoding).putInt(8, denoiser).putInt(12, flags);
+        input.putFloat(16, params.hitDistA()).putFloat(20, params.hitDistB()).putFloat(24, params.hitDistC()).putFloat(28, range);
+        input.putInt(32, width).putInt(36, height).putFloat(40, exposure).putInt(44, 0).putLong(48, motionAddress);
     }
 
-    /**
-     * Push constants of the shader (layout in {@link #PUSH_BYTES}). {@code motionAddr} is the Vec4Buf of the ray shader
-     * (xyz = prev - cur world motion of the primary hit, w = 1 for an entity); 0 disables the NRD motion input.
-     */
-    static void writePush(ByteBuffer b, int normalEncoding, int roughnessEncoding, int denoiser, int flags,
-                          NrdReblurParams p, float denoisingRange, int width, int height, float exposure, long motionAddr) {
-        b.putInt(0, normalEncoding).putInt(4, roughnessEncoding).putInt(8, denoiser).putInt(12, flags);
-        b.putFloat(16, p.hitDistA()).putFloat(20, p.hitDistB()).putFloat(24, p.hitDistC()).putFloat(28, denoisingRange);
-        b.putInt(32, width).putInt(36, height).putFloat(40, exposure);
-        b.putLong(48, motionAddr);
+    void recordPack(VkCommandBuffer command, ByteBuffer push, int width, int height) {
+        record(command, push, width, height, BedrayNrdPackNative.PACK);
+    }
+    void recordCompose(VkCommandBuffer command, ByteBuffer push, int width, int height) {
+        record(command, push, width, height, BedrayNrdPackNative.COMPOSE);
     }
 
-    void recordPack(VkCommandBuffer cmd, ByteBuffer push, int width, int height) {
-        record(cmd, packPipeline, push, width, height);
+    private void record(VkCommandBuffer command, ByteBuffer push, int width, int height, int phase) {
+        if (closed) throw new IllegalStateException("NRD pack is closed");
+        if (command == null || views == null) throw new IllegalStateException("NRD pack is not bound");
+        var settings = BedrayNrdPackNative.Settings.fromPush(push, width, height);
+        var selected = phase == BedrayNrdPackNative.COMPOSE ? program("nrd_compose", COMPOSE_BINDINGS)
+            : settings.denoiser() == 2 ? program("nrd_pack_rr", RR_BINDINGS)
+            : program(settings.normal() == 2 ? "nrd_pack_r10" : "nrd_pack_snorm", PACK_BINDINGS);
+        long handle = command.address();
+        BedrayNrdPackNative.validate(handle, selected.nativeHandle(), views, phase, width, height, settings);
+        int previous = recordings.getOrDefault(handle, 0);
+        if (phase == BedrayNrdPackNative.PACK ? previous != 0 : previous != 1)
+            throw new IllegalStateException("NRD recording phase reused or compose has no pack");
+        // A native error may follow partial recording. Keep this identity until
+        // the host proves discard/completion; no exception-path release.
+        recordings.put(handle, previous | (1 << phase));
+        nativePass.record(handle, selected.nativeHandle(), views, phase, width, height, settings);
     }
 
-    void recordCompose(VkCommandBuffer cmd, ByteBuffer push, int width, int height) {
-        record(cmd, composePipeline, push, width, height);
+    void releaseRecording(long command) {
+        if (!recordings.containsKey(command)) return;
+        runtime.releaseRecording(command);
+        recordings.remove(command);
+    }
+    void discardRecording(long command) {
+        if (!recordings.containsKey(command)) return;
+        runtime.discardRecording(command);
+        recordings.remove(command);
+    }
+    void releaseRecordingsAfterHostDrain() {
+        for (long command : List.copyOf(recordings.keySet())) releaseRecording(command);
     }
 
-    private void record(VkCommandBuffer cmd, long pipeline, ByteBuffer push, int width, int height) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(set), null);
-            VK10.vkCmdPushConstants(cmd, pipelineLayout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
-            VK10.vkCmdDispatch(cmd, (width + 7) / 8, (height + 7) / 8, 1);
-        }
-    }
-
-    /** Device must be idle. */
+    /** Caller proved idle/completion, or this adapter never recorded. */
     void destroy() {
-        VK10.vkDestroyPipeline(device, packPipeline, null);
-        VK10.vkDestroyPipeline(device, composePipeline, null);
-        VK10.vkDestroyPipelineLayout(device, pipelineLayout, null);
-        VK10.vkDestroyDescriptorPool(device, pool, null);
-        VK10.vkDestroyDescriptorSetLayout(device, setLayout, null);
-        VK10.vkDestroyShaderModule(device, packModule, null);
-        VK10.vkDestroyShaderModule(device, composeModule, null);
+        if (closed) return;
+        releaseRecordingsAfterHostDrain();
+        // Cached program lifetime belongs to SlangRuntime.
+        closed = true;
+        views = null;
+        programs.clear();
     }
 }

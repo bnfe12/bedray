@@ -306,14 +306,16 @@ public final class NrdChecks {
         ByteBuffer plain = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
         ByteBuffer gb = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp+gbuffer", RtPipeline.GBUFFER_DEFINE);
         check(gb.getInt(0) == 0x07230203 && gb.remaining() > plain.remaining(), "gbuffer variant compiles and is larger than the plain shader");
-        ByteBuffer pack = RtShaderCompiler.compileResource(NrdPackPipeline.SHADER_PATH, "rt_pack_nrd.comp:pack", "#define VKB_PASS_PACK 1" + (char) 10);
-        ByteBuffer compose = RtShaderCompiler.compileResource(NrdPackPipeline.SHADER_PATH, "rt_pack_nrd.comp:compose",
+        // Retained GLSL reference oracle; the active pack adapter is AOT Slang.
+        String reference = "/shaders/glsl/rt_pack_nrd.comp";
+        ByteBuffer pack = RtShaderCompiler.compileResource(reference, "rt_pack_nrd.comp:pack", "#define VKB_PASS_PACK 1" + (char) 10);
+        ByteBuffer compose = RtShaderCompiler.compileResource(reference, "rt_pack_nrd.comp:compose",
             "#define VKB_PASS_COMPOSE 1" + (char) 10);
         check(pack.getInt(0) == 0x07230203 && pack.remaining() > 500, "pack pass SPIR-V");
         check(compose.getInt(0) == 0x07230203 && compose.remaining() > 500, "compose pass SPIR-V");
         boolean threw = false;
         try {
-            RtShaderCompiler.compileResource(NrdPackPipeline.SHADER_PATH, "rt_pack_nrd.comp:none");
+            RtShaderCompiler.compileResource(reference, "rt_pack_nrd.comp:none");
         } catch (RuntimeException e) {
             threw = true;
         }
