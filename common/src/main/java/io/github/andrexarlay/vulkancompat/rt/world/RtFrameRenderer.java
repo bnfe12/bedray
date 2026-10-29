@@ -964,6 +964,9 @@ public final class RtFrameRenderer {
         // vanilla fog of the game (render distance edge, biome / weather / water) + aerial perspective: rt_common.glsl fogTransmittanceHit
         fogState.collect(Minecraft.getInstance(), levelState.worldPartialTicks, lastRadiusXz, skyState.rainBrightness);
         fogState.write(hdr, RtAtmosphereSettings.fogVanilla(), RtAtmosphereSettings.fogAerial(), RtAtmosphereSettings.chunkFadeSeconds());
+        // The medium a primary ray starts in: the same fluid state that decides the fog above, so a swimmer's paths
+        // absorb through their own water column instead of through clear air.
+        params.cameraInWater = fogState.medium == 1;
         if (sky.skyColor != null) {
             params.skyColor[0] = sky.skyColor.x();
             params.skyColor[1] = sky.skyColor.y();

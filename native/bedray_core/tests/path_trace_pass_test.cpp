@@ -721,6 +721,26 @@ void test_successful_frames_and_payloads() {
         }
     }
     CHECK(fixture.release(second.command_buffer) == BEDRAY_OK);
+
+    // The eye's own water body is host knowledge, so the host bit has to land in the frame word the shader reads,
+    // beside the history bit and without disturbing it. An unknown bit stays rejected: the host may not invent a
+    // mapping the core has not declared.
+    BedrayPathTraceFrameDesc swimmer = valid_frame(0xC003);
+    swimmer.flags = BEDRAY_PATH_TRACE_FRAME_ACCUMULATE | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER;
+    CHECK_STATUS(fixture.render(swimmer), BEDRAY_OK);
+    if (fake::render_calls.size() == 6) {
+        std::vector<unsigned char> constants;
+        CHECK(read_buffer_bytes(resource_handle(fake::render_calls[4].resources, 16), constants));
+        if (constants.size() >= 608) {
+            CHECK(push_u32(constants, 604) == (1u | (1u << 5u)));
+        }
+    }
+    CHECK(fixture.release(swimmer.command_buffer) == BEDRAY_OK);
+
+    BedrayPathTraceFrameDesc unknown = valid_frame(0xC004);
+    unknown.flags = BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER | (1u << 30);
+    CHECK_STATUS(fixture.render(unknown), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK(!fixture.pass.has_recordings());
 }
 
 void test_spatial_stage() {

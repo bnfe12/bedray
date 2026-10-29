@@ -110,7 +110,7 @@ class RtSlangSampleRejectionTest {
     @Test
     void theBelowHorizonVndfSampleIsAZeroAndNotABrokenPath() {
         String bsdf = block(read(BSDF),
-            "BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint seed) {");
+            "BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float incidentIor,");
         int horizon = bsdf.indexOf("if (lightLocal.z <= 0.0) return result;");
         assertTrue(horizon >= 0, "the sampler no longer rejects a below-horizon reflection before using it");
         assertTrue(bsdf.indexOf("result.valid = true") > horizon
@@ -127,7 +127,7 @@ class RtSlangSampleRejectionTest {
         String tracer = read(TRACER);
         int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission;");
         int direct = tracer.indexOf("result.radiance += throughput * direct;");
-        int sampled = tracer.indexOf("BSDFSample bsdf = bsdfSample(surface.material, view, normal, seed);");
+        int sampled = tracer.indexOf("BSDFSample bsdf = bsdfSample(surface.material, view, normal,");
         assertTrue(emission >= 0 && direct > emission && sampled > direct,
             "emission and next-event estimation must both be accumulated before the lobe is drawn, or the stop "
                 + "throws away light this vertex earned");

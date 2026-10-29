@@ -119,6 +119,8 @@ public final class RtFrameParams {
     public float bobY;
     public float bobZ;
     public boolean sceneChanged;
+    /** The camera stands in water ({@code FogType.WATER}), so a primary ray starts inside the medium. */
+    public boolean cameraInWater;
     // ---- emitter list of this frame, for the Slang path tracer's block-emitter NEE (StatsBuf mirrors these) ----
     /** VkBuffer of the {@link RtEmitters} ring; {@link #emitterOffset} selects the segment in use. */
     public long emitterHandle;

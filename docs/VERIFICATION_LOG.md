@@ -4,6 +4,72 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — An underwater camera now knows it is under water (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
+
+Branch: `refactor/slang-pipeline`. The typed path tracer carried a water medium
+that only a *transmission through a surface* could switch on, so a camera already
+sitting in a water block traced every primary segment through clear air: the
+deeper you swam, the less the picture changed, and the surface seen from below
+refracted the wrong way and never mirrored.
+
+Two facts made this closable without a layout change. The engine already answers
+the question — `RtFogState.collect()` reads `camera.getFluidInCamera()` and sets
+`medium = 1` for `FogType.WATER`, which is the same state that picks the water fog
+— and `FrameConstants.frame.w` had bits 0-4 taken, so a fifth bit is additive
+inside the same 608-byte block.
+
+What landed:
+
+| Layer | Change |
+|---|---|
+| Slang contract | `FRAME_FLAG_CAMERA_IN_WATER = 1u << 5u` and `frameCameraInWater()` |
+| Slang path | `PathTraceOptions.primaryInWater`; `primaryWaterMedium()` walks up from the eye (64 blocks, 6 probes, cutout and invalid faces skipped) and takes the first up-facing `MATERIAL_SOURCE_FLUID` top; `tracePath` seeds the body, fetches the downwelling light and sets `PATH_TRACE_FLAG_WATER_MEDIUM` before the first segment |
+| Slang BSDF | `bsdfSample(..., float incidentIor, ...)`, `eta = incidentIor >= dense ? incidentIor : incidentIor / dense` — the ratio exceeds 1 leaving the dense side, so `refract` can return zero and the TIR branch becomes the swimmer's mirror (critical angle 48.7 deg at 1.333) |
+| Java host | `RtFrameParams.cameraInWater` from `RtFogState.medium == 1`; `RtSlangFrameData` writes `Frame.FLAG_CAMERA_IN_WATER` |
+| Native core | `BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER (1u << 8)` host bit, mapped by `make_frame_constants` onto bit 5 of the frame word; admitted into `allowed_flags`; advertised as `BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER (1u << 4)` |
+
+The last row was not optional. `make_frame_constants` builds its own
+`FrameConstants` from `BedrayPathTraceFrameDesc`, so a bit written only into the
+Java block would never reach the shader on the live native-scene path — and
+`PathTracePass::render` rejects an unknown flag with `INVALID_ARGUMENT`, so the
+host bit and the core's `allowed_flags` had to land in the same batch. The host
+now masks the bit out when the loaded core does not advertise the feature, which
+leaves an old DLL tracing with the eye in air instead of losing the frame.
+
+Evidence: `:common:compileSlang` with `slangc` 2026.20 compiles all roots;
+`:common:test` with `--rerun-tasks` reports 854 tests, 0 failures, 0 errors,
+3 skipped (`RtSlangWaterMediumTest` 9/9, `RtSlangSampleRejectionTest` 10/10 after
+its `bsdfSample` signature guard followed the new parameter); CTest reports 23/23
+with `bedray_path_trace_pass_test` checking that the frame word carries
+`1 | (1 << 5)` for an accumulating underwater frame and that
+`CAMERA_IN_WATER | (1 << 30)` is still rejected.
+
+Mutation proof — each wiring point reverted, the guard named in brackets failed,
+then the file was restored byte-identically (`sha256` compared): the `eta`
+expression in `bsdf.slang`, the `WATER_IOR` argument at the sampler call, the
+`options.primaryInWater` line in `path_trace_entry.slang`, the contract bit number
+and `RtFrameRenderer`'s verdict [three guards in `theEyeStartsInsideItsOwnWaterBody`
+/ `theOpticalLobeRefractsFromTheMediumTheRayTravelsIn` /
+`theHostPublishesTheCamerasFluidState`]; then, in a second pass, the host bit in
+`RtSlangPathPass`, the compat mask in `BedrayPathTraceNative` and the feature-mask
+entry in `core.cpp` [`theHostPublishesTheCamerasFluidState` again]. The C++ mapping
+was mutated on its own and `bedray_path_trace_pass_test` failed at the frame-word
+check. Restoring a native file with `cp -p` keeps the *old* mtime, so MSBuild
+re-ran the mutated binary until the file was touched — the second green CTest run
+is after that.
+
+Limits of this record. `primaryWaterMedium` costs up to six extra closest-hit
+probes per primary ray only while the eye is submerged, and the common open-water
+case stops at the first hit; no timing was taken. When the walk finds no face the
+fallback puts the surface at the eye, which can understate depth but cannot invent
+column. `PathTraceOptions.primaryInWater` is deliberately not a `PathTracePush`
+flag bit because that word mirrors host ABI bits one for one. What is *not* done
+in the water item: the NEE beam under water is still a straight shadow ray, so it
+carries no Snell bend and no caustics, and `RtSettings.waterStyle` is not wired
+into the typed path. No owner-verified frame of any of this exists yet; the play
+test is "dive, look up at the surface from below, and see the mirror and the
+depth colour change", which nothing here has observed.
+
 ## 2026-10-29 — A replay verdict is not a live frame: the gate loses its name list, the scene march is unblocked (L1 driver replay, L2 unit, mutation proof)
 
 Branch: `refactor/slang-pipeline`. The open question was whether

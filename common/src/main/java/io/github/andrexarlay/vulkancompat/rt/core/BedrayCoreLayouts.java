@@ -71,10 +71,17 @@ public final class BedrayCoreLayouts {
     public static final int PATH_TRACE_FRAME_NATIVE_SCENE = 1 << 5;
     public static final int PATH_TRACE_FRAME_NATIVE_DI = 1 << 6;
     public static final int PATH_TRACE_FRAME_RESET_DI = 1 << 7;
+    /**
+     * The eye stands in water, so a primary path begins inside the medium. Host-only: the core maps it onto
+     * {@code FRAME_FLAG_CAMERA_IN_WATER} (bit 5) of the FrameConstants frame word, which is a different namespace.
+     */
+    public static final int PATH_TRACE_FRAME_CAMERA_IN_WATER = 1 << 8;
     public static final int PATH_TRACE_FEATURE_NATIVE_DI = 1 << 0;
     public static final int PATH_TRACE_FEATURE_GUIDE_BINDINGS = 1 << 1;
     public static final int PATH_TRACE_FEATURE_GUIDE_OUTPUTS = 1 << 2;
     public static final int PATH_TRACE_FEATURE_NRD_MOTION = 1 << 3;
+    /** The core maps {@code PATH_TRACE_FRAME_CAMERA_IN_WATER} into the frame word the shader reads. */
+    public static final int PATH_TRACE_FEATURE_CAMERA_IN_WATER = 1 << 4;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;

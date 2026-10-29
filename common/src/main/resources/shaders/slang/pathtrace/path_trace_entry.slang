@@ -224,6 +224,9 @@ public void pathTraceEntry<T : ISceneTracer>(
     options.maxDistance = max(pc.maxDistance, 1.0);
     options.maxRadiance = max(pc.maxRadiance, 1.0);
     options.flags = pc.flags;
+    // Whether the eye's own block is water, which only the host can answer: the
+    // surface of that body can hide behind a block submerged in the same column.
+    options.primaryInWater = frameCameraInWater(f);
 
     Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance);
     uint seed = pathTraceSeed(p, f.frame.x, pc.sampleIndex);

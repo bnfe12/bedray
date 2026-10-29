@@ -20,7 +20,10 @@
 // each segment adds the light it scatters towards the eye.  The same state
 // travels into the shadow rays, so an underwater receiver is lit through its
 // own water column instead of through clear air.  The water surface itself is
-// clear (`surface.slang`); all of its colour is this absorption.
+// clear (`surface.slang`); all of its colour is this absorption.  A camera that
+// starts inside a body has no entry surface either, so `primaryInWater` seeds the
+// same state before the first segment and the optical lobe refracts from the
+// dense side, which is what lets a swimmer see the surface mirror.
 
 public module path_tracer;
 
@@ -70,6 +73,11 @@ struct PathTraceOptions {
     float maxRadiance;          // firefly / overflow guard
     float alphaCutoff;
     uint  flags;
+    // The host's verdict that the eye itself sits in water.  Geometry cannot
+    // answer it: the surface of that body can be hidden by a block submerged in
+    // the same column.  Never read from the push-constant flags, which mirror a
+    // host ABI bit for bit; this is a shader-internal decision.
+    bool  primaryInWater;
 };
 
 PathTraceOptions defaultPathTraceOptions() {
@@ -83,6 +91,7 @@ PathTraceOptions defaultPathTraceOptions() {
     options.maxRadiance = 1.0e6;
     options.alphaCutoff = 0.5;
     options.flags = 0u;
+    options.primaryInWater = false;
     return options;
 }
 
@@ -185,6 +194,50 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     return bsdf * light.radiance * transmittance / max(light.sourcePdf, 1.0e-6);
 }
 
+// How far up, and past how many blockers, the search for the surface of the
+// body the eye sits in goes.  An ocean column is at most ~64 blocks deep and a
+// submerged block or a waterlogged slab hides the top face from the first probe
+// only for a moment, so the walk stops on the first face that is not a fluid
+// top rather than after the first hit.
+static const float WATER_PROBE_RISE = 64.0;
+static const uint WATER_PROBE_STEPS = 6u;
+
+// The water body the camera itself stands in, found by walking straight up from
+// the eye until the top face of the column appears.  The host says whether the
+// eye is in water - geometry cannot, because a block submerged in the same body
+// hides its surface - and this answers which body: its biome tint and the height
+// its surface sits at, both read off the face the same decoder names for a
+// refracted transmission.  `inside` stays false when the walk leaves without a
+// face, which is the caller's cue to keep its own fallback.
+WaterMedium primaryWaterMedium<T : ISceneTracer>(T traversal, MaterialAtlas atlas,
+        BlockMaterialTable blockMaterials, MaterialSamplingOptions materialOptions,
+        float3 eye, float rayBias, float alphaCutoff) {
+    float3 up = float3(0.0, 1.0, 0.0);
+    float3 origin = eye;
+    float remaining = WATER_PROBE_RISE;
+    for (uint probe = 0u; probe < WATER_PROBE_STEPS && remaining > 0.0; ++probe) {
+        SurfaceHit face = traversal.traceClosest(makeRay(origin, up, 0.0, remaining));
+        if (!face.hit || !isFinite(face.t) || !(face.t > 0.0)) {
+            break;
+        }
+        float advance = face.t + rayBias;
+        origin = origin + up * advance;
+        remaining -= advance;
+        SurfaceSample body = decodeSurface(atlas, blockMaterials, face, materialOptions, up);
+        if (!body.valid || surfaceIsHole(body, alphaCutoff)) {
+            continue;
+        }
+        // A fluid face whose outward normal points up is the top of the column:
+        // the same face the entry test below crosses when a ray dives in.
+        if ((body.material.sourceFlags & MATERIAL_SOURCE_FLUID) != 0u
+                && body.hit.geometricNormal.y > 0.5) {
+            return waterMediumFrom(waterBiomeTint(face.tint, body.hit.geometricNormal),
+                body.hit.position.y);
+        }
+    }
+    return noWaterMedium();
+}
+
 // Traces one path.  `seed` is advanced in place so a caller can derive the next
 // path's seed without a global random stream.
 PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
@@ -233,6 +286,22 @@ PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentS
     // per path.
     float3 waterDown = float3(0.0);
     bool waterDownReady = false;
+
+    if (options.primaryInWater) {
+        // The eye's own body: the primary ray has no entry surface to cross, so
+        // without this every segment under water would run through clear air.
+        // A walk that found no face above still absorbs - the host named the
+        // medium, and putting the surface at the eye is the shallowest reading
+        // that cannot invent depth the column does not have.
+        medium = primaryWaterMedium(traversal, atlas, blockMaterials, materialOptions,
+            primaryRay.origin, options.rayBias, options.alphaCutoff);
+        if (!medium.inside) {
+            medium = waterMediumFrom(float3(1.0), primaryRay.origin.y);
+        }
+        waterDown = environment.radiance(float3(0.0, 1.0, 0.0));
+        waterDownReady = true;
+        result.flags |= PATH_TRACE_FLAG_WATER_MEDIUM;
+    }
 
     for (; step < options.maxSurfaceSteps; ++step) {
         // A non-finite interval cannot be traced at all; an empty one is a path cut short by the cutout advances.
@@ -389,7 +458,11 @@ PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentS
         result.radiance += throughput * direct;
 
         // ---- BSDF sampling ----
-        BSDFSample bsdf = bsdfSample(surface.material, view, normal, seed);
+        // The lobe refracts from the medium this ray travels in, not from air:
+        // under water the surface is the dense side leaving, which bends away
+        // from the normal and mirrors at grazing angles.
+        BSDFSample bsdf = bsdfSample(surface.material, view, normal,
+            medium.inside ? WATER_IOR : 1.0, seed);
         if (!bsdf.valid || bsdf.pdf <= 0.0) {
             // No lobe left to sample (an albedo that reflects nothing, or a
             // VNDF reflection below the shading horizon with zero BRDF).  A

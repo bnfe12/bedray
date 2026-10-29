@@ -57,6 +57,9 @@ static const uint FRAME_FLAG_CAMERA_CUT         = 1u << 1u;
 static const uint FRAME_FLAG_RESET_TEMPORAL     = 1u << 2u;
 static const uint FRAME_FLAG_FIRST_PERSON       = 1u << 3u;
 static const uint FRAME_FLAG_DEBUG_VIEW         = 1u << 4u;
+// The eye's own block is water.  No surface crossing produced it, so a path that starts here starts inside the medium and
+// cannot learn it from geometry: the water surface above can be hidden by a block submerged in the same body.
+static const uint FRAME_FLAG_CAMERA_IN_WATER    = 1u << 5u;
 
 struct FrameConstants {
     CameraState     camera;
@@ -75,4 +78,9 @@ bool frameWantsHistory(FrameConstants frame) {
 
 float frameDeltaTime(FrameConstants frame) {
     return max(frame.exposure.values.w, 0.0);
+}
+
+// Whether the host put the eye inside a water body this frame.
+bool frameCameraInWater(FrameConstants frame) {
+    return (frame.frame.w & FRAME_FLAG_CAMERA_IN_WATER) != 0u;
 }
