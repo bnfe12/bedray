@@ -36,3 +36,11 @@ work, passed 830 tests: 821 passed, nine skipped, zero failures/errors
 These are L1/L2 checks; vendor dispatch, GPU format/driver behavior, visual parity
 and game acceptance are not established by them. Guide-image allocation,
 spatial upscalers and frame-generation preparation are separate migration work.
+
+After synchronization with audit revision `24b0617`, the clean committed tree
+`1d7a04bbea7003bf031b77360c894198f488f97f` passed **834 tests: 825 passed,
+nine skipped**, all 24 committed AOT entries, in 1m46s. Windows native CI
+[40936173315](https://github.com/bnfe12/bedray/actions/runs/40936173315)
+passed 24+1+1 on that exact source. The release-every helper includes velocity;
+the frozen Shaderc inventory now excludes the migrated velocity compiler.
+This clean-tree result supersedes the mixed prepared-tree result above.

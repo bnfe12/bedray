@@ -4,6 +4,18 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — Native AOT denoiser preparation (L1/L2)
+
+Source `1d7a04bbea7003bf031b77360c894198f488f97f`, synchronized with audit
+revision `24b0617`: `:common:test` passed **834 tests, 825 passed, nine skipped,
+zero failures/errors**, all 24 AOT entries compiled with Slang 2026.20 (1m46s).
+Windows native CI [40936173315](https://github.com/bnfe12/bedray/actions/runs/40936173315)
+passed 24 core + one scene + one lifetime test; baseline 15+1+1 also passed.
+Velocity and NRD/RR pack/compose now use coarse native AOT recording, shared
+device-runtime leases and exact completion/discard. Details and remaining
+ownership scope: [NATIVE_DENOISER_PREPARATION.md](ai-agent-addenda/NATIVE_DENOISER_PREPARATION.md).
+No new GPU/game, vendor execution, image comparison or owner acceptance is claimed.
+
 ## 2026-10-29 — P1-6, P1-8, P1-9 and P1-11: four audit items that had an analysis and no test (L2 unit, mutation proof)
 
 Branch: `refactor/slang-pipeline`, on top of `54f94a0`. Four P1 items carried a
