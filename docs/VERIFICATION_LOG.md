@@ -868,3 +868,44 @@ comparison also confirms fillPushConstants is unchanged from the base.
 visual parity or performance claim. Supporting volumetric integration remains
 blocked on its legacy-section shader boundary; it cannot consume a native table
 merely because the record byte size matches.
+
+## 2026-10-29 — native compatibility with the shader-owner guide contract
+
+Base `486a0841ae81bbd32c7f23719028d882ca927c0b` includes the shader-owner entity,
+water and DLSS-RR guide changes through edb6a72. Those entries now declare 25
+bindings; the native pass still required 18 and therefore could not configure
+against the current AOT programs. C++ now validates either complete contract,
+independently for the legacy/native scene program. Current programs bind three
+native-owned one-texel images with the exact R32F/RGBA16F/RGBA8 formats at guide
+bindings 26..32. Their pins, transitions and destruction follow the pass's existing
+recording proof. A guide-write request is explicitly unsupported before pins or
+commands; this change does not claim native denoiser output.
+
+The additive GUIDE_BINDINGS feature distinguishes matching DLLs before program
+registration. Old 18-binding C ABI clients remain supported; ABI-v2 structures
+and shader sources are unchanged. Native FFM packing now reuses the canonical
+112-byte Dispatch writer. It preserves the shader owner's auto-normal strength
+in entityState.w, which the old native adapter still forced to zero, while
+retaining the bound-entity range normalization for the first three lanes.
+
+[Native CI run 40803800553](https://github.com/bnfe12/bedray/actions/runs/40803800553)
+on native revision `0ed486ec64dedcbb67fddf732caca67d26e1b7f6`: candidate core
+19/19, standalone scene 1/1 and lifetime 1/1 pass; baseline core 15/15 plus the
+same two standalone checks passes; ABI probe v2 exits 0. The new path test covers
+malformed guide bindings, partial stand-in allocation cleanup, formats/extents,
+inactive guide descriptors, forbidden writes before recording, discard and mixed
+18/25-binding scene variants. The shared fake driver now records view/image/format
+identity so those assertions inspect the actual bound resources.
+
+Java compilation and 160 selected tests pass, zero failures/errors/skips. The
+preceding filters now include the shader owner's water/guide tests via
+`*RtSlang*Test` and two new BedrayPathTraceNativeTest cases. They compare all
+112 packet bytes for heap/native storage, guard both ends, preserve the auto-normal
+lane and validate entity normalization. Their first run caught an alignment
+assumption in the new helper's heap override; using the same ByteBuffer packet
+writer for that override fixes it. The final repeated command exits 0. JDK,
+dependency paths and bounded Gradle JVM settings match the preceding batch.
+The current 18 production AOT passes freshly compile during the first run.
+
+`git diff --check` passes. No GPU/game or visual result; native remains opt-in.
+Full native guide output and the volumetric scene boundary remain separate work.
