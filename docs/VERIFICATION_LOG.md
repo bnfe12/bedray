@@ -1009,3 +1009,32 @@ offline dependencies and bounded JVM settings match the preceding entries.
 Repository cleanup retains only main/refactor/slang-pipeline branches. Merged
 head branches are deleted automatically in GitHub; local fetch pruning is
 enabled. Old worktrees are detached with their files/dependencies retained.
+
+## 2026-10-29 — exact host statistics readback leases
+
+Base `0898b0049508b29f0a5f26cd753fbd775049de47`. StatsBuf no longer reads or
+reuses a mapped slot because it is two frames old. RecordingReadbackSlots leases
+the entire slot (GPU input fields as well as counters) until the exact existing
+host ticket proves completion/discard. Completed written slots remain retained
+until CPU consumption; discard and unwritten frames publish nothing. A late or
+retried callback cannot touch a reused slot or a replacement pool after teardown.
+Pressure uses the existing host fence drain before opening a new command buffer,
+never a frame delay or device-idle call. Producer metadata snapshots accumulation,
+transparency, daylight, ordering and timestamp rather than reading current settings.
+
+An explicit SHADER_WRITE/TRANSFER_WRITE -> HOST_READ buffer-range barrier is
+recorded before command-buffer end. Stats memory is already required to be
+HOST_VISIBLE|HOST_COHERENT by RtMemory, so no invalidate is required; completion
+is still mandatory. This follows the
+[Khronos compute readback example](https://docs.vulkan.org/guide/latest/synchronization_examples.html).
+Shader layouts/algorithms and native ABI are unchanged in this change.
+
+Final Java compilation and 29 focused tests pass, zero failures/errors/skips
+(23s): Recording*Test, RtStatsLayoutTest, PathTraceBackendTest, RestirDiStateTest.
+The new tests include delayed proof, slot pressure, same-address reuse, unknown
+execution, discard, failed host read and retry after another owner's retirement
+fails. A preceding broader run passed 134 tests (including four separately
+prepared volumetric-interface tests); that shader interface is a separate PR.
+The bounded offline Gradle/JDK/dependency setup matches preceding entries.
+An independent read-only source review found no blocking lifetime/visibility
+issue. No GPU/game evidence; native mode stays opt-in.
