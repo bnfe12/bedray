@@ -284,6 +284,18 @@ BedrayProgram* find_program(BedrayCore* core, uint64_t handle) {
     return nullptr;
 }
 
+// Release visits every owner even when one reports a failure. The host calls release exactly once per command buffer,
+// so an early return would strand the remaining owners' recordings for the rest of the session.
+template <typename... Release>
+BedrayStatus release_every(Release&&... release) {
+    BedrayStatus first = BEDRAY_OK;
+    const auto visit = [&first](BedrayStatus status) {
+        if (status != BEDRAY_OK && first == BEDRAY_OK) first = status;
+    };
+    (visit(release()), ...);
+    return first;
+}
+
 } // namespace
 
 namespace bedray::core {
@@ -1011,13 +1023,11 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
             ++it;
         }
     }
-    BedrayStatus result = BEDRAY_OK;
-    auto collect = [&](BedrayStatus status) { if (result == BEDRAY_OK) result = status; };
-    if (core->path_trace) collect(core->path_trace->release_recording(command_buffer));
-    if (core->bloom) collect(core->bloom->release_recording(command_buffer));
-    if (core->volumetric) collect(core->volumetric->release_recording(command_buffer));
-    if (core->velocity) collect(core->velocity->release_recording(command_buffer));
-    return result;
+    return release_every(
+        [&] { return core->path_trace ? core->path_trace->release_recording(command_buffer) : BEDRAY_OK; },
+        [&] { return core->bloom ? core->bloom->release_recording(command_buffer) : BEDRAY_OK; },
+        [&] { return core->volumetric ? core->volumetric->release_recording(command_buffer) : BEDRAY_OK; },
+        [&] { return core->velocity ? core->velocity->release_recording(command_buffer) : BEDRAY_OK; });
 } catch (const std::bad_alloc&) {
     return BEDRAY_ERROR_OUT_OF_MEMORY;
 } catch (...) {

@@ -107,9 +107,14 @@ public final class SlangProgram implements AutoCloseable {
     /**
      * The core's opaque program handle. The native pass adapters configure
      * themselves with it; it stays owned by this instance and is invalid after
-     * {@link #close()}.
+     * {@link #close()}. A closed instance must not hand out its handle: every
+     * adapter keeps it for its own lifetime and would dispatch through a
+     * program the core has already freed.
      */
     public long nativeHandle() {
+        if (closed) {
+            throw new IllegalStateException("SlangProgram " + name() + " is closed");
+        }
         return handle;
     }
 

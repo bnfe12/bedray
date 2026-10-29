@@ -232,9 +232,11 @@ SurfaceVisibility traceShadowVisibility<T : ISceneTracer>(T traversal,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         float3 surfacePosition, float3 normal, float3 direction,
         float distance, float bias, MaterialSamplingOptions options) {
+    // One offset only: the origin is already a bias off the surface, so tMin must not add a second one and start the
+    // test twice as far away, which leaks light through carpets, glass and slabs.
     float3 origin = surfacePosition + normal * bias;
     float tMax = max(distance - bias, bias);
-    Ray ray = makeRay(origin, direction, bias, tMax);
+    Ray ray = makeRay(origin, direction, 0.0, tMax);
     return traceFilteredVisibility(traversal, atlas, blockMaterials, ray, options);
 }
 
@@ -245,8 +247,10 @@ SurfaceVisibility traceShadowVisibilityMedium<T : ISceneTracer>(T traversal,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         float3 surfacePosition, float3 normal, float3 direction,
         float distance, float bias, MaterialSamplingOptions options, WaterMedium medium) {
+    // One offset only: the origin is already a bias off the surface, so tMin must not add a second one and start the
+    // test twice as far away, which leaks light through carpets, glass and slabs.
     float3 origin = surfacePosition + normal * bias;
     float tMax = max(distance - bias, bias);
-    Ray ray = makeRay(origin, direction, bias, tMax);
+    Ray ray = makeRay(origin, direction, 0.0, tMax);
     return traceFilteredVisibilityMedium(traversal, atlas, blockMaterials, ray, options, medium);
 }

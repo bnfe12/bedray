@@ -4,6 +4,299 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — P1-6, P1-8, P1-9 and P1-11: four audit items that had an analysis and no test (L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`, on top of `54f94a0`. Four P1 items carried a
+2026-10-28 "source-only" verdict whose own text said *для уверенности нужен
+тест*. Each of them also had a second problem: the register's summary sentence
+was a claim about the tree that nothing re-checked. This batch turns those
+sentences into tests, and corrects two of them.
+
+What is now pinned:
+
+- **P1-6 (`RtSlangHistoryAnchorTest`, 3 tests).** `SurfaceHit.worldPosition` is
+  `float3(section.origin.xyz & 1023) + localPosition` in the section backends and
+  `result.position + cameraAnchor` for entities, so it is a neighbourhood proxy,
+  not an identity. The test enumerates every `X.worldPosition` reader and writer
+  in `shaders/slang/**` after stripping `//` comments — readers are exactly
+  `{experimental/restir_pt.slang, surface/surface.slang}` — and separately asserts
+  that no root module mentions `restir_pt` and that outside `experimental/` the
+  only file containing `historyValidate(` is its own definition in
+  `contracts/history.slang`. That last part is the honest headline: **no live pass
+  validates history at all today**, so the wrapped anchor cannot reach a frame.
+- **P1-8 (`RtSlangSampleRejectionTest.theBelowHorizonVndfSampleIsAZeroAndNotABrokenPath()`).**
+  A VNDF reflection that lands below the shading horizon (`lightLocal.z <= 0.0`)
+  returns before `L`, `weight`, `pdf` and `valid` are written, and the tracer
+  accumulates emission and NEE *before* calling `bsdfSample`, so the path is short,
+  not broken: it sets `PATH_TRACE_FLAG_TRUNCATED`, not `INVALID_SAMPLE`, and stays
+  in the accumulation mean. The test checks that ordering by index, not by prose.
+- **P1-9 (`RtSlangCutoutAdvanceTest`, 3 tests).** The hole branch has to move the
+  origin and shorten the interval by the *same* `advance`, `primaryAdvance` may
+  only grow on the camera ray, `firstHitDistance` stays `primaryAdvance + hit.t`,
+  and the advanced `makeRay` must not add a second `rayBias` (with
+  `mediumStart = 0.0` so the water segment still measures from the new origin).
+- **P1-11 (`ShadercSurfaceTest`, 2 tests).** The register said one Shaderc user
+  was left. There are nine, and they are not all residue: `RtShaderCompiler` plus
+  its four legacy callers, three upscaler/frame-gen passes, the Iris/pack GLSL host
+  (four files, which *cannot* be AOT-compiled because the GLSL is user-authored),
+  and the PoC entry. The frozen set is now the inventory, and the second test
+  forbids `rt/slang/**` and `RtFrameRenderer` from referencing
+  `org.lwjgl.util.shaderc` at all — `lwjgl-shaderc` is `compileOnly`
+  (`gradle/loader-module.gradle:44`), so its runtime presence is a host assumption
+  the Slang path must not acquire.
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test` full suite after the batch | 0 failures | 819 tests, 0 failures, 0 errors, 3 skipped (810 before) |
+| M1 `surface.hit.worldPosition` read added in `pathtrace/path_tracer.slang` | P1-6 reader guard fails | `onlyTheDocumentedAnchorsReadTheWrappedPosition() FAILED`, nothing else |
+| M2 `__exported import "experimental/restir_pt.slang"` in `bedray.slang` | reachability guard fails | `theModuleThatKeysHistoryOnTheAnchorIsStillUnreachable() FAILED` |
+| M3 the three-line wrap warning deleted above the field | warning guard fails | `theFieldAnnouncesThatItIsNotAUniqueIdentity() FAILED` |
+| M4 `if (lightLocal.z <= 0.0) return result;` deleted | P1-8 guard fails | `theBelowHorizonVndfSampleIsAZeroAndNotABrokenPath() FAILED` |
+| M5 `result.radiance += throughput * surface.material.emission;` deleted | P1-8 guard fails | same test, and only it |
+| M6 (`M7`) `result.weight = float3(1.0);` written before the horizon return | P1-8 guard fails | same test, and only it |
+| cutout branch mutations (4, previous run): origin moved without shortening `tMin`; `makeRay(..., 0.0, ...)`; `primaryAdvance` growing off the camera ray; double bias in `firstHitDistance` | P1-9 guards fail | one test killed per mutation |
+| `org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_initialize()` inserted in `SlangRuntime.create` | both P1-11 guards fail | `runtimeGlslCompilationStaysOnTheFrozenSurface() FAILED` + `theSlangPathNeverReachesForShaderc() FAILED` |
+| restore of every mutated file | byte-identical | `path_tracer.slang` `c757558b…`, `bsdf.slang` `a0fa8468…`, `hit.slang` `627becc7…`, `bedray.slang` `c5c314de…`, `SlangRuntime.java` `7199f4e7…`; `git status` clean for all five |
+
+Two findings from this batch are negative and are recorded as such in the
+register: `bedray_frame_lifetime::FrameLifetime` should *not* be wired (every
+destroy site is already guarded by the `recordings_`/`Pins` maps and the
+`begin_use`/`complete_use` pair, so a second reference count would create two
+competing truths), and `bedray_history`'s C-API would duplicate the one-bit reset
+scheme the frame already runs — closing P1-1 by importing dead code is not
+closing it.
+
+Not shown here: L1 beyond the suite's own `compileSlang` task, L3, L4, L5. These
+are source-contract guards — they prove the ordering and the reachability, not
+that a frame looks right, and no live frame was captured on this revision.
+
+## 2026-10-29 — P2-8 CRT/ABI audit, and why the source-contract gates were not running (L0 source, L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`, on top of `57f8f2f`. P2-8 was the last audit
+item with a heading and no status line at all: it claimed a `/MT` vs `/MD`
+conflict between the two native projects. It is closed as "no conflict, pinned
+by test", and the run turned up a defect in the verification gate itself.
+
+What the source says:
+
+- Both projects set `MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"`
+  (`bedray_core/CMakeLists.txt:107`, `bedray_scene/CMakeLists.txt:53` and `:61`),
+  and `/MD` / `MultiThreadedDLL` appear nowhere under `native/` — not in the
+  DLLs, not in the ten test executables, not in `bedray_render_graph`. The
+  static CRT is deliberate: the shipped `bedray_core.dll` must not require a
+  VC++ redistributable.
+- Static CRT is only safe while one module's heap never frees another's memory.
+  That holds by ABI, not by habit: every `BEDRAY_API` declaration in
+  `native/*/include/*.h` returns `BedrayStatus`, `uint32_t` or `void` — 28
+  exports, no exceptions. Buffers the native side fills are addresses the JVM
+  allocated in its own `Arena` and pass in as `out` parameters, so no pointer
+  ever crosses back.
+
+Two new guards in `NativePlatformGateTest`, `everyNativeTargetUsesTheSameStaticCrt()`
+and `noExportHandsTheHostSomethingToFree()`. The export scan counts what it
+examined and fails if that count is zero, so relocating the declarations out of
+its reach cannot silently turn the guard into a no-op.
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test --tests '*NativePlatformGateTest*'` | 0 failures | 6/6 pass |
+| `/MD` injected as `MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"` on the `bedray_core` target | guard fails | `everyNativeTargetUsesTheSameStaticCrt() FAILED` |
+| fake `BEDRAY_API void* BEDRAY_CALL bedray_core_take_ownership(BedrayCore*)` added to `bedray_core.h` | guard fails | `noExportHandsTheHostSomethingToFree() FAILED` |
+| restore | byte-identical | `native/bedray_core/CMakeLists.txt` sha256 `1408d440…` before and after, `git status` clean for the path |
+
+**The gate was not running.** The first mutation reported `BUILD SUCCESSFUL`
+with zero tests executed: `:common:test` treats `native/**` and
+`../gradle/slang.gradle` as invisible, because these tests read them by
+relative path from `common/` and never declare them as inputs. Only
+`--rerun-tasks` exposed it. That is not a curiosity — a native build-file
+regression lands in exactly the state where the guard that would catch it is
+UP-TO-DATE. Fixed by declaring `inputs.files(rootProject.fileTree('native') {
+include '*/CMakeLists.txt', '*/include/**', 'nrd_bridge/src/*.cpp' })` plus
+`gradle/slang.gradle` on the test task; re-verified without `--rerun-tasks`, the
+`/MD` mutation now fails the run on its own. Files under
+`common/src/main/resources/shaders/**` were already covered transitively, since
+they reach the test classpath through `processResources`.
+
+Second method note: `git show HEAD:<path> > <path>` is **not** a byte-exact
+restore in this worktree. `core.autocrlf=true`, so the blob is LF while the
+checked-out file is CRLF; the content matched but sha256 did not
+(`2448624…` vs `1408d440…`), which would have shown up as a whole-file
+line-ending diff in a commit. The CRLF form is `git show … | sed 's/$/\r/'`,
+and the hash comparison is what proves it.
+
+No live-frame claim here: this is an ABI and build-configuration audit, L0/L2.
+
+
+## 2026-10-29 — Radiance Cascades merge physics: what is and is not left (L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`, on top of `4fdc0ca`. Tool: `slangc` 2026.20
+via `-Pslangc=…`. No shader or host source change — this run re-tests P0-4's
+claim that the confidence-weighted average "persists in the codebase".
+
+P0-4 is correct that `rcLegacyProbeIrradiance` still merges the two intervals
+as `(near.rgb*near.a + far.rgb*far.a) / (near.a + far.a)`, and the typed
+compose `front.radiance + front.transmittance * back.radiance` is the physics.
+What the audit did not say is that the averaging form has no path to a frame:
+
+- `bedray.slang` exports `rc_atlas_layout`, `interval_transport`,
+  `segment_store`, `rc_trace`. `radiance_cascades_store.slang` (the float4
+  facade) is reachable only from `bedray_legacy.slang`.
+- No `.slang` in the tree calls `rcStoreInterval` or `rcAccumulateInterval`
+  outside the module that defines them, so the averaging resolve has no writer
+  for the atlas it reads.
+- In the legacy format `.a` really is a sample count clamped to
+  `RC_MAX_CONFIDENCE = 64.0`, not opacity — so "treat `.a` as transmittance" is
+  not a fix; the format cannot express occlusion at all. That is why the typed
+  `RCSegment{radiance, transmittance, confidence, flags}` exists.
+- `passes/rc_probe_trace.slang` compiles and ships in the jar
+  (`spv/rc_probe_trace.spv`, manifest, reflection), but zero references to it
+  exist in `common/src/main/java`, and the only native mention is a
+  `render_plan.cpp` feature name. **No RC pass is dispatched.**
+
+So the remaining P0-4 work is frame integration, not merge physics. Closing it
+needs a host that binds the typed atlas and a frame to look at — L3/L4, which
+does not exist here.
+
+Result:
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test --tests '*RtSlangRadianceTransportTest*'` | 0 failures | 4/4 pass: transport form, no divisor on the radiance statement, opaque-front early return before the composition, `min(confidence)`, and the legacy-unreachability scan |
+| Mutation proof | all four fail | Reverting `rcComposeSegments` to the confidence-weighted mean, deleting the `all(front.transmittance == float3(0.0))` early return, turning `min` into `+`, and exporting `radiance_cascades_store.slang` from the default root → 4 tests completed, 4 failed |
+| Restore | no residue | `interval_transport.slang` and `bedray.slang` back, 4/4 green again |
+
+Two notes on method. The first draft of the reachability guard asserted
+`bedray.slang` must not contain the string `radiance_cascades_store.slang` and
+**failed on a comment** — the module name appears in the root's own header docs.
+The guard now matches the import statement, which is the thing that actually
+exports it; a substring check on a name that also appears in prose is not a
+check. And the hashes of the restored `interval_transport.slang` differ between
+this worktree and `C:\BedRay` (`5da26d73…` vs `a78f4fde…`) purely because
+`git archive` writes CRLF while the live tree holds LF; `diff
+--strip-trailing-cr` reports no difference, so the guards ran against the same
+text the committed file contains.
+
+## 2026-10-29 — Union trace guards are load-bearing (L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`, on top of `39c8653`. No source change: this
+run proves the three guards already in `native/bedray_core/src/path_trace_pass.cpp`
+actually decide the outcome. CMake Release, `ctest -R bedray_path_trace_pass`
+per mutation.
+
+| Guard | Mutation | Result |
+|---|---|---|
+| `binding_count != 18u && != 25u && != 26u` accepts the 26-binding Java-built program | drop `!= 26u` | FAILED (SEGFAULT) |
+| `program_has_binding(core, program, 33, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)` | replace with `(void)motion;` | FAILED (clean) |
+| `create_dummy(16u, motion_dummy_id_, …)` for the NRD `IN_MV` stand-in | gate with `if (false)` | FAILED (SEGFAULT) |
+
+Two of the three die by segfault rather than a clean assertion: when
+`configure` refuses, `bedray_path_trace_pass_test` continues and dereferences a
+pass that was never set up. So these prove the guards are load-bearing — a
+regression there is caught — but they do not identify which `CHECK` breaks, and
+the harness's own failure reporting is worse than it should be for the
+rejection paths. The middle case fails cleanly because it is a per-program
+validation, not setup.
+
+Restored `path_trace_pass.cpp` is byte-identical to the committed file
+(`37cca8b35742ca7d…`), rebuilt after `touch` (a restored file keeps an older
+mtime and MSBuild would otherwise relink the mutated object), and the full
+native suite is back to 21/21.
+
+## 2026-10-29 — Borrowed Slang programs stay borrowed (L2 unit)
+
+Branch: `refactor/slang-pipeline`, on top of `39e0365`. Tool: `slangc` 2026.20
+via `-Pslangc=…`; `:common:test` only, no native rebuild (the change is Java).
+
+P1-14 said `SodiumDequantize.destroy()` closed the `SlangProgram` that
+`SlangRuntime.program()` caches, so the next world load got the dead instance
+back and its freed handle went into a fresh `BedraySodiumNative`. `1cc8ce6`
+(PR #35) had already removed that `close()` and replaced the field with a
+`nativeHandle()` capture, so the defect text was stale; what was missing was any
+rule that keeps it from coming back, and one live hole.
+
+`SlangProgram.close()` calls `library.destroyProgram(core, handle)` but
+`nativeHandle()` returned `handle` regardless of `closed`. A consumer that
+borrowed a closed program therefore received a freed handle with no error — the
+failure surfaces as GPU-side corruption rather than an exception, which is how
+the original crash presented. `nativeHandle()` now throws when closed. Every
+call site takes the handle in its constructor and passes it straight to a native
+adapter, so the guard can only fire on the poisoned-cache path.
+
+Source changes covered by this run:
+
+- `SlangProgram.nativeHandle()` refuses a closed instance.
+- `SodiumProgramLifetimeTest` pins three things: `destroy()` contains neither
+  `program.close()` nor a `SlangProgram` import, `SlangRuntime` is the only
+  writer/reader/invalidator of the `programs` map, and the handle guard precedes
+  the return.
+
+Result:
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test --tests '*SodiumProgramLifetimeTest*' '*SodiumDequantize*'` | 0 failures | 3 new guards + 2 layout tests pass (benchmark skipped) |
+| Mutation proof | guards fail on pre-fix shape | `destroyKeepsTheBorrowedProgramAlive` and `aClosedProgramRefusesToHandOutItsHandle` both FAILED with `program.close()` restored and the guard removed; the mutated decoder needed a `SlangProgram` field so it compiled like the pre-fix version instead of failing the build |
+| `:common:test` full | 0 failures | 804 tests / 139 suites, 0 failures, 0 errors, 6 skipped (XML aggregate), so the handle guard breaks no consumer |
+| Restore | byte-identical | `SlangProgram.java` `b5394515…`, `SodiumDequantize.java` `8f00ebff…` in both trees |
+
+L2 only. The reload crash needs a world exit and re-entry on a real device;
+nothing here proves that a live reload now survives.
+
+## 2026-10-29 — Ray-offset fixes and the release fan-out (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline`, on top of `b98f54a`. Tool: `slangc` 2026.20,
+`-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major
+-I common/src/main/resources/shaders/slang`. CMake Release + CTest from the
+isolated worktree; cmake is not on PATH, taken from
+`build/bedray-native/windows-x64/CMakeCache.txt` `CMAKE_COMMAND`.
+
+Three audit defects, closed in source:
+
+- **P1-15** `pathtrace/path_tracer.slang` — a bounce started at
+  `hit.position + bsdf.direction * options.rayBias`, so at grazing angles the
+  origin stayed inside the triangle it had just left, and the fallback used the
+  shading normal, which a normal map can tilt past the face. It now offsets
+  along `safeNormalize(surface.hit.geometricNormal, normal)` with the sign
+  chosen by `dot(bsdf.direction, bounceNormal)`, and `tMin` remains `0.0`.
+- **P1-16** `surface/visibility.slang` — both shadow wrappers offset the origin
+  by `bias` *and* passed `bias` as `tMin`, so the occlusion test began
+  $2\times\text{bias}$ off the surface and light leaked through carpets, glass
+  and slabs. `tMin` is now `0.0`; the origin keeps the single offset. That is
+  the convention the bounce ray and the legacy `traceVisibility` already use
+  (`rt_common_sampling.glsl:7` passes a fixed epsilon against an offset origin,
+  never the caller's bias twice). Note the audit's
+  `light/visibility.slang` path no longer exists.
+- **P1-17** `native/bedray_core/src/core.cpp` —
+  `bedray_core_release_recording` returned on the first failing owner, leaving
+  later owners holding a recording for the rest of the session and
+  `bedray_core_destroy` refusing to shut down. Release is now a fan-out through
+  `release_every`, which visits every owner and reports the first failure. The
+  template lives in the anonymous namespace: inside the file-wide `extern "C"`
+  block MSVC rejects it with `C2894`. The reachable leak was `bloom → volumetric`
+  (`PathTracePass::release_recording` always returns `BEDRAY_OK`, and an unknown
+  recording returns `BEDRAY_OK` too).
+
+Result:
+
+| Check | Expected | Observed |
+|---|---|---|
+| `slangc` on the passes that include both files | 0 errors | `path_trace`, `path_trace_scene`, `restir_spatial`, `rc_probe_trace` all compile to SPIR-V |
+| `:common:test --tests '*RtSlangRayOffsetTest*' '*RtSlangWaterMediumTest*' '*RtSlangVisibilityOverflowTest*'` | 0 failures | 11 tests / 3 suites pass, both new `RtSlangRayOffsetTest` cases green |
+| Mutation proof P1-15 | guard fails on pre-fix tracer | `theBounceLeavesAlongTheGeometricFace` FAILED, `aShadowRayIsOffsetExactlyOnce` PASSED |
+| Mutation proof P1-16 | guard fails on pre-fix visibility | `aShadowRayIsOffsetExactlyOnce` FAILED, `theBounceLeavesAlongTheGeometricFace` PASSED |
+| CTest `build/bedray-native/windows-x64` | 21/21 | 21/21 pass, including the `release_every` case in `descriptor_cache_test.cpp` |
+
+After each mutation the fixed file was copied back and `touch`ed, because
+`cp -p` preserves the older mtime and MSBuild then relinks the *mutated* object
+instead of rebuilding it. Both restored files were checked byte-identical by
+sha256 against the working tree (`path_tracer.slang`
+`c757558bb926a596…`, `visibility.slang` `f38b3986a8f733df…`).
+
+This is L1/L2 for the optics lane. A shadow ray and a grazing reflection are
+numerically indistinguishable in a unit test; the visible claims — no light
+through a carpet, no self-intersection on water or ice at grazing angles —
+need a frame the owner has to look at.
+
 ## 2026-10-29 — Spatial reuse binds the captured entity atlas (L1 compile, L2 unit, L3 game, L4 visible effect)
 
 Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20, same target and
@@ -139,7 +432,7 @@ Result:
 | `passes/*.slang` | 18 | 18 | `path_trace` 551880 B, `path_trace_scene` 563696 B, both 26 bindings / 112 B push |
 | Targeted `:common:test` | 35 tests | 0 failures | `RtSlangNrdMotionTest` 5, `RtSlangGbufferGuidesTest` 7, `RtSlangEntityTest` 14, `SlangPassLibraryTest` 9 |
 | Native `bedray_core` Release x64 | build | OK | `bedray_core.dll`, `bedray_path_trace_pass_test.exe` rebuilt |
-| CTest (`build/bedray-native/windows-x64`) | 18 tests | 18 passed | includes `bedray_path_trace_pass_test` with the 18/25/26-binding contract and stand-in counts |
+| CTest (`build/bedray-native/windows-x64`) | 19 tests | 19 passed | re-run on the pushed HEAD `01b8d3b` in an isolated worktree; includes `bedray_path_trace_pass_test` with the 18/25/26-binding contract and stand-in counts |
 
 Mutation proofs: changing the shader trust threshold `1.0e-8` to `0.0` fails
 `theMotionRecordIsTheLegacyVec4`; replacing the host's
@@ -147,19 +440,26 @@ Mutation proofs: changing the shader trust threshold `1.0e-8` to `0.0` fails
 `theHostAndThePushKeepTheirPromise`. Both files were restored byte-identical
 (sha256 verified).
 
-No clean full-suite claim is recorded for this batch: one run raced a
-concurrent, uncommitted spatial-reuse edit in the same worktree (its three
-`RtSlangRestirSpatialTest` failures are stale-compile artifacts — the same
-test passes against the settled sources), and two later attempts were killed
-by host memory exhaustion (JVM `hs_err`, "insufficient memory", while another
-session's Gradle build ran on the same 16 GB machine). The full-suite run is
-to be repeated on a free host before this batch is treated as L2-complete.
+No clean full-suite claim was available while this batch was first written: one
+run raced a concurrent, uncommitted spatial-reuse edit in the same worktree (its
+three `RtSlangRestirSpatialTest` failures are stale-compile artifacts — the same
+test passes against the settled sources), and two later attempts were killed by
+host memory exhaustion (JVM `hs_err`, "insufficient memory", while another
+session's Gradle build ran on the same 16 GB machine). The gap is now closed on
+the settled branch: the spatial entry above records a clean `:common:test` run
+(754 tests / 122 suites, 0 failures) on the pushed HEAD after PR #29, and the
+C++ side was re-run for this entry in an isolated worktree checked out at
+`01b8d3b` — CMake Release build OK and CTest 19/19, with
+`bedray_path_trace_pass_test` covering the 18/25/26-binding union contract.
 
-This is L1/L2 only. No GPU dispatch, frame or screenshot exists; the NRD
-layout has never consumed these values on a device, and no owner-verified
-image of the Slang path exists. The guide capture happens before the display
-pass may reject a sample, so a rejected pixel can carry a motion record too;
-the denoiser's own history rejection is expected to absorb that once a live
+This is L1/L2 for the motion lane. No GPU dispatch has ever run with
+`PATH_TRACE_OPTION_NRD_MOTION` set — the C++ backend never sets either option
+bit — so the NRD layout has not consumed these values on a device, and no
+owner-verified image of the motion channel exists. Live frames of the Slang path
+do exist now (see the spatial entry), but they exercise the trace and spatial
+stages, not the guide or motion writes. The guide capture happens before the
+display pass may reject a sample, so a rejected pixel can carry a motion record
+too; the denoiser's own history rejection is expected to absorb that once a live
 frame is measured.
 
 ## 2026-10-29 — DLSS-RR guide channels from the typed path (L1 compile, L2 unit)
