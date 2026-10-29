@@ -1,7 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.slang;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
-import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanQueue;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLocator;
@@ -271,19 +270,6 @@ public final class SlangRuntime implements AutoCloseable {
     public void discardRecording(long commandBuffer) {
         if (closed) throw new IllegalStateException("SlangRuntime is closed");
         library.discardRecording(core, commandBuffer);
-    }
-
-    /**
-     * Queue retirement after the command buffer has been attached to this
-     * encoder's current submission and before that submission is sent.
-     * The encoder's destruction queue runs after its submission-completion
-     * wait. Register once per recording, not once per dispatch. A discarded
-     * recording instead requires {@link #releaseRecording(long)} directly.
-     */
-    public void retireSubmittedRecording(VulkanCommandEncoder encoder, long commandBuffer) {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
-        if (encoder == null || commandBuffer == 0) throw new IllegalArgumentException("encoder and command buffer are required");
-        encoder.queueForDestroy(() -> releaseRecording(commandBuffer));
     }
 
     @Override
