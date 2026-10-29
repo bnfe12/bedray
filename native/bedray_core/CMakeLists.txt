@@ -2,10 +2,20 @@ cmake_minimum_required(VERSION 3.25)
 
 project(bedray_core LANGUAGES CXX)
 
-# Windows x64 is the first target. The library is a plain shared object with a
-# C ABI; it links no Vulkan loader and creates no Vulkan object of its own.
+# Windows x64 is the validated target. The library itself is a plain shared
+# object with a C ABI; a non-Windows build is allowed only as an explicit,
+# untested portability opt-in and no support is claimed for it.
+option(BEDRAY_ALLOW_UNSUPPORTED_PLATFORM
+       "Attempt a build on a platform Bedray does not support yet (untested)" OFF)
 if(NOT WIN32)
-    message(FATAL_ERROR "bedray_core currently supports Windows only")
+    if(NOT BEDRAY_ALLOW_UNSUPPORTED_PLATFORM)
+        message(FATAL_ERROR
+            "bedray_core currently supports Windows x64 only. "
+            "Pass -DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM=ON to attempt an untested build.")
+    endif()
+    message(WARNING
+        "bedray_core: building on a non-Windows platform by explicit opt-in; "
+        "this configuration is untested and unsupported.")
 endif()
 
 set(CMAKE_CXX_STANDARD 23)

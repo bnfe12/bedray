@@ -84,11 +84,11 @@ public final class SlangRuntime implements AutoCloseable {
         }
         BedrayCoreLocator.Location location = BedrayCoreLocator.locate(libraries);
         if (!location.usable()) {
-            throw new BedrayCoreException("locate", -1, BedrayCoreLocator.DLL + " is not installed in "
+            throw new BedrayCoreException("locate", -1, BedrayCoreLocator.FILE + " is not installed in "
                 + libraries.nativesDirectory() + " (" + location.detail() + ")", null);
         }
 
-        BedrayCoreNative library = BedrayCoreNative.load(location.dll());
+        BedrayCoreNative library = BedrayCoreNative.load(location.file());
         try {
             VkDevice vkDevice = device.vkDevice();
             VkPhysicalDevice physical = vkDevice.getPhysicalDevice();
@@ -308,7 +308,7 @@ public final class SlangRuntime implements AutoCloseable {
             library.destroy(core);
         } catch (RuntimeException e) {
             LOGGER.error("[VKB-SLANG] core shutdown refused ({}); keeping {} loaded", e.getMessage(),
-                BedrayCoreLocator.DLL);
+                BedrayCoreLocator.FILE);
             return;
         }
         library.close();

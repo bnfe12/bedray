@@ -2,8 +2,19 @@ cmake_minimum_required(VERSION 3.25)
 
 project(bedray_scene LANGUAGES CXX)
 
+# Windows x64 is the validated target. A non-Windows build is an explicit,
+# untested portability opt-in; no support is claimed for it.
+option(BEDRAY_ALLOW_UNSUPPORTED_PLATFORM
+       "Attempt a build on a platform Bedray does not support yet (untested)" OFF)
 if(NOT WIN32)
-    message(FATAL_ERROR "bedray_scene currently supports Windows only")
+    if(NOT BEDRAY_ALLOW_UNSUPPORTED_PLATFORM)
+        message(FATAL_ERROR
+            "bedray_scene currently supports Windows x64 only. "
+            "Pass -DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM=ON to attempt an untested build.")
+    endif()
+    message(WARNING
+        "bedray_scene: building on a non-Windows platform by explicit opt-in; "
+        "this configuration is untested and unsupported.")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -54,10 +65,15 @@ endif()
 
 set_target_properties(bedray_scene PROPERTIES
     OUTPUT_NAME "bedray_scene"
-    PREFIX ""
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
 )
+# Windows has no "lib" prefix. Linux and macOS keep CMake's default prefix so
+# the shared object matches System.mapLibraryName("bedray_scene"), which is what
+# the Java locator asks NativeLibraries for.
+if(WIN32)
+    set_target_properties(bedray_scene PROPERTIES PREFIX "")
+endif()
 
 enable_testing()
 

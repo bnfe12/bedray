@@ -9,12 +9,13 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Describes one vendor native library (a set of DLL files) the core knows how to find and check.
+ * Describes one vendor native library (a set of shared-library files) the core knows how to find and check.
  * <p>
  * The file lists are an allowlist: the installer copies only files whose name is listed here, under that exact name.
  * File names were taken from the vendor SDK layouts under {@code <local decompiled sources>} (DLSS {@code lib/Windows_x86_64},
  * Streamline {@code bin/x64}, FidelityFX {@code PrebuiltSignedDLL}, NRD wrapper names from the earlier prototype
- * {@code native/nrd_bridge}); the exact DLL versions are not pinned.
+ * {@code native/nrd_bridge}); the exact versions are not pinned. Windows {@code .dll}, Linux {@code .so} and macOS
+ * {@code .dylib} names are accepted in the allowlist; the structural check is still PE-only and therefore Windows-only.
  *
  * @param id             stable lower-case id ({@code [a-z0-9_]+}), e.g. {@code "dlss"}
  * @param displayName    human readable name
@@ -34,7 +35,7 @@ public record LibraryDescriptor(String id, String displayName, String vendor, Li
                                 List<String> optionalFiles, String licenseName, String termsUrl,
                                 Map<String, Set<String>> knownSha256, String minVersion, long maxFileBytes) {
     private static final Pattern ID = Pattern.compile("[a-z0-9_]+");
-    private static final Pattern FILE = Pattern.compile("[A-Za-z0-9_.\\-]+\\.dll");
+    private static final Pattern FILE = Pattern.compile("[A-Za-z0-9_.\\-]+\\.(?:dll|so|dylib)");
     private static final Pattern VERSION = Pattern.compile("\\d+(\\.\\d+){0,3}");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
 
@@ -51,7 +52,7 @@ public record LibraryDescriptor(String id, String displayName, String vendor, Li
         }
         for (String f : concat(requiredFiles, optionalFiles)) {
             if (!FILE.matcher(f).matches()) {
-                throw new IllegalArgumentException("library " + id + ": file name must be a plain *.dll name: " + f);
+                throw new IllegalArgumentException("library " + id + ": file name must be a plain *.dll, *.so or *.dylib name: " + f);
             }
         }
         if (minVersion != null && !VERSION.matcher(minVersion).matches()) {
