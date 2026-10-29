@@ -87,6 +87,8 @@ constexpr std::uint64_t kTraceProgram = 0x1001;
 constexpr std::uint64_t kTraceSceneProgram = 0x1002;
 constexpr std::uint64_t kSpatialProgram = 0x1003;
 constexpr std::uint64_t kDisplayProgram = 0x1004;
+constexpr std::uint64_t kRCTraceProgram = 0x1005;
+constexpr std::uint64_t kRCBuildProgram = 0x1006;
 
 constexpr std::uint64_t kBadTraceCount = 0x2001;
 constexpr std::uint64_t kBadTracePush = 0x2002;
@@ -185,6 +187,21 @@ void install_valid_programs() {
     register_program(kTraceSceneProgram, 112, trace.data(), trace.size());
     register_program(kSpatialProgram, 64, kSpatialBindings, std::size(kSpatialBindings));
     register_program(kDisplayProgram, 32, kDisplayBindings, std::size(kDisplayBindings));
+    auto field_trace = trace;
+    field_trace.push_back({34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER});
+    field_trace.push_back({35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
+    register_program(kRCTraceProgram, 112, field_trace.data(), field_trace.size());
+    constexpr ProgramBinding field_build[] = {
+        {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {16, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+        {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {18, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {21, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {22, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+    };
+    register_program(kRCBuildProgram, 80, field_build, std::size(field_build));
 }
 
 void install_bad_programs() {
@@ -1212,6 +1229,153 @@ void test_real_nrd_motion_output() {
     CHECK(fake::buffers.empty()); CHECK(fake::images.empty()); CHECK(fake::faults == 0);
 }
 
+BedrayRCDesc rc_config() {
+    return {BEDRAY_CORE_ABI_VERSION, sizeof(BedrayRCDesc), kRCBuildProgram, 8, 0, 0};
+}
+
+void test_rc_configuration_requires_native_field_program() {
+    reset_all(); BedrayCore core{}; PathTracePass pass;
+    CHECK_STATUS(pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    auto legacy = make_config(); legacy.program_trace = kRCTraceProgram;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), legacy, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK(fake::buffers.empty() && fake::images.empty());
+    auto config = make_config(kRCTraceProgram);
+    g_programs[kRCTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), config, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    g_programs[kRCTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), config, &g_error), BEDRAY_OK);
+    auto native = valid_frame(61); native.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+    CHECK_STATUS(pass.render(native, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(fake::render_calls.empty() && !pass.has_recordings());
+    CHECK_STATUS(pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_OK);
+    CHECK(pass.uses_program(kRCBuildProgram) && pass.uses_program(kRCTraceProgram));
+    auto ordinary = native; ordinary.flags = 0;
+    CHECK_STATUS(pass.render(ordinary, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(fake::render_calls.empty() && !pass.has_recordings());
+    auto bad = rc_config(); bad.base_axis = 4;
+    CHECK_STATUS(pass.configure_rc(bad, 65535, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK(pass.uses_program(kRCBuildProgram)); // Failed reconfigure preserves the previous owner.
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    CHECK_STATUS(pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(!pass.uses_program(kRCBuildProgram));
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    CHECK(fake::buffers.empty() && fake::memories.empty() && fake::images.empty() && fake::faults == 0);
+}
+
+void test_rc_levels_precede_primary_and_exact_proof_releases_both_owners() {
+    Fixture fixture(kRCTraceProgram);
+    CHECK_STATUS(fixture.pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_OK);
+    auto first = valid_frame(61); first.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE; first.frame_index = 7;
+    CHECK_STATUS(fixture.render(first), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 7);
+    if (fake::render_calls.size() != 7) return;
+    const auto primary = fake::render_calls[5];
+    CHECK(primary.program == kRCTraceProgram && primary.resources.size() == 28 && primary.push_bytes == 112);
+    CHECK(fake::render_calls[6].program == kDisplayProgram);
+    const auto metadata = resource_handle(primary.resources, 34), tails = resource_handle(primary.resources, 35);
+    CHECK(metadata != 0 && tails != 0 && metadata != tails);
+    CHECK(resource_range(primary.resources, 34) == 272 && resource_range(primary.resources, 35) == 69168ull * 32u);
+    std::vector<unsigned char> first_metadata;
+    CHECK(read_buffer_bytes(metadata, first_metadata));
+    CHECK(push_u32(first_metadata, 256) == 7);
+    for (std::size_t level = 0; level < 5; ++level) {
+        const auto& call = fake::render_calls[level];
+        CHECK(call.program == kRCBuildProgram && call.command_buffer == first.command_buffer && call.resources.size() == 16);
+        CHECK(push_u32(call.push, 0) == 4u - static_cast<std::uint32_t>(level));
+        CHECK(call.push_bytes == 80 && call.group_y == 1 && call.group_z == 1);
+        CHECK(resource_handle(call.resources, 34) == metadata && resource_handle(call.resources, 35) == tails);
+        // The builder borrows the exact scene and immutable FrameConstants upload consumed by the primary pass.
+        for (std::uint32_t binding : {0u,2u,3u,9u,10u,16u,17u,18u,20u,21u,22u,23u,24u,25u}) {
+            const auto* copied = find_resource(call.resources, binding);
+            const auto* input = find_resource(primary.resources, binding);
+            CHECK(copied && input);
+            if (copied && input) CHECK(copied->handle == input->handle && copied->offset == input->offset
+                && copied->range == input->range && copied->sampler == input->sampler);
+        }
+    }
+    CHECK_STATUS(fixture.pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_ERROR_IN_USE);
+    CHECK_STATUS(fixture.pass.destroy(), BEDRAY_ERROR_IN_USE);
+    CHECK_STATUS(fixture.release(999), BEDRAY_OK);
+    CHECK(fake::buffers.contains(metadata) && fake::buffers.contains(tails));
+    CHECK_STATUS(fixture.render(first), BEDRAY_ERROR_IN_USE);
+    auto second = first; second.command_buffer = 62; second.frame_index = 8;
+    CHECK_STATUS(fixture.render(second), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 14);
+    if (fake::render_calls.size() != 14) return;
+    const auto second_metadata = resource_handle(fake::render_calls[12].resources, 34);
+    const auto second_tails = resource_handle(fake::render_calls[12].resources, 35);
+    CHECK(second_metadata != metadata && second_tails != tails);
+    std::vector<unsigned char> retained;
+    CHECK(read_buffer_bytes(metadata, retained) && retained == first_metadata);
+    CHECK(read_buffer_bytes(second_metadata, retained) && push_u32(retained, 256) == 8);
+    fixture.pass.discard_recording(first.command_buffer);
+    CHECK(fake::buffers.contains(metadata) && fake::buffers.contains(tails)); // Discard marks state; release carries the proof.
+    CHECK_STATUS(fixture.release(first.command_buffer), BEDRAY_OK);
+    CHECK(!fake::buffers.contains(metadata) && !fake::buffers.contains(tails));
+    CHECK(fake::buffers.contains(second_metadata) && fake::buffers.contains(second_tails));
+    CHECK_STATUS(fixture.release(second.command_buffer), BEDRAY_OK);
+    CHECK(!fake::buffers.contains(second_metadata) && !fake::buffers.contains(second_tails));
+}
+
+void test_rc_partial_dispatch_failure_keeps_child_and_parent_pins() {
+    for (int dispatch : {0, 4, 5, 6}) {
+        Fixture fixture(kRCTraceProgram);
+        CHECK_STATUS(fixture.pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_OK);
+        auto frame = valid_frame(71); frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+        fake::fail_render_at(dispatch, BEDRAY_ERROR_VULKAN);
+        CHECK_STATUS(fixture.render(frame), BEDRAY_ERROR_VULKAN);
+        CHECK(fake::render_calls.size() == static_cast<std::size_t>(dispatch + 1));
+        CHECK(fixture.pass.has_recordings()); CHECK_STATUS(fixture.pass.destroy(), BEDRAY_ERROR_IN_USE);
+        if (fake::render_calls.empty()) continue;
+        const auto metadata = resource_handle(fake::render_calls.front().resources, 34);
+        const auto tails = resource_handle(fake::render_calls.front().resources, 35);
+        CHECK(fake::buffers.contains(metadata) && fake::buffers.contains(tails));
+        CHECK_STATUS(fixture.release(999), BEDRAY_OK);
+        CHECK(fake::buffers.contains(metadata) && fake::buffers.contains(tails));
+        fixture.pass.discard_recording(frame.command_buffer);
+        CHECK_STATUS(fixture.release(frame.command_buffer), BEDRAY_OK);
+        CHECK(!fake::buffers.contains(metadata) && !fake::buffers.contains(tails));
+    }
+    for (int allocation : {0, 1}) {
+        Fixture fixture(kRCTraceProgram);
+        CHECK_STATUS(fixture.pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_OK);
+        auto warm = valid_frame(72); warm.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+        CHECK_STATUS(fixture.render(warm), BEDRAY_OK); CHECK_STATUS(fixture.release(warm.command_buffer), BEDRAY_OK);
+        const auto calls = fake::render_calls.size();
+        fake::fail_allocate_after = allocation; // Completed FrameConstants upload is reused; metadata or tails then fail.
+        auto failed = warm; failed.command_buffer = 73;
+        CHECK_STATUS(fixture.render(failed), BEDRAY_ERROR_OUT_OF_MEMORY);
+        CHECK(fake::render_calls.size() == calls && fixture.pass.has_recordings());
+        CHECK_STATUS(fixture.pass.destroy(), BEDRAY_ERROR_IN_USE);
+        fixture.pass.discard_recording(failed.command_buffer);
+        CHECK_STATUS(fixture.release(failed.command_buffer), BEDRAY_OK);
+    }
+}
+
+void test_rc_device_loss_after_build_retains_fields_until_all_recordings_are_proven() {
+    for (int dispatch : {2, 5, 6}) {
+        Fixture fixture(kRCTraceProgram);
+        CHECK_STATUS(fixture.pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_OK);
+        auto first = valid_frame(81); first.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+        CHECK_STATUS(fixture.render(first), BEDRAY_OK);
+        if (fake::render_calls.size() < 7) continue;
+        const auto metadata = resource_handle(fake::render_calls[5].resources, 34);
+        const auto tails = resource_handle(fake::render_calls[5].resources, 35);
+        fake::fail_render_at(dispatch, BEDRAY_ERROR_DEVICE_LOST);
+        auto second = first; second.command_buffer = 82;
+        CHECK_STATUS(fixture.render(second), BEDRAY_ERROR_DEVICE_LOST);
+        CHECK_STATUS(fixture.pass.destroy(), BEDRAY_ERROR_IN_USE);
+        CHECK_STATUS(fixture.release(999), BEDRAY_OK);
+        CHECK_STATUS(fixture.release(first.command_buffer), BEDRAY_OK);
+        CHECK(fake::buffers.contains(metadata) && fake::buffers.contains(tails));
+        CHECK(fixture.pass.has_recordings());
+        CHECK_STATUS(fixture.release(second.command_buffer), BEDRAY_OK);
+        CHECK(!fixture.pass.has_recordings());
+        CHECK(!fake::buffers.contains(metadata) && !fake::buffers.contains(tails));
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1228,6 +1392,10 @@ int main() {
     test_guide_aware_program_contract();
     test_real_guide_outputs();
     test_real_nrd_motion_output();
+    test_rc_configuration_requires_native_field_program();
+    test_rc_levels_precede_primary_and_exact_proof_releases_both_owners();
+    test_rc_partial_dispatch_failure_keeps_child_and_parent_pins();
+    test_rc_device_loss_after_build_retains_fields_until_all_recordings_are_proven();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "bedray_path_trace_pass_test FAILED: %d failure(s)\n", g_failures);

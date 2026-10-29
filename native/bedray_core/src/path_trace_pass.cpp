@@ -436,17 +436,18 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     // traversal differ, and that is the program's own business.
     bool trace_guides = false, scene_guides = false;
     bool trace_motion = false, scene_motion = false;
+    bool trace_field = false, scene_field = false;
     auto validate_trace_program = [&](std::uint64_t program, const char* label, bool& guides,
-                                      bool& motion) -> BedrayStatus {
+                                      bool& motion, bool& field, bool native_scene) -> BedrayStatus {
         ProgramContract contract{};
         if (!program_contract(core, program, contract)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "%s is not registered", label);
         }
         if ((contract.binding_count != 18u && contract.binding_count != 25u
-                && contract.binding_count != 26u)
+                && contract.binding_count != 26u && !(native_scene && contract.binding_count == 28u))
             || contract.push_constant_bytes < sizeof(PathTracePush)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s contract mismatch: %u bindings, %u push bytes (need 18/25/26, %zu)",
+                "%s contract mismatch: %u bindings, %u push bytes (need 18/25/26 or native 28, %zu)",
                 label, contract.binding_count, contract.push_constant_bytes, sizeof(PathTracePush));
         }
         if (!has_bindings(core, program, kTraceBindings, std::size(kTraceBindings))) {
@@ -454,7 +455,8 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
                 "%s does not declare the path_trace.slang binding set", label);
         }
         guides = contract.binding_count >= 25u;
-        motion = contract.binding_count == 26u;
+        motion = contract.binding_count >= 26u;
+        field = contract.binding_count == 28u;
         if (guides && !has_bindings(core, program, kTraceGuideBindings,
                 std::size(kTraceGuideBindings))) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
@@ -463,16 +465,20 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
         if (motion && !program_has_binding(core, program, 33, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER))
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
                 "%s motion binding 33 must be a storage buffer", label);
+        if (field && (!program_has_binding(core, program, 34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+            || !program_has_binding(core, program, 35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)))
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+                "%s RC bindings 34/35 must be uniform/storage buffers", label);
         return BEDRAY_OK;
     };
     BedrayStatus trace_status = validate_trace_program(desc.program_trace, "program_trace", trace_guides,
-        trace_motion);
+        trace_motion, trace_field, false);
     if (trace_status != BEDRAY_OK) {
         return trace_status;
     }
     if (desc.program_trace_scene != 0) {
         BedrayStatus scene_status = validate_trace_program(desc.program_trace_scene, "program_trace_scene",
-            scene_guides, scene_motion);
+            scene_guides, scene_motion, scene_field, true);
         if (scene_status != BEDRAY_OK) {
             return scene_status;
         }
@@ -590,6 +596,7 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     scene_guide_bindings_ = scene_guides;
     trace_motion_bindings_ = trace_motion;
     scene_motion_bindings_ = scene_motion;
+    scene_field_bindings_ = scene_field;
 
     BedrayStatus status = create_dummy(64u, block_materials_id_, block_materials_view_, error);
     if (status == BEDRAY_OK) {
@@ -614,6 +621,23 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace pass state");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring path trace");
+}
+
+BedrayStatus PathTracePass::configure_rc(const BedrayRCDesc& desc, std::uint32_t max_groups_x,
+    BedrayError* error) try {
+    if (has_recordings()) return fail(error, BEDRAY_ERROR_IN_USE, "path-trace/RC recordings pending");
+    if (!core_ || !buffers_ || !scene_field_bindings_ || lost_)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "RC requires a configured native scene program with field bindings");
+    auto next = std::make_unique<RCFieldPass>();
+    const auto status = next->configure(core_, fns_, desc, max_groups_x, error);
+    if (status != BEDRAY_OK) return status;
+    rc_field_ = std::move(next);
+    history_written_ = false;
+    return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate RC field owner");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring RC field");
 }
 
 BedrayStatus PathTracePass::create_guide_dummies(BedrayError* error) {
@@ -827,6 +851,11 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     // and must have been configured with path_trace_scene.slang. A table that is
     // not a whole number of records would decode as a different section.
     const bool native_scene = (desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE) != 0;
+    const bool field_bindings = native_scene && scene_field_bindings_;
+    if (field_bindings && !rc_field_)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "selected scene program requires configured RC field resources");
+    if (rc_field_ && !native_scene)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "configured RC field requires a native scene frame");
     const bool guide_bindings = native_scene ? scene_guide_bindings_ : trace_guide_bindings_;
     std::array<std::uint64_t, 7> guide_views{};
     if (guides) {
@@ -1131,7 +1160,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         fns_.cmd_fill_buffer(command, owned_reservoirs_view_.buffer, 0, owned_reservoirs_view_.size, 0);
     entry_barrier(fns_, command);
 
-    std::array<BedrayResource, 26> trace_resources{};
+    std::array<BedrayResource, 28> trace_resources{};
     trace_resources[0] = acceleration_resource(0, as_acceleration(desc.scene.tlas));
     trace_resources[1] = image_resource(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, radiance_view_.view);
     trace_resources[2] = buffer_resource(2, as_buffer(desc.scene.sections.handle),
@@ -1173,6 +1202,18 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         trace_resources[25] = motion ? buffer_resource(33, as_buffer(motion->handle), motion->offset, motion->bytes)
             : buffer_resource(33, motion_dummy_view_.buffer, 0, motion_dummy_view_.size);
     }
+    if (field_bindings) {
+        std::array<BedrayResource,2> field_resources{};
+        status = rc_field_->record(desc, std::span<const BedrayResource>(trace_resources.data(),26), field_resources, error);
+        if (status != BEDRAY_OK) {
+            if (status == BEDRAY_ERROR_DEVICE_LOST) device_lost();
+            // Entry transitions and possibly some field levels were recorded;
+            // the host's exact completion/discard proof releases both owners.
+            return status;
+        }
+        trace_resources[26] = field_resources[0];
+        trace_resources[27] = field_resources[1];
+    }
 
     BedrayFrameDesc trace_desc{};
     trace_desc.abi_version = BEDRAY_CORE_ABI_VERSION;
@@ -1182,13 +1223,14 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     trace_desc.group_count_y = groups(desc.camera.height);
     trace_desc.group_count_z = 1;
     trace_desc.resource_count = static_cast<std::uint32_t>(18u + (guide_bindings ? 7u : 0u)
-        + (motion_binding ? 1u : 0u));
+        + (motion_binding ? 1u : 0u) + (field_bindings ? 2u : 0u));
     trace_desc.resources = trace_resources.data();
     trace_desc.push_constants = &trace_push;
     trace_desc.push_constant_bytes = static_cast<std::uint32_t>(sizeof(trace_push));
 
     status = bedray_core_render_frame(core_, &trace_desc, error);
     if (status != BEDRAY_OK) {
+        if (status == BEDRAY_ERROR_DEVICE_LOST) device_lost();
         return status;
     }
     compute_barrier(fns_, command);
@@ -1239,6 +1281,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
 
         status = bedray_core_render_phases(core_, &spatial_desc, 8, 2, error);
         if (status != BEDRAY_OK) {
+            if (status == BEDRAY_ERROR_DEVICE_LOST) device_lost();
             return status;
         }
         compute_barrier(fns_, command);
@@ -1302,6 +1345,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
 
     status = bedray_core_render_frame(core_, &display_desc, error);
     if (status != BEDRAY_OK) {
+        if (status == BEDRAY_ERROR_DEVICE_LOST) device_lost();
         return status;
     }
 
@@ -1333,6 +1377,10 @@ void PathTracePass::discard_recording(std::uint64_t command_buffer) noexcept {
 }
 
 BedrayStatus PathTracePass::release_recording(std::uint64_t command_buffer) noexcept {
+    if (rc_field_) {
+        const auto status = rc_field_->release_recording(command_buffer);
+        if (status != BEDRAY_OK) return status;
+    }
     const auto it = recordings_.find(command_buffer);
     if (it == recordings_.end()) {
         return BEDRAY_OK;
@@ -1358,8 +1406,13 @@ BedrayStatus PathTracePass::release_recording(std::uint64_t command_buffer) noex
 }
 
 BedrayStatus PathTracePass::destroy() noexcept {
-    if (!recordings_.empty()) {
+    if (has_recordings()) {
         return BEDRAY_ERROR_IN_USE;
+    }
+    if (rc_field_) {
+        const auto status = rc_field_->destroy();
+        if (status != BEDRAY_OK) return status;
+        rc_field_.reset();
     }
     if (images_) {
         if (lost_) {
@@ -1414,6 +1467,7 @@ BedrayStatus PathTracePass::destroy() noexcept {
 
 void PathTracePass::device_lost() noexcept {
     lost_ = true;
+    if (rc_field_) rc_field_->device_lost();
     if (images_) {
         images_->device_lost();
     }
@@ -1425,6 +1479,7 @@ void PathTracePass::device_lost() noexcept {
 void PathTracePass::reset_state() noexcept {
     trace_guide_bindings_ = scene_guide_bindings_ = guide_dummies_initialized_ = false;
     trace_motion_bindings_ = scene_motion_bindings_ = false;
+    scene_field_bindings_ = false;
     guide_dummy_ids_ = {}; guide_dummy_views_ = {};
     radiance_id_ = {};
     motion_id_ = {};

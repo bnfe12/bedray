@@ -39,7 +39,7 @@ enable_testing()
 
 add_library(bedray_core SHARED
     src/core.cpp
-    src/path_trace_pass.cpp
+    src/path_trace_pass.cpp src/rc_field_pass.cpp
     src/bloom_pass.cpp
     src/particles_pass.cpp
     src/sodium_pass.cpp
@@ -125,7 +125,7 @@ if(MSVC)
     set_property(TARGET bedray_abi_probe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-add_executable(bedray_descriptor_cache_test tests/descriptor_cache_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp src/sodium_pass.cpp src/velocity_pass.cpp src/nrd_pack_pass.cpp src/volumetric_pass.cpp)
+add_executable(bedray_descriptor_cache_test tests/descriptor_cache_test.cpp src/path_trace_pass.cpp src/rc_field_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp src/sodium_pass.cpp src/velocity_pass.cpp src/nrd_pack_pass.cpp src/volumetric_pass.cpp)
 target_link_libraries(bedray_descriptor_cache_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_descriptor_cache_test PRIVATE
     include
@@ -138,7 +138,7 @@ if(MSVC)
 endif()
 add_test(NAME bedray_descriptor_cache_test COMMAND bedray_descriptor_cache_test)
 
-add_executable(bedray_sampler_ownership_test tests/sampler_ownership_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp src/sodium_pass.cpp src/velocity_pass.cpp src/nrd_pack_pass.cpp src/volumetric_pass.cpp)
+add_executable(bedray_sampler_ownership_test tests/sampler_ownership_test.cpp src/path_trace_pass.cpp src/rc_field_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp src/sodium_pass.cpp src/velocity_pass.cpp src/nrd_pack_pass.cpp src/volumetric_pass.cpp)
 target_link_libraries(bedray_sampler_ownership_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_sampler_ownership_test PRIVATE
     include
@@ -154,7 +154,7 @@ add_test(NAME bedray_sampler_ownership_test COMMAND bedray_sampler_ownership_tes
 # White-box test: includes src/path_trace_pass.cpp directly, stubs the core's
 # render entry points and program registry, and drives the pass through a fake
 # Vulkan driver supplied by bedray_gpu_resources' function tables.
-add_executable(bedray_path_trace_pass_test tests/path_trace_pass_test.cpp)
+add_executable(bedray_path_trace_pass_test tests/path_trace_pass_test.cpp src/rc_field_pass.cpp)
 target_link_libraries(bedray_path_trace_pass_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_path_trace_pass_test PRIVATE
     include
@@ -188,7 +188,7 @@ if(MSVC)
 endif()
 add_test(NAME bedray_particles_pass_test COMMAND bedray_particles_pass_test)
 
-foreach(pass IN ITEMS velocity nrd_pack)
+foreach(pass IN ITEMS velocity nrd_pack rc_field)
     add_executable(bedray_${pass}_pass_test tests/${pass}_pass_test.cpp src/${pass}_pass.cpp)
     target_link_libraries(bedray_${pass}_pass_test PRIVATE bedray_gpu_resources)
     target_include_directories(bedray_${pass}_pass_test PRIVATE include "${BEDRAY_VULKAN_HEADERS}")
