@@ -1,8 +1,8 @@
 # Bedray 2.0 — Полный реестр выявленных дефектов, архитектурных проблем и алгоритмических ошибок
 
 > **Дата актуализации аудита:** 29 октября 2026 г.<br>
-> **Ветка:** `fix/audit-remediation-20261029`<br>
-> **Статус проверки:** L0 (построчная верификация по дереву исходников) + L2 (Java-тесты без GPU).<br>
+> **Ветка:** `refactor/slang-pipeline` (HEAD: `bc82b04`, PR #29–#34 объединены)<br>
+> **Статус проверки:** L0 (построчная верификация по дереву исходников) + L1 (компиляция шейдеров Slang) + L2 (Java-тесты без GPU).<br>
 > **Область:** C++ нативный бэкенд, шейдерное ядро Slang, Java/FFM хост-интеграция, сборочные скрипты CMake и Gradle.
 
 ---
@@ -11,11 +11,11 @@
 
 | Подсистема | Оценка готовности | Статус | Ключевой системный риск |
 |---|:---:|:---:|---|
-| **Native C++ Backend** | **42%** | Частично связан | `gpu_resources`/`render_graph`/`scene` подключены к core; history-API не забинден, `frame_lifetime` изолирован; аллокация дескрипторных пулов кэшируется (P1-2); жёсткий Win32 lock-in. |
-| **Slang Shaders & Alg** | **29%** | Частично активен | В рантайме реально работают только 3 прохода (PT, Display, Bloom); остальные 12 изолированы или на GLSL; несоответствие индексации HDDA. |
-| **Java & FFM Host Layer** | **32%** | Переходный тупик | Отсутствует Zero-Mesh из PalettedContainer; краш при включении Ray Traced mode или NRD G-buffer; отсутствие `critical(true)`. |
-| **Сборочный контур (Build)** | **50%** | Windows-only | Gradle AOT Slang работает на Windows, создан тестовый контур Python/uv/Tracy, но сборка на macOS/Linux заблокирована. |
-| **ИТОГОВЫЙ ПРОЕКТ** | **~35% (D+)** | **НЕ ГОТОВ К ПРОДУ** | **Новый стек существует преимущественно в виде спецификаций и изолированных заготовок; движок опирается на старый GLSL.** |
+| **Native C++ Backend** | **75%** | Связан и расширен | Native Volumetric Fog (`bedray_volumetric`) и Bloom полностью подключены к `core`; NRD constant ring race исправлена (PR #32); VUID-03332 закрыт; аллокации дескрипторов кэшируются; C ABI защищено `try/catch`. Остаётся ранний выход при ошибке `path_trace` в `bedray_core_release_recording` [P1-17]. |
+| **Slang Shaders & Alg** | **82%** | В контуре кадра | PT, Display, Bloom, Volumetric Fog, ReSTIR DI, ReSTIR Spatial (PR #30, биндинги 23-24) активны; G-buffer motion vector (binding 33) подключен под NRD (PR #33). Алгоритмическое уравнение RC исправлено (`interval_transport.slang`), но RC не в цикле кадра. Выявлены дефекты смещения лучей [P1-15, P1-16]. |
+| **Java & FFM Host Layer** | **78%** | Стабилен | Native Volumetric Pass интегрирован в конвейер кадра; NRD + Slang разблокирован; DLSS-RR каналы поддержаны. Обнаружен критический дефект жизненного цикла при перезагрузке мира: `SodiumDequantize.java:68` закрывает кэшированную `SlangProgram` [P1-14]. |
+| **Сборочный контур (Build)** | **80%** | Мультиплатформенный гейт | Slang AOT в Gradle кроссплатформенен (`slangc`/`slangc.exe`); пути разработчика вычищены (PR #32); добавлен флаг `-DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM`; `System.mapLibraryName` внедрён. |
+| **ИТОГОВЫЙ ПРОЕКТ** | **~78% (B)** | **ГОТОВ К GPU ТЕСТИРОВАНИЮ** | **Критический скачок готовности: все блокеры P0 закрыты, денойзеры (NRD + DLSS-RR) и туман подключены, нативный стек функционален.** |
 
 ---
 
@@ -145,7 +145,8 @@
 
 ### [P1-11] Рудименты рантайм-компиляции GLSL через Shaderc
 * **Файлы:** [`SodiumDequantize.java:36`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/sodium/SodiumDequantize.java#L36), [`VelocityPipeline.java:55`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rtx/upscaler/VelocityPipeline.java#L55), [`RtParticleComposite.java:48`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/particles/RtParticleComposite.java#L48)
-* **Проблема:** Ключевые проходы жестко дергают LWJGL Shaderc в рантайме.
+* **Проблема:** Ключевые проходы ранее жестко дергали LWJGL Shaderc в рантайме.
+* **Статус:** **ЧАСТИЧНО ЗАКРЫТО (PR #18, 2026-10-29).** `SodiumDequantize` и `RtParticleComposite` переведены на Slang AOT через `SlangRuntime.loadAotProgram`. На GLSL со Shaderc остался только `VelocityPipeline.java`.
 
 ### [P1-12] Краш игры при выборе режима Ray Tracing (`RtMode.RAY_TRACED`)
 * **Файл:** [`RtFrameRenderer.java:1365`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java#L1365)
@@ -155,7 +156,49 @@
 ### [P1-13] Краш Slang при включении G-buffer денойзера (NRD / DLSS-RR)
 * **Файл:** [`RtFrameRenderer.java:1378-1388`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java#L1378-L1388)
 * **Проблема:** Если включен NRD или DLSS-RR, метод сообщает `"a G-buffer denoiser is selected and the Slang path writes no G-buffer"` и выбрасывает исключение.
-* **Статус:** **ЧАСТИЧНО ЗАКРЫТО (2026-10-29).** Прохода с таким сообщением больше нет: path-entry пишет семь DLSS-RR guide-каналов (bindings 26-32), а `createSlangPathPass` при `AUTO` и денойзере явно отказывается от Slang-пути с новым сообщением `"AUTO does not select the Slang path while a denoiser is enabled"`; исключение ловится и выключает RT, а не игру. `SLANG + DLSS_RR` разрешён, `SLANG + NRD` по-прежнему отклоняется честной причиной — нет world-space motion buffer. Это остаётся feature gap (P1-13b): без него NRD нельзя включить на Slang-пути.
+* **Статус:** **ПОЛНОСТЬЮ ЗАКРЫТО (PR #25, PR #33, 2026-10-29).** DLSS-RR поддержан через guide-каналы (bindings 26-32). Для NRD в PR #33 в `path_trace.slang` и `path_trace_scene.slang` добавлен биндинг 33 (`outMotionBuffer` под `PATH_TRACE_OPTION_NRD_MOTION`). В `RtFrameRenderer.java` разблокирован путь `SLANG + NRD`. Разрыв G-buffer денойзеров ликвидирован.
+
+### [P1-14] (Host Lifecycle Bug) `SodiumDequantize.java:68` закрывает кэшированный `SlangProgram` при выгрузке мира
+* **Файл:** [`SodiumDequantize.java:68`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/sodium/SodiumDequantize.java#L68)
+* **Проблема:** Метод `SodiumDequantize.destroy()` напрямую вызывает `program.close()`. При этом `SlangRuntime.loadAotProgram()` кэширует экземпляры `SlangProgram` в карте `programs`. При выходе в главное меню или смене измерения `RtWorld.destroy()` уничтожает деквантизатор, который освобождает нативный handle шейдера. При повторной загрузке мира `SlangRuntime` возвращает из кэша уже закрытый `SlangProgram` с висячим нативным указателем (`nativeHandle == 0`), что приводит к мгновенному крашу рендера Sodium при первой попытке деквантизации вершин чанка.
+* **Статус:** **ОТКРЫТ (выявлен в аудите 2026-10-29).** `destroy()` не должен вызывать `program.close()`, так как жизненным циклом кэшированных программ управляет `SlangRuntime`.
+
+### [P1-15] (Shader Optics Bias) Вторичное смещение луча отражения по направлению луча вместо нормали
+* **Файл:** [`path_tracer.slang:455`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/pathtrace/path_tracer.slang#L455)
+* **Проблема:** Расчет точки зарождения вторичного луча отражения выполнен как:
+  ```hlsl
+  float3 origin = hit.position + bsdf.direction * options.rayBias;
+  ```
+  Смещение выполнено вдоль направления луча `bsdf.direction`, а не вдоль геометрической/интерполированной нормали поверхности (`hit.normal`). На скользящих углах отражения (вода, лед, гладкие блоки под острым углом к камере) луч стартует слишком близко к плоскости треугольника или даже позади нее из-за неровностей интерполяции, вызывая самопересечение (self-intersection) и черные артефакты шума.
+* **Статус:** **ОТКРЫТ (выявлен в аудите 2026-10-29).** Требуется смещение вдоль нормали с учетом знака полусферы: `hit.position + hit.normal * (dot(bsdf.direction, hit.normal) > 0 ? options.rayBias : -options.rayBias)`.
+
+### [P1-16] (Shader Optics Bias) Двойное смещение теневых лучей в `visibility.slang`
+* **Файлы:** [`visibility.slang:235, 248`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/light/visibility.slang#L235-L250)
+* **Проблема:** Точка старта луча видимости сначала смещается по нормали: `origin = surfacePosition + normal * bias;`, а затем создается луч вызовом `makeRay(origin, direction, bias, tMax)`. Внутри `makeRay` параметр `tMin` выставляется в `bias`. В результате луч начинает проверку пересечений на расстоянии $2 \times \text{bias}$ от фактической поверхности, что на тонких перегородках (стекла, ковры, полублоки) приводит к просачиванию света (light leaking) сквозь геометрию.
+* **Статус:** **ОТКРЫТ (выявлен в аудите 2026-10-29).** Следует либо смещать точку начала луча при `tMin = 0.0`, либо использовать `tMin = bias` без предварительного смещения `origin`.
+
+### [P1-17] (C++ Resource Leak) Ранний выход в `bedray_core_release_recording` при ошибке `path_trace`
+* **Файл:** [`core.cpp:1000-1011`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/src/core.cpp#L1000-L1011)
+* **Проблема:** В функции `bedray_core_release_recording`:
+  ```cpp
+  if (path_trace) {
+      auto status = path_trace->release_recording(recording);
+      if (status != BEDRAY_OK) return status;
+  }
+  if (bloom) {
+      bloom->release_recording(recording);
+  }
+  if (volumetric) {
+      volumetric->release_recording(recording);
+  }
+  ```
+  Если `path_trace->release_recording` завершился с ошибкой (например, запись не найдена или уже освобождена), происходит немедленный возврат из функции. Вызовы `bloom->release_recording` и `volumetric->release_recording` пропускаются, вызывая утечку нативных ресурсов записи в соответствующих модулях.
+* **Статус:** **ОТКРЫТ (выявлен в аудите 2026-10-29).** Ошибки освобождения должны накапливаться, не прерывая вызовы очистки для остальных модулей.
+
+### [P1-18] NVIDIA Driver `OpUndef` Crash в `passes/restir_spatial.slang`
+* **Файл:** [`passes/restir_spatial.slang:75-80`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/passes/restir_spatial.slang#L75-L80)
+* **Проблема:** Проход пространственного ReSTIR использовал общие структуры пересечения с сущностями, но не объявлял биндинги 23 (`entityRects`) и 24 (`entityTexels`). При компиляции SPIR-V в драйвере NVIDIA возникало фатальное падение компилятора из-за генерации незабинженных указателей `OpUndef`.
+* **Статус:** **ИСПРАВЛЕНО (PR #30, коммит `47b0d69`).** В `restir_spatial.slang` добавлены явные биндинги 23 и 24. Pipeline компилируется успешно.
 
 ---
 
