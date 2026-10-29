@@ -4,6 +4,35 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — platform native names and the CMake opt-in (L2 tests; no native configure)
+
+P2-3: `BedrayCoreLocator` and `BedraySceneLocator` hardcoded `bedray_core.dll` /
+`bedray_scene.dll`. Both now expose `FILE = System.mapLibraryName(LIBRARY_ID)`
+and pass that name to `NativeLibraries`. `LibraryDescriptor` accepts `.dll`,
+`.so` and `.dylib` allowlist entries; path separators and versioned names such
+as `libbedray_core.so.1` are still rejected. Windows still resolves
+`bedray_core.dll`, so the installed layout is unchanged.
+
+P2-2: `native/bedray_core` and `native/bedray_scene` no longer fail a
+non-Windows configure unconditionally. The default still refuses the platform,
+but the message names `-DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM=ON`; that opt-in
+emits a warning that the build is untested and unsupported. `bedray_scene`
+keeps `PREFIX ""` on Windows only, so Linux/macOS output matches the JVM name.
+
+Evidence on `1c2ea7c` from the ASCII worktree:
+
+| Check | Result |
+|---|---|
+| targeted `BedrayNativeNameTest`, `NativePlatformGateTest`, `RtSlangGbufferGuidesTest` | passed |
+| `:core:test` | 107 tests, 0 failures, 0 errors |
+| `:common:compileSlang :common:test` | 747 tests, 0 failures, 0 errors, 9 skipped, 123 classes |
+
+Not run: CMake is not installed here, so neither project was configured or
+built; no Linux/macOS machine was used. The structural check in
+`NativeLibrariesImpl` is still PE-only, and the NRD/DLSS wrappers are
+Windows-only. P2-2/P2-3 remove the hardcoded name and the unconditional gate;
+they do not make non-Windows loading or rendering supported.
+
 ## 2026-10-29 — NRD constant-buffer ring (L0 source contract; native build not run)
 
 P0-7 in [AUDIT_DEFECTS_AND_ISSUES.md](AUDIT_DEFECTS_AND_ISSUES.md): every

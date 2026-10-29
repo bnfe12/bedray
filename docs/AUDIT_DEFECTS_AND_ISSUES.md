@@ -163,10 +163,12 @@
 ### [P2-2] Блокировка сборки на не-Windows платформах в CMake (macOS / Linux / ARM)
 * **Файлы:** [`bedray_core/CMakeLists.txt:7-9`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/CMakeLists.txt#L7-L9), [`bedray_scene/CMakeLists.txt:5-7`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_scene/CMakeLists.txt#L5-L7)
 * **Проблема:** `if(NOT WIN32) message(FATAL_ERROR "... currently supports Windows only") endif()`.
+* **Статус:** **ИСПРАВЛЕНО (2026-10-29), только гейт.** Оба проекта по умолчанию по-прежнему отказывают на не-Windows, но сообщение теперь называет явный opt-in: `-DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM=ON`. С ним конфигурация выдаёт `WARNING`, что платформа не тестируется и не поддерживается. `bedray_scene` оставляет пустой `PREFIX` только на Windows, чтобы на Linux/macOS имя совпадало с `System.mapLibraryName`. CMake в этом окружении не установлен, поэтому конфигурация/сборка не запускалась; непроверенная платформа по-прежнему не заявлена как поддерживаемая.
 
 ### [P2-3] Хардкод расширения `.dll` в Java Native Loader
 * **Файл:** [`BedrayCoreLocator.java:20`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreLocator.java#L20)
 * **Проблема:** Зашит `DLL = "bedray_core.dll"`. Игра не может загрузить `.dylib` на macOS или `.so` на Linux.
+* **Статус:** **ИСПРАВЛЕНО (2026-10-29), имя и allowlist.** `BedrayCoreLocator.FILE` и `BedraySceneLocator.FILE` теперь вычисляются через `System.mapLibraryName(LIBRARY_ID)`; `LibraryDescriptor` принимает `.dll`, `.so` и `.dylib` (пути и `*.so.1` по-прежнему отклоняются). Контракт закреплён `BedrayNativeNameTest` и `NativePlatformGateTest`. Это не включает загрузку на не-Windows: структурная проверка `NativeLibrariesImpl` остаётся PE-only, а NRD/DLSS-обёртки Windows-only по своей природе.
 
 ### [P2-4] Хардкод бинарника `slangc.exe` в Gradle
 * **Файл:** [`gradle/slang.gradle:49`](file:///C:/Users/andre/Downloads/bedray-slang/gradle/slang.gradle#L45-L55)
