@@ -4,6 +4,41 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — P1 audit pass: completion-proof retirement and module wiring (L2 tests; no GPU)
+
+P1-4: `RtFrameRenderer` registers recording retirement through
+`RecordingCompletion.submitted(...)` after `encoder.execute`, so release runs
+only in the destruction queue that drains after the submission fence. The dead
+`SlangRuntime.retireSubmittedRecording` is removed, and
+`RecordingCompletionTest.retirementWaitsForHostCompletionProof` now asserts that
+a submission alone releases nothing.
+
+P1-1: `NativeModuleWiringTest` pins the current wiring: the core compiles
+`history_c.cpp`, the GPU buffer/image C wrappers and `frame_graph_owner.cpp`,
+links the graph/scene targets, and Java uses the native buffer/image owners.
+The audit records the remaining gap honestly: the history C API has no Java
+binding, and `bedray_frame_lifetime` is still standalone.
+
+P1-2 is marked fixed in the audit: the per-program descriptor cache reuses up to
+eight `{pool,set}` pairs, so a steady-state dispatch no longer creates and
+destroys a pool. P1-3 is marked latent: the live core graph has one
+`opaque_group` pass and emits no graph barrier; the conservative all-commands
+barrier remains for future multi-pass dispatch graphs. P1-5 is marked mitigated:
+`SlangRuntime.close` keeps the core and `closed=false` when destroy reports
+`IN_USE`, and the renderer retains `teardownPending` for a later retry.
+
+Evidence on `6bfd935` from the ASCII worktree:
+
+| Check | Result |
+|---|---|
+| targeted `RecordingCompletionTest`, `NativeModuleWiringTest` | passed |
+| `:core:test` | 107 tests, 0 failures, 0 errors |
+| `:common:compileSlang :common:test` | 18 passes (task up-to-date, shaders unchanged); 752 tests, 0 failures, 0 errors, 9 skipped, 124 classes |
+
+Not run: CMake is not installed, so no native configure/build; no GPU dispatch,
+validation layers, game startup or rendered effect. P1-3's performance claim is
+not measured.
+
 ## 2026-10-29 — platform native names, build-path hygiene and the CMake opt-in (L2 tests; no native configure)
 
 P2-3: `BedrayCoreLocator` and `BedraySceneLocator` hardcoded `bedray_core.dll` /

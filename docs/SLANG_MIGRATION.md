@@ -111,9 +111,10 @@ copy line by line.
 On the `fix/audit-remediation-20261029` branch, merge commit `84b1697` joins
 `origin/refactor/slang-pipeline` (`4dc68d5`) with the P2 audit batch; `7fbfbda`
 adds the NRD constant-buffer ring, `1c2ea7c` adds the platform native names
-and the CMake opt-in, and `320b274` removes the developer Vulkan path plus the
-hardcoded Gradle `slangc.exe`. `:common:compileSlang` builds 18 passes and
-`:common:test` reports 749 tests, 0 failures, 0 errors and 9 skipped from an
+and the CMake opt-in, `320b274` removes the developer Vulkan path plus the
+hardcoded Gradle `slangc.exe`, and `6bfd935` removes the dead speculative
+recording retirement. `:common:compileSlang` builds 18 passes and
+`:common:test` reports 752 tests, 0 failures, 0 errors and 9 skipped from an
 ASCII worktree. Both path entries compile to 25 bindings and a 112-byte push
 block, with the seven guide images at bindings 26-32. That proves the tree
 configures, the AOT passes compile and the Java/source contracts hold; it does

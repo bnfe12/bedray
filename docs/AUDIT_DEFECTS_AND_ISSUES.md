@@ -1,8 +1,8 @@
 # Bedray 2.0 — Полный реестр выявленных дефектов, архитектурных проблем и алгоритмических ошибок
 
-> **Дата актуализации аудита:** 28 октября 2026 г.  
-> **Ветка:** `refactor/slang-pipeline`  
-> **Статус проверки:** L0 (Сплошная тройная построчная верификация тремя субагентами по дереву исходников).  
+> **Дата актуализации аудита:** 29 октября 2026 г.<br>
+> **Ветка:** `fix/audit-remediation-20261029`<br>
+> **Статус проверки:** L0 (построчная верификация по дереву исходников) + L2 (Java-тесты без GPU).<br>
 > **Область:** C++ нативный бэкенд, шейдерное ядро Slang, Java/FFM хост-интеграция, сборочные скрипты CMake и Gradle.
 
 ---
@@ -11,7 +11,7 @@
 
 | Подсистема | Оценка готовности | Статус | Ключевой системный риск |
 |---|:---:|:---:|---|
-| **Native C++ Backend** | **42%** | Архитектурно разорван | 4 модуля изолированы (250 КБ балласта); аллокация дескрипторных пулов 900 раз/сек; гонка NRD; жесткий Win32 lock-in. |
+| **Native C++ Backend** | **42%** | Частично связан | `gpu_resources`/`render_graph`/`scene` подключены к core; history-API не забинден, `frame_lifetime` изолирован; аллокация дескрипторных пулов кэшируется (P1-2); жёсткий Win32 lock-in. |
 | **Slang Shaders & Alg** | **29%** | Частично активен | В рантайме реально работают только 3 прохода (PT, Display, Bloom); остальные 12 изолированы или на GLSL; несоответствие индексации HDDA. |
 | **Java & FFM Host Layer** | **32%** | Переходный тупик | Отсутствует Zero-Mesh из PalettedContainer; краш при включении Ray Traced mode или NRD G-buffer; отсутствие `critical(true)`. |
 | **Сборочный контур (Build)** | **50%** | Windows-only | Gradle AOT Slang работает на Windows, создан тестовый контур Python/uv/Tracy, но сборка на macOS/Linux заблокирована. |
@@ -36,7 +36,7 @@
   * [`history_c.cpp:1-150`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_history/src/history_c.cpp) (все 20 экспортных функций)
 * **Поведение:** Экспортные C-функции не имеют блоков `try { ... } catch (...)`. При `std::bad_alloc`, `std::out_of_range` или системном сбое C++ исключение пересекает границу C ABI. На платформе Windows/MSVC это генерирует системное SEH-исключение `0xE06D7363`, которое FFM-рантайм Java не может перехватить, вызывая немедленный жесткий краш процесса JVM с генерацией `hs_err_pid.log`.
 * **Причина:** Отсутствие `try / catch` на C ABI интерфейсе `bedray_core`.
-* **Статус:** **НЕ ИСПРАВЛЕН** (выявлен в ходе аудита, требует отдельного исправления).
+* **Статус:** **ИСПРАВЛЕНО (коммит `06ca754f`; проверено по исходникам 2026-10-29).** Все экспорты `core.cpp` обёрнуты в function-try-block с `catch (...)`, который возвращает безопасный статус (или `0`/`void` для legacy-сигнатур). `gpu_buffers_c.cpp` — 18/18, `gpu_images_c.cpp` — 14/14, `history_c.cpp` — 22/22 экспортов имеют `try/catch`. Нативный CI [run 40718040730](https://github.com/bnfe12/bedray/actions/runs/40718040730) собрал и прогнал core 17/17, scene 1/1, frame lifetime 1/1 на этой линии. Проверка исключения через FFM на живой JVM не выполнялась; GPU/игрового прогона нет.
 
 ### [P0-3] Инверсия вероятности смеси в ReSTIR DI (Свет темнее в $1/q$ раз)
 * **Файлы:**
@@ -96,23 +96,28 @@
 ### [P1-1] Оторванные и неинтегрированные нативные C++ модули
 * **Файлы:** `native/bedray_gpu_resources/`, `native/bedray_history/`, `native/bedray_render_graph/`, `native/bedray_frame_lifetime/`
 * **Проблема:** Написано свыше 250 КБ чистого C++ кода (графы рендеринга, таймлайн-семафоры, кольцевые пулы буферов, трекинг истории). Однако в Java ([`BedrayCoreNative.java`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreNative.java)) экспортированы только функции из монолитного `core.cpp`. Ни один из 4 вспомогательных модулей не вызывается из игры.
+* **Статус:** **ЧАСТИЧНО ИСПРАВЛЕНО (2026-10-29, проверено по исходникам).** `bedray_gpu_resources` компилируется в `bedray_core` и реально вызывается из Java: `SlangRuntime.createImageOwner/createBufferOwner` → `BedrayGpuImagesNative`/`BedrayGpuBuffersNative` (FFM-экспорты `bedray_gpu_*`); используется в `RtPathTraceSlangPass` и `ReferencePathTraceBackend`. `bedray_render_graph` линкуется в core (`bedray_graph_frame`, `bedray_graph_history`, `bedray_graph_vulkan`), а `FrameGraphOwner` ведёт запись path-trace через `graph::FrameScheduler`. `bedray_scene` встроена в core как `bedray_scene_objects`. Остаётся разрыв: C-API `bedray_history` компилируется в core (`history_c.cpp`), но Java его не биндит, а `path_trace_pass` ведёт собственную историю изображений; `bedray_frame_lifetime` не подключён ни к core, ни к render graph и собирается только как отдельная библиотека с тестом. Контракт проводки закреплён `NativeModuleWiringTest`. Это L0 по CMake/исходникам; нативная сборка в этом окружении не запускалась.
 
 ### [P1-2] Аллокация `VkDescriptorPool` на каждый Compute Dispatch (900 раз/сек)
 * **Файл:** [`core.cpp:828-844`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/src/core.cpp#L828-L844)
 * **Проблема:** В `bedray_core_record_dispatch` при каждом отдельном диспатче создается новый `VkDescriptorPool` с `maxSets = 1`. При 15 compute-проходах за кадр на 60 FPS это **900 вызовов `vkCreateDescriptorPool` и 900 вызовов `vkDestroyDescriptorPool` в секунду**.
 * **Угроза:** Блокировка внутренних мьютексов аллокатора Vulkan-драйвера, деградация 1% Low FPS и фрагментация VRAM.
+* **Статус:** **ИСПРАВЛЕНО (коммит `3ca8722d`; проверено по исходникам 2026-10-29).** `BedrayProgram` держит кэш до 8 пар `{pool,set}`; `recycle_descriptors` возвращает их после записи, а следующий dispatch берёт готовую пару (`available_descriptor_count > 0`) вместо `vkCreateDescriptorPool`. Новый pool создаётся только при пустом кэше (например, при пиковой конкурентности больше 8) и освобождается при уничтожении программы. Нативная сборка в этом окружении не запускалась; GPU-профилирования «900/сек» нет.
 
 ### [P1-3] Барьерный молот `VK_PIPELINE_STAGE_ALL_COMMANDS_BIT` в Render Graph
 * **Файл:** [`vulkan_recording.cpp:113-122`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_render_graph/src/vulkan_recording.cpp#L110-L125)
 * **Проблема:** Между каждым проходом графа рендеринга выставляется глобальный барьер `VK_PIPELINE_STAGE_ALL_COMMANDS_BIT` с `srcAccessMask = READ | WRITE`. Видеокарта сбрасывает все конвейеры до нуля перед началом каждого прохода, снижая утилизацию GPU на 30–45%.
+* **Статус:** **ЛАТЕНТНО, НА ЖИВОМ ПУТИ НЕ ВОСПРОИЗВОДИТСЯ (2026-10-29, проверено по исходникам).** `FrameGraphOwner.configure` добавляет ровно один проход с `RecordingKind::opaque_group`; `record_vulkan_graph` для opaque_group барьер не эмитит — синхронизацию внутри группы ведёт сам path-trace pass. `core_dispatch` (единственный потребитель широкого барьера для dispatch-графов) из core не вызывается. Консервативный `ALL_COMMANDS` остаётся в адаптере для будущих multi-pass dispatch-графов и закреплён нативным `vulkan_recording_test`; при подключении такого графа его нужно заменить на stage/access из `ResourceUse`. GPU-профилирования не было, поэтому цифра «30–45%» не подтверждена.
 
 ### [P1-4] Мертвый код отставки буферов команд и спекулятивный `releaseRecording`
 * **Файлы:** [`SlangRuntime.java:174-178`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/slang/SlangRuntime.java#L170-L178), [`RtFrameRenderer.java:590-592`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java#L588-L595)
 * **Проблема:** Метод `retireSubmittedRecording` является мертвым кодом. Вместо него `RtFrameRenderer` спекулятивно дергает `releaseRecording` в начале кадра, полагая, что командный буфер уже завершился на GPU, что ведет к удалению дескрипторов во время исполнения на видеокарте.
+* **Статус:** **ИСПРАВЛЕНО (2026-10-29).** `RtFrameRenderer` регистрирует освобождение через `RecordingCompletion.submitted(...)` уже после `encoder.execute(cmd)`; release выполняется только в очереди уничтожения после ожидания завершения submission (или по доказанному discard). Спекулятивного `releaseRecording` в начале кадра больше нет. Мёртвый `SlangRuntime.retireSubmittedRecording` удалён. Контракт «submission — не proof» закреплён `RecordingCompletionTest.retirementWaitsForHostCompletionProof`, а доказательство завершения — `RecordingCompletionChecks`. Это L2 без GPU; живой прогон не выполнялся.
 
 ### [P1-5] Безвозвратная утечка ядра при смене разрешения / режима (`BEDRAY_ERROR_IN_USE`)
 * **Файлы:** [`core.cpp:470`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/src/core.cpp#L468-L476), [`SlangRuntime.java:197-204`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/slang/SlangRuntime.java#L195-L205)
 * **Проблема:** Если при вызове `bedray_core_destroy` в ядре осталась хоть одна незавершенная запись, функция возвращает `BEDRAY_ERROR_IN_USE`. Java-слой ловит исключение и бросает указатель `core`, навсегда оставляя старые пайплайны и шейдерные модули в VRAM.
+* **Статус:** **СМЯГЧЕНО, ПРИНЯТОЕ ОГРАНИЧЕНИЕ (2026-10-29, проверено по исходникам).** `SlangRuntime.close()` больше не теряет указатель: при `BEDRAY_ERROR_IN_USE` он логирует отказ, оставляет `closed=false` и библиотеку загруженной. `RtFrameRenderer.shutdown` в этом случае сохраняет сильные ссылки и `teardownPending`, чтобы повторить teardown после успешного drain; в ветке с миром исключение `destroy_slang_runtime` ловится и помечает gate, не освобождая ресурсы под in-flight записью. Это осознанная утечка до повторной попытки/выхода из процесса, а не молчаливая потеря указателя; принудительно уничтожать core с незавершёнными записями нельзя. Живого теста с реальным `IN_USE` нет.
 
 ### [P1-6] Нарушение глобальной истории из-за оборачивания секций по модулю 1024
 * **Файлы:** [`contracts/hit.slang:33-36`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/hit.slang#L30-L40), [`traversal/hardware_traversal.slang:62`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/traversal/hardware_traversal.slang#L60-L65)
