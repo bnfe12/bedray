@@ -53,7 +53,7 @@ final class RestirDiState {
     }
 
     /**
-     * The half this frame reads. A native ring's parity is the core's private state, and a host mirror of it would be a
+     * The half this frame writes (history reads the opposite half). A native ring's parity is the core's private state, and a host mirror of it would be a
      * second source of truth the two could disagree on, so this stays zero and the core derives its own.
      */
     int parity() {

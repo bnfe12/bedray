@@ -45,9 +45,10 @@
 * **Поведение:** При сэмплировании дискретной смеси эмиттеров и солнца с вероятностью ветвления $q = \text{emitterProbability}$ плотность вероятности выбранного семпла равна $p_{\text{mix}} = q \cdot p_{\text{branch}}$. Ранее выполнялось деление вместо умножения (`sourcePdf /= emitterProbability`), что из-за $W = 1/p$ занижало свет в 4 раза при $q = 0.25$.
 * **Причина:** Путаница между коррекцией веса сэмпла $W = 1/p$ и плотностью вероятности $p$.
 * **Статус:** Закрыто в ветке коммитом `3ca8722d` (деление заменено на умножение).
+* **Проверка 2026-10-28 (source-only):** на HEAD плотности умножаются на вероятность ветки (`sourcePdf *= emitterProbability`, `*= 1.0 - emitterProbability`), а single-branch путь не ренормируется. По коду это соответствует $p_{mix} = q \cdot p_{branch}$; вес $1/sourcePdf$ больше не умножается на $q$ ошибочно. Компиляции/теста не было (L0); нужен тест PDF для $q = 0.25, 0, 1$ и сравнение с эталоном.
 
 ### [P0-4] Radiance Cascades: арифметическое среднее вместо окклюзии лучевого транспорта
-* **Файл:** [`radiance_cascades_store.slang:171-176, 214-220`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/radiance_cascades_store.slang#L170-L180)
+* **Файл:** [`legacy_float4_store.slang:117-185`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/legacy_float4_store.slang#L117-L185)
 * **Поведение:** Слияние ближнего и дальнего интервалов каскада реализовано через взвешенное среднее:
   ```hlsl
   float confidence = nearInterval.a + farInterval.a;
@@ -58,18 +59,22 @@
   Если ближний интервал уперся в непрозрачный блок ($\text{near.a} = 1.0$), свет дальнего интервала обязан быть полностью заблокирован. Стена толщиной в 1 блок сейчас усредняется с солнцем: $(L_{\text{wall}} + L_{\text{sun}}) / 2$, вызывая сквозную засветку закрытых помещений.
 * **Причина:** Ошибочное понимание альфа-канала интервала как "статистической уверенности" (confidence) вместо коэффициента поглощения/непрозрачности.
 * **Статус:** **НЕ ИСПРАВЛЕН** (сохраняется в кодовой базе).
+* **Проверка 2026-10-28 (source-only, L1 compile):** в дерево добавлен typed-путь: `RCSegment` и `rcComposeSegments` (`L_front + T_front * L_back`) в `interval_transport.slang`, typed `rcProbeIrradiance`/`rcProbeComplete` в `segment_store.slang`, typed trace `rc_trace.slang`. Старый float4 resolve помечен legacy, но всё ещё присутствует и несовместим с typed atlas. Typed API компилируется `slangc` 2026.20 (harness `verify_rc_typed.slang`, exit 0); это только L1. Typed-путь не подключён к живому кадру, поэтому P0-4 нельзя считать закрытым до runtime-теста, reflected stride check, cross-cascade resolve и интеграции.
+* **Чистка 2026-10-28 (source-only, L1 compile):** typed trace `rc_trace.slang` разделён на `rc_trace_options/shade/walk/dispatch/history/ownership`; `rc_atlas_layout.slang` больше не тянет legacy-модуль в typed store. Legacy float4 вынесен в `legacy_float4_store.slang`, старый resolve переименован в `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`, а `bedray.slang` больше не экспортирует legacy-формат. Это снижает риск перепутать atlas, но **не закрывает P0-4**: live-path, GPU-проверки и cross-cascade resolve по-прежнему отсутствуют.
 
 ### [P0-5] Двойной оффсет квадов в аппаратном пересечении геометрии (чтение мусора)
 * **Файл:** [`geometry.slang:214-230`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/geometry.slang#L214-L230)
 * **Поведение:** При сопоставлении абсолютного и локального индекса квада в секции прибавлялся `range.firstQuad` повторно.
 * **Причина:** Потеря семантики относительного vs абсолютного индекса.
 * **Статус:** Закрыто в ветке коммитом `b00dc38a` через переход на локальные индексы диапазонов геометрии нативной сцены.
+* **Проверка 2026-10-28 (source-only):** `geometryRangeForPrimitive` возвращает индекс диапазона, а `geometryVertexBase` вычисляет `(range.firstQuad + (primitive >> 1u)) * 4u` без повторного `firstQuad`; producer использует локальные индексы quad. По коду offset согласован. Компиляции/теста не было (L0); нужен layout/contract test на несколько диапазонов.
 
 ### [P0-6] Spatial ReSTIR DI сбрасывает локальные обновления при победе своего семпла
 * **Файл:** [`spatial_block_emitters.slang:150-165`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/restir/spatial_block_emitters.slang#L150-L165)
 * **Поведение:** Если собственный семпл пикселя оказывался лучше соседей, шейдер завершал работу без записи (`return;`), отбрасывая накопленный соседский вес $W_{\text{sum}}$ и счетчик $M$, что порождало полосы дисперсии и мерцание.
 * **Причина:** Неверная интерпретация рулетки Рестира.
 * **Статус:** Закрыто в ветке коммитом `3ca8722d` (ранний выход удален, объединенный резервуар всегда валидируется и сохраняется).
+* **Проверка 2026-10-28 (source-only):** `spatial_block_emitters.slang` публикует merged reservoir всегда, когда он конечен и валиден, независимо от того, победил ли собственный sample; `mergeReservoirs` обновляет `M`/`W_sum` даже при сохранении текущего sample. Ранний `if (!won) return;` отсутствует. Компиляции/теста не было (L0); нужен регрессионный тест на own-winner и не-конечный вес.
 
 ### [P0-7] NRD Bridge: Гонка данных при перезаписи буфера констант кадра (GPU Crash TDR)
 * **Файлы:** [`vkb_nrd.cpp:411-429, 910-932`](file:///C:/Users/andre/Downloads/bedray-slang/native/nrd_bridge/src/vkb_nrd.cpp#L411-L429)
@@ -112,6 +117,7 @@
 ### [P1-6] Нарушение глобальной истории из-за оборачивания секций по модулю 1024
 * **Файлы:** [`contracts/hit.slang:33-36`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/contracts/hit.slang#L30-L40), [`traversal/hardware_traversal.slang:62`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/traversal/hardware_traversal.slang#L60-L65)
 * **Проблема:** Позиция в мире вычисляется со сверткой координат: `result.worldPosition = float3(section.origin.xyz & 1023) + localPosition;`. При $X, Z > 1023$ координаты сбрасываются в 0, проецируя точку на 1024 блока назад. Временное накопление (TAA, SVGF) взрывается шлейфами.
+* **Статус на 2026-10-28 (source-only):** в заявленном виде на HEAD не воспроизводится. `reprojectToHistory` вызывается только из `passes/temporal_accumulate.slang`, который читает отдельный `positionImg` (RGBA32F, абсолютные мировые координаты), а не `SurfaceHit.worldPosition`. Сам `worldPosition` документирован как 1024-обёрнутый neighbourhood proxy и запрещён как identity для history; единственный потребитель — не подключённый `restir_pt`. Латентный риск остаётся, если `restir_pt` подключат к `worldPosition` без развёртки; это host/contract-задача. Компиляции/теста не было (L0).
 
 ### [P1-7] ReSTIR PT: раздутый резервуар (465 МБ VRAM) и отсутствие детерминанта Якоби
 * **Файл:** [`restir/restir_pt.slang`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/restir/restir_pt.slang)
@@ -120,14 +126,17 @@
 ### [P1-8] Обрыв путей при отсечении горизонта в GGX VNDF
 * **Файлы:** [`shading/bsdf.slang:161-163`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/shading/bsdf.slang#L160-L165), [`path_tracer.slang:302-306`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/pathtrace/path_tracer.slang#L300-L310)
 * **Проблема:** При отражении микрограни под горизонт геометрии (`lightLocal.z <= 0.0`) трейсер путей полностью прекращает трассировку луча (`break;`), вызывая неестественное затемнение кромок объектов.
+* **Статус на 2026-10-28 (source-only):** заявленное затемнение кодом не подтверждается. При `lightLocal.z <= 0.0` вклад single-scattering GGX BRDF равен нулю (`NdotL <= 0`), а `break` происходит уже после накопления emission и NEE текущей вершины; продолжение пути с нулевым throughput дало бы тот же результат. `valid=false` здесь семантически неточно (это валидный нулевой сэмпл, а не сломанный путь), но на радианс не влияет. Реальная потеря энергии на силуэтах — отсутствие multiscatter-компенсации, отдельная задача. Компиляции/теста не было (L0); для уверенности нужен unit-тест на то, что ниже-горизонтный сэмпл не меняет сумму пути.
 
 ### [P1-9] Накопление смещения луча в вырезах (Cutout Holes) искажает ViewZ
 * **Файл:** [`path_tracer.slang:228, 246`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/pathtrace/path_tracer.slang#L220-L250)
 * **Проблема:** При прохождении листвы `advance = hit.t + options.rayBias;` накапливается в `primaryAdvance`, систематически завышая `firstHitDistance` для денойзера.
+* **Статус на 2026-10-28 (source-only):** в заявленном виде не воспроизводится. После каждого hole `ray.origin` сдвигается на `hit.t + rayBias`, поэтому следующий `hit.t` отсчитывается уже от новой точки и уменьшается на накопленное смещение. `primaryAdvance` хранит фактическое расстояние от камеры до текущего origin, а `primaryAdvance + hit.t` даёт расстояние до той же поверхности; $N \times \text{rayBias}$ не накапливается. Компиляции/теста не было (L0); для уверенности нужен тест с несколькими cutout-слоями и известной глубиной.
 
 ### [P1-10] Засветка пещер скайбоксом в Radiance Cascades
-* **Файл:** [`radiance_cascades/rc_trace.slang:363-367`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/rc_trace.slang#L360-L368)
+* **Файл:** [`rc_trace_options.slang:99-114, 193-201`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/rc_trace_options.slang#L99-L114), [`rc_trace_walk.slang:232-252`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/radiance_cascades/rc_trace_walk.slang#L232-L252)
 * **Проблема:** При `options.worldBoundaryDistance == 0.0` любой промах луча в терминальном каскаде считается выходом в небо, заливая пещеры дневным светом.
+* **Статус на 2026-10-28 (source-only, L1 compile):** исправлено в `rc_trace_options.slang` (политика и defaults) и `rc_trace_walk.slang` (добавление environment в far-сегмент). Environment теперь opt-in: `TerminalCascade` требует положительный `worldBoundaryDistance`, `rcEnvironmentAllowed` дополнительно требует `tFar >= worldBoundaryDistance`, а `defaultRCTraceOptions()` выбирает `Disabled`. Нулевая граница больше не означает «доверяем терминальному каскаду» — это отсутствие доказательства, и небо не добавляется. Host, которому нужен sky в RC, обязан задать реальную границу и поднять far override терминального каскада до неё. `verify_rc_environment.slang` компилируется `slangc` 2026.20 (L1); runtime/GPU-теста нет. Это изменение контракта `RCTraceOptions`, его нужно согласовать с host-интеграцией.
 
 ### [P1-11] Рудименты рантайм-компиляции GLSL через Shaderc
 * **Файлы:** [`SodiumDequantize.java:36`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/sodium/SodiumDequantize.java#L36), [`VelocityPipeline.java:55`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rtx/upscaler/VelocityPipeline.java#L55), [`RtParticleComposite.java:48`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/java/io/github/andrexarlay/vulkancompat/rt/particles/RtParticleComposite.java#L48)

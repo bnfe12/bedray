@@ -116,7 +116,16 @@ def STRUCT_LAYOUTS = [
     // Shader-facing scene record owned by bedray_scene (native/bedray_scene/include/bedray_scene.h).
     // The TLAS instanceCustomIndex is the table slot, so these offsets are an ABI, not a suggestion.
     GeometrySection: [size: 64, fields: [origin: 0, meta: 16, vertexAddress: 32, ranges: 40]],
-    GeometryRange: [size: 8, fields: [firstQuad: 0, quadCountPass: 4]]
+    GeometryRange: [size: 8, fields: [firstQuad: 0, quadCountPass: 4]],
+    // Typed Radiance Cascades interval record.  The host allocates the atlas and
+    // routes RWStructuredBuffer<RCSegment> descriptors with this stride; a
+    // packed float3/float3 layout would not match the reflected record.
+    RCSegment: [size: 32, fields: [radiance: 0, confidence: 12, transmittance: 16, flags: 28]],
+    // Diagnostic record written by passes/rc_probe_trace.slang; one element per
+    // dispatched ray.  Keep the counters in this order so a future Java reader
+    // cannot silently reinterpret them.
+    RCTraceEntryStatus: [size: 32, fields: [code: 0, rays: 4, stored: 8, storeFailed: 12,
+        invalidInput: 16, unresolved: 20, clamped: 24, truncated: 28]]
 ]
 
 def validateStructLayout = { String relative, String bindingName, struct ->

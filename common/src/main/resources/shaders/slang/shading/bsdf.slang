@@ -159,6 +159,12 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
         float2 u = float2(rand01(seed), rand01(seed));
         float3 halfLocal = sampleGGXVNDF(viewLocal, alpha, u);
         float3 lightLocal = reflect(-viewLocal, halfLocal);
+        // A visible-normal reflection can land below the shading horizon.  The
+        // single-scattering BRDF is zero there, so this is a legitimate
+        // zero-energy sample, not a broken one: the caller keeps the emission
+        // and NEE it already accumulated and stops the path.  Do not resample
+        // until the direction is above the horizon without reweighting by the
+        // conditional density; that would add energy instead of removing it.
         if (lightLocal.z <= 0.0) return result;
 
         float3 L = safeNormalize(tangent * lightLocal.x +

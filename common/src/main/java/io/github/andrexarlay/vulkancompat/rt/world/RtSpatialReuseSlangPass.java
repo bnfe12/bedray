@@ -8,6 +8,7 @@ import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.util.LinkedHashSet;
@@ -32,6 +33,7 @@ import java.util.Set;
  * including availability after the final phase for next frame's temporal import.
  */
 final class RtSpatialReuseSlangPass implements AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     static final String PASS_NAME = "restir_spatial";
     /** {@code RestirSpatialPush} of the entry pass; checked against the generated manifest before the first dispatch. */
     static final int PUSH_BYTES = 64;
@@ -84,10 +86,15 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
     }
 
     /**
-     * Registers the pass, or yields empty with the reason in the log. A program that got registered and then failed the
-     * manifest check is closed again, so a wrong contract cannot leave a pipeline behind in the core.
+     * Registers a borrowed program, or yields empty with the reason in the log.
+     * The runtime retains ownership even when a wrapper rejects its contract.
      */
-    static Optional<RtSpatialReuseSlangPass> create(SlangRuntime runtime, Logger log) {
+    static Optional<RtSpatialReuseSlangPass> create(SlangRuntime runtime) {
+        return registerProgram(runtime).map(program -> new RtSpatialReuseSlangPass(runtime, program));
+    }
+
+    /** Programs are borrowed from the runtime cache; only the runtime retires them. */
+    static Optional<SlangProgram> registerProgram(SlangRuntime runtime) {
         if (runtime == null) {
             return Optional.empty();
         }
@@ -95,17 +102,14 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
         try {
             Optional<SlangProgram> pass = runtime.program(PASS_NAME);
             if (pass.isEmpty()) {
-                log.info("[VKB-RT] spatial reuse off: Slang pass {} is not registered", PASS_NAME);
+                LOGGER.info("[VKB-RT] spatial reuse off: Slang pass {} is not registered", PASS_NAME);
                 return Optional.empty();
             }
             program = pass.get();
             requireManifest(program);
-            return Optional.of(new RtSpatialReuseSlangPass(runtime, program));
+            return Optional.of(program);
         } catch (RuntimeException e) {
-            if (program != null) {
-                program.close();
-            }
-            log.info("[VKB-RT] spatial reuse off: {}", e.getMessage() == null ? e.toString() : e.getMessage());
+            LOGGER.info("[VKB-RT] spatial reuse off: {}", e.getMessage() == null ? e.toString() : e.getMessage());
             return Optional.empty();
         }
     }
@@ -216,12 +220,6 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
         recordings.remove(commandBuffer);
     }
 
-    void releaseRecordings() {
-        for (Long commandBuffer : List.copyOf(recordings)) {
-            releaseRecording(commandBuffer);
-        }
-    }
-
     String passName() {
         return program.name();
     }
@@ -236,8 +234,7 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
         if (closed) {
             return;
         }
+        if (!recordings.isEmpty()) throw new IllegalStateException("spatial pass still awaits recording proof");
         closed = true;
-        releaseRecordings();
-        program.close();
     }
 }

@@ -81,7 +81,8 @@ struct PathTracePush {
     float4 emitterCameraRelative;   // xyz camera minus the origin the list was rebuilt at, w candidates per call
     float4 diCameraDelta;           // xyz raw camera position minus the previous frame's, w reserved
     uint4  diState;                 // x: PATH_TRACE_DI_* bits, y: parity half this frame writes, zw reserved
-    uint4  entityState;             // x: entity atlas texels per side (0 = no atlas), yz: self-avatar primitive range, w reserved
+    uint4  entityState;             // x: entity atlas texels per side (0 = no atlas), yz: self-avatar primitive range,
+                                    // w: auto-normal strength as float bits (0 = off)
 };
 
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;
@@ -102,6 +103,15 @@ struct PathTracePush {
 [[vk::binding(23, 0)]] StructuredBuffer<uint4> entityRects;
 [[vk::binding(24, 0)]] StructuredBuffer<uint> entityTexels;
 [[vk::binding(25, 0)]] StructuredBuffer<uint> entityPrevious;
+// Denoiser guides, the same seven channels rt_path.comp writes for rt_pack_nrd.comp.  The host binds one-pixel
+// stand-ins and leaves PATH_TRACE_OPTION_GBUFFER clear when no denoiser is selected.
+[[vk::image_format("r32f")]]    [[vk::binding(26, 0)]] RWTexture2D<float> outViewZ;
+[[vk::image_format("rgba16f")]] [[vk::binding(27, 0)]] RWTexture2D<float4> outNormalRough;
+[[vk::image_format("rgba16f")]] [[vk::binding(28, 0)]] RWTexture2D<float4> outSpecular;
+[[vk::image_format("rgba16f")]] [[vk::binding(29, 0)]] RWTexture2D<float4> outDiffuse;
+[[vk::image_format("rgba8")]]   [[vk::binding(30, 0)]] RWTexture2D<float4> outAlbedo;
+[[vk::image_format("rgba16f")]] [[vk::binding(31, 0)]] RWTexture2D<float4> outDirect;
+[[vk::image_format("rgba8")]]   [[vk::binding(32, 0)]] RWTexture2D<float4> outSpecAlbedo;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -125,6 +135,40 @@ uint pathTraceSeed(int2 pixel, uint frameIndex, uint sampleIndex) {
     uint seed = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u;
     seed = pcgHash(seed + frameIndex * 26699u);
     return pcgHash(seed + sampleIndex * 6971u);
+}
+
+// Guide channels for the NRD / DLSS-RR input pack, laid out as rt_path.comp writes them: the pack, the denoiser and the
+// compose are unchanged, so the Slang path can be denoised by the same chain as the legacy one.  A sky pixel gets the
+// legacy pattern (view depth 1e6, a flat normal, zero signal, albedo 0) so the pack skips it and the denoiser keeps its
+// range finite.
+void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result) {
+    if (!result.primary.valid) {
+        outViewZ[p] = 1.0e6;
+        outNormalRough[p] = float4(0.0, 0.0, 1.0, 1.0);
+        outSpecular[p] = float4(0.0);
+        outDiffuse[p] = float4(0.0);
+        outAlbedo[p] = float4(0.0);
+        outDirect[p] = float4(0.0);
+        outSpecAlbedo[p] = float4(0.0);
+        return;
+    }
+    // NRD's view depth is measured backwards from the eye along the view axis, as in rt_path.comp.
+    float3 toSurface = result.primary.position - f.camera.origin.xyz;
+    float viewZ = -dot(toSurface, f.camera.forward.xyz);
+    float3 n = result.primary.normal;
+    n = length(n) > 1.0e-4 ? normalize(n) : float3(0.0, 0.0, 1.0);
+    outViewZ[p] = viewZ;
+    outNormalRough[p] = float4(n, clamp(result.primary.roughness, 0.0, 1.0));
+    // The path tracer sums diffuse and specular per sample: the split channel stays empty and the whole signal goes
+    // through the colour input as raw radiance (specular albedo is a material guide only), exactly as in rt_path.comp.
+    outSpecular[p] = float4(0.0);
+    outDiffuse[p] = float4(result.radiance - result.primary.direct, result.firstHitDistance);
+    outAlbedo[p] = float4(result.primary.albedo, 1.0);
+    outDirect[p] = float4(result.primary.direct, 0.0);
+    bool specularGuide = result.primary.metallic > 0.5 || result.primary.roughness < 0.6;
+    float3 specAlbedo = !specularGuide ? float3(0.0)
+        : (result.primary.metallic > 0.5 ? result.primary.albedo : result.primary.specularF0);
+    outSpecAlbedo[p] = float4(clamp(specAlbedo, float3(0.0), float3(1.0)), 1.0);
 }
 
 [shader("compute")]
@@ -251,6 +295,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // and a hole to the shadow ray.
     MaterialSamplingOptions materialOptions = defaultMaterialSamplingOptions();
     materialOptions.alphaCutoff = options.alphaCutoff;
+    materialOptions.portalTime = f.camera.origin.w;
+    materialOptions.autoNormalStrength = asfloat(pc.entityState.w);
     PathTraceResult result = tracePath(traversal, lights, environment, directReuse, atlas, table,
         primary, materialOptions, options, seed);
 
@@ -267,4 +313,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // showed had itself been one frame ago.  A miss and terrain both say "nowhere", which is what a camera-only
     // reprojection already assumes, so no flag and no branch is needed downstream for them.
     outMotion[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u ? result.primaryMotion : float4(0.0);
+    if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u) {
+        pathTraceWriteGuides(p, f, result);
+    }
 }

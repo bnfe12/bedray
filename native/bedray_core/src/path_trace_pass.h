@@ -7,6 +7,7 @@
 #include <bedray/gpu_images.hpp>
 
 #include <cstdint>
+#include <array>
 #include <map>
 #include <memory>
 #include <vector>
@@ -37,7 +38,8 @@ public:
     BedrayStatus configure(BedrayCore* core, const DeviceFns& fns,
         const BedrayPathTraceDesc& desc, BedrayError* error);
 
-    BedrayStatus render(const BedrayPathTraceFrameDesc& desc, BedrayError* error);
+    BedrayStatus render(const BedrayPathTraceFrameDesc& desc, BedrayError* error,
+        const BedrayPathTraceGuides* guides = nullptr);
 
     // Idempotent for an unknown command buffer. Completes the pass's own
     // image/buffer uses for that recording and then collects retired objects.
@@ -66,6 +68,7 @@ private:
     };
 
     BedrayStatus ensure_images(std::uint32_t width, std::uint32_t height, BedrayError* error);
+    BedrayStatus create_guide_dummies(BedrayError* error);
     BedrayStatus create_dummy(VkDeviceSize bytes, gpu::BufferId& id,
         gpu::BufferView& view, BedrayError* error);
     BedrayStatus ensure_reservoirs(std::uint64_t bytes, BedrayError* error);
@@ -95,6 +98,10 @@ private:
     gpu::ImageView history_depth_view_[2]{};
     bool images_ready_ = false;
     bool images_initialized_ = false;
+    bool trace_guide_bindings_ = false, scene_guide_bindings_ = false;
+    bool guide_dummies_initialized_ = false;
+    std::array<gpu::ImageId, 3> guide_dummy_ids_{};
+    std::array<gpu::ImageView, 3> guide_dummy_views_{};
     std::uint32_t image_width_ = 0;
     std::uint32_t image_height_ = 0;
 

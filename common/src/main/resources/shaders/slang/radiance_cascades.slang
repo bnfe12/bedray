@@ -6,8 +6,6 @@
 
 public module radiance_cascades;
 
-import types;
-
 static const uint RADIANCE_CASCADE_COUNT = 5u;
 static const uint RADIANCE_BASE_PROBE_AXIS = 32u;
 static const uint RADIANCE_BASE_RAY_COUNT = 16u;

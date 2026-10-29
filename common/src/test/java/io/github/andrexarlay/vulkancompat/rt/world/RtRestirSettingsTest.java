@@ -26,6 +26,10 @@ class RtRestirSettingsTest {
         + "RtRayEffectsPass.java";
     private static final String SLANG_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
+    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "ReferencePathTraceBackend.java";
+    private static final String NATIVE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "NativePathTraceBackend.java";
     private static final String UI = "src/main/java/io/github/andrexarlay/vulkancompat/sodium/VulkanSodiumConfig.java";
     private static final String CATALOG = "src/main/java/io/github/andrexarlay/vulkancompat/sodium/SettingsCatalog.java";
     private static final String EN = "src/main/resources/assets/bedray/lang/en_us.json";
@@ -60,7 +64,7 @@ class RtRestirSettingsTest {
         }
     }
 
-    /** The Slang reservoir is allocated for the session and *used* per frame: only the second half may follow the player. */
+    /** The controller selects reuse per frame; each backend owns allocation and history behind that boundary. */
     @Test
     void thePathTracerSplitsTheRingFromTheReuse() {
         String pass = read(SLANG_PASS);
@@ -68,11 +72,18 @@ class RtRestirSettingsTest {
             "diRequested() stays the static capability, so flipping the switch never frees a ring mid-frame");
         assertTrue(pass.contains("return diRequested() && RtSettings.pathRestirDi();"),
             "diActive() is the per-frame decision the player controls");
-        assertTrue(pass.contains("if (emitterCount > 0 && diActive() && di.available(reservoirs != null))"),
-            "the dispatch is the consumer: without the flag the shader takes the plain per-frame branch");
-        assertTrue(pass.contains("String restir = di.mode(diActive(), reservoirs != null, spatialRequested());"),
-            "and the mode log says what is really running, so a frame can be checked after the fact");
-        String prepare = block(pass, "private void prepareReservoirs(");
+        assertTrue(pass.contains("int diFlags = emitterCount > 0 && diActive() ? DI_FLAG_ENABLED"),
+            "the controller hands the chosen backend the current per-frame reuse decision");
+        assertTrue(pass.contains("String restir = diActive() ? backend.reservoirState() : \"off\";"),
+            "the mode log reports the selected backend's actual ring state");
+        String reference = read(REFERENCE_BACKEND);
+        assertTrue(reference.contains("if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null)"),
+            "reference dispatch requires the controller's request and a real ring");
+        String nativeBackend = read(NATIVE_BACKEND);
+        assertTrue(nativeBackend.contains("hasNativeReservoirs()")
+                && nativeBackend.contains("frame.flags() | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI"),
+            "the native backend requires native DI and delegates its ownership through the coarse frame flag");
+        String prepare = block(reference, "private void prepareReservoirs(");
         int staticBranch = prepare.indexOf("if (!diRequested()) {");
         assertTrue(staticBranch >= 0 && prepare.indexOf("nativeBuffers.retire(reservoirs)", staticBranch) > staticBranch,
             "allocation follows the static switch only: a settings flip must not free the ring inside a recorded frame");

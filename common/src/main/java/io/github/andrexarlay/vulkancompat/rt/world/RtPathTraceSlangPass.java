@@ -69,6 +69,32 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS
         | BedrayCoreLayouts.CAP_SHADER_INT64;
 
+    /** {@code PathTracePush.flags}: the pass fills the denoiser guides. Mirrors {@code PATH_TRACE_OPTION_GBUFFER}. */
+    static final int OPTION_GBUFFER = 1;
+
+    /** The seven denoiser guide images, in the order {@code gbufferViews()} hands them over. */
+    record Guides(long viewZ, long normalRough, long diffuse, long albedo, long direct, long specular, long specAlbedo) {
+        /**
+         * The guides of a bound G-buffer, or null when this frame has none. A short array is a host bug: the shader
+         * would write through a binding the host never filled, so the pass refuses it instead of guessing.
+         */
+        static Guides of(long[] views) {
+            if (views == null) {
+                return null;
+            }
+            if (views.length < 7) {
+                throw new IllegalArgumentException("the denoiser G-buffer has " + views.length
+                    + " view(s), the path trace writes 7 guide channels");
+            }
+            return new Guides(views[0], views[1], views[2], views[3], views[4], views[5], views[6]);
+        }
+
+        boolean complete() {
+            return viewZ != 0L && normalRough != 0L && diffuse != 0L && albedo != 0L && direct != 0L
+                && specular != 0L && specAlbedo != 0L;
+        }
+    }
+
     /** One binding the host promises to supply, checked against the generated manifest before the first dispatch. */
     record Expected(String name, int descriptorType) {
     }
@@ -91,7 +117,14 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         new Expected("entityAttrs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
         new Expected("entityRects", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
         new Expected("entityTexels", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        new Expected("entityPrevious", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        new Expected("entityPrevious", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("outViewZ", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        new Expected("outNormalRough", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        new Expected("outSpecular", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        new Expected("outDiffuse", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        new Expected("outAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        new Expected("outDirect", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        new Expected("outSpecAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE));
 
     /** Scene inputs the host must supply: the frame TLAS and the section table written by {@link RtWorld}. */
     record Scene(long tlas, RtMemory.Buf sectionTable) {
@@ -266,7 +299,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                     int emitterCount, float emitterProbability, float emitterCamRelX, float emitterCamRelY,
                     float emitterCamRelZ, int emitterCandidates,
                     float diCamDeltaX, float diCamDeltaY, float diCamDeltaZ, int diFlags, int diParity,
-                    int entityAtlasSize, int selfAvatarTriStart, int selfAvatarTriCount) {
+                    int entityAtlasSize, int selfAvatarTriStart, int selfAvatarTriCount, float autoNormalStrength) {
         Dispatch {
             if (maxDepth < 1) {
                 throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
@@ -314,6 +347,17 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                 throw new IllegalArgumentException("the entity state of a frame cannot be negative, got "
                     + entityAtlasSize + "/" + selfAvatarTriStart + "/" + selfAvatarTriCount);
             }
+            if (!(autoNormalStrength >= 0f) || !Float.isFinite(autoNormalStrength)) {
+                throw new IllegalArgumentException("auto-normal strength must be finite and >= 0, got " + autoNormalStrength);
+            }
+        }
+
+        Dispatch withDiState(int diFlags, int diParity) {
+            return new Dispatch(maxDepth, maxSurfaceSteps, sampleIndex, materialCount, flags,
+                rayBias, alphaCutoff, maxDistance, maxRadiance, sunProbability,
+                emitterCount, emitterProbability, emitterCamRelX, emitterCamRelY, emitterCamRelZ, emitterCandidates,
+                diCamDeltaX, diCamDeltaY, diCamDeltaZ, diFlags, diParity,
+                entityAtlasSize, selfAvatarTriStart, selfAvatarTriCount, autoNormalStrength);
         }
 
         void writeTo(ByteBuffer out) {
@@ -349,7 +393,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             out.putInt(base + 96, entityAtlasSize);
             out.putInt(base + 100, selfAvatarTriStart);
             out.putInt(base + 104, selfAvatarTriCount);
-            out.putInt(base + 108, 0);
+            out.putFloat(base + 108, autoNormalStrength);
         }
     }
 
@@ -423,6 +467,11 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private long frameRecording;
     private BedrayGpuImagesNative.Image radiance;
     private BedrayGpuImagesNative.Image motion;
+    // One-pixel stand-ins for the three guide formats. A descriptor is always required; with no denoiser the shader is
+    // told not to write guides (PATH_TRACE_OPTION_GBUFFER clear), so the dummies are bound but never addressed.
+    private BedrayGpuImagesNative.Image guideDummyR32F;
+    private BedrayGpuImagesNative.Image guideDummyRGBA16F;
+    private BedrayGpuImagesNative.Image guideDummyRGBA8;
     private int width;
     private int height;
     private boolean closed;
@@ -467,6 +516,14 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             reservoirDummy = zeroedBuffer(RESERVOIR_BYTES);
             entityScalarDummy = zeroedBuffer(ENTITY_SCALAR_BYTES);
             entityVectorDummy = zeroedBuffer(ENTITY_VECTOR_BYTES);
+            // One texel per guide format, owned by the pass: the core never reads them back, and the shader only
+            // addresses them when the host asked for guides and bound the real images instead.
+            guideDummyR32F = nativeImages.create(1, 1, VK10.VK_FORMAT_R32_SFLOAT,
+                VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+            guideDummyRGBA16F = nativeImages.create(1, 1, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+            guideDummyRGBA8 = nativeImages.create(1, 1, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+                VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         } catch (RuntimeException | Error e) {
             nativeBuffers.close();
             nativeImages.close();
@@ -521,7 +578,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * that makes both outputs visible to their consumers.
      */
     void record(VkCommandBuffer cmd, Scene scene, Atlases atlases, Emitters emitters, Reservoirs reservoirs,
-                Entities entities, long depthView, Frame frame, Dispatch dispatch) {
+                Entities entities, Guides guides, long depthView, Frame frame, Dispatch dispatch) {
         if (closed) {
             throw new IllegalStateException("path trace pass is closed");
         }
@@ -540,6 +597,15 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         }
         if (depthView == 0L) {
             throw new IllegalArgumentException("path trace needs a depth target");
+        }
+        // The push and the bindings have to agree: a guide write with no image bound would be a descriptor the host
+        // never filled, and a bound G-buffer the push does not mention would be denoised from stale texels.
+        boolean wantsGuides = (dispatch.flags() & OPTION_GBUFFER) != 0;
+        Guides boundGuides = guides != null && guides.complete() ? guides : null;
+        if (wantsGuides != (boundGuides != null)) {
+            throw new IllegalArgumentException(wantsGuides
+                ? "the push asks for denoiser guides but no complete G-buffer is bound"
+                : "denoiser guides are bound but the push does not enable them");
         }
         if (dispatch.emitterCount() > 0 && (emitters == null || emitters.buffer() == 0L)) {
             throw new IllegalArgumentException("the push promises " + dispatch.emitterCount()
@@ -562,6 +628,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         ensure(frame.width, frame.height);
         nativeImages.retain(cmd.address(), radiance);
         nativeImages.retain(cmd.address(), motion);
+        nativeImages.retain(cmd.address(), guideDummyR32F);
+        nativeImages.retain(cmd.address(), guideDummyRGBA16F);
+        nativeImages.retain(cmd.address(), guideDummyRGBA8);
         nativeBuffers.retain(cmd.address(), blockMaterials);
         nativeBuffers.retain(cmd.address(), reservoirDummy);
         nativeBuffers.retain(cmd.address(), entityScalarDummy);
@@ -586,7 +655,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             // follows the table the host actually bound, not a global switch.
             SlangProgram active = activeProgram(scene);
             active.dispatch(cmd.address(), active.groups(width, 0), active.groups(height, 1), 1,
-                resources(scene, atlases, emitters, reservoirs, entities, depthView), push);
+                resources(scene, atlases, emitters, reservoirs, entities, boundGuides, depthView), push);
         }
         VkBarriers.fullMemoryBarrier(cmd);
     }
@@ -615,7 +684,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     }
 
     private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters,
-                                                   Reservoirs reservoirs, Entities entities, long depthView) {
+                                                   Reservoirs reservoirs, Entities entities, Guides guides,
+                                                   long depthView) {
         RtMemory.Buf table = scene.sectionTable();
         // An empty list still needs a descriptor. The dummy table is 64 B, so the fallback range is clamped to it: the
         // shader never indexes past pc.emitterCount, which is 0 for exactly this case.
@@ -647,7 +717,23 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             entityBuffer("entityAttrs", captured.attrs(), entityVectorDummy),
             entityBuffer("entityRects", captured.rects(), entityVectorDummy),
             entityBuffer("entityTexels", captured.texels(), entityScalarDummy),
-            entityBuffer("entityPrevious", captured.previous(), entityScalarDummy));
+            entityBuffer("entityPrevious", captured.previous(), entityScalarDummy),
+            guideImage("outViewZ", guides == null ? 0L : guides.viewZ(), guideDummyR32F),
+            guideImage("outNormalRough", guides == null ? 0L : guides.normalRough(), guideDummyRGBA16F),
+            guideImage("outSpecular", guides == null ? 0L : guides.specular(), guideDummyRGBA16F),
+            guideImage("outDiffuse", guides == null ? 0L : guides.diffuse(), guideDummyRGBA16F),
+            guideImage("outAlbedo", guides == null ? 0L : guides.albedo(), guideDummyRGBA8),
+            guideImage("outDirect", guides == null ? 0L : guides.direct(), guideDummyRGBA16F),
+            guideImage("outSpecAlbedo", guides == null ? 0L : guides.specAlbedo(), guideDummyRGBA8));
+    }
+
+    /**
+     * One guide channel: the denoiser's own image when this frame asked for guides, the pass's one-texel stand-in
+     * otherwise. The dummy keeps the descriptor set complete without the pass owning frame-sized images it would never
+     * write.
+     */
+    private static SlangProgram.Resource guideImage(String name, long view, BedrayGpuImagesNative.Image dummy) {
+        return SlangProgram.Resource.storageImage(name, view != 0L ? view : dummy.view());
     }
 
     /**
@@ -721,6 +807,18 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (motion != null) {
             nativeImages.retire(motion);
             motion = null;
+        }
+        if (guideDummyR32F != null) {
+            nativeImages.retire(guideDummyR32F);
+            guideDummyR32F = null;
+        }
+        if (guideDummyRGBA16F != null) {
+            nativeImages.retire(guideDummyRGBA16F);
+            guideDummyRGBA16F = null;
+        }
+        if (guideDummyRGBA8 != null) {
+            nativeImages.retire(guideDummyRGBA8);
+            guideDummyRGBA8 = null;
         }
         nativeBuffers.close();
         nativeImages.close();

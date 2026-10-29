@@ -51,6 +51,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle renderPhasesHandle;
     private final MethodHandle configurePathTraceHandle;
     private final MethodHandle renderPathTraceHandle;
+    private final MethodHandle renderPathTraceGuidesHandle;
     private final MethodHandle destroyPathTraceHandle;
     private final MethodHandle pathTraceFeatureMaskHandle;
 
@@ -113,6 +114,8 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            renderPathTraceGuidesHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_guides",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             destroyPathTraceHandle = bindOptional(linker, lookup, "bedray_core_destroy_path_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS));
             pathTraceFeatureMaskHandle = bindOptional(linker, lookup, "bedray_core_path_trace_feature_mask",
@@ -435,9 +438,8 @@ public final class BedrayCoreNative implements AutoCloseable {
     }
 
     /**
-     * Invalidates pass history and releases a recording whose GPU work was
-     * proven discarded, or completed with resubmission excluded. Call before
-     * re-recording this command buffer.
+     * Invalidates temporal state and releases a recording after proven discard,
+     * or after host completion with unknown execution and no future resubmission.
      */
     public void discardRecording(long core, long commandBuffer) {
         ensureOpen();
@@ -448,16 +450,13 @@ public final class BedrayCoreNative implements AutoCloseable {
         }
         try {
             int status = (int) discardRecordingHandle.invokeExact(handle(core), commandBuffer);
-            if (status != BedrayCoreLayouts.STATUS_OK)
-                throw new BedrayCoreException("discard_recording", status, "", null);
-        } catch (Throwable t) { throw rethrow("discard_recording", t); }
+            check("discard_recording", status, MemorySegment.NULL);
+        } catch (Throwable t) {
+            throw rethrow("discard_recording", t);
+        }
     }
 
-    /**
-     * Releases resources for a recording after all its GPU submissions have
-     * completed and it cannot be submitted again. Call before re-recording
-     * this command buffer.
-     */
+    /** Releases a completed recording that cannot be submitted again. */
     public void releaseRecording(long core, long commandBuffer) {
         ensureOpen();
         requireHandle(core, "core");
@@ -483,13 +482,8 @@ public final class BedrayCoreNative implements AutoCloseable {
     }
 
     /**
-     * Configures the native path-trace pass on {@code core}. The three program
-     * handles come from {@link #registerProgram}; {@code programSpatial} may be
-     * zero to disable the ReSTIR spatial stage.
-     *
-     * <p>The pass then owns its radiance/motion/accumulation/history images, the
-     * per-recording FrameConstants upload and the one-element dummies. It records
-     * into a host command buffer and never submits or waits.
+     * Configures the native pass with registered program handles. Scene/spatial programs may be zero.
+     * The pass owns private images, uploads and dummies and only records into host command buffers.
      */
     public void configurePathTrace(long core, long programTrace, long programTraceScene, long programSpatial,
                                    long programDisplay, long imageBudgetBytes, long bufferBudgetBytes,
@@ -549,6 +543,24 @@ public final class BedrayCoreNative implements AutoCloseable {
         }
     }
 
+    /** Same frame recorder with seven borrowed host guide views. Input POD is consumed synchronously. */
+    public void renderPathTraceGuides(long core, MemorySegment frameDesc, MemorySegment guides) {
+        ensureOpen();
+        requireHandle(core, "core");
+        requirePathTrace();
+        if (!hasNativeGuideOutputs())
+            throw new BedrayCoreException("render_path_trace_guides", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+                "matching native guide-output exports are required", null);
+        if (frameDesc == null || !frameDesc.isNative() || frameDesc.byteSize() < BedrayCoreLayouts.PT_FRAME_DESC.byteSize()
+            || guides == null || !guides.isNative() || guides.byteSize() < BedrayCoreLayouts.PT_GUIDES_DESC.byteSize())
+            throw new IllegalArgumentException("native frame and guide descriptors are required");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment error = arena.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) renderPathTraceGuidesHandle.invokeExact(handle(core), frameDesc, guides, error);
+            check("render_path_trace_guides", status, error);
+        } catch (Throwable failure) { throw rethrow("render_path_trace_guides", failure); }
+    }
+
     /** Destroys the native pass. Refuses while one of its recordings is unreleased. */
     public void destroyPathTrace(long core) {
         ensureOpen();
@@ -568,13 +580,26 @@ public final class BedrayCoreNative implements AutoCloseable {
         }
     }
 
-    /** True when the loaded DLL owns the DI reservoir ring ({@code NATIVE_DI} feature bit). */
+    /** True when the loaded core advertises ownership of DI allocation, history and parity. */
     public boolean hasNativeReservoirs() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_DI);
+    }
+
+    /** Accepts current 25-binding programs with inactive native guide stand-ins; does not enable guide writes. */
+    public boolean hasGuideBindings() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_GUIDE_BINDINGS);
+    }
+
+    public boolean hasNativeGuideOutputs() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_GUIDE_OUTPUTS) && renderPathTraceGuidesHandle != null;
+    }
+
+    private boolean hasPathTraceFeature(int feature) {
         ensureOpen();
         if (pathTraceFeatureMaskHandle == null) return false;
         try {
             int features = (int) pathTraceFeatureMaskHandle.invokeExact();
-            return (features & BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_DI) != 0;
+            return (features & feature) == feature;
         } catch (Throwable t) {
             throw rethrow("path_trace_feature_mask", t);
         }

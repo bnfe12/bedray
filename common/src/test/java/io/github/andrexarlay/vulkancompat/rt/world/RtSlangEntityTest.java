@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtSlangEntityTest {
 
+    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String ENTITY = SHADERS + "/traversal/entity_geometry.slang";
     private static final String TRAVERSAL = SHADERS + "/traversal/legacy_section_traversal.slang";
@@ -178,11 +179,13 @@ class RtSlangEntityTest {
     /** The frame pulls the capture of the frame it is recording; the switch family keeps an A/B check available. */
     @Test
     void theFrameHandsTheCapturedRingToThePass() {
-        String frame = read(HOST_FRAME);
+        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(frame.contains("RtPathTraceSlangPass.Entities capturedEntities = entityBindingsOfThisFrame();"),
             "one place reads the manager, so the push and the descriptors cannot disagree");
         assertTrue(frame.contains("trace.record(cmd, scene, atlases, emitters, reservoirRange, capturedEntities, "
-            + "views.depth(), frame, dispatch)") || frame.contains("capturedEntities, views.depth(), frame, dispatch"),
+            + "RtPathTraceSlangPass.Guides.of(views.gbuffer()), views.depth(), frame, dispatch)")
+            || frame.contains("capturedEntities, RtPathTraceSlangPass.Guides.of(views.gbuffer()),\n"
+            + "            views.depth(), frame, dispatch"),
             "the ring travels with the rest of the frame's resources");
         assertTrue(frame.contains("if (!RtConfig.SLANG_ENTITIES)"), "and the switch turns the whole thing off");
 
@@ -198,12 +201,12 @@ class RtSlangEntityTest {
      */
     @Test
     void theFrameReportsWhatTheRingActuallyHolds() {
-        String frame = read(HOST_FRAME);
+        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(frame.contains("if (!entityRingReported) {"), "one line per session, not one per frame");
         assertTrue(frame.contains("Slang path trace reads the entity ring"), "the populated case names its counts");
         assertTrue(frame.contains("Slang path trace has no entity capture in this frame"),
             "and the empty case is reported too, because silence is what made this ambiguous before");
-        assertTrue(frame.indexOf("Slang path trace reads the entity ring") < frame.indexOf("trace.record(cmd,"),
+        assertTrue(frame.indexOf("Slang path trace reads the entity ring") < frame.indexOf("backend.record("),
             "the evidence is recorded before the dispatch that may fail");
         assertTrue(frame.contains("capturedEntities.indices().bytes() / 12L"),
             "triangles from the index range the shader itself measures");
@@ -305,11 +308,49 @@ class RtSlangEntityTest {
         assertTrue(host.contains("SlangProgram.Resource.storageImage(\"outMotion\", motion.view())"),
             "and hands its own image to the shader, so no consumer can bind a stale one");
 
-        String frame = read(HOST_FRAME);
+        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(frame.contains("SlangProgram.Resource.storageImage(\"motion\", trace.motionView())"),
             "the display step reads the tracer's image rather than a second allocation");
         assertTrue(frame.contains("entityView(eg.framePreviousPositions())"),
             "and the previous ring reaches the pass from the same one place as the other slices");
+    }
+
+    @Test
+    void endPortalPartsUseTheProceduralStarfieldInsteadOfTheirCapturedTexel() {
+        String entity = read(ENTITY);
+        assertTrue(entity.contains("static const uint ENTITY_VERTEX_FLAG_END_PORTAL = 0x80u;"),
+            "CapturedVertexConsumer marks end_portal and end_gateway parts with bit 7");
+        assertTrue(entity.contains("result.flags |= HIT_FLAG_ENTITY_END_PORTAL;"),
+            "the geometry decoder carries the part classification to the material layer");
+
+        String surface = block(read(SURFACE), "} else if (hit.kind == HitKind.Entity) {");
+        assertTrue(surface.contains("entityPortalColor(hit.worldPosition, rayDirection, options.portalTime)"),
+            "the portal is procedural and uses the current bounce direction for parallax");
+        assertTrue(surface.contains("emission = 0.95;") && surface.contains("pbr.roughness = 0.05;"),
+            "the legacy portal emission and smooth surface response");
+        assertTrue(read(SURFACE).contains("SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection)"),
+            "a secondary hit needs its own ray direction, not the camera's primary direction");
+        String pass = read(PASS);
+        assertTrue(pass.contains("materialOptions.portalTime = f.camera.origin.w;"),
+            "the animation clock comes from the immutable frame block");
+    }
+
+    @Test
+    void entityAutoNormalsPerturbOnlyTheShadingNormal() {
+        String surface = read(SURFACE);
+        assertTrue(surface.contains("float entityAtlasLuminanceOffset(EntityAtlas atlas, uint slot, float2 uv, int2 offset)"),
+            "the Sobel taps are integer atlas texels, not block-atlas samples");
+        assertTrue(surface.contains("float3 decodeEntityAutoNormal(EntityAtlas atlas, SurfaceHit hit,"),
+            "entity normal generation has its own material-stage decoder");
+        String entity = block(surface, "} else if (hit.kind == HitKind.Entity) {");
+        assertTrue(entity.contains("decodeEntityAutoNormal(atlas.entities, hit, geometricNormal, options.autoNormalStrength)"),
+            "the player's strength reaches the entity decode");
+        assertTrue(entity.indexOf("!endPortal") < entity.indexOf("decodeEntityAutoNormal"),
+            "the procedural portal must not inherit a normal from its placeholder texture");
+        assertTrue(!entity.contains("hit.geometricNormal ="),
+            "auto normals never change the geometric normal used to offset shadow rays");
+        assertTrue(read(PASS).contains("materialOptions.autoNormalStrength = asfloat(pc.entityState.w);"),
+            "the existing push block carries the strength without growing the ABI");
     }
 
     private static String block(String source, String header) {
