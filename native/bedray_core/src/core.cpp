@@ -6,6 +6,7 @@
 #include "path_trace_pass.h"
 #include "bloom_pass.h"
 #include "particles_pass.h"
+#include "volumetric_pass.h"
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
 #include "frame_graph_owner.h"
 #endif
@@ -121,6 +122,7 @@ struct BedrayCore {
     bedray::core::DeviceFns device_fns{};
     std::unique_ptr<bedray::core::PathTracePass> path_trace;
     std::unique_ptr<bedray::core::BloomPass> bloom;
+    std::unique_ptr<bedray::core::VolumetricPass> volumetric;
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
     std::unique_ptr<bedray::core::FrameGraphOwner> frame_graph;
 #endif
@@ -631,15 +633,22 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
     if (core == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
-    if (!core->recordings.empty()) return BEDRAY_ERROR_IN_USE;
+    if (!core->recordings.empty() || (core->bloom && core->bloom->has_recordings())
+        || (core->volumetric && core->volumetric->has_recordings())
+        || (core->path_trace && core->path_trace->has_recordings())) return BEDRAY_ERROR_IN_USE;
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && core->frame_graph->has_recordings()) return BEDRAY_ERROR_IN_USE;
+#endif
+    if (core->volumetric) {
+        const auto status = core->volumetric->destroy();
+        if (status != BEDRAY_OK) return status;
+        core->volumetric.reset();
+    }
     if (core->bloom) {
         const BedrayStatus status = core->bloom->destroy();
         if (status != BEDRAY_OK) return status;
         core->bloom.reset();
     }
-#if defined(BEDRAY_CORE_FRAME_GRAPH)
-    if (core->frame_graph && core->frame_graph->has_recordings()) return BEDRAY_ERROR_IN_USE;
-#endif
     if (core->path_trace) {
         const BedrayStatus status = core->path_trace->destroy();
         if (status != BEDRAY_OK) return status;
@@ -946,7 +955,8 @@ BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
     const bool in_use = std::any_of(core->recordings.begin(), core->recordings.end(),
         [program](const RecordingUse& use) { return use.program == program; })
         || (core->path_trace && core->path_trace->uses_program(program_handle))
-        || (core->bloom && core->bloom->uses_program(program_handle));
+        || (core->bloom && core->bloom->uses_program(program_handle))
+        || (core->volumetric && core->volumetric->uses_program(program_handle));
     if (!in_use) {
         core->programs.erase(std::remove(core->programs.begin(), core->programs.end(), program), core->programs.end());
         destroy_program(core, program);
@@ -978,7 +988,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
         const bool in_use = std::any_of(core->recordings.begin(), core->recordings.end(),
             [program](const RecordingUse& use) { return use.program == program; })
             || (core->path_trace && core->path_trace->uses_program(program->handle))
-            || (core->bloom && core->bloom->uses_program(program->handle));
+            || (core->bloom && core->bloom->uses_program(program->handle))
+            || (core->volumetric && core->volumetric->uses_program(program->handle));
         if (program->retired && !in_use) {
             it = core->programs.erase(it);
             destroy_program(core, program);
@@ -992,7 +1003,11 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
             return status;
         }
     }
-    if (core->bloom) return core->bloom->release_recording(command_buffer);
+    if (core->bloom) {
+        const auto status = core->bloom->release_recording(command_buffer);
+        if (status != BEDRAY_OK) return status;
+    }
+    if (core->volumetric) return core->volumetric->release_recording(command_buffer);
     return BEDRAY_OK;
 } catch (const std::bad_alloc&) {
     return BEDRAY_ERROR_OUT_OF_MEMORY;
@@ -1005,6 +1020,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_discard_recording(
     if (core == nullptr || command_buffer == 0) return BEDRAY_ERROR_INVALID_ARGUMENT;
     if (core->path_trace) core->path_trace->discard_recording(command_buffer);
     if (core->bloom) core->bloom->discard_recording(command_buffer);
+    if (core->volumetric) core->volumetric->discard_recording(command_buffer);
     return bedray_core_release_recording(core, command_buffer);
 } catch (...) {
     return BEDRAY_ERROR_INTERNAL;
@@ -1438,6 +1454,57 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_bloom(BedrayCore* core) 
     if (!core->bloom) return BEDRAY_OK;
     const auto status = core->bloom->destroy();
     if (status == BEDRAY_OK) core->bloom.reset();
+    return status;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_ERROR_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_ERROR_INTERNAL;
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_volumetric(
+    BedrayCore* core, const BedrayVolumetricDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/volumetric desc is null");
+    if (desc->abi_version != BEDRAY_CORE_ABI_VERSION || desc->struct_size != sizeof(*desc))
+        return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "volumetric ABI/size mismatch");
+    constexpr auto required = BEDRAY_CAP_RAY_QUERY | BEDRAY_CAP_ACCELERATION_STRUCTURE
+        | BEDRAY_CAP_BUFFER_DEVICE_ADDRESS | BEDRAY_CAP_SHADER_INT64;
+    if ((core->capabilities & required) != required)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "volumetric ray-query/BDA/Int64 capabilities are not enabled");
+    if (core->volumetric && core->volumetric->has_recordings())
+        return fail(error, BEDRAY_ERROR_IN_USE, "volumetric recordings pending");
+    auto pass = std::make_unique<bedray::core::VolumetricPass>();
+    auto status = pass->configure(core, core->device_fns, *desc, error);
+    if (status != BEDRAY_OK) return status;
+    if (core->volumetric) {
+        status = core->volumetric->destroy();
+        if (status != BEDRAY_OK) return status;
+    }
+    core->volumetric = std::move(pass);
+    return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate volumetric pass");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring volumetric pass");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_volumetric(
+    BedrayCore* core, const BedrayVolumetricFrameDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc || !core->volumetric)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "volumetric pass is not configured");
+    return core->volumetric->render(*desc, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate volumetric recording");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording volumetric pass");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_volumetric(BedrayCore* core) try {
+    if (!core) return BEDRAY_ERROR_INVALID_ARGUMENT;
+    if (!core->volumetric) return BEDRAY_OK;
+    const auto status = core->volumetric->destroy();
+    if (status == BEDRAY_OK) core->volumetric.reset();
     return status;
 } catch (const std::bad_alloc&) {
     return BEDRAY_ERROR_OUT_OF_MEMORY;
