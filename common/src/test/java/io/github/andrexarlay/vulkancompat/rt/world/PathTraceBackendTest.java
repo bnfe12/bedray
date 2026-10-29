@@ -45,13 +45,21 @@ class PathTraceBackendTest {
         assertEquals(0, backend.frame.dispatch().diParity(), "the host supplies no backend parity");
         host.dispatch(null, params, 16, 8);
         assertEquals(0, backend.frame.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY);
+        assertTrue((backend.frame.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI) != 0,
+            "a frame without emitters cannot consume the backend's reset request");
+        params.emitterCount = 1;
+        host.dispatch(null, params, 16, 8);
+        assertTrue(backend.frame.dispatch().diFlags() != 0, "this frame actually runs DI");
+        host.dispatch(null, params, 16, 8);
         assertEquals(0, backend.frame.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI);
         host.discardRecording(99);
         host.dispatch(null, params, 16, 8);
         assertEquals(0, backend.frame.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY);
-        host.prepare(null, null, 8, 8);
-        host.dispatch(null, params, 8, 8);
+        host.prepare(null, null, 8, 16);
+        host.dispatch(null, params, 8, 16);
         assertTrue((backend.frame.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY) != 0);
+        assertTrue((backend.frame.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI) != 0,
+            "a transposed extent has the same pixel count but a different reservoir layout");
         host.discardRecording(17);
         assertEquals(17, backend.discarded);
         host.dispatch(null, params, 8, 8);
