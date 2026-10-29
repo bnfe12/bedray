@@ -39,10 +39,21 @@ above the single-dispatch calls. It keeps one recording per command buffer in
 `recordings_` and pins six private images plus the selected buffer uses (dummy
 buffers, frame upload and an active native DI ring). Current 25-binding trace
 programs additionally pin three one-texel guide stand-ins of R32F, RGBA16F and
-RGBA8. They satisfy inactive bindings, never an enabled G-buffer-write request.
+RGBA8 when guide writes are disabled. They satisfy inactive bindings only.
 Their transitions are recorded before use and invalidated on discard; retirement
 still follows exact recording proof. Legacy 18-binding programs are accepted
 independently for both scene-table variants.
+
+The additive `bedray_core_render_path_trace_guides` call accepts the separate
+64-byte `BedrayPathTraceGuides` descriptor, guarded by ABI version/size and the
+GUIDE_OUTPUTS feature. All seven non-zero host views and the G-buffer option are
+required together. Those views are borrowed GENERAL images at the frame extent;
+their host owner must retain them until the same exact completion/discard proof
+as output/depth. The pass binds them directly in immutable dispatch descriptors,
+does not pin/transition the inactive stand-ins, and never destroys host images.
+The same opaque graph callback consumes both input PODs synchronously; it retains
+only the existing command-buffer recording. History and barrier authority remain
+in the pass. The original call still rejects enabled writes without real targets.
 
 - `bedray_core_release_recording` remains the only release call: the core drops
   its dispatch records and the pass completes its image/buffer pins in the same

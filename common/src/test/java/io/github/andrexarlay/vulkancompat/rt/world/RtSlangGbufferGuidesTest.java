@@ -130,7 +130,11 @@ class RtSlangGbufferGuidesTest {
         assertTrue(renderer.contains("denoiseMode != DenoiserMode.DLSS_RR"), "only the RR layout consumes these guides");
         assertTrue(renderer.contains("the \" + denoiseMode + \" layout needs the world-space motion buffer\""),
             "NRD is refused with its real blocker: the motion buffer");
-        assertTrue(renderer.contains("RtConfig.SLANG_PATH_TRACE_CPP"), "the C++ backend writes no guides");
+        assertTrue(renderer.contains("RtSlangPathPass.supportProblem(runtime, gbuffer)"),
+            "the native core must support the requested outputs before the pass is created");
+        String backend = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/NativePathTraceBackend.java");
+        assertTrue(backend.contains("guides && !runtime.library().hasNativeGuideOutputs()"),
+            "a guide request needs the additive native feature and export");
         assertTrue(renderer.contains("AUTO keeps the GLSL path when a denoiser is selected"),
             "AUTO does not silently move a denoiser onto unproven guides");
         String pass = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");

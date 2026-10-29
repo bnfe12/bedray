@@ -72,6 +72,7 @@ public final class BedrayCoreLayouts {
     public static final int PATH_TRACE_FRAME_RESET_DI = 1 << 7;
     public static final int PATH_TRACE_FEATURE_NATIVE_DI = 1 << 0;
     public static final int PATH_TRACE_FEATURE_GUIDE_BINDINGS = 1 << 1;
+    public static final int PATH_TRACE_FEATURE_GUIDE_OUTPUTS = 1 << 2;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;
@@ -178,6 +179,18 @@ public final class BedrayCoreLayouts {
 
     // ---- additive path-trace ABI (see the "Additive path-trace pass ABI" block
     // in bedray_core.h). These layouts do not touch any ABI v2 struct above.
+
+    public static final StructLayout PT_GUIDES_DESC = MemoryLayout.structLayout(
+        ValueLayout.JAVA_INT.withName("abi_version"),
+        ValueLayout.JAVA_INT.withName("struct_size"),
+        ValueLayout.JAVA_LONG.withName("view_z"),
+        ValueLayout.JAVA_LONG.withName("normal_rough"),
+        ValueLayout.JAVA_LONG.withName("specular"),
+        ValueLayout.JAVA_LONG.withName("diffuse"),
+        ValueLayout.JAVA_LONG.withName("albedo"),
+        ValueLayout.JAVA_LONG.withName("direct"),
+        ValueLayout.JAVA_LONG.withName("specular_albedo")
+    ).withName("BedrayPathTraceGuides");
 
     public static final StructLayout PT_BUFFER = MemoryLayout.structLayout(
         ValueLayout.JAVA_LONG.withName("handle"),
@@ -485,6 +498,7 @@ public final class BedrayCoreLayouts {
         require("BedrayPathTraceLighting", PT_LIGHTING.byteSize(), 80);
         require("BedrayPathTraceAtmosphere", PT_ATMOSPHERE.byteSize(), 80);
         require("BedrayPathTracePath", PT_PATH.byteSize(), 112);
+        require("BedrayPathTraceGuides", PT_GUIDES_DESC.byteSize(), 64);
         require("BedrayPathTraceFrameDesc", PT_FRAME_DESC.byteSize(), 1072);
         require("BedrayPathTraceDesc", PT_DESC.byteSize(), 80);
         require("BedrayPathTraceDesc.program_trace_scene", PTD_PROGRAM_TRACE_SCENE, 64);

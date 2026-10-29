@@ -1437,9 +1437,7 @@ public final class RtFrameRenderer {
             // the denoiser, which is the consequence, not the cause.
             String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
             if (blocker == null) {
-                if (RtConfig.SLANG_PATH_TRACE_CPP) {
-                    blocker = "the C++ path backend writes no G-buffer guides";
-                } else if (denoiseMode != DenoiserMode.DLSS_RR) {
+                if (denoiseMode != DenoiserMode.DLSS_RR) {
                     blocker = "the " + denoiseMode + " layout needs the world-space motion buffer"
                         + " the Slang path does not fill yet";
                 } else if (selector == RtConfig.PathTracer.AUTO) {
@@ -1470,7 +1468,7 @@ public final class RtFrameRenderer {
         }
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
-            String problem = RtSlangPathPass.supportProblem(runtime);
+            String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
             if (problem != null) {
                 pathSlangUnavailableReason = problem;
                 if (selector == RtConfig.PathTracer.AUTO) {

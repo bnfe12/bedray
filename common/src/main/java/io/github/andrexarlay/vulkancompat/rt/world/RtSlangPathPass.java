@@ -76,6 +76,10 @@ public final class RtSlangPathPass implements RtPass {
 
     /** Why this runtime cannot run the Slang path, or null when it can. Used verbatim in the fallback/failure log. */
     static String supportProblem(SlangRuntime runtime) {
+        return supportProblem(runtime, false);
+    }
+
+    static String supportProblem(SlangRuntime runtime, boolean guides) {
         if (runtime == null) {
             return "no Slang runtime";
         }
@@ -89,7 +93,7 @@ public final class RtSlangPathPass implements RtPass {
         if (!SlangPassLibrary.available(DISPLAY_PASS)) {
             return "AOT pass " + DISPLAY_PASS + " is missing from the jar";
         }
-        return null;
+        return RtConfig.SLANG_PATH_TRACE_CPP ? NativePathTraceBackend.supportProblem(runtime, guides) : null;
     }
 
     private final boolean requestedGbuffer;
