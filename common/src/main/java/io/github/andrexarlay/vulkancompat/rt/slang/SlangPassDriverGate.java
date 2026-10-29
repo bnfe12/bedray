@@ -1,11 +1,9 @@
 package io.github.andrexarlay.vulkancompat.rt.slang;
 
-import java.util.LinkedHashSet;
 import java.util.Locale;
-import java.util.Set;
 
 /**
- * Refuses a Slang module that the NVIDIA driver cannot compile.
+ * Refuses a Slang module that the NVIDIA driver cannot survive.
  *
  * <p>Reading a resource handle that no binding ever assigned makes {@code nvoglv64.dll} take an access
  * violation inside {@code vkCreateComputePipelines}. That is not a {@code VkResult} and not a Java
@@ -14,19 +12,22 @@ import java.util.Set;
  * {@code OpUndef} pointer, which is visible in the compiled artifact, so the rule reads the bytes rather
  * than a list of names: a pass fixed in Slang stops being refused without touching this file.
  *
- * <p>A headless replay of the four Vulkan steps {@code bedray_core_register_program} performs on the
- * owner's GPU (RTX 5060 Ti) faults on some modules the game registers without trouble - {@code path_trace}
- * and {@code restir_spatial} among them - because the replay brings up a leaner device than the game's
- * Vulkan backend does. A replay fault is therefore only evidence when the module has never been
- * registered in a live frame either; those names are listed below and nothing else is.
+ * <p>A name list is the thing this gate must not grow. The headless replay of the four Vulkan steps
+ * {@code bedray_core_register_program} performs faults on every module that does pointer arithmetic with
+ * device addresses ({@code OpConvertUToPtr}, {@code OpPtrAccessChain}, {@code OpPtrEqual}), yet the game
+ * registered {@code path_trace}, {@code path_trace_scene} and {@code restir_spatial} at 20:50:16 in one and
+ * the same session and then died on {@code volumetric_march} - the replay's device is not the game's, so a
+ * replay verdict carries no information about whether a live frame can compile the module. Refusing a
+ * module because a replay said so cost the light shafts twice (docs/AUDIT_DEFECTS_AND_ISSUES.md P0-9).
+ * Only a defect that is both deterministic from the bytes and already known to kill the JVM belongs here.
  *
  * <p>Ways this silently breaks:
  * <ul>
- *   <li>An {@code OpUndef} pointer that the march never reads still refuses the module, so a pass can go
- *       missing with no shader-side symptom.</li>
- *   <li>A name added to the replay list without a faulting replay puts a working feature behind a refusal,
- *       and the log line that explains it is the only trace.</li>
- *   <li>A driver update can change either verdict, so the property below exists to retest.</li>
+ *   <li>An {@code OpUndef} pointer the march never reads still refuses the module, so a pass can go missing
+ *       with no shader-side symptom.</li>
+ *   <li>A driver-side fault that leaves no byte-level trace is invisible here, and only a live frame finds
+ *       it. That is the accepted cost of not refusing on a replay.</li>
+ *   <li>A driver update can change the verdict, so the property below exists to retest.</li>
  * </ul>
  * Override with {@code -Dbedray.slang.passes=a,b,c} (extra names) or {@code -Dbedray.slang.passes=all} to
  * remove the gate.
@@ -34,10 +35,6 @@ import java.util.Set;
 public final class SlangPassDriverGate {
     /** Property that widens the gate; {@code all} removes it. */
     public static final String PASSES_PROPERTY = "bedray.slang.passes";
-
-    /** Faulted in the headless replay and never registered by a live frame. */
-    private static final Set<String> REPLAY_REFUSED = Set.of("volumetric_march_scene", "rc_probe_trace",
-        "velocity_reproject");
 
     // SPIR-V words, little endian: OpUndef=1, OpTypePointer=32. A pointer carries Result Id,
     // Storage Class and the pointee type in that order.
@@ -57,12 +54,7 @@ public final class SlangPassDriverGate {
         return blocker(name, spirv) == null;
     }
 
-    /** The replay-list half of the decision, for diagnostics that have no module bytes at hand. */
-    public static String blocker(String name) {
-        return blocker(name, null);
-    }
-
-    /** Why {@code name} must not reach the driver, or {@code null} when it may. */
+    /** Why {@code name} with module {@code spirv} must not reach the driver, or {@code null} when it may. */
     public static String blocker(String name, byte[] spirv) {
         if (name == null || name.isEmpty()) {
             return "the pass name is empty";
@@ -78,22 +70,7 @@ public final class SlangPassDriverGate {
                 + "resource or drop the code path - see docs/AUDIT_DEFECTS_AND_ISSUES.md P0-9. Set -D"
                 + PASSES_PROPERTY + "=" + name + " to try it anyway";
         }
-        if (REPLAY_REFUSED.contains(name)) {
-            return name + " faulted the headless driver replay and no live frame has ever registered it; "
-                + "set -D" + PASSES_PROPERTY + "=" + name + " to try it";
-        }
         return null;
-    }
-
-    /** Names this gate blocks without looking at a module, for diagnostics and tests. */
-    public static Set<String> blockedNames() {
-        Set<String> out = new LinkedHashSet<>();
-        for (String name : REPLAY_REFUSED) {
-            if (blocker(name, new byte[0]) != null) {
-                out.add(name);
-            }
-        }
-        return out;
     }
 
     /**

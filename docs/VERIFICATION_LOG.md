@@ -4,6 +4,76 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — A replay verdict is not a live frame: the gate loses its name list, the scene march is unblocked (L1 driver replay, L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`. The open question was whether
+`volumetric_march_scene` may reach the driver at all: it faulted the headless
+replay, so the gate refused it and light shafts stayed off. This entry settles
+that the replay carries no information, and says how much risk that leaves.
+
+Sweep of all 24 AOT modules through the four Vulkan steps
+`bedray_core_register_program` performs, under three device configurations:
+
+| Probe device settings | Faulting modules |
+|---|---|
+| queried features (everything the GPU advertises), instance apiVersion 1.3 | `path_trace`, `path_trace_scene`, `rc_probe_trace`, `restir_spatial`, `velocity_reproject`, `volumetric_march_scene` |
+| the engine's minimal calloc'd feature chain + its 8 device extensions | identical six |
+| same, instance apiVersion 1.2 | identical six |
+
+The verdict does not move with the device, so the difference from the game is
+not a feature bit or an API level. What does separate the two sets, perfectly:
+
+| Opcode (SPIR-V) | In all 6 faulting modules | In any of the 18 clean ones |
+|---|---|---|
+| `OpConvertUToPtr` (68), `OpPtrAccessChain` (166), `OpPtrEqual` (185) | present | absent |
+
+Device-address pointer arithmetic. And the game compiles exactly that, on the
+same GPU, in the very session that died: `26.3(1)/minecraft/logs/latest.log`
+registers `path_trace` (26 bindings), `path_trace_scene` and `restir_spatial` at
+20:50:16, then crashes after `shafts_pass=true` on `volumetric_march`. Two crash
+signatures, one shared caller frame — the game's leaf is `nvoglv64.dll+0x13f4ae`
+reading `0x4` (the `OpUndef` handle), the replay's is `+0x140178` reading `0x0`
+under `vkCreateComputePipelines`. Same function, different null source: the
+replay reproduces *a* compiler fault, not *the* one that killed the game.
+
+Conclusion, and it narrows what a gate may claim: refusing a module because a
+replay faulted is refusing on an unexplained harness difference. `SlangPassDriverGate`
+now holds the byte rule only — `REPLAY_REFUSED`, `blockedNames()` and the
+name-only `blocker(name)` are deleted, and the class comment records why, because
+a future reader is the one most likely to re-add the list.
+
+| Check | Expected | Observed |
+|---|---|---|
+| `OpUndef` descriptor handles, all 24 built modules | 0 | 0 for all 24 (Python scan over the deployed bytes) |
+| `volumetric_march_scene` descriptor contract vs the legacy march | same | same: `tlas` 0, `sections` 2/64 B, `accumImage` 11, `outDepth` 12, `frame` 16/608 B, push 96 B, 8×8×1, capabilities 517 |
+| `SlangPassDriverGateTest` + `SlangRuntimeOwnershipTest` | green | 9 + 3 tests, 0 failures |
+| mutation proof of the new anti-name-list guard | red | a `java.util.Set.of("volumetric_march_scene")` field added to the gate fails exactly `a_replay_fault_alone_never_refuses_a_module`; file restored byte-identical (sha256 `2046f3fe…` OK) |
+
+Two method errors made and corrected while getting here, both of which had
+already produced a fake finding:
+
+- I read SPIR-V `Decoration::Binding` as 3 and `Offset` as 33. They are 33 and
+  34 (`DescriptorSet` 34, `Offset` 35). The wrong table made 23 of 24 modules
+  look like they declared descriptors the manifest never lists; the corrected
+  scan shows the two marches identical. No conclusion from the earlier audit
+  stands — including the one I was about to report.
+- The replay's `VK_EXT_debug_utils` callback treated `pCallbackData` as the
+  message `char*`, when it is a `VkDebugUtilsMessengerCallbackDataEXT*`, so the
+  driver's diagnostics printed as mojibake for every run since the harness
+  existed. Decoded properly, the loader only reports inserting `VK_LAYER_RTSS`
+  and `VK_LAYER_OBS_HOOK` and NVIDIA says nothing before the fault — there is no
+  compiler message to chase.
+
+**Not proven:** no live frame has yet registered either march module — the
+atmosphere's Slang volumetric passes have never been connected in a session the
+owner ran (`04:14` log: `Slang volumetric passes are not connected; god rays are
+unavailable`). The unblocked scene march is a deliberate, stated risk: if the
+driver does fault on it, the JVM dies without a log line, and the fix is to put
+the refusal back on that one name with the crash log as its evidence. The same
+exposure now applies to `rc_probe_trace` (not wired into the frame loop yet) and
+`velocity_reproject` (nothing registers that name). L1 + L2, no owner-verified
+frame.
+
 ## 2026-10-29 — P0-5 and P0-6: the two audit items that said "нужен тест" and had none (L2 unit, mutation proof)
 
 Branch: `refactor/slang-pipeline`. Both items were closed in the branch months
@@ -100,13 +170,13 @@ refusals — `26.3(1)/minecraft/logs/latest.log` at 20:50:16 records
 `registered SlangProgram[path_trace, 26 binding(s), 112 B push]`,
 `[path_trace_scene, …]`, `[restir_spatial, 8 binding(s), 64 B push]`,
 `[path_display]`, `[sodium_dequantize]`, `[particles_composite]`, and the other
-instance adds the four `bloom_*`. The replay brings up a leaner device than the
-game's Vulkan backend, so a replay fault is only a refusal when no live frame
-has ever registered the module; the shipped rule is the byte scan plus
-`REPLAY_REFUSED = {volumetric_march_scene, rc_probe_trace, velocity_reproject}`,
-and `SlangPassDriverGateTest` pins the live-registered names as permitted.
-Left as-is, the earlier lists would have switched path tracing off in the Java
-host — the opposite of what the owner was testing.
+instance adds the four `bloom_*`. Left as-is, those lists would have switched
+path tracing off in the Java host — the opposite of what the owner was testing.
+The interim rule that survived that correction (byte scan plus
+`REPLAY_REFUSED = {volumetric_march_scene, rc_probe_trace, velocity_reproject}`)
+was itself wrong as a method, and the next entry below is what replaced it: a
+replay verdict turned out to be uncorrelated with the game, so the gate is now
+the byte scan and nothing else.
 
 Evidence level: L1 (compile), L2 (unit), plus a driver replay on the owner's GPU.
 **No owner-verified frame yet.** `volumetric_march_scene` still refuses, so

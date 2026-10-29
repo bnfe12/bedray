@@ -26,10 +26,12 @@ import org.junit.jupiter.api.Test;
  * exception - the JVM dies with the game, with no log line. The rule therefore reads the compiled bytes,
  * so fixing a pass in Slang lifts its own refusal.
  *
- * <p>What this file does not do is trust a name list. The headless replay of 2026-10-29 faulted on
- * {@code path_trace} and {@code restir_spatial}, and the live frame registered both at 20:50:16 in
- * {@code logs/latest.log} of the testbed instance - a replay fault is only a refusal when no live frame has
- * ever registered the module either.
+ * <p>What this file does not do is trust a name list. The headless replay of 2026-10-29 faults on exactly the
+ * modules that do device-address pointer arithmetic ({@code path_trace}, {@code path_trace_scene},
+ * {@code restir_spatial}, {@code rc_probe_trace}, {@code velocity_reproject}, {@code volumetric_march_scene} -
+ * the opcode sets of the other eighteen contain no {@code OpConvertUToPtr}), and the live frame registered the
+ * first three of those at 20:50:16 in {@code logs/latest.log} of the testbed instance before dying on the march.
+ * The replay is therefore not a live frame, and only a byte-level defect justifies a refusal.
  */
 class SlangPassDriverGateTest {
 
@@ -93,44 +95,48 @@ class SlangPassDriverGateTest {
     }
 
     @Test
-    void a_replay_fault_no_live_frame_ever_overrules_is_refused() {
-        for (String name : Set.of("volumetric_march_scene", "rc_probe_trace", "velocity_reproject")) {
-            String reason = SlangPassDriverGate.blocker(name);
-            assertNotNull(reason, name + " must stay out of the driver until a live frame registers it");
-            assertTrue(reason.contains(SlangPassDriverGate.PASSES_PROPERTY), name + " has to say how to override");
+    void a_replay_fault_alone_never_refuses_a_module() throws IOException {
+        // Every one of these faulted the headless replay; path_trace, path_trace_scene and restir_spatial are
+        // registered by a live frame in the same session that died on the march's OpUndef handle, which is what
+        // proved the replay's device is not the game's. A name list built on that verdict took the light shafts
+        // away twice, so refusal has to need a byte-level defect.
+        for (String name : Set.of("volumetric_march_scene", "rc_probe_trace", "velocity_reproject", "path_trace")) {
+            assertNull(SlangPassDriverGate.blocker(name, null), name + " must reach the driver");
+            assertTrue(SlangPassDriverGate.permits(name, null));
         }
-        assertEquals(Set.of("volumetric_march_scene", "rc_probe_trace", "velocity_reproject"),
-            SlangPassDriverGate.blockedNames());
+        String gate = read(Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/slang/"
+            + "SlangPassDriverGate.java"));
+        assertFalse(gate.contains("Set.of("),
+            "the gate must stay name-free: a refusal that reads only a name blocks passes it never saw fail");
     }
 
     @Test
     void the_passes_a_live_frame_registered_are_permitted() {
         for (String name : LIVE_REGISTERED) {
-            assertNull(SlangPassDriverGate.blocker(name), name + " runs in the game, so the gate must not stop it");
+            assertNull(SlangPassDriverGate.blocker(name, null),
+                name + " runs in the game, so the gate must not stop it");
             assertTrue(SlangPassDriverGate.permits(name, null));
         }
     }
 
     @Test
     void a_null_or_empty_name_is_refused() {
-        assertNotNull(SlangPassDriverGate.blocker(null));
-        assertNotNull(SlangPassDriverGate.blocker(""));
+        assertNotNull(SlangPassDriverGate.blocker(null, null));
+        assertNotNull(SlangPassDriverGate.blocker("", null));
     }
 
     @Test
     void the_property_overrides_for_one_pass_and_for_every_pass() {
+        byte[] broken = module(op(4, 32), 10, 0, 8, op(3, 1), 10, 11);
         try {
             System.setProperty(SlangPassDriverGate.PASSES_PROPERTY, "volumetric_march_scene,path_trace");
-            assertNull(SlangPassDriverGate.blocker("volumetric_march_scene"));
-            assertNull(SlangPassDriverGate.blocker("volumetric_march_scene",
-                module(op(4, 32), 10, 0, 8, op(3, 1), 10, 11)));
-
+            assertNull(SlangPassDriverGate.blocker("volumetric_march_scene", broken));
             System.setProperty(SlangPassDriverGate.PASSES_PROPERTY, "all");
-            assertNull(SlangPassDriverGate.blocker("rc_probe_trace"));
+            assertNull(SlangPassDriverGate.blocker("rc_probe_trace", broken));
         } finally {
             System.clearProperty(SlangPassDriverGate.PASSES_PROPERTY);
         }
-        assertNotNull(SlangPassDriverGate.blocker("volumetric_march_scene"),
+        assertNotNull(SlangPassDriverGate.blocker("volumetric_march_scene", broken),
             "clearing the property restores the default");
     }
 
@@ -146,14 +152,6 @@ class SlangPassDriverGateTest {
         assertTrue(refusal > 0, "SlangRuntime must screen the module bytes it is about to register");
         assertTrue(register > 0, "the register call this test anchors on was renamed");
         assertTrue(refusal < register, "the gate has to refuse before the runtime reaches the driver");
-    }
-
-    @Test
-    void blocked_names_are_all_bundled_in_the_jar() {
-        Set<String> bundled = Set.copyOf(SlangPassLibrary.names());
-        for (String name : SlangPassDriverGate.blockedNames()) {
-            assertTrue(bundled.contains(name), name + " is not in the jar, so the gate is guarding nothing");
-        }
     }
 
     /** SPIR-V words after the five-word header, little endian, each instruction already carrying its size. */
