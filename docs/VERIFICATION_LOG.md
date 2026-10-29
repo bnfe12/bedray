@@ -4,6 +4,63 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — P2-8 CRT/ABI audit, and why the source-contract gates were not running (L0 source, L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`, on top of `57f8f2f`. P2-8 was the last audit
+item with a heading and no status line at all: it claimed a `/MT` vs `/MD`
+conflict between the two native projects. It is closed as "no conflict, pinned
+by test", and the run turned up a defect in the verification gate itself.
+
+What the source says:
+
+- Both projects set `MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"`
+  (`bedray_core/CMakeLists.txt:107`, `bedray_scene/CMakeLists.txt:53` and `:61`),
+  and `/MD` / `MultiThreadedDLL` appear nowhere under `native/` — not in the
+  DLLs, not in the ten test executables, not in `bedray_render_graph`. The
+  static CRT is deliberate: the shipped `bedray_core.dll` must not require a
+  VC++ redistributable.
+- Static CRT is only safe while one module's heap never frees another's memory.
+  That holds by ABI, not by habit: every `BEDRAY_API` declaration in
+  `native/*/include/*.h` returns `BedrayStatus`, `uint32_t` or `void` — 28
+  exports, no exceptions. Buffers the native side fills are addresses the JVM
+  allocated in its own `Arena` and pass in as `out` parameters, so no pointer
+  ever crosses back.
+
+Two new guards in `NativePlatformGateTest`, `everyNativeTargetUsesTheSameStaticCrt()`
+and `noExportHandsTheHostSomethingToFree()`. The export scan counts what it
+examined and fails if that count is zero, so relocating the declarations out of
+its reach cannot silently turn the guard into a no-op.
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test --tests '*NativePlatformGateTest*'` | 0 failures | 6/6 pass |
+| `/MD` injected as `MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"` on the `bedray_core` target | guard fails | `everyNativeTargetUsesTheSameStaticCrt() FAILED` |
+| fake `BEDRAY_API void* BEDRAY_CALL bedray_core_take_ownership(BedrayCore*)` added to `bedray_core.h` | guard fails | `noExportHandsTheHostSomethingToFree() FAILED` |
+| restore | byte-identical | `native/bedray_core/CMakeLists.txt` sha256 `1408d440…` before and after, `git status` clean for the path |
+
+**The gate was not running.** The first mutation reported `BUILD SUCCESSFUL`
+with zero tests executed: `:common:test` treats `native/**` and
+`../gradle/slang.gradle` as invisible, because these tests read them by
+relative path from `common/` and never declare them as inputs. Only
+`--rerun-tasks` exposed it. That is not a curiosity — a native build-file
+regression lands in exactly the state where the guard that would catch it is
+UP-TO-DATE. Fixed by declaring `inputs.files(rootProject.fileTree('native') {
+include '*/CMakeLists.txt', '*/include/**', 'nrd_bridge/src/*.cpp' })` plus
+`gradle/slang.gradle` on the test task; re-verified without `--rerun-tasks`, the
+`/MD` mutation now fails the run on its own. Files under
+`common/src/main/resources/shaders/**` were already covered transitively, since
+they reach the test classpath through `processResources`.
+
+Second method note: `git show HEAD:<path> > <path>` is **not** a byte-exact
+restore in this worktree. `core.autocrlf=true`, so the blob is LF while the
+checked-out file is CRLF; the content matched but sha256 did not
+(`2448624…` vs `1408d440…`), which would have shown up as a whole-file
+line-ending diff in a commit. The CRLF form is `git show … | sed 's/$/\r/'`,
+and the hash comparison is what proves it.
+
+No live-frame claim here: this is an ABI and build-configuration audit, L0/L2.
+
+
 ## 2026-10-29 — Radiance Cascades merge physics: what is and is not left (L2 unit, mutation proof)
 
 Branch: `refactor/slang-pipeline`, on top of `4fdc0ca`. Tool: `slangc` 2026.20
