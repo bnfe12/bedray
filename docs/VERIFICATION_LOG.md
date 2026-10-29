@@ -43,7 +43,7 @@ Result:
 
 | Check | Expected | Observed |
 |---|---|---|
-| `:common:test` (native lib + slangc) on final HEAD `01aadc9` | 0 failures | 753 tests / 121 suites, 0 failures, 0 errors, 3 skipped; all 12 `RtSlangRestirSpatialTest` cases pass |
+| `:common:test` (native lib + slangc) | 0 failures | 754 tests / 122 suites, 0 failures, 0 errors, 3 skipped; all 12 `RtSlangRestirSpatialTest` cases pass |
 | CTest `build/bedray-native/windows-x64` on final HEAD | 19/19 | 19/19 pass |
 | `vkCreateComputePipelines` on the final jar's `restir_spatial` | 0 | 0 (OK); manifest 8 bindings, 64 B push |
 | Live `-Dvkbridge.autotest=world -Dvkbridge.rt.nativeScene=true -Dvkbridge.rt.nativePathTrace=true` | PASS, C++ DI + spatial | `restir_spatial, 8 binding(s), 64 B push`; `restir_di=native+spatial`; 3 shots 2560x1440; `result=PASS`; no `hs_err` |
@@ -60,7 +60,14 @@ exercised the 8-binding contract at dispatch time, not just at build time.
 
 Earlier intermediate trees during this batch gave 735 tests / 18 CTest
 (pre-rebase) and 745 tests / 19 CTest (after PR #28); those are superseded by
-the 753 / 19 result above.
+the 754 / 19 result above.
+
+`EntityAtlasBindingContractTest` now guards the crash class: every pass whose
+source declares an `EntityAtlas` local must declare bindings 23/24 as storage
+buffers *and* assign `.rects`, `.texels` and `.atlasSize`. The manifest alone
+cannot see an unassigned member, so the test pairs the generated manifest with
+the pass source. Removing one assignment from `restir_spatial.slang` makes it
+fail with the OpUndef explanation; the pass source is unmodified in this tree.
 
 Rebased onto `4dc68d5` (PR #27, native guide outputs), `0898b00` (PR #28,
 native particle composite) and `fc1861d` (PR #29, proven stats slots). The one
