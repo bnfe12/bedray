@@ -11,8 +11,8 @@
 
 | Подсистема | Оценка готовности | Статус | Ключевой системный риск |
 |---|:---:|:---:|---|
-| **Native C++ Backend** | **75%** | Связан и расширен | Native Volumetric Fog (`bedray_volumetric`) и Bloom полностью подключены к `core`; NRD constant ring race исправлена (PR #32); VUID-03332 закрыт; аллокации дескрипторов кэшируются; C ABI защищено `try/catch`. Остаётся ранний выход при ошибке `path_trace` в `bedray_core_release_recording` [P1-17]. |
-| **Slang Shaders & Alg** | **82%** | В контуре кадра | PT, Display, Bloom, Volumetric Fog, ReSTIR DI, ReSTIR Spatial (PR #30, биндинги 23-24) активны; G-buffer motion vector (binding 33) подключен под NRD (PR #33). Алгоритмическое уравнение RC исправлено (`interval_transport.slang`), но RC не в цикле кадра. Выявлены дефекты смещения лучей [P1-15, P1-16]. |
+| **Native C++ Backend** | **75%** | Связан и расширен | Native Volumetric Fog (`bedray_volumetric`) и Bloom полностью подключены к `core`; NRD constant ring race исправлена (PR #32); VUID-03332 закрыт; аллокации дескрипторов кэшируются; C ABI защищено `try/catch`; `bedray_core_release_recording` освобождает всех владельцев через `release_every` [P1-17 закрыт]. |
+| **Slang Shaders & Alg** | **82%** | В контуре кадра | PT, Display, Bloom, Volumetric Fog, ReSTIR DI, ReSTIR Spatial (PR #30, биндинги 23-24) активны; G-buffer motion vector (binding 33) подключен под NRD (PR #33). Алгоритмическое уравнение RC исправлено (`interval_transport.slang`), но RC не в цикле кадра. Дефекты смещения лучей закрыты: отскок по граневой нормали [P1-15], одинарное смещение теневых лучей [P1-16]. |
 | **Java & FFM Host Layer** | **78%** | Стабилен | Native Volumetric Pass интегрирован в конвейер кадра; NRD + Slang разблокирован; DLSS-RR каналы поддержаны. Обнаружен критический дефект жизненного цикла при перезагрузке мира: `SodiumDequantize.java:68` закрывает кэшированную `SlangProgram` [P1-14]. |
 | **Сборочный контур (Build)** | **80%** | Мультиплатформенный гейт | Slang AOT в Gradle кроссплатформенен (`slangc`/`slangc.exe`); пути разработчика вычищены (PR #32); добавлен флаг `-DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM`; `System.mapLibraryName` внедрён. |
 | **ИТОГОВЫЙ ПРОЕКТ** | **~78% (B)** | **ГОТОВ К GPU ТЕСТИРОВАНИЮ** | **Критический скачок готовности: все блокеры P0 закрыты, денойзеры (NRD + DLSS-RR) и туман подключены, нативный стек функционален.** |
@@ -170,12 +170,12 @@
   float3 origin = hit.position + bsdf.direction * options.rayBias;
   ```
   Смещение выполнено вдоль направления луча `bsdf.direction`, а не вдоль геометрической/интерполированной нормали поверхности (`hit.normal`). На скользящих углах отражения (вода, лед, гладкие блоки под острым углом к камере) луч стартует слишком близко к плоскости треугольника или даже позади нее из-за неровностей интерполяции, вызывая самопересечение (self-intersection) и черные артефакты шума.
-* **Статус:** **ОТКРЫТ (выявлен в аудите 2026-10-29).** Требуется смещение вдоль нормали с учетом знака полусферы: `hit.position + hit.normal * (dot(bsdf.direction, hit.normal) > 0 ? options.rayBias : -options.rayBias)`.
+* **Статус:** **ЗАКРЫТО (2026-10-29).** В `tracePath` отскок смещается вдоль геометрической грани: `float3 bounceNormal = safeNormalize(surface.hit.geometricNormal, normal);` и `hit.position + bounceNormal * (dot(bsdf.direction, bounceNormal) >= 0.0 ? options.rayBias : -options.rayBias)`. Полусфера выбирается по исходящему направлению, но сам вектор — граневой, поэтому неровная shading-нормаль больше не может увести точку старта за треугольник. Проверено `RtSlangRayOffsetTest.theBounceLeavesAlongTheGeometricFace()` (mutation-proof: до-fix версия прохода падает на этом тесте).
 
 ### [P1-16] (Shader Optics Bias) Двойное смещение теневых лучей в `visibility.slang`
 * **Файлы:** [`visibility.slang:235, 248`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/light/visibility.slang#L235-L250)
 * **Проблема:** Точка старта луча видимости сначала смещается по нормали: `origin = surfacePosition + normal * bias;`, а затем создается луч вызовом `makeRay(origin, direction, bias, tMax)`. Внутри `makeRay` параметр `tMin` выставляется в `bias`. В результате луч начинает проверку пересечений на расстоянии $2 \times \text{bias}$ от фактической поверхности, что на тонких перегородках (стекла, ковры, полублоки) приводит к просачиванию света (light leaking) сквозь геометрию.
-* **Статус:** **ОТКРЫТ (выявлен в аудите 2026-10-29).** Следует либо смещать точку начала луча при `tMin = 0.0`, либо использовать `tMin = bias` без предварительного смещения `origin`.
+* **Статус:** **ЗАКРЫТО (2026-10-29).** Исправлено первой вариант из рекомендации: `origin` остаётся смещённым по нормали, а `tMin` стал `0.0` — `makeRay(origin, direction, 0.0, tMax)` в обоих обёртках (`traceShadowVisibility` и `traceShadowVisibilityMedium`). Это соглашение уже действовало для отскока в `path_tracer.slang` (`makeRay(origin, bsdf.direction, 0.0, options.maxDistance)`), так что тонкая геометрия больше не получает старт тестa на $2\times\text{bias}$. Файл переехал: `surface/visibility.slang`, а не `light/visibility.slang`. Проверено `RtSlangRayOffsetTest.aShadowRayIsOffsetExactlyOnce()` (mutation-proof: до-fix версия падает).
 
 ### [P1-17] (C++ Resource Leak) Ранний выход в `bedray_core_release_recording` при ошибке `path_trace`
 * **Файл:** [`core.cpp:1000-1011`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/src/core.cpp#L1000-L1011)
@@ -193,7 +193,7 @@
   }
   ```
   Если `path_trace->release_recording` завершился с ошибкой (например, запись не найдена или уже освобождена), происходит немедленный возврат из функции. Вызовы `bloom->release_recording` и `volumetric->release_recording` пропускаются, вызывая утечку нативных ресурсов записи в соответствующих модулях.
-* **Статус:** **ОТКРЫТ (выявлен в аудите 2026-10-29).** Ошибки освобождения должны накапливаться, не прерывая вызовы очистки для остальных модулей.
+* **Статус:** **ЗАКРЫТО (2026-10-29).** Освобождение стало fan-out: `release_every(...)` в анонимном namespace обходит владельцев (`path_trace`, `bloom`, `volumetric`) безусловно и возвращает первую ошибку, так что сбой одного модуля больше не оставляет записей у следующих. Шаблон нельзя объявлять внутри блока `extern "C"` (MSVC `C2894`), поэтому он над ним. Достижимой утечкой был путь `bloom → volumetric`: `PathTracePass::release_recording` всегда возвращает `BEDRAY_OK`, а неизвестная запись у bloom/volumetric — тоже `BEDRAY_OK`. Проверено `descriptor_cache_test.cpp` (CTest 21/21; mutation-proof: ранний выход ловится тестом).
 
 ### [P1-18] NVIDIA Driver `OpUndef` Crash в `passes/restir_spatial.slang`
 * **Файл:** [`passes/restir_spatial.slang:75-80`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/passes/restir_spatial.slang#L75-L80)

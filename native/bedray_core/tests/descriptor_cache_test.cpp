@@ -138,5 +138,20 @@ int main() {
     bedray_core_destroy_program(&core, 2);
     require(bedray_core_release_recording(&core, frame.command_buffer) == BEDRAY_OK);
     require(core.programs.empty());
+
+    // Release is a fan-out: every owner retires even when one of them reports a failure, and the host sees the first
+    // failure. An early return would strand the owners after the failing one, and bedray_core_destroy then refuses
+    // to shut down because they still hold recordings.
+    {
+        unsigned visited = 0;
+        require(release_every(
+            [&] { ++visited; return BEDRAY_ERROR_VULKAN; },
+            [&] { ++visited; return BEDRAY_ERROR_IN_USE; },
+            [&] { ++visited; return BEDRAY_OK; }) == BEDRAY_ERROR_VULKAN);
+        require(visited == 3);
+        visited = 0;
+        require(release_every([&] { ++visited; return BEDRAY_OK; }) == BEDRAY_OK);
+        require(visited == 1);
+    }
     return 0;
 }

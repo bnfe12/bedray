@@ -4,6 +4,61 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — Ray-offset fixes and the release fan-out (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline`, on top of `b98f54a`. Tool: `slangc` 2026.20,
+`-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major
+-I common/src/main/resources/shaders/slang`. CMake Release + CTest from the
+isolated worktree; cmake is not on PATH, taken from
+`build/bedray-native/windows-x64/CMakeCache.txt` `CMAKE_COMMAND`.
+
+Three audit defects, closed in source:
+
+- **P1-15** `pathtrace/path_tracer.slang` — a bounce started at
+  `hit.position + bsdf.direction * options.rayBias`, so at grazing angles the
+  origin stayed inside the triangle it had just left, and the fallback used the
+  shading normal, which a normal map can tilt past the face. It now offsets
+  along `safeNormalize(surface.hit.geometricNormal, normal)` with the sign
+  chosen by `dot(bsdf.direction, bounceNormal)`, and `tMin` remains `0.0`.
+- **P1-16** `surface/visibility.slang` — both shadow wrappers offset the origin
+  by `bias` *and* passed `bias` as `tMin`, so the occlusion test began
+  $2\times\text{bias}$ off the surface and light leaked through carpets, glass
+  and slabs. `tMin` is now `0.0`; the origin keeps the single offset. That is
+  the convention the bounce ray and the legacy `traceVisibility` already use
+  (`rt_common_sampling.glsl:7` passes a fixed epsilon against an offset origin,
+  never the caller's bias twice). Note the audit's
+  `light/visibility.slang` path no longer exists.
+- **P1-17** `native/bedray_core/src/core.cpp` —
+  `bedray_core_release_recording` returned on the first failing owner, leaving
+  later owners holding a recording for the rest of the session and
+  `bedray_core_destroy` refusing to shut down. Release is now a fan-out through
+  `release_every`, which visits every owner and reports the first failure. The
+  template lives in the anonymous namespace: inside the file-wide `extern "C"`
+  block MSVC rejects it with `C2894`. The reachable leak was `bloom → volumetric`
+  (`PathTracePass::release_recording` always returns `BEDRAY_OK`, and an unknown
+  recording returns `BEDRAY_OK` too).
+
+Result:
+
+| Check | Expected | Observed |
+|---|---|---|
+| `slangc` on the passes that include both files | 0 errors | `path_trace`, `path_trace_scene`, `restir_spatial`, `rc_probe_trace` all compile to SPIR-V |
+| `:common:test --tests '*RtSlangRayOffsetTest*' '*RtSlangWaterMediumTest*' '*RtSlangVisibilityOverflowTest*'` | 0 failures | 11 tests / 3 suites pass, both new `RtSlangRayOffsetTest` cases green |
+| Mutation proof P1-15 | guard fails on pre-fix tracer | `theBounceLeavesAlongTheGeometricFace` FAILED, `aShadowRayIsOffsetExactlyOnce` PASSED |
+| Mutation proof P1-16 | guard fails on pre-fix visibility | `aShadowRayIsOffsetExactlyOnce` FAILED, `theBounceLeavesAlongTheGeometricFace` PASSED |
+| CTest `build/bedray-native/windows-x64` | 21/21 | 21/21 pass, including the `release_every` case in `descriptor_cache_test.cpp` |
+
+After each mutation the fixed file was copied back and `touch`ed, because
+`cp -p` preserves the older mtime and MSBuild then relinks the *mutated* object
+instead of rebuilding it. Both restored files were checked byte-identical by
+sha256 against the working tree (`path_tracer.slang`
+`c757558bb926a596…`, `visibility.slang` `f38b3986a8f733df…`).
+
+This is L1/L2 for the optics lane. A shadow ray and a grazing reflection are
+numerically indistinguishable in a unit test; the visible claims — no light
+through a carpet, no self-intersection on water or ice at grazing angles —
+need a frame the owner has to look at.
+
 ## 2026-10-29 — Spatial reuse binds the captured entity atlas (L1 compile, L2 unit, L3 game, L4 visible effect)
 
 Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20, same target and

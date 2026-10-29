@@ -452,13 +452,14 @@ PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentS
             break;
         }
 
-        float3 origin = hit.position + bsdf.direction * options.rayBias;
-        if (dot(bsdf.direction, normal) < 0.0) {
-            origin = hit.position - normal * options.rayBias;
-        }
+        // Offset off the geometric face, not along the outgoing ray: at grazing angles a ray-aligned bias leaves the
+        // bounce inside the triangle it just left, and a tilted shading normal can point past the face.
+        float3 bounceNormal = safeNormalize(surface.hit.geometricNormal, normal);
+        float3 origin = hit.position
+            + bounceNormal * (dot(bsdf.direction, bounceNormal) >= 0.0 ? options.rayBias : -options.rayBias);
         ray = makeRay(origin, bsdf.direction, 0.0, options.maxDistance);
-        // The new origin sits at most one bias behind the interaction; the
-        // segment starts there (the legacy path ignored this offset too).
+        // The new origin sits one bias off the interaction along the face; the segment starts there (the legacy path
+        // ignored this offset too).
         mediumStart = 0.0;
     }
 
