@@ -1,11 +1,9 @@
 package io.github.andrexarlay.vulkancompat.rt.sodium;
 
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
-import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
+import io.github.andrexarlay.vulkancompat.rt.core.BedraySodiumNative;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
-import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import java.nio.ByteBuffer;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -14,14 +12,14 @@ import java.util.Set;
 public final class SodiumDequantize {
     public static final int PUSH_BYTES = 32;
     private final SlangRuntime runtime;
-    private final SlangProgram program;
+    private final BedraySodiumNative nativePass;
     private final Set<Long> recordings = new LinkedHashSet<>();
     private boolean closed;
 
     public SodiumDequantize(SlangRuntime runtime) {
         if (runtime == null) throw new IllegalArgumentException("Slang runtime is required");
         this.runtime = runtime;
-        this.program = runtime.program("sodium_dequantize")
+        var program = runtime.program("sodium_dequantize")
             .orElseThrow(() -> new IllegalStateException("Missing AOT Sodium decoder"));
         var manifest = program.manifest();
         int required = BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS | BedrayCoreLayouts.CAP_SHADER_INT64;
@@ -30,6 +28,7 @@ public final class SodiumDequantize {
             || !java.util.Arrays.equals(manifest.threadGroupSize(), new int[] {64, 1, 1})) {
             throw new IllegalStateException("Sodium decoder requires BDA/Int64, 32-byte push constants and 64 threads");
         }
+        nativePass = new BedraySodiumNative(runtime.library(), runtime.core(), program.nativeHandle());
     }
 
     /** Caller supplies nonoverlapping raw/arena ranges and orders the writes before AS build. */
@@ -39,13 +38,10 @@ public final class SodiumDequantize {
             || quadCount > Integer.MAX_VALUE / 28 || ((rawAddr | arenaAddr | flagsAddr) & 3L) != 0) {
             throw new IllegalArgumentException("Invalid Sodium decode addresses/count");
         }
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            ByteBuffer pc = stack.malloc(PUSH_BYTES);
-            pc.putLong(0, rawAddr).putLong(8, arenaAddr).putLong(16, flagsAddr)
-                .putInt(24, quadCount).putInt(28, 0);
-            recordings.add(cmd.address());
-            program.dispatch(cmd.address(), program.groups(quadCount, 0), 1, 1, List.of(), pc);
-        }
+        // Several section decodes share one CB. One host proof releases all of
+        // its immutable core dispatch records, rather than recycling by frame age.
+        recordings.add(cmd.address());
+        nativePass.record(cmd.address(), rawAddr, arenaAddr, flagsAddr, quadCount);
     }
 
     /** Only after the host drained submissions and forbids resubmission. */
@@ -65,7 +61,7 @@ public final class SodiumDequantize {
     public void destroy() {
         if (closed) return;
         if (!recordings.isEmpty()) throw new IllegalStateException("Sodium recordings require host completion");
-        program.close();
+        // The cached program is borrowed; SlangRuntime is its sole owner.
         closed = true;
     }
 }
