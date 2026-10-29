@@ -106,9 +106,13 @@ discard and device loss, including the enclosing path group. CI
 [40937161641](https://github.com/bnfe12/bedray/actions/runs/40937161641)
 passed 25 core + one scene + one lifetime test on
 `7dfdf5ca1d9f043b7fcf4f7c79bf314e3cbc7bba`.
-Both RC entries compile with Slang 2026.20. Final Java/FFM/reflection validation
-is recorded with the integration change. No new GPU/game/visual or owner
-acceptance is claimed.
+Clean source `67adc69b147e0a64ad0dfef6b814464285a7e942` passed the full Java
+suite: 861 tests, 852 passed, nine skipped, zero failures/errors (1m50s), with
+all 26 AOT entries. Final geometric-face offset source
+`eb7659aeedb2295fec29822e4811b1fe93288ad0` rebuilt all 26 entries with Slang
+2026.20 and passed all 46 focused RC/FFM/ray-offset/rejection/anchor tests
+(55s). Native sources are unchanged from the CI revision above. No new
+GPU/game/visual or owner acceptance is claimed.
 
 ## Primary references
 
