@@ -96,6 +96,7 @@ float volumetricDarkness(float exposure) {
 // the single-scattered key-light radiance.  One visibility ray per step whose
 // density is above the contribution floor.
 //
+//   origin              view-bob eye offset in raw-camera-relative space
 //   dir                 normalized view direction (camera-relative space)
 //   tEnd                march length: min(primary hit distance, shaft range)
 //   worldHeightOffset   camera world height: added to the relative sample y
@@ -106,7 +107,7 @@ float volumetricDarkness(float exposure) {
 //
 // The loop is bounded by `steps` (the legacy entry clamps 2..48); no
 // recursion, no allocation.
-float3 marchLightShaft<T : ISceneTracer>(T traversal, float3 dir, float tEnd,
+float3 marchLightShaft<T : ISceneTracer>(T traversal, float3 origin, float3 dir, float tEnd,
         uint steps, float jitter, float3 keyDir, float3 keyColor,
         float worldHeightOffset, float densityMul, float dark, float inscatter,
         float strength, float rayBias) {
@@ -123,7 +124,7 @@ float3 marchLightShaft<T : ISceneTracer>(T traversal, float3 dir, float tEnd,
     float accumulation = 0.0;
     for (uint i = 0u; i < n; ++i) {
         float t = (float(i) + jitter) * dt;
-        float3 p = dir * t;
+        float3 p = origin + dir * t;
         float density = VOLUMETRIC_SIGMA_S * densityMul *
             fogHeightProfile(worldHeightOffset + p.y);
         transmittance *= exp(-density * dt);
@@ -148,8 +149,8 @@ float3 marchLightShaft<T : ISceneTracer>(T traversal, float3 dir, float tEnd,
 // Reprojects the end point of a marched ray into the previous frame and
 // returns the half-resolution history pixel (texel centres at integers).
 // `worldDelta` translates the current camera-relative point into the previous
-// frame's camera-relative space (previous origin minus current origin; the
-// host computes it).  `flipY` mirrors NDC.y exactly like the legacy pass.
+// frame's camera-relative space (current raw camera origin minus previous;
+// the host computes it).  `flipY` mirrors NDC.y exactly like the legacy pass.
 // `ok` is false when the point falls behind the near plane.
 float2 shaftHistoryPixel(float4x4 prevViewProjection, float3 worldDelta,
         float3 rayEnd, float2 fullSize, bool flipY, out bool ok) {

@@ -12,7 +12,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Minecraft settings/host-view adapter for native volumetric, bloom and sun glare passes.
- * Unsupported volumetric camera contracts are reported explicitly.
+ * All passes consume the same camera-relative frame contract, including view bob.
  *
  * <p>Order of a frame: main pass (rt_rays / rt_path) -> denoiser (NRD / DLSS-RR G-buffer path) -> this -> copy to the engine target ->
  * the temporal upscaler / frame generation of the engine. The passes see the denoised image at render resolution; they write only
@@ -28,7 +28,6 @@ final class RtAtmosphere {
     /** Native Slang runtime, created with the first bloom pass; {@code null} until then and when unavailable. */
     private SlangRuntime slangRuntime;
     private boolean slangUnavailableLogged;
-    private boolean volumetricUnavailableLogged;
     private RtGpuTimer timer;
     private String lastLogged = "";
     /**
@@ -50,16 +49,8 @@ final class RtAtmosphere {
             return; // debug views show the raw buffer
         }
         RtAtmosphereSettings.GodRays gr = RtAtmosphereSettings.godRays();
-        boolean shaftsRequested = gr == RtAtmosphereSettings.GodRays.POST && p.volumetricFogEnabled && p.fogDensity > 0f
+        boolean shafts = gr == RtAtmosphereSettings.GodRays.POST && p.volumetricFogEnabled && p.fogDensity > 0f
             && RtAtmosphereSettings.godRayStrength() > 0f;
-        String shaftProblem = shaftsRequested ? RtSlangVolumetricPass.supportProblem(p) : null;
-        if (shaftProblem != null && !volumetricUnavailableLogged) {
-            LOGGER.warn("[VKB-ATMO] god rays unavailable: {}", shaftProblem);
-            volumetricUnavailableLogged = true;
-        } else if (shaftProblem == null) {
-            volumetricUnavailableLogged = false;
-        }
-        boolean shafts = shaftsRequested && shaftProblem == null;
         boolean glow = RtAtmosphereSettings.bloom();
         boolean glare = RtAtmosphereSettings.sunGlare();
         logIfChanged(shafts);

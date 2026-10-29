@@ -51,16 +51,8 @@ final class RtSlangVolumetricPass implements AutoCloseable {
         }
     }
 
-    /** The current shader's camera-origin limitation must be explicit until its owner implements it. */
-    static String supportProblem(RtFrameParams p) {
-        return Math.abs(p.bobX) > 1e-6f || Math.abs(p.bobY) > 1e-6f || Math.abs(p.bobZ) > 1e-6f
-            ? "volumetric march does not yet apply the view-bob origin" : null;
-    }
-
     void record(VkCommandBuffer cmd, RtPipeline.Views views, RtFrameParams p, int width, int height) {
         if (closed) throw new IllegalStateException("volumetric pass is closed");
-        String problem = supportProblem(p);
-        if (problem != null) throw new IllegalStateException(problem);
         if (views.table() == null) throw new IllegalArgumentException("volumetric pass requires the scene section table");
         int steps = RtAtmosphereSettings.godRaySteps();
         float strength = RtAtmosphereSettings.godRayStrength(), range = RtAtmosphereSettings.godRayRange();
