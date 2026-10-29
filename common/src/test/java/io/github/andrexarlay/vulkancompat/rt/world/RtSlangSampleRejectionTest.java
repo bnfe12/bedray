@@ -24,6 +24,7 @@ class RtSlangSampleRejectionTest {
 
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
+    private static final String BSDF = "src/main/resources/shaders/slang/shading/bsdf.slang";
     private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
@@ -95,6 +96,45 @@ class RtSlangSampleRejectionTest {
             "but a throughput that is not a number ends the sample, not just the path");
         assertEquals("invalid", flagSetBy(tracer, "if (!isFinite(ray.tMax)) {"),
             "a non-finite interval is checked before the empty-interval stop, so NaN is not read as truncation");
+    }
+
+    /**
+     * P1-8: a VNDF reflection off a visible normal can land below the shading horizon. The audit read the resulting
+     * stop as lost energy on silhouettes; the code says otherwise, and these are the facts that make it otherwise.
+     * The sampler returns the zero sample it was handed, before it builds a light direction or writes a weight, so
+     * nothing downstream can multiply by a half-filled record; and the tracer stops only after this vertex's own
+     * emission and next-event terms are already in {@code result.radiance}, so the path ends short rather than
+     * losing what it gathered. Continuing with a zero throughput would be the same radiance at the cost of a
+     * bounce, and resampling until the direction is above the horizon would add energy instead of removing it.
+     */
+    @Test
+    void theBelowHorizonVndfSampleIsAZeroAndNotABrokenPath() {
+        String bsdf = block(read(BSDF),
+            "BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint seed) {");
+        int horizon = bsdf.indexOf("if (lightLocal.z <= 0.0) return result;");
+        assertTrue(horizon >= 0, "the sampler no longer rejects a below-horizon reflection before using it");
+        assertTrue(bsdf.indexOf("result.valid = true") > horizon
+                && bsdf.indexOf("result.weight =") > horizon
+                && bsdf.indexOf("result.pdf =") > horizon,
+            "the early return must precede every write, or the caller multiplies a half-built record");
+        assertTrue(bsdf.indexOf("float3 L = safeNormalize(tangent * lightLocal.x +") > horizon,
+            "no light direction may be built from a sample that was just refused");
+        String invalid = block(read(BSDF), "BSDFSample invalidBSDFSample() {");
+        assertTrue(invalid.contains("sample.valid = false;") && invalid.contains("sample.weight = float3(0.0);")
+                && invalid.contains("sample.pdf = 0.0;"),
+            "the refused sample has to be the zero the caller already tests for");
+
+        String tracer = read(TRACER);
+        int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission;");
+        int direct = tracer.indexOf("result.radiance += throughput * direct;");
+        int sampled = tracer.indexOf("BSDFSample bsdf = bsdfSample(surface.material, view, normal, seed);");
+        assertTrue(emission >= 0 && direct > emission && sampled > direct,
+            "emission and next-event estimation must both be accumulated before the lobe is drawn, or the stop "
+                + "throws away light this vertex earned");
+        assertEquals("truncated", flagSetBy(tracer, "if (!bsdf.valid || bsdf.pdf <= 0.0) {"),
+            "a lobe with nothing left is a short path, not a rejected sample");
+        assertTrue(tracer.indexOf("throughput *= bsdf.weight;") > sampled,
+            "the path stops before the zero weight could be folded into the throughput");
     }
 
     /** The verdict leaves the tracer through the alpha lane, through the one helper that defines it. */

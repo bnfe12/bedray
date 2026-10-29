@@ -4,6 +4,72 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — P1-6, P1-8, P1-9 and P1-11: four audit items that had an analysis and no test (L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`, on top of `54f94a0`. Four P1 items carried a
+2026-10-28 "source-only" verdict whose own text said *для уверенности нужен
+тест*. Each of them also had a second problem: the register's summary sentence
+was a claim about the tree that nothing re-checked. This batch turns those
+sentences into tests, and corrects two of them.
+
+What is now pinned:
+
+- **P1-6 (`RtSlangHistoryAnchorTest`, 3 tests).** `SurfaceHit.worldPosition` is
+  `float3(section.origin.xyz & 1023) + localPosition` in the section backends and
+  `result.position + cameraAnchor` for entities, so it is a neighbourhood proxy,
+  not an identity. The test enumerates every `X.worldPosition` reader and writer
+  in `shaders/slang/**` after stripping `//` comments — readers are exactly
+  `{experimental/restir_pt.slang, surface/surface.slang}` — and separately asserts
+  that no root module mentions `restir_pt` and that outside `experimental/` the
+  only file containing `historyValidate(` is its own definition in
+  `contracts/history.slang`. That last part is the honest headline: **no live pass
+  validates history at all today**, so the wrapped anchor cannot reach a frame.
+- **P1-8 (`RtSlangSampleRejectionTest.theBelowHorizonVndfSampleIsAZeroAndNotABrokenPath()`).**
+  A VNDF reflection that lands below the shading horizon (`lightLocal.z <= 0.0`)
+  returns before `L`, `weight`, `pdf` and `valid` are written, and the tracer
+  accumulates emission and NEE *before* calling `bsdfSample`, so the path is short,
+  not broken: it sets `PATH_TRACE_FLAG_TRUNCATED`, not `INVALID_SAMPLE`, and stays
+  in the accumulation mean. The test checks that ordering by index, not by prose.
+- **P1-9 (`RtSlangCutoutAdvanceTest`, 3 tests).** The hole branch has to move the
+  origin and shorten the interval by the *same* `advance`, `primaryAdvance` may
+  only grow on the camera ray, `firstHitDistance` stays `primaryAdvance + hit.t`,
+  and the advanced `makeRay` must not add a second `rayBias` (with
+  `mediumStart = 0.0` so the water segment still measures from the new origin).
+- **P1-11 (`ShadercSurfaceTest`, 2 tests).** The register said one Shaderc user
+  was left. There are nine, and they are not all residue: `RtShaderCompiler` plus
+  its four legacy callers, three upscaler/frame-gen passes, the Iris/pack GLSL host
+  (four files, which *cannot* be AOT-compiled because the GLSL is user-authored),
+  and the PoC entry. The frozen set is now the inventory, and the second test
+  forbids `rt/slang/**` and `RtFrameRenderer` from referencing
+  `org.lwjgl.util.shaderc` at all — `lwjgl-shaderc` is `compileOnly`
+  (`gradle/loader-module.gradle:44`), so its runtime presence is a host assumption
+  the Slang path must not acquire.
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test` full suite after the batch | 0 failures | 819 tests, 0 failures, 0 errors, 3 skipped (810 before) |
+| M1 `surface.hit.worldPosition` read added in `pathtrace/path_tracer.slang` | P1-6 reader guard fails | `onlyTheDocumentedAnchorsReadTheWrappedPosition() FAILED`, nothing else |
+| M2 `__exported import "experimental/restir_pt.slang"` in `bedray.slang` | reachability guard fails | `theModuleThatKeysHistoryOnTheAnchorIsStillUnreachable() FAILED` |
+| M3 the three-line wrap warning deleted above the field | warning guard fails | `theFieldAnnouncesThatItIsNotAUniqueIdentity() FAILED` |
+| M4 `if (lightLocal.z <= 0.0) return result;` deleted | P1-8 guard fails | `theBelowHorizonVndfSampleIsAZeroAndNotABrokenPath() FAILED` |
+| M5 `result.radiance += throughput * surface.material.emission;` deleted | P1-8 guard fails | same test, and only it |
+| M6 (`M7`) `result.weight = float3(1.0);` written before the horizon return | P1-8 guard fails | same test, and only it |
+| cutout branch mutations (4, previous run): origin moved without shortening `tMin`; `makeRay(..., 0.0, ...)`; `primaryAdvance` growing off the camera ray; double bias in `firstHitDistance` | P1-9 guards fail | one test killed per mutation |
+| `org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_initialize()` inserted in `SlangRuntime.create` | both P1-11 guards fail | `runtimeGlslCompilationStaysOnTheFrozenSurface() FAILED` + `theSlangPathNeverReachesForShaderc() FAILED` |
+| restore of every mutated file | byte-identical | `path_tracer.slang` `c757558b…`, `bsdf.slang` `a0fa8468…`, `hit.slang` `627becc7…`, `bedray.slang` `c5c314de…`, `SlangRuntime.java` `7199f4e7…`; `git status` clean for all five |
+
+Two findings from this batch are negative and are recorded as such in the
+register: `bedray_frame_lifetime::FrameLifetime` should *not* be wired (every
+destroy site is already guarded by the `recordings_`/`Pins` maps and the
+`begin_use`/`complete_use` pair, so a second reference count would create two
+competing truths), and `bedray_history`'s C-API would duplicate the one-bit reset
+scheme the frame already runs — closing P1-1 by importing dead code is not
+closing it.
+
+Not shown here: L1 beyond the suite's own `compileSlang` task, L3, L4, L5. These
+are source-contract guards — they prove the ordering and the reachability, not
+that a frame looks right, and no live frame was captured on this revision.
+
 ## 2026-10-29 — P2-8 CRT/ABI audit, and why the source-contract gates were not running (L0 source, L2 unit, mutation proof)
 
 Branch: `refactor/slang-pipeline`, on top of `57f8f2f`. P2-8 was the last audit
