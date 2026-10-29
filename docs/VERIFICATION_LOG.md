@@ -4,6 +4,37 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — origin merge: guides + water + native bloom on the deduplicated entry (L1 compile, L2 no GPU)
+
+Branch: `fix/audit-remediation-20261029`, merge commit `84b1697`, merging
+`origin/refactor/slang-pipeline` (`4dc68d5`, 27 commits) into the P2 batch
+(`bccdced`). The run used the ASCII worktree at the merge commit, because the
+Gradle test worker mangles the Cyrillic project path on this machine. Tool:
+`slangc` 2026.20 via `-Pslangc=...`.
+
+Conflict resolution kept the single shared body in
+`pathtrace/path_trace_entry.slang`: the guide writer and the seven guide
+outputs from origin now live there once, and both `passes/path_trace.slang`
+and `passes/path_trace_scene.slang` stay thin wrappers that declare bindings
+26-32 and forward all seven channels. The `portalTime` and
+`autoNormalStrength` material options are set in the shared body. The origin
+water, bloom, recording-lifetime and native-backend changes merged without
+shader-body conflicts; `RtRestirSettingsTest` now checks both the reference
+and the native backend.
+
+Result:
+
+| Check | Result |
+|---|---|
+| `:common:compileSlang` | 18 passes, `BUILD SUCCESSFUL` |
+| `path_trace` manifest | 25 bindings, 112 B push, guides 26-32 |
+| `path_trace_scene` manifest | 25 bindings, 112 B push, same names and types |
+| `:common:test` | 739 tests, 0 failures, 0 errors, 9 skipped, 120 classes |
+
+This is L1/L2 only. It proves the merged tree configures, both path roots
+compile with the water/gbuffer changes, and no Java contract test regressed.
+No GPU dispatch, frame, screenshot or game run exists on `84b1697`.
+
 ## 2026-10-29 — shaderc optimizer hang and the shared path entry (L1 compile, L2 no GPU)
 
 Branch: `fix/audit-remediation-20261029`, commits `f631326` and `6209614`, on
