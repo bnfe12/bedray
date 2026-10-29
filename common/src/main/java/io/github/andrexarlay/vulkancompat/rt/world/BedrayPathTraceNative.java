@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreNative;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayRadianceCascadesNative;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
@@ -53,11 +54,17 @@ final class BedrayPathTraceNative implements AutoCloseable {
     private final long programSpatial;
     private final long programDisplay;
     private final long sampler;
+    private final BedrayRadianceCascadesNative rc;
     private boolean configured;
     private boolean closed;
 
     BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programTraceScene, long programSpatial,
                           long programDisplay, long sampler) {
+        this(runtime,programTrace,programTraceScene,programSpatial,programDisplay,sampler,0);
+    }
+
+    BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programTraceScene, long programSpatial,
+                          long programDisplay, long sampler, long rcBuilder) {
         if (runtime == null || programTrace == 0L || programDisplay == 0L) {
             throw new IllegalArgumentException("native path trace needs a runtime, a trace and a display program");
         }
@@ -72,6 +79,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
         this.programSpatial = programSpatial;
         this.programDisplay = programDisplay;
         this.sampler = sampler;
+        this.rc = rcBuilder == 0 ? null : new BedrayRadianceCascadesNative(library,core,rcBuilder,RtConfig.SLANG_RC_BASE_AXIS);
     }
 
     /**
@@ -86,12 +94,15 @@ final class BedrayPathTraceNative implements AutoCloseable {
         library.configurePathTrace(core, programTrace, programTraceScene, programSpatial, programDisplay,
             imageBudget, bufferBudget, frame.width, frame.height);
         configured = true;
+        if (rc != null) rc.configure();
     }
 
     void render(FrameInput input) {
         if (closed) {
             throw new IllegalStateException("native path trace is closed");
         }
+        if (rc != null && (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE) == 0)
+            throw new IllegalStateException("RC requires actual native scene ownership; Java scene fallback is unsupported");
         RtPathTraceSlangPass.Frame frame = input.frame();
         if (frame == null || frame.width <= 0 || frame.height <= 0) {
             throw new IllegalArgumentException("native path trace needs a positive frame extent");

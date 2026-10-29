@@ -139,6 +139,10 @@ def STRUCT_LAYOUTS = [
         diState: 80, entityState: 96]],
     // Push block of the typed Radiance Cascades probe pass.  The 8-byte gap before emitterCameraRelative is part
     // of the ABI (float4 alignment), so it is pinned through the field offsets.
+    RCFieldConstants: [size: 272, fields: [header: 0, counts: 16, origins: 96, ranges: 176, tag: 256]],
+    RCFieldBuildPush: [size: 80, fields: [level: 0, count: 4, frameIndex: 8, materialCount: 12,
+        rayBias: 16, alphaCutoff: 20, maxRadiance: 24, sunProbability: 28, emitterCount: 32,
+        maxDepth: 36, emitterProbability: 40, reserved: 44, emitterCameraRelative: 48, entityState: 64]],
     RCProbeTracePush: [size: 112, fields: [rayBias: 0, alphaCutoff: 4, emissionScale: 8, maxRadiance: 12,
         sunProbability: 16, emitterProbability: 20, nearDistance: 24, farDistance: 28,
         worldBoundaryDistance: 32, rayCount: 36, segmentCapacity: 40, materialCount: 44,

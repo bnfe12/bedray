@@ -413,14 +413,19 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * mismatch falls back to the legacy path instead of binding a wrong image or pushing a short block.
      */
     static void requireManifest(SlangProgram program) {
+        requireManifest(program, false);
+    }
+
+    static void requireManifest(SlangProgram program, boolean radianceCascades) {
         SlangPassManifest manifest = program.manifest();
         if (manifest.pushConstantBytes() != PUSH_BYTES) {
             throw new IllegalStateException(program.name() + " pushes " + manifest.pushConstantBytes()
                 + " B, host block is " + PUSH_BYTES + " B");
         }
-        if (manifest.bindings().size() != EXPECTED.size()) {
+        int count = EXPECTED.size() + (radianceCascades ? 2 : 0);
+        if (manifest.bindings().size() != count) {
             throw new IllegalStateException(program.name() + " declares " + manifest.bindings().size()
-                + " binding(s), host supplies " + EXPECTED.size());
+                + " binding(s), host supplies " + count);
         }
         for (Expected want : EXPECTED) {
             SlangPassManifest.Binding binding = manifest.binding(want.name());
@@ -445,6 +450,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         requireElementBytes(manifest, "entityTexels", ENTITY_SCALAR_BYTES);
         requireElementBytes(manifest, "entityPrevious", ENTITY_SCALAR_BYTES);
         requireElementBytes(manifest, "outMotionBuffer", MOTION_ELEMENT_BYTES);
+        if (radianceCascades) {
+            RtRadianceCascadesContract.requireFieldBindings(manifest);
+        }
     }
 
     private static void requireElementBytes(SlangPassManifest manifest, String name, int expected) {

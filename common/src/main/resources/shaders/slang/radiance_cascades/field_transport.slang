@@ -63,6 +63,11 @@ RCSegment rcFieldTrace<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSamp
     options.nearDistance = options.farDistance = 0.0;
     options.environmentPolicy = uint(RCEnvironmentPolicy.Disabled);
     options.worldBoundaryDistance = 0.0;
+    // The primary path already owns direct emitter NEE. This field carries
+    // reflected direct light (one indirect bounce), not emitter visibility a
+    // second time. Keep emission masks for self-emitter rejection; the light
+    // sampler's authored emitter records/radiance are unchanged.
+    materialOptions.emissionScale = 0.0;
     RCTraceResult result = traceCascadeRay(traversal, lights, environment, atlas, table,
         ray, level, materialOptions, options, seed);
     RCSegment s = result.composed;

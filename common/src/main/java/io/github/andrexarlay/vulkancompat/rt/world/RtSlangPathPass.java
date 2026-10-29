@@ -77,6 +77,8 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     static String supportProblem(SlangRuntime runtime, boolean guides) {
+        if (RtConfig.SLANG_RADIANCE_CASCADES && !RtConfig.SLANG_PATH_TRACE_CPP)
+            return "radianceCascades requires nativePathTrace=true";
         if (runtime == null) {
             return "no Slang runtime";
         }
@@ -169,6 +171,7 @@ public final class RtSlangPathPass implements RtPass {
         String restir = diActive() ? backend.reservoirState() : "off";
         if (!restir.equals("off") && spatialRequested()) restir += "+spatial";
         return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
+            + (RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS : "")
             + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
             + ",frames=" + (accumFrames + 1) + ",denoiser=" + (requestedGbuffer ? "dlss_rr" : "off") + ")";
     }
