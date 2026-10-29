@@ -1,6 +1,8 @@
 package io.github.andrexarlay.vulkancompat.rt.denoise;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
@@ -93,6 +95,7 @@ public final class DlssRrDenoiser {
     private NrdPackPipeline packPipeline;
 
     private boolean imagesReady;
+    private long imageInitRecording;
     private boolean restartNext = true;
     private boolean havePrev;
     private double prevX;
@@ -109,11 +112,11 @@ public final class DlssRrDenoiser {
     /**
      * Creates the DLSS-RR denoiser, locating {@code vkb_dlss.dll} via Bedray Core or system property.
      */
-    public DlssRrDenoiser(VkDevice device, RtMemory memory, int width, int height, RtMemory.Img output) {
-        this(device, memory, width, height, output != null ? output.image : 0L, output != null ? output.view : 0L);
+    public DlssRrDenoiser(VkDevice device, RtMemory memory, int width, int height, RtMemory.Img output, SlangRuntime runtime) {
+        this(device, memory, width, height, output != null ? output.image : 0L, output != null ? output.view : 0L, runtime);
     }
 
-    public DlssRrDenoiser(VkDevice device, RtMemory memory, int width, int height, long outputImage, long outputView) {
+    public DlssRrDenoiser(VkDevice device, RtMemory memory, int width, int height, long outputImage, long outputView, SlangRuntime runtime) {
         this.device = device;
         this.memory = memory;
         Path wrapperDll = resolveWrapperDll();
@@ -122,13 +125,21 @@ public final class DlssRrDenoiser {
         }
         this.rr = DlssRayReconstruction.load(wrapperDll);
         this.ownsRr = true;
-        this.packPipeline = device != null ? new NrdPackPipeline(device) : null;
+        try {
+            this.packPipeline = device != null ? new NrdPackPipeline(runtime) : null;
+        } catch (RuntimeException | Error failure) {
+            rr.close();
+            throw failure;
+        }
         VelocityPipeline vp = null;
         if (device != null) {
             try {
-                vp = new VelocityPipeline(device);
-            } catch (Throwable t) {
-                LOGGER.warn("[DLSS-RR] Failed to initialize VelocityPipeline: {}", t.getMessage());
+                vp = new VelocityPipeline(runtime);
+            } catch (RuntimeException | Error failure) {
+                packPipeline.destroy();
+                packPipeline = null;
+                rr.close();
+                throw failure;
             }
         }
         this.velocityPipeline = vp;
@@ -145,6 +156,7 @@ public final class DlssRrDenoiser {
                 this.velocityPipeline.cleanup();
                 this.velocityPipeline = null;
             }
+            rr.close();
             throw e;
         }
         LOGGER.info("[DLSS-RR] denoiser_ready size={}x{} wrapper={}", width, height, io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(wrapperDll));
@@ -162,17 +174,24 @@ public final class DlssRrDenoiser {
     }
 
     public DlssRrDenoiser(VkDevice device, RtMemory memory, DlssRayReconstruction rr, VelocityPipeline velocityPipeline, int width, int height, long outputImage, long outputView) {
+        this(device, memory, rr, velocityPipeline, width, height, outputImage, outputView, null);
+    }
+
+    public DlssRrDenoiser(VkDevice device, RtMemory memory, DlssRayReconstruction rr, VelocityPipeline velocityPipeline,
+                          int width, int height, long outputImage, long outputView, SlangRuntime runtime) {
         this.device = device;
         this.memory = memory;
         this.rr = Objects.requireNonNull(rr, "rr");
         this.ownsRr = false;
-        this.packPipeline = device != null ? new NrdPackPipeline(device) : null;
+        this.packPipeline = device != null ? new NrdPackPipeline(runtime) : null;
         VelocityPipeline vp = velocityPipeline;
         if (vp == null && device != null) {
             try {
-                vp = new VelocityPipeline(device);
-            } catch (Throwable t) {
-                LOGGER.warn("[DLSS-RR] Failed to initialize VelocityPipeline: {}", t.getMessage());
+                vp = new VelocityPipeline(runtime);
+            } catch (RuntimeException | Error failure) {
+                packPipeline.destroy();
+                packPipeline = null;
+                throw failure;
             }
         }
         this.velocityPipeline = vp;
@@ -270,6 +289,7 @@ public final class DlssRrDenoiser {
         }
 
         imagesReady = false;
+        imageInitRecording = 0;
         restartNext = true;
         havePrev = false;
     }
@@ -307,6 +327,7 @@ public final class DlssRrDenoiser {
         }
         VkBarriers.fullMemoryBarrier(cmd);
         imagesReady = true;
+        imageInitRecording = cmd.address();
     }
 
     private void ensureNgx() {
@@ -560,6 +581,9 @@ public final class DlssRrDenoiser {
                     VkBarriers.fullMemoryBarrier(cmd);
                 }
             } catch (Throwable t) {
+                // A native recording failure may follow emitted commands. It
+                // requires whole-command discard, not a cleared-motion retry.
+                if (t instanceof BedrayCoreException failure) throw failure;
                 LOGGER.warn("[DLSS-RR] VelocityPipeline dispatch failed: {}", t.getMessage());
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     VkClearColorValue zero = VkClearColorValue.calloc(stack);
@@ -710,6 +734,32 @@ public final class DlssRrDenoiser {
         imagesReady = false;
     }
 
+    /** Exact host proof for the shared-core pack/compose recording. */
+    public void releaseRecording(long command) {
+        if (packPipeline != null) packPipeline.releaseRecording(command);
+        if (velocityPipeline != null) velocityPipeline.releaseRecording(command);
+        if (imageInitRecording == command) imageInitRecording = 0;
+    }
+
+    public void discardRecording(long command) {
+        if (packPipeline != null) packPipeline.discardRecording(command);
+        if (velocityPipeline != null) velocityPipeline.discardRecording(command);
+        if (imageInitRecording == command) {
+            imageInitRecording = 0;
+            imagesReady = false;
+        }
+        restartNext = true;
+        havePrev = false;
+        prevViewZValid = false;
+    }
+
+    public void releaseRecordingsAfterHostDrain() {
+        if (packPipeline != null) packPipeline.releaseRecordingsAfterHostDrain();
+        if (velocityPipeline != null) velocityPipeline.releaseRecordingsAfterHostDrain();
+        imageInitRecording = 0;
+    }
+
+    /** Caller closes/discards open recordings and drains host submissions first. */
     public void destroy() {
         if (device != null) {
             VK10.vkDeviceWaitIdle(device);

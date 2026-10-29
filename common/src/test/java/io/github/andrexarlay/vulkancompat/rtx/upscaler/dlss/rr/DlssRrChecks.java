@@ -486,8 +486,7 @@ public final class DlssRrChecks {
         float dx = prevClip.x - clipCenter.x;
         check(Math.abs(dx) > 1e-4f, "camera movement produces non-zero motion displacement: " + dx);
 
-        // Verify VelocityPipeline shader compiles
-        ByteBuffer spv = VelocityPipeline.compileShaderToSpirv();
-        check(spv != null && spv.remaining() > 0, "velocity_reproject.comp compiles to SPIR-V");
+        var velocityPass = io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary.load(VelocityPipeline.PROGRAM_NAME).orElseThrow();
+        check(velocityPass.spirv().length > 0, "live velocity AOT SPIR-V is packaged");
     }
 }

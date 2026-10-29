@@ -19,6 +19,7 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
 import io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangDeviceCapabilities;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
@@ -122,6 +123,7 @@ public final class RtFrameRenderer {
      * buffer device addresses and Int64.
      */
     private static SlangRuntime pathSlangRuntime;
+    private static SlangRuntimePool.Lease pathSlangLease;
     private static boolean pathSlangUnavailable;
     private static String pathSlangUnavailableReason = "Slang path runtime is not initialized";
     private static boolean pathSlangUnavailableLogged;
@@ -627,6 +629,7 @@ public final class RtFrameRenderer {
         RtWorld recordingWorld = world;
         RtPass recordingPass = pass;
         Runnable[] particleRelease = {() -> {}};
+        Retirement[] denoiserProof = {new Retirement(() -> {}, () -> {})};
         RecordingCompletion.Ticket recording;
         try {
             recording = recordingCompletion.beginWithDiscard(cmd.address(),
@@ -640,7 +643,9 @@ public final class RtFrameRenderer {
             new Retirement(
                 () -> recordingEmitters.releaseRecording(cmd.address()), () -> recordingEmitters.releaseRecording(cmd.address())),
             new Retirement(
-                () -> particleRelease[0].run(), () -> particleRelease[0].run()));
+                () -> particleRelease[0].run(), () -> particleRelease[0].run()),
+            new Retirement(
+                () -> denoiserProof[0].completed().run(), () -> denoiserProof[0].discarded().run()));
         } catch (RuntimeException | Error failure) {
             statsOwner.discarded(statsLease); // no commands or submission can reference it yet
             throw failure;
@@ -668,7 +673,7 @@ public final class RtFrameRenderer {
             blasBuiltTotal += stats.builtThisFrame();
             if (stats.instances() > 0 && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
                 recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
-                    world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ, statsLease);
+                    world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ, statsLease, denoiserProof);
                 traced = true;
             }
             VkBarriers.fullMemoryBarrier(cmd);
@@ -773,7 +778,7 @@ public final class RtFrameRenderer {
     /** Output image, dispatch and (debug view only) the copy into the engine colour image, inside the open command buffer. */
     private static void recordPrimaryRays(VkCommandBuffer cmd, VulkanDevice vulkanDevice, CameraRenderState camera,
                                          RenderTarget target, LevelRenderState levelState, boolean sceneChanged,
-                                         RecordingReadbackSlots.Lease<StatsMetadata> statsLease) {
+                                         RecordingReadbackSlots.Lease<StatsMetadata> statsLease, Retirement[] denoiserProof) {
         VkDevice device = vulkanDevice.vkDevice();
         SkyRenderState sky = levelState.skyRenderState;
         frameProjection = BOB_PROJECTION ? io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.levelProjectionOr(camera.projectionMatrix) : camera.projectionMatrix;
@@ -1190,11 +1195,16 @@ public final class RtFrameRenderer {
                         ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterY()
                             * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignY()
                         : 0.0f;
-                    dlssRrDenoiser.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
+                    DlssRrDenoiser owner = dlssRrDenoiser;
+                    denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
+                        () -> owner.discardRecording(cmd.address()));
+                    owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY);
                     frameColorTemporallyResolved = true;
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (Exception e) {
+                    if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
+                        throw nativeFailure; // partial coarse recording requires whole-command discard
                     denoiserRuntimeFailure = "dlss_rr_record: " + String.valueOf(e.getMessage());
                     LOGGER.error("[DLSS-RR] FAILED record: {} (denoiser disabled for this session, raw RT image is shown)",
                         e.getMessage(), e);
@@ -1216,7 +1226,10 @@ public final class RtFrameRenderer {
                         ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getPrevPixelJitterX() : 0.0f;
                     float nrdJitterPrevY = nrdJittered
                         ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getPrevPixelJitterY() : 0.0f;
-                    denoiser.record(cmd, camera.projectionMatrix, frameProjection, camera.viewRotationMatrix,
+                    NrdDenoiser owner = denoiser;
+                    denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
+                        () -> owner.discardRecording(cmd.address()));
+                    owner.record(cmd, camera.projectionMatrix, frameProjection, camera.viewRotationMatrix,
                         camera.pos.x, camera.pos.y, camera.pos.z, params.tonemap, composeExposure,
                         nrdJitterX, nrdJitterY, nrdJitterPrevX, nrdJitterPrevY);
                     frameColorTemporallyResolved = true;
@@ -1382,7 +1395,8 @@ public final class RtFrameRenderer {
     // [DLSS-RR] Creates the DLSS-RR denoiser
     private static void createDlssRrDenoiser(VkDevice device, int w, int h) {
         try {
-            dlssRrDenoiser = new DlssRrDenoiser(device, world.memory(), w, h, output);
+            dlssRrDenoiser = new DlssRrDenoiser(device, world.memory(), w, h, output,
+                pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
         } catch (Exception e) {
             denoiserRuntimeFailure = "dlss_rr_init: " + String.valueOf(e.getMessage());
             LOGGER.error("[DLSS-RR] status=disabled reason=init {} (falling back to NRD if available)", e.getMessage(), e);
@@ -1421,7 +1435,8 @@ public final class RtFrameRenderer {
 
     private static void createDenoiser(VkDevice device, int w, int h) {
         try {
-            denoiser = new NrdDenoiser(device, world.memory(), denoiseMode, denoiseAvailability, w, h, output.view);
+            denoiser = new NrdDenoiser(device, world.memory(), denoiseMode, denoiseAvailability, w, h, output.view,
+                pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
         } catch (NrdException | RtFailure e) {
             denoiserRuntimeFailure = "nrd_init: " + String.valueOf(e.getMessage());
             LOGGER.error("[VKB-NRD] status=disabled reason=init {} (off for this session, setting kept)", e.getMessage(), e);
@@ -1593,7 +1608,8 @@ public final class RtFrameRenderer {
         }
         try {
             int enabledMask = SlangDeviceCapabilities.enabledMask(vulkanDevice);
-            SlangRuntime runtime = SlangRuntime.create(vulkanDevice, enabledMask);
+            pathSlangLease = SlangRuntimePool.acquire(vulkanDevice);
+            SlangRuntime runtime = pathSlangLease.runtime();
             pathSlangRuntime = runtime;
             LOGGER.info("[VKB-RT] Slang path runtime ready enabled_mask=0x{}", Integer.toHexString(enabledMask));
             return runtime;
@@ -1870,11 +1886,8 @@ public final class RtFrameRenderer {
                     io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.collectAfterHostDrain(true);
                 }
                 if (pathSlangRuntime != null) {
-                    pathSlangRuntime.close();
-                    if (!pathSlangRuntime.isClosed()) {
-                        teardownPending = true;
-                        return;
-                    }
+                    pathSlangLease.close();
+                    pathSlangLease = null;
                     pathSlangRuntime = null;
                 }
                 teardownPending = false;
@@ -1891,10 +1904,18 @@ public final class RtFrameRenderer {
                 pl.destroy();
                 pass = null;
             }
+            if (denoiser != null) {
+                denoiser.destroy();
+                denoiser = null;
+            }
+            if (dlssRrDenoiser != null) {
+                dlssRrDenoiser.destroy();
+                dlssRrDenoiser = null;
+            }
             if (pathSlangRuntime != null) {
                 w.closeComputeAfterHostDrain();
-                pathSlangRuntime.close(); // the pass released its recordings in destroy()
-                if (!pathSlangRuntime.isClosed()) throw new RtFailure("destroy_slang_runtime", "recordings are still in use");
+                pathSlangLease.close();
+                pathSlangLease = null;
                 pathSlangRuntime = null;
             }
             pathSlangUnavailable = false;

@@ -102,5 +102,9 @@ public final class RtDeviceRequirements {
 
     public static void registerSlangPath(DeviceFeatureRegistry registry) {
         registry.register(slangPathRequirement());
+        // Independent optional feature: the primary trace does not require it.
+        registry.register(new DeviceRequirement("VKB Slang image formats", Set.of(),
+            List.of(FeatureRequest.core(FeatureRequest.VK10, "shaderStorageImageExtendedFormats")),
+            0, true, null));
     }
 }

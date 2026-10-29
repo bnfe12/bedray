@@ -177,6 +177,7 @@ def validateStructLayout = { String relative, String bindingName, struct ->
 def CORE_SPIRV_CAPABILITIES = [0: 'Matrix', 1: 'Shader', 50: 'ImageQuery']
 def ABI_SPIRV_CAPABILITIES = [
     11  : [name: 'Int64', abi: 1 << 9],                        // BEDRAY_CAP_SHADER_INT64
+    49  : [name: 'StorageImageExtendedFormats', abi: 1 << 10],
     4472: [name: 'RayQueryKHR', abi: 1 << 0],                  // BEDRAY_CAP_RAY_QUERY
     5347: [name: 'PhysicalStorageBufferAddresses', abi: 1 << 2] // BEDRAY_CAP_BUFFER_DEVICE_ADDRESS
 ]
