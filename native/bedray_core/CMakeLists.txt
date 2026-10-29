@@ -33,6 +33,7 @@ add_library(bedray_core SHARED
     src/core.cpp
     src/path_trace_pass.cpp
     src/bloom_pass.cpp
+    src/particles_pass.cpp
 )
 
 # History exposes a C API implemented by the core DLL. The registry remains a
@@ -112,7 +113,7 @@ if(MSVC)
     set_property(TARGET bedray_abi_probe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-add_executable(bedray_descriptor_cache_test tests/descriptor_cache_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp)
+add_executable(bedray_descriptor_cache_test tests/descriptor_cache_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp)
 target_link_libraries(bedray_descriptor_cache_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_descriptor_cache_test PRIVATE
     include
@@ -125,7 +126,7 @@ if(MSVC)
 endif()
 add_test(NAME bedray_descriptor_cache_test COMMAND bedray_descriptor_cache_test)
 
-add_executable(bedray_sampler_ownership_test tests/sampler_ownership_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp)
+add_executable(bedray_sampler_ownership_test tests/sampler_ownership_test.cpp src/path_trace_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp)
 target_link_libraries(bedray_sampler_ownership_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_sampler_ownership_test PRIVATE
     include
