@@ -51,6 +51,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle renderPhasesHandle;
     private final MethodHandle configurePathTraceHandle;
     private final MethodHandle renderPathTraceHandle;
+    private final MethodHandle renderPathTraceGuidesHandle;
     private final MethodHandle destroyPathTraceHandle;
     private final MethodHandle pathTraceFeatureMaskHandle;
 
@@ -113,6 +114,8 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            renderPathTraceGuidesHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_guides",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             destroyPathTraceHandle = bindOptional(linker, lookup, "bedray_core_destroy_path_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS));
             pathTraceFeatureMaskHandle = bindOptional(linker, lookup, "bedray_core_path_trace_feature_mask",
@@ -540,6 +543,24 @@ public final class BedrayCoreNative implements AutoCloseable {
         }
     }
 
+    /** Same frame recorder with seven borrowed host guide views. Input POD is consumed synchronously. */
+    public void renderPathTraceGuides(long core, MemorySegment frameDesc, MemorySegment guides) {
+        ensureOpen();
+        requireHandle(core, "core");
+        requirePathTrace();
+        if (!hasNativeGuideOutputs())
+            throw new BedrayCoreException("render_path_trace_guides", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+                "matching native guide-output exports are required", null);
+        if (frameDesc == null || !frameDesc.isNative() || frameDesc.byteSize() < BedrayCoreLayouts.PT_FRAME_DESC.byteSize()
+            || guides == null || !guides.isNative() || guides.byteSize() < BedrayCoreLayouts.PT_GUIDES_DESC.byteSize())
+            throw new IllegalArgumentException("native frame and guide descriptors are required");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment error = arena.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) renderPathTraceGuidesHandle.invokeExact(handle(core), frameDesc, guides, error);
+            check("render_path_trace_guides", status, error);
+        } catch (Throwable failure) { throw rethrow("render_path_trace_guides", failure); }
+    }
+
     /** Destroys the native pass. Refuses while one of its recordings is unreleased. */
     public void destroyPathTrace(long core) {
         ensureOpen();
@@ -567,6 +588,10 @@ public final class BedrayCoreNative implements AutoCloseable {
     /** Accepts current 25-binding programs with inactive native guide stand-ins; does not enable guide writes. */
     public boolean hasGuideBindings() {
         return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_GUIDE_BINDINGS);
+    }
+
+    public boolean hasNativeGuideOutputs() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_GUIDE_OUTPUTS) && renderPathTraceGuidesHandle != null;
     }
 
     private boolean hasPathTraceFeature(int feature) {

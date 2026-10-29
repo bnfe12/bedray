@@ -38,7 +38,8 @@ public:
     BedrayStatus configure(BedrayCore* core, const DeviceFns& fns,
         const BedrayPathTraceDesc& desc, BedrayError* error);
 
-    BedrayStatus render(const BedrayPathTraceFrameDesc& desc, BedrayError* error);
+    BedrayStatus render(const BedrayPathTraceFrameDesc& desc, BedrayError* error,
+        const BedrayPathTraceGuides* guides = nullptr);
 
     // Idempotent for an unknown command buffer. Completes the pass's own
     // image/buffer uses for that recording and then collects retired objects.

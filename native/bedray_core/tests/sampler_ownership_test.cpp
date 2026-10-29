@@ -58,6 +58,11 @@ VKAPI_ATTR void VKAPI_CALL destroy(VkDevice, VkSampler sampler, const VkAllocati
 
 int main() {
     require((bedray_core_path_trace_feature_mask() & BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS) != 0);
+    require((bedray_core_path_trace_feature_mask() & BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS) != 0);
+    BedrayError guide_error{};
+    BedrayPathTraceGuides guides{};
+    require(bedray_core_render_path_trace_guides(nullptr, nullptr, &guides, &guide_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    require(bedray_core_render_path_trace_guides(nullptr, nullptr, nullptr, &guide_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
     exception_boundaries();
     auto* core = new BedrayCore;
     BedrayBloomDesc bloom{};

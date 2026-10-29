@@ -1063,6 +1063,81 @@ void test_guide_aware_program_contract() {
     CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
 }
 
+void test_real_guide_outputs() {
+    reset_all();
+    std::vector<ProgramBinding> bindings(std::begin(kTraceBindings), std::end(kTraceBindings));
+    for (std::uint32_t binding = 26; binding <= 32; ++binding)
+        bindings.push_back({binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
+    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
+    register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
+    BedrayCore core{};
+    PathTracePass pass;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    auto frame = valid_frame(11);
+    frame.path.flags = 1;
+    BedrayPathTraceGuides guides{BEDRAY_CORE_ABI_VERSION, sizeof(BedrayPathTraceGuides),
+        0x8001, 0x8002, 0x8003, 0x8004, 0x8005, 0x8006, 0x8007};
+    // Invalid guide requests must fail before resource pins, allocation or commands.
+    guides.struct_size = 63;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_ABI_MISMATCH);
+    guides.struct_size = sizeof(guides);
+    guides.abi_version = 0;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_ABI_MISMATCH);
+    guides.abi_version = BEDRAY_CORE_ABI_VERSION;
+    guides.direct = 0;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_INVALID_ARGUMENT);
+    guides.direct = 0x8006;
+    frame.path.flags = 0;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_INVALID_ARGUMENT);
+    frame.path.flags = 1;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(!pass.has_recordings()); CHECK(fake::images.size() == 3);
+    CHECK(fake::render_calls.empty()); CHECK(fake::barriers == 0);
+
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 2);
+    const auto& trace = fake::render_calls.front();
+    for (std::uint32_t i = 0; i < 7; ++i) {
+        CHECK(resource_handle(trace.resources, 26 + i) == 0x8001 + i);
+        CHECK(trace.resources[18 + i].image_layout == VK_IMAGE_LAYOUT_GENERAL);
+    }
+    CHECK_STATUS(pass.destroy(), BEDRAY_ERROR_IN_USE);
+    CHECK_STATUS(pass.release_recording(11), BEDRAY_OK);
+    // An inactive subsequent dispatch must bind the native stand-ins, not stale host targets.
+    frame.command_buffer = 12;
+    frame.path.flags = 0;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    const auto& inactive = fake::render_calls[2];
+    for (std::uint32_t i = 0; i < 7; ++i)
+        CHECK(fake::view_images.contains(resource_handle(inactive.resources, 26 + i)));
+    CHECK_STATUS(pass.release_recording(12), BEDRAY_OK);
+
+    // The native-scene variant forwards the same seven views; a partial failure
+    // retains the recording until the host discards it.
+    frame.command_buffer = 13;
+    frame.path.flags = 1;
+    frame.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+    fake::fail_render_at(0, BEDRAY_ERROR_VULKAN);
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_VULKAN);
+    CHECK(fake::render_calls.back().program == kTraceSceneProgram);
+    CHECK(resource_handle(fake::render_calls.back().resources, 32) == 0x8007);
+    CHECK(pass.has_recordings()); CHECK_STATUS(pass.destroy(), BEDRAY_ERROR_IN_USE);
+    pass.discard_recording(13);
+    CHECK_STATUS(pass.release_recording(13), BEDRAY_OK);
+    fake::fail_render_at(-1, BEDRAY_OK);
+
+    // A legacy program cannot accept real guides even if its sibling can.
+    register_program(kTraceSceneProgram, 112, kTraceBindings, std::size(kTraceBindings));
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    frame.command_buffer = 14;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(!pass.has_recordings());
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    // The fake driver faults on any attempted destruction of borrowed host views.
+    CHECK(fake::images.empty()); CHECK(fake::views.empty()); CHECK(fake::view_images.empty());
+    CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
+}
+
 } // namespace
 
 int main() {
@@ -1077,6 +1152,7 @@ int main() {
     test_upload_failure_releases_pins();
     test_device_lost_configure_cleanup();
     test_guide_aware_program_contract();
+    test_real_guide_outputs();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "bedray_path_trace_pass_test FAILED: %d failure(s)\n", g_failures);

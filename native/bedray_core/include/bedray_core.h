@@ -207,6 +207,8 @@ typedef struct BedrayFrameDesc {
 /* Accepts 25-binding trace programs with inactive, native-owned guide stand-ins.
  * Does not enable G-buffer writes or change any ABI-v2 structure layout. */
 #define BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS (1u << 1)
+/* Additive render_path_trace_guides call binds seven real borrowed outputs. */
+#define BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS  (1u << 2)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)
@@ -355,6 +357,21 @@ typedef struct BedrayPathTraceDesc {
     uint64_t reserved;
 } BedrayPathTraceDesc;
 
+/* Borrowed GENERAL images at the frame extent. The host retains them through
+ * the same completion/discard proof as output/depth. No image is owned here.
+ * Existing ABI-v2 structures remain unchanged; struct_size must be 64. */
+typedef struct BedrayPathTraceGuides {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t view_z;          /* binding 26, R32F */
+    uint64_t normal_rough;    /* binding 27, RGBA16F */
+    uint64_t specular;        /* binding 28, RGBA16F */
+    uint64_t diffuse;         /* binding 29, RGBA16F */
+    uint64_t albedo;          /* binding 30, RGBA8 */
+    uint64_t direct;          /* binding 31, RGBA16F */
+    uint64_t specular_albedo; /* binding 32, RGBA8 */
+} BedrayPathTraceGuides;
+
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
     BedrayCore* core,
     const BedrayPathTraceDesc* desc,
@@ -364,6 +381,12 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
     BedrayCore* core,
     const BedrayPathTraceFrameDesc* desc,
     BedrayError* error);
+
+/* Complete guide outputs and the shader's G-buffer option must both be set.
+ * Calls the same graph/pass recorder; never submits, waits or retains input POD. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_guides(
+    BedrayCore* core, const BedrayPathTraceFrameDesc* desc,
+    const BedrayPathTraceGuides* guides, BedrayError* error);
 
 /* Refuses while a path-trace recording remains. Programs stay host-owned and
  * must not be destroyed while the pass can still record with them. */

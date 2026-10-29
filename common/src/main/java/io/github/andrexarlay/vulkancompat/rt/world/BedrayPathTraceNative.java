@@ -103,13 +103,30 @@ final class BedrayPathTraceNative implements AutoCloseable {
             throw new IllegalStateException("the native scene table needs Slang pass path_trace_scene,"
                 + " which this jar did not compile");
         }
+        var guides = RtPathTraceSlangPass.Guides.of(input.views().gbuffer());
+        boolean wantsGuides = (input.dispatch().flags() & RtPathTraceSlangPass.OPTION_GBUFFER) != 0;
+        boolean completeGuides = guides != null && guides.complete();
+        if (wantsGuides != completeGuides) {
+            throw new IllegalArgumentException(wantsGuides
+                ? "the push asks for denoiser guides but no complete G-buffer is bound"
+                : "denoiser guides are bound but the push does not enable them");
+        }
+        if (wantsGuides && !library.hasNativeGuideOutputs()) {
+            throw new IllegalStateException("native denoiser guides need a core with GUIDE_OUTPUTS");
+        }
         if (!configured) {
             configure(frame);
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment desc = arena.allocate(BedrayCoreLayouts.PT_FRAME_DESC);
             fill(desc, input);
-            library.renderPathTrace(core, desc);
+            if (wantsGuides) {
+                MemorySegment targets = arena.allocate(BedrayCoreLayouts.PT_GUIDES_DESC);
+                fillGuides(targets, guides);
+                library.renderPathTraceGuides(core, desc, targets);
+            } else {
+                library.renderPathTrace(core, desc);
+            }
         }
     }
 
@@ -214,6 +231,24 @@ final class BedrayPathTraceNative implements AutoCloseable {
         packet.putInt(state, entities.atlasSize());
         packet.putInt(state + 4, entities.selfAvatarTriStart());
         packet.putInt(state + 8, entities.selfAvatarTriCount());
+    }
+
+    /** Borrowed host targets in shader binding order (different from the denoiser's array order). */
+    static void fillGuides(MemorySegment out, RtPathTraceSlangPass.Guides guides) {
+        if (out.byteSize() != BedrayCoreLayouts.PT_GUIDES_DESC.byteSize())
+            throw new IllegalArgumentException("native guide descriptor must be 64 bytes");
+        if (guides == null || !guides.complete())
+            throw new IllegalArgumentException("native guide outputs need all seven views");
+        var packet = out.asByteBuffer().order(ByteOrder.nativeOrder());
+        packet.putInt(0, BedrayCoreLayouts.ABI_VERSION);
+        packet.putInt(4, Math.toIntExact(BedrayCoreLayouts.PT_GUIDES_DESC.byteSize()));
+        packet.putLong(8, guides.viewZ());
+        packet.putLong(16, guides.normalRough());
+        packet.putLong(24, guides.specular());
+        packet.putLong(32, guides.diffuse());
+        packet.putLong(40, guides.albedo());
+        packet.putLong(48, guides.direct());
+        packet.putLong(56, guides.specAlbedo());
     }
 
     private static void putBuffer(MemorySegment at, long base, long handle, long offset, long bytes) {

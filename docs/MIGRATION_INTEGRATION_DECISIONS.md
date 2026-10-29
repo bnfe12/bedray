@@ -73,9 +73,15 @@ matching current core. SlangRuntime is the sole owner of cached programs.
 
 GUIDE_BINDINGS accepts the shader owner's current 25-binding trace programs
 with native-owned one-texel R32F/RGBA16F/RGBA8 stand-ins for bindings 26..32 when
-guide writes are off. It does not advertise real G-buffer output. An explicit
-G-buffer-write bit is rejected before resource pins/commands; the existing host
-selector still refuses native denoising. Independent 18-binding ABI clients stay
-supported. Native FFM path packing shares Dispatch.writeTo, preserving the
+guide writes are off. The separate GUIDE_OUTPUTS feature and
+`bedray_core_render_path_trace_guides` accept seven real borrowed host targets
+through an additive 64-byte descriptor. All views and the G-buffer option must
+agree; missing targets are rejected before resource pins/commands. The Java
+adapter explicitly maps denoiser array order to shader binding order, notably
+specular before diffuse. The host owns their formats, extent, GENERAL layout and
+retention through exact recording proof, as for output/depth. Native DLSS-RR can
+be selected explicitly with a matching core; AUTO remains gated on live guide
+acceptance, and NRD remains unsupported without primary world-space motion.
+Independent 18-binding ABI clients stay supported. Native FFM path packing shares Dispatch.writeTo, preserving the
 auto-normal strength bits in entityState.w while normalizing entity metadata to
 the ranges actually bound. Existing ABI-v2 structures are unchanged.

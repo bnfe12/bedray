@@ -909,3 +909,37 @@ The current 18 production AOT passes freshly compile during the first run.
 
 `git diff --check` passes. No GPU/game or visual result; native remains opt-in.
 Full native guide output and the volumetric scene boundary remain separate work.
+
+## 2026-10-29 — borrowed native guide outputs for DLSS-RR
+
+Base `7cba8972b94a9e108df8611bd8e93a33cb073460`. The additive
+`bedray_core_render_path_trace_guides` call and GUIDE_OUTPUTS feature accept the
+separate 64-byte BedrayPathTraceGuides descriptor; old ABI-v2 structures and
+exports are unchanged. All seven non-zero GENERAL views and the G-buffer option
+are required together. The existing opaque graph forwards borrowed POD
+synchronously to the same path pass; no second history or barrier authority is
+introduced. The host retains the targets through exact completion/discard. The
+native pass never creates, transitions or destroys those external targets.
+
+Java checks matching native feature/export before selecting native guide output,
+validates flag/targets before configure, and explicitly maps the denoiser's array
+order to bindings 26..32 (specular precedes diffuse in the shader). Explicit
+native SLANG + DLSS-RR is enabled with a matching core; AUTO retains the existing
+live-acceptance gate and NRD still requires primary world-space motion.
+
+Native revision `f49c2700a28610d50c90c0115aceef4381096a86` passes
+[Windows CI 40807393855](https://github.com/bnfe12/bedray/actions/runs/40807393855):
+candidate core 19/19 + scene 1/1 + lifetime 1/1; baseline core 15/15 + scene 1/1 +
+lifetime 1/1; ABI-v2 probe exits 0 on both. The pass test now checks real targets,
+invalid ABI/size/missing views/flag agreement before commands, active-to-inactive
+descriptor replacement, both scene variants, partial failure/discard and legacy
+18-binding rejection of real guides. The fake driver faults if borrowed host
+views are destroyed. The graph test checks synchronous guide forwarding.
+
+Java compilation and 161 selected tests pass, zero failures/errors/skips (51s),
+using the preceding filters, local dependencies and bounded JVM settings. The
+additional case verifies distinct guide channels, ABI header, heap/native packet
+packing, both range guards and malformed inputs. Shader compilation is up to
+date from the preceding 18-pass run; shader sources are unchanged in this batch.
+`git diff --check` passes. No GPU/game, visual parity or performance evidence;
+native remains opt-in. The volumetric native-scene boundary remains separate.

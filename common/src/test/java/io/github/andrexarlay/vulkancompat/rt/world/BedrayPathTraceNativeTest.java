@@ -47,4 +47,28 @@ class BedrayPathTraceNativeTest {
                 () -> BedrayPathTraceNative.fillPath(out.asSlice(0, 111), dispatch(0, 0, 0), RtPathTraceSlangPass.Entities.NONE));
         }
     }
+
+    @Test void guidePacketsMapDenoiserChannelsToShaderBindingsOnHeapAndNativeMemory() {
+        var guides = RtPathTraceSlangPass.Guides.of(new long[]{101, 102, 103, 104, 105, 106, 107});
+        long[] bindingOrder = {101, 102, 106, 103, 104, 105, 107};
+        try (Arena arena = Arena.ofConfined()) {
+            for (MemorySegment storage : new MemorySegment[]{arena.allocate(80, 8), MemorySegment.ofArray(new byte[80])}) {
+                storage.fill((byte)0x5a);
+                var out = storage.asSlice(8, 64);
+                BedrayPathTraceNative.fillGuides(out, guides);
+                assertEquals(BedrayCoreLayouts.ABI_VERSION, out.get(JAVA_INT_UNALIGNED, 0));
+                assertEquals(64, out.get(JAVA_INT_UNALIGNED, 4));
+                for (int i = 0; i < bindingOrder.length; i++)
+                    assertEquals(bindingOrder[i], out.get(JAVA_LONG_UNALIGNED, 8 + i * 8), "guide binding " + (26 + i));
+                for (int i = 0; i < 8; i++) {
+                    assertEquals((byte)0x5a, storage.get(JAVA_BYTE, i));
+                    assertEquals((byte)0x5a, storage.get(JAVA_BYTE, 72 + i));
+                }
+                assertThrows(IllegalArgumentException.class, () -> BedrayPathTraceNative.fillGuides(out.asSlice(0, 63), guides));
+                assertThrows(IllegalArgumentException.class, () -> BedrayPathTraceNative.fillGuides(out, null));
+                var partial = RtPathTraceSlangPass.Guides.of(new long[]{101, 102, 103, 104, 105, 106, 0});
+                assertThrows(IllegalArgumentException.class, () -> BedrayPathTraceNative.fillGuides(out, partial));
+            }
+        }
+    }
 }

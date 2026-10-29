@@ -19,6 +19,9 @@ using gpu::Status;
 
 constexpr std::uint32_t kThreadGroup = 8u;
 constexpr std::uint32_t kPathOptionGbuffer = 1u << 0u;
+static_assert(sizeof(BedrayPathTraceGuides) == 64);
+static_assert(offsetof(BedrayPathTraceGuides, view_z) == 8);
+static_assert(offsetof(BedrayPathTraceGuides, specular_albedo) == 56);
 constexpr std::uint32_t kFrameFlagHistoryValid = 1u << 0u;
 constexpr std::uint32_t kFrameFlagResetTemporal = 1u << 2u;
 // restir_spatial.slang: RESTIR_SPATIAL_ENABLED, the state.w bit that lets the
@@ -759,7 +762,8 @@ BedrayStatus PathTracePass::ensure_reservoirs(std::uint64_t bytes, BedrayError* 
     return BEDRAY_OK;
 }
 
-BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, BedrayError* error) try {
+BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, BedrayError* error,
+    const BedrayPathTraceGuides* guides) try {
     BedrayPathTraceFrameDesc desc = input;
     if (core_ == nullptr || images_ == nullptr || buffers_ == nullptr) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
@@ -792,8 +796,21 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     // not a whole number of records would decode as a different section.
     const bool native_scene = (desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE) != 0;
     const bool guide_bindings = native_scene ? scene_guide_bindings_ : trace_guide_bindings_;
-    if (guide_bindings && (desc.path.flags & kPathOptionGbuffer) != 0)
-        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "native guide bindings are inactive stand-ins, not G-buffer outputs");
+    std::array<std::uint64_t, 7> guide_views{};
+    if (guides) {
+        if (guides->abi_version != BEDRAY_CORE_ABI_VERSION || guides->struct_size != sizeof(*guides))
+            return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "path-trace guide ABI/size mismatch");
+        if (!guide_bindings)
+            return fail(error, BEDRAY_ERROR_UNSUPPORTED, "selected trace program has no guide bindings");
+        if ((desc.path.flags & kPathOptionGbuffer) == 0)
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "guide outputs require the G-buffer option");
+        guide_views = {guides->view_z, guides->normal_rough, guides->specular, guides->diffuse,
+            guides->albedo, guides->direct, guides->specular_albedo};
+        if (std::any_of(guide_views.begin(), guide_views.end(), [](auto view) { return view == 0; }))
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "all seven guide outputs are required");
+    } else if (guide_bindings && (desc.path.flags & kPathOptionGbuffer) != 0) {
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "G-buffer writes require the additive guide-output call");
+    }
     if (native_scene) {
         if (program_trace_scene_ == 0) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
@@ -972,7 +989,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
             return status;
         }
     }
-    if (guide_bindings) for (auto id : guide_dummy_ids_) {
+    if (guide_bindings && !guides) for (auto id : guide_dummy_ids_) {
         status = pin_image(id, recording, error);
         if (status != BEDRAY_OK) {
             release_recording(command_handle);
@@ -1035,7 +1052,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     std::memcpy(trace_push.entity_state, desc.path.entity_state, sizeof(trace_push.entity_state));
 
     const VkCommandBuffer command = as_command_buffer(desc.command_buffer);
-    if (guide_bindings && !guide_dummies_initialized_) {
+    if (guide_bindings && !guides && !guide_dummies_initialized_) {
         for (const auto& view : guide_dummy_views_)
             transition_image(fns_, command, view.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
         guide_dummies_initialized_ = true;
@@ -1103,7 +1120,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         constexpr std::array<std::size_t, 7> format_index{0, 1, 1, 1, 2, 1, 2};
         for (std::size_t i = 0; i < format_index.size(); ++i)
             trace_resources[18 + i] = image_resource(static_cast<std::uint32_t>(26 + i),
-                VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, guide_dummy_views_[format_index[i]].view);
+                VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, guides ? as_view(guide_views[i]) : guide_dummy_views_[format_index[i]].view);
     }
 
     BedrayFrameDesc trace_desc{};
