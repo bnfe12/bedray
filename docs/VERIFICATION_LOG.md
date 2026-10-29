@@ -4,7 +4,7 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
-## 2026-10-29 — platform native names and the CMake opt-in (L2 tests; no native configure)
+## 2026-10-29 — platform native names, build-path hygiene and the CMake opt-in (L2 tests; no native configure)
 
 P2-3: `BedrayCoreLocator` and `BedraySceneLocator` hardcoded `bedray_core.dll` /
 `bedray_scene.dll`. Both now expose `FILE = System.mapLibraryName(LIBRARY_ID)`
@@ -19,16 +19,24 @@ but the message names `-DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM=ON`; that opt-in
 emits a warning that the build is untested and unsupported. `bedray_scene`
 keeps `PREFIX ""` on Windows only, so Linux/macOS output matches the JVM name.
 
-Evidence on `1c2ea7c` from the ASCII worktree:
+P2-1: the `C:/Dev/Sky/tools/sdk/Vulkan-Headers` fallback is gone from
+`bedray_core`, `bedray_scene` and `bedray_render_graph`; only the
+`BEDRAY_VULKAN_HEADERS` cache variable and `VULKAN_SDK` remain.
+
+P2-4: the `slangDir`/`SLANG_DIR` lookup uses `slangc.exe` on Windows and
+`slangc` elsewhere, while explicit `-Pslangc`/`SLANGC` still win.
+
+Evidence on `320b274` from the ASCII worktree:
 
 | Check | Result |
 |---|---|
 | targeted `BedrayNativeNameTest`, `NativePlatformGateTest`, `RtSlangGbufferGuidesTest` | passed |
-| `:core:test` | 107 tests, 0 failures, 0 errors |
-| `:common:compileSlang :common:test` | 747 tests, 0 failures, 0 errors, 9 skipped, 123 classes |
+| `:core:test` (at `1c2ea7c`) | 107 tests, 0 failures, 0 errors |
+| `:common:compileSlang :common:test` | 18 passes; 749 tests, 0 failures, 0 errors, 9 skipped, 123 classes |
 
 Not run: CMake is not installed here, so neither project was configured or
-built; no Linux/macOS machine was used. The structural check in
+built; no Linux/macOS machine was used, and the `slangDir` branch was not
+exercised because the runs pass an explicit `-Pslangc`. The structural check in
 `NativeLibrariesImpl` is still PE-only, and the NRD/DLSS wrappers are
 Windows-only. P2-2/P2-3 remove the hardcoded name and the unconditional gate;
 they do not make non-Windows loading or rendering supported.
