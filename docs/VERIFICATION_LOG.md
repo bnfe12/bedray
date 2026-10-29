@@ -1196,3 +1196,24 @@ prepared volumetric-interface tests); that shader interface is a separate PR.
 The bounded offline Gradle/JDK/dependency setup matches preceding entries.
 An independent read-only source review found no blocking lifetime/visibility
 issue. No GPU/game evidence; native mode stays opt-in.
+
+## 2026-10-29 — volumetric native-scene binding adapter (needs shader owner review)
+
+The legacy volumetric march body/push are extracted into one shared generic
+entry helper; the new volumetric_march_scene entry binds GeometrySection through
+the existing GeometryProvider/HardwareTraversal with a fixed world-only mask 1.
+It supplies no entity streams and never decodes entities. LegacySection remains
+bound only by the legacy entry. Both keep bindings 0/2/11/12/16, 608-byte frame,
+96-byte push and 8x8x1 groups. Apply and scattering arithmetic are unchanged.
+
+Pinned SHA256 of the original body from 0898b004, removing only the four legacy
+traversal setup statements, matches the extracted helper. Standalone slangc
+2026.20 compiles both march entries and apply, exit 0/no warnings. Gradle also
+compiles all 19 production entries; five RtSlangVolumetricSceneTest cases pass,
+zero failures/errors/skips (28s), checking exact body, push types/order, native
+record field identity and generated manifests. No host activation in this PR.
+
+Existing limitations are preserved: binary world-only visibility, no shaft
+bob-origin correction, no material/alpha filtering. Exposure/reprojection must
+use the typed display contract when integrated. This is a separate interface
+PR marked needs shader owner review; no GPU/game or visual evidence.
