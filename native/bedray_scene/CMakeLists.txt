@@ -26,8 +26,6 @@ set(BEDRAY_VULKAN_HEADERS "" CACHE PATH "Path to the Vulkan-Headers include dire
 if(NOT BEDRAY_VULKAN_HEADERS)
     if(DEFINED ENV{VULKAN_SDK} AND EXISTS "$ENV{VULKAN_SDK}/include/vulkan/vulkan_core.h")
         set(BEDRAY_VULKAN_HEADERS "$ENV{VULKAN_SDK}/include")
-    elseif(EXISTS "C:/Dev/Sky/tools/sdk/Vulkan-Headers/include/vulkan/vulkan_core.h")
-        set(BEDRAY_VULKAN_HEADERS "C:/Dev/Sky/tools/sdk/Vulkan-Headers/include")
     endif()
 endif()
 if(NOT EXISTS "${BEDRAY_VULKAN_HEADERS}/vulkan/vulkan_core.h")

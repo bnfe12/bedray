@@ -37,6 +37,11 @@ def slangPasses = (project.findProperty('slangPasses') ?: '**/*.slang').toString
 def slangArgs = ['-target', 'spirv', '-profile', slangProfile, '-entry', 'main',
                  '-matrix-layout-column-major', '-I', slangRoot.absolutePath]
 
+// The SDK ships the compiler as bin/slangc.exe on Windows and bin/slangc
+// elsewhere. The explicit -Pslangc/SLANGC paths still win when set.
+def slangcBinary = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+    ? 'slangc.exe' : 'slangc'
+
 def findSlangc = {
     List<File> candidates = []
     if (project.hasProperty('slangc')) {
@@ -46,10 +51,10 @@ def findSlangc = {
         candidates << file(System.getenv('SLANGC'))
     }
     if (project.hasProperty('slangDir')) {
-        candidates << new File(project.property('slangDir').toString(), 'bin/slangc.exe')
+        candidates << new File(project.property('slangDir').toString(), "bin/$slangcBinary")
     }
     if (System.getenv('SLANG_DIR')) {
-        candidates << new File(System.getenv('SLANG_DIR'), 'bin/slangc.exe')
+        candidates << new File(System.getenv('SLANG_DIR'), "bin/$slangcBinary")
     }
     candidates.find { it.isFile() }
 }

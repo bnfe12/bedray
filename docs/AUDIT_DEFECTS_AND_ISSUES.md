@@ -87,7 +87,7 @@
 * **Поведение:** Буферы для структур ускорения и секций создаются с флагом `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT`. Однако при выделении памяти `vkAllocateMemory` вызывается со структурой `VkMemoryAllocateInfo` без добавления в цепочку `pNext` структуры `VkMemoryAllocateFlagsInfo` с флагом `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`.
 * **Причина:** Нарушение обязательного требования спецификации Vulkan VUID-VkMemoryAllocateInfo-pNext-03332.
 * **Угроза:** На строгих драйверах (NVIDIA, RADV, Intel) вызовы построения BLAS завершаются с ошибкой `VK_ERROR_INITIALIZATION_FAILED` или сбоем устройства.
-* **Статус:** **НЕ ИСПРАВЛЕН** (выявлен в ходе аудита).
+* **Статус:** **ИСПРАВЛЕНО (2026-10-28, коммит `5e89275`).** Для буферов с `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` в `VkMemoryAllocateInfo.pNext` теперь добавляется `VkMemoryAllocateFlagsInfo` с `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`; нулевой полученный адрес отклоняется с очисткой до публикации. Проверено нативным CI: [run 40718040730](https://github.com/bnfe12/bedray/actions/runs/40718040730) — core 17/17, scene 1/1, frame lifetime 1/1, ABI probe v2 exit 0. Это L2 без GPU/драйверной валидации VUID; GPU-прогона нет.
 
 ---
 
@@ -159,6 +159,7 @@
 ### [P2-1] Хардкод путей разработчика в CMake
 * **Файлы:** [`bedray_core/CMakeLists.txt:20`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/CMakeLists.txt#L20), [`bedray_render_graph/CMakeLists.txt:56`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_render_graph/CMakeLists.txt#L56)
 * **Проблема:** Зашит абсолютный локальный путь `C:/Dev/Sky/tools/sdk/Vulkan-Headers/include`.
+* **Статус:** **ИСПРАВЛЕНО (2026-10-29).** Fallback `C:/Dev/Sky/...` удалён из `bedray_core`, `bedray_scene` и `bedray_render_graph`; остались только `-DBEDRAY_VULKAN_HEADERS=...` и `VULKAN_SDK`. `NativePlatformGateTest` запрещает возврат пути. CMake здесь не установлен, конфигурация не запускалась.
 
 ### [P2-2] Блокировка сборки на не-Windows платформах в CMake (macOS / Linux / ARM)
 * **Файлы:** [`bedray_core/CMakeLists.txt:7-9`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_core/CMakeLists.txt#L7-L9), [`bedray_scene/CMakeLists.txt:5-7`](file:///C:/Users/andre/Downloads/bedray-slang/native/bedray_scene/CMakeLists.txt#L5-L7)
@@ -173,6 +174,7 @@
 ### [P2-4] Хардкод бинарника `slangc.exe` в Gradle
 * **Файл:** [`gradle/slang.gradle:49`](file:///C:/Users/andre/Downloads/bedray-slang/gradle/slang.gradle#L45-L55)
 * **Проблема:** AOT-задача вызывает исключительно `bin/slangc.exe`.
+* **Статус:** **ИСПРАВЛЕНО (2026-10-29).** Имя бинарника в `slangDir`/`SLANG_DIR` выбирается по `os.name`: `slangc.exe` на Windows, `slangc` на остальных платформах; явные `-Pslangc`/`SLANGC` по-прежнему имеют приоритет. Контракт закреплён `NativePlatformGateTest`. Сам AOT-прогон в этом окружении выполнялся с явным `-Pslangc=...`, поэтому ветка `slangDir` тестом не исполнялась.
 
 ### [P2-5] Ловушка выравнивания std430 в структуре `VelocityPush`
 * **Файл:** [`passes/velocity_reproject.slang:59`](file:///C:/Users/andre/Downloads/bedray-slang/common/src/main/resources/shaders/slang/passes/velocity_reproject.slang#L55-L65)

@@ -22,6 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class NativePlatformGateTest {
     private static final Path CORE = Path.of("../native/bedray_core/CMakeLists.txt");
     private static final Path SCENE = Path.of("../native/bedray_scene/CMakeLists.txt");
+    private static final Path GRAPH = Path.of("../native/bedray_render_graph/CMakeLists.txt");
+    private static final Path SLANG_GRADLE = Path.of("../gradle/slang.gradle");
 
     @Test
     void aNonWindowsConfigureIsAnOptInWithAWarning() throws IOException {
@@ -44,5 +46,22 @@ class NativePlatformGateTest {
         assertTrue(cmake.matches("(?s).*if\\(WIN32\\)\\s*set_target_properties\\(bedray_scene PROPERTIES PREFIX \"\"\\)\\s*endif\\(\\).*"),
             "an empty prefix on Linux/macOS would produce bedray_scene.so while the JVM asks for libbedray_scene.so; "
                 + "the empty prefix belongs to the Windows branch only");
+    }
+
+    @Test
+    void noDeveloperSpecificPathsAreLeftInTheBuildFiles() throws IOException {
+        for (Path path : new Path[] {CORE, SCENE, GRAPH}) {
+            assertFalse(Files.readString(path).contains("C:/Dev/"),
+                path + ": a developer checkout path must not be a fallback; use VULKAN_SDK or -DBEDRAY_VULKAN_HEADERS");
+        }
+    }
+
+    @Test
+    void theSlangCompilerFollowsTheHostPlatform() throws IOException {
+        String gradle = Files.readString(SLANG_GRADLE);
+        assertTrue(gradle.contains("slangcBinary"),
+            "the SDK lookup must choose slangc.exe on Windows and slangc elsewhere");
+        assertFalse(gradle.contains("'bin/slangc.exe'"),
+            "a hardcoded bin/slangc.exe breaks every non-Windows AOT build");
     }
 }
