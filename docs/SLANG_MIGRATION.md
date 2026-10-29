@@ -1113,15 +1113,20 @@ cross-cascade resolve or image comparison was run.
    entered by a transmission through a surface), Snell refraction and caustics
    of the underwater NEE beam, side-aware IOR when a path leaves the water, and
    wiring `RtSettings.waterStyle` into the typed path.
-4b. **Denoiser G-buffer** — the entry pass now writes the seven DLSS-RR guide
+4b. **Denoiser G-buffer** — the entry pass writes the seven DLSS-RR guide
    channels (`outViewZ`, `outNormalRough`, `outDiffuse`, `outAlbedo`,
    `outDirect`, `outSpecular`, `outSpecAlbedo`, bindings 26–32) at the primary
    vertex, plus NRD's per-pixel `IN_MV` vec4 into binding 33
    (`outMotionBuffer`, the renderer's existing `entity_motion_px`); explicit
-   `SLANG` + `DLSS_RR` and `SLANG` + `NRD` are accepted. `AUTO` still keeps the
-   GLSL pass until a live frame consumes them, and no live frame exists. Open:
-   the C++ path backend binds one-texel dummies and writes no guides, and a
-   rejected (invalid/truncated) sample can still carry a guide.
+   `SLANG` + `DLSS_RR` and `SLANG` + `NRD` are accepted, and `AUTO` keeps the
+   GLSL pass until a live frame consumes the guides. The C++ backend forwards
+   the seven guides through the additive
+   `bedray_core_render_path_trace_guides` call (`GUIDE_OUTPUTS`), so
+   `nativePathTrace` + `DLSS_RR` no longer blocks on missing outputs. It still
+   binds the binding-33 stand-in and sets no motion option bit, so
+   `RtFrameRenderer` refuses NRD only when `SLANG_PATH_TRACE_CPP` is set.
+   Open: a rejected (invalid/truncated) sample can still carry a guide, and
+   the C++ pass has no world-space motion output yet.
 5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
    are now in the shared checkout as source-only. Environment is opt-in on a
    positive world boundary that the terminal window reaches; a zero boundary
