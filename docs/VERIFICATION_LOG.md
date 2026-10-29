@@ -139,7 +139,7 @@ Result:
 | `passes/*.slang` | 18 | 18 | `path_trace` 551880 B, `path_trace_scene` 563696 B, both 26 bindings / 112 B push |
 | Targeted `:common:test` | 35 tests | 0 failures | `RtSlangNrdMotionTest` 5, `RtSlangGbufferGuidesTest` 7, `RtSlangEntityTest` 14, `SlangPassLibraryTest` 9 |
 | Native `bedray_core` Release x64 | build | OK | `bedray_core.dll`, `bedray_path_trace_pass_test.exe` rebuilt |
-| CTest (`build/bedray-native/windows-x64`) | 18 tests | 18 passed | includes `bedray_path_trace_pass_test` with the 18/25/26-binding contract and stand-in counts |
+| CTest (`build/bedray-native/windows-x64`) | 19 tests | 19 passed | re-run on the pushed HEAD `01b8d3b` in an isolated worktree; includes `bedray_path_trace_pass_test` with the 18/25/26-binding contract and stand-in counts |
 
 Mutation proofs: changing the shader trust threshold `1.0e-8` to `0.0` fails
 `theMotionRecordIsTheLegacyVec4`; replacing the host's
@@ -147,19 +147,26 @@ Mutation proofs: changing the shader trust threshold `1.0e-8` to `0.0` fails
 `theHostAndThePushKeepTheirPromise`. Both files were restored byte-identical
 (sha256 verified).
 
-No clean full-suite claim is recorded for this batch: one run raced a
-concurrent, uncommitted spatial-reuse edit in the same worktree (its three
-`RtSlangRestirSpatialTest` failures are stale-compile artifacts — the same
-test passes against the settled sources), and two later attempts were killed
-by host memory exhaustion (JVM `hs_err`, "insufficient memory", while another
-session's Gradle build ran on the same 16 GB machine). The full-suite run is
-to be repeated on a free host before this batch is treated as L2-complete.
+No clean full-suite claim was available while this batch was first written: one
+run raced a concurrent, uncommitted spatial-reuse edit in the same worktree (its
+three `RtSlangRestirSpatialTest` failures are stale-compile artifacts — the same
+test passes against the settled sources), and two later attempts were killed by
+host memory exhaustion (JVM `hs_err`, "insufficient memory", while another
+session's Gradle build ran on the same 16 GB machine). The gap is now closed on
+the settled branch: the spatial entry above records a clean `:common:test` run
+(754 tests / 122 suites, 0 failures) on the pushed HEAD after PR #29, and the
+C++ side was re-run for this entry in an isolated worktree checked out at
+`01b8d3b` — CMake Release build OK and CTest 19/19, with
+`bedray_path_trace_pass_test` covering the 18/25/26-binding union contract.
 
-This is L1/L2 only. No GPU dispatch, frame or screenshot exists; the NRD
-layout has never consumed these values on a device, and no owner-verified
-image of the Slang path exists. The guide capture happens before the display
-pass may reject a sample, so a rejected pixel can carry a motion record too;
-the denoiser's own history rejection is expected to absorb that once a live
+This is L1/L2 for the motion lane. No GPU dispatch has ever run with
+`PATH_TRACE_OPTION_NRD_MOTION` set — the C++ backend never sets either option
+bit — so the NRD layout has not consumed these values on a device, and no
+owner-verified image of the motion channel exists. Live frames of the Slang path
+do exist now (see the spatial entry), but they exercise the trace and spatial
+stages, not the guide or motion writes. The guide capture happens before the
+display pass may reject a sample, so a rejected pixel can carry a motion record
+too; the denoiser's own history rejection is expected to absorb that once a live
 frame is measured.
 
 ## 2026-10-29 — DLSS-RR guide channels from the typed path (L1 compile, L2 unit)
