@@ -1168,6 +1168,38 @@ Repository cleanup retains only main/refactor/slang-pipeline branches. Merged
 head branches are deleted automatically in GitHub; local fetch pruning is
 enabled. Old worktrees are detached with their files/dependencies retained.
 
+## 2026-10-29 — consolidated audit integration and complete Java test run
+
+The remaining audit branch is merged with `8d18bd7` (native volumetric integration).
+Its build/platform/NRD constant-ring fixes and shared path entry are preserved,
+alongside current native passes, exact stats leases, DI state and NRD motion
+binding 33. The shared entry receives the latest motion buffer/helper; no primary
+transport arithmetic is rewritten. Conflicting source tests follow the actual
+shared entry and current backend state rather than restoring obsolete strings.
+All earlier audit evidence appended below remains historical to its own revision.
+
+Runtime shutdown is additionally made retry-safe: core destruction runs before
+cached-program invalidation. Pending recordings leave the library and programs
+usable; successful core destruction invalidates Java wrappers without calling
+through the freed core handle. A failed library unload forbids rendering and
+can retry without destroying the core twice. Two pure lifecycle tests cover both
+refusal and retry cases.
+
+Final source revision `0a1244f543c2a7a9a6d906dba3657a6ff11cb765` passes full
+`:common:test`: **786 tests, 777 passed, 9 skipped, zero failures/errors** (63s).
+All 19 production AOT entries compile on this merged tree. The skipped cases
+require optional real-pack/environment inputs; no GPU/game test is claimed.
+The first full run found three stale source assertions after integration; those
+are updated to the shared motion helper and DI state module, and the full repeat
+passes. The bounded offline command/JDK/dependencies match preceding entries.
+
+[Native CI 40841976213](https://github.com/bnfe12/bedray/actions/runs/40841976213)
+passes on the same revision: candidate core 21/21 + scene 1/1 + lifetime 1/1;
+baseline core 15/15 + scene 1/1 + lifetime 1/1; ABI-v2 probes exit 0. No C++
+warnings are reported. Subsequent edits only update documentation. Windows is
+the validated build target; non-Windows opt-in is explicitly untested. Native
+path stays opt-in, with no visual/performance/owner live acceptance claim.
+
 ## 2026-10-29 — exact host statistics readback leases
 
 Base `0898b0049508b29f0a5f26cd753fbd775049de47`. StatsBuf no longer reads or

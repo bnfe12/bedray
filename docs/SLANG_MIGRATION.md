@@ -334,15 +334,17 @@ hardware paths agree on foliage and glass.
 
 | Pass | Slang entry files | Host | State |
 |---|---|---|---|
-| Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Requires AOT Slang; mip and sampler ownership remains in Java and must move to C++. See [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no live validation. |
+| Bloom + sun glare | `bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` -> coarse native `BloomPass` | C++ owns mip images, descriptor/push packing, dispatch/barriers and exact retirement; programs/samplers remain runtime-owned. L1/L2, no live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `passes/path_trace.slang`, `passes/restir_spatial.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` + `RtSpatialReuseSlangPass` (optional); opt-in native pass in `bedray_core` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` keeps the legacy GLSL `rt_path.comp` when the AOT passes, device capabilities or a G-buffer denoiser block it. Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. `-Dvkbridge.rt.nativePathTrace=true` moves the same three dispatches into the C++ pass when the DLL exports the additive ABI; the Java path stays default. Fills the seven DLSS-RR guide images (bindings 26–32) when the host binds them, and NRD's per-pixel `IN_MV` vec4 into binding 33 (`outMotionBuffer`, the renderer's `entity_motion_px`) when the views carry that buffer; `AUTO` stays on GLSL while a denoiser is selected because no live frame has consumed the guides yet. No auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
+| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides are supported; native NRD motion output remains unavailable. Java reference consumes the NRD motion buffer. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
+| Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
+| Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
 
 The host addresses bindings by Slang parameter name (`srcTex`, `dstImg`,
 `finalImg`, `depthTex`), and `RtBloomPass` validates the generated manifest
 against the resources it can supply before the first dispatch.  A shader edit
-that moves a binding or changes the 128-byte block therefore falls back to
-GLSL with a log line instead of binding the wrong image.
+that moves a binding or changes the 128-byte block is rejected with an explicit
+contract error before native recording.
 
 ### Path-trace host contract
 
@@ -975,7 +977,9 @@ candidates, not a validated or active runtime.
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
 | Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_atlas_layout.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace facade split into options/shade/walk/dispatch/history/ownership; `segment_store.slang` is a facade over `segment_record.slang` and `probe_resolve.slang`, and the typed probe resolve is `rcResolveProbe`/`rcProbeComplete` returning `RCProbeRadiance`; these are source-only in this checkout. The legacy float4 store is isolated behind `legacy_float4_store.slang`/`radiance_cascades_store.slang` and its resolve is named `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`; it is incompatible with the typed atlas. Environment is opt-in on a positive world boundary, so a terminal-cascade miss under a roof is not treated as sky. Cross-cascade reconstruction, unbiased temporal reuse and host integration are unfinished. |
 | ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
-| Path tracing | `pathtrace/path_tracer.slang`, `passes/path_trace.slang` | iterative loop over `ISceneTracer`, NEE through `ILightSampler` with sun/moon plus block emitters, filtered shadows, Russian roulette, first-hit distance; the traced scene is terrain *and* the captured entity ring (`traversal/entity_geometry.slang`), decoded by the instance's custom-index bit; `RtSlangPathPass` wraps `RtPathTraceSlangPass`, the optional `RtSpatialReuseSlangPass` and `path_display` in Path Tracing mode, with `AUTO` falling back to GLSL when the Slang path is blocked. The entry pass writes the seven DLSS-RR guide channels (bindings 26–32) at the primary vertex when the host sets `PATH_TRACE_OPTION_GBUFFER` and NRD's per-pixel `IN_MV` vec4 (binding 33) when the views carry the motion buffer (`PATH_TRACE_OPTION_NRD_MOTION`); explicit `SLANG` with `DLSS_RR` or `NRD` is accepted, `AUTO` still keeps the GLSL pass until a live frame validates the guides |
+| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides are supported; native NRD motion output remains unavailable. Java reference consumes the NRD motion buffer. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
+| Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
+| Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
 
 Surface decoding lives in `surface/surface.slang`; the filtered shadow walk lives
 in `surface/visibility.slang`; the BSDF lobes live in `shading/bsdf.slang`.
@@ -1118,8 +1122,7 @@ cross-cascade resolve or image comparison was run.
    `outDirect`, `outSpecular`, `outSpecAlbedo`, bindings 26–32) at the primary
    vertex, plus NRD's per-pixel `IN_MV` vec4 into binding 33
    (`outMotionBuffer`, the renderer's existing `entity_motion_px`); explicit
-   `SLANG` + `DLSS_RR` and `SLANG` + `NRD` are accepted, and `AUTO` keeps the
-   GLSL pass until a live frame consumes the guides. The C++ backend forwards
+   `SLANG` + `DLSS_RR` and `SLANG` + `NRD` are accepted, and `AUTO` declines the Slang denoiser path until a live frame consumes the guides. The C++ backend forwards
    the seven guides through the additive
    `bedray_core_render_path_trace_guides` call (`GUIDE_OUTPUTS`), so
    `nativePathTrace` + `DLSS_RR` no longer blocks on missing outputs. It still
