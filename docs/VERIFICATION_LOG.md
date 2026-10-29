@@ -4,6 +4,46 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — Borrowed Slang programs stay borrowed (L2 unit)
+
+Branch: `refactor/slang-pipeline`, on top of `39e0365`. Tool: `slangc` 2026.20
+via `-Pslangc=…`; `:common:test` only, no native rebuild (the change is Java).
+
+P1-14 said `SodiumDequantize.destroy()` closed the `SlangProgram` that
+`SlangRuntime.program()` caches, so the next world load got the dead instance
+back and its freed handle went into a fresh `BedraySodiumNative`. `1cc8ce6`
+(PR #35) had already removed that `close()` and replaced the field with a
+`nativeHandle()` capture, so the defect text was stale; what was missing was any
+rule that keeps it from coming back, and one live hole.
+
+`SlangProgram.close()` calls `library.destroyProgram(core, handle)` but
+`nativeHandle()` returned `handle` regardless of `closed`. A consumer that
+borrowed a closed program therefore received a freed handle with no error — the
+failure surfaces as GPU-side corruption rather than an exception, which is how
+the original crash presented. `nativeHandle()` now throws when closed. Every
+call site takes the handle in its constructor and passes it straight to a native
+adapter, so the guard can only fire on the poisoned-cache path.
+
+Source changes covered by this run:
+
+- `SlangProgram.nativeHandle()` refuses a closed instance.
+- `SodiumProgramLifetimeTest` pins three things: `destroy()` contains neither
+  `program.close()` nor a `SlangProgram` import, `SlangRuntime` is the only
+  writer/reader/invalidator of the `programs` map, and the handle guard precedes
+  the return.
+
+Result:
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test --tests '*SodiumProgramLifetimeTest*' '*SodiumDequantize*'` | 0 failures | 3 new guards + 2 layout tests pass (benchmark skipped) |
+| Mutation proof | guards fail on pre-fix shape | `destroyKeepsTheBorrowedProgramAlive` and `aClosedProgramRefusesToHandOutItsHandle` both FAILED with `program.close()` restored and the guard removed; the mutated decoder needed a `SlangProgram` field so it compiled like the pre-fix version instead of failing the build |
+| `:common:test` full | 0 failures | 804 tests / 139 suites, 0 failures, 0 errors, 6 skipped (XML aggregate), so the handle guard breaks no consumer |
+| Restore | byte-identical | `SlangProgram.java` `b5394515…`, `SodiumDequantize.java` `8f00ebff…` in both trees |
+
+L2 only. The reload crash needs a world exit and re-entry on a real device;
+nothing here proves that a live reload now survives.
+
 ## 2026-10-29 — Ray-offset fixes and the release fan-out (L1 compile, L2 unit)
 
 Branch: `refactor/slang-pipeline`, on top of `b98f54a`. Tool: `slangc` 2026.20,
