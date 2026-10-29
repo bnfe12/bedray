@@ -65,29 +65,67 @@ passing, 2026-10-28).
 
 Current limitations:
 
-- Minecraft 26.3's `VulkanCommandEncoder.queueForDestroy` is a candidate host
+The host distinguishes successful completion from abandonment. The additive
+`bedray_core_discard_recording` invalidates private image layout/history and DI
+ring history/parity before using the same exact scheduler release path. A late
+or unknown command handle cannot invalidate a newer pass recording. Host drain
+with UNKNOWN execution conservatively uses abandonment cleanup; a completed
+callback uses completion cleanup. Each ticket remembers its chosen disposition
+and successful owner actions across retries. Native scene abandonment poisons
+scene reuse until recreation, because committed uploads/AS builds may not have
+executed. It does not free other outstanding frames.
+
+- Minecraft 26.3's `VulkanCommandEncoder.queueForDestroy` is the host
   completion bridge: bytecode shows `submit()` waits for a completed submission
-  before rotating its destruction queue. `SlangRuntime.retireSubmittedRecording`
-  exposes this route, but no game pass has wired it yet. It must be scheduled
+  before rotating its destruction queue. `RtFrameRenderer` now attaches one
+  generation-specific `RecordingCompletion` callback after `execute`, covering
+  atmosphere, path pass, Sodium decode, scene frames and the captured particle
+  composite owner. An `execute`/enqueue failure retains an unknown recording;
+  a deliberate never-executed discard can release immediately. It is scheduled
   after the recording is added to the same encoder submission and before that
   submission is sent; unsubmitted discarded recordings use direct release.
-  `VulkanCommandEncoder.destroy()` closes its submission builder, waits for its
-  graphics queue, then drains the destruction queue. The inspected bytecode is
-  from `libs/minecraft-26.3-client.jar`; other versions need separate review.
-  Confirm error paths and encoder ownership during integration.
+  `VulkanDevice.createCommandEncoder()` returns the shared encoder. Its fence
+  snapshots the current submission index, and `awaitCompletion` waits for that
+  index. Host drains now submit and await this fence, retaining resources on a
+  five-second timeout instead of using `vkDeviceWaitIdle`. The inspected client
+  jar is 26.3, SHA-256
+  `4508d006323f24fa02876310c192d739af56516eb259000ac50f0909a68c9a2d`;
+  other versions need separate review. This is bytecode and no-GPU test evidence,
+  not a live completion/driver validation.
 - Per-dispatch pool allocation favours correctness and isolation. A future
   pooled allocator must retain the same completion and recording-generation
   semantics; do not reuse individual sets merely after a fixed frame count.
 - External images, buffers, and acceleration structures remain owned by the
   host/scene. Their owners must retain them until the same completion event.
+- Host entity capture follows that same event. `EntityCaptureBuffers` leases
+  exclusive writable geometry slices and pins shared immutable atlas generations
+  through `RecordingResourceOwner`. Slot exhaustion creates another generation;
+  neither the three-slot capacity nor a frame delay permits reuse or destruction.
+  `RtWorld.releaseRecording`/`discardRecording` release capture leases through the
+  generation-specific `RecordingCompletion` action. An upload failure leaves its
+  ticket pending until discard. Partial allocation/destruction keeps retryable
+  ownership; close refuses outstanding tickets. Public upload overloads without a
+  command buffer reject GPU work and retain only their null-memory compatibility
+  behavior. These resources are still host capture storage borrowed by the native
+  scene/pass, rather than a second scene or native history owner.
+- Published emitter lists use `EmitterCaptureBuffers` and the same proof owner.
+  A publication copies into fresh storage sized for the selected records; frames
+  that share a list pin that immutable generation. An empty list allocates no GPU
+  buffer. The frame's host ticket captures the exact RtEmitters instance, and
+  retains it before either backend can read the list. Later publication cannot
+  overwrite it, even with more than three outstanding readers/publications.
+  Destruction refuses pending readers; late host callbacks cannot release a
+  newer recording that reused the command-buffer address. The record layout,
+  CPU selection/fingerprint rules and shader light sampling are unchanged.
 - The ABI assumes calls are externally synchronized on the render thread.
 - Program handles are monotonically assigned per core and are not native
   addresses. Destroying a program invalidates the handle for new dispatches;
   already-recorded work retains the actual program until release.
 - `SlangRuntime.create` requires the host to supply the actual enabled feature
-  mask. Physical device support is not proof that a logical device enabled a
-  feature. The current host has not yet wired an authoritative enabled-feature
-  mapping; never substitute a physical-support query for that fact.
+  mask. `SlangDeviceCapabilities.enabledMask` maps the game's enabled feature set
+  through its mixin accessor and returns zero if unreadable. Physical device
+  support is not proof that a logical device enabled a feature; never substitute
+  a physical-support query for that fact. This mapping still needs live validation.
 - The ABI v2 sources build as the Windows x64 Release `bedray_core.dll` and the
   contract tests pass (`bedray_path_trace_pass_test`, 2026-10-28); no GPU or
   live-game correctness claim is made.

@@ -300,7 +300,10 @@ PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentS
         // ---- BSDF sampling ----
         BSDFSample bsdf = bsdfSample(surface.material, view, normal, seed);
         if (!bsdf.valid || bsdf.pdf <= 0.0) {
-            // No lobe left to sample (an albedo that reflects nothing).  A short path, not a broken one.
+            // No lobe left to sample (an albedo that reflects nothing, or a
+            // VNDF reflection below the shading horizon with zero BRDF).  A
+            // short path, not a broken one: direct light and emission at this
+            // vertex are already in `result.radiance`.
             result.flags |= PATH_TRACE_FLAG_TRUNCATED;
             break;
         }

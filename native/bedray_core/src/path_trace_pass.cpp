@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -711,7 +712,28 @@ BedrayStatus PathTracePass::pin_buffer(gpu::BufferId id, RecordingPins& pins, Be
     return BEDRAY_OK;
 }
 
-BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& desc, BedrayError* error) try {
+BedrayStatus PathTracePass::ensure_reservoirs(std::uint64_t bytes, BedrayError* error) {
+    if (owned_reservoirs_id_.serial != 0 && owned_reservoirs_view_.size == bytes) return BEDRAY_OK;
+    gpu::BufferId next{};
+    gpu::BufferView view{};
+    VkResult vk = VK_SUCCESS;
+    const auto result = buffers_->create({bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, false}, next, view, vk);
+    if (result != Status::ok)
+        return fail(error, status_of(result), "cannot allocate native DI ring: VkResult=%d", static_cast<int>(vk));
+    if (owned_reservoirs_id_.serial != 0) static_cast<void>(buffers_->retire(owned_reservoirs_id_));
+    owned_reservoirs_id_ = next;
+    owned_reservoirs_view_ = view;
+    owned_di_parity_ = 0;
+    owned_di_history_ = false;
+    owned_di_needs_clear_ = true;
+    static_cast<void>(buffers_->collect());
+    return BEDRAY_OK;
+}
+
+BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, BedrayError* error) try {
+    BedrayPathTraceFrameDesc desc = input;
     if (core_ == nullptr || images_ == nullptr || buffers_ == nullptr) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
     }
@@ -722,6 +744,13 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& desc, BedrayE
     if (desc.command_buffer == 0) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "command_buffer is null");
     }
+    constexpr std::uint32_t allowed_flags = BEDRAY_PATH_TRACE_FRAME_RESET_HISTORY
+        | BEDRAY_PATH_TRACE_FRAME_ACCUMULATE | BEDRAY_PATH_TRACE_FRAME_CAMERA_STATIC
+        | BEDRAY_PATH_TRACE_FRAME_FLIP_Y | BEDRAY_PATH_TRACE_FRAME_SPATIAL
+        | BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_NATIVE_DI
+        | BEDRAY_PATH_TRACE_FRAME_RESET_DI;
+    if ((desc.flags & ~allowed_flags) != 0)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "unknown path-trace frame flags");
     if (desc.output_view == 0 || desc.depth_view == 0) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "output_view/depth_view must be non-zero");
     }
@@ -779,39 +808,83 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& desc, BedrayE
     // zero VkDescriptorBufferInfo::range as an empty (invalid) binding, while a
     // zero handle is the documented way to select the pass's own dummy.
     const BedrayPathTraceBuffer* bound_buffers[] = {
-        &desc.scene.block_materials, &desc.scene.emitters, &desc.scene.reservoirs};
+        &desc.scene.sections, &desc.scene.block_materials, &desc.scene.emitters, &desc.scene.reservoirs};
     for (const BedrayPathTraceBuffer* buffer : bound_buffers) {
-        if (buffer->handle != 0 && buffer->bytes == 0) {
+        if (buffer->flags != 0 || buffer->reserved != 0 ||
+            (buffer->handle != 0 && (buffer->bytes == 0 ||
+                buffer->offset > std::numeric_limits<std::uint64_t>::max() - buffer->bytes))) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "a bound scene buffer has a zero descriptor range");
+                "invalid scene buffer flags, reserved words or descriptor range");
         }
     }
     const BedrayPathTraceRange* bound_ranges[] = {
         &desc.scene.entity_positions, &desc.scene.entity_indices, &desc.scene.entity_attrs,
         &desc.scene.entity_rects, &desc.scene.entity_texels, &desc.scene.entity_previous};
     for (const BedrayPathTraceRange* range : bound_ranges) {
-        if (range->handle != 0 && range->bytes == 0) {
+        if (range->handle != 0 && (range->bytes == 0
+            || range->offset > std::numeric_limits<std::uint64_t>::max() - range->bytes)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
                 "a bound entity range has a zero descriptor range");
         }
     }
-    // The host owns the reservoir ring and its parity/history bookkeeping: the
-    // pass forwards diState verbatim so a host-side reset can never disagree
-    // with a parity the pass advanced on its own.
-    const std::uint32_t di_flags = desc.path.di_state[0];
-    const std::uint32_t di_parity = desc.path.di_state[1];
+    const bool native_di = (desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_DI) != 0;
+    std::uint32_t di_flags = desc.path.di_state[0];
+    std::uint32_t di_parity = desc.path.di_state[1];
+    const std::uint64_t pixels = static_cast<std::uint64_t>(desc.camera.width) * desc.camera.height;
+    if (pixels > std::numeric_limits<std::uint64_t>::max() / 128u)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "DI extent overflows its byte range");
+    const std::uint64_t di_bytes = pixels * 128u;
+    if (native_di && (desc.scene.reservoirs.handle != 0 || di_parity != 0))
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "native DI cannot also accept a host ring/parity");
+    if (native_di && fns_.cmd_fill_buffer == nullptr)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "native DI needs vkCmdFillBuffer");
+    if (!native_di && (desc.flags & BEDRAY_PATH_TRACE_FRAME_RESET_DI) != 0)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "native DI reset requires native ownership");
     if (di_parity > 1u) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
             "di_state.y must be the 0/1 reservoir parity, got %u", di_parity);
     }
-    if ((di_flags & BEDRAY_PATH_TRACE_DI_ENABLED) != 0 && desc.scene.reservoirs.handle == 0) {
+    if (!native_di && (di_flags & BEDRAY_PATH_TRACE_DI_ENABLED) != 0
+        && (desc.scene.reservoirs.handle == 0 || desc.scene.reservoirs.bytes < di_bytes)) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-            "ReSTIR DI is enabled but no reservoir ring is bound");
+            "ReSTIR DI needs a complete two-parity reservoir range");
     }
+    if (desc.path.emitter_count > 0 && desc.scene.emitters.bytes < static_cast<std::uint64_t>(desc.path.emitter_count) * 96u)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "emitter descriptor range is smaller than emitter_count");
+    if (desc.path.material_count > 0 && (desc.scene.block_materials.handle == 0
+        || desc.scene.block_materials.bytes < static_cast<std::uint64_t>(desc.path.material_count) * 64u))
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "material descriptor range is smaller than material_count");
 
     BedrayStatus status = ensure_images(desc.camera.width, desc.camera.height, error);
     if (status != BEDRAY_OK) {
         return status;
+    }
+
+    const bool native_di_active = native_di && (di_flags & BEDRAY_PATH_TRACE_DI_ENABLED) != 0
+        && desc.path.emitter_count > 0;
+    if (native_di_active) {
+        status = ensure_reservoirs(di_bytes, error);
+        if (status != BEDRAY_OK) return status;
+        if ((desc.flags & BEDRAY_PATH_TRACE_FRAME_RESET_DI) != 0) owned_di_needs_clear_ = true;
+        di_flags &= ~BEDRAY_PATH_TRACE_DI_HISTORY;
+        if (owned_di_history_ && !owned_di_needs_clear_) di_flags |= BEDRAY_PATH_TRACE_DI_HISTORY;
+        di_parity = owned_di_parity_;
+        desc.path.di_state[0] = di_flags;
+        desc.path.di_state[1] = di_parity;
+        desc.scene.reservoirs = buffer_from_view(owned_reservoirs_view_);
+    } else {
+        owned_di_history_ = false;
+        if (native_di) {
+            di_flags &= ~(BEDRAY_PATH_TRACE_DI_ENABLED | BEDRAY_PATH_TRACE_DI_HISTORY);
+            desc.path.di_state[0] = di_flags;
+            desc.path.di_state[1] = 0;
+        }
+        if (owned_reservoirs_id_.serial != 0) {
+            static_cast<void>(buffers_->retire(owned_reservoirs_id_));
+            owned_reservoirs_id_ = {};
+            owned_reservoirs_view_ = {};
+            static_cast<void>(buffers_->collect());
+        }
     }
 
     const bool reset_history = (desc.flags & BEDRAY_PATH_TRACE_FRAME_RESET_HISTORY) != 0
@@ -880,6 +953,8 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& desc, BedrayE
     if (status == BEDRAY_OK) {
         status = pin_buffer(entity_vector_id_, recording, error);
     }
+    if (status == BEDRAY_OK && native_di_active)
+        status = pin_buffer(owned_reservoirs_id_, recording, error);
     if (status != BEDRAY_OK) {
         release_recording(command_handle);
         return status;
@@ -924,6 +999,14 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& desc, BedrayE
 
     const VkCommandBuffer command = as_command_buffer(desc.command_buffer);
 
+    // Publication happens only after the complete group records successfully.
+    // A partial failure cannot leave the next dispatch importing its writes.
+    const bool clear_di = native_di_active && owned_di_needs_clear_;
+    if (native_di_active) {
+        owned_di_history_ = false;
+        owned_di_needs_clear_ = true;
+    }
+
     if (!images_initialized_) {
         for (const gpu::ImageView& view : {radiance_view_, motion_view_, accum_view_[0],
                  accum_view_[1], history_depth_view_[0], history_depth_view_[1]}) {
@@ -938,6 +1021,8 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& desc, BedrayE
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
         }
     }
+    if (clear_di)
+        fns_.cmd_fill_buffer(command, owned_reservoirs_view_.buffer, 0, owned_reservoirs_view_.size, 0);
     entry_barrier(fns_, command);
 
     std::array<BedrayResource, 18> trace_resources{};
@@ -1100,6 +1185,11 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& desc, BedrayE
 
     history_written_ = true;
     history_parity_ ^= 1u;
+    if (native_di_active) {
+        owned_di_history_ = true;
+        owned_di_needs_clear_ = false;
+        owned_di_parity_ ^= 1u;
+    }
 
     exit_barrier(fns_, command);
     return BEDRAY_OK;
@@ -1107,6 +1197,16 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& desc, BedrayE
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame state");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path trace");
+}
+
+void PathTracePass::discard_recording(std::uint64_t command_buffer) noexcept {
+    if (recordings_.find(command_buffer) == recordings_.end()) return;
+    history_written_ = false;
+    history_parity_ = 0;
+    images_initialized_ = false;
+    owned_di_history_ = false;
+    owned_di_needs_clear_ = true;
+    owned_di_parity_ = 0;
 }
 
 BedrayStatus PathTracePass::release_recording(std::uint64_t command_buffer) noexcept {
@@ -1162,7 +1262,7 @@ BedrayStatus PathTracePass::destroy() noexcept {
         if (lost_) {
             static_cast<void>(buffers_->release_after_device_loss());
         } else {
-            for (const gpu::BufferId id : {block_materials_id_, reservoir_dummy_id_,
+            for (const gpu::BufferId id : {block_materials_id_, reservoir_dummy_id_, owned_reservoirs_id_,
                      entity_scalar_id_, entity_vector_id_}) {
                 if (id.serial != 0) {
                     static_cast<void>(buffers_->retire(id));
@@ -1217,6 +1317,11 @@ void PathTracePass::reset_state() noexcept {
     image_height_ = 0;
     block_materials_id_ = {};
     reservoir_dummy_id_ = {};
+    owned_reservoirs_id_ = {};
+    owned_reservoirs_view_ = {};
+    owned_di_parity_ = 0;
+    owned_di_history_ = false;
+    owned_di_needs_clear_ = false;
     entity_scalar_id_ = {};
     entity_vector_id_ = {};
     block_materials_view_ = {};

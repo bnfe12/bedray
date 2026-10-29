@@ -4,6 +4,9 @@
 #include <vulkan/vulkan_core.h>
 
 #include "path_trace_pass.h"
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+#include "frame_graph_owner.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -115,6 +118,9 @@ struct BedrayCore {
 
     bedray::core::DeviceFns device_fns{};
     std::unique_ptr<bedray::core::PathTracePass> path_trace;
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    std::unique_ptr<bedray::core::FrameGraphOwner> frame_graph;
+#endif
 
     PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
     PFN_vkGetDeviceProcAddr get_device_proc_addr = nullptr;
@@ -143,6 +149,7 @@ struct BedrayCore {
     PFN_vkCmdPushConstants cmd_push_constants = nullptr;
     PFN_vkCmdDispatch cmd_dispatch = nullptr;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
+    PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
 };
 
 namespace {
@@ -303,11 +310,19 @@ bool program_has_binding(BedrayCore* core, uint64_t handle,
 
 extern "C" {
 
-BEDRAY_API uint32_t BEDRAY_CALL bedray_core_abi_version(void) {
+BEDRAY_API uint32_t BEDRAY_CALL bedray_core_abi_version(void) try {
     return BEDRAY_CORE_ABI_VERSION;
+} catch (...) {
+    return 0;
 }
 
-BEDRAY_API void BEDRAY_CALL bedray_core_abi_info(BedrayAbiInfo* out_info) {
+BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
+    return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI;
+} catch (...) {
+    return 0;
+}
+
+BEDRAY_API void BEDRAY_CALL bedray_core_abi_info(BedrayAbiInfo* out_info) try {
     if (out_info == nullptr) {
         return;
     }
@@ -319,6 +334,8 @@ BEDRAY_API void BEDRAY_CALL bedray_core_abi_info(BedrayAbiInfo* out_info) {
     out_info->sizeof_resource = static_cast<uint32_t>(sizeof(BedrayResource));
     out_info->sizeof_error = static_cast<uint32_t>(sizeof(BedrayError));
     out_info->reserved = 0;
+} catch (...) {
+    // Legacy void ABI cannot report a status; never unwind into the host.
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
@@ -387,6 +404,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
         || !load_device(core.get(), core->create_sampler, "vkCreateSampler")
         || !load_device(core.get(), core->destroy_sampler, "vkDestroySampler")
         || !load_device(core.get(), core->cmd_pipeline_barrier, "vkCmdPipelineBarrier")
+        || !load_device(core.get(), core->cmd_fill_buffer, "vkCmdFillBuffer")
         || !load_device(core.get(), core->allocate_descriptor_sets, "vkAllocateDescriptorSets")
         || !load_device(core.get(), core->update_descriptor_sets, "vkUpdateDescriptorSets")
         || !load_device(core.get(), core->cmd_bind_pipeline, "vkCmdBindPipeline")
@@ -443,6 +461,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
     core->device_fns.non_coherent_atom_size = core->properties.limits.nonCoherentAtomSize;
     core->device_fns.generation = next_resource_generation();
     core->device_fns.cmd_pipeline_barrier = core->cmd_pipeline_barrier;
+    core->device_fns.cmd_fill_buffer = core->cmd_fill_buffer;
 
     uint32_t extension_count = 0;
     VkResult result = core->enumerate_device_extension_properties(
@@ -605,11 +624,14 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception creating core");
 }
 
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) {
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
     if (core == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
     if (!core->recordings.empty()) return BEDRAY_ERROR_IN_USE;
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && core->frame_graph->has_recordings()) return BEDRAY_ERROR_IN_USE;
+#endif
     if (core->path_trace) {
         const BedrayStatus status = core->path_trace->destroy();
         if (status != BEDRAY_OK) return status;
@@ -625,6 +647,10 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) {
         core->destroy_sampler(core->device, core->linear_sampler, nullptr);
     delete core;
     return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_ERROR_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_ERROR_INTERNAL;
 }
 
 static BedrayStatus acquire_sampler(
@@ -651,23 +677,33 @@ static BedrayStatus acquire_sampler(
     }
     *out_sampler = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(cached));
     return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate sampler state");
 } catch (...) {
-    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception creating atlas sampler");
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception creating sampler");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_atlas_sampler(
-    BedrayCore* core, uint64_t* out_sampler, BedrayError* error) {
+    BedrayCore* core, uint64_t* out_sampler, BedrayError* error) try {
     return acquire_sampler(core, false, out_sampler, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate atlas sampler state");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception acquiring atlas sampler");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_linear_sampler(
-    BedrayCore* core, uint64_t* out_sampler, BedrayError* error) {
+    BedrayCore* core, uint64_t* out_sampler, BedrayError* error) try {
     return acquire_sampler(core, true, out_sampler, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate linear sampler state");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception acquiring linear sampler");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(
     BedrayCore* core,
-    BedrayCapabilities* out_capabilities) {
+    BedrayCapabilities* out_capabilities) try {
     if (core == nullptr || out_capabilities == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
@@ -687,6 +723,10 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(
     out_capabilities->max_uniform_buffer_range = core->properties.limits.maxUniformBufferRange;
     out_capabilities->device_memory_bytes = device_memory;
     return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_ERROR_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_ERROR_INTERNAL;
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
@@ -886,7 +926,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
 
 BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
     BedrayCore* core,
-    uint64_t program_handle) {
+    uint64_t program_handle) try {
     if (core == nullptr || program_handle == 0) {
         return;
     }
@@ -902,11 +942,19 @@ BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
         core->programs.erase(std::remove(core->programs.begin(), core->programs.end(), program), core->programs.end());
         destroy_program(core, program);
     }
+} catch (...) {
+    // Legacy void ABI cannot report a status; never unwind into the host.
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
-    BedrayCore* core, uint64_t command_buffer) {
+    BedrayCore* core, uint64_t command_buffer) try {
     if (core == nullptr || command_buffer == 0) return BEDRAY_ERROR_INVALID_ARGUMENT;
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && !core->frame_graph->releasing(command_buffer)) {
+        const BedrayStatus released = core->frame_graph->release_proven(command_buffer, nullptr);
+        if (released != BEDRAY_OK) return released;
+    }
+#endif
     const auto command = reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(command_buffer));
     for (auto it = core->recordings.begin(); it != core->recordings.end();) {
         if (it->command_buffer == command) {
@@ -935,6 +983,19 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
         }
     }
     return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_ERROR_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_ERROR_INTERNAL;
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_discard_recording(
+    BedrayCore* core, uint64_t command_buffer) try {
+    if (core == nullptr || command_buffer == 0) return BEDRAY_ERROR_INVALID_ARGUMENT;
+    if (core->path_trace) core->path_trace->discard_recording(command_buffer);
+    return bedray_core_release_recording(core, command_buffer);
+} catch (...) {
+    return BEDRAY_ERROR_INTERNAL;
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
@@ -1208,6 +1269,10 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
         return fail(error, BEDRAY_ERROR_IN_USE,
             "path-trace recordings must be released before reconfiguration");
     }
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && core->frame_graph->has_recordings())
+        return fail(error, BEDRAY_ERROR_IN_USE, "native graph recordings must be released before reconfiguration");
+#endif
     if (core->path_trace) {
         const BedrayStatus status = core->path_trace->destroy();
         if (status != BEDRAY_OK) {
@@ -1221,6 +1286,19 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
     if (status != BEDRAY_OK) {
         return status;
     }
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    auto frame_graph = std::make_unique<bedray::core::FrameGraphOwner>();
+    const auto record = [](void* pointer, const BedrayPathTraceFrameDesc& frame, BedrayError* err) {
+        return static_cast<BedrayCore*>(pointer)->path_trace->render(frame, err);
+    };
+    const auto release = [](void* pointer, std::uint64_t command) {
+        return bedray_core_release_recording(static_cast<BedrayCore*>(pointer), command);
+    };
+    const BedrayStatus graph_status = frame_graph->configure(core->capabilities, core->queue_family,
+        core->cmd_pipeline_barrier, record, release, core, error);
+    if (graph_status != BEDRAY_OK) return graph_status;
+    core->frame_graph = std::move(frame_graph);
+#endif
     core->path_trace = std::move(pass);
     return BEDRAY_OK;
 } catch (const std::bad_alloc&) {
@@ -1244,14 +1322,18 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
     if (!core->path_trace) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
     }
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    return core->frame_graph->record(*desc, error);
+#else
     return core->path_trace->render(*desc, error);
+#endif
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path trace");
 }
 
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* core) {
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* core) try {
     if (core == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
@@ -1261,12 +1343,22 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* c
     if (core->path_trace->has_recordings()) {
         return BEDRAY_ERROR_IN_USE;
     }
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && core->frame_graph->has_recordings()) return BEDRAY_ERROR_IN_USE;
+#endif
     const BedrayStatus status = core->path_trace->destroy();
     if (status != BEDRAY_OK) {
         return status;
     }
     core->path_trace.reset();
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    core->frame_graph.reset();
+#endif
     return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_ERROR_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_ERROR_INTERNAL;
 }
 
 } // extern "C"

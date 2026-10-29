@@ -5,7 +5,36 @@
 namespace {
 unsigned creates = 0, destroys = 0;
 bool fail_next = true;
+bool throw_allocation = false;
 void require(bool condition) { if (!condition) std::abort(); }
+VKAPI_ATTR VkResult VKAPI_CALL throwing_create(VkDevice, const VkSamplerCreateInfo*,
+    const VkAllocationCallbacks*, VkSampler*) {
+    if (throw_allocation) throw std::bad_alloc{};
+    throw 42;
+}
+VKAPI_ATTR void VKAPI_CALL throwing_destroy(VkDevice, VkSampler, const VkAllocationCallbacks*) {
+    if (throw_allocation) throw std::bad_alloc{};
+    throw 42;
+}
+void exception_boundaries() {
+    auto* core = new BedrayCore;
+    core->create_sampler = throwing_create;
+    BedrayError error{};
+    for (unsigned fault = 0; fault < 2; ++fault) {
+        throw_allocation = fault == 0;
+        const auto expected = throw_allocation ? BEDRAY_ERROR_OUT_OF_MEMORY : BEDRAY_ERROR_INTERNAL;
+        uint64_t sampler = 55;
+        require(bedray_core_atlas_sampler(core, &sampler, &error) == expected);
+        require(sampler == 0 && error.status == expected);
+        require(bedray_core_linear_sampler(core, &sampler, &error) == expected);
+        require(sampler == 0 && error.status == expected);
+        core->atlas_sampler = reinterpret_cast<VkSampler>(100);
+        core->destroy_sampler = throwing_destroy;
+        require(bedray_core_destroy(core) == expected);
+        core->atlas_sampler = VK_NULL_HANDLE;
+    }
+    require(bedray_core_destroy(core) == BEDRAY_OK);
+}
 VKAPI_ATTR VkResult VKAPI_CALL create(VkDevice, const VkSamplerCreateInfo* info,
     const VkAllocationCallbacks*, VkSampler* out) {
     ++creates;
@@ -28,6 +57,7 @@ VKAPI_ATTR void VKAPI_CALL destroy(VkDevice, VkSampler sampler, const VkAllocati
 }
 
 int main() {
+    exception_boundaries();
     auto* core = new BedrayCore;
     core->create_sampler = create;
     core->destroy_sampler = destroy;

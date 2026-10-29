@@ -28,7 +28,7 @@ enum class FrameErrorCode : std::uint8_t {
     completion_regressed,
     history_read_incomplete,// a history producer is not proven complete
     exhausted,              // recording identifiers are exhausted; fail closed
-    release_failed,         // a release callback threw; all reachable state was freed
+    release_failed,         // release failed; ticket and slot retained for retry
 };
 
 struct FrameError {
@@ -83,7 +83,7 @@ public:
     // Invoked exactly once per recording: after an unsubmitted recording is
     // discarded, after host-proven completion, or after a proven device idle or
     // loss. It must not throw; a throw is reported as release_failed and the
-    // scheduler still frees its own state. The callback may re-enter the
+    // scheduler retains the lease for retry. The callback may re-enter the
     // scheduler; a slot being released is not reusable until the callback ends.
     using ReleaseRecording = std::function<void(const FrameTicket&)>;
 
@@ -129,6 +129,12 @@ public:
     // Host-proven completion high-water mark. Frees submitted slots whose last
     // use is not later. Unknown submissions are never released here.
     [[nodiscard]] bool complete(std::uint64_t serial, FrameError& error);
+
+    // Coarse ABI-v2 bridge: host proved ALL submissions complete, or deliberately
+    // discarded an unsubmitted recording, and forbids resubmission. This releases
+    // exactly this ticket, not a synthetic queue serial/high-water mark. Unknown
+    // work stays pinned until the host supplies that proof. Failure is retryable.
+    [[nodiscard]] bool release_proven(const FrameTicket& ticket, FrameError& error);
 
     // Host proof that the device is idle (vkDeviceWaitIdle or every queue's
     // fence). Frees submitted and unknown slots, including their release

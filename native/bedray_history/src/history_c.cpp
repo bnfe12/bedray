@@ -86,8 +86,8 @@ BedrayHistoryRetired retired_out(const RetiredHistoryImages& v) noexcept {
 }
 
 extern "C" {
-uint32_t bedray_history_abi_version(void) { return BEDRAY_HISTORY_ABI_VERSION; }
-BedrayHistoryStatus bedray_history_abi_info(BedrayHistoryAbiInfo* out, uint32_t out_size) {
+uint32_t bedray_history_abi_version(void) try { return BEDRAY_HISTORY_ABI_VERSION; } catch (...) { return 0; }
+BedrayHistoryStatus bedray_history_abi_info(BedrayHistoryAbiInfo* out, uint32_t out_size) try {
     if (!out || out_size < sizeof(BedrayHistoryAbiInfo)) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     BedrayHistoryAbiInfo info{};
     info.version = BEDRAY_HISTORY_ABI_VERSION; info.sizeof_info = sizeof(info);
@@ -122,39 +122,72 @@ BedrayHistoryStatus bedray_history_abi_info(BedrayHistoryAbiInfo* out, uint32_t 
     std::copy_n(ticket_offsets, 4, info.ticket_offsets); std::copy_n(retired_offsets, 5, info.retired_offsets);
     *out = info;
     return BEDRAY_HISTORY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_create(uint64_t budget, BedrayHistory** out) {
+BedrayHistoryStatus bedray_history_create(uint64_t budget, BedrayHistory** out) try {
     if (!out) return BEDRAY_HISTORY_INVALID_ARGUMENT;
-    *out = new (std::nothrow) BedrayHistory(budget);
-    return *out ? BEDRAY_HISTORY_OK : BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+    *out = nullptr;
+    *out = new BedrayHistory(budget);
+    return BEDRAY_HISTORY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_destroy(BedrayHistory* h) {
+BedrayHistoryStatus bedray_history_destroy(BedrayHistory* h) try {
     if (!h) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     if (h->registry.timeline().active() || h->registry.retained_count() != 0 || h->registry.configured_bytes() != 0)
         return BEDRAY_HISTORY_IN_USE;
     delete h; return BEDRAY_HISTORY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_memory(BedrayHistory* h, uint64_t* configured, uint64_t* retained, uint64_t* budget) {
+BedrayHistoryStatus bedray_history_memory(BedrayHistory* h, uint64_t* configured, uint64_t* retained, uint64_t* budget) try {
     if (!h || !configured || !retained || !budget) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     *configured = h->registry.configured_bytes();
     *retained = h->registry.retained_bytes();
     *budget = h->registry.budget_bytes();
     return BEDRAY_HISTORY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_begin_device(BedrayHistory* h, uint64_t generation) {
+BedrayHistoryStatus bedray_history_begin_device(BedrayHistory* h, uint64_t generation) try {
     return h ? status(h->registry.begin_device(generation)) : BEDRAY_HISTORY_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_device_lost(BedrayHistory* h) {
+BedrayHistoryStatus bedray_history_device_lost(BedrayHistory* h) try {
     return h ? status(h->registry.device_lost()) : BEDRAY_HISTORY_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_device_idle(BedrayHistory* h) {
+BedrayHistoryStatus bedray_history_device_idle(BedrayHistory* h) try {
     return h ? status(h->registry.device_idle()) : BEDRAY_HISTORY_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_retire_device(BedrayHistory* h) {
+BedrayHistoryStatus bedray_history_retire_device(BedrayHistory* h) try {
     return h ? status(h->registry.retire_device()) : BEDRAY_HISTORY_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
 BedrayHistoryStatus bedray_history_add(BedrayHistory* h, const char* name, uint32_t bytes,
-                                       uint32_t sensitivity, uint64_t* out) {
+                                       uint32_t sensitivity, uint64_t* out) try {
     constexpr uint32_t allowed = BEDRAY_HISTORY_RESET_TARGET | BEDRAY_HISTORY_RESET_SCENE |
         BEDRAY_HISTORY_RESET_CAMERA | BEDRAY_HISTORY_RESET_DISCONTINUITY;
     if (!h || !name || !out || bytes == 0 || bytes > 256 || (sensitivity & ~allowed) != 0)
@@ -164,27 +197,47 @@ BedrayHistoryStatus bedray_history_add(BedrayHistory* h, const char* name, uint3
     const auto result = h->registry.add(std::string_view(name, bytes), HistoryResetPolicy{static_cast<HistoryReset>(sensitivity)}, id);
     if (result == RegistryStatus::ok) *out = id.value;
     return status(result);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_remove(BedrayHistory* h, uint64_t id) {
+BedrayHistoryStatus bedray_history_remove(BedrayHistory* h, uint64_t id) try {
     return h ? status(h->registry.remove(SignalId{id})) : BEDRAY_HISTORY_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
 BedrayHistoryStatus bedray_history_configure(BedrayHistory* h, uint64_t id,
-                                             const BedrayHistoryImage* images, uint32_t count) {
+                                             const BedrayHistoryImage* images, uint32_t count) try {
     if (!h || !images || count > BEDRAY_HISTORY_MAX_SLOTS) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     HistoryImageSet set{}; set.count = count;
     for (uint32_t i = 0; i < count; ++i) set.images[i] = image(images[i]);
     return status(h->registry.configure(SignalId{id}, set));
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_invalidate(BedrayHistory* h, uint64_t id, uint32_t* detail) {
+BedrayHistoryStatus bedray_history_invalidate(BedrayHistory* h, uint64_t id, uint32_t* detail) try {
     if (!h || !detail) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     HistoryStatus d = HistoryStatus::ok; auto s = h->registry.invalidate(SignalId{id}, d);
     *detail = static_cast<uint32_t>(d); return status(s);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_invalidate_after_pending(BedrayHistory* h, uint64_t id) {
+BedrayHistoryStatus bedray_history_invalidate_after_pending(BedrayHistory* h, uint64_t id) try {
     return h ? status(h->registry.invalidate_after_pending(SignalId{id})) : BEDRAY_HISTORY_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
 BedrayHistoryStatus bedray_history_prepare(BedrayHistory* h, uint64_t id, const BedrayHistoryKey* k,
-    uint64_t frame, uint32_t queue, uint32_t ordering, BedrayHistoryRecording* out, uint32_t* detail) {
+    uint64_t frame, uint32_t queue, uint32_t ordering, BedrayHistoryRecording* out, uint32_t* detail) try {
     // The current host integration cannot provide the other ordering modes.
     if (!h || !k || !out || !detail || ordering != BEDRAY_HISTORY_COMPLETED_ONLY)
         return BEDRAY_HISTORY_INVALID_ARGUMENT;
@@ -202,42 +255,74 @@ BedrayHistoryStatus bedray_history_prepare(BedrayHistory* h, uint64_t id, const 
         *out = v;
     }
     return status(s);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_cancel(BedrayHistory* h, uint64_t id, uint64_t token, uint32_t* detail) {
+BedrayHistoryStatus bedray_history_cancel(BedrayHistory* h, uint64_t id, uint64_t token, uint32_t* detail) try {
     if (!h || !detail) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     HistoryStatus d = HistoryStatus::ok; auto s = h->registry.cancel(SignalId{id}, token, d);
     *detail = static_cast<uint32_t>(d); return status(s);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
 BedrayHistoryStatus bedray_history_begin_submission(BedrayHistory* h, uint32_t queue, uint64_t serial,
-                                                     BedrayHistoryTicket* out) {
+                                                     BedrayHistoryTicket* out) try {
     if (!h || !out) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     SubmissionTicket t{}; auto s = h->registry.begin_submission(queue, serial, t);
     if (s == RegistryStatus::ok) *out = ticket_out(t);
     return status(s);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
 BedrayHistoryStatus bedray_history_attach(BedrayHistory* h, const BedrayHistoryTicket* t, uint64_t id,
-                                           uint64_t token, uint32_t reset, uint32_t* detail) {
+                                           uint64_t token, uint32_t reset, uint32_t* detail) try {
     if (!h || !t || !detail || reset > 1) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     HistoryStatus d = HistoryStatus::ok; auto s = h->registry.attach(ticket(*t), SignalId{id}, token, reset != 0, d);
     *detail = static_cast<uint32_t>(d); return status(s);
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_end_submission(BedrayHistory* h, const BedrayHistoryTicket* t, uint32_t outcome) {
+BedrayHistoryStatus bedray_history_end_submission(BedrayHistory* h, const BedrayHistoryTicket* t, uint32_t outcome) try {
     if (!h || !t) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     return status(h->registry.end_submission(ticket(*t), static_cast<SubmitOutcome>(outcome)));
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_complete(BedrayHistory* h, uint32_t queue, uint64_t serial) {
+BedrayHistoryStatus bedray_history_complete(BedrayHistory* h, uint32_t queue, uint64_t serial) try {
     return h ? status(h->registry.complete(queue, serial)) : BEDRAY_HISTORY_INVALID_ARGUMENT;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_pop_finished(BedrayHistory* h, BedrayHistoryRetired* out, uint32_t* has) {
+BedrayHistoryStatus bedray_history_pop_finished(BedrayHistory* h, BedrayHistoryRetired* out, uint32_t* has) try {
     if (!h || !out || !has) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     RetiredHistoryImages r{}; *has = h->registry.pop_finished(r) ? 1u : 0u;
     if (*has) *out = retired_out(r);
     return BEDRAY_HISTORY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
-BedrayHistoryStatus bedray_history_pop_orphaned(BedrayHistory* h, BedrayHistoryRetired* out, uint32_t* has) {
+BedrayHistoryStatus bedray_history_pop_orphaned(BedrayHistory* h, BedrayHistoryRetired* out, uint32_t* has) try {
     if (!h || !out || !has) return BEDRAY_HISTORY_INVALID_ARGUMENT;
     RetiredHistoryImages r{}; *has = h->registry.pop_orphaned(r) ? 1u : 0u;
     if (*has) *out = retired_out(r);
     return BEDRAY_HISTORY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_HISTORY_WRAPPER_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_HISTORY_INTERNAL_ERROR;
 }
 }

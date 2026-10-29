@@ -319,6 +319,14 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             }
         }
 
+        Dispatch withDiState(int diFlags, int diParity) {
+            return new Dispatch(maxDepth, maxSurfaceSteps, sampleIndex, materialCount, flags,
+                rayBias, alphaCutoff, maxDistance, maxRadiance, sunProbability,
+                emitterCount, emitterProbability, emitterCamRelX, emitterCamRelY, emitterCamRelZ, emitterCandidates,
+                diCamDeltaX, diCamDeltaY, diCamDeltaZ, diFlags, diParity,
+                entityAtlasSize, selfAvatarTriStart, selfAvatarTriCount, autoNormalStrength);
+        }
+
         void writeTo(ByteBuffer out) {
             if (out.capacity() - out.position() < PUSH_BYTES) {
                 throw new IllegalArgumentException("path trace pushes " + PUSH_BYTES + " bytes, got "

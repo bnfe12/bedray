@@ -257,6 +257,7 @@ std::set<std::uint64_t> views;
 
 std::vector<RenderCall> render_calls;
 std::vector<PhaseCall> phase_calls;
+std::uint32_t fills = 0;
 int render_call_index = 0;
 int fail_render_call = -1;
 BedrayStatus render_fail_status = BEDRAY_OK;
@@ -296,6 +297,7 @@ void reset() {
     views.clear();
     render_calls.clear();
     phase_calls.clear();
+    fills = 0;
     render_call_index = 0;
     fail_render_call = -1;
     render_fail_status = BEDRAY_OK;
@@ -306,6 +308,13 @@ void reset() {
     fail_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
     faults = 0;
     barriers = 0;
+}
+
+VKAPI_ATTR void VKAPI_CALL cmd_fill_buffer(
+    VkCommandBuffer, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, std::uint32_t value) {
+    const auto it = buffers.find(handle_id(buffer));
+    if (it == buffers.end() || offset != 0 || size != it->second.size || value != 0) ++faults;
+    ++fills;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL create_buffer(
@@ -588,6 +597,7 @@ DeviceFns make_device_fns() {
     fns.buffer_functions.flush = &fake::flush_memory;
     fns.buffer_functions.invalidate = &fake::invalidate_memory;
     fns.cmd_pipeline_barrier = &fake::cmd_pipeline_barrier;
+    fns.cmd_fill_buffer = &fake::cmd_fill_buffer;
     return fns;
 }
 
@@ -1078,9 +1088,9 @@ void test_spatial_stage() {
         frame.path.emitter_count = 3;
         frame.path.emitter_probability = 0.5f;
         frame.scene.emitters.handle = 0x5001;
-        frame.scene.emitters.bytes = 192;
+        frame.scene.emitters.bytes = 288;
         frame.scene.reservoirs.handle = 0x5002;
-        frame.scene.reservoirs.bytes = 128;
+        frame.scene.reservoirs.bytes = 64 * 64 * 128;
 
         CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
         CHECK(fake::render_calls.size() == 2);
@@ -1117,7 +1127,7 @@ void test_spatial_stage() {
         no_emitters.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED;
         no_emitters.path.di_state[1] = 1;
         no_emitters.scene.reservoirs.handle = 0x5005;
-        no_emitters.scene.reservoirs.bytes = 128;
+        no_emitters.scene.reservoirs.bytes = 64 * 64 * 128;
         CHECK_STATUS(fixture.render(no_emitters), BEDRAY_OK);
         CHECK(fake::phase_calls.size() == 1);
         CHECK(fixture.release(no_emitters.command_buffer) == BEDRAY_OK);
@@ -1133,14 +1143,82 @@ void test_spatial_stage() {
         spatial.path.di_state[1] = 1;
         spatial.path.emitter_count = 1;
         spatial.scene.emitters.handle = 0x5007;
-        spatial.scene.emitters.bytes = 64;
+        spatial.scene.emitters.bytes = 96;
         spatial.scene.reservoirs.handle = 0x5008;
-        spatial.scene.reservoirs.bytes = 64;
+        spatial.scene.reservoirs.bytes = 64 * 64 * 128;
         CHECK_STATUS(plain.render(spatial), BEDRAY_OK);
         CHECK(fake::phase_calls.empty());
         CHECK(fake::render_calls.size() == 2);
         CHECK(plain.release(spatial.command_buffer) == BEDRAY_OK);
     }
+}
+
+void test_native_reservoir_owner() {
+    Fixture fixture;
+    auto frame = valid_frame(0xD001);
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_DI;
+    frame.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED | BEDRAY_PATH_TRACE_DI_HISTORY;
+    frame.path.emitter_count = 1;
+    frame.scene.emitters.handle = 0x7001;
+    frame.scene.emitters.bytes = 96;
+    auto invalid = frame;
+    invalid.path.di_state[1] = 1;
+    expect_invalid_frame(fixture, invalid);
+    invalid = frame;
+    invalid.scene.reservoirs.handle = 0x7002;
+    expect_invalid_frame(fixture, invalid);
+    invalid = frame;
+    invalid.scene.emitters.bytes = 95;
+    expect_invalid_frame(fixture, invalid);
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::fills == 1);
+    const auto ring = resource_handle(fake::render_calls[0].resources, 19);
+    CHECK(resource_range(fake::render_calls[0].resources, 19) == 64 * 64 * 128);
+    CHECK(push_u32(fake::render_calls[0].push, 80) == BEDRAY_PATH_TRACE_DI_ENABLED);
+    CHECK(push_u32(fake::render_calls[0].push, 84) == 0);
+    fixture.pass.discard_recording(0xDEAD);
+    frame.command_buffer++;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::fills == 1);
+    CHECK(resource_handle(fake::render_calls[2].resources, 19) == ring);
+    CHECK(push_u32(fake::render_calls[2].push, 80) & BEDRAY_PATH_TRACE_DI_HISTORY);
+    CHECK(push_u32(fake::render_calls[2].push, 84) == 1);
+    fixture.pass.discard_recording(frame.command_buffer);
+    CHECK_STATUS(fixture.release(frame.command_buffer), BEDRAY_OK);
+    frame.command_buffer++;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::fills == 2);
+    CHECK(!(push_u32(fake::render_calls[4].push, 80) & BEDRAY_PATH_TRACE_DI_HISTORY));
+    CHECK(push_u32(fake::render_calls[4].push, 84) == 0);
+    frame.command_buffer++;
+    frame.flags &= ~BEDRAY_PATH_TRACE_FRAME_RESET_DI;
+    frame.camera.width = 32;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::fills == 3);
+    CHECK(resource_handle(fake::render_calls[6].resources, 19) != ring);
+    CHECK(push_u32(fake::render_calls[6].push, 84) == 0);
+    CHECK(fake::buffers.count(ring) == 1);
+    CHECK_STATUS(fixture.release(0xD001), BEDRAY_OK);
+    CHECK_STATUS(fixture.release(0xD002), BEDRAY_OK);
+    CHECK(fake::buffers.count(ring) == 1);
+    CHECK_STATUS(fixture.release(0xD003), BEDRAY_OK);
+    CHECK(fake::buffers.count(ring) == 0);
+    const auto resized = resource_handle(fake::render_calls[6].resources, 19);
+    frame.command_buffer++;
+    frame.path.di_state[0] = 0;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::buffers.count(resized) == 1);
+    CHECK_STATUS(fixture.release(0xD004), BEDRAY_OK);
+    CHECK(fake::buffers.count(resized) == 0);
+    frame.command_buffer++;
+    frame.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::fills == 4);
+    frame.command_buffer++;
+    frame.flags |= BEDRAY_PATH_TRACE_FRAME_RESET_DI;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    CHECK(fake::fills == 5);
+    CHECK(!(push_u32(fake::render_calls[fake::render_calls.size() - 2].push, 80) & BEDRAY_PATH_TRACE_DI_HISTORY));
 }
 
 void test_extent_change_keeps_pinned_images() {
@@ -1242,9 +1320,9 @@ void test_failure_after_dispatch_keeps_pins() {
     phase_failure.path.di_state[1] = 1;
     phase_failure.path.emitter_count = 1;
     phase_failure.scene.emitters.handle = 0x6001;
-    phase_failure.scene.emitters.bytes = 64;
+    phase_failure.scene.emitters.bytes = 96;
     phase_failure.scene.reservoirs.handle = 0x6002;
-    phase_failure.scene.reservoirs.bytes = 64;
+    phase_failure.scene.reservoirs.bytes = 64 * 64 * 128;
     CHECK_STATUS(fixture.render(phase_failure), BEDRAY_ERROR_VULKAN);
     CHECK(fixture.pass.has_recordings());
     CHECK(fixture.release(phase_failure.command_buffer) == BEDRAY_OK);
@@ -1314,6 +1392,7 @@ int main() {
     test_render_validation();
     test_successful_frames_and_payloads();
     test_spatial_stage();
+    test_native_reservoir_owner();
     test_extent_change_keeps_pinned_images();
     test_recording_lifetime();
     test_failure_after_dispatch_keeps_pins();

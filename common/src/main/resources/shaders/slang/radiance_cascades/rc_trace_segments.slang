@@ -1,7 +1,8 @@
-// OBSOLETE EXPERIMENT, not an integration candidate. Use rc_trace.slang as
-// the current trace source. This earlier alternative loses far-segment emission
-// on a miss and adds environment in every cascade; it is retained only as WIP
-// reference and must not be called by a render pass.
+// OBSOLETE EXPERIMENT - not an integration candidate and not exported by any
+// root module.  Use radiance_cascades/rc_trace.slang (facade) for new code.
+// This earlier alternative loses far-segment emission on a miss and adds
+// environment in every cascade; it is retained only because an old source-shape
+// test names this path, and must not be called by a render pass.
 //
 // Segment-record Radiance Cascades probe-ray tracing for Bedray 2.0.
 //
@@ -41,9 +42,9 @@
 //
 // Addressing, storage layout and validity rules are not duplicated here:
 // cascadeRay / decodeRadianceDispatch come from radiance_cascades.slang, the
-// index math and writes come from radiance_cascades_store.slang and
-// segment_store.slang.  This module is uncompiled by agreement (the migration
-// freeze forbids slangc runs); it is L1 source only.
+// index math and writes come from the shared atlas layout and segment_store.
+// This module is not part of the default compile set.  It may not build against
+// the current typed API and must not be revived without a fresh review.
 
 public module rc_trace_segments;
 

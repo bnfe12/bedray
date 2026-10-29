@@ -117,8 +117,14 @@ bool record_vulkan_graph(const RenderGraph& graph, const VulkanRecordingPlan& pl
     for (const auto& step : plan.passes) {
         if (!graph.is_current(plan.graph, plan.enabled_capabilities))
             return fail(error, RecordingError::stale_graph);
-        barrier(command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                0, 1, &memory, 0, nullptr, static_cast<std::uint32_t>(step.images.size()), step.images.data());
+        const auto* pass = graph.pass(step.pass);
+        if (pass == nullptr) return fail(error, RecordingError::invalid_plan);
+        if (pass->recording_kind == RecordingKind::opaque_group) {
+            if (!step.images.empty()) return fail(error, RecordingError::invalid_plan);
+        } else {
+            barrier(command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    0, 1, &memory, 0, nullptr, static_cast<std::uint32_t>(step.images.size()), step.images.data());
+        }
         if (!record_pass(context, step.pass, command_buffer)) return fail(error, RecordingError::callback_failed);
     }
     if (!graph.is_current(plan.graph, plan.enabled_capabilities))

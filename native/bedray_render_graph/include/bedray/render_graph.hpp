@@ -51,6 +51,13 @@ struct DispatchSize {
     std::uint32_t z = 1;
 };
 
+enum class RecordingKind : std::uint8_t {
+    dispatch,
+    // Callback owns private layouts, descriptors and entry/exit dependencies
+    // for a dispatch group. Its private resources cannot also be graph uses.
+    opaque_group,
+};
+
 struct PassDesc {
     std::string name;
     std::vector<ResourceUse> uses;
@@ -62,10 +69,11 @@ struct PassDesc {
     // any_queue means "the host's recording queue". Different explicit
     // families are rejected until cross-queue synchronization is modelled.
     std::uint32_t queue_family = any_queue;
-    // Compute dispatch dimensions. Every pass in this planner is a dispatch.
+    // Compute dimensions for dispatch nodes; opaque groups supply their own.
     DispatchSize dispatch{};
     // Shader push-constant ranges in bytes; must match the AOT manifest.
     std::vector<PushConstantRange> push_constants;
+    RecordingKind recording_kind = RecordingKind::dispatch;
 };
 
 // An ordering constraint, not a ready-to-emit Vulkan barrier. Multiple entries

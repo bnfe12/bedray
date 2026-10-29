@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtSlangEntityTest {
 
+    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String ENTITY = SHADERS + "/traversal/entity_geometry.slang";
     private static final String TRAVERSAL = SHADERS + "/traversal/legacy_section_traversal.slang";
@@ -178,7 +179,7 @@ class RtSlangEntityTest {
     /** The frame pulls the capture of the frame it is recording; the switch family keeps an A/B check available. */
     @Test
     void theFrameHandsTheCapturedRingToThePass() {
-        String frame = read(HOST_FRAME);
+        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(frame.contains("RtPathTraceSlangPass.Entities capturedEntities = entityBindingsOfThisFrame();"),
             "one place reads the manager, so the push and the descriptors cannot disagree");
         assertTrue(frame.contains("trace.record(cmd, scene, atlases, emitters, reservoirRange, capturedEntities, "
@@ -198,12 +199,12 @@ class RtSlangEntityTest {
      */
     @Test
     void theFrameReportsWhatTheRingActuallyHolds() {
-        String frame = read(HOST_FRAME);
+        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(frame.contains("if (!entityRingReported) {"), "one line per session, not one per frame");
         assertTrue(frame.contains("Slang path trace reads the entity ring"), "the populated case names its counts");
         assertTrue(frame.contains("Slang path trace has no entity capture in this frame"),
             "and the empty case is reported too, because silence is what made this ambiguous before");
-        assertTrue(frame.indexOf("Slang path trace reads the entity ring") < frame.indexOf("trace.record(cmd,"),
+        assertTrue(frame.indexOf("Slang path trace reads the entity ring") < frame.indexOf("backend.record("),
             "the evidence is recorded before the dispatch that may fail");
         assertTrue(frame.contains("capturedEntities.indices().bytes() / 12L"),
             "triangles from the index range the shader itself measures");
@@ -305,7 +306,7 @@ class RtSlangEntityTest {
         assertTrue(host.contains("SlangProgram.Resource.storageImage(\"outMotion\", motion.view())"),
             "and hands its own image to the shader, so no consumer can bind a stale one");
 
-        String frame = read(HOST_FRAME);
+        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(frame.contains("SlangProgram.Resource.storageImage(\"motion\", trace.motionView())"),
             "the display step reads the tracer's image rather than a second allocation");
         assertTrue(frame.contains("entityView(eg.framePreviousPositions())"),

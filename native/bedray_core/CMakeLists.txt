@@ -51,6 +51,10 @@ target_sources(bedray_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_reso
 target_compile_definitions(bedray_core PRIVATE BEDRAY_GPU_RESOURCES_EXPORTS)
 target_link_libraries(bedray_core PRIVATE bedray_gpu_resources)
 
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../bedray_scene"
+                 "${CMAKE_CURRENT_BINARY_DIR}/bedray_scene")
+target_link_libraries(bedray_core PRIVATE bedray_scene_objects)
+
 # Compile the graph with the core; frame execution still needs integration.
 # No second Vulkan loader or device is introduced.
 option(BEDRAY_ENABLE_RENDER_GRAPH "Build the renderer graph with the native core" ON)
@@ -60,6 +64,18 @@ if(BEDRAY_ENABLE_RENDER_GRAPH)
                      "${CMAKE_CURRENT_BINARY_DIR}/bedray_render_graph")
     target_link_libraries(bedray_core PRIVATE bedray_graph_vulkan)
     target_link_libraries(bedray_core PRIVATE bedray_graph_history)
+    target_link_libraries(bedray_core PRIVATE bedray_graph_frame)
+    target_sources(bedray_core PRIVATE src/frame_graph_owner.cpp)
+    target_compile_definitions(bedray_core PRIVATE BEDRAY_CORE_FRAME_GRAPH)
+
+    add_executable(bedray_frame_graph_owner_test tests/frame_graph_owner_test.cpp src/frame_graph_owner.cpp)
+    target_include_directories(bedray_frame_graph_owner_test PRIVATE include src)
+    target_link_libraries(bedray_frame_graph_owner_test PRIVATE bedray_graph_frame)
+    if(MSVC)
+        target_compile_options(bedray_frame_graph_owner_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+        set_property(TARGET bedray_frame_graph_owner_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+    add_test(NAME bedray_frame_graph_owner COMMAND bedray_frame_graph_owner_test)
 endif()
 
 target_include_directories(bedray_core
@@ -90,6 +106,7 @@ set_target_properties(bedray_core PROPERTIES
 add_executable(bedray_abi_probe tools/abi_probe.cpp)
 target_link_libraries(bedray_abi_probe PRIVATE bedray_core)
 target_include_directories(bedray_abi_probe PRIVATE include)
+add_test(NAME bedray_abi_probe COMMAND bedray_abi_probe)
 if(MSVC)
     set_property(TARGET bedray_abi_probe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
@@ -136,3 +153,24 @@ if(MSVC)
     set_property(TARGET bedray_path_trace_pass_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 add_test(NAME bedray_path_trace_pass_test COMMAND bedray_path_trace_pass_test)
+
+# Compile the real C wrappers into the test process so the allocation fault
+# injector controls their operator new (the DLL has its own static CRT).
+add_executable(bedray_abi_exception_test tests/abi_exception_test.cpp
+    "${CMAKE_CURRENT_LIST_DIR}/../bedray_history/src/history_c.cpp")
+target_link_libraries(bedray_abi_exception_test PRIVATE bedray_gpu_resources_c bedray_history)
+target_compile_definitions(bedray_abi_exception_test PRIVATE BEDRAY_CORE_BUILD)
+if(MSVC)
+    target_compile_options(bedray_abi_exception_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+    set_property(TARGET bedray_abi_exception_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_test(NAME bedray_abi_exception COMMAND bedray_abi_exception_test)
+
+add_executable(bedray_core_scene_exports_test tests/core_scene_exports_test.cpp)
+target_include_directories(bedray_core_scene_exports_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../bedray_scene/include")
+target_compile_definitions(bedray_core_scene_exports_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+if(MSVC)
+    target_compile_options(bedray_core_scene_exports_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+endif()
+add_test(NAME bedray_core_scene_exports COMMAND bedray_core_scene_exports_test $<TARGET_FILE:bedray_core>)

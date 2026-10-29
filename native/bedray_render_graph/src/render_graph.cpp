@@ -104,8 +104,16 @@ bool RenderGraph::compile(std::uint64_t enabled_capabilities, CompiledGraph& out
             queue_family = pass.queue_family;
             queue_family_pass = static_cast<PassId>(i);
         }
-        if (pass.dispatch.x == 0 || pass.dispatch.y == 0 || pass.dispatch.z == 0 ||
-            pass.dispatch.x > 65535 || pass.dispatch.y > 65535 || pass.dispatch.z > 65535) {
+        if (pass.recording_kind != RecordingKind::dispatch && pass.recording_kind != RecordingKind::opaque_group) {
+            return fail(error, ErrorCode::invalid_usage, 0, static_cast<PassId>(i));
+        }
+        if (pass.recording_kind == RecordingKind::opaque_group
+            && (!pass.uses.empty() || !pass.push_constants.empty())) {
+            return fail(error, ErrorCode::invalid_usage, 0, static_cast<PassId>(i));
+        }
+        if (pass.recording_kind == RecordingKind::dispatch &&
+            (pass.dispatch.x == 0 || pass.dispatch.y == 0 || pass.dispatch.z == 0 ||
+            pass.dispatch.x > 65535 || pass.dispatch.y > 65535 || pass.dispatch.z > 65535)) {
             return fail(error, ErrorCode::invalid_dispatch, 0, static_cast<PassId>(i));
         }
         for (std::size_t r = 0; r < pass.push_constants.size(); ++r) {

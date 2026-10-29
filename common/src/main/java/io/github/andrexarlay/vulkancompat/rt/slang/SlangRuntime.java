@@ -268,6 +268,11 @@ public final class SlangRuntime implements AutoCloseable {
         library.releaseRecording(core, commandBuffer);
     }
 
+    public void discardRecording(long commandBuffer) {
+        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        library.discardRecording(core, commandBuffer);
+    }
+
     /**
      * Queue retirement after the command buffer has been attached to this
      * encoder's current submission and before that submission is sent.

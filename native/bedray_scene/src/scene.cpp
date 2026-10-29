@@ -865,8 +865,10 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
         plan.table_upload_offset[kind] = reserve_bytes(table.pending.size());
     }
 
-    if (plan.section_table_rebuild && !plan.section_records.empty()) {
-        const uint64_t bytes = plan.section_records.size() * BEDRAY_SCENE_SECTION_RECORD_BYTES;
+    if (plan.section_table_rebuild) {
+        // An entity-only scene still needs a valid section descriptor. Publish a
+        // real zeroed record while keeping the logical section count at zero.
+        const uint64_t bytes = std::max<size_t>(1, plan.section_records.size()) * BEDRAY_SCENE_SECTION_RECORD_BYTES;
         const VkBufferUsageFlags usage =
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
             | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
@@ -914,8 +916,11 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
         plan.copies.push_back({ plan.table_upload_offset[kind], &plan.new_tables[kind], 0, table.pending.size() });
     }
     if (plan.section_table_present) {
-        const uint64_t bytes = plan.section_records.size() * BEDRAY_SCENE_SECTION_RECORD_BYTES;
-        std::memcpy(base + plan.section_table_upload_offset, plan.section_records.data(), bytes);
+        const uint64_t bytes = plan.new_section_table.size;
+        std::memset(base + plan.section_table_upload_offset, 0, static_cast<size_t>(bytes));
+        if (!plan.section_records.empty())
+            std::memcpy(base + plan.section_table_upload_offset, plan.section_records.data(),
+                plan.section_records.size() * BEDRAY_SCENE_SECTION_RECORD_BYTES);
         plan.copies.push_back({ plan.section_table_upload_offset, &plan.new_section_table, 0, bytes });
     }
 
@@ -1287,7 +1292,7 @@ void commit_plan(
         }
         scene.section_table = plan.new_section_table;
         plan.new_section_table = Buffer{};
-        scene.section_table_bytes = plan.section_records.size() * BEDRAY_SCENE_SECTION_RECORD_BYTES;
+        scene.section_table_bytes = scene.section_table.size;
         scene.section_table_dirty = false;
     }
 
@@ -1669,11 +1674,13 @@ extern "C" {
 
 using namespace bedray_scene;
 
-BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_abi_version(void) {
+BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_abi_version(void) try {
     return BEDRAY_SCENE_ABI_VERSION;
+} catch (...) {
+    return 0;
 }
 
-BEDRAY_SCENE_API void BEDRAY_SCENE_CALL bedray_scene_abi_info(BedraySceneAbiInfo* out_info) {
+BEDRAY_SCENE_API void BEDRAY_SCENE_CALL bedray_scene_abi_info(BedraySceneAbiInfo* out_info) try {
     if (out_info == nullptr) {
         return;
     }
@@ -1689,6 +1696,8 @@ BEDRAY_SCENE_API void BEDRAY_SCENE_CALL bedray_scene_abi_info(BedraySceneAbiInfo
     out_info->sizeof_section_record = static_cast<uint32_t>(sizeof(BedraySceneSectionRecord));
     out_info->sizeof_error = static_cast<uint32_t>(sizeof(BedraySceneError));
     out_info->reserved = 0;
+} catch (...) {
+    // Preserve the existing void discovery ABI; never unwind into FFM.
 }
 
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_create(
@@ -2129,13 +2138,29 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
     return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception releasing a scene frame");
 }
 
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_discard_frame(
+    BedrayScene* scene, uint64_t frame_index, BedraySceneError* error) try {
+    if (scene == nullptr || find_slot(scene->impl, frame_index) == nullptr)
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "discarded frame is not outstanding");
+    mark_failed(scene->impl, BEDRAY_SCENE_ERROR_INTERNAL,
+        "prepared GPU writes were discarded; recreate the scene from host captures");
+    return bedray_scene_release_frame(scene, frame_index, error);
+} catch (...) {
+    return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception discarding scene frame");
+}
+
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_query_resources(
     BedrayScene* scene,
-    BedraySceneResources* out_resources) {
+    BedraySceneResources* out_resources) try {
     if (scene == nullptr || out_resources == nullptr) {
         return BEDRAY_SCENE_ERROR_INVALID_ARGUMENT;
     }
     const Scene& impl = scene->impl;
+    if (impl.failed) {
+        std::memset(out_resources, 0, sizeof(*out_resources));
+        out_resources->abi_version = BEDRAY_SCENE_ABI_VERSION;
+        return impl.failure_status;
+    }
     if (!impl.has_last_resources) {
         std::memset(out_resources, 0, sizeof(*out_resources));
         out_resources->abi_version = BEDRAY_SCENE_ABI_VERSION;
@@ -2143,6 +2168,17 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_query_resource
     }
     *out_resources = impl.last_resources;
     return BEDRAY_SCENE_OK;
+} catch (...) {
+    return BEDRAY_SCENE_ERROR_INTERNAL;
+}
+
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_resident_bytes(
+    BedrayScene* scene, uint64_t* out_bytes) try {
+    if (scene == nullptr || out_bytes == nullptr) return BEDRAY_SCENE_ERROR_INVALID_ARGUMENT;
+    *out_bytes = scene->impl.resident_bytes;
+    return BEDRAY_SCENE_OK;
+} catch (...) {
+    return BEDRAY_SCENE_ERROR_INTERNAL;
 }
 
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_destroy(BedrayScene* scene) {

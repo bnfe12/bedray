@@ -56,6 +56,7 @@ struct Buffer {
     VkBuffer handle = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint64_t size = 0;
+    uint64_t allocation_bytes = 0;
     uint64_t address = 0;
     void* mapped = nullptr;
     bool coherent = true;
@@ -177,6 +178,7 @@ struct Scene {
     VkPhysicalDeviceMemoryProperties memory_properties{};
     uint64_t scratch_alignment = kDefaultScratchAlignment;
     uint32_t capabilities = 0;
+    uint64_t resident_bytes = 0;
 
     bool failed = false;
     BedraySceneStatus failure_status = BEDRAY_SCENE_OK;

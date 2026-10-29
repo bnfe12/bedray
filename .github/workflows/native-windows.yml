@@ -1,0 +1,72 @@
+name: Native Windows contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/native-ci-abi-exceptions, 'codex/migration-*']
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native ${{ matrix.revision }} (no GPU)
+    runs-on: windows-2022
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [baseline, candidate]
+    env:
+      VULKAN_HEADERS_SHA: 2cd90f9d20df57eac214c148f3aed885372ddcfe # v1.4.321
+      SLANG_VERSION: '2026.20'
+      SLANG_SHA256: e6dd32bbddf1720ebb4e679d55e9635ce792865a5bd84f3d2cd9af28647c0174
+    steps:
+      - name: Checkout CI driver
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: driver
+          persist-credentials: false
+      - name: Checkout source revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ matrix.revision == 'baseline' && '4236c75ab72fded1347dd19d88f38a3804742a38' || github.sha }}
+          path: source
+          persist-credentials: false
+      - name: Checkout pinned Vulkan-Headers
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: ${{ env.VULKAN_HEADERS_SHA }}
+          path: deps/Vulkan-Headers
+          persist-credentials: false
+      - name: Fetch and verify pinned Slang SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          $archive = Join-Path $env:RUNNER_TEMP 'slang.zip'
+          $url = "https://github.com/shader-slang/slang/releases/download/v${env:SLANG_VERSION}/slang-${env:SLANG_VERSION}-windows-x86_64.zip"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:SLANG_SHA256) { throw "Slang SHA256 mismatch: $hash" }
+          Expand-Archive -LiteralPath $archive -DestinationPath deps/slang
+          "Slang $env:SLANG_VERSION sha256=$hash; Vulkan-Headers $env:VULKAN_HEADERS_SHA" | Tee-Object evidence/dependencies.txt
+          & ./deps/slang/bin/slangc.exe -version 2>&1 | Tee-Object evidence/slang-version.txt
+          if ($LASTEXITCODE -ne 0) { throw 'slangc version probe failed' }
+      - name: Configure, build and test native modules
+        shell: pwsh
+        run: |
+          ./driver/.github/scripts/native-ci.ps1 -SourceRoot source -Headers deps/Vulkan-Headers/include -BuildRoot evidence/build
+      - name: Publish text evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.revision }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            evidence/**/*.txt
+            evidence/**/*.log
+            evidence/**/*.xml
+            evidence/**/CMakeConfigureLog.yaml

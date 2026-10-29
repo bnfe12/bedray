@@ -4,6 +4,8 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement;
 import io.github.andrexarlay.vulkancompat.rt.denoise.BridgeNrdLocator;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserConfig;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
@@ -109,6 +111,9 @@ public final class RtFrameRenderer {
     private static RtGpuTimer gpuTimer;
     /** God rays, bloom and sun glare post passes (Bedray atmosphere), run on the final image after the denoiser. */
     private static final RtAtmosphere atmosphere = new RtAtmosphere();
+    private static final RecordingCompletion recordingCompletion =
+        new RecordingCompletion(
+            failure -> LOGGER.error("[VKB-RT] native recording release failed; retaining it for host drain", failure));
     /**
      * Dedicated Slang runtime for the Path Tracing pass. Bloom keeps the capability-free runtime of {@link RtAtmosphere};
      * this one is created with the feature mask the logical device really enabled, because path_trace uses ray queries,
@@ -234,7 +239,7 @@ public final class RtFrameRenderer {
     }
 
     public static io.github.andrexarlay.vulkancompat.rt.entity.RuntimeFeatureStatus getEntityInstanceStatus() {
-        if (world != null && world.entityBlas() != null && world.entityBlas().getBlasAddress() != 0L && world.entityBlas().getPrimitiveCount() > 0) {
+        if (world != null && world.entityPrimitiveCount() > 0) {
             return io.github.andrexarlay.vulkancompat.rt.entity.RuntimeFeatureStatus.READY;
         }
         return io.github.andrexarlay.vulkancompat.rt.entity.RuntimeFeatureStatus.EMPTY;
@@ -604,39 +609,72 @@ public final class RtFrameRenderer {
             lastPassLog = "";
         }
         long frameStart = System.nanoTime();
+        if (emitters == null) emitters = new RtEmitters(world.memory());
+        RtEmitters recordingEmitters = emitters;
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        // This transient handle comes from the pool that was reset after its previous submission completed, so the
-        // native bloom and path-tracer recordings made into it are no longer in flight and can release their pools now.
-        atmosphere.releaseRecording(cmd.address());
-        pass.releaseRecording(cmd.address());
-        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.releaseRecording(cmd.address());
-        VkBarriers.fullMemoryBarrier(cmd);
-        if (gpuTimer != null) {
-            gpuTimer.beginFrame(cmd);
-        }
-        int radiusXz = RtConfig.radiusXz(Minecraft.getInstance().options.getEffectiveRenderDistance());
-        int radiusY = RtConfig.radiusY(radiusXz);
-        lastRadiusXz = radiusXz;
-        lastRadiusY = radiusY;
-        if (gpuTimer != null) {
-            gpuTimer.stamp(cmd, SPAN_WORLD, false);
-        }
-        RtWorld.FrameStats stats = world.update(cmd, camera.pos.x, camera.pos.y, camera.pos.z, radiusXz, radiusY);
-        if (gpuTimer != null) {
-            gpuTimer.stamp(cmd, SPAN_WORLD, true);
-        }
-        lastStats = stats;
-        blasBuiltTotal += stats.builtThisFrame();
+        RtWorld recordingWorld = world;
+        RtPass recordingPass = pass;
+        Runnable[] particleRelease = {() -> {}};
+        var recording = recordingCompletion.beginWithDiscard(cmd.address(),
+            new Retirement(
+                () -> atmosphere.releaseRecording(cmd.address()), () -> {
+                    atmosphere.resetHistory();
+                    atmosphere.releaseRecording(cmd.address());
+                }),
+            new Retirement(
+                () -> recordingPass.releaseRecording(cmd.address()), () -> recordingPass.discardRecording(cmd.address())),
+            new Retirement(
+                () -> recordingWorld.releaseRecording(cmd.address()), () -> recordingWorld.discardRecording(cmd.address())),
+            new Retirement(
+                () -> recordingEmitters.releaseRecording(cmd.address()), () -> recordingEmitters.releaseRecording(cmd.address())),
+            new Retirement(
+                () -> particleRelease[0].run(), () -> particleRelease[0].run()));
+        boolean executeAttempted = false;
+        RtWorld.FrameStats stats;
         boolean traced = false;
-        if (stats.instances() > 0 && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
-            recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
-                world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ);
-            traced = true;
+        try {
+            VkBarriers.fullMemoryBarrier(cmd);
+            if (gpuTimer != null) {
+                gpuTimer.beginFrame(cmd);
+            }
+            int radiusXz = RtConfig.radiusXz(Minecraft.getInstance().options.getEffectiveRenderDistance());
+            int radiusY = RtConfig.radiusY(radiusXz);
+            lastRadiusXz = radiusXz;
+            lastRadiusY = radiusY;
+            if (gpuTimer != null) {
+                gpuTimer.stamp(cmd, SPAN_WORLD, false);
+            }
+            stats = recordingWorld.update(cmd, camera.pos.x, camera.pos.y, camera.pos.z, radiusXz, radiusY);
+            if (gpuTimer != null) {
+                gpuTimer.stamp(cmd, SPAN_WORLD, true);
+            }
+            lastStats = stats;
+            blasBuiltTotal += stats.builtThisFrame();
+            if (stats.instances() > 0 && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
+                recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
+                    world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ);
+                traced = true;
+            }
+            VkBarriers.fullMemoryBarrier(cmd);
+            RtFailure.check(VK10.vkEndCommandBuffer(cmd), "end_command_buffer");
+            particleRelease[0] = io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.recordingRelease(cmd.address());
+            recordingCompletion.submissionAttempted(recording);
+            executeAttempted = true;
+            encoder.execute(cmd);
+            recordingCompletion.submitted(recording, action -> encoder.queueForDestroy(action::run));
+        } catch (RuntimeException | Error failure) {
+            if (!executeAttempted) {
+                // This local command buffer was never handed to execute and is
+                // deliberately abandoned; the host will not submit it later.
+                particleRelease[0] = io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.recordingRelease(cmd.address());
+                try { recordingCompletion.discard(recording); }
+                catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
+            }
+            // An exception during execute/enqueue is UNKNOWN: keep resources
+            // pinned until the existing host drain proves completion.
+            throw failure;
         }
-        VkBarriers.fullMemoryBarrier(cmd);
-        RtFailure.check(VK10.vkEndCommandBuffer(cmd), "end_command_buffer");
-        encoder.execute(cmd);
         if (pendingDisplayedTarget == target && frameProjection != null) {
             displayedStamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
             displayedTarget = target;
@@ -812,9 +850,6 @@ public final class RtFrameRenderer {
         // zeroing the slot would keep the count of the frame that used it three slots ago.
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.LEAF_BACKLIT, 4, 0);
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.TRANS_QUERIES, 24, 0);
-        if (emitters == null) {
-            emitters = new RtEmitters(world.memory());
-        }
         float lightRange = RtConfig.mode() == RtMode.PATH_TRACED
             ? Math.min(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathMaxDistance(), 128)
             : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.emissiveDistance() + 8f;
@@ -826,6 +861,7 @@ public final class RtFrameRenderer {
         emitters.update(world, materials.lastBake(), camera.pos.x, camera.pos.y, camera.pos.z, lightRange,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.lightBudget(), entityEmitters,
             entityEmitters.length / RtEmitters.FLOATS);
+        emitters.retainForRecording(cmd.address());
         long hdr = statsBuf.mapped + writeOffset;
         MemoryUtil.memPutLong(hdr + RtStatsLayout.OPTICAL_ADDR,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials() ? materials.opticalAddress() : 0L);
@@ -1010,7 +1046,7 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.FOG_DISTANCE_SCALE, params.fogDistanceScale);
         // entity geometry of this frame (RtEntityGeometryManager ring slice; the same slice the entity BLAS was built from)
         RtEntityGeometryManager eg = RtEntityGeometryManager.INSTANCE;
-        boolean entOk = world.entityBlas().getPrimitiveCount() > 0;
+        boolean entOk = world.entityPrimitiveCount() > 0;
         MemoryUtil.memPutInt(hdr + RtStatsLayout.ENTITY_TRIS, entOk ? eg.frameTriangles() : 0);
         // Triangle range of the local player's body captured for this frame: the primary rays skip it (an inside face of the
         // avatar at 0.001 from the eye is what the first-person screen would otherwise show).
@@ -1439,14 +1475,14 @@ public final class RtFrameRenderer {
                 }
                 return null;
             }
-            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, world.memory(), gbuffer);
+            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, gbuffer);
             LOGGER.info("[VKB-RT] path_tracer selector={} on AOT Slang passes {}+{} (gbuffer={})",
                 selector.name().toLowerCase(Locale.ROOT), RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
             return slang;
         } catch (RuntimeException e) {
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             pathSlangUnavailableReason = reason;
-            if (selector == RtConfig.PathTracer.SLANG) {
+            if (selector == RtConfig.PathTracer.SLANG || RtConfig.SLANG_PATH_TRACE_CPP) {
                 if (e instanceof RtFailure failure) {
                     throw failure;
                 }
@@ -1719,12 +1755,17 @@ public final class RtFrameRenderer {
         if (host == null || host.vkDevice().address() != device.address()) {
             throw new RtFailure(stage, "host device is unavailable or changed");
         }
-        // execute(cmd) only appends to the game's submission builder. The host's
-        // own submit drains it; no second queue or native submission is created.
+        // The host fence captures this encoder's current submission serial.
+        // On the single graphics queue it covers pending work and earlier uses;
+        // timeout/failure is not permission to release any recording.
         drainingHostSubmissions = true;
-        try {
-            host.createCommandEncoder().submit();
-            RtFailure.check(VK10.vkDeviceWaitIdle(device), stage);
+        VulkanCommandEncoder encoder = host.createCommandEncoder();
+        try (var completion = encoder.createFence()) {
+            encoder.submit();
+            if (!completion.awaitCompletion(5_000_000_000L)) {
+                throw new RtFailure(stage, "host graphics submission completion timed out; resources retained");
+            }
+            recordingCompletion.afterHostDrain();
         } finally {
             drainingHostSubmissions = false;
         }
