@@ -25,8 +25,8 @@ class BedrayPathTraceNativeTest {
                 var out = storage.asSlice(8, 112);
                 BedrayPathTraceNative.fillPath(out, dispatch, RtPathTraceSlangPass.Entities.NONE);
                 for (int i = 0; i < 112; i++) assertEquals(expected.get(i), out.get(JAVA_BYTE, i), "path byte " + i);
-                assertEquals(6, out.get(JAVA_INT, BedrayCoreLayouts.PTP_FLAGS));
-                assertEquals(Float.floatToRawIntBits(1.25f), out.get(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE + 12));
+                assertEquals(6, out.get(JAVA_INT_UNALIGNED, BedrayCoreLayouts.PTP_FLAGS));
+                assertEquals(Float.floatToRawIntBits(1.25f), out.get(JAVA_INT_UNALIGNED, BedrayCoreLayouts.PTP_ENTITY_STATE + 12));
                 for (int i = 0; i < 8; i++) {
                     assertEquals((byte)0x5a, storage.get(JAVA_BYTE, i));
                     assertEquals((byte)0x5a, storage.get(JAVA_BYTE, 120 + i));

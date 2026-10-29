@@ -207,11 +207,13 @@ final class BedrayPathTraceNative implements AutoCloseable {
     static void fillPath(MemorySegment out, RtPathTraceSlangPass.Dispatch dispatch, RtPathTraceSlangPass.Entities entities) {
         if (out.byteSize() != BedrayCoreLayouts.PT_PATH.byteSize())
             throw new IllegalArgumentException("native path block must be 112 bytes");
-        dispatch.writeTo(out.asByteBuffer().order(ByteOrder.nativeOrder()));
+        var packet = out.asByteBuffer().order(ByteOrder.nativeOrder());
+        dispatch.writeTo(packet);
         // Match the resource ranges actually bound by this native frame, as before.
-        out.set(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE, entities.atlasSize());
-        out.set(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE + 4, entities.selfAvatarTriStart());
-        out.set(JAVA_INT, BedrayCoreLayouts.PTP_ENTITY_STATE + 8, entities.selfAvatarTriCount());
+        int state = Math.toIntExact(BedrayCoreLayouts.PTP_ENTITY_STATE);
+        packet.putInt(state, entities.atlasSize());
+        packet.putInt(state + 4, entities.selfAvatarTriStart());
+        packet.putInt(state + 8, entities.selfAvatarTriCount());
     }
 
     private static void putBuffer(MemorySegment at, long base, long handle, long offset, long bytes) {
