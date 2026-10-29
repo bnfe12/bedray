@@ -27,6 +27,7 @@ class RtSlangGbufferGuidesTest {
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
     private static final String PASS = SHADERS + "/passes/path_trace.slang";
     private static final String SCENE_PASS = SHADERS + "/passes/path_trace_scene.slang";
+    private static final String ENTRY = SHADERS + "/pathtrace/path_trace_entry.slang";
 
     @Test
     void theGuideChannelsAreThePrimaryVertexThePathShaded() {
@@ -45,35 +46,31 @@ class RtSlangGbufferGuidesTest {
 
     @Test
     void theSplitRadianceStillSumsToTheColourInput() {
-        for (String pass : new String[] {PASS, SCENE_PASS}) {
-            String source = read(pass);
-            String guides = block(source, "void pathTraceWriteGuides(");
-            assertTrue(guides.contains("outDiffuse[p] = float4(result.radiance - result.primary.direct, result.firstHitDistance);"),
-                pass + ": the residual is the whole signal minus the direct term the pack adds back");
-            assertTrue(guides.contains("outDirect[p] = float4(result.primary.direct, 0.0);"),
-                pass + ": the direct term is the one the residual removed");
-            assertTrue(guides.contains("outSpecular[p] = float4(0.0);"),
-                pass + ": the path tracer has no split specular channel, exactly as rt_path.comp writes zeros");
-            assertTrue(guides.contains("outAlbedo[p] = float4(result.primary.albedo, 1.0);"), pass + ": albedo guide");
-            assertTrue(guides.contains("outNormalRough[p] = float4(n, clamp(result.primary.roughness, 0.0, 1.0));"),
-                pass + ": normal + roughness");
-            assertTrue(guides.contains("float viewZ = -dot(toSurface, f.camera.forward.xyz);"),
-                pass + ": NRD's view depth is backwards along the view axis, as in rt_path.comp");
-            assertTrue(guides.contains("result.primary.metallic > 0.5 || result.primary.roughness < 0.6"),
-                pass + ": the legacy specular-albedo rule (metal or glossy only)");
-        }
+        String source = read(ENTRY);
+        String guides = block(source, "void pathTraceWriteGuides(");
+        assertTrue(guides.contains("outDiffuse[p] = float4(result.radiance - result.primary.direct, result.firstHitDistance);"),
+            "the residual is the whole signal minus the direct term the pack adds back");
+        assertTrue(guides.contains("outDirect[p] = float4(result.primary.direct, 0.0);"),
+            "the direct term is the one the residual removed");
+        assertTrue(guides.contains("outSpecular[p] = float4(0.0);"),
+            "the path tracer has no split specular channel, exactly as rt_path.comp writes zeros");
+        assertTrue(guides.contains("outAlbedo[p] = float4(result.primary.albedo, 1.0);"), "albedo guide");
+        assertTrue(guides.contains("outNormalRough[p] = float4(n, clamp(result.primary.roughness, 0.0, 1.0));"),
+            "normal + roughness");
+        assertTrue(guides.contains("float viewZ = -dot(toSurface, f.camera.forward.xyz);"),
+            "NRD's view depth is backwards along the view axis, as in rt_path.comp");
+        assertTrue(guides.contains("result.primary.metallic > 0.5 || result.primary.roughness < 0.6"),
+            "the legacy specular-albedo rule (metal or glossy only)");
     }
 
     @Test
     void aSkyPixelLooksLikeSkyToTheDenoiser() {
-        for (String pass : new String[] {PASS, SCENE_PASS}) {
-            String source = read(pass);
-            String guides = block(source, "void pathTraceWriteGuides(");
-            assertTrue(guides.contains("if (!result.primary.valid) {"), pass + ": a miss has no surface to guide on");
-            assertTrue(guides.contains("outViewZ[p] = 1.0e6;"), pass + ": the sky depth rt_path.comp writes");
-            assertTrue(guides.contains("outNormalRough[p] = float4(0.0, 0.0, 1.0, 1.0);"), pass + ": the flat sky normal");
-            assertTrue(guides.contains("outAlbedo[p] = float4(0.0);"), pass + ": zero albedo keeps sky out of the demodulation");
-        }
+        String source = read(ENTRY);
+        String guides = block(source, "void pathTraceWriteGuides(");
+        assertTrue(guides.contains("if (!result.primary.valid) {"), "a miss has no surface to guide on");
+        assertTrue(guides.contains("outViewZ[p] = 1.0e6;"), "the sky depth rt_path.comp writes");
+        assertTrue(guides.contains("outNormalRough[p] = float4(0.0, 0.0, 1.0, 1.0);"), "the flat sky normal");
+        assertTrue(guides.contains("outAlbedo[p] = float4(0.0);"), "zero albedo keeps sky out of the demodulation");
     }
 
     @Test
@@ -81,12 +78,10 @@ class RtSlangGbufferGuidesTest {
         String tracer = read(TRACER);
         assertTrue(tracer.contains("static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;"),
             "the option bit is the host contract for the guides");
-        for (String pass : new String[] {PASS, SCENE_PASS}) {
-            String source = read(pass);
-            assertTrue(source.contains("if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u) {"),
-                pass + ": the guide stores are gated by the option bit");
-            assertTrue(source.contains("pathTraceWriteGuides(p, f, result);"), pass + ": one write site");
-        }
+        String source = read(ENTRY);
+        assertTrue(source.contains("if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u) {"),
+            "the guide stores are gated by the option bit");
+        assertTrue(source.contains("pathTraceWriteGuides(p, f, result, "), "one write site");
         // The option word is the push's fifth field, which the host leaves zero unless it binds the images.
         String host = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");
         assertTrue(host.contains("int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)"),
@@ -95,6 +90,20 @@ class RtSlangGbufferGuidesTest {
         assertTrue(record.contains("static final int OPTION_GBUFFER = 1;"), "the Java mirror of the shader option bit");
         assertTrue(record.contains("if (wantsGuides != (boundGuides != null)) {"),
             "record refuses a flag without images and images without the flag");
+    }
+
+    @Test
+    void bothEntriesBindTheSevenGuidesAndForwardThem() {
+        for (String pass : new String[] {PASS, SCENE_PASS}) {
+            String source = read(pass);
+            for (int binding = 26; binding <= 32; binding++) {
+                assertTrue(source.contains("[[vk::binding(" + binding + ", 0)]]"),
+                    pass + ": guide binding " + binding + " must be declared by the thin wrapper");
+            }
+            assertTrue(source.contains("outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect,"
+                    + " outSpecAlbedo,"),
+                pass + ": the wrapper forwards all seven guides to the shared body");
+        }
     }
 
     @Test
@@ -136,8 +145,8 @@ class RtSlangGbufferGuidesTest {
         String backend = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/NativePathTraceBackend.java");
         assertTrue(backend.contains("guides && !runtime.library().hasNativeGuideOutputs()"),
             "a guide request needs the additive native feature and export");
-        assertTrue(renderer.contains("AUTO keeps the GLSL path when a denoiser is selected"),
-            "AUTO does not silently move a denoiser onto unproven guides");
+        assertTrue(renderer.contains("AUTO does not select the Slang path while a denoiser is enabled"),
+            "AUTO does not silently move a denoiser onto unproven guides, and the message says what it actually does");
         String pass = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");
         String uses = block(pass, "public boolean usesGbuffer() {");
         assertTrue(uses.contains("return requestedGbuffer;"),

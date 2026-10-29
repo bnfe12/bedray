@@ -79,6 +79,8 @@ class RtRestirSettingsTest {
         String reference = read(REFERENCE_BACKEND);
         assertTrue(reference.contains("if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null)"),
             "reference dispatch requires the controller's request and a real ring");
+        assertTrue(reference.contains("return di.mode(true, reservoirs != null, false);"),
+            "the reference backend separates a fresh ring from a reused one");
         String nativeBackend = read(NATIVE_BACKEND);
         assertTrue(nativeBackend.contains("hasNativeReservoirs()")
                 && nativeBackend.contains("frame.flags() | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI"),

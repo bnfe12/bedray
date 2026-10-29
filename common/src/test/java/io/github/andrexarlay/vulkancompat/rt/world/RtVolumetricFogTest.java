@@ -4,6 +4,8 @@ import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.Tag;
 
 import java.nio.ByteBuffer;
 
@@ -17,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 4. Night attenuation (deep dark blue / black fog at night, bright sky-tinted fog by day).
  * 5. Configuration parameters and bounds in RtSettings and RtFrameParams.
  */
+@Timeout(120)
 public class RtVolumetricFogTest {
 
     private static final float EPSILON = 1e-4f;
@@ -60,6 +63,7 @@ public class RtVolumetricFogTest {
     }
 
     @Test
+    @Tag("shader-compile")
     public void testShaderCompilation() {
         // Verify shader source presence of volumetric fog functions and flags
         String commonSrc = RtWorldChecks.rtCommon();

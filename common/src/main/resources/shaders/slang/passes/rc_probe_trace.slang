@@ -14,8 +14,10 @@
 //   not the allocation size; `radianceCascadeLayout().totalRecords` is the
 //   canonical minimum.
 // * `rcStatus` has one `RCTraceEntryStatus` per dispatched item.  The host must
-//   bind at least `pc.rayCount` elements.  It is diagnostic output, not part of
-//   the atlas: an entry with code != Ok still writes no record.
+//   bind `pc.rcStatusCapacity` elements and set that field to the bound range;
+//   items at or beyond the capacity return without writing.  It is diagnostic
+//   output, not part of the atlas: an entry with code != Ok still writes no
+//   record.
 // * `pc.rayCount` is the number of flat ray items in this dispatch and must not
 //   exceed the canonical ray count.  Indices beyond the canonical grid report
 //   InvalidDispatch instead of touching the atlas.
@@ -82,6 +84,8 @@ struct RCProbeTracePush {
     uint  frameIndex;              // 60, seed decorrelation only
     uint  maxDepth;                // 64
     uint  emitterCount;            // 68
+    uint  rcStatusCapacity;        // 72, elements in the bound rcStatus range; 0 = no status writes
+    uint  reserved;                // 76, keeps emitterCameraRelative at the 16-byte boundary
     float4 emitterCameraRelative;  // 80..95, xyz camera anchor, w candidates
     uint4  entityState;            // 96..111, x: atlas size, yz: self avatar, w: reserved
 };                              // 112 B total; the pass manifest requires <= 128
@@ -109,7 +113,7 @@ struct RCProbeTracePush {
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     uint index = tid.x;
-    if (index >= pc.rayCount) return;
+    if (index >= pc.rayCount || index >= pc.rcStatusCapacity) return;
 
     FrameConstants f = frame;
 

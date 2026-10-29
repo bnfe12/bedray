@@ -37,6 +37,11 @@ def slangPasses = (project.findProperty('slangPasses') ?: '**/*.slang').toString
 def slangArgs = ['-target', 'spirv', '-profile', slangProfile, '-entry', 'main',
                  '-matrix-layout-column-major', '-I', slangRoot.absolutePath]
 
+// The SDK ships the compiler as bin/slangc.exe on Windows and bin/slangc
+// elsewhere. The explicit -Pslangc/SLANGC paths still win when set.
+def slangcBinary = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+    ? 'slangc.exe' : 'slangc'
+
 def findSlangc = {
     List<File> candidates = []
     if (project.hasProperty('slangc')) {
@@ -46,10 +51,10 @@ def findSlangc = {
         candidates << file(System.getenv('SLANGC'))
     }
     if (project.hasProperty('slangDir')) {
-        candidates << new File(project.property('slangDir').toString(), 'bin/slangc.exe')
+        candidates << new File(project.property('slangDir').toString(), "bin/$slangcBinary")
     }
     if (System.getenv('SLANG_DIR')) {
-        candidates << new File(System.getenv('SLANG_DIR'), 'bin/slangc.exe')
+        candidates << new File(System.getenv('SLANG_DIR'), "bin/$slangcBinary")
     }
     candidates.find { it.isFile() }
 }
@@ -125,7 +130,21 @@ def STRUCT_LAYOUTS = [
     // dispatched ray.  Keep the counters in this order so a future Java reader
     // cannot silently reinterpret them.
     RCTraceEntryStatus: [size: 32, fields: [code: 0, rays: 4, stored: 8, storeFailed: 12,
-        invalidInput: 16, unresolved: 20, clamped: 24, truncated: 28]]
+        invalidInput: 16, unresolved: 20, clamped: 24, truncated: 28]],
+    // Push block shared by passes/path_trace.slang and path_trace_scene.slang.  The manifest checks the total size;
+    // pinning the fields catches a same-size reorder that would otherwise reach the Java writer unnoticed.
+    PathTracePush: [size: 112, fields: [maxDepth: 0, maxSurfaceSteps: 4, sampleIndex: 8, materialCount: 12,
+        flags: 16, rayBias: 20, alphaCutoff: 24, maxDistance: 28, maxRadiance: 32, sunProbability: 36,
+        emitterCount: 40, emitterProbability: 44, emitterCameraRelative: 48, diCameraDelta: 64,
+        diState: 80, entityState: 96]],
+    // Push block of the typed Radiance Cascades probe pass.  The 8-byte gap before emitterCameraRelative is part
+    // of the ABI (float4 alignment), so it is pinned through the field offsets.
+    RCProbeTracePush: [size: 112, fields: [rayBias: 0, alphaCutoff: 4, emissionScale: 8, maxRadiance: 12,
+        sunProbability: 16, emitterProbability: 20, nearDistance: 24, farDistance: 28,
+        worldBoundaryDistance: 32, rayCount: 36, segmentCapacity: 40, materialCount: 44,
+        environmentPolicy: 48, environmentCascade: 52, frameRotation: 56, frameIndex: 60,
+        maxDepth: 64, emitterCount: 68, rcStatusCapacity: 72, reserved: 76,
+        emitterCameraRelative: 80, entityState: 96]]
 ]
 
 def validateStructLayout = { String relative, String bindingName, struct ->

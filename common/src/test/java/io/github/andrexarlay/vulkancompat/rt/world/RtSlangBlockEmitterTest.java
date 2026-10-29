@@ -21,6 +21,7 @@ class RtSlangBlockEmitterTest {
 
     private static final String EMITTERS = "src/main/resources/shaders/slang/light/block_emitters.slang";
     private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
     private static final String CONTRACT = "src/main/resources/shaders/slang/contracts/light.slang";
     private static final String SURFACE = "src/main/resources/shaders/slang/surface/surface.slang";
@@ -39,7 +40,7 @@ class RtSlangBlockEmitterTest {
         assertTrue(record.indexOf("uvEdges;") < record.indexOf("tint;"), "the field order is the upload order");
         String legacy = block(read(LEGACY_CORE), "struct Emitter {");
         assertEquals(count(record, "float4 "), count(legacy, "vec4"), "one vec4 per float4");
-        assertTrue(read(PASS).contains("float4 emitterCameraRelative;"),
+        assertTrue(read(ENTRY).contains("float4 emitterCameraRelative;"),
             "the camera-relative correction and the candidate count travel as a push vec4");
     }
 
@@ -188,17 +189,17 @@ class RtSlangBlockEmitterTest {
         }
         assertTrue(composite.contains("if (!hasEmitters || sunIntensity <= 0.0)"),
             "with one live branch there is nothing to renormalise, and the sun keeps its own sun/moon split");
-        String pass = read(PASS);
-        assertTrue(pass.contains("lights.emitterProbability = pc.emitterCount > 0u ? clamp(pc.emitterProbability, 0.0, 1.0) : 0.0;"),
+        String entry = read(ENTRY);
+        assertTrue(entry.contains("lights.emitterProbability = pc.emitterCount > 0u ? clamp(pc.emitterProbability, 0.0, 1.0) : 0.0;"),
             "an empty list must not steal half of the draws for a light that is never there");
-        assertTrue(pass.contains("[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;"),
+        assertTrue(read(PASS).contains("[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;"),
             "the host promises exactly this binding number");
-        assertTrue(pass.contains("uint emitterCandidates = uint(max(pc.emitterCameraRelative.w, 1.0));"),
+        assertTrue(entry.contains("uint emitterCandidates = uint(max(pc.emitterCameraRelative.w, 1.0));"),
             "the candidate count travels in the free component of the camera-relative vec4");
-        assertTrue(pass.contains("emitterSampler.candidates = emitterCandidates;")
-            && pass.contains("directReuse.candidates = emitterCandidates;"),
+        assertTrue(entry.contains("emitterSampler.candidates = emitterCandidates;")
+            && entry.contains("directReuse.candidates = emitterCandidates;"),
             "the plain RIS draw and the ReSTIR DI batch read the same number of candidates, so the A/B is one switch");
-        assertTrue(pass.indexOf("receiverEmission") < 0,
+        assertTrue(entry.indexOf("receiverEmission") < 0,
             "the sampler has no per-frame receiver state: the emission of the face being shaded travels with the call");
         assertTrue(composite.contains("&& !(receiver.primary && emittersReusedAtPrimary);"),
             "with the reservoir on, the composite leaves the emitter branch to it at the primary vertex instead of"

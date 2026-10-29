@@ -91,6 +91,10 @@ float3 bsdfEvaluate(MaterialSample material, float3 V, float3 N, float3 L) {
     float3 f0 = bsdfF0(material);
     float3 fresnel = fresnelSchlick(VdotH, f0);
     float3 fresnelView = fresnelSchlick(NdotV, f0);
+    // Legacy parity: the diffuse lobe keeps the view-angle factor (1 - F(N.V)).
+    // That is not strictly Helmholtz-reciprocal because the factor does not
+    // depend on L, but it matches the owner-tuned legacy GLSL look.  Do not
+    // switch to an L-dependent factor without a GPU A/B that shows the delta.
     // A delta optical transmission has no diffuse reflection lobe to evaluate;
     // otherwise NEE would light a lobe the sampler cannot produce.
     bool optical = material.alphaMode == AlphaMode.Optical && material.transmission > 0.0;
@@ -232,6 +236,8 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
     float cosTheta = max(dot(lobeNormal, L), 0.0);
     if (cosTheta <= 0.0) return result;
 
+    // Same legacy-parity factor as bsdfEvaluate: sampler and NEE evaluator
+    // must use one convention or the estimator stops matching.
     float3 fresnelView = fresnelSchlick(NdotV, bsdfF0(material));
     float branchProbability = transmissionProbability;
     float3 albedo;

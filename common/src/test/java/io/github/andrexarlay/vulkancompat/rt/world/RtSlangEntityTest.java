@@ -29,6 +29,7 @@ class RtSlangEntityTest {
     private static final String DISPLAY = SHADERS + "/passes/path_display.slang";
     private static final String SURFACE = SHADERS + "/surface/surface.slang";
     private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String ENTRY = SHADERS + "/pathtrace/path_trace_entry.slang";
     private static final String HOST_PASS =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java";
     private static final String HOST_FRAME =
@@ -282,8 +283,8 @@ class RtSlangEntityTest {
         assertTrue(motion.contains("return entityMotion(entities, hit.primitiveId, hit.barycentrics);"),
             "and the entity half answers from the ring through the hit's own corner data");
 
-        String pass = read(PASS);
-        assertTrue(pass.contains("outMotion[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u"
+        String entry = read(ENTRY);
+        assertTrue(entry.contains("outMotion[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u"
             + " ? result.primaryMotion : float4(0.0);"),
             "a pixel that hit nothing says nothing, so a moved camera restarts it instead of borrowing the sky's history");
     }
@@ -330,8 +331,8 @@ class RtSlangEntityTest {
             "the legacy portal emission and smooth surface response");
         assertTrue(read(SURFACE).contains("SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection)"),
             "a secondary hit needs its own ray direction, not the camera's primary direction");
-        String pass = read(PASS);
-        assertTrue(pass.contains("materialOptions.portalTime = f.camera.origin.w;"),
+        String entry = read(ENTRY);
+        assertTrue(entry.contains("materialOptions.portalTime = f.camera.origin.w;"),
             "the animation clock comes from the immutable frame block");
     }
 
@@ -349,7 +350,7 @@ class RtSlangEntityTest {
             "the procedural portal must not inherit a normal from its placeholder texture");
         assertTrue(!entity.contains("hit.geometricNormal ="),
             "auto normals never change the geometric normal used to offset shadow rays");
-        assertTrue(read(PASS).contains("materialOptions.autoNormalStrength = asfloat(pc.entityState.w);"),
+        assertTrue(read(ENTRY).contains("materialOptions.autoNormalStrength = asfloat(pc.entityState.w);"),
             "the existing push block carries the strength without growing the ABI");
     }
 

@@ -25,6 +25,7 @@ class RtSlangSampleRejectionTest {
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
     private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
     private static final String CASCADER = "src/main/resources/shaders/slang/radiance_cascades/rc_trace.slang";
     private static final String HOST_PASS =
@@ -104,10 +105,11 @@ class RtSlangSampleRejectionTest {
         assertTrue(helper.contains(INVALID), "the verdict is the non-finite fault");
         assertFalse(helper.contains(TRUNCATED), "a truncated path stays a sample");
         String pass = read(PASS);
-        assertTrue(pass.contains("outImage[p] = float4(result.radiance, pathTraceSampleRejected(result.flags)"
+        String entry = read(ENTRY);
+        assertTrue(entry.contains("outImage[p] = float4(result.radiance, pathTraceSampleRejected(result.flags)"
                 + " ? 0.0 : 1.0);"),
             "the pass publishes the helper's answer instead of inventing its own rule");
-        assertFalse(pass.contains("float4(result.radiance, 1.0)"),
+        assertFalse(entry.contains("float4(result.radiance, 1.0)"),
             "a hardcoded 1.0 would make the whole rejection chain dead code");
         assertTrue(pass.contains("//   1  outImage") && pass.contains("a = 0 for a"),
             "and the binding table says the lane carries the verdict, so a later consumer is not surprised");

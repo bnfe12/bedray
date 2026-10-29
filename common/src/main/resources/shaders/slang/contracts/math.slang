@@ -39,7 +39,10 @@ float3 orientNormal(float3 normal, float3 geometricNormal) {
 }
 
 bool isFinite(float value) {
-    return value == value && abs(value) < 3.402823466e+38;
+    // Inf and NaN both carry an all-ones exponent.  A bit test survives fast-math:
+    // the compiler is allowed to fold `value == value` to true and to assume that
+    // ordered comparisons with NaN have a definite result.
+    return (asuint(value) & 0x7f800000u) != 0x7f800000u;
 }
 
 bool isFinite(float3 value) {

@@ -1493,14 +1493,15 @@ public final class RtFrameRenderer {
             // The Java Slang path fills the DLSS-RR guides and, for the NRD layouts, the primary hit's world-space
             // motion (the renderer binds {@code entity_motion_px} into the frame's views for exactly those modes).
             // The C++ backend forwards the seven guides through GUIDE_OUTPUTS but writes no motion yet, so it is
-            // refused for NRD only.  AUTO keeps the denoiser on the proven GLSL pass until a live frame has
+            // refused for NRD only.  AUTO declines the Slang denoiser path until a live frame has
             // validated the guides; it still reports a real Slang blocker instead of blaming the denoiser.
             String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
             if (blocker == null) {
                 if (RtConfig.SLANG_PATH_TRACE_CPP && denoiseMode != DenoiserMode.DLSS_RR) {
                     blocker = "the C++ path backend writes no world-space motion for " + denoiseMode;
                 } else if (selector == RtConfig.PathTracer.AUTO) {
-                    blocker = "AUTO keeps the GLSL path when a denoiser is selected";
+                    blocker = "AUTO does not select the Slang path while a denoiser is enabled;"
+                        + " set bedray.pathTracer=slang to test the guides";
                 }
             }
             if (blocker != null) {

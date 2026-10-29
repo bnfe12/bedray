@@ -16,6 +16,7 @@ more may be wrong, on other GPUs, drivers and systems (AMD Radeon and Intel Arc 
 ## Image
 
 * Path Tracing is **EXPERIMENTAL**. "Ray Tracing (Fast)" is in development and hidden in this release (`experimental_rays` in bedray.toml unlocks it for developers; unsupported). Expect noise, flicker, ghosting while moving, and wrong lighting in some places.
+* Diffuse reflection keeps the view-angle Fresnel factor `1 - F(N·V)` for parity with the owner-tuned legacy GLSL. It is not strictly Helmholtz-reciprocal; an L-dependent factor is deferred until a matching-build GPU A/B can show the visual delta.
 * Redstone dust can show a blocky gray fringe from alpha coverage in the traced image; the fix is not yet confirmed in a final live run.
 * Reflections stay noisy with the NRD denoiser (no specular denoiser input yet).
 * Animated textures (fire, lava, portals) bake only their first frame into the materials, so glow and roughness can mismatch.

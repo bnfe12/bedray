@@ -39,7 +39,7 @@ class RtSlangNrdMotionTest {
         assertTrue(read(TRACER).contains("PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;"),
             "the option word is shared with the guides: bit 0 is the G-buffer, bit 1 is NRD's motion");
         for (String pass : new String[] {PASS, SCENE_PASS}) {
-            String source = read(pass);
+            String source = read(pass) + "\n" + read(SHADERS + "/pathtrace/path_trace_entry.slang");
             assertTrue(source.contains("[[vk::binding(33, 0)]] RWStructuredBuffer<float4> outMotionBuffer;"),
                 pass + ": one vec4 per pixel, not an RGBA16F image the pack could not read with its 16-byte stride");
             String motion = block(source, "float4 pathTraceNrdMotion(");
@@ -57,7 +57,7 @@ class RtSlangNrdMotionTest {
     @Test
     void theWriteIsGatedByItsOwnOptionBit() {
         for (String pass : new String[] {PASS, SCENE_PASS}) {
-            String source = read(pass);
+            String source = read(pass) + "\n" + read(SHADERS + "/pathtrace/path_trace_entry.slang");
             String store = block(source, "if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {");
             assertTrue(store.contains("outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result);"),
                 pass + ": the pixel index is the legacy row-major one, one record per render pixel");

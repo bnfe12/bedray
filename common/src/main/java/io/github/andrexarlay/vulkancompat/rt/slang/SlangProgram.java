@@ -205,6 +205,9 @@ public final class SlangProgram implements AutoCloseable {
         library.destroyProgram(core, handle);
     }
 
+    /** Core teardown already destroyed the native program; never call through its freed core handle. */
+    void coreDestroyed() { closed = true; }
+
     @Override
     public String toString() {
         return "SlangProgram[" + name() + ", " + manifest.bindings().size() + " binding(s), "
