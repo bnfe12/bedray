@@ -4,6 +4,55 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — Radiance Cascades merge physics: what is and is not left (L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`, on top of `4fdc0ca`. Tool: `slangc` 2026.20
+via `-Pslangc=…`. No shader or host source change — this run re-tests P0-4's
+claim that the confidence-weighted average "persists in the codebase".
+
+P0-4 is correct that `rcLegacyProbeIrradiance` still merges the two intervals
+as `(near.rgb*near.a + far.rgb*far.a) / (near.a + far.a)`, and the typed
+compose `front.radiance + front.transmittance * back.radiance` is the physics.
+What the audit did not say is that the averaging form has no path to a frame:
+
+- `bedray.slang` exports `rc_atlas_layout`, `interval_transport`,
+  `segment_store`, `rc_trace`. `radiance_cascades_store.slang` (the float4
+  facade) is reachable only from `bedray_legacy.slang`.
+- No `.slang` in the tree calls `rcStoreInterval` or `rcAccumulateInterval`
+  outside the module that defines them, so the averaging resolve has no writer
+  for the atlas it reads.
+- In the legacy format `.a` really is a sample count clamped to
+  `RC_MAX_CONFIDENCE = 64.0`, not opacity — so "treat `.a` as transmittance" is
+  not a fix; the format cannot express occlusion at all. That is why the typed
+  `RCSegment{radiance, transmittance, confidence, flags}` exists.
+- `passes/rc_probe_trace.slang` compiles and ships in the jar
+  (`spv/rc_probe_trace.spv`, manifest, reflection), but zero references to it
+  exist in `common/src/main/java`, and the only native mention is a
+  `render_plan.cpp` feature name. **No RC pass is dispatched.**
+
+So the remaining P0-4 work is frame integration, not merge physics. Closing it
+needs a host that binds the typed atlas and a frame to look at — L3/L4, which
+does not exist here.
+
+Result:
+
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test --tests '*RtSlangRadianceTransportTest*'` | 0 failures | 4/4 pass: transport form, no divisor on the radiance statement, opaque-front early return before the composition, `min(confidence)`, and the legacy-unreachability scan |
+| Mutation proof | all four fail | Reverting `rcComposeSegments` to the confidence-weighted mean, deleting the `all(front.transmittance == float3(0.0))` early return, turning `min` into `+`, and exporting `radiance_cascades_store.slang` from the default root → 4 tests completed, 4 failed |
+| Restore | no residue | `interval_transport.slang` and `bedray.slang` back, 4/4 green again |
+
+Two notes on method. The first draft of the reachability guard asserted
+`bedray.slang` must not contain the string `radiance_cascades_store.slang` and
+**failed on a comment** — the module name appears in the root's own header docs.
+The guard now matches the import statement, which is the thing that actually
+exports it; a substring check on a name that also appears in prose is not a
+check. And the hashes of the restored `interval_transport.slang` differ between
+this worktree and `C:\BedRay` (`5da26d73…` vs `a78f4fde…`) purely because
+`git archive` writes CRLF while the live tree holds LF; `diff
+--strip-trailing-cr` reports no difference, so the guards ran against the same
+text the committed file contains.
+
 ## 2026-10-29 — Union trace guards are load-bearing (L2 unit, mutation proof)
 
 Branch: `refactor/slang-pipeline`, on top of `39c8653`. No source change: this
