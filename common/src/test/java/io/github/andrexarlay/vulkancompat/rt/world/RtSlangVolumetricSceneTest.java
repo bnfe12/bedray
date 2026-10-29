@@ -15,7 +15,7 @@ import java.util.HexFormat;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Native/legacy binding adapters share one unchanged march/store body; no GPU or host hookup. */
+/** Native/legacy binding adapters share one march/store body; coordinate updates preserve its transport arithmetic. */
 class RtSlangVolumetricSceneTest {
     private static final String ROOT = "src/main/resources/shaders/slang/";
     private static final String KERNEL = "light/volumetric_march_entry.slang";
@@ -23,7 +23,11 @@ class RtSlangVolumetricSceneTest {
     @Test void theExtractedKernelPreservesTheExistingMarchAndTemporalArithmetic() throws Exception {
         String body = block(read(KERNEL), "void volumetricMarchEntry<");
         // Fingerprint of the pre-extraction main body on 0898b004, with only its
-        // four LegacySectionTraversal setup statements removed; whitespace ignored.
+        // four traversal setup statements removed. Normalize only the deliberate
+        // origin input/endpoint coordinate changes; all other arithmetic remains pinned.
+        body = body.replace("marchLightShaft(traversal, frame.camera.origin.xyz, dir,",
+                "marchLightShaft(traversal, dir,")
+            .replace("float3 rayEnd = frame.camera.origin.xyz + dir * tEnd;", "float3 rayEnd = dir * tEnd;");
         String fingerprint = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
             .digest(body.replaceAll("\\s+", "").getBytes(StandardCharsets.UTF_8)));
         assertEquals("d0b6a58f09d5e34d59db20268af6e559de94e5be8959e88745fc642b2d379cf7", fingerprint,

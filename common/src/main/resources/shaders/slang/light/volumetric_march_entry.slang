@@ -1,7 +1,7 @@
 // Shared volumetric march/store entry body. The two binding adapters choose
 // their section decoder; arithmetic and temporal accumulation live here once.
-// Extracted unchanged from passes/volumetric_march.slang. Existing bob-origin,
-// binary visibility and exposure semantics are deliberately preserved.
+// The shared camera-relative origin is applied to both march samples and the
+// temporal endpoint. Binary visibility and exposure semantics are unchanged.
 public module volumetric_march_entry;
 
 import "contracts/frame.slang";
@@ -15,7 +15,7 @@ struct VolumetricMarchPush {
     float  strength;          // settings strength, 1.0 = vanilla look
     float3 keyColor;          // rgb: key light radiance
     float  range;             // shaft range in blocks (legacy clamps >= 8)
-    float3 prevOriginDelta;   // previous camera origin minus current (camera-relative rebase)
+    float3 prevOriginDelta;   // current raw camera origin minus previous (camera-relative rebase)
     float  rain;              // 0 clear .. 1 rain
     float  exposure;          // frame exposure (darkness adaptation only)
     float  inscatter;         // settings in-scattering weight
@@ -76,7 +76,7 @@ void volumetricMarchEntry<T : ISceneTracer>(T traversal, uint3 dispatchThreadID,
         (1.0 + 2.2 * dark);
     float jitter = shaftJitter(float2(pf), pc.frameIndex);
 
-    float3 scatter = marchLightShaft(traversal, dir, tEnd, pc.steps, jitter,
+    float3 scatter = marchLightShaft(traversal, frame.camera.origin.xyz, dir, tEnd, pc.steps, jitter,
         pc.keyDir, pc.keyColor, pc.worldHeightOffset, densityMul, dark,
         pc.inscatter, pc.strength, pc.rayBias);
 
@@ -85,7 +85,7 @@ void volumetricMarchEntry<T : ISceneTracer>(T traversal, uint3 dispatchThreadID,
     float alpha = 1.0;
     float3 history = float3(0.0);
     if (pc.historyValid != 0u) {
-        float3 rayEnd = dir * tEnd;
+        float3 rayEnd = frame.camera.origin.xyz + dir * tEnd;
         bool ok;
         float2 pix = shaftHistoryPixel(frame.camera.prevViewProjection,
             pc.prevOriginDelta, rayEnd, float2(fullSize), pc.flipY != 0u, ok);

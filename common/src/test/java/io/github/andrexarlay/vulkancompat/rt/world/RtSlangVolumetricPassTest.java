@@ -25,14 +25,17 @@ class RtSlangVolumetricPassTest {
         assertEquals(0, march.getInt(76)); assertEquals(1, march.getInt(80)); assertEquals(1, march.getInt(84));
         assertEquals(1, apply.getInt(8)); assertEquals(0, march.getInt(92));
     }
-    @Test void unsupportedBobOriginIsExplicitAndSharedCameraConversionPreservesIt() {
+    @Test void sharedCameraConversionPreservesTheBobOriginWithoutChangingWorldHeight() {
         var p = new RtFrameParams();
-        assertNull(RtSlangVolumetricPass.supportProblem(p));
-        p.bobX = 0.1f;
-        assertNotNull(RtSlangVolumetricPass.supportProblem(p));
+        p.bobX = 0.1f; p.bobY = 0.2f; p.cameraY = 80;
         var frame = new RtPathTraceSlangPass.Frame();
         RtSlangFrameData.fill(frame, p, 16, 8, 3, 1);
         assertEquals(p.bobX, frame.origin.x);
+        assertEquals(p.bobY, frame.origin.y);
+        var march = ByteBuffer.allocate(96).order(ByteOrder.nativeOrder());
+        var apply = ByteBuffer.allocate(24).order(ByteOrder.nativeOrder());
+        RtSlangVolumetricPass.fillPush(march, apply, p, 12, 0.5f, 64);
+        assertEquals(80f, march.getFloat(60), "raw camera height excludes bob; shader sample origin adds it once");
         assertNotEquals(0f, frame.jitter.x);
     }
 }
