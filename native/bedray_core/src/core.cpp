@@ -322,7 +322,7 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_abi_version(void) try {
 }
 
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
-    return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS | BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS;
+    return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS | BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS | BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION;
 } catch (...) {
     return 0;
 }
@@ -1317,8 +1317,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
     auto frame_graph = std::make_unique<bedray::core::FrameGraphOwner>();
     const auto record = [](void* pointer, const BedrayPathTraceFrameDesc& frame,
-        const BedrayPathTraceGuides* guides, BedrayError* err) {
-        return static_cast<BedrayCore*>(pointer)->path_trace->render(frame, err, guides);
+        const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion, BedrayError* err) {
+        return static_cast<BedrayCore*>(pointer)->path_trace->render(frame, err, guides, motion);
     };
     const auto release = [](void* pointer, std::uint64_t command) {
         return bedray_core_release_recording(static_cast<BedrayCore*>(pointer), command);
@@ -1337,7 +1337,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
 }
 
 static BedrayStatus record_path_trace(BedrayCore* core, const BedrayPathTraceFrameDesc* desc,
-    const BedrayPathTraceGuides* guides, BedrayError* error) {
+    const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion, BedrayError* error) {
     clear_error(error);
     if (core == nullptr || desc == nullptr) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/desc is null");
@@ -1352,15 +1352,15 @@ static BedrayStatus record_path_trace(BedrayCore* core, const BedrayPathTraceFra
     if (guides && (guides->abi_version != BEDRAY_CORE_ABI_VERSION || guides->struct_size != sizeof(*guides)))
         return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "path-trace guide ABI/size mismatch");
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
-    return core->frame_graph->record(*desc, error, guides);
+    return core->frame_graph->record(*desc, error, guides, motion);
 #else
-    return core->path_trace->render(*desc, error, guides);
+    return core->path_trace->render(*desc, error, guides, motion);
 #endif
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
     BedrayCore* core, const BedrayPathTraceFrameDesc* desc, BedrayError* error) try {
-    return record_path_trace(core, desc, nullptr, error);
+    return record_path_trace(core, desc, nullptr, nullptr, error);
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame");
 } catch (...) {
@@ -1372,11 +1372,23 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_guides(
     const BedrayPathTraceGuides* guides, BedrayError* error) try {
     clear_error(error);
     if (!guides) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "guide outputs are null");
-    return record_path_trace(core, desc, guides, error);
+    return record_path_trace(core, desc, guides, nullptr, error);
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate guided path-trace frame");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording guided path trace");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_motion(
+    BedrayCore* core, const BedrayPathTraceFrameDesc* desc, const BedrayPathTraceGuides* guides,
+    const BedrayPathTraceBuffer* motion, BedrayError* error) try {
+    clear_error(error);
+    if (!guides || !motion) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "guide/motion outputs are null");
+    return record_path_trace(core, desc, guides, motion, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace motion frame");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path-trace motion");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* core) try {

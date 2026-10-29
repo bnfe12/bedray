@@ -136,8 +136,8 @@ class RtSlangGbufferGuidesTest {
     @Test
     void theRendererKeepsTheProvenPassUnlessADenoiserIsAskedFor() {
         String renderer = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
-        assertTrue(renderer.contains("RtConfig.SLANG_PATH_TRACE_CPP && denoiseMode != DenoiserMode.DLSS_RR"),
-            "the C++ backend still writes no world-space motion, so NRD stays refused there");
+        assertTrue(renderer.contains("!runtime.library().hasNativeMotion()"),
+            "native NRD needs the additive output feature/export before pass selection");
         assertFalse(renderer.contains("the \" + denoiseMode + \" layout needs the world-space motion buffer\""),
             "the Java Slang path fills NRD's motion now");
         assertTrue(renderer.contains("RtSlangPathPass.supportProblem(runtime, gbuffer)"),

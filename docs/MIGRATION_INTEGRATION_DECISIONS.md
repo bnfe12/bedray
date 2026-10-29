@@ -81,7 +81,10 @@ adapter explicitly maps denoiser array order to shader binding order, notably
 specular before diffuse. The host owns their formats, extent, GENERAL layout and
 retention through exact recording proof, as for output/depth. Native DLSS-RR can
 be selected explicitly with a matching core; AUTO remains gated on live guide
-acceptance, and NRD remains unsupported without primary world-space motion.
+acceptance. NRD additionally requires the NRD_MOTION feature/export and
+`bedray_core_render_path_trace_motion`, forwarding the host's complete vec4 pixel
+buffer through the same graph/pass. Both option bits, guides and the borrowed
+buffer range must agree; host ownership and exact recording proof remain unchanged.
 Independent 18-binding ABI clients stay supported. Native FFM path packing shares Dispatch.writeTo, preserving the
 auto-normal strength bits in entityState.w while normalizing entity metadata to
 the ranges actually bound. Existing ABI-v2 structures are unchanged.

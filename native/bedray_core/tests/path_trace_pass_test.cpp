@@ -1172,6 +1172,46 @@ void test_real_guide_outputs() {
     CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
 }
 
+void test_real_nrd_motion_output() {
+    reset_all();
+    auto bindings = trace_bindings(7, true);
+    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
+    register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
+    BedrayCore core{}; PathTracePass pass;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    auto frame = valid_frame(51); frame.path.flags = 3;
+    BedrayPathTraceGuides guides{BEDRAY_CORE_ABI_VERSION, sizeof(BedrayPathTraceGuides), 101,102,103,104,105,106,107};
+    BedrayPathTraceBuffer motion{0x9001, 32, static_cast<std::uint64_t>(frame.camera.width) * frame.camera.height * 16, 0, 0};
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_UNSUPPORTED);
+    --motion.bytes;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides, &motion), BEDRAY_ERROR_INVALID_ARGUMENT);
+    ++motion.bytes; motion.reserved = 1;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides, &motion), BEDRAY_ERROR_INVALID_ARGUMENT);
+    motion.reserved = 0; frame.path.flags = 1;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides, &motion), BEDRAY_ERROR_INVALID_ARGUMENT);
+    frame.path.flags = 3;
+    CHECK_STATUS(pass.render(frame, &g_error, nullptr, &motion), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(!pass.has_recordings()); CHECK(fake::render_calls.empty());
+    CHECK_STATUS(pass.render(frame, &g_error, &guides, &motion), BEDRAY_OK);
+    const auto& resource = fake::render_calls.front().resources.back();
+    CHECK(resource.binding == 33 && resource.handle == motion.handle && resource.offset == 32 && resource.range == motion.bytes);
+    CHECK_STATUS(pass.destroy(), BEDRAY_ERROR_IN_USE);
+    CHECK_STATUS(pass.release_recording(51), BEDRAY_OK);
+    frame.command_buffer = 52; frame.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+    fake::fail_render_at(0, BEDRAY_ERROR_VULKAN);
+    CHECK_STATUS(pass.render(frame, &g_error, &guides, &motion), BEDRAY_ERROR_VULKAN);
+    CHECK(fake::render_calls.back().program == kTraceSceneProgram);
+    CHECK(resource_handle(fake::render_calls.back().resources, 33) == motion.handle);
+    pass.discard_recording(52); CHECK_STATUS(pass.release_recording(52), BEDRAY_OK);
+    fake::fail_render_at(-1, BEDRAY_OK);
+    frame.command_buffer = 53; frame.path.flags = 0;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(resource_handle(fake::render_calls[fake::render_calls.size()-2].resources, 33) != motion.handle);
+    CHECK_STATUS(pass.release_recording(53), BEDRAY_OK);
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    CHECK(fake::buffers.empty()); CHECK(fake::images.empty()); CHECK(fake::faults == 0);
+}
+
 } // namespace
 
 int main() {
@@ -1187,6 +1227,7 @@ int main() {
     test_device_lost_configure_cleanup();
     test_guide_aware_program_contract();
     test_real_guide_outputs();
+    test_real_nrd_motion_output();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "bedray_path_trace_pass_test FAILED: %d failure(s)\n", g_failures);
