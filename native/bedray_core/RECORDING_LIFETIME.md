@@ -125,6 +125,31 @@ Java adapter keeps its recording identities for that callback and borrows the
 runtime's cached program without closing it on adapter recreation. No shader
 source, image allocation, transition, submission or wait is added.
 
+## Volumetric march/apply (additive coarse calls)
+
+VolumetricPass owns one RGBA32F history generation (ceil(W/2) by twice ceil(H/2)),
+the immutable 608-byte frame upload per recording, descriptor packing and all
+entry/march/apply/exit barriers. Separate 48-byte configuration and 120-byte frame
+descriptors preserve existing ABI-v2 layouts. Legacy/native scene programs are
+selected by table identity, never by equal record size. Both use world-only
+visibility, as their five-binding entry carries no entity streams.
+
+Native history authority derives consecutive frame validity, overrides both push
+frame indices and publishes history only after the complete group records.
+Resize retires old images behind exact pins. Discard invalidates the matching
+generation and forces fresh image/layout state; older generations cannot destroy
+newer images. Upload failure before commands releases unused pins, while partial
+dispatch failure retains the recording for host discard. Device loss keeps the
+whole affected pool until all pending command buffers receive proof. Close and
+reconfigure refuse pending uses. Programs and output/depth/TLAS/table stay borrowed.
+
+The host adapter shares typed frame preparation with the path pass and supplies
+camera/settings/POD only. It uses typed exposure 1 consistently in march/apply;
+it explicitly refuses nonzero view-bob origin until the shader owner supplies
+that coordinate contract. No Java image allocator/descriptor loop or GLSL
+fallback is introduced. The atmosphere callback releases/discards this pass with
+bloom under the same host recording proof.
+
 Current limitations:
 
 The host distinguishes successful completion from abandonment. The additive

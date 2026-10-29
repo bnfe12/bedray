@@ -1217,3 +1217,35 @@ Existing limitations are preserved: binary world-only visibility, no shaft
 bob-origin correction, no material/alpha filtering. Exposure/reprojection must
 use the typed display contract when integrated. This is a separate interface
 PR marked needs shader owner review; no GPU/game or visual evidence.
+
+## 2026-10-29 — native volumetric history and host integration
+
+Base `47b0d6984253f31b284f216994a1fcb0ef02a2e6` includes the separately reviewed
+interface PR #30 plus the shader owner's NRD/spatial updates. VolumetricPass owns
+half-resolution RGBA32F history, per-recording 608-byte uploads, 96/24-byte push
+packing/history overrides, five/four-resource descriptors and barriers. Separate
+48/120-byte coarse descriptors and exports are additive; existing ABI-v2 layouts
+are unchanged. Both scene layouts are validated/selected independently.
+
+The Java settings adapter sends one call for march/apply, shares frame conversion
+with path tracing, uses typed display exposure 1 and current-minus-previous camera
+delta, and participates in existing exact atmosphere completion/discard. Requested
+god rays are connected before bloom. The existing shader's nonzero bob-origin
+limitation is explicitly reported rather than rendered with incorrect coordinates;
+binary world-only visibility remains an explicit shader contract.
+
+Native revision `400bbea29d2c3595cd6183e0c3a2b8a821f95126` passes
+[Windows CI 40840132518](https://github.com/bnfe12/bedray/actions/runs/40840132518):
+candidate core 21/21 + scene 1/1 + lifetime 1/1; baseline core 15/15 + scene 1/1 +
+lifetime 1/1; ABI-v2 probes exit 0. Tests cover descriptors/push/groups, native and
+legacy programs, consecutive/gapped/reset history, resize and discard generations,
+pre-record upload failure, partial dispatch failure and device loss with two
+pending records. No C++ warnings were reported in that run.
+
+Java compilation, all 19 production AOT entries and 148 selected tests pass,
+zero failures/errors/skips (56s). The test filters cover recording lifetime,
+backend/state, RtSlang*, settings, path/manifest/native packets, bloom packets and
+stats layout; new tests check every coarse packet offset/payload slice, exposure,
+delta direction, native history ownership and explicit bob handling. SDK/JDK,
+local dependencies and bounded offline JVM settings match preceding entries.
+No GPU/game, visual parity or performance evidence; native path remains opt-in.
