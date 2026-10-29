@@ -275,3 +275,84 @@ struct LegacySectionTraversal : ISceneTracer {
         return hit.hit ? hit.t : ray.tMax;
     }
 }
+
+// The same TLAS and the same section decode, with no entity leg.
+//
+// A pass whose instance mask cannot commit an entity instance still must not
+// carry an `EntityGeometry`: Slang compiles a resource field that no binding
+// ever assigns to an OpUndef descriptor pointer, and the NVIDIA driver takes an
+// access violation inside vkCreateComputePipelines when a module reads one. That
+// is not a VkResult and not a Java exception, so the JVM and the game die with
+// it (docs/AUDIT_DEFECTS_AND_ISSUES.md P0-9). `volumetric_march` is the world
+// half of the scene and binds no entity stream, so it uses this traversal.
+struct LegacySectionWorldTraversal : ISceneTracer {
+    RaytracingAccelerationStructure tlas;
+    StructuredBuffer<LegacySection> sections;
+    uint instanceMask;
+
+    SurfaceHit decodeHit(Ray ray, uint instanceId, uint geometryIndex, uint primitiveId,
+            float2 bary, float t) {
+        return legacyHitToSurface(sections, ray, instanceId, geometryIndex, primitiveId, bary, t);
+    }
+
+    SurfaceHit traceNearest(Ray ray) {
+        SurfaceHit result = missHit(ray.tMax);
+        if (ray.tMax <= ray.tMin) return result;
+
+        RayDesc desc;
+        desc.Origin = ray.origin;
+        desc.Direction = ray.direction;
+        desc.TMin = ray.tMin;
+        desc.TMax = ray.tMax;
+
+        RayQuery<RAY_FLAG_NONE> query;
+        query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);
+        while (query.Proceed()) {
+            if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                query.CommitNonOpaqueTriangleHit();
+            }
+        }
+
+        if (query.CommittedStatus() == COMMITTED_NOTHING) return result;
+        return decodeHit(ray, query.CommittedInstanceID(), query.CommittedGeometryIndex(),
+            query.CommittedPrimitiveIndex(), query.CommittedTriangleBarycentrics(),
+            query.CommittedRayT());
+    }
+
+    SurfaceHit traceClosest(Ray ray) {
+        return traceNearest(ray);
+    }
+
+    // A section cannot move: its geometry is uploaded once and the world around a
+    // player is static within a frame, so the interface default (zero motion) is
+    // exactly the right answer here and is never overridden.
+
+    VisibilityResult traceVisibility(Ray ray) {
+        if (ray.tMax <= ray.tMin) return visibleResult(ray.tMax);
+
+        RayDesc desc;
+        desc.Origin = ray.origin;
+        desc.Direction = ray.direction;
+        desc.TMin = ray.tMin;
+        desc.TMax = ray.tMax;
+
+        RayQuery<RAY_FLAG_NONE> query;
+        query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
+        while (query.Proceed()) {
+            if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                query.CommitNonOpaqueTriangleHit();
+            }
+        }
+
+        if (query.CommittedStatus() == COMMITTED_NOTHING) return visibleResult(ray.tMax);
+        SurfaceHit blocker = decodeHit(ray, query.CommittedInstanceID(),
+            query.CommittedGeometryIndex(), query.CommittedPrimitiveIndex(),
+            query.CommittedTriangleBarycentrics(), query.CommittedRayT());
+        return blockedResult(blocker, float3(0.0));
+    }
+
+    float traceDistance(Ray ray) {
+        SurfaceHit hit = traceClosest(ray);
+        return hit.hit ? hit.t : ray.tMax;
+    }
+}

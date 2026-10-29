@@ -4,6 +4,85 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — The march's unassigned entity handle, and why a replay verdict is not a refusal (L1 compile, L2 unit, driver replay, no live frame yet)
+
+Branch: `refactor/slang-pipeline`, on top of `24b0617`. Two owner-reported
+crashes (`Краш`) in the testbed instance were the same fault: `hs_err_pid12888.log`
+(16:54) and `hs_err_pid12088.log` (20:50) both take
+`EXCEPTION_ACCESS_VIOLATION (0xc0000005), reading address 0x0000000000000004`
+with `# Problematic frame: # C [nvoglv64.dll+0x13f4ae]`, and both Java stacks end
+at `RtSlangVolumetricPass.<init>` → `SlangRuntime.program` →
+`BedrayCoreNative.registerProgram`, immediately after `[VKB-ATMO] … shafts_pass=true`.
+The defect is in `passes/volumetric_march.slang`: the adapter assigned `tlas`,
+`sections` and `instanceMask` on a `LegacySectionTraversal`, leaving the struct's
+`EntityGeometry entities` resource fields unassigned. Slang lowers that to an
+`OpUndef` descriptor pointer, `marchLightShaft` reaches `decodeHit`, and the
+entity branch dereferences the undefined handle — even though the host marches
+with `instanceMask = 1`, so an entity could never be committed.
+
+Proof by mutation, on the same module, bindings and layout (headless replay of
+the four Vulkan steps `bedray_core_register_program` performs, RTX 5060 Ti):
+
+| Variant | What it adds | Replay |
+|---|---|---|
+| `m5_legacydecode` | section decode only | `4/4 pipeline ok` |
+| `m7_undefentity` | the same plus an unassigned `EntityGeometry` leg | `Problematic frame: # C [nvoglv64.dll…]` |
+
+Fix and gate:
+
+- `traversal/legacy_section_traversal.slang` gains `LegacySectionWorldTraversal`
+  — same TLAS, same `legacyHitToSurface` decode, no entity leg, and
+  `surfaceMotion` left at the interface default (a section does not move within a
+  frame). `volumetric_march.slang` uses it.
+- `SlangPassDriverGate.undefinedDescriptorPointers(byte[])` counts `OpUndef`
+  results whose type is a pointer into a descriptor storage class
+  (`UniformConstant`/`Uniform`/`StorageBuffer`), and `SlangRuntime.program`
+  refuses such a module before it reaches the driver, naming
+  `-Dbedray.slang.passes=<name>` (or `all`) as the override. The gate reads bytes
+  instead of a name list, so a shader fix lifts its own refusal.
+- `RtAtmosphere` no longer creates its own `BedrayCore`. The branch already grew
+  `SlangRuntimePool` (one core per `VkDevice`, refcounted leases) in `fb4d5d8`,
+  so the atmosphere now takes a lease from it and hands that lease back in
+  `destroy()`, after its volumetric and bloom passes let go of their recordings,
+  and the renderer releases its own lease only after `atmosphere.destroy()` in
+  both shutdown branches. A second core on the same device was the first
+  hypothesis for this crash and the replay disproved it — the fault reproduces
+  with a single core — but the shape is still wrong (two descriptor pools, two
+  pipeline caches, and a shutdown order that can close a core while another
+  holder still pins a recording), so `SlangRuntimeOwnershipTest` pins exactly one
+  creator (the pool) plus the release-before-close order. `RtAtmosphere` also
+  holds a `shaftsUnavailable` flag now: a pass whose programs refuse must cost
+  one `LOGGER.warn`, not an exception on every frame.
+
+| Check | Expected | Observed |
+|---|---|---|
+| `slangc` on the patched adapter | exit 0 | exit 0, 26008 B module, 5 bindings unchanged |
+| `OpUndef` descriptor pointers, all 19 AOT artifacts, pre-fix tree | only the crashing module | `volumetric_march` 2, every other module 0 |
+| same, rebuilt tree | 0 | 0 for all 19 |
+| driver replay after the fix | no fault | `volumetric_march 4/4 pipeline ok`, `volumetric_apply 4/4 pipeline ok` |
+| `:common:test` | 0 failures | 837 tests / 146 files, 0 failures, 0 errors, 3 skipped |
+| mutation proof of the new guards | red | reverting one line to `LegacySectionTraversal traversal;` fails `no_bundled_module_reads_an_unassigned_descriptor_handle`, `the_march_module_is_clean_after_losing_its_entity_leg` and `onlyTheSectionProviderChangesAtTheTwoBindingBoundaries`; restored byte-identical (sha256 OK) and green again |
+
+What this batch also corrects, and it matters more than the shader fix: the
+gate first shipped as two hard-coded name lists taken from a single headless
+replay (12 allowed / 7 refused). The game's own log disproves three of the
+refusals — `26.3(1)/minecraft/logs/latest.log` at 20:50:16 records
+`registered SlangProgram[path_trace, 26 binding(s), 112 B push]`,
+`[path_trace_scene, …]`, `[restir_spatial, 8 binding(s), 64 B push]`,
+`[path_display]`, `[sodium_dequantize]`, `[particles_composite]`, and the other
+instance adds the four `bloom_*`. The replay brings up a leaner device than the
+game's Vulkan backend, so a replay fault is only a refusal when no live frame
+has ever registered the module; the shipped rule is the byte scan plus
+`REPLAY_REFUSED = {volumetric_march_scene, rc_probe_trace, velocity_reproject}`,
+and `SlangPassDriverGateTest` pins the live-registered names as permitted.
+Left as-is, the earlier lists would have switched path tracing off in the Java
+host — the opposite of what the owner was testing.
+
+Evidence level: L1 (compile), L2 (unit), plus a driver replay on the owner's GPU.
+**No owner-verified frame yet.** `volumetric_march_scene` still refuses, so
+`RtSlangVolumetricPass` cannot construct and light shafts stay off this build
+(fail-soft in `RtAtmosphere`, one `LOGGER.warn`); path tracing is unaffected.
+
 ## 2026-10-29 — Native AOT denoiser preparation (L1/L2)
 
 Source `1d7a04bbea7003bf031b77360c894198f488f97f`, synchronized with audit
@@ -137,7 +216,6 @@ line-ending diff in a commit. The CRLF form is `git show … | sed 's/$/\r/'`,
 and the hash comparison is what proves it.
 
 No live-frame claim here: this is an ABI and build-configuration audit, L0/L2.
-
 
 ## 2026-10-29 — Radiance Cascades merge physics: what is and is not left (L2 unit, mutation proof)
 
@@ -1624,7 +1702,6 @@ stats layout; new tests check every coarse packet offset/payload slice, exposure
 delta direction, native history ownership and explicit bob handling. SDK/JDK,
 local dependencies and bounded offline JVM settings match preceding entries.
 No GPU/game, visual parity or performance evidence; native path remains opt-in.
-
 
 ## 2026-10-29 — P1 audit pass: completion-proof retirement and module wiring (L2 tests; no GPU)
 

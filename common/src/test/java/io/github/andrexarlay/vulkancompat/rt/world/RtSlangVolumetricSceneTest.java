@@ -54,6 +54,13 @@ class RtSlangVolumetricSceneTest {
         assertTrue(legacy.contains("[[vk::binding(2, 0)]] StructuredBuffer<LegacySection> sections;"));
         assertTrue(legacy.contains("traversal.sections = sections;"));
         assertTrue(legacy.contains("traversal.instanceMask = pc.instanceMask;"));
+        // The march has no entity binding, so it must not name the traversal that
+        // carries an EntityGeometry field: Slang lowers the unassigned handle to an
+        // OpUndef descriptor pointer and the NVIDIA driver faults on it.
+        assertTrue(legacy.contains("LegacySectionWorldTraversal traversal;"),
+            "volumetric_march must take the world-only traversal");
+        assertFalse(legacy.contains("LegacySectionTraversal traversal;"));
+        assertFalse(legacy.contains("entities"));
         assertTrue(scene.contains("[[vk::binding(2, 0)]] StructuredBuffer<GeometrySection> sections;"));
         assertTrue(scene.contains("GeometryProvider geometry;"));
         assertTrue(scene.contains("geometry.sections = sections;"));
