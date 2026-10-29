@@ -127,10 +127,9 @@ explicitly.
 
 Known limits of the current Java host:
 
-* the seven DLSS-RR guide channels are written by the entry pass when the host
-  binds them, but `AUTO` still disables the G-buffer denoiser while Slang is
-  active until a live frame consumes them; NRD stays refused because the
-  primary hit's world-space motion is not filled;
+* the seven DLSS-RR guide channels and NRD's `IN_MV` vec4 are written by the
+  entry pass when the host binds them, but `AUTO` still keeps the GLSL pass
+  while a denoiser is selected until a live frame consumes them;
 * no auto exposure; `FrameConstants.exposure` is fixed at 1 and the display
   push also uses 1;
 * a two-colour gradient sky derived from one game sky colour, not `rt_sky.glsl`;
@@ -428,13 +427,15 @@ the pass must not silently reinterpret `rt_depth`.
   decides resets from camera movement, scene changes and settings. A C++ reset
   policy must use stable identity (camera/scene revisions) and must not infer
   history validity from a frame count.
-* G-buffer denoisers: the Slang entry pass now writes the seven DLSS-RR guide
-  channels in-shader when the host binds them, so DLSS-RR no longer needs a
-  separate guide pass; NRD additionally needs the primary hit's world-space
-  motion, which nothing fills yet. The C++ pass does not bind the guides, so
-  the mode resolver must report the unsupported combination instead of
-  silently disabling the denoiser. The existing Java `AUTO` fallback is
-  reference behaviour, not the target selection policy.
+* G-buffer denoisers: the Slang entry pass writes the seven DLSS-RR guide
+  channels (bindings 26-32) and NRD's per-pixel `IN_MV` vec4 (binding 33) when
+  the host binds them, so neither denoiser needs a separate guide pass. The C++
+  pass accepts 18-, 25- and 26-binding programs: the 25/26 sets get one-texel
+  guide stand-ins, the 26 set also gets a 16-byte `IN_MV` stand-in, and both
+  option bits stay clear. It writes no guides, so a C++ host that selects a
+  denoiser must still report the unsupported combination instead of silently
+  disabling it. The existing Java `AUTO` fallback is reference behaviour, not
+  the target selection policy.
 
 ## 8. Frame integration
 

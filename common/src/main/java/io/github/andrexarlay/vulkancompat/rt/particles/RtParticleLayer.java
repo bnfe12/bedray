@@ -206,9 +206,7 @@ public final class RtParticleLayer {
             composite = new RtParticleComposite(runtime);
             LOGGER.info("[VKB-RT] particles composite pipeline ready");
         }
-        io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.fullMemoryBarrier(cmd);
         composite.record(cmd, layerView, rtOutputView, width, height, 1.0f);
-        io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.fullMemoryBarrier(cmd);
         compositedFrames++;
         return true;
     }

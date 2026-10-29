@@ -16,6 +16,28 @@ VKAPI_ATTR void VKAPI_CALL throwing_destroy(VkDevice, VkSampler, const VkAllocat
     if (throw_allocation) throw std::bad_alloc{};
     throw 42;
 }
+VKAPI_ATTR void VKAPI_CALL throwing_barrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags,
+    VkDependencyFlags, std::uint32_t, const VkMemoryBarrier*, std::uint32_t,
+    const VkBufferMemoryBarrier*, std::uint32_t, const VkImageMemoryBarrier*) {
+    if (throw_allocation) throw std::bad_alloc{};
+    throw 42;
+}
+void particle_exception_boundaries() {
+    BedrayCore core;
+    BedrayProgram program;
+    program.handle = 17; program.push_constant_bytes = 16;
+    program.bindings = {{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, 0}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, 0}};
+    core.programs.push_back(&program); core.cmd_pipeline_barrier = throwing_barrier;
+    BedrayError error{};
+    BedrayParticlesFrameDesc frame{BEDRAY_CORE_ABI_VERSION, sizeof(BedrayParticlesFrameDesc), 11, 17, 21, 22, 19, 9, 1, 0};
+    require(bedray_core_render_particles(nullptr, &frame, &error) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    require(bedray_core_render_particles(&core, nullptr, &error) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    for (unsigned fault = 0; fault < 2; ++fault) {
+        throw_allocation = fault == 0;
+        const auto expected = throw_allocation ? BEDRAY_ERROR_OUT_OF_MEMORY : BEDRAY_ERROR_INTERNAL;
+        require(bedray_core_render_particles(&core, &frame, &error) == expected && error.status == expected);
+    }
+}
 void exception_boundaries() {
     auto* core = new BedrayCore;
     core->create_sampler = throwing_create;
@@ -64,6 +86,7 @@ int main() {
     require(bedray_core_render_path_trace_guides(nullptr, nullptr, &guides, &guide_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
     require(bedray_core_render_path_trace_guides(nullptr, nullptr, nullptr, &guide_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
     exception_boundaries();
+    particle_exception_boundaries();
     auto* core = new BedrayCore;
     BedrayBloomDesc bloom{};
     BedrayError bloom_error{};

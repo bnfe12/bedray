@@ -55,9 +55,11 @@ The same opaque graph callback consumes both input PODs synchronously; it retain
 only the existing command-buffer recording. History and barrier authority remain
 in the pass. The original call still rejects enabled writes without real targets.
 
-- `bedray_core_release_recording` remains the only release call: the core drops
-  its dispatch records and the pass completes its image/buffer pins in the same
-  function. An unknown command buffer is a no-op.
+- `bedray_core_release_recording` is the completion release: the core drops its
+  dispatch records and the pass completes its image/buffer pins in the same
+  function. An unknown command buffer is a no-op. The additive
+  `bedray_core_discard_recording` below invalidates history first and then uses
+  the same release path; nothing else frees a recording.
 - A failure before the first dispatch was recorded — image creation, the
   FrameConstants upload, a pin failure — is provably discardable: the pass
   completes its own pins and leaves no recording.
@@ -104,6 +106,49 @@ receive host proof, then releases that pool together. No individual lost-owner
 use operation is assumed to remain available. No frame delay, submission, wait,
 new device or destruction of borrowed host views is introduced. Tests use a
 shared fake driver and provide no GPU/game evidence.
+
+## Particle/weather composite (additive coarse call)
+
+`bedray_core_render_particles` consumes the versioned/sized 56-byte
+BedrayParticlesFrameDesc and records the existing AOT particles_composite pass.
+The native module validates the 16-byte push and sampled-image/storage-image
+binding contract, packs both descriptors and the push, and owns the entry/exit
+memory barriers. Java validates 8x8x1 reflection and supplies only the borrowed
+program, command buffer, distinct GENERAL views, extent and finite strength.
+
+The pass is stateless: the existing per-dispatch core recording already retains
+its pipeline/descriptors until release/discard, so it has no duplicate resource
+owner or configure/destroy lifecycle. Host particle/weather and output images
+remain retained through the same exact proof. A partial call failure requires
+discarding the entire host recording; no frame delay frees descriptors. The
+Java adapter keeps its recording identities for that callback and borrows the
+runtime's cached program without closing it on adapter recreation. No shader
+source, image allocation, transition, submission or wait is added.
+
+## Volumetric march/apply (additive coarse calls)
+
+VolumetricPass owns one RGBA32F history generation (ceil(W/2) by twice ceil(H/2)),
+the immutable 608-byte frame upload per recording, descriptor packing and all
+entry/march/apply/exit barriers. Separate 48-byte configuration and 120-byte frame
+descriptors preserve existing ABI-v2 layouts. Legacy/native scene programs are
+selected by table identity, never by equal record size. Both use world-only
+visibility, as their five-binding entry carries no entity streams.
+
+Native history authority derives consecutive frame validity, overrides both push
+frame indices and publishes history only after the complete group records.
+Resize retires old images behind exact pins. Discard invalidates the matching
+generation and forces fresh image/layout state; older generations cannot destroy
+newer images. Upload failure before commands releases unused pins, while partial
+dispatch failure retains the recording for host discard. Device loss keeps the
+whole affected pool until all pending command buffers receive proof. Close and
+reconfigure refuse pending uses. Programs and output/depth/TLAS/table stay borrowed.
+
+The host adapter shares typed frame preparation with the path pass and supplies
+camera/settings/POD only. It uses typed exposure 1 consistently in march/apply;
+it explicitly refuses nonzero view-bob origin until the shader owner supplies
+that coordinate contract. No Java image allocator/descriptor loop or GLSL
+fallback is introduced. The atmosphere callback releases/discards this pass with
+bloom under the same host recording proof.
 
 Current limitations:
 

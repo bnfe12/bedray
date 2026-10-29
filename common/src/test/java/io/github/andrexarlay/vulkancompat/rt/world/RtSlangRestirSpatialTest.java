@@ -198,8 +198,8 @@ class RtSlangRestirSpatialTest {
         String pass = read(PASS);
         String host = read(HOST);
         structFieldsInOrder(pass);
-        assertEquals(64, RtSpatialReuseSlangPass.PUSH_BYTES, "RestirSpatialPush is four words of state, one float4 and"
-            + " a float plus its padding");
+        assertEquals(64, RtSpatialReuseSlangPass.PUSH_BYTES, "RestirSpatialPush is four words of state, one float4,"
+            + " a float, its padding and the entity atlas size");
         assertTrue(host.contains("static final int PUSH_BYTES = 64;"), "and the host states it");
         assertTrue(host.contains("if (manifest.pushConstantBytes() != PUSH_BYTES)"),
             "refusing a shader that pushes a different block before the first dispatch");
@@ -218,7 +218,7 @@ class RtSlangRestirSpatialTest {
             push.put(i, (byte) 0x5A);
         }
         new RtSpatialReuseSlangPass.Spatial(7, 1, 0, RtSpatialReuseSlangPass.SPATIAL_ENABLED,
-            1.5f, -2.5f, 3.5f, 128f).writeTo(push);
+            1.5f, -2.5f, 3.5f, 128f, 512).writeTo(push);
         assertEquals(7, push.getInt(0), "frame index");
         assertEquals(1, push.getInt(4), "parity half the trace pass wrote");
         assertEquals(0, push.getInt(8), "checker phase");
@@ -227,6 +227,7 @@ class RtSlangRestirSpatialTest {
         assertEquals(-2.5f, push.getFloat(20), 0f, "camera-relative y");
         assertEquals(3.5f, push.getFloat(24), 0f, "camera-relative z");
         assertEquals(128f, push.getFloat(32), 0f, "the trace pass's ray window");
+        assertEquals(512, push.getInt(48), "the captured entity atlas' texels per side");
         for (int i = 0; i < push.capacity(); i++) {
             assertTrue(push.get(i) != (byte) 0x5A, "offset " + i + " is never written: the host would push"
                 + " uninitialised stack memory");
@@ -236,7 +237,8 @@ class RtSlangRestirSpatialTest {
     private static void structFieldsInOrder(String pass) {
         String push = block(pass, "struct RestirSpatialPush {");
         int at = -1;
-        for (String field : List.of("uint4  state", "float4 cameraRelative", "float  maxDistance", "float3 pad")) {
+        for (String field : List.of("uint4  state", "float4 cameraRelative", "float  maxDistance", "float  pad0",
+            "float  pad1", "float  pad2", "uint   entityAtlasSize", "uint   pad3", "uint   pad4", "uint   pad5")) {
             int next = push.indexOf(field);
             assertTrue(next > at, "RestirSpatialPush must declare " + field + " in this order: " + push);
             at = next;
@@ -249,7 +251,7 @@ class RtSlangRestirSpatialTest {
         String pass = read(PASS);
         String host = read(HOST);
         for (String binding : new String[] {"albedoAtlas", "materialAtlas", "normalAtlas", "frame", "emitters",
-            "reservoirs"}) {
+            "reservoirs", "entityRects", "entityTexels"}) {
             assertTrue(bindingLine(pass, binding) >= 0, binding + " must be bound by number in the shader");
             assertTrue(host.contains("new Expected(\"" + binding + "\""), binding + " has no host expectation");
             assertTrue(host.contains("SlangProgram.Resource.sampled(\"" + binding + "\"")
@@ -257,11 +259,12 @@ class RtSlangRestirSpatialTest {
                     || binding.equals("frame"),
                 binding + " is expected but never supplied");
         }
-        assertEquals(6, count(pass, "[[vk::binding("), "six bindings, and the manifest count is checked against them");
+        assertEquals(8, count(pass, "[[vk::binding("), "eight bindings, and the manifest count is checked against them");
         assertTrue(host.contains("if (manifest.bindings().size() != EXPECTED.size())"),
             "a binding the host forgot to fill fails at load, not as a null descriptor");
         for (String[] pair : new String[][] {
-            {"frame", "FRAME_CONSTANTS_BYTES"}, {"emitters", "EMITTER_BYTES"}, {"reservoirs", "RESERVOIR_BYTES"} }) {
+            {"frame", "FRAME_CONSTANTS_BYTES"}, {"emitters", "EMITTER_BYTES"}, {"reservoirs", "RESERVOIR_BYTES"},
+            {"entityRects", "ENTITY_VECTOR_BYTES"}, {"entityTexels", "ENTITY_SCALAR_BYTES"} }) {
             assertTrue(host.contains("requireElementBytes(manifest, \"" + pair[0] + "\", "
                 + "RtPathTraceSlangPass." + pair[1] + ")"),
                 pair[0] + " holds " + pair[1] + ": the stride the host allocated has to be the stride the shader reads");
@@ -287,8 +290,9 @@ class RtSlangRestirSpatialTest {
             "the push carries no extent: there is only one source for the render size, so a pooled record cannot be"
                 + " indexed against a resolution the ring no longer has");
         assertTrue(game.contains("spatialReuse.record(cmd, new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(),\n"
-            + "                    views.normal(), sampler), emitters, reservoirRange, trace.frameResource(), width, height,"),
-            "the host binds the trace pass's own frame upload");
+            + "                    views.normal(), sampler), emitters, reservoirRange, capturedEntities, trace.frameResource(),\n"
+            + "                width, height,"),
+            "the host binds the trace pass's own frame upload and the captured entity atlas");
         assertTrue(host.contains("record(VkCommandBuffer cmd, RtPathTraceSlangPass.Atlases atlases,"),
             "and takes the resources from the trace pass's own records");
         assertTrue(host.contains("program.groups(width, 0), program.groups(height, 1), 1"),
@@ -308,13 +312,15 @@ class RtSlangRestirSpatialTest {
     void aMissingSpatialKernelDegradesToTemporalOnly() {
         String host = read(HOST);
         String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
-        assertTrue(host.contains("static Optional<RtSpatialReuseSlangPass> create(SlangRuntime runtime)"),
+        assertTrue(host.contains("static Optional<RtSpatialReuseSlangPass> create(SlangRuntime runtime, "
+            + "RtPathTraceSlangPass.Entities entityFallback)"),
             "creation yields empty with the reason in the log");
         assertTrue(host.contains("LOGGER.info(\"[VKB-RT] spatial reuse off: {}\""),
             "as an info line: the renderer is still working");
         assertFalse(host.contains("program.close();"),
             "the wrapper borrows its program from the runtime cache and cannot retire it independently");
-        assertTrue(game.contains("spatialReuse = RtSpatialReuseSlangPass.create(runtime).orElse(null);"),
+        assertTrue(game.contains("spatialReuse = RtSpatialReuseSlangPass.create(runtime, trace.entityFallback())"
+            + ".orElse(null);"),
             "assigned outside the try that builds the trace pass, so a missing stage cannot fail path tracing");
         assertTrue(game.contains("return backend.spatialAvailable() && diActive() && RtSettings.pathRestirSpatial();"),
             "the mode log reports the stage only when it exists, is enabled and its parent is on");

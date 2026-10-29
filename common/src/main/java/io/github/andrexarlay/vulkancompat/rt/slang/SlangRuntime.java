@@ -50,7 +50,7 @@ public final class SlangRuntime implements AutoCloseable {
     private final int apiVersion;
     private final VulkanDevice hostDevice;
     private final Map<String, SlangProgram> programs = new HashMap<>();
-    private boolean closed;
+    private final RuntimeShutdown shutdown = new RuntimeShutdown();
 
     private SlangRuntime(BedrayCoreNative library, long core, BedrayCoreNative.Capabilities capabilities,
                          int enabledCapabilities, VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
@@ -140,7 +140,7 @@ public final class SlangRuntime implements AutoCloseable {
      * Missing artifacts and registration failures are surfaced to the caller.
      */
     public Optional<SlangProgram> program(String name) {
-        if (closed) {
+        if (!shutdown.isOpen()) {
             throw new IllegalStateException("SlangRuntime is closed");
         }
         SlangProgram existing = programs.get(name);
@@ -172,28 +172,28 @@ public final class SlangRuntime implements AutoCloseable {
     }
 
     public boolean isClosed() {
-        return closed;
+        return shutdown.isClosed();
     }
 
     /** Sampler lifetime is tied to this runtime's native core and its recordings. */
     public long atlasSampler() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return library.atlasSampler(core);
     }
 
     public long linearSampler() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return library.linearSampler(core);
     }
 
     /** Creates a native image owner on the same game-owned logical device. */
     public BedrayGpuImagesNative createImageOwner(long budgetBytes) {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return new BedrayGpuImagesNative(library, physicalDevice, device, budgetBytes);
     }
 
     public BedrayGpuBuffersNative createBufferOwner(long budgetBytes) {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return new BedrayGpuBuffersNative(library, physicalDevice, device, budgetBytes);
     }
 
@@ -203,13 +203,13 @@ public final class SlangRuntime implements AutoCloseable {
      * this runtime and are invalid after {@link #close()}.
      */
     public BedrayCoreNative library() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return library;
     }
 
     /** @see #library() */
     public long core() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return core;
     }
 
@@ -219,17 +219,17 @@ public final class SlangRuntime implements AutoCloseable {
      * a device, queue or swapchain.
      */
     public VkInstance instance() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return instance;
     }
 
     public VkPhysicalDevice physicalDevice() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return physicalDevice;
     }
 
     public VkDevice device() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return device;
     }
 
@@ -239,65 +239,52 @@ public final class SlangRuntime implements AutoCloseable {
      * submission completed.
      */
     public VulkanDevice hostDevice() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return hostDevice;
     }
 
     /** Address of {@code vkGetInstanceProcAddr}, as the core received it. */
     public long getInstanceProcAddr() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return getInstanceProcAddr;
     }
 
     /** Address of {@code vkGetDeviceProcAddr}, as the core received it. */
     public long getDeviceProcAddr() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return getDeviceProcAddr;
     }
 
     /** Vulkan API version of the physical device, as the core received it. */
     public int apiVersion() {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         return apiVersion;
     }
 
     /** Host calls this only after completion or discard of this recording. */
     public void releaseRecording(long commandBuffer) {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         library.releaseRecording(core, commandBuffer);
     }
 
     public void discardRecording(long commandBuffer) {
-        if (closed) throw new IllegalStateException("SlangRuntime is closed");
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
         library.discardRecording(core, commandBuffer);
     }
 
     @Override
     public void close() {
-        if (closed) {
-            return;
-        }
+        if (shutdown.isClosed()) return;
         library.requireResourceOwnersReleased();
-        for (SlangProgram program : programs.values()) {
-            try {
-                program.close();
-            } catch (RuntimeException e) {
-                LOGGER.warn("[VKB-SLANG] destroy program {}: {}", program.name(), e.getMessage());
-            }
-        }
-        programs.clear();
-        // The native core rejects shutdown while a recording is still registered. That is a host bug (the caller
-        // must release after GPU completion or discard), and destroying pools under in-flight work would be worse
-        // than leaking the core until process exit: log it and keep the library loaded instead of throwing out of
-        // the renderer's shutdown path.
         try {
-            library.destroy(core);
-        } catch (RuntimeException e) {
-            LOGGER.error("[VKB-SLANG] core shutdown refused ({}); keeping {} loaded", e.getMessage(),
-                BedrayCoreLocator.FILE);
-            return;
+            shutdown.close(() -> library.destroy(core), () -> {
+                for (SlangProgram program : programs.values()) program.coreDestroyed();
+                programs.clear();
+            }, library::close);
+        } catch (RuntimeException failure) {
+            if (!shutdown.isOpen()) throw failure;
+            LOGGER.error("[VKB-SLANG] core shutdown refused ({}); keeping {} and cached programs usable",
+                failure.getMessage(), BedrayCoreLocator.FILE);
         }
-        library.close();
-        closed = true;
     }
 }

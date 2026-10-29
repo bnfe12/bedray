@@ -117,6 +117,26 @@ constexpr ProgramBinding kTraceBindings[] = {
     {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 };
 
+// The seven denoiser guide images and the NRD motion vec4 exist so every host sees the same descriptor set; the
+// C++ host leaves their option bits clear and binds one-texel/one-element stand-ins.
+constexpr ProgramBinding kGuideBindings[] = {
+    {26, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {27, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {32, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {33, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+};
+
+std::vector<ProgramBinding> trace_bindings(std::size_t guide_count, bool motion) {
+    std::vector<ProgramBinding> bindings(std::begin(kTraceBindings), std::end(kTraceBindings));
+    for (std::size_t i = 0; i < guide_count; ++i) bindings.push_back(kGuideBindings[i]);
+    if (motion) bindings.push_back(kGuideBindings[7]);
+    return bindings;
+}
+
 constexpr ProgramBinding kDisplayBindings[] = {
     {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
     {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
@@ -136,6 +156,8 @@ constexpr ProgramBinding kSpatialBindings[] = {
     {16, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
     {18, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
     {19, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+    {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+    {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 };
 
 void clear_programs() {
@@ -158,24 +180,25 @@ std::vector<ProgramBinding> altered_copy(const ProgramBinding* table, std::size_
 }
 
 void install_valid_programs() {
-    register_program(kTraceProgram, 112, kTraceBindings, std::size(kTraceBindings));
-    register_program(kTraceSceneProgram, 112, kTraceBindings, std::size(kTraceBindings));
+    const std::vector<ProgramBinding> trace = trace_bindings(7, true);
+    register_program(kTraceProgram, 112, trace.data(), trace.size());
+    register_program(kTraceSceneProgram, 112, trace.data(), trace.size());
     register_program(kSpatialProgram, 64, kSpatialBindings, std::size(kSpatialBindings));
     register_program(kDisplayProgram, 32, kDisplayBindings, std::size(kDisplayBindings));
 }
 
 void install_bad_programs() {
     register_program(kBadTraceCount, 112, kTraceBindings, std::size(kTraceBindings) - 1u);
-    register_program(kBadTracePush, 111, kTraceBindings, std::size(kTraceBindings));
+    const std::vector<ProgramBinding> bad_push = trace_bindings(7, true);
+    register_program(kBadTracePush, 111, bad_push.data(), bad_push.size());
 
     const std::vector<ProgramBinding> wrong_trace = altered_copy(
         kTraceBindings, std::size(kTraceBindings), 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     register_program(kBadTraceBinding, 112, wrong_trace.data(), wrong_trace.size());
 
-    // Trace binding 25 is a storage buffer; a uniform buffer is the wrong type.
-    const std::vector<ProgramBinding> wrong_scene = altered_copy(
-        kTraceBindings, std::size(kTraceBindings), std::size(kTraceBindings) - 1u,
-        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+    // Trace binding 33 is a storage buffer; a uniform buffer is the wrong type.
+    std::vector<ProgramBinding> wrong_scene = trace_bindings(7, true);
+    wrong_scene.back().descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     register_program(kBadSceneBinding, 112, wrong_scene.data(), wrong_scene.size());
 
     register_program(kBadDisplayPush, 31, kDisplayBindings, std::size(kDisplayBindings));
@@ -482,11 +505,11 @@ void test_configure_validation() {
         CHECK(pass.uses_program(kDisplayProgram));
         CHECK(!pass.uses_program(0));
         CHECK(!pass.uses_program(kBadTraceCount));
-        CHECK(fake::buffers.size() == 4);
+        CHECK(fake::buffers.size() == 5);
 
         // Reconfiguring replaces the previous owner without leaking it.
         CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
-        CHECK(fake::buffers.size() == 4);
+        CHECK(fake::buffers.size() == 5);
         CHECK(pass.destroy() == BEDRAY_OK);
         CHECK(fake::buffers.empty());
         CHECK(!pass.uses_program(kTraceProgram));
@@ -624,7 +647,7 @@ void test_successful_frames_and_payloads() {
         const fake::RenderCall& trace = fake::render_calls[0];
         CHECK(trace.command_buffer == frame.command_buffer);
         CHECK(trace.program == kTraceProgram);
-        CHECK(trace.resources.size() == 18);
+        CHECK(trace.resources.size() == 26);
         CHECK(trace.push.size() == 112);
         CHECK(trace.push_bytes == 112);
         CHECK(trace.group_x == 8);
@@ -640,6 +663,11 @@ void test_successful_frames_and_payloads() {
         CHECK(resource_handle(trace.resources, 17) != 0);
         CHECK(resource_handle(trace.resources, 17) == resource_handle(trace.resources, 18));
         CHECK(resource_handle(trace.resources, 19) != 0);
+        // The guide stand-ins and NRD's IN_MV vec4 keep the 26-binding set complete; the host never
+        // sets the option bits that would write them.
+        for (std::uint32_t binding = 26; binding <= 32; ++binding)
+            CHECK(resource_handle(trace.resources, binding) != 0);
+        CHECK(resource_range(trace.resources, 33) == 16);
         CHECK(push_u32(trace.push, 0) == frame.path.max_depth);
         CHECK(push_u32(trace.push, 8) == frame.path.sample_index);
         CHECK(push_u32(trace.push, 16) == frame.path.flags);
@@ -717,7 +745,7 @@ void test_spatial_stage() {
             const fake::PhaseCall& call = fake::phase_calls[0];
             CHECK(call.command_buffer == frame.command_buffer);
             CHECK(call.program == kSpatialProgram);
-            CHECK(call.resources.size() == 6);
+            CHECK(call.resources.size() == 8);
             CHECK(call.push.size() == 64);
             CHECK(call.push_bytes == 64);
             CHECK(call.phase_offset == 8);
@@ -728,6 +756,12 @@ void test_spatial_stage() {
             CHECK(push_u32(call.push, 12) == 1);
             CHECK(resource_handle(call.resources, 18) == frame.scene.emitters.handle);
             CHECK(resource_handle(call.resources, 19) == frame.scene.reservoirs.handle);
+            // The entity atlas is always bound: a pooled record can belong to an entity emitter, and the one-element
+            // stand-ins are what keeps the descriptor legal while the frame captured nothing.
+            CHECK(resource_handle(call.resources, 23) != 0);
+            CHECK(resource_handle(call.resources, 24) != 0);
+            // entityAtlasSize sits at offset 48 and is zero when no atlas was uploaded.
+            CHECK(push_u32(call.push, 48) == frame.path.entity_state[0]);
         }
         CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
 
@@ -843,7 +877,7 @@ void test_extent_change_keeps_pinned_images() {
     Fixture fixture;
     const BedrayPathTraceFrameDesc first = valid_frame(0x1301);
     CHECK_STATUS(fixture.render(first), BEDRAY_OK);
-    CHECK(fake::images.size() == 6);
+    CHECK(fake::images.size() == 9);
 
     // A new extent retires the old images, but the live recording still pins
     // them: they may only leave the owner after release_recording proves the
@@ -852,10 +886,10 @@ void test_extent_change_keeps_pinned_images() {
     resized.camera.width = 32;
     resized.camera.height = 32;
     CHECK_STATUS(fixture.render(resized), BEDRAY_OK);
-    CHECK(fake::images.size() == 12);
+    CHECK(fake::images.size() == 15);
 
     CHECK(fixture.release(first.command_buffer) == BEDRAY_OK);
-    CHECK(fake::images.size() == 6);
+    CHECK(fake::images.size() == 9);
 
     CHECK(fixture.release(resized.command_buffer) == BEDRAY_OK);
     CHECK(fixture.pass.destroy() == BEDRAY_OK);

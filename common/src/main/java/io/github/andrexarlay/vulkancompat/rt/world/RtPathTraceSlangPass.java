@@ -62,6 +62,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final int ENTITY_SCALAR_BYTES = 4;
     /** {@code traversal/entity_geometry.slang}: colour, light, u, v of one captured vertex, and one atlas rect. */
     static final int ENTITY_VECTOR_BYTES = 16;
+    /** {@code rt_pack_nrd.comp}: one Vec4Buf element of NRD's IN_MV channel, four floats per render pixel. */
+    static final int MOTION_ELEMENT_BYTES = 16;
     static final int THREAD_GROUP = 8;
 
     /** Optional device capabilities the generated manifest requires; see {@code bedray_core.h}. */
@@ -71,6 +73,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     /** {@code PathTracePush.flags}: the pass fills the denoiser guides. Mirrors {@code PATH_TRACE_OPTION_GBUFFER}. */
     static final int OPTION_GBUFFER = 1;
+
+    /** {@code PathTracePush.flags}: the pass also writes NRD's world-space motion channel. Mirrors the shader bit. */
+    static final int OPTION_NRD_MOTION = 2;
 
     /** The seven denoiser guide images, in the order {@code gbufferViews()} hands them over. */
     record Guides(long viewZ, long normalRough, long diffuse, long albedo, long direct, long specular, long specAlbedo) {
@@ -124,7 +129,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         new Expected("outDiffuse", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("outAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("outDirect", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
-        new Expected("outSpecAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE));
+        new Expected("outSpecAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
+        new Expected("outMotionBuffer", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
 
     /** Scene inputs the host must supply: the frame TLAS and the section table written by {@link RtWorld}. */
     record Scene(long tlas, RtMemory.Buf sectionTable) {
@@ -438,6 +444,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         requireElementBytes(manifest, "entityRects", ENTITY_VECTOR_BYTES);
         requireElementBytes(manifest, "entityTexels", ENTITY_SCALAR_BYTES);
         requireElementBytes(manifest, "entityPrevious", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "outMotionBuffer", MOTION_ELEMENT_BYTES);
     }
 
     private static void requireElementBytes(SlangPassManifest manifest, String name, int expected) {
@@ -472,6 +479,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private BedrayGpuImagesNative.Image guideDummyR32F;
     private BedrayGpuImagesNative.Image guideDummyRGBA16F;
     private BedrayGpuImagesNative.Image guideDummyRGBA8;
+    // The NRD motion channel is a vec4 per pixel; a zero element keeps the descriptor complete when the layout is not
+    // NRD and PATH_TRACE_OPTION_NRD_MOTION stays clear.
+    private BedrayGpuBuffersNative.Buffer motionDummy;
     private int width;
     private int height;
     private boolean closed;
@@ -524,6 +534,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT);
             guideDummyRGBA8 = nativeImages.create(1, 1, VK10.VK_FORMAT_R8G8B8A8_UNORM,
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+            motionDummy = zeroedBuffer(MOTION_ELEMENT_BYTES);
         } catch (RuntimeException | Error e) {
             nativeBuffers.close();
             nativeImages.close();
@@ -541,6 +552,17 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     long radianceView() {
         return radiance == null ? 0L : radiance.view();
+    }
+
+    /**
+     * The one-element entity-atlas buffers this pass substitutes when a frame captured no entities. A consumer that
+     * binds the atlas unconditionally (the spatial reuse stage) takes them as its own fallback: the shader's
+     * {@code atlasSize == 0} guard makes both lookups return before touching either buffer.
+     */
+    Entities entityFallback() {
+        return new Entities(BufferView.NONE, BufferView.NONE, BufferView.NONE, BufferView.NONE,
+            new BufferView(entityVectorDummy.handle(), 0L, entityVectorDummy.size()),
+            new BufferView(entityScalarDummy.handle(), 0L, entityScalarDummy.size()), 0, 0, 0);
     }
 
     /** The core program handle the native pass configures itself with. */
@@ -578,7 +600,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * that makes both outputs visible to their consumers.
      */
     void record(VkCommandBuffer cmd, Scene scene, Atlases atlases, Emitters emitters, Reservoirs reservoirs,
-                Entities entities, Guides guides, long depthView, Frame frame, Dispatch dispatch) {
+                Entities entities, Guides guides, BufferView nrdMotion, long depthView, Frame frame, Dispatch dispatch) {
         if (closed) {
             throw new IllegalStateException("path trace pass is closed");
         }
@@ -606,6 +628,23 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             throw new IllegalArgumentException(wantsGuides
                 ? "the push asks for denoiser guides but no complete G-buffer is bound"
                 : "denoiser guides are bound but the push does not enable them");
+        }
+        // NRD's motion channel has the same contract: the push bit and a full-size pixel range travel together, because
+        // a write past the bound range corrupts a neighbour buffer and a missing write leaves stale motion for NRD.
+        boolean wantsMotion = (dispatch.flags() & OPTION_NRD_MOTION) != 0;
+        BufferView boundMotion = nrdMotion != null && nrdMotion.buffer() != 0L ? nrdMotion : BufferView.NONE;
+        if (wantsMotion != (boundMotion.buffer() != 0L)) {
+            throw new IllegalArgumentException(wantsMotion
+                ? "the push asks for the NRD motion channel but no motion buffer is bound"
+                : "a motion buffer is bound but the push does not enable it");
+        }
+        long motionBytes = (long) frame.width * frame.height * MOTION_ELEMENT_BYTES;
+        if (boundMotion.buffer() != 0L && boundMotion.bytes() < motionBytes) {
+            throw new IllegalArgumentException("the NRD motion range holds " + boundMotion.bytes()
+                + " B, the frame needs " + motionBytes + " B (one vec4 per pixel)");
+        }
+        if (wantsMotion && boundGuides == null) {
+            throw new IllegalArgumentException("NRD consumes the guide images too: motion without guides is unusable");
         }
         if (dispatch.emitterCount() > 0 && (emitters == null || emitters.buffer() == 0L)) {
             throw new IllegalArgumentException("the push promises " + dispatch.emitterCount()
@@ -635,6 +674,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         nativeBuffers.retain(cmd.address(), reservoirDummy);
         nativeBuffers.retain(cmd.address(), entityScalarDummy);
         nativeBuffers.retain(cmd.address(), entityVectorDummy);
+        nativeBuffers.retain(cmd.address(), motionDummy);
         // Both images are fully overwritten. Declaring their old contents
         // undefined on every recording also handles a discarded first recording.
         VkBarriers.transition(cmd, radiance.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
@@ -655,7 +695,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             // follows the table the host actually bound, not a global switch.
             SlangProgram active = activeProgram(scene);
             active.dispatch(cmd.address(), active.groups(width, 0), active.groups(height, 1), 1,
-                resources(scene, atlases, emitters, reservoirs, entities, boundGuides, depthView), push);
+                resources(scene, atlases, emitters, reservoirs, entities, boundGuides, boundMotion, depthView), push);
         }
         VkBarriers.fullMemoryBarrier(cmd);
     }
@@ -685,7 +725,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters,
                                                    Reservoirs reservoirs, Entities entities, Guides guides,
-                                                   long depthView) {
+                                                   BufferView nrdMotion, long depthView) {
         RtMemory.Buf table = scene.sectionTable();
         // An empty list still needs a descriptor. The dummy table is 64 B, so the fallback range is clamped to it: the
         // shader never indexes past pc.emitterCount, which is 0 for exactly this case.
@@ -724,7 +764,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             guideImage("outDiffuse", guides == null ? 0L : guides.diffuse(), guideDummyRGBA16F),
             guideImage("outAlbedo", guides == null ? 0L : guides.albedo(), guideDummyRGBA8),
             guideImage("outDirect", guides == null ? 0L : guides.direct(), guideDummyRGBA16F),
-            guideImage("outSpecAlbedo", guides == null ? 0L : guides.specAlbedo(), guideDummyRGBA8));
+            guideImage("outSpecAlbedo", guides == null ? 0L : guides.specAlbedo(), guideDummyRGBA8),
+            motionBuffer(nrdMotion, motionDummy));
     }
 
     /**
@@ -734,6 +775,17 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      */
     private static SlangProgram.Resource guideImage(String name, long view, BedrayGpuImagesNative.Image dummy) {
         return SlangProgram.Resource.storageImage(name, view != 0L ? view : dummy.view());
+    }
+
+    /**
+     * NRD's IN_MV channel: the denoiser's own per-pixel vec4 range, or the pass's one-element stand-in. As with the
+     * guides, the push bit says which one the shader writes, so the dummy is never addressed.
+     */
+    private static SlangProgram.Resource motionBuffer(BufferView view, BedrayGpuBuffersNative.Buffer dummy) {
+        if (view == null || view.buffer() == 0L || view.bytes() <= 0L) {
+            return SlangProgram.Resource.storageBuffer("outMotionBuffer", dummy.handle(), 0L, dummy.size());
+        }
+        return SlangProgram.Resource.storageBuffer("outMotionBuffer", view.buffer(), view.offset(), view.bytes());
     }
 
     /**
@@ -820,6 +872,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             nativeImages.retire(guideDummyRGBA8);
             guideDummyRGBA8 = null;
         }
+        motionDummy = null;
         nativeBuffers.close();
         nativeImages.close();
         closed = true;

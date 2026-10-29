@@ -144,7 +144,7 @@ class SlangPassLibraryTest {
         Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
 
         SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        assertEquals(25, manifest.bindings().size(), "path_trace: binding count");
+        assertEquals(26, manifest.bindings().size(), "path_trace: binding count");
         assertBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
         assertBinding(manifest, "outImage", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -189,6 +189,11 @@ class SlangPassLibraryTest {
         assertBinding(manifest, "outAlbedo", 30, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "outDirect", 31, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "outSpecAlbedo", 32, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        // NRD's IN_MV channel: the per-pixel vec4 rt_pack_nrd.comp reads at StatsBuf.motionAddr, bound as a storage
+        // buffer because an RGBA16F image's 8 bytes per pixel cannot hold the legacy 16-byte record the pack expects.
+        assertBinding(manifest, "outMotionBuffer", 33, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        assertEquals(16, manifest.binding("outMotionBuffer").elementBytes(),
+            "one vec4 (motion xyz + entity flag) per render pixel, as in rt_pack_nrd.comp's Vec4Buf");
         assertEquals(112, manifest.pushConstantBytes(),
             "path_trace: the 96-byte DI block plus the 16-byte entity state of this frame");
         assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS

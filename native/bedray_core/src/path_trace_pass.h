@@ -99,6 +99,7 @@ private:
     bool images_ready_ = false;
     bool images_initialized_ = false;
     bool trace_guide_bindings_ = false, scene_guide_bindings_ = false;
+    bool trace_motion_bindings_ = false, scene_motion_bindings_ = false;
     bool guide_dummies_initialized_ = false;
     std::array<gpu::ImageId, 3> guide_dummy_ids_{};
     std::array<gpu::ImageView, 3> guide_dummy_views_{};
@@ -109,10 +110,15 @@ private:
     gpu::BufferId reservoir_dummy_id_{};
     gpu::BufferId entity_scalar_id_{};
     gpu::BufferId entity_vector_id_{};
+    // One-texel stand-ins for the seven DLSS-RR guide images and a 16-byte stand-in for NRD's IN_MV vec4 the Slang
+    // pass declares. The C++ host never sets the option bits that would write them, so they only keep the
+    // descriptor set complete.
+    gpu::BufferId motion_dummy_id_{};
     gpu::BufferView block_materials_view_{};
     gpu::BufferView reservoir_dummy_view_{};
     gpu::BufferView entity_scalar_view_{};
     gpu::BufferView entity_vector_view_{};
+    gpu::BufferView motion_dummy_view_{};
     gpu::BufferId owned_reservoirs_id_{};
     gpu::BufferView owned_reservoirs_view_{};
     std::uint32_t owned_di_parity_ = 0;

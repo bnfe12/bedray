@@ -110,6 +110,15 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result,
 
 // `traversal` arrives with its backend-specific fields set (TLAS and the section/geometry provider); everything that
 // is shared between the two backends is filled here, so adding a field cannot be forgotten in one entry point.
+float4 pathTraceNrdMotion(PathTraceResult result) {
+    if (!result.primary.valid) {
+        return float4(0.0);
+    }
+    float3 motion = result.primaryMotion.xyz;
+    float trusted = (result.primaryMotion.w > 0.5 || dot(motion, motion) > 1.0e-8) ? 1.0 : 0.0;
+    return float4(motion, trusted);
+}
+
 public void pathTraceEntry<T : ISceneTracer>(
     T traversal,
     EntityGeometry entities,
@@ -127,6 +136,7 @@ public void pathTraceEntry<T : ISceneTracer>(
     RWTexture2D<float4> outAlbedo,
     RWTexture2D<float4> outDirect,
     RWTexture2D<float4> outSpecAlbedo,
+    RWStructuredBuffer<float4> outMotionBuffer,
     FrameConstants frame,
     StructuredBuffer<BlockMaterial> blockMaterials,
     StructuredBuffer<BlockEmitterRecord> emitters,
@@ -243,5 +253,8 @@ public void pathTraceEntry<T : ISceneTracer>(
     if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u) {
         pathTraceWriteGuides(p, f, result, outViewZ, outNormalRough, outSpecular, outDiffuse,
             outAlbedo, outDirect, outSpecAlbedo);
+    }
+    if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {
+        outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result);
     }
 }

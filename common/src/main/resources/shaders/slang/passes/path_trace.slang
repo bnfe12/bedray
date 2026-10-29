@@ -82,6 +82,9 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 [[vk::image_format("rgba8")]]   [[vk::binding(30, 0)]] RWTexture2D<float4> outAlbedo;
 [[vk::image_format("rgba16f")]] [[vk::binding(31, 0)]] RWTexture2D<float4> outDirect;
 [[vk::image_format("rgba8")]]   [[vk::binding(32, 0)]] RWTexture2D<float4> outSpecAlbedo;
+// NRD's IN_MV channel: the same per-pixel Vec4 rt_path.comp writes into StatsBuf.motionAddr.  The host binds a
+// one-element stand-in and leaves PATH_TRACE_OPTION_NRD_MOTION clear unless the NRD layout is selected.
+[[vk::binding(33, 0)]] RWStructuredBuffer<float4> outMotionBuffer;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -119,6 +122,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.selfAvatarTriStart = pc.entityState.y;
     traversal.selfAvatarTriCount = pc.entityState.z;
     pathTraceEntry(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
-        outDepth, outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect, outSpecAlbedo,
+        outDepth, outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer,
         frame, blockMaterials, emitters, reservoirs, pc);
 }

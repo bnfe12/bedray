@@ -4,275 +4,164 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
-## 2026-10-29 — P1 audit pass: completion-proof retirement and module wiring (L2 tests; no GPU)
+## 2026-10-29 — Spatial reuse binds the captured entity atlas (L1 compile, L2 unit, L3 game, L4 visible effect)
 
-P1-4: `RtFrameRenderer` registers recording retirement through
-`RecordingCompletion.submitted(...)` after `encoder.execute`, so release runs
-only in the destruction queue that drains after the submission fence. The dead
-`SlangRuntime.retireSubmittedRecording` is removed, and
-`RecordingCompletionTest.retirementWaitsForHostCompletionProof` now asserts that
-a submission alone releases nothing.
+Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20, same target and
+include flags as the batch below; jar `bedray-fabric-mc26.3-0.2.0-alpha.jar`,
+`bedray_core.dll` rebuilt from the same checkout.
 
-P1-1: `NativeModuleWiringTest` pins the current wiring: the core compiles
-`history_c.cpp`, the GPU buffer/image C wrappers and `frame_graph_owner.cpp`,
-links the graph/scene targets, and Java uses the native buffer/image owners.
-The audit records the remaining gap honestly: the history C API has no Java
-binding, and `bedray_frame_lifetime` is still standalone.
+Root cause of the world-creation crash recorded in `hs_err_pid26912.log`:
+`passes/restir_spatial.slang` built a `MaterialAtlas` without setting
+`atlas.entities`, and Slang materialised the unset `EntityAtlas` members as
+`OpUndef` pointers. The stage does re-evaluate pooled records through the
+emitter list, so an entity emitter's record can address that atlas; NVIDIA
+617.42 faulted in `vkCreateComputePipelines` on the resulting SPIR-V. A
+standalone Vulkan harness (`vkpipe2.py`) reproduced it byte-exactly: the
+43324 B artifact crashed pipeline creation, the 38964 B pre-entity artifact and
+a variant with the entity path removed did not.
 
-P1-2 is marked fixed in the audit: the per-program descriptor cache reuses up to
-eight `{pool,set}` pairs, so a steady-state dispatch no longer creates and
-destroys a pool. P1-3 is marked latent: the live core graph has one
-`opaque_group` pass and emits no graph barrier; the conservative all-commands
-barrier remains for future multi-pass dispatch graphs. P1-5 is marked mitigated:
-`SlangRuntime.close` keeps the core and `closed=false` when destroy reports
-`IN_USE`, and the renderer retains `teardownPending` for a later retry.
+Source changes covered by this run:
 
-Evidence on `6bfd935` from the ASCII worktree:
-
-| Check | Result |
-|---|---|
-| targeted `RecordingCompletionTest`, `NativeModuleWiringTest` | passed |
-| `:core:test` | 107 tests, 0 failures, 0 errors |
-| `:common:compileSlang :common:test` | 18 passes (task up-to-date, shaders unchanged); 752 tests, 0 failures, 0 errors, 9 skipped, 124 classes |
-
-Not run: CMake is not installed, so no native configure/build; no GPU dispatch,
-validation layers, game startup or rendered effect. P1-3's performance claim is
-not measured.
-
-## 2026-10-29 — platform native names, build-path hygiene and the CMake opt-in (L2 tests; no native configure)
-
-P2-3: `BedrayCoreLocator` and `BedraySceneLocator` hardcoded `bedray_core.dll` /
-`bedray_scene.dll`. Both now expose `FILE = System.mapLibraryName(LIBRARY_ID)`
-and pass that name to `NativeLibraries`. `LibraryDescriptor` accepts `.dll`,
-`.so` and `.dylib` allowlist entries; path separators and versioned names such
-as `libbedray_core.so.1` are still rejected. Windows still resolves
-`bedray_core.dll`, so the installed layout is unchanged.
-
-P2-2: `native/bedray_core` and `native/bedray_scene` no longer fail a
-non-Windows configure unconditionally. The default still refuses the platform,
-but the message names `-DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM=ON`; that opt-in
-emits a warning that the build is untested and unsupported. `bedray_scene`
-keeps `PREFIX ""` on Windows only, so Linux/macOS output matches the JVM name.
-
-P2-1: the `C:/Dev/Sky/tools/sdk/Vulkan-Headers` fallback is gone from
-`bedray_core`, `bedray_scene` and `bedray_render_graph`; only the
-`BEDRAY_VULKAN_HEADERS` cache variable and `VULKAN_SDK` remain.
-
-P2-4: the `slangDir`/`SLANG_DIR` lookup uses `slangc.exe` on Windows and
-`slangc` elsewhere, while explicit `-Pslangc`/`SLANGC` still win.
-
-Evidence on `320b274` from the ASCII worktree:
-
-| Check | Result |
-|---|---|
-| targeted `BedrayNativeNameTest`, `NativePlatformGateTest`, `RtSlangGbufferGuidesTest` | passed |
-| `:core:test` (at `1c2ea7c`) | 107 tests, 0 failures, 0 errors |
-| `:common:compileSlang :common:test` | 18 passes; 749 tests, 0 failures, 0 errors, 9 skipped, 123 classes |
-
-Not run: CMake is not installed here, so neither project was configured or
-built; no Linux/macOS machine was used, and the `slangDir` branch was not
-exercised because the runs pass an explicit `-Pslangc`. The structural check in
-`NativeLibrariesImpl` is still PE-only, and the NRD/DLSS wrappers are
-Windows-only. P2-2/P2-3 remove the hardcoded name and the unconditional gate;
-they do not make non-Windows loading or rendering supported.
-
-## 2026-10-29 — NRD constant-buffer ring (L0 source contract; native build not run)
-
-P0-7 in [AUDIT_DEFECTS_AND_ISSUES.md](AUDIT_DEFECTS_AND_ISSUES.md): every
-`vkb_nrd_dispatch` call uploaded its constant blocks from slot 0 of a buffer
-sized for one frame, while the host may keep 1-8 frames in flight. Frame N+1
-could overwrite bytes that frame N's command buffer was still reading.
-
-The buffer is now `cbStride * cbSlots * d->frames`, the upload base is
-`d->ring * d->cbSlots`, and the ring advances after the upload, in lockstep
-with the per-frame descriptor pool. `dispatchN <= cbSlots` still bounds one
-frame's slots. `NrdConstantRingSourceTest` pins the allocation, the base, the
-slot arithmetic, the old expression's absence and the order of the ring
-advance.
-
-This is not L1 for the native bridge: NRD and Vulkan headers are external
-(`VKB_NRD_SRC`, `VKB_VK_HEADERS`) and are not installed on this machine, so
-`native/nrd_bridge/build.bat` was not run. The Java source contract is L2 and
-the C++ change itself is L0-reviewed only. Full `:common:test` after the
-change: **740 tests, 0 failures, 0 errors, 9 skipped, 121 classes**. No GPU
-dispatch, TDR repro or denoised frame exists.
-
-## 2026-10-29 — origin merge: guides + water + native bloom on the deduplicated entry (L1 compile, L2 no GPU)
-
-Branch: `fix/audit-remediation-20261029`, merge commit `84b1697`, merging
-`origin/refactor/slang-pipeline` (`4dc68d5`, 27 commits) into the P2 batch
-(`bccdced`). The run used the ASCII worktree at the merge commit, because the
-Gradle test worker mangles the Cyrillic project path on this machine. Tool:
-`slangc` 2026.20 via `-Pslangc=...`.
-
-Conflict resolution kept the single shared body in
-`pathtrace/path_trace_entry.slang`: the guide writer and the seven guide
-outputs from origin now live there once, and both `passes/path_trace.slang`
-and `passes/path_trace_scene.slang` stay thin wrappers that declare bindings
-26-32 and forward all seven channels. The `portalTime` and
-`autoNormalStrength` material options are set in the shared body. The origin
-water, bloom, recording-lifetime and native-backend changes merged without
-shader-body conflicts; `RtRestirSettingsTest` now checks both the reference
-and the native backend.
+- `passes/restir_spatial.slang` now declares bindings 23 `entityRects` and 24
+  `entityTexels`, imports `traversal/entity_geometry.slang`, and fills
+  `EntityAtlas{rects, texels, atlasSize}` in `main`. `atlasSize == 0` makes
+  `entityTexel` return its fallback before touching either buffer, which is the
+  no-entity-capture case. 8 bindings, 64 B push.
+- `RestirSpatialPush` carries `uint entityAtlasSize` at byte 48. The block is
+  std430, so a `float3`/`uint3` pad would be 16-byte aligned and move the lane
+  to byte 60; the padding is six scalars and the struct is exactly 64 B.
+- `RtSpatialReuseSlangPass` takes the trace pass's `Entities` fallback at
+  creation, binds the frame's rects/texels or the one-element stand-ins, and
+  validates `ENTITY_VECTOR_BYTES`/`ENTITY_SCALAR_BYTES` from the manifest.
+  `ReferencePathTraceBackend` passes `capturedEntities` to `record`.
+- The C++ `PathTracePass` validates the 8-binding spatial manifest, keeps
+  `SpatialPush64.entity_atlas_size` at offset 48, and binds 23/24 in the spatial
+  dispatch from `desc.path.entity_state[0]`. `path_trace_pass_test.cpp` mirrors
+  the eight bindings, the resource count and the push lane.
 
 Result:
 
-| Check | Result |
-|---|---|
-| `:common:compileSlang` | 18 passes, `BUILD SUCCESSFUL` |
-| `path_trace` manifest | 25 bindings, 112 B push, guides 26-32 |
-| `path_trace_scene` manifest | 25 bindings, 112 B push, same names and types |
-| `:common:test` | 739 tests, 0 failures, 0 errors, 9 skipped, 120 classes |
+| Check | Expected | Observed |
+|---|---|---|
+| `:common:test` (native lib + slangc) | 0 failures | 754 tests / 122 suites, 0 failures, 0 errors, 3 skipped; all 12 `RtSlangRestirSpatialTest` cases pass |
+| CTest `build/bedray-native/windows-x64` on final HEAD | 19/19 | 19/19 pass |
+| `vkCreateComputePipelines` on the final jar's `restir_spatial` | 0 | 0 (OK); manifest 8 bindings, 64 B push |
+| Live `-Dvkbridge.autotest=world -Dvkbridge.rt.nativeScene=true -Dvkbridge.rt.nativePathTrace=true` | PASS, C++ DI + spatial | `restir_spatial, 8 binding(s), 64 B push`; `restir_di=native+spatial`; 3 shots 2560x1440; `result=PASS`; no `hs_err` |
+| Same with `nativePathTrace=true` only | PASS, C++ DI + spatial | `restir_di=native+spatial`; `result=PASS` |
+| Same with neither (Java Slang host) | PASS | `restir_di=fresh+spatial` then `temporal+spatial`; `result=PASS` |
 
-This is L1/L2 only. It proves the merged tree configures, both path roots
-compile with the water/gbuffer changes, and no Java contract test regressed.
-No GPU dispatch, frame, screenshot or game run exists on `84b1697`.
+The final matrix was re-run on the exact pushed HEAD after PR #29 (renderer
+statistics readback slots) landed, because that PR changed `RtFrameRenderer`
+after the previous build. All three live runs wrote fresh
+`autotest/world/02_world_{a,b,c}.png` (2560x1440, non-uniform: per-image mean
+458/464/474, stdev ~150) and left no new crash dump — the only `hs_err` in the
+instance is the historical `hs_err_pid26912.log` from 00:45. The C++ runs
+exercised the 8-binding contract at dispatch time, not just at build time.
 
-## 2026-10-29 — shaderc optimizer hang and the shared path entry (L1 compile, L2 no GPU)
+Earlier intermediate trees during this batch gave 735 tests / 18 CTest
+(pre-rebase) and 745 tests / 19 CTest (after PR #28); those are superseded by
+the 754 / 19 result above.
 
-Branch: `fix/audit-remediation-20261029`, commits `f631326` and `6209614`, on
-top of `cc3c0db`. The run used an ASCII worktree of the same commit because the
-Gradle test worker mangles the Cyrillic project path on this machine. Tool:
-`slangc` 2026.20 via `-Pslangc=...`.
+`EntityAtlasBindingContractTest` now guards the crash class: every pass whose
+source declares an `EntityAtlas` local must declare bindings 23/24 as storage
+buffers *and* assign `.rects`, `.texels` and `.atlasSize`. The manifest alone
+cannot see an unassigned member, so the test pairs the generated manifest with
+the pass source. Removing one assignment from `restir_spatial.slang` makes it
+fail with the OpUndef explanation; the pass source is unmodified in this tree.
 
-### The shaderc hang was the SPIR-V optimizer
+Rebased onto `4dc68d5` (PR #27, native guide outputs), `0898b00` (PR #28,
+native particle composite) and `fc1861d` (PR #29, proven stats slots). The one
+semantic merge change is the renderer's NRD guard: the Java Slang path fills
+motion now, while the C++ backend forwards the seven guides but still writes no
+world-space motion, so `RtFrameRenderer` refuses NRD only when
+`SLANG_PATH_TRACE_CPP` is set. `RtSlangGbufferGuidesTest` pins that split.
 
-`RtVolumetricFogTest.testShaderCompilation` did not merely run slowly: the test
-worker was blocked inside native `shaderc_compile_into_spv` on the expanded
-`rt_rays.comp` source (261,010 characters without `VKB_GBUFFER`). A standalone
-reproducer over the same include expansion isolated the stage:
+## 2026-10-29 — NRD IN_MV motion channel from the typed path (L1 compile, L2 unit)
 
-| Compiler | Variant | Level | Result |
+Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20,
+`-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major
+-I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `pathtrace/path_tracer.slang` gained `PATH_TRACE_OPTION_NRD_MOTION`
+  (`1u << 1u`), the second bit of the previously always-zero
+  `PathTraceOptions.flags` word. The push block stays 112 B. The tracer
+  already produced `PathTraceResult.primaryMotion` at the primary vertex
+  (`float4(traversal.surfaceMotion(hit), hit.kind == HitKind.Entity ? 1.0 :
+  0.0)`), so no capture point moved for this batch.
+- `passes/path_trace.slang` and `passes/path_trace_scene.slang` gained
+  binding 33, `RWStructuredBuffer<float4> outMotionBuffer`, and a gated write
+  under the new option bit: `pathTraceNrdMotion` reproduces the legacy
+  `rt_path.comp:615-616` record — `xyz` is the primary surface's world motion
+  (previous minus current), `w` is the trust flag
+  (`primaryMotion.w > 0.5 || dot(motion, motion) > 1.0e-8`), and a pixel with
+  no accepted primary surface (sky, invalid) writes zero, which the NRD pack
+  already treats as a static miss. 26 bindings, 112 B push in both roots.
+- `RtPathTraceSlangPass` gained `MOTION_ELEMENT_BYTES = 16`,
+  `OPTION_NRD_MOTION = 2`, a `BufferView nrdMotion` argument on `record`, and
+  all-or-nothing validation: the bit and a bound range must agree, the range
+  must hold `width * height * 16` bytes, and motion without guides is
+  rejected (NRD reads both). A one-element pass-owned dummy keeps the
+  descriptor set complete when the bit is clear, exactly like the guide
+  dummies.
+- `RtPipeline.Views` carries the `entity_motion_px` handle (default 0),
+  `RtFrameRenderer` allocates the buffer before `pass.bind` for NRD frames
+  and keeps the existing StatsBuf address write, `ReferencePathTraceBackend`
+  turns the handle into the frame's `BufferView` from the dispatch flags, and
+  `RtSlangPathPass` sets the bit only when the views carry the buffer and the
+  guides. Explicit `SLANG` + `NRD` is now accepted; `SLANG` + `DLSS_RR` stays
+  accepted, `AUTO` still keeps the GLSL pass until a live frame consumes the
+  guides.
+- The C++ `PathTracePass` accepts 18-, 25- and 26-binding trace manifests:
+  the 25/26 sets are checked for the seven guide storage images, the 26 set for
+  the binding-33 storage buffer, and configure creates the one-texel guide
+  stand-ins (R32F, RGBA16F, RGBA8) plus, for 26, a 16-byte `IN_MV` stand-in. A
+  native frame binds 18, 25 or 26 resources to match its program and pins the
+  stand-ins it uses; `destroy` retires them and `reset_state` clears them. The
+  pass never sets either option bit, so the stand-ins are never addressed.
+  `path_trace_pass_test.cpp` mirrors all three sets and the new fake-resource
+  counts. (Rebased onto `7cba897`, which had introduced the 18/25 guide
+  stand-in compatibility; this batch keeps it and adds the 26-binding motion
+  lane instead of replacing it.)
+- New `RtSlangNrdMotionTest` (5 guards) pins the legacy vec4 record, the
+  option gate on both sides, the host's bit/buffer promise, the renderer's
+  allocate-before-bind order and the vec4-per-pixel buffer contract.
+  `SlangPassLibraryTest` pins 26 bindings and `outMotionBuffer` (33,
+  storage buffer, 16 B per element); `RtSlangGbufferGuidesTest` and
+  `RtSlangEntityTest` were updated for the new `record` argument and the
+  now-accepted NRD policy.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
 |---|---|---|---|
-| lwjgl-shaderc 3.3.3 | plain | `performance` | no result after 90 s (killed) |
-| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `performance` | no result after 90 s (killed) |
-| lwjgl-shaderc 3.3.3 | plain | `size` | no result after 60 s (killed) |
-| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `size` | no result after 60 s (killed) |
-| lwjgl-shaderc 3.3.3 | plain | `zero` | 448 ms, 400,760 B SPIR-V |
-| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `zero` | 930 ms, 409,768 B SPIR-V |
-| lwjgl-shaderc 3.4.3 | plain | `performance` | no result after 120 s (killed) |
-| lwjgl-shaderc 3.4.3 | `VKB_GBUFFER` | `performance` | no result after 120 s (killed) |
-| lwjgl-shaderc 3.4.3 | `VKB_GBUFFER` | `zero` | 1,271 ms, 409,696 B SPIR-V |
+| `passes/*.slang` | 18 | 18 | `path_trace` 551880 B, `path_trace_scene` 563696 B, both 26 bindings / 112 B push |
+| Targeted `:common:test` | 35 tests | 0 failures | `RtSlangNrdMotionTest` 5, `RtSlangGbufferGuidesTest` 7, `RtSlangEntityTest` 14, `SlangPassLibraryTest` 9 |
+| Native `bedray_core` Release x64 | build | OK | `bedray_core.dll`, `bedray_path_trace_pass_test.exe` rebuilt |
+| CTest (`build/bedray-native/windows-x64`) | 18 tests | 18 passed | includes `bedray_path_trace_pass_test` with the 18/25/26-binding contract and stand-in counts |
 
-The regression is in shaderc's SPIR-V optimizer, not in the shader and not in a
-particular LWJGL build. `RtShaderCompiler` now pins
-`shaderc_optimization_level_zero` (`RUNTIME_OPTIMIZATION_LEVEL`), and the disk
-cache profile moved to `bedray-spirv-cache-v3 ... optimization=zero`, so a
-performance-era cache cannot mask the change. `RtShaderCompilerOptionsTest`
-fails if the optimizer level is raised again. This affects only the runtime
-GLSL fallback compiler: the AOT Slang passes are optimised by `slangc`, and the
-Vulkan driver still optimises the module when it builds the pipeline.
+Mutation proofs: changing the shader trust threshold `1.0e-8` to `0.0` fails
+`theMotionRecordIsTheLegacyVec4`; replacing the host's
+`wantsMotion != (boundMotion.buffer() != 0)` check with `false` fails
+`theHostAndThePushKeepTheirPromise`. Both files were restored byte-identical
+(sha256 verified).
 
-### Test gate
+No clean full-suite claim is recorded for this batch: one run raced a
+concurrent, uncommitted spatial-reuse edit in the same worktree (its three
+`RtSlangRestirSpatialTest` failures are stale-compile artifacts — the same
+test passes against the settled sources), and two later attempts were killed
+by host memory exhaustion (JVM `hs_err`, "insufficient memory", while another
+session's Gradle build ran on the same 16 GB machine). The full-suite run is
+to be repeated on a free host before this batch is treated as L2-complete.
 
-- `lwjgl-shaderc:<version>:natives-windows` is now a `testRuntimeOnly`
-  dependency, so `:common:test` no longer needs a launcher installation to load
-  `shaderc.dll`.
-- JUnit's default timeout is 120 s; a future native hang fails the run instead
-  of holding the whole gate.
-- `runShimTests` no longer requires the launcher (`testClasses` only).
-- The build warns when the project path contains non-ASCII characters and
-  points at the ASCII-worktree workaround, now documented in BUILDING.md.
+This is L1/L2 only. No GPU dispatch, frame or screenshot exists; the NRD
+layout has never consumed these values on a device, and no owner-verified
+image of the Slang path exists. The guide capture happens before the display
+pass may reject a sample, so a rejected pixel can carry a motion record too;
+the denoiser's own history rejection is expected to absorb that once a live
+frame is measured.
 
-### One path-trace entry body
-
-`passes/path_trace.slang` and `passes/path_trace_scene.slang` were 270/271-line
-copies differing only in binding 2 and the traversal backend. The shared
-integration now lives in `pathtrace/path_trace_entry.slang`; each pass file
-declares its own bindings and backend and calls `pathTraceEntry`.
-
-```
-[slang] path_trace:       420,476 B SPIR-V, 18 binding(s), 112 B push
-[slang] path_trace_scene: 431,924 B SPIR-V, 18 binding(s), 112 B push
-```
-
-`SlangPassLibraryTest.pathTraceScenePassKeepsTheSameHostContractAsTheLegacyEntry`
-compares every descriptor, the push size, capability bits and workgroup;
-`PathTraceEntryDedupTest` rejects a copied `tracePath(` call in either wrapper;
-`RtSlangBlockEmitterTest` reads the shared body. `:common:compileSlang` builds
-18 passes.
-
-### Targeted result
-
-`:common:test` with `SlangPassLibraryTest`, `PathTraceEntryDedupTest`,
-`RtPathTraceSlangPassTest`, `RtSlangBlockEmitterTest` and
-`RtShaderCompilerOptionsTest`: 29 tests, 0 failures. An earlier targeted run of
-`RtVolumetricFogTest` (including `testShaderCompilation`),
-`RtShaderDiskCacheTest` and `RtShaderCompilerOptionsTest` was also green.
-
-This is L1 (Slang/GLSL compile) and L2 (no-GPU Java tests). No Vulkan device,
-game launch, visual parity, denoiser, Fast RT, auto-exposure, volumetric,
-composite or sky/fog output was verified on this revision. The historical
-2026-10-28 note that `path_trace`/`path_trace_scene` deduplication was blocked is
-superseded by this entry.
-
-### Full suite
-
-`:common:test` from the ASCII worktree after the entry-body cleanup: **693
-tests, 0 failures, 0 errors, 9 skipped, 111 test classes**, `BUILD SUCCESSFUL`
-(58 s with warm Gradle). The nine skips are the optional pack/GPU-gated tests,
-not ignored failures. This is the first full-suite green run on a revision with
-the shaderc natives on the test runtime classpath.
-
-### P2 safety batch
-
-Three P2 findings from the audit are closed without changing rendering
-behaviour:
-
-- `contracts/math.slang`: `isFinite` classifies the IEEE-754 exponent
-  (`(asuint(value) & 0x7f800000u) != 0x7f800000u`) instead of testing
-  `value == value`, which fast-math may fold to `true`.
-- `passes/velocity_reproject.slang`: the four-byte gap before `jitterPrevious`
-  and the eight tail bytes are now named fields (`padJitter`, `pad2`). The
-  reflected block is still 96 B, `jitterPrevious` is still at offset 64, and
-  `VelocityPushLayoutTest` checks both the source declaration and the compiled
-  manifest.
-- `shading/bsdf.slang`: the diffuse Fresnel factor stays view-angle based for
-  parity with the owner-tuned legacy GLSL. This is not strictly
-  Helmholtz-reciprocal and is documented in `KNOWN_ISSUES.md`; changing it
-  needs a GPU A/B that this gate cannot provide.
-
-Full suite after the batch: **697 tests, 0 failures, 0 errors, 9 skipped, 113
-test classes**, `BUILD SUCCESSFUL` (1 m 37 s, including the Slang rebuild).
-
-## 2026-10-28 — ReSTIR source tests and the first runnable :common:test (L2, no GPU)
-
-Branch: `fix/stale-restir-source-tests-20261028`, commit `248a7e1`, on top of
-the merged PR #10 (`6632bca`).
-
-The earlier configuration blocker (missing Fabric/NeoForge launcher jars) was
-resolved locally without adding anything to the repository:
-`fabric-loader-0.19.5`, NeoForge `26.3.0.57-beta`, FML `12.0.9`, bus `8.0.5`,
-mergetool `2.0.7`, and the gitignored `libs/` client/Iris/Sodium jars.
-`:common:test` now configures and runs `:common:compileSlang` first (18 passes).
-
-Three source-scan tests were stale relative to the host's native-reservoir path,
-which already existed on the base before PR #10 (`a8f796b` has
-`nativeReservoirs`). The tests still asserted the pre-native strings:
-
-- `diParity = nativeReservoirs ? 0 : reservoirFrame & 1` (the Slang ring still
-  alternates; the native path owns its parity).
-- `diFlags = DI_FLAG_ENABLED | (!nativeReservoirs && reservoirHistoryWritten ? ...)`
-  (the native path must not claim a history it did not write).
-- the dispatch guard and mode log likewise admit the native ring.
-
-The fix changes only those assertions; shader and host behaviour is unchanged.
-
-Full-suite status is deliberately not claimed green:
-
-- Without the shaderc natives jar, 57 of 681 tests fail: 54 are `shaderc.dll`
-  load failures, 3 were the stale assertions above.
-- With `lwjgl-shaderc-3.3.3-natives-windows.jar` added only to the local test
-  classpath, the run stops in `RtVolumetricFogTest` and was killed after 40
-  minutes. That is an environment/harness limitation, not evidence about the
-  typed RC shaders.
-- The Gradle test worker mangles the non-ASCII project path on this machine, so
-  the run was executed from an ASCII worktree of the same commit.
-
-Targeted evidence after the fix: `74 tests, 0 failures` for `RtSlang*`,
-`RtRestirSettingsTest` and `SlangPassLibraryTest`, `BUILD SUCCESSFUL`. This is
-L2 (Java source scans, no GPU, no game). It does not change the L1 shader
-compile evidence or prove runtime behaviour.
 ## 2026-10-29 — DLSS-RR guide channels from the typed path (L1 compile, L2 unit)
 
 Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20, same flags as below.
@@ -1212,3 +1101,422 @@ packing, both range guards and malformed inputs. Shader compilation is up to
 date from the preceding 18-pass run; shader sources are unchanged in this batch.
 `git diff --check` passes. No GPU/game, visual parity or performance evidence;
 native remains opt-in. The volumetric native-scene boundary remains separate.
+
+## 2026-10-29 — remaining ReSTIR branches integrated on the current backend boundary
+
+PR #17 is reconciled with base `4dc68d5aea060da5be1823925a523f702b5b2bcd`.
+RestirDiState now drives the reference backend's parity, history, pending clear
+and exact width/height layout, while the common controller uses its delegated
+mode only to track whether a reset request actually reached a DI dispatch.
+Native allocation/history/parity stay in C++. A transposed extent invalidates
+the reference ring even at identical pixel count. A reset survives an empty
+emitter frame; failed recording cannot consume it. DI history publishes only
+after the complete reference recording succeeds.
+
+Java compilation and 112 selected tests pass, zero failures/errors/skips (39s):
+PathTraceBackendTest, RestirDiStateTest, RtSlang*Test, RtRestirSettingsTest,
+RtPathTraceSlangPassTest, SlangPassLibraryTest and BedrayPathTraceNativeTest.
+The controller test now exercises an empty-emitter frame and a transposed extent;
+the seven state tests cover both ownership modes. The bounded offline Gradle
+command, JDK/dependencies and JVM limits match the preceding entries. Native and
+shader sources are unchanged, so this is Java L1/L2 evidence, no GPU/game check.
+
+PR #22's source assertions targeted the old monolithic host. The current tests
+already inspect the controller/reference/native split and pass above; restoring
+those old strings would undo the ownership boundary. Its commits are retained
+as merged history with the current implementation/tests kept. The older 74-test
+evidence in that branch remains historical, not evidence for this revision.
+
+Branch cleanup keeps main and refactor/slang-pipeline. Before deleting merged
+branches, all refs/history were saved to a verified local Git bundle. GitHub's
+kept-history ruleset is narrowed to those two branches with its deletion and
+non-fast-forward protections intact; the main PR rule is unchanged.
+
+## 2026-10-29 — native particle/weather composite boundary
+
+Base `b5d852c76e30a5e2f3e46e61d7d9fb1977d9db0f`. The stateless native
+particles_pass module now validates/records the existing AOT entry, its two
+bindings, exact 16-byte push, dispatch groups and entry/exit memory barriers.
+The additive bedray_core_render_particles export accepts a separate 56-byte
+versioned/sized descriptor; existing ABI-v2 layouts and shader sources remain
+unchanged. The generic core's immutable per-dispatch recordings already retain
+program/descriptors until exact proof, so no duplicate configure/destroy owner,
+private image, submission or wait is introduced. All external views stay borrowed.
+
+Java supplies host views and scalar state through one coarse FFM call, validates
+the exact reflected bindings/8x8x1 group, and retains the existing recording
+identities. Game-layer barriers are removed with their native replacement.
+Adapter destruction no longer closes the runtime-owned cached shader program.
+
+[Native CI 40810744617](https://github.com/bnfe12/bedray/actions/runs/40810744617)
+passes on `0e5d6c40165d416aad80d56df58d8240754404b8`: candidate core 20/20 +
+scene 1/1 + lifetime 1/1; baseline core 15/15 + scene 1/1 + lifetime 1/1;
+ABI-v2 probes exit 0. New tests check malformed ABI/size/inputs/contracts before
+commands, distinct input/output, finite strength, exact descriptors/push/groups,
+barrier order, changed targets across dispatches, failure propagation and real
+C ABI bad_alloc/unexpected-exception containment. Native build reports no C++
+warnings in that run.
+
+Java compilation and 173 selected tests pass, zero failures/errors/skips (31s).
+The preceding 161-test filters now include RestirDiStateTest (7),
+ParticleGroupLedgerTest (3) and BedrayParticlesNativeTest (2). The latter checks
+every field/offset, zero strength and invalid inputs before downcalls. JDK,
+offline dependencies and bounded JVM settings match the preceding entries.
+`git diff --check` passes. No GPU/game or visual evidence; native stays opt-in.
+
+Repository cleanup retains only main/refactor/slang-pipeline branches. Merged
+head branches are deleted automatically in GitHub; local fetch pruning is
+enabled. Old worktrees are detached with their files/dependencies retained.
+
+## 2026-10-29 — exact host statistics readback leases
+
+Base `0898b0049508b29f0a5f26cd753fbd775049de47`. StatsBuf no longer reads or
+reuses a mapped slot because it is two frames old. RecordingReadbackSlots leases
+the entire slot (GPU input fields as well as counters) until the exact existing
+host ticket proves completion/discard. Completed written slots remain retained
+until CPU consumption; discard and unwritten frames publish nothing. A late or
+retried callback cannot touch a reused slot or a replacement pool after teardown.
+Pressure uses the existing host fence drain before opening a new command buffer,
+never a frame delay or device-idle call. Producer metadata snapshots accumulation,
+transparency, daylight, ordering and timestamp rather than reading current settings.
+
+An explicit SHADER_WRITE/TRANSFER_WRITE -> HOST_READ buffer-range barrier is
+recorded before command-buffer end. Stats memory is already required to be
+HOST_VISIBLE|HOST_COHERENT by RtMemory, so no invalidate is required; completion
+is still mandatory. This follows the
+[Khronos compute readback example](https://docs.vulkan.org/guide/latest/synchronization_examples.html).
+Shader layouts/algorithms and native ABI are unchanged in this change.
+
+Final Java compilation and 29 focused tests pass, zero failures/errors/skips
+(23s): Recording*Test, RtStatsLayoutTest, PathTraceBackendTest, RestirDiStateTest.
+The new tests include delayed proof, slot pressure, same-address reuse, unknown
+execution, discard, failed host read and retry after another owner's retirement
+fails. A preceding broader run passed 134 tests (including four separately
+prepared volumetric-interface tests); that shader interface is a separate PR.
+The bounded offline Gradle/JDK/dependency setup matches preceding entries.
+An independent read-only source review found no blocking lifetime/visibility
+issue. No GPU/game evidence; native mode stays opt-in.
+
+## 2026-10-29 — volumetric native-scene binding adapter (needs shader owner review)
+
+The legacy volumetric march body/push are extracted into one shared generic
+entry helper; the new volumetric_march_scene entry binds GeometrySection through
+the existing GeometryProvider/HardwareTraversal with a fixed world-only mask 1.
+It supplies no entity streams and never decodes entities. LegacySection remains
+bound only by the legacy entry. Both keep bindings 0/2/11/12/16, 608-byte frame,
+96-byte push and 8x8x1 groups. Apply and scattering arithmetic are unchanged.
+
+Pinned SHA256 of the original body from 0898b004, removing only the four legacy
+traversal setup statements, matches the extracted helper. Standalone slangc
+2026.20 compiles both march entries and apply, exit 0/no warnings. Gradle also
+compiles all 19 production entries; five RtSlangVolumetricSceneTest cases pass,
+zero failures/errors/skips (28s), checking exact body, push types/order, native
+record field identity and generated manifests. No host activation in this PR.
+
+Existing limitations are preserved: binary world-only visibility, no shaft
+bob-origin correction, no material/alpha filtering. Exposure/reprojection must
+use the typed display contract when integrated. This is a separate interface
+PR marked needs shader owner review; no GPU/game or visual evidence.
+
+## 2026-10-29 — native volumetric history and host integration
+
+Base `47b0d6984253f31b284f216994a1fcb0ef02a2e6` includes the separately reviewed
+interface PR #30 plus the shader owner's NRD/spatial updates. VolumetricPass owns
+half-resolution RGBA32F history, per-recording 608-byte uploads, 96/24-byte push
+packing/history overrides, five/four-resource descriptors and barriers. Separate
+48/120-byte coarse descriptors and exports are additive; existing ABI-v2 layouts
+are unchanged. Both scene layouts are validated/selected independently.
+
+The Java settings adapter sends one call for march/apply, shares frame conversion
+with path tracing, uses typed display exposure 1 and current-minus-previous camera
+delta, and participates in existing exact atmosphere completion/discard. Requested
+god rays are connected before bloom. The existing shader's nonzero bob-origin
+limitation is explicitly reported rather than rendered with incorrect coordinates;
+binary world-only visibility remains an explicit shader contract.
+
+Native revision `400bbea29d2c3595cd6183e0c3a2b8a821f95126` passes
+[Windows CI 40840132518](https://github.com/bnfe12/bedray/actions/runs/40840132518):
+candidate core 21/21 + scene 1/1 + lifetime 1/1; baseline core 15/15 + scene 1/1 +
+lifetime 1/1; ABI-v2 probes exit 0. Tests cover descriptors/push/groups, native and
+legacy programs, consecutive/gapped/reset history, resize and discard generations,
+pre-record upload failure, partial dispatch failure and device loss with two
+pending records. No C++ warnings were reported in that run.
+
+Java compilation, all 19 production AOT entries and 148 selected tests pass,
+zero failures/errors/skips (56s). The test filters cover recording lifetime,
+backend/state, RtSlang*, settings, path/manifest/native packets, bloom packets and
+stats layout; new tests check every coarse packet offset/payload slice, exposure,
+delta direction, native history ownership and explicit bob handling. SDK/JDK,
+local dependencies and bounded offline JVM settings match preceding entries.
+No GPU/game, visual parity or performance evidence; native path remains opt-in.
+
+
+## 2026-10-29 — P1 audit pass: completion-proof retirement and module wiring (L2 tests; no GPU)
+
+P1-4: `RtFrameRenderer` registers recording retirement through
+`RecordingCompletion.submitted(...)` after `encoder.execute`, so release runs
+only in the destruction queue that drains after the submission fence. The dead
+`SlangRuntime.retireSubmittedRecording` is removed, and
+`RecordingCompletionTest.retirementWaitsForHostCompletionProof` now asserts that
+a submission alone releases nothing.
+
+P1-1: `NativeModuleWiringTest` pins the current wiring: the core compiles
+`history_c.cpp`, the GPU buffer/image C wrappers and `frame_graph_owner.cpp`,
+links the graph/scene targets, and Java uses the native buffer/image owners.
+The audit records the remaining gap honestly: the history C API has no Java
+binding, and `bedray_frame_lifetime` is still standalone.
+
+P1-2 is marked fixed in the audit: the per-program descriptor cache reuses up to
+eight `{pool,set}` pairs, so a steady-state dispatch no longer creates and
+destroys a pool. P1-3 is marked latent: the live core graph has one
+`opaque_group` pass and emits no graph barrier; the conservative all-commands
+barrier remains for future multi-pass dispatch graphs. P1-5 is marked mitigated:
+`SlangRuntime.close` keeps the core and `closed=false` when destroy reports
+`IN_USE`, and the renderer retains `teardownPending` for a later retry.
+
+Evidence on `6bfd935` from the ASCII worktree:
+
+| Check | Result |
+|---|---|
+| targeted `RecordingCompletionTest`, `NativeModuleWiringTest` | passed |
+| `:core:test` | 107 tests, 0 failures, 0 errors |
+| `:common:compileSlang :common:test` | 18 passes (task up-to-date, shaders unchanged); 752 tests, 0 failures, 0 errors, 9 skipped, 124 classes |
+
+Not run: CMake is not installed, so no native configure/build; no GPU dispatch,
+validation layers, game startup or rendered effect. P1-3's performance claim is
+not measured.
+
+## 2026-10-29 — platform native names, build-path hygiene and the CMake opt-in (L2 tests; no native configure)
+
+P2-3: `BedrayCoreLocator` and `BedraySceneLocator` hardcoded `bedray_core.dll` /
+`bedray_scene.dll`. Both now expose `FILE = System.mapLibraryName(LIBRARY_ID)`
+and pass that name to `NativeLibraries`. `LibraryDescriptor` accepts `.dll`,
+`.so` and `.dylib` allowlist entries; path separators and versioned names such
+as `libbedray_core.so.1` are still rejected. Windows still resolves
+`bedray_core.dll`, so the installed layout is unchanged.
+
+P2-2: `native/bedray_core` and `native/bedray_scene` no longer fail a
+non-Windows configure unconditionally. The default still refuses the platform,
+but the message names `-DBEDRAY_ALLOW_UNSUPPORTED_PLATFORM=ON`; that opt-in
+emits a warning that the build is untested and unsupported. `bedray_scene`
+keeps `PREFIX ""` on Windows only, so Linux/macOS output matches the JVM name.
+
+P2-1: the `C:/Dev/Sky/tools/sdk/Vulkan-Headers` fallback is gone from
+`bedray_core`, `bedray_scene` and `bedray_render_graph`; only the
+`BEDRAY_VULKAN_HEADERS` cache variable and `VULKAN_SDK` remain.
+
+P2-4: the `slangDir`/`SLANG_DIR` lookup uses `slangc.exe` on Windows and
+`slangc` elsewhere, while explicit `-Pslangc`/`SLANGC` still win.
+
+Evidence on `320b274` from the ASCII worktree:
+
+| Check | Result |
+|---|---|
+| targeted `BedrayNativeNameTest`, `NativePlatformGateTest`, `RtSlangGbufferGuidesTest` | passed |
+| `:core:test` (at `1c2ea7c`) | 107 tests, 0 failures, 0 errors |
+| `:common:compileSlang :common:test` | 18 passes; 749 tests, 0 failures, 0 errors, 9 skipped, 123 classes |
+
+Not run: CMake is not installed here, so neither project was configured or
+built; no Linux/macOS machine was used, and the `slangDir` branch was not
+exercised because the runs pass an explicit `-Pslangc`. The structural check in
+`NativeLibrariesImpl` is still PE-only, and the NRD/DLSS wrappers are
+Windows-only. P2-2/P2-3 remove the hardcoded name and the unconditional gate;
+they do not make non-Windows loading or rendering supported.
+
+## 2026-10-29 — NRD constant-buffer ring (L0 source contract; native build not run)
+
+P0-7 in [AUDIT_DEFECTS_AND_ISSUES.md](AUDIT_DEFECTS_AND_ISSUES.md): every
+`vkb_nrd_dispatch` call uploaded its constant blocks from slot 0 of a buffer
+sized for one frame, while the host may keep 1-8 frames in flight. Frame N+1
+could overwrite bytes that frame N's command buffer was still reading.
+
+The buffer is now `cbStride * cbSlots * d->frames`, the upload base is
+`d->ring * d->cbSlots`, and the ring advances after the upload, in lockstep
+with the per-frame descriptor pool. `dispatchN <= cbSlots` still bounds one
+frame's slots. `NrdConstantRingSourceTest` pins the allocation, the base, the
+slot arithmetic, the old expression's absence and the order of the ring
+advance.
+
+This is not L1 for the native bridge: NRD and Vulkan headers are external
+(`VKB_NRD_SRC`, `VKB_VK_HEADERS`) and are not installed on this machine, so
+`native/nrd_bridge/build.bat` was not run. The Java source contract is L2 and
+the C++ change itself is L0-reviewed only. Full `:common:test` after the
+change: **740 tests, 0 failures, 0 errors, 9 skipped, 121 classes**. No GPU
+dispatch, TDR repro or denoised frame exists.
+
+## 2026-10-29 — origin merge: guides + water + native bloom on the deduplicated entry (L1 compile, L2 no GPU)
+
+Branch: `fix/audit-remediation-20261029`, merge commit `84b1697`, merging
+`origin/refactor/slang-pipeline` (`4dc68d5`, 27 commits) into the P2 batch
+(`bccdced`). The run used the ASCII worktree at the merge commit, because the
+Gradle test worker mangles the Cyrillic project path on this machine. Tool:
+`slangc` 2026.20 via `-Pslangc=...`.
+
+Conflict resolution kept the single shared body in
+`pathtrace/path_trace_entry.slang`: the guide writer and the seven guide
+outputs from origin now live there once, and both `passes/path_trace.slang`
+and `passes/path_trace_scene.slang` stay thin wrappers that declare bindings
+26-32 and forward all seven channels. The `portalTime` and
+`autoNormalStrength` material options are set in the shared body. The origin
+water, bloom, recording-lifetime and native-backend changes merged without
+shader-body conflicts; `RtRestirSettingsTest` now checks both the reference
+and the native backend.
+
+Result:
+
+| Check | Result |
+|---|---|
+| `:common:compileSlang` | 18 passes, `BUILD SUCCESSFUL` |
+| `path_trace` manifest | 25 bindings, 112 B push, guides 26-32 |
+| `path_trace_scene` manifest | 25 bindings, 112 B push, same names and types |
+| `:common:test` | 739 tests, 0 failures, 0 errors, 9 skipped, 120 classes |
+
+This is L1/L2 only. It proves the merged tree configures, both path roots
+compile with the water/gbuffer changes, and no Java contract test regressed.
+No GPU dispatch, frame, screenshot or game run exists on `84b1697`.
+
+## 2026-10-29 — shaderc optimizer hang and the shared path entry (L1 compile, L2 no GPU)
+
+Branch: `fix/audit-remediation-20261029`, commits `f631326` and `6209614`, on
+top of `cc3c0db`. The run used an ASCII worktree of the same commit because the
+Gradle test worker mangles the Cyrillic project path on this machine. Tool:
+`slangc` 2026.20 via `-Pslangc=...`.
+
+### The shaderc hang was the SPIR-V optimizer
+
+`RtVolumetricFogTest.testShaderCompilation` did not merely run slowly: the test
+worker was blocked inside native `shaderc_compile_into_spv` on the expanded
+`rt_rays.comp` source (261,010 characters without `VKB_GBUFFER`). A standalone
+reproducer over the same include expansion isolated the stage:
+
+| Compiler | Variant | Level | Result |
+|---|---|---|---|
+| lwjgl-shaderc 3.3.3 | plain | `performance` | no result after 90 s (killed) |
+| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `performance` | no result after 90 s (killed) |
+| lwjgl-shaderc 3.3.3 | plain | `size` | no result after 60 s (killed) |
+| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `size` | no result after 60 s (killed) |
+| lwjgl-shaderc 3.3.3 | plain | `zero` | 448 ms, 400,760 B SPIR-V |
+| lwjgl-shaderc 3.3.3 | `VKB_GBUFFER` | `zero` | 930 ms, 409,768 B SPIR-V |
+| lwjgl-shaderc 3.4.3 | plain | `performance` | no result after 120 s (killed) |
+| lwjgl-shaderc 3.4.3 | `VKB_GBUFFER` | `performance` | no result after 120 s (killed) |
+| lwjgl-shaderc 3.4.3 | `VKB_GBUFFER` | `zero` | 1,271 ms, 409,696 B SPIR-V |
+
+The regression is in shaderc's SPIR-V optimizer, not in the shader and not in a
+particular LWJGL build. `RtShaderCompiler` now pins
+`shaderc_optimization_level_zero` (`RUNTIME_OPTIMIZATION_LEVEL`), and the disk
+cache profile moved to `bedray-spirv-cache-v3 ... optimization=zero`, so a
+performance-era cache cannot mask the change. `RtShaderCompilerOptionsTest`
+fails if the optimizer level is raised again. This affects only the runtime
+GLSL fallback compiler: the AOT Slang passes are optimised by `slangc`, and the
+Vulkan driver still optimises the module when it builds the pipeline.
+
+### Test gate
+
+- `lwjgl-shaderc:<version>:natives-windows` is now a `testRuntimeOnly`
+  dependency, so `:common:test` no longer needs a launcher installation to load
+  `shaderc.dll`.
+- JUnit's default timeout is 120 s; a future native hang fails the run instead
+  of holding the whole gate.
+- `runShimTests` no longer requires the launcher (`testClasses` only).
+- The build warns when the project path contains non-ASCII characters and
+  points at the ASCII-worktree workaround, now documented in BUILDING.md.
+
+### One path-trace entry body
+
+`passes/path_trace.slang` and `passes/path_trace_scene.slang` were 270/271-line
+copies differing only in binding 2 and the traversal backend. The shared
+integration now lives in `pathtrace/path_trace_entry.slang`; each pass file
+declares its own bindings and backend and calls `pathTraceEntry`.
+
+```
+[slang] path_trace:       420,476 B SPIR-V, 18 binding(s), 112 B push
+[slang] path_trace_scene: 431,924 B SPIR-V, 18 binding(s), 112 B push
+```
+
+`SlangPassLibraryTest.pathTraceScenePassKeepsTheSameHostContractAsTheLegacyEntry`
+compares every descriptor, the push size, capability bits and workgroup;
+`PathTraceEntryDedupTest` rejects a copied `tracePath(` call in either wrapper;
+`RtSlangBlockEmitterTest` reads the shared body. `:common:compileSlang` builds
+18 passes.
+
+### Targeted result
+
+`:common:test` with `SlangPassLibraryTest`, `PathTraceEntryDedupTest`,
+`RtPathTraceSlangPassTest`, `RtSlangBlockEmitterTest` and
+`RtShaderCompilerOptionsTest`: 29 tests, 0 failures. An earlier targeted run of
+`RtVolumetricFogTest` (including `testShaderCompilation`),
+`RtShaderDiskCacheTest` and `RtShaderCompilerOptionsTest` was also green.
+
+This is L1 (Slang/GLSL compile) and L2 (no-GPU Java tests). No Vulkan device,
+game launch, visual parity, denoiser, Fast RT, auto-exposure, volumetric,
+composite or sky/fog output was verified on this revision. The historical
+2026-10-28 note that `path_trace`/`path_trace_scene` deduplication was blocked is
+superseded by this entry.
+
+### Full suite
+
+`:common:test` from the ASCII worktree after the entry-body cleanup: **693
+tests, 0 failures, 0 errors, 9 skipped, 111 test classes**, `BUILD SUCCESSFUL`
+(58 s with warm Gradle). The nine skips are the optional pack/GPU-gated tests,
+not ignored failures. This is the first full-suite green run on a revision with
+the shaderc natives on the test runtime classpath.
+
+### P2 safety batch
+
+Three P2 findings from the audit are closed without changing rendering
+behaviour:
+
+- `contracts/math.slang`: `isFinite` classifies the IEEE-754 exponent
+  (`(asuint(value) & 0x7f800000u) != 0x7f800000u`) instead of testing
+  `value == value`, which fast-math may fold to `true`.
+- `passes/velocity_reproject.slang`: the four-byte gap before `jitterPrevious`
+  and the eight tail bytes are now named fields (`padJitter`, `pad2`). The
+  reflected block is still 96 B, `jitterPrevious` is still at offset 64, and
+  `VelocityPushLayoutTest` checks both the source declaration and the compiled
+  manifest.
+- `shading/bsdf.slang`: the diffuse Fresnel factor stays view-angle based for
+  parity with the owner-tuned legacy GLSL. This is not strictly
+  Helmholtz-reciprocal and is documented in `KNOWN_ISSUES.md`; changing it
+  needs a GPU A/B that this gate cannot provide.
+
+Full suite after the batch: **697 tests, 0 failures, 0 errors, 9 skipped, 113
+test classes**, `BUILD SUCCESSFUL` (1 m 37 s, including the Slang rebuild).
+
+## 2026-10-28 — ReSTIR source tests and the first runnable :common:test (L2, no GPU)
+
+Branch: `fix/stale-restir-source-tests-20261028`, commit `248a7e1`, on top of
+the merged PR #10 (`6632bca`).
+
+The earlier configuration blocker (missing Fabric/NeoForge launcher jars) was
+resolved locally without adding anything to the repository:
+`fabric-loader-0.19.5`, NeoForge `26.3.0.57-beta`, FML `12.0.9`, bus `8.0.5`,
+mergetool `2.0.7`, and the gitignored `libs/` client/Iris/Sodium jars.
+`:common:test` now configures and runs `:common:compileSlang` first (18 passes).
+
+Three source-scan tests were stale relative to the host's native-reservoir path,
+which already existed on the base before PR #10 (`a8f796b` has
+`nativeReservoirs`). The tests still asserted the pre-native strings:
+
+- `diParity = nativeReservoirs ? 0 : reservoirFrame & 1` (the Slang ring still
+  alternates; the native path owns its parity).
+- `diFlags = DI_FLAG_ENABLED | (!nativeReservoirs && reservoirHistoryWritten ? ...)`
+  (the native path must not claim a history it did not write).
+- the dispatch guard and mode log likewise admit the native ring.
+
+The fix changes only those assertions; shader and host behaviour is unchanged.
+
+Full-suite status is deliberately not claimed green:
+
+- Without the shaderc natives jar, 57 of 681 tests fail: 54 are `shaderc.dll`
+  load failures, 3 were the stale assertions above.
+- With `lwjgl-shaderc-3.3.3-natives-windows.jar` added only to the local test
+  classpath, the run stops in `RtVolumetricFogTest` and was killed after 40
+  minutes. That is an environment/harness limitation, not evidence about the
+  typed RC shaders.
+- The Gradle test worker mangles the non-ASCII project path on this machine, so
+  the run was executed from an ASCII worktree of the same commit.
+
+Targeted evidence after the fix: `74 tests, 0 failures` for `RtSlang*`,
+`RtRestirSettingsTest` and `SlangPassLibraryTest`, `BUILD SUCCESSFUL`. This is
+L2 (Java source scans, no GPU, no game). It does not change the L1 shader
+compile evidence or prove runtime behaviour.

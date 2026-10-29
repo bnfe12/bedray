@@ -5,6 +5,7 @@ import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingReadbackSlots;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement;
 import io.github.andrexarlay.vulkancompat.rt.denoise.BridgeNrdLocator;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserConfig;
@@ -38,6 +39,7 @@ import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VKCapabilitiesDevice;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkBufferMemoryBarrier;
 import org.lwjgl.vulkan.VkImageCopy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -133,13 +135,9 @@ public final class RtFrameRenderer {
     private static long reservoirPixels = -1L;
     private static long reservoirLightFingerprint = Long.MIN_VALUE;
     private static boolean reservoirResetRequested = true;
-    private static final boolean[] statsWritten = new boolean[STATS_SLOTS];
-    /**
-     * Whether the frame that wrote each stats slot incremented the history counter, i.e. ran {@code temporalAccumulate}
-     * (see {@link RtAccumulation#acceptedPct}): the shader also requires a non-zero history length.
-     */
-    private static final boolean[] statsAccumulated = new boolean[STATS_SLOTS];
-    private static final boolean[] statsTransparency = new boolean[STATS_SLOTS];
+    private record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence, long recordedNanos) {}
+    private static RecordingReadbackSlots<StatsMetadata> statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
+    private static long lastStatsSequence = -1;
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
     private static double lastHitPct = -1.0;
@@ -608,15 +606,27 @@ public final class RtFrameRenderer {
             resetHistory();
             lastPassLog = "";
         }
+        consumeCompletedStats();
+        if (!statsReadbacks.hasFreeSlot()) {
+            drainHostSubmissions(device, "stats_slots_drain");
+            consumeCompletedStats();
+            if (!statsReadbacks.hasFreeSlot()) throw new RtFailure("stats_slots", "completion proof unavailable; stats slots retained");
+        }
         long frameStart = System.nanoTime();
         if (emitters == null) emitters = new RtEmitters(world.memory());
         RtEmitters recordingEmitters = emitters;
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
+        var statsOwner = statsReadbacks;
+        var statsLease = statsOwner.reserve(cmd.address());
+        if (statsLease == null) throw new RtFailure("stats_slots", "stats reservation unavailable");
         RtWorld recordingWorld = world;
         RtPass recordingPass = pass;
         Runnable[] particleRelease = {() -> {}};
-        var recording = recordingCompletion.beginWithDiscard(cmd.address(),
+        RecordingCompletion.Ticket recording;
+        try {
+            recording = recordingCompletion.beginWithDiscard(cmd.address(),
+            new Retirement(() -> statsOwner.completed(statsLease), () -> statsOwner.discarded(statsLease)),
             new Retirement(
                 () -> atmosphere.releaseRecording(cmd.address()), () -> atmosphere.discardRecording(cmd.address())),
             new Retirement(
@@ -627,6 +637,10 @@ public final class RtFrameRenderer {
                 () -> recordingEmitters.releaseRecording(cmd.address()), () -> recordingEmitters.releaseRecording(cmd.address())),
             new Retirement(
                 () -> particleRelease[0].run(), () -> particleRelease[0].run()));
+        } catch (RuntimeException | Error failure) {
+            statsOwner.discarded(statsLease); // no commands or submission can reference it yet
+            throw failure;
+        }
         boolean executeAttempted = false;
         RtWorld.FrameStats stats;
         boolean traced = false;
@@ -650,10 +664,11 @@ public final class RtFrameRenderer {
             blasBuiltTotal += stats.builtThisFrame();
             if (stats.instances() > 0 && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
                 recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
-                    world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ);
+                    world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ, statsLease);
                 traced = true;
             }
             VkBarriers.fullMemoryBarrier(cmd);
+            if (traced) recordStatsHostVisibility(cmd, statsLease.slot());
             RtFailure.check(VK10.vkEndCommandBuffer(cmd), "end_command_buffer");
             particleRelease[0] = io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.recordingRelease(cmd.address());
             recordingCompletion.submissionAttempted(recording);
@@ -694,9 +709,67 @@ public final class RtFrameRenderer {
         logWindow(stats, target);
     }
 
+    /** Only completed, still-leased slots may be read; sequence orders results, never proves completion. */
+    private static void consumeCompletedStats() {
+        var ready = statsReadbacks.ready().stream()
+            .sorted(java.util.Comparator.comparingLong(lease -> lease.metadata().sequence())).toList();
+        for (var lease : ready) {
+            var metadata = lease.metadata();
+            if (metadata.sequence() > lastStatsSequence) {
+                long base = statsBuf.mapped + (long) lease.slot() * STATS_STRIDE;
+                int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
+                int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
+                lastTransparency = metadata.transparency() ? String.format(Locale.ROOT,
+                    "[RT-TRANSPARENCY] counters=READBACK queries=%d candidates=%d layers=%d overflows=%d direct_shadow_queries=%d indirect_shadow_queries=%d",
+                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_QUERIES)),
+                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_CANDIDATES)),
+                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_LAYERS)),
+                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_OVERFLOWS)),
+                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_DIRECT_SHADOWS)),
+                    Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_INDIRECT_SHADOWS)))
+                    : "[RT-TRANSPARENCY] counters=WAITING";
+                if (hits > 0) {
+                    // Without the accumulating variant histAccepted is never incremented, and the share used to print as a
+                    // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
+                    lastHistPct = RtAccumulation.acceptedPct(MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED), hits,
+                        metadata.accumulated());
+                    // Both counters use the same 1-in-16 pixel mask as countSample, so this is a true share of the hit pixels.
+                    lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT) / hits;
+                }
+                if (samples > 0) {
+                    lastHitPct = 100.0 * hits / samples;
+                    exposure.setMax(RtSkyState.maxExposure(metadata.day()));
+                    long expNow = metadata.recordedNanos();
+                    exposure.observe(Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM)), samples,
+                        lastExposureNanos == 0L ? 1.0f / 60.0f : (float) ((expNow - lastExposureNanos) / 1.0e9));
+                    lastExposureNanos = expNow;
+                    lastExposureValue = exposure.value();
+                    long sumLog = Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM));
+                    lastAvgLum = sumLog == 0L ? 0.0 : Math.pow(2.0, sumLog / 64.0 / samples - 16.0);
+                }
+                lastStatsSequence = metadata.sequence();
+            }
+            statsReadbacks.consume(lease);
+        }
+    }
+
+    /** GPU writes become visible to coherent mapped host memory after this recording completes. */
+    private static void recordStatsHostVisibility(VkCommandBuffer cmd, int slot) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var barrier = VkBufferMemoryBarrier.calloc(1, stack).sType$Default()
+                .srcAccessMask(VK10.VK_ACCESS_SHADER_WRITE_BIT | VK10.VK_ACCESS_TRANSFER_WRITE_BIT)
+                .dstAccessMask(VK10.VK_ACCESS_HOST_READ_BIT)
+                .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                .buffer(statsBuf.handle).offset((long) slot * STATS_STRIDE).size(STATS_STRIDE);
+            VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK10.VK_PIPELINE_STAGE_HOST_BIT,
+                0, null, barrier, null);
+        }
+    }
+
     /** Output image, dispatch and (debug view only) the copy into the engine colour image, inside the open command buffer. */
     private static void recordPrimaryRays(VkCommandBuffer cmd, VulkanDevice vulkanDevice, CameraRenderState camera,
-                                         RenderTarget target, LevelRenderState levelState, boolean sceneChanged) {
+                                         RenderTarget target, LevelRenderState levelState, boolean sceneChanged,
+                                         RecordingReadbackSlots.Lease<StatsMetadata> statsLease) {
         VkDevice device = vulkanDevice.vkDevice();
         SkyRenderState sky = levelState.skyRenderState;
         frameProjection = BOB_PROJECTION ? io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.levelProjectionOr(camera.projectionMatrix) : camera.projectionMatrix;
@@ -783,6 +856,13 @@ public final class RtFrameRenderer {
             }
         }
         boolean useDenoiser = pass.usesGbuffer() && (denoiser != null || dlssRrDenoiser != null);
+        // NRD reads this frame's per-pixel world motion through its own binding, so the buffer has to exist before the
+        // pass binds its views: the handle travels with them, and the pass writes exactly that range.
+        long motionHandle = 0L;
+        if (useDenoiser && denoiseMode.isNrd() && wantsEntityMotion()) {
+            ensureEntityMotionBuffer(device, w, h);
+            motionHandle = entityMotionBuf.handle;
+        }
         if (materials == null) {
             materials = new RtMaterialAtlas(world.memory());
             // Without this the atlas keeps no texel states, intern() returns ST_RETRY forever and the micromaps are
@@ -802,45 +882,9 @@ public final class RtFrameRenderer {
             }
         }
         pass.bind(new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
-            materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L, lightmapView));
+            materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L, lightmapView, motionHandle));
 
-        // The slot read now was written by the dispatch two frames ago (the engine keeps at most 2 submissions in flight).
-        int writeSlot = (int) (dispatchCounter % STATS_SLOTS);
-        int readSlot = (writeSlot + 1) % STATS_SLOTS;
-        if (statsWritten[readSlot]) {
-            long base = statsBuf.mapped + (long) readSlot * STATS_STRIDE;
-            int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
-            int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
-            lastTransparency = statsTransparency[readSlot] ? String.format(Locale.ROOT,
-                "[RT-TRANSPARENCY] counters=READBACK queries=%d candidates=%d layers=%d overflows=%d direct_shadow_queries=%d indirect_shadow_queries=%d",
-                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_QUERIES)),
-                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_CANDIDATES)),
-                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_LAYERS)),
-                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_OVERFLOWS)),
-                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_DIRECT_SHADOWS)),
-                Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_INDIRECT_SHADOWS)))
-                : "[RT-TRANSPARENCY] counters=WAITING";
-            if (hits > 0) {
-                // Without the accumulating variant histAccepted is never incremented, and the share used to print as a
-                // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
-                lastHistPct = RtAccumulation.acceptedPct(MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED), hits,
-                    statsAccumulated[readSlot]);
-                // Both counters use the same 1-in-16 pixel mask as countSample, so this is a true share of the hit pixels.
-                lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT) / hits;
-            }
-            if (samples > 0) {
-                lastHitPct = 100.0 * hits / samples;
-                exposure.setMax(RtSkyState.maxExposure(params.key.day));
-                long expNow = System.nanoTime();
-                exposure.observe(Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM)), samples,
-                    lastExposureNanos == 0L ? 1.0f / 60.0f : (float) ((expNow - lastExposureNanos) / 1.0e9));
-                lastExposureNanos = expNow;
-                lastExposureValue = exposure.value();
-                long sumLog = Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM));
-                lastAvgLum = sumLog == 0L ? 0.0 : Math.pow(2.0, sumLog / 64.0 / samples - 16.0);
-            }
-            statsWritten[readSlot] = false;
-        }
+        int writeSlot = statsLease.slot();
         long writeOffset = (long) writeSlot * STATS_STRIDE;
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset, 16, 0);
         // leafBacklit sits far past the four head counters, so the 16-byte fill above does not reach it: without its own
@@ -1058,16 +1102,8 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_ATLAS_ADDR, eg.atlasAddress());
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_RECT_ADDR, eg.rectAddress());
         long motionAddr = 0L;
-        if (useDenoiser && (dlssRrDenoiser != null || denoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off")) {
-            long need = (long) w * h * 16L;
-            if (entityMotionBuf == null || entityMotionBuf.size < need) {
-                if (entityMotionBuf != null) {
-                    VK10.vkDeviceWaitIdle(device);
-                    world.memory().destroy(entityMotionBuf);
-                }
-                entityMotionBuf = world.memory().createBuffer("entity_motion_px", need,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-            }
+        if (useDenoiser && wantsEntityMotion()) {
+            ensureEntityMotionBuffer(device, w, h);
             motionAddr = entityMotionBuf.address;
             if (dlssRrDenoiser != null) {
                 dlssRrDenoiser.entityMotionAddress = motionAddr;
@@ -1116,9 +1152,9 @@ public final class RtFrameRenderer {
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_RAYS, true);
         }
-        statsWritten[writeSlot] = true;
-        statsTransparency[writeSlot] = (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0;
-        statsAccumulated[writeSlot] = (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.accumCount > 0;
+        statsReadbacks.written(statsLease, new StatsMetadata(
+            (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.accumCount > 0,
+            (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0, params.key.day, dispatchCounter, System.nanoTime()));
         dispatchCounter++;
         VkBarriers.fullMemoryBarrier(cmd);
         if (probePrev != null && outputDepth != null) {
@@ -1225,6 +1261,29 @@ public final class RtFrameRenderer {
             }
             pendingDisplayedTarget = target;
         }
+    }
+
+    /** True when this frame's denoiser layout consumes {@code entity_motion_px}; both of them read it as IN_MV input. */
+    private static boolean wantsEntityMotion() {
+        return (denoiser != null || dlssRrDenoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off");
+    }
+
+    /**
+     * One vec4 per render pixel, storage+device-address: NRD's {@code IN_MV} channel and the RR velocity pass's entity
+     * term. Idempotent within a frame sized like the last one; a resize waits for the device because the old extent may
+     * still be in flight.
+     */
+    private static void ensureEntityMotionBuffer(VkDevice device, int w, int h) {
+        long need = (long) w * h * 16L;
+        if (entityMotionBuf != null && entityMotionBuf.size >= need) {
+            return;
+        }
+        if (entityMotionBuf != null) {
+            VK10.vkDeviceWaitIdle(device);
+            world.memory().destroy(entityMotionBuf);
+        }
+        entityMotionBuf = world.memory().createBuffer("entity_motion_px", need,
+            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
     }
 
     /** Once per world: locates the NRD natives and logs the denoiser that will be used. */
@@ -1431,17 +1490,15 @@ public final class RtFrameRenderer {
             return null;
         }
         if (gbuffer) {
-            // The Slang path fills the DLSS-RR guides. AUTO is conservative:
-            // with a denoiser selected it declines the Slang path instead of
-            // feeding guides no live frame has consumed. An explicit slang
-            // selector may use DLSS-RR, but NRD's layouts additionally need
-            // the primary hit's world-space motion from a buffer this path
-            // does not write yet, so they are refused with that real reason.
+            // The Java Slang path fills the DLSS-RR guides and, for the NRD layouts, the primary hit's world-space
+            // motion (the renderer binds {@code entity_motion_px} into the frame's views for exactly those modes).
+            // The C++ backend forwards the seven guides through GUIDE_OUTPUTS but writes no motion yet, so it is
+            // refused for NRD only.  AUTO declines the Slang denoiser path until a live frame has
+            // validated the guides; it still reports a real Slang blocker instead of blaming the denoiser.
             String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
             if (blocker == null) {
-                if (denoiseMode != DenoiserMode.DLSS_RR) {
-                    blocker = "the " + denoiseMode + " layout needs the world-space motion buffer"
-                        + " the Slang path does not fill yet";
+                if (RtConfig.SLANG_PATH_TRACE_CPP && denoiseMode != DenoiserMode.DLSS_RR) {
+                    blocker = "the C++ path backend writes no world-space motion for " + denoiseMode;
                 } else if (selector == RtConfig.PathTracer.AUTO) {
                     blocker = "AUTO does not select the Slang path while a denoiser is enabled;"
                         + " set bedray.pathTracer=slang to test the guides";
@@ -1916,9 +1973,9 @@ public final class RtFrameRenderer {
         reservoirLightFingerprint = Long.MIN_VALUE;
         reservoirResetRequested = true;
         outputReady = false;
-        java.util.Arrays.fill(statsWritten, false);
-        java.util.Arrays.fill(statsTransparency, false);
+        statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
+        lastStatsSequence = -1;
         lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
-        java.util.Arrays.fill(statsAccumulated, false);
+
     }
 }

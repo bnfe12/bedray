@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangDeviceCapabilities;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -10,9 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Temporary Minecraft-side adapter for bloom and sun glare after the main pass.
- * The new Slang volumetric passes are not connected yet; requested god rays are
- * reported unavailable rather than selecting a runtime-compiled GLSL pass.
+ * Minecraft settings/host-view adapter for native volumetric, bloom and sun glare passes.
+ * Unsupported volumetric camera contracts are reported explicitly.
  *
  * <p>Order of a frame: main pass (rt_rays / rt_path) -> denoiser (NRD / DLSS-RR G-buffer path) -> this -> copy to the engine target ->
  * the temporal upscaler / frame generation of the engine. The passes see the denoised image at render resolution; they write only
@@ -24,6 +24,7 @@ final class RtAtmosphere {
     private static final int SPAN_BLOOM = 1;
 
     private RtBloomPass bloom;
+    private RtSlangVolumetricPass volumetric;
     /** Native Slang runtime, created with the first bloom pass; {@code null} until then and when unavailable. */
     private SlangRuntime slangRuntime;
     private boolean slangUnavailableLogged;
@@ -51,13 +52,14 @@ final class RtAtmosphere {
         RtAtmosphereSettings.GodRays gr = RtAtmosphereSettings.godRays();
         boolean shaftsRequested = gr == RtAtmosphereSettings.GodRays.POST && p.volumetricFogEnabled && p.fogDensity > 0f
             && RtAtmosphereSettings.godRayStrength() > 0f;
-        if (shaftsRequested && !volumetricUnavailableLogged) {
-            LOGGER.warn("[VKB-ATMO] Slang volumetric passes are not connected; god rays are unavailable");
+        String shaftProblem = shaftsRequested ? RtSlangVolumetricPass.supportProblem(p) : null;
+        if (shaftProblem != null && !volumetricUnavailableLogged) {
+            LOGGER.warn("[VKB-ATMO] god rays unavailable: {}", shaftProblem);
             volumetricUnavailableLogged = true;
-        } else if (!shaftsRequested) {
+        } else if (shaftProblem == null) {
             volumetricUnavailableLogged = false;
         }
-        boolean shafts = false;
+        boolean shafts = shaftsRequested && shaftProblem == null;
         boolean glow = RtAtmosphereSettings.bloom();
         boolean glare = RtAtmosphereSettings.sunGlare();
         logIfChanged(shafts);
@@ -73,6 +75,12 @@ final class RtAtmosphere {
         }
         if (timer != null) {
             timer.beginFrame(cmd);
+        }
+        if (shafts) {
+            if (volumetric == null) volumetric = new RtSlangVolumetricPass(slangRuntime(vulkanDevice));
+            if (timer != null) timer.stamp(cmd, 0, false);
+            volumetric.record(cmd, views, p, w, h);
+            if (timer != null) timer.stamp(cmd, 0, true);
         }
         if (glow || glare) {
             if (bloom == null) {
@@ -164,8 +172,8 @@ final class RtAtmosphere {
             return null;
         }
         try {
-            // Bloom needs no optional device feature: compute, combined image samplers and storage images are core.
-            slangRuntime = SlangRuntime.create(device, 0);
+            // Bloom is feature-free; volumetric visibility needs the host's actually enabled RQ/BDA/Int64 features.
+            slangRuntime = SlangRuntime.create(device, SlangDeviceCapabilities.enabledMask(device));
         } catch (RuntimeException e) {
             LOGGER.warn("[VKB-ATMO] native Slang runtime unavailable; bloom is unavailable: {}", e.getMessage());
         }
@@ -174,6 +182,7 @@ final class RtAtmosphere {
 
     /** The exact host ticket proved completion and excluded resubmission. */
     void releaseRecording(long commandBuffer) {
+        if (volumetric != null) volumetric.releaseRecording(commandBuffer);
         if (bloom != null) {
             bloom.releaseRecording(commandBuffer);
         }
@@ -181,14 +190,16 @@ final class RtAtmosphere {
 
     void discardRecording(long commandBuffer) {
         resetHistory();
+        if (volumetric != null) volumetric.discardRecording(commandBuffer);
         if (bloom != null) bloom.discardRecording(commandBuffer);
     }
 
     void resetHistory() {
-        // No volumetric history until the Slang passes are integrated.
+        if (volumetric != null) volumetric.resetHistory();
     }
 
     void destroy() {
+        if (volumetric != null) { volumetric.close(); volumetric = null; }
         if (bloom != null) {
             bloom.destroy(); // releases the remaining recordings before the runtime shuts down
             bloom = null;

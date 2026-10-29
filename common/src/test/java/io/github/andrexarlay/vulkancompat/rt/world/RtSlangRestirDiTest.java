@@ -91,8 +91,8 @@ class RtSlangRestirDiTest {
         String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(game.contains("long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;"),
             "the host reserves both halves");
-        assertTrue(game.contains("int diParity = reservoirFrame & 1;"), "the host alternates the half");
-        assertTrue(game.contains("reservoirFrame++;"),
+        assertTrue(game.contains("int diParity = di.parity();"), "the host alternates the half");
+        assertTrue(game.contains("di.afterDispatch(diFlags != 0);"),
             "and only advances it after a dispatch that really wrote records");
         assertTrue(game.contains("nativeBuffers.createDeviceLocal(need,"),
             "the Slang ring is its own buffer: the GLSL records have a different layout and a mode switch must not"
@@ -230,7 +230,7 @@ class RtSlangRestirDiTest {
         assertEquals(RtSlangPathPass.DI_FLAG_HISTORY, flag(entry, "PATH_TRACE_DI_HISTORY"), "history bit");
         assertEquals(RtSlangPathPass.DI_FLAG_STATIC, flag(entry, "PATH_TRACE_DI_STATIC"), "static bit");
         assertEquals(RtSlangPathPass.DI_FLAG_FLIP_Y, flag(entry, "PATH_TRACE_DI_FLIP_Y"), "flipY bit");
-        assertTrue(game.contains("diFlags = dispatch.diFlags() | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)"),
+        assertTrue(game.contains("diFlags = di.flags("),
             "the host never claims a history it did not write");
         assertTrue(game.contains("if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null)"),
             "reuse needs the ring, the player's switch and a list to reuse: without emitters there is nothing to carry over");
