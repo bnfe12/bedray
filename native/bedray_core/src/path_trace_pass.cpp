@@ -609,10 +609,6 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
         destroy();
         return status;
     }
-    if (status != BEDRAY_OK) {
-        destroy();
-        return status;
-    }
     return BEDRAY_OK;
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace pass state");

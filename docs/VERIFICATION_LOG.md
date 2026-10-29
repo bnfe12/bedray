@@ -41,12 +41,17 @@ Source changes covered by this run:
   guides. Explicit `SLANG` + `NRD` is now accepted; `SLANG` + `DLSS_RR` stays
   accepted, `AUTO` still keeps the GLSL pass until a live frame consumes the
   guides.
-- The C++ `PathTracePass` validates the 26-binding manifest, creates three
-  1x1 storage images (R32F, RGBA16F, RGBA8) and one 16-byte motion dummy at
-  configure, binds them at 26-33, retires them in `destroy` and clears them
-  in `reset_state`; its option bits stay clear, so the dummies are never
-  addressed. `path_trace_pass_test.cpp` mirrors the 26-binding set and the
-  new fake-resource counts.
+- The C++ `PathTracePass` accepts 18-, 25- and 26-binding trace manifests:
+  the 25/26 sets are checked for the seven guide storage images, the 26 set for
+  the binding-33 storage buffer, and configure creates the one-texel guide
+  stand-ins (R32F, RGBA16F, RGBA8) plus, for 26, a 16-byte `IN_MV` stand-in. A
+  native frame binds 18, 25 or 26 resources to match its program and pins the
+  stand-ins it uses; `destroy` retires them and `reset_state` clears them. The
+  pass never sets either option bit, so the stand-ins are never addressed.
+  `path_trace_pass_test.cpp` mirrors all three sets and the new fake-resource
+  counts. (Rebased onto `7cba897`, which had introduced the 18/25 guide
+  stand-in compatibility; this batch keeps it and adds the 26-binding motion
+  lane instead of replacing it.)
 - New `RtSlangNrdMotionTest` (5 guards) pins the legacy vec4 record, the
   option gate on both sides, the host's bit/buffer promise, the renderer's
   allocate-before-bind order and the vec4-per-pixel buffer contract.
@@ -62,7 +67,7 @@ Result:
 | `passes/*.slang` | 18 | 18 | `path_trace` 551880 B, `path_trace_scene` 563696 B, both 26 bindings / 112 B push |
 | Targeted `:common:test` | 35 tests | 0 failures | `RtSlangNrdMotionTest` 5, `RtSlangGbufferGuidesTest` 7, `RtSlangEntityTest` 14, `SlangPassLibraryTest` 9 |
 | Native `bedray_core` Release x64 | build | OK | `bedray_core.dll`, `bedray_path_trace_pass_test.exe` rebuilt |
-| CTest (`build/bedray-native/windows-x64`) | 17 tests | 17 passed | includes `bedray_path_trace_pass_test` with the 26-binding contract and dummy counts |
+| CTest (`build/bedray-native/windows-x64`) | 18 tests | 18 passed | includes `bedray_path_trace_pass_test` with the 18/25/26-binding contract and stand-in counts |
 
 Mutation proofs: changing the shader trust threshold `1.0e-8` to `0.0` fails
 `theMotionRecordIsTheLegacyVec4`; replacing the host's

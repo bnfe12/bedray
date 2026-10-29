@@ -48,7 +48,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
             display = runtime.program(DISPLAY_PASS).orElseThrow();
             requireDisplayManifest(display);
             sampler = runtime.atlasSampler();
-            spatialReuse = RtSpatialReuseSlangPass.create(runtime).orElse(null);
+            spatialReuse = RtSpatialReuseSlangPass.create(runtime, trace.entityFallback()).orElse(null);
         } catch (RuntimeException | Error failure) {
             if (nextBuffers != null) nextBuffers.close();
             if (nextImages != null) nextImages.close();
@@ -164,9 +164,9 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         // barrier between its two phases and a trailing one, both inside record().
         if (spatialReuse != null && (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL) != 0 && diFlags != 0 && emitterCount > 0 && reservoirs != null) {
             spatialReuse.record(cmd, new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(),
-                    views.normal(), sampler), emitters, reservoirRange, trace.frameResource(), width, height,
-                frame.frameIndex, diParity, dispatch.emitterCamRelX(), dispatch.emitterCamRelY(), dispatch.emitterCamRelZ(),
-                dispatch.maxDistance());
+                    views.normal(), sampler), emitters, reservoirRange, capturedEntities, trace.frameResource(),
+                width, height, frame.frameIndex, diParity, dispatch.emitterCamRelX(), dispatch.emitterCamRelY(),
+                dispatch.emitterCamRelZ(), dispatch.maxDistance());
         }
 
         int flags = displayFlags(input.flags());

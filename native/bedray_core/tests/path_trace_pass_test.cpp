@@ -745,7 +745,7 @@ void test_spatial_stage() {
             const fake::PhaseCall& call = fake::phase_calls[0];
             CHECK(call.command_buffer == frame.command_buffer);
             CHECK(call.program == kSpatialProgram);
-            CHECK(call.resources.size() == 6);
+            CHECK(call.resources.size() == 8);
             CHECK(call.push.size() == 64);
             CHECK(call.push_bytes == 64);
             CHECK(call.phase_offset == 8);
@@ -756,6 +756,12 @@ void test_spatial_stage() {
             CHECK(push_u32(call.push, 12) == 1);
             CHECK(resource_handle(call.resources, 18) == frame.scene.emitters.handle);
             CHECK(resource_handle(call.resources, 19) == frame.scene.reservoirs.handle);
+            // The entity atlas is always bound: a pooled record can belong to an entity emitter, and the one-element
+            // stand-ins are what keeps the descriptor legal while the frame captured nothing.
+            CHECK(resource_handle(call.resources, 23) != 0);
+            CHECK(resource_handle(call.resources, 24) != 0);
+            // entityAtlasSize sits at offset 48 and is zero when no atlas was uploaded.
+            CHECK(push_u32(call.push, 48) == frame.path.entity_state[0]);
         }
         CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
 

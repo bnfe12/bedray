@@ -430,11 +430,12 @@ the pass must not silently reinterpret `rt_depth`.
 * G-buffer denoisers: the Slang entry pass writes the seven DLSS-RR guide
   channels (bindings 26-32) and NRD's per-pixel `IN_MV` vec4 (binding 33) when
   the host binds them, so neither denoiser needs a separate guide pass. The C++
-  pass validates the 26-binding set and binds one-texel/one-element dummies,
-  leaving both option bits clear: it writes no guides, so a C++ host that
-  selects a denoiser must still report the unsupported combination instead of
-  silently disabling it. The existing Java `AUTO` fallback is reference
-  behaviour, not the target selection policy.
+  pass accepts 18-, 25- and 26-binding programs: the 25/26 sets get one-texel
+  guide stand-ins, the 26 set also gets a 16-byte `IN_MV` stand-in, and both
+  option bits stay clear. It writes no guides, so a C++ host that selects a
+  denoiser must still report the unsupported combination instead of silently
+  disabling it. The existing Java `AUTO` fallback is reference behaviour, not
+  the target selection policy.
 
 ## 8. Frame integration
 
