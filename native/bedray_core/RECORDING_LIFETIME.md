@@ -34,7 +34,7 @@ structure sizes.
 
 ## Path-trace pass recordings (internal pass, ABI v2 coarse calls)
 
-`PathTracePass` (`src/path_trace_pass.cpp`) is the core's only internal recorder
+`PathTracePass` (`src/path_trace_pass.cpp`) is the native path recorder
 above the single-dispatch calls. It keeps one recording per command buffer in
 `recordings_` and pins six images and up to five buffers (four dummies plus the
 per-recording FrameConstants upload) on it.
@@ -62,6 +62,32 @@ per-recording FrameConstants upload) on it.
 
 Covered by `native/bedray_core/tests/path_trace_pass_test.cpp` (built and
 passing, 2026-10-28).
+
+## Bloom recordings (additive coarse calls)
+
+`BloomPass` owns the complete existing prefilter/down/up/apply sequence, its six
+RGBA16F mip images, transitions and entry/compute/exit barriers. Java supplies
+the four registered AOT program handles, borrowed core samplers, host output/
+depth views and unchanged 128-byte push payload. Each program requires the
+existing binding contract; the Java adapter additionally checks 8x8x1 reflection.
+The separate `bedray_bloom.h` descriptors carry ABI version and structure size;
+existing ABI v2 layouts are unchanged. Matching bloom exports are mandatory.
+
+One call records twelve dispatches for bloom or one apply dispatch for glare
+only. Every dispatch still uses the core's per-dispatch descriptors. A recording
+pins its exact mip generation before the first command. Partial recording failure
+retains those pins for deliberate discard. Resize retires old images until all
+readers release them. Discard of the current generation forces fresh images
+before the next recording, since its layout transitions may not have executed;
+discard of an older generation cannot invalidate a newer one.
+
+The existing core completion/discard calls release bloom uses alongside other
+passes. Close/reconfigure refuse outstanding recordings. Device loss stops new
+recordings and retains the entire lost pool until all affected command buffers
+receive host proof, then releases that pool together. No individual lost-owner
+use operation is assumed to remain available. No frame delay, submission, wait,
+new device or destruction of borrowed host views is introduced. Tests use a
+shared fake driver and provide no GPU/game evidence.
 
 Current limitations:
 

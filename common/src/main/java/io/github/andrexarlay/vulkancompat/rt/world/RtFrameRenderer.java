@@ -618,10 +618,7 @@ public final class RtFrameRenderer {
         Runnable[] particleRelease = {() -> {}};
         var recording = recordingCompletion.beginWithDiscard(cmd.address(),
             new Retirement(
-                () -> atmosphere.releaseRecording(cmd.address()), () -> {
-                    atmosphere.resetHistory();
-                    atmosphere.releaseRecording(cmd.address());
-                }),
+                () -> atmosphere.releaseRecording(cmd.address()), () -> atmosphere.discardRecording(cmd.address())),
             new Retirement(
                 () -> recordingPass.releaseRecording(cmd.address()), () -> recordingPass.discardRecording(cmd.address())),
             new Retirement(

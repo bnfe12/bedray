@@ -38,6 +38,15 @@ adapter through `bedray_core_atlas_sampler`. The core releases it after all its
 recordings and descriptor pools. This is an additive export with unchanged ABI
 structure layouts; the updated Java host requires the matching new DLL.
 
+Bloom also uses coarse native configure/render/destroy calls from
+`native/bedray_core/include/bedray_bloom.h`. C++ owns its twelve-dispatch chain,
+mip generations, barriers and recording pins. RtBloomPass registers borrowed
+runtime programs, validates their existing manifests and supplies the unchanged
+128-byte push data. Discard invalidates the affected generation rather than
+assuming its transitions executed. The host owns output/depth and completion
+proof; it must use a DLL with the new bloom exports. This moves orchestration,
+not shader math, and has no GPU/game acceptance yet.
+
 ## Scene query migration
 
 Scene query migration: `contracts/scene_tracer.slang` is the single geometric
@@ -397,6 +406,12 @@ reason; it no longer falls back to legacy GLSL `rt_path.comp`. The legacy ray
 effects pass is likewise reported unavailable until its Slang replacement is
 connected. The Slang volumetric passes compile but are not yet connected, so
 god rays are currently reported unavailable.
+
+The current `volumetric_march` binding 2 explicitly reads `LegacySection` through
+`LegacySectionTraversal`. The native scene publishes a different GeometrySection
+record, despite both records being 64 bytes. Connecting that pass to native scene
+requires a shader-owner-reviewed native-scene entry/contract; it must not bind the
+native table to the existing legacy descriptor by size alone.
 
 #### Native C++ path-trace pass (opt-in)
 

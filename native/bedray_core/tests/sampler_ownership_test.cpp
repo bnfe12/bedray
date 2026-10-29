@@ -59,6 +59,13 @@ VKAPI_ATTR void VKAPI_CALL destroy(VkDevice, VkSampler sampler, const VkAllocati
 int main() {
     exception_boundaries();
     auto* core = new BedrayCore;
+    BedrayBloomDesc bloom{};
+    BedrayError bloom_error{};
+    require(bedray_core_configure_bloom(nullptr, &bloom, &bloom_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    require(bedray_core_configure_bloom(core, &bloom, &bloom_error) == BEDRAY_ERROR_ABI_MISMATCH);
+    require(bedray_core_render_bloom(core, nullptr, &bloom_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    require(bedray_core_destroy_bloom(nullptr) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    require(bedray_core_destroy_bloom(core) == BEDRAY_OK);
     core->create_sampler = create;
     core->destroy_sampler = destroy;
     BedrayError error{};
