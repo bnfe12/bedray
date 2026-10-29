@@ -25,10 +25,12 @@ final class RtAtmosphere {
 
     private RtBloomPass bloom;
     private RtSlangVolumetricPass volumetric;
-    /** Native Slang runtime, created with the first bloom pass; {@code null} until then and when unavailable. */
+    /** The device's one native core, borrowed through a pool lease; {@code null} while it is unavailable. */
     private SlangRuntime slangRuntime;
     private SlangRuntimePool.Lease slangLease;
     private boolean slangUnavailableLogged;
+    /** Set once the volumetric passes refuse to register, so the frame loop stops asking. */
+    private boolean shaftsUnavailable;
     private RtGpuTimer timer;
     private String lastLogged = "";
     /**
@@ -58,6 +60,10 @@ final class RtAtmosphere {
         if (!shafts && !glow && !glare) {
             return;
         }
+        SlangRuntime runtime = slangRuntime(vulkanDevice);
+        if (runtime == null) {
+            return;
+        }
         if (RtGpuTimer.ENABLED && timer == null) {
             try {
                 timer = new RtGpuTimer(device, "VKB-ATMO", "godrays", "bloom");
@@ -68,15 +74,22 @@ final class RtAtmosphere {
         if (timer != null) {
             timer.beginFrame(cmd);
         }
-        if (shafts) {
-            if (volumetric == null) volumetric = new RtSlangVolumetricPass(slangRuntime(vulkanDevice));
+        if (shafts && !shaftsUnavailable && volumetric == null) {
+            try {
+                volumetric = new RtSlangVolumetricPass(runtime);
+            } catch (RuntimeException e) {
+                shaftsUnavailable = true;
+                LOGGER.warn("[VKB-ATMO] light shafts unavailable: {}", e.getMessage());
+            }
+        }
+        if (shafts && volumetric != null) {
             if (timer != null) timer.stamp(cmd, 0, false);
             volumetric.record(cmd, views, p, w, h);
             if (timer != null) timer.stamp(cmd, 0, true);
         }
         if (glow || glare) {
             if (bloom == null) {
-                bloom = new RtBloomPass(slangRuntime(vulkanDevice));
+                bloom = new RtBloomPass(runtime);
             }
             float[] dir = p.key.dir;
             boolean keyOn = Math.max(p.key.color[0], Math.max(p.key.color[1], p.key.color[2])) > 1.0e-3f;
@@ -144,31 +157,34 @@ final class RtAtmosphere {
     }
 
     /**
-     * Creates the native runtime on first use. A missing DLL or AOT bundle is
-     * reported; the new renderer does not compile a legacy GLSL replacement.
+     * Borrows the device's only native core through {@link SlangRuntimePool}. Creating a second {@code BedrayCore} here
+     * used to be the shape of a crash the JVM cannot catch: the atmosphere's own core was created, reported ABI 2
+     * ready, and then faulted inside the driver on its very first Vulkan call (nvoglv64.dll, read at 0x4) while
+     * registering {@code volumetric_march}. One core per device also means one set of descriptor pools and pipeline
+     * caches; the lease is what keeps the core alive while the atmosphere still holds recordings, and the pool closes
+     * the core once the last holder releases it.
      */
     private SlangRuntime slangRuntime(VulkanDevice device) {
+        if (slangRuntime != null && slangRuntime.isClosed()) {
+            slangLease = null; // a world reload gave the device a new core
+            slangRuntime = null;
+        }
         if (slangRuntime != null || slangUnavailableLogged) {
             return slangRuntime;
         }
-        slangUnavailableLogged = true;
-        boolean compiled;
         try {
-            compiled = SlangRuntime.hasCompiledPasses();
-        } catch (RuntimeException e) {
-            LOGGER.warn("[VKB-ATMO] Slang pass index is unreadable; bloom is unavailable: {}", e.getMessage());
-            return null;
-        }
-        if (!compiled) {
-            LOGGER.info("[VKB-ATMO] no AOT Slang passes in the jar; bloom is unavailable");
-            return null;
-        }
-        try {
+            if (!SlangRuntime.hasCompiledPasses()) {
+                slangUnavailableLogged = true;
+                LOGGER.info("[VKB-ATMO] no AOT Slang passes in the jar; light shafts and bloom are unavailable");
+                return null;
+            }
             // Bloom is feature-free; volumetric visibility needs the host's actually enabled RQ/BDA/Int64 features.
             slangLease = SlangRuntimePool.acquire(device);
             slangRuntime = slangLease.runtime();
-        } catch (RuntimeException e) {
-            LOGGER.warn("[VKB-ATMO] native Slang runtime unavailable; bloom is unavailable: {}", e.getMessage());
+        } catch (RuntimeException | Error e) {
+            slangUnavailableLogged = true;
+            LOGGER.warn("[VKB-ATMO] native Slang runtime unavailable; light shafts and bloom are unavailable: {}",
+                e.getMessage());
         }
         return slangRuntime;
     }
@@ -197,11 +213,13 @@ final class RtAtmosphere {
             bloom.destroy(); // releases the remaining recordings before the runtime shuts down
             bloom = null;
         }
-        if (slangRuntime != null) {
+        // Last, after both passes let go of their recordings: releasing the lease is what can close the core.
+        if (slangLease != null) {
             slangLease.close();
             slangLease = null;
-            slangRuntime = null;
         }
+        slangRuntime = null;
+        slangUnavailableLogged = false;
         if (timer != null) {
             timer.destroy();
             timer = null;

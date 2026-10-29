@@ -118,9 +118,10 @@ public final class RtFrameRenderer {
         new RecordingCompletion(
             failure -> LOGGER.error("[VKB-RT] native recording release failed; retaining it for host drain", failure));
     /**
-     * Dedicated Slang runtime for the Path Tracing pass. Bloom keeps the capability-free runtime of {@link RtAtmosphere};
-     * this one is created with the feature mask the logical device really enabled, because path_trace uses ray queries,
-     * buffer device addresses and Int64.
+     * This renderer's handle on the device's one native core, leased from {@link SlangRuntimePool}. Created with the
+     * feature mask the logical device really enabled, because path_trace uses ray queries, buffer device addresses and
+     * Int64. The pool is what keeps it to one core per device: the atmosphere used to create its own, and a second
+     * {@code BedrayCore} on the same device faults inside the driver on its first Vulkan call.
      */
     private static SlangRuntime pathSlangRuntime;
     private static SlangRuntimePool.Lease pathSlangLease;
@@ -1885,6 +1886,7 @@ public final class RtFrameRenderer {
                     drainHostSubmissions(host.vkDevice(), "particle_startup_failure_drain");
                     io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.collectAfterHostDrain(true);
                 }
+                atmosphere.destroy(); // same reason as below: its recordings live on this core
                 if (pathSlangRuntime != null) {
                     pathSlangLease.close();
                     pathSlangLease = null;
@@ -1912,6 +1914,9 @@ public final class RtFrameRenderer {
                 dlssRrDenoiser.destroy();
                 dlssRrDenoiser = null;
             }
+            // Before the lease below: the atmosphere's passes hold recordings on this same core, and releasing the
+            // last lease closes the core, which refuses while a recording is still pinned.
+            atmosphere.destroy();
             if (pathSlangRuntime != null) {
                 w.closeComputeAfterHostDrain();
                 pathSlangLease.close();
@@ -1921,7 +1926,6 @@ public final class RtFrameRenderer {
             pathSlangUnavailable = false;
             pathSlangUnavailableLogged = false;
             pathSlangUnavailableReason = "Slang path runtime is not initialized";
-            atmosphere.destroy();
             if (gpuTimer != null) {
                 gpuTimer.destroy();
                 gpuTimer = null;
