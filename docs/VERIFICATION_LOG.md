@@ -538,3 +538,92 @@ with no native test failures. Same limits: native L2 only, no shader compile,
 GPU, game or visual claim. A final shader sweep on the published tree at
 `913e4e0` repeated all 17 `passes/*.slang` plus the five harnesses with exit 0;
 the shader sources are still identical to `b1137fd`.
+
+## 2026-10-28 — migration code cleanliness review
+
+Reviewed the integrated migration from base `a8f796b95f4b3dcb1866669d521586d45a4f6323`,
+with focus on Java FFM/host ownership, scene capture, completion/discard bookkeeping,
+PathTracePass pin/retirement and the graph owner. Removed write-only frame/memory
+fields and unused internal memory arguments; simplified section ID preservation;
+made the chosen world scene owner final. Corrected stale DI/table-lifetime comments,
+misplaced/duplicated API JavaDoc and verbose repeated type names. Native DI telemetry
+now says native rather than claiming fresh Java-owned history every frame.
+
+`git diff --check` passes. Searches found no conflict markers or empty catch blocks
+in the reviewed ABI/scene code, nor submit/queue-wait/device-idle calls in native
+core/scene. No dedicated formatter/linter configuration was found. The focused
+review found no additional critical defect; this is not an audit of every subsystem.
+
+Executed `:common:compileJava :common:test` with RecordingCompletionTest,
+BedraySceneGeometryTest, RtSceneApiTest, RtPathTraceSlangPassTest and
+SlangPassLibraryTest: BUILD SUCCESSFUL, 23 tests, zero failures/errors/skips.
+Local dependency paths match the preceding verification batch. Existing Java
+API/JOML Unsafe deprecation diagnostics remain. Native sources and shader sources
+are byte-for-byte unchanged from the preceding passing native/AOT evidence;
+identical native CI is deliberately skipped for this Java cleanup. No GPU/game
+result is claimed. ABI layouts, native lifetime protocol and shader math are unchanged.
+
+The integration base advanced to `6632bca4219c13937e9f19fed7f65983e670f5be`
+(RC shader-owner PR #10) during review. Merged it without editing its sources;
+the sole conflict was the append-only verification journal and both records are
+preserved. Repeated the same Java compile/23-test command on `e4eea40`: success,
+zero test failures/errors/skips. The default AOT build freshly compiled all
+18 production passes, including rc_probe_trace, with reflection validation.
+The final follow-up only clarifies the stale migration-status documentation.
+Relative to the refreshed base, cleanup changes no native or shader sources.
+
+## 2026-10-28 — explicit native/reference path execution boundary
+
+Base `a7f91404132d9abed9607867ff94c5374b82480a`. RtSlangPathPass now captures
+camera/settings/scene POD and delegates execution through PathTraceBackend.
+NativePathTraceBackend registers borrowed runtime programs and calls the coarse
+C++ pass; it creates no Java GPU owner, dummy buffers, descriptors or Vulkan
+commands. ReferencePathTraceBackend contains the existing Java orchestration,
+private images and DI ring. The native implementation therefore no longer
+constructs the reference pass just to obtain program handles. Matching native
+cores must advertise NATIVE_DI; explicit native selection reports unsupported
+cores instead of silently selecting reference execution. The default stays Java
+until owner GPU/game verification. ABI v2 layouts and shader sources are unchanged.
+
+Spatial wrappers now borrow cached programs from SlangRuntime. Closing a wrapper
+cannot close a still-cached program; pending recording retirement is required
+before wrapper close. The controller publishes successful history/reset
+consumption only after record returns. Unknown discard handles do not reset it.
+
+Executed comparison with the same local dependencies/JDK/Slang SDK as above:
+`:common:test --tests '*RtSlang*Test' --tests '*RtPathTraceSlangPassTest'
+--tests '*SlangPassLibraryTest' --tests '*RecordingCompletionTest'
+--tests '*BedraySceneGeometryTest'`. Base runs 80 tests, 3 failing obsolete Java
+source assertions in RtSlangRestirDiTest and RtSlangRestirSpatialTest (native DI
+ownership from the earlier integration); no shader math test fails. This change
+updates those ownership/file-boundary assertions and adds PathTraceBackendTest.
+Candidate command adds `--tests '*PathTraceBackendTest'`: 83/83 pass, zero
+errors/skips, including record failure/reset latching, resize/discard, close
+retry, display-bit translation and byte-exact preservation of other push fields.
+Java compilation exits 0. All 18 unchanged AOT passes also compile on the baseline.
+Native C++ is unchanged, so the existing 20-test native evidence remains scoped
+to the same sources and identical native CI is skipped. No GPU/game claim.
+
+## 2026-10-28 — isolated native section capture queue
+
+Base `446622916bb3d75c3f7ecded5571ab4a59c92760`. NativeSectionCapture now owns
+CPU selection, stable nearest-first ordering, pacing, accepted capture snapshots
+and retry bookkeeping. RtWorld delegates capture selection then calls the native
+scene owner; capture acceptance never denotes GPU completion. SectionGeometryIdentity
+shares geometry/tag-hash rules between reference and native paths. Capture has no
+Vulkan handles, allocations or native resource destruction. Construction rollback
+also closes an empty scene if capture-module construction fails.
+
+The CPU budget now includes stale/identical queued captures, which previously
+could bypass it. Sink failure leaves that capture pending and the accepted
+snapshot/version unchanged. Scan-key publication follows successful eviction/
+queue construction, so an eviction failure is retried. Camera/radius changes
+rescan even with an unchanged source version. Equal-distance order uses the
+section key for deterministic selection.
+
+Executed the previous 83 checks plus NativeSectionCaptureTest and RtSceneApiTest:
+92 tests, zero failures/errors/skips; Java build exits 0. Six new no-GPU cases
+exercise quota/order, failed copy and eviction retry, identical remesh/tag changes,
+stale snapshots, camera changes, budget enforcement and clear/rescan. Shader and
+native sources are unchanged; native/AOT evidence is reused for those exact
+sources. Matching GPU/game verification remains outstanding; native stays opt-in.

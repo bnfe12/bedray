@@ -26,6 +26,8 @@ class RtRestirSettingsTest {
         + "RtRayEffectsPass.java";
     private static final String SLANG_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
+    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "ReferencePathTraceBackend.java";
     private static final String UI = "src/main/java/io/github/andrexarlay/vulkancompat/sodium/VulkanSodiumConfig.java";
     private static final String CATALOG = "src/main/java/io/github/andrexarlay/vulkancompat/sodium/SettingsCatalog.java";
     private static final String EN = "src/main/resources/assets/bedray/lang/en_us.json";
@@ -68,11 +70,14 @@ class RtRestirSettingsTest {
             "diRequested() stays the static capability, so flipping the switch never frees a ring mid-frame");
         assertTrue(pass.contains("return diRequested() && RtSettings.pathRestirDi();"),
             "diActive() is the per-frame decision the player controls");
-        assertTrue(pass.contains("if (emitterCount > 0 && diActive() && (nativeReservoirs || reservoirs != null))"),
-            "the dispatch is the consumer: without the flag the shader takes the plain per-frame branch; the native path owns its ring, the Slang path needs a bound one");
-        assertTrue(pass.contains("String restir = !diActive() || (!nativeReservoirs && reservoirs == null) ? \"off\""),
-            "and the mode log says what is really running: the native path owns its ring, the Slang path needs a bound one");
-        String prepare = block(pass, "private void prepareReservoirs(");
+        String backend = read(REFERENCE_BACKEND);
+        assertTrue(backend.contains("if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null)"),
+            "the reference backend is the consumer: without the flag the shader takes the plain per-frame branch; it needs a bound ring and an emitter list");
+        assertTrue(pass.contains("String restir = diActive() ? backend.reservoirState() : \"off\";"),
+            "and the mode log says what is really running: the backend reports whether it has a ring, the switch gates it");
+        assertTrue(backend.contains("return reservoirs == null ? \"off\" : reservoirHistoryWritten ? \"temporal\" : \"fresh\";"),
+            "the reference backend separates a fresh ring from a reused one");
+        String prepare = block(backend, "private void prepareReservoirs(");
         int staticBranch = prepare.indexOf("if (!diRequested()) {");
         assertTrue(staticBranch >= 0 && prepare.indexOf("nativeBuffers.retire(reservoirs)", staticBranch) > staticBranch,
             "allocation follows the static switch only: a settings flip must not free the ring inside a recorded frame");

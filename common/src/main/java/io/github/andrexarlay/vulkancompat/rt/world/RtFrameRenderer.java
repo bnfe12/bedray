@@ -4,6 +4,8 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement;
 import io.github.andrexarlay.vulkancompat.rt.denoise.BridgeNrdLocator;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserConfig;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
@@ -109,8 +111,8 @@ public final class RtFrameRenderer {
     private static RtGpuTimer gpuTimer;
     /** God rays, bloom and sun glare post passes (Bedray atmosphere), run on the final image after the denoiser. */
     private static final RtAtmosphere atmosphere = new RtAtmosphere();
-    private static final io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion recordingCompletion =
-        new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion(
+    private static final RecordingCompletion recordingCompletion =
+        new RecordingCompletion(
             failure -> LOGGER.error("[VKB-RT] native recording release failed; retaining it for host drain", failure));
     /**
      * Dedicated Slang runtime for the Path Tracing pass. Bloom keeps the capability-free runtime of {@link RtAtmosphere};
@@ -613,16 +615,16 @@ public final class RtFrameRenderer {
         RtPass recordingPass = pass;
         Runnable[] particleRelease = {() -> {}};
         var recording = recordingCompletion.beginWithDiscard(cmd.address(),
-            new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement(
+            new Retirement(
                 () -> atmosphere.releaseRecording(cmd.address()), () -> {
                     atmosphere.resetHistory();
                     atmosphere.releaseRecording(cmd.address());
                 }),
-            new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement(
+            new Retirement(
                 () -> recordingPass.releaseRecording(cmd.address()), () -> recordingPass.discardRecording(cmd.address())),
-            new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement(
+            new Retirement(
                 () -> recordingWorld.releaseRecording(cmd.address()), () -> recordingWorld.discardRecording(cmd.address())),
-            new io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement(
+            new Retirement(
                 () -> particleRelease[0].run(), () -> particleRelease[0].run()));
         boolean executeAttempted = false;
         RtWorld.FrameStats stats;
@@ -1471,14 +1473,14 @@ public final class RtFrameRenderer {
                 }
                 return null;
             }
-            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, world.memory(), gbuffer);
+            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, gbuffer);
             LOGGER.info("[VKB-RT] path_tracer selector={} on AOT Slang passes {}+{} (gbuffer={})",
                 selector.name().toLowerCase(Locale.ROOT), RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
             return slang;
         } catch (RuntimeException e) {
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             pathSlangUnavailableReason = reason;
-            if (selector == RtConfig.PathTracer.SLANG) {
+            if (selector == RtConfig.PathTracer.SLANG || RtConfig.SLANG_PATH_TRACE_CPP) {
                 if (e instanceof RtFailure failure) {
                     throw failure;
                 }

@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtSlangRestirSpatialTest {
 
+    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String SPATIAL = "src/main/resources/shaders/slang/restir/spatial_block_emitters.slang";
     private static final String PASS = "src/main/resources/shaders/slang/passes/restir_spatial.slang";
     private static final String DI = "src/main/resources/shaders/slang/restir/di_block_emitters.slang";
@@ -277,7 +278,7 @@ class RtSlangRestirSpatialTest {
     void theRenderComesFromTheFrameBlockTheTracePassUploaded() {
         String pass = read(PASS);
         String host = read(HOST);
-        String game = read(GAME_PASS);
+        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(pass.contains("uint2 size = f.camera.size.xy;"), "the shader takes the extent from FrameConstants");
         assertTrue(pass.contains("if (f.camera.size.x == 0u || f.camera.size.y == 0u)"),
             "and refuses an uninitialised block instead of computing a zero ring index");
@@ -306,20 +307,20 @@ class RtSlangRestirSpatialTest {
     @Test
     void aMissingSpatialKernelDegradesToTemporalOnly() {
         String host = read(HOST);
-        String game = read(GAME_PASS);
-        assertTrue(host.contains("static Optional<RtSpatialReuseSlangPass> create(SlangRuntime runtime, Logger log)"),
+        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
+        assertTrue(host.contains("static Optional<RtSpatialReuseSlangPass> create(SlangRuntime runtime)"),
             "creation yields empty with the reason in the log");
-        assertTrue(host.contains("log.info(\"[VKB-RT] spatial reuse off: {}\""),
+        assertTrue(host.contains("LOGGER.info(\"[VKB-RT] spatial reuse off: {}\""),
             "as an info line: the renderer is still working");
-        assertTrue(host.contains("if (program != null) {\n                program.close();"),
-            "and a program that got registered and then failed the manifest check is closed again");
-        assertTrue(game.contains("this.spatialReuse = RtSpatialReuseSlangPass.create(runtime, LOGGER).orElse(null);"),
+        assertFalse(host.contains("program.close();"),
+            "the wrapper borrows its program from the runtime cache and cannot retire it independently");
+        assertTrue(game.contains("spatialReuse = RtSpatialReuseSlangPass.create(runtime).orElse(null);"),
             "assigned outside the try that builds the trace pass, so a missing stage cannot fail path tracing");
-        assertTrue(game.contains("return spatialReuse != null && diActive() && RtSettings.pathRestirSpatial();"),
+        assertTrue(game.contains("return backend.spatialAvailable() && diActive() && RtSettings.pathRestirSpatial();"),
             "the mode log reports the stage only when it exists, is enabled and its parent is on");
-        assertTrue(game.contains("return spatialRequested() && diFlags != 0 && emitterCount > 0;"),
+        assertTrue(game.contains("(input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL) != 0 && diFlags != 0 && emitterCount > 0"),
             "a frame needs records of this convention and a list to pool before the stage runs");
-        assertTrue(game.contains("if (spatialReuse != null && spatialActive(diFlags, emitterCount) && reservoirs != null)"),
+        assertTrue(game.contains("if (spatialReuse != null && (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL) != 0 && diFlags != 0 && emitterCount > 0 && reservoirs != null)"),
             "and the dispatch re-checks the ring it is about to bind");
         assertTrue(game.contains("spatialReuse.releaseRecording(commandBuffer);")
             && game.contains("spatialReuse.close();"),
@@ -329,16 +330,15 @@ class RtSlangRestirSpatialTest {
     /** Spatial reuse merges the reservoirs the trace pass writes, so it cannot be switched on without it. */
     @Test
     void theStageIsAChildOfTheReuseItPools() {
-        String game = read(GAME_PASS);
+        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
         String spatial = read(SPATIAL);
-        assertTrue(game.contains(": (reservoirHistoryWritten ? \"temporal\" : \"fresh\")"
-            + " + (spatialRequested() ? \"+spatial\" : \"\");"),
+        assertTrue(game.contains("if (!restir.equals(\"off\") && spatialRequested()) restir += \"+spatial\";"),
             "the frame description only reports spatial on top of a reservoir stage that is running");
         assertTrue(spatial.contains("diReservoirSlot(pixel, size, parity) < diReservoirCount(reservoirs)"),
             "the spatial reader bounds the slot through the same helper the temporal stage uses");
         assertTrue(spatial.contains("uint ownSlot = diReservoirSlot(pixel, size, parity);"),
             "and addresses the half the trace pass wrote, not the other one");
-        assertTrue(game.contains("params.frame, diParity, params.emitterCamRelX, params.emitterCamRelY,"),
+        assertTrue(game.contains("frame.frameIndex, diParity, dispatch.emitterCamRelX(), dispatch.emitterCamRelY(),"),
             "and passes that parity, not its successor");
     }
 

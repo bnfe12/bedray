@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtSlangRestirDiTest {
 
+    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String DI = "src/main/resources/shaders/slang/restir/di_block_emitters.slang";
     private static final String RESERVOIR = "src/main/resources/shaders/slang/restir/restir_di.slang";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
@@ -86,11 +87,10 @@ class RtSlangRestirDiTest {
             "history comes from the other half");
         assertTrue(di.contains("reservoirs[reservoirSlot()] = current;"),
             "the record of this frame goes to this frame's half");
-        String game = read(GAME_PASS);
+        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(game.contains("long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;"),
             "the host reserves both halves");
-        assertTrue(game.contains("int diParity = nativeReservoirs ? 0 : reservoirFrame & 1;"),
-            "the host alternates the half of the Slang ring; the native path owns its own parity");
+        assertTrue(game.contains("int diParity = reservoirFrame & 1;"), "the host alternates the half");
         assertTrue(game.contains("reservoirFrame++;"),
             "and only advances it after a dispatch that really wrote records");
         assertTrue(game.contains("nativeBuffers.createDeviceLocal(need,"),
@@ -224,15 +224,15 @@ class RtSlangRestirDiTest {
             "the shader names the bit the host promises to set");
         assertTrue(pass.contains("directReuse.enabled = (pc.diState.x & PATH_TRACE_DI_ENABLED) != 0u ? 1u : 0u;"),
             "and the sampler is built either way");
-        String game = read(GAME_PASS);
+        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
         assertEquals(RtSlangPathPass.DI_FLAG_ENABLED, flag(pass, "PATH_TRACE_DI_ENABLED"), "enabled bit");
         assertEquals(RtSlangPathPass.DI_FLAG_HISTORY, flag(pass, "PATH_TRACE_DI_HISTORY"), "history bit");
         assertEquals(RtSlangPathPass.DI_FLAG_STATIC, flag(pass, "PATH_TRACE_DI_STATIC"), "static bit");
         assertEquals(RtSlangPathPass.DI_FLAG_FLIP_Y, flag(pass, "PATH_TRACE_DI_FLIP_Y"), "flipY bit");
-        assertTrue(game.contains("diFlags = DI_FLAG_ENABLED | (!nativeReservoirs && reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)"),
-            "the host never claims a history it did not write, and the native path tracks its own");
-        assertTrue(game.contains("if (emitterCount > 0 && diActive() && (nativeReservoirs || reservoirs != null))"),
-            "reuse needs the ring, the player's switch and a list to reuse: the native path owns its ring, the Slang path needs a bound one");
+        assertTrue(game.contains("diFlags = dispatch.diFlags() | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0)"),
+            "the host never claims a history it did not write");
+        assertTrue(game.contains("if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null)"),
+            "reuse needs the ring, the player's switch and a list to reuse: without emitters there is nothing to carry over");
         assertTrue(read(CONFIG).contains("\"vkbridge.rt.restirDi\", \"true\""),
             "the A/B switch is there for the owner, on by default");
         assertTrue(game.contains("return RtConfig.SLANG_BLOCK_EMITTERS && RtConfig.SLANG_RESTIR_DI;"),
@@ -249,7 +249,7 @@ class RtSlangRestirDiTest {
             "the manifest is checked for the binding the host fills");
         assertTrue(host.contains("reservoirDummy = zeroedBuffer(RESERVOIR_BYTES);"),
             "with the branch off a one-record zeroed buffer still satisfies the descriptor");
-        String game = read(GAME_PASS);
+        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
         assertTrue(game.contains("RtPathTraceSlangPass.Reservoirs reservoirRange ="
             + " RtPathTraceSlangPass.Reservoirs.NONE;"),
             "and the game pass starts from that empty range every frame");
