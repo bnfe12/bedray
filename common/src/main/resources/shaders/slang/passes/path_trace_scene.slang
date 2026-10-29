@@ -26,6 +26,13 @@
 //   23 entityRects      StructuredBuffer<uint4>
 //   24 entityTexels     StructuredBuffer<uint>
 //   25 entityPrevious   StructuredBuffer<uint>
+//   26 outViewZ         R32F denoiser guide (view depth)
+//   27 outNormalRough   RGBA16F guide (normal + roughness)
+//   28 outSpecular      RGBA16F guide (zero: the path tracer sums its lobes)
+//   29 outDiffuse       RGBA16F guide (residual radiance + first hit distance)
+//   30 outAlbedo        RGBA8 guide
+//   31 outDirect        RGBA16F guide (the primary vertex's own NEE)
+//   32 outSpecAlbedo    RGBA8 guide (metal albedo or dielectric F0)
 //
 // The section record's vertexAddress is a PhysicalStorageBuffer address of a
 // GeometryVertex array (64 B stride), so the manifest keeps Int64 and
@@ -60,6 +67,15 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 [[vk::binding(23, 0)]] StructuredBuffer<uint4> entityRects;
 [[vk::binding(24, 0)]] StructuredBuffer<uint> entityTexels;
 [[vk::binding(25, 0)]] StructuredBuffer<uint> entityPrevious;
+// Denoiser guides, the same seven channels rt_path.comp writes for rt_pack_nrd.comp.  The host binds one-pixel
+// stand-ins and leaves PATH_TRACE_OPTION_GBUFFER clear when no denoiser is selected.
+[[vk::image_format("r32f")]]    [[vk::binding(26, 0)]] RWTexture2D<float> outViewZ;
+[[vk::image_format("rgba16f")]] [[vk::binding(27, 0)]] RWTexture2D<float4> outNormalRough;
+[[vk::image_format("rgba16f")]] [[vk::binding(28, 0)]] RWTexture2D<float4> outSpecular;
+[[vk::image_format("rgba16f")]] [[vk::binding(29, 0)]] RWTexture2D<float4> outDiffuse;
+[[vk::image_format("rgba8")]]   [[vk::binding(30, 0)]] RWTexture2D<float4> outAlbedo;
+[[vk::image_format("rgba16f")]] [[vk::binding(31, 0)]] RWTexture2D<float4> outDirect;
+[[vk::image_format("rgba8")]]   [[vk::binding(32, 0)]] RWTexture2D<float4> outSpecAlbedo;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -95,5 +111,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.selfAvatarTriStart = pc.entityState.y;
     traversal.selfAvatarTriCount = pc.entityState.z;
     pathTraceEntry(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
-        outDepth, frame, blockMaterials, emitters, reservoirs, pc);
+        outDepth, outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect, outSpecAlbedo,
+        frame, blockMaterials, emitters, reservoirs, pc);
 }

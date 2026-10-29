@@ -127,8 +127,10 @@ explicitly.
 
 Known limits of the current Java host:
 
-* no G-buffer, so NRD and DLSS-RR cannot run on this pass; Path Tracing mode
-  disables the G-buffer denoiser while Slang is active;
+* the seven DLSS-RR guide channels are written by the entry pass when the host
+  binds them, but `AUTO` still disables the G-buffer denoiser while Slang is
+  active until a live frame consumes them; NRD stays refused because the
+  primary hit's world-space motion is not filled;
 * no auto exposure; `FrameConstants.exposure` is fixed at 1 and the display
   push also uses 1;
 * a two-colour gradient sky derived from one game sky colour, not `rt_sky.glsl`;
@@ -426,9 +428,11 @@ the pass must not silently reinterpret `rt_depth`.
   decides resets from camera movement, scene changes and settings. A C++ reset
   policy must use stable identity (camera/scene revisions) and must not infer
   history validity from a frame count.
-* G-buffer denoisers: path tracing has no G-buffer, so NRD/DLSS-RR cannot be
-  selected on top of it without a separate guide pass. The plan does not add
-  one; the mode resolver must report the unsupported combination instead of
+* G-buffer denoisers: the Slang entry pass now writes the seven DLSS-RR guide
+  channels in-shader when the host binds them, so DLSS-RR no longer needs a
+  separate guide pass; NRD additionally needs the primary hit's world-space
+  motion, which nothing fills yet. The C++ pass does not bind the guides, so
+  the mode resolver must report the unsupported combination instead of
   silently disabling the denoiser. The existing Java `AUTO` fallback is
   reference behaviour, not the target selection policy.
 
@@ -459,7 +463,17 @@ Completion integration:
 The pass never calls `vkQueueSubmit`, `vkDeviceWaitIdle` or `vkQueueWaitIdle`,
 including on resize.
 
-## 9. Missing contracts and decisions for the owner
+## 9. Original contract gaps (historical checkpoint)
+
+The list below records the pre-integration questions. It is not the current
+implementation status or a request to repeat owner decisions. Scene traversal,
+native allocation/coarse calls, opaque graph/scheduler, capability mapping and
+exact recording retirement are now integrated. The authoritative choices are
+in [MIGRATION_INTEGRATION_DECISIONS.md](MIGRATION_INTEGRATION_DECISIONS.md);
+revision-specific L1/L2 evidence is in VERIFICATION_LOG.md. Depth keeps ray
+distance/`1e6`; display applies exposure once. Shader transport/sky/G-buffer
+parity and owner GPU/game acceptance remain separate work. The revised sequence
+in section 10 describes the implemented boundary.
 
 1. **Scene traversal and vertex layout.** `LegacySection` (64 B) is not
    `BedraySceneSectionRecord` (ABI v2, 64 B: `origin[4]`, `meta[4]`,
@@ -506,14 +520,12 @@ including on resize.
     or push bytes, and the graph’s 64-bit capabilities do not yet share the
     10-bit Slang mask. These must be designed before path tracing is declared a
     graph pass.
-12. **Completion and validation.** The Java path is the only implemented
-    reference. The C++ pass exists source-only and is covered by two unrun
-    contract tests: `native/bedray_core/tests/path_trace_pass_test.cpp` (fake
-    Vulkan, white-box) and `native/bedray_scene/tests/scene_contract_test.cpp`
-    (fake Vulkan, ABI v2; its last recorded run predates the current ABI-v2
-    revision). Neither test has been compiled or run for this document, and no
-    GPU run or game run exists. Unknown submission outcomes must pin resources.
-    This document records no fresh verification result.
+12. **Completion and validation.** The Java path remains the default reference.
+    The C++ pass, embedded scene and graph/scheduler have passing native Windows
+    CI contract evidence at the revisions recorded in VERIFICATION_LOG.md.
+    Unknown submission outcomes remain pinned until host drain, then use
+    conservative discard invalidation. No GPU/game result exists for this
+    migration; compilation and fake-driver tests do not establish visual parity.
 
 ### Follow-ups from the 2026-10-27 shader audit
 
@@ -640,6 +652,9 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   emissive texel on a model lights nothing but itself. Pinned by
   `RtSlangEntityTest`, `RtPathTraceSlangPassTest` and
   `SlangPassLibraryTest`.
+  *Status update (2026-10-29): motion vectors, the End Portal starfield, the
+  Sobel auto-normal and glowing parts as NEE candidates all landed in
+  `e1bcd82`; no owner-verified frame of them is recorded yet.*
 * **Water is a flat thin pane.** The legacy triangle decode maps only the
   redstone and emissive source bits (`surface/surface.slang:237`); no code
   assigns `MATERIAL_SOURCE_FLUID` on this path and no water module is compiled
@@ -649,42 +664,58 @@ has been checked on a GPU; the reference pass was only compiled with `slangc`.
   passes `pc.flags = 0` (`RtSlangPathPass.java:266`), so the legacy
   `FLAG_WATER_REALISTIC`/caustics behaviour cannot be recovered by a flag
   alone; the fluid tag and a shading model have to be connected.
+  *Status update (2026-10-29): the surface half is connected.
+  `surface/water.slang` compiles as part of both path roots and ports the
+  legacy wave field, `waterWaveNormal`, the biome tint and the classification;
+  `decodeSurface` now assigns `MATERIAL_SOURCE_FLUID`, `AlphaMode.Optical`, IOR
+  1.333 and a clear Fresnel interface. The volumetric medium followed in the
+  same module (`waterSigmaT`, `waterInScatter` with the 0.65 multiple-scatter
+  floor) and in `tracePath`: per-segment absorption and in-scatter, entry/exit
+  on a refracted transmission through a horizontal fluid face, and a
+  medium-aware NEE (`traceShadowVisibilityMedium`) so an underwater receiver is
+  shadowed through its own column. The straight shadow ray has no Snell
+  refraction or caustics, a camera that starts inside water is not given a
+  medium, the BSDF still assumes air-to-material IOR on an exit face, and the
+  `waterStyle` switch is open.*
 
 ## 10. Migration sequence
 
-1. **Freeze the reference.** Keep `RtSlangPathPass`, `RtPathTraceSlangPass`,
-   `RtFrameRenderer`, `RtBloomPass`, `RtAtmosphere` and the existing ABI v2
-   structs untouched while ownership is coordinated. The only shared-header
-   change is the additive path-trace block, which does not alter a v2 layout.
-   Record the current behaviour; do not extend the GLSL fallback.
+1. **Preserve the reference and ABI.** Retain reference behavior while ownership
+   moves behind explicit backend boundaries. Existing ABI v2 layouts stay
+   unchanged; new coarse calls are additive. Do not extend the GLSL fallback.
 2. **Scene traversal contract.** Define the vertex/material/light records and
    the replacement traversal; add a source-level contract test for the shader
    table layout. No GPU calls.
-3. **Pass skeleton — source implemented, uncompiled.** The internal module now
+3. **Pass skeleton — implemented, scoped L1/L2.** The internal module now
    owns extent/generation logic, frame constants, push packing, image/buffer
    pins and the trace → optional spatial → display recording. The fake-Vulkan
-   plan/barrier test exists source-only as
+   plan/barrier test is
    `native/bedray_core/tests/path_trace_pass_test.cpp`: it drives the pass
    through a fake driver, checks the three-dispatch recording, push payloads,
    barrier sequence, pin lifetime on failure, resize retirement and device-loss
-   cleanup. It has not been compiled or run.
-4. **Allocator and coarse call — source implemented, uncompiled.** The C++
+   cleanup. Native Windows CI builds and runs it; exact revisions and counts
+   are in VERIFICATION_LOG.md. This does not establish GPU/visual correctness.
+4. **Allocator and coarse call — implemented, scoped L1/L2.** The C++
    image/buffer function table, generation retirement and the additive coarse
-   calls exist behind an opt-in switch; the Java path remains default. The ABI
-   is additive, not a v2 layout change, and still needs owner review before it
-   is treated as stable.
+   calls exist behind an opt-in switch; the Java reference remains default.
+   Native mode now owns scene geometry/AS, private images, frame uploads and
+   DI allocation/parity/reset. Java capture/settings delegates through a coarse
+   NativePathTraceBackend. The ABI remains additive with unchanged v2 layouts.
+   Host capture buffers retain exact completion/discard leases as external inputs.
 5. **In-game switch.** After the user explicitly starts verification, enable the
    C++ pass for Path Tracing mode, compare output against the Java reference,
    and fix only evidence-backed differences. Then remove Java image/descriptor/
    pipeline ownership and the GLSL fallback from the new path; report
    unsupported states instead of silently switching.
-6. **Graph integration.** Add the path-trace/post pass kind, per-pass program and
-   push contract, external boundary contract and scheduler release hook;
-   replace the conservative entry/exit barriers with graph hazards once the
-   graph owns the final image copy and display. The concrete gaps between the
-   live pass and the graph/history modules are itemised in
-   `native/bedray_render_graph/RENDER_GRAPH_NOTES.md`, section "Path-trace pass
-   as a graph node — live-path gap (2026-10-28)".
+6. **Graph integration — opaque path node implemented, scoped L1/L2.** The native
+   path runs through an opaque-group graph node and FrameScheduler with up to
+   eight exact recording leases. The pass owns its private barriers/history;
+   graph orders the node without emitting another barrier stream or registering
+   the same histories twice. Retirement follows the host's generation-specific
+   completion/discard action. The graph does not yet own the final host image
+   copy or every post effect; changing that boundary requires an explicit image
+   contract. Decisions and remaining limits are in
+   `MIGRATION_INTEGRATION_DECISIONS.md` and the render-graph notes.
 
 Exit criteria for each step: a source review plus a relevant contract test or a
 recorded verification result. A compile is not a game check, and a plan is not a
@@ -697,4 +728,5 @@ compile.
 * No Java-owned renderer or per-dispatch Java descriptor tables in the target.
 * No new GLSL fallback as the target; the existing fallback is reference-only.
 * No G-buffer/denoiser implementation in this plan.
-* No claim that the current source compiles, runs or renders on a GPU.
+* No claim that scoped compilation/tests prove complete rendering parity or
+  that the current source runs correctly on a GPU.

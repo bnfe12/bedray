@@ -74,6 +74,9 @@ static const uint HIT_FLAG_ENTITY_HURT  = 1u << 8u;
 // needs the cutout rule can keep using HIT_FLAG_CUTOUT.
 static const uint HIT_FLAG_FOLIAGE      = 1u << 9u;
 static const uint HIT_FLAG_LEAF_CUBE    = 1u << 10u;
+// A captured End Portal or End Gateway part.  Its atlas texel is only a
+// placeholder; the material layer evaluates the procedural starfield.
+static const uint HIT_FLAG_ENTITY_END_PORTAL = 1u << 11u;
 
 SurfaceHit missHit(float tMax) {
     SurfaceHit result;

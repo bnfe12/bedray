@@ -609,6 +609,8 @@ public final class RtFrameRenderer {
             lastPassLog = "";
         }
         long frameStart = System.nanoTime();
+        if (emitters == null) emitters = new RtEmitters(world.memory());
+        RtEmitters recordingEmitters = emitters;
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
         RtWorld recordingWorld = world;
@@ -616,14 +618,13 @@ public final class RtFrameRenderer {
         Runnable[] particleRelease = {() -> {}};
         var recording = recordingCompletion.beginWithDiscard(cmd.address(),
             new Retirement(
-                () -> atmosphere.releaseRecording(cmd.address()), () -> {
-                    atmosphere.resetHistory();
-                    atmosphere.releaseRecording(cmd.address());
-                }),
+                () -> atmosphere.releaseRecording(cmd.address()), () -> atmosphere.discardRecording(cmd.address())),
             new Retirement(
                 () -> recordingPass.releaseRecording(cmd.address()), () -> recordingPass.discardRecording(cmd.address())),
             new Retirement(
                 () -> recordingWorld.releaseRecording(cmd.address()), () -> recordingWorld.discardRecording(cmd.address())),
+            new Retirement(
+                () -> recordingEmitters.releaseRecording(cmd.address()), () -> recordingEmitters.releaseRecording(cmd.address())),
             new Retirement(
                 () -> particleRelease[0].run(), () -> particleRelease[0].run()));
         boolean executeAttempted = false;
@@ -846,9 +847,6 @@ public final class RtFrameRenderer {
         // zeroing the slot would keep the count of the frame that used it three slots ago.
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.LEAF_BACKLIT, 4, 0);
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.TRANS_QUERIES, 24, 0);
-        if (emitters == null) {
-            emitters = new RtEmitters(world.memory());
-        }
         float lightRange = RtConfig.mode() == RtMode.PATH_TRACED
             ? Math.min(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathMaxDistance(), 128)
             : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.emissiveDistance() + 8f;
@@ -860,6 +858,7 @@ public final class RtFrameRenderer {
         emitters.update(world, materials.lastBake(), camera.pos.x, camera.pos.y, camera.pos.z, lightRange,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.lightBudget(), entityEmitters,
             entityEmitters.length / RtEmitters.FLOATS);
+        emitters.retainForRecording(cmd.address());
         long hdr = statsBuf.mapped + writeOffset;
         MemoryUtil.memPutLong(hdr + RtStatsLayout.OPTICAL_ADDR,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials() ? materials.opticalAddress() : 0L);
@@ -1432,15 +1431,26 @@ public final class RtFrameRenderer {
             return null;
         }
         if (gbuffer) {
-            // AUTO only keeps the denoiser when the Slang pass is blocked; report that real blocker instead of blaming
+            // The Slang path fills the DLSS-RR guides; the NRD layouts additionally take the primary hit's world-space
+            // motion from a buffer this path does not write yet, and AUTO keeps the denoiser on the proven GLSL pass
+            // until a live frame has validated the guides.  AUTO still reports a real Slang blocker instead of blaming
             // the denoiser, which is the consequence, not the cause.
             String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
-            pathSlangUnavailableReason = blocker != null ? blocker
-                : "a G-buffer denoiser is selected and the Slang path writes no G-buffer";
-            if (selector == RtConfig.PathTracer.AUTO) {
-                logSlangUnavailable(pathSlangUnavailableReason);
+            if (blocker == null) {
+                if (denoiseMode != DenoiserMode.DLSS_RR) {
+                    blocker = "the " + denoiseMode + " layout needs the world-space motion buffer"
+                        + " the Slang path does not fill yet";
+                } else if (selector == RtConfig.PathTracer.AUTO) {
+                    blocker = "AUTO keeps the GLSL path when a denoiser is selected";
+                }
             }
-            return null;
+            if (blocker != null) {
+                pathSlangUnavailableReason = blocker;
+                if (selector == RtConfig.PathTracer.AUTO) {
+                    logSlangUnavailable(blocker);
+                }
+                return null;
+            }
         }
         String debugView = RtConfig.currentDebugView();
         if (!debugView.isEmpty()) {
@@ -1458,7 +1468,7 @@ public final class RtFrameRenderer {
         }
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
-            String problem = RtSlangPathPass.supportProblem(runtime);
+            String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
             if (problem != null) {
                 pathSlangUnavailableReason = problem;
                 if (selector == RtConfig.PathTracer.AUTO) {

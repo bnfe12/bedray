@@ -149,6 +149,163 @@ Targeted evidence after the fix: `74 tests, 0 failures` for `RtSlang*`,
 `RtRestirSettingsTest` and `SlangPassLibraryTest`, `BUILD SUCCESSFUL`. This is
 L2 (Java source scans, no GPU, no game). It does not change the L1 shader
 compile evidence or prove runtime behaviour.
+## 2026-10-29 — DLSS-RR guide channels from the typed path (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20, same flags as below.
+
+Source changes covered by this run:
+
+- `pathtrace/path_tracer.slang` fills `PathTraceResult.primary`
+  (`PathPrimaryGuide`: position, view-facing normal, albedo floored at 0.02,
+  F0, direct NEE, roughness, metallic) at the primary vertex, after the
+  filtered-shadow mask and before `result.radiance += throughput * direct`, so
+  the guide describes exactly the surface the radiance was shaded on.
+  `PATH_TRACE_OPTION_GBUFFER` (bit 0) reuses the `PathTraceOptions.flags` word
+  that was always 0 and no shader reads as a sample property; the push stays
+  112 B.
+- `passes/path_trace.slang` and `passes/path_trace_scene.slang` gained
+  bindings 26–32 in the denoiser order: `outViewZ` (R32F),
+  `outNormalRough`, `outSpecular`, `outDiffuse`, `outDirect` (RGBA16F),
+  `outAlbedo`, `outSpecAlbedo` (RGBA8), and `pathTraceWriteGuides`, which
+  follows `rt_path.comp`: view Z from the camera forward, sky as
+  1e6 / (0,0,1,1) / zeros, `diffuse = radiance - direct` with the primary hit
+  distance in `.a`, specular zero for the path tracer, and the legacy specular
+  albedo rule (`metal > 0.5 || roughness < 0.6 ? (metal ? albedo : F0) : 0`).
+  The call is gated by the option bit, not by the pixel.
+- `RtPathTraceSlangPass` gained `Guides` (seven views, all-or-nothing),
+  three pass-owned 1×1 dummy images (R32F, RGBA16F, RGBA8) so the descriptor
+  set is complete in either mode, and a `record` check that throws when the
+  option bit and the bound guides disagree. `ReferencePathTraceBackend` and
+  `RtSlangPathPass` pass `views.gbuffer()` and set the bit only when all seven
+  views exist; `RtFrameRenderer` now allows explicit `SLANG` + `DLSS_RR`,
+  still refuses `NRD` (the RR packer consumes images only, but the NRD layout
+  also reads the primary hit's world-space motion from `pc.motionAddr`, which
+  the Slang path does not fill), refuses the C++ path backend (writes no
+  guides), and keeps `AUTO` on the GLSL pass while a denoiser is selected.
+- New `RtSlangGbufferGuidesTest` (7 guards) pins the capture point, the
+  split-radiance identity, the sky pattern, the option gating on both sides,
+  the short-array rejection, the denoiser channel order and the renderer
+  policy. `SlangPassLibraryTest` pins 25 bindings; the entity guard that named
+  the `record` argument list was updated for the new `Guides` argument.
+
+The first full-suite run of this batch failed exactly that entity guard
+(`theFrameHandsTheCapturedRingToThePass`, argument list pinned without the new
+`Guides` argument); the guard was updated and both the targeted test and the
+full suite below were rerun on the fixed source.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | `path_trace` 550704 B, `path_trace_scene` 562520 B, 25 bindings, 112 B push |
+| Harnesses | 6 | 6 | unchanged |
+| Targeted `:common:test` | 26 tests | 0 failures | `RtSlangGbufferGuidesTest` 7, `SlangPassLibraryTest` 9, `RtPathTraceSlangPassTest` 10 |
+| `:common:test` | 725 tests | 0 failures | 3 skipped |
+
+This is L1/L2 only. It proves the guides compile in both path roots and the
+source/host guards agree; no GPU dispatch, frame or screenshot exists, the
+denoiser has not consumed these images, and no owner-verified image of the
+Slang path exists. The guides were captured at the primary vertex of a path
+whose radiance may still be rejected by the display pass (invalid/truncated
+samples), so a rejected pixel can carry a guide; the denoiser's own history
+rejection is expected to absorb that once a live frame is measured.
+
+## 2026-10-29 — water volumetric medium in the typed path (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20,
+`-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major
+-I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `surface/water.slang` gained the medium: `WATER_CLEAR_ABSORPTION`
+  (0.17, 0.036, 0.013), `WATER_SCATTERING` 0.055 and
+  `WATER_MULTIPLE_SCATTER_FLOOR` 0.65 (the legacy `rt_common_water.glsl`
+  values), `waterSigmaT` (clear absorption + biome dye + scattering),
+  `WaterMedium {inside, sigmaT, scatterAlbedo, surfY}`, `noWaterMedium`,
+  `waterMediumFrom`, `waterSegmentTransmittance`, `waterInScatter` (depth at
+  the segment midpoint, 0.65 depth falloff) and the horizontal-face
+  `waterEntersMedium`/`waterLeavesMedium` rules.
+- `surface/surface.slang` makes the fluid interface clear
+  (`material.albedo = float3(1.0)`, IOR 1.333, transmission 1) so the colour is
+  distance absorption rather than a painted tint; `surfaceTransmittance` keeps
+  the legacy `(1 - F) * waterBiomeTint * 0.85` sheet for callers without medium
+  state, and the new `surfaceInterfaceTransmittance` returns only the Fresnel
+  share for a fluid.
+- `surface/visibility.slang` gained `traceFilteredVisibilityMedium` and
+  `traceShadowVisibilityMedium`: segment absorption between the receiver and
+  each candidate, fluid interfaces as Fresnel-only filters, medium toggling on
+  horizontal fluid faces, tail absorption on a miss. Shadow rays add no
+  in-scatter. The medium-blind walk is unchanged.
+- `pathtrace/path_tracer.slang` carries `WaterMedium` along the path: a
+  refracted transmission (`BSDF_LOBE_TRANSMISSION`) through a horizontal fluid
+  face enters or leaves the body (reflections and TIR do not), every segment
+  inside is absorbed by `waterSegmentTransmittance` and adds
+  `waterInScatter` (downwelling from `environment.radiance(up)`), and
+  `pathTraceDirectTerm` shadows through `traceShadowVisibilityMedium`. A cutout
+  advance moves the ray origin, so the segment start tracks `-rayBias`.
+  `PATH_TRACE_FLAG_WATER_MEDIUM` marks a path that entered the body.
+- `verify_water.slang` extended with the medium entries (dye dominance,
+  scatter albedo below one, outside body clear and non-scattering, absorption
+  falling with length, positive in-scatter, enter/leave truth table).
+- New `RtSlangWaterMediumTest` (6 guards) keeps the Slang constants on the
+  legacy numerics and pins the interface-clear, shadow-medium and
+  toggle-on-refraction rules.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | `path_trace` 546524 B, `path_trace_scene` 558340 B, 18 bindings, 112 B push |
+| Harnesses | 6 | 6 | `verify_water.slang` now also reads the medium |
+| Targeted `:common:test` | 16 tests | 0 failures | `RtSlangWaterMediumTest` 6, `RtWaterMediumTest` 7, `RtSlangVisibilityOverflowTest` 3 |
+| `:common:test` | 718 tests | 0 failures | 3 skipped |
+
+This is L1/L2 only.  It proves the medium compiles in both path roots and the
+source guards hold; no GPU dispatch, frame or screenshot exists, and the
+underwater look is not owner-verified.  Not modelled, documented in the module
+header: a camera that starts inside water, Snell refraction and caustics of the
+underwater NEE beam, side-aware IOR on an exit face, and the `waterStyle`
+switch.
+
+## 2026-10-29 — water surface model in the typed path (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline` (merge `cbe478f`). Tool: `slangc` 2026.20,
+`-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major
+-I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `surface/water.slang` is new: the six-wave slope field with pixel-footprint
+  filtering and the filtered-out slope variance, `waterWaveNormal` (horizontal
+  faces only, downhill shift on flowing top quads, same-side guard),
+  `cardinalFaceShade`/`waterBiomeTint` (the legacy division of the baked face
+  shade out of the vertex colour) and `waterIsSurface` (translucent,
+  `luminance(f0) <= 0.025`, `roughness <= 0.035`, `metallic < 0.5` - glass at
+  f0 0.04 and ice at roughness 0.05 stay panes). Ported from
+  `rt_caustics.glsl`, `rt_common_surface.glsl` and `rt_common_water.glsl`.
+- `surface/surface.slang` assigns `MATERIAL_SOURCE_FLUID`, `AlphaMode.Optical`,
+  IOR 1.333 and the realistic-style surface (full wave normal, sheen from the
+  lost variance) when the triangle is a fluid, and `surfaceTransmittance`
+  filters a fluid by `(1 - F) * waterBiomeTint * 0.85` instead of the sprite
+  alpha slab.
+- Not ported, documented in the module header: the volumetric medium (depth
+  absorption, in-scattering, Snell refraction, caustics) and the legacy
+  `waterStyle` switch.
+- New compile harness `verify_water.slang`.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | `path_trace` 523968 B, `path_trace_scene` 535784 B, 18 bindings, 112 B push |
+| Harnesses | 6 | 6 | `verify_water.slang` added to the five existing ones |
+| `:common:test` | 712 tests | 0 failures | 3 skipped |
+
+This is L1/L2 only.  It proves module resolution, both path roots compiling
+with the water decode, and that no Java contract test regressed.  No GPU
+dispatch, frame or side-by-side screenshot exists; a flat pane and a wave
+surface compile identically.
 
 ## 2026-10-28 — typed RC store split and entry status (L1 compile)
 
@@ -734,3 +891,200 @@ exercise quota/order, failed copy and eviction retry, identical remesh/tag chang
 stale snapshots, camera changes, budget enforcement and clear/rescan. Shader and
 native sources are unchanged; native/AOT evidence is reused for those exact
 sources. Matching GPU/game verification remains outstanding; native stays opt-in.
+
+## 2026-10-28 — entity capture leases follow exact recording proof
+
+Base `99228bcff711ceb037a7675fb875819a541df18b`. Extracted host entity GPU
+storage into EntityCaptureBuffers, using RecordingResourceOwner for exclusive
+writable slices and shared immutable atlas generations. Exhausted slots allocate
+a new generation. Replaced modulo slot overwrite and fixed-frame destruction
+with release through RtWorld's exact completion/discard action. World/device
+identity is checked; close refuses outstanding recordings. Partial allocation,
+atlas-copy and destructor failure retain retryable ownership. Untracked GPU
+upload overloads now reject work; null-memory compatibility remains available.
+
+Also corrected staged-quad index packing: it previously wrote the 65,536-quad
+template into an allocation that could be only 256 KiB. EntityQuadIndices now
+checks the mapped range before writing the actual quad count. No shader math,
+bindings, native implementation or ABI layout changed.
+
+Executed Java compilation and 109 selected tests, zero failures/errors/skips:
+the preceding 92 checks, RecordingResourceOwnerTest (6), EntityCaptureBuffersTest
+(6), and RtEntityUploadTest (5). The fault-injection cases cover slot pressure,
+shared atlas readers, stale tickets, foreign owners, partial create/copy/destroy,
+close retry, quad-buffer reuse and bounded index writes. Command uses the same
+local dependencies/JDK/Slang SDK, `--offline --max-workers=2 :common:test` with
+the preceding test filters plus the three classes above. `git diff --check`
+passes. Native sources and all 18 AOT pass sources are unchanged.
+
+An initial broader `*RtEntity*Test` run was interrupted while the unchanged
+RtEntityHermeticityTest.testShaderCompilation spent several minutes in native
+shaderc compiling legacy GLSL. That interrupted run is not passing evidence;
+the subsequent focused command completed successfully. No GPU/game claim.
+
+## 2026-10-28 — immutable emitter publications with completion leases
+
+Base `fcc0f799e4f10dcb86fd15da4a06d0246490bde9`. Replaced the unproven three-
+segment emitter overwrite rule with EmitterCaptureBuffers. Each selected list
+is copied into fresh immutable storage; unchanged lists share storage and every
+reading recording pins it through RecordingResourceOwner. Publications allocate
+only the selected record bytes, empty lists allocate nothing, and old storage
+retires only after all readers' completion/discard. The frame ticket captures
+the exact RtEmitters owner before recording begins. Selection/scan logic stays
+in RtEmitters; GPU allocation/copy/retirement is in the separate storage module.
+Published origin/count/fingerprint change after the copy. No emitter math,
+record layout, shader source, native implementation or ABI layout changed.
+
+Java compilation and 134 selected tests pass, zero failures/errors/skips.
+Command repeats the preceding 109-test filters and adds EmitterCaptureBuffersTest
+(7), RtEmittersStabilityTest (10), RtEmitterScanPassTest (6), and QuadEmitterBuilderTest
+(2). New no-GPU tests cover shared lists, ten outstanding readers, byte-exact
+packing/range guards, empty lists, allocation/copy/cleanup failures, close refusal
+and a late completion callback after command-handle reuse through the real host
+ticket bridge. `git diff --check` passes. The existing native/18-pass AOT evidence
+applies to unchanged implementation sources; no identical native CI repeated.
+This changes allocation behavior but has no measured GPU/performance/game result.
+
+## 2026-10-28 — reconcile migration contracts with the backend boundary
+
+Base `65ad244eb3ffd131525778053cd13dfc389a8fda`. Refreshed native ownership,
+explicit selection failure, embedded scene, DI, graph/scheduler and host-fence
+descriptions in SLANG_MIGRATION and the integration plan. The earlier graph gap
+analysis is retained as a clearly superseded historical checkpoint, with the
+current implementation/decision document taking precedence. Supporting post
+passes, arbitrary cross-node image contracts, shader parity and GPU/game
+acceptance are not declared complete.
+
+RtRestirSettingsTest still searched for allocation/dispatch code in the old
+controller. Baseline command `:common:test --tests '*RtRestirSettingsTest'`
+ran five cases: four pass, thePathTracerSplitsTheRingFromTheReuse fails at the
+obsolete dispatch source assertion. Updated that guard to follow the real
+controller request, reference allocation/dispatch and required native-DI coarse
+flag; persistence, UI/dependency, reset and ray-pass checks remain intact.
+
+Candidate repeats the preceding 134-test command with RtRestirSettingsTest:
+139 tests pass, zero failures/errors/skips, Gradle exits 0. `git diff --check`
+passes. Production Java, native implementation, shader sources and ABI layouts
+are unchanged in this contract/documentation change. No new GPU/game evidence.
+
+## 2026-10-28 — coarse native bloom recorder
+
+Base `bc1bf8d36e6e9bba2a7a1e9ecd294775fc5aa66e`. BloomPass now owns the existing
+six-mip prefilter/down/up/apply chain, transitions, entry/inter-dispatch/exit
+barriers and exact image-generation pins. RtBloomPass supplies borrowed runtime
+programs/samplers, host views and the unchanged 128-byte push payload through
+BedrayBloomNative. One coarse call records twelve dispatches with bloom or one
+glare-only apply. The adapter contains no image owner, per-dispatch binding table,
+dispatch loop or Vulkan barrier. Removed its duplicate mip-size implementation;
+the corresponding old Java helper checks now exercise the native implementation
+in bloom_pass_test.cpp. Path trace and bloom tests share one fake pass driver.
+
+The additive bedray_bloom.h descriptors are 64/56 bytes with version/size guards,
+native offset assertions and Java FFM layout/slice tests. Existing ABI v2 layouts,
+shader bindings and shader math are unchanged. Programs remain borrowed from
+SlangRuntime. Matching bloom exports are required; no GLSL fallback is added.
+
+Resize retains old pinned generations. A discarded current generation forces
+fresh mip images because its transitions may not have executed; discarding an
+older generation cannot invalidate a newer one. Close/reconfigure refuse pending
+recordings. Device loss stops new recording and retains the whole lost pool until
+every affected command buffer receives host completion/discard proof, then frees
+it together. An intermediate CI run on 5faae45 exposed that the lost image owner
+rejects ordinary complete_use calls; this final bulk cleanup follows all host
+proofs instead of assuming individual lost-owner operations still work.
+
+Final native implementation/test revision `b8186f9092b1b56165e2177741691bb855f7862e`:
+[Windows CI run 40787939814](https://github.com/bnfe12/bedray/actions/runs/40787939814)
+passes baseline core 15/15 + scene 1/1 + lifetime 1/1 and candidate core 19/19 +
+scene 1/1 + lifetime 1/1; ABI probe v2 exits 0. Tests include dispatch order/groups,
+binding contracts, byte-exact pushes, glare-only mode, resize, partial allocation/
+recording failure, discard, unsupported extent and loss with two pending readers.
+
+Final Java command repeats the preceding 139-test filters with BedrayBloomNativeTest
+(3): 142 tests pass, zero failures/errors/skips; Java/test compilation exits 0.
+It uses `--offline --max-workers=1`, JDK25 and the same local dependencies, with
+Gradle JVM `-Xms32m -Xmx768m -XX:MaxMetaspaceSize=384m -XX:+UseSerialGC
+-XX:ActiveProcessorCount=2`. Earlier attempts failed before tests when Windows
+commit memory was exhausted (JVM native allocation/metaspace failures); those are
+not passing evidence. The completed retry and final run succeed. A source-body
+comparison also confirms fillPushConstants is unchanged from the base.
+
+`git diff --check` passes. All 18 AOT shader sources are unchanged. No GPU/game,
+visual parity or performance claim. Supporting volumetric integration remains
+blocked on its legacy-section shader boundary; it cannot consume a native table
+merely because the record byte size matches.
+
+## 2026-10-29 — native compatibility with the shader-owner guide contract
+
+Base `486a0841ae81bbd32c7f23719028d882ca927c0b` includes the shader-owner entity,
+water and DLSS-RR guide changes through edb6a72. Those entries now declare 25
+bindings; the native pass still required 18 and therefore could not configure
+against the current AOT programs. C++ now validates either complete contract,
+independently for the legacy/native scene program. Current programs bind three
+native-owned one-texel images with the exact R32F/RGBA16F/RGBA8 formats at guide
+bindings 26..32. Their pins, transitions and destruction follow the pass's existing
+recording proof. A guide-write request is explicitly unsupported before pins or
+commands; this change does not claim native denoiser output.
+
+The additive GUIDE_BINDINGS feature distinguishes matching DLLs before program
+registration. Old 18-binding C ABI clients remain supported; ABI-v2 structures
+and shader sources are unchanged. Native FFM packing now reuses the canonical
+112-byte Dispatch writer. It preserves the shader owner's auto-normal strength
+in entityState.w, which the old native adapter still forced to zero, while
+retaining the bound-entity range normalization for the first three lanes.
+
+[Native CI run 40803800553](https://github.com/bnfe12/bedray/actions/runs/40803800553)
+on native revision `0ed486ec64dedcbb67fddf732caca67d26e1b7f6`: candidate core
+19/19, standalone scene 1/1 and lifetime 1/1 pass; baseline core 15/15 plus the
+same two standalone checks passes; ABI probe v2 exits 0. The new path test covers
+malformed guide bindings, partial stand-in allocation cleanup, formats/extents,
+inactive guide descriptors, forbidden writes before recording, discard and mixed
+18/25-binding scene variants. The shared fake driver now records view/image/format
+identity so those assertions inspect the actual bound resources.
+
+Java compilation and 160 selected tests pass, zero failures/errors/skips. The
+preceding filters now include the shader owner's water/guide tests via
+`*RtSlang*Test` and two new BedrayPathTraceNativeTest cases. They compare all
+112 packet bytes for heap/native storage, guard both ends, preserve the auto-normal
+lane and validate entity normalization. Their first run caught an alignment
+assumption in the new helper's heap override; using the same ByteBuffer packet
+writer for that override fixes it. The final repeated command exits 0. JDK,
+dependency paths and bounded Gradle JVM settings match the preceding batch.
+The current 18 production AOT passes freshly compile during the first run.
+
+`git diff --check` passes. No GPU/game or visual result; native remains opt-in.
+Full native guide output and the volumetric scene boundary remain separate work.
+
+## 2026-10-29 — borrowed native guide outputs for DLSS-RR
+
+Base `7cba8972b94a9e108df8611bd8e93a33cb073460`. The additive
+`bedray_core_render_path_trace_guides` call and GUIDE_OUTPUTS feature accept the
+separate 64-byte BedrayPathTraceGuides descriptor; old ABI-v2 structures and
+exports are unchanged. All seven non-zero GENERAL views and the G-buffer option
+are required together. The existing opaque graph forwards borrowed POD
+synchronously to the same path pass; no second history or barrier authority is
+introduced. The host retains the targets through exact completion/discard. The
+native pass never creates, transitions or destroys those external targets.
+
+Java checks matching native feature/export before selecting native guide output,
+validates flag/targets before configure, and explicitly maps the denoiser's array
+order to bindings 26..32 (specular precedes diffuse in the shader). Explicit
+native SLANG + DLSS-RR is enabled with a matching core; AUTO retains the existing
+live-acceptance gate and NRD still requires primary world-space motion.
+
+Native revision `f49c2700a28610d50c90c0115aceef4381096a86` passes
+[Windows CI 40807393855](https://github.com/bnfe12/bedray/actions/runs/40807393855):
+candidate core 19/19 + scene 1/1 + lifetime 1/1; baseline core 15/15 + scene 1/1 +
+lifetime 1/1; ABI-v2 probe exits 0 on both. The pass test now checks real targets,
+invalid ABI/size/missing views/flag agreement before commands, active-to-inactive
+descriptor replacement, both scene variants, partial failure/discard and legacy
+18-binding rejection of real guides. The fake driver faults if borrowed host
+views are destroyed. The graph test checks synchronous guide forwarding.
+
+Java compilation and 161 selected tests pass, zero failures/errors/skips (51s),
+using the preceding filters, local dependencies and bounded JVM settings. The
+additional case verifies distinct guide channels, ABI header, heap/native packet
+packing, both range guards and malformed inputs. Shader compilation is up to
+date from the preceding 18-pass run; shader sources are unchanged in this batch.
+`git diff --check` passes. No GPU/game, visual parity or performance evidence;
+native remains opt-in. The volumetric native-scene boundary remains separate.

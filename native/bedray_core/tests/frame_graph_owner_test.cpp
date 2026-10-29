@@ -13,11 +13,13 @@ VKAPI_ATTR void VKAPI_CALL barrier(VkCommandBuffer, VkPipelineStageFlags, VkPipe
 struct Context {
     FrameGraphOwner* owner = nullptr;
     int records = 0, releases = 0;
+    std::uint64_t last_guide_view = 0;
     BedrayStatus record_status = BEDRAY_OK, release_status = BEDRAY_OK;
 };
-BedrayStatus record(void* pointer, const BedrayPathTraceFrameDesc&, BedrayError* error) {
+BedrayStatus record(void* pointer, const BedrayPathTraceFrameDesc&, const BedrayPathTraceGuides* guides, BedrayError* error) {
     auto& c = *static_cast<Context*>(pointer);
     ++c.records;
+    c.last_guide_view = guides ? guides->view_z : 0;
     if (error) error->status = c.record_status;
     return c.record_status;
 }
@@ -47,7 +49,10 @@ int main() {
     check(owner.configure(caps, 3, barrier, record, release, &context, &error) == BEDRAY_OK);
     check(owner.record(frame(10), &error) == BEDRAY_OK);
     check(owner.record(frame(10), &error) == BEDRAY_ERROR_IN_USE);
-    check(owner.record(frame(11), &error) == BEDRAY_OK);
+    BedrayPathTraceGuides guides{BEDRAY_CORE_ABI_VERSION, sizeof(BedrayPathTraceGuides), 101,102,103,104,105,106,107};
+    check(owner.record(frame(11), &error, &guides) == BEDRAY_OK);
+    guides.view_z = 999;
+    check(context.last_guide_view == 101); // Consumed synchronously; scheduler does not retain borrowed POD.
     check(owner.record(frame(12), &error) == BEDRAY_ERROR_IN_USE);
     check(context.records == 2 && barriers == 0); // pass is the only barrier authority
     check(owner.release_proven(10, &error) == BEDRAY_OK);

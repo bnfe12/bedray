@@ -4,6 +4,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include "path_trace_pass.h"
+#include "bloom_pass.h"
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
 #include "frame_graph_owner.h"
 #endif
@@ -118,6 +119,7 @@ struct BedrayCore {
 
     bedray::core::DeviceFns device_fns{};
     std::unique_ptr<bedray::core::PathTracePass> path_trace;
+    std::unique_ptr<bedray::core::BloomPass> bloom;
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
     std::unique_ptr<bedray::core::FrameGraphOwner> frame_graph;
 #endif
@@ -317,7 +319,7 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_abi_version(void) try {
 }
 
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
-    return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI;
+    return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS | BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS;
 } catch (...) {
     return 0;
 }
@@ -629,6 +631,11 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy(BedrayCore* core) try {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
     if (!core->recordings.empty()) return BEDRAY_ERROR_IN_USE;
+    if (core->bloom) {
+        const BedrayStatus status = core->bloom->destroy();
+        if (status != BEDRAY_OK) return status;
+        core->bloom.reset();
+    }
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
     if (core->frame_graph && core->frame_graph->has_recordings()) return BEDRAY_ERROR_IN_USE;
 #endif
@@ -937,7 +944,8 @@ BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
     program->retired = true;
     const bool in_use = std::any_of(core->recordings.begin(), core->recordings.end(),
         [program](const RecordingUse& use) { return use.program == program; })
-        || (core->path_trace && core->path_trace->uses_program(program_handle));
+        || (core->path_trace && core->path_trace->uses_program(program_handle))
+        || (core->bloom && core->bloom->uses_program(program_handle));
     if (!in_use) {
         core->programs.erase(std::remove(core->programs.begin(), core->programs.end(), program), core->programs.end());
         destroy_program(core, program);
@@ -968,7 +976,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
         BedrayProgram* program = *it;
         const bool in_use = std::any_of(core->recordings.begin(), core->recordings.end(),
             [program](const RecordingUse& use) { return use.program == program; })
-            || (core->path_trace && core->path_trace->uses_program(program->handle));
+            || (core->path_trace && core->path_trace->uses_program(program->handle))
+            || (core->bloom && core->bloom->uses_program(program->handle));
         if (program->retired && !in_use) {
             it = core->programs.erase(it);
             destroy_program(core, program);
@@ -982,6 +991,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_release_recording(
             return status;
         }
     }
+    if (core->bloom) return core->bloom->release_recording(command_buffer);
     return BEDRAY_OK;
 } catch (const std::bad_alloc&) {
     return BEDRAY_ERROR_OUT_OF_MEMORY;
@@ -993,6 +1003,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_discard_recording(
     BedrayCore* core, uint64_t command_buffer) try {
     if (core == nullptr || command_buffer == 0) return BEDRAY_ERROR_INVALID_ARGUMENT;
     if (core->path_trace) core->path_trace->discard_recording(command_buffer);
+    if (core->bloom) core->bloom->discard_recording(command_buffer);
     return bedray_core_release_recording(core, command_buffer);
 } catch (...) {
     return BEDRAY_ERROR_INTERNAL;
@@ -1288,8 +1299,9 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
     }
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
     auto frame_graph = std::make_unique<bedray::core::FrameGraphOwner>();
-    const auto record = [](void* pointer, const BedrayPathTraceFrameDesc& frame, BedrayError* err) {
-        return static_cast<BedrayCore*>(pointer)->path_trace->render(frame, err);
+    const auto record = [](void* pointer, const BedrayPathTraceFrameDesc& frame,
+        const BedrayPathTraceGuides* guides, BedrayError* err) {
+        return static_cast<BedrayCore*>(pointer)->path_trace->render(frame, err, guides);
     };
     const auto release = [](void* pointer, std::uint64_t command) {
         return bedray_core_release_recording(static_cast<BedrayCore*>(pointer), command);
@@ -1307,10 +1319,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring path trace");
 }
 
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
-    BedrayCore* core,
-    const BedrayPathTraceFrameDesc* desc,
-    BedrayError* error) try {
+static BedrayStatus record_path_trace(BedrayCore* core, const BedrayPathTraceFrameDesc* desc,
+    const BedrayPathTraceGuides* guides, BedrayError* error) {
     clear_error(error);
     if (core == nullptr || desc == nullptr) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/desc is null");
@@ -1322,15 +1332,34 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
     if (!core->path_trace) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
     }
+    if (guides && (guides->abi_version != BEDRAY_CORE_ABI_VERSION || guides->struct_size != sizeof(*guides)))
+        return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "path-trace guide ABI/size mismatch");
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
-    return core->frame_graph->record(*desc, error);
+    return core->frame_graph->record(*desc, error, guides);
 #else
-    return core->path_trace->render(*desc, error);
+    return core->path_trace->render(*desc, error, guides);
 #endif
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
+    BedrayCore* core, const BedrayPathTraceFrameDesc* desc, BedrayError* error) try {
+    return record_path_trace(core, desc, nullptr, error);
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path trace");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_guides(
+    BedrayCore* core, const BedrayPathTraceFrameDesc* desc,
+    const BedrayPathTraceGuides* guides, BedrayError* error) try {
+    clear_error(error);
+    if (!guides) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "guide outputs are null");
+    return record_path_trace(core, desc, guides, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate guided path-trace frame");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording guided path trace");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* core) try {
@@ -1355,6 +1384,49 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* c
     core->frame_graph.reset();
 #endif
     return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return BEDRAY_ERROR_OUT_OF_MEMORY;
+} catch (...) {
+    return BEDRAY_ERROR_INTERNAL;
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_bloom(
+    BedrayCore* core, const BedrayBloomDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/bloom desc is null");
+    if (core->bloom && core->bloom->has_recordings()) return fail(error, BEDRAY_ERROR_IN_USE, "bloom recordings pending");
+    auto pass = std::make_unique<bedray::core::BloomPass>();
+    auto status = pass->configure(core, core->device_fns, *desc, error);
+    if (status != BEDRAY_OK) return status;
+    if (core->bloom) {
+        status = core->bloom->destroy();
+        if (status != BEDRAY_OK) return status;
+    }
+    core->bloom = std::move(pass);
+    return BEDRAY_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate bloom pass");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring bloom");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_bloom(
+    BedrayCore* core, const BedrayBloomFrameDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc || !core->bloom) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "bloom not configured");
+    return core->bloom->render(*desc, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate bloom recording");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording bloom");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_bloom(BedrayCore* core) try {
+    if (!core) return BEDRAY_ERROR_INVALID_ARGUMENT;
+    if (!core->bloom) return BEDRAY_OK;
+    const auto status = core->bloom->destroy();
+    if (status == BEDRAY_OK) core->bloom.reset();
+    return status;
 } catch (const std::bad_alloc&) {
     return BEDRAY_ERROR_OUT_OF_MEMORY;
 } catch (...) {

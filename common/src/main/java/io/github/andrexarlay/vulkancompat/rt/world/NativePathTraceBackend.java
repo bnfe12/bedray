@@ -16,10 +16,18 @@ final class NativePathTraceBackend implements PathTraceBackend {
     private final Set<Long> recordings = new LinkedHashSet<>();
     private boolean closed;
 
+    static String supportProblem(SlangRuntime runtime, boolean guides) {
+        if (!runtime.library().hasPathTrace() || !runtime.library().hasNativeReservoirs()
+            || !runtime.library().hasGuideBindings())
+            return "nativePathTrace requires a core with NATIVE_DI and the 25-binding guide contract";
+        if (guides && !runtime.library().hasNativeGuideOutputs())
+            return "nativePathTrace guide output requires a matching core with GUIDE_OUTPUTS";
+        return null;
+    }
+
     NativePathTraceBackend(SlangRuntime runtime) {
-        if (!runtime.library().hasPathTrace() || !runtime.library().hasNativeReservoirs()) {
-            throw new IllegalStateException("nativePathTrace requires a core with path-trace and NATIVE_DI exports");
-        }
+        String problem = supportProblem(runtime, false);
+        if (problem != null) throw new IllegalStateException(problem);
         this.runtime = runtime;
         SlangProgram trace = runtime.program(RtPathTraceSlangPass.PASS_NAME).orElseThrow();
         RtPathTraceSlangPass.requireManifest(trace);

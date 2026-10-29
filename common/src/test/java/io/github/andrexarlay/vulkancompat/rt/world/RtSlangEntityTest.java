@@ -184,7 +184,9 @@ class RtSlangEntityTest {
         assertTrue(frame.contains("RtPathTraceSlangPass.Entities capturedEntities = entityBindingsOfThisFrame();"),
             "one place reads the manager, so the push and the descriptors cannot disagree");
         assertTrue(frame.contains("trace.record(cmd, scene, atlases, emitters, reservoirRange, capturedEntities, "
-            + "views.depth(), frame, dispatch)") || frame.contains("capturedEntities, views.depth(), frame, dispatch"),
+            + "RtPathTraceSlangPass.Guides.of(views.gbuffer()), views.depth(), frame, dispatch)")
+            || frame.contains("capturedEntities, RtPathTraceSlangPass.Guides.of(views.gbuffer()),\n"
+            + "            views.depth(), frame, dispatch"),
             "the ring travels with the rest of the frame's resources");
         assertTrue(frame.contains("if (!RtConfig.SLANG_ENTITIES)"), "and the switch turns the whole thing off");
 
@@ -312,6 +314,44 @@ class RtSlangEntityTest {
             "the display step reads the tracer's image rather than a second allocation");
         assertTrue(frame.contains("entityView(eg.framePreviousPositions())"),
             "and the previous ring reaches the pass from the same one place as the other slices");
+    }
+
+    @Test
+    void endPortalPartsUseTheProceduralStarfieldInsteadOfTheirCapturedTexel() {
+        String entity = read(ENTITY);
+        assertTrue(entity.contains("static const uint ENTITY_VERTEX_FLAG_END_PORTAL = 0x80u;"),
+            "CapturedVertexConsumer marks end_portal and end_gateway parts with bit 7");
+        assertTrue(entity.contains("result.flags |= HIT_FLAG_ENTITY_END_PORTAL;"),
+            "the geometry decoder carries the part classification to the material layer");
+
+        String surface = block(read(SURFACE), "} else if (hit.kind == HitKind.Entity) {");
+        assertTrue(surface.contains("entityPortalColor(hit.worldPosition, rayDirection, options.portalTime)"),
+            "the portal is procedural and uses the current bounce direction for parallax");
+        assertTrue(surface.contains("emission = 0.95;") && surface.contains("pbr.roughness = 0.05;"),
+            "the legacy portal emission and smooth surface response");
+        assertTrue(read(SURFACE).contains("SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection)"),
+            "a secondary hit needs its own ray direction, not the camera's primary direction");
+        String entry = read(ENTRY);
+        assertTrue(entry.contains("materialOptions.portalTime = f.camera.origin.w;"),
+            "the animation clock comes from the immutable frame block");
+    }
+
+    @Test
+    void entityAutoNormalsPerturbOnlyTheShadingNormal() {
+        String surface = read(SURFACE);
+        assertTrue(surface.contains("float entityAtlasLuminanceOffset(EntityAtlas atlas, uint slot, float2 uv, int2 offset)"),
+            "the Sobel taps are integer atlas texels, not block-atlas samples");
+        assertTrue(surface.contains("float3 decodeEntityAutoNormal(EntityAtlas atlas, SurfaceHit hit,"),
+            "entity normal generation has its own material-stage decoder");
+        String entity = block(surface, "} else if (hit.kind == HitKind.Entity) {");
+        assertTrue(entity.contains("decodeEntityAutoNormal(atlas.entities, hit, geometricNormal, options.autoNormalStrength)"),
+            "the player's strength reaches the entity decode");
+        assertTrue(entity.indexOf("!endPortal") < entity.indexOf("decodeEntityAutoNormal"),
+            "the procedural portal must not inherit a normal from its placeholder texture");
+        assertTrue(!entity.contains("hit.geometricNormal ="),
+            "auto normals never change the geometric normal used to offset shadow rays");
+        assertTrue(read(ENTRY).contains("materialOptions.autoNormalStrength = asfloat(pc.entityState.w);"),
+            "the existing push block carries the strength without growing the ABI");
     }
 
     private static String block(String source, String header) {

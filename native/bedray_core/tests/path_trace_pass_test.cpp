@@ -212,394 +212,12 @@ bool program_has_binding(BedrayCore*, std::uint64_t handle,
 
 } // namespace bedray::core
 
-namespace fake {
-
-struct BufferState {
-    VkDeviceSize size = 0;
-    std::uint64_t memory = 0;
-};
-
-struct MemoryState {
-    std::vector<unsigned char> bytes;
-    bool mapped = false;
-};
-
-struct ImageState {
-    VkDeviceSize allocation = 0;
-    std::uint64_t memory = 0;
-};
-
-struct RenderCall {
-    std::uint64_t command_buffer = 0;
-    std::uint64_t program = 0;
-    std::uint32_t group_x = 0;
-    std::uint32_t group_y = 0;
-    std::uint32_t group_z = 0;
-    std::uint32_t push_bytes = 0;
-    std::vector<BedrayResource> resources;
-    std::vector<unsigned char> push;
-};
-
-struct PhaseCall {
-    std::uint64_t command_buffer = 0;
-    std::uint64_t program = 0;
-    std::uint32_t phase_offset = 0;
-    std::uint32_t phase_count = 0;
-    std::uint32_t push_bytes = 0;
-    std::vector<BedrayResource> resources;
-    std::vector<unsigned char> push;
-};
-
-std::map<std::uint64_t, BufferState> buffers;
-std::map<std::uint64_t, MemoryState> memories;
-std::map<std::uint64_t, ImageState> images;
-std::set<std::uint64_t> views;
-
-std::vector<RenderCall> render_calls;
-std::vector<PhaseCall> phase_calls;
-std::uint32_t fills = 0;
-int render_call_index = 0;
-int fail_render_call = -1;
-BedrayStatus render_fail_status = BEDRAY_OK;
-bool fail_phase_call = false;
-BedrayStatus phase_fail_status = BEDRAY_ERROR_VULKAN;
-
-std::uint64_t next_handle = 0x1000;
-int fail_allocate_after = -1;
-VkResult fail_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-int faults = 0;
-std::uint32_t barriers = 0;
-
-template <typename T>
-std::uint64_t handle_id(T handle) {
-    if constexpr (std::is_pointer_v<T>) {
-        return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(handle));
-    } else {
-        return static_cast<std::uint64_t>(handle);
-    }
-}
-
-template <typename T>
-T make_handle(std::uint64_t id) {
-    return reinterpret_cast<T>(static_cast<std::uintptr_t>(id));
-}
-
-void fail_render_at(int index, BedrayStatus status) {
-    render_call_index = 0;
-    fail_render_call = index;
-    render_fail_status = status;
-}
-
-void reset() {
-    buffers.clear();
-    memories.clear();
-    images.clear();
-    views.clear();
-    render_calls.clear();
-    phase_calls.clear();
-    fills = 0;
-    render_call_index = 0;
-    fail_render_call = -1;
-    render_fail_status = BEDRAY_OK;
-    fail_phase_call = false;
-    phase_fail_status = BEDRAY_ERROR_VULKAN;
-    next_handle = 0x1000;
-    fail_allocate_after = -1;
-    fail_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
-    faults = 0;
-    barriers = 0;
-}
-
-VKAPI_ATTR void VKAPI_CALL cmd_fill_buffer(
-    VkCommandBuffer, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size, std::uint32_t value) {
-    const auto it = buffers.find(handle_id(buffer));
-    if (it == buffers.end() || offset != 0 || size != it->second.size || value != 0) ++faults;
-    ++fills;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL create_buffer(
-    VkDevice, const VkBufferCreateInfo* info, const VkAllocationCallbacks*, VkBuffer* out) {
-    if (info == nullptr || out == nullptr) {
-        ++faults;
-        return VK_ERROR_INITIALIZATION_FAILED;
-    }
-    const std::uint64_t id = next_handle++;
-    buffers.emplace(id, BufferState{info->size, 0});
-    *out = make_handle<VkBuffer>(id);
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR void VKAPI_CALL destroy_buffer(
-    VkDevice, VkBuffer buffer, const VkAllocationCallbacks*) {
-    if (buffers.erase(handle_id(buffer)) != 1) {
-        ++faults;
-    }
-}
-
-VKAPI_ATTR void VKAPI_CALL get_buffer_requirements(
-    VkDevice, VkBuffer buffer, VkMemoryRequirements* out) {
-    const auto it = buffers.find(handle_id(buffer));
-    if (it == buffers.end()) {
-        ++faults;
-        std::memset(out, 0, sizeof(*out));
-        return;
-    }
-    out->size = it->second.size < 256 ? 256 : it->second.size;
-    out->alignment = 16;
-    out->memoryTypeBits = 0x3u;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL allocate_memory(
-    VkDevice, const VkMemoryAllocateInfo* info, const VkAllocationCallbacks*, VkDeviceMemory* out) {
-    if (fail_allocate_after == 0) {
-        const VkResult result = fail_result;
-        fail_allocate_after = -1;
-        return result;
-    }
-    if (fail_allocate_after > 0) {
-        --fail_allocate_after;
-    }
-    if (info == nullptr || out == nullptr) {
-        ++faults;
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
-    }
-    const std::uint64_t id = next_handle++;
-    MemoryState state{};
-    state.bytes.assign(static_cast<std::size_t>(info->allocationSize), 0);
-    memories.emplace(id, std::move(state));
-    *out = make_handle<VkDeviceMemory>(id);
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR void VKAPI_CALL free_memory(
-    VkDevice, VkDeviceMemory memory, const VkAllocationCallbacks*) {
-    if (memories.erase(handle_id(memory)) != 1) {
-        ++faults;
-    }
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL bind_buffer_memory(
-    VkDevice, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize) {
-    const auto it = buffers.find(handle_id(buffer));
-    if (it == buffers.end()) {
-        ++faults;
-        return VK_ERROR_UNKNOWN;
-    }
-    it->second.memory = handle_id(memory);
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL map_memory(VkDevice, VkDeviceMemory memory, VkDeviceSize offset,
-    VkDeviceSize, VkMemoryMapFlags, void** data) {
-    const auto it = memories.find(handle_id(memory));
-    if (it == memories.end() || offset > it->second.bytes.size()) {
-        ++faults;
-        return VK_ERROR_MEMORY_MAP_FAILED;
-    }
-    it->second.mapped = true;
-    *data = it->second.bytes.data() + static_cast<std::size_t>(offset);
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR void VKAPI_CALL unmap_memory(VkDevice, VkDeviceMemory memory) {
-    const auto it = memories.find(handle_id(memory));
-    if (it == memories.end()) {
-        ++faults;
-        return;
-    }
-    it->second.mapped = false;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL flush_memory(
-    VkDevice, std::uint32_t, const VkMappedMemoryRange*) {
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL invalidate_memory(
-    VkDevice, std::uint32_t, const VkMappedMemoryRange*) {
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL get_image_format_properties(VkPhysicalDevice, VkFormat,
-    VkImageType, VkImageTiling, VkImageUsageFlags, VkImageCreateFlags,
-    VkImageFormatProperties* out) {
-    std::memset(out, 0, sizeof(*out));
-    out->maxExtent.width = 16384;
-    out->maxExtent.height = 16384;
-    out->maxExtent.depth = 1;
-    out->maxMipLevels = 1;
-    out->maxArrayLayers = 1;
-    out->sampleCounts = VK_SAMPLE_COUNT_1_BIT;
-    out->maxResourceSize = 1ull << 30;
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL create_image(
-    VkDevice, const VkImageCreateInfo* info, const VkAllocationCallbacks*, VkImage* out) {
-    if (info == nullptr || out == nullptr) {
-        ++faults;
-        return VK_ERROR_INITIALIZATION_FAILED;
-    }
-    const VkDeviceSize pixels =
-        static_cast<VkDeviceSize>(info->extent.width) * static_cast<VkDeviceSize>(info->extent.height);
-    const std::uint64_t id = next_handle++;
-    images.emplace(id, ImageState{pixels * 16u < 4096u ? 4096u : pixels * 16u, 0});
-    *out = make_handle<VkImage>(id);
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR void VKAPI_CALL destroy_image(VkDevice, VkImage image, const VkAllocationCallbacks*) {
-    if (images.erase(handle_id(image)) != 1) {
-        ++faults;
-    }
-}
-
-VKAPI_ATTR void VKAPI_CALL get_image_requirements(
-    VkDevice, VkImage image, VkMemoryRequirements* out) {
-    const auto it = images.find(handle_id(image));
-    if (it == images.end()) {
-        ++faults;
-        std::memset(out, 0, sizeof(*out));
-        return;
-    }
-    out->size = it->second.allocation;
-    out->alignment = 16;
-    out->memoryTypeBits = 0x3u;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL bind_image_memory(
-    VkDevice, VkImage image, VkDeviceMemory memory, VkDeviceSize) {
-    const auto it = images.find(handle_id(image));
-    if (it == images.end()) {
-        ++faults;
-        return VK_ERROR_UNKNOWN;
-    }
-    it->second.memory = handle_id(memory);
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL create_view(
-    VkDevice, const VkImageViewCreateInfo* info, const VkAllocationCallbacks*, VkImageView* out) {
-    if (info == nullptr || images.find(handle_id(info->image)) == images.end()) {
-        ++faults;
-        return VK_ERROR_UNKNOWN;
-    }
-    const std::uint64_t id = next_handle++;
-    views.insert(id);
-    *out = make_handle<VkImageView>(id);
-    return VK_SUCCESS;
-}
-
-VKAPI_ATTR void VKAPI_CALL destroy_view(
-    VkDevice, VkImageView view, const VkAllocationCallbacks*) {
-    if (views.erase(handle_id(view)) != 1) {
-        ++faults;
-    }
-}
-
-VKAPI_ATTR void VKAPI_CALL cmd_pipeline_barrier(VkCommandBuffer, VkPipelineStageFlags,
-    VkPipelineStageFlags, VkDependencyFlags, std::uint32_t, const VkMemoryBarrier*,
-    std::uint32_t, const VkBufferMemoryBarrier*, std::uint32_t, const VkImageMemoryBarrier*) {
-    ++barriers;
-}
-
-} // namespace fake
-
-extern "C" BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
-    BedrayCore*, const BedrayFrameDesc* desc, BedrayError*) {
-    fake::RenderCall call{};
-    if (desc != nullptr) {
-        call.command_buffer = desc->command_buffer;
-        call.program = desc->program;
-        call.group_x = desc->group_count_x;
-        call.group_y = desc->group_count_y;
-        call.group_z = desc->group_count_z;
-        call.push_bytes = desc->push_constant_bytes;
-        if (desc->resources != nullptr) {
-            call.resources.assign(desc->resources, desc->resources + desc->resource_count);
-        }
-        if (desc->push_constants != nullptr && desc->push_constant_bytes != 0) {
-            const auto* bytes = static_cast<const unsigned char*>(desc->push_constants);
-            call.push.assign(bytes, bytes + desc->push_constant_bytes);
-        }
-    }
-    const int index = fake::render_call_index++;
-    fake::render_calls.push_back(std::move(call));
-    if (index == fake::fail_render_call) {
-        return fake::render_fail_status;
-    }
-    return BEDRAY_OK;
-}
-
-extern "C" BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_phases(
-    BedrayCore*, const BedrayFrameDesc* desc, std::uint32_t phase_offset,
-    std::uint32_t phase_count, BedrayError*) {
-    fake::PhaseCall call{};
-    if (desc != nullptr) {
-        call.command_buffer = desc->command_buffer;
-        call.program = desc->program;
-        call.phase_offset = phase_offset;
-        call.phase_count = phase_count;
-        call.push_bytes = desc->push_constant_bytes;
-        if (desc->resources != nullptr) {
-            call.resources.assign(desc->resources, desc->resources + desc->resource_count);
-        }
-        if (desc->push_constants != nullptr && desc->push_constant_bytes != 0) {
-            const auto* bytes = static_cast<const unsigned char*>(desc->push_constants);
-            call.push.assign(bytes, bytes + desc->push_constant_bytes);
-        }
-    }
-    fake::phase_calls.push_back(std::move(call));
-    if (fake::fail_phase_call) {
-        return fake::phase_fail_status;
-    }
-    return BEDRAY_OK;
-}
+#include "fake_pass_device.h"
 
 namespace {
 
 using bedray::core::DeviceFns;
 using bedray::core::PathTracePass;
-
-DeviceFns make_device_fns() {
-    DeviceFns fns{};
-    fns.physical_device = fake::make_handle<VkPhysicalDevice>(0x10);
-    fns.device = fake::make_handle<VkDevice>(0x11);
-    fns.memory_properties.memoryTypeCount = 2;
-    fns.memory_properties.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    fns.memory_properties.memoryTypes[0].heapIndex = 0;
-    fns.memory_properties.memoryTypes[1].propertyFlags =
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    fns.memory_properties.memoryTypes[1].heapIndex = 1;
-    fns.memory_properties.memoryHeapCount = 2;
-    fns.memory_properties.memoryHeaps[0].size = 1ull << 30;
-    fns.memory_properties.memoryHeaps[0].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-    fns.memory_properties.memoryHeaps[1].size = 1ull << 28;
-    fns.non_coherent_atom_size = 256;
-    fns.generation = 1;
-    fns.image_functions.create_image = &fake::create_image;
-    fns.image_functions.destroy_image = &fake::destroy_image;
-    fns.image_functions.get_requirements = &fake::get_image_requirements;
-    fns.image_functions.allocate_memory = &fake::allocate_memory;
-    fns.image_functions.free_memory = &fake::free_memory;
-    fns.image_functions.bind_image_memory = &fake::bind_image_memory;
-    fns.image_functions.create_view = &fake::create_view;
-    fns.image_functions.destroy_view = &fake::destroy_view;
-    fns.image_functions.image_format_properties = &fake::get_image_format_properties;
-    fns.buffer_functions.create_buffer = &fake::create_buffer;
-    fns.buffer_functions.destroy_buffer = &fake::destroy_buffer;
-    fns.buffer_functions.get_requirements = &fake::get_buffer_requirements;
-    fns.buffer_functions.allocate_memory = &fake::allocate_memory;
-    fns.buffer_functions.free_memory = &fake::free_memory;
-    fns.buffer_functions.bind_buffer_memory = &fake::bind_buffer_memory;
-    fns.buffer_functions.map_memory = &fake::map_memory;
-    fns.buffer_functions.unmap_memory = &fake::unmap_memory;
-    fns.buffer_functions.flush = &fake::flush_memory;
-    fns.buffer_functions.invalidate = &fake::invalidate_memory;
-    fns.cmd_pipeline_barrier = &fake::cmd_pipeline_barrier;
-    fns.cmd_fill_buffer = &fake::cmd_fill_buffer;
-    return fns;
-}
 
 BedrayPathTraceDesc make_config(std::uint64_t scene_program = kTraceSceneProgram,
     std::uint64_t spatial_program = kSpatialProgram) {
@@ -1385,6 +1003,141 @@ void test_device_lost_configure_cleanup() {
     CHECK(pass.destroy() == BEDRAY_OK);
 }
 
+void test_guide_aware_program_contract() {
+    reset_all();
+    std::vector<ProgramBinding> bindings(std::begin(kTraceBindings), std::end(kTraceBindings));
+    for (std::uint32_t binding = 26; binding <= 32; ++binding)
+        bindings.push_back({binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
+    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
+    register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
+    BedrayCore core{};
+    PathTracePass pass;
+    // A 25-binding declaration does not excuse a missing/wrong guide type.
+    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK(fake::images.empty()); CHECK(fake::buffers.empty());
+    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    // Four buffer dummies, then one image succeeds and the next allocation fails.
+    fake::fail_allocate_after = 5;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_OUT_OF_MEMORY);
+    CHECK(fake::images.empty()); CHECK(fake::buffers.empty()); CHECK(fake::memories.empty());
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    CHECK(fake::images.size() == 3);
+    auto frame = valid_frame(1);
+    frame.path.flags = 1; // Stand-ins cannot satisfy an explicit G-buffer-write request.
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(!pass.has_recordings()); CHECK(fake::render_calls.empty()); CHECK(fake::images.size() == 3);
+    frame.path.flags = 0;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::images.size() == 9);
+    const auto& trace = fake::render_calls.front();
+    CHECK(trace.resources.size() == 25); CHECK(trace.push_bytes == 112);
+    constexpr VkFormat formats[] = {VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM};
+    for (std::size_t i = 0; i < std::size(formats); ++i) {
+        const auto& resource = trace.resources[18 + i];
+        CHECK(resource.binding == 26 + i); CHECK(resource.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        CHECK(resource.image_layout == VK_IMAGE_LAYOUT_GENERAL);
+        const auto& image = fake::images.at(fake::view_images.at(resource.handle));
+        CHECK(image.width == 1 && image.height == 1); CHECK(image.format == formats[i]);
+    }
+    CHECK_STATUS(pass.destroy(), BEDRAY_ERROR_IN_USE);
+    pass.discard_recording(1);
+    CHECK_STATUS(pass.release_recording(1), BEDRAY_OK);
+    frame.command_buffer = 2;
+    frame.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::render_calls[fake::render_calls.size() - 2].program == kTraceSceneProgram);
+    CHECK(fake::render_calls[fake::render_calls.size() - 2].resources.size() == 25);
+    CHECK_STATUS(pass.release_recording(2), BEDRAY_OK);
+    // An older 18-binding native-scene program remains independently supported.
+    register_program(kTraceSceneProgram, 112, kTraceBindings, std::size(kTraceBindings));
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    frame.command_buffer = 3;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::render_calls[fake::render_calls.size() - 2].resources.size() == 18);
+    CHECK_STATUS(pass.release_recording(3), BEDRAY_OK);
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    CHECK(fake::images.empty()); CHECK(fake::views.empty()); CHECK(fake::view_images.empty());
+    CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
+}
+
+void test_real_guide_outputs() {
+    reset_all();
+    std::vector<ProgramBinding> bindings(std::begin(kTraceBindings), std::end(kTraceBindings));
+    for (std::uint32_t binding = 26; binding <= 32; ++binding)
+        bindings.push_back({binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE});
+    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
+    register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
+    BedrayCore core{};
+    PathTracePass pass;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    auto frame = valid_frame(11);
+    frame.path.flags = 1;
+    BedrayPathTraceGuides guides{BEDRAY_CORE_ABI_VERSION, sizeof(BedrayPathTraceGuides),
+        0x8001, 0x8002, 0x8003, 0x8004, 0x8005, 0x8006, 0x8007};
+    // Invalid guide requests must fail before resource pins, allocation or commands.
+    guides.struct_size = 63;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_ABI_MISMATCH);
+    guides.struct_size = sizeof(guides);
+    guides.abi_version = 0;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_ABI_MISMATCH);
+    guides.abi_version = BEDRAY_CORE_ABI_VERSION;
+    guides.direct = 0;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_INVALID_ARGUMENT);
+    guides.direct = 0x8006;
+    frame.path.flags = 0;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_INVALID_ARGUMENT);
+    frame.path.flags = 1;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(!pass.has_recordings()); CHECK(fake::images.size() == 3);
+    CHECK(fake::render_calls.empty()); CHECK(fake::barriers == 0);
+
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 2);
+    const auto& trace = fake::render_calls.front();
+    for (std::uint32_t i = 0; i < 7; ++i) {
+        CHECK(resource_handle(trace.resources, 26 + i) == 0x8001 + i);
+        CHECK(trace.resources[18 + i].image_layout == VK_IMAGE_LAYOUT_GENERAL);
+    }
+    CHECK_STATUS(pass.destroy(), BEDRAY_ERROR_IN_USE);
+    CHECK_STATUS(pass.release_recording(11), BEDRAY_OK);
+    // An inactive subsequent dispatch must bind the native stand-ins, not stale host targets.
+    frame.command_buffer = 12;
+    frame.path.flags = 0;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    const auto& inactive = fake::render_calls[2];
+    for (std::uint32_t i = 0; i < 7; ++i)
+        CHECK(fake::view_images.contains(resource_handle(inactive.resources, 26 + i)));
+    CHECK_STATUS(pass.release_recording(12), BEDRAY_OK);
+
+    // The native-scene variant forwards the same seven views; a partial failure
+    // retains the recording until the host discards it.
+    frame.command_buffer = 13;
+    frame.path.flags = 1;
+    frame.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+    fake::fail_render_at(0, BEDRAY_ERROR_VULKAN);
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_VULKAN);
+    CHECK(fake::render_calls.back().program == kTraceSceneProgram);
+    CHECK(resource_handle(fake::render_calls.back().resources, 32) == 0x8007);
+    CHECK(pass.has_recordings()); CHECK_STATUS(pass.destroy(), BEDRAY_ERROR_IN_USE);
+    pass.discard_recording(13);
+    CHECK_STATUS(pass.release_recording(13), BEDRAY_OK);
+    fake::fail_render_at(-1, BEDRAY_OK);
+
+    // A legacy program cannot accept real guides even if its sibling can.
+    register_program(kTraceSceneProgram, 112, kTraceBindings, std::size(kTraceBindings));
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    frame.command_buffer = 14;
+    CHECK_STATUS(pass.render(frame, &g_error, &guides), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(!pass.has_recordings());
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    // The fake driver faults on any attempted destruction of borrowed host views.
+    CHECK(fake::images.empty()); CHECK(fake::views.empty()); CHECK(fake::view_images.empty());
+    CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
+}
+
 } // namespace
 
 int main() {
@@ -1398,6 +1151,8 @@ int main() {
     test_failure_after_dispatch_keeps_pins();
     test_upload_failure_releases_pins();
     test_device_lost_configure_cleanup();
+    test_guide_aware_program_contract();
+    test_real_guide_outputs();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "bedray_path_trace_pass_test FAILED: %d failure(s)\n", g_failures);

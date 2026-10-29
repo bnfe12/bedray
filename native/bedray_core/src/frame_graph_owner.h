@@ -12,13 +12,14 @@ namespace bedray::core {
 // scheduler leases recordings. No second history or barrier stream is created.
 class FrameGraphOwner final {
 public:
-    using Record = BedrayStatus (*)(void*, const BedrayPathTraceFrameDesc&, BedrayError*);
+    using Record = BedrayStatus (*)(void*, const BedrayPathTraceFrameDesc&, const BedrayPathTraceGuides*, BedrayError*);
     using Release = BedrayStatus (*)(void*, std::uint64_t);
 
     explicit FrameGraphOwner(std::uint32_t slots = graph::max_frame_slots);
     BedrayStatus configure(std::uint32_t core_capabilities, std::uint32_t queue_family,
         PFN_vkCmdPipelineBarrier barrier, Record record, Release release, void* context, BedrayError* error);
-    BedrayStatus record(const BedrayPathTraceFrameDesc&, BedrayError* error);
+    BedrayStatus record(const BedrayPathTraceFrameDesc&, BedrayError* error,
+        const BedrayPathTraceGuides* guides = nullptr);
     // Existing ABI-v2 release supplies host fence/discard proof for this exact CB.
     BedrayStatus release_proven(std::uint64_t command_buffer, BedrayError* error);
     bool has_recordings() const noexcept { return !recordings_.empty(); }

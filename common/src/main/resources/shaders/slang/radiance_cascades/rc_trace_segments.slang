@@ -213,7 +213,7 @@ void rctsWalkRay<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler>(
         bool nearSegment = hit.t <= mid;
 
         SurfaceSample surface = decodeSurface(atlas, blockMaterials, hit,
-            materialOptions);
+            materialOptions, ray.direction);
         if (!surface.valid) {
             // Same rule as the visibility walk: an undecodable surface is
             // opaque, never a window.

@@ -34,10 +34,26 @@ structure sizes.
 
 ## Path-trace pass recordings (internal pass, ABI v2 coarse calls)
 
-`PathTracePass` (`src/path_trace_pass.cpp`) is the core's only internal recorder
+`PathTracePass` (`src/path_trace_pass.cpp`) is the native path recorder
 above the single-dispatch calls. It keeps one recording per command buffer in
-`recordings_` and pins six images and up to five buffers (four dummies plus the
-per-recording FrameConstants upload) on it.
+`recordings_` and pins six private images plus the selected buffer uses (dummy
+buffers, frame upload and an active native DI ring). Current 25-binding trace
+programs additionally pin three one-texel guide stand-ins of R32F, RGBA16F and
+RGBA8 when guide writes are disabled. They satisfy inactive bindings only.
+Their transitions are recorded before use and invalidated on discard; retirement
+still follows exact recording proof. Legacy 18-binding programs are accepted
+independently for both scene-table variants.
+
+The additive `bedray_core_render_path_trace_guides` call accepts the separate
+64-byte `BedrayPathTraceGuides` descriptor, guarded by ABI version/size and the
+GUIDE_OUTPUTS feature. All seven non-zero host views and the G-buffer option are
+required together. Those views are borrowed GENERAL images at the frame extent;
+their host owner must retain them until the same exact completion/discard proof
+as output/depth. The pass binds them directly in immutable dispatch descriptors,
+does not pin/transition the inactive stand-ins, and never destroys host images.
+The same opaque graph callback consumes both input PODs synchronously; it retains
+only the existing command-buffer recording. History and barrier authority remain
+in the pass. The original call still rejects enabled writes without real targets.
 
 - `bedray_core_release_recording` remains the only release call: the core drops
   its dispatch records and the pass completes its image/buffer pins in the same
@@ -62,6 +78,32 @@ per-recording FrameConstants upload) on it.
 
 Covered by `native/bedray_core/tests/path_trace_pass_test.cpp` (built and
 passing, 2026-10-28).
+
+## Bloom recordings (additive coarse calls)
+
+`BloomPass` owns the complete existing prefilter/down/up/apply sequence, its six
+RGBA16F mip images, transitions and entry/compute/exit barriers. Java supplies
+the four registered AOT program handles, borrowed core samplers, host output/
+depth views and unchanged 128-byte push payload. Each program requires the
+existing binding contract; the Java adapter additionally checks 8x8x1 reflection.
+The separate `bedray_bloom.h` descriptors carry ABI version and structure size;
+existing ABI v2 layouts are unchanged. Matching bloom exports are mandatory.
+
+One call records twelve dispatches for bloom or one apply dispatch for glare
+only. Every dispatch still uses the core's per-dispatch descriptors. A recording
+pins its exact mip generation before the first command. Partial recording failure
+retains those pins for deliberate discard. Resize retires old images until all
+readers release them. Discard of the current generation forces fresh images
+before the next recording, since its layout transitions may not have executed;
+discard of an older generation cannot invalidate a newer one.
+
+The existing core completion/discard calls release bloom uses alongside other
+passes. Close/reconfigure refuse outstanding recordings. Device loss stops new
+recordings and retains the entire lost pool until all affected command buffers
+receive host proof, then releases that pool together. No individual lost-owner
+use operation is assumed to remain available. No frame delay, submission, wait,
+new device or destruction of borrowed host views is introduced. Tests use a
+shared fake driver and provide no GPU/game evidence.
 
 Current limitations:
 
@@ -97,14 +139,35 @@ executed. It does not free other outstanding frames.
   semantics; do not reuse individual sets merely after a fixed frame count.
 - External images, buffers, and acceleration structures remain owned by the
   host/scene. Their owners must retain them until the same completion event.
+- Host entity capture follows that same event. `EntityCaptureBuffers` leases
+  exclusive writable geometry slices and pins shared immutable atlas generations
+  through `RecordingResourceOwner`. Slot exhaustion creates another generation;
+  neither the three-slot capacity nor a frame delay permits reuse or destruction.
+  `RtWorld.releaseRecording`/`discardRecording` release capture leases through the
+  generation-specific `RecordingCompletion` action. An upload failure leaves its
+  ticket pending until discard. Partial allocation/destruction keeps retryable
+  ownership; close refuses outstanding tickets. Public upload overloads without a
+  command buffer reject GPU work and retain only their null-memory compatibility
+  behavior. These resources are still host capture storage borrowed by the native
+  scene/pass, rather than a second scene or native history owner.
+- Published emitter lists use `EmitterCaptureBuffers` and the same proof owner.
+  A publication copies into fresh storage sized for the selected records; frames
+  that share a list pin that immutable generation. An empty list allocates no GPU
+  buffer. The frame's host ticket captures the exact RtEmitters instance, and
+  retains it before either backend can read the list. Later publication cannot
+  overwrite it, even with more than three outstanding readers/publications.
+  Destruction refuses pending readers; late host callbacks cannot release a
+  newer recording that reused the command-buffer address. The record layout,
+  CPU selection/fingerprint rules and shader light sampling are unchanged.
 - The ABI assumes calls are externally synchronized on the render thread.
 - Program handles are monotonically assigned per core and are not native
   addresses. Destroying a program invalidates the handle for new dispatches;
   already-recorded work retains the actual program until release.
 - `SlangRuntime.create` requires the host to supply the actual enabled feature
-  mask. Physical device support is not proof that a logical device enabled a
-  feature. The current host has not yet wired an authoritative enabled-feature
-  mapping; never substitute a physical-support query for that fact.
+  mask. `SlangDeviceCapabilities.enabledMask` maps the game's enabled feature set
+  through its mixin accessor and returns zero if unreadable. Physical device
+  support is not proof that a logical device enabled a feature; never substitute
+  a physical-support query for that fact. This mapping still needs live validation.
 - The ABI v2 sources build as the Windows x64 Release `bedray_core.dll` and the
   contract tests pass (`bedray_path_trace_pass_test`, 2026-10-28); no GPU or
   live-game correctness claim is made.

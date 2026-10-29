@@ -131,20 +131,27 @@ class RtSlangBlockEmitterTest {
     }
 
     @Test
-    void entityEmittersAreRejectedBeforeTheyTakeWeight() {
+    void entityEmittersSampleTheirOwnAtlasEmissionAndTint() {
         String slang = read(EMITTERS);
         String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord> records,");
-        int reject = candidate.indexOf("if (uint(emitter.uvCorner.w + 0.5) != 0u) {");
-        int atlasFetch = candidate.indexOf("atlas.material.SampleLevel(point.uv, 0.0)");
-        assertTrue(reject >= 0, "the entity-atlas records are skipped");
-        assertTrue(reject < atlasFetch, "the skip happens before the fetch the rejection makes pointless");
+        assertFalse(candidate.contains("entity-atlas emitter: not evaluable"),
+            "a glowing entity quad is a real NEE candidate, not a hole in the light list");
+        assertTrue(candidate.contains("entityTexel(atlas.entities, slotPlus1 - 1u, point.uv)"),
+            "the candidate resolves emission at the sampled point of the entity atlas");
+        assertTrue(candidate.contains("entityTexelEmission(entityTexel) * emitter.edge1.w"),
+            "the atlas emission code keeps the record's power boost");
+        assertTrue(candidate.contains("point.tint = emitter.tint;"),
+            "the captured vanilla tint is part of the emitted radiance");
         assertTrue(candidate.contains("distance2 > lightRadius * lightRadius"),
-            "the radius test also precedes the fetch");
-        String batch = block(slang, "BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<BlockEmitterRecord> records,");
-        int validity = batch.indexOf("if (!blockEmitterCandidateValid(candidate)) {");
-        int weight = batch.indexOf("winner.weightSum += weight;");
-        assertTrue(validity >= 0 && validity < weight,
-            "a candidate that cannot be evaluated must not enter the sum or the roulette");
+            "the radius test still precedes either atlas fetch");
+
+        String radiance = block(slang, "float3 blockEmitterRadiance(BlockEmitterPoint p, MaterialAtlas atlas) {");
+        assertTrue(radiance.contains("p.atlasSlotPlus1 != 0u"),
+            "the winning point remembers which atlas owns its UVs");
+        assertTrue(radiance.contains("p.tint.rgb * p.tint.a"),
+            "rgb and alpha of the captured tint both modulate the light, as in rt_common_emitters.glsl");
+        assertTrue(radiance.contains("emitterAttenuationColor(tex)"),
+            "entity and block emitters share the same tuned chromatic response");
     }
 
     @Test

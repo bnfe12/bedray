@@ -99,16 +99,7 @@ public final class RtAtmosphereTest {
         check(RtVolumetricPass.halfSize(1920) == 960 && RtVolumetricPass.halfSize(1081) == 541 && RtVolumetricPass.halfSize(1) == 1, "half size");
         check(RtVolumetricPass.consecutive(10, 11) && !RtVolumetricPass.consecutive(10, 12) && !RtVolumetricPass.consecutive(Long.MIN_VALUE, 0),
             "consecutive frames");
-        check(RtBloomPass.mipSize(1920, 0) == 960 && RtBloomPass.mipSize(1920, 5) == 30 && RtBloomPass.mipSize(1, 5) == 1
-            && RtBloomPass.mipSize(1081, 0) == 541, "bloom mip sizes");
-        for (int s : new int[] {1, 7, 640, 1080, 3840}) {
-            int prev = s;
-            for (int m = 0; m < RtBloomPass.LEVELS; m++) {
-                int cur = RtBloomPass.mipSize(s, m);
-                check(cur >= 1 && cur <= (prev + 1) / 2 + (m == 0 ? 0 : 0) + 1, "mip chain shrinks for " + s);
-                prev = cur;
-            }
-        }
+        // Bloom dimensions are owned and tested by native/bedray_core/tests/bloom_pass_test.cpp.
     }
 
     static void fogMath() {
