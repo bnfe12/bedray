@@ -4,6 +4,36 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — P0-5 and P0-6: the two audit items that said "нужен тест" and had none (L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`. Both items were closed in the branch months
+ago by a code change and then verified source-only, with the doc itself asking
+for a regression test. Now each has one, and each guard was shown to bite.
+
+| Guard | Mutation | Result |
+|---|---|---|
+| `RtSlangSectionIndexTest > theRangeOffsetIsAppliedExactlyOncePerVertexBase` | a second `range.firstQuad +` in `geometryVertexBase` — the P0-5 defect itself | FAILED |
+| `... > anIndexPastTheDeclaredRangesResolvesToNoRange` | `return int(geometryIndex);` instead of the range clamp | FAILED |
+| `... > theBlasRangeOffsetsTheSameQuadStartTheShaderAdds` | `range.firstVertex = 0u;` in `acceleration_scene.cpp` | FAILED |
+| `... > theHeaderSaysTheRangeStartCountsQuads` | "first quad" → "first vertex" in `bedray_scene.h` | FAILED |
+| `RtSlangRestirSpatialTest > aMergedRecordKeepsItsOwnReceiverAndRefusesANonFiniteWinner` | a statement added after `reservoirs[ownSlot] = merged;` — the publish stops being last | FAILED |
+| same test, second assertion | a fourth early `return;` in front of the publish — the P0-6 bug shape | FAILED (`expected: <3> but was: <4>`) |
+
+All four mutated files (two shaders, one `.cpp`, one header) were restored from
+byte copies and verified by sha256; the restored tree is green (17 tests across
+the two classes, 0 failures) and `git status` shows no residue in `native/`.
+
+One structural finding from the proof: the native half of the P0-5 agreement was
+not an input to `:common:test`. Editing `native/bedray_scene/src/*.cpp` left the
+task `UP-TO-DATE`, so the guard could pass against a stale tree — the same hole
+that closed P2-8. `common/build.gradle` now lists `bedray_scene/src/*.cpp` next
+to the `CMakeLists.txt`/`include/**`/`nrd_bridge` inputs, and the `firstVertex = 0u`
+mutation is what proves the file is read on a real run.
+
+Evidence level L2 (no-GPU unit) plus L1 for the Slang compile of the restored
+tree. These are source-contract guards: they pin the agreement between the two
+representations, not a rendered frame. No owner-verified frame claim here.
+
 ## 2026-10-29 — The march's unassigned entity handle, and why a replay verdict is not a refusal (L1 compile, L2 unit, driver replay, no live frame yet)
 
 Branch: `refactor/slang-pipeline`, on top of `24b0617`. Two owner-reported

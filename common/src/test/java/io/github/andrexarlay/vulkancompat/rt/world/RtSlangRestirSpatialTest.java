@@ -167,6 +167,12 @@ class RtSlangRestirSpatialTest {
         assertTrue(read(LEGACY).contains("if (!(wsum >= 0.0) || !(count > 0.0) || !(winPhat > 0.0)"),
             "the legacy kernel rejects the same set");
         assertTrue(spatial.contains("reservoirs[ownSlot] = merged;"), "and only then writes the slot");
+        assertTrue(spatial.stripTrailing().endsWith("reservoirs[ownSlot] = merged;\n    }"),
+            "the store is the last statement of the stage: a merge that roulette resolved onto its own sample still "
+                + "has its count and weight published, which is the whole of P0-6");
+        assertEquals(3, count(spatial, "return;"),
+            "an inactive pixel, a pixel with no own record and a non-finite winner are the only ways out of the "
+                + "stage; a fourth exit in front of the publish would leave the merged count and weight unpublished");
     }
 
     /**

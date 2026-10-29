@@ -60,8 +60,11 @@ test {
     useJUnitPlatform()
     // Source-contract tests read build files outside this module and Gradle cannot see that read. Without these
     // inputs a native or Gradle edit leaves the guards UP-TO-DATE: a /MD injection into bedray_core/CMakeLists.txt
-    // reported BUILD SUCCESSFUL with zero tests executed (2026-10-29).
-    inputs.files(rootProject.fileTree('native') { include '*/CMakeLists.txt', '*/include/**', 'nrd_bridge/src/*.cpp' })
+    // reported BUILD SUCCESSFUL with zero tests executed (2026-10-29). bedray_scene/src is here for the same reason:
+    // RtSlangSectionIndexTest pins a shader/C++ pair, and only the shader half is a processResources input.
+    inputs.files(rootProject.fileTree('native') {
+        include '*/CMakeLists.txt', '*/include/**', 'nrd_bridge/src/*.cpp', 'bedray_scene/src/*.cpp'
+    })
     inputs.files(rootProject.file('gradle/slang.gradle'))
     jvmArgs '--enable-native-access=ALL-UNNAMED'
     // A test that blocks in native code must fail the run, not hold the whole gate forever. JUnit's default timeout
