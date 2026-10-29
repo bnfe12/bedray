@@ -107,6 +107,24 @@ use operation is assumed to remain available. No frame delay, submission, wait,
 new device or destruction of borrowed host views is introduced. Tests use a
 shared fake driver and provide no GPU/game evidence.
 
+## Particle/weather composite (additive coarse call)
+
+`bedray_core_render_particles` consumes the versioned/sized 56-byte
+BedrayParticlesFrameDesc and records the existing AOT particles_composite pass.
+The native module validates the 16-byte push and sampled-image/storage-image
+binding contract, packs both descriptors and the push, and owns the entry/exit
+memory barriers. Java validates 8x8x1 reflection and supplies only the borrowed
+program, command buffer, distinct GENERAL views, extent and finite strength.
+
+The pass is stateless: the existing per-dispatch core recording already retains
+its pipeline/descriptors until release/discard, so it has no duplicate resource
+owner or configure/destroy lifecycle. Host particle/weather and output images
+remain retained through the same exact proof. A partial call failure requires
+discarding the entire host recording; no frame delay frees descriptors. The
+Java adapter keeps its recording identities for that callback and borrows the
+runtime's cached program without closing it on adapter recreation. No shader
+source, image allocation, transition, submission or wait is added.
+
 Current limitations:
 
 The host distinguishes successful completion from abandonment. The additive

@@ -973,3 +973,39 @@ Branch cleanup keeps main and refactor/slang-pipeline. Before deleting merged
 branches, all refs/history were saved to a verified local Git bundle. GitHub's
 kept-history ruleset is narrowed to those two branches with its deletion and
 non-fast-forward protections intact; the main PR rule is unchanged.
+
+## 2026-10-29 — native particle/weather composite boundary
+
+Base `b5d852c76e30a5e2f3e46e61d7d9fb1977d9db0f`. The stateless native
+particles_pass module now validates/records the existing AOT entry, its two
+bindings, exact 16-byte push, dispatch groups and entry/exit memory barriers.
+The additive bedray_core_render_particles export accepts a separate 56-byte
+versioned/sized descriptor; existing ABI-v2 layouts and shader sources remain
+unchanged. The generic core's immutable per-dispatch recordings already retain
+program/descriptors until exact proof, so no duplicate configure/destroy owner,
+private image, submission or wait is introduced. All external views stay borrowed.
+
+Java supplies host views and scalar state through one coarse FFM call, validates
+the exact reflected bindings/8x8x1 group, and retains the existing recording
+identities. Game-layer barriers are removed with their native replacement.
+Adapter destruction no longer closes the runtime-owned cached shader program.
+
+[Native CI 40810744617](https://github.com/bnfe12/bedray/actions/runs/40810744617)
+passes on `0e5d6c40165d416aad80d56df58d8240754404b8`: candidate core 20/20 +
+scene 1/1 + lifetime 1/1; baseline core 15/15 + scene 1/1 + lifetime 1/1;
+ABI-v2 probes exit 0. New tests check malformed ABI/size/inputs/contracts before
+commands, distinct input/output, finite strength, exact descriptors/push/groups,
+barrier order, changed targets across dispatches, failure propagation and real
+C ABI bad_alloc/unexpected-exception containment. Native build reports no C++
+warnings in that run.
+
+Java compilation and 173 selected tests pass, zero failures/errors/skips (31s).
+The preceding 161-test filters now include RestirDiStateTest (7),
+ParticleGroupLedgerTest (3) and BedrayParticlesNativeTest (2). The latter checks
+every field/offset, zero strength and invalid inputs before downcalls. JDK,
+offline dependencies and bounded JVM settings match the preceding entries.
+`git diff --check` passes. No GPU/game or visual evidence; native stays opt-in.
+
+Repository cleanup retains only main/refactor/slang-pipeline branches. Merged
+head branches are deleted automatically in GitHub; local fetch pruning is
+enabled. Old worktrees are detached with their files/dependencies retained.
