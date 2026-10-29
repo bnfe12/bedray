@@ -89,7 +89,7 @@ class RtSlangGbufferGuidesTest {
         }
         // The option word is the push's fifth field, which the host leaves zero unless it binds the images.
         String host = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");
-        assertTrue(host.contains("int optionFlags = guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0;"),
+        assertTrue(host.contains("int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)"),
             "the push flag follows the bound guides, never a setting");
         String record = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java");
         assertTrue(record.contains("static final int OPTION_GBUFFER = 1;"), "the Java mirror of the shader option bit");
@@ -125,11 +125,12 @@ class RtSlangGbufferGuidesTest {
     }
 
     @Test
-    void theRendererKeepsTheProvenPassUnlessRRIsAskedFor() {
+    void theRendererKeepsTheProvenPassUnlessADenoiserIsAskedFor() {
         String renderer = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
-        assertTrue(renderer.contains("denoiseMode != DenoiserMode.DLSS_RR"), "only the RR layout consumes these guides");
-        assertTrue(renderer.contains("the \" + denoiseMode + \" layout needs the world-space motion buffer\""),
-            "NRD is refused with its real blocker: the motion buffer");
+        assertTrue(renderer.contains("RtConfig.SLANG_PATH_TRACE_CPP && denoiseMode != DenoiserMode.DLSS_RR"),
+            "the C++ backend still writes no world-space motion, so NRD stays refused there");
+        assertFalse(renderer.contains("the \" + denoiseMode + \" layout needs the world-space motion buffer\""),
+            "the Java Slang path fills NRD's motion now");
         assertTrue(renderer.contains("RtSlangPathPass.supportProblem(runtime, gbuffer)"),
             "the native core must support the requested outputs before the pass is created");
         String backend = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/NativePathTraceBackend.java");

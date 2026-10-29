@@ -58,6 +58,7 @@ static const uint PATH_TRACE_FLAG_WATER_MEDIUM     = 1u << 8u;
 // pass to produce), not properties of a sample: the tracer ignores them and the
 // entry pass reads them.
 static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;  // fill PathTraceResult.primary for the denoiser guides
+static const uint PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;  // also write the primary hit's world motion for NRD's IN_MV
 
 struct PathTraceOptions {
     uint  maxDepth;             // scattering events before the path stops

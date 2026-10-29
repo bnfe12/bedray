@@ -856,6 +856,13 @@ public final class RtFrameRenderer {
             }
         }
         boolean useDenoiser = pass.usesGbuffer() && (denoiser != null || dlssRrDenoiser != null);
+        // NRD reads this frame's per-pixel world motion through its own binding, so the buffer has to exist before the
+        // pass binds its views: the handle travels with them, and the pass writes exactly that range.
+        long motionHandle = 0L;
+        if (useDenoiser && denoiseMode.isNrd() && wantsEntityMotion()) {
+            ensureEntityMotionBuffer(device, w, h);
+            motionHandle = entityMotionBuf.handle;
+        }
         if (materials == null) {
             materials = new RtMaterialAtlas(world.memory());
             // Without this the atlas keeps no texel states, intern() returns ST_RETRY forever and the micromaps are
@@ -875,7 +882,7 @@ public final class RtFrameRenderer {
             }
         }
         pass.bind(new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
-            materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L, lightmapView));
+            materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L, lightmapView, motionHandle));
 
         int writeSlot = statsLease.slot();
         long writeOffset = (long) writeSlot * STATS_STRIDE;
@@ -1095,16 +1102,8 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_ATLAS_ADDR, eg.atlasAddress());
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_RECT_ADDR, eg.rectAddress());
         long motionAddr = 0L;
-        if (useDenoiser && (dlssRrDenoiser != null || denoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off")) {
-            long need = (long) w * h * 16L;
-            if (entityMotionBuf == null || entityMotionBuf.size < need) {
-                if (entityMotionBuf != null) {
-                    VK10.vkDeviceWaitIdle(device);
-                    world.memory().destroy(entityMotionBuf);
-                }
-                entityMotionBuf = world.memory().createBuffer("entity_motion_px", need,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-            }
+        if (useDenoiser && wantsEntityMotion()) {
+            ensureEntityMotionBuffer(device, w, h);
             motionAddr = entityMotionBuf.address;
             if (dlssRrDenoiser != null) {
                 dlssRrDenoiser.entityMotionAddress = motionAddr;
@@ -1262,6 +1261,29 @@ public final class RtFrameRenderer {
             }
             pendingDisplayedTarget = target;
         }
+    }
+
+    /** True when this frame's denoiser layout consumes {@code entity_motion_px}; both of them read it as IN_MV input. */
+    private static boolean wantsEntityMotion() {
+        return (denoiser != null || dlssRrDenoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off");
+    }
+
+    /**
+     * One vec4 per render pixel, storage+device-address: NRD's {@code IN_MV} channel and the RR velocity pass's entity
+     * term. Idempotent within a frame sized like the last one; a resize waits for the device because the old extent may
+     * still be in flight.
+     */
+    private static void ensureEntityMotionBuffer(VkDevice device, int w, int h) {
+        long need = (long) w * h * 16L;
+        if (entityMotionBuf != null && entityMotionBuf.size >= need) {
+            return;
+        }
+        if (entityMotionBuf != null) {
+            VK10.vkDeviceWaitIdle(device);
+            world.memory().destroy(entityMotionBuf);
+        }
+        entityMotionBuf = world.memory().createBuffer("entity_motion_px", need,
+            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
     }
 
     /** Once per world: locates the NRD natives and logs the denoiser that will be used. */
@@ -1468,15 +1490,15 @@ public final class RtFrameRenderer {
             return null;
         }
         if (gbuffer) {
-            // The Slang path fills the DLSS-RR guides; the NRD layouts additionally take the primary hit's world-space
-            // motion from a buffer this path does not write yet, and AUTO keeps the denoiser on the proven GLSL pass
-            // until a live frame has validated the guides.  AUTO still reports a real Slang blocker instead of blaming
-            // the denoiser, which is the consequence, not the cause.
+            // The Java Slang path fills the DLSS-RR guides and, for the NRD layouts, the primary hit's world-space
+            // motion (the renderer binds {@code entity_motion_px} into the frame's views for exactly those modes).
+            // The C++ backend forwards the seven guides through GUIDE_OUTPUTS but writes no motion yet, so it is
+            // refused for NRD only.  AUTO keeps the denoiser on the proven GLSL pass until a live frame has
+            // validated the guides; it still reports a real Slang blocker instead of blaming the denoiser.
             String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
             if (blocker == null) {
-                if (denoiseMode != DenoiserMode.DLSS_RR) {
-                    blocker = "the " + denoiseMode + " layout needs the world-space motion buffer"
-                        + " the Slang path does not fill yet";
+                if (RtConfig.SLANG_PATH_TRACE_CPP && denoiseMode != DenoiserMode.DLSS_RR) {
+                    blocker = "the C++ path backend writes no world-space motion for " + denoiseMode;
                 } else if (selector == RtConfig.PathTracer.AUTO) {
                     blocker = "AUTO keeps the GLSL path when a denoiser is selected";
                 }

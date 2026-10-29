@@ -4,6 +4,87 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — NRD IN_MV motion channel from the typed path (L1 compile, L2 unit)
+
+Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20,
+`-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major
+-I common/src/main/resources/shaders/slang`.
+
+Source changes covered by this run:
+
+- `pathtrace/path_tracer.slang` gained `PATH_TRACE_OPTION_NRD_MOTION`
+  (`1u << 1u`), the second bit of the previously always-zero
+  `PathTraceOptions.flags` word. The push block stays 112 B. The tracer
+  already produced `PathTraceResult.primaryMotion` at the primary vertex
+  (`float4(traversal.surfaceMotion(hit), hit.kind == HitKind.Entity ? 1.0 :
+  0.0)`), so no capture point moved for this batch.
+- `passes/path_trace.slang` and `passes/path_trace_scene.slang` gained
+  binding 33, `RWStructuredBuffer<float4> outMotionBuffer`, and a gated write
+  under the new option bit: `pathTraceNrdMotion` reproduces the legacy
+  `rt_path.comp:615-616` record — `xyz` is the primary surface's world motion
+  (previous minus current), `w` is the trust flag
+  (`primaryMotion.w > 0.5 || dot(motion, motion) > 1.0e-8`), and a pixel with
+  no accepted primary surface (sky, invalid) writes zero, which the NRD pack
+  already treats as a static miss. 26 bindings, 112 B push in both roots.
+- `RtPathTraceSlangPass` gained `MOTION_ELEMENT_BYTES = 16`,
+  `OPTION_NRD_MOTION = 2`, a `BufferView nrdMotion` argument on `record`, and
+  all-or-nothing validation: the bit and a bound range must agree, the range
+  must hold `width * height * 16` bytes, and motion without guides is
+  rejected (NRD reads both). A one-element pass-owned dummy keeps the
+  descriptor set complete when the bit is clear, exactly like the guide
+  dummies.
+- `RtPipeline.Views` carries the `entity_motion_px` handle (default 0),
+  `RtFrameRenderer` allocates the buffer before `pass.bind` for NRD frames
+  and keeps the existing StatsBuf address write, `ReferencePathTraceBackend`
+  turns the handle into the frame's `BufferView` from the dispatch flags, and
+  `RtSlangPathPass` sets the bit only when the views carry the buffer and the
+  guides. Explicit `SLANG` + `NRD` is now accepted; `SLANG` + `DLSS_RR` stays
+  accepted, `AUTO` still keeps the GLSL pass until a live frame consumes the
+  guides.
+- The C++ `PathTracePass` validates the 26-binding manifest, creates three
+  1x1 storage images (R32F, RGBA16F, RGBA8) and one 16-byte motion dummy at
+  configure, binds them at 26-33, retires them in `destroy` and clears them
+  in `reset_state`; its option bits stay clear, so the dummies are never
+  addressed. `path_trace_pass_test.cpp` mirrors the 26-binding set and the
+  new fake-resource counts.
+- New `RtSlangNrdMotionTest` (5 guards) pins the legacy vec4 record, the
+  option gate on both sides, the host's bit/buffer promise, the renderer's
+  allocate-before-bind order and the vec4-per-pixel buffer contract.
+  `SlangPassLibraryTest` pins 26 bindings and `outMotionBuffer` (33,
+  storage buffer, 16 B per element); `RtSlangGbufferGuidesTest` and
+  `RtSlangEntityTest` were updated for the new `record` argument and the
+  now-accepted NRD policy.
+
+Result:
+
+| Set | Files | Exit 0 | Notes |
+|---|---|---|---|
+| `passes/*.slang` | 18 | 18 | `path_trace` 551880 B, `path_trace_scene` 563696 B, both 26 bindings / 112 B push |
+| Targeted `:common:test` | 35 tests | 0 failures | `RtSlangNrdMotionTest` 5, `RtSlangGbufferGuidesTest` 7, `RtSlangEntityTest` 14, `SlangPassLibraryTest` 9 |
+| Native `bedray_core` Release x64 | build | OK | `bedray_core.dll`, `bedray_path_trace_pass_test.exe` rebuilt |
+| CTest (`build/bedray-native/windows-x64`) | 17 tests | 17 passed | includes `bedray_path_trace_pass_test` with the 26-binding contract and dummy counts |
+
+Mutation proofs: changing the shader trust threshold `1.0e-8` to `0.0` fails
+`theMotionRecordIsTheLegacyVec4`; replacing the host's
+`wantsMotion != (boundMotion.buffer() != 0)` check with `false` fails
+`theHostAndThePushKeepTheirPromise`. Both files were restored byte-identical
+(sha256 verified).
+
+No clean full-suite claim is recorded for this batch: one run raced a
+concurrent, uncommitted spatial-reuse edit in the same worktree (its three
+`RtSlangRestirSpatialTest` failures are stale-compile artifacts — the same
+test passes against the settled sources), and two later attempts were killed
+by host memory exhaustion (JVM `hs_err`, "insufficient memory", while another
+session's Gradle build ran on the same 16 GB machine). The full-suite run is
+to be repeated on a free host before this batch is treated as L2-complete.
+
+This is L1/L2 only. No GPU dispatch, frame or screenshot exists; the NRD
+layout has never consumed these values on a device, and no owner-verified
+image of the Slang path exists. The guide capture happens before the display
+pass may reject a sample, so a rejected pixel can carry a motion record too;
+the denoiser's own history rejection is expected to absorb that once a live
+frame is measured.
+
 ## 2026-10-29 — DLSS-RR guide channels from the typed path (L1 compile, L2 unit)
 
 Branch: `refactor/slang-pipeline`. Tool: `slangc` 2026.20, same flags as below.

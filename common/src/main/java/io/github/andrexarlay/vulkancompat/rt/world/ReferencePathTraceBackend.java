@@ -149,10 +149,16 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         }
         int diParity = di.parity();
         dispatch = dispatch.withDiState(diFlags, diParity);
+        // NRD's IN_MV channel: the frame's own vec4-per-pixel range when the push asked for it, never a stale binding.
+        RtPathTraceSlangPass.BufferView motion = (dispatch.flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0
+            && views.motion() != 0L
+            ? new RtPathTraceSlangPass.BufferView(views.motion(), 0L,
+                (long) width * height * RtPathTraceSlangPass.MOTION_ELEMENT_BYTES)
+            : RtPathTraceSlangPass.BufferView.NONE;
         trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
             new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
             emitters, reservoirRange, capturedEntities, RtPathTraceSlangPass.Guides.of(views.gbuffer()),
-            views.depth(), frame, dispatch);
+            motion, views.depth(), frame, dispatch);
         // Spatial reuse pools the records the trace pass just wrote, in the half it just wrote. Nothing in this frame
         // reads them - the benefit lands in the next frame's temporal import - so the stage owns its own ordering: the
         // barrier between its two phases and a trailing one, both inside record().

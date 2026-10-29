@@ -112,6 +112,9 @@ struct PathTracePush {
 [[vk::image_format("rgba8")]]   [[vk::binding(30, 0)]] RWTexture2D<float4> outAlbedo;
 [[vk::image_format("rgba16f")]] [[vk::binding(31, 0)]] RWTexture2D<float4> outDirect;
 [[vk::image_format("rgba8")]]   [[vk::binding(32, 0)]] RWTexture2D<float4> outSpecAlbedo;
+// NRD's IN_MV channel: the same per-pixel Vec4 rt_path.comp writes into StatsBuf.motionAddr.  The host binds a
+// one-element stand-in and leaves PATH_TRACE_OPTION_NRD_MOTION clear unless the NRD layout is selected.
+[[vk::binding(33, 0)]] RWStructuredBuffer<float4> outMotionBuffer;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -169,6 +172,18 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result) {
     float3 specAlbedo = !specularGuide ? float3(0.0)
         : (result.primary.metallic > 0.5 ? result.primary.albedo : result.primary.specularF0);
     outSpecAlbedo[p] = float4(clamp(specAlbedo, float3(0.0), float3(1.0)), 1.0);
+}
+
+// NRD's IN_MV channel, written where rt_path.comp writes Vec4Buf(StatsBuf.motionAddr): the primary surface's own
+// world motion, prev minus cur, and the same trust flag (a captured model always counts, a static surface's near-zero
+// motion is left out).  A sky pixel has no surface to reproject, so it writes zero and the pack keeps its static miss.
+float4 pathTraceNrdMotion(PathTraceResult result) {
+    if (!result.primary.valid) {
+        return float4(0.0);
+    }
+    float3 motion = result.primaryMotion.xyz;
+    float trusted = (result.primaryMotion.w > 0.5 || dot(motion, motion) > 1.0e-8) ? 1.0 : 0.0;
+    return float4(motion, trusted);
 }
 
 [shader("compute")]
@@ -315,5 +330,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     outMotion[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u ? result.primaryMotion : float4(0.0);
     if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u) {
         pathTraceWriteGuides(p, f, result);
+    }
+    if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {
+        outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result);
     }
 }

@@ -23,10 +23,10 @@ import java.util.Objects;
  * writes exposure + tone curve into the renderer's RGBA8 {@code rt_output}. Depth goes straight into {@code rt_depth},
  * so the composite, bloom, particles and upscalers downstream are unchanged.
  *
- * <p>The pass fills the seven DLSS-RR guide images when the host binds them ({@code PATH_TRACE_OPTION_GBUFFER}); NRD
- * additionally needs the world-space motion of the primary hit, which this pass does not write, so the renderer only
- * accepts {@code DLSS_RR} here. Not done yet, compared with the GLSL {@link RtPathTracerPass}: no auto exposure (the
- * GLSL shader feeds the luminance statistics; exposure is fixed at 1), a two-colour sky instead of
+ * <p>The pass fills the seven DLSS-RR guide images when the host binds them ({@code PATH_TRACE_OPTION_GBUFFER}) and
+ * NRD's per-pixel {@code IN_MV} vec4 when the frame carries the motion buffer
+ * ({@code PATH_TRACE_OPTION_NRD_MOTION}). Not done yet, compared with the GLSL {@link RtPathTracerPass}: no auto
+ * exposure (the GLSL shader feeds the luminance statistics; exposure is fixed at 1), a two-colour sky instead of
  * {@code rt_sky.glsl}; the mean is reprojected per pixel through the previous view-projection, so accumulation
  * survives camera motion but restarts on disocclusion.
  *
@@ -287,9 +287,11 @@ public final class RtSlangPathPass implements RtPass {
             }
         }
         // The renderer hands over the denoiser's guide images only when it built this pass for a G-buffer; the push
-        // flag and the bindings then agree, which is what the record validates.
+        // flag and the bindings then agree, which is what the record validates. NRD additionally reads a per-pixel vec4
+        // motion buffer, bound only for that layout, so its push bit follows the buffer the frame actually carries.
         RtPathTraceSlangPass.Guides guides = RtPathTraceSlangPass.Guides.of(views.gbuffer());
-        int optionFlags = guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0;
+        int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)
+            | (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0);
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,

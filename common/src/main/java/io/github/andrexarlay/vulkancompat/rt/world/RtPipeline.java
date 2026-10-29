@@ -56,15 +56,24 @@ public final class RtPipeline {
     public static final int BINDING_DEPTH = 12;
     public static final int BINDING_LIGHTMAP = 15;
 
-    /** Views bound for one frame; {@code gbuffer} non-null exactly for the gbuffer variant, {@code accum} != 0 exactly for accum. */
+    /**
+     * Views bound for one frame; {@code gbuffer} non-null exactly for the gbuffer variant, {@code accum} != 0 exactly for
+     * accum. {@code motion} is NRD's {@code IN_MV} buffer (one vec4 per pixel), non-zero only when the NRD layout is
+     * selected; the legacy pipeline ignores it and {@link #sameAs} leaves it out because no legacy binding carries it.
+     */
     public record Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum, long[] gbuffer,
-                        long depth, long lightmap) {
+                        long depth, long lightmap, long motion) {
         public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum, long[] gbuffer) {
-            this(tlas, table, output, atlas, material, normal, accum, gbuffer, 0L, 0L);
+            this(tlas, table, output, atlas, material, normal, accum, gbuffer, 0L, 0L, 0L);
         }
 
         public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum, long[] gbuffer, long depth) {
-            this(tlas, table, output, atlas, material, normal, accum, gbuffer, depth, 0L);
+            this(tlas, table, output, atlas, material, normal, accum, gbuffer, depth, 0L, 0L);
+        }
+
+        public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum, long[] gbuffer,
+                     long depth, long lightmap) {
+            this(tlas, table, output, atlas, material, normal, accum, gbuffer, depth, lightmap, 0L);
         }
 
         boolean sameAs(Views o) {
