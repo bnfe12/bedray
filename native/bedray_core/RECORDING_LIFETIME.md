@@ -55,9 +55,11 @@ The same opaque graph callback consumes both input PODs synchronously; it retain
 only the existing command-buffer recording. History and barrier authority remain
 in the pass. The original call still rejects enabled writes without real targets.
 
-- `bedray_core_release_recording` remains the only release call: the core drops
-  its dispatch records and the pass completes its image/buffer pins in the same
-  function. An unknown command buffer is a no-op.
+- `bedray_core_release_recording` is the completion release: the core drops its
+  dispatch records and the pass completes its image/buffer pins in the same
+  function. An unknown command buffer is a no-op. The additive
+  `bedray_core_discard_recording` below invalidates history first and then uses
+  the same release path; nothing else frees a recording.
 - A failure before the first dispatch was recorded — image creation, the
   FrameConstants upload, a pin failure — is provably discardable: the pass
   completes its own pins and leaves no recording.

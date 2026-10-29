@@ -33,10 +33,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     private BedrayGpuBuffersNative.Buffer reservoirs;
     private int historyParity;
     private int lastWidth, lastHeight;
-    private long reservoirPixels;
-    private boolean reservoirHistoryWritten;
-    private boolean reservoirResetRequested = true;
-    private int reservoirFrame;
+    private final RestirDiState di = new RestirDiState(false);
     private boolean closed;
 
     ReferencePathTraceBackend(VkDevice device, SlangRuntime runtime) {
@@ -108,26 +105,18 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
                 nativeBuffers.retire(reservoirs);
                 reservoirs = null;
             }
-            reservoirHistoryWritten = false;
-            reservoirPixels = 0L;
+            di.reset();
             return;
         }
         if (reservoirs != null && reservoirs.size() >= need) {
-            if (pixels != reservoirPixels) {
-                // A smaller render scale moves every pixel index, so the records of the old layout must not be read.
-                reservoirPixels = pixels;
-                reservoirResetRequested = true;
-                reservoirHistoryWritten = false;
-            }
+            if (di.extentDiffers(width, height)) di.layoutFor(width, height);
             return;
         }
         BedrayGpuBuffersNative.Buffer next = nativeBuffers.createDeviceLocal(need,
             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         nativeBuffers.retire(reservoirs);
         reservoirs = next;
-        reservoirPixels = pixels;
-        reservoirResetRequested = true;
-        reservoirHistoryWritten = false;
+        di.layoutFor(width, height);
         LOGGER.info("[VKB-RT] Slang ReSTIR DI reservoirs {}x{} x2 = {} MiB", width, height,
             Math.max(1L, need / (1024L * 1024L)));
     }
@@ -144,33 +133,26 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         int width = frame.width, height = frame.height;
         int accumFrames = input.accumFrames();
         boolean historyWritten = (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY) == 0;
-        reservoirResetRequested |= (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI) != 0;
+        if ((input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI) != 0) di.reset();
         int emitterCount = dispatch.emitterCount();
         int diFlags = 0;
-        int diParity = reservoirFrame & 1;
         RtPathTraceSlangPass.Reservoirs reservoirRange = RtPathTraceSlangPass.Reservoirs.NONE;
         if (reservoirs != null) nativeBuffers.retain(cmd.address(), reservoirs);
         if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null) {
-            if (reservoirResetRequested) {
+            if (di.resetPending()) {
                 VK10.vkCmdFillBuffer(cmd, reservoirs.handle(), 0L, reservoirs.size(), 0);
                 VkBarriers.fullMemoryBarrier(cmd);
-                reservoirResetRequested = false;
-                reservoirHistoryWritten = false;
+                di.ringCleared();
             }
-            diFlags = dispatch.diFlags() | (reservoirHistoryWritten ? DI_FLAG_HISTORY : 0);
+            diFlags = di.flags((dispatch.diFlags() & DI_FLAG_STATIC) != 0, (dispatch.diFlags() & DI_FLAG_FLIP_Y) != 0);
             reservoirRange = new RtPathTraceSlangPass.Reservoirs(reservoirs.handle(), reservoirs.size());
         }
+        int diParity = di.parity();
         dispatch = dispatch.withDiState(diFlags, diParity);
         trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
             new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
             emitters, reservoirRange, capturedEntities, RtPathTraceSlangPass.Guides.of(views.gbuffer()),
             views.depth(), frame, dispatch);
-        if (diFlags == 0) {
-            reservoirHistoryWritten = false;
-        } else {
-            reservoirHistoryWritten = true;
-            reservoirFrame++;
-        }
         // Spatial reuse pools the records the trace pass just wrote, in the half it just wrote. Nothing in this frame
         // reads them - the benefit lands in the next frame's temporal import - so the stage owns its own ordering: the
         // barrier between its two phases and a trailing one, both inside record().
@@ -212,6 +194,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
                 trace.frameResource()), push);
         }
         historyParity ^= 1;
+        di.afterDispatch(diFlags != 0);
         VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read by the composite, bloom and upscalers next
     }
 
@@ -226,7 +209,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         return flags;
     }
     @Override public String reservoirState() {
-        return reservoirs == null ? "off" : reservoirHistoryWritten ? "temporal" : "fresh";
+        return di.mode(true, reservoirs != null, false);
     }
     @Override public void releaseRecording(long commandBuffer) {
         if (!recordings.contains(commandBuffer)) return;
@@ -239,8 +222,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     }
     @Override public boolean discardRecording(long commandBuffer) {
         if (!recordings.contains(commandBuffer)) return false;
-        reservoirHistoryWritten = false;
-        reservoirResetRequested = true;
+        di.reset();
         releaseRecording(commandBuffer);
         return true;
     }

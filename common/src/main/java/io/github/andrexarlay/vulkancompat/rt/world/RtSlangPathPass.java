@@ -105,7 +105,8 @@ public final class RtSlangPathPass implements RtPass {
     /** True when the previous display dispatch left a mean and a depth history that reprojection can read. */
     private boolean historyWritten;
     private long reservoirFingerprint = Long.MIN_VALUE;
-    private boolean reservoirResetRequested = true;
+    // Backend owns the ring; host tracks only whether its reset request ran DI.
+    private final RestirDiState diRequests = new RestirDiState(true);
     private int lastSettingsHash;
     private int lastWidth;
     private int lastHeight;
@@ -179,6 +180,7 @@ public final class RtSlangPathPass implements RtPass {
     public void prepare(VkCommandBuffer cmd, RtMemory mem, int width, int height) {
         backend.prepare(width, height);
         if (lastWidth != width || lastHeight != height) {
+            diRequests.layoutFor(width, height);
             lastWidth = width;
             lastHeight = height;
             historyWritten = false;
@@ -215,7 +217,7 @@ public final class RtSlangPathPass implements RtPass {
         // keep glowing through history forever, while streaming sections and the accumulate switch leave it valid - and
         // filling hundreds of MB every frame would cost far more than the reuse saves.
         if (forceReset || settingsHash != lastSettingsHash || params.emitterFingerprint != reservoirFingerprint) {
-            reservoirResetRequested = true;
+            diRequests.reset();
         }
         reservoirFingerprint = params.emitterFingerprint;
         forceReset = false;
@@ -252,7 +254,7 @@ public final class RtSlangPathPass implements RtPass {
     public void resetHistory() {
         forceReset = true;
         historyWritten = false;
-        reservoirResetRequested = true;
+        diRequests.reset();
     }
 
     @Override
@@ -302,11 +304,11 @@ public final class RtSlangPathPass implements RtPass {
             | (params.flipY ? BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y : 0)
             | (spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0)
             | (nativeScene ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE : 0)
-            | (reservoirResetRequested ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0);
+            | (diRequests.resetPending() ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0);
         backend.record(new PathTraceBackend.Frame(cmd, views, frame, dispatch, emitters, capturedEntities,
             flags, accumFrames));
         historyWritten = true;
-        reservoirResetRequested = false;
+        diRequests.afterDispatch(diFlags != 0);
     }
 
     /**

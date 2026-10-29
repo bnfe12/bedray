@@ -943,3 +943,33 @@ packing, both range guards and malformed inputs. Shader compilation is up to
 date from the preceding 18-pass run; shader sources are unchanged in this batch.
 `git diff --check` passes. No GPU/game, visual parity or performance evidence;
 native remains opt-in. The volumetric native-scene boundary remains separate.
+
+## 2026-10-29 — remaining ReSTIR branches integrated on the current backend boundary
+
+PR #17 is reconciled with base `4dc68d5aea060da5be1823925a523f702b5b2bcd`.
+RestirDiState now drives the reference backend's parity, history, pending clear
+and exact width/height layout, while the common controller uses its delegated
+mode only to track whether a reset request actually reached a DI dispatch.
+Native allocation/history/parity stay in C++. A transposed extent invalidates
+the reference ring even at identical pixel count. A reset survives an empty
+emitter frame; failed recording cannot consume it. DI history publishes only
+after the complete reference recording succeeds.
+
+Java compilation and 112 selected tests pass, zero failures/errors/skips (39s):
+PathTraceBackendTest, RestirDiStateTest, RtSlang*Test, RtRestirSettingsTest,
+RtPathTraceSlangPassTest, SlangPassLibraryTest and BedrayPathTraceNativeTest.
+The controller test now exercises an empty-emitter frame and a transposed extent;
+the seven state tests cover both ownership modes. The bounded offline Gradle
+command, JDK/dependencies and JVM limits match the preceding entries. Native and
+shader sources are unchanged, so this is Java L1/L2 evidence, no GPU/game check.
+
+PR #22's source assertions targeted the old monolithic host. The current tests
+already inspect the controller/reference/native split and pass above; restoring
+those old strings would undo the ownership boundary. Its commits are retained
+as merged history with the current implementation/tests kept. The older 74-test
+evidence in that branch remains historical, not evidence for this revision.
+
+Branch cleanup keeps main and refactor/slang-pipeline. Before deleting merged
+branches, all refs/history were saved to a verified local Git bundle. GitHub's
+kept-history ruleset is narrowed to those two branches with its deletion and
+non-fast-forward protections intact; the main PR rule is unchanged.
