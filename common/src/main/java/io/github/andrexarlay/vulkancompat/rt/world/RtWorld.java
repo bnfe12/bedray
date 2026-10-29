@@ -39,9 +39,10 @@ import java.util.Map;
  * GPU side of the world ray tracing (step R1.2): own copies of the section geometry decoded by
  * {@link SectionGeometryRegistry}, one BLAS per section, and a TLAS rebuilt every frame.
  *
- * <p>Everything is recorded into the command buffer passed to {@link #update}; nothing is submitted here. Resources of
- * removed/replaced Java sections are released {@link #DEFER_FRAMES} frames later. The opt-in native scene instead
- * retires generations after explicit host completion/discard proof. Render thread only.
+ * <p>Everything is recorded into the command buffer passed to {@link #update}; nothing is submitted here. Before each
+ * legacy update the host drains prior uses of the shared mapped inputs. Removed/replaced sections
+ * are reclaimed at the next host drain. The opt-in native scene retires generations through its exact recording
+ * completion/discard callbacks. Render thread only.
  *
  * <p>Per section a block of the geometry arena holds {@code [positions float3 x 4Q][uv float2 x 4Q]}; the BLAS has one
  * triangle geometry per non-empty pass (SOLID: OPAQUE, CUTOUT/TRANSLUCENT: non-opaque) reading a slice of the
@@ -74,7 +75,6 @@ public final class RtWorld {
     public static final int FOLIAGE_CARD = 1;
     public static final int FOLIAGE_CUBE = 2;
     static final int INSTANCE_BYTES = RtInstanceWriter.SIZEOF;
-    static final int DEFER_FRAMES = 3;
     static final long BLOCK_ALIGN = 256L;
     private static final double CPU_BUDGET_MS = 8.0;
 
@@ -129,9 +129,6 @@ public final class RtWorld {
         }
     }
 
-    private record Deferred(long frame, SectionGpu section) {
-    }
-
     /**
      * Block-state query that tags the cutout quads with {@link #VEGETATION_BIT} (and {@link #LEAF_CUBE_BIT} for a full
      * cube) while a section is staged. Called on the render thread, once per cutout quad of a section build. Returns one of
@@ -173,7 +170,8 @@ public final class RtWorld {
     private final Map<Long, SectionGpu> gpu = new HashMap<>();
     /** Changes with the active scene's section captures; emitter list rebuilds key off it. */
     private long structureVersion;
-    private final ArrayDeque<Deferred> deferred = new ArrayDeque<>();
+    private final ArrayDeque<SectionGpu> deferred = new ArrayDeque<>();
+    private final LegacySceneLifetime legacyLifetime = new LegacySceneLifetime();
     private final ArrayDeque<Integer> freeSlots = new ArrayDeque<>();
     private int nextSlot = 0;
     private List<DecodedSection> pending = new ArrayList<>();
@@ -380,13 +378,13 @@ public final class RtWorld {
 
     /** As above with the RT radius of this frame in sections (RtConfig.radiusXz / radiusY); a change triggers a rescan. */
     public FrameStats update(VkCommandBuffer cmd, double camX, double camY, double camZ, int radiusXz, int radiusY) {
+        if (nativeScene == null) legacyLifetime.begin(cmd.address());
         boolean radiusChanged = radiusXz != this.radiusXz || radiusY != this.radiusY;
         this.radiusXz = radiusXz;
         this.radiusY = radiusY;
         long tUpdate = RtTimings.start();
         frameIndex++;
         if (nativeScene != null) return updateNative(cmd, camX, camY, camZ, tUpdate);
-        releaseDeferred(false);
         stagingCursor = (frameIndex % STAGING_SEGMENTS) * STAGING_SEGMENT_BYTES;
         scratchCursor = scratchBase;
 
@@ -676,7 +674,7 @@ public final class RtWorld {
             if (gone || far) {
                 it.remove();
                 structureVersion++;
-                deferred.add(new Deferred(frameIndex, g));
+                deferred.add(g);
             }
         }
         ArrayList<DecodedSection> list = new ArrayList<>();
@@ -1007,8 +1005,8 @@ public final class RtWorld {
             if (ommIdx != null) {
                 MemoryUtil.memIntBuffer(staging.mapped + ommOffset, ommIdx.length).put(ommIdx);
             }
-            // The dispatch reads the raw words straight from the mapped staging via its device address (the segment is
-            // retired three frames later, the dispatch is recorded in this frame's command buffer) and writes the arena
+            // The dispatch reads the raw words straight from mapped staging via its device address. The next legacy
+            // update requires host completion before rewriting mapped inputs; this dispatch writes the arena
             // block; a compute-to-AS-build barrier in recordBlasBuilds orders it against the reads of the build.
             dequantize.dispatch(cmd, staging.address + stagingOffset, geomBlock.address(), flagsAddr, quads);
             if (ommIdx != null) {
@@ -1069,7 +1067,7 @@ public final class RtWorld {
                 SectionGpu old = gpu.put(d.key, entry);
                 structureVersion++;
                 if (old != null) {
-                    deferred.add(new Deferred(frameIndex, old));
+                    deferred.add(old);
                 }
             }
             return item;
@@ -1236,11 +1234,27 @@ public final class RtWorld {
 
     // --------------------------------------------------------------------------------------------- release
 
+    /** Actual scene ownership decides serialization, including native-scene startup fallback. */
+    public boolean requiresLegacyHostDrain() {
+        return nativeScene == null;
+    }
+
+    /** Called outside a local recording, after the host fence and all exact recording callbacks completed. */
+    public void prepareLegacyFrameAfterHostDrain() {
+        if (nativeScene != null) throw new IllegalStateException("native scene does not use legacy shared inputs");
+        legacyLifetime.prepareAfterHostDrain(() -> {
+            releaseDeferredAfterHostDrain();
+            entityBlas.releaseRetiredAfterHostDrain();
+            if (omm != null) omm.releaseRetiredAfterHostDrain();
+        });
+    }
+
     /** Called only with host proof of completion or deliberate unsubmitted discard. */
     public void releaseRecording(long commandBuffer) {
         if (dequantize != null) dequantize.releaseRecording(commandBuffer);
         if (nativeScene != null) nativeScene.releaseRecording(commandBuffer);
         RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
+        legacyLifetime.release(commandBuffer);
     }
 
     public void discardRecording(long commandBuffer) {
@@ -1250,6 +1264,7 @@ public final class RtWorld {
         }
         if (dequantize != null) dequantize.releaseRecording(commandBuffer);
         RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
+        legacyLifetime.release(commandBuffer);
     }
 
     /** The caller has drained host submissions and excluded future resubmission. */
@@ -1265,9 +1280,9 @@ public final class RtWorld {
         if (nativeScene != null) nativeScene.close();
     }
 
-    private void releaseDeferred(boolean all) {
-        while (!deferred.isEmpty() && (all || frameIndex - deferred.peekFirst().frame() >= DEFER_FRAMES)) {
-            SectionGpu g = deferred.pollFirst().section();
+    private void releaseDeferredAfterHostDrain() {
+        while (!deferred.isEmpty()) {
+            SectionGpu g = deferred.peekFirst();
             KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, g.blasHandle, null);
             blasArena.free(g.blasBlock);
             geomArena.free(g.geom);
@@ -1275,6 +1290,7 @@ public final class RtWorld {
                 omm.releaseRef(g.ommObject);
             }
             freeSlots.push(g.slot);
+            deferred.removeFirst();
         }
     }
 
@@ -1288,12 +1304,13 @@ public final class RtWorld {
             mem.close();
             return;
         }
+        legacyLifetime.requireReleased();
         dequantize.destroy();
         for (SectionGpu g : gpu.values()) {
-            deferred.add(new Deferred(frameIndex, g));
+            deferred.add(g);
         }
         gpu.clear();
-        releaseDeferred(true);
+        releaseDeferredAfterHostDrain();
         KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, tlasHandle, null);
         mem.destroy(tlasBuf);
         mem.destroy(scratch);

@@ -35,7 +35,7 @@ import java.util.Locale;
  * <p>One global level-4 (256 micro-triangles) 4-state micromap object holds every classified UV triangle.
  * Entries are interned by their exact UV corners (float bits) and appended to a host-visible payload; when the
  * payload grows past the object's entry count, a new object is built ("flip") and the old one is retired while
- * BLAS builds still reference it (refcounted, freed after {@link #RETIRED_FRAMES} frames with no references).
+ * BLAS builds still reference it (refcounted, freed after a host drain with no remaining references).
  * Because entries only append within an epoch, a BLAS's per-triangle entry indexes stay valid across flips.
  *
  * <p>Per BLAS triangle the index buffer (8 bytes per cutout quad, uint32 per triangle, appended to the section
@@ -78,7 +78,6 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
     /** VkMicromapTriangleEXT: uint32 dataOffset + uint16 subdivisionLevel + uint16 format. */
     static final int TRI_BYTES = 8;
     static final int THROTTLE_FRAMES = 15;
-    static final int RETIRED_FRAMES = 3;
     /** Radius of the neighbourhood the far cutout test can average over: 4 for the shader's max 3x3 tap spread, 1 rounding. */
     static final int TEXEL_NEIGHBORHOOD = 5;
     /** A neighbourhood texel above this alpha could push the far test's averaged coverage over its 0.04 draw threshold. */
@@ -398,29 +397,17 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
     private static final class Retired {
         final long handle;
         final RtMemory.Buf buf;
-        final long frame;
 
-        Retired(long handle, RtMemory.Buf buf, long frame) {
+        Retired(long handle, RtMemory.Buf buf) {
             this.handle = handle;
             this.buf = buf;
-            this.frame = frame;
         }
     }
 
     private final ArrayList<Retired> retired = new ArrayList<>();
 
-    private static final class RetiredBuf {
-        final RtMemory.Buf buf;
-        final long frame;
-
-        RetiredBuf(RtMemory.Buf buf, long frame) {
-            this.buf = buf;
-            this.frame = frame;
-        }
-    }
-
-    /** Build-input buffers of finished epochs: a recorded micromap build may still be reading them. */
-    private final ArrayList<RetiredBuf> retiredBufs = new ArrayList<>();
+    /** Build inputs and scratch may remain referenced until the next host completion proof. */
+    private final ArrayList<RtMemory.Buf> retiredBufs = new ArrayList<>();
 
     private OpacityMicromapCache(RtMemory mem) {
         this.mem = mem;
@@ -587,33 +574,30 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
 
     // -------------------------------------------------------------------------------------------------- flush
 
-    /** Records the micromap build (throttled) and frees long-retired objects; called once per frame before the BLAS builds. */
+    /** Records the micromap build (throttled); called once per frame before the BLAS builds. */
     void beforeBuild(VkCommandBuffer cmd, long frameIndex) {
         frame = frameIndex;
         if (disabled) {
             return;
         }
-        destroyRetired();
         if (entries > objectEntries && frameIndex - lastFlushFrame >= THROTTLE_FRAMES) {
             flush(cmd);
         }
     }
 
-    private void destroyRetired() {
+    /** Called outside recording after the host drain; live BLAS references keep their micromaps. */
+    void releaseRetiredAfterHostDrain() {
         for (Iterator<Retired> it = retired.iterator(); it.hasNext(); ) {
             Retired r = it.next();
-            if (frame - r.frame >= RETIRED_FRAMES && !refs.containsKey(r.handle)) {
+            if (!refs.containsKey(r.handle)) {
                 EXTOpacityMicromap.vkDestroyMicromapEXT(mem.device, r.handle, null);
                 mem.destroy(r.buf);
                 it.remove();
             }
         }
-        for (Iterator<RetiredBuf> it = retiredBufs.iterator(); it.hasNext(); ) {
-            RetiredBuf r = it.next();
-            if (frame - r.frame >= RETIRED_FRAMES) {
-                mem.destroy(r.buf);
-                it.remove();
-            }
+        for (Iterator<RtMemory.Buf> it = retiredBufs.iterator(); it.hasNext(); ) {
+            mem.destroy(it.next());
+            it.remove();
         }
     }
 
@@ -659,7 +643,7 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
             }
 
             if (objectHandle != 0L) {
-                retired.add(new Retired(objectHandle, storage, frame));
+                retired.add(new Retired(objectHandle, storage));
             }
             objectHandle = newHandle;
             storage = newStorage;
@@ -687,12 +671,10 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
             return;
         }
         long bytes = Math.max(8L << 20, need);
-        if (mmScratch != null) {
-            VK10.vkDeviceWaitIdle(mem.device); // a recorded build may still be executing
-            mem.destroy(mmScratch);
-        }
-        mmScratch = mem.createBuffer("omm_scratch", bytes,
+        RtMemory.Buf next = mem.createBuffer("omm_scratch", bytes,
             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        if (mmScratch != null) retiredBufs.add(mmScratch);
+        mmScratch = next;
         mmScratchBytes = bytes;
     }
 
@@ -740,14 +722,14 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
         entryOf.clear();
         permanentUnknown.clear();
         if (objectHandle != 0L) {
-            retired.add(new Retired(objectHandle, storage, frame));
+            retired.add(new Retired(objectHandle, storage));
             objectHandle = 0L;
             storage = null;
         }
         if (buildBuf != null) {
             // entries are rewritten from index 0 in the new epoch, and the build recorded for the retired object may
             // still be executing: the buffer it reads must outlive the frame, like the object itself
-            retiredBufs.add(new RetiredBuf(buildBuf, frame));
+            retiredBufs.add(buildBuf);
             buildBuf = null;
         }
         objectEntries = 0;
@@ -840,7 +822,7 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
 
     // ------------------------------------------------------------------------------------------------ release
 
-    /** Waits for the GPU and releases everything. Safe to call once; called from {@link RtWorld#destroy()}. */
+    /** Releases everything after host completion; called from {@link RtWorld#destroy()}. */
     public void destroy() {
         disabled = true;
         if (objectHandle != 0L) {
@@ -856,8 +838,8 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
             mem.destroy(r.buf);
         }
         retired.clear();
-        for (RetiredBuf r : retiredBufs) {
-            mem.destroy(r.buf);
+        for (RtMemory.Buf r : retiredBufs) {
+            mem.destroy(r);
         }
         retiredBufs.clear();
         if (buildBuf != null) {
