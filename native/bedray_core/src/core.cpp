@@ -319,7 +319,7 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_abi_version(void) try {
 }
 
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
-    return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI;
+    return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS;
 } catch (...) {
     return 0;
 }
