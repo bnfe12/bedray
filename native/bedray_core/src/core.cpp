@@ -5,6 +5,7 @@
 
 #include "path_trace_pass.h"
 #include "bloom_pass.h"
+#include "particles_pass.h"
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
 #include "frame_graph_owner.h"
 #endif
@@ -1408,6 +1409,17 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_bloom(
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate bloom pass");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring bloom");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_particles(
+    BedrayCore* core, const BedrayParticlesFrameDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/particle frame is null");
+    return bedray::core::record_particles(core, core->cmd_pipeline_barrier, *desc, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate particle recording");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording particles");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_bloom(

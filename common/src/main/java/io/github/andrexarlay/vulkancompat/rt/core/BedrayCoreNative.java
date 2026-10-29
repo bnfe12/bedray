@@ -683,7 +683,7 @@ public final class BedrayCoreNative implements AutoCloseable {
         throw new BedrayCoreException(operation, status, message, null);
     }
 
-    private void ensureOpen() {
+    void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("bedray_core is closed");
         }
