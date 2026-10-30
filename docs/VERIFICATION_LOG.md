@@ -79,10 +79,12 @@ restored to its pre-probe sha256.
 
 Two probes first reported green and were **harness bugs, not weak guards**: the needles
 spanned two lines, this checkout stores CRLF, and `str.replace` on the raw bytes
-matched nothing, so Gradle re-ran against an untouched file. Re-run with needles tried
-in both spellings and an assertion that the mutation landed: both went red. The
-companion lesson — a change to a source file that a test only reads by relative path
-does not invalidate `:common:test` — is recorded with the verification discipline.
+matched nothing, so Gradle ran against an untouched file and the green was true for the
+source it was given. Re-run with the needle tried in both spellings and an assertion
+that the old text is gone and the new text present before trusting a result: both went
+red, each naming its own test. Probes whose needle sits on one line were unaffected,
+which is why all ten probes of the first batch — single-line needles each — fired on the
+first pass.
 
 ### Still open
 
