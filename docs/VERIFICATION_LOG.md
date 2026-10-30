@@ -51,6 +51,13 @@ named the pre-profile source text were updated to the new lines. `FEATURE_MATRIX
 ray rows now say what this revision shows: L2 for the ray profile (the old L4
 screenshots belong to the deleted GLSL pass), NOT_IMPLEMENTED for AO/DIRECT.
 
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `56b429aa791f902a…` and
+`bedray_core.dll` sha256 `9ca5cd88cc01f823…`, previous files backed up under
+`bedray-backups/`. The line to look for is
+`[VKB-RT] ray effects on AOT Slang passes passes/path_trace.slang+passes/path_display.slang`
+followed by `ray_slang(bounces=2,spp=1,...)`; no owner-verified frame yet.
+
 ## 2026-10-30 — the native core meters its own recording (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`, commit `8fa6548` (15 files, +734/−45).
