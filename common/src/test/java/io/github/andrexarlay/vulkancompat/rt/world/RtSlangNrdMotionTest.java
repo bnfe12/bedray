@@ -130,8 +130,10 @@ class RtSlangNrdMotionTest {
     @Test
     void theFrameTurnsTheBitOnOnlyWhenTheViewsCarryTheBuffer() {
         String frame = read(HOST_FRAME);
-        assertTrue(frame.contains("| (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0);"),
+        assertTrue(frame.contains("| (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)"),
             "the push follows the bound views, never a setting");
+        assertTrue(frame.contains("| rayEffectFlags();"),
+            "the ray profile's effect bits OR into the same flag word, not a second one");
         String backend = read(BACKEND);
         assertTrue(backend.contains("RtPathTraceSlangPass.BufferView motion = (dispatch.flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0"),
             "the backend derives the binding from the same flag the push carries");

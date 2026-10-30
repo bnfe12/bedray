@@ -136,10 +136,11 @@ class RtSlangRcFieldTest {
         assertTrue(entry.contains("if (pathTraceSampleRejected(result.flags)) {"));
         assertTrue(entry.contains("PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);"));
         assertTrue(entry.contains("sampleTrusted ? 1.0 : 0.0"));
-        int outside = tracer.indexOf("result.flags |= PATH_TRACE_FLAG_RC_OUTSIDE;");
-        int ordinary = tracer.indexOf("throughput *= bsdf.weight;", outside);
-        assertTrue(outside >= 0 && ordinary > outside);
-        assertFalse(tracer.substring(outside, ordinary).contains("break;"), "outside support continues the ordinary sampled ray");
+        String fieldBlock = body(tracer, "if (field.active() && receiver.primary");
+        int outsideFlag = fieldBlock.indexOf("result.flags |= PATH_TRACE_FLAG_RC_OUTSIDE;");
+        assertTrue(outsideFlag >= 0);
+        assertFalse(fieldBlock.substring(outsideFlag).contains("break;"),
+            "outside support continues the ordinary sampled ray");
         assertTrue(tracer.contains("throughput * bsdf.weight * incoming.cosineMean"));
     }
 

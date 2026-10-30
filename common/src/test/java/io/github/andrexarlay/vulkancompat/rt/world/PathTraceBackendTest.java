@@ -74,7 +74,7 @@ class PathTraceBackendTest {
 
     @Test void backendDiStatePreservesEveryOtherPushByte() {
         var original = new RtPathTraceSlangPass.Dispatch(3, 8, 7, 5, 9, 0.01f, 0.5f, 72f, 64f, 0.5f,
-            2, 0.25f, 1f, 2f, 3f, 8, 4f, 5f, 6f, 1, 0, 256, 10, 20, 0f);
+            2, 0.25f, 1f, 2f, 3f, 8, 4f, 5f, 6f, 1, 0, 256, 10, 20, 0f, 0f, 0f, 0f);
         ByteBuffer before = ByteBuffer.allocate(RtPathTraceSlangPass.PUSH_BYTES);
         ByteBuffer after = ByteBuffer.allocate(RtPathTraceSlangPass.PUSH_BYTES);
         original.writeTo(before);

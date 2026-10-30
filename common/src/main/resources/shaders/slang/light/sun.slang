@@ -29,6 +29,9 @@ float sunSolidAngle(float angularRadius) {
 struct SunMoonSampler : ILightSampler {
     SunState sun;
     float sunProbability;   // host-provided split between sun and moon
+    // Draw the disc axis instead of a point of the disc.  The density stays the true disc's, so the flux the estimate
+    // carries is unchanged and only the penumbra disappears: a hard-edged shadow from the same sun.
+    bool hardShadows;
 
     LightSample sample(LightReceiver receiver, inout uint seed) {
         LightSample result = invalidLightSample();
@@ -52,7 +55,8 @@ struct SunMoonSampler : ILightSampler {
             : sun.moonColor.rgb * max(sun.moonColor.w, 0.0);
         if (luminance(radiance) <= 0.0) return result;
 
-        float3 direction = coneAround(axis, radius, seed);
+        // A hard shadow samples the axis while keeping the disc's density: the same flux, no penumbra.
+        float3 direction = hardShadows ? axis : coneAround(axis, radius, seed);
         float cosSurface = lightCosine(receiver.normal, direction);
         if (cosSurface <= 0.0) return result;
 

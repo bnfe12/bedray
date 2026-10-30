@@ -97,6 +97,8 @@ public final class RtFrameParams {
     public int bounces;
     public int spp = 1;
     public int rayDistance = 128;
+    /** Section radius of the RT world this frame (16 blocks each): the ray profile traces no farther than this. */
+    public int rtRadiusXz = 8;
     /** Ray mode: rays per pixel nibbles (RtRayEffectsPass.packQualities) replacing quality/bounces/spp in params2; -1 = path layout. */
     public int rayQualities = -1;
     /** Ray mode spatial filter (rt_atrous.comp): iteration index (params2 bits 16-19) and iteration count (20-23). */

@@ -63,7 +63,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     atlas.albedo = albedoAtlas; atlas.material = materialAtlas; atlas.normal = normalAtlas;
     atlas.entities = entityAtlas;
     BlockMaterialTable table; table.materials = blockMaterials; table.count = pc.materialCount;
-    SunMoonSampler key; key.sun = frame.sun; key.sunProbability = pc.sunProbability;
+    SunMoonSampler key; key.sun = frame.sun; key.sunProbability = pc.sunProbability; key.hardShadows = false;
     BlockEmitterSampler block;
     block.records = emitters; block.atlas = atlas;
     block.candidates = uint(max(pc.emitterCameraRelative.w, 1.0));

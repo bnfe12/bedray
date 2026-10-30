@@ -151,6 +151,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     SunMoonSampler keyLight;
     keyLight.sun = f.sun;
     keyLight.sunProbability = pc.sunProbability;
+    keyLight.hardShadows = false;
 
     BlockEmitterSampler emitterSampler;
     emitterSampler.records = emitters;

@@ -69,6 +69,15 @@ static const uint PATH_TRACE_FLAG_RC_UNRESOLVED    = 1u << 12u;
 // entry pass reads them.
 static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;  // fill PathTraceResult.primary for the denoiser guides
 static const uint PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;  // also write the primary hit's world motion for NRD's IN_MV
+// The effect set of the ray profile (Ray Tracing mode).  Absent bits are the full transport the path profile runs, so a
+// host that sets none of them - Path Tracing, the RC probe pass - traces exactly what it always traced.
+static const uint PATH_TRACE_OPTION_NO_SPECULAR_BOUNCE  = 1u << 2u;  // a specular continuation ends the path
+static const uint PATH_TRACE_OPTION_NO_DIFFUSE_BOUNCE   = 1u << 3u;  // a diffuse continuation ends the path
+// A diffuse continuation may only collect the environment: a geometry hit is an occluder (sky-light ambient occlusion).
+static const uint PATH_TRACE_OPTION_AMBIENT_ONLY_BOUNCE = 1u << 4u;
+static const uint PATH_TRACE_OPTION_NO_KEY_SHADOWS      = 1u << 5u;  // key-light NEE skips the visibility walk
+// The key-light sampler draws the disc axis instead of a point of the disc: the same flux, a hard shadow edge.
+static const uint PATH_TRACE_OPTION_HARD_KEY_SHADOWS    = 1u << 6u;
 
 struct PathTraceOptions {
     uint  maxDepth;             // scattering events before the path stops
@@ -80,6 +89,10 @@ struct PathTraceOptions {
     float maxRadiance;          // firefly / overflow guard
     float alphaCutoff;
     uint  flags;
+    // Per-lobe far planes of a continuation (0 = maxDistance).  The ray profile stops its bounce rays at the distances
+    // its own sliders name, so "Reflection Distance" and "GI Distance" are what the traced rays actually use.
+    float diffuseDistance;
+    float specularDistance;
     // The host's verdict that the eye itself sits in water.  Geometry cannot
     // answer it: the surface of that body can be hidden by a block submerged in
     // the same column.  Never read from the push-constant flags, which mirror a
@@ -102,6 +115,8 @@ PathTraceOptions defaultPathTraceOptions() {
     options.maxRadiance = 1.0e6;
     options.alphaCutoff = 0.5;
     options.flags = 0u;
+    options.diffuseDistance = 0.0;
+    options.specularDistance = 0.0;
     options.primaryInWater = false;
     options.waterCaustics = false;
     return options;
@@ -221,6 +236,12 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     if (dot(shadowNormal, view) < 0.0) {
         shadowNormal = -shadowNormal;
     }
+    // The ray profile's "RT Shadows" switch: with it off the key light still lights the surface, it simply skips the
+    // visibility walk - the sun arrives unshadowed, while every block emitter keeps its traced shadow.
+    if ((options.flags & PATH_TRACE_OPTION_NO_KEY_SHADOWS) != 0u
+            && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
+        return bsdf * light.radiance * beamWeight / max(light.sourcePdf, 1.0e-6);
+    }
     traced = true;
     SurfaceVisibility shadow = beam.valid
         ? traceShadowBeam(traversal, atlas, blockMaterials, position, shadowNormal, lightDirection,
@@ -314,6 +335,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     float3 throughput = float3(1.0);
     Ray ray = primaryRay;
     bool firstSurfaceAccepted = false;
+    // The previous continuation was an ambient-only (AO) bounce: the next opaque surface it reaches blocks the sky
+    // light this ray carries, so the path ends there without shading that surface.
+    bool ambientOnlyPending = false;
     // Cutout holes move the origin along the current ray. Keep the displacement
     // of the primary ray only, so a later hit is measured from the camera.
     float primaryAdvance = 0.0;
@@ -426,6 +450,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             // medium segment must continue from there, not from zero.
             mediumStart = -options.rayBias;
             continue;
+        }
+
+        if (ambientOnlyPending) {
+            // An ambient-only bounce that found geometry collects nothing: the sky it would have seen is occluded.
+            break;
         }
 
         if (!firstSurfaceAccepted) {
@@ -542,6 +571,30 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.flags |= PATH_TRACE_FLAG_RC_OUTSIDE;
         }
 
+        // Which continuations this pass may trace.  The ray profile switches whole effects off (reflections, GI, AO)
+        // and bounds the ones that stay with their own distances; the path profile leaves every bit clear and keeps the
+        // full transport.  Transmission is never gated this way: looking through water or glass is not a ray effect.
+        float continuationDistance = options.maxDistance;
+        bool continuationAmbientOnly = false;
+        if (bsdf.lobe == BSDF_LOBE_SPECULAR) {
+            if ((options.flags & PATH_TRACE_OPTION_NO_SPECULAR_BOUNCE) != 0u) {
+                result.flags |= PATH_TRACE_FLAG_TRUNCATED;
+                break;
+            }
+            if (options.specularDistance > 0.0) {
+                continuationDistance = options.specularDistance;
+            }
+        } else if (bsdf.lobe == BSDF_LOBE_DIFFUSE) {
+            if ((options.flags & PATH_TRACE_OPTION_NO_DIFFUSE_BOUNCE) != 0u) {
+                result.flags |= PATH_TRACE_FLAG_TRUNCATED;
+                break;
+            }
+            continuationAmbientOnly = (options.flags & PATH_TRACE_OPTION_AMBIENT_ONLY_BOUNCE) != 0u;
+            if (options.diffuseDistance > 0.0) {
+                continuationDistance = options.diffuseDistance;
+            }
+        }
+
         // A refracted transmission through a horizontal fluid face crosses the
         // water boundary; the transmitted direction says which side the next
         // segment runs on.  A reflection (including total internal reflection)
@@ -600,7 +653,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         float3 bounceNormal = safeNormalize(surface.hit.geometricNormal, normal);
         float3 origin = hit.position
             + bounceNormal * (dot(bsdf.direction, bounceNormal) >= 0.0 ? options.rayBias : -options.rayBias);
-        ray = makeRay(origin, bsdf.direction, 0.0, options.maxDistance);
+        ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
+        ambientOnlyPending = continuationAmbientOnly;
         // The new origin sits one bias off the interaction along the face; the segment starts there (the legacy path
         // ignored this offset too).
         mediumStart = 0.0;

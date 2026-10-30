@@ -87,7 +87,7 @@ other upscalers, or noise levels) has not been evaluated.
 | Feature | Status | Level | Evidence | Requirements |
 |---|---|---|---|---|
 | Chunk geometry capture, acceleration structures | BETA | L4 | `blas built=... tlas instances=... failed=0`, screenshots | ray query |
-| Ray Tracing (Fast) mode (the ray profile of the Slang pass: primary surface plus one indirect bounce, one sample per pixel, its own ReSTIR/accumulate switches) | IN DEVELOPMENT, hidden in the release UI (`experimental_rays`) | L2 | `ray_slang(...)` mode log, unit checks of the profile; the earlier L4 screenshots belong to the deleted GLSL pass and do not validate this one | ray query |
+| Ray Tracing (Fast) mode (the ray profile of the Slang pass: primary surface plus one indirect bounce, one sample per pixel; the Shadows / Soft Shadows / Reflections / AO / GI / Emissive switches choose which continuations it traces, and the Reflection / GI / AO / Emissive distance values bound how far each one reaches) | IN DEVELOPMENT, hidden in the release UI (`experimental_rays`) | L2 | `ray_slang(...)` mode log, `[RT-EFFECTS]` F3 line, unit checks of the profiles and of the switch-to-option-bit mapping; the earlier L4 screenshots belong to the deleted GLSL pass and do not validate this one | ray query |
 | Path Tracing mode (recommended; main quality mode: GI, bounces, accumulation, auto exposure) | EXPERIMENTAL, available | L4 | accumulated frames logged, screenshots | ray query |
 | AO / Direct modes | NOT_IMPLEMENTED in the Slang renderer: refused by name (`slang_ao`, `slang_direct`) | L2 | unit checks pin the refusal | ray query |
 | LabPBR `_s` / `_n`, auto PBR, auto normals | EXPERIMENTAL | L4 | `materials baked ... labpbr_s=...`, normals debug view | |

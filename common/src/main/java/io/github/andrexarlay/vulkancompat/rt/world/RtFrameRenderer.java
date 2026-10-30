@@ -938,6 +938,7 @@ public final class RtFrameRenderer {
         params.flipY = RtConfig.FLIP_Y;
         params.tonemap = RtConfig.TONEMAP_ACES;
         params.frame = (int) dispatchCounter;
+        params.rtRadiusXz = lastRadiusXz;
         params.cameraX = camera.pos.x;
         params.cameraY = camera.pos.y;
         params.cameraZ = camera.pos.z;

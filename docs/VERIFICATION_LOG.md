@@ -4,6 +4,55 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — The ray profile reads its own effect switches (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+Stage 1 left the six ray-effect switches as labels on a profile that traced
+everything. This batch makes each one a choice the shader acts on:
+
+- `path_tracer.slang` grows five `PATH_TRACE_OPTION_*` bits (2..6) and two
+  per-lobe far planes. `NO_SPECULAR_BOUNCE` / `NO_DIFFUSE_BOUNCE` end that
+  continuation with `PATH_TRACE_FLAG_TRUNCATED` - the existing "short path,
+  still trusted" flag - after the vertex's own emission and NEE are already in
+  the radiance. `AMBIENT_ONLY_BOUNCE` lets a diffuse continuation collect only
+  the environment: an accepted geometry hit ends the path unshaded (sky-light
+  occlusion). Transmission is deliberately never gated, so water and glass stay
+  see-through with every effect off.
+- `NO_KEY_SHADOWS` returns the key light's NEE term before the visibility walk;
+  sun/moon only, block emitters keep their traced shadows. `HARD_KEY_SHADOWS`
+  is `sun.slang`: the sampler draws the disc axis while keeping the true disc's
+  source density, so flux is unchanged and only the penumbra disappears.
+- The three push words that were reserved zeros (76, 88, 92) now carry the
+  emitter collection range, the diffuse far plane and the specular far plane as
+  floats; the C++ path-trace pass already copies them verbatim, and a zero still
+  means "the ray far plane", so the path profile and the RC probe pass are
+  unchanged.
+- Host: `RtSlangPathPass.rayEffectFlags()` maps RT Shadows / Soft Shadows /
+  Reflections / AO / GI to bits (GI supersedes AO); `diffuseBounceDistance()` is
+  GI distance or the AO radius, `specularBounceDistance()` is Reflection
+  Distance, `emitterBounceDistance()` is Emissive Distance + 8 (the list was
+  collected within that range; the shader still caps the light radius at 24
+  blocks), and `rays_emissive_quality` becomes `min(4,max(1,q))*8` RIS
+  candidates. "RT Block Light" off now drops the emitter list from the trace
+  entirely. The ray profile's ray far plane is `rtRadiusXz * 16`, the extent the
+  scene was built for, instead of the path mode's 384.
+- F3: `[RT-EFFECTS]` names the six switches and four ranges for the frame.
+
+Tests: **835 tests, 148 classes, 0 failures, 0 errors, 6 skipped**, `BUILD
+SUCCESSFUL` (`:common:test --rerun-tasks`). Four older source-scan guards moved
+with the code: the NRD-motion line now ORs `rayEffectFlags()` into the same
+word, the bounce ray asserts the continuation far plane, the RC outside-support
+check reads the field block instead of a raw substring, and the TRUNCATED
+inventory is six stops instead of four.
+
+Open: the four remaining quality sliders of the ray mode
+(`rays_shadow_quality`, `rays_reflection_quality`, `rays_ao_quality`,
+`rays_gi_quality`) still do not change a traced image; they are dead controls
+until the next batch deletes them or gives them a meaning. `rays_pixel_shadows`
+/ `rays_pixel_shadow_size` remain stats-only. No owner-verified frame yet for
+any of this.
+
 ## 2026-10-30 — Ray Tracing mode runs as the Slang pass's ray profile (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`, commit `028d2d8` (9 files, +293/−149).

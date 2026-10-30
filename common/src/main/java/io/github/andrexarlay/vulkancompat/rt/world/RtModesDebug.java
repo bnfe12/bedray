@@ -37,6 +37,9 @@ public final class RtModesDebug {
         out.add(String.format(Locale.ROOT,
             "[RT-WATER] style=%s reflection=%s transmission=%s caustics=%s mask=0x%02X",
             waterStyle, reflectionTraced ? "RAY_TRACED" : "DISABLED", waterTransport, caustics, RtFrameRenderer.getReflectionMask()));
+        if (pass == RtMode.RAY_TRACED) {
+            out.add(rayEffectsLine());
+        }
         out.add(RtFrameRenderer.getHermeticTelemetry());
         out.add(RtFrameRenderer.transparencyTelemetry());
         out.add("[RT-OPTICS] model=" + (RtSettings.opticalMaterials() ? "AUTHORED_SLAB" : "LEGACY")
@@ -59,6 +62,16 @@ public final class RtModesDebug {
         // The legacy FrameGenerationPipeline is an unused scaffold and always reports unsupported.
         out.add("[FRAME-GEN] " + FrameGenRuntime.statusLine());
         // Dirt RT / shader-host lines come from the "shader_host" provider (ShaderHostDebug).
+    }
+
+    /** What the ray profile traces this frame: the six switches and the four ranges they read. */
+    static String rayEffectsLine() {
+        String diffuse = RtSettings.gi() ? "GI" : (RtSettings.ao() ? "AO_ONLY" : "OFF");
+        return String.format(Locale.ROOT,
+            "[RT-EFFECTS] shadows=%s soft=%s reflections=%s diffuse=%s emissive=%s distances=refl%d gi%d ao%d emis%d",
+            onOff(RtSettings.shadows()), onOff(RtSettings.softShadows()), onOff(RtSettings.reflections()), diffuse,
+            onOff(RtSettings.emissive()), RtSettings.reflectionDistance(), RtSettings.giDistance(),
+            RtSettings.aoRadius(), RtSettings.emissiveDistance());
     }
 
     private static String onOff(boolean v) {

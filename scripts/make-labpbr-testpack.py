@@ -1,4 +1,4 @@
-"""Writes a tiny LabPBR 1.3 test resource pack (for the rt_modes autotest, step c of docs/experiments/rt-modes.md).
+"""Writes a tiny LabPBR 1.3 test resource pack (for the rt_modes autotest).
 
 Usage: python -I scripts/make-labpbr-testpack.py <resourcepacks dir>
 Creates <dir>/vkrtx_labpbr_test/ with:

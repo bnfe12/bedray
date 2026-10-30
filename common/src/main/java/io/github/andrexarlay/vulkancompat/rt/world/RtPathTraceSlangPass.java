@@ -79,6 +79,16 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     /** {@code PathTracePush.flags}: the pass also writes NRD's world-space motion channel. Mirrors the shader bit. */
     static final int OPTION_NRD_MOTION = 2;
 
+    /**
+     * The effect set of the ray profile, mirroring {@code PATH_TRACE_OPTION_*} in {@code path_tracer.slang}. Absent
+     * bits are the full transport, so the path profile - which sets none of them - traces what it always traced.
+     */
+    static final int OPTION_NO_SPECULAR_BOUNCE = 4;
+    static final int OPTION_NO_DIFFUSE_BOUNCE = 8;
+    static final int OPTION_AMBIENT_ONLY_BOUNCE = 16;
+    static final int OPTION_NO_KEY_SHADOWS = 32;
+    static final int OPTION_HARD_KEY_SHADOWS = 64;
+
     /** The seven denoiser guide images, in the order {@code gbufferViews()} hands them over. */
     record Guides(long viewZ, long normalRough, long diffuse, long albedo, long direct, long specular, long specAlbedo) {
         /**
@@ -308,7 +318,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     /**
      * The 112-byte push block of {@code passes/path_trace.slang}: path limits, sampling inputs, the emitter list of the
-     * frame, the ReSTIR DI temporal state and the entity ring of this frame. Exposure is not
+     * frame, the ReSTIR DI temporal state, the ray profile's bounce ranges and the entity ring of this frame. Exposure is not
      * here on purpose: the pass writes scene-referred radiance and the display step applies {@code FrameConstants.exposure}
      * exactly once.
      */
@@ -317,7 +327,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                     int emitterCount, float emitterProbability, float emitterCamRelX, float emitterCamRelY,
                     float emitterCamRelZ, int emitterCandidates,
                     float diCamDeltaX, float diCamDeltaY, float diCamDeltaZ, int diFlags, int diParity,
-                    int entityAtlasSize, int selfAvatarTriStart, int selfAvatarTriCount, float autoNormalStrength) {
+                    int entityAtlasSize, int selfAvatarTriStart, int selfAvatarTriCount, float autoNormalStrength,
+                    float emitterDistance, float diffuseDistance, float specularDistance) {
         Dispatch {
             if (maxDepth < 1) {
                 throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
@@ -368,6 +379,11 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             if (!(autoNormalStrength >= 0f) || !Float.isFinite(autoNormalStrength)) {
                 throw new IllegalArgumentException("auto-normal strength must be finite and >= 0, got " + autoNormalStrength);
             }
+            if (!Float.isFinite(emitterDistance) || !Float.isFinite(diffuseDistance)
+                || !Float.isFinite(specularDistance)) {
+                throw new IllegalArgumentException("the bounce distances must be finite, got "
+                    + emitterDistance + "/" + diffuseDistance + "/" + specularDistance);
+            }
         }
 
         Dispatch withDiState(int diFlags, int diParity) {
@@ -375,7 +391,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                 rayBias, alphaCutoff, maxDistance, maxRadiance, sunProbability,
                 emitterCount, emitterProbability, emitterCamRelX, emitterCamRelY, emitterCamRelZ, emitterCandidates,
                 diCamDeltaX, diCamDeltaY, diCamDeltaZ, diFlags, diParity,
-                entityAtlasSize, selfAvatarTriStart, selfAvatarTriCount, autoNormalStrength);
+                entityAtlasSize, selfAvatarTriStart, selfAvatarTriCount, autoNormalStrength,
+                emitterDistance, diffuseDistance, specularDistance);
         }
 
         void writeTo(ByteBuffer out) {
@@ -403,11 +420,13 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             out.putFloat(base + 64, diCamDeltaX);
             out.putFloat(base + 68, diCamDeltaY);
             out.putFloat(base + 72, diCamDeltaZ);
-            out.putInt(base + 76, 0);
+            // The three words the reservoir and DI state left reserved now carry the ray profile's bounce ranges; a
+            // dispatch that does not fill them (0) traces with the ray far plane exactly as before.
+            out.putFloat(base + 76, emitterDistance);
             out.putInt(base + 80, diFlags);
             out.putInt(base + 84, diParity);
-            out.putInt(base + 88, 0);
-            out.putInt(base + 92, 0);
+            out.putFloat(base + 88, diffuseDistance);
+            out.putFloat(base + 92, specularDistance);
             out.putInt(base + 96, entityAtlasSize);
             out.putInt(base + 100, selfAvatarTriStart);
             out.putInt(base + 104, selfAvatarTriCount);

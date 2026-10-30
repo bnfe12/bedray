@@ -38,4 +38,42 @@ class RtModesDebugStatusTest {
         assertEquals(" q3 d256", RtModesDebug.reflectionSettings(true, 3, 256));
         assertEquals("", RtModesDebug.reflectionSettings(false, 3, 256));
     }
+
+    /** The ray profile's F3 line names every switch and range, so a screenshot shows what the frame traced. */
+    @Test
+    void rayEffectsLineNamesTheSwitchesTheProfilesRead() {
+        boolean sShadows = RtSettings.raysShadows;
+        boolean sSoft = RtSettings.raysSoftShadows;
+        boolean sRefl = RtSettings.raysReflections;
+        boolean sAo = RtSettings.raysAo;
+        boolean sGi = RtSettings.raysGi;
+        boolean sEmissive = RtSettings.raysEmissive;
+        try {
+            RtSettings.raysShadows = true;
+            RtSettings.raysSoftShadows = true;
+            RtSettings.raysReflections = false;
+            RtSettings.raysAo = true;
+            RtSettings.raysGi = false;
+            RtSettings.raysEmissive = true;
+            assertEquals("[RT-EFFECTS] shadows=on soft=on reflections=off diffuse=AO_ONLY emissive=on"
+                    + " distances=refl" + RtSettings.reflectionDistance() + " gi" + RtSettings.giDistance()
+                    + " ao" + RtSettings.aoRadius() + " emis" + RtSettings.emissiveDistance(),
+                RtModesDebug.rayEffectsLine());
+
+            RtSettings.raysGi = true;
+            assertTrue(RtModesDebug.rayEffectsLine().contains("diffuse=GI"), "GI supersedes the ambient-only bounce");
+
+            RtSettings.raysGi = false;
+            RtSettings.raysAo = false;
+            assertTrue(RtModesDebug.rayEffectsLine().contains("diffuse=OFF"),
+                "no GI and no AO means no diffuse continuation at all");
+        } finally {
+            RtSettings.raysShadows = sShadows;
+            RtSettings.raysSoftShadows = sSoft;
+            RtSettings.raysReflections = sRefl;
+            RtSettings.raysAo = sAo;
+            RtSettings.raysGi = sGi;
+            RtSettings.raysEmissive = sEmissive;
+        }
+    }
 }

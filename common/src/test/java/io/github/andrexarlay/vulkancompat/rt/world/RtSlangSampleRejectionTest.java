@@ -79,11 +79,11 @@ class RtSlangSampleRejectionTest {
         }
         assertEquals(8, sites, "eight arithmetic faults: primary ray, interval, hit parameter, two cutout advances, "
             + "primary advance, throughput and the final radiance");
-        assertEquals(4, count(tracer, "result.flags |= " + TRUNCATED + ";"),
-            "and four stops that only cut the path short");
+        assertEquals(6, count(tracer, "result.flags |= " + TRUNCATED + ";"),
+            "and six stops that only cut the path short: the four above plus the ray profile's two effect gates");
     }
 
-    /** Each of the four stops, named by the guard that decides it. */
+    /** Each of the stops, named by the guard that decides it. */
     @Test
     void theStopsThatOnlyCutThePathShort() {
         String tracer = read(TRACER);
@@ -95,6 +95,10 @@ class RtSlangSampleRejectionTest {
             "a lobe with nothing left to sample is an ordinary end of a path");
         assertEquals("truncated", flagSetBy(tracer, "if (pathMaxComponent(throughput) > options.maxRadiance) {"),
             "the firefly guard clamps, it does not invalidate");
+        assertEquals("truncated", flagSetBy(tracer, "if ((options.flags & PATH_TRACE_OPTION_NO_SPECULAR_BOUNCE) != 0u) {"),
+            "reflections off ends a specular continuation, and the vertex's own light is already gathered");
+        assertEquals("truncated", flagSetBy(tracer, "if ((options.flags & PATH_TRACE_OPTION_NO_DIFFUSE_BOUNCE) != 0u) {"),
+            "GI and AO off ends a diffuse continuation the same way");
         assertEquals("invalid", flagSetBy(tracer, "if (!isFinite(throughput)) {"),
             "but a throughput that is not a number ends the sample, not just the path");
         assertEquals("invalid", flagSetBy(tracer, "if (!isFinite(ray.tMax)) {"),

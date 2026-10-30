@@ -40,8 +40,9 @@ public struct PathTracePush {
     uint  emitterCount;
     float emitterProbability;
     float4 emitterCameraRelative;   // xyz camera minus the origin the list was rebuilt at, w candidates per call
-    float4 diCameraDelta;           // xyz raw camera position minus the previous frame's, w reserved
-    uint4  diState;                 // x: PATH_TRACE_DI_* bits, y: parity half this frame writes, zw reserved
+    float4 diCameraDelta;           // xyz raw camera position minus the previous frame's, w emitter collection range
+    uint4  diState;                 // x: PATH_TRACE_DI_* bits, y: parity half this frame writes, zw diffuse/specular
+                                    // bounce far planes as floats (0 = the ray far plane)
     uint4  entityState;             // x: entity atlas texels per side (0 = no atlas), yz: self-avatar primitive range,
                                     // w: auto-normal strength as float bits (0 = off)
 };
@@ -299,6 +300,8 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     SunMoonSampler keyLight;
     keyLight.sun = f.sun;
     keyLight.sunProbability = pc.sunProbability;
+    // The ray profile's "Soft Shadows" switch decides whether the key light is sampled across its disc or at its axis.
+    keyLight.hardShadows = (pc.flags & PATH_TRACE_OPTION_HARD_KEY_SHADOWS) != 0u;
 
     // Block emitters of this frame, in the list RtEmitters uploads for the legacy path as well. The receiver's own
     // emission reaches the sampler through LightReceiver, so a glowing face is not lit by its own quad.
@@ -308,7 +311,10 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     emitterSampler.atlas = atlas;
     emitterSampler.candidates = emitterCandidates;
     emitterSampler.cameraRelative = pc.emitterCameraRelative.xyz;
-    emitterSampler.maxDistance = max(pc.maxDistance, 1.0);
+    // The word carries the range the host collected emitters over; a host that leaves it 0 (the path profile's older
+    // default) keeps the whole ray far plane.
+    emitterSampler.maxDistance = asfloat(pc.diCameraDelta.w) > 0.0
+        ? asfloat(pc.diCameraDelta.w) : max(pc.maxDistance, 1.0);
 
     // ReSTIR DI over the same list: one reservoir of this pixel, the reprojected history of the same surface.  The pass
     // always builds it and the push flag decides whether it is consulted, so one instantiation covers both branches.
@@ -318,7 +324,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     directReuse.atlas = atlas;
     directReuse.candidates = emitterCandidates;
     directReuse.cameraRelative = pc.emitterCameraRelative.xyz;
-    directReuse.maxDistance = max(pc.maxDistance, 1.0);
+    directReuse.maxDistance = emitterSampler.maxDistance;
     directReuse.enabled = (pc.diState.x & PATH_TRACE_DI_ENABLED) != 0u ? 1u : 0u;
     directReuse.historyValid = (pc.diState.x & PATH_TRACE_DI_HISTORY) != 0u ? 1u : 0u;
     directReuse.cameraStatic = (pc.diState.x & PATH_TRACE_DI_STATIC) != 0u ? 1u : 0u;
@@ -353,6 +359,10 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     options.maxDistance = max(pc.maxDistance, 1.0);
     options.maxRadiance = max(pc.maxRadiance, 1.0);
     options.flags = pc.flags;
+    // The ray profile's own bounce distances.  A 0 word is the path profile's older host and keeps the ray far plane,
+    // so the two words change nothing for a dispatch that does not fill them.
+    options.diffuseDistance = asfloat(pc.diState.z) > 0.0 ? asfloat(pc.diState.z) : options.maxDistance;
+    options.specularDistance = asfloat(pc.diState.w) > 0.0 ? asfloat(pc.diState.w) : options.maxDistance;
     // Whether the eye's own block is water, which only the host can answer: the
     // surface of that body can hide behind a block submerged in the same column.
     options.primaryInWater = frameCameraInWater(f);

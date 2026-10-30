@@ -655,7 +655,7 @@ public final class RtSettings {
      * Applies a preset. LOW..ULTRA write the Ray Tracing values (the mode is not changed: the "Tracing" option decides); OFF
      * also switches tracing off (older config files, autotests). FAST / QUALITY / PATH_TRACING (older files and autotests)
      * switch to Path Tracing and apply the matching {@link PathPreset}; {@link #preset} stays as it was. CUSTOM only stores the
-     * preset. Values per preset are documented in docs/experiments/rt-modes.md.
+     * preset. The LOW..ULTRA values are written below.
      */
     public static void applyPreset(Preset p) {
         if (p == Preset.FAST || p == Preset.QUALITY || p == Preset.PATH_TRACING) {

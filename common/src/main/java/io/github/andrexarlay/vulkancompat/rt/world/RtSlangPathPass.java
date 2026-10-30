@@ -79,6 +79,56 @@ public final class RtSlangPathPass implements RtPass {
         return rayMode ? RtSettings.raysAccumulation() : RtSettings.accumulate();
     }
 
+    /**
+     * The effect switches of the ray mode, as {@code PATH_TRACE_OPTION_*} bits. The path profile sets none: it always
+     * traces the full transport, and its own screen has no per-effect switches to honour.
+     */
+    int rayEffectFlags() {
+        if (!rayMode) {
+            return 0;
+        }
+        int flags = 0;
+        if (!RtSettings.reflections()) {
+            flags |= RtPathTraceSlangPass.OPTION_NO_SPECULAR_BOUNCE;
+        }
+        if (!RtSettings.gi()) {
+            // Without GI a diffuse bounce either collects the sky alone (AO) or is not traced at all.
+            flags |= RtSettings.ao() ? RtPathTraceSlangPass.OPTION_AMBIENT_ONLY_BOUNCE
+                : RtPathTraceSlangPass.OPTION_NO_DIFFUSE_BOUNCE;
+        }
+        if (!RtSettings.shadows()) {
+            flags |= RtPathTraceSlangPass.OPTION_NO_KEY_SHADOWS;
+        }
+        if (!RtSettings.softShadows()) {
+            flags |= RtPathTraceSlangPass.OPTION_HARD_KEY_SHADOWS;
+        }
+        return flags;
+    }
+
+    /** Far plane of a diffuse bounce: GI's own distance, or the AO radius when that bounce only collects the sky. */
+    float diffuseBounceDistance() {
+        if (!rayMode) {
+            return 0f;
+        }
+        return RtSettings.gi() ? RtSettings.giDistance() : RtSettings.aoRadius();
+    }
+
+    /** Far plane of a specular bounce, from the ray mode's "Reflection Distance"; 0 = the ray far plane. */
+    float specularBounceDistance() {
+        return rayMode ? RtSettings.reflectionDistance() : 0f;
+    }
+
+    /** The range the emitter list of this frame was collected over, so the sampler never reaches past it. */
+    float emitterBounceDistance(RtFrameParams params) {
+        return rayMode ? RtSettings.emissiveDistance() + 8f : Math.min(params.rayDistance, 128f);
+    }
+
+    /** Candidate count per light sample: the ray mode's own quality slider, the path mode's A/B property. */
+    int emitterCandidates() {
+        return rayMode ? Math.min(4, Math.max(1, RtSettings.emissiveQuality())) * 8
+            : RtConfig.SLANG_EMITTER_CANDIDATES;
+    }
+
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
     static boolean isSupported(SlangRuntime runtime) {
         return supportProblem(runtime) == null;
@@ -238,7 +288,12 @@ public final class RtSlangPathPass implements RtPass {
             params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());
             params.spp = RtAdaptiveQuality.spp(RtSettings.spp());
         }
-        params.rayDistance = RtSettings.pathMaxDistance();
+        // The ray mode's far plane is its world radius ("RT Distance"), exactly the extent the scene was built for;
+        // the path mode keeps its own longest-ray slider.
+        params.rayDistance = rayMode ? Math.max(32, params.rtRadiusXz * 16) : RtSettings.pathMaxDistance();
+        params.giDistance = RtSettings.giDistance();
+        params.emissiveDistance = RtSettings.emissiveDistance();
+        params.aoRadius = RtSettings.aoRadius();
         params.flags |= RtFrameParams.FLAG_EMISSIVE;
 
         // The mean is reprojected per pixel, so camera motion no longer invalidates the whole history; only a change
@@ -252,7 +307,8 @@ public final class RtSlangPathPass implements RtPass {
         // pixel's own average, only with a different variance. Restarting the history to equalise the weights would
         // throw away the convergence the accumulation exists for.
         int settingsHash = Objects.hash(params.bounces, params.rayDistance, accumulateRequested(), params.mode,
-            RtSettings.pathPreset, RtSettings.preset);
+            RtSettings.pathPreset, RtSettings.preset, rayEffectFlags(), diffuseBounceDistance(),
+            specularBounceDistance(), emitterBounceDistance(params), emitterCandidates());
         if (forceReset || lightingChanged || params.sceneChanged || settingsHash != lastSettingsHash
             || !accumulateRequested()) {
             accumFrames = 0;
@@ -311,7 +367,9 @@ public final class RtSlangPathPass implements RtPass {
         fillFrame(params, width, height);
         // The emitter list of the legacy path, bound as a second descriptor range: switching block emitters off is an A/B
         // on the shader's NEE branch only, the list keeps being rebuilt either way.
-        int emitterCount = RtConfig.SLANG_BLOCK_EMITTERS ? Math.max(0, params.emitterCount) : 0;
+        // "RT Block Light" off drops the emitter list from the trace entirely: no emitter NEE, no reservoir branch.
+        int emitterCount = RtConfig.SLANG_BLOCK_EMITTERS && (!rayMode || RtSettings.emissive())
+            ? Math.max(0, params.emitterCount) : 0;
         RtPathTraceSlangPass.Emitters emitters = new RtPathTraceSlangPass.Emitters(
             emitterCount > 0 ? params.emitterHandle : 0L, params.emitterOffset, emitterCount);
         int diFlags = emitterCount > 0 && diActive() ? DI_FLAG_ENABLED
@@ -339,14 +397,16 @@ public final class RtSlangPathPass implements RtPass {
         // motion buffer, bound only for that layout, so its push bit follows the buffer the frame actually carries.
         RtPathTraceSlangPass.Guides guides = RtPathTraceSlangPass.Guides.of(views.gbuffer());
         int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)
-            | (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0);
+            | (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)
+            | rayEffectFlags();
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
-            params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES,
+            params.emitterCamRelY, params.emitterCamRelZ, emitterCandidates(),
             params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, 0,
             capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount(),
-            RtSettings.autoNormalsOn() ? RtSettings.autoNormalStrengthPercent() / 100f : 0f);
+            RtSettings.autoNormalsOn() ? RtSettings.autoNormalStrengthPercent() / 100f : 0f,
+            emitterBounceDistance(params), diffuseBounceDistance(), specularBounceDistance());
         boolean nativeScene = views.table() != null && views.table().sceneOwned;
         int flags = (historyWritten ? 0 : BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY)
             | (accumulateRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_ACCUMULATE : 0)

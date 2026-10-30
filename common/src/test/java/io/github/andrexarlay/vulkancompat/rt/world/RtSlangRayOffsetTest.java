@@ -41,8 +41,8 @@ class RtSlangRayOffsetTest {
             "one bias, on the hemisphere the outgoing ray actually left through");
         assertTrue(!bounce.contains("bsdf.direction * options.rayBias"),
             "biasing along the ray keeps the bounce inside the triangle at grazing angles");
-        assertTrue(source.contains("ray = makeRay(origin, bsdf.direction, 0.0, options.maxDistance);"),
-            "tMin stays zero: the origin already carries the only offset");
+        assertTrue(source.contains("ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);"),
+            "tMin stays zero: the origin already carries the only offset, and the far plane is the continuation's");
     }
 
     @Test
