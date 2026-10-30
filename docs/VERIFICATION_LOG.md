@@ -53,6 +53,14 @@ until the next batch deletes them or gives them a meaning. `rays_pixel_shadows`
 / `rays_pixel_shadow_size` remain stats-only. No owner-verified frame yet for
 any of this.
 
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `18876fa4393d77e0…`; the previous
+jar is kept as `….20261030-064129.bak` (sha256 `56b429aa791f902a…`).
+`bedray_core.dll` was rebuilt from this checkout and is byte-identical to the
+deployed native (sha256 `9ca5cd88cc01f823…`), so the natives did not change.
+The line to look for is `[RT-EFFECTS] shadows=… soft=… reflections=…
+diffuse=… emissive=… distances=refl…`; no owner-verified frame yet.
+
 ## 2026-10-30 — Ray Tracing mode runs as the Slang pass's ray profile (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`, commit `028d2d8` (9 files, +293/−149).
