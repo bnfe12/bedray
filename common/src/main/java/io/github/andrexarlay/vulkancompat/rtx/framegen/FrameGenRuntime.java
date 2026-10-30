@@ -435,7 +435,7 @@ public final class FrameGenRuntime {
                 return;
             }
             if (gpu == null) {
-                gpu = new FrameGenGpu(device.vkDevice());
+                gpu = new FrameGenGpu(device);
             }
             gpu.ensure(fmt, winW, winH, renderW, renderH);
             long mainImg = WorldTargetManager.extractVkImage(main);
@@ -449,13 +449,21 @@ public final class FrameGenRuntime {
             VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
             VkBarriers.fullMemoryBarrier(cmd);
             gpu.recordInitialTransitions(cmd);
-            gpu.record(cmd, slot, mainImg, depthView, mvView);
+            Runnable retire;
+            try {
+                retire = gpu.record(cmd, slot, mainImg, depthView, mvView);
+            } catch (RuntimeException | Error failure) {
+                gpu.discardRecording(cmd.address());
+                throw failure;
+            }
             VkBarriers.fullMemoryBarrier(cmd);
             int end = VK10.vkEndCommandBuffer(cmd);
             if (end != VK10.VK_SUCCESS) {
+                gpu.discardRecording(cmd.address());
                 throw new IllegalStateException("vkEndCommandBuffer failed: " + end);
             }
             encoder.execute(cmd);
+            encoder.queueForDestroy(retire::run);
             worldReady = true;
         } catch (Throwable t) {
             fail("world_ready", t.toString(), t);
@@ -775,7 +783,7 @@ public final class FrameGenRuntime {
      * Common constants (guide 7.0 and sl_consts.h). SL matrices are row-major with row vectors; the JOML float array
      * (column-major, column vectors) of M is byte-identical to the row-major array of M transposed, i.e. the row-vector form,
      * so {@code Matrix4f.get} is passed as is. Depth: reverse-Z hardware depth; motion vectors: pixels, previous minus current,
-     * camera + object motion, no jitter, already flipped to the back buffer orientation by fg_prepare.comp.
+     * camera + object motion, no jitter, already flipped to the back buffer orientation by the fg_prepare pass.
      */
     private static long constantsFrame = -1;
 

@@ -334,6 +334,26 @@ public final class BedrayCoreLayouts {
         ValueLayout.JAVA_LONG.withName("reserved")
     ).withName("BedrayPathTraceDesc");
 
+    /** Additive producer-only ABI of {@code bedray_fg_prepare.h}: host images, core-owned recording. */
+    public static final StructLayout FG_PREPARE_DESC = MemoryLayout.structLayout(
+        ValueLayout.JAVA_INT.withName("abi_version"),
+        ValueLayout.JAVA_INT.withName("struct_size"),
+        ValueLayout.JAVA_LONG.withName("command_buffer"),
+        ValueLayout.JAVA_LONG.withName("program"),
+        ValueLayout.JAVA_LONG.withName("sampler"),
+        ValueLayout.JAVA_LONG.withName("source_color_image"),
+        ValueLayout.JAVA_LONG.withName("hudless_image"),
+        ValueLayout.JAVA_LONG.withName("depth_view"),
+        ValueLayout.JAVA_LONG.withName("input_motion_view"),
+        ValueLayout.JAVA_LONG.withName("output_depth_view"),
+        ValueLayout.JAVA_LONG.withName("output_motion_view"),
+        ValueLayout.JAVA_INT.withName("window_width"),
+        ValueLayout.JAVA_INT.withName("window_height"),
+        ValueLayout.JAVA_INT.withName("render_width"),
+        ValueLayout.JAVA_INT.withName("render_height"),
+        ValueLayout.JAVA_LONG.withName("reserved")
+    ).withName("BedrayFgPrepareFrameDesc");
+
     static final long ERROR_STATUS = ERROR.byteOffset(groupElement("status"));
     static final long ERROR_MESSAGE = ERROR.byteOffset(groupElement("message"));
 
@@ -499,6 +519,23 @@ public final class BedrayCoreLayouts {
     public static final long PTD_PROGRAM_STATS = PT_DESC.byteOffset(groupElement("program_stats"));
     public static final long PTD_PROGRAM_TRACE_SCENE = PT_DESC.byteOffset(groupElement("program_trace_scene"));
 
+    public static final long FGP_ABI_VERSION = FG_PREPARE_DESC.byteOffset(groupElement("abi_version"));
+    public static final long FGP_STRUCT_SIZE = FG_PREPARE_DESC.byteOffset(groupElement("struct_size"));
+    public static final long FGP_COMMAND_BUFFER = FG_PREPARE_DESC.byteOffset(groupElement("command_buffer"));
+    public static final long FGP_PROGRAM = FG_PREPARE_DESC.byteOffset(groupElement("program"));
+    public static final long FGP_SAMPLER = FG_PREPARE_DESC.byteOffset(groupElement("sampler"));
+    public static final long FGP_SOURCE_COLOR_IMAGE = FG_PREPARE_DESC.byteOffset(groupElement("source_color_image"));
+    public static final long FGP_HUDLESS_IMAGE = FG_PREPARE_DESC.byteOffset(groupElement("hudless_image"));
+    public static final long FGP_DEPTH_VIEW = FG_PREPARE_DESC.byteOffset(groupElement("depth_view"));
+    public static final long FGP_INPUT_MOTION_VIEW = FG_PREPARE_DESC.byteOffset(groupElement("input_motion_view"));
+    public static final long FGP_OUTPUT_DEPTH_VIEW = FG_PREPARE_DESC.byteOffset(groupElement("output_depth_view"));
+    public static final long FGP_OUTPUT_MOTION_VIEW = FG_PREPARE_DESC.byteOffset(groupElement("output_motion_view"));
+    public static final long FGP_WINDOW_WIDTH = FG_PREPARE_DESC.byteOffset(groupElement("window_width"));
+    public static final long FGP_WINDOW_HEIGHT = FG_PREPARE_DESC.byteOffset(groupElement("window_height"));
+    public static final long FGP_RENDER_WIDTH = FG_PREPARE_DESC.byteOffset(groupElement("render_width"));
+    public static final long FGP_RENDER_HEIGHT = FG_PREPARE_DESC.byteOffset(groupElement("render_height"));
+    public static final long FGP_RESERVED = FG_PREPARE_DESC.byteOffset(groupElement("reserved"));
+
     private BedrayCoreLayouts() {
     }
 
@@ -524,6 +561,13 @@ public final class BedrayCoreLayouts {
         require("BedrayPathTraceDesc", PT_DESC.byteSize(), 80);
         require("BedrayPathTraceDesc.program_stats", PTD_PROGRAM_STATS, 56);
         require("BedrayPathTraceDesc.program_trace_scene", PTD_PROGRAM_TRACE_SCENE, 64);
+        require("BedrayFgPrepareFrameDesc", FG_PREPARE_DESC.byteSize(), 104);
+        require("BedrayFgPrepareFrameDesc.command_buffer", FGP_COMMAND_BUFFER, 8);
+        require("BedrayFgPrepareFrameDesc.sampler", FGP_SAMPLER, 24);
+        require("BedrayFgPrepareFrameDesc.source_color_image", FGP_SOURCE_COLOR_IMAGE, 32);
+        require("BedrayFgPrepareFrameDesc.depth_view", FGP_DEPTH_VIEW, 48);
+        require("BedrayFgPrepareFrameDesc.window_width", FGP_WINDOW_WIDTH, 80);
+        require("BedrayFgPrepareFrameDesc.reserved", FGP_RESERVED, 96);
         require("BedrayPathTraceFrameDesc.scene", PTFD_SCENE, 32);
         require("BedrayPathTraceFrameDesc.camera", PTFD_CAMERA, 344);
         require("BedrayPathTraceFrameDesc.lighting", PTFD_LIGHTING, 760);

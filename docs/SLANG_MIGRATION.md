@@ -19,6 +19,18 @@ Existing-feature transfers in the current working tree:
   path also uses an opaque frame-graph node and scheduler; its private histories
   remain owned by PathTracePass, as recorded in MIGRATION_INTEGRATION_DECISIONS.md.
 
+* Frame generation (DLSS-G and FSR 3) prepares its inputs through the AOT pass
+  `passes/fg_prepare.slang` recorded by `bedray_core_render_fg_prepare`: the core
+  owns the flipped blit of the engine main target into the hudless image, the
+  depth/motion flip dispatch, its descriptors and the barriers, and the host only
+  hands over the images it already owns (the `BedrayFgPrepareFrameDesc` mirror is
+  `BedrayCoreLayouts.FG_PREPARE_DESC`). `FrameGenGpu` borrows the per-device
+  `SlangRuntime` from `SlangRuntimePool`, validates the manifest (4 bindings,
+  uint2 push, 8x8x1) before the first dispatch, and hands each recording back once
+  the encoder's fence proves retirement. `fg_prepare.comp` is deleted; without the
+  matching DLL the producer is logged as unavailable and framegen does not run -
+  there is no Shaderc fallback. No owner-verified generated frame yet.
+
 * The typed path trace now writes the legacy denoiser guide set for DLSS-RR:
   the entry pass fills `outViewZ` through `outSpecAlbedo` (bindings 26–32) at
   the primary vertex when the host sets `PATH_TRACE_OPTION_GBUFFER`, so an
@@ -139,9 +151,8 @@ re-captured live before a jar ships. A compile or a test is not a frame.
    contract plus `git log`.  Do not copy the old include graph, and do not
    reintroduce a runtime GLSL compile in the renderer (see
    `ShadercSurfaceTest`).  What survives Shaderc is not the renderer:
-   `fg_prepare.comp`, `iris_depth.comp`, the `shaders/spatial/` upscaler kernels
-   and the Iris pack host, plus the one-shot opacity-micromap probe in
-   `RtExtensionProbe`.
+   `iris_depth.comp`, the `shaders/spatial/` upscaler kernels and the Iris pack
+   host, plus the one-shot opacity-micromap probe in `RtExtensionProbe`.
 6. **No binaries in git.**  SDKs, generated SPIR-V, DLLs and JARs stay out of
    the repository.  `*.spv`, `*.exe`, `*.dll` and `*.jar` are already ignored.
 

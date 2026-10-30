@@ -52,6 +52,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle configurePathTraceHandle;
     private final MethodHandle renderPathTraceHandle;
     private final MethodHandle recordPathTraceStatsHandle;
+    private final MethodHandle renderFgPrepareHandle;
     private final MethodHandle renderPathTraceGuidesHandle;
     private final MethodHandle renderPathTraceMotionHandle;
     private final MethodHandle destroyPathTraceHandle;
@@ -119,6 +120,8 @@ public final class BedrayCoreNative implements AutoCloseable {
             recordPathTraceStatsHandle = bindOptional(linker, lookup, "bedray_core_record_path_trace_stats",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT,
                     ADDRESS));
+            renderFgPrepareHandle = bindOptional(linker, lookup, "bedray_core_render_fg_prepare",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceGuidesHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_guides",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceMotionHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_motion",
@@ -577,6 +580,35 @@ public final class BedrayCoreNative implements AutoCloseable {
             check("record_path_trace_stats", status, error);
         } catch (Throwable t) {
             throw rethrow("record_path_trace_stats", t);
+        }
+    }
+
+    /** True when the loaded DLL carries the additive frame-generation producer export. */
+    public boolean hasFgPrepare() {
+        return renderFgPrepareHandle != null;
+    }
+
+    /**
+     * Records the frame-generation input preparation through the core: it owns the flipped blit, the compute
+     * dispatch and the barriers, and the host images stay in GENERAL. {@code desc} holds a
+     * {@link BedrayCoreLayouts#FG_PREPARE_DESC}; the descriptor is read synchronously.
+     */
+    public void renderFgPrepare(long core, MemorySegment desc) {
+        ensureOpen();
+        requireHandle(core, "core");
+        if (renderFgPrepareHandle == null) {
+            throw new BedrayCoreException("render_fg_prepare", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+                "the loaded bedray_core has no frame-generation producer export", null);
+        }
+        if (desc == null || !desc.isNative() || desc.byteSize() < BedrayCoreLayouts.FG_PREPARE_DESC.byteSize()) {
+            throw new IllegalArgumentException("desc must hold a BedrayFgPrepareFrameDesc");
+        }
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) renderFgPrepareHandle.invokeExact(handle(core), desc, error);
+            check("render_fg_prepare", status, error);
+        } catch (Throwable t) {
+            throw rethrow("render_fg_prepare", t);
         }
     }
 

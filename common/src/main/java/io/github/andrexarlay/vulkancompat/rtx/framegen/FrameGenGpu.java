@@ -1,39 +1,32 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
-import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
-import org.lwjgl.BufferUtils;
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreNative;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.util.shaderc.Shaderc;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorImageInfo;
-import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorPoolSize;
-import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
 import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkImageBlit;
 import org.lwjgl.vulkan.VkImageCreateInfo;
-import org.lwjgl.vulkan.VkImageMemoryBarrier;
-import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkMemoryAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryRequirements;
 import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
-import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
-import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
-import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
-import org.lwjgl.vulkan.VkWriteDescriptorSet;
+import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.ByteBuffer;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.LongBuffer;
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * GPU side of the frame generation inputs, all plain Vulkan on the engine device (the engine keeps its own images in
@@ -42,9 +35,12 @@ import java.nio.charset.StandardCharsets;
  * <li>a ring of {@link #SETS} sets {hudless colour (window size, back buffer format), flipped depth (R32F), flipped motion
  *     vectors (RG16F)}; a ring because Streamline reads the tagged images asynchronously after {@code vkQueuePresentKHR}
  *     (ProgrammingGuideDLSS_G.md 5.2: tags valid until present), while the next frame already writes the next set;</li>
- * <li>the compute pass {@code fg_prepare.comp} (flip of depth and motion vectors, see the shader header) and a
- *     {@code vkCmdBlitImage} that copies the engine main target (world without GUI) vertically flipped into the hudless image.</li>
+ * <li>the AOT Slang pass {@code fg_prepare} recorded by the native core through
+ *     {@code bedray_core_render_fg_prepare}: the core owns the flipped blit of the engine main target into the hudless
+ *     image, the depth/motion flip dispatch, its descriptors and the barriers between them.</li>
  * </ul>
+ * The core pins a descriptor pool per recording, so every recorded command buffer is handed back exactly once - released
+ * when the encoder's fence proved the submission retired, discarded when the recording was abandoned unsubmitted.
  * Render thread only.
  */
 public final class FrameGenGpu implements AutoCloseable {
@@ -52,6 +48,10 @@ public final class FrameGenGpu implements AutoCloseable {
     public static final int SETS = 3;
     public static final int FORMAT_DEPTH = VK10.VK_FORMAT_R32_SFLOAT;
     public static final int FORMAT_MV = VK10.VK_FORMAT_R16G16_SFLOAT;
+    /** The AOT artifact the native producer validates before it records: 4 bindings, uint2 push, 8x8x1 threads. */
+    static final String PASS_NAME = "fg_prepare";
+    static final int PUSH_BYTES = 8;
+    static final int[] THREADS = {8, 8, 1};
     private static final int USAGE = VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_STORAGE_BIT
         | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
@@ -60,22 +60,74 @@ public final class FrameGenGpu implements AutoCloseable {
 
     private final VkDevice device;
     private final VkPhysicalDeviceMemoryProperties memProps;
+    private final SlangRuntimePool.Lease runtimeLease;
+    private final BedrayCoreNative library;
+    private final long core;
+    private final SlangProgram program;
+    private final Set<Long> recordings = new LinkedHashSet<>();
 
     private final Img[] hudless = new Img[SETS];
     private final Img[] depth = new Img[SETS];
     private final Img[] mv = new Img[SETS];
     private boolean needInitialTransition;
 
-    private long shaderModule, sampler, setLayout, pipelineLayout, pipeline, descriptorPool;
-    private final long[] descriptorSets = new long[SETS];
+    private long sampler;
 
     private int hudFormat, winW, winH, renderW, renderH;
 
-    public FrameGenGpu(VkDevice device) {
-        this.device = device;
+    public FrameGenGpu(VulkanDevice device) {
+        this.device = device.vkDevice();
         this.memProps = VkPhysicalDeviceMemoryProperties.calloc();
-        VK10.vkGetPhysicalDeviceMemoryProperties(device.getPhysicalDevice(), memProps);
-        createPipeline();
+        VK10.vkGetPhysicalDeviceMemoryProperties(this.device.getPhysicalDevice(), memProps);
+        SlangRuntimePool.Lease lease = SlangRuntimePool.acquire(device);
+        try {
+            SlangRuntime runtime = lease.runtime();
+            this.library = runtime.library();
+            this.core = runtime.core();
+            if (!library.hasFgPrepare()) {
+                throw new IllegalStateException("the loaded bedray_core has no frame-generation producer export");
+            }
+            this.program = runtime.program(PASS_NAME)
+                .orElseThrow(() -> new IllegalStateException("missing Slang pass '" + PASS_NAME + "'"));
+            requireManifest(program.manifest());
+            this.runtimeLease = lease;
+        } catch (RuntimeException | Error failure) {
+            lease.close();
+            memProps.free();
+            throw failure;
+        }
+        createSampler();
+    }
+
+    /** The program contract the C++ pass re-checks; a one-sided shader edit dies here, not as a wrong dispatch. */
+    static void requireManifest(SlangPassManifest manifest) {
+        if (manifest.pushConstantBytes() != PUSH_BYTES) {
+            throw new IllegalStateException(manifest.name() + " pushes " + manifest.pushConstantBytes()
+                + " B, the producer contract is " + PUSH_BYTES + " B");
+        }
+        if (manifest.bindings().size() != 4) {
+            throw new IllegalStateException(manifest.name() + " declares " + manifest.bindings().size()
+                + " binding(s), the producer contract is 4");
+        }
+        if (!Arrays.equals(manifest.threadGroupSize(), THREADS)) {
+            throw new IllegalStateException(manifest.name() + " runs " + Arrays.toString(manifest.threadGroupSize())
+                + ", the producer grid is " + Arrays.toString(THREADS));
+        }
+        boolean[] seen = new boolean[4];
+        for (SlangPassManifest.Binding binding : manifest.bindings()) {
+            int slot = binding.binding();
+            if (slot < 0 || slot >= seen.length || seen[slot]) {
+                throw new IllegalStateException(manifest.name() + ": unexpected binding " + slot);
+            }
+            seen[slot] = true;
+            int want = slot == 0 ? BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                : BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            if (binding.descriptorType() != want) {
+                throw new IllegalStateException(manifest.name() + ": binding " + slot + " is "
+                    + BedrayCoreLayouts.descriptorTypeName(binding.descriptorType()) + ", the producer supplies "
+                    + BedrayCoreLayouts.descriptorTypeName(want));
+            }
+        }
     }
 
     public Img hudless(int set) {
@@ -169,90 +221,17 @@ public final class FrameGenGpu implements AutoCloseable {
         return -1;
     }
 
-    private void createPipeline() {
+    private void createSampler() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            ByteBuffer spirv = compile();
-            VkShaderModuleCreateInfo mci = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(spirv);
-            LongBuffer p = stack.mallocLong(1);
-            check(VK10.vkCreateShaderModule(device, mci, null, p), "vkCreateShaderModule");
-            shaderModule = p.get(0);
-
             VkSamplerCreateInfo si = VkSamplerCreateInfo.calloc(stack).sType$Default()
                 .magFilter(VK10.VK_FILTER_NEAREST).minFilter(VK10.VK_FILTER_NEAREST)
                 .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
                 .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                 .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                 .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateSampler(device, si, null, p), "vkCreateSampler");
             sampler = p.get(0);
-
-            VkDescriptorSetLayoutBinding.Buffer b = VkDescriptorSetLayoutBinding.calloc(4, stack);
-            b.get(0).binding(0).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
-            for (int i = 1; i < 4; i++) {
-                b.get(i).binding(i).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
-            }
-            VkDescriptorSetLayoutCreateInfo lci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(b);
-            check(VK10.vkCreateDescriptorSetLayout(device, lci, null, p), "vkCreateDescriptorSetLayout");
-            setLayout = p.get(0);
-
-            VkPushConstantRange.Buffer pcr = VkPushConstantRange.calloc(1, stack)
-                .stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(8);
-            VkPipelineLayoutCreateInfo plci = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
-                .pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(pcr);
-            check(VK10.vkCreatePipelineLayout(device, plci, null, p), "vkCreatePipelineLayout");
-            pipelineLayout = p.get(0);
-
-            VkComputePipelineCreateInfo.Buffer cpi = VkComputePipelineCreateInfo.calloc(1, stack);
-            cpi.get(0).sType$Default().layout(pipelineLayout).stage().sType$Default()
-                .stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModule).pName(stack.UTF8("main"));
-            check(RtVulkanPipelineCache.createCompute(device, cpi, null, p), "vkCreateComputePipelines");
-            pipeline = p.get(0);
-
-            VkDescriptorPoolSize.Buffer ps = VkDescriptorPoolSize.calloc(2, stack);
-            ps.get(0).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(SETS);
-            ps.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(SETS * 3);
-            VkDescriptorPoolCreateInfo dpi = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(SETS).pPoolSizes(ps);
-            check(VK10.vkCreateDescriptorPool(device, dpi, null, p), "vkCreateDescriptorPool");
-            descriptorPool = p.get(0);
-            for (int i = 0; i < SETS; i++) {
-                VkDescriptorSetAllocateInfo dai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
-                    .descriptorPool(descriptorPool).pSetLayouts(stack.longs(setLayout));
-                check(VK10.vkAllocateDescriptorSets(device, dai, p), "vkAllocateDescriptorSets");
-                descriptorSets[i] = p.get(0);
-            }
-        }
-    }
-
-    private static ByteBuffer compile() {
-        String glsl;
-        try (InputStream in = FrameGenGpu.class.getResourceAsStream("/shaders/glsl/fg_prepare.comp")) {
-            if (in == null) {
-                throw new IllegalStateException("resource /shaders/fg_prepare.comp not found");
-            }
-            glsl = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new IllegalStateException("cannot read fg_prepare.comp", e);
-        }
-        long compiler = Shaderc.shaderc_compiler_initialize();
-        long options = Shaderc.shaderc_compile_options_initialize();
-        try {
-            Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan, Shaderc.shaderc_env_version_vulkan_1_2);
-            long result = Shaderc.shaderc_compile_into_spv(compiler, glsl, Shaderc.shaderc_compute_shader, "fg_prepare.comp", "main", options);
-            try {
-                if (Shaderc.shaderc_result_get_compilation_status(result) != Shaderc.shaderc_compilation_status_success) {
-                    throw new IllegalStateException("fg_prepare.comp: " + Shaderc.shaderc_result_get_error_message(result));
-                }
-                ByteBuffer bytes = Shaderc.shaderc_result_get_bytes(result);
-                ByteBuffer direct = BufferUtils.createByteBuffer(bytes.remaining());
-                direct.put(bytes);
-                direct.flip();
-                return direct;
-            } finally {
-                Shaderc.shaderc_result_release(result);
-            }
-        } finally {
-            Shaderc.shaderc_compile_options_release(options);
-            Shaderc.shaderc_compiler_release(compiler);
         }
     }
 
@@ -277,61 +256,71 @@ public final class FrameGenGpu implements AutoCloseable {
     }
 
     /**
-     * Records for one frame: vertically flipped copy of the engine main target colour into {@code hudless(set)} and the flip
-     * pass depth/motion vectors -> {@code depth(set)}/{@code mv(set)}. All images GENERAL; the caller brackets with barriers.
+     * Records for one frame: vertically flipped copy of the engine main target colour into {@code hudless(set)} and the
+     * flip pass depth/motion vectors -> {@code depth(set)}/{@code mv(set)}. All images GENERAL; the core records its own
+     * barriers. Returns the action that releases the core's recording, to be run once the encoder's fence proves the
+     * submission retired.
      *
      * @param mainColorImage engine main target colour (world + hand, no GUI yet), window size, RGBA8
      * @param depthView      depth aspect view of the world depth copy (render size)
      * @param mvView         view of the engine motion vector image (render size, RG16F)
      */
-    public void record(VkCommandBuffer cmd, int set, long mainColorImage, long depthView, long mvView) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            // 1. hudless: blit with flipped destination offsets
-            Img h = hudless[set];
-            VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
-            region.srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-            region.dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-            region.srcOffsets(0).set(0, 0, 0);
-            region.srcOffsets(1).set(h.width(), h.height(), 1);
-            region.dstOffsets(0).set(0, h.height(), 0);
-            region.dstOffsets(1).set(h.width(), 0, 1);
-            VK10.vkCmdBlitImage(cmd, mainColorImage, VK10.VK_IMAGE_LAYOUT_GENERAL, h.image(), VK10.VK_IMAGE_LAYOUT_GENERAL,
-                region, VK10.VK_FILTER_NEAREST);
+    public Runnable record(VkCommandBuffer cmd, int set, long mainColorImage, long depthView, long mvView) {
+        Img h = hudless[set];
+        Img d = depth[set];
+        Img m = mv[set];
+        long command = cmd.address();
+        // Registered before the core sees it: a failure inside the native recording leaves the whole command buffer
+        // to be discarded by the caller, and discard must find the command here to recycle the pool.
+        recordings.add(command);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment desc = arena.allocate(BedrayCoreLayouts.FG_PREPARE_DESC);
+            desc.set(ValueLayout.JAVA_INT, BedrayCoreLayouts.FGP_ABI_VERSION, BedrayCoreLayouts.ABI_VERSION);
+            desc.set(ValueLayout.JAVA_INT, BedrayCoreLayouts.FGP_STRUCT_SIZE,
+                (int) BedrayCoreLayouts.FG_PREPARE_DESC.byteSize());
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_COMMAND_BUFFER, command);
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_PROGRAM, program.nativeHandle());
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_SAMPLER, sampler);
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_SOURCE_COLOR_IMAGE, mainColorImage);
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_HUDLESS_IMAGE, h.image());
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_DEPTH_VIEW, depthView);
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_INPUT_MOTION_VIEW, mvView);
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_OUTPUT_DEPTH_VIEW, d.view());
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_OUTPUT_MOTION_VIEW, m.view());
+            desc.set(ValueLayout.JAVA_INT, BedrayCoreLayouts.FGP_WINDOW_WIDTH, h.width());
+            desc.set(ValueLayout.JAVA_INT, BedrayCoreLayouts.FGP_WINDOW_HEIGHT, h.height());
+            desc.set(ValueLayout.JAVA_INT, BedrayCoreLayouts.FGP_RENDER_WIDTH, d.width());
+            desc.set(ValueLayout.JAVA_INT, BedrayCoreLayouts.FGP_RENDER_HEIGHT, d.height());
+            desc.set(ValueLayout.JAVA_LONG, BedrayCoreLayouts.FGP_RESERVED, 0L);
+            library.renderFgPrepare(core, desc);
+        }
+        return () -> releaseRecording(command);
+    }
 
-            // 2. depth + motion vectors flip
-            VkDescriptorImageInfo.Buffer d0 = VkDescriptorImageInfo.calloc(1, stack)
-                .sampler(sampler).imageView(depthView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkDescriptorImageInfo.Buffer d1 = VkDescriptorImageInfo.calloc(1, stack)
-                .imageView(mvView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkDescriptorImageInfo.Buffer d2 = VkDescriptorImageInfo.calloc(1, stack)
-                .imageView(depth[set].view()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkDescriptorImageInfo.Buffer d3 = VkDescriptorImageInfo.calloc(1, stack)
-                .imageView(mv[set].view()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkWriteDescriptorSet.Buffer w = VkWriteDescriptorSet.calloc(4, stack);
-            w.get(0).sType$Default().dstSet(descriptorSets[set]).dstBinding(0).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).pImageInfo(d0);
-            w.get(1).sType$Default().dstSet(descriptorSets[set]).dstBinding(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(d1);
-            w.get(2).sType$Default().dstSet(descriptorSets[set]).dstBinding(2).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(d2);
-            w.get(3).sType$Default().dstSet(descriptorSets[set]).dstBinding(3).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).pImageInfo(d3);
-            VK10.vkUpdateDescriptorSets(device, w, null);
-            // The blit above and this dispatch touch different images; a barrier before the dispatch is not needed for them.
-            VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSets[set]), null);
-            VK10.vkCmdPushConstants(cmd, pipelineLayout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, stack.ints(renderW, renderH));
-            VK10.vkCmdDispatch(cmd, (renderW + 7) / 8, (renderH + 7) / 8, 1);
+    /** Recycles the pinned descriptors once the submission is proven retired. Idempotent. */
+    public void releaseRecording(long command) {
+        if (recordings.remove(command)) {
+            library.releaseRecording(core, command);
+        }
+    }
+
+    /** Invalidates a recording that was never submitted, so its descriptor pool is not pinned for the session. */
+    public void discardRecording(long command) {
+        if (recordings.remove(command)) {
+            library.discardRecording(core, command);
         }
     }
 
     @Override
     public void close() {
         VK10.vkDeviceWaitIdle(device);
+        for (long command : Set.copyOf(recordings)) {
+            releaseRecording(command);
+        }
         destroyImages();
-        if (pipeline != 0L) VK10.vkDestroyPipeline(device, pipeline, null);
-        if (pipelineLayout != 0L) VK10.vkDestroyPipelineLayout(device, pipelineLayout, null);
-        if (descriptorPool != 0L) VK10.vkDestroyDescriptorPool(device, descriptorPool, null);
-        if (setLayout != 0L) VK10.vkDestroyDescriptorSetLayout(device, setLayout, null);
         if (sampler != 0L) VK10.vkDestroySampler(device, sampler, null);
-        if (shaderModule != 0L) VK10.vkDestroyShaderModule(device, shaderModule, null);
-        pipeline = pipelineLayout = descriptorPool = setLayout = sampler = shaderModule = 0L;
+        sampler = 0L;
+        runtimeLease.close();
         memProps.free();
     }
 }

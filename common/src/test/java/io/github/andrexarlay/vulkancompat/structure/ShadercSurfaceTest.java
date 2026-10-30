@@ -15,8 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * P1-11: the migration target is AOT Slang, but runtime GLSL -> SPIR-V through Shaderc is still load-bearing in
- * code that is not the Slang renderer. Seven compiler users remain after the legacy renderer was deleted, so
- * the inventory is frozen here instead of being re-guessed every audit.
+ * code that is not the Slang renderer (the Iris pack host, its depth converter and the spatial upscaler). The
+ * inventory is frozen here instead of being re-guessed every audit; the FrameGen producer left it when its AOT pass
+ * landed in `passes/fg_prepare.slang`.
  *
  * <p>Ways this silently breaks: a new pass reaches for Shaderc because it is the shortest way to get a compute
  * shader, and every player machine then needs the Shaderc native library at runtime; or the Slang path grows a
@@ -68,8 +69,9 @@ class ShadercSurfaceTest {
             TreeSet<String> shipped = new TreeSet<>(files.filter(Files::isRegularFile)
                 .map(path -> path.getFileName().toString())
                 .collect(java.util.stream.Collectors.toList()));
-            assertEquals(new TreeSet<>(List.of("fg_prepare.comp", "iris_depth.comp")), shipped,
-                "FrameGen and the Iris depth converter are the only runtime-compiled GLSL left in the resource tree");
+            assertEquals(new TreeSet<>(List.of("iris_depth.comp")), shipped,
+                "the Iris depth converter is the only runtime-compiled GLSL left in the resource tree; FrameGen's"
+                    + " producer is the AOT fg_prepare pass recorded by bedray_core_render_fg_prepare");
         }
         TreeSet<String> gone = new TreeSet<>();
         for (String name : new String[] {"RtPipeline.java", "RtShaderCompiler.java", "RtShaderDiskCache.java",

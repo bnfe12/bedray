@@ -378,7 +378,7 @@ public final class Fsr3FrameGen {
 
             FsrCamera cam = FsrCamera.fromProjection(pc);
             if (gpu == null) {
-                gpu = new FrameGenGpu(device.vkDevice());
+                gpu = new FrameGenGpu(device);
             }
             gpu.ensure(fmt, winW, winH, renderW, renderH);
             if (!ensureFg(device, winW, winH, fmt, cam)) {
@@ -404,11 +404,18 @@ public final class Fsr3FrameGen {
             VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
             VkBarriers.fullMemoryBarrier(cmd);
             gpu.recordInitialTransitions(cmd);
-            gpu.record(cmd, slot, mainImg, depthView, mvView);
+            Runnable retire;
+            try {
+                retire = gpu.record(cmd, slot, mainImg, depthView, mvView);
+            } catch (RuntimeException | Error failure) {
+                gpu.discardRecording(cmd.address());
+                throw failure;
+            }
             VkBarriers.fullMemoryBarrier(cmd);
 
             int r = nat.configureFg(fg, scSwapchain, want, hudless, frameId);
             if (r != 0) {
+                gpu.discardRecording(cmd.address());
                 throw new IllegalStateException("ffxConfigure(frame generation) returned " + r);
             }
             configuredFrame = frameId;
@@ -429,14 +436,17 @@ public final class Fsr3FrameGen {
                 CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), 1.0f, 1.0f, frameMs,
                 near, far, cam.fovY(), camVec, frameId));
             if (r != 0) {
+                gpu.discardRecording(cmd.address());
                 throw new IllegalStateException("ffxDispatch(frame generation prepare) returned " + r);
             }
             VkBarriers.fullMemoryBarrier(cmd);
             int end = VK10.vkEndCommandBuffer(cmd);
             if (end != VK10.VK_SUCCESS) {
+                gpu.discardRecording(cmd.address());
                 throw new IllegalStateException("vkEndCommandBuffer failed: " + end);
             }
             encoder.execute(cmd);
+            encoder.queueForDestroy(retire::run);
             worldReady = true;
             if (want != modeOn) {
                 LOGGER.info("[VKB-FG] fsr3 mode={} multiplier=2x (was {}) frame={} output={}x{} render={}x{} back_buffers={} focused={}",
