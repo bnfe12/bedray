@@ -4,6 +4,53 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — Ray Tracing mode runs as the Slang pass's ray profile (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `028d2d8` (9 files, +293/−149).
+
+Ray Tracing mode had been refused with `slang_ray` since the legacy GLSL ray
+pass went away, although the AOT path transport already produces its effect
+set: sun shadows through NEE, reflections and one-bounce indirect light through
+the BSDF sample, emissive blocks through their own NEE. The mode now builds the
+same two Slang programs and differs only in the profile. `RtSlangPathPass`
+takes a `rayMode`: `configure` pins two scattering events — the surface the
+camera sees plus one indirect one, because `path_tracer.slang` counts the
+primary as depth 0 — and one sample per pixel, and it bypasses the adaptive
+governor. `describe` prints `ray_slang(...)` without the radiance-cascade axis.
+Each profile reads its own switches (`rays_restir_*` + `rays_accumulate` for the
+ray profile, `path_restir_*` + `accumulate` for the path profile), so neither
+profile's rows are dead.
+
+With the backend owning both profiles' reservoirs, the renderer's `rt_restir`
+and `rt_restir_aux` ring, its size constants, pixel count, light fingerprint and
+reset flag are deleted; the two `StatsBuf` address slots stay in the record
+layout at zero (`RtStatsLayout` offsets unchanged). The denoiser refusal now
+covers every active mode with one reason, `slang_denoiser_not_wired`: the NL
+pack was only ever validated against the deleted GLSL G-buffer. `AO` and
+`DIRECT` are debug shadings of that deleted pass and are refused under their own
+stage names (`slang_ao`, `slang_direct`) instead of showing a lit image labelled
+as a debug shading. A boolean-only `enable_hardware_ray_tracing` request still
+resolves to `PATH_TRACED`, the fuller of the two profiles.
+
+Open: the per-effect ray switches (`rays_shadows`, `rays_soft_shadows`,
+`rays_ao`, `rays_reflections`, `rays_emissive`, `rays_gi` and their quality and
+distance sliders) still do not change the traced image — they only label the F3
+line and the `RtModesDebug` description — so those rows remain dead controls
+until the ray profile reads them as path options.
+
+### Evidence
+
+Java: `:common:test --rerun-tasks` **831 tests, 0 failures, 0 errors, 6 skipped**
+(the six are the DLL, benchmark-flag and real-shaderpack cases). New
+`RtSlangRayModeTest` (6 tests) drives the controller through a recording
+backend: the ray profile keeps 2 bounces / 1 sample while `path_spp`/`path_bounces`
+say 8/5, reports its own mode, ignores the governor, reads its own reuse and
+accumulate switches, refuses AO/DIRECT by stage name, and pins the renderer source
+so the host reservoir ring cannot come back. Four existing string guards that
+named the pre-profile source text were updated to the new lines. `FEATURE_MATRIX`
+ray rows now say what this revision shows: L2 for the ray profile (the old L4
+screenshots belong to the deleted GLSL pass), NOT_IMPLEMENTED for AO/DIRECT.
+
 ## 2026-10-30 — the native core meters its own recording (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`, commit `8fa6548` (15 files, +734/−45).
