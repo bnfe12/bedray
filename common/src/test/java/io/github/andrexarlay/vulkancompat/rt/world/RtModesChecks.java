@@ -443,7 +443,14 @@ final class RtModesChecks {
             check(VulkanRtxConfig.rtMode == RtMode.PATH_TRACED, "legacy key ignored after rt_mode");
             VulkanRtxConfig.setRtMode(RtMode.OFF);
             VulkanRtxConfig.enableHardwareRayTracing = true;
-            check(VulkanRtxConfig.effectiveRtMode() == RtMode.RAY_TRACED, "legacy boolean write means the ray mode");
+            // A caller that only says "trace" (the legacy boolean, not a mode name) gets the renderer that exists; the
+            // ray-effects pass is not wired, so RAY_TRACED here would be a refused frame rather than a frame.
+            check(VulkanRtxConfig.effectiveRtMode() == RtMode.PATH_TRACED, "legacy boolean write means the path renderer");
+            VulkanRtxConfig.enableHardwareRayTracing = false;
+            check(VulkanRtxConfig.effectiveRtMode() == RtMode.OFF, "no trace request, no renderer");
+            VulkanRtxConfig.rtMode = RtMode.RAY_TRACED;
+            check(VulkanRtxConfig.effectiveRtMode() == RtMode.RAY_TRACED, "a named rays request is not silently rewritten");
+            VulkanRtxConfig.rtMode = RtMode.OFF;
 
             // Test F3 debug provider formatting for PATH_TRACED denoiser line
             io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.setForTests(true);

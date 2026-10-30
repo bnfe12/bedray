@@ -330,13 +330,18 @@ public final class VulkanRtxConfig {
         enableHardwareRayTracing = !voxelRendererSelected() && mode.isActive();
     }
 
-    /** Mode used by the renderer: also honours a direct write of {@link #enableHardwareRayTracing} (legacy callers, tests). */
+    /**
+     * Mode used by the renderer: also honours a direct write of {@link #enableHardwareRayTracing} (autotests, tools).
+     * Such a caller says "trace" without naming a mode, and the only renderer in the tree is the path tracer: the
+     * ray-effects passes are not wired yet, so handing back {@code RAY_TRACED} here would be a frame the renderer
+     * refuses ({@code slang_ray}) rather than a frame at all.
+     */
     public static RtMode effectiveRtMode() {
         if (voxelRendererSelected()) {
             return RtMode.OFF;
         }
         if (rtMode == RtMode.OFF && enableHardwareRayTracing) {
-            return RtMode.RAY_TRACED;
+            return RtMode.PATH_TRACED;
         }
         return rtMode;
     }
@@ -704,9 +709,11 @@ public final class VulkanRtxConfig {
                 case "experimental_rays" -> experimentalRays = Boolean.parseBoolean(val);
                 case "ui_expert" -> uiExpert = Boolean.parseBoolean(val);
                 case "enable_hardware_ray_tracing" -> {
-                    // Legacy key of the single on/off toggle: only used by files that have no rt_mode (it meant the ray mode).
+                    // Legacy key of the single on/off toggle, only read by a file that has no rt_mode. It said "trace", not
+                    // "with which renderer", and the path tracer is the only one in the tree: the ray mode it used to name
+                    // now refuses the frame (slang_ray) instead of lighting the world the way the author of the file meant.
                     if (!rtModeSeenInFile) {
-                        setRtMode(Boolean.parseBoolean(val) ? RtMode.RAY_TRACED : RtMode.OFF);
+                        setRtMode(Boolean.parseBoolean(val) ? RtMode.PATH_TRACED : RtMode.OFF);
                     }
                 }
                 // RT mode settings; false = a key of an older config file that no longer exists (ignored on purpose)
