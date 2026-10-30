@@ -1,16 +1,27 @@
-// Path-space ReSTIR for Bedray 2.0 — reservoir math only.  v2.
+// Path-space ReSTIR for Bedray 2.0 — reservoir math only.  v3.
+//
+// v3 changes (change of measure for the fixed-first-vertex shift):
+//   * reuse is now restricted to one certified class of paths: a diffuse first
+//     vertex whose suffix radiance and sampling distribution do not depend on
+//     the incoming edge.  Sky and emitter first edges, delta and glossy first
+//     vertices are rejected (v2 admitted rough GGX and sky paths, whose
+//     radiance is direction-dependent, so no density ratio could correct them).
+//   * the shift correction is derived and implemented: the stored first-edge
+//     density transports as q_new = q_old * G_old / G_new where
+//     G(anchor) = |cos at the first vertex| / r^2, so the merge multiplies the
+//     target ratio by J = G_new / G_old (ptFirstEdgeShiftJacobian).  The
+//     derivation and its CPU validation are in docs/RESTIR_GI_DERIVATION.md.
+//   * the firefly/grazing guards (ratio caps, minimum edge cosine) are
+//     estimator changes, not corrections: they bias the estimate towards
+//     history and the module documents them as such.
+//   * each first vertex carries a stable `sampleId`; the duplicate test is an
+//     identity comparison, not a position heuristic (which dropped distinct
+//     samples that shared a vertex).
 //
 // v2 changes (alpha 0.2.0 architecture review):
 //   * the reservoir shrank from 304 B to 112 B per pixel: the estimator only
 //     ever read the anchor and the first scattered vertex, so the 4-vertex
 //     array is gone.  The memory formula is in the layout comment below.
-//   * reuse is restricted to an explicit class of paths. The mapping keeps the
-//     first scattered vertex and re-anchors the receiver. Its change of measure
-//     has NOT been derived for the stored solid-angle PDF when distance and
-//     endpoint angles change: SYMMETRIC_LOBE alone does not establish an
-//     unbiased Jacobian. Reuse is provisional and must not be enabled in a
-//     shipping pass until that derivation and validation are complete. Delta
-//     and sharp-specular first vertices are rejected.
 //   * sky (ENVIRONMENT) paths lost their visibility exemption: a reused sky
 //     edge is traced like any other first edge, in both resolves and in the
 //     spatial acceptance test.  A fresh sky path still needs no ray.
@@ -69,16 +80,17 @@ import "traversal/traversal.slang";
 // The bits live at 24 and above, outside the SurfaceHit/HIT_FLAG namespace, so
 // a caller may copy a hit flag word into a vertex without a cutout texel
 // reading as "sky".  Only the first vertex may set ENVIRONMENT, EMISSIVE_END
-// and SYMMETRIC_LOBE: all three are statements about the first edge.
+// and DIFFUSE_FIRST: all three are statements about the first edge.
 static const uint RESTIR_PT_PATH_FLAG_RECEIVER       = 1u << 24u;
 static const uint RESTIR_PT_PATH_FLAG_ENVIRONMENT    = 1u << 25u;  // first edge escaped to the sky
 static const uint RESTIR_PT_PATH_FLAG_DELTA          = 1u << 26u;  // contains a delta vertex; never reusable
 static const uint RESTIR_PT_PATH_FLAG_EMISSIVE_END   = 1u << 28u;  // first edge ended on an emitter
-// The generator certifies that the first vertex's lobe density is
-// reciprocal (diffuse or sufficiently rough GGX reflection), which is the
-// condition the fixed-first-vertex shift needs for its density ratio to be
-// meaningful.  Without this bit the path is local to its pixel.
-static const uint RESTIR_PT_PATH_FLAG_SYMMETRIC_LOBE = 1u << 29u;
+// The generator certifies that the first scattered vertex is diffuse: its
+// outgoing radiance and its lobe density do not depend on the incoming edge,
+// which is the condition the fixed-first-vertex shift needs for the geometry
+// ratio to be the whole change of measure.  Only a certified path is reusable;
+// a rough, specular or delta first vertex stays local to its pixel.
+static const uint RESTIR_PT_PATH_FLAG_DIFFUSE_FIRST = 1u << 29u;
 
 // RestirPtReservoir.source.y.  These live in their own field of the resolve
 // result and must not be folded into RestirPtResolveResult.flags: the two
@@ -111,6 +123,11 @@ static const uint RESTIR_PT_TECHNIQUE_LIGHT_TRACED = 1u;
 static const float RESTIR_PT_MIN_PDF = 1.0e-8;
 static const float RESTIR_PT_MIN_COSINE = 0.05;
 static const float RESTIR_PT_MIN_DISTANCE = 1.0e-4;
+// A first edge at a grazing angle to the first vertex's normal makes the
+// solid-angle-to-area factor G = cos/r^2 approach zero, and the geometry ratio
+// G_new/G_old explode.  Rejecting the candidate is a documented approximation
+// (biased toward keeping the current sample), not part of the derivation.
+static const float RESTIR_PT_MIN_EDGE_COSINE = 1.0e-3;
 static const float RESTIR_PT_MAX_CANDIDATE_WEIGHT = 64.0;
 static const float RESTIR_PT_MAX_RADIANCE = 1.0e6;
 static const float RESTIR_PT_MAX_RESOLVED_WEIGHT = 1.0e4;
@@ -124,8 +141,6 @@ static const float RESTIR_PT_OCCLUSION_DECAY = 0.25;
 static const float RESTIR_PT_SPATIAL_MAX_DISTANCE = 1.0;
 static const float RESTIR_PT_SPATIAL_MIN_NORMAL_DOT = 0.85;
 
-static const float RESTIR_PT_SAME_SAMPLE_DISTANCE = 1.0e-6;
-
 // How far a resolve position may sit from a path's own anchor and still be
 // considered the same receiver.  A receiver shift is at least one voxel, so a
 // millimetre separates "same surface, recomputed position" from "resolved
@@ -136,16 +151,18 @@ static const float RESTIR_PT_FRESH_ANCHOR_DISTANCE = 1.0e-3;
 
 // ---- Record layout ----------------------------------------------------------
 //
-//   RestirPtFirstVertex  48 B  (position@0, normal@12, throughput@24,
-//                               pdf@36, bsdfPdf@40, flags@44)
+//   RestirPtFirstVertex  52 B  (position@0, normal@12, throughput@24,
+//                               pdf@36, bsdfPdf@40, flags@44, sampleId@48)
 //   RestirPtPath         80 B  (anchorPosition@0, anchorNormal@12,
-//                               first@24, flags@72, padded to 16)
+//                               first@24, flags@76, no padding needed)
 //   RestirPtReservoir   112 B  (sample@0, stats@80, source@96)
 //
 // Memory formula: bytes per pixel = 112; a temporal pass needs two buffers
 // (current + history), so the budget is  112 * width * height * 2  bytes —
 // 464.5 MB at 1080p, down from 2 * 630 MB in v1.  The fixed-size record keeps
-// it a value type: no indirection, constant StructuredBuffer stride.
+// it a value type: no indirection, constant StructuredBuffer stride.  v3 grew
+// the first vertex by 4 B (the sample id) but filled the path's tail padding,
+// so neither the path nor the reservoir changed size.
 //
 // What was removed and why: vertices[2..3] were validated but never read by
 // the estimator (the suffix is summarised in `first.throughput`), the vertex
@@ -159,6 +176,7 @@ struct RestirPtFirstVertex {
     float  pdf;           // solid-angle density of edge 0 -> 1 at the writer
     float  bsdfPdf;       // reverse BSDF density at this vertex for 1 -> 0
     uint   flags;         // first-edge statements (ENVIRONMENT, EMISSIVE_END)
+    uint   sampleId;      // stable caller id of this sample; 0 = unknown
 };
 
 struct RestirPtPath {
@@ -219,6 +237,7 @@ RestirPtFirstVertex ptEmptyFirstVertex() {
     vertex.pdf = 0.0;
     vertex.bsdfPdf = 0.0;
     vertex.flags = 0u;
+    vertex.sampleId = 0u;
     return vertex;
 }
 
@@ -294,17 +313,25 @@ bool ptPathValid(RestirPtPath path) {
     return isFinite(distanceSquared) && distanceSquared > RESTIR_PT_MIN_DISTANCE * RESTIR_PT_MIN_DISTANCE;
 }
 
-// Reuse class check.  A delta path has no finite density in the measure used
-// here; a sharp-specular first vertex has a reverse density that is not the
-// density the new receiver needs; a zero source density would let a path the
-// sampler never chose contribute.  All three are *rejected*, not approximated.
+// Reuse class check.  The derivation only covers a certified diffuse first
+// vertex: its outgoing radiance and its lobe density are independent of the
+// incoming edge, so the stored suffix is the same function of the vertex for
+// every anchor that can see it.  A delta path has no finite density in this
+// measure; a glossy or specular first vertex reflects the old edge's
+// direction and does not transport; a sky or emitter first vertex carries
+// radiance for exactly one incoming direction.  All of them are *rejected*,
+// not approximated.  A zero source density would let a path the sampler never
+// chose contribute and is rejected too.
+//
 // A black suffix is *not* rejected: the target density does not contain the
 // radiance, so a black candidate still has a positive WRS weight and belongs
 // in M and in the weight sum.
 bool ptPathReusable(RestirPtPath path) {
     if (!ptPathValid(path)) return false;
     if ((path.flags & RESTIR_PT_PATH_FLAG_DELTA) != 0u) return false;
-    if ((path.flags & RESTIR_PT_PATH_FLAG_SYMMETRIC_LOBE) == 0u) return false;
+    if ((path.flags & RESTIR_PT_PATH_FLAG_DIFFUSE_FIRST) == 0u) return false;
+    uint terminalMask = RESTIR_PT_PATH_FLAG_ENVIRONMENT | RESTIR_PT_PATH_FLAG_EMISSIVE_END;
+    if ((path.flags & terminalMask) != 0u) return false;
     return path.first.pdf > 0.0;
 }
 
@@ -330,6 +357,39 @@ bool ptSourceCompatible(uint currentIdentity, uint incomingIdentity) {
 
 // ---- Densities --------------------------------------------------------------
 
+// Solid angle per unit area of the first edge at the first vertex, seen from
+// `anchor`: G = |cos(normal, edge)| / r^2.  This is the factor that relates the
+// solid-angle density of the first edge at one anchor to the same vertex
+// sample seen from another; see docs/RESTIR_GI_DERIVATION.md.  A grazing edge
+// or a coincident anchor returns 0, and the caller rejects the candidate.
+float ptFirstEdgeGeometry(float3 firstPosition, float3 firstNormal, float3 anchor) {
+    float3 toAnchor = anchor - firstPosition;
+    float distanceSquared = dot(toAnchor, toAnchor);
+    if (!isFinite(distanceSquared) ||
+            distanceSquared <= RESTIR_PT_MIN_DISTANCE * RESTIR_PT_MIN_DISTANCE) {
+        return 0.0;
+    }
+    float3 normal = safeNormalize(firstNormal, float3(0.0, 1.0, 0.0));
+    float cosine = abs(dot(normal, toAnchor * rsqrt(distanceSquared)));
+    if (cosine < RESTIR_PT_MIN_EDGE_COSINE) return 0.0;
+    return cosine / distanceSquared;
+}
+
+// Change of measure for the fixed-first-vertex shift.  The stored first-edge
+// density is q_old, measured at the anchor that sampled it; the same vertex
+// sample viewed from `surfacePosition` has density q_new = q_old * G_old /
+// G_new, so the merge multiplies the candidate's target ratio by
+// J = q_old / q_new = G_new / G_old.  `originDelta` rebases the stored vertex
+// into the current camera-relative space; pass 0 for a same-frame neighbour.
+// Returns 0 when either endpoint is degenerate, and the caller rejects.
+float ptFirstEdgeShiftJacobian(RestirPtFirstVertex first, float3 storedAnchor,
+        float3 originDelta, float3 surfacePosition) {
+    float oldGeometry = ptFirstEdgeGeometry(first.position, first.normal, storedAnchor);
+    float newGeometry = ptFirstEdgeGeometry(first.position + originDelta, first.normal, surfacePosition);
+    if (oldGeometry <= 0.0 || newGeometry <= 0.0) return 0.0;
+    return newGeometry / oldGeometry;
+}
+
 // Sampling density of the stored path at its own receiver: the solid-angle
 // density of the first edge.  The suffix density is shared by all candidates
 // of a pixel, so it cancels between the target and the estimator and is not
@@ -344,10 +404,12 @@ float ptPathSourcePdf(RestirPtPath path) {
 // shading term, applied once at resolve; mixing the two would make the reuse
 // ratio cancel instead of weight.
 //
-// The cosine is |cos| with a floor: a shared path is reused across the two
-// sides of a leaf card, and a grazing receiver must not make the ratio of two
-// near-zero cosines explode. The floor is an approximation, not a Jacobian.
-// The density conversion for a changed anchor remains an open integration gate.
+// The target cancels between the merge ratio and the resolve normalisation, so
+// it is a variance control only; with the Jacobian in ptMergeReservoir the
+// reused estimate is normalised by the transported density q_new.  The cosine
+// is |cos| with a floor: a shared path is reused across the two sides of a
+// leaf card, and a grazing receiver must not make the ratio explode. The floor
+// is an approximation, not part of the change of measure.
 float ptTargetPdf(RestirPtFirstVertex vertex, float3 surfacePosition,
         float3 surfaceNormal) {
     float3 toVertex = vertex.position - surfacePosition;
@@ -396,20 +458,28 @@ RestirPtFirstVertex ptVertexFromHit(Ray ray, SurfaceHit hit, float3 suffixRadian
 }
 
 // Records a fresh path: the receiver anchor plus the already-built first
-// vertex.  The generator is responsible for the SYMMETRIC_LOBE certificate
-// (diffuse or sufficiently rough first lobe) and for DELTA on a delta vertex;
-// both decide reusability, so they belong to the code that knows the lobe.
+// vertex.  The generator is responsible for the DIFFUSE_FIRST certificate (a
+// diffuse first scattered vertex) and for DELTA on a delta vertex; both decide
+// reusability, so they belong to the code that knows the lobe.
+//
+// `sampleId` is the caller's stable identity for this sample: unique among the
+// samples a pixel can merge in one frame, and preserved by every copy of the
+// record.  A tag of 0 means "unknown" and disables duplicate rejection, which
+// is safe against double counting but wastes merges; the pass that eventually
+// stamps it should fold the pixel index, the path index and the frame parity.
 RestirPtPath ptRecordPath(float3 surfacePosition, float3 surfaceNormal,
-        RestirPtFirstVertex first, bool symmetricLobe, bool delta) {
+        RestirPtFirstVertex first, bool diffuseFirst, bool delta,
+        uint sampleId) {
     RestirPtPath path = ptEmptyPath();
     path.anchorPosition = surfacePosition;
     path.anchorNormal = safeNormalize(surfaceNormal, float3(0.0, 1.0, 0.0));
     path.first = first;
+    path.first.sampleId = sampleId;
     // Terminal type is determined by the first hit and must survive in the
     // path-level flags used by resolve and DI/PT ownership policy.
     path.flags = RESTIR_PT_PATH_FLAG_RECEIVER |
         (first.flags & (RESTIR_PT_PATH_FLAG_ENVIRONMENT | RESTIR_PT_PATH_FLAG_EMISSIVE_END));
-    if (symmetricLobe) path.flags |= RESTIR_PT_PATH_FLAG_SYMMETRIC_LOBE;
+    if (diffuseFirst) path.flags |= RESTIR_PT_PATH_FLAG_DIFFUSE_FIRST;
     if (delta) path.flags |= RESTIR_PT_PATH_FLAG_DELTA;
     return path;
 }
@@ -453,17 +523,18 @@ bool ptReuseCompatible(RestirPtReceiver receiver, RestirPtPath path,
     return dot(normal, storedNormal) >= minNormalDot;
 }
 
-// Provisional duplicate heuristic: the first-vertex position alone does not
-// identify a path or its suffix. Distinct samples can share a vertex, so this
-// comparison can reject valid contributions and bias the estimator. A stable
-// path/sample identity and correct reuse policy are required before shipping.
-// Only valid in one coordinate space; rebase the path before comparing.
+// Duplicate test: the same sample must not enter one reservoir twice, or its
+// weight would be added twice.  v3 compares the caller's stable sample id
+// instead of the first-vertex position: distinct samples can share a vertex
+// (two suffix paths that hit the same surface point), and dropping one of them
+// biases the estimator, while an unknown id (0) on either side proves nothing
+// and is treated as distinct.
 bool ptSameSample(RestirPtReservoir current, RestirPtReservoir incoming) {
     // A reset (empty) accumulator must never read as a duplicate: its first
-    // vertex sits at the origin, which a legitimate path can also do.
+    // vertex carries id 0, which the check below already refuses to match.
     if (current.stats.x <= 0.0 || incoming.stats.x <= 0.0) return false;
-    float3 delta = current.sample.first.position - incoming.sample.first.position;
-    return dot(delta, delta) <= RESTIR_PT_SAME_SAMPLE_DISTANCE * RESTIR_PT_SAME_SAMPLE_DISTANCE;
+    return current.sample.first.sampleId != 0u &&
+        current.sample.first.sampleId == incoming.sample.first.sampleId;
 }
 
 float ptPathMaxComponent(float3 value) {
@@ -511,18 +582,27 @@ RestirPtReservoir ptAddPath(RestirPtReservoir reservoir, RestirPtPath path,
 
 // Shared merge primitive.  `incomingTargetPdf` must already be evaluated at
 // the current receiver; `incoming.stats.z` still holds the density at the
-// receiver that wrote it, and their ratio is the shift correction.  M and the
-// weight sum are scaled by the same factor, so clamping M cannot change the
-// resolved weight (W = wSum / (M * p-hat)).
+// receiver that wrote it, and their ratio is the target part of the shift.
+// `shiftJacobian` is the derived change of measure G_new/G_old from
+// ptFirstEdgeShiftJacobian, so the candidate ratio becomes
+//
+//   (p-hat_new / p-hat_old) * (q_old / q_new)
+//
+// which is exactly the ratio of the stored weight to the weight this candidate
+// deserves at the new receiver.  M and the weight sum are scaled by the same
+// factor, so clamping M cannot change the resolved weight (W = wSum/(M*p-hat)).
+//
+// The ratio cap is a firefly guard, not part of the derivation: it biases the
+// estimate toward the current sample and is documented as an approximation.
 //
 // The incoming path is validated here as well, because this is a public entry
 // point and a caller can hand it a history record straight out of a GPU
 // buffer.  The test is ptPathReusable, not merely ptPathValid: a delta path, a
-// non-symmetric lobe or a zero-density path cannot be re-weighted, and letting
-// one through would push a record into the reservoir that the resolve then
-// rejects, so the pixel would lose a sample it had instead of keeping the one
-// it already held.  A light-traced technique has a different density
-// structure and is likewise rejected in v2.
+// non-diffuse first vertex or a zero-density path cannot be re-weighted, and
+// letting one through would push a record into the reservoir that the resolve
+// then rejects, so the pixel would lose a sample it had instead of keeping the
+// one it already held.  A light-traced technique has a different density
+// structure and is likewise rejected in v3.
 //
 // `ageIncoming` is the caller's statement about where the record came from: a
 // history record is one frame old (+1), a spatial neighbour is from this frame
@@ -534,12 +614,16 @@ RestirPtReservoir ptAddPath(RestirPtReservoir reservoir, RestirPtPath path,
 // be another light would starve every other emitter in the pixel.  The
 // temporal gate (requireSourceMatch) is where an identity mismatch rejects.
 RestirPtReservoir ptMergeReservoir(RestirPtReservoir current, RestirPtReservoir incoming,
-        float incomingTargetPdf, float ratioCap, float mCap, bool ageIncoming,
-        inout uint seed) {
+        float incomingTargetPdf, float shiftJacobian, float ratioCap, float mCap,
+        bool ageIncoming, inout uint seed) {
     if (!ptReservoirHasSample(incoming)) return current;
     if (!ptPathReusable(incoming.sample)) return current;
     if (incoming.source.z != RESTIR_PT_TECHNIQUE_BSDF_PATH) return current;
     if (!isFinite(incomingTargetPdf) || incomingTargetPdf <= 0.0) return current;
+    // J = G_new / G_old has to be finite and positive: a coincident anchor or
+    // a grazing first edge makes the shift degenerate, and the candidate
+    // cannot be transported to this receiver.
+    if (!isFinite(shiftJacobian) || shiftJacobian <= 0.0) return current;
     // A `current` that is not a usable accumulator — the empty start, or a
     // record read from a corrupt buffer — is reset instead of merged: adding a
     // finite weight to a NaN sum would leave the record permanently unusable,
@@ -554,7 +638,7 @@ RestirPtReservoir ptMergeReservoir(RestirPtReservoir current, RestirPtReservoir 
     float incomingM = min(incoming.stats.x, mCap);
     if (incomingM <= 0.0) return current;
 
-    float ratio = clamp(incomingTargetPdf / max(incoming.stats.z, RESTIR_PT_MIN_PDF),
+    float ratio = clamp(incomingTargetPdf / max(incoming.stats.z, RESTIR_PT_MIN_PDF) * shiftJacobian,
         0.0, ratioCap);
     // Dividing by the real M (not by max(M, 1)) keeps the cap exact for a
     // record that carries 0 < M < 1; a floor would silently multiply W by M.
@@ -585,8 +669,8 @@ RestirPtReservoir ptMergeReservoir(RestirPtReservoir current, RestirPtReservoir 
 // Temporal reuse.  Validation goes through contracts/history.slang so this
 // pass cannot invent a second notion of valid history: depth, normal, material
 // and position agreement all come from historyValidate.  On top of that the
-// module rejects a delta path, a non-symmetric first lobe, a zero-density path
-// and a malformed record.
+// module rejects a delta path, a non-diffuse first vertex, a terminal
+// first-edge path, a zero-density path and a malformed record.
 //
 // `requireSourceMatch` gates the history on the source identity (emitter for
 // EMISSIVE_END paths, sky-state revision for ENVIRONMENT paths).  It is off by
@@ -621,11 +705,18 @@ RestirPtReservoir ptTemporalReuse(RestirPtReservoir current, RestirPtReservoir h
     float targetPdf = ptPathTargetPdf(incoming.sample, receiver.position, receiver.normal);
     if (targetPdf <= 0.0) return current;
 
+    // The change of measure is computed from the stored first vertex: G_old at
+    // the anchor that sampled it, G_new at this receiver with the vertex
+    // rebased into the current camera-relative space.
+    float shiftJacobian = ptFirstEdgeShiftJacobian(history.sample.first,
+        history.sample.anchorPosition, originDelta, receiver.position);
+    if (shiftJacobian <= 0.0) return current;
+
     // The age is added by the merge, and only if the history record wins.
     // Doing it here unconditionally aged a *fresh* sample whenever history was
     // rejected, which made ptCandidateIsFresh fail and re-enabled PT+DI
     // double counting.
-    return ptMergeReservoir(current, incoming, targetPdf,
+    return ptMergeReservoir(current, incoming, targetPdf, shiftJacobian,
         RESTIR_PT_TEMPORAL_RATIO_CAP, RESTIR_PT_M_CAP, true, seed);
 }
 
@@ -673,11 +764,13 @@ bool ptFirstEdgeVisible<T : ISceneTracer>(T traversal, MaterialAtlas atlas,
 }
 
 // Spatial reuse.  Same-frame records, so no rebase and no ageing; the
-// neighbour must be a usable path on the same surface and its first edge —
-// sky or emitter — must be visible from this receiver (v2: sky edges are no
-// longer exempt).  The transmittance is deliberately not baked into the
-// candidate: the material-filtered resolve walks the same edge again, and
-// tinting here as well would square the glass.
+// neighbour must be a usable path on the same surface and its first edge must
+// be visible from this receiver.  v3 reuses only diffuse indirect paths, so a
+// sky or emitter edge never reaches the merge; the visibility test still runs
+// because the stored edge may cross geometry that is between the two receivers
+// or moved since the neighbour was sampled.  The transmittance is deliberately
+// not baked into the candidate: the material-filtered resolve walks the same
+// edge again, and tinting here as well would square the glass.
 //
 // The caller owns neighbour selection and must not pass the same reservoir
 // twice: after a merge that did not select the neighbour, the module has no
@@ -703,10 +796,6 @@ RestirPtReservoir ptSpatialReuse<T : ISceneTracer>(RestirPtReservoir current,
     float distance = sqrt(distanceSquared);
     float3 direction = toVertex / distance;
 
-    // v2: sky edges are validated like every other first edge.  The stored
-    // sky vertex sits at the writer's escape point, which is a finite proxy
-    // for "the sky in that direction"; anything geometric in front of it from
-    // this receiver blocks the path.
     float3 transmittance;
     uint visibilityFlags;
     if (!ptFirstEdgeVisible(traversal, atlas, blockMaterials, receiver, direction,
@@ -718,9 +807,15 @@ RestirPtReservoir ptSpatialReuse<T : ISceneTracer>(RestirPtReservoir current,
         receiver.normal);
     if (targetPdf <= 0.0) return current;
 
+    // Same frame: the vertex is already in the current camera-relative space,
+    // so the shift is the pure anchor change and originDelta is zero.
+    float shiftJacobian = ptFirstEdgeShiftJacobian(neighbor.sample.first,
+        neighbor.sample.anchorPosition, float3(0.0), receiver.position);
+    if (shiftJacobian <= 0.0) return current;
+
     RestirPtReservoir incoming = neighbor;
     incoming.sample = ptShiftPath(neighbor.sample, receiver.position, receiver.normal);
-    return ptMergeReservoir(current, incoming, targetPdf,
+    return ptMergeReservoir(current, incoming, targetPdf, shiftJacobian,
         RESTIR_PT_SPATIAL_RATIO_CAP, RESTIR_PT_M_CAP, false, seed);
 }
 

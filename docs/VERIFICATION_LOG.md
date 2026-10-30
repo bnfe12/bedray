@@ -3315,3 +3315,51 @@ Evidence: the Release x64 build directory that produced the deployed
 `bedray_core.dll` re-ran CTest: `100% tests passed, 0 tests failed out of 25`,
 including `bedray_frame_graph_owner` and `bedray_history_submission`. No native
 source changed in this batch. No owner-verified frame.
+
+## 2026-10-30 — ReSTIR PT: change of measure derived, implemented and CPU-validated (L1 slangc, L2 unit)
+
+`experimental/restir_pt.slang` used to reuse a stored first edge as if the anchor
+had not moved: the merge applied only the target ratio, so a candidate sampled at
+one receiver was weighted by that receiver's solid-angle density. v3 derives the
+correction for the fixed-first-vertex shift and restricts reuse to the class
+where it holds. With `G(x) = |cos at the first vertex| / r^2`, the same vertex
+sample has density `q_new = q_old * G_old / G_new` at the new anchor, so the
+merge multiplies the target ratio by `J = G_new / G_old`
+(`ptFirstEdgeShiftJacobian`), and the resolve normalisation by the target
+density cancels — the target is a variance control only. Reuse is limited to a
+certified diffuse first vertex (`RESTIR_PT_PATH_FLAG_DIFFUSE_FIRST`); sky and
+emitter first edges, delta and glossy first vertices are rejected because their
+suffix radiance or density depends on the incoming direction. Duplicate
+rejection now compares a stable `sampleId` instead of a first-vertex position.
+The record grew only its first vertex, 48 to 52 B, filling existing tail
+padding: the path stays 80 B and the reservoir 112 B.
+
+Derivation, rejected classes, documented approximations (ratio caps 8/5, edge
+cosine 1e-3, target cosine floor 0.05) and the remaining integration gates are
+in `docs/RESTIR_GI_DERIVATION.md`. The module stays quarantined: no root
+imports it, there is no pass or host, and no GPU run exists.
+
+Evidence:
+
+- L1 Slang: a temporary probe root (kept outside the repository) imports the
+  module, instantiates `ptSpatialReuse`, `ptResolveFiltered` and `ptResolveVisible`
+  and calls every other entry; the pinned `slangc` (2026.20) with
+  `-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major` emits
+  323,420 B of SPIR-V with no warnings.
+- L2 Java: `RestirPtChangeOfMeasureTest`, four tests. Algebra on one candidate
+  resolves to `1/q_new` within 1e-12 and is invariant to a 7.25x target scale.
+  A two-million-sample Monte Carlo against a closed-form indirect integral
+  (`0.6 * 0.5 * 0.5 = 0.15`) measures `0.149937 ± 0.000172` with the Jacobian
+  and `0.170995` without it (the v2 merge is 14% high). Source guards pin the
+  flag, both geometry functions, the merge ratio, the rejection lines, the
+  `sampleId` test and the two reuse call sites.
+- Full `:common:test` with the pinned slangc: `928 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL.
+- Mutation proof: replacing the temporal reuse's `originDelta` with
+  `float3(0.0)` (which would silently drop the change of measure whenever the
+  camera moves) turned exactly
+  `theShaderImplementsTheDerivedShiftJacobian()` red; the shader was restored
+  byte-identical, sha256 `a7b51eef353f5f02c80145e83364fbc53eff957f0e68dff6779db02413896e12`.
+
+No native build, CTest or deploy: no root imports the module and no runtime
+behavior changed. No owner-verified frame.
