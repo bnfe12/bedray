@@ -3250,3 +3250,47 @@ fallback.
 Still missing: an owner-verified generated frame, and the shader-side inputs for
 the remaining Shaderc survivors (`iris_depth.comp`, the spatial upscaler kernels,
 the Iris pack host).
+
+## 2026-10-30 — The Iris depth converter is an AOT Slang pass (L0 source, L1 build, L2 unit + mutation)
+
+Commit `a4cbc04`. `iris_depth.comp` — the last first-party GLSL in the resource
+tree — is deleted. `passes/iris_depth.slang` reproduces the conversion exactly
+(encoding 0 scale/bias, 1 window clamp, 2/3 linear ray distance, column-major
+inverse view, `far/(far-near)` mapping, non-finite depth becomes 1) and
+`IrisDepthConverter` now loads it with `SlangPass.load("iris_depth")`, checks
+`requireManifest` (128-byte push, 8x8x1 threads, binding 0 combined `rasterDepth`
+sampler, binding 1 `r32f` `irisDepth` storage image), runs the same
+`SlangPassDriverGate` as core-registered passes, and builds the module from the
+AOT words. The pipeline still belongs to the Iris bridge, which is host code, not
+the renderer. No GLSL or Shaderc fallback: without the artifact the constructor
+throws and depth conversion does not run.
+
+Evidence:
+
+- L1 Slang: `iris_depth: 4800 B SPIR-V, 2 binding(s), 128 B push constants,
+  8x8x1 threads` (1200 words), exactly what the bridge writes and dispatches.
+- L2 Java: full `:common:test --rerun-tasks`, `924 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL. The new `IrisDepthAotTest` covers the
+  bridge loading the AOT pass instead of Shaderc, the deleted GLSL, the shader
+  contract (push block, bindings, thread grid, every encoding branch, the
+  column-vs-row matrix convention), the built artifact against `requireManifest`,
+  and four refused manifests (120-byte push, 16x16 threads, wrong slot types).
+  `ShadercSurfaceTest` now requires an empty `shaders/glsl/` tree.
+- Mutation proof: deleting the thread-grid check from `requireManifest` turned
+  `aManifestThatDisagreesWithTheBridgeIsRefused` red; the file was restored
+  byte-identical (sha256 `31186b396a26...fdf17fb`).
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous jar kept
+as `*.20261030-104721.bak`): JAR built from a `git archive a4cbc04` snapshot plus
+`libs/`, sha256
+`a6ae897e0297ef50fc6a5fa639876971cb11c4f77c766f1038eac8f1c6caa7c0`, containing
+`shaders/slang/spv/iris_depth.spv` (4800 B) and no `shaders/glsl/` entry. Natives
+are unchanged; both instances still carry `bedray_core.dll` sha256
+`8ed33b8021368f80e26d4b42d10bbb61cfa38b82042fbce035f0d4c0dd17ea07`. What a
+playtest should show: Iris shader packs see the same converted depth as before
+(fog, shadows and pack effects unchanged); a jar built without the Slang SDK logs
+`iris_depth is not in this build` once instead of falling back to GLSL.
+
+Still missing: an owner-verified frame, and the two Shaderc users that compile
+third-party or user-supplied GLSL (the `shaders/spatial/` upscaler kernels and the
+Iris pack host).
