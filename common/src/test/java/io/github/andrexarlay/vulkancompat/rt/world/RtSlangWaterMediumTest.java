@@ -386,7 +386,7 @@ class RtSlangWaterMediumTest {
 
         String fluid = block(read(SURFACE), "&& waterIsSurface(true, material.f0");
         assertTrue(fluid.contains("waterStyledWaveNormal(hit.worldPosition, geometricNormal,\n"
-                + "                options.portalTime, footprint, options.waterWaveMix, lostVar)"),
+                + "                    options.portalTime, footprint, options.waterWaveMix, lostVar)"),
             "the decoded face keeps the field the switch scales");
         assertTrue(fluid.indexOf("material.ior = WATER_IOR;") < fluid.indexOf("options.waterWaveMix >= 1.0"),
             "the optical profile is set before the style is ever consulted, so no style can pick a different water");

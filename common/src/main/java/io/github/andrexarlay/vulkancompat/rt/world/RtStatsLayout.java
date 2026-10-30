@@ -4,16 +4,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Byte layout of one per-frame slot of StatsBuf. The host fields are written by RtFrameRenderer / RtSkyState /
- * RtFogState and read by the shaders through {@code pc.statsAddr}; the four counter words at the head are written on
- * the GPU, by {@code passes/frame_stats.slang} for the Slang path. The shader-side mirror of this struct is
- * {@code FrameStats} in {@code shaders/slang/bindings.slang}.
+ * Byte layout of one per-frame slot of StatsBuf. The four counter words at the head are the whole live ABI: the host
+ * binds exactly those sixteen bytes to {@code passes/frame_stats.slang}, which writes them on the GPU. Since the legacy
+ * pipeline was deleted no typed pass reads {@code pc.statsAddr}, so the rest of the slot is host-side scratch with no
+ * shader on the other end - {@code RtSlangLayoutAbiTest} proves that boundary (no pass imports the legacy declarations)
+ * instead of pretending {@code FrameStats} in {@code bindings.slang} is still a mirror to keep in step.
  * <p>
  * The member list below is the single Java source of truth: offsets are computed here with the same
- * std430 rules the shader compiler applies to the declaration. {@code RtStatsLayoutTest} used to parse the GLSL
- * declaration and compare every field, and it was deleted with the legacy pipeline; {@code RtFrameStatsTest} now
- * pins the four head words that the counter pass writes, and the rest of the slot is only kept in step by editing
- * both mirrors together.
+ * std430 rules the shader compiler applies to the declaration. {@code RtFrameStatsTest} pins the four head words that
+ * the counter pass writes; {@code gradle/slang.gradle} and {@code RtSlangLayoutAbiTest} pin the blocks that still have
+ * a Slang consumer.
  */
 public final class RtStatsLayout {
     /** One member of the frame slot: shader declaration and its computed std430 placement. */

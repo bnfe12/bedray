@@ -427,7 +427,7 @@ WaterMedium primaryWaterMedium<T : ISceneTracer>(T traversal, MaterialAtlas atla
         float advance = face.t + rayBias;
         origin = origin + up * advance;
         remaining -= advance;
-        SurfaceSample body = decodeSurface(atlas, blockMaterials, face, materialOptions, up);
+        SurfaceSample body = decodeSurface(atlas, blockMaterials, face, materialOptions, up, false);
         if (!body.valid || surfaceIsHole(body, alphaCutoff)) {
             continue;
         }

@@ -1311,13 +1311,43 @@ is supposed to protect or removed.  The first group is closed:
   camera matrix, both velocity sanitises, the pass clip-w gate) were each
   caught, and every shader was restored by sha256.
 
-The second group has no Slang counterpart yet, and each entry is an open hole,
-not a passing test:
+The second group was closed in the hot-loop/layout batch, with one deliberate
+reinterpretation:
 
-* the `StatsBuf` std430 layout of the Slang structs, beyond the two
-  self-avatar slots. (`RtStatsLayoutTest`)
-* the primary-path hot-loop invariants. (`RtPathHotLoopTest`,
-  `RtOptimizationTest`, `RtBlockLightReachTest`)
+* the rules of the deleted `RtPathHotLoopTest` and `RtOptimizationTest` are now
+  `RtSlangHotLoopTest` (7): one decode per accepted hit, the primary record
+  filled at the first accepted surface, the sky evaluated only on a miss, an
+  ambient-only bounce stopping at geometry, one key-light draw per vertex, the
+  reservoir reset by `emitters.fingerprint()` rather than a section version,
+  and no shading normal built by a transmittance walk. The last rule had been
+  lost in the port: `decodeSurface` carries the legacy `wantNormal` switch
+  again, and both walks of `surface/visibility.slang` plus the camera's
+  `primaryWaterMedium` decode with `false`, so a shadow walk pays for no atlas
+  normal, AO texel, entity auto-normal or wave fit. Seven mutation probes
+  (entity gate, atlas gate, the shaded overload, one visibility walk, the sky
+  branch, the fingerprint, plus the build pin) were each caught, and every file
+  was restored by sha256.
+* the reach the deleted `RtBlockLightReachTest` measured is
+  `RtSlangBlockLightReachTest` (7): the `d^-1.5` → `d^-1.25` seam at two
+  blocks, the 24-block squared window, the rsqrt form (no `pow`), the candidate
+  distance/self gate read before the atlas fetch, the hoisted `lightRadius`,
+  and the sqrt-ladder index PMF. Mutation-proved by moving `EMITTER_RADIUS`.
+* `RtStatsLayoutTest` has no field-by-field successor, because the struct it
+  mirrored has no shader on the other end. The typed stats ABI is the four
+  counter words (16 B) that `passes/frame_stats.slang` writes through
+  `RWStructuredBuffer<uint>`; no pass imports the legacy `FrameStats` or
+  `PushConstants` declarations (only `backend_query.slang` and
+  `bedray_legacy.slang` import the module, and neither names them), so the
+  slot's tail is host-only scratch, not a layout a shader can misread.
+  `RtSlangLayoutAbiTest` (8) pins the blocks that do have a consumer -
+  `FrameConstants` 608 B with every section offset, `PathTracePush` 112 B with
+  the 16 members and the emitter/di/entity offsets, `DIReservoir` 64 B,
+  `BlockEmitterRecord` 96 B, `FrameStatsPush` 8 B, the four counter words vs
+  the host's 16 B, and the legacy 128-byte push against `RtFrameParams` - and
+  proves the reachability boundary that keeps the tail dead. `gradle/slang.gradle`
+  keeps the build-time pin; a same-size swap of `diState`/`entityState` fails
+  that pin, and with it skipped fails the unit test, then was restored by
+  sha256.
 
 The third group tested the deleted classes themselves (runtime compiler
 options, the SPIR-V disk cache, the GLSL include graph, the `rtx/raytracing`

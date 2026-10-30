@@ -275,8 +275,11 @@ float3 decodeEntityAutoNormal(EntityAtlas atlas, SurfaceHit hit,
 // Decodes one hit.  A miss or a malformed hit returns valid = false; a cutout
 // hole is still a valid surface (surfaceIsHole decides whether it is a hole),
 // because a visibility walk must distinguish a hole from a filter.
+// `wantNormal` is the transmittance-walk switch of the legacy decoder: a shadow ray reads only the material, the
+// geometric normal and the tint, so it must not pay for the atlas normal, the AO texel or the water wave normal. Every
+// value those walks consume is computed on both paths, so the filter it applies is the same one a shaded hit gets.
 SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMaterials,
-        SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection) {
+        SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection, bool wantNormal) {
     SurfaceSample surface;
     surface.valid = false;
     surface.hit = hit;
@@ -379,7 +382,7 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
             glassy = false;
             pbr.roughness = 0.05;
         }
-        if (!endPortal && !outline && alpha >= ENTITY_ALPHA_HOLE) {
+        if (wantNormal && !endPortal && !outline && alpha >= ENTITY_ALPHA_HOLE) {
             shadingNormal = decodeEntityAutoNormal(atlas.entities, hit, geometricNormal, options.autoNormalStrength);
         }
 
@@ -483,31 +486,36 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         if ((options.flags & MATERIAL_SAMPLING_FLAG_APPLY_TINT) != 0u) {
             material.albedo *= hit.tint;
         }
-        shadingNormal = decodeAtlasNormal(atlas, options, hit, geometricNormal,
-            ambientOcclusion);
-        material.ambientOcclusion = ambientOcclusion;
+        if (wantNormal) {
+            shadingNormal = decodeAtlasNormal(atlas, options, hit, geometricNormal,
+                ambientOcclusion);
+            material.ambientOcclusion = ambientOcclusion;
+        }
         // A fluid is not a tinted pane.  The auto-PBR atlas tags it with water's
         // reflectance and roughness, the sheet takes the analytic wave normal
         // and the Fresnel split of an optical interface, and its transmission is
         // tinted by the biome colour instead of by the opaque 16x16 sprite.
         if ((hit.flags & HIT_FLAG_TRANSLUCENT) != 0u
                 && waterIsSurface(true, material.f0, material.roughness, material.metallic)) {
-            float footprint = hit.t * WATER_PIXEL_ANGLE /
-                max(abs(dot(rayDirection, geometricNormal)), 0.06);
-            float lostVar = 0.0;
-            float3 waveNormal = waterStyledWaveNormal(hit.worldPosition, geometricNormal,
-                options.portalTime, footprint, options.waterWaveMix, lostVar);
             material.sourceFlags |= MATERIAL_SOURCE_FLUID;
             material.alphaMode = AlphaMode.Optical;
             material.ior = WATER_IOR;
-            // Both styles are the same water: the medium, the IOR and the light
-            // that reaches the floor do not depend on the switch.  Only the face
-            // does - the realistic style keeps the full tilt, the damped one
-            // leans back toward the flat normal and carries a gentler sheen, the
-            // pair the legacy surface decoder used.
-            material.roughness = options.waterWaveMix >= 1.0
-                ? clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30)
-                : clamp(0.02 + sqrt(max(lostVar, 0.0)) * 0.8, 0.02, 0.16);
+            if (wantNormal) {
+                float footprint = hit.t * WATER_PIXEL_ANGLE /
+                    max(abs(dot(rayDirection, geometricNormal)), 0.06);
+                float lostVar = 0.0;
+                float3 waveNormal = waterStyledWaveNormal(hit.worldPosition, geometricNormal,
+                    options.portalTime, footprint, options.waterWaveMix, lostVar);
+                // Both styles are the same water: the medium, the IOR and the light
+                // that reaches the floor do not depend on the switch.  Only the face
+                // does - the realistic style keeps the full tilt, the damped one
+                // leans back toward the flat normal and carries a gentler sheen, the
+                // pair the legacy surface decoder used.
+                material.roughness = options.waterWaveMix >= 1.0
+                    ? clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30)
+                    : clamp(0.02 + sqrt(max(lostVar, 0.0)) * 0.8, 0.02, 0.16);
+                shadingNormal = waveNormal;
+            }
             material.metallic = 0.0;
             material.f0 = float3(WATER_INTERFACE_F0);
             material.flags &= ~MATERIAL_FLAG_METAL;
@@ -519,7 +527,6 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
             // caller that does not gets the tint from surfaceTransmittance,
             // which reads the biome colour off the hit.
             material.albedo = float3(1.0);
-            shadingNormal = waveNormal;
         }
     }
 
@@ -578,6 +585,12 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
     surface.tangent = hit.tangent;
     surface.bitangent = hit.bitangent;
     return surface;
+}
+
+// A caller that shades the surface needs the decoded normal and AO.
+SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMaterials,
+        SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection) {
+    return decodeSurface(atlas, blockMaterials, hit, options, rayDirection, true);
 }
 
 // A cutout texel below the threshold is a hole, not a filter.  Opaque and
