@@ -4,6 +4,35 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — Rejected samples no longer publish denoiser guides (L1/L2, mutation proof; L3 no-regression)
+
+`pathTraceSampleRejected` (`INVALID_SAMPLE | RC_UNRESOLVED`) is now computed once
+in `pathtrace/path_trace_entry.slang`; the alpha lane, `outMotion`, the seven
+DLSS-RR guides and NRD's binding-33 vec4 all read that one verdict. A refused
+sample writes the neutral miss set (view depth 1e6, flat normal, zero signal)
+and zero motion, so no output can contradict the zero weight in the radiance
+lane. A truncated path stays trusted: it stopped short, but its primary vertex
+is real.
+
+Source revision `e267a2f` plus this change. The shader compiles and the Fabric
+jar builds. `:common:test` passed **887 tests in 159 suites: 0 failures, 0
+errors, 3 skipped**; CTest passed **24/24**. The new
+`RtSlangNrdMotionTest.theRejectedSampleNeverPublishesGuidesOrMotion` was
+mutation-tested: removing `!sampleTrusted ||` from the two neutral branches
+fails it (and `theMotionRecordIsTheLegacyVec4`), restoring the guard passes.
+
+Two live world runs on the installed jar and `bedray_core.dll` passed with the
+native path tracer: `nativeScene=true` + `nativePathTrace=true`
+(`backend=NativePathTraceBackend spatial=true`, `result=PASS`, three 2560x1440
+shots, per-channel mean 157.4/158.9/165.9 and stdev 52.6/53.9/51.0), and
+`nativePathTrace=true` alone (`result=PASS`, 577 frames). Both ran with
+`denoiser=off`, so `gbuffer=off` and the guide bindings were not consumed: this
+proves no regression in the shared entry, not live guide consumption. No new
+crash dump appeared; `hs_err_pid26912.log` remains the 2026-10-29 spatial
+artifact. The Java-host run was not completed because the user stopped
+launching Minecraft, so no claim is made for it. L4 visual acceptance and owner
+confirmation are not claimed.
+
 ## 2026-10-30 — Guide initialization precedes primary writes (L2)
 
 NRD now prepares a new image generation before the primary pass writes its

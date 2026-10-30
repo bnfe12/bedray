@@ -133,7 +133,8 @@ class RtSlangRcFieldTest {
         assertTrue(tracer.contains("PATH_TRACE_FLAG_RC_UNRESOLVED    = 1u << 12u"));
         assertTrue(tracer.contains("PATH_TRACE_FLAG_INVALID_SAMPLE   = 1u << 3u"));
         String entry = source(SHADERS + "pathtrace/path_trace_entry.slang");
-        assertTrue(entry.contains("pathTraceSampleRejected(result.flags) ? 0.0 : 1.0"));
+        assertTrue(entry.contains("bool sampleTrusted = !pathTraceSampleRejected(result.flags);"));
+        assertTrue(entry.contains("sampleTrusted ? 1.0 : 0.0"));
         int outside = tracer.indexOf("result.flags |= PATH_TRACE_FLAG_RC_OUTSIDE;");
         int ordinary = tracer.indexOf("throughput *= bsdf.weight;", outside);
         assertTrue(outside >= 0 && ordinary > outside);

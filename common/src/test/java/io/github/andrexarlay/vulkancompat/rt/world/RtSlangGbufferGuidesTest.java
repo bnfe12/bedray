@@ -67,7 +67,8 @@ class RtSlangGbufferGuidesTest {
     void aSkyPixelLooksLikeSkyToTheDenoiser() {
         String source = read(ENTRY);
         String guides = block(source, "void pathTraceWriteGuides(");
-        assertTrue(guides.contains("if (!result.primary.valid) {"), "a miss has no surface to guide on");
+        assertTrue(guides.contains("if (!sampleTrusted || !result.primary.valid) {"),
+            "a miss and a rejected sample have no surface to guide on");
         assertTrue(guides.contains("outViewZ[p] = 1.0e6;"), "the sky depth rt_path.comp writes");
         assertTrue(guides.contains("outNormalRough[p] = float4(0.0, 0.0, 1.0, 1.0);"), "the flat sky normal");
         assertTrue(guides.contains("outAlbedo[p] = float4(0.0);"), "zero albedo keeps sky out of the demodulation");

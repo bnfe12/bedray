@@ -1165,8 +1165,13 @@ cross-cascade resolve or image comparison was run.
    `nativePathTrace` + `DLSS_RR` no longer blocks on missing outputs. The additive NRD_MOTION feature and
    `bedray_core_render_path_trace_motion` also forward the borrowed vec4-per-pixel
    buffer at binding 33. Native NRD requires that matching feature/export; the
-   old calls reject enabled motion writes without real targets. Open: a rejected
-   (invalid/truncated) sample can still carry a guide.
+   old calls reject enabled motion writes without real targets. A rejected
+   sample is closed: the entry computes `pathTraceSampleRejected`
+   (`INVALID_SAMPLE | RC_UNRESOLVED`) once, and the alpha lane, `outMotion`, the
+   seven guides and binding 33 all read that one verdict, so a refused sample
+   writes the neutral miss set and zero motion. A truncated path stays trusted:
+   it stopped short, but its primary vertex is real. Open: a live frame that
+   consumes the guides through DLSS RR/NRD.
 5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
    are now in the shared checkout as source-only. Environment is opt-in on a
    positive world boundary that the terminal window reaches; a zero boundary

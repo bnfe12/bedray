@@ -43,7 +43,8 @@ class RtSlangNrdMotionTest {
             assertTrue(source.contains("[[vk::binding(33, 0)]] RWStructuredBuffer<float4> outMotionBuffer;"),
                 pass + ": one vec4 per pixel, not an RGBA16F image the pack could not read with its 16-byte stride");
             String motion = block(source, "float4 pathTraceNrdMotion(");
-            assertTrue(motion.contains("if (!result.primary.valid) {"), pass + ": a miss has no surface to reproject");
+            assertTrue(motion.contains("if (!sampleTrusted || !result.primary.valid) {"),
+                pass + ": a miss or a rejected sample has no surface to reproject");
             assertTrue(motion.contains("return float4(0.0);"), pass + ": sky writes zero and the pack keeps its static miss");
             assertTrue(motion.contains("float3 motion = result.primaryMotion.xyz;"),
                 pass + ": the same primary displacement the accumulator reprojects");
@@ -59,8 +60,38 @@ class RtSlangNrdMotionTest {
         for (String pass : new String[] {PASS, SCENE_PASS}) {
             String source = read(pass) + "\n" + read(SHADERS + "/pathtrace/path_trace_entry.slang");
             String store = block(source, "if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {");
-            assertTrue(store.contains("outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result);"),
-                pass + ": the pixel index is the legacy row-major one, one record per render pixel");
+            assertTrue(store.contains(
+                "outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result, sampleTrusted);"),
+                pass + ": the pixel index is the legacy row-major one, one record per render pixel, and the"
+                    + " sample's verdict gates the write");
+        }
+    }
+
+    @Test
+    void theRejectedSampleNeverPublishesGuidesOrMotion() {
+        String rule = block(read(TRACER), "bool pathTraceSampleRejected(");
+        assertTrue(rule.contains(
+            "return (flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_RC_UNRESOLVED)) != 0u;"),
+            "one rule names the samples the accumulator refuses");
+        assertFalse(rule.contains("PATH_TRACE_FLAG_TRUNCATED"),
+            "a truncated path stopped short but its primary vertex is real, so it stays trusted");
+        String entry = read(SHADERS + "/pathtrace/path_trace_entry.slang");
+        assertTrue(entry.contains("bool sampleTrusted = !pathTraceSampleRejected(result.flags);"),
+            "the verdict is computed once and every output reads the same bit");
+        assertTrue(entry.contains("outImage[p] = float4(result.radiance, sampleTrusted ? 1.0 : 0.0);"),
+            "the radiance lane and the guides cannot disagree about the same sample");
+        assertTrue(entry.contains("outMotion[p] = sampleTrusted && (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u"),
+            "the accumulator must not reproject through a refused path");
+        assertTrue(entry.contains(
+            "pathTraceWriteGuides(p, f, result, sampleTrusted, outViewZ, outNormalRough, outSpecular, outDiffuse,"),
+            "the guides get the same verdict the alpha lane used");
+        assertTrue(block(entry, "void pathTraceWriteGuides(").contains("if (!sampleTrusted || !result.primary.valid) {"),
+            "a rejected sample writes the neutral set, exactly like a miss");
+        assertTrue(block(entry, "float4 pathTraceNrdMotion(").contains("if (!sampleTrusted || !result.primary.valid) {"),
+            "NRD's motion gets the same verdict");
+        for (String pass : new String[] {PASS, SCENE_PASS}) {
+            assertTrue((read(pass) + "\n" + entry).contains("bool sampleTrusted = !pathTraceSampleRejected(result.flags);"),
+                pass + ": the pass wrappers share the one entry body that computes the verdict");
         }
     }
 

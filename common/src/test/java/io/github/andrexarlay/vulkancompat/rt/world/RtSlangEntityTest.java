@@ -284,9 +284,10 @@ class RtSlangEntityTest {
             "and the entity half answers from the ring through the hit's own corner data");
 
         String entry = read(ENTRY);
-        assertTrue(entry.contains("outMotion[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u"
-            + " ? result.primaryMotion : float4(0.0);"),
-            "a pixel that hit nothing says nothing, so a moved camera restarts it instead of borrowing the sky's history");
+        assertTrue(entry.contains("outMotion[p] = sampleTrusted && (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u"
+            + "\n        ? result.primaryMotion : float4(0.0);"),
+            "a pixel that hit nothing or whose sample the tracer refused says nothing, so a moved camera restarts it"
+                + " instead of borrowing the sky's history");
     }
 
     /** The accumulator is where a motion vector becomes a pixel: it has to be added, not merely carried. */

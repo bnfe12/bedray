@@ -71,7 +71,7 @@ uint pathTraceSeed(int2 pixel, uint frameIndex, uint sampleIndex) {
 // compose are unchanged, so the Slang path can be denoised by the same chain as the legacy one.  A sky pixel gets the
 // legacy pattern (view depth 1e6, a flat normal, zero signal, albedo 0) so the pack skips it and the denoiser keeps its
 // range finite.
-void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result,
+void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result, bool sampleTrusted,
         RWTexture2D<float> outViewZ,
         RWTexture2D<float4> outNormalRough,
         RWTexture2D<float4> outSpecular,
@@ -79,7 +79,11 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result,
         RWTexture2D<float4> outAlbedo,
         RWTexture2D<float4> outDirect,
         RWTexture2D<float4> outSpecAlbedo) {
-    if (!result.primary.valid) {
+    // A sample the tracer rejected carries no geometry the denoiser may consume: `sampleTrusted` is
+    // false for PATH_TRACE_FLAG_INVALID_SAMPLE and PATH_TRACE_FLAG_RC_UNRESOLVED, and the neutral set
+    // below is the same one a miss gets, so the guides never disagree with the zero weight in the
+    // radiance lane.  A truncated path is still trusted: it stopped short, its primary vertex is real.
+    if (!sampleTrusted || !result.primary.valid) {
         outViewZ[p] = 1.0e6;
         outNormalRough[p] = float4(0.0, 0.0, 1.0, 1.0);
         outSpecular[p] = float4(0.0);
@@ -110,8 +114,8 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result,
 
 // `traversal` arrives with its backend-specific fields set (TLAS and the section/geometry provider); everything that
 // is shared between the two backends is filled here, so adding a field cannot be forgotten in one entry point.
-float4 pathTraceNrdMotion(PathTraceResult result) {
-    if (!result.primary.valid) {
+float4 pathTraceNrdMotion(PathTraceResult result, bool sampleTrusted) {
+    if (!sampleTrusted || !result.primary.valid) {
         return float4(0.0);
     }
     float3 motion = result.primaryMotion.xyz;
@@ -244,21 +248,27 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // is applied once by the display/tonemap pass, so accumulation and denoise keep working in linear HDR.
     // The alpha lane is the sample's verdict, not coverage: rgb has no room left to say "this path could not be
     // trusted", and a non-finite fault must not dilute a running mean that lives for thousands of frames.
-    outImage[p] = float4(result.radiance, pathTraceSampleRejected(result.flags) ? 0.0 : 1.0);
+    // The verdict is computed once: the guides and both motion lanes read the same bit, so no output can
+    // contradict the alpha lane.
+    bool sampleTrusted = !pathTraceSampleRejected(result.flags);
+    outImage[p] = float4(result.radiance, sampleTrusted ? 1.0 : 0.0);
     // Legacy depth contract (rt_path.comp): a miss writes 1e6, because bloom.slang treats anything at or beyond
     // BLOOM_SKY_DISTANCE (1e5) as sky and the composite pass uses the same buffer.  firstHitDistance alone defaults
     // to the ray far plane on a miss, which is far below that threshold and would make the sky glow.
     outDepth[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u ? result.firstHitDistance : 1.0e6;
     // The velocity lane belongs to the accumulator, not to the integrand: it says where the surface this pixel
     // showed had itself been one frame ago.  A miss and terrain both say "nowhere", which is what a camera-only
-    // reprojection already assumes, so no flag and no branch is needed downstream for them.
-    outMotion[p] = (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u ? result.primaryMotion : float4(0.0);
+    // reprojection already assumes, so no flag and no branch is needed downstream for them.  A rejected sample
+    // says "nowhere" too: its vector was produced by a path the tracer refused, and the accumulator must not
+    // reproject through it.
+    outMotion[p] = sampleTrusted && (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u
+        ? result.primaryMotion : float4(0.0);
     if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u) {
-        pathTraceWriteGuides(p, f, result, outViewZ, outNormalRough, outSpecular, outDiffuse,
+        pathTraceWriteGuides(p, f, result, sampleTrusted, outViewZ, outNormalRough, outSpecular, outDiffuse,
             outAlbedo, outDirect, outSpecAlbedo);
     }
     if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {
-        outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result);
+        outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result, sampleTrusted);
     }
 }
 

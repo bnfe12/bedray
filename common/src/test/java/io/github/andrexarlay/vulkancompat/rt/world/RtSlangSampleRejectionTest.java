@@ -146,9 +146,10 @@ class RtSlangSampleRejectionTest {
         assertFalse(helper.contains(TRUNCATED), "a truncated path stays a sample");
         String pass = read(PASS);
         String entry = read(ENTRY);
-        assertTrue(entry.contains("outImage[p] = float4(result.radiance, pathTraceSampleRejected(result.flags)"
-                + " ? 0.0 : 1.0);"),
+        assertTrue(entry.contains("bool sampleTrusted = !pathTraceSampleRejected(result.flags);"),
             "the pass publishes the helper's answer instead of inventing its own rule");
+        assertTrue(entry.contains("outImage[p] = float4(result.radiance, sampleTrusted ? 1.0 : 0.0);"),
+            "and the alpha lane carries that one answer");
         assertFalse(entry.contains("float4(result.radiance, 1.0)"),
             "a hardcoded 1.0 would make the whole rejection chain dead code");
         assertTrue(pass.contains("//   1  outImage") && pass.contains("a = 0 for a"),
