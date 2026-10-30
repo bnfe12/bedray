@@ -2,9 +2,11 @@
 
 Status: L1 build/contract-test candidate. The core CMake build includes the graph and its
 Vulkan adapter by default, and the adapter plus its fake-command-buffer
-contract test build and pass at L1. `core.cpp` still does not construct or
-execute the adapter, so this is not evidence of a rendered frame and no GPU or
-driver validation has been performed. A standalone graph build enables the
+contract test build and pass at L1. `core.cpp` constructs the adapter through
+`FrameGraphOwner` and records the native path-trace group through it; no other
+pass is a graph node. That path has not been captured against a GPU or a game
+frame, so this is not evidence of a rendered frame and no driver validation has
+been performed. A standalone graph build enables the
 Vulkan adapter explicitly and supplies Vulkan headers.
 
 The Minecraft host owns the Vulkan device, command buffer, queue, submission,
@@ -12,7 +14,7 @@ and presentation. The adapter receives the existing `vkCmdPipelineBarrier`
 function pointer and records into the host's command buffer; it never creates
 a device or submits work.
 
-Before recording, the future renderer must:
+Before recording, the renderer must:
 
 1. Build the graph from enabled passes and compile it with the capabilities
    actually enabled on this device. Each declared write that initializes a

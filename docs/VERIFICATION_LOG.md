@@ -3294,3 +3294,24 @@ playtest should show: Iris shader packs see the same converted depth as before
 Still missing: an owner-verified frame, and the two Shaderc users that compile
 third-party or user-supplied GLSL (the `shaders/spatial/` upscaler kernels and the
 Iris pack host).
+
+## 2026-10-30 — Render-graph docs corrected to the shipped state (L0, CTest re-run)
+
+Four documents still said the native core neither constructs nor executes the
+render graph. That stopped being true at `5fb4ad1` (2026-10-28):
+`configure_path_trace` builds a `FrameGraphOwner`, the whole native path-trace
+group is one opaque `path_trace.frame` node compiled from the reported
+capability mask, `bedray_core_render_path_trace` records it through
+`FrameScheduler`, and `bedray_core_release_recording` proves completion through
+`release_proven`; configure, pass destroy and core destroy refuse outstanding
+leases. `docs/SLANG_MIGRATION.md`,
+`native/bedray_render_graph/README.md`, `RENDER_GRAPH_NOTES.md` and
+`VULKAN_INTEGRATION.md` now say that, and keep the accurate parts: every other
+pass records directly, the history bridge is linked but not driven, no GPU or
+game frame through the graph has been captured, and the capability mapping lives
+only in `FrameGraphOwner::plan_capabilities`.
+
+Evidence: the Release x64 build directory that produced the deployed
+`bedray_core.dll` re-ran CTest: `100% tests passed, 0 tests failed out of 25`,
+including `bedray_frame_graph_owner` and `bedray_history_submission`. No native
+source changed in this batch. No owner-verified frame.

@@ -1038,19 +1038,26 @@ already radiance and is left unchanged.  This is a source-only Java change
 
 ### Render-graph recording boundary
 
-`native/bedray_render_graph/` is the planned recording layer: it compiles a
-pass graph, tracks image layouts and emits broad `ALL_COMMANDS` barriers before
-each pass.  The native core links it by default (`BEDRAY_ENABLE_RENDER_GRAPH`),
-but `core.cpp` neither constructs nor executes it. A previous agent reported
-scoped compilation and ABI tests; those reports do not cover later graph and
-history changes and do not prove a rendered frame. The current sources have
-not been independently built as a complete migration.
+`native/bedray_render_graph/` compiles a pass graph, tracks image layouts and
+emits broad `ALL_COMMANDS` barriers before each pass. The native core links it by
+default (`BEDRAY_ENABLE_RENDER_GRAPH`) and now drives it for the main renderer
+workload: `configure_path_trace` constructs a `FrameGraphOwner`
+(`src/frame_graph_owner.cpp`), which registers the whole native path-trace group
+as one opaque `path_trace.frame` node, compiles the plan from the capability mask
+the host reports, and binds the scheduler. `bedray_core_render_path_trace` records
+that node through `record_frame`; `bedray_core_release_recording` proves
+completion through `release_proven`; configuring again, destroying the pass or
+destroying the core is refused while a lease remains. The owner test
+(`bedray_frame_graph_owner`) covers the capability refusal, the opaque-group
+shape, double release and a failed release that retains its slot, and it is part
+of the 25-test CTest suite. Bloom, volumetric, particles and the frame-generation
+producer still record directly; the graph is not yet the whole-frame recorder.
 
-When the frame moves to the graph, path tracing becomes one
-`record_vulkan_graph` pass.  The adapter records into the host command buffer
-through the supplied `vkCmdPipelineBarrier`, never creates a device and never
-submits, so the Minecraft host keeps ownership of the queue and presentation.
-The pass must then:
+Adopting the graph for those passes, and for the rest of a frame, still needs the
+following before it can be claimed. The adapter records into the host command
+buffer through the supplied `vkCmdPipelineBarrier`, never creates a device and
+never submits, so the Minecraft host keeps ownership of the queue and
+presentation. Each pass must then:
 
 * call `prepare_vulkan_recording` before recording, with the actual
   `initial_layout`, the full `VkImageSubresourceRange`, and the capabilities
@@ -1066,16 +1073,17 @@ The pass must then:
 * use one `BedrayFrameDesc` per compute pass if adopting `record_core_dispatches`;
   the C++ integration must resolve reflected named bindings into that descriptor
   and supply the matching 64-byte push block. The bridge does not do this mapping
-  itself and has not yet been connected or validated in a live frame.
+  itself.
 
-Two contracts still need one owner before integration: the graph's 64-bit
+Two contracts must keep one owner as more passes move over: the graph's 64-bit
 `required_capabilities` (logical-device feature bits) and the 10-bit Slang
-capability mask (517) must share one mapping, otherwise `compile` fails with
-`missing_capability` or `is_current` reports a stale plan; and
-`RtMemory.createImage` creates EXCLUSIVE images without a queue family index,
-so single-graphics-family ownership must be proven or an ownership transfer
-added.  History stays on `completed_only` until submission outcomes are
-connected; this pass does not read or write history.
+capability mask (517) share the mapping in `FrameGraphOwner::plan_capabilities`
+today, and a second copy elsewhere would make `compile` fail with
+`missing_capability` or `is_current` report a stale plan; and
+`RtMemory.createImage` creates EXCLUSIVE images without a queue family index, so
+single-graphics-family ownership must be proven or an ownership transfer added.
+History stays on `completed_only` until submission outcomes are connected; the
+graph node does not read or write history.
 
 The history registry now has a provisional C ABI and is referenced by the core
 build, but neither the frame path nor the host drives its submission protocol.
