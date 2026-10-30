@@ -26,10 +26,12 @@ What landed:
 | harness | `verify_water.slang` now reads all of the beam entries and its bounds |
 
 Evidence: `:common:compileSlang` with `slangc` 2026.20 (24 roots; `path_trace.spv`
-1,036,436 B and `path_trace_scene.spv` 1,064,072 B), `verify_water.slang` compiles
-standalone (56,708 B), `:common:test --rerun-tasks` reports **863 tests, 0 failures,
-0 errors, 3 skipped** (153 classes) with the new `RtSlangWaterBeamTest` 9/9 and the
-extended `RtSlangRayOffsetTest` 2/2.
+1,037,924 B and `path_trace_scene.spv` 1,065,560 B on the rebased tree),
+`verify_water.slang` compiles standalone (56,708 B), `:common:test --rerun-tasks`
+reports **895 tests, 0 failures, 0 errors, 3 skipped** (160 classes) with the new
+`RtSlangWaterBeamTest` 9/9 and the extended `RtSlangRayOffsetTest` 2/2. Before the
+rebase onto the RC/guide branch the same batch measured 863 tests in 153 classes,
+also green.
 
 Mutation proof — 14 probes, each a single revert of one wiring point, the named
 guard failing, then the file restored byte-identically (`sha256` compared): the
@@ -49,12 +51,13 @@ real execution. A probe that only matches `startswith("> Task :common:test")` al
 hits `:common:testClasses`; the check is anchored on the exact task token.
 
 Cost, measured and kept: the two walk instantiations `traceShadowBeam` adds are
-+426 KB / +440 KB of SPIR-V on the path-trace roots (+70 % over `HEAD`, which
-`git archive` + the same `slangc` line reproduces at 610,276 / 624,376 B — matching
-the SPIR-V inside the jar deployed on 2026-10-29). Routing both legs through one
-shared callee, and through the existing `traceShadowVisibilityMedium` wrapper, were
-both tried and are not smaller (1,048,772 / 1,049,204 B). The caustic itself is
-cheap: removing only the focus call saves 28 KB.
++426 KB / +440 KB of SPIR-V on the path-trace roots (+70 % over the parent
+revision, which `git archive` + the same `slangc` line reproduces at 611,764 /
+625,864 B — and the pre-RC revision the jar deployed on 2026-10-29 carries,
+610,276 / 624,376 B, compiles the same way). Routing both legs through one shared
+callee, and through the existing `traceShadowVisibilityMedium` wrapper, were both
+tried on the same sources and are not smaller (+12 KB / +13 KB). The caustic itself
+is cheap: removing only the focus call saves 28 KB.
 
 Limits, so a playtest is not asked to prove more than this: the beam bends the
 direct light only — the sky seen from under water, emitted light and secondary rays
