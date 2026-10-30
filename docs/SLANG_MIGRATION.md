@@ -957,12 +957,12 @@ keeps the straight column, because it never crossed anything. The direct term sh
 `-beam.direction` — the same direction its cosine test and its BSDF use, so a beam
 bent below the receiver's horizon is simply not lit — and carries
 `beam.solidAngle * focus` in the estimator. Evidence: `:common:compileSlang` with
-`slangc` 2026.20 (path_trace 1,037,924 B / path_trace_scene 1,065,560 B), the
+`slangc` 2026.20 (path_trace 1,038,264 B / path_trace_scene 1,065,900 B), the
 extended `verify_water.slang` harness compiles on its own (56,708 B),
 `RtSlangWaterBeamTest` (9 guards, double-precision ports of Snell, étendue and the
 finite-difference stencil) and the extended `RtSlangRayOffsetTest` pass, and the full
-`:common:test --rerun-tasks` suite reports 895 tests, 0 failures, 0 errors, 3 skipped.
-All 14 mutation probes are caught (each revert names its guard) and the four shader
+`:common:test --rerun-tasks` suite reports 896 tests, 0 failures, 0 errors, 3 skipped.
+All 16 mutation probes are caught (each revert names its guard) and the four shader
 files come back byte-identical. The cost is measured, not assumed: the two extra walk
 instantiations in `traceShadowBeam` are +426 KB / +440 KB of SPIR-V on the two path
 roots (+70 %); reordering the legs onto a single shared callee was tried and is not

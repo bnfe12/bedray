@@ -26,14 +26,14 @@ What landed:
 | harness | `verify_water.slang` now reads all of the beam entries and its bounds |
 
 Evidence: `:common:compileSlang` with `slangc` 2026.20 (24 roots; `path_trace.spv`
-1,037,924 B and `path_trace_scene.spv` 1,065,560 B on the rebased tree),
+1,038,264 B and `path_trace_scene.spv` 1,065,900 B on the rebased tree),
 `verify_water.slang` compiles standalone (56,708 B), `:common:test --rerun-tasks`
-reports **895 tests, 0 failures, 0 errors, 3 skipped** (160 classes) with the new
+reports **896 tests, 0 failures, 0 errors, 3 skipped** (160 classes) with the new
 `RtSlangWaterBeamTest` 9/9 and the extended `RtSlangRayOffsetTest` 2/2. Before the
 rebase onto the RC/guide branch the same batch measured 863 tests in 153 classes,
 also green.
 
-Mutation proof — 14 probes, each a single revert of one wiring point, the named
+Mutation proof — 16 probes, each a single revert of one wiring point, the named
 guard failing, then the file restored byte-identically (`sha256` compared): the
 inverted étendue ratio, the entry point's sign, the flipped index ratio, the removed
 crest guard, the focus as the area instead of its reciprocal, `WATER_INTERFACE_F0`
@@ -41,7 +41,8 @@ moved, the column walked without the medium, the sky leg left on the sheet, the
 crossing loss dropped, the raw visibility bit read outside its predicate (caught by
 `RtSlangVisibilityOverflowTest`), the lobe asked about the air sight line, the beam
 weight dropped, the beam offered to any light, and a second copy of the interface
-number in the decoder. **14/14 caught.**
+number in the decoder, the column allowed past the light it was sampled from, and
+the sky leg let off the filter budget. **16/16 caught.**
 
 Two harness lessons, both fixed in the probe script rather than in the guards. The
 source guards read shader files straight off disk, so Gradle does not see the input

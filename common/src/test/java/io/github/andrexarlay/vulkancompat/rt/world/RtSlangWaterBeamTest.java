@@ -170,6 +170,9 @@ class RtSlangWaterBeamTest {
         assertTrue(walk.contains("traceFilteredVisibility(traversal, atlas, blockMaterials,"),
             "the sky leg is the plain walk: above the sheet the light is in air and no face toggles anything");
         assertTrue(walk.contains("SURFACE_VISIBILITY_FLAG_REFRACTED"), "the frame can tell a bent beam from a straight ray");
+        assertTrue(walk.contains("visibility.layers += air.layers;"),
+            "the sky leg spends the same filter budget as the column: a beam that walked sixteen faces above the sheet "
+                + "has not proven a sight line either");
         assertTrue(walk.contains("if (!surfaceVisibilityProven(visibility)) {"),
             "a blocker inside the column ends the beam before the sky leg is asked");
         assertTrue(walk.contains("bool skyClear = surfaceVisibilityProven(air);"),
