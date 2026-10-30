@@ -43,7 +43,8 @@ public final class RtFrameParams {
     public static final int FLAG_ACCUMULATE = 1 << 6;
     /** Normal maps from the LabPBR _n atlas. */
     public static final int FLAG_NORMAL_MAPS = 1 << 7;
-    /** Path tracing: tone mapping uses the auto exposure from the frame slot (see RtExposure). */
+    /** Path tracing: tone mapping adapts to the measured luminance ({@code path_auto_exposure}); the number it adapts to
+     * is {@link #exposure}. */
     public static final int FLAG_AUTO_EXPOSURE = 1 << 8;
     /** Ray mode: one-bounce ray traced global illumination. */
     public static final int FLAG_GI = 1 << 9;
@@ -101,6 +102,12 @@ public final class RtFrameParams {
     public int filterIter;
     public int filterIters;
     // ---- written to the per-frame slot (RtFrameRenderer), not pushed ----
+    /**
+     * The frame's tone-mapping exposure: {@link RtExposure#applied} of the auto state and the EV compensation. One number
+     * for the whole frame - the display step, the volumetric composite, the denoiser packs and the StatsBuf slot all read
+     * this field, so a slider cannot brighten one lane and leave another where it was.
+     */
+    public float exposure = RtExposure.MIN;
     public float giDistance = 64f;
     public float emissiveDistance = 32f;
     public float aoRadius = 2.5f;

@@ -914,8 +914,12 @@ public final class RtFrameRenderer {
         io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setEnabled(
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.cullSharedGlass());
         MemoryUtil.memPutInt(hdr + RtStatsLayout.EMITTER_COUNT, emitters.count());
-        MemoryUtil.memPutFloat(hdr + RtStatsLayout.EXPOSURE, exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
-            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths()));
+        // One exposure number for the frame, read from the switch rather than from the flag bit that is composed below:
+        // the display step, the volumetric composite, the denoiser packs and this slot all take params.exposure, so a
+        // change of the compensation cannot brighten one of them and leave another where it was.
+        params.exposure = exposure.applied(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoExposure(),
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths());
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.EXPOSURE, params.exposure);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL, (float) (camera.pos.x - emitters.originX()));
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 4, (float) (camera.pos.y - emitters.originY()));
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 8, (float) (camera.pos.z - emitters.originZ()));
@@ -978,6 +982,7 @@ public final class RtFrameRenderer {
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.waterStyle() == 1 ? RtFrameParams.FLAG_WATER_REALISTIC : 0)
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.vibrantVisuals() ? RtFrameParams.FLAG_VIBRANT_VISUALS : 0)
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.caustics() ? RtFrameParams.FLAG_CAUSTICS : 0)
+            | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoExposure() ? RtFrameParams.FLAG_AUTO_EXPOSURE : 0)
             | ((denoiseMode == DenoiserMode.DLSS_RR && dlssRrDenoiser != null
                 || denoiseMode.isNrd() && NRD_DENOISE_SUN) ? RtFrameParams.FLAG_SUN_DENOISED : 0)
             | (DEMODULATE ? RtFrameParams.FLAG_DEMODULATE : 0)
@@ -1178,8 +1183,8 @@ public final class RtFrameRenderer {
             if (dlssRrDenoiser != null) {
                 // [DLSS-RR] Record DLSS Ray Reconstruction
                 try {
-                    float composeExposure = exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
-                        io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths());
+                    // The frame's own exposure, decided once above: the pack's tonemap and the path display cannot diverge.
+                    float composeExposure = params.exposure;
                     long depthView = (dlssRrDenoiser != null && dlssRrDenoiser.gbViewZ() != null)
                         ? dlssRrDenoiser.gbViewZ().view
                         : (target != null ? WorldTargetManager.extractVkImageView(target.getDepthTextureView()) : 0L);
@@ -1210,8 +1215,8 @@ public final class RtFrameRenderer {
                 }
             } else if (denoiser != null) {
                 try {
-                    float composeExposure = exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
-                        io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths());
+                    // The frame's own exposure, decided once above: the pack's tonemap and the path display cannot diverge.
+                    float composeExposure = params.exposure;
                     boolean nrdJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
                         && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive()
                         && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isScalingActive();

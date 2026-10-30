@@ -62,7 +62,11 @@ final class RtSlangFrameData {
         frame.fog.set(0f, 0f, 0f, 0f);
         frame.cloud.set(0f, 0f, 0f, 0f);
 
-        frame.exposure.set(1f, 0f, 0f, 0f);
+        // The frame's exposure, in the one lane both backends read: the Java display push takes it from here, and
+        // BedrayPathTraceNative forwards it as the native descriptor's lighting.exposure. The other three lanes stay
+        // zero - no Slang shader reads the bloom or tonemap-operator selectors, the native core writes its own zero into
+        // the auto bit, and the Java path keeps its frame time in origin.w rather than in values.w.
+        frame.exposure.set(p.exposure, 0f, 0f, 0f);
         frame.autoExposure = 0;
         frame.tonemapOperator = 0;
         frame.bloomEnabled = 0;

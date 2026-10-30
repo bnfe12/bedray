@@ -74,8 +74,9 @@ final class RtSlangVolumetricPass implements AutoCloseable {
     }
 
     static void fillPush(ByteBuffer march, ByteBuffer apply, RtFrameParams p, int steps, float strength, float range) {
-        // The typed path/display contract uses exposure 1 and tone-maps its output.
-        float exposure = 1f;
+        // The shafts are added to the tone-mapped picture, so they are scaled by the exposure that picture was made with:
+        // the frame's own number, which the display step reads too.
+        float exposure = p.exposure;
         for (int i = 0; i < 3; i++) {
             march.putFloat(i * 4, p.key.dir[i]); march.putFloat(16 + i * 4, p.key.color[i]);
         }
