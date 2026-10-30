@@ -892,19 +892,17 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private void addExpertOptions(ConfigBuilder builder, OptionGroupBuilder ex, Function<ConfigState, Boolean> raysOn,
                                   Function<ConfigState, Boolean> anyRt, Function<ConfigState, Boolean> pathOn, Identifier[] dMode,
                                   Identifier modeId, Path gameDir, StorageEventHandler st) {
-        String[] names = {"rays_shadow_quality", "rays_reflection_quality", "rays_reflection_distance", "rays_ao_quality",
-            "rays_ao_radius", "rays_emissive_quality", "rays_emissive_distance", "rays_gi_quality", "rays_gi_distance"};
-        int[][] r = {{2, 1, 8, 1}, {1, 1, 4, 1}, {128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {2, 1, 8, 1},
-            {3, 1, 8, 1}, {1, 1, 8, 1}, {32, 8, 64, 8}, {1, 1, 8, 1}, {64, RtSettings.DISTANCE_MIN, 256, 16}};
-        String[] units = {"", "", " blocks", "", " blocks", "", " blocks", "", " blocks"};
-        List<Supplier<Integer>> gets = List.of(() -> RtSettings.raysShadowQuality,
-            () -> RtSettings.raysReflectionQuality, () -> RtSettings.raysReflectionDistance, () -> RtSettings.raysAoQuality,
+        String[] names = {"rays_reflection_distance", "rays_ao_radius", "rays_emissive_quality", "rays_emissive_distance",
+            "rays_gi_distance"};
+        int[][] r = {{128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {3, 1, 8, 1}, {1, 1, 8, 1},
+            {32, 8, 64, 8}, {64, RtSettings.DISTANCE_MIN, 256, 16}};
+        String[] units = {" blocks", " blocks", "", " blocks", " blocks"};
+        List<Supplier<Integer>> gets = List.of(() -> RtSettings.raysReflectionDistance,
             () -> RtSettings.raysAoRadius, () -> RtSettings.raysEmissiveQuality, () -> RtSettings.raysEmissiveDistance,
-            () -> RtSettings.raysGiQuality, () -> RtSettings.raysGiDistance);
-        List<Consumer<Integer>> sets = List.of(v -> RtSettings.raysShadowQuality = v,
-            v -> RtSettings.raysReflectionQuality = v, v -> RtSettings.raysReflectionDistance = v, v -> RtSettings.raysAoQuality = v,
+            () -> RtSettings.raysGiDistance);
+        List<Consumer<Integer>> sets = List.of(v -> RtSettings.raysReflectionDistance = v,
             v -> RtSettings.raysAoRadius = v, v -> RtSettings.raysEmissiveQuality = v, v -> RtSettings.raysEmissiveDistance = v,
-            v -> RtSettings.raysGiQuality = v, v -> RtSettings.raysGiDistance = v);
+            v -> RtSettings.raysGiDistance = v);
         for (int i = 0; i < names.length; i++) {
             ex.addOption(intOpt(builder, names[i], r[i][0], r[i][1], r[i][2], r[i][3], unit(units[i]), sets.get(i), gets.get(i),
                 raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
@@ -1181,9 +1179,9 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         if (before != VulkanRtxConfig.effectiveRtMode()) {
             afterModeChange(before, VulkanRtxConfig.effectiveRtMode(), "reset");
         }
-        LOGGER.info("[VKB-AUTOTEST] ui_reset level={} {} mode={} rays: shadows={} refl={} ao={} gi={} shadow_rays={} ao_rays={} | {}",
+        LOGGER.info("[VKB-AUTOTEST] ui_reset level={} {} mode={} rays: shadows={} refl={} ao={} gi={} | {}",
             level.name().toLowerCase(Locale.ROOT), what, VulkanRtxConfig.effectiveRtMode().logName(), RtSettings.raysShadows,
-            RtSettings.raysReflections, RtSettings.raysAo, RtSettings.raysGi, RtSettings.raysShadowQuality, RtSettings.raysAoQuality,
+            RtSettings.raysReflections, RtSettings.raysAo, RtSettings.raysGi,
             RtSettings.pathSummary());
         if (current instanceof VideoSettingsScreenAccess access) {
             net.minecraft.client.Minecraft.getInstance().gui.setScreen(

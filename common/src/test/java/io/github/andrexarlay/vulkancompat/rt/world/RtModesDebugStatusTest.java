@@ -33,12 +33,6 @@ class RtModesDebugStatusTest {
         assertFalse(line.contains("runtime=active"), line);
     }
 
-    @Test
-    void reflectionSettingsShowConfiguredCostControlsOnlyWhenEnabled() {
-        assertEquals(" q3 d256", RtModesDebug.reflectionSettings(true, 3, 256));
-        assertEquals("", RtModesDebug.reflectionSettings(false, 3, 256));
-    }
-
     /** The ray profile's F3 line names every switch and range, so a screenshot shows what the frame traced. */
     @Test
     void rayEffectsLineNamesTheSwitchesTheProfilesRead() {

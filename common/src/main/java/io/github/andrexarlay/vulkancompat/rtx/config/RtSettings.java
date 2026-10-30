@@ -70,20 +70,17 @@ public final class RtSettings {
     public static final int DISTANCE_MIN = 16;
     public static final int DISTANCE_MAX = 512;
 
-    // ---- Ray Tracing mode: one switch + quality (rays per pixel) + distance per effect ----
+    // ---- Ray Tracing mode: one switch + distance per effect (block light also has a sample count) ----
     public static boolean raysShadows = true;
-    /** Shadow rays jittered inside a widened sun disk (soft penumbra), {@link #raysShadowQuality} rays per pixel. */
+    /** Shadow rays jittered inside a widened sun disk (soft penumbra); the accumulation averages them. */
     public static boolean raysSoftShadows = false;
-    public static int raysShadowQuality = 2;
     /** Stylised retro shadows: the sun visibility is evaluated once per world-space cell, so edges are blocky like a low-res shadow map. */
     public static boolean raysPixelShadows = false;
     /** Edge of a pixelated-shadow cell in texture pixels (1 = one pixel of a 16x16 block texture = 1/16 block), both modes. */
     public static int raysPixelShadowSize = 1;
     public static boolean raysReflections = false;
-    public static int raysReflectionQuality = 1;
     public static int raysReflectionDistance = 128;
     public static boolean raysAo = false;
-    public static int raysAoQuality = 2;
     /** AO radius in blocks. */
     public static int raysAoRadius = 3;
     public static boolean raysEmissive = true;
@@ -91,7 +88,6 @@ public final class RtSettings {
     public static int raysEmissiveDistance = 32;
     /** One-bounce ray traced global illumination (replaces the vanilla sky-light ambient). */
     public static boolean raysGi = false;
-    public static int raysGiQuality = 1;
     public static int raysGiDistance = 64;
     /** Temporal accumulation of the stochastic effects while the camera and the scene stand still. */
     public static boolean raysAccumulate = true;
@@ -245,20 +241,16 @@ public final class RtSettings {
         bool("rays_transparency_stats", () -> transparencyStats, v -> transparencyStats = v);
         bool("rays_shadows", () -> raysShadows, v -> raysShadows = v);
         bool("rays_soft_shadows", () -> raysSoftShadows, v -> raysSoftShadows = v);
-        integer("rays_shadow_quality", () -> raysShadowQuality, v -> raysShadowQuality = v, 1, 8);
         bool("rays_pixel_shadows", () -> raysPixelShadows, v -> raysPixelShadows = v);
         integer("rays_pixel_shadow_size", () -> raysPixelShadowSize, v -> raysPixelShadowSize = v, 1, 16);
         bool("rays_reflections", () -> raysReflections, v -> raysReflections = v);
-        integer("rays_reflection_quality", () -> raysReflectionQuality, v -> raysReflectionQuality = v, 1, 4);
         integer("rays_reflection_distance", () -> raysReflectionDistance, v -> raysReflectionDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("rays_ao", () -> raysAo, v -> raysAo = v);
-        integer("rays_ao_quality", () -> raysAoQuality, v -> raysAoQuality = v, 1, 8);
         integer("rays_ao_radius", () -> raysAoRadius, v -> raysAoRadius = v, 1, 8);
         bool("rays_emissive", () -> raysEmissive, v -> raysEmissive = v);
         integer("rays_emissive_quality", () -> raysEmissiveQuality, v -> raysEmissiveQuality = v, 1, 8);
         integer("rays_emissive_distance", () -> raysEmissiveDistance, v -> raysEmissiveDistance = v, 8, 64);
         bool("rays_gi", () -> raysGi, v -> raysGi = v);
-        integer("rays_gi_quality", () -> raysGiQuality, v -> raysGiQuality = v, 1, 8);
         integer("rays_gi_distance", () -> raysGiDistance, v -> raysGiDistance = v, DISTANCE_MIN, 256);
         bool("rays_accumulate", () -> raysAccumulate, v -> raysAccumulate = v);
         bool("rays_restir_temporal", () -> raysRestirTemporal, v -> raysRestirTemporal = v);
@@ -436,20 +428,16 @@ public final class RtSettings {
     public static boolean cullSharedGlass() { return b("rays_cull_shared_glass"); }
     public static boolean transparencyStats() { return b("rays_transparency_stats"); }
     public static boolean softShadows() { return b("rays_soft_shadows"); }
-    public static int shadowQuality() { return i("rays_shadow_quality"); }
     public static boolean pixelShadows() { return b("rays_pixel_shadows"); }
     public static int pixelShadowSize() { return i("rays_pixel_shadow_size"); }
     public static boolean reflections() { return b("rays_reflections"); }
-    public static int reflectionQuality() { return i("rays_reflection_quality"); }
     public static int reflectionDistance() { return i("rays_reflection_distance"); }
     public static boolean ao() { return b("rays_ao"); }
-    public static int aoQuality() { return i("rays_ao_quality"); }
     public static int aoRadius() { return i("rays_ao_radius"); }
     public static boolean emissive() { return b("rays_emissive"); }
     public static int emissiveQuality() { return i("rays_emissive_quality"); }
     public static int emissiveDistance() { return i("rays_emissive_distance"); }
     public static boolean gi() { return b("rays_gi"); }
-    public static int giQuality() { return i("rays_gi_quality"); }
     public static int giDistance() { return i("rays_gi_distance"); }
     public static boolean raysAccumulation() { return b("rays_accumulate"); }
     /**
@@ -676,21 +664,17 @@ public final class RtSettings {
         // common base (LOW): sun/moon as a disk (soft shadows), accumulation smooths the single shadow ray
         raysShadows = true;
         raysSoftShadows = true;
-        raysShadowQuality = 1;
         raysPixelShadows = false;
         raysPixelShadowSize = 1;
         raysReflections = false;
-        raysReflectionQuality = 1;
         raysReflectionDistance = 64;
         // rays = fast RT: sun shadows, contact AO (one short cosine ray per pixel, accumulated) and local-light shadows
         raysAo = true;
-        raysAoQuality = 1;
         raysAoRadius = 3;
         raysEmissive = true;
         raysEmissiveQuality = 1;
         raysEmissiveDistance = 24;
         raysGi = false;
-        raysGiQuality = 1;
         raysGiDistance = 48;
         raysAccumulate = true;
         volumetricFogEnabled = true;
@@ -705,44 +689,33 @@ public final class RtSettings {
             case MEDIUM -> {
                 waterStyle = WATER_STYLE_REALISTIC;
                 raysSoftShadows = true;
-                raysShadowQuality = 2;
                 raysReflections = true;
                 raysAo = true;
-                raysAoQuality = 2;
                 raysEmissiveDistance = 32;
                 // one traced bounce: the cheapest light leak that removes the flat "ambient only" look indoors
                 raysGi = true;
-                raysGiQuality = 1;
                 raysGiDistance = 48;
             }
             case HIGH -> {
                 waterStyle = WATER_STYLE_REALISTIC;
                 raysSoftShadows = true;
-                raysShadowQuality = 2;
                 raysReflections = true;
-                raysReflectionQuality = 2;
                 raysReflectionDistance = 128;
                 raysAo = true;
-                raysAoQuality = 4;
                 raysEmissiveQuality = 2;
                 raysEmissiveDistance = 32;
                 raysGi = true;
-                raysGiQuality = 1;
                 raysGiDistance = 64;
             }
             case ULTRA -> {
                 waterStyle = WATER_STYLE_REALISTIC;
                 raysSoftShadows = true;
-                raysShadowQuality = 4;
                 raysReflections = true;
-                raysReflectionQuality = 4;
                 raysReflectionDistance = 256;
                 raysAo = true;
-                raysAoQuality = 8;
                 raysEmissiveQuality = 4;
                 raysEmissiveDistance = 48;
                 raysGi = true;
-                raysGiQuality = 2;
                 raysGiDistance = 128;
             }
             default -> {

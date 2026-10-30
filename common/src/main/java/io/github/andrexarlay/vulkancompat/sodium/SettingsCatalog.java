@@ -460,15 +460,11 @@ public final class SettingsCatalog {
             "Needs ray tracing on; it applies to Path Tracing and to Ray Tracing (Fast).",
             "A look option with no preview screenshot yet.");
         for (String[] e : new String[][] {
-            {"rays_shadow_quality", "RT Shadow Rays", "Shadow rays per pixel."},
             {"rays_pixel_shadow_size", "RT Pixel Shadow Size", "Size of a pixelated shadow in texture pixels (1 = one pixel of a 16x16 block texture); larger means chunkier edges. Only used when RT Pixel Shadows is on."},
-            {"rays_reflection_quality", "RT Reflection Rays", "Reflection rays per pixel."},
             {"rays_reflection_distance", "RT Reflection Distance", "Longest reflection ray in blocks."},
-            {"rays_ao_quality", "RT AO Rays", "Occlusion rays per pixel."},
             {"rays_ao_radius", "RT AO Radius", "Occluders farther than this do not darken."},
             {"rays_emissive_quality", "RT Block Light Samples", "Light samples per pixel."},
             {"rays_emissive_distance", "RT Block Light Distance", "Glowing blocks farther than this do not light a surface."},
-            {"rays_gi_quality", "RT GI Rays", "Bounce rays per pixel."},
             {"rays_gi_distance", "RT GI Distance", "Longest bounce ray in blocks."}}) {
             putNoImage(e[0], Tier.EXPERT, e[1], e[2], "",
                 e[0].equals("rays_pixel_shadow_size")

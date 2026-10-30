@@ -78,14 +78,6 @@ public final class RtModesDebug {
         return v ? "on" : "off";
     }
 
-    static String reflectionSettings() {
-        return reflectionSettings(RtSettings.reflections(), RtSettings.reflectionQuality(), RtSettings.reflectionDistance());
-    }
-
-    static String reflectionSettings(boolean enabled, int quality, int distance) {
-        return enabled ? String.format(Locale.ROOT, " q%d d%d", quality, distance) : "";
-    }
-
     static String denoiserStatusLine(RtSettings.PathDenoiser requested, io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode selected,
                                     String runtime, String resolutionReason, String runtimeFailure) {
         StringBuilder line = new StringBuilder("requested=").append(requested.name().toLowerCase(Locale.ROOT))

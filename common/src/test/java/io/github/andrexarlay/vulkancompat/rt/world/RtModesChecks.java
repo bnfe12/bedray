@@ -42,17 +42,20 @@ final class RtModesChecks {
 
     private static void resetLevels() {
         RtSettings.applyPreset(RtSettings.Preset.HIGH);
-        RtSettings.raysAoQuality = 7;
+        RtSettings.raysEmissiveDistance = 7;
         RtSettings.raysAo = false;
         RtSettings.preset = RtSettings.Preset.HIGH;
         RtSettings.resetLevel(RtSettings.Level.EXPERT);
-        check(RtSettings.raysAoQuality == 4 && !RtSettings.raysAo, "expert reset: numbers from HIGH, switches kept");
+        check(RtSettings.raysEmissiveDistance == 32 && !RtSettings.raysAo,
+            "expert reset: numbers from HIGH, switches kept");
         RtSettings.preset = RtSettings.Preset.HIGH;
-        RtSettings.raysAoQuality = 7;
+        RtSettings.raysEmissiveDistance = 7;
         RtSettings.resetLevel(RtSettings.Level.ADVANCED);
-        check(RtSettings.raysAo && RtSettings.raysAoQuality == 7, "advanced reset: switches from HIGH, numbers kept");
+        check(RtSettings.raysAo && RtSettings.raysEmissiveDistance == 7,
+            "advanced reset: switches from HIGH, numbers kept");
         RtSettings.resetLevel(RtSettings.Level.ALL);
-        check(RtSettings.raysAoQuality == 2 && RtSettings.preset == RtSettings.Preset.MEDIUM, "all: Custom -> MEDIUM values");
+        check(RtSettings.raysEmissiveDistance == 32 && RtSettings.preset == RtSettings.Preset.MEDIUM,
+            "all: Custom -> MEDIUM values");
         RtSettings.applyPathPreset(RtSettings.PathPreset.FAST);
         check(RtSettings.pathPreset == RtSettings.PathPreset.FAST && RtSettings.pathBounces == 2 && RtSettings.pathSpp == 1
             && RtSettings.pathDistance == 128 && !RtSettings.caustics && RtSettings.autoExposure(), "path preset FAST values");

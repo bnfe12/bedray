@@ -264,7 +264,6 @@ public class RtShadingFixesTest {
     private static void runRtPresetChecks() {
         RtSettings.Preset savedPreset = RtSettings.preset;
         boolean savedGi = RtSettings.raysGi;
-        int savedQuality = RtSettings.raysGiQuality;
         int savedDistance = RtSettings.raysGiDistance;
         boolean savedReflections = RtSettings.raysReflections;
         try {
@@ -272,7 +271,6 @@ public class RtShadingFixesTest {
             assertFalse(RtSettings.gi(), "LOW stays a shadow/contact/emissive preset without a GI bounce");
             RtSettings.applyPreset(RtSettings.Preset.MEDIUM);
             assertTrue(RtSettings.gi(), "MEDIUM traces one GI bounce instead of flat ambient-only interiors");
-            assertEquals(1, RtSettings.giQuality(), "MEDIUM uses one GI ray");
             assertEquals(48, RtSettings.giDistance(), "MEDIUM keeps the cheap GI reach");
             assertTrue(RtSettings.reflections(), "MEDIUM keeps reflections");
             RtSettings.applyPreset(RtSettings.Preset.HIGH);
@@ -280,10 +278,9 @@ public class RtShadingFixesTest {
             assertEquals(64, RtSettings.giDistance(), "HIGH reaches farther than MEDIUM");
             RtSettings.applyPreset(RtSettings.Preset.ULTRA);
             assertTrue(RtSettings.gi(), "ULTRA keeps GI");
-            assertTrue(RtSettings.giQuality() >= 2, "ULTRA traces more than one GI ray");
+            assertTrue(RtSettings.giDistance() > 64, "ULTRA reaches farther than HIGH");
         } finally {
             RtSettings.raysGi = savedGi;
-            RtSettings.raysGiQuality = savedQuality;
             RtSettings.raysGiDistance = savedDistance;
             RtSettings.raysReflections = savedReflections;
             RtSettings.preset = savedPreset;

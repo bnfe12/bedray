@@ -4,6 +4,45 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — The dead ray-count sliders are deleted (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+The ray profile traces one sample per pixel per frame, so the four per-effect
+sample-count sliders counted nothing and moved no pixel. They are gone rather
+than wired to a second meaning:
+
+- `RtSettings` loses `raysShadowQuality`, `raysReflectionQuality`,
+  `raysAoQuality`, `raysGiQuality`: the fields, the `integer(...)` registry
+  entries, the getters (`shadowQuality()`, …) and every `applyPreset`
+  assignment. `resetLevel` and the UI profile gating iterate the registries, so
+  they picked the removal up without edits.
+- The Expert page built a row per slider in `VulkanSodiumConfig`; it now builds
+  five (reflection distance, AO radius, emissive sample count, emissive
+  distance, GI distance), and `SettingsCatalog`'s labels and owned-row checks
+  follow. The ray mode's remaining sample count is the block-light one.
+- Autotest: `RtModesScenario`'s `q` modifier now sets `raysEmissiveQuality`;
+  six scenarios drop their post-`LOW` `raysShadowQuality = 2` line.
+  `RtModesChecks.resetLevels` exercises `raysEmissiveDistance`, and
+  `RtShadingFixesTest` replaces the ULTRA quality assertion with "ULTRA's GI
+  distance reaches farther than HIGH's".
+- Old configs: `applyKeyValue` returns false for a key in neither registry and
+  the callers ignore the result, so a `bedray.toml` that still lists the four
+  keys loads silently and the next save writes them out. The sample
+  `common/config/bedray.toml` no longer lists them; `docs/SETTINGS_AUDIT.md`
+  records the removal with the reason.
+- `RtModesDebug.reflectionSettings()` had no consumer left once the slider was
+  gone, so it and its test are deleted.
+
+Tests: **834 tests, 148 classes, 0 failures, 0 errors, 6 skipped**, `BUILD
+SUCCESSFUL` (`:common:test --rerun-tasks`). One test fewer than the previous
+batch: `reflectionSettingsShowConfiguredCostControlsOnlyWhenEnabled` tested the
+deleted formatter.
+
+Open: `rays_pixel_shadows` / `rays_pixel_shadow_size` still only select a stats
+pixel and reach no renderer; they are the last stats-only rows and belong to
+their own pass. No owner-verified frame yet.
+
 ## 2026-10-30 — The ray profile reads its own effect switches (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.
