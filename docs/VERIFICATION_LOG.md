@@ -3056,3 +3056,64 @@ Targeted evidence after the fix: `74 tests, 0 failures` for `RtSlang*`,
 `RtRestirSettingsTest` and `SlangPassLibraryTest`, `BUILD SUCCESSFUL`. This is
 L2 (Java source scans, no GPU, no game). It does not change the L1 shader
 compile evidence or prove runtime behaviour.
+
+## 2026-10-30 — Hot-loop and layout guards for the typed path (L1 + L2, no GPU)
+
+Branch: `refactor/slang-pipeline`, commit `7d33541`.
+
+Closes the last open holes left by the GLSL guard deletions (#81): the
+primary-path hot-loop invariants and the std430 layouts that still have a
+Slang consumer.
+
+Runtime change (one, value-preserving): `surface/surface.slang` decodes with
+the legacy `wantNormal` switch again. Both walks of `surface/visibility.slang`
+and `pathtrace/path_tracer.slang`'s `primaryWaterMedium` pass `false`, so a
+shadow or probe walk no longer pays for the atlas normal, the AO texel, the
+entity auto-normal or the water wave normal. Every value those walks read
+(material, geometric normal, tint) is produced on both paths, and a 5-arg
+overload keeps the shaded callers byte-for-byte unchanged.
+
+New guards, all mutation-proved (each mutation caught by the named test,
+each file restored and verified by SHA-256):
+
+- `RtSlangHotLoopTest` (7): one `decodeSurface` per accepted hit, one
+  `SurfaceSample` local, emission added once, the primary guide record filled
+  at the first accepted surface, `environment.radiance` only in the miss
+  branch, an ambient-only bounce `break`ing at geometry, two key-light draws
+  (reservoir and plain branches), the reservoir reset by
+  `emitters.fingerprint()`, and the `wantNormal` gate structure.
+- `RtSlangBlockLightReachTest` (7): `d^-1.5` → `0.84090 * d^-1.25` seam at
+  two blocks, the 24-block squared window, the rsqrt form with no `pow`, the
+  candidate gate before both atlas fetches, the hoisted
+  `lightRadius = min(maxDistance, EMITTER_RADIUS)` in both batch entries, and
+  the sqrt-ladder index PMF.
+- `RtSlangLayoutAbiTest` (8): std430 parse of `FrameConstants` (608 B, every
+  section offset), `PathTracePush` (112 B, 16 members, offsets 48/64/76/80/96),
+  `DIReservoir` (64 B), `BlockEmitterRecord` (96 B = 24 floats),
+  `FrameStatsPush` (8 B), the four counter words against the host's 16 B, and
+  the legacy 128-byte push against `RtFrameParams`. The same-size
+  `diState`/`entityState` swap is caught by `gradle/slang.gradle`'s build pin
+  and, with that task skipped, by the unit test. `RtStatsLayoutTest` has no
+  field successor on purpose: the AOT manifests prove `frame_stats.slang`
+  binds one 4-byte `uint` per counter, and no pass imports the legacy
+  `FrameStats`/`PushConstants` declarations (importers are
+  `backend_query.slang` and `bedray_legacy.slang`, neither naming them), so
+  the slot tail is host-only scratch.
+
+The `wantNormal` restructuring moved the water call four columns right, so
+`RtSlangWaterMediumTest.thePlayerSwitchesReachTheFrameWord` now matches the new
+indentation; no assertion changed meaning. `RtStatsLayout`'s javadoc no longer
+claims a full-struct mirror.
+
+Evidence:
+
+- L1: `:common:compileSlang` compiled all 27 passes with `slangc` 2026.20,
+  `BUILD SUCCESSFUL`.
+- L2: full `:common:test`, `910 tests, 0 failures, 0 errors, 6 skipped`
+  (XML totals), `BUILD SUCCESSFUL` in 23 s.
+- Nine mutation probes, all caught: entity gate, atlas gate, shaded overload,
+  one visibility walk, `EMITTER_RADIUS`, sky branch, fingerprint, and the push
+  reorder (build pin + unit test).
+
+Still missing: an owner-verified frame. No jar from this commit has been
+played yet; shader compiles and unit tests are not a runtime check.
