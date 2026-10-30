@@ -1269,14 +1269,54 @@ is supposed to protect or removed.  The first group is closed:
   skip, verdict, albedo count, entry range, host flag, host switch, path
   range, contract default, bit collision, clear) were each caught, and every
   mutated file was restored by sha256.
+* the glass cost the deleted `RtGlassCostTest` measured is now a policy of the
+  typed walk. `surface/visibility.slang` spends one closest-hit query per
+  layer, so the transmittance floor (`SURFACE_VISIBILITY_MIN_TRANSMITTANCE`,
+  1e-3) ends an absorbed ray before the next pane, and every filtered layer and
+  every hole advances past its own candidate through `skipSurfaceCandidate`
+  (`ray.tMin = hitDistance + bias`; the origin stays, so `hit.t` is still
+  measured from the original ray). The medium walk applies
+  `waterSegmentTransmittance` to the column first and the interface's
+  `1 - Fsc` Fresnel share second, because a fluid face tints once and the
+  colour is the distance absorption. `RtSlangGlassCostTest` (5) reads the two
+  constants out of the shader as the model's own inputs, proves five 25 %
+  panes trip the floor before the 16-layer budget while a clean window fills
+  it, and pins the four floor-to-skip adjacencies, the six advances, the
+  hole's advance-without-filter and the fluid share against
+  `surface/visibility.slang` and `surface/surface.slang`.
+* the NaN guards the deleted `RtShaderNaNGuardTest` pinned are structural in
+  the typed modules. `safeNormalize` gates the squared length on
+  `MATH_EPSILON` (1e-6), both GGX half vectors are
+  `safeNormalize(V + L, N)`, the block emitter rejects a zero density and a
+  zero cosine before its divisions and keeps the `max(cosReceiver, 1e-4)` and
+  `0.001` shadow-length floors, the sun rejects a zero source PDF after the
+  divide, the tangent frame needs its det gate *and* guarded numerators (a
+  collinear edge zeroes one while the UVs stay distinct), and the primary
+  normal is replaced below 1e-4 at both entry points; no shading or NEE module
+  carries a bare `normalize(`, and the entry's three are the explicit camera
+  basis plus the two gated lines. The camera ray builder has no homogeneous
+  divide at all (explicit basis, no matrix multiply, no division) - stronger
+  than the deleted `safeW` guard - and both velocity modules sanitise a
+  non-finite reprojection to zero motion plus a full disocclusion, which is why
+  the live-parity module keeps the bare `w` divide its GLSL source had.
+  `RtSlangNaNGuardTest` (9) mirrors the helpers numerically and the call sites
+  structurally, read out of `contracts/math.slang`, `shading/bsdf.slang`,
+  `shading/microfacet.slang`, `light/block_emitters.slang`, `light/sun.slang`,
+  `pathtrace/path_trace_entry.slang`, the two velocity modules and the
+  velocity pass. Thirty-one mutation probes (floor branch, floor order, floor
+  value, layer budget, hole skip/break/filter, skip origin, medium filter,
+  fluid and non-fluid share, gate value and comparison, both half vectors,
+  emitter direction/cosine/floor/bias, sun axis and PDF order, tangent det and
+  numerator, both entry gates, a new bare normalize, the camera divide and the
+  camera matrix, both velocity sanitises, the pass clip-w gate) were each
+  caught, and every shader was restored by sha256.
 
 The second group has no Slang counterpart yet, and each entry is an open hole,
 not a passing test:
 
 * the `StatsBuf` std430 layout of the Slang structs, beyond the two
   self-avatar slots. (`RtStatsLayoutTest`)
-* glass cost, the NEE NaN guard and the primary-path hot-loop invariants.
-  (`RtGlassCostTest`, `RtShaderNaNGuardTest`, `RtPathHotLoopTest`,
+* the primary-path hot-loop invariants. (`RtPathHotLoopTest`,
   `RtOptimizationTest`, `RtBlockLightReachTest`)
 
 The third group tested the deleted classes themselves (runtime compiler

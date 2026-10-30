@@ -4,6 +4,48 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — Glass cost and NaN guards return as typed tests (L0 source, L1 build, L2 unit; no runtime change)
+
+Branch: `refactor/slang-pipeline`.
+
+Two of the tests the GLSL deletion invalidated compared the port against GLSL text, so they were removed rather than re-aimed. Their coverage is back, read out of the Slang sources that own the behaviour; no shader changed in this batch, so the deployed jar and natives are untouched.
+
+- `RtSlangGlassCostTest` (5) pins the cost of the typed visibility walk: the
+  1e-3 transmittance floor ends an absorbed ray before the next pane, each of
+  the four floor branches closes into its own `skipSurfaceCandidate` advance
+  (`ray.tMin = hitDistance + bias`, the origin stays), the six advances, the
+  hole's advance without a filter, and the medium walk's order - the water
+  column's `waterSegmentTransmittance` first, the fluid interface's
+  `1 - Fsc` Fresnel share second, so water is tinted once. The numeric half
+  reads `SURFACE_VISIBILITY_MAX_LAYERS` (16) and
+  `SURFACE_VISIBILITY_MIN_TRANSMITTANCE` (1e-3) out of the shader and shows
+  five 25 % panes end the ray while a clean window fills the budget.
+- `RtSlangNaNGuardTest` (9) re-establishes the deleted `RtShaderNaNGuardTest`:
+  `safeNormalize`'s squared-length gate, both GGX half vectors, the block
+  emitter's density/cosine rejections and its weight and shadow-length floors,
+  the sun's axis fallbacks and post-divide PDF rejection, the tangent frame's
+  det gate plus guarded numerators (with the collinear-UV numeric case), both
+  primary-normal gates, and a tree-wide count of bare `normalize(` calls.
+- The deleted test's `safeW` camera-ray guard has no typed counterpart to fix:
+  `pathTracePrimaryRay` builds the ray from the explicit camera basis - no
+  matrix multiply, no division - which is stronger than guarding the divisor,
+  and the two velocity modules sanitise a non-finite reprojection to zero
+  motion plus full disocclusion, so the live-parity module keeps the bare `w`
+  divide its GLSL source had. Both facts are pinned instead of rewriting
+  live-parity arithmetic.
+
+Thirty-one mutation probes (floor branch/order/value, layer budget, hole
+skip/break/filter, skip origin, medium filter, fluid and non-fluid share, gate
+value and comparison, both half vectors, emitter direction/cosine/floor/bias,
+sun axis and PDF order, tangent det and numerator, both entry gates, a new bare
+normalize, the camera divide and a camera matrix, both velocity sanitises, the
+pass clip-w gate) were each caught, and every shader was restored by sha256.
+
+Full `:common:test --rerun-tasks`: 154 classes, 888 tests, 0 failures, 6
+skipped, `BUILD SUCCESSFUL`. No shader, Java main source or native source
+changed, so there is no new distribution to deploy: the instance jars stay at
+`5f52f205295d0d4e…`.
+
 ## 2026-10-30 — Distant block light hands back to the baked field (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.
