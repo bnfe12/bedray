@@ -324,6 +324,17 @@ public final class SettingsCatalog {
             "Path Tracing with ReSTIR Direct Light on, and only where glowing blocks are traced. The pass is optional: a "
                 + "build without its compiled kernel runs temporal reuse alone and says so in the log.",
             "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_restir_pt", Tier.ADVANCED, "ReSTIR Path Reuse (experimental)",
+            "Keeps the indirect light a pixel's first bounce brought back - light bounced off a nearby diffuse wall or floor - "
+                + "in a per-pixel path record and reuses it in the next frames, so bounced light settles faster while you move. "
+                + "Only rough, non-glowing surfaces seen through a diffuse bounce are reused; sky, glass, metal, water and "
+                + "glowing blocks keep the per-frame path. With an empty history the picture is exactly the one without it.",
+            "FPS: low to medium (one extra visibility ray per pixel for a reused path) and about 0.6 GB of video memory at "
+                + "1080p (two 144-byte records per pixel), allocated only while the switch is on.",
+            "Path Tracing only, with ReSTIR Direct Light on, on the default (Java-recorded) backend. The native backend "
+                + "(-Dvkbridge.rt.nativePathTrace=true) has no path reservoir and ignores the switch.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames. Not yet confirmed "
+                + "in a live game frame.");
         putNoImage("adaptive_quality", Tier.ADVANCED, "Adaptive Quality",
             "Keeps Path Tracing inside a GPU frame budget: when the measured time of the traced rays and the denoiser is over it, rays per pixel drop first and then bounces, "
                 + "below the values you chose; when the frame has room again they come back. It never goes above your values. Off by default - turn it on if you want a steadier "

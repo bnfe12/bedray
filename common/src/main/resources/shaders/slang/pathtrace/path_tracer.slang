@@ -93,6 +93,79 @@ static const uint PATH_TRACE_PIXEL_SHADOW_SIZE_SHIFT    = 8u;
 // the emitter branch instead of paying an NEE batch whose every candidate is rejected.  A frame with the switch off
 // keeps no baked field either, so the deleted renderer's "emissive lighting off" A/B stays exactly that.
 static const uint PATH_TRACE_OPTION_BLOCK_EMITTERS      = 1u << 16u;
+// ReSTIR PT (restir/pt_temporal.slang): record where this path's diffuse continuation of the primary vertex first
+// scattered, so the entry can hand that suffix to the pixel's path reservoir.  Bit 17 is the first free bit (8..15 carry
+// the pixel-shadow cell, 16 the block emitters).  The tracer only records; it never reads or writes a reservoir, and a
+// host that leaves the bit clear traces exactly what it traced before.
+static const uint PATH_TRACE_OPTION_RESTIR_PT        = 1u << 17u;
+
+// PathPtRecord.status.  NONE: the bit was clear or the primary receiver is not one the reservoir may own (sky pixel, water,
+// an RC field continuation, an optical interface, a ray profile without a full diffuse bounce) - the pixel publishes an
+// empty record and the reservoir adds nothing.  ATTEMPT: an eligible receiver drew one sample that never reached a first
+// scattered vertex (specular lobe, no lobe, truncation, firefly, depth limit) - still one draw from the first-edge
+// density, so it counts in M with no contribution.  VERTEX: the continuation reached its first vertex or escaped.
+static const uint PATH_PT_RECORD_NONE    = 0u;
+static const uint PATH_PT_RECORD_ATTEMPT = 1u;
+static const uint PATH_PT_RECORD_VERTEX  = 2u;
+// PathPtRecord.vertexFlags.  The stage maps them onto RESTIR_PT_PATH_FLAG_*; the tracer keeps its own namespace so it
+// never imports the reservoir module.
+static const uint PATH_PT_VERTEX_ENVIRONMENT = 1u << 0u;   // the continuation escaped: no vertex, a sky lookup
+static const uint PATH_PT_VERTEX_EMISSIVE    = 1u << 1u;   // the first vertex emits (decoded material, not a hit hint)
+static const uint PATH_PT_VERTEX_CERTIFIED   = 1u << 2u;   // the first vertex carries the diffuse certificate
+
+// The first edge of one path, as the reservoir needs it.  Positions are camera-relative like every hit.
+struct PathPtRecord {
+    uint   status;               // PATH_PT_RECORD_*
+    float3 anchorPosition;       // the primary vertex
+    float3 anchorNormal;         // its view-facing shading normal
+    float3 diffuseReflectance;   // pi * f_d at the anchor for this view: bsdfDiffuseReflectanceAt
+    float3 direction;            // the diffuse continuation (anchor -> first vertex)
+    float  sourcePdf;            // its solid-angle density, the lobe probability included
+    float3 continuationWeight;   // the throughput the continuation left with (bsdf.weight at the primary)
+    float3 radianceBefore;       // result.radiance when it left
+    float3 vertexPosition;
+    float3 vertexNormal;         // view-facing (towards the anchor)
+    float  reversePdf;           // the first vertex's density of sampling the edge back to the anchor
+    uint   vertexFlags;          // PATH_PT_VERTEX_*
+    float3 suffixContribution;   // what the path gathered after the continuation left: the term the stage takes out
+    float3 suffix;               // the same divided by continuationWeight: radiance arriving at the anchor
+};
+
+PathPtRecord emptyPathPtRecord() {
+    PathPtRecord record;
+    record.status = PATH_PT_RECORD_NONE;
+    record.anchorPosition = float3(0.0);
+    record.anchorNormal = float3(0.0, 1.0, 0.0);
+    record.diffuseReflectance = float3(0.0);
+    record.direction = float3(0.0, 1.0, 0.0);
+    record.sourcePdf = 0.0;
+    record.continuationWeight = float3(0.0);
+    record.radianceBefore = float3(0.0);
+    record.vertexPosition = float3(0.0);
+    record.vertexNormal = float3(0.0, 1.0, 0.0);
+    record.reversePdf = 0.0;
+    record.vertexFlags = 0u;
+    record.suffixContribution = float3(0.0);
+    record.suffix = float3(0.0);
+    return record;
+}
+
+// The emitter decision of a first vertex, made on the decoded material - the twin of ptTerminalEmits in
+// experimental/restir_pt.slang.  HIT_FLAG_EMISSIVE is a backend hint the hardware traversal never sets.
+bool ptTerminalEmitsMaterial(MaterialSample material) {
+    return material.emission.r > 0.0 || material.emission.g > 0.0 || material.emission.b > 0.0;
+}
+
+// The diffuse-first certificate (RESTIR_PT_PATH_FLAG_DIFFUSE_FIRST): an opaque, non-fluid, non-foliage, non-metal surface
+// rough enough to be read as Lambertian.  The BSDF still has a GGX lobe at roughness >= 0.6, so treating that share as
+// direction-independent is a documented approximation (docs/RESTIR_GI_DERIVATION.md, "Live temporal stage"), not a
+// claim; the threshold is the denoiser's specular-guide rule, so one notion of "glossy" governs both.  Foliage is out
+// because its back-lit NEE term depends on the side the light arrives from.
+bool pathPtCertifiedDiffuse(MaterialSample material) {
+    return material.alphaMode == AlphaMode.Opaque
+        && (material.sourceFlags & (MATERIAL_SOURCE_FLUID | MATERIAL_SOURCE_FOLIAGE)) == 0u
+        && material.metallic <= 0.5 && material.roughness >= 0.6;
+}
 
 struct PathTraceOptions {
     uint  maxDepth;             // scattering events before the path stops
@@ -171,6 +244,7 @@ struct PathTraceResult {
     float4 primaryMotion;       // xyz: where the primary surface stood one frame ago minus where it is now, in
                                 // world blocks; w: 1 when that surface is a captured model rather than terrain
     PathPrimaryGuide primary;   // guide channels, filled only when the primary ray hit a decodable surface
+    PathPtRecord pt;            // ReSTIR PT first edge, recorded only under PATH_TRACE_OPTION_RESTIR_PT
     uint   depth;
     uint   surfaceHits;
     uint   flags;
@@ -190,6 +264,7 @@ PathTraceResult emptyPathTraceResult() {
     result.primary.roughness = 1.0;
     result.primary.metallic = 0.0;
     result.primary.valid = false;
+    result.pt = emptyPathPtRecord();
     result.depth = 0u;
     result.surfaceHits = 0u;
     result.flags = 0u;
@@ -481,6 +556,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // of the primary ray only, so a later hit is measured from the camera.
     float primaryAdvance = 0.0;
     uint step = 0u;
+    // The diffuse continuation of the primary vertex is in flight and its first vertex is not recorded yet.
+    bool ptArmed = false;
 
     // The water body the current ray runs in and the ray coordinate where its
     // current segment began.  A hole advance moves the origin, so the same
@@ -537,6 +614,15 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 float3 tailMidpoint = ray.origin + ray.direction * (mediumStart + tail * 0.5);
                 result.radiance += throughput * waterInScatter(medium, tailMidpoint.y, waterDown, tail);
                 throughput *= waterSegmentTransmittance(medium, tail);
+            }
+            if (ptArmed) {
+                // An escaped continuation has no vertex: the sky lookup is direction-dependent radiance, which the path
+                // keeps (the stage never takes an ENVIRONMENT first edge into the reservoir).
+                ptArmed = false;
+                result.pt.status = PATH_PT_RECORD_VERTEX;
+                result.pt.vertexPosition = ray.origin + ray.direction * ray.tMax;
+                result.pt.vertexNormal = -ray.direction;
+                result.pt.vertexFlags = PATH_PT_VERTEX_ENVIRONMENT;
             }
             result.radiance += throughput * environment.radiance(ray.direction);
             result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;
@@ -615,6 +701,19 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         float3 normal = surface.shadingNormal;
         float3 view = -ray.direction;
         if (dot(normal, view) < 0.0) normal = -normal;
+
+        if (ptArmed) {
+            // The first scattered vertex of the primary diffuse continuation.  `view` points back along the edge to the
+            // anchor, so bsdfPdf(material, view, normal, view) is this vertex's density of sampling that edge in reverse
+            // - the module's `bsdfPdf` field.  (L = +direction faces into the surface and would always read 0.)
+            ptArmed = false;
+            result.pt.status = PATH_PT_RECORD_VERTEX;
+            result.pt.vertexPosition = hit.position;
+            result.pt.vertexNormal = normal;
+            result.pt.reversePdf = bsdfPdf(surface.material, view, normal, view);
+            result.pt.vertexFlags = (ptTerminalEmitsMaterial(surface.material) ? PATH_PT_VERTEX_EMISSIVE : 0u)
+                | (pathPtCertifiedDiffuse(surface.material) ? PATH_PT_VERTEX_CERTIFIED : 0u);
+        }
 
         // The face of a glowing block is seen as its own emission, and the light it casts on other surfaces comes from
         // NEE; a sampler that reads the emitter list rejects the receiver's own quad through LightReceiver.emission.
@@ -723,6 +822,23 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.primary.direct = direct;
         }
         result.radiance += throughput * direct;
+
+        // ReSTIR PT owns the diffuse continuation of an eligible primary vertex.  Eligibility is a property of the receiver,
+        // decided before the lobe is drawn: whatever this sample then does, it is one attempt of that receiver's reservoir.
+        // A receiver the reservoir must never add to - in water (the first edge is attenuated by the medium), an RC field
+        // continuation, an optical interface (its sampler has no diffuse branch), a ray profile without a full diffuse
+        // bounce - stays NONE and keeps every term in the path.
+        if (receiver.primary && (options.flags & PATH_TRACE_OPTION_RESTIR_PT) != 0u && !medium.inside
+                && !field.active() && surface.material.alphaMode != AlphaMode.Optical
+                && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u
+                && (options.flags & (PATH_TRACE_OPTION_NO_DIFFUSE_BOUNCE | PATH_TRACE_OPTION_AMBIENT_ONLY_BOUNCE)) == 0u) {
+            result.pt.status = PATH_PT_RECORD_ATTEMPT;
+            result.pt.anchorPosition = hit.position;
+            result.pt.anchorNormal = normal;
+            // The same N.V floor bsdfSample uses, so the resolved f_d and the sampler's diffuse weight are one value.
+            result.pt.diffuseReflectance = bsdfDiffuseReflectanceAt(surface.material,
+                max(dot(normal, view), 1.0e-4));
+        }
 
         // ---- BSDF sampling ----
         // The lobe refracts from the medium this ray travels in, not from air:
@@ -847,6 +963,15 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         float3 bounceNormal = safeNormalize(surface.hit.geometricNormal, normal);
         float3 origin = hit.position
             + bounceNormal * (dot(bsdf.direction, bounceNormal) >= 0.0 ? options.rayBias : -options.rayBias);
+        if (result.pt.status == PATH_PT_RECORD_ATTEMPT && result.surfaceHits == 1u
+                && bsdf.lobe == BSDF_LOBE_DIFFUSE && !continuationAmbientOnly && !medium.inside) {
+            // The continuation the reservoir may own leaves now.  Everything the path adds from here on is its suffix.
+            ptArmed = true;
+            result.pt.direction = bsdf.direction;
+            result.pt.sourcePdf = bsdf.pdf;
+            result.pt.continuationWeight = throughput;
+            result.pt.radianceBefore = result.radiance;
+        }
         ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
         ambientOnlyPending = continuationAmbientOnly;
         // The new origin sits one bias off the interaction along the face; the segment starts there (the legacy path
@@ -868,6 +993,17 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     if (!isFinite(result.radiance)) {
         result.radiance = float3(0.0);
         result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+    }
+    if (result.pt.status == PATH_PT_RECORD_VERTEX) {
+        // Taken before the clamp below, so subtracting it removes exactly what the suffix added.  A rejected sample keeps
+        // a zero suffix, and the stage refuses it as a candidate anyway.
+        float3 radianceSuffix = (result.flags & PATH_TRACE_FLAG_INVALID_SAMPLE) != 0u
+            ? float3(0.0) : max(result.radiance - result.pt.radianceBefore, float3(0.0));
+        result.pt.suffixContribution = radianceSuffix;
+        float3 weight = result.pt.continuationWeight;
+        result.pt.suffix = float3(weight.r > 0.0 ? radianceSuffix.r / weight.r : 0.0,
+            weight.g > 0.0 ? radianceSuffix.g / weight.g : 0.0,
+            weight.b > 0.0 ? radianceSuffix.b / weight.b : 0.0);
     }
     result.radiance = clampRadiance(result.radiance, options.maxRadiance);
     return result;

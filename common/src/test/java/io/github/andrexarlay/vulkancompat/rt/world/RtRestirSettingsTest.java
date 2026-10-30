@@ -113,7 +113,8 @@ class RtRestirSettingsTest {
     void aReuseChangeDropsEveryHistoryItInvalidates() {
         String renderer = read(RENDERER);
         assertTrue(renderer.contains("int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)\n"
-                + "            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0);"),
+                + "            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0)\n"
+                + "            | (RtSettings.pathRestirPt() ? 16 : 0);"),
             "every reuse switch in one packed int, so a change of any of them is one comparison");
         assertTrue(renderer.contains("|| curReusePolicy != lastFrameReusePolicy"), "and that comparison gates the reset");
         assertTrue(renderer.contains("private static int lastFrameReusePolicy = -1;"),
@@ -142,6 +143,40 @@ class RtRestirSettingsTest {
         // Spatial reuse merges the records the temporal stage writes, so neither page may offer it alone.
         assertRowNeedsParent(ui, "rays_restir_spatial", "rays_restir_temporal");
         assertRowNeedsParent(ui, "path_restir_spatial", "path_restir_di");
+    }
+
+    /**
+     * ReSTIR PT is the one reuse switch that is off by default: its ring is two 144-byte records per pixel. It still has
+     * to be a real switch - persisted, overridable, read by the controller, shown under its parent and named in both
+     * locales - and the catalog has to name the price and the parent, or the player cannot judge it.
+     */
+    @Test
+    void pathReuseIsARealSwitchThatIsOffByDefault() {
+        String settings = read(SETTINGS);
+        assertTrue(settings.contains("public static boolean pathRestirPt = false;"),
+            "off by default: 597.2 MB at 1080p is not a cost to impose silently");
+        assertTrue(settings.contains("bool(\"path_restir_pt\", () -> pathRestirPt, v -> pathRestirPt = v);"),
+            "registered, so the file and -Dvkrtx.rt.path_restir_pt reach it");
+        assertTrue(settings.contains("public static boolean pathRestirPt() { return b(\"path_restir_pt\"); }"),
+            "the override-aware getter the controller reads");
+        String pass = read(SLANG_PASS);
+        assertTrue(pass.contains("return !rayMode && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();"),
+            "the controller asks only the path profile, only a backend with a ring, only under direct-light reuse");
+        String ui = read(UI);
+        assertTrue(ui.contains("boolOpt(builder, \"path_restir_pt\", false, v -> RtSettings."), "a row, off by default");
+        assertRowNeedsParent(ui, "path_restir_pt", "path_restir_di");
+        String catalog = read(CATALOG);
+        int at = catalog.indexOf("putNoImage(\"path_restir_pt\"");
+        assertTrue(at >= 0, "catalog entry");
+        String entry = catalog.substring(at, catalog.indexOf("putNoImage(", at + 10));
+        assertTrue(entry.contains("0.6 GB") && entry.contains("ReSTIR Direct Light"),
+            "the entry names the video memory and the parent switch");
+        JsonObject en = readJson(EN);
+        JsonObject ru = readJson(RU);
+        for (JsonObject locale : new JsonObject[] {en, ru}) {
+            assertNotNull(locale.get("bedray.opt.path_restir_pt"), "name in both locales");
+            assertNotNull(locale.get("bedray.opt.path_restir_pt.desc"), "description in both locales");
+        }
     }
 
     /**

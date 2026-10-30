@@ -647,6 +647,12 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             () -> RtSettings.pathRestirSpatial,
             s -> pathOn.apply(s) && s.readBooleanOption(pathDiId), rtDependencies(modeId, pathDiId),
             Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Path reuse of the indirect light. Off by default for its video memory, and a child of direct-light reuse: the
+        // reservoir owns the bounced light while DI owns the direct light, and the page offers them in that order.
+        pt.addOption(boolOpt(builder, "path_restir_pt", false, v -> RtSettings.pathRestirPt = v,
+            () -> RtSettings.pathRestirPt,
+            s -> pathOn.apply(s) && s.readBooleanOption(pathDiId), rtDependencies(modeId, pathDiId),
+            Mark.PATH, OptionImpact.HIGH, false, st));
         EnumOptionBuilder<RtSettings.AdaptiveQuality> aq = builder.createEnumOption(id("adaptive_quality"), RtSettings.AdaptiveQuality.class);
         aq.setName(nameOf("adaptive_quality")).setTooltip(v -> tipOf("adaptive_quality")).setDefaultValue(RtSettings.AdaptiveQuality.OFF)
             .setAllowedValues(EnumSet.allOf(RtSettings.AdaptiveQuality.class))

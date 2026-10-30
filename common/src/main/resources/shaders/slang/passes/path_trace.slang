@@ -37,6 +37,8 @@
 //   30 outAlbedo        RGBA8 guide
 //   31 outDirect        RGBA16F guide (the primary vertex's own NEE)
 //   32 outSpecAlbedo    RGBA8 guide (metal albedo or dielectric F0)
+//   33 outMotionBuffer  RWStructuredBuffer<float4> NRD IN_MV (one vec4 per pixel)
+//   36 ptReservoirs     RWStructuredBuffer<RestirPtReservoir> (ReSTIR PT: two parity halves, 144 B per pixel)
 //
 // The six entity buffers are this frame's ring slot, bound at its own offset:
 // the bound length is the triangle count, so a frame with nothing captured binds
@@ -85,6 +87,9 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 // NRD's IN_MV channel: the same per-pixel Vec4 rt_path.comp writes into StatsBuf.motionAddr.  The host binds a
 // one-element stand-in and leaves PATH_TRACE_OPTION_NRD_MOTION clear unless the NRD layout is selected.
 [[vk::binding(33, 0)]] RWStructuredBuffer<float4> outMotionBuffer;
+// ReSTIR PT: two parity halves of one 144-byte RestirPtReservoir per pixel (restir/pt_temporal.slang).  A host without the
+// ring binds a one-record stand-in and leaves PATH_TRACE_OPTION_RESTIR_PT clear; the stage refuses a ring that short.
+[[vk::binding(36, 0)]] RWStructuredBuffer<RestirPtReservoir> ptReservoirs;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -123,5 +128,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.selfAvatarTriCount = pc.entityState.z;
     pathTraceEntry(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
         outDepth, outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer,
-        frame, blockMaterials, emitters, reservoirs, pc);
+        frame, blockMaterials, emitters, reservoirs, ptReservoirs, pc);
 }

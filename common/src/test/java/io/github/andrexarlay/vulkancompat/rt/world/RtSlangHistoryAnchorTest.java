@@ -39,12 +39,12 @@ class RtSlangHistoryAnchorTest {
         "traversal/entity_geometry.slang");
 
     /**
-     * The only things allowed to read it: three documented procedural anchors and one unreachable module. The tracer
-     * reads it to name a world-locked shadow cell and a leaf's own block - a pattern derived from where the surface is,
-     * not an identity - so two surfaces that wrap to the same anchor still shade alike.
+     * The only things allowed to read it: two documented procedural anchors. The tracer reads it to name a world-locked
+     * shadow cell and a leaf's own block - a pattern derived from where the surface is, not an identity - so two surfaces
+     * that wrap to the same anchor still shade alike. ReSTIR PT used to read it as its history key; since the module went
+     * live it keys on the reprojected camera-relative receiver instead and is no longer a reader.
      */
     private static final List<String> READERS = List.of(
-        "experimental/restir_pt.slang",
         "pathtrace/path_tracer.slang",
         "surface/surface.slang");
 
@@ -70,22 +70,23 @@ class RtSlangHistoryAnchorTest {
     }
 
     /**
-     * The one history validation that uses the wrapped anchor lives in a module no root imports, so it cannot reach a
-     * frame. If that import is ever added, this fails before the accumulator does.
+     * The one history validation outside the contract is ReSTIR PT's, and the path passes now import it. Its key is the
+     * receiver reprojected into the camera-relative space of the frame that wrote the record - the DI convention - so
+     * P1-6 stays closed with the module live: if the wrapped anchor ever becomes the key again, this fails before the
+     * reservoir does.
      */
     @Test
-    void theModuleThatKeysHistoryOnTheAnchorIsStillUnreachable() throws IOException {
-        String roots = code(Files.readString(ROOT, StandardCharsets.UTF_8)
-            + Files.readString(LEGACY_ROOT, StandardCharsets.UTF_8));
-        assertTrue(roots.indexOf("restir_pt") < 0,
-            "restir_pt is the only caller that feeds a wrapped anchor to historyValidate, so importing it into a "
-                + "root makes P1-6 live without changing a line of its arithmetic");
-
+    void theLiveHistoryKeyIsTheReprojectedReceiverNotTheAnchor() throws IOException {
         String restir = Files.readString(SHADERS.resolve("experimental/restir_pt.slang"), StandardCharsets.UTF_8);
-        assertTrue(restir.contains("HistoryStatus status = historyValidate(storedReceiver, receiver.worldPosition,"),
-            "the unvalidated key the guard above is scoped to");
+        assertTrue(restir.contains("HistoryStatus status = historyValidate(storedReceiver, receiver.historyPosition,"),
+            "the key is the receiver in the writer frame's camera-relative space");
+        assertTrue(code(restir).indexOf("worldPosition") < 0,
+            "no code in the module may touch the wrapped anchor");
         assertTrue(restir.contains("RESTIR_PT_NOTES.md"),
-            "the module has to keep pointing at the note that explains why this is not an identity");
+            "the module has to keep pointing at the note that explains why the anchor is not an identity");
+        String stage = code(Files.readString(SHADERS.resolve("restir/pt_temporal.slang"), StandardCharsets.UTF_8));
+        assertTrue(stage.contains("receiver.historyPosition = previous;"),
+            "the live stage fills the key from the DI reprojection");
 
         TreeSet<String> callers = new TreeSet<>();
         for (Path path : shaders()) {

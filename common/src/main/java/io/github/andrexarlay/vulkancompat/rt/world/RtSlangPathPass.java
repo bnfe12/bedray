@@ -74,6 +74,15 @@ public final class RtSlangPathPass implements RtPass {
             && (rayMode ? RtSettings.restirSpatial() : RtSettings.pathRestirSpatial());
     }
 
+    /**
+     * ReSTIR PT this frame: the path profile only, a backend that owns a PT ring, and the player's row - which the
+     * settings page offers as a child of ReSTIR Direct Light, so it follows that switch too. Emitters are not required:
+     * the reservoir carries indirect light, which a daylight frame with an empty list has as much as an interior.
+     */
+    boolean ptActive() {
+        return !rayMode && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();
+    }
+
     /** The accumulate switch that belongs to this profile: the ray mode has its own, the path mode its own. */
     private boolean accumulateRequested() {
         return rayMode ? RtSettings.raysAccumulation() : RtSettings.accumulate();
@@ -206,6 +215,8 @@ public final class RtSlangPathPass implements RtPass {
     private long reservoirFingerprint = Long.MIN_VALUE;
     // Backend owns the ring; host tracks only whether its reset request ran DI.
     private final RestirDiState diRequests = new RestirDiState(true);
+    /** One-shot request for the backend to invalidate its ReSTIR PT ring before the next frame reads it. */
+    private boolean ptResetRequested = true;
     private int lastSettingsHash;
     private int lastWidth;
     private int lastHeight;
@@ -283,6 +294,7 @@ public final class RtSlangPathPass implements RtPass {
         return (rayMode ? "ray_slang(" : "path_slang(") + "bounces=" + p.bounces + ",spp=" + p.spp + ",dist=" + p.rayDistance
             + (!rayMode && RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS : "")
             + (accumulateRequested() ? ",accumulate" : "") + ",restir_di=" + restir
+            + ",restir_pt=" + (ptActive() ? backend.pathReuseState() : "off")
             + ",frames=" + (accumFrames + 1) + ",denoiser=" + (requestedGbuffer ? "dlss_rr" : "off") + ")";
     }
 
@@ -291,6 +303,7 @@ public final class RtSlangPathPass implements RtPass {
         backend.prepare(width, height);
         if (lastWidth != width || lastHeight != height) {
             diRequests.layoutFor(width, height);
+            ptResetRequested = true;
             lastWidth = width;
             lastHeight = height;
             historyWritten = false;
@@ -346,6 +359,8 @@ public final class RtSlangPathPass implements RtPass {
         // filling hundreds of MB every frame would cost far more than the reuse saves.
         if (forceReset || settingsHash != lastSettingsHash || params.emitterFingerprint != reservoirFingerprint) {
             diRequests.reset();
+            // A stored path's suffix carries the light of the list it was traced with, so the same rule drops it.
+            ptResetRequested = true;
         }
         reservoirFingerprint = params.emitterFingerprint;
         forceReset = false;
@@ -383,6 +398,7 @@ public final class RtSlangPathPass implements RtPass {
         forceReset = true;
         historyWritten = false;
         diRequests.reset();
+        ptResetRequested = true;
     }
 
     @Override
@@ -426,7 +442,11 @@ public final class RtSlangPathPass implements RtPass {
             | pixelShadowFlags()
             // The distant block-light handover belongs to the emitter feature: a frame that traced no emitters has no
             // list to hand over from, and its receivers keep tracing exactly what they traced before.
-            | (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0);
+            | (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0)
+            // ReSTIR PT: the request and the camera facts. Parity and history belong to the backend that owns the ring.
+            | (ptActive() ? RtPathTraceSlangPass.OPTION_RESTIR_PT
+                | (params.cameraStatic ? RtPathTraceSlangPass.PT_STATIC : 0)
+                | (params.flipY ? RtPathTraceSlangPass.PT_FLIP_Y : 0) : 0);
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
@@ -454,7 +474,8 @@ public final class RtSlangPathPass implements RtPass {
                 ? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_CAUSTICS : 0);
         backend.record(new PathTraceBackend.Frame(cmd, views, frame, dispatch, emitters, capturedEntities,
             new RtPathTraceSlangPass.BufferView(params.statsBuffer, params.statsOffset,
-                RtFrameStatsSlangPass.COUNTER_BYTES), flags, accumFrames));
+                RtFrameStatsSlangPass.COUNTER_BYTES), flags, accumFrames, ptResetRequested));
+        ptResetRequested = false;
         historyWritten = true;
         diRequests.afterDispatch(diFlags != 0);
     }

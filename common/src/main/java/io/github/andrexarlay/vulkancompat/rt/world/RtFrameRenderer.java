@@ -531,7 +531,8 @@ public final class RtFrameRenderer {
         // ReSTIR is a per-technique switch, and every one of them changes what a stored record means: turning reuse on or
         // off, or pooling neighbours on top of it, must not continue an accumulation that was built without it.
         int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)
-            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0);
+            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0)
+            | (RtSettings.pathRestirPt() ? 16 : 0);
 
         boolean presetOrDenoiserChanged = (lastFrameBounces != -1) && (
             curPreset != lastFramePreset

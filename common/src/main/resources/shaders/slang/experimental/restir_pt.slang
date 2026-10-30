@@ -1,4 +1,17 @@
-// Path-space ReSTIR for Bedray 2.0 — reservoir math only.  v4.
+// Path-space ReSTIR for Bedray 2.0 — reservoir math only.  v5.
+//
+// v5 changes (the live temporal stage, restir/pt_temporal.slang):
+//   * an attempt that produced no candidate is still an attempt.  The live
+//     stage owns only certified diffuse first vertices; a specular lobe, a
+//     truncation, a sky/emitter edge or an uncertified vertex enters the
+//     reservoir through ptAddEmptyAttempt (M + 1, no weight).  v4 could prove
+//     the merge reset unreachable because every admitted attempt carried a
+//     weight; with empty attempts that is false, so the reset now fires only
+//     for a corrupt accumulator (ptReservoirIsAccumulator) and an M-only
+//     record survives the history merge.
+//   * history is keyed on RestirPtReceiver.historyPosition — the receiver in
+//     the camera-relative space of the frame that wrote the history — never on
+//     SurfaceHit.worldPosition, which wraps at 1024 blocks (audit P1-6).
 //
 // v4 changes (attempt accounting):
 //   * admission is not reuse.  ptAddPath gated on ptPathReusable, so a sky,
@@ -32,7 +45,7 @@
 //     samples that shared a vertex).
 //
 // v2 changes (alpha 0.2.0 architecture review):
-//   * the reservoir shrank from 304 B to 112 B per pixel: the estimator only
+//   * the reservoir shrank from 304 B to 144 B per pixel: the estimator only
 //     ever read the anchor and the first scattered vertex, so the 4-vertex
 //     array is gone.  The memory formula is in the layout comment below.
 //   * sky (ENVIRONMENT) paths lost their visibility exemption: a reused sky
@@ -164,18 +177,27 @@ static const float RESTIR_PT_FRESH_ANCHOR_DISTANCE = 1.0e-3;
 
 // ---- Record layout ----------------------------------------------------------
 //
-//   RestirPtFirstVertex  52 B  (position@0, normal@12, throughput@24,
-//                               pdf@36, bsdfPdf@40, flags@44, sampleId@48)
-//   RestirPtPath         80 B  (anchorPosition@0, anchorNormal@12,
-//                               first@24, flags@76, no padding needed)
-//   RestirPtReservoir   112 B  (sample@0, stats@80, source@96)
+// Measured from the generated reflection of passes/path_trace.slang (v5; the
+// record is a RWStructuredBuffer element, so it is laid out std430 and every
+// float3 starts on a 16-byte boundary):
 //
-// Memory formula: bytes per pixel = 112; a temporal pass needs two buffers
-// (current + history), so the budget is  112 * width * height * 2  bytes —
-// 464.5 MB at 1080p, down from 2 * 630 MB in v1.  The fixed-size record keeps
-// it a value type: no indirection, constant StructuredBuffer stride.  v3 grew
-// the first vertex by 4 B (the sample id) but filled the path's tail padding,
-// so neither the path nor the reservoir changed size.
+//   RestirPtFirstVertex  64 B  (position@0, normal@16, throughput@32,
+//                               pdf@44, bsdfPdf@48, flags@52, sampleId@56,
+//                               4 B tail padding to the 16-byte alignment)
+//   RestirPtPath        112 B  (anchorPosition@0, anchorNormal@16,
+//                               first@32, flags@96, 12 B tail padding)
+//   RestirPtReservoir   144 B  (sample@0, stats@112, source@128)
+//
+// Up to v4 this comment claimed 52/80/112 B.  Those were the packed (scalar)
+// payload sizes, never a measured layout; the first host to bind the record
+// measured 144 B, and gradle/slang.gradle now pins the measured one.  No
+// reordering reaches 112 B under std430: a nested struct holding a float3 is
+// rounded up to 16 B, so the first vertex alone costs 64.
+//
+// Memory formula: bytes per pixel = 144; a temporal pass needs two halves
+// (current + history), so the budget is  144 * width * height * 2  bytes —
+// 597.2 MB at 1080p, down from 2 * 630 MB in v1.  The fixed-size record keeps
+// it a value type: no indirection, constant StructuredBuffer stride.
 //
 // What was removed and why: vertices[2..3] were validated but never read by
 // the estimator (the suffix is summarised in `first.throughput`), the vertex
@@ -215,17 +237,18 @@ struct RestirPtReservoir {
 };
 
 // Everything the module needs to know about the surface being shaded.
-// `worldPosition` carries the world-anchored position historyValidate needs
-// (SurfaceHit.worldPosition); `position` is camera-relative and is the one
-// used for all distance and direction math.  v2 note: with the current
-// backends `worldPosition` is a 1024-block-wrapped anchor, so it is a
-// same-frame neighbourhood proxy, never a unique identity — see
-// RESTIR_PT_NOTES.md §"worldPosition".
+// `position` is camera-relative and is the one used for all distance and
+// direction math.  `historyPosition` is the same receiver expressed in the
+// camera-relative space of the frame that wrote the history (position + its
+// own motion + the camera delta), which is what a stored anchor can be
+// compared with; `depth` is its length there.  v5: this replaced
+// SurfaceHit.worldPosition, a 1024-block-wrapped anchor that is never a unique
+// identity (RESTIR_PT_NOTES.md §"worldPosition", audit P1-6).
 struct RestirPtReceiver {
     float3 position;
-    float3 worldPosition;
+    float3 historyPosition;
     float3 normal;
-    float  depth;         // positive view depth, used by historyValidate
+    float  depth;         // distance of historyPosition from the history frame's camera
     uint   materialId;
 };
 
@@ -346,6 +369,17 @@ bool ptPathReusable(RestirPtPath path) {
     uint terminalMask = RESTIR_PT_PATH_FLAG_ENVIRONMENT | RESTIR_PT_PATH_FLAG_EMISSIVE_END;
     if ((path.flags & terminalMask) != 0u) return false;
     return path.first.pdf > 0.0;
+}
+
+// A record a merge may add to: finite, non-negative counters inside the M
+// bound, and a valid path whenever it carries weight.  An accumulator that
+// holds only attempts (M > 0, wSum = 0) is legitimate — it is the attempts a
+// pixel made that produced no candidate — and must survive a merge.
+bool ptReservoirIsAccumulator(RestirPtReservoir reservoir) {
+    if (!isFinite(reservoir.stats.x) || !isFinite(reservoir.stats.y)) return false;
+    if (reservoir.stats.x < 0.0 || reservoir.stats.y < 0.0) return false;
+    if (reservoir.stats.x > RESTIR_PT_MAX_M) return false;
+    return reservoir.stats.y == 0.0 || ptReservoirHasSample(reservoir);
 }
 
 bool ptReservoirHasSample(RestirPtReservoir reservoir) {
@@ -610,6 +644,18 @@ RestirPtReservoir ptAddPath(RestirPtReservoir reservoir, RestirPtPath path,
     return reservoir;
 }
 
+// One attempt that produced no candidate: M + 1 and nothing else.  The live
+// stage calls it for every draw of an eligible receiver that the reservoir
+// does not own (a specular lobe, a truncation before the first vertex, a sky
+// or emitter first edge, an uncertified first vertex), because W divides by
+// the number of attempts, not by the number of candidates (§6).
+RestirPtReservoir ptAddEmptyAttempt(RestirPtReservoir reservoir) {
+    if (!ptReservoirIsAccumulator(reservoir)) reservoir = ptEmptyReservoir();
+    reservoir.stats.x = min(reservoir.stats.x + 1.0, RESTIR_PT_MAX_M);
+    reservoir.stats.w = min(reservoir.stats.x / RESTIR_PT_M_CAP, 1.0);
+    return reservoir;
+}
+
 // Shared merge primitive.  `incomingTargetPdf` must already be evaluated at
 // the current receiver; `incoming.stats.z` still holds the density at the
 // receiver that wrote it, and their ratio is the target part of the shift.
@@ -654,12 +700,13 @@ RestirPtReservoir ptMergeReservoir(RestirPtReservoir current, RestirPtReservoir 
     // a grazing first edge makes the shift degenerate, and the candidate
     // cannot be transported to this receiver.
     if (!isFinite(shiftJacobian) || shiftJacobian <= 0.0) return current;
-    // A `current` that is not a usable accumulator — the empty start, or a
-    // record read from a corrupt buffer — is reset instead of merged: adding a
-    // finite weight to a NaN sum would leave the record permanently unusable,
-    // and a positive M with no weight would drag the resolved weight towards
-    // zero.
-    if (!ptReservoirHasSample(current)) current = ptEmptyReservoir();
+    // A `current` that is not a usable accumulator — a record read from a
+    // corrupt buffer — is reset instead of merged: adding a finite weight to a
+    // NaN sum would leave the record permanently unusable.  v5: a positive M
+    // with no weight is NOT corrupt; it is the attempts this pixel made that
+    // produced no candidate, and dropping them would normalise W by the
+    // history's attempts alone (the 1/P(recorded) defect of v3, moved here).
+    if (!ptReservoirIsAccumulator(current)) current = ptEmptyReservoir();
     // The module never writes M above RESTIR_PT_MAX_M, so a larger value is a
     // corrupted record, not a heavily reused one.
     if (incoming.stats.x > RESTIR_PT_MAX_M) return current;
@@ -718,7 +765,7 @@ RestirPtReservoir ptTemporalReuse(RestirPtReservoir current, RestirPtReservoir h
     if (!ptReservoirHasSample(history)) return current;
     if (!ptPathReusable(history.sample)) return current;
 
-    HistoryStatus status = historyValidate(storedReceiver, receiver.worldPosition,
+    HistoryStatus status = historyValidate(storedReceiver, receiver.historyPosition,
         receiver.normal, receiver.depth, receiver.materialId, policy);
     if (status != HistoryStatus.Valid) return current;
 

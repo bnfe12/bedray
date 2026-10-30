@@ -1,7 +1,9 @@
 # Experimental Slang modules
 
-Nothing in this directory is part of the AOT pass set or the runtime. `compileSlang` only compiles
-`passes/**/*.slang`; a module here is not imported by a pass and is not validated by the shader manifest.
+`compileSlang` only compiles `passes/**/*.slang`. One module here is now reached by those passes:
+`restir_pt.slang` is imported through `restir/pt_temporal.slang` by `path_trace`, `path_trace_scene` and
+`rc_path_trace_scene`, behind the default-off `path_restir_pt` switch. It stays in this directory until its GPU
+smoke gate closes.
 
 ## `restir_pt.slang`
 
@@ -20,8 +22,11 @@ ReSTIR path-reuse prototype. It is kept for reference, not as an enabled techniq
   Monte Carlo against a closed form, and `RestirPtReservoirInvariantTest`, which pins the admission/reuse
   split and the attempt-accounting expectation) and the module compiles through the pinned `slangc` with
   the AOT flags.
-- There is still no host pass, no descriptor contract test and no GPU evidence.
-- `render_plan.slang` may name the `ReSTIR_PT` algorithm in a plan, but the runtime does not select this module.
+- v5 (the live temporal stage): `ptAddEmptyAttempt` counts a draw the stage does not own, the merge reset only
+  drops a corrupt accumulator (`ptReservoirIsAccumulator`), and history is keyed on
+  `RestirPtReceiver.historyPosition` instead of the 1024-wrapped `SurfaceHit.worldPosition`. The record layout was
+  measured: 144 B per pixel (std430), not the 112 B earlier versions claimed. Derivation §11.
+- The host (`ReferencePathTraceBackend`, binding 36), the manifest pins and the contract tests exist; the native core
+  binds a stand-in. There is no GPU smoke run and no spatial stage yet.
 
-Before this file can move back to `restir/`, it needs a pass, a manifest-checked host and at least one GPU
-smoke run. The change-of-measure and reservoir-property gates are closed; these are not.
+Before this file can move back to `restir/`, it needs at least one GPU smoke run with `path_restir_pt` on.

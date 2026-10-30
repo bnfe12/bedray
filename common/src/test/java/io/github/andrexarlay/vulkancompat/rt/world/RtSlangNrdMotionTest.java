@@ -102,7 +102,7 @@ class RtSlangNrdMotionTest {
         assertEquals(2, RtPathTraceSlangPass.OPTION_NRD_MOTION, "the Java mirror of the shader's option bit");
         assertEquals(16, RtPathTraceSlangPass.MOTION_ELEMENT_BYTES, "one vec4 per pixel, the pack's stride");
         String record = read(HOST_PASS);
-        assertTrue(record.contains("new Expected(\"outMotionBuffer\", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));"),
+        assertTrue(record.contains("new Expected(\"outMotionBuffer\", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),"),
             "the manifest must declare the binding as a storage buffer");
         assertTrue(record.contains("requireElementBytes(manifest, \"outMotionBuffer\", MOTION_ELEMENT_BYTES);"),
             "a shader whose vec4 is not 16 bytes would index past the bound range");
@@ -121,7 +121,7 @@ class RtSlangNrdMotionTest {
         assertTrue(record.contains("if (wantsMotion && boundGuides == null) {"),
             "NRD also consumes the guides, so motion without a G-buffer is refused");
         String resources = block(record, "private List<SlangProgram.Resource> resources(");
-        assertTrue(resources.contains("motionBuffer(nrdMotion, motionDummy));"), "the binding is always supplied");
+        assertTrue(resources.contains("motionBuffer(nrdMotion, motionDummy),"), "the binding is always supplied");
         String helper = block(record, "private static SlangProgram.Resource motionBuffer(");
         assertTrue(helper.contains("return SlangProgram.Resource.storageBuffer(\"outMotionBuffer\", dummy.handle(), 0L, dummy.size());"),
             "the dummy is the fallback, never a stale ring slice");
@@ -135,8 +135,10 @@ class RtSlangNrdMotionTest {
         assertTrue(frame.contains("| rayEffectFlags()\n"
                 + "            | pixelShadowFlags()\n"),
             "the ray profile's effect bits and the pixel-shadow option OR into the same flag word, not a second one");
-        assertTrue(frame.contains("| (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0);"),
-            "the block-emitter switch closes the same word: a second push word would be a different ABI");
+        assertTrue(frame.contains("| (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0)\n"
+                + "            // ReSTIR PT: the request and the camera facts."),
+            "the block-emitter switch and the ReSTIR PT request close the same word: a second push word would be a"
+                + " different ABI");
         String backend = read(BACKEND);
         assertTrue(backend.contains("RtPathTraceSlangPass.BufferView motion = (dispatch.flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0"),
             "the backend derives the binding from the same flag the push carries");

@@ -118,6 +118,8 @@ def STRUCT_LAYOUTS = [
     BlockMaterial: [size: 64, fields: [albedo: 0, surface: 16, optical: 32, meta: 48]],
     // The ReSTIR DI record the Slang path tracer reads and writes; the Java host allocates the ring with this stride.
     DIReservoir: [size: 64, fields: [sample: 0, stats: 16, source: 32, receiver: 48]],
+    // The ReSTIR PT record of experimental/restir_pt.slang, bound at 36; the Java host allocates two halves of it per pixel.
+    RestirPtReservoir: [size: 144, fields: [sample: 0, stats: 112, source: 128]],
     // Shader-facing scene record owned by bedray_scene (native/bedray_scene/include/bedray_scene.h).
     // The TLAS instanceCustomIndex is the table slot, so these offsets are an ABI, not a suggestion.
     GeometrySection: [size: 64, fields: [origin: 0, meta: 16, vertexAddress: 32, ranges: 40]],

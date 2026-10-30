@@ -167,11 +167,15 @@ is. Its resolved contribution is correspondingly $\sim 10^{-8}$, and the term it
 represents (a first edge straight to the environment) is the one the
 environment/direct estimator owns.
 
-The same floor means `ptMergeReservoir`'s reset
-`if (!ptReservoirHasSample(current)) current = ptEmptyReservoir();` cannot fire
-for a legitimate accumulator: every admitted attempt adds a strictly positive
-weight, so after any add the current reservoir has a sample. The reset covers
-empty and corrupt records only, and it is kept as such.
+The same floor meant, in v4, that `ptMergeReservoir`'s reset
+`if (!ptReservoirHasSample(current)) current = ptEmptyReservoir();` could not
+fire for a legitimate accumulator: every admitted attempt added a strictly
+positive weight. **v5 superseded that argument** (§11): the live stage admits
+attempts it does not own through `ptAddEmptyAttempt` (`M + 1`, no weight), so
+an accumulator with `M > 0, wSum = 0` is legitimate, and the reset now fires only
+for a corrupt record (`ptReservoirIsAccumulator`). With the v4 reset a pixel
+whose attempt produced no candidate would merge history and keep `M = M_h`,
+which is the `1/P(recorded)` defect moved into the merge.
 
 ## 7. Duplicate samples
 
@@ -266,10 +270,84 @@ including both generic reuse functions.
 
 ## 10. Integration gates that remain
 
-Per `experimental/README.md`, the module stays out of the AOT set until it has a
-pass, a manifest-checked host, a reservoir property test and at least one GPU
-smoke run. The property test is now closed
-(`RestirPtReservoirInvariantTest`); the mathematical gates of §4–§6 are closed by
-this note and the CPU validation in §9. What remains is a pass, a
-manifest-checked host and a GPU smoke run, so there is still no owner-verified
-frame.
+The property test (`RestirPtReservoirInvariantTest`), the mathematical gates of
+§4–§6, a pass and a manifest-checked host are closed: §11 describes the live
+temporal stage. What remains is a GPU smoke run with the switch on, the spatial
+stage, and an owner-verified frame. The module stays in `experimental/` until
+the GPU gate closes (`experimental/README.md`).
+
+## 11. Live temporal stage (v5)
+
+`restir/pt_temporal.slang` is the adapter the path entries call once per pixel,
+after the first ray (`s == 0`) of `pathTraceEntryWithField`. The tracer records
+that ray's first edge under `PATH_TRACE_OPTION_RESTIR_PT` (bit 17) in a
+`PathPtRecord`: the anchor, the diffuse continuation's direction and density
+(`bsdf.pdf`, lobe probability included), the throughput it left with, the
+radiance before it left, the first vertex (position, view-facing normal,
+`bsdfPdf(material_v, view_v, n_v, view_v)` as the reverse density) and the
+suffix `L = (total - before) / throughput`.
+
+**Ownership.** The reservoir owns exactly one term: the diffuse continuation of
+an eligible primary vertex whose first scattered vertex is certified diffuse and
+does not emit. An admitted candidate's contribution `throughput * L` is
+subtracted from the path and the resolve adds
+`(rho_d / pi) * cos * L * W`, where `rho_d = bsdfDiffuseReflectanceAt` is the
+same reflectance the sampler's diffuse weight is built from. Every other term
+stays in the path: sky and emitter first edges (§5 refuses to transport them,
+so the path that traced them owns them), uncertified first vertices, specular
+and transmission lobes, and DI's next-event estimate at the primary vertex,
+which the stage never touches. Nothing is counted twice and nothing is dropped.
+The DI/PT ownership question of addendum 05 therefore has a concrete answer in
+the live stage: the overlapping first-edge emitter term is never in the
+reservoir.
+
+**Eligibility** is decided on the receiver before the lobe is drawn: not in water
+(the first edge would carry medium attenuation), not an RC field continuation,
+not an optical interface (its sampler has no diffuse branch), not fluid, and not
+a ray profile without a full diffuse bounce. An ineligible receiver publishes an
+empty record and adds nothing.
+
+**Attempts.** Every draw of an eligible receiver is one attempt: a candidate
+enters through `ptAddPath`, anything else through `ptAddEmptyAttempt`. Because
+`W = wSum/(M p-hat)` divides by attempts, the per-pixel estimate of the owned
+term is the RIS estimate over the receiver's diffuse branch with the non-owned
+outcomes as zero-target draws.
+
+**First-frame identity.** With no history `M = 1`, `wSum = p-hat/q` and
+`W = 1/q`. A fresh winner is shaded along its sampled direction (the
+anchor-to-vertex edge starts one ray bias off the face and differs at a short
+edge), so `(rho_d/pi) cos(w) L / q = (rho_d / P) L = throughput * L`: the image
+with the switch on equals the image with it off. `RestirPtTemporalStageTest`
+checks this on 200,000 random cases to 1e-9 and counts the cases the firefly caps
+touch (`MAX_CANDIDATE_WEIGHT` 64, `MAX_RESOLVED_WEIGHT` 1e4), which must stay rare.
+
+**History.** One record per pixel and parity half, laid out like the DI ring.
+The stored anchor is the stored receiver: a pixel reprojects
+`anchor + motion + cameraDelta` through `prevViewProjection` (the DI
+reprojection) and validates the record with `historyValidate` against that
+camera-relative position (`RestirPtReceiver.historyPosition`), with DI's bounds
+(5 % depth band, normal 0.8 still / 0.6 moving, age 32). The stored first vertex
+is rebased by `-cameraDelta`. `SurfaceHit.worldPosition` is never a key (P1-6).
+The ring has its own parity and history bits (18/19) and its own camera bits
+(20/21), because it does not depend on emitters while DI only writes its state
+when it runs.
+
+**Record layout, measured.** The std430 layout the reflection reports is
+first vertex 64 B, path 112 B, reservoir 144 B. The 52/80/112 B figures up to v4
+were packed payload sizes, never a measured layout; no field order reaches 112 B
+under std430 because a nested struct with a `float3` rounds to 16 B. The ring is
+`2 * 144 * w * h` bytes: 597.2 MB at 1080p.
+
+**Approximations specific to the live stage** (on top of §8):
+
+- the certificate (`pathPtCertifiedDiffuse`: opaque, non-fluid, non-foliage,
+  metallic <= 0.5, roughness >= 0.6) reads a rough dielectric's residual GGX lobe
+  as Lambertian;
+- the suffix stored with a vertex was shaded with the old edge's view (the
+  `(1 - F(N.V))` factor and the residual specular share at the first vertex);
+- a first vertex on a moving entity is rebased with the camera delta only;
+- a history whose stored winner fails `ptPathReusable` is rejected as a whole,
+  which conditions the merge on the winner's class; in the live stage every
+  stored winner is a certified candidate, so this only fires on corrupt data;
+- the occlusion decay and the ratio/weight caps are lag and firefly guards.
+

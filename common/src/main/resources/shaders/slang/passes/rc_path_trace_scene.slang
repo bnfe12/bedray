@@ -1,5 +1,6 @@
 // Native scene primary path with opt-in finite-window RC diffuse continuation.
-// Same path/guide ABI plus immutable per-recording field bindings34/35.
+// Same path/guide ABI plus immutable per-recording field bindings34/35, and the ReSTIR PT ring at 36, which the
+// native core always fills with its one-record stand-in (the core owns no PT ring).
 public module rc_path_trace_scene_pass;
 import "radiance_cascades/field_gather.slang";
 
@@ -42,6 +43,9 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 // NRD's IN_MV channel: the same per-pixel Vec4 rt_path.comp writes into StatsBuf.motionAddr.  The host binds a
 // one-element stand-in and leaves PATH_TRACE_OPTION_NRD_MOTION clear unless the NRD layout is selected.
 [[vk::binding(33, 0)]] RWStructuredBuffer<float4> outMotionBuffer;
+// ReSTIR PT: two parity halves of one 144-byte RestirPtReservoir per pixel (restir/pt_temporal.slang).  A host without the
+// ring binds a one-record stand-in and leaves PATH_TRACE_OPTION_RESTIR_PT clear; the stage refuses a ring that short.
+[[vk::binding(36, 0)]] RWStructuredBuffer<RestirPtReservoir> ptReservoirs;
 
 [[vk::binding(34, 0)]] ConstantBuffer<RCFieldConstants> rcField;
 [[vk::binding(35, 0)]] StructuredBuffer<RCSegment> rcTails;
@@ -82,5 +86,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     field.field = rcField; field.tails = rcTails; field.frameIndex = frame.frame.x;
     pathTraceEntryWithField(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
         outDepth, outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer,
-        frame, blockMaterials, emitters, reservoirs, pc, field);
+        frame, blockMaterials, emitters, reservoirs, ptReservoirs, pc, field);
 }

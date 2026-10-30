@@ -19,6 +19,12 @@ using gpu::Status;
 
 constexpr std::uint32_t kThreadGroup = 8u;
 constexpr std::uint32_t kPathOptionGbuffer = 1u << 0u;
+// PathTracePush.flags bits 17..21: PATH_TRACE_OPTION_RESTIR_PT and the PATH_TRACE_PT_* ring state of
+// restir/pt_temporal.slang.  The core owns no ReSTIR PT ring; it binds a one-record stand-in at 36 and clears these bits
+// so the shader traces exactly the PT-off image.
+constexpr std::uint32_t kPathOptionRestirPtMask = 0x1Fu << 17u;
+// RestirPtReservoir (experimental/restir_pt.slang): the measured std430 stride, pinned by gradle/slang.gradle.
+constexpr std::uint32_t kRestirPtReservoirBytes = 144u;
 static_assert(sizeof(BedrayPathTraceGuides) == 64);
 static_assert(offsetof(BedrayPathTraceGuides, view_z) == 8);
 static_assert(offsetof(BedrayPathTraceGuides, specular_albedo) == 56);
@@ -462,26 +468,31 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     bool trace_guides = false, scene_guides = false;
     bool trace_motion = false, scene_motion = false;
     bool trace_field = false, scene_field = false;
+    bool trace_pt = false, scene_pt = false;
     auto validate_trace_program = [&](std::uint64_t program, const char* label, bool& guides,
-                                      bool& motion, bool& field, bool native_scene) -> BedrayStatus {
+                                      bool& motion, bool& field, bool& pt_ring, bool native_scene) -> BedrayStatus {
         ProgramContract contract{};
         if (!program_contract(core, program, contract)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "%s is not registered", label);
         }
-        if ((contract.binding_count != 18u && contract.binding_count != 25u
-                && contract.binding_count != 26u && !(native_scene && contract.binding_count == 28u))
+        // The ReSTIR PT ring at 36 is additive: every older layout stays accepted, and the same layout plus one storage
+        // buffer at 36 is the current one.  A declaration at 36 of any other type is a drift, not a ring.
+        pt_ring = program_has_binding(core, program, 36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        const std::uint32_t base = contract.binding_count - (pt_ring ? 1u : 0u);
+        if ((base != 18u && base != 25u && base != 26u && !(native_scene && base == 28u))
             || contract.push_constant_bytes < sizeof(PathTracePush)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s contract mismatch: %u bindings, %u push bytes (need 18/25/26 or native 28, %zu)",
+                "%s contract mismatch: %u bindings, %u push bytes (need 18/25/26 or native 28, each optionally + "
+                "the ReSTIR PT storage buffer at 36, %zu)",
                 label, contract.binding_count, contract.push_constant_bytes, sizeof(PathTracePush));
         }
         if (!has_bindings(core, program, kTraceBindings, std::size(kTraceBindings))) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
                 "%s does not declare the path_trace.slang binding set", label);
         }
-        guides = contract.binding_count >= 25u;
-        motion = contract.binding_count >= 26u;
-        field = contract.binding_count == 28u;
+        guides = base >= 25u;
+        motion = base >= 26u;
+        field = base == 28u;
         if (guides && !has_bindings(core, program, kTraceGuideBindings,
                 std::size(kTraceGuideBindings))) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
@@ -497,13 +508,13 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
         return BEDRAY_OK;
     };
     BedrayStatus trace_status = validate_trace_program(desc.program_trace, "program_trace", trace_guides,
-        trace_motion, trace_field, false);
+        trace_motion, trace_field, trace_pt, false);
     if (trace_status != BEDRAY_OK) {
         return trace_status;
     }
     if (desc.program_trace_scene != 0) {
         BedrayStatus scene_status = validate_trace_program(desc.program_trace_scene, "program_trace_scene",
-            scene_guides, scene_motion, scene_field, true);
+            scene_guides, scene_motion, scene_field, scene_pt, true);
         if (scene_status != BEDRAY_OK) {
             return scene_status;
         }
@@ -652,6 +663,8 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     trace_motion_bindings_ = trace_motion;
     scene_motion_bindings_ = scene_motion;
     scene_field_bindings_ = scene_field;
+    trace_pt_binding_ = trace_pt;
+    scene_pt_binding_ = scene_pt;
 
     BedrayStatus status = create_dummy(64u, block_materials_id_, block_materials_view_, error);
     if (status == BEDRAY_OK) {
@@ -666,6 +679,9 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     if (status == BEDRAY_OK && (trace_guides || scene_guides)) status = create_guide_dummies(error);
     if (status == BEDRAY_OK && (trace_motion || scene_motion)) {
         status = create_dummy(16u, motion_dummy_id_, motion_dummy_view_, error);
+    }
+    if (status == BEDRAY_OK && (trace_pt || scene_pt)) {
+        status = create_dummy(kRestirPtReservoirBytes, pt_dummy_id_, pt_dummy_view_, error);
     }
     if (status != BEDRAY_OK) {
         destroy();
@@ -929,6 +945,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         return fail(error, BEDRAY_ERROR_UNSUPPORTED, "G-buffer writes require the additive guide-output call");
     }
     const bool motion_binding = native_scene ? scene_motion_bindings_ : trace_motion_bindings_;
+    const bool pt_binding = native_scene ? scene_pt_binding_ : trace_pt_binding_;
     const bool wants_motion = (desc.path.flags & (1u << 1u)) != 0;
     if (motion) {
         if (!motion_binding) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "selected program has no NRD motion binding");
@@ -1149,6 +1166,8 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         status = pin_buffer(owned_reservoirs_id_, recording, error);
     if (status == BEDRAY_OK && motion_binding && !motion)
         status = pin_buffer(motion_dummy_id_, recording, error);
+    if (status == BEDRAY_OK && pt_binding)
+        status = pin_buffer(pt_dummy_id_, recording, error);
     if (status != BEDRAY_OK) {
         release_recording(command_handle);
         return status;
@@ -1178,7 +1197,8 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     trace_push.max_surface_steps = desc.path.max_surface_steps;
     trace_push.sample_index = desc.path.sample_index;
     trace_push.material_count = desc.path.material_count;
-    trace_push.flags = desc.path.flags;
+    // No PT ring here: the stand-in at 36 is one record, and the PT bits are cleared so the stage never runs on it.
+    trace_push.flags = desc.path.flags & ~kPathOptionRestirPtMask;
     trace_push.ray_bias = desc.path.ray_bias;
     trace_push.alpha_cutoff = desc.path.alpha_cutoff;
     trace_push.max_distance = desc.path.max_distance;
@@ -1224,7 +1244,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         fns_.cmd_fill_buffer(command, owned_reservoirs_view_.buffer, 0, owned_reservoirs_view_.size, 0);
     entry_barrier(fns_, command);
 
-    std::array<BedrayResource, 28> trace_resources{};
+    std::array<BedrayResource, 29> trace_resources{};
     trace_resources[0] = acceleration_resource(0, as_acceleration(desc.scene.tlas));
     trace_resources[1] = image_resource(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, radiance_view_.view);
     trace_resources[2] = buffer_resource(2, as_buffer(desc.scene.sections.handle),
@@ -1278,6 +1298,11 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         trace_resources[26] = field_resources[0];
         trace_resources[27] = field_resources[1];
     }
+    const std::size_t pt_slot = 18u + (guide_bindings ? 7u : 0u) + (motion_binding ? 1u : 0u)
+        + (field_bindings ? 2u : 0u);
+    if (pt_binding) {
+        trace_resources[pt_slot] = buffer_resource(36, pt_dummy_view_.buffer, 0, pt_dummy_view_.size);
+    }
 
     BedrayFrameDesc trace_desc{};
     trace_desc.abi_version = BEDRAY_CORE_ABI_VERSION;
@@ -1286,8 +1311,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     trace_desc.group_count_x = groups(desc.camera.width);
     trace_desc.group_count_y = groups(desc.camera.height);
     trace_desc.group_count_z = 1;
-    trace_desc.resource_count = static_cast<std::uint32_t>(18u + (guide_bindings ? 7u : 0u)
-        + (motion_binding ? 1u : 0u) + (field_bindings ? 2u : 0u));
+    trace_desc.resource_count = static_cast<std::uint32_t>(pt_slot + (pt_binding ? 1u : 0u));
     trace_desc.resources = trace_resources.data();
     trace_desc.push_constants = &trace_push;
     trace_desc.push_constant_bytes = static_cast<std::uint32_t>(sizeof(trace_push));
@@ -1583,7 +1607,7 @@ BedrayStatus PathTracePass::destroy() noexcept {
             static_cast<void>(buffers_->release_after_device_loss());
         } else {
             for (const gpu::BufferId id : {block_materials_id_, reservoir_dummy_id_, owned_reservoirs_id_,
-                     entity_scalar_id_, entity_vector_id_, motion_dummy_id_}) {
+                     entity_scalar_id_, entity_vector_id_, motion_dummy_id_, pt_dummy_id_}) {
                 if (id.serial != 0) {
                     static_cast<void>(buffers_->retire(id));
                 }
@@ -1624,6 +1648,7 @@ void PathTracePass::reset_state() noexcept {
     trace_guide_bindings_ = scene_guide_bindings_ = guide_dummies_initialized_ = false;
     trace_motion_bindings_ = scene_motion_bindings_ = false;
     scene_field_bindings_ = false;
+    trace_pt_binding_ = scene_pt_binding_ = false;
     guide_dummy_ids_ = {}; guide_dummy_views_ = {};
     radiance_id_ = {};
     motion_id_ = {};
@@ -1656,6 +1681,8 @@ void PathTracePass::reset_state() noexcept {
     entity_vector_view_ = {};
     motion_dummy_id_ = {};
     motion_dummy_view_ = {};
+    pt_dummy_id_ = {};
+    pt_dummy_view_ = {};
     history_parity_ = 0;
     history_written_ = false;
     lost_ = false;

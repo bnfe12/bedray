@@ -130,6 +130,8 @@ private:
     bool trace_guide_bindings_ = false, scene_guide_bindings_ = false;
     bool trace_motion_bindings_ = false, scene_motion_bindings_ = false;
     bool scene_field_bindings_ = false;
+    // The program declares the ReSTIR PT ring at binding 36; the core binds pt_dummy_ and clears the PT push bits.
+    bool trace_pt_binding_ = false, scene_pt_binding_ = false;
     bool guide_dummies_initialized_ = false;
     std::array<gpu::ImageId, 3> guide_dummy_ids_{};
     std::array<gpu::ImageView, 3> guide_dummy_views_{};
@@ -144,11 +146,13 @@ private:
     // pass declares. The C++ host never sets the option bits that would write them, so they only keep the
     // descriptor set complete.
     gpu::BufferId motion_dummy_id_{};
+    gpu::BufferId pt_dummy_id_{};
     gpu::BufferView block_materials_view_{};
     gpu::BufferView reservoir_dummy_view_{};
     gpu::BufferView entity_scalar_view_{};
     gpu::BufferView entity_vector_view_{};
     gpu::BufferView motion_dummy_view_{};
+    gpu::BufferView pt_dummy_view_{};
     gpu::BufferId owned_reservoirs_id_{};
     gpu::BufferView owned_reservoirs_view_{};
     std::uint32_t owned_di_parity_ = 0;

@@ -212,8 +212,11 @@ class RtSlangDistantBlockLightTest {
             "the list is rebuilt over min(path distance, 128) blocks in path mode (RtEmitters.update)");
         assertTrue(renderer.contains("RtSettings.emissiveDistance() + 8f"),
             "and over emissiveDistance() + 8 blocks in ray mode");
-        assertTrue(read(NATIVE_CORE).contains("trace_push.flags = desc.path.flags;"),
-            "the native core forwards the host's option word bit for bit, so the new bit needs no native change");
+        String nativeCore = read(NATIVE_CORE);
+        assertTrue(nativeCore.contains("trace_push.flags = desc.path.flags & ~kPathOptionRestirPtMask;")
+                && nativeCore.contains("constexpr std::uint32_t kPathOptionRestirPtMask = 0x1Fu << 17u;"),
+            "the native core forwards the host's option word bit for bit except the ReSTIR PT ring state (17..21), so"
+                + " bit 16 needs no native change");
     }
 
     @Test
@@ -224,7 +227,7 @@ class RtSlangDistantBlockLightTest {
             "one verdict: the bound list, the reservoir branch and the baked field follow the same switch");
         assertTrue(host.contains("int emitterCount = blockEmitters ? Math.max(0, params.emitterCount) : 0;"),
             "the list is dropped with the field, so 'RT Block Light off' stays 'no emissive lighting'");
-        assertTrue(host.contains("| (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0);"),
+        assertTrue(host.contains("| (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0)\n"),
             "the push word carries the same verdict to the shader");
         assertTrue(read(PASS_HOST).contains("static final int OPTION_BLOCK_EMITTERS = 1 << 16;"),
             "mirror of the shader bit 16");

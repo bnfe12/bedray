@@ -48,7 +48,8 @@ class RtSlangSamplePerPixelTest {
             "the entry asks the frame how many rays this pixel owns");
         assertTrue(shared.contains("for (uint s = 0u; s < sampleCount; ++s)"),
             "the integrator runs once per requested sample");
-        assertTrue(shared.contains("accumulatePathTraceSample(total, tracePathWithField("),
+        assertTrue(shared.contains("PathTraceResult traced = tracePathWithField(")
+                && shared.contains("accumulatePathTraceSample(total, traced);"),
             "each sample feeds the running mean instead of overwriting the pixel");
         assertTrue(shared.contains("PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);"),
             "the writers read the mean of the samples, not the last one");

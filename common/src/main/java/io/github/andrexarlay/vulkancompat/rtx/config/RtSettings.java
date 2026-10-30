@@ -169,6 +169,13 @@ public final class RtSettings {
      * direct-light reuse off there are no records to pool, so this switch alone does nothing.
      */
     public static boolean pathRestirSpatial = true;
+    /**
+     * ReSTIR PT of the Slang path tracer: the diffuse indirect light of a pixel's first bounce is kept in a per-pixel path
+     * reservoir and reprojected into the next frame (restir/pt_temporal.slang). Off by default: the ring costs two
+     * 144-byte records per pixel (597.2 MB at 1080p). Offered as a child of {@link #pathRestirDi}, and run only by the
+     * reference backend, which owns the ring; the native core binds a stand-in.
+     */
+    public static boolean pathRestirPt = false;
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
@@ -260,6 +267,7 @@ public final class RtSettings {
         bool("path_accumulate", () -> pathAccumulate, v -> pathAccumulate = v);
         bool("path_restir_di", () -> pathRestirDi, v -> pathRestirDi = v);
         bool("path_restir_spatial", () -> pathRestirSpatial, v -> pathRestirSpatial = v);
+        bool("path_restir_pt", () -> pathRestirPt, v -> pathRestirPt = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
@@ -457,6 +465,8 @@ public final class RtSettings {
      * no rays. The Slang kernel is optional: without its AOT artifact this reads true and the pass simply never runs.
      */
     public static boolean pathRestirSpatial() { return b("path_restir_spatial"); }
+    /** ReSTIR PT temporal reuse of the path tracer's diffuse indirect light; see {@link #pathRestirPt}. */
+    public static boolean pathRestirPt() { return b("path_restir_pt"); }
     public static int bounces() { return i("path_bounces"); }
     public static int spp() { return i("path_spp"); }
     public static boolean accumulate() { return b("path_accumulate"); }

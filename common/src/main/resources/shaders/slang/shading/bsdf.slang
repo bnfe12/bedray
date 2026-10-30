@@ -60,6 +60,14 @@ float3 bsdfF0(MaterialSample material) {
     return materialIsMetal(material) ? material.albedo : material.f0;
 }
 
+// The diffuse reflection the sampler's reflection branch carries, times pi: the reflection albedo after the view-angle
+// share the interface took ((1 - F(N.V)), the legacy-parity factor bsdfEvaluate keeps too).  One formula for the
+// sampler's weight and for ReSTIR PT's resolve, which shades a reused direction with the same lobe; two copies would
+// let the first-frame identity of that reservoir drift without anything failing.
+float3 bsdfDiffuseReflectanceAt(MaterialSample material, float NdotV) {
+    return bsdfReflectionAlbedo(material) * (float3(1.0) - fresnelSchlick(NdotV, bsdfF0(material)));
+}
+
 // Probability of choosing the specular reflection lobe.  Metals are pure
 // specular; a dielectric uses its Fresnel reflectance at the view angle.
 float bsdfSpecularProbability(MaterialSample material, float3 V, float3 N) {
@@ -259,7 +267,7 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float inciden
             (float3(1.0) - fresnelView);
         branchProbability *= transmission;
     } else {
-        albedo = bsdfReflectionAlbedo(material) * (float3(1.0) - fresnelView);
+        albedo = bsdfDiffuseReflectanceAt(material, NdotV);
         if (thinPane) branchProbability *= max(1.0 - transmission, 0.0);
     }
 

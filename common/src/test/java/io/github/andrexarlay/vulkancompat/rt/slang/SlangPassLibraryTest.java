@@ -144,7 +144,7 @@ class SlangPassLibraryTest {
         Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
 
         SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        assertEquals(26, manifest.bindings().size(), "path_trace: binding count");
+        assertEquals(27, manifest.bindings().size(), "path_trace: binding count (26 + the ReSTIR PT ring at 36)");
         assertBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
         assertBinding(manifest, "outImage", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);

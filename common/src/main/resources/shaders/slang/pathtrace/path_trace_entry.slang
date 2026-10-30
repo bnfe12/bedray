@@ -14,6 +14,7 @@ import "light/sun.slang";
 import "pathtrace/path_tracer.slang";
 import "restir/di_block_emitters.slang";
 __exported import "restir/restir_di.slang";
+__exported import "restir/pt_temporal.slang";
 import "sampling.slang";
 __exported import "surface/surface.slang";
 import "surface/water.slang";
@@ -271,6 +272,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     StructuredBuffer<BlockMaterial> blockMaterials,
     StructuredBuffer<BlockEmitterRecord> emitters,
     RWStructuredBuffer<DIReservoir> reservoirs,
+    RWStructuredBuffer<RestirPtReservoir> ptReservoirs,
     PathTracePush pc, F diffuseField) {
     uint2 size;
     outImage.GetDimensions(size.x, size.y);
@@ -393,6 +395,21 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // above are identical with either, so both styles are the same body of water.
     materialOptions.waterWaveMix = frameWaterRealisticWaves(f) ? 1.0 : WATER_WAVE_MIX_VANILLA;
 
+    // ReSTIR PT: one path reservoir per pixel, fed by the first ray's diffuse continuation (restir/pt_temporal.slang).
+    // Its parity and history travel in the flag word because the ring does not depend on emitters, and DI's own state
+    // is only written while DI runs.  A host without a ring binds one record, which ptTemporalActive refuses.
+    PtTemporalState ptState;
+    ptState.enabled = (pc.flags & PATH_TRACE_OPTION_RESTIR_PT) != 0u ? 1u : 0u;
+    ptState.historyValid = (pc.flags & PATH_TRACE_PT_HISTORY) != 0u ? 1u : 0u;
+    ptState.cameraStatic = (pc.flags & PATH_TRACE_PT_STATIC) != 0u ? 1u : 0u;
+    ptState.flipY = (pc.flags & PATH_TRACE_PT_FLIP_Y) != 0u ? 1u : 0u;
+    ptState.parity = (pc.flags & PATH_TRACE_PT_PARITY) != 0u ? 1u : 0u;
+    ptState.pixel = p;
+    ptState.size = size;
+    ptState.frameIndex = f.frame.x;
+    ptState.cameraDelta = pc.diCameraDelta.xyz;
+    ptState.previousViewProjection = f.camera.prevViewProjection;
+
     uint sampleCount = pathTraceSampleCount(f);
     uint diRequested = directReuse.enabled;
     PathTraceMean total = emptyPathTraceMean();
@@ -413,8 +430,20 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
         // on the reservoir has to pay for the emissive branch itself, or the extra rays would darken the picture.
         directReuse.enabled = s == 0u ? diRequested : 0u;
         lights.emittersReusedAtPrimary = directReuse.enabled != 0u;
-        accumulatePathTraceSample(total, tracePathWithField(traversal, lights, environment, directReuse, atlas, table,
-            primary, materialOptions, options, seed, diffuseField));
+        // The path reservoir is one record per pixel as well: only the first ray records its first edge and hands it over,
+        // the others keep their own suffixes and trace exactly what they traced before.
+        options.flags = s == 0u ? pc.flags : (pc.flags & ~PATH_TRACE_OPTION_RESTIR_PT);
+        uint pathSeed = seed;
+        PathTraceResult traced = tracePathWithField(traversal, lights, environment, directReuse, atlas, table,
+            primary, materialOptions, options, seed, diffuseField);
+        if (s == 0u && ptState.enabled != 0u) {
+            float3 swapped = ptTemporalStage(traversal, atlas, table, materialOptions, options.rayBias, traced, ptState,
+                ptReservoirs, pathSeed);
+            // The same guards the tracer applies to its own sum: a finite, non-negative radiance under the firefly cap.
+            traced.radiance = isFinite(swapped)
+                ? clampRadiance(max(swapped, float3(0.0)), options.maxRadiance) : traced.radiance;
+        }
+        accumulatePathTraceSample(total, traced);
     }
     // The frame the writers below read is the mean of those rays, not the last one: a pixel that traced eight of them
     // would otherwise throw seven away and keep only their noise.
@@ -458,10 +487,10 @@ public void pathTraceEntry<T : ISceneTracer>(
     RWTexture2D<float4> outSpecAlbedo, RWStructuredBuffer<float4> outMotionBuffer,
     FrameConstants frame, StructuredBuffer<BlockMaterial> blockMaterials,
     StructuredBuffer<BlockEmitterRecord> emitters, RWStructuredBuffer<DIReservoir> reservoirs,
-    PathTracePush pc) {
+    RWStructuredBuffer<RestirPtReservoir> ptReservoirs, PathTracePush pc) {
     NoPathDiffuseField field;
     pathTraceEntryWithField(traversal, entities, tid, outImage, albedoAtlas, outMotion,
         materialAtlas, normalAtlas, outDepth, outViewZ, outNormalRough, outSpecular,
         outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer, frame,
-        blockMaterials, emitters, reservoirs, pc, field);
+        blockMaterials, emitters, reservoirs, ptReservoirs, pc, field);
 }

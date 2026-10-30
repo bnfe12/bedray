@@ -232,6 +232,9 @@ class RtPathTraceSlangPassTest {
             "one atlas slot: rect and authored PBR");
         assertEquals(RtPathTraceSlangPass.ENTITY_SCALAR_BYTES, manifest.binding("entityTexels").elementBytes(),
             "one packed texel of the RT entity atlas");
+        assertEquals(RtPathTraceSlangPass.PT_RESERVOIR_BYTES, manifest.binding("ptReservoirs").elementBytes(),
+            "RestirPtReservoir: the 112-byte path, stats and source, std430");
+        assertEquals(36, manifest.binding("ptReservoirs").binding(), "the PT ring sits above the RC field bindings 34/35");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[0], "group x");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[1], "group y");
     }
