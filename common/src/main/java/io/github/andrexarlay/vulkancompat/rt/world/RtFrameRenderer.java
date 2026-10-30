@@ -855,14 +855,22 @@ public final class RtFrameRenderer {
                 createDlssRrDenoiser(device, w, h);
             }
             if (dlssRrDenoiser != null) {
-                dlssRrDenoiser.ensure(cmd, w, h, output);
+                DlssRrDenoiser owner = dlssRrDenoiser;
+                denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
+                    () -> owner.discardRecording(cmd.address()));
+                owner.ensure(cmd, w, h, output);
             }
         }
         if (denoiseMode.isNrd()) {
             if (pass.usesGbuffer() && denoiser == null) {
                 createDenoiser(device, w, h);
-            } else if (denoiser != null) {
-                denoiser.ensure(w, h, output.view);
+            }
+            if (denoiser != null) {
+                NrdDenoiser owner = denoiser;
+                denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
+                    () -> owner.discardRecording(cmd.address()));
+                owner.ensure(w, h, output.view);
+                owner.prepare(cmd);
             }
         }
         boolean useDenoiser = pass.usesGbuffer() && (denoiser != null || dlssRrDenoiser != null);
@@ -1200,8 +1208,6 @@ public final class RtFrameRenderer {
                             * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignY()
                         : 0.0f;
                     DlssRrDenoiser owner = dlssRrDenoiser;
-                    denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
-                        () -> owner.discardRecording(cmd.address()));
                     owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY);
                     frameColorTemporallyResolved = true;
@@ -1231,8 +1237,6 @@ public final class RtFrameRenderer {
                     float nrdJitterPrevY = nrdJittered
                         ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getPrevPixelJitterY() : 0.0f;
                     NrdDenoiser owner = denoiser;
-                    denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
-                        () -> owner.discardRecording(cmd.address()));
                     owner.record(cmd, camera.projectionMatrix, frameProjection, camera.viewRotationMatrix,
                         camera.pos.x, camera.pos.y, camera.pos.z, params.tonemap, composeExposure,
                         nrdJitterX, nrdJitterY, nrdJitterPrevX, nrdJitterPrevY);

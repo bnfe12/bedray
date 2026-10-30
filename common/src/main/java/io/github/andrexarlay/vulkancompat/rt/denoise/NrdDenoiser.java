@@ -245,6 +245,16 @@ public final class NrdDenoiser {
         LOGGER.info("[VKB-NRD] resized size={}x{} (history restarted)", w, h);
     }
 
+    /** Initializes this generation before the primary pass writes any of its borrowed guide views. */
+    public void prepare(VkCommandBuffer cmd) {
+        if (cmd == null || cmd.address() == 0) throw new IllegalArgumentException("guide preparation needs a recording");
+        if (!imagesReady) {
+            imageInitRecording = cmd.address();
+            initImages(cmd);
+            imagesReady = true;
+        }
+    }
+
     /**
      * Records pack, NRD and compose into {@code cmd}. Must follow the rt_rays.comp dispatch and a full memory barrier.
      * {@code projection} is the unbobbed base projection and {@code fullProjection} is the bobbed projection used by RT rays.
@@ -265,11 +275,7 @@ public final class NrdDenoiser {
     public void record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f fullProjection, Matrix4f viewRotation,
                        double camX, double camY, double camZ, boolean tonemap, float exposure,
                        float jitterX, float jitterY, float jitterPrevX, float jitterPrevY) {
-        if (!imagesReady) {
-            initImages(cmd);
-            imagesReady = true;
-            imageInitRecording = cmd.address();
-        }
+        prepare(cmd);
         buildFrameSettings(projection, fullProjection, viewRotation, camX, camY, camZ,
             jitterX, jitterY, jitterPrevX, jitterPrevY);
         frame.write(frameSettingsSeg);
