@@ -4,6 +4,21 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — Guide initialization precedes primary writes (L2)
+
+NRD now prepares a new image generation before the primary pass writes its
+guides. Both NRD and DLSS RR capture the exact instance's completion/discard
+callbacks before preparation can emit commands; abandoning the primary pass
+therefore rolls back first-use layout state even before denoiser recording.
+Four focused tests passed with JDK 25/JUnit 5.10.2, covering ordering, first-use
+discard and initializer ownership. No GPU execution is claimed.
+
+RC/upstream integration revision `c90fce3` also passed all 26 AOT entries and
+**882 Java tests: 873 passed, nine skipped**, zero failures/errors (2m16s).
+Native CI [40979323913](https://github.com/bnfe12/bedray/actions/runs/40979323913)
+passed 25 core + one scene + one lifetime tests, preserving upstream water and
+shader-byte gate fixes. The merged revision is `2c8051d`.
+
 ## 2026-10-29 — Native RC finite-window reconstruction (L1/L2)
 
 RC v2 now builds five dependent cone-transport levels inside the native opaque
