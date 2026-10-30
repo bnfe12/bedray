@@ -241,6 +241,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         int samplesPerFrame = 1;
         int flags;
 
+        /** Mirrors {@code FRAME_FLAG_CAMERA_IN_WATER}: the eye's own block is water. */
+        static final int FLAG_CAMERA_IN_WATER = 1 << 5;
+
         void writeTo(ByteBuffer out) {
             int available = out.capacity() - out.position();
             if (available < FRAME_CONSTANTS_BYTES) {

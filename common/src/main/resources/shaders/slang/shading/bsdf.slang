@@ -146,7 +146,14 @@ float bsdfPdf(MaterialSample material, float3 V, float3 N, float3 L) {
 
 // Samples one lobe and returns the full throughput multiplier.  The caller
 // multiplies its path throughput by `weight`; no separate 1/pdf is needed.
-BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint seed) {
+// `incidentIor` is the refractive index of the medium the ray travels in: 1.0
+// for air, the index of water for a ray under a fluid surface.  The optical
+// lobe refracts from that medium into the material's own, and back out again
+// when they are the same medium, so a surface seen from below bends away from
+// the normal and can totally internally reflect instead of being read as an
+// air-to-glass interface.
+BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float incidentIor,
+        inout uint seed) {
     BSDFSample result = invalidBSDFSample();
 
     float NdotV = max(dot(N, V), 1.0e-4);
@@ -198,7 +205,13 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, inout uint se
 
     float transmissionProbability = max(1.0 - specularProbability, 1.0e-6);
     if (material.alphaMode == AlphaMode.Optical && material.transmission > 0.0) {
-        float eta = 1.0 / max(material.ior, 1.0);
+        // The material's own index is the dense side, and air is the other one.
+        // A ray that already travels in that dense side (the water medium of the
+        // path) leaves through the interface, so eta exceeds 1 and `refract` can
+        // return a zero vector: total internal reflection, the mirror a swimmer
+        // sees at the surface from below.
+        float dense = max(material.ior, 1.0);
+        float eta = incidentIor >= dense ? incidentIor : incidentIor / dense;
         float3 refracted = refract(-V, N, eta);
         float3 fresnel = fresnelSchlick(NdotV, bsdfF0(material));
 

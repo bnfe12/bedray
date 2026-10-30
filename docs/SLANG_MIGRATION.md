@@ -900,6 +900,40 @@ writes the seven DLSS-RR guide channels and NRD's per-pixel `IN_MV` vec4
 device address), so an explicit `SLANG` path with `NRD` is accepted; `AUTO`
 keeps the GLSL pass until a live frame validates the guides.
 
+Status update (2026-10-29, camera medium). The two water gaps that needed no
+layout change are closed. The host now says whether the eye is in a fluid:
+`RtFrameRenderer` copies `RtFogState.medium == 1` — the same vanilla camera
+state that already picks the water fog — into `RtFrameParams.cameraInWater`. The
+Slang pass writes it straight into the contract bit
+`FRAME_FLAG_CAMERA_IN_WATER = 1u << 5u` (`RtSlangFrameData` →
+`Frame.FLAG_CAMERA_IN_WATER`), additive after bits 0-4 so the 608-byte
+`FrameConstants` layout is untouched. The native backend builds its own
+`FrameConstants`, so the same verdict also travels as the host bit
+`BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER (1u << 8)` — the core's
+`make_frame_constants` maps it onto bit 5 of the frame word beside the history
+bit, and `BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER (1u << 4)` advertises that
+mapping: a host that reaches an older core, which rejects an unknown flag with
+`INVALID_ARGUMENT`, drops the bit instead of losing the frame, and the trace
+starts in air as it always did. `path_trace_entry.slang` reads the word into the
+new `PathTraceOptions.primaryInWater` (a struct field, not a `PathTracePush.flags`
+bit: that word mirrors host ABI bits one for one), and `tracePath` seeds the body
+before the first segment with `primaryWaterMedium()` — a geometric walk straight
+up from the eye that skips invalid and cutout faces and takes the first up-facing
+`MATERIAL_SOURCE_FLUID` top, so it names the same biome tint and surface height a
+diving transmission would. If the walk finds nothing the host still named the
+medium, so the fallback puts the surface at the eye: it can only understate
+depth, never invent column. The optical lobe takes `incidentIor` now, and
+`eta = incidentIor >= dense ? incidentIor : incidentIor / dense` makes the ratio
+exceed 1 when a ray leaves the dense side, so `refract` can return a zero vector
+and the surface mirrors under water (critical angle 48.7 deg at 1.333). Evidence:
+`RtSlangWaterMediumTest` (9 guards, mutation-proved by reverting each of the five
+wiring points), `bedray_path_trace_pass_test` (the frame word carries bit 5 beside
+the history bit, and an unlisted flag is still rejected), `:common:compileSlang`
+with `slangc` 2026.20, the full `:common:test` suite and CTest. What remains of
+the water item is the Snell-refracted NEE beam and its caustics (the shadow ray
+is still straight) and `RtSettings.waterStyle`. No owner-verified frame of any of
+this exists yet.
+
 `bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
 sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
 front-hemisphere diffuse-reflection density that no sample could produce; an
@@ -1113,10 +1147,13 @@ cross-cascade resolve or image comparison was run.
 4a. **Water** — the surface model and the volumetric medium are ported: wave
    field, biome tint, classification, Fresnel interface, depth absorption,
    in-scattering with the multiple-scatter floor, and a medium-aware shadow
-   walk. Still open: a camera that starts *inside* water (the medium is only
-   entered by a transmission through a surface), Snell refraction and caustics
-   of the underwater NEE beam, side-aware IOR when a path leaves the water, and
-   wiring `RtSettings.waterStyle` into the typed path.
+   walk. Closed: a camera that starts *inside* water seeds its own body (the
+   host publishes `FRAME_FLAG_CAMERA_IN_WATER` from `RtFogState.medium`, and
+   `primaryWaterMedium` walks up from the eye for the surface it sits under),
+   and the optical lobe now refracts from the medium the ray travels in, so a
+   path leaving the body bends away from the normal and can totally internally
+   reflect. Still open: Snell refraction and caustics of the underwater NEE beam,
+   and wiring `RtSettings.waterStyle` into the typed path.
 4b. **Denoiser G-buffer** — the entry pass writes the seven DLSS-RR guide
    channels (`outViewZ`, `outNormalRough`, `outDiffuse`, `outAlbedo`,
    `outDirect`, `outSpecular`, `outSpecAlbedo`, bindings 26–32) at the primary

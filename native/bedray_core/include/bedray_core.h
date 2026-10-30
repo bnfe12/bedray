@@ -204,6 +204,10 @@ typedef struct BedrayFrameDesc {
  * Query the feature mask before use; RESET_DI invalidates native DI contents. */
 #define BEDRAY_PATH_TRACE_FRAME_NATIVE_DI      (1u << 6)
 #define BEDRAY_PATH_TRACE_FRAME_RESET_DI       (1u << 7)
+/* The eye stands in a water block, so a primary path begins inside the medium and crosses no surface that could say
+ * so. Host-only like NATIVE_SCENE: the core copies it into FRAME_FLAG_CAMERA_IN_WATER (bit 5) of the FrameConstants
+ * frame word the shader reads, it never reaches the push block. */
+#define BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER (1u << 8)
 #define BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI    (1u << 0)
 /* Accepts 25- and 26-binding trace programs with inactive, native-owned guide stand-ins; the 26th adds NRD's
  * IN_MV vec4. Does not enable G-buffer writes or change any ABI-v2 structure layout. */
@@ -211,6 +215,10 @@ typedef struct BedrayFrameDesc {
 /* Additive render_path_trace_guides call binds seven real borrowed outputs. */
 #define BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS  (1u << 2)
 #define BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION     (1u << 3)
+/* Accepts BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER and maps it into the frame word. A host that sets the bit against a
+ * core without it would be rejected by the flag validation, so the host masks the bit out when the feature is absent:
+ * the frame then traces as if the eye were in air, which is what every older build did. */
+#define BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER (1u << 4)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)

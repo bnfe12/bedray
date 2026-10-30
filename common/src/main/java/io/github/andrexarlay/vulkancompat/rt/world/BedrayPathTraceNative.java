@@ -158,7 +158,13 @@ final class BedrayPathTraceNative implements AutoCloseable {
         RtPipeline.Views views = input.views();
 
         desc.set(JAVA_INT, BedrayCoreLayouts.PTFD_ABI_VERSION, BedrayCoreLayouts.ABI_VERSION);
-        desc.set(JAVA_INT, BedrayCoreLayouts.PTFD_FLAGS, input.flags());
+        // A core that predates the medium bit rejects the whole frame over an unknown flag, so the verdict is dropped
+        // rather than negotiated: the trace then starts in air, exactly as it did before the bit existed.
+        int flags = input.flags();
+        if ((flags & BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER) != 0 && !library.hasCameraInWaterFlag()) {
+            flags &= ~BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER;
+        }
+        desc.set(JAVA_INT, BedrayCoreLayouts.PTFD_FLAGS, flags);
         desc.set(JAVA_LONG, BedrayCoreLayouts.PTFD_COMMAND_BUFFER, input.commandBuffer());
         desc.set(JAVA_LONG, BedrayCoreLayouts.PTFD_OUTPUT_VIEW, views.output());
         desc.set(JAVA_LONG, BedrayCoreLayouts.PTFD_DEPTH_VIEW, views.depth());

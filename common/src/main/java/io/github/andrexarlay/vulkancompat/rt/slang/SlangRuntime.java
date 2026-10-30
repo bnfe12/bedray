@@ -147,9 +147,19 @@ public final class SlangRuntime implements AutoCloseable {
         if (existing != null) {
             return Optional.of(existing);
         }
+        String blocked = SlangPassDriverGate.blocker(name, null);
+        if (blocked != null) {
+            LOGGER.info("[VKB-SLANG] pass '{}' refused: {}", name, blocked);
+            throw new IllegalStateException("Slang pass '" + name + "' is not registered: " + blocked);
+        }
         Optional<SlangPass> pass = SlangPassLibrary.load(name);
         if (pass.isEmpty()) {
             throw new IllegalStateException("missing Slang pass '" + name + "'");
+        }
+        blocked = SlangPassDriverGate.blocker(name, pass.get().spirv());
+        if (blocked != null) {
+            LOGGER.warn("[VKB-SLANG] pass '{}' refused: {}", name, blocked);
+            throw new IllegalStateException("Slang pass '" + name + "' is not registered: " + blocked);
         }
         int required = pass.get().manifest().requiredCapabilities();
         if (!supports(required)) {

@@ -601,6 +601,11 @@ public final class BedrayCoreNative implements AutoCloseable {
         return renderPathTraceMotionHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_NRD_MOTION);
     }
 
+    /** True when the loaded core accepts and maps the camera-medium frame bit; an older core would reject the frame. */
+    public boolean hasCameraInWaterFlag() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_CAMERA_IN_WATER);
+    }
+
     public void renderPathTraceMotion(long core, MemorySegment frame, MemorySegment guides, MemorySegment motion) {
         ensureOpen(); requireHandle(core, "core"); requirePathTrace();
         if (!hasNativeMotion()) throw new BedrayCoreException("render_path_trace_motion", BedrayCoreLayouts.STATUS_UNSUPPORTED,

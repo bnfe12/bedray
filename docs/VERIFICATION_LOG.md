@@ -21,6 +21,250 @@ nine skipped**, all 26 AOT entries (1m50s). Final source `eb7659a` rebuilt all
 include independent dense solid-angle integration, not GPU execution.
 Contract, bounds, costs and limitations: [RC_RECONSTRUCTION_PLAN.md](RC_RECONSTRUCTION_PLAN.md).
 No new GPU/game, visual, performance or owner acceptance is claimed.
+## 2026-10-29 — An underwater camera now knows it is under water (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
+
+Branch: `refactor/slang-pipeline`. The typed path tracer carried a water medium
+that only a *transmission through a surface* could switch on, so a camera already
+sitting in a water block traced every primary segment through clear air: the
+deeper you swam, the less the picture changed, and the surface seen from below
+refracted the wrong way and never mirrored.
+
+Two facts made this closable without a layout change. The engine already answers
+the question — `RtFogState.collect()` reads `camera.getFluidInCamera()` and sets
+`medium = 1` for `FogType.WATER`, which is the same state that picks the water fog
+— and `FrameConstants.frame.w` had bits 0-4 taken, so a fifth bit is additive
+inside the same 608-byte block.
+
+What landed:
+
+| Layer | Change |
+|---|---|
+| Slang contract | `FRAME_FLAG_CAMERA_IN_WATER = 1u << 5u` and `frameCameraInWater()` |
+| Slang path | `PathTraceOptions.primaryInWater`; `primaryWaterMedium()` walks up from the eye (64 blocks, 6 probes, cutout and invalid faces skipped) and takes the first up-facing `MATERIAL_SOURCE_FLUID` top; `tracePath` seeds the body, fetches the downwelling light and sets `PATH_TRACE_FLAG_WATER_MEDIUM` before the first segment |
+| Slang BSDF | `bsdfSample(..., float incidentIor, ...)`, `eta = incidentIor >= dense ? incidentIor : incidentIor / dense` — the ratio exceeds 1 leaving the dense side, so `refract` can return zero and the TIR branch becomes the swimmer's mirror (critical angle 48.7 deg at 1.333) |
+| Java host | `RtFrameParams.cameraInWater` from `RtFogState.medium == 1`; `RtSlangFrameData` writes `Frame.FLAG_CAMERA_IN_WATER` |
+| Native core | `BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER (1u << 8)` host bit, mapped by `make_frame_constants` onto bit 5 of the frame word; admitted into `allowed_flags`; advertised as `BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER (1u << 4)` |
+
+The last row was not optional. `make_frame_constants` builds its own
+`FrameConstants` from `BedrayPathTraceFrameDesc`, so a bit written only into the
+Java block would never reach the shader on the live native-scene path — and
+`PathTracePass::render` rejects an unknown flag with `INVALID_ARGUMENT`, so the
+host bit and the core's `allowed_flags` had to land in the same batch. The host
+now masks the bit out when the loaded core does not advertise the feature, which
+leaves an old DLL tracing with the eye in air instead of losing the frame.
+
+Evidence: `:common:compileSlang` with `slangc` 2026.20 compiles all roots;
+`:common:test` with `--rerun-tasks` reports 854 tests, 0 failures, 0 errors,
+3 skipped (`RtSlangWaterMediumTest` 9/9, `RtSlangSampleRejectionTest` 10/10 after
+its `bsdfSample` signature guard followed the new parameter); CTest reports 23/23
+with `bedray_path_trace_pass_test` checking that the frame word carries
+`1 | (1 << 5)` for an accumulating underwater frame and that
+`CAMERA_IN_WATER | (1 << 30)` is still rejected.
+
+Mutation proof — each wiring point reverted, the guard named in brackets failed,
+then the file was restored byte-identically (`sha256` compared): the `eta`
+expression in `bsdf.slang`, the `WATER_IOR` argument at the sampler call, the
+`options.primaryInWater` line in `path_trace_entry.slang`, the contract bit number
+and `RtFrameRenderer`'s verdict [three guards in `theEyeStartsInsideItsOwnWaterBody`
+/ `theOpticalLobeRefractsFromTheMediumTheRayTravelsIn` /
+`theHostPublishesTheCamerasFluidState`]; then, in a second pass, the host bit in
+`RtSlangPathPass`, the compat mask in `BedrayPathTraceNative` and the feature-mask
+entry in `core.cpp` [`theHostPublishesTheCamerasFluidState` again]. The C++ mapping
+was mutated on its own and `bedray_path_trace_pass_test` failed at the frame-word
+check. Restoring a native file with `cp -p` keeps the *old* mtime, so MSBuild
+re-ran the mutated binary until the file was touched — the second green CTest run
+is after that.
+
+Limits of this record. `primaryWaterMedium` costs up to six extra closest-hit
+probes per primary ray only while the eye is submerged, and the common open-water
+case stops at the first hit; no timing was taken. When the walk finds no face the
+fallback puts the surface at the eye, which can understate depth but cannot invent
+column. `PathTraceOptions.primaryInWater` is deliberately not a `PathTracePush`
+flag bit because that word mirrors host ABI bits one for one. What is *not* done
+in the water item: the NEE beam under water is still a straight shadow ray, so it
+carries no Snell bend and no caustics, and `RtSettings.waterStyle` is not wired
+into the typed path. No owner-verified frame of any of this exists yet; the play
+test is "dive, look up at the surface from below, and see the mirror and the
+depth colour change", which nothing here has observed.
+
+## 2026-10-29 — A replay verdict is not a live frame: the gate loses its name list, the scene march is unblocked (L1 driver replay, L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`. The open question was whether
+`volumetric_march_scene` may reach the driver at all: it faulted the headless
+replay, so the gate refused it and light shafts stayed off. This entry settles
+that the replay carries no information, and says how much risk that leaves.
+
+Sweep of all 24 AOT modules through the four Vulkan steps
+`bedray_core_register_program` performs, under three device configurations:
+
+| Probe device settings | Faulting modules |
+|---|---|
+| queried features (everything the GPU advertises), instance apiVersion 1.3 | `path_trace`, `path_trace_scene`, `rc_probe_trace`, `restir_spatial`, `velocity_reproject`, `volumetric_march_scene` |
+| the engine's minimal calloc'd feature chain + its 8 device extensions | identical six |
+| same, instance apiVersion 1.2 | identical six |
+
+The verdict does not move with the device, so the difference from the game is
+not a feature bit or an API level. What does separate the two sets, perfectly:
+
+| Opcode (SPIR-V) | In all 6 faulting modules | In any of the 18 clean ones |
+|---|---|---|
+| `OpConvertUToPtr` (68), `OpPtrAccessChain` (166), `OpPtrEqual` (185) | present | absent |
+
+Device-address pointer arithmetic. And the game compiles exactly that, on the
+same GPU, in the very session that died: `26.3(1)/minecraft/logs/latest.log`
+registers `path_trace` (26 bindings), `path_trace_scene` and `restir_spatial` at
+20:50:16, then crashes after `shafts_pass=true` on `volumetric_march`. Two crash
+signatures, one shared caller frame — the game's leaf is `nvoglv64.dll+0x13f4ae`
+reading `0x4` (the `OpUndef` handle), the replay's is `+0x140178` reading `0x0`
+under `vkCreateComputePipelines`. Same function, different null source: the
+replay reproduces *a* compiler fault, not *the* one that killed the game.
+
+Conclusion, and it narrows what a gate may claim: refusing a module because a
+replay faulted is refusing on an unexplained harness difference. `SlangPassDriverGate`
+now holds the byte rule only — `REPLAY_REFUSED`, `blockedNames()` and the
+name-only `blocker(name)` are deleted, and the class comment records why, because
+a future reader is the one most likely to re-add the list.
+
+| Check | Expected | Observed |
+|---|---|---|
+| `OpUndef` descriptor handles, all 24 built modules | 0 | 0 for all 24 (Python scan over the deployed bytes) |
+| `volumetric_march_scene` descriptor contract vs the legacy march | same | same: `tlas` 0, `sections` 2/64 B, `accumImage` 11, `outDepth` 12, `frame` 16/608 B, push 96 B, 8×8×1, capabilities 517 |
+| `SlangPassDriverGateTest` + `SlangRuntimeOwnershipTest` | green | 9 + 3 tests, 0 failures |
+| mutation proof of the new anti-name-list guard | red | a `java.util.Set.of("volumetric_march_scene")` field added to the gate fails exactly `a_replay_fault_alone_never_refuses_a_module`; file restored byte-identical (sha256 `2046f3fe…` OK) |
+
+Two method errors made and corrected while getting here, both of which had
+already produced a fake finding:
+
+- I read SPIR-V `Decoration::Binding` as 3 and `Offset` as 33. They are 33 and
+  34 (`DescriptorSet` 34, `Offset` 35). The wrong table made 23 of 24 modules
+  look like they declared descriptors the manifest never lists; the corrected
+  scan shows the two marches identical. No conclusion from the earlier audit
+  stands — including the one I was about to report.
+- The replay's `VK_EXT_debug_utils` callback treated `pCallbackData` as the
+  message `char*`, when it is a `VkDebugUtilsMessengerCallbackDataEXT*`, so the
+  driver's diagnostics printed as mojibake for every run since the harness
+  existed. Decoded properly, the loader only reports inserting `VK_LAYER_RTSS`
+  and `VK_LAYER_OBS_HOOK` and NVIDIA says nothing before the fault — there is no
+  compiler message to chase.
+
+**Not proven:** no live frame has yet registered either march module — the
+atmosphere's Slang volumetric passes have never been connected in a session the
+owner ran (`04:14` log: `Slang volumetric passes are not connected; god rays are
+unavailable`). The unblocked scene march is a deliberate, stated risk: if the
+driver does fault on it, the JVM dies without a log line, and the fix is to put
+the refusal back on that one name with the crash log as its evidence. The same
+exposure now applies to `rc_probe_trace` (not wired into the frame loop yet) and
+`velocity_reproject` (nothing registers that name). L1 + L2, no owner-verified
+frame.
+
+## 2026-10-29 — P0-5 and P0-6: the two audit items that said "нужен тест" and had none (L2 unit, mutation proof)
+
+Branch: `refactor/slang-pipeline`. Both items were closed in the branch months
+ago by a code change and then verified source-only, with the doc itself asking
+for a regression test. Now each has one, and each guard was shown to bite.
+
+| Guard | Mutation | Result |
+|---|---|---|
+| `RtSlangSectionIndexTest > theRangeOffsetIsAppliedExactlyOncePerVertexBase` | a second `range.firstQuad +` in `geometryVertexBase` — the P0-5 defect itself | FAILED |
+| `... > anIndexPastTheDeclaredRangesResolvesToNoRange` | `return int(geometryIndex);` instead of the range clamp | FAILED |
+| `... > theBlasRangeOffsetsTheSameQuadStartTheShaderAdds` | `range.firstVertex = 0u;` in `acceleration_scene.cpp` | FAILED |
+| `... > theHeaderSaysTheRangeStartCountsQuads` | "first quad" → "first vertex" in `bedray_scene.h` | FAILED |
+| `RtSlangRestirSpatialTest > aMergedRecordKeepsItsOwnReceiverAndRefusesANonFiniteWinner` | a statement added after `reservoirs[ownSlot] = merged;` — the publish stops being last | FAILED |
+| same test, second assertion | a fourth early `return;` in front of the publish — the P0-6 bug shape | FAILED (`expected: <3> but was: <4>`) |
+
+All four mutated files (two shaders, one `.cpp`, one header) were restored from
+byte copies and verified by sha256; the restored tree is green (17 tests across
+the two classes, 0 failures) and `git status` shows no residue in `native/`.
+
+One structural finding from the proof: the native half of the P0-5 agreement was
+not an input to `:common:test`. Editing `native/bedray_scene/src/*.cpp` left the
+task `UP-TO-DATE`, so the guard could pass against a stale tree — the same hole
+that closed P2-8. `common/build.gradle` now lists `bedray_scene/src/*.cpp` next
+to the `CMakeLists.txt`/`include/**`/`nrd_bridge` inputs, and the `firstVertex = 0u`
+mutation is what proves the file is read on a real run.
+
+Evidence level L2 (no-GPU unit) plus L1 for the Slang compile of the restored
+tree. These are source-contract guards: they pin the agreement between the two
+representations, not a rendered frame. No owner-verified frame claim here.
+
+## 2026-10-29 — The march's unassigned entity handle, and why a replay verdict is not a refusal (L1 compile, L2 unit, driver replay, no live frame yet)
+
+Branch: `refactor/slang-pipeline`, on top of `24b0617`. Two owner-reported
+crashes (`Краш`) in the testbed instance were the same fault: `hs_err_pid12888.log`
+(16:54) and `hs_err_pid12088.log` (20:50) both take
+`EXCEPTION_ACCESS_VIOLATION (0xc0000005), reading address 0x0000000000000004`
+with `# Problematic frame: # C [nvoglv64.dll+0x13f4ae]`, and both Java stacks end
+at `RtSlangVolumetricPass.<init>` → `SlangRuntime.program` →
+`BedrayCoreNative.registerProgram`, immediately after `[VKB-ATMO] … shafts_pass=true`.
+The defect is in `passes/volumetric_march.slang`: the adapter assigned `tlas`,
+`sections` and `instanceMask` on a `LegacySectionTraversal`, leaving the struct's
+`EntityGeometry entities` resource fields unassigned. Slang lowers that to an
+`OpUndef` descriptor pointer, `marchLightShaft` reaches `decodeHit`, and the
+entity branch dereferences the undefined handle — even though the host marches
+with `instanceMask = 1`, so an entity could never be committed.
+
+Proof by mutation, on the same module, bindings and layout (headless replay of
+the four Vulkan steps `bedray_core_register_program` performs, RTX 5060 Ti):
+
+| Variant | What it adds | Replay |
+|---|---|---|
+| `m5_legacydecode` | section decode only | `4/4 pipeline ok` |
+| `m7_undefentity` | the same plus an unassigned `EntityGeometry` leg | `Problematic frame: # C [nvoglv64.dll…]` |
+
+Fix and gate:
+
+- `traversal/legacy_section_traversal.slang` gains `LegacySectionWorldTraversal`
+  — same TLAS, same `legacyHitToSurface` decode, no entity leg, and
+  `surfaceMotion` left at the interface default (a section does not move within a
+  frame). `volumetric_march.slang` uses it.
+- `SlangPassDriverGate.undefinedDescriptorPointers(byte[])` counts `OpUndef`
+  results whose type is a pointer into a descriptor storage class
+  (`UniformConstant`/`Uniform`/`StorageBuffer`), and `SlangRuntime.program`
+  refuses such a module before it reaches the driver, naming
+  `-Dbedray.slang.passes=<name>` (or `all`) as the override. The gate reads bytes
+  instead of a name list, so a shader fix lifts its own refusal.
+- `RtAtmosphere` no longer creates its own `BedrayCore`. The branch already grew
+  `SlangRuntimePool` (one core per `VkDevice`, refcounted leases) in `fb4d5d8`,
+  so the atmosphere now takes a lease from it and hands that lease back in
+  `destroy()`, after its volumetric and bloom passes let go of their recordings,
+  and the renderer releases its own lease only after `atmosphere.destroy()` in
+  both shutdown branches. A second core on the same device was the first
+  hypothesis for this crash and the replay disproved it — the fault reproduces
+  with a single core — but the shape is still wrong (two descriptor pools, two
+  pipeline caches, and a shutdown order that can close a core while another
+  holder still pins a recording), so `SlangRuntimeOwnershipTest` pins exactly one
+  creator (the pool) plus the release-before-close order. `RtAtmosphere` also
+  holds a `shaftsUnavailable` flag now: a pass whose programs refuse must cost
+  one `LOGGER.warn`, not an exception on every frame.
+
+| Check | Expected | Observed |
+|---|---|---|
+| `slangc` on the patched adapter | exit 0 | exit 0, 26008 B module, 5 bindings unchanged |
+| `OpUndef` descriptor pointers, all 19 AOT artifacts, pre-fix tree | only the crashing module | `volumetric_march` 2, every other module 0 |
+| same, rebuilt tree | 0 | 0 for all 19 |
+| driver replay after the fix | no fault | `volumetric_march 4/4 pipeline ok`, `volumetric_apply 4/4 pipeline ok` |
+| `:common:test` | 0 failures | 837 tests / 146 files, 0 failures, 0 errors, 3 skipped |
+| mutation proof of the new guards | red | reverting one line to `LegacySectionTraversal traversal;` fails `no_bundled_module_reads_an_unassigned_descriptor_handle`, `the_march_module_is_clean_after_losing_its_entity_leg` and `onlyTheSectionProviderChangesAtTheTwoBindingBoundaries`; restored byte-identical (sha256 OK) and green again |
+
+What this batch also corrects, and it matters more than the shader fix: the
+gate first shipped as two hard-coded name lists taken from a single headless
+replay (12 allowed / 7 refused). The game's own log disproves three of the
+refusals — `26.3(1)/minecraft/logs/latest.log` at 20:50:16 records
+`registered SlangProgram[path_trace, 26 binding(s), 112 B push]`,
+`[path_trace_scene, …]`, `[restir_spatial, 8 binding(s), 64 B push]`,
+`[path_display]`, `[sodium_dequantize]`, `[particles_composite]`, and the other
+instance adds the four `bloom_*`. Left as-is, those lists would have switched
+path tracing off in the Java host — the opposite of what the owner was testing.
+The interim rule that survived that correction (byte scan plus
+`REPLAY_REFUSED = {volumetric_march_scene, rc_probe_trace, velocity_reproject}`)
+was itself wrong as a method, and the next entry below is what replaced it: a
+replay verdict turned out to be uncorrelated with the game, so the gate is now
+the byte scan and nothing else.
+
+Evidence level: L1 (compile), L2 (unit), plus a driver replay on the owner's GPU.
+**No owner-verified frame yet.** `volumetric_march_scene` still refuses, so
+`RtSlangVolumetricPass` cannot construct and light shafts stay off this build
+(fail-soft in `RtAtmosphere`, one `LOGGER.warn`); path tracing is unaffected.
 
 ## 2026-10-29 — Native AOT denoiser preparation (L1/L2)
 
@@ -155,7 +399,6 @@ line-ending diff in a commit. The CRLF form is `git show … | sed 's/$/\r/'`,
 and the hash comparison is what proves it.
 
 No live-frame claim here: this is an ABI and build-configuration audit, L0/L2.
-
 
 ## 2026-10-29 — Radiance Cascades merge physics: what is and is not left (L2 unit, mutation proof)
 
@@ -1642,7 +1885,6 @@ stats layout; new tests check every coarse packet offset/payload slice, exposure
 delta direction, native history ownership and explicit bob handling. SDK/JDK,
 local dependencies and bounded offline JVM settings match preceding entries.
 No GPU/game, visual parity or performance evidence; native path remains opt-in.
-
 
 ## 2026-10-29 — P1 audit pass: completion-proof retirement and module wiring (L2 tests; no GPU)
 

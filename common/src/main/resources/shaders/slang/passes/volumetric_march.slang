@@ -1,5 +1,7 @@
 // Legacy-section binding adapter for the shared volumetric march/store.
 // Native GeometrySection tables must use volumetric_march_scene instead.
+// The march keeps the world instance mask, so it takes the traversal with no
+// entity leg: nothing here binds an entity stream.
 public module volumetric_march_pass;
 
 import "contracts/frame.slang";
@@ -18,7 +20,7 @@ import "traversal/legacy_section_traversal.slang";
 [numthreads(8, 8, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
-    LegacySectionTraversal traversal;
+    LegacySectionWorldTraversal traversal;
     traversal.tlas = tlas;
     traversal.sections = sections;
     traversal.instanceMask = pc.instanceMask;

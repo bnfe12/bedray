@@ -69,7 +69,7 @@ final class RtSlangFrameData {
         frame.frameIndex = p.frame;
         frame.sampleIndex = sampleIndex;
         frame.samplesPerFrame = 1;
-        frame.flags = 0;
+        frame.flags = p.cameraInWater ? RtPathTraceSlangPass.Frame.FLAG_CAMERA_IN_WATER : 0;
     }
 
     private static Vector3f unproject(Matrix4f invViewProj, float x, float y) {
