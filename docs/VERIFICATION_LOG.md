@@ -4,6 +4,76 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — the legacy renderer is gone, and a trace request that names no mode opens the renderer that exists (L1 build, L2 unit, mutation proof; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, three commits: `1ea94ce` (deletion),
+`27a4ca5` (water guards), `383ae71` (mode honesty).
+
+`1ea94ce` removes the second renderer: 99 files, −13,476 lines. Gone are
+`RtPipeline`, `RtShaderCompiler`, `RtShaderDiskCache`, `RtPathTracerPass`,
+`RtRayEffectsPass`, `RtCompositePipeline`, `RtVolumetricPass`, `RtTestPipeline`,
+`SimpleAccelerationStructureBuilder`, the four `rtx/raytracing` experiment-engine
+classes, the 26 GLSL files under `shaders/glsl/`, and the `-Dbedray.pathTracer`
+selector. Two things were split out of `RtPipeline` before it went, because
+surviving code still needed them: `RtFrameBindings` (the legacy binding numbers and
+the `Views` record) and `RtExtensionProbe.supportsOpacityMicromap()`. The Shaderc
+surface left in the tree is seven users, of which only `fg_prepare.comp` and
+`iris_depth.comp` (plus `shaders/spatial/`) are still compiled at runtime — the
+inventory is frozen by `ShadercSurfaceTest`, which also forbids a runtime GLSL
+compile in `rt/slang` and `RtFrameRenderer`.
+
+What that deletion exposed is the subject of `383ae71`. Three entry points said
+"trace" without naming a renderer and answered themselves with `RAY_TRACED`:
+`VulkanRtxConfig.effectiveRtMode()`'s boolean fallback, the legacy
+`enable_hardware_ray_tracing` toml key (read only by a file that has no `rt_mode`),
+and the perf autotest's `-Dvkrtx.autotest.perfRt`. Post-deletion,
+`RtFrameRenderer.createPass` refuses that mode (`RtFailure("slang_ray")`), so an
+old config file or a perf run stopped producing a frame at all. All three now name
+`PATH_TRACED`. A *named* `rays|ao|direct` request is deliberately left alone: that
+is an explicit `experimental_rays` opt-in, and its refusal is pinned by
+`SlangPathUnavailableTest` until the ray-effects passes get a Slang host.
+
+Evidence, one full run per commit, none concurrent:
+
+| Commit | `:common:test` | `:common:runShimTests` |
+|---|---|---|
+| `1ea94ce` | 788 tests, 0 failures, 9 skipped | 34 passed, 0 failed |
+| `27a4ca5` | 798 tests, 0 failures, 6 skipped | 34 passed, 0 failed |
+| `383ae71` | 799 tests, 0 failures, 6 skipped | 34 passed, 0 failed |
+
+`27a4ca5` adds `RtSlangWaterTest` (10 tests) over `surface/water.slang`, the water
+rules in `surface/surface.slang`, `pathtrace/path_tracer.slang`,
+`pathtrace/path_trace_entry.slang` and the Java side of the fluid identity
+(`AutoPbr`, `OpticalMaterials`). It pins the owner's water rule as a test: the
+style switch moves the waves and nothing else, so `waterSigmaT`, `waterMediumFrom`,
+`waterSegmentTransmittance`, `waterInScatter`, `waterBeamTravel` and
+`waterBeamTransmittance` must not contain a `waveMix` token, while the étendue
+ratio stays outside the caustics switch. Six mutation probes on
+`surface/water.slang`, each a compile-valid single revert (`--tests
+"*RtSlangWaterTest"`, then the file restored byte-identically with `sha256`
+verified and `touch`ed so the next build cannot reuse the mutated artifact): the
+vanilla wave mix retuned, the wave dispersion law replaced by a linear one, the
+caustic fold guard dropped, the étendue ratio frozen to 1.0, the absorption made to
+read the style switch, and the light column taken from the straight sight line
+instead of the refracted one. **All six were caught** by a named test.
+
+First jar with no legacy code in it, built from this tree and installed in both
+testbed instances: `bedray-fabric.jar` 15,273,193 B (`dfbdbcb4d1b2aa41…`),
+`bedray_core.dll` 437,760 B (`685905c6028f90b8…`), `bedray_scene.dll` 224,768 B
+(`bf2caba452ef6445…`). Neither instance had any BedRay artifact before, so no
+timestamped `.bak` was due; each file was hash-checked after the copy.
+
+Not proven, and stated plainly: **no owner-verified frame** from any of the three.
+The jar is the first build whose path mode does not depend on the deleted code, and
+that is a build fact, not a game fact. Two known open holes are recorded rather
+than hidden: the ray-effects chain has no Slang host at all (`createPass` refuses
+`slang_ray`), and the deleted GLSL guards left coverage holes listed in
+[SLANG_MIGRATION.md](SLANG_MIGRATION.md) under "What the deleted GLSL guards
+covered". A harness correction came out of the deploy: `fabricBedrayDistribution`
+does **not** stage `bedray_scene.dll`, although `native/bedray_core/DISTRIBUTION.md`
+says both distribution tasks copy it — the task was run separately and the DLL
+copied by hand.
+
 ## 2026-10-30 — The underwater light arrives bent, and the waves focus it (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
 
 Branch: `refactor/slang-pipeline`. An underwater receiver sampled the sun along the
