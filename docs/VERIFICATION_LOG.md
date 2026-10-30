@@ -3117,3 +3117,10 @@ Evidence:
 
 Still missing: an owner-verified frame. No jar from this commit has been
 played yet; shader compiles and unit tests are not a runtime check.
+
+Deployed for playtest (source-archive build of `7ddba13` + `libs/`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar`, sha256
+`6183c04d1f2d4547a54767b7d5c660d9dedc2216dd6c1b469d82ec8b37fcf4e6`, to both
+"Bedray Fabric 26.3" and "26.3(1)" (previous jar kept as
+`*.20261030-090243.bak`). Natives are unchanged from the earlier live
+`bedray_core.dll` build.
