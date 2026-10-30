@@ -42,6 +42,14 @@ Open: no owner-verified frame consumes the guides yet. The first live check is
 ghosting and haloes; the guide layout and the resolution table are unit-proven,
 not run. Reflections stay noisy under NRD (no specular denoiser input).
 
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `303f7dc64981bb08…`; the previous
+(dead-slider) jar is kept as `….20261030-065439.bak` (sha256
+`7b4bc92f0731c714…`). `bedray_core.dll` was rebuilt from this checkout and is
+byte-identical to the deployed native (sha256 `9ca5cd88cc01f823…`), so the
+natives did not change. With the default `path_denoiser` (NRD) the next run
+should log `denoiser requested=NRD active=nrd_reblur` once the world loads.
+
 ## 2026-10-30 — The dead ray-count sliders are deleted (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.
