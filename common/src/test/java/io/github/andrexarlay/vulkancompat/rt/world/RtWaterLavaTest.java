@@ -13,12 +13,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * L2 JUnit tests verifying:
- * 1. Water style selection (0: Vanilla, 1: Realistic) in RtSettings and RtFrameParams.
+ * 1. Water style selection (0: Vanilla, 1: Realistic) in RtSettings and RtFrameParams. Realistic means the waves, not a
+ *    different absorption, IOR or étendue: the two styles stay at parity everywhere else.
  * 2. Snell's law water refraction (refract(d, ns, 1.0 / 1.333)).
  * 3. Water wave normal interference (multi-frequency wave ripples, horizon preservation).
  * 4. Underwater sun specular caustics and surface sun glitter.
  * 5. Animated turbulent high-emission lava glow with texel hotspots.
- * 6. Integration with RtRayEffectsPass and RtPathTracerPass flags and descriptions.
+ * 6. The frame-parameter flags and the typed feature bits that carry the switches to the Slang path pass.
  */
 public class RtWaterLavaTest {
 

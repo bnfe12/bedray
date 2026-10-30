@@ -18,11 +18,6 @@ public class RtShadingFixesTest {
     private static final float EPSILON = 1e-4f;
 
     @Test
-    public void testReflectionEnergySplit() {
-        runReflectionEnergyChecks();
-    }
-
-    @Test
     public void testGgxVndfEnergy() {
         runGgxVndfChecks();
     }
@@ -53,66 +48,21 @@ public class RtShadingFixesTest {
     }
 
     @Test
-    public void testRoughSurfaceEnergySplit() {
-        runRoughEnergySplitChecks();
-    }
-
-    @Test
     public void testBiomeAmbientVariation() {
         runBiomeAmbientChecks();
     }
 
-    @Test
-    public void testEmissiveSurfacesShowTheirLight() {
-        runEmissiveSurfaceChecks();
-    }
-
     public static void runAll() {
         RtShadingFixesTest test = new RtShadingFixesTest();
-        test.testReflectionEnergySplit();
         test.testGgxVndfEnergy();
         test.testTorchAndEmitterBoost();
         test.testVoxelEdgeBleedingAndNormalSmoothing();
         test.testPixelShadows();
         test.testRtPresetLighting();
         test.testDenoisedSpecularContract();
-        test.testRoughSurfaceEnergySplit();
         test.testBiomeAmbientVariation();
-        test.testEmissiveSurfacesShowTheirLight();
     }
 
-    /**
-     * A glowing block must LOOK like it emits: its visible face carries the same scene-linear radiance the emitter list casts
-     * into the room, and that radiance survives the denoiser input. Both halves were broken (owner report 2026-10-25 "blocks
-     * give light but do not look like the texture emits"): the emission was anchored to a capped display colour (dimmer than
-     * the light it casts, and below the bloom threshold), and the DLSS-RR pack never read the channel it is written to.
-     */
-    private static void runEmissiveSurfaceChecks() {
-        String surface = RtWorldChecks.rtCommon();
-        int emittedStart = surface.indexOf("vec3 emitted(Surface s) {");
-        int emittedEnd = surface.indexOf("\n}", emittedStart);
-        assertTrue(emittedStart > 0 && emittedEnd > emittedStart, "emitted() is declared in the common modules");
-        String body = surface.substring(emittedStart, emittedEnd);
-
-        assertTrue(surface.contains("float flux = EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN;"),
-            "the visible emission uses the same gain as the emitter list");
-        assertTrue(body.contains("return emitterLightColor(s.albedoTex) * (s.emission * flux);"),
-            "a glowing texel radiates its classified colour at its own emission strength");
-        assertTrue(body.contains("return redColor * (s.emission * 1.2 * flux);"), "redstone keeps its saturated red glow");
-        assertTrue(body.contains("return fieryColor * (1.15 * pulse * texelHotspot * max(s.emission, 1.0) * flux);"),
-            "lava keeps its pulse and hotspot");
-        assertFalse(body.contains("displayToRadiance"),
-            "the emission is scene-linear: a display-anchored value cannot follow the exposure nor reach the bloom threshold");
-        assertFalse(surface.contains("vec3 emissionDisplay("), "the capped display helper is gone, not kept as a second path");
-
-        assertTrue(surface.contains("leNoTrans = texRgb * chosenEm * EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN;"),
-            "the cast light and the visible face are the same expression");
-
-        String path = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
-        assertTrue(path.contains("res.direct0 += e;"), "the first-vertex emission goes to the analytic direct channel");
-        assertTrue(path.contains("gbRestSum +=") && path.contains("r.radiance - r.direct0"),
-            "and is subtracted from the denoised diffuse channel, so nothing is counted twice");
-    }
 
     private static float fresnelSchlick(float f0, float cosTheta) {
         float c = Math.max(0.0f, Math.min(1.0f, cosTheta));
@@ -126,84 +76,7 @@ public class RtShadingFixesTest {
         return t * t * (3.0f - 2.0f * t);
     }
 
-    private static void runReflectionEnergyChecks() {
-        // Dielectric: the diffuse share falls monotonically from 1 - f0 at normal incidence as the Fresnel reflectance
-        // rises towards grazing; the two shares stay within [0,1] (no negative or over-unity energy).
-        for (float f0 : new float[] {0.02f, 0.04f}) {
-            float previous = 2.0f;
-            for (float cosV : new float[] {1.0f, 0.7f, 0.3f, 0.05f, 0.0f}) {
-                float f = fresnelSchlick(f0, cosV);
-                float kD = 1.0f - f;
-                assertTrue(kD >= 0.0f && kD <= 1.0f, "kD in [0,1] at cosV=" + cosV);
-                assertTrue(kD <= previous + EPSILON, "kD does not rise towards grazing at cosV=" + cosV);
-                previous = kD;
-                assertTrue(f >= f0 - EPSILON, "reflectance never falls below F0 at cosV=" + cosV);
-            }
-            assertTrue(Math.abs(fresnelSchlick(f0, 0.0f) - 1.0f) < 1.0e-4f, "grazing reflectance is 1");
-            assertTrue(Math.abs(fresnelSchlick(f0, 1.0f) - f0) < 1.0e-6f, "normal reflectance is F0");
-        }
 
-        // The old non-physical shortcuts (15 % metal diffuse, Fresnel scaled by gloss) must stay gone, the diffuse share
-        // must apply to metals even with reflections off, and the sampled reflection must be the VNDF estimator.
-        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
-        String common = RtWorldChecks.rtCommon();
-        assertFalse(rays.contains("diffuse * 0.15"), "no 15% metal diffuse in rt_rays.comp");
-        assertFalse(common.contains("diffuse * 0.15"), "no 15% metal diffuse in rt_common.glsl");
-        assertFalse(rays.contains("* F * gloss"), "reflection is no longer scaled by gloss");
-        assertFalse(rays.contains("coneAround(rdir, spread"),
-            "the VNDF reflection path is not cone-jittered (the water far-sheen keeps its own coneAround)");
-        assertTrue(rays.contains("vec3 kD = s.metal > 0.5 ? vec3(0.0) : vec3(1.0) - fresnelSchlick(f0, cosV);"),
-            "kD is computed before the reflections gate");
-        assertTrue(rays.contains("imageStore(gbDiffuse, p, vec4((indirect + emissiveLight) * diffK * thr * atmT, gbHitDist));"),
-            "the denoiser diffuse channel carries the raw kD lighting (metals have no diffuse), fog included");
-        assertTrue(rays.contains("sampleGgxVndf(s.ns, V, alpha, u, vdotH)"), "rt_rays.comp samples the GGX VNDF");
-        assertTrue(rays.contains("smithG2OverG1(cosV, dot(rdir, s.ns), alphaSq)"),
-            "rt_rays.comp weights VNDF samples by F(V.H) * G2/G1");
-        assertTrue(rays.contains("skyEnvRadiance(rdir, s.roughness)"),
-            "rough reflections keep clouds and stars through skyEnvRadiance");
-        assertTrue(common.contains("vec3 sampleGgxVndf(vec3 n, vec3 v, float alpha, vec2 u, out float vdotH)"),
-            "rt_common.glsl defines the VNDF sampler");
-        assertTrue(common.contains("vec3 skyEnvRadiance(vec3 dir, float roughness)"),
-            "rt_common.glsl defines the cloud-aware environment radiance");
-    }
-
-    /**
-     * The owner-visible radial darkening (report 2026-10-21: "if you stand close to a wall the far part of the wall is
-     * darkened, same for the blocks you stand on"). Above ROUGH_SPLIT no specular lobe is sampled, so splitting the diffuse
-     * by the grazing Schlick reflectance deleted energy that nothing reflected back: at 84 degrees a stone-like F0 of 0.04
-     * keeps only 39% of the diffuse, which is a vignette around the point of the surface nearest the camera. A rough
-     * dielectric must split with the constant F0 instead.
-     */
-    private static void runRoughEnergySplitChecks() {
-        float f0 = 0.04f;
-        float split = 1.0f - f0;
-        for (float cosV : new float[] {1.0f, 0.5f, 0.25f, 0.1f, 0.0f}) {
-            float full = 1.0f - fresnelSchlick(f0, cosV);
-            assertTrue(split >= full - EPSILON, "the rough split never removes more energy than the full curve, cosV=" + cosV);
-        }
-        assertTrue(1.0f - fresnelSchlick(f0, 0.1f) < 0.45f,
-            "the guarded bug: the full Schlick curve keeps under 45% of the diffuse at 84 degrees");
-
-        String common = RtWorldChecks.rtCommon();
-        String path = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
-        assertTrue(common.contains("const float ROUGH_SPLIT = 0.6;"),
-            "one roughness threshold shared by the energy split and the specular lobe probability");
-        assertTrue(common.contains("vec3 fresnelEnergySplit(vec3 f0, float cosTheta, float roughness, bool metal)"),
-            "rt_common.glsl defines the split");
-        assertTrue(common.contains("(metal || roughness < ROUGH_SPLIT) ? fresnelSchlick(f0, cosTheta) : f0;"),
-            "traced-specular surfaces keep the Fresnel curve, rough dielectrics keep F0");
-        assertEquals(2, count(common, "vec3 F = fresnelEnergySplit(f0, cosV, s.roughness, s.metal > 0.5);"),
-            "both secondary-hit shading paths use the split");
-        assertTrue(path.contains("vec3 F = fresnelEnergySplit(f0, cosV, s.roughness, s.metal > 0.5);"),
-            "the path tracer primary hit uses the split");
-        assertEquals(0, count(path, "vec3 F = fresnelSchlick(f0, cosV);"),
-            "no primary-hit path keeps the full grazing Fresnel on the diffuse share");
-        assertTrue(path.contains("s.roughness < ROUGH_SPLIT ? clamp(max(Fsc, 0.45 * gloss), 0.05, 0.95) : 0.0"),
-            "the specular lobe is sampled only below the same threshold");
-        // The sun / emitter NEE, the foliage back scatter, the canopy fill and the diffuse weight all read the split value.
-        assertEquals(5, count(path.substring(path.indexOf("vec3 F = fresnelEnergySplit")), "(1.0 - Fsc)"),
-            "sun NEE, foliage back scatter, emitter NEE, canopy fill and the diffuse continuation share the split");
-    }
 
     // ---- GGX VNDF white-furnace model (double precision port of rt_common.glsl sampleGgxVndf) ----------------------------
     private static double dot(double[] a, double[] b) {
@@ -418,11 +291,6 @@ public class RtShadingFixesTest {
     }
 
     private static void runPixelShadowChecks() {
-        // The shader side of the contract (the snap formula, one module, no normal lift, entity/foliage gate, no hidden
-        // sample state, and the numeric cell behaviour) is RtPixelShadowSamplingTest's job; a Java mirror here would only
-        // test itself. Only the StatsBuf plumbing and the settings stay in this class.
-        String common = RtWorldChecks.rtCommon();
-        assertTrue(common.contains("float shadowPixel;"), "StatsBuf carries the pixel-shadow cell size");
 
         // Settings: registered, off by default, clamped, and reset by a preset.
         RtSettings.Preset savedPreset = RtSettings.preset;
@@ -455,108 +323,17 @@ public class RtShadingFixesTest {
      * world-space motion, and DLSS-RR gets one combined raw colour (no direct-light double add).
      */
     private static void runDenoisedSpecularChecks() {
-        assertEquals(7, RtPipeline.GBUFFER_VIEWS, "gbuffer = viewZ, normal, diffuse, albedo, direct, specular, spec albedo");
-        assertEquals(13, RtPipeline.BINDING_GBUFFER_SPECULAR, "specular radiance is binding 13");
-        assertEquals(14, RtPipeline.BINDING_GBUFFER_SPEC_ALBEDO, "F0 guide is binding 14");
+        assertEquals(7, RtFrameBindings.GBUFFER_VIEWS, "gbuffer = viewZ, normal, diffuse, albedo, direct, specular, spec albedo");
+        assertEquals(13, RtFrameBindings.BINDING_GBUFFER_SPECULAR, "specular radiance is binding 13");
+        assertEquals(14, RtFrameBindings.BINDING_GBUFFER_SPEC_ALBEDO, "F0 guide is binding 14");
 
         // Both denoisers must hand the pipeline exactly GBUFFER_VIEWS images. DLSS-RR kept returning the old five after the
         // G-buffer gained the specular radiance and F0 lanes, so the first gbuffer bind threw and RT stayed off all session.
-        assertEquals(RtPipeline.GBUFFER_VIEWS, denoiserGbufferViews("DlssRrDenoiser.java"),
+        assertEquals(RtFrameBindings.GBUFFER_VIEWS, denoiserGbufferViews("DlssRrDenoiser.java"),
             "DLSS-RR must expose every G-buffer image the shader writes");
-        assertEquals(RtPipeline.GBUFFER_VIEWS, denoiserGbufferViews("NrdDenoiser.java"),
+        assertEquals(RtFrameBindings.GBUFFER_VIEWS, denoiserGbufferViews("NrdDenoiser.java"),
             "NRD must expose every G-buffer image the shader writes");
 
-        String common = RtWorldChecks.rtCommon();
-        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
-        String path = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
-        String pack = RtShaderCompiler.loadSource("/shaders/glsl/rt_pack_nrd.comp");
-
-        assertTrue(common.contains("binding = 13, rgba16f) uniform writeonly image2D gbSpecular"), "binding 13 declared");
-        assertTrue(common.contains("binding = 14, rgba8) uniform writeonly image2D gbSpecAlbedo"), "binding 14 declared");
-
-        // Ray mode: the traced radiance is raw (denoised later), the analytic GGX sun highlight is noise-free and goes into gbDirect.
-        assertTrue(rays.contains("imageStore(gbSpecular, p, vec4(refl * thr * atmT, reflDist));"),
-            "rt_rays.comp stores the raw traced reflection radiance with its hit distance");
-        assertTrue(rays.contains("imageStore(gbSpecAlbedo, p, vec4(clamp(wantsRefl ? f0 : vec3(0.0), 0.0, 1.0), 1.0));"),
-            "the F0 guide is zero when there is no specular lobe");
-        assertTrue(rays.contains("specSun = pc.keyColor.rgb * vis * specGGX * ndotl;"), "sun highlight is analytic");
-        assertTrue(rays.contains("directOut = (s.albedoLit * direct * directScale + specSun + selfEmission) * thr + glassRefl;"),
-            "the noise-free sun highlight is composed after the denoiser (gbDirect)");
-        assertTrue(count(rays, "vec4(s.motion,") == 1 && rays.contains("dot(s.motion, s.motion) > 1.0e-8"),
-            "entity/world motion is written for the NRD motion input");
-        assertFalse(rays.contains("gbAlbedo, p, vec4((indirect"), "the diffuse channel is no longer pre-demodulated in the ray shader");
-
-        // Path mode: raw radiance, zero specular radiance (no PT specular lane yet), F0 guide for RR.
-        assertTrue(path.contains("imageStore(gbSpecular, p, vec4(0.0));"), "path tracing keeps an empty specular lane");
-        assertTrue(path.contains("imageStore(gbSpecAlbedo, p, vec4(clamp(specAlb, 0.0, 1.0), 1.0));"),
-            "path tracing writes the F0/albedo specular guide for DLSS-RR");
-
-        // Pack: NRD motion, demodulation, separate specular; RR early-returns without touching IN_MV.
-        assertTrue(pack.contains("Vec4Buf(pc.motionAddr).v[p.y * pc.size.x + p.x]"), "pack reads the world-space motion buffer");
-        assertTrue(pack.contains("imageStore(nrdInMotion, p, vec4(motion, 0.0));"), "pack writes the NRD motion input");
-        assertTrue(pack.contains("vec3 ambient = radiance / albedo;"), "diffuse radiance is demodulated for NRD");
-        assertTrue(pack.contains("imageStore(nrdInSpecular, p, vec4(linearToYCoCg(specRadiance), normHitSpec));"),
-            "REBLUR gets a real specular lane");
-        assertTrue(pack.contains("imageStore(nrdInSpecular, p, vec4(specRadiance, min(specDist, FP16_MAX)));"),
-            "RELAX gets a real specular lane");
-        assertTrue(pack.contains("if (pc.denoiser != 2u) {") && pack.contains("imageStore(nrdInMotion, p, vec4(0.0));"),
-            "DLSS-RR leaves IN_MV to the velocity pass");
-        // The analytic direct channel carries the first-vertex emission (the visible face of a torch, glowstone, lava), the
-        // first camera-facing interface mirror, the GGX sun highlight and the fog in-scatter, and is subtracted from
-        // gbDiffuse in the ray shaders. Without it in the RR input those pixels were lit by their own light and stayed dark.
-        assertTrue(pack.contains("vec3 direct = imageLoad(gbDirect, p).rgb;")
-                && pack.contains("vec4(clamp(radiance + specRadiance + direct, 0.0, FP16_MAX), 1.0)"),
-            "DLSS-RR receives one combined raw colour, direct channel included (emission is visible, not only cast)");
-        assertTrue(pack.contains("if (invalid3(direct)) {"), "a non-finite direct term is dropped before the denoiser history");
-
-        // Compose: RR output is final; NRD is remodulated and the specular lane added.
-        assertTrue(pack.contains("color = max(den.xyz, 0.0);"), "RR compose adds no direct light twice");
-        assertTrue(pack.contains("color = albedo * ambient + specular + direct;"), "NRD compose remodulates and adds both lanes");
-        assertTrue(pack.contains("vec3 specular = pc.denoiser == 0u ? yCoCgToLinear(denSpec.xyz) : max(denSpec.xyz, 0.0);"),
-            "RELAX specular is read in linear RGB, REBLUR in YCoCg");
-    }
-
-    /**
-     * Stage E contract: the ray pass reuses one emitter sample per pixel through a two-parity reservoir, while the path
-     * tracer keeps plain RIS. The history is validated before reuse and the world state invalidates it.
-     */
-    @Test
-    public void testRestirTemporalReuse() {
-        String common = RtWorldChecks.rtCommon();
-        String rays = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
-        String path = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
-
-        assertTrue(common.contains("uvec2 reservoirAddr;"), "StatsBuf publishes the reservoir buffer address");
-        assertTrue(common.contains("struct Reservoir {"), "one packed reservoir record");
-        assertTrue(common.contains("buffer ReservoirBuf { Reservoir r[]; }"), "the reservoir is a device-address buffer");
-        int resStart = common.indexOf("struct Reservoir {");
-        assertEquals(4, count(common.substring(resStart, common.indexOf("};", resStart)), "vec4 "),
-            "Reservoir is 4 x vec4 = 64 B, matching RESERVOIR_BYTES in RtFrameRenderer");
-        assertTrue(common.contains("float emitterPhat(vec3 y, float d2, float texEm, vec3 en, bool openSource, Surface s, float maxDist)"),
-            "the RIS target is shared by candidates and reused history");
-        assertTrue(common.contains("prev.leWsum.w * (mPrev / max(prev.meta.x, 1.0))"),
-            "the stored weight is scaled to the clamped sample count that is added to M (no unbounded ramp)");
-        assertTrue(common.contains("clamp(phatHist / max(prev.enPhat.w, 1.0e-4), 0.0, RESTIR_TEMPORAL_RATIO_CAP)"),
-            "the stored RIS weight is rescaled to the current receiver, with the firefly ratio clamp");
-        assertTrue(common.contains("float mPrev = min(prev.meta.x, RESTIR_M_CAP);"), "the history sample count is clamped");
-        assertTrue(common.contains("normalDot > (isStatic ? 0.8 : 0.6)"), "a normal mismatch rejects the history");
-        assertTrue(common.contains("abs(prev.meta.w - prevDist) < tol"), "a depth mismatch rejects the history");
-        assertTrue(common.contains("prev.yTexEm.xyz - (isStatic ? vec3(0.0) : fb.camDelta.xyz)"),
-            "a stored camera-relative sample follows the camera: camDelta = current - previous");
-        assertTrue(common.contains("(uint(prev.meta.y) & 2u)") && common.contains("(recvN.z < 0.0 ? 2 : 0)"),
-            "the sign of the receiver normal z survives the snorm packing");
-        assertTrue(count(common, "storeEmptyReservoir(writeSlot);") == 3, "no candidate, a degenerate point and no emitters all clear it");
-        assertTrue(common.contains("uint((pc.frame & 1u) ^ 1u) * pixels"), "the previous parity half is read");
-        assertTrue(common.contains("ReservoirBuf(fb.reservoirAddr).r[writeSlot] = outR;"), "the current parity half is written");
-        assertTrue(common.contains("traceTransmittance(shadowOrigin, rayDir / rayDist, rayDist)"),
-            "the reused sample still gets exactly one visibility ray");
-
-        assertTrue(rays.contains("sampleEmittersTemporal(s, vec3(1.0), reach, seed, p, size, n * NEE_CANDIDATES,"),
-            "the ray pass merges the history once per pixel");
-        assertTrue(rays.contains("emCellShadow);"),
-            "the merged sample traces its shadow from the pixelated cell, like the sun");
-        assertEquals(0, count(path, "sampleEmittersTemporal"), "the path tracer keeps plain RIS");
-        assertEquals(0, count(path, "sampleEmittersImpl"), "the path tracer keeps plain RIS");
     }
 
     /**
@@ -565,13 +342,6 @@ public class RtShadingFixesTest {
      * biome-tinted sky and fog still move the result by a visible amount.
      */
     private static void runBiomeAmbientChecks() {
-        String common = RtWorldChecks.rtCommon();
-        assertTrue(common.contains("vec3 skyTint = 0.45 * pc.skyColor.rgb + 0.55;"),
-            "the biome sky colour must keep close to half of the ambient tint");
-        assertTrue(common.contains("vec3 horizonDay = mix(vec3(1.00, 0.97, 0.92), sb.skyFogColor.rgb * 1.15, 0.30);"),
-            "the horizon band must take the biome fog colour");
-        assertTrue(common.contains("if (skyIsNether()) {") && common.contains("if (skyIsEnd()) {"),
-            "the per-dimension ambient stays intact");
 
         float[][] skies = {{0.47f, 0.65f, 1.00f}, {0.55f, 0.62f, 0.48f}};   // plains vs a murky, green-shifted biome
         float oldDelta = relativeDelta(zenithAmbient(skies[0], 0.25f, 0.75f), zenithAmbient(skies[1], 0.25f, 0.75f));

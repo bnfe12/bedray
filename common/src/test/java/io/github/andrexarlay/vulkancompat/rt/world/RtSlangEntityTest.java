@@ -38,7 +38,6 @@ class RtSlangEntityTest {
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtEntityGeometryManager.java";
     private static final String CONFIG =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtConfig.java";
-    private static final String LEGACY_SURFACE = "src/main/resources/shaders/glsl/rt_common_surface.glsl";
 
     /** A path tracer that cannot see a mob cannot reflect one, so the scene mask has to carry both bits. */
     @Test
@@ -52,9 +51,6 @@ class RtSlangEntityTest {
         String trace = block(traversal, "SurfaceHit traceNearest(Ray ray, bool excludeSelfAvatar) {");
         assertTrue(trace.contains("query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);"),
             "the mask the pass sets is the mask the query uses");
-        String legacy = block(read(LEGACY_SURFACE), "void fetchEntitySurface(");
-        assertTrue(legacy.contains("entityTriangle(prim)"),
-            "the legacy path decodes the same primitive index: this is a port, not a re-derivation");
     }
 
     /** One instance holds both kinds of geometry, so the only honest discriminator is the instance's own bit. */
@@ -86,13 +82,13 @@ class RtSlangEntityTest {
         String entity = block(read(ENTITY),
             "SurfaceHit entityHitToSurface(EntityGeometry entities, float3 cameraAnchor, Ray ray,");
         assertTrue(entity.contains("result.worldPosition = result.position + cameraAnchor;"),
-            "the legacy path adds camRel the same way (rt_common_surface.glsl: s.worldPos = s.pos + camRel.xyz)");
+            "a camera-relative section position becomes a world position by adding the same camera delta");
         assertTrue(entity.contains("result.sectionId = SECTION_INDEX_NONE;"),
             "no section to key history or emitter identity on");
 
         String pass = read(PASS);
         assertTrue(pass.contains("traversal.cameraAnchor = pc.emitterCameraRelative.xyz;"),
-            "the same vector the block-emitter NEE corrects with, which is the legacy camRel");
+            "the same vector the block-emitter NEE corrects with");
     }
 
     /**
@@ -123,7 +119,7 @@ class RtSlangEntityTest {
      * fullbright floor is applied after them - which is what the legacy chain does.
      */
     @Test
-    void theAlphaBandsAndTheFullbrightFloorMatchTheLegacyDecode() {
+    void theAlphaBandsAndTheFullbrightFloorOfTheEntityDecode() {
         String entity = read(ENTITY);
         assertTrue(entity.contains("static const float ENTITY_ALPHA_HOLE = 0.1;"), "vanilla's entity cutout edge");
         assertTrue(entity.contains("static const float ENTITY_ALPHA_EMISSION_CODE = 224.0 / 255.0;"),
@@ -133,7 +129,7 @@ class RtSlangEntityTest {
 
         String surface = block(read(SURFACE), "} else if (hit.kind == HitKind.Entity) {");
         assertTrue(surface.contains("if (hit.light.x > 0.995 && hit.light.y > 0.995 && alpha >= ENTITY_ALPHA_HOLE) {"),
-            "the legacy rule's own three conditions");
+            "the three conditions of the vanilla cutout and fullbright rule");
         assertTrue(surface.contains("material.emissionMask = max(material.emissionMask, ENTITY_FULLBRIGHT_EMISSION);"),
             "a max, not an assignment: a glowing texel keeps the brighter of the two");
         assertTrue(surface.indexOf("ENTITY_FULLBRIGHT_EMISSION") > surface.indexOf("material.alphaMode = AlphaMode.Cutout;"),
@@ -141,12 +137,8 @@ class RtSlangEntityTest {
         assertTrue(surface.contains("glassy = entityTexelTranslucent(texel) && max(color.r, max(color.g, color.b)) > 0.08;"),
             "a black texel is the shadow blob under the model, not a pane");
         assertTrue(surface.contains("color = lerp(color, float3(1.0, 0.05, 0.05), 0.65);"),
-            "the hurt tint, at the legacy 65%");
+            "the hurt tint, at 65%");
 
-        String legacy = block(read(LEGACY_SURFACE), "void fetchEntitySurface(");
-        assertTrue(legacy.contains("texelEmission = max(texelEmission, 0.4);"),
-            "the legacy floor this port keeps");
-        assertTrue(legacy.contains("mix(col, vec3(1.0, 0.05, 0.05), 0.65)"), "and the legacy hurt tint");
     }
 
     /** The count the shader reads is the length it was bound, so a stale ring slot can never be walked. */
@@ -329,7 +321,7 @@ class RtSlangEntityTest {
         assertTrue(surface.contains("entityPortalColor(hit.worldPosition, rayDirection, options.portalTime)"),
             "the portal is procedural and uses the current bounce direction for parallax");
         assertTrue(surface.contains("emission = 0.95;") && surface.contains("pbr.roughness = 0.05;"),
-            "the legacy portal emission and smooth surface response");
+            "the portal emission and the smooth surface response");
         assertTrue(read(SURFACE).contains("SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection)"),
             "a secondary hit needs its own ray direction, not the camera's primary direction");
         String entry = read(ENTRY);

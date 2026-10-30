@@ -110,12 +110,13 @@ described a 1:1 port of the existing GLSL.  Bedray 2.0 is a new shader core:
 the old GLSL stays in the tree as a behavioural reference, not as a source to
 copy line by line.
 
-**Current whole-migration evidence: L0 — source and build wiring.** Prior
-agents reported scoped compilation and unit tests for particular revisions;
-those results do not establish that the current complete tree builds. Existing
-bloom now requires AOT Slang and fails when unavailable, but other legacy
-GLSL consumers still exist and must be migrated. A compile or test is not proof
-of rendering in Minecraft; that requires a fresh matching live run and evidence.
+**Current whole-migration evidence: L1 — the tree builds and its unit suites
+pass.** `:common:compileJava`, `:common:compileTestJava`, `:common:test` and
+`runShimTests` are green on `refactor/slang-pipeline` after the legacy renderer
+was deleted, and `native/` CTest passes on its own build. None of that is
+proof of rendering in Minecraft: with the GLSL path gone, the Slang path is the
+only renderer, so the frame that used to be carried by the fallback has to be
+re-captured live before a jar ships. A compile or a test is not a frame.
 
 ## Design rules
 
@@ -130,9 +131,17 @@ of rendering in Minecraft; that requires a fresh matching live run and evidence.
 4. **One module = one concern.**  Material rules do not live in traversal;
    reservoir math does not live in the light sampler; cascade addressing does
    not live in the trace pass.
-5. **The old GLSL is a reference.**  Do not delete it and do not copy its
-   include graph.  When behaviour is unclear, read it; when writing new code,
-   use the new contracts.
+5. **The old GLSL is gone.**  The rule used to be "keep it as a reference".
+   The owner overrode it: while a second renderer existed, every gap was
+   silently filled by the GLSL path and the Slang path never had to close it.
+   `common/src/main/resources/shaders/glsl/rt_*.comp|glsl` and the Java passes
+   that compiled them at runtime are deleted; the reference is now the Slang
+   contract plus `git log`.  Do not copy the old include graph, and do not
+   reintroduce a runtime GLSL compile in the renderer (see
+   `ShadercSurfaceTest`).  What survives Shaderc is not the renderer:
+   `fg_prepare.comp`, `iris_depth.comp`, the `shaders/spatial/` upscaler kernels
+   and the Iris pack host, plus the one-shot opacity-micromap probe in
+   `RtExtensionProbe`.
 6. **No binaries in git.**  SDKs, generated SPIR-V, DLLs and JARs stay out of
    the repository.  `*.spv`, `*.exe`, `*.dll` and `*.jar` are already ignored.
 
@@ -415,11 +424,17 @@ CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing uses its own
 `SlangRuntime`, created from `SlangDeviceCapabilities.enabledMask`; the mask-0
 runtime in `RtAtmosphere` belongs to bloom only. The final C++ renderer must
 negotiate the features actually enabled on the game's device and select only
-supported methods. If this path is unsupported, the Java selector reports the
-reason; it no longer falls back to legacy GLSL `rt_path.comp`. The legacy ray
-effects pass is likewise reported unavailable until its Slang replacement is
-connected. The Slang volumetric passes compile but are not yet connected, so
-god rays are currently reported unavailable.
+supported methods. There is no selector and no second renderer any more: the
+`-Dbedray.pathTracer=auto|slang|legacy` switch and the GLSL `rt_path.comp` it
+could fall back to are deleted, so a Slang path the device cannot run fails the
+frame with its reason in `vkbridge.rt.failure` and the game keeps drawing the
+raster image.  Ray Tracing mode (the default when `enableHardwareRayTracing` is
+on) is in the same position: its GLSL effects pass is deleted and the Slang
+`ssr.slang`, `composite.slang`, `atrous.slang`, `temporal_accumulate.slang` and
+`velocity_reproject.slang` passes are not wired into the frame loop yet, so
+`createPass` reports `slang_ray` unavailable until they are.  The Slang
+volumetric passes compile but are not yet connected either, so god rays are
+likewise reported unavailable.
 
 The current `volumetric_march` binding 2 explicitly reads `LegacySection` through
 `LegacySectionTraversal`. The native scene publishes a different GeometrySection
@@ -1149,6 +1164,46 @@ manually compiled all 17 `passes/*.slang` with the `compileSlang` arguments
 code-generation evidence for that revision only: it is not a Gradle build, no
 manifest was validated by `compileSlang`, and no GPU dispatch, stride check,
 cross-cascade resolve or image comparison was run.
+
+### What the deleted GLSL guards covered
+
+Deleting the GLSL invalidated every test whose oracle was GLSL text. Such a
+test compares the port against a file that no longer exists, which proves
+nothing about the port, so each one was either re-aimed at the Slang source it
+is supposed to protect or removed.  The first group is closed:
+
+* the self-avatar exclusion now reads `traversal/scene_traversal.slang`
+  (`selfAvatarPrimitive`, `tracePrimary`) and `passes/path_trace.slang`;
+* the vegetation hit bits now read `traversal/legacy_section_traversal.slang`;
+* the ReSTIR DI and spatial pool numbers are pinned literally against
+  `restir/*.slang` instead of by comparison with `rt_restir_spatial.comp`;
+* the live velocity reprojection body is pinned inside
+  `history/velocity_live.slang`;
+* the NRD motion channel reads `pathtrace/path_tracer.slang` and the
+  binding record in `RtFrameBindings`;
+* the block-emitter falloff, chromatic categories and shadow bias read
+  `light/block_emitters.slang`, and the entity and G-buffer hermetic masks read
+  `surface/surface.slang` and `pathtrace/path_trace_entry.slang`.
+
+The second group has no Slang counterpart yet, and each entry is an open hole,
+not a passing test:
+
+* `surface/water.slang` — the medium, the vanilla/realistic split and the
+  underwater light are guarded only through Java parameters; no test reads the
+  shader. (`RtWaterMediumTest`, `RtVanillaWaterLightTest`)
+* the `StatsBuf` std430 layout of the Slang structs, beyond the two
+  self-avatar slots. (`RtStatsLayoutTest`)
+* pixel-shadow sampling, canopy and foliage light transmission, glass cost,
+  distant-block light, the NEE NaN guard and the primary-path hot-loop
+  invariants. (`RtPixelShadowSamplingTest`, `RtCanopyLightTest`,
+  `RtFoliageLightingTest`, `RtGlassCostTest`, `RtDistantBlockLightTest`,
+  `RtShaderNaNGuardTest`, `RtPathHotLoopTest`, `RtOptimizationTest`,
+  `RtBlockLightReachTest`)
+
+The third group tested the deleted classes themselves (runtime compiler
+options, the SPIR-V disk cache, the GLSL include graph, the `rtx/raytracing`
+experiment engine) and is gone with no loss. The sun and moon disc did not
+lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
 
 ## Next steps
 

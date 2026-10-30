@@ -14,7 +14,7 @@ class DenoiserGuidePreparationTest {
         int create = renderer.indexOf("createDenoiser(device, w, h)");
         int ensure = renderer.indexOf("owner.ensure(w, h, output.view)", create);
         int prepare = renderer.indexOf("owner.prepare(cmd)", ensure);
-        int bind = renderer.indexOf("pass.bind(new RtPipeline.Views(", prepare);
+        int bind = renderer.indexOf("pass.bind(new RtFrameBindings.Views(", prepare);
         int primary = renderer.indexOf("pass.dispatch(cmd, params, w, h)", bind);
         int record = renderer.indexOf("owner.record(cmd, camera.projectionMatrix", primary);
         assertTrue(create >= 0 && ensure > create && prepare > ensure && bind > prepare && primary > bind && record > primary);

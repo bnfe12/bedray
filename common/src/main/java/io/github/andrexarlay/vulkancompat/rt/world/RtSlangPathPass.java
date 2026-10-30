@@ -98,7 +98,7 @@ public final class RtSlangPathPass implements RtPass {
     private final boolean requestedGbuffer;
     private final PathTraceBackend backend;
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
-    private RtPipeline.Views views;
+    private RtFrameBindings.Views views;
     private int accumFrames;
     private boolean forceReset = true;
     /** True when the previous display dispatch left a mean and a depth history that reprojection can read. */
@@ -236,7 +236,7 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     @Override
-    public void bind(RtPipeline.Views common) {
+    public void bind(RtFrameBindings.Views common) {
         views = common;
     }
 

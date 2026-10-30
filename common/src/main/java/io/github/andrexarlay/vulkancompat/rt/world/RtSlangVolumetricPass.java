@@ -51,7 +51,7 @@ final class RtSlangVolumetricPass implements AutoCloseable {
         }
     }
 
-    void record(VkCommandBuffer cmd, RtPipeline.Views views, RtFrameParams p, int width, int height) {
+    void record(VkCommandBuffer cmd, RtFrameBindings.Views views, RtFrameParams p, int width, int height) {
         if (closed) throw new IllegalStateException("volumetric pass is closed");
         if (views.table() == null) throw new IllegalArgumentException("volumetric pass requires the scene section table");
         int steps = RtAtmosphereSettings.godRaySteps();

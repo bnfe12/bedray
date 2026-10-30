@@ -32,7 +32,6 @@ public class ShimTestRunner {
             "testConfigDefaults",
             "testTargetResolutionMath",
             "testVulkanCapabilityChecker",
-            "testRtExperimentEngine",
             "testWorldTargetManager",
             "testHandDeferral",
             "testUpscalerJitterSource",
@@ -54,7 +53,6 @@ public class ShimTestRunner {
             "testNrdDenoiser",
             "testJitterPhaseCount",
             "testVelocityShaderCompiles",
-            "testRtShaderSourcesCompile",
             "testMixinDisableCsv",
             "testRtxDeviceRequirements",
             "testLateProvidersAndScenarios",
@@ -63,14 +61,13 @@ public class ShimTestRunner {
             "testRtActivation",
             "testTextureLodBias",
             "testMotionVectorStability",
-            "testSpatialUpscalers"
+            "testSpatialUpscalers",
         };
         Runnable[] runs = {
             wrap(ShimTestRunner::testHaltonJitter),
             wrap(ShimTestRunner::testConfigDefaults),
             wrap(ShimTestRunner::testTargetResolutionMath),
             wrap(ShimTestRunner::testVulkanCapabilityChecker),
-            wrap(ShimTestRunner::testRtExperimentEngine),
             wrap(ShimTestRunner::testWorldTargetManager),
             wrap(ShimTestRunner::testHandDeferral),
             wrap(ShimTestRunner::testUpscalerJitterSource),
@@ -92,7 +89,6 @@ public class ShimTestRunner {
             wrap(io.github.andrexarlay.vulkancompat.rt.denoise.NrdChecks::runAll),
             wrap(ShimTestRunner::testJitterPhaseCount),
             wrap(ShimTestRunner::testVelocityShaderCompiles),
-            wrap(ShimTestRunner::testRtShaderSourcesCompile),
             wrap(ShimTestRunner::testMixinDisableCsv),
             wrap(ShimTestRunner::testRtxDeviceRequirements),
             wrap(ShimTestRunner::testLateProvidersAndScenarios),
@@ -101,7 +97,7 @@ public class ShimTestRunner {
             wrap(io.github.andrexarlay.vulkancompat.rtx.raytracing.RtActivationChecks::runAll),
             wrap(io.github.andrexarlay.vulkancompat.rtx.config.TextureLodBiasChecks::runAll),
             wrap(ShimTestRunner::testMotionVectorStability),
-            wrap(io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial.SpatialChecks::runAll)
+            wrap(io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial.SpatialChecks::runAll),
         };
         if (names.length != runs.length) {
             throw new IllegalStateException("names.length (" + names.length + ") != runs.length (" + runs.length + ")");
@@ -122,6 +118,8 @@ public class ShimTestRunner {
             System.exit(1);
         }
     }
+
+
 
     private interface ThrowingRunnable { void run() throws Exception; }
 
@@ -307,45 +305,6 @@ public class ShimTestRunner {
         io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.reset();
     }
 
-    private static void testRtExperimentEngine() {
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.DefaultRtExperimentEngine engine =
-            io.github.andrexarlay.vulkancompat.rtx.raytracing.DefaultRtExperimentEngine.getInstance();
-        assertTrue(engine != null, "DefaultRtExperimentEngine instance must exist");
-        assertTrue(io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanRtExperimentEngine.getInstance() != null, "VulkanRtExperimentEngine instance must exist");
-        assertTrue(engine == io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanRtExperimentEngine.getInstance(), "Must be same singleton instance");
-
-        // 1. By default, isEnabled() is false
-        VulkanRtxConfig.enableHardwareRayTracing = false;
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideForTesting(false);
-        assertTrue(!engine.isEnabled(), "Engine must be disabled when config flag is false");
-
-        // 2. Safe no-ops when disabled
-        engine.init();
-        assertTrue(!engine.isInitialized(), "init must no-op when disabled");
-        engine.buildTestStructure();
-        engine.dispatchRayQuery();
-        engine.dispatchRayQuery((com.mojang.blaze3d.pipeline.RenderTarget) null);
-        engine.cleanup();
-        assertTrue(!engine.isInitialized(), "cleanup must no-op when not initialized");
-
-        // 3. When enabled via config and capability
-        try {
-            io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideForTesting(true);
-            VulkanRtxConfig.enableHardwareRayTracing = true;
-            assertTrue(engine.isEnabled(), "Engine must be enabled when config=true and capability=true");
-
-            engine.init();
-            assertTrue(engine.isInitialized(), "Engine must initialize when enabled");
-            engine.buildTestStructure();
-            engine.dispatchRayQuery();
-            engine.dispatchRayQuery((com.mojang.blaze3d.pipeline.RenderTarget) null);
-            engine.cleanup();
-            assertTrue(!engine.isInitialized(), "Engine must be reset after cleanup");
-        } finally {
-            VulkanRtxConfig.enableHardwareRayTracing = false;
-            io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.reset();
-        }
-    }
 
     private static void testWorldTargetManager() throws Exception {
         VulkanRtxConfig.UpscalerType oldU = VulkanRtxConfig.upscalerType;
@@ -625,6 +584,43 @@ public class ShimTestRunner {
 
     // ---- Intel XeSS (X0/X1): Java-level checks only (no DLL, no GPU) ----
 
+    /** The engine's own FeatureSet/Feature/PNextStruct value types still build a ray-tracing requirement. */
+    private static void testFeatureSetStructs() {
+        try {
+            com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct asStruct =
+                new com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct(org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR.class);
+            com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct rqStruct =
+                new com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct(org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR.class);
+            com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct bdaStruct =
+                new com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct(org.lwjgl.vulkan.VkPhysicalDeviceBufferDeviceAddressFeaturesKHR.class);
+
+            com.mojang.renderpearl.backend.vulkan.init.VulkanFeature f1 =
+                new com.mojang.renderpearl.backend.vulkan.init.VulkanFeature(asStruct, "accelerationStructure");
+            com.mojang.renderpearl.backend.vulkan.init.VulkanFeature f2 =
+                new com.mojang.renderpearl.backend.vulkan.init.VulkanFeature(rqStruct, "rayQuery");
+            com.mojang.renderpearl.backend.vulkan.init.VulkanFeature f3 =
+                new com.mojang.renderpearl.backend.vulkan.init.VulkanFeature(bdaStruct, "bufferDeviceAddress");
+
+            com.mojang.renderpearl.backend.vulkan.init.FeatureSet rtFeatureSet =
+                new com.mojang.renderpearl.backend.vulkan.init.FeatureSet(
+                    "Hardware Ray Tracing",
+                    java.util.Set.of(
+                        "VK_KHR_acceleration_structure",
+                        "VK_KHR_ray_query",
+                        "VK_KHR_buffer_device_address",
+                        "VK_KHR_deferred_host_operations"
+                    ),
+                    java.util.Set.of(f1, f2, f3)
+                );
+            assertTrue(rtFeatureSet != null, "rtFeatureSet must not be null");
+            assertEquals(4, rtFeatureSet.extensions().size(), "four extensions");
+            assertEquals(3, rtFeatureSet.features().size(), "three features");
+            System.out.println("FeatureSet created: " + rtFeatureSet);
+        } catch (Throwable t) {
+            throw new RuntimeException("FeatureSet creation failed: " + t.getMessage(), t);
+        }
+    }
+
     private static void testXessStructLayoutSizes() {
         // Sizes computed from xess.h / xess_vk.h (pack 8); the class initializer also throws on a mismatch.
         XessLayouts.verify();
@@ -725,62 +721,8 @@ public class ShimTestRunner {
         assertTrue(pass.spirv().length > 0, "live velocity AOT SPIR-V must be packaged");
     }
 
-    /**
-     * Compiles the RT shaders in every define combination the pipelines instantiate. A GLSL error in rt_common.glsl
-     * surfaces here instead of disabling ray tracing at runtime.
-     */
-    private static void testRtShaderSourcesCompile() {
-        String gbuffer = io.github.andrexarlay.vulkancompat.rt.world.RtPipeline.GBUFFER_DEFINE;
-        String accum = io.github.andrexarlay.vulkancompat.rt.world.RtPathTracerPass.ACCUM_DEFINE;
-        assertSpirv("/shaders/glsl/rt_rays.comp", "rt_rays.comp", "", "ray mode");
-        assertSpirv("/shaders/glsl/rt_rays.comp", "rt_rays.comp+gbuffer", gbuffer, "ray mode with the denoiser G-buffer");
-        assertSpirv("/shaders/glsl/rt_path.comp", "rt_path.comp", accum, "path mode");
-        assertSpirv("/shaders/glsl/rt_path.comp", "rt_path.comp+gbuffer", gbuffer + accum, "path mode with the denoiser G-buffer");
-        assertSpirv("/shaders/glsl/rt_atrous.comp", "rt_atrous.comp", accum, "path-mode atrous filter");
-    }
 
-    private static void assertSpirv(String path, String name, String defines, String what) {
-        java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler.compileResource(path, name, defines);
-        assertTrue(spv != null && spv.remaining() > 0, what + " must compile to SPIR-V");
-    }
 
-    private static void testFeatureSetStructs() {
-        try {
-            com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct asStruct =
-                new com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct(org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR.class);
-            com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct rqStruct =
-                new com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct(org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR.class);
-            com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct bdaStruct =
-                new com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct(org.lwjgl.vulkan.VkPhysicalDeviceBufferDeviceAddressFeaturesKHR.class);
-
-            com.mojang.renderpearl.backend.vulkan.init.VulkanFeature f1 =
-                new com.mojang.renderpearl.backend.vulkan.init.VulkanFeature(asStruct, "accelerationStructure");
-            com.mojang.renderpearl.backend.vulkan.init.VulkanFeature f2 =
-                new com.mojang.renderpearl.backend.vulkan.init.VulkanFeature(rqStruct, "rayQuery");
-            com.mojang.renderpearl.backend.vulkan.init.VulkanFeature f3 =
-                new com.mojang.renderpearl.backend.vulkan.init.VulkanFeature(bdaStruct, "bufferDeviceAddress");
-
-            com.mojang.renderpearl.backend.vulkan.init.FeatureSet rtFeatureSet =
-                new com.mojang.renderpearl.backend.vulkan.init.FeatureSet(
-                    "Hardware Ray Tracing",
-                    java.util.Set.of(
-                        "VK_KHR_acceleration_structure",
-                        "VK_KHR_ray_query",
-                        "VK_KHR_buffer_device_address",
-                        "VK_KHR_deferred_host_operations"
-                    ),
-                    java.util.Set.of(f1, f2, f3)
-                );
-            assertTrue(rtFeatureSet != null, "rtFeatureSet must not be null");
-            System.out.println("FeatureSet created: " + rtFeatureSet);
-
-            java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.rt.poc.RtTestPipeline.obtainSpirv();
-            assertTrue(spv != null && spv.remaining() > 0, "SPIR-V bytecode must be available");
-            System.out.println("SPIR-V obtained: " + spv.remaining() + " bytes");
-        } catch (Throwable t) {
-            throw new RuntimeException("FeatureSet creation failed: " + t.getMessage(), t);
-        }
-    }
 
     /** Our own requirements convert into engine FeatureSets through Bedray Core applier (Core-side registry logic is tested in module core). */
     private static void testRtxDeviceRequirements() {

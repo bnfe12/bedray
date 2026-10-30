@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Spatial ReSTIR DI for the Slang path tracer is a port of {@code rt_restir_spatial.comp}, and it is the reuse stage that
  * can silently make light wrong instead of noisy: a neighbour's sample re-resolved at the wrong surface, a pooled record
  * indexed against a resolution the ring no longer has, or a merged weight that survives into next frame's temporal
- * import. The guards below pin the numbers the owner tuned in the legacy kernel, the checker discipline that makes the
+ * import. The guards below pin the numbers the owner tuned against real scenes, the checker discipline that makes the
  * in-place update race-free, and the host contract that keeps the pass optional.
  */
 class RtSlangRestirSpatialTest {
@@ -26,38 +26,30 @@ class RtSlangRestirSpatialTest {
     private static final String PASS = "src/main/resources/shaders/slang/passes/restir_spatial.slang";
     private static final String DI = "src/main/resources/shaders/slang/restir/di_block_emitters.slang";
     private static final String RESERVOIR = "src/main/resources/shaders/slang/restir/restir_di.slang";
-    private static final String LEGACY = "src/main/resources/shaders/glsl/rt_restir_spatial.comp";
     private static final String HOST = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSpatialReuseSlangPass.java";
     private static final String GAME_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
 
     /**
-     * The owner tunes these against real scenes; a retune has to move both files or neither. The legacy kernel hard-codes
-     * its square as {@code round(u * 14.0) - 7}, so the radius is read out of that expression rather than out of the
-     * unused {@code SPATIAL_RADIUS} declaration next to it.
+     * The owner tunes these against real scenes, so a retune is a deliberate edit of one file.
      */
     @Test
-    void thePoolNumbersAreTheLegacyOnes() {
+    void thePoolNumbersAreTheTunedOnes() {
         String slang = read(SPATIAL);
-        String legacy = read(LEGACY);
-        assertEquals(intNumber(legacy, "SPATIAL_DRAWS"), intNumber(slang, "SPATIAL_DRAWS"),
-            "draws per pixel: the port must pool the same neighbourhood the legacy kernel proved out");
+        assertEquals(8, intNumber(slang, "SPATIAL_DRAWS"),
+            "draws per pixel: the pooled neighbourhood the owner tuned against real scenes");
         assertTrue(slang.contains("static const int SPATIAL_OFFSET_RADIUS = 7;"),
-            "the legacy square is plus or minus seven per axis (round(u * 14.0) - 7)");
-        assertTrue(legacy.contains("ivec2 off = ivec2(round(u * 14.0)) - 7;"), "and the port reads 2 * 7 from that");
-        assertTrue(slang.contains("static const float SPATIAL_NORMAL_DOT_MIN = 0.85;")
-            && legacy.contains("if (dot(nQ, nP) < 0.85)"),
+            "plus or minus seven per axis, which is where the 2 * 7 of the square comes from");
+        assertTrue(slang.contains("static const float SPATIAL_NORMAL_DOT_MIN = 0.85;"),
             "the same normal rejection: walls must not import each other's light");
         assertTrue(slang.contains("SPATIAL_PLANE_TOLERANCE_RELATIVE * max(length(position), 1.0)\n"
-                + "            + SPATIAL_PLANE_TOLERANCE_ABSOLUTE;")
-            && legacy.contains("float planeTol = 0.05 * max(own.meta.w, 1.0) + 0.1;"),
+                + "            + SPATIAL_PLANE_TOLERANCE_ABSOLUTE;"),
             "the same plane gate - five percent of the camera distance plus a tenth of a block");
         assertTrue(slang.contains("static const float SPATIAL_PLANE_TOLERANCE_RELATIVE = 0.05;")
             && slang.contains("static const float SPATIAL_PLANE_TOLERANCE_ABSOLUTE = 0.1;"),
             "and both halves of that tolerance are named constants of this module");
-        assertTrue(slang.contains("pcgHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frameIndex * 26699u + 7u)")
-            && legacy.contains("pcgHash(uint(p.x) * 1973u + uint(p.y) * 9277u + pc.frame * 26699u + 7u)"),
+        assertTrue(slang.contains("pcgHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frameIndex * 26699u + 7u)"),
             "the same seed hash, including its +7 stream offset, so a side-by-side frame can be compared per sample");
     }
 
@@ -68,7 +60,7 @@ class RtSlangRestirSpatialTest {
         String reservoir = read(RESERVOIR);
         assertTrue(spatial.contains("merged = restirDiSpatial(emitters(), merged, neighbour, receiver,\n"
             + "                RESTIR_DI_M_CAP, RESTIR_DI_SPATIAL_RATIO_CAP, seed);"),
-            "one merge primitive, the legacy spatial ratio cap and the shared M cap");
+            "one merge primitive, the spatial ratio cap and the shared M cap");
         assertTrue(reservoir.contains("static const float RESTIR_DI_SPATIAL_RATIO_CAP = 5.0;"),
             "the firefly clamp that bounds a receiver change");
         String usable = block(read(SPATIAL), "bool neighbourUsable(DIReservoir neighbour)");
@@ -86,7 +78,7 @@ class RtSlangRestirSpatialTest {
     }
 
     /**
-     * A neighbour is imported only after it has proved it is the same surface. Every rejection the legacy kernel applies
+     * A neighbour is imported only after it has proved it is the same surface. Every rejection the stage applies
      * has to be there, because the cost of dropping one is a torch lighting the room behind the wall it stands in.
      */
     @Test
@@ -121,19 +113,15 @@ class RtSlangRestirSpatialTest {
     @Test
     void theCheckerDisciplineIsWhatMakesTheInPlaceUpdateRaceFree() {
         String slang = read(SPATIAL);
-        String legacy = read(LEGACY);
-        assertTrue(slang.contains("return ((pixel.x + pixel.y) & 1) == int(phase);")
-            && legacy.contains("if (((p.x + p.y) & 1) != phase)"),
+        assertTrue(slang.contains("return ((pixel.x + pixel.y) & 1) == int(phase);"),
             "the writer set is one checker colour");
         String offset = block(slang, "int2 blockEmitterSpatialOffset(inout uint seed, int radius)");
         assertTrue(offset.contains("if (((offset.x + offset.y) & 1) == 0)")
             && offset.contains("offset.x += offset.x >= 0 ? 1 : -1;"),
             "and the offset is pushed onto the opposite colour, so a read never hits a cell this dispatch writes");
-        assertTrue(legacy.contains("if (((off.x + off.y) & 1) == 0)")
-            && legacy.contains("off.x += off.x >= 0 ? 1 : -1;"), "as in the legacy kernel");
         assertEquals(2, RtSpatialReuseSlangPass.PHASES, "two colours, hence two dispatches per frame");
         assertTrue(slang.contains("for (uint draw = 0u; draw < SPATIAL_DRAWS; draw += 1u)"),
-            "the draws are the legacy count, not a loop over a disk");
+            "the draws are the tuned count, not a loop over a disk");
     }
 
     /** This stage pools distributions; visibility stays the shading pass's job. A stray shadow ray here would double the cost. */
@@ -146,8 +134,6 @@ class RtSlangRestirSpatialTest {
         assertFalse(pass.contains("accelerationStructure") && pass.contains("RaytracingAccelerationStructure"),
             "the entry pass binds no acceleration structure");
         assertFalse(spatial.contains("traversal"), "and does not import one");
-        assertTrue(read(LEGACY).contains("No shadow rays here"),
-            "the legacy kernel documents the same split, so this is a contract and not an accident");
     }
 
     /**
@@ -164,8 +150,6 @@ class RtSlangRestirSpatialTest {
         assertTrue(spatial.contains("if (!(merged.stats.y >= 0.0) || !(merged.stats.x > 0.0) || !(merged.sample.w > 0.0)\n"
             + "            || !isFinite(merged.sample.xyz) || !isFinite(merged.stats.xyz))"),
             "a NaN count passes a plain comparison, so every lane is tested before the store");
-        assertTrue(read(LEGACY).contains("if (!(wsum >= 0.0) || !(count > 0.0) || !(winPhat > 0.0)"),
-            "the legacy kernel rejects the same set");
         assertTrue(spatial.contains("reservoirs[ownSlot] = merged;"), "and only then writes the slot");
         assertTrue(spatial.stripTrailing().endsWith("reservoirs[ownSlot] = merged;\n    }"),
             "the store is the last statement of the stage: a merge that roulette resolved onto its own sample still "
@@ -312,7 +296,7 @@ class RtSlangRestirSpatialTest {
 
     /**
      * The pass is an extra stage, not a precondition: a machine whose AOT artifact is missing or whose manifest disagrees
-     * has to keep running temporal reuse, which is what the legacy path did when its spatial kernel was compiled out.
+     * has to keep running temporal reuse, which is what the pass did when the spatial stage was compiled out.
      */
     @Test
     void aMissingSpatialKernelDegradesToTemporalOnly() {

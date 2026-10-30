@@ -5,7 +5,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 /** Execution boundary: the host captures frame state; the selected backend owns recording resources. */
 interface PathTraceBackend extends AutoCloseable {
     /** Borrowed mutable inputs, consumed synchronously by record and never retained by a backend. */
-    record Frame(VkCommandBuffer command, RtPipeline.Views views, RtPathTraceSlangPass.Frame constants,
+    record Frame(VkCommandBuffer command, RtFrameBindings.Views views, RtPathTraceSlangPass.Frame constants,
                  RtPathTraceSlangPass.Dispatch dispatch, RtPathTraceSlangPass.Emitters emitters,
                  RtPathTraceSlangPass.Entities entities, int flags, int accumFrames) {}
 

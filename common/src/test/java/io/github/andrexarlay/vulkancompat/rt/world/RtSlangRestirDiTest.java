@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * ReSTIR DI for the Slang path tracer is a port of numbers the legacy GLSL path has run on GPUs for months, wired to a
+ * ReSTIR DI for the Slang path tracer carries the numbers the GLSL path ran on GPUs for months, wired to a
  * host that owns a second reservoir ring. String guards cannot prove a merge is unbiased, but they can prove the three
  * things that break silently: the constants the owner tuned, the space a stored light point is written and read in, and
  * the fact that the frame being written never aliases the frame being read.
@@ -26,7 +26,6 @@ class RtSlangRestirDiTest {
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
     private static final String CONTRACT = "src/main/resources/shaders/slang/contracts/light.slang";
-    private static final String LEGACY = "src/main/resources/shaders/glsl/rt_common_emitters.glsl";
     /** The gradle pin lives in the root project, one level above the {@code common} working directory of a test JVM. */
     private static final String GRADLE = "../gradle/slang.gradle";
     private static final String HOST_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
@@ -39,21 +38,16 @@ class RtSlangRestirDiTest {
 
     /** The owner tunes these by eye against real scenes; a retune has to move both files or neither. */
     @Test
-    void theMergeNumbersAreTheLegacyOnes() {
+    void theMergeNumbersAreTheTunedOnes() {
         String slang = read(RESERVOIR);
-        String legacy = read(LEGACY);
-        for (String[] pair : new String[][] {
-            {"RESTIR_M_CAP = 20.0", "RESTIR_DI_M_CAP = 20.0"},
-            {"RESTIR_TEMPORAL_RATIO_CAP = 8.0", "RESTIR_DI_TEMPORAL_RATIO_CAP = 8.0"},
-            {"RESTIR_SPATIAL_RATIO_CAP = 5.0", "RESTIR_DI_SPATIAL_RATIO_CAP = 5.0"},
-            {"RESTIR_OCCLUSION_DECAY = 0.25", "RESTIR_DI_OCCLUSION_DECAY = 0.25"} }) {
-            assertTrue(legacy.contains(pair[0]), "the legacy path moved " + pair[0] + ": re-tune the port too");
-            assertTrue(slang.contains(pair[1]), "the Slang port dropped " + pair[1]);
+        for (String constant : new String[] {"RESTIR_DI_M_CAP = 20.0", "RESTIR_DI_TEMPORAL_RATIO_CAP = 8.0",
+            "RESTIR_DI_SPATIAL_RATIO_CAP = 5.0", "RESTIR_DI_OCCLUSION_DECAY = 0.25"}) {
+            assertTrue(slang.contains(constant), "the merge lost its tuned number: " + constant);
         }
         String gates = read(DI);
         assertTrue(gates.contains("static const float DI_DISTANCE_TOLERANCE_RELATIVE = 0.05;")
             && gates.contains("static const float DI_DISTANCE_TOLERANCE_ABSOLUTE = 0.1;"),
-            "the legacy receiver-distance tolerance: 5 percent plus a tenth of a block");
+            "the receiver-distance tolerance: 5 percent plus a tenth of a block");
         assertTrue(gates.contains("static const float DI_NORMAL_DOT_STATIC = 0.8;")
             && gates.contains("static const float DI_NORMAL_DOT_MOVING = 0.6;"),
             "a moving camera has to prove the surface match, a stationary one may keep a turned normal");
@@ -100,7 +94,7 @@ class RtSlangRestirDiTest {
     }
 
     /**
-     * A reused sample must belong to the surface now shading this pixel. Every gate the legacy path uses has to survive
+     * A reused sample must belong to the surface now shading this pixel. Every gate that keeps a wrong surface out has to survive
      * the port, or a torch seen through a window keeps lighting the wall behind it.
      */
     @Test
@@ -169,7 +163,7 @@ class RtSlangRestirDiTest {
         assertTrue(confirm.contains("DIReservoir record = reservoirs[ownSlot];"),
             "and the feedback re-reads the slot, because nothing may be carried between the two calls");
         assertTrue(confirm.contains("record.stats.y *= RESTIR_DI_OCCLUSION_DECAY;"),
-            "the weight sum decays, the sample stays: the legacy four-frame fade-out");
+            "the weight sum decays, the sample stays: a four-frame fade-out");
         String tracer = read(TRACER);
         assertTrue(tracer.contains("reuse.reuseConfirm(!reusedTraced || reusedOccluded);"),
             "a sample that could not even be traced is treated as occluded, so a record that lost its light fades too");
@@ -211,7 +205,7 @@ class RtSlangRestirDiTest {
             "one estimator, fed with the merged weight sum and the merged M - reuse means reusing the accumulation too");
         assertTrue(reuse.contains("current = mergeReservoirs(current, history, evaluation.targetPdf,")
             && reuse.contains("RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed)"),
-            "the import is capped by the legacy ratio, so one bright history cannot swallow this frame's draws");
+            "the import is capped by the ratio, so one bright history cannot swallow this frame's draws");
         String entry = read(ENTRY);
         assertTrue(entry.contains("lights.emittersReusedAtPrimary = directReuse.enabled != 0u;"),
             "with the reservoir on, the composite stops drawing the emitter branch a second time at the primary vertex");

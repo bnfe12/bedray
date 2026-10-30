@@ -38,7 +38,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
      * {@code PathTracePush} fields the Java path would have written, so the two
      * paths cannot drift in their path limits or ReSTIR state.
      */
-    record FrameInput(long commandBuffer, RtPipeline.Views views, RtPathTraceSlangPass.Frame frame,
+    record FrameInput(long commandBuffer, RtFrameBindings.Views views, RtPathTraceSlangPass.Frame frame,
                       RtPathTraceSlangPass.Dispatch dispatch, RtPathTraceSlangPass.Emitters emitters,
                       RtPathTraceSlangPass.Reservoirs reservoirs, RtPathTraceSlangPass.Entities entities,
                       int flags, int accumFrames, int displayFlags, float maxRadiance,
@@ -155,7 +155,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
     private void fill(MemorySegment desc, FrameInput input) {
         RtPathTraceSlangPass.Frame frame = input.frame();
         RtPathTraceSlangPass.Dispatch dispatch = input.dispatch();
-        RtPipeline.Views views = input.views();
+        RtFrameBindings.Views views = input.views();
 
         desc.set(JAVA_INT, BedrayCoreLayouts.PTFD_ABI_VERSION, BedrayCoreLayouts.ABI_VERSION);
         // A core that predates the medium bit rejects the whole frame over an unknown flag, so the verdict is dropped

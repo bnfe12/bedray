@@ -46,7 +46,7 @@ final class RtAtmosphere {
      * @param bobX     camera origin offset of the frame (bob), camera-relative
      */
     void record(VkCommandBuffer cmd, VulkanDevice vulkanDevice, RtMemory mem, RtFrameParams p, Matrix4f viewProj,
-                RtPipeline.Views views, int w, int h, float bobX, float bobY, float bobZ) {
+                RtFrameBindings.Views views, int w, int h, float bobX, float bobY, float bobZ) {
         VkDevice device = vulkanDevice.vkDevice();
         if (p.mode != RtConfig.MODE_LIT || views.depth() == 0L) {
             return; // debug views show the raw buffer

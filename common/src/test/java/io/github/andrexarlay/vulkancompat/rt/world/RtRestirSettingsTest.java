@@ -22,8 +22,6 @@ class RtRestirSettingsTest {
     private static final String SETTINGS = "src/main/java/io/github/andrexarlay/vulkancompat/rtx/config/RtSettings.java";
     private static final String RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtFrameRenderer.java";
-    private static final String RAYS_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
-        + "RtRayEffectsPass.java";
     private static final String SLANG_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
@@ -102,11 +100,12 @@ class RtRestirSettingsTest {
             "the reuse needs the emissive term it would reuse, and it is the switch that decides whether the ring is handed over");
         assertTrue(renderer.contains("long reservoirAddr = 0L;"),
             "off means the shader is handed a zero reservoir address, which is the shader's own off test");
-        String rays = read(RAYS_PASS);
-        assertTrue(rays.contains("if (restirSpatial != null && RtSettings.restirSpatial() && params.mode == RtConfig.MODE_LIT"),
-            "spatial reuse is gated where the two checker phases are dispatched, not where the pipeline is built");
-        assertTrue(rays.contains("private static final boolean RESTIR_SPATIAL"),
-            "the session switch still decides whether the kernel exists at all");
+        String path = read(SLANG_PASS);
+        assertTrue(path.contains("return backend.spatialAvailable() && diActive() && RtSettings.pathRestirSpatial();"),
+            "spatial reuse is gated where the frame is recorded, not where the pipeline is built: a backend without the "
+                + "reservoir ring cannot be asked to reuse it");
+        assertTrue(path.contains("spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0"),
+            "the switch reaches the core as one frame bit, so the shader and the host cannot disagree mid-session");
     }
 
     /** A reused record is a claim about the past: any technique change invalidates it, so the frame diff has to see them. */

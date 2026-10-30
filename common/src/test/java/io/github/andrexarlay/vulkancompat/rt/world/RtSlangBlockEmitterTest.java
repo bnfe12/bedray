@@ -11,11 +11,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The Slang path tracer had only the sun and the moon to sample, so a torch-lit room rendered black while the legacy path
- * lit it. {@code light/block_emitters.slang} is a port, not a re-derivation: the look of the legacy emitters (the tuned
- * falloff, the chromatic categories, the open-source shadow bias) is what the owner has been iterating on for months, so
- * these guards pin the constants, the receiver state the port moved into {@code LightReceiver}, and the one place where the
- * two estimators differ by construction.
+ * The Slang path tracer had only the sun and the moon to sample, so a torch-lit room rendered black. The emitter list in
+ * {@code light/block_emitters.slang} carries the look the owner iterated on for months: the tuned falloff, the chromatic
+ * categories, the open-source shadow bias. These guards pin those numbers, the receiver state the sampler needs, and the
+ * one place where the estimate and the density must not double-count a cosine.
  */
 class RtSlangBlockEmitterTest {
 
@@ -25,9 +24,6 @@ class RtSlangBlockEmitterTest {
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
     private static final String CONTRACT = "src/main/resources/shaders/slang/contracts/light.slang";
     private static final String SURFACE = "src/main/resources/shaders/slang/surface/surface.slang";
-    private static final String LEGACY = "src/main/resources/shaders/glsl/rt_common_emitters.glsl";
-    private static final String LEGACY_CORE = "src/main/resources/shaders/glsl/rt_common_core.glsl";
-    private static final String LEGACY_SURFACE = "src/main/resources/shaders/glsl/rt_common_surface.glsl";
 
     @Test
     void theRecordIsTheBufferRtEmittersAlreadyUploads() {
@@ -38,28 +34,20 @@ class RtSlangBlockEmitterTest {
         assertTrue(record.indexOf("edge1;") < record.indexOf("edge2;"), "the two edges of the quad");
         assertTrue(record.indexOf("edge2;") < record.indexOf("uvCorner;"), "then uv, then tint");
         assertTrue(record.indexOf("uvEdges;") < record.indexOf("tint;"), "the field order is the upload order");
-        String legacy = block(read(LEGACY_CORE), "struct Emitter {");
-        assertEquals(count(record, "float4 "), count(legacy, "vec4"), "one vec4 per float4");
         assertTrue(read(ENTRY).contains("float4 emitterCameraRelative;"),
             "the camera-relative correction and the candidate count travel as a push vec4");
     }
 
     @Test
-    void theFalloffAndTheWindowAreTheLegacyOnes() {
+    void theFalloffAndTheWindowAreTheTunedOnes() {
         String slang = read(EMITTERS);
-        String legacyConstants = read(LEGACY_CORE) + read(LEGACY_SURFACE);
         assertTrue(slang.contains("static const float EMITTER_RADIUS = 24.0;"), "the light radius, not the ray distance");
         assertTrue(slang.contains("static const float EMISSIVE_GAIN = 3.0;"));
         assertTrue(slang.contains("static const float EMISSIVE_FLUX_GAIN = 2.2;"));
-        for (String constant : new String[] {"EMITTER_RADIUS = 24.0", "EMISSIVE_GAIN = 3.0", "EMISSIVE_FLUX_GAIN = 2.2"}) {
-            assertTrue(legacyConstants.contains(constant), constant + " must stay shared with the legacy path");
-        }
         String attenuation = block(slang, "float emitterAttenuation(float d2) {");
         assertTrue(attenuation.contains("dd <= 4.0 ? rsqrt(dd * sqrt(dd)) : 0.84090 * rsqrt(dd * sqrt(sqrt(dd)))"),
-            "d^-1.5 to two blocks then d^-1.25, continuous at the seam, with the same rsqrt form");
-        assertTrue(attenuation.contains("max(d2, 0.25)"), "the floor of the legacy dd");
-        assertTrue(read(LEGACY).contains("dd <= 4.0 ? inversesqrt(dd * sqrt(dd)) : 0.84090 * inversesqrt(dd * sqrt(sqrt(dd)))"),
-            "rsqrt and inversesqrt are the same function: the port must not have changed the curve");
+            "d^-1.5 to two blocks then d^-1.25, continuous at the seam");
+        assertTrue(attenuation.contains("max(d2, 0.25)"), "the floor of dd near the emitter face");
         String window = block(slang, "float emitterWindow(float d2, float lightRadius) {");
         assertTrue(window.contains("clamp(1.0 - d2 / (lightRadius * lightRadius), 0.0, 1.0)"), "squared linear window");
         assertTrue(slang.contains("min(maxDistance, EMITTER_RADIUS)"));
@@ -70,9 +58,9 @@ class RtSlangBlockEmitterTest {
         String slang = read(EMITTERS);
         String estimate = estimateBlock(slang);
         assertTrue(estimate.contains("float risWeight = (weightSum / max(sampleCount, 1.0)) / max(cosReceiver, 1.0e-4);"),
-            "the legacy p-hat folds the receiver cosine into the target density and its albedo/PI term has no cosine of its"
+            "the target density folds the receiver cosine in and the albedo/PI term has no cosine of its"
                 + " own, while bsdfEvaluate returns the diffuse lobe multiplied by NdotL: dividing here is what keeps the"
-                + " product equal to the legacy integrand instead of squaring the cosine");
+                + "product an unbiased integrand instead of squaring the cosine");
         assertTrue(estimate.contains("result.radiance = e.radiancePerEmission * risWeight * e.solidAnglePdf;"),
             "radiance divided by this sourcePdf leaves Le * W / K");
         assertTrue(estimate.contains("result.sourcePdf = e.solidAnglePdf;"), "the density itself stays the honest one");
@@ -98,12 +86,12 @@ class RtSlangBlockEmitterTest {
         assertTrue(phat.contains("float cosKernel = p.twoSided ? max(abs(cosEmitter), 0.25) : max(cosEmitter, 0.0);"),
             "the look kernel keeps the 0.25 floor so an edge-on flame does not switch off");
         String endBias = block(slang, "float blockEmitterEndBias(BlockEmitterPoint p, float distanceTo) {");
-        assertTrue(endBias.contains("float endBias = clamp(0.02 * distanceTo, 0.002, 0.03);"), "the legacy shadow bias");
+        assertTrue(endBias.contains("float endBias = clamp(0.02 * distanceTo, 0.002, 0.03);"), "the tuned shadow bias");
         assertTrue(endBias.contains("return p.twoSided ? max(endBias, min(0.2, 0.45 * distanceTo)) : endBias;"),
             "a torch flame on its stick must not be shadowed by its own stick");
         String estimate = estimateBlock(slang);
         assertTrue(estimate.contains("float shadowDistance = max(distanceTo - e.endBias, 0.001);"),
-            "the shadow ray of the path tracer ends where the legacy one did");
+            "the shadow ray of the path tracer stops short of the emitter body");
         assertTrue(estimate.contains("result.position = receiver.position + direction * shadowDistance;"),
             "short of the emitter body");
         assertTrue(estimate.contains("result.distance = shadowDistance;"),
@@ -115,7 +103,7 @@ class RtSlangBlockEmitterTest {
         String slang = read(EMITTERS);
         String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord> records,");
         assertTrue(candidate.contains("distance2 < (receiver.emission > 0.5 ? 0.25 : 1.0e-6)"),
-            "the legacy half-block self-rejection: without it a torch face samples its own quad at d -> 0, the d^-1.5"
+            "the half-block self-rejection: without it a torch face samples its own quad at d -> 0, the d^-1.5"
                 + " kernel blows that candidate up and it wins the roulette on top of the emission term already added");
         assertTrue(read(CONTRACT).contains("float  emission;"),
             "the receiver carries the one piece of state a sampler cannot infer from a position and a normal");
@@ -127,7 +115,7 @@ class RtSlangBlockEmitterTest {
         assertTrue(tracer.contains("result.radiance += throughput * surface.material.emission;"),
             "and still adds the face it sees: the look of an emitter and the light it casts are two terms");
         assertTrue(read(SURFACE).contains("material.emissionMask = max(materialTexel.b, 0.0);"),
-            "the mask is the atlas channel the legacy s.emission reads, not a luminance of the colour");
+            "the mask is the atlas channel the emitter sampler reads, not a luminance of the colour");
     }
 
     @Test
@@ -149,27 +137,24 @@ class RtSlangBlockEmitterTest {
         assertTrue(radiance.contains("p.atlasSlotPlus1 != 0u"),
             "the winning point remembers which atlas owns its UVs");
         assertTrue(radiance.contains("p.tint.rgb * p.tint.a"),
-            "rgb and alpha of the captured tint both modulate the light, as in rt_common_emitters.glsl");
+            "rgb and alpha of the captured tint both modulate the light");
         assertTrue(radiance.contains("emitterAttenuationColor(tex)"),
             "entity and block emitters share the same tuned chromatic response");
     }
 
     @Test
-    void theColorCategoriesAreTheLegacyOnes() {
+    void theColorCategoriesAreTheTunedOnes() {
         String slang = block(read(EMITTERS), "float3 emitterAttenuationColor(float3 tex) {");
-        String legacy = block(read(LEGACY_SURFACE), "vec3 emitterLightColor(vec3 tex) {");
         // The eight chromatic categories are tuned by eye against real screens, so a retune has to move both files or
         // neither: a bound that survives on one side only means the two paths disagree about what a torch looks like.
         for (String threshold : new String[] {"c.r > 0.65 && c.g < 0.22", "c.r >= 0.55 && c.r > c.b * 1.25",
             "c.b > 0.45 && c.g > 0.35 && c.r < 0.45", "c.b > 0.65 && c.g > 0.65 && c.r > 0.35",
             "c.r > 0.7 && c.g > 0.65 && c.b < 0.45", "c.r > 0.45 && c.b > 0.55 && c.g < 0.45",
             "c.r > 0.6 && c.b > 0.75 && c.g >= 0.45", "c.g > 0.65 && c.b > 0.35 && c.r < 0.5"}) {
-            assertTrue(slang.contains(threshold), "the Slang port dropped " + threshold);
-            assertTrue(legacy.contains(threshold), "the legacy path moved " + threshold + ": re-tune the port too");
+            assertTrue(slang.contains(threshold), "the shader lost " + threshold);
         }
         assertTrue(read(EMITTERS).contains("float3(1.0, 0.04, 0.02)"),
             "redstone keeps its own colour instead of the texture");
-        assertTrue(read(LEGACY).contains("vec3(1.0, 0.04, 0.02)"), "the legacy override it copies is still there");
         assertTrue(read(EMITTERS).contains("uint(materialTexel.a * 255.0 + 0.5)) & 4u"),
             "the redstone texel test reads the same alpha bit as the atlas builder writes it");
     }

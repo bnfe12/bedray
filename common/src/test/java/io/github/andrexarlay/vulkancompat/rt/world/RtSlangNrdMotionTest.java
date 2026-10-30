@@ -12,10 +12,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * NRD's {@code IN_MV} channel is a per-pixel {@code vec4} at {@code StatsBuf.motionAddr}: {@code rt_pack_nrd.comp} reads
- * it with a 16-byte stride, so an RGBA16F image (8 B/px) cannot carry it and the Slang path writes the buffer instead.
- * The value is the legacy one, {@code rt_path.comp:616}: the primary hit's world motion, prev minus cur, plus a trust
- * flag that is 1 for any captured model.
+ * NRD's {@code IN_MV} channel is a per-pixel 16-byte record at {@code StatsBuf.motionAddr}: the native pack reads it
+ * with that stride, so an RGBA16F image (8 B/px) cannot carry it and the Slang path writes the buffer instead.
+ * The value is the primary hit's world motion, prev minus cur, plus a trust flag that is 1 for any captured model.
  * <p>
  * Ways this silently breaks: the push bit set without the buffer (a descriptor the host never filled), the buffer bound
  * without the bit (stale motion denoised as if it were this frame), a range shorter than the frame (a write into a
@@ -32,10 +31,10 @@ class RtSlangNrdMotionTest {
     private static final String HOST_FRAME = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java";
     private static final String BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java";
-    private static final String PIPELINE = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPipeline.java";
+    private static final String BINDINGS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameBindings.java";
 
     @Test
-    void theMotionRecordIsTheLegacyVec4() {
+    void theMotionRecordIsOneVec4PerPixel() {
         assertTrue(read(TRACER).contains("PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;"),
             "the option word is shared with the guides: bit 0 is the G-buffer, bit 1 is NRD's motion");
         for (String pass : new String[] {PASS, SCENE_PASS}) {
@@ -50,7 +49,7 @@ class RtSlangNrdMotionTest {
                 pass + ": the same primary displacement the accumulator reprojects");
             assertTrue(motion.contains(
                 "float trusted = (result.primaryMotion.w > 0.5 || dot(motion, motion) > 1.0e-8) ? 1.0 : 0.0;"),
-                pass + ": rt_path.comp:616's trust flag verbatim, so a still surface stays out of the entity motion");
+                pass + ": the primary-hit trust flag, so a still surface stays out of the entity motion");
             assertTrue(motion.contains("return float4(motion, trusted);"), pass + ": xyz + flag, four floats");
         }
     }
@@ -62,7 +61,7 @@ class RtSlangNrdMotionTest {
             String store = block(source, "if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {");
             assertTrue(store.contains(
                 "outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result, sampleTrusted);"),
-                pass + ": the pixel index is the legacy row-major one, one record per render pixel, and the"
+                pass + ": the pixel index is the row-major one, one record per render pixel, and the"
                     + " sample's verdict gates the write");
         }
     }
@@ -149,16 +148,16 @@ class RtSlangNrdMotionTest {
         assertTrue(renderer.contains("private static void ensureEntityMotionBuffer(VkDevice device, int w, int h) {"),
             "one allocation site for both the address and the binding");
         int alloc = renderer.indexOf("ensureEntityMotionBuffer(device, w, h);");
-        int bind = renderer.indexOf("pass.bind(new RtPipeline.Views(");
+        int bind = renderer.indexOf("pass.bind(new RtFrameBindings.Views(");
         assertTrue(alloc >= 0 && bind >= 0 && alloc < bind,
             "the buffer has to exist before bind, or the pass captures zero and never writes");
         assertFalse(renderer.contains("the Slang path does not fill yet"),
-            "the refusal this batch removes must not come back");
-        String views = block(read(PIPELINE), "public record Views(");
+            "the refusal that used to gate this buffer must not come back");
+        String views = block(read(BINDINGS), "public record Views(");
         assertTrue(views.contains("long depth, long lightmap, long motion) {"),
             "the motion handle is part of the frame's views");
-        assertFalse(block(read(PIPELINE), "boolean sameAs(Views o) {").contains("motion"),
-            "no legacy binding carries it, so a new allocation must not force a descriptor rebind");
+        assertTrue(views.contains("gbuffer, 0L, 0L, 0L);"),
+            "a frame without motion uses the same record, so the allocation is not a descriptor rebind");
     }
 
     private static String block(String source, String header) {

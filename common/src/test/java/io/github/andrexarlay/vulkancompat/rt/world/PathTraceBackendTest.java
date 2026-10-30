@@ -28,7 +28,7 @@ class PathTraceBackendTest {
     @Test void failedRecordingCannotPublishHistoryOrConsumeReset() {
         Backend backend = new Backend();
         RtSlangPathPass host = new RtSlangPathPass(backend, false);
-        host.bind(new RtPipeline.Views(1, null, 2, 3, 4, 5, 0, null, 6));
+        host.bind(new RtFrameBindings.Views(1, null, 2, 3, 4, 5, 0, null, 6));
         RtFrameParams params = new RtFrameParams();
         params.bounces = 3;
         params.rayDistance = 72;

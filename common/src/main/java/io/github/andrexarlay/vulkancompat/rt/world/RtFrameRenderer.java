@@ -211,21 +211,9 @@ public final class RtFrameRenderer {
     /** The ReSTIR technique switches of this frame, packed; a change of any of them invalidates every reservoir. */
     private static int lastFrameReusePolicy = -1;
 
-    /**
-     * Screen-space depth composite pipeline for legacy raster entity compositing.
-     * When native RT is active, this pipeline is permanently disabled (OFF): dynamic entities
-     * are fully integrated into the RT TLAS, so pure RT radiance (finalSource=RT_OUTPUT) is copied
-     * directly into the final render target without raster depth composite mixing.
-     */
-    private static RtCompositePipeline compositePipeline = null;
-    private static final boolean LEGACY_RASTER_ENTITY_COMPOSITE = false;
     private static final String FINAL_OUTPUT_SOURCE = "RT_OUTPUT";
     private static final int REFLECTION_MASK = 0x03;
     private static final int SHADOW_MASK = 0x03;
-
-    public static boolean isLegacyRasterEntityCompositeEnabled() {
-        return LEGACY_RASTER_ENTITY_COMPOSITE && compositePipeline != null;
-    }
 
     public static String getFinalSource() {
         return FINAL_OUTPUT_SOURCE;
@@ -254,10 +242,9 @@ public final class RtFrameRenderer {
         var entityStatus = getEntityInstanceStatus();
         String worldStatus = world == null ? "UNAVAILABLE" : (lastStats == null ? "INITIALIZING" : "READY");
         return String.format(Locale.ROOT,
-            "[RT-HERMETIC] worldInstance=%s entityInstance=%s legacyRasterEntityComposite=%s finalSource=%s reflectionMask=0x%02X shadowMask=0x%02X",
+            "[RT-HERMETIC] worldInstance=%s entityInstance=%s finalSource=%s reflectionMask=0x%02X shadowMask=0x%02X",
             worldStatus,
             entityStatus,
-            isLegacyRasterEntityCompositeEnabled() ? "ON" : "OFF",
             FINAL_OUTPUT_SOURCE,
             REFLECTION_MASK,
             SHADOW_MASK);
@@ -899,7 +886,7 @@ public final class RtFrameRenderer {
                 gbViews = denoiser.gbufferViews();
             }
         }
-        pass.bind(new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
+        pass.bind(new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
             materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L, lightmapView, motionHandle));
 
         int writeSlot = statsLease.slot();
@@ -1265,7 +1252,7 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_ATMO, false);
         }
         atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
-            new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
+            new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, outputDepth.view, lightmapView),
             w, h, bobOrigin.x, bobOrigin.y, bobOrigin.z);
         if (gpuTimer != null) {
@@ -1501,37 +1488,15 @@ public final class RtFrameRenderer {
             }
             throw new RtFailure("slang_path", pathSlangUnavailableReason);
         }
-        // The old effect pass compiles GLSL at runtime. Keep its source as a
-        // reference, but do not silently route the new renderer through it.
+        // Ray tracing mode has no Slang effect pass yet; the GLSL one is deleted with the legacy renderer.
         throw new RtFailure("slang_ray", "ray effects are not yet available in the Slang renderer");
     }
 
     /**
-     * Creates the AOT Slang path or reports why it cannot run. A missing path
-     * never silently selects runtime-compiled GLSL.
+     * Creates the AOT Slang path or reports why it cannot run. There is no second renderer to fall back to: a missing
+     * Slang artifact fails the frame, and {@code vkbridge.rt.failure} records the reason.
      */
     private static RtPass createSlangPathPass(VkDevice device, boolean gbuffer) {
-        RtConfig.PathTracer selector = RtConfig.PATH_TRACER;
-        if (selector == RtConfig.PathTracer.LEGACY) {
-            pathSlangUnavailableReason = "legacy GLSL path tracing is not supported by the new renderer";
-            return null;
-        }
-        if (gbuffer) {
-            // Both backends supply guide outputs; native NRD additionally requires its motion-output export below.
-            // AUTO remains conservative until a live frame validates the denoiser inputs.
-            String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
-            if (blocker == null && selector == RtConfig.PathTracer.AUTO) {
-                blocker = "AUTO does not select the Slang path while a denoiser is enabled;"
-                    + " set bedray.pathTracer=slang to test the guides";
-            }
-            if (blocker != null) {
-                pathSlangUnavailableReason = blocker;
-                if (selector == RtConfig.PathTracer.AUTO) {
-                    logSlangUnavailable(blocker);
-                }
-                return null;
-            }
-        }
         String debugView = RtConfig.currentDebugView();
         if (!debugView.isEmpty()) {
             pathSlangUnavailableReason = "debug view '" + debugView + "' is not implemented in the Slang path";
@@ -1541,69 +1506,37 @@ public final class RtFrameRenderer {
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             pathSlangUnavailableReason = "VulkanDevice is not available";
-            if (selector == RtConfig.PathTracer.AUTO) {
-                logSlangUnavailable(pathSlangUnavailableReason);
-            }
+            logSlangUnavailable(pathSlangUnavailableReason);
             return null;
         }
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
             String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
             if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && denoiseMode.isNrd()
-                && !runtime.library().hasNativeMotion())
+                && !runtime.library().hasNativeMotion()) {
                 problem = "native NRD requires a matching core with NRD_MOTION";
+            }
             if (problem != null) {
                 pathSlangUnavailableReason = problem;
-                if (selector == RtConfig.PathTracer.AUTO) {
-                    logSlangUnavailable(problem);
-                }
+                logSlangUnavailable(problem);
                 return null;
             }
             if (world == null) {
                 pathSlangUnavailableReason = "the RT world is not initialized";
-                if (selector == RtConfig.PathTracer.AUTO) {
-                    logSlangUnavailable(pathSlangUnavailableReason);
-                }
+                logSlangUnavailable(pathSlangUnavailableReason);
                 return null;
             }
             RtSlangPathPass slang = new RtSlangPathPass(device, runtime, gbuffer);
-            LOGGER.info("[VKB-RT] path_tracer selector={} on AOT Slang passes {}+{} (gbuffer={})",
-                selector.name().toLowerCase(Locale.ROOT), RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
+            LOGGER.info("[VKB-RT] path tracing on AOT Slang passes {}+{} (gbuffer={})",
+                RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
             return slang;
+        } catch (RtFailure failure) {
+            pathSlangUnavailableReason = failure.result();
+            throw failure;
         } catch (RuntimeException e) {
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             pathSlangUnavailableReason = reason;
-            if (selector == RtConfig.PathTracer.SLANG || RtConfig.SLANG_PATH_TRACE_CPP) {
-                if (e instanceof RtFailure failure) {
-                    throw failure;
-                }
-                throw new RtFailure("slang_path", reason, e);
-            }
-            logSlangUnavailable(reason);
-            return null;
-        }
-    }
-
-    /**
-     * Null when AUTO can render Path Tracing through the Slang pass, otherwise the reason it is unavailable. Never logs:
-     * the pass creation path owns the diagnostic. The runtime is created here on first use, so a missing native
-     * or AOT artifact is discovered before the denoiser is switched off.
-     */
-    private static String slangPathBlocker() {
-        if (!RtConfig.currentDebugView().isEmpty()) {
-            return "debug view is not implemented in the Slang path";
-        }
-        VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
-        if (vulkanDevice == null) {
-            return "VulkanDevice is not available";
-        }
-        if (world == null) {
-            return "the RT world is not initialized";
-        }
-        try {
-            return RtSlangPathPass.supportProblem(pathSlangRuntime(vulkanDevice));
-        } catch (RuntimeException e) {
-            return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw new RtFailure("slang_path", reason, e);
         }
     }
 
@@ -1965,10 +1898,6 @@ public final class RtFrameRenderer {
             if (compositeOutput != null) {
                 w.memory().destroy(compositeOutput);
                 compositeOutput = null;
-            }
-            if (compositePipeline != null) {
-                compositePipeline.destroy();
-                compositePipeline = null;
             }
             if (statsBuf != null) {
                 w.memory().destroy(statsBuf);

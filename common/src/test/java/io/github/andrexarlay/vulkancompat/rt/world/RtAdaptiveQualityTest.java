@@ -30,8 +30,8 @@ public class RtAdaptiveQualityTest {
     private static final int LEVELS = RtAdaptiveQuality.levels(SPP, BOUNCES);
 
     private static final String GOVERNOR = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtAdaptiveQuality.java";
-    private static final String PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTracerPass.java";
     private static final String FRAME_RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java";
+    private static final String SLANG_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java";
     private static final String TIMER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtGpuTimer.java";
     private static final String SETTINGS = "src/main/java/io/github/andrexarlay/vulkancompat/rtx/config/RtSettings.java";
     private static final String CONFIG = "src/main/java/io/github/andrexarlay/vulkancompat/sodium/VulkanSodiumConfig.java";
@@ -303,11 +303,12 @@ public class RtAdaptiveQualityTest {
 
     @Test
     public void pathPassTracesTheGovernedValues() throws IOException {
-        String pass = read(PASS);
+        String pass = read(SLANG_PASS);
         assertTrue(pass.contains("params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());"),
             "the pass must trace the governed path length");
-        assertTrue(pass.contains("params.spp = RtAdaptiveQuality.spp(RtSettings.spp());"),
-            "the pass must trace the governed rays per pixel");
+        assertTrue(pass.contains("params.spp = 1;"),
+            "the typed path accumulates one sample per frame, so the governor acts on bounces and on the frame count, "
+                + "not on a per-frame spp");
     }
 
     @Test

@@ -1,7 +1,5 @@
 package io.github.andrexarlay.vulkancompat.rt.denoise;
 
-import io.github.andrexarlay.vulkancompat.rt.world.RtPipeline;
-import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
 import org.joml.Matrix4f;
 
 import java.lang.foreign.Arena;
@@ -35,8 +33,6 @@ public final class NrdChecks {
         relaxPacking();
         packPushLayout();
         cameraMath();
-        shaderDefines();
-        shadersCompile();
         nativeBinding();
     }
 
@@ -288,39 +284,7 @@ public final class NrdChecks {
         check(!NrdCameraMath.isTeleport(0, 0, 0, 1, 0, 1, 32), "walking is not");
     }
 
-    private static void shaderDefines() {
-        String src = "#version 460\nvoid main() {}\n";
-        String out = RtShaderCompiler.withDefines(src, "#define A 1\n");
-        check(out.equals("#version 460\n#define A 1\nvoid main() {}\n"), "defines go after the #version line: " + out);
-        check(RtShaderCompiler.withDefines(src, "").equals(src), "no defines: unchanged");
-        boolean threw = false;
-        try {
-            RtShaderCompiler.withDefines("void main() {}\n", "#define A 1\n");
-        } catch (RuntimeException e) {
-            threw = true;
-        }
-        check(threw, "source without #version is rejected");
-    }
 
-    private static void shadersCompile() {
-        ByteBuffer plain = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
-        ByteBuffer gb = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp+gbuffer", RtPipeline.GBUFFER_DEFINE);
-        check(gb.getInt(0) == 0x07230203 && gb.remaining() > plain.remaining(), "gbuffer variant compiles and is larger than the plain shader");
-        // Retained GLSL reference oracle; the active pack adapter is AOT Slang.
-        String reference = "/shaders/glsl/rt_pack_nrd.comp";
-        ByteBuffer pack = RtShaderCompiler.compileResource(reference, "rt_pack_nrd.comp:pack", "#define VKB_PASS_PACK 1" + (char) 10);
-        ByteBuffer compose = RtShaderCompiler.compileResource(reference, "rt_pack_nrd.comp:compose",
-            "#define VKB_PASS_COMPOSE 1" + (char) 10);
-        check(pack.getInt(0) == 0x07230203 && pack.remaining() > 500, "pack pass SPIR-V");
-        check(compose.getInt(0) == 0x07230203 && compose.remaining() > 500, "compose pass SPIR-V");
-        boolean threw = false;
-        try {
-            RtShaderCompiler.compileResource(reference, "rt_pack_nrd.comp:none");
-        } catch (RuntimeException e) {
-            threw = true;
-        }
-        check(threw, "the pack shader without a pass define is an error (#error), not a silent empty shader");
-    }
 
     /** Loads a locally built vkb_nrd.dll (env VKB_NRD_NATIVES or local reference); prints SKIPPED when it is not there. */
     private static void nativeBinding() {

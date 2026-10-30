@@ -20,9 +20,7 @@ public final class RtAtmosphereTest {
     }
 
     public static void runAll() {
-        shadersCompile();
         settings();
-        helpers();
         glare();
         fogMath();
     }
@@ -37,21 +35,6 @@ public final class RtAtmosphereTest {
         check(RtSky.glareStrength(1f, 1f, -1f, 1f) == 0f && RtSky.glareStrength(1f, 3f, 3f, 5f) == 1f, "every factor clamps");
     }
 
-    static void shadersCompile() {
-        String post = "#define VKB_POST 1" + (char) 10 + "#define VKB_ACCUM 1" + (char) 10;
-        for (int stage = 0; stage < 2; stage++) {
-            ByteBuffer spv = RtShaderCompiler.compileResource("/shaders/glsl/rt_volumetric.comp", "rt_volumetric.comp+stage" + stage,
-                post + "#define VOL_STAGE " + stage + (char) 10);
-            check(spv.remaining() > 1000 && (spv.remaining() & 3) == 0, "rt_volumetric stage " + stage + " SPIR-V");
-        }
-        for (int stage = 0; stage < 4; stage++) {
-            ByteBuffer spv = RtShaderCompiler.compileResource("/shaders/glsl/rt_bloom.comp", "rt_bloom.comp+stage" + stage,
-                "#define BLOOM_STAGE " + stage + (char) 10);
-            check(spv.remaining() > 500 && (spv.remaining() & 3) == 0, "rt_bloom stage " + stage + " SPIR-V");
-        }
-        // the main shaders still compile with the VKB_POST guard in rt_common.glsl (no define = unchanged declarations)
-        check(RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp").remaining() > 1000, "rt_rays still compiles");
-    }
 
     static void settings() {
         double[] saved = new double[RtAtmosphereSettings.options().size()];
@@ -95,12 +78,6 @@ public final class RtAtmosphereTest {
         }
     }
 
-    static void helpers() {
-        check(RtVolumetricPass.halfSize(1920) == 960 && RtVolumetricPass.halfSize(1081) == 541 && RtVolumetricPass.halfSize(1) == 1, "half size");
-        check(RtVolumetricPass.consecutive(10, 11) && !RtVolumetricPass.consecutive(10, 12) && !RtVolumetricPass.consecutive(Long.MIN_VALUE, 0),
-            "consecutive frames");
-        // Bloom dimensions are owned and tested by native/bedray_core/tests/bloom_pass_test.cpp.
-    }
 
     static void fogMath() {
         check(RtFogState.linear(5, 10, 20) == 0f && RtFogState.linear(25, 10, 20) == 1f && Math.abs(RtFogState.linear(15, 10, 20) - 0.5f) < 1e-6f,
