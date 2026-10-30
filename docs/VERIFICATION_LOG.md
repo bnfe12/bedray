@@ -4,6 +4,139 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — the frame counts its own pixels again (L0 source, L1 build, L2 unit, 13 mutation probes; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `412d855` (12 files, +665/−29).
+
+The four words at the head of a StatsBuf slot — `hits`, `samples`, `lumLogSum`,
+`histAccepted` — were written inline by the GLSL ray pass and nothing replaced them
+when the legacy pipeline was deleted. Two failures hid behind that: `RtExposure.observe`
+never received a sample, so `path_auto_exposure` could not adapt and the exposure
+batch above could only make the compensation slider live; and the F3 overlay divided
+zeros, so `hit_pct` and `hist_pct` printed as if the frame had been measured.
+
+`passes/frame_stats.slang` now derives the four words from images the path already
+produces, and `RtFrameStatsSlangPass` dispatches it from `ReferencePathTraceBackend`
+immediately after the barrier the composite already needs — no new image, no new
+synchronization, no descriptor-set change:
+
+- It reads the tracer's `radiance` (RGBA16F), the running mean `accum` (RGBA32F) and
+  `depth` (R32F), and binds **only the sixteen-byte head** of the slot it writes, so
+  the pass cannot reach the emitter address that lives behind the counters.
+- The luminance word is the ABI the host already decoded — `64*(log2(lum)+16)`,
+  clamped to its own fixed-point range at 2^-16 and 2^16 — so `RtExposure` and the F3
+  average needed no change, and `RtFrameStatsTest` reads all three files instead of
+  trusting one side.
+- A pixel whose verdict alpha is zero, or whose radiance is NaN/Inf, is not added at
+  all: one such frame would otherwise sit in a mean that lives for thousands of
+  frames. This is the same bit `path_display.slang` rejects on, so the meter and the
+  picture agree.
+- One whole 4×4 tile in sixteen is metered, rotated by `pc.frameIndex`, so a still
+  camera does not weigh the same pixels all session. At 1920×1080 that is 8 100 tiles
+  and ~129 600 metered pixels per frame — 1/16 of the screen, the rate the legacy
+  counters and the shares were calibrated for.
+- The slot is handed over through two new borrowed fields (`RtFrameParams.statsBuffer`
+  / `statsOffset`) set beside `statsAddress`, after the `vkCmdFillBuffer` that clears
+  the head, so the pass writes into the slot the renderer leases and reads back.
+
+`gradle/slang.gradle` pins `FrameStatsPush` (8 bytes: `frameIndex` at 0, `reserved` at
+4). The compiled artifact is 4 712 B of SPIR-V, 1 178 words, four bindings
+(`radiance`/`accum`/`depth` as `STORAGE_IMAGE`, `stats` as `STORAGE_BUFFER` with
+`elementBytes` 4), 8 B push, 8×8×1 workgroup, capabilities `ImageQuery`+`Shader` and
+`requiredCapabilities` 0 — no new negotiated capability, and the generated pass index
+now lists 27 entries with `frame_stats` among them.
+
+Honesty changes that came with it: `leafBacklit` had no writer either, and a zero in
+that word read as a measured "no leaf is backlit" — `leaf_pct` now reports `n/a`. The
+native core records the whole frame inside `bedray_core`, where the radiance and
+accumulation images are its own, so it still has no counter writer; both backends
+report "no measurement" rather than a fabricated number, and `PathTraceBackend.Frame`
+documents which backend writes what.
+
+### Evidence
+
+`:common:compileSlang` green (27 passes). `:common:test`: **824 tests, 0 failures,
+0 errors, 6 skipped** (the six are the native-ABI, benchmark and real-pack tests that
+need a DLL, a flag or a shaderpack on disk). New `RtFrameStatsTest` (11 tests) covers
+the round trip of the luminance word, the three-file formula pin, the counter offsets,
+the 1-in-16 mask and its rotation, the rejection gate, the sixteen-byte bind, the
+generated manifest plus three rejected mutations of it, the ordering after the
+composite barrier, the slot handover, and `n/a` for the unwritten leaf counter.
+`RtSlangSampleRejectionTest.nothingElseReadsTheLaneTheVerdictLivesIn` was rewritten as
+`everyReaderOfTheVerdictLaneTreatsItAsAVerdict`: the meter is the second consumer of
+the verdict lane, so the guard now names all three files that bind it and requires each
+reader to reject on the bit or ignore it, never to weight by it.
+
+### Mutation probes (13)
+
+Ten against the meter: the luminance formula, the metered rate, a swapped counter slot,
+the deleted verdict gate, alpha used as a weight, a descriptor bound to the whole slot,
+the wrong accumulation half, `params.statsOffset` pinned to zero, the leaf counter
+printed as a measurement, and a third consumer of `radianceView`. Three against the
+head mirror: the Slang `FrameStats` field order, the Java `RtStatsLayout` field order,
+and a renamed counter field. Each reported exactly the owning test red, and every file
+restored to its pre-probe sha256.
+
+Two probes first reported green and were **harness bugs, not weak guards**: the needles
+spanned two lines, this checkout stores CRLF, and `str.replace` on the raw bytes
+matched nothing, so Gradle re-ran against an untouched file. Re-run with needles tried
+in both spellings and an assertion that the mutation landed: both went red. The
+companion lesson — a change to a source file that a test only reads by relative path
+does not invalidate `:common:test` — is recorded with the verification discipline.
+
+### Still open
+
+The native path-trace core needs its own writer (or an ABI route that lets the host
+dispatch this pass over core-owned images) — that is the follow-up task, and an
+ABI-layout change needs the owner's word first. Nothing here is a live frame: no
+Vulkan device, no game launch, no measured brightness change. The owner's playtest
+still decides whether the exposure now adapts and whether F3 prints real shares.
+
+## 2026-10-30 — the frame's exposure is spent where the picture is made (L0 source, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `f131804` (7 files, +168/−12), with the
+distribution-doc correction `248a298`. Recorded here two batches late: the fix
+landed before the rays-per-pixel entry below, its log section did not.
+
+The typed path applied no exposure at all. The display push literal was `1.0f`
+(`ReferencePathTraceBackend`, offset 8 of the display block), the volumetric
+composite pushed `1`, and `FLAG_AUTO_EXPOSURE` was read in three call sites that
+nothing ever set — so `path_ev_compensation` brightened the denoiser's guide pack
+while the traced image stayed where it was: one setting, two numbers.
+
+`RtFrameRenderer` now decides the exposure once per frame, from the settings
+switch (`RtSettings.autoExposure()`) and the compensation, through
+`RtExposure.applied`, and stores it in `RtFrameParams.exposure`; the flag bit is
+composed from the same switch, so the bit and the number cannot disagree. Every
+consumer reads that field: the StatsBuf slot (`RtStatsLayout.EXPOSURE`),
+`FrameConstants.exposure.x` — already the lane `BedrayPathTraceNative` forwards as
+the native descriptor's `lighting.exposure`, so no ABI change — the Java display
+push, the DLSS-RR and NRD packs' tonemap, and the light shafts composited after
+tone mapping.
+
+`248a298` rewrites `native/bedray_core/DISTRIBUTION.md`, which promised both DLLs
+are staged next to each other. `gradle/bedray-distribution.gradle` says otherwise:
+`fabricBedrayDistribution`/`neoforgeBedrayDistribution` depend on `buildBedrayNative`
+and copy `nativeDll` plus the combined JAR, and `buildBedrayScene` is not in the
+chain, so an instance fed only the task's output runs without `bedray_scene.dll`.
+
+### Evidence
+
+`RtSlangExposureTest` (new, 7 tests): the EV compensation is a power of two; a
+measured scene moves the auto value and not the fixed one; the frame computes
+exposure once; the switch reaches the frame flags; one lane feeds both backends;
+the volumetric composite shares the picture's exposure; only the display step
+spends it. `RtSlangVolumetricPassTest` and `RtSlangExposureTest` pass in a full
+`:common:test`; L0/L2 only — no Vulkan device, no game launch, no measured
+brightness change.
+
+What was still missing at that revision, stated plainly because the commit says so:
+adaptive exposure had nothing to adapt to. No Slang pass wrote the luminance sum,
+the hits or the samples counters since the legacy GLSL ray pass was deleted, so
+`RtExposure.observe` never ran and the meter sat at the ray-mode floor. The
+compensation slider was the live half of the setting. The batch below closes the
+measurement; neither has an owner-verified frame yet.
+
 ## 2026-10-30 — "Rays per Pixel" traces the rays it says it traces (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
 
 Branch: `refactor/slang-pipeline`, commit `edb5650` (11 files, +305/−23).
