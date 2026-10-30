@@ -1,12 +1,13 @@
 # The ReSTIR GI change of measure
 
-`experimental/restir_pt.slang` v3 reuses a stored path at a different receiver by
+`experimental/restir_pt.slang` v4 reuses a stored path at a different receiver by
 keeping the first scattered vertex and moving the anchor. This note derives the
 density correction that shift needs, states exactly which paths the derivation
 covers, and lists what the implementation deliberately does not model. The
 module is still quarantined: it is imported by no root, has no pass or host and
-has never run on a GPU. What changed in v3 is that reuse now has a proof and a
-CPU validation instead of an open question.
+has never run on a GPU. v3 gave reuse a proof and a CPU validation instead of an
+open question; v4 makes the reservoir's $M$ the number of attempts the sampler
+made, which is the other half of the same normalisation (§6).
 
 ## 1. What is reused
 
@@ -103,7 +104,9 @@ is diffuse. For a Lambertian first vertex:
 - the first vertex's lobe density used by the suffix sampler is the same
   direction-independent function of the vertex for every anchor.
 
-Everything else is rejected by `ptPathReusable`, not approximated:
+Everything else is rejected for reuse by `ptPathReusable`, not approximated.
+v4 still **admits** such a path as an attempt — it is a draw from the first-edge
+density like any other — but it is never transported and never merges (§6):
 
 | First edge | Why it is refused |
 |---|---|
@@ -115,7 +118,62 @@ Everything else is rejected by `ptPathReusable`, not approximated:
 A black suffix is not a rejection reason: the target density does not contain
 the radiance, so a black candidate still has a positive WRS weight.
 
-## 6. Duplicate samples
+## 6. Attempt accounting
+
+The reservoir theorem has two halves. One is the change of measure above; the
+other is that $M$ in $W = \sum w / (M\hat p)$ is the number of **attempts** drawn
+from $q$, and does not depend on the sample values. v3 violated the second half:
+`ptAddPath` returned early unless `ptPathReusable` held, so a draw that landed on
+the sky, on an emitter, on a delta or on a glossy vertex never incremented the
+sample count. $M$ was then the number of *recorded* reusable hits out of $N$
+attempts, a random quantity, and the estimate was conditioned on a recording that
+the estimator never asked for.
+
+The size of the error follows from that conditioning. Let $K$ be the number of
+recorded attempts out of $N$, each attempt recording with probability $p$, and
+let $y = w\,f/\hat p$ for a recorded attempt. Since $K$ is a function of which
+attempts recorded, condition on $K = k \ge 1$: the $k$ recorded draws are i.i.d.
+from the recorded distribution, and $\mathbb{E}[y \mid \text{recorded}] = A/p$
+where $A$ is the integral the unbiased estimator targets (the factor $1/p$ is
+exactly the fraction of attempts the recording threw away). The v3 estimator
+averaged over those $k$, so
+
+$$
+\mathbb{E}\left[\hat I_{v3}\right]
+  = \Pr(K > 0)\cdot\frac{A}{p}
+  = \left(1-(1-p)^N\right)\frac{A}{p}.
+$$
+
+With $N = 1$ this is $A$ — a single attempt is fine, because recording is the
+only way its weight can be nonzero and both sides carry the same $1/p$. From
+$N = 2$ on the factor is larger than one. In the half-sky wall scene of §9
+($p = \tfrac12$, $A = 0.15$): $N = 2$ gives $0.225$ (+50%), $N = 4$ gives
+$0.28125$ (+87.5%). Both were measured in the CPU model at
+$0.224808 \pm 0.000333$ and $0.281228 \pm 0.000539$.
+
+v4 splits the two questions. `ptAddPath` admits every path that passes
+`ptPathValid` and carries `first.pdf > 0`; that is what makes $M$ the number of
+attempts. `ptPathReusable` stays where a density is actually transported —
+`ptMergeReservoir`, `ptTemporalReuse`, `ptSpatialReuse` — so a sky or emitter
+record still never merges into a receiver's reservoir and no density is invented
+for it.
+
+Admitting a non-contributing attempt cannot corrupt the reservoir. Its WRS
+weight is $\hat p_{\text{sky}}/q$ with the target at the `ptTargetPdf` floor
+($\max(\text{bsdfPdf},10^{-8})\cdot\cos$), and a sky record carries
+$\text{bsdfPdf} = 0$, so its weight is about $10^{-8}/q$: it can only win a
+reservoir whose every other weight is smaller, which a recorded diffuse hit never
+is. Its resolved contribution is correspondingly $\sim 10^{-8}$, and the term it
+represents (a first edge straight to the environment) is the one the
+environment/direct estimator owns.
+
+The same floor means `ptMergeReservoir`'s reset
+`if (!ptReservoirHasSample(current)) current = ptEmptyReservoir();` cannot fire
+for a legitimate accumulator: every admitted attempt adds a strictly positive
+weight, so after any add the current reservoir has a sample. The reset covers
+empty and corrupt records only, and it is kept as such.
+
+## 7. Duplicate samples
 
 v2 compared first-vertex positions to detect the same sample entering a
 reservoir twice. Distinct samples can share a vertex, so that test dropped valid
@@ -124,7 +182,7 @@ an unknown id (0) never matches, which keeps reset reservoirs and untagged
 callers safe. The id must be unique among the samples one pixel can merge in a
 frame and must survive every copy of the record.
 
-## 7. Documented approximations
+## 8. Documented approximations
 
 These are estimator changes, not consequences of the derivation:
 
@@ -152,7 +210,7 @@ pass:
   neighbours needs the usual ReSTIR caveats about support and correlation),
 - MIS between the reused estimator and other techniques.
 
-## 8. CPU validation
+## 9. CPU validation
 
 `RestirPtChangeOfMeasureTest` pins the derivation in three ways:
 
@@ -173,13 +231,45 @@ pass:
    merge ratio, the terminal/delta/diffuse rejection lines and the `sampleId`
    duplicate test.
 
+`RestirPtReservoirInvariantTest` closes the attempt-accounting gate of §6. It
+mirrors the module's arithmetic in Java doubles — including the target's
+`MIN_PDF` floor, which is what keeps a non-contributing attempt from winning —
+and checks four things:
+
+1. **The split in the source.** `ptAddPath` must admit on `ptPathValid` plus
+   `first.pdf > 0` and must not mention `ptPathReusable`; the merge must still
+   keep the certified-class gate.
+2. **Fresh reservoirs, two attempts.** On the flatland scene above, the
+   counting reservoir measures $0.149496 \pm 0.000330$ and the v3-gated twin
+   $0.224808 \pm 0.000333$ against the conditional expectation
+   $1.5 \cdot 0.15 = 0.225$ (isolation model, 400 000 trials; the unit test
+   repeats the comparison at 300 000 trials and asserts $4\sigma$/1% and 2%).
+   The pair is the sharpest statement of the defect because only the admission
+   rule differs.
+3. **Temporal reuse.** Transported-into-empty and merged-with-fresh both stay
+   on $0.15$ ($0.150065 \pm 0.000296$ and $0.149831 \pm 0.000330$), so reuse
+   neither re-introduces the conditioning nor breaks the Jacobian transport.
+4. **The Jacobian is still applied.** A deterministic merge into an empty
+   reservoir must satisfy $W_{\text{merged}} = W_{\text{source}} \cdot J$
+   exactly (1e-12), with $J$ at least 5% away from one so the assertion cannot
+   pass by accident.
+
+A mutation proof backs the guard: restoring the v3 gate
+(`if (!ptPathReusable(path)) return reservoir;`) turns exactly
+`admissionCountsEveryAttemptWhileReuseStaysInTheMerge` red and nothing else;
+the shader was restored by backup and verified by sha256
+(`4c31aeed…461ef`).
+
 The module also compiles cleanly through the pinned `slangc` (2026.20) with the
 AOT flags, through a temporary probe root that calls every entry point,
 including both generic reuse functions.
 
-## 9. Integration gates that remain
+## 10. Integration gates that remain
 
 Per `experimental/README.md`, the module stays out of the AOT set until it has a
 pass, a manifest-checked host, a reservoir property test and at least one GPU
-smoke run. This derivation closes the mathematical gate only; there is still no
-owner-verified frame.
+smoke run. The property test is now closed
+(`RestirPtReservoirInvariantTest`); the mathematical gates of §4–§6 are closed by
+this note and the CPU validation in §9. What remains is a pass, a
+manifest-checked host and a GPU smoke run, so there is still no owner-verified
+frame.

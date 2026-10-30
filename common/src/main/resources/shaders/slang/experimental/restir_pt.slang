@@ -1,4 +1,17 @@
-// Path-space ReSTIR for Bedray 2.0 — reservoir math only.  v3.
+// Path-space ReSTIR for Bedray 2.0 — reservoir math only.  v4.
+//
+// v4 changes (attempt accounting):
+//   * admission is not reuse.  ptAddPath gated on ptPathReusable, so a sky,
+//     emitter, delta or glossy first edge never reached M.  Every one of them
+//     is a draw from the first-edge density, and the PT estimand is zero on
+//     the directions DI owns, so a conditional M scaled the resolved weight
+//     by 1/P(recorded) — measured 2x in a half-sky wall scene.  The add path
+//     now admits every valid attempt; the certified-class gate stays in
+//     ptMergeReservoir, which is the step that transports a stored density.
+//   * a non-contributing attempt cannot win the reservoir: its target is the
+//     MIN_PDF floor (a sky record carries bsdfPdf = 0), so its weight is
+//     ~1e-8/pdf.  What an admitted path contributes is its recorded throughput
+//     and the ownership policy, never whether it could be reused.
 //
 // v3 changes (change of measure for the fixed-first-vertex shift):
 //   * reuse is now restricted to one certified class of paths: a diffuse first
@@ -549,9 +562,26 @@ float ptPathMaxComponent(float3 value) {
 // `sourceIdentity` is the caller's stable id for the light the suffix ends on
 // (or the sky-state revision for an escaped path; 0 when unknown); it is only
 // compared during temporal reuse.
+//
+// Admission is not reuse (v4).  M has to be the number of attempts the
+// sampler made, independent of what they produced, or W = wSum/(M*p-hat)
+// estimates an integral conditioned on a recorded hit: v3's ptPathReusable
+// gate dropped every sky, emitter, delta and glossy first edge here, which
+// scaled the estimate by 1/P(recorded) — a factor of two in a half-sky scene.
+// Every valid attempt enters M; the certified-class restriction stays in
+// ptMergeReservoir, which is the step that transports a stored density to
+// another receiver.
+//
+// A non-contributing attempt stays harmless without a second test: its target
+// is the MIN_PDF floor (ptVertexFromHit records bsdfPdf = 0 for an escaped
+// edge), so its weight is ~1e-8/pdf and it never wins.  What an admitted path
+// contributes is decided by the throughput the caller recorded and by the
+// DI/PT ownership policy, not by whether the path could ever be reused.  A
+// zero first-edge density is still refused: the sampler never chose that
+// direction, so it is not a draw from q at all.
 RestirPtReservoir ptAddPath(RestirPtReservoir reservoir, RestirPtPath path,
         uint sourceIdentity, inout uint seed) {
-    if (!ptPathReusable(path)) return reservoir;
+    if (!ptPathValid(path) || path.first.pdf <= 0.0) return reservoir;
 
     float sourcePdf = ptPathSourcePdf(path);
     float targetPdf = ptPathTargetPdf(path, path.anchorPosition,

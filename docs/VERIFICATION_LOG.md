@@ -3363,3 +3363,60 @@ Evidence:
 
 No native build, CTest or deploy: no root imports the module and no runtime
 behavior changed. No owner-verified frame.
+
+## 2026-10-30 — ReSTIR PT v4: attempt accounting matches the reservoir normalisation (L1 slangc, L2 unit)
+
+v3's change of measure was correct, but its reservoir was still biased by the
+other half of the same theorem. `ptAddPath` returned early unless
+`ptPathReusable` held, so a sky, emitter, delta or glossy first edge never
+reached `M`, and `W = wSum / (M * p-hat)` normalised by the number of *recorded*
+reusable hits instead of the number of attempts. That conditions the estimate on
+a recording and scales it by `1/P(recorded)`. With `K` recorded attempts out of
+`N`, each recording with probability `p`, the v3 estimator has expectation
+`Pr(K > 0) * A / p = (1 - (1-p)^N) * A / p`, where `A` is the integral an
+unbiased estimator targets. In the half-sky wall scene (`p = 1/2`, `A = 0.15`)
+that is 0.225 at `N = 2` (+50%) and 0.28125 at `N = 4` (+87.5%); the isolation
+model measured 0.224808 ± 0.000333 and 0.281228 ± 0.000539, against the
+analytic 0.15 measured by the counting variant (0.149496 ± 0.000330).
+
+v4 splits admission from reuse. `ptAddPath` now admits every `ptPathValid` path
+with `first.pdf > 0`, which is what makes `M` the number of attempts; the
+certified-class gate stays in `ptMergeReservoir`, `ptTemporalReuse` and
+`ptSpatialReuse`, where a stored density is actually transported. A
+non-contributing attempt cannot corrupt the reservoir: its target sits at the
+`ptTargetPdf` floor (`max(bsdfPdf, 1e-8) * cos`) and a sky record carries
+`bsdfPdf = 0`, so its weight is ~1e-8/q and its resolved contribution ~1e-8.
+The same floor proves the merge reset
+`if (!ptReservoirHasSample(current)) current = ptEmptyReservoir();` unreachable
+for a legitimate accumulator: every admitted attempt adds a strictly positive
+weight, so after any add `wSum > 0`. The reset is kept for empty and corrupt
+records only, and the derivation now says so (`docs/RESTIR_GI_DERIVATION.md`
+§6, sections 6-9 renumbered, README, `SLANG_MIGRATION.md` and the P1-7 audit
+entry updated).
+
+Evidence:
+
+- L1 Slang: the same temporary probe root (outside the repository) imports the
+  edited module and calls every entry, including `ptSpatialReuse`,
+  `ptResolveFiltered` and `ptResolveVisible`; the pinned `slangc` (2026.20)
+  with `-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major`
+  emits 323,028 B of SPIR-V with no warnings (v3: 323,420 B).
+- L2 Java: `RestirPtReservoirInvariantTest`, four tests. Source guards pin the
+  split (`ptAddPath` admits on `ptPathValid` + `first.pdf > 0` and never names
+  `ptPathReusable`; the merge keeps it). A 300,000-trial comparison of two
+  identical fresh reservoirs whose only difference is the admission rule puts
+  the counting one within 4 standard errors and 1% of 0.15 and the v3-gated
+  twin within 2% of `1.5 * 0.15`. Temporal reuse stays on 0.15 both transported
+  into an empty reservoir and merged with the fresh one, and a deterministic
+  merge checks `W_merged = W_source * J` exactly (1e-12) with `|J-1| > 0.05`.
+- Full `:common:test` with the pinned slangc: `932 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals; the previous 928 plus the four new tests), BUILD
+  SUCCESSFUL.
+- Mutation proof: restoring the v3 gate
+  (`if (!ptPathReusable(path)) return reservoir;`) in `ptAddPath` turned exactly
+  `admissionCountsEveryAttemptWhileReuseStaysInTheMerge()` red and left the
+  other seven ReSTIR PT tests green; the shader was restored byte-identical,
+  sha256 `4c31aeede4968a07c8658d41adbad0d02151897b6cc3c5c5f5b4e8d323a461ef`.
+
+No native build, CTest or deploy: no root imports the module and no runtime
+behavior changed. No owner-verified frame.
