@@ -128,12 +128,15 @@ public final class RtFrameRenderer {
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtMemory.Buf entityMotionBuf;
-    private record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence, long recordedNanos) {}
+    private record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence,
+                                 long recordedNanos, int width, int height, int frameIndex) {}
     private static RecordingReadbackSlots<StatsMetadata> statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
     private static long lastStatsSequence = -1;
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
     private static double lastHitPct = -1.0;
+    /** Share of the metered pixels the tracer refused; -1 until a counter slot carries a measurement. */
+    private static double lastRejectedPct = -1.0;
     /** Share of the hit pixels whose key light reached them through a leaf card (1-in-16 mask, like hist_pct). */
     private static double lastLeafPct = -1.0;
     private static volatile String lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
@@ -705,6 +708,10 @@ public final class RtFrameRenderer {
                 long base = statsBuf.mapped + (long) lease.slot() * STATS_STRIDE;
                 int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
                 int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
+                // The counter pass only adds the samples it trusts, so this slot's own extent and rotation say how
+                // many pixels it weighed: the difference is the share the tracer refused, which no other word carries.
+                lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(), metadata.height(),
+                    metadata.frameIndex(), samples);
                 lastTransparency = metadata.transparency() ? String.format(Locale.ROOT,
                     "[RT-TRANSPARENCY] counters=READBACK queries=%d candidates=%d layers=%d overflows=%d direct_shadow_queries=%d indirect_shadow_queries=%d",
                     Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_QUERIES)),
@@ -1106,7 +1113,8 @@ public final class RtFrameRenderer {
         }
         statsReadbacks.written(statsLease, new StatsMetadata(
             (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.accumCount > 0,
-            (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0, params.key.day, dispatchCounter, System.nanoTime()));
+            (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0, params.key.day, dispatchCounter,
+            System.nanoTime(), w, h, params.frame));
         dispatchCounter++;
         VkBarriers.fullMemoryBarrier(cmd);
         if (probePrev != null && outputDepth != null) {
@@ -1646,9 +1654,10 @@ public final class RtFrameRenderer {
             int userBounces = RtSettings.bounces();
             double budget = RtSettings.adaptiveBudgetMs();
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
+                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s reject_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
                 passFrames, target != null ? (long) target.width * target.height : 0L,
                 lastHitPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHitPct),
+                lastRejectedPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectedPct),
                 lastHistPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHistPct),
                 lastLeafPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastLeafPct),
                 passMsInWindow / passFramesInWindow,

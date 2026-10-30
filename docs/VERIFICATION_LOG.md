@@ -3124,3 +3124,41 @@ Deployed for playtest (source-archive build of `7ddba13` + `libs/`):
 "Bedray Fabric 26.3" and "26.3(1)" (previous jar kept as
 `*.20261030-090243.bak`). Natives are unchanged from the earlier live
 `bedray_core.dll` build.
+
+## 2026-10-30 — The refused-sample share reaches the F3 line (L0 source, L1 build, L2 unit)
+
+Branch: `refactor/slang-pipeline`.
+
+`passes/frame_stats.slang` meters one whole 4x4 tile in sixteen and adds only the
+samples it trusts, so the share it refused was already implied by the slot's own
+numbers - no host code read it. `RtStatsMetering` now mirrors the pass's tile walk
+(edge tiles clipped, the rotation taken unsigned, which is the same modulo because
+2^32 is divisible by sixteen), and `RtFrameRenderer` prints
+`reject_pct = 100 * (metered - samples) / metered` on the `rt_pass` line. The value
+is `n/a` when the slot carries no measurement, or when the sample count exceeds the
+mask - which would mean the host's copy of the shader disagrees with the pass that
+ran. The readback metadata now carries the extent and the frame index the pass
+metered with (`params.frame`, the same word pushed to the counter pass).
+
+Evidence:
+
+- L1/L2: full `:common:test --rerun-tasks`, `913 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL in 52 s; all 27 Slang passes were
+  compiled by `slangc` 2026.20 in the same run.
+- `RtFrameStatsTest` (15, three new): the host mask equals a brute-force
+  enumeration of the shader's own pixels for 1x1, 6x3, 256x128 and 63x65 across
+  all sixteen rotations; the share is 3.125 % for 64 refused pixels of 2048 and
+  `n/a` for zero metered, zero trusted or an over-counted slot; the renderer
+  passes the slot's own extent/rotation and prints the field.
+- Three mutation probes, all caught by the named guard: the edge-tile x-clip
+  dropped, the frame rotation dropped, and the over-count refusal dropped. Every
+  mutated file came back byte-identical (SHA-256 checked).
+
+The ledger's stale rows were reconciled in the same batch: the Big Four table now
+records the RC v2 field as integrated (five dependent dispatches, bindings 34/35,
+192 MiB default budget, switch and axis properties) and ReSTIR PT as a quarantined
+in-tree module rather than one outside the checkout; Next steps 1, 2, 4a and 5 say
+what is actually closed and what still needs an owner-verified frame.
+
+Still missing: an owner-verified frame, and per-reason counters (invalid versus
+truncated, visibility overflow) which need a new binding/ABI in the C++ pass.

@@ -189,6 +189,69 @@ class RtFrameStatsTest {
         assertTrue(shader.contains("if (site % PATH_STATS_TILES_PER_SAMPLE != 0u)"), "and the same rate");
     }
 
+    /**
+     * The mask now has a second reader: the renderer subtracts the trusted samples from the pixels the pass weighed to
+     * report how many of them the tracer refused. A host copy of the shader's tile walk is only honest if it lands on
+     * the same pixels, so both enumerate the same mask, edge tiles included.
+     */
+    @Test
+    void theHostMetersTheSamePixelsAsTheShader() throws IOException {
+        int rate = RtStatsMetering.TILES_PER_SAMPLE;
+        assertEquals((int) Double.parseDouble(needle(read(SHADER), "PATH_STATS_TILES_PER_SAMPLE = ", "u;")), rate,
+            "the host mirror reads the shader's own rate");
+        for (int[] extent : new int[][]{{1, 1}, {6, 3}, {256, 128}, {63, 65}}) {
+            int width = extent[0];
+            int height = extent[1];
+            int tilesPerRow = (width + 3) / 4;
+            for (int frameIndex = 0; frameIndex < rate; frameIndex++) {
+                long expected = 0L;
+                for (int y = 0; y < height; y++) {
+                    for (int x = 0; x < width; x++) {
+                        long tile = (x / 4) + (long) (y / 4) * tilesPerRow;
+                        if ((tile + frameIndex) % rate == 0) {
+                            expected++;
+                        }
+                    }
+                }
+                assertEquals(expected, RtStatsMetering.meteredPixels(width, height, frameIndex),
+                    "the same 4x4 tiles for " + width + "x" + height + " at frame " + frameIndex);
+            }
+        }
+        assertEquals(0L, RtStatsMetering.meteredPixels(0, 32, 0), "an empty image meters nothing");
+        assertEquals(0L, RtStatsMetering.meteredPixels(32, -1, 0), "and neither does one without rows");
+    }
+
+    /** A frame without metered pixels, trusted samples or a consistent count carries no share, and says so. */
+    @Test
+    void theRejectionShareIsOnlyPrintedWhenItWasMeasured() {
+        long metered = RtStatsMetering.meteredPixels(256, 128, 0);
+        assertEquals(2048L, metered, "a 256x128 frame weighs 128 tiles of sixteen pixels");
+        assertEquals(0.0, RtStatsMetering.rejectedPct(256, 128, 0, (int) metered), 1.0e-12);
+        assertEquals(3.125, RtStatsMetering.rejectedPct(256, 128, 0, (int) metered - 64), 1.0e-12,
+            "64 refused pixels of 2048 is three and an eighth percent");
+        assertEquals(-1.0, RtStatsMetering.rejectedPct(256, 128, 0, 0), "no trusted sample is no measurement");
+        assertEquals(-1.0, RtStatsMetering.rejectedPct(256, 128, 0, (int) metered + 1),
+            "a count past the meter means the host's mask is wrong, and n/a is the only honest answer");
+        assertEquals(-1.0, RtStatsMetering.rejectedPct(0, 128, 0, 1));
+    }
+
+    /**
+     * The share reaches the operator's line with the slot's own extent and rotation: a guessed frame index would
+     * weigh the tiles of a frame that was never traced.
+     */
+    @Test
+    void theRendererReportsTheRejectedShareOfItsMeteredTiles() throws IOException {
+        String renderer = read(RENDERER);
+        assertTrue(renderer.contains("System.nanoTime(), w, h, params.frame));"),
+            "the readback carries the extent and rotation the pass metered with");
+        assertTrue(renderer.contains("lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(),"
+                + " metadata.height(),")
+                && renderer.contains("metadata.frameIndex(), samples);"),
+            "the host recomputes the shader's tiles instead of trusting the settings screen");
+        assertTrue(renderer.contains("reject_pct=%s"),
+            "the F3 line prints the share next to hit_pct, or nothing measures it");
+    }
+
     /** A rejected pixel is no sample of the integrand, and the history share may only count pixels that hit. */
     @Test
     void anUntrustedSampleIsNotASampleAndOnlyAHitKeepsHistory() throws IOException {
