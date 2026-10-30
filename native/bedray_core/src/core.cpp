@@ -9,6 +9,7 @@
 #include "sodium_pass.h"
 #include "velocity_pass.h"
 #include "nrd_pack_pass.h"
+#include "fg_prepare_pass.h"
 #include "volumetric_pass.h"
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
 #include "frame_graph_owner.h"
@@ -166,6 +167,7 @@ struct BedrayCore {
     PFN_vkCmdPushConstants cmd_push_constants = nullptr;
     PFN_vkCmdDispatch cmd_dispatch = nullptr;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
+    PFN_vkCmdBlitImage cmd_blit_image = nullptr;
     PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
 };
 
@@ -435,6 +437,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
         || !load_device(core.get(), core->create_sampler, "vkCreateSampler")
         || !load_device(core.get(), core->destroy_sampler, "vkDestroySampler")
         || !load_device(core.get(), core->cmd_pipeline_barrier, "vkCmdPipelineBarrier")
+        || !load_device(core.get(), core->cmd_blit_image, "vkCmdBlitImage")
         || !load_device(core.get(), core->cmd_fill_buffer, "vkCmdFillBuffer")
         || !load_device(core.get(), core->allocate_descriptor_sets, "vkAllocateDescriptorSets")
         || !load_device(core.get(), core->update_descriptor_sets, "vkUpdateDescriptorSets")
@@ -1566,6 +1569,21 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_nrd_pack(
     return fail(error,BEDRAY_ERROR_OUT_OF_MEMORY,"cannot allocate NRD pack recording");
 } catch (...) {
     return fail(error,BEDRAY_ERROR_INTERNAL,"unexpected exception recording NRD pack");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_fg_prepare(
+    BedrayCore* core, const BedrayFgPrepareFrameDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/FG producer descriptor is null");
+    if ((core->capabilities & BEDRAY_CAP_STORAGE_IMAGE_EXTENDED_FORMATS) == 0)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "FG producer extended image formats are not enabled");
+    return bedray::core::record_fg_prepare(core, core->cmd_pipeline_barrier,
+        core->cmd_blit_image, *desc, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate FG producer recording");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording FG producer");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_decode_sodium(
