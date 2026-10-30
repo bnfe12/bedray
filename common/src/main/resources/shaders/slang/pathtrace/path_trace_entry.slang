@@ -359,6 +359,12 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     options.maxDistance = max(pc.maxDistance, 1.0);
     options.maxRadiance = max(pc.maxRadiance, 1.0);
     options.flags = pc.flags;
+    // Pixel-shaped key-light shadows: bits 8..15 of the same word carry the cell size in texture pixels (1/16 block
+    // each), so the 112-byte push block did not have to grow a word.  A flag without a size is off, and the flag clear is
+    // the exact per-pixel shadow of every earlier build.
+    options.pixelShadowCell = (pc.flags & PATH_TRACE_OPTION_PIXEL_SHADOWS) != 0u
+        ? float((pc.flags >> PATH_TRACE_PIXEL_SHADOW_SIZE_SHIFT) & 0xFFu) / 16.0 : 0.0;
+    options.frameIndex = f.frame.x;
     // The ray profile's own bounce distances.  A 0 word is the path profile's older host and keeps the ray far plane,
     // so the two words change nothing for a dispatch that does not fill them.
     options.diffuseDistance = asfloat(pc.diState.z) > 0.0 ? asfloat(pc.diState.z) : options.maxDistance;
@@ -392,7 +398,11 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
         // host prepared - the frame's own jitter, the host's own sample index - so the cheapest setting traces the very
         // paths it traced before this loop existed.
         Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance, pathTracePixelJitter(f, p, s, sampleCount));
-        uint seed = pathTraceSeed(p, f.frame.x, pc.sampleIndex * sampleCount + s);
+        // One word identifies the sample across the whole frame: the path seed and the world-locked sun rotation of a
+        // pixel-shadow cell both hash it, so the strata a cell shares are the strata every pixel of the frame drew.
+        uint sampleWord = pc.sampleIndex * sampleCount + s;
+        uint seed = pathTraceSeed(p, f.frame.x, sampleWord);
+        options.sampleWord = sampleWord;
         // The reservoir is one record per pixel per frame, so only the first ray reads, merges and publishes it. The
         // rest shade the same emitter list with plain next-event estimation, and every write of the reservoir - the
         // publish, the occlusion decay, the empty record - is gated on reuseActive(), so turning it off here cannot

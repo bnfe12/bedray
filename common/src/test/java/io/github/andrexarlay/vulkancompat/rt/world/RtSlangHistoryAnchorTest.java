@@ -38,9 +38,14 @@ class RtSlangHistoryAnchorTest {
         "traversal/voxel_traversal.slang",
         "traversal/entity_geometry.slang");
 
-    /** The only things allowed to read it: two documented procedural anchors and one unreachable module. */
+    /**
+     * The only things allowed to read it: three documented procedural anchors and one unreachable module. The tracer
+     * reads it to name a world-locked shadow cell and a leaf's own block - a pattern derived from where the surface is,
+     * not an identity - so two surfaces that wrap to the same anchor still shade alike.
+     */
     private static final List<String> READERS = List.of(
         "experimental/restir_pt.slang",
+        "pathtrace/path_tracer.slang",
         "surface/surface.slang");
 
     @Test

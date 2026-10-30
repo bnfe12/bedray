@@ -89,6 +89,16 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final int OPTION_NO_KEY_SHADOWS = 32;
     static final int OPTION_HARD_KEY_SHADOWS = 64;
 
+    /**
+     * {@code PathTracePush.flags}: the primary receiver's shadow is evaluated once per world cell. Mirrors
+     * {@code PATH_TRACE_OPTION_PIXEL_SHADOWS}; bits 8..15 of the same word carry the cell size in texture pixels
+     * (1..16, one sixteenth of a block each), so the 112-byte push block did not have to grow a word.
+     */
+    static final int OPTION_PIXEL_SHADOWS = 128;
+
+    static final int PIXEL_SHADOW_SIZE_SHIFT = 8;
+    static final int PIXEL_SHADOW_MAX_SIZE = 16;
+
     /** The seven denoiser guide images, in the order {@code gbufferViews()} hands them over. */
     record Guides(long viewZ, long normalRough, long diffuse, long albedo, long direct, long specular, long specAlbedo) {
         /**

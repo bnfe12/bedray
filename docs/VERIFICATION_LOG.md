@@ -4,6 +4,62 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — Pixel-shaped key-light shadows return (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+The deleted `rt_common_pixel_shadow.glsl` evaluated the key-light shadow once per
+world cell: it snapped the receiver horizontally to the cell centre, accepted the
+snap only when one validation ray was unblocked, and rotated the sun/moon disc
+from a cell-stable seed so the quantised penumbra was one value instead of
+per-pixel speckle. The Slang path lit every fragment exactly, so the look option
+did nothing. This batch ports the policy without growing the push block:
+
+- `PATH_TRACE_OPTION_PIXEL_SHADOWS` is flag bit 7 and bits 8..15 carry the cell
+  size in texture pixels (1..16, one sixteenth of a block each, the legacy
+  `StatsBuf.shadowPixel/16`); `PathTracePush` stays 112 B and
+  `RtSlangPathPass.pixelShadowFlags()` clamps a stale setting instead of
+  refusing the frame.
+- `pathPixelShadowOrigin` snapshots only the receiver, keeps the lateral
+  displacement horizontal, projects it into the surface plane and returns the
+  exact position when the probe is blocked. It runs for the primary receiver
+  only - a deeper vertex is 1-3 spp and each one would spend a validation ray -
+  and never for a leaf, an entity or an underwater receiver, whose sun-side and
+  bent-beam origins win.
+- `pathTraceShadowCell`, `pathTraceStableSunCell` and `pathTraceFoliageSunCell`
+  name the world-locked rotation cell: the estimator and the disc seed hash the
+  same cell, a non-cell fragment keeps a 1/16-block sheared world cell while the
+  option is on, and a leaf freezes to its own block at frame 0 exactly as the
+  legacy `sunSampleFrame(foliage)` did. `LightReceiver.stableSun`/`sunSeed`
+  carry the choice into `SunMoonSampler`, which replays the same draws into the
+  path stream when it is off, so an ordinary receiver keeps its exact seed.
+- `worldPosition` is the world-anchored (modulo 1024 blocks) hit anchor every
+  backend fills; every cell size the host can send divides that wrap, so a cell
+  never drifts across the anchor boundary. `RtSlangHistoryAnchorTest` now lists
+  the tracer as a reader with that reason.
+- `RtSlangPixelShadowTest` (10) mirrors the cell arithmetic, the projection,
+  the blocked-cell fallback, the primary-only rule, the foliage freeze, the
+  shared estimator/rotation cell, the stream sync and the host clamp, read out
+  of `pathtrace/path_tracer.slang`, `pathtrace/path_trace_entry.slang`,
+  `light/sun.slang` and `contracts/light.slang`. Eighteen mutation probes (flag
+  bit, size shift, entry decode, primary gate, underwater gate, blocked snap,
+  projection sign, cell scaling, foliage frame and cell, y-shear, stable seed,
+  stream sync, rotation cell, receiver default, host clamp, host flag OR) were
+  each caught, and every mutated file was restored by sha256.
+- Three contract tests were re-aimed at the preserved invariants:
+  `RtSlangRayModeTest` reads `coneAround(axis, radius, drawSeed)`,
+  `RtSlangSamplePerPixelTest` reads the named `sampleWord`, and
+  `RtSlangNrdMotionTest` expects the pixel-shadow flags in the same OR chain.
+
+Full `:common:test --rerun-tasks`: 151 classes, 865 tests, 0 failures, 6
+skipped, `BUILD SUCCESSFUL` (42 s). All Slang entry passes compile;
+`path_trace` is 1 112 528 B SPIR-V, 26 bindings, 112 B push constants (unchanged).
+
+Open: no owner-verified frame shows the staircase yet, and the look is only
+meaningful once `pixel_shadows` is on in the video settings. Glass cost, the
+distant-block light fallback, the NEE NaN guard and the hot-loop/layout guards
+remain open holes.
+
 ## 2026-10-30 — Foliage filters the key light again (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.

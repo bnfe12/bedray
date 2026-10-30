@@ -59,6 +59,12 @@ struct LightReceiver {
     // gates on the shaded face alone rejects every back-lit leaf, which is why the legacy path lit it with a separate
     // transmission term; the sampler reads this flag to hand such a receiver the sample it must shade.
     bool   foliage;
+    // World-locked sun/moon rotation.  With `stableSun` set the sampler draws the disc point from `sunSeed` instead of
+    // the path's own stream, so every fragment of one world cell (or one leaf block) draws the same point: the pixel-
+    // shadow option evaluates the shadow once per cell, and a per-pixel disc point would fill that quantised penumbra
+    // with speckle.  The path tracer fills this; every other caller leaves it false and keeps the exact per-path sample.
+    bool   stableSun;
+    uint   sunSeed;
 };
 
 LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
@@ -70,6 +76,8 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
     receiver.primary = false;
     receiver.motion = float3(0.0);
     receiver.foliage = false;
+    receiver.stableSun = false;
+    receiver.sunSeed = 0u;
     return receiver;
 }
 

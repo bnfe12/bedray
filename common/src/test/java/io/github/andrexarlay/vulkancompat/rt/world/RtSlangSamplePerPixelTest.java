@@ -64,8 +64,10 @@ class RtSlangSamplePerPixelTest {
         String shared = read(SHARED);
         assertTrue(shared.contains("if (n <= 1u) {\n        return f.camera.jitter.xy;"),
             "a single ray keeps the host's own sub-pixel jitter");
-        assertTrue(shared.contains("pathTraceSeed(p, f.frame.x, pc.sampleIndex * sampleCount + s)"),
-            "with one sample the seed is the host's sample index, exactly as before the loop");
+        assertTrue(shared.contains("uint sampleWord = pc.sampleIndex * sampleCount + s;\n"
+                + "        uint seed = pathTraceSeed(p, f.frame.x, sampleWord);"),
+            "with one sample the seed is the host's sample index, exactly as before the loop; the same word also keys "
+                + "the world-locked sun rotation of a pixel-shadow cell");
     }
 
     /**

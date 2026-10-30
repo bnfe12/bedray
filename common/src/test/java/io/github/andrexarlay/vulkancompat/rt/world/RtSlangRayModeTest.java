@@ -309,8 +309,9 @@ class RtSlangRayModeTest {
             "the per-lobe far plane is the one the bounce uses");
 
         String sun = read(Path.of("src/main/resources/shaders/slang/light/sun.slang"));
-        assertTrue(sun.contains("float3 direction = hardShadows ? axis : coneAround(axis, radius, seed);"),
-            "hard shadows draw the disc axis but keep the disc density");
+        assertTrue(sun.contains("float3 direction = hardShadows ? axis : coneAround(axis, radius, drawSeed);"),
+            "hard shadows draw the disc axis but keep the disc density; the disc point comes from the receiver's "
+                + "world-locked seed when it has one, or the path's own");
 
         String entry = read(Path.of("src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang"));
         assertTrue(entry.contains("keyLight.hardShadows = (pc.flags & PATH_TRACE_OPTION_HARD_KEY_SHADOWS) != 0u;"),

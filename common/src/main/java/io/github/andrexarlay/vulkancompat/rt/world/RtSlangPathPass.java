@@ -105,6 +105,21 @@ public final class RtSlangPathPass implements RtPass {
         return flags;
     }
 
+    /**
+     * The pixel-shadow look option, as the flag plus the cell size in texture pixels. It belongs to both profiles: the
+     * deleted legacy renderer honoured it in the path and the ray pass alike, and the setting lives in the shared look
+     * page. A size outside the settings screen's 1..16 range is clamped rather than refused: a stale config must not
+     * blank the shadows of a frame.
+     */
+    static int pixelShadowFlags() {
+        if (!RtSettings.pixelShadows()) {
+            return 0;
+        }
+        int size = Math.min(RtPathTraceSlangPass.PIXEL_SHADOW_MAX_SIZE,
+            Math.max(1, RtSettings.pixelShadowSize()));
+        return RtPathTraceSlangPass.OPTION_PIXEL_SHADOWS | (size << RtPathTraceSlangPass.PIXEL_SHADOW_SIZE_SHIFT);
+    }
+
     /** Far plane of a diffuse bounce: GI's own distance, or the AO radius when that bounce only collects the sky. */
     float diffuseBounceDistance() {
         if (!rayMode) {
@@ -398,7 +413,8 @@ public final class RtSlangPathPass implements RtPass {
         RtPathTraceSlangPass.Guides guides = RtPathTraceSlangPass.Guides.of(views.gbuffer());
         int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)
             | (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)
-            | rayEffectFlags();
+            | rayEffectFlags()
+            | pixelShadowFlags();
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,

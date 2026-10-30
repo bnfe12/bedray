@@ -1217,16 +1217,38 @@ is supposed to protect or removed.  The first group is closed:
   gates, sun-side normal, cube step, underwater origin, estimator and
   no-shadow branch, front-face gate, silhouette ramp) were each caught, and
   the shaders were restored byte-identically.
+* pixel shadows are the cell policy the deleted
+  `rt_common_pixel_shadow.glsl` ran, carried in the existing flag word:
+  `PATH_TRACE_OPTION_PIXEL_SHADOWS` (bit 7) plus the cell size in bits 8..15
+  in 1/16-block units (the legacy `shadowPixel/16`), so `PathTracePush` stays
+  112 B. `pathPixelShadowOrigin` snaps the receiver - never the caster -
+  horizontally to its cell centre, projects the lateral onto the surface
+  plane and keeps the snap only when the one validation ray is unblocked; the
+  estimator and the world-locked disc rotation hash the same
+  `pathTraceShadowCell`, only the primary, non-entity, non-leaf, above-water
+  receiver pays, and a leaf freezes to its block at frame 0 as the legacy
+  `sunSampleFrame` did. The sampler draws from `LightReceiver.sunSeed` when
+  `stableSun` is set and replays the same draws into the path stream otherwise,
+  so an ordinary receiver keeps its exact per-path sequence.
+  `RtSlangPixelShadowTest` (10) mirrors the cell arithmetic, the projection,
+  the blocked-cell fallback, the primary-only rule, the foliage freeze, the
+  stream sync and the host clamp, read out of `pathtrace/path_tracer.slang`,
+  `pathtrace/path_trace_entry.slang`, `light/sun.slang` and
+  `contracts/light.slang`. Eighteen mutation probes (flag bit, size shift,
+  entry decode, primary gate, underwater gate, blocked snap, projection sign,
+  cell scaling, foliage frame/cell, y-shear, stable seed, stream sync, rotation
+  cell, receiver default, host clamp, host flag OR) were each caught, and every
+  mutated file was restored by sha256.
 
 The second group has no Slang counterpart yet, and each entry is an open hole,
 not a passing test:
 
 * the `StatsBuf` std430 layout of the Slang structs, beyond the two
   self-avatar slots. (`RtStatsLayoutTest`)
-* pixel-shadow sampling, glass cost, distant-block light, the NEE NaN guard
-  and the primary-path hot-loop invariants. (`RtPixelShadowSamplingTest`,
-  `RtGlassCostTest`, `RtDistantBlockLightTest`, `RtShaderNaNGuardTest`,
-  `RtPathHotLoopTest`, `RtOptimizationTest`, `RtBlockLightReachTest`)
+* glass cost, distant-block light, the NEE NaN guard and the primary-path
+  hot-loop invariants. (`RtGlassCostTest`, `RtDistantBlockLightTest`,
+  `RtShaderNaNGuardTest`, `RtPathHotLoopTest`, `RtOptimizationTest`,
+  `RtBlockLightReachTest`)
 
 The third group tested the deleted classes themselves (runtime compiler
 options, the SPIR-V disk cache, the GLSL include graph, the `rtx/raytracing`

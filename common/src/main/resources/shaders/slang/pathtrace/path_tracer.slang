@@ -78,6 +78,12 @@ static const uint PATH_TRACE_OPTION_AMBIENT_ONLY_BOUNCE = 1u << 4u;
 static const uint PATH_TRACE_OPTION_NO_KEY_SHADOWS      = 1u << 5u;  // key-light NEE skips the visibility walk
 // The key-light sampler draws the disc axis instead of a point of the disc: the same flux, a hard shadow edge.
 static const uint PATH_TRACE_OPTION_HARD_KEY_SHADOWS    = 1u << 6u;
+// Pixel-shaped key-light shadows: the primary receiver is evaluated once per world cell instead of once per pixel, so the
+// shadow edge becomes the staircase of the block texture the cell is measured in (the deleted rt_common_pixel_shadow.glsl).
+// Bits 8..15 carry the cell size in texture pixels, one sixteenth of a block each; the flag set with a zero size is
+// treated as off, and the flag clear keeps the exact per-pixel shadow of every earlier build.
+static const uint PATH_TRACE_OPTION_PIXEL_SHADOWS       = 1u << 7u;
+static const uint PATH_TRACE_PIXEL_SHADOW_SIZE_SHIFT    = 8u;
 
 struct PathTraceOptions {
     uint  maxDepth;             // scattering events before the path stops
@@ -102,6 +108,11 @@ struct PathTraceOptions {
     // The style switch is NOT here - it changes the wave field a face keeps, which is the surface decoder's option,
     // not a different path for the light.
     bool  waterCaustics;
+    // Pixel-shadow cell in blocks (0 = the exact per-pixel shadow), and the frame/sample words the world-locked sun
+    // rotation is hashed from.  Pass options like the flags above: the entry sets them, the tracer only reads them.
+    float pixelShadowCell;
+    uint  frameIndex;
+    uint  sampleWord;
 };
 
 PathTraceOptions defaultPathTraceOptions() {
@@ -119,6 +130,9 @@ PathTraceOptions defaultPathTraceOptions() {
     options.specularDistance = 0.0;
     options.primaryInWater = false;
     options.waterCaustics = false;
+    options.pixelShadowCell = 0.0;
+    options.frameIndex = 0u;
+    options.sampleWord = 0u;
     return options;
 }
 
@@ -178,6 +192,62 @@ bool pathTraceSampleRejected(uint flags) {
     return (flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_RC_UNRESOLVED)) != 0u;
 }
 
+// ---- Pixel-shaped shadows (the deleted rt_common_pixel_shadow.glsl) ----
+// The option evaluates the shadow once per world cell: the receiver is snapped horizontally to the centre of its cell,
+// so a whole cell shares one shadow ray and the edge becomes the staircase of the block texture the cell is measured in.
+// Three rules keep the look from becoming a cheat, and all three live here: only the receiver moves (never the caster),
+// a cell that crosses geometry keeps the exact shadow, and geometry that is not part of the block grid (a mob, a leaf)
+// is never snapped.  The cell is world-locked: `SurfaceHit.worldPosition` is the world anchor modulo 1024 blocks, and
+// every cell size the host can send (1/16 .. 1 block) divides the 1024-block wrap exactly.
+
+// Cell index that rotates the sun/moon disc sequence: each fragment of a pixel-shadow cell draws the same disc point, so
+// the quantised penumbra is one value instead of per-pixel speckle.
+int3 pathTraceShadowCell(float3 worldPosition, float cell) {
+    return int3(int(floor(worldPosition.x / cell)), int(floor(worldPosition.z / cell)), 0);
+}
+
+// World-locked rotation for a fragment that keeps its exact origin: the penumbra rays stay still in the world while the
+// accumulating sub-pixel jitter moves the hit, instead of boiling.  The y shear decorrelates stacked surfaces, so a floor
+// under a roof does not repeat the roof's sample pattern; the 1/16-block cell is the legacy one.
+int3 pathTraceStableSunCell(float3 worldPosition) {
+    float2 sheared = (worldPosition.xz + worldPosition.y * 0.5) * 16.0;
+    return int3(int(floor(sheared.x)), int(floor(sheared.y)), 0);
+}
+
+// A leaf's rotation is its own block, frame term included in the caller: a leaf card never leaves that block, and hashing
+// a 1/16-block cell would restart the whole disc sequence as jitter moves the hit across those cell borders.
+int3 pathTraceFoliageSunCell(float3 worldPosition) {
+    return int3(floor(worldPosition));
+}
+
+// The cell-stable seed of the sun/moon sample: same cell, same frame and same sample stratum draw the same disc point.
+uint pathTraceSunSeed(int3 cell, uint frame, uint sampleWord) {
+    uint seed = uint(cell.x) * 1973u + uint(cell.y) * 9277u + uint(cell.z) * 4093u;
+    return pcgHash(pcgHash(seed + frame * 26699u) + sampleWord * 6971u);
+}
+
+// Origin of the shared shadow ray of a fragment's cell.  Returns `position` unchanged whenever sharing is not possible
+// (the option is off or the cell crosses geometry), so a caller can use the result unconditionally.  The displacement
+// stays horizontal and is projected into the surface plane - a naive world snap pushes wall fragments sideways into the
+// wall - and the validation ray is the whole test: blocks are convex, so "the cell centre is inside geometry or behind a
+// step" is exactly "the short segment from the fragment to that centre is blocked".  A fragment whose snap is rejected
+// keeps its exact origin, which is what keeps shadows attached to their casters.
+float3 pathPixelShadowOrigin<T : ISceneTracer>(T traversal, float3 position, float3 normal, float bias,
+        float3 worldPosition, float cell) {
+    float2 w = worldPosition.xz;
+    float3 lateral = float3((floor(w.x / cell) + 0.5) * cell - w.x, 0.0,
+                            (floor(w.y / cell) + 0.5) * cell - w.y);
+    lateral -= normal * dot(lateral, normal);
+    float len = length(lateral);
+    if (len <= 1.0e-5) {
+        return position;   // the fragment already sits on the cell centre
+    }
+    // The probe starts where the shadow ray will start, not on the face itself: a ray lying in its own triangle would
+    // count that triangle as a blocker and reject every snap.
+    Ray probe = makeRay(position + normal * bias, lateral / len, 0.0, len + 0.05);
+    return traversal.traceVisibility(probe).visible ? position + lateral : position;
+}
+
 // Shades one direct-light sample: the BSDF term of the legacy NEE times the filtered visibility walk.  The caller
 // multiplies the result by its throughput.  `traced` says a shadow ray really ran, `occluded` that it came back
 // blocked; a reservoir needs both, because a sample this receiver cannot even see must fade instead of persisting.
@@ -188,7 +258,7 @@ bool pathTraceSampleRejected(uint flags) {
 // caustics.
 float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light,
-        PathTraceOptions options, MaterialSamplingOptions materialOptions, WaterMedium medium,
+        PathTraceOptions options, MaterialSamplingOptions materialOptions, WaterMedium medium, bool primary,
         out bool traced, out bool occluded) {
     float3 zero = float3(0.0);
     traced = false;
@@ -274,6 +344,16 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         shadowPosition = leafCube && frontFace
             ? position - shadowNormal * 1.01
             : position + lightDirection * 0.01;
+    }
+    // Pixel-shaped shadows: the primary fragment is shaded from the centre of its world cell, so one whole cell shares
+    // one shadow ray.  Only the primary vertex pays for this - a deeper vertex is 1-3 spp and the denoiser dissolves
+    // its quantization, while each one would spend a validation ray.  A leaf keeps the sun-side origin its transmission
+    // needs, an entity moves inside a world-locked cell, and an underwater receiver's cell above means nothing.  The
+    // same rule gates both the key light and a block emitter, which is what makes a torch cast the same staircase.
+    if (primary && options.pixelShadowCell > 0.0 && leafBack <= 0.0 && !medium.inside
+            && (surface.hit.flags & HIT_FLAG_ENTITY) == 0u) {
+        shadowPosition = pathPixelShadowOrigin(traversal, position, shadowNormal, options.rayBias,
+            surface.hit.worldPosition, options.pixelShadowCell);
     }
     SurfaceVisibility shadow = beam.valid
         ? traceShadowBeam(traversal, atlas, blockMaterials, shadowPosition, shadowNormal, lightDirection,
@@ -527,6 +607,26 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // handed a key-light sample the estimator would discard.
         receiver.foliage = (surface.material.sourceFlags & MATERIAL_SOURCE_FOLIAGE) != 0u
             && (surface.material.flags & MATERIAL_FLAG_EMISSIVE) == 0u;
+        // The world-locked rotation of the sun/moon disc for this vertex.  A leaf freezes to its own block AND to a fixed
+        // frame term: its transmission is a 0.6-per-layer staircase, so re-rolling the disc point every frame flips whole
+        // texels - the ripple the owner kept reporting.  With pixel shadows on, a cell shares one disc point and every
+        // vertex that keeps its exact origin still gets a world-locked one, so accumulating jitter cannot make the
+        // penumbra boil.  With the option off nothing changes: the sample stays the exact per-path one.
+        receiver.stableSun = false;
+        receiver.sunSeed = 0u;
+        if (receiver.foliage) {
+            receiver.stableSun = true;
+            receiver.sunSeed = pathTraceSunSeed(pathTraceFoliageSunCell(surface.hit.worldPosition), 0u,
+                options.sampleWord);
+        } else if (options.pixelShadowCell > 0.0) {
+            bool cellShadow = receiver.primary && !medium.inside
+                && (surface.hit.flags & HIT_FLAG_ENTITY) == 0u;
+            int3 sunCell = cellShadow
+                ? pathTraceShadowCell(surface.hit.worldPosition, options.pixelShadowCell)
+                : pathTraceStableSunCell(surface.hit.worldPosition);
+            receiver.stableSun = true;
+            receiver.sunSeed = pathTraceSunSeed(sunCell, options.frameIndex, options.sampleWord);
+        }
         float3 direct = float3(0.0);
         if (receiver.primary && reuse.reuseActive()) {
             // The reservoir carries the emissive branch across frames, so the composite must not also draw it; the key
@@ -536,19 +636,19 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             LightSample reused = reuse.reuseSample(receiver, seed);
             reuseHandled = true;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                reused, options, materialOptions, medium, reusedTraced, reusedOccluded);
+                reused, options, materialOptions, medium, receiver.primary, reusedTraced, reusedOccluded);
             // A sample this receiver could not even shade has not been proven visible either: decaying it lets a record
             // that lost its light fade out instead of sitting at full weight until the surface changes.
             reuse.reuseConfirm(!reusedTraced || reusedOccluded);
             bool keyTraced;
             bool keyOccluded;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lights.sample(receiver, seed), options, materialOptions, medium, keyTraced, keyOccluded);
+                lights.sample(receiver, seed), options, materialOptions, medium, receiver.primary, keyTraced, keyOccluded);
         } else {
             bool lightTraced;
             bool lightOccluded;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lights.sample(receiver, seed), options, materialOptions, medium, lightTraced, lightOccluded);
+                lights.sample(receiver, seed), options, materialOptions, medium, receiver.primary, lightTraced, lightOccluded);
         }
         if (direct.r + direct.g + direct.b > 0.0) {
             result.flags |= PATH_TRACE_FLAG_FILTERED_SHADOW;
