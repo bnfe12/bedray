@@ -56,6 +56,14 @@ Full `:common:test --rerun-tasks`: 152 classes, 874 tests, 0 failures, 6
 skipped, `BUILD SUCCESSFUL`. All Slang entry passes compile; `path_trace` is
 1 116 428 B SPIR-V, 26 bindings, 112 B push constants (unchanged).
 
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `5f52f205295d0d4e…`; the previous
+(pixel-shadow) jar is kept as `….20261030-080400.bak` (sha256
+`9b2f92a2e07f869d…`). The bundled `shaders/slang/spv/path_trace.spv` is
+1 116 428 B, sha256 `a29b017aced495f0…`, equal to the fresh compile;
+`bedray_core.dll` (`9ca5cd88cc01f823…`) is byte-identical to the deployed
+native, so no native changed.
+
 Open: no owner-verified frame shows the handover, and the field's hue is the
 pre-lightmap tint rather than the sampler's lightmap colour.
 
