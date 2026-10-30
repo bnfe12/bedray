@@ -4,6 +4,53 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — Foliage filters the key light again (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+The deleted GLSL path treated a canopy as a coloured filter: the shadow walk
+multiplied its transmittance by `0.60 * mix(1, hue, 0.45)` per leaf face, the
+direct term added a back-lit transmission lobe outside the front-face gate, and
+the key-light ray started on the sun side of the leaf. The Slang port had only
+the traversal flags (`HIT_FLAG_FOLIAGE` / `HIT_FLAG_LEAF_CUBE`), so every plant
+shaded like stone and a back-lit leaf was a black dot on a sunlit slope.
+
+- `decodeSurface` copies `HIT_FLAG_FOLIAGE` into `MATERIAL_SOURCE_FOLIAGE`; the
+  new `MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE` is set by exactly the three shadow
+  wrappers (`traceShadowVisibility`, `...Medium`, `traceShadowBeam`), so camera,
+  AO and sky walks keep the binary cutout and the hole skip still runs before a
+  leaf layer is counted.
+- `materialFiltersAsFoliage` accepts cutout, non-emissive plants only;
+  `foliageLayerTransmittance` keeps the legacy 0.60 / 0.45 rule (~36 % through
+  one leaf block), with the hue divisor floored so a black texel is a neutral
+  filter instead of NaN.
+- `pathTraceDirectTerm` adds `albedo * leafBack * 0.42 *
+  smoothstep(0, 0.08, leafBack) * (1 - luminance(f0)) * (1.05, 1.25, 0.75)`
+  outside the front-face gate, for the key light only, and starts the shadow ray
+  one block along the sun-side normal for a front-face leaf cube or 1 cm along
+  the sun for a card; under water the refracted beam origin wins.
+- `SunMoonSampler` accepts a foliage receiver from either face (absolute cosine)
+  instead of the shaded one, so a front-lit plant keeps its sample;
+  `receiver.foliage` carries the tag with the same emissive exclusion the
+  estimator uses.
+- `RtSlangFoliageTransmissionTest` (12) pins the constants, a Java mirror of the
+  arithmetic, both gates, the walk ordering, the two-sided cosine and the shadow
+  origins. Fifteen mutation probes (two-sided cosine, beam and occluded setter,
+  layer constant, tag copy, flag bit, both emissive gates, sun-side normal, cube
+  step, underwater origin, estimator and no-shadow branch, front-face gate,
+  silhouette ramp) were each caught, and every shader was restored by sha256.
+  `RtSlangWaterBeamTest` was re-aimed at the preserved invariants
+  (`shadowPosition` defaults to the receiver; `bsdf = bsdfEvaluate(... arrival)`).
+- Full `:common:test --rerun-tasks`: 150 classes, 855 tests, 0 failures,
+  6 skipped. All 27 Slang entry passes compile (`:common:compileSlang`, 14 s,
+  112 B push constants on the path pass unchanged).
+
+Open: no owner-verified frame shows the canopy yet. The F3 `leafBacklit` counter
+is still unwritten by the Slang pass (it has no stats binding, so
+`RtFrameStatsTest` keeps reporting n/a), and the native `bedray_core` path does
+not forward a leaf counter either; both are follow-ups. Pixel shadows, distant
+block light, the glass-cost guard and the NaN/hot-loop guards remain open holes.
+
 ## 2026-10-30 — The denoiser is re-enabled on the Slang guides (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.

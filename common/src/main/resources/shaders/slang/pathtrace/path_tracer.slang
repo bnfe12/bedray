@@ -222,13 +222,6 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
                 materialOptions.waterWaveMix) : 1.0)
         : 1.0;
     float cosine = max(dot(normal, arrival), 0.0);
-    if (cosine <= 0.0) {
-        return zero;
-    }
-    float3 bsdf = bsdfEvaluate(surface.material, view, normal, arrival);
-    if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
-        return zero;
-    }
     // Offset from the geometric face, not the normal-mapped
     // shading normal: a tilted normal can start the shadow ray
     // inside the surface and either leak light or self-shadow.
@@ -236,17 +229,56 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     if (dot(shadowNormal, view) < 0.0) {
         shadowNormal = -shadowNormal;
     }
+    bool keyLight = light.kind == LightKind.Sun || light.kind == LightKind.Moon;
+    // Light through a thin leaf card.  A plant seen against the sun has its shaded face toward the camera, so this
+    // cosine is zero and the BSDF below has no front lobe; the legacy path lit exactly that case with a transmission
+    // term, and without it every back-lit plant is a dark dot on a sunlit slope.  The term reads the light-facing
+    // normal, and an emissive plant is excluded the way the filter is: a flame drawn in the cutout pass transmits no
+    // sunlight.
+    bool foliage = (surface.material.sourceFlags & MATERIAL_SOURCE_FOLIAGE) != 0u
+        && (surface.material.flags & MATERIAL_FLAG_EMISSIVE) == 0u;
+    float leafBack = foliage && keyLight ? max(dot(-shadowNormal, arrival), 0.0) : 0.0;
+    if (cosine <= 0.0 && leafBack <= 0.0) {
+        return zero;
+    }
+    float3 bsdf = zero;
+    if (cosine > 0.0) {
+        bsdf = bsdfEvaluate(surface.material, view, normal, arrival);
+        if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
+            return zero;
+        }
+    }
+    // The transmission term carries no cosine of the shaded face; its own ramp does that job.  The energy split the
+    // legacy term took from the specular lobe is the same (1 - F) at the leaf's dielectric F0.
+    float3 leafTerm = zero;
+    if (leafBack > 0.0) {
+        float leafGain = leafBack * FOLIAGE_BACKLIT_GAIN * smoothstep(0.0, 0.08, leafBack)
+            * (1.0 - clamp(luminance(surface.material.f0), 0.0, 1.0));
+        leafTerm = surface.material.albedo * (leafGain * FOLIAGE_BACKLIT_TINT);
+    }
     // The ray profile's "RT Shadows" switch: with it off the key light still lights the surface, it simply skips the
     // visibility walk - the sun arrives unshadowed, while every block emitter keeps its traced shadow.
-    if ((options.flags & PATH_TRACE_OPTION_NO_KEY_SHADOWS) != 0u
-            && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
-        return bsdf * light.radiance * beamWeight / max(light.sourcePdf, 1.0e-6);
+    if ((options.flags & PATH_TRACE_OPTION_NO_KEY_SHADOWS) != 0u && keyLight) {
+        float3 unshadowed = leafBack > 0.0 ? leafTerm : bsdf;
+        return unshadowed * light.radiance * beamWeight / max(light.sourcePdf, 1.0e-6);
     }
     traced = true;
+    // The back-lit shadow ray has to start on the sun side of the leaf or it re-hits the caster.  A full leaf cube is
+    // one block thick: its sun-side face is exactly one block along -normal, so the step crosses its own cell.  A card
+    // (or a back-face hit, already on the sun-side face) is zero thickness and is cleared by 1 cm along the sun.  An
+    // underwater receiver keeps the beam origin: the bent column, not the straight sight line, carries its light.
+    float3 shadowPosition = position;
+    if (leafBack > 0.0 && !medium.inside) {
+        bool leafCube = (surface.hit.flags & HIT_FLAG_LEAF_CUBE) != 0u;
+        bool frontFace = (surface.hit.flags & HIT_FLAG_FRONT_FACE) != 0u;
+        shadowPosition = leafCube && frontFace
+            ? position - shadowNormal * 1.01
+            : position + lightDirection * 0.01;
+    }
     SurfaceVisibility shadow = beam.valid
-        ? traceShadowBeam(traversal, atlas, blockMaterials, position, shadowNormal, lightDirection,
+        ? traceShadowBeam(traversal, atlas, blockMaterials, shadowPosition, shadowNormal, lightDirection,
             light.distance, options.rayBias, materialOptions, medium, beam)
-        : traceShadowVisibilityMedium(traversal, atlas, blockMaterials, position, shadowNormal,
+        : traceShadowVisibilityMedium(traversal, atlas, blockMaterials, shadowPosition, shadowNormal,
             lightDirection, light.distance, options.rayBias, materialOptions, medium);
     // Sixteen filters deep the walk gives up and keeps the energy it collected.  That is not a proven sight line:
     // calling it one would light this surface through an opaque blocker hidden behind the glass.  Reporting it as
@@ -256,7 +288,8 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         occluded = true;
         return zero;
     }
-    return bsdf * light.radiance * transmittance * beamWeight / max(light.sourcePdf, 1.0e-6);
+    float3 estimator = leafBack > 0.0 ? leafTerm : bsdf;
+    return estimator * light.radiance * transmittance * beamWeight / max(light.sourcePdf, 1.0e-6);
 }
 
 // How far up, and past how many blockers, the search for the surface of the
@@ -489,6 +522,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // The reservoir belongs to this surface, so its history has to be looked up where this surface was - which for
         // a mob part is not the pixel the camera alone points at.
         receiver.motion = result.primaryMotion.xyz;
+        // The leaf transmission term below needs a key-light sample on the sun side of the card; the samplers read the
+        // tag from the same place the estimator does, emissive exclusion included, so a glowing cutout plant is not
+        // handed a key-light sample the estimator would discard.
+        receiver.foliage = (surface.material.sourceFlags & MATERIAL_SOURCE_FOLIAGE) != 0u
+            && (surface.material.flags & MATERIAL_FLAG_EMISSIVE) == 0u;
         float3 direct = float3(0.0);
         if (receiver.primary && reuse.reuseActive()) {
             // The reservoir carries the emissive branch across frames, so the composite must not also draw it; the key

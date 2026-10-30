@@ -1203,18 +1203,30 @@ is supposed to protect or removed.  The first group is closed:
   dispersion law, dropped fold guard, frozen étendue, absorption reading the
   style switch, column taken from the sight line) were each caught, and the
   shader was restored byte-identically.
+* the canopy is a filter again, as the legacy path had it:
+  `RtSlangFoliageTransmissionTest` pins the shadow-only leaf layer
+  (`0.60 * mix(1, hue, 0.45)`, ~36 % through one leaf block), the
+  cutout-and-not-emissive gate, the two-sided key-light acceptance, the
+  back-lit term outside the front-face gate (`0.42`,
+  `smoothstep(0, 0.08, ...)`, `float3(1.05, 1.25, 0.75)`), and the sun-side
+  shadow origin (one block for a front-face leaf cube, one centimetre for a
+  card, the bent beam under water), read out of `surface/surface.slang`,
+  `surface/visibility.slang`, `light/sun.slang` and
+  `pathtrace/path_tracer.slang`. Fifteen mutation probes (two-sided cosine,
+  beam and occluded setter, layer constant, tag copy, flag bit, both emissive
+  gates, sun-side normal, cube step, underwater origin, estimator and
+  no-shadow branch, front-face gate, silhouette ramp) were each caught, and
+  the shaders were restored byte-identically.
 
 The second group has no Slang counterpart yet, and each entry is an open hole,
 not a passing test:
 
 * the `StatsBuf` std430 layout of the Slang structs, beyond the two
   self-avatar slots. (`RtStatsLayoutTest`)
-* pixel-shadow sampling, canopy and foliage light transmission, glass cost,
-  distant-block light, the NEE NaN guard and the primary-path hot-loop
-  invariants. (`RtPixelShadowSamplingTest`, `RtCanopyLightTest`,
-  `RtFoliageLightingTest`, `RtGlassCostTest`, `RtDistantBlockLightTest`,
-  `RtShaderNaNGuardTest`, `RtPathHotLoopTest`, `RtOptimizationTest`,
-  `RtBlockLightReachTest`)
+* pixel-shadow sampling, glass cost, distant-block light, the NEE NaN guard
+  and the primary-path hot-loop invariants. (`RtPixelShadowSamplingTest`,
+  `RtGlassCostTest`, `RtDistantBlockLightTest`, `RtShaderNaNGuardTest`,
+  `RtPathHotLoopTest`, `RtOptimizationTest`, `RtBlockLightReachTest`)
 
 The third group tested the deleted classes themselves (runtime compiler
 options, the SPIR-V disk cache, the GLSL include graph, the `rtx/raytracing`

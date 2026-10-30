@@ -220,14 +220,17 @@ class RtSlangWaterBeamTest {
                 + "medium the light is in");
         assertTrue(term.contains("float3 arrival = beam.valid ? -beam.direction : lightDirection;"),
             "the beam travels down, so the direction the receiver sees the light in is its negation");
-        assertTrue(term.contains("float3 bsdf = bsdfEvaluate(surface.material, view, normal, arrival);"),
+        assertTrue(term.contains("bsdf = bsdfEvaluate(surface.material, view, normal, arrival);"),
             "the lobe is asked about the direction the light arrived from, which is what moves a shadow under water");
         assertFalse(term.contains("bsdfEvaluate(surface.material, view, normal, lightDirection)"),
             "the air-side sight line is not an underwater arrival direction");
         assertTrue(term.contains("float cosine = max(dot(normal, arrival), 0.0);"), "and neither is it the horizon test");
-        assertTrue(term.contains("traceShadowBeam(traversal, atlas, blockMaterials, position, shadowNormal, lightDirection,")
-                && term.contains("traceShadowVisibilityMedium(traversal, atlas, blockMaterials, position, shadowNormal,"),
+        assertTrue(term.contains("traceShadowBeam(traversal, atlas, blockMaterials, shadowPosition, shadowNormal, lightDirection,")
+                && term.contains("traceShadowVisibilityMedium(traversal, atlas, blockMaterials, shadowPosition, shadowNormal,"),
             "both walks stay: the beam when the surface was crossed, the straight column when it was not");
+        assertTrue(term.contains("float3 shadowPosition = position;"),
+            "the walks start at the receiver; only the back-lit leaf rule may move the origin, and it never fires "
+                + "under water where the bent column carries the light");
         assertTrue(term.contains("* beamWeight / max(light.sourcePdf, 1.0e-6)"),
             "the estimator weight has to ride on the result or the bend changes the brightness instead of its place");
         assertFalse(term.contains("return bsdf * light.radiance * transmittance / max(light.sourcePdf, 1.0e-6);"),

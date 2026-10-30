@@ -55,6 +55,10 @@ struct LightReceiver {
     bool   primary;     // this is the primary hit of the pixel that owns the reservoir
     float3 motion;      // this surface's own displacement: where it stood last frame minus where it is now, in
                         // world blocks; zero for terrain and for a backend that tracks no moving geometry
+    // A plant or leaf card: one-sided for reflection, but its back side transmits the key light.  A sun sampler that
+    // gates on the shaded face alone rejects every back-lit leaf, which is why the legacy path lit it with a separate
+    // transmission term; the sampler reads this flag to hand such a receiver the sample it must shade.
+    bool   foliage;
 };
 
 LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
@@ -65,6 +69,7 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
     // Conservative default: a caller that wants its surface served from the reservoir opts in explicitly.
     receiver.primary = false;
     receiver.motion = float3(0.0);
+    receiver.foliage = false;
     return receiver;
 }
 

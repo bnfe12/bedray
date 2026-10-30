@@ -57,7 +57,12 @@ struct SunMoonSampler : ILightSampler {
 
         // A hard shadow samples the axis while keeping the disc's density: the same flux, no penumbra.
         float3 direction = hardShadows ? axis : coneAround(axis, radius, seed);
-        float cosSurface = lightCosine(receiver.normal, direction);
+        // A leaf card is one-sided for reflection but its far side transmits the key light: a plant seen against the
+        // sun has the shaded face toward the camera, and gating on that face would hand it no sample at all - the
+        // legacy path lit exactly this case with its own transmission term.  The acceptance must stay two-sided, so it
+        // is the absolute cosine: flipping the normal would answer only the back-lit half and starve a front-lit plant.
+        float cosSurface = receiver.foliage ? abs(dot(receiver.normal, direction))
+                                            : lightCosine(receiver.normal, direction);
         if (cosSurface <= 0.0) return result;
 
         float selectionPdf = pickSun ? sunPdf : moonPdf;
@@ -91,7 +96,10 @@ struct SunMoonSampler : ILightSampler {
         float3 radiance = isSun
             ? sun.color.rgb * max(sun.color.w, 0.0)
             : sun.moonColor.rgb * max(sun.moonColor.w, 0.0);
-        float cosSurface = lightCosine(receiver.normal, direction);
+        // Same leaf rule as sample(): the far side of a plant transmits the key light, so the estimate is normalised
+        // on whichever face reaches the sun, never only on the shaded one.
+        float cosSurface = receiver.foliage ? abs(dot(receiver.normal, direction))
+                                            : lightCosine(receiver.normal, direction);
         if (cosSurface <= 0.0 || luminance(radiance) <= 0.0) return result;
 
         float sunIntensity = luminance(sun.color.rgb) * max(sun.color.w, 0.0);

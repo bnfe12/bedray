@@ -87,6 +87,18 @@ static const uint MATERIAL_SAMPLING_FLAG_NORMAL_MAP     = 1u << 0u;
 static const uint MATERIAL_SAMPLING_FLAG_MATERIAL_ATLAS = 1u << 1u;
 static const uint MATERIAL_SAMPLING_FLAG_APPLY_TINT     = 1u << 2u;
 static const uint MATERIAL_SAMPLING_FLAG_EMISSIVE       = 1u << 3u;
+// Shadow queries only: a cutout plant or leaf filters the key light instead of blocking it.  Visibility, AO, sky and
+// camera queries keep the binary cutout, because a canopy still occludes them.
+static const uint MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE = 1u << 4u;
+
+// Share of the key light one leaf face lets through, and how far that share bends toward the texel's own hue.  The
+// legacy path used the same pair: ~60 % per face keeps ~36 % through the entry and exit face of one leaf block.
+static const float FOLIAGE_LAYER_TRANSMITTANCE = 0.60;
+static const float FOLIAGE_HUE_MIX = 0.45;
+// Back-lit leaf term of the direct estimator (rt_path.comp): strength, the smooth ramp that keeps the term from
+// flickering at the silhouette, and the warm scatter tint of light that crossed a leaf.
+static const float FOLIAGE_BACKLIT_GAIN = 0.42;
+static const float3 FOLIAGE_BACKLIT_TINT = float3(1.05, 1.25, 0.75);
 
 struct MaterialSamplingOptions {
     float alphaCutoff;        // cutout threshold, 0.5 matches the legacy path
@@ -513,6 +525,13 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
 
     // Source flags are authoritative for tags that do not change geometry:
     // foliage is cutout, a fluid filters light, an emitter has emission.
+    //
+    // Foliage arrives with the geometry, not with the material table: the host
+    // classifies plants and leaves per quad while staging a section, and both
+    // traversal backends surface that tag as HIT_FLAG_FOLIAGE.
+    if ((hit.flags & HIT_FLAG_FOLIAGE) != 0u) {
+        material.sourceFlags |= MATERIAL_SOURCE_FOLIAGE;
+    }
     if ((material.sourceFlags & MATERIAL_SOURCE_REDSTONE) != 0u) {
         // Redstone dust is forced into the translucent pass by the vanilla
         // model, but the tagged texel is a cutout solid, not glass.
@@ -567,6 +586,25 @@ bool surfaceIsHole(SurfaceSample surface, float alphaCutoff) {
     if (!surface.valid) return true;
     if (!materialIsCutout(surface.material)) return false;
     return !materialAcceptsAlpha(surface.material, alphaCutoff);
+}
+
+// A leaf texel is a coloured filter for the key light, not an opaque blocker.  Only the cutout-pass vegetation tag may
+// filter: bars, chains, panes, ladders and doors share the cutout pass, and a glowing plant (a torch flower, a campfire
+// model drawn as a cutout) is an opaque emitter - a flame does not transmit sunlight.
+bool materialFiltersAsFoliage(MaterialSample material) {
+    if ((material.sourceFlags & MATERIAL_SOURCE_FOLIAGE) == 0u) return false;
+    if ((material.flags & MATERIAL_FLAG_CUTOUT) == 0u) return false;
+    return (material.flags & MATERIAL_FLAG_EMISSIVE) == 0u;
+}
+
+// Transmittance of one leaf face: 60 % of the light, bent toward the texel's own hue (its albedo over the strongest
+// channel), so a canopy shades green instead of grey.
+float3 foliageLayerTransmittance(SurfaceSample surface) {
+    if (!surface.valid) return float3(1.0);
+    float3 albedo = max(surface.material.albedo, float3(0.0));
+    float maximum = max(albedo.r, max(albedo.g, albedo.b));
+    float3 hue = albedo / max(maximum, 1.0e-3);
+    return FOLIAGE_LAYER_TRANSMITTANCE * lerp(float3(1.0), hue, FOLIAGE_HUE_MIX);
 }
 
 // Filtered transmittance of one translucent layer.  Thin panes use the texel

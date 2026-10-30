@@ -82,6 +82,25 @@ SurfaceVisibility traceFilteredVisibility<T : ISceneTracer>(T traversal,
             continue;
         }
 
+        // A shadow ray sees a leaf as a coloured filter, not a wall.  Only the shadow wrappers below set the flag:
+        // visibility, AO, sky and camera queries keep the binary cutout, because a canopy still occludes them.
+        if ((options.flags & MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE) != 0u
+                && materialFiltersAsFoliage(surface.material)) {
+            transmittance *= foliageLayerTransmittance(surface);
+            visibility.layers++;
+            visibility.flags |= SURFACE_VISIBILITY_FLAG_FILTERED;
+
+            float maximum = max(transmittance.r, max(transmittance.g, transmittance.b));
+            if (maximum <= SURFACE_VISIBILITY_MIN_TRANSMITTANCE) {
+                visibility.result = blockedResult(hit, float3(0.0));
+                visibility.flags |= SURFACE_VISIBILITY_FLAG_ABSORBED;
+                return visibility;
+            }
+
+            current = skipSurfaceCandidate(current, hit.t, SURFACE_VISIBILITY_BIAS);
+            continue;
+        }
+
         if (materialIsTranslucent(surface.material)) {
             transmittance *= surfaceTransmittance(surface, ray.direction);
             visibility.layers++;
@@ -168,6 +187,23 @@ SurfaceVisibility traceFilteredVisibilityMedium<T : ISceneTracer>(T traversal,
             continue;
         }
 
+        if ((options.flags & MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE) != 0u
+                && materialFiltersAsFoliage(surface.material)) {
+            transmittance *= foliageLayerTransmittance(surface);
+            visibility.layers++;
+            visibility.flags |= SURFACE_VISIBILITY_FLAG_FILTERED;
+
+            float maximum = max(transmittance.r, max(transmittance.g, transmittance.b));
+            if (maximum <= SURFACE_VISIBILITY_MIN_TRANSMITTANCE) {
+                visibility.result = blockedResult(hit, float3(0.0));
+                visibility.flags |= SURFACE_VISIBILITY_FLAG_ABSORBED;
+                return visibility;
+            }
+
+            current = skipSurfaceCandidate(current, hit.t, SURFACE_VISIBILITY_BIAS);
+            continue;
+        }
+
         if (materialIsTranslucent(surface.material)) {
             transmittance *= surfaceInterfaceTransmittance(surface, ray.direction);
             visibility.layers++;
@@ -240,6 +276,7 @@ SurfaceVisibility traceShadowVisibility<T : ISceneTracer>(T traversal,
     float3 origin = surfacePosition + normal * bias;
     float tMax = max(distance - bias, bias);
     Ray ray = makeRay(origin, direction, 0.0, tMax);
+    options.flags |= MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE;
     return traceFilteredVisibility(traversal, atlas, blockMaterials, ray, options);
 }
 
@@ -255,6 +292,7 @@ SurfaceVisibility traceShadowVisibilityMedium<T : ISceneTracer>(T traversal,
     float3 origin = surfacePosition + normal * bias;
     float tMax = max(distance - bias, bias);
     Ray ray = makeRay(origin, direction, 0.0, tMax);
+    options.flags |= MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE;
     return traceFilteredVisibilityMedium(traversal, atlas, blockMaterials, ray, options, medium);
 }
 
@@ -274,6 +312,8 @@ SurfaceVisibility traceShadowBeam<T : ISceneTracer>(T traversal,
         float distance, float bias, MaterialSamplingOptions options,
         WaterMedium medium, WaterBeam beam) {
     float3 origin = surfacePosition + normal * bias;
+    // Both legs of the beam are shadow rays: a leaf filters the column and the sky alike.
+    options.flags |= MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE;
     SurfaceVisibility visibility = traceFilteredVisibilityMedium(traversal, atlas, blockMaterials,
         makeRay(origin, -beam.direction, 0.0, max(beam.column - bias, bias)), options, medium);
     visibility.flags |= SURFACE_VISIBILITY_FLAG_REFRACTED;
