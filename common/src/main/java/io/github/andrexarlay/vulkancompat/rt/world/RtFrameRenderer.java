@@ -10,6 +10,7 @@ import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retire
 import io.github.andrexarlay.vulkancompat.rt.denoise.BridgeNrdLocator;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserConfig;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
+import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserResolution;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DlssRrDenoiser;
 import io.github.andrexarlay.vulkancompat.rt.denoise.NrdAvailability;
 import io.github.andrexarlay.vulkancompat.rt.denoise.NrdDenoiser;
@@ -1264,59 +1265,29 @@ public final class RtFrameRenderer {
     }
 
     /**
-     * Path tracing denoiser requested for this frame: reads the setting (RtSettings.denoiser()).
-     * Falls back to OFF when the library is missing or the denoiser failed earlier in this session;
-     * every change of the outcome is logged once (rule 4).
+     * Denoiser requested for this frame: reads the setting (RtSettings.denoiser()) and resolves it against the
+     * libraries and session state through {@link DenoiserResolution}. The Slang pass supplies the seven DLSS-RR guide
+     * channels and NRD's motion, so an active trace mode no longer disables the setting. Every change of the outcome
+     * is logged once (rule 4).
      */
     private static DenoiserMode resolveDenoiseMode() {
         RtSettings.PathDenoiser want = RtSettings.denoiser();
-        if (RtConfig.mode().isActive() && want != RtSettings.PathDenoiser.OFF) {
-            // The Slang pass writes the DLSS-RR guides, but the denoiser pack has not been re-registered on them yet:
-            // the only layout it was tested with belonged to the deleted GLSL pass. Preserve the requested setting,
-            // report the disabled stage and never select a different renderer to make that request appear supported.
-            String reason = "slang_denoiser_not_wired";
-            String line = "requested=" + want + " active=off reason=" + reason;
-            denoiserResolutionReason = reason;
-            if (!line.equals(lastDenoiserLog)) {
-                lastDenoiserLog = line;
-                LOGGER.info("[VKB-RT] denoiser {}", line);
-            }
-            return DenoiserMode.OFF;
+        boolean nrdUsable = denoiseAvailability != null && denoiseAvailability.usable();
+        String nrdReason = denoiseAvailability == null ? "null" : denoiseAvailability.reason();
+        boolean dlssUsable = false;
+        String dlssReason = "null";
+        boolean frameGenOwnsNgx = false;
+        if (want == RtSettings.PathDenoiser.DLSS_RR) {
+            DlssAvailability.Library lib = DlssAvailability.library();
+            dlssUsable = lib != null && lib.usable();
+            dlssReason = lib == null ? "null" : lib.reason();
+            frameGenOwnsNgx = io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.isReady()
+                && !io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.rrViaStreamline();
         }
-        DenoiserMode mode = DenoiserMode.OFF;
-        String reason = "setting";
-        switch (want) {
-            case OFF -> { }
-            case DLSS_RR -> {
-                DlssAvailability.Library lib = DlssAvailability.library();
-                if (dlssRrFailed) {
-                    reason = "dlss_rr_failed_earlier_this_session";
-                } else if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.isReady()
-                    && !io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.rrViaStreamline()) {
-                    // Frame generation owns NGX: raw NGX cannot create Ray Reconstruction next to it (0xBAD0000B in the log of the
-                    // owner's configuration), only the Streamline plugin can. Say so instead of trying and failing.
-                    reason = "frame_generation_needs_sl.dlss_d.dll+nvngx_dlssd.dll_in_the_streamline_folder";
-                } else if (lib == null || !lib.usable()) {
-                    reason = "dlss_library_unusable " + (lib == null ? "null" : lib.reason());
-                } else {
-                    mode = DenoiserMode.DLSS_RR;
-                }
-                if (mode == DenoiserMode.OFF && !nrdFailed && denoiseAvailability != null && denoiseAvailability.usable()) {
-                    mode = DenoiserMode.NRD_REBLUR;
-                    reason += " -> fallback_to_nrd";
-                }
-            }
-            case NRD -> {
-                if (nrdFailed) {
-                    reason = "nrd_failed_earlier_this_session";
-                } else if (denoiseAvailability == null || !denoiseAvailability.usable()) {
-                    reason = "nrd_library_unusable " + (denoiseAvailability == null ? "null" : denoiseAvailability.reason());
-                } else {
-                    DenoiserMode flag = DenoiserConfig.requested();
-                    mode = flag.isNrd() ? flag : DenoiserMode.NRD_REBLUR;
-                }
-            }
-        }
+        DenoiserResolution.Result resolved = DenoiserResolution.resolve(want, dlssRrFailed, nrdFailed,
+            dlssUsable, dlssReason, frameGenOwnsNgx, nrdUsable, nrdReason, DenoiserConfig.requested());
+        DenoiserMode mode = resolved.mode();
+        String reason = resolved.reason();
         String line = "requested=" + want + " active=" + mode.logName() + (mode == DenoiserMode.OFF && want != RtSettings.PathDenoiser.OFF ? " reason=" + reason : "");
         denoiserResolutionReason = reason;
         if (!line.equals(lastDenoiserLog)) {

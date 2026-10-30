@@ -4,6 +4,44 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — The denoiser is re-enabled on the Slang guides (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+Every active trace mode used to resolve the denoiser setting to OFF with
+`slang_denoiser_not_wired`. The refusal dated from the first Slang wiring, when
+the pass wrote no G-buffer; it outlived its reason. The Slang pass has written
+the seven DLSS-RR guide channels and NRD's `IN_MV` since the guide/motion
+batches, the pack, the denoiser and the compose are unchanged, and
+`RtSlangGbufferGuidesTest` already pins every channel against the deleted
+`rt_path.comp` layout. This batch removes the gate:
+
+- `DenoiserResolution` owns the decision table as a pure function: setting
+  (`path_denoiser`) × library usability × session failures → mode + reason,
+  including the DLSS-RR→NRD fallback and the frame-generation/Streamline
+  limitation. `RtFrameRenderer.resolveDenoiseMode` gathers the live
+  availability, calls it and logs the result once per change.
+- An enabled denoiser makes `wantGbuffer` true, so the pass builds the guide
+  variant and the renderer binds the denoiser's seven images and the motion
+  buffer. On the native backend a core without `GUIDE_OUTPUTS` (or
+  `NRD_MOTION` for NRD) still refuses with its existing reason instead of
+  running guide-less.
+- Tests: new `DenoiserResolutionTest` (9) covers NRD and the `-Dvkrtx.denoiser`
+  variant, a session failure, a missing library with its reason, DLSS-RR,
+  frame generation owning NGX, the NRD fallback, OFF, and source guards that
+  the two refusal strings are gone, `resolveDenoiseMode` no longer reads
+  `RtConfig.mode()`, `wantGbuffer` follows the denoiser, and the motion-export
+  check survived.
+
+Tests: **843 tests, 149 classes, 0 failures, 0 errors, 6 skipped**, `BUILD
+SUCCESSFUL` (`:common:test --rerun-tasks`). `RtSlangGbufferGuidesTest` (8) and
+`RtSlangNrdMotionTest` (6) re-ran green with the batch.
+
+Open: no owner-verified frame consumes the guides yet. The first live check is
+`[VKB-RT] denoiser requested=… active=nrd_reblur|dlss_rr` plus a look for
+ghosting and haloes; the guide layout and the resolution table are unit-proven,
+not run. Reflections stay noisy under NRD (no specular denoiser input).
+
 ## 2026-10-30 — The dead ray-count sliders are deleted (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.

@@ -92,8 +92,8 @@ other upscalers, or noise levels) has not been evaluated.
 | AO / Direct modes | NOT_IMPLEMENTED in the Slang renderer: refused by name (`slang_ao`, `slang_direct`) | L2 | unit checks pin the refusal | ray query |
 | LabPBR `_s` / `_n`, auto PBR, auto normals | EXPERIMENTAL | L4 | `materials baked ... labpbr_s=...`, normals debug view | |
 | Emissive block light (next-event estimation) | EXPERIMENTAL | L4 | emitter log lines, night-scene screenshots | |
-| NRD denoiser for Path Tracing | EXPERIMENTAL | L4 for diffuse light | `denoiser_ready mode=nrd_reblur`; reflections are still blurred (no specular input) | `NRD.dll` + `vkb_nrd.dll` |
-| DLSS Ray Reconstruction | EXPERIMENTAL | L5 (author) | confirmed by the owner on the RTX 5060 Ti; not re-verified on other systems | NVIDIA RTX, `nvngx_dlssd.dll` |
+| NRD denoiser for Path Tracing | EXPERIMENTAL | L2 (the earlier L4 `denoiser_ready mode=nrd_reblur` run belongs to the deleted GLSL pass) | the Slang pass writes the same seven guides and NRD's motion, unit checks pin every channel, and the setting resolves again under a trace mode; no owner-verified frame consumes them yet. Reflections stay blurred (no specular input) | `NRD.dll` + `vkb_nrd.dll` |
+| DLSS Ray Reconstruction | EXPERIMENTAL | L2 for the Slang guides (L5 on the deleted GLSL pass) | the owner confirmed DLSS-RR on the RTX 5060 Ti before the migration; the guide layout is unchanged and now filled by the Slang primary vertex, not re-verified on any system yet | NVIDIA RTX, `nvngx_dlssd.dll` |
 | Accumulation-only fallback (no denoiser library) | BETA | L4 | used when libraries are missing | |
 | Volumetric / distance fog | EXPERIMENTAL | L2 | | |
 | Entities, items, hand in the traced scene | EXPERIMENTAL | L1 | code and unit checks only; no recorded in-game image check | |

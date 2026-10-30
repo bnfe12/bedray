@@ -1272,8 +1272,10 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    channels (`outViewZ`, `outNormalRough`, `outDiffuse`, `outAlbedo`,
    `outDirect`, `outSpecular`, `outSpecAlbedo`, bindings 26–32) at the primary
    vertex, plus NRD's per-pixel `IN_MV` vec4 into binding 33
-   (`outMotionBuffer`, the renderer's existing `entity_motion_px`); explicit
-   `SLANG` + `DLSS_RR` and `SLANG` + `NRD` are accepted, and `AUTO` declines the Slang denoiser path until a live frame consumes the guides. The C++ backend forwards
+   (`outMotionBuffer`, the renderer's existing `entity_motion_px`). The
+   renderer no longer refuses the denoiser under a trace mode: the pure
+   `DenoiserResolution` table decides from the setting and the libraries alone,
+   and the pass builds its guide variant whenever a denoiser is active. The C++ backend forwards
    the seven guides through the additive
    `bedray_core_render_path_trace_guides` call (`GUIDE_OUTPUTS`), so
    `nativePathTrace` + `DLSS_RR` no longer blocks on missing outputs. The additive NRD_MOTION feature and
@@ -1284,8 +1286,9 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    (`INVALID_SAMPLE | RC_UNRESOLVED`) once, and the alpha lane, `outMotion`, the
    seven guides and binding 33 all read that one verdict, so a refused sample
    writes the neutral miss set and zero motion. A truncated path stays trusted:
-   it stopped short, but its primary vertex is real. Open: a live frame that
-   consumes the guides through DLSS RR/NRD.
+   it stopped short, but its primary vertex is real. Open: an owner-verified
+   frame that consumes the guides through DLSS RR/NRD, and the artifact check
+   that goes with it (the table and the guide layout are unit-proven, not run).
 5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
    are now in the shared checkout as source-only. Environment is opt-in on a
    positive world boundary that the terminal window reaches; a zero boundary
