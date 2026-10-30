@@ -1183,14 +1183,20 @@ is supposed to protect or removed.  The first group is closed:
   binding record in `RtFrameBindings`;
 * the block-emitter falloff, chromatic categories and shadow bias read
   `light/block_emitters.slang`, and the entity and G-buffer hermetic masks read
-  `surface/surface.slang` and `pathtrace/path_trace_entry.slang`.
+  `surface/surface.slang` and `pathtrace/path_trace_entry.slang`;
+* the whole water model is guarded by `RtSlangWaterTest`: the wave table and
+  its deep-water dispersion, the volumetric absorption and dye split, the
+  medium entry rules, the refracted beam and its column bound, the étendue
+  ratio and the caustic Jacobian, all read out of `surface/water.slang` and
+  cross-checked against the host's own water rule in `AutoPbr` and
+  `OpticalMaterials`. Six mutation probes (retuned wave mix, replaced
+  dispersion law, dropped fold guard, frozen étendue, absorption reading the
+  style switch, column taken from the sight line) were each caught, and the
+  shader was restored byte-identically.
 
 The second group has no Slang counterpart yet, and each entry is an open hole,
 not a passing test:
 
-* `surface/water.slang` — the medium, the vanilla/realistic split and the
-  underwater light are guarded only through Java parameters; no test reads the
-  shader. (`RtWaterMediumTest`, `RtVanillaWaterLightTest`)
 * the `StatsBuf` std430 layout of the Slang structs, beyond the two
   self-avatar slots. (`RtStatsLayoutTest`)
 * pixel-shadow sampling, canopy and foliage light transmission, glass cost,
