@@ -148,8 +148,9 @@ class RtSlangGbufferGuidesTest {
             "a guide request needs the additive native feature and export");
         assertTrue(renderer.contains("native NRD requires a matching core with NRD_MOTION"),
             "a denoiser the native core cannot feed is refused by name, not silently moved onto unproven guides");
-        assertTrue(renderer.contains("throw new RtFailure(\"slang_path\", pathSlangUnavailableReason)"),
-            "there is no second renderer to fall back to: an unusable Slang path fails the frame with its reason");
+        assertTrue(renderer.contains(
+                "throw new RtFailure(rayMode ? \"slang_ray\" : \"slang_path\", pathSlangUnavailableReason);"),
+            "there is no second renderer to fall back to: an unusable Slang profile fails the frame with its reason");
         for (String gone : new String[] {"RtPathTracerPass", "RtRayEffectsPass", "RtShaderCompiler", "rt_path.comp"}) {
             assertFalse(renderer.contains(gone), gone + " is deleted; a reference here means the legacy path is coming back");
         }

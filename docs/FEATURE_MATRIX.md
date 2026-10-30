@@ -87,9 +87,9 @@ other upscalers, or noise levels) has not been evaluated.
 | Feature | Status | Level | Evidence | Requirements |
 |---|---|---|---|---|
 | Chunk geometry capture, acceleration structures | BETA | L4 | `blas built=... tlas instances=... failed=0`, screenshots | ray query |
-| Ray Tracing (Fast) mode (simplified: shadows, soft sun/moon, AO, reflections, block light, basic 1-bounce GI) | IN DEVELOPMENT, hidden in the release UI (`experimental_rays`) | L4 | mode logs, screenshots of test scenes | ray query |
+| Ray Tracing (Fast) mode (the ray profile of the Slang pass: primary surface plus one indirect bounce, one sample per pixel, its own ReSTIR/accumulate switches) | IN DEVELOPMENT, hidden in the release UI (`experimental_rays`) | L2 | `ray_slang(...)` mode log, unit checks of the profile; the earlier L4 screenshots belong to the deleted GLSL pass and do not validate this one | ray query |
 | Path Tracing mode (recommended; main quality mode: GI, bounces, accumulation, auto exposure) | EXPERIMENTAL, available | L4 | accumulated frames logged, screenshots | ray query |
-| AO / Direct modes | IN DEVELOPMENT, hidden | L2 | only with `experimental_rays`; less tested | ray query |
+| AO / Direct modes | NOT_IMPLEMENTED in the Slang renderer: refused by name (`slang_ao`, `slang_direct`) | L2 | unit checks pin the refusal | ray query |
 | LabPBR `_s` / `_n`, auto PBR, auto normals | EXPERIMENTAL | L4 | `materials baked ... labpbr_s=...`, normals debug view | |
 | Emissive block light (next-event estimation) | EXPERIMENTAL | L4 | emitter log lines, night-scene screenshots | |
 | NRD denoiser for Path Tracing | EXPERIMENTAL | L4 for diffuse light | `denoiser_ready mode=nrd_reblur`; reflections are still blurred (no specular input) | `NRD.dll` + `vkb_nrd.dll` |

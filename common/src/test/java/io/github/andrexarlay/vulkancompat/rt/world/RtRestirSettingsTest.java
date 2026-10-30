@@ -68,8 +68,8 @@ class RtRestirSettingsTest {
         String pass = read(SLANG_PASS);
         assertTrue(pass.contains("return RtConfig.SLANG_BLOCK_EMITTERS && RtConfig.SLANG_RESTIR_DI;"),
             "diRequested() stays the static capability, so flipping the switch never frees a ring mid-frame");
-        assertTrue(pass.contains("return diRequested() && RtSettings.pathRestirDi();"),
-            "diActive() is the per-frame decision the player controls");
+        assertTrue(pass.contains("return diRequested() && (rayMode ? RtSettings.restirTemporal() : RtSettings.pathRestirDi());"),
+            "diActive() is the per-frame decision the player controls, read from the profile's own switch");
         assertTrue(pass.contains("int diFlags = emitterCount > 0 && diActive() ? DI_FLAG_ENABLED"),
             "the controller hands the chosen backend the current per-frame reuse decision");
         assertTrue(pass.contains("String restir = diActive() ? backend.reservoirState() : \"off\";"),
@@ -91,19 +91,19 @@ class RtRestirSettingsTest {
             "and the retired ring waits for the native owner to drain its uses, never for the whole device");
     }
 
-    /** The ray pass reads the same two switches, each at the place where its own work is decided. */
+    /** The ray profile reads the ray switches, each at the place where its own work is decided. */
     @Test
     void theRayPassReadsItsTwoStagesWhereTheyHappen() {
         String renderer = read(RENDERER);
-        assertTrue(renderer.contains("if (pass.mode() == RtMode.RAY_TRACED && RtSettings.restirTemporal()\n"
-                + "            && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {"),
-            "the reuse needs the emissive term it would reuse, and it is the switch that decides whether the ring is handed over");
-        assertTrue(renderer.contains("long reservoirAddr = 0L;"),
-            "off means the shader is handed a zero reservoir address, which is the shader's own off test");
         String path = read(SLANG_PASS);
-        assertTrue(path.contains("return backend.spatialAvailable() && diActive() && RtSettings.pathRestirSpatial();"),
+        assertTrue(path.contains(
+                "return diRequested() && (rayMode ? RtSettings.restirTemporal() : RtSettings.pathRestirDi());"),
+            "the temporal switch is chosen by profile where the frame is recorded");
+        assertTrue(path.contains("&& (rayMode ? RtSettings.restirSpatial() : RtSettings.pathRestirSpatial());"),
             "spatial reuse is gated where the frame is recorded, not where the pipeline is built: a backend without the "
                 + "reservoir ring cannot be asked to reuse it");
+        assertTrue(renderer.contains("MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, 0L);"),
+            "the host no longer owns a reservoir ring: the backend binds its own");
         assertTrue(path.contains("spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0"),
             "the switch reaches the core as one frame bit, so the shader and the host cannot disagree mid-session");
     }

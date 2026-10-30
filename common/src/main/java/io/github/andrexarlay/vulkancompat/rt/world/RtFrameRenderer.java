@@ -73,10 +73,6 @@ public final class RtFrameRenderer {
      * RtSkyState the sky block, RtFogState the fog block.
      */
     private static final int STATS_STRIDE = RtStatsLayout.SLOT_STRIDE;
-    /** Bytes per pixel of one ReSTIR parity half (Reservoir in rt_common.glsl, cross-checked by RtStatsLayoutTest). */
-    static final int RESERVOIR_BYTES = 64;
-    /** Bytes per pixel of one ReSTIR receiver-position half (ReservoirAuxBuf: vec4 camera-relative position). */
-    static final int RESERVOIR_AUX_BYTES = 16;
     /** Rebuilt sections closer than this (squared section distance, ~2 sections) reset the path tracing accumulation. */
     static final long SCENE_CHANGE_RADIUS_SQ = 8;
 
@@ -131,13 +127,6 @@ public final class RtFrameRenderer {
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtMemory.Buf entityMotionBuf;
-    /** ReSTIR DI reservoirs of rt_rays.comp: two parity halves of 64 B per pixel (ReservoirBuf in rt_common.glsl). */
-    private static RtMemory.Buf reservoirBuf;
-    /** ReSTIR DI receiver positions of rt_rays.comp: two parity halves of 16 B per pixel, written with the reservoirs. */
-    private static RtMemory.Buf reservoirAuxBuf;
-    private static long reservoirPixels = -1L;
-    private static long reservoirLightFingerprint = Long.MIN_VALUE;
-    private static boolean reservoirResetRequested = true;
     private record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence, long recordedNanos) {}
     private static RecordingReadbackSlots<StatsMetadata> statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
     private static long lastStatsSequence = -1;
@@ -406,7 +395,6 @@ public final class RtFrameRenderer {
         }
         exposure.reset();
         atmosphere.resetHistory();
-        reservoirResetRequested = true;
         lastHistPct = -1.0;
         lastLeafPct = -1.0;
         lastTracedNs = 0L;   // the gap before the next traced frame describes the old setup, not a slow one
@@ -999,65 +987,6 @@ public final class RtFrameRenderer {
         if (!io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.indirectTranslucentShadows()) params.flags |= RtFrameParams.FLAG_SKIP_INDIRECT_TRANSLUCENT;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.transparencyStats()) params.flags |= RtFrameParams.FLAG_TRANSPARENCY_STATS;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials()) params.flags |= RtFrameParams.FLAG_OPTICAL_MATERIALS;
-        // ReSTIR DI: one reservoir per pixel, two parity halves. Only the ray pass reads it; path tracing keeps plain RIS.
-        // With reuse switched off the shader is handed a zero reservoir address, which is the shader's own "off" test, and
-        // the ring is not even filled - so switching back on converges from nothing rather than from stale records.
-        long reservoirAddr = 0L;
-        long reservoirAuxAddr = 0L;
-        if (pass.mode() == RtMode.RAY_TRACED && RtSettings.restirTemporal()
-            && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {
-            long pixels = (long) w * h;
-            long need = pixels * 2L * RESERVOIR_BYTES;
-            boolean reset = false;
-            if (reservoirBuf == null || reservoirBuf.size < need) {
-                if (reservoirBuf != null) {
-                    VK10.vkDeviceWaitIdle(device);
-                    world.memory().destroy(reservoirBuf);
-                }
-                reservoirBuf = world.memory().createBuffer("rt_restir", need,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                        | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-                reset = true;
-                LOGGER.info("[VKB-RT] ReSTIR reservoirs {}x{} x2 = {} KiB", w, h, need / 1024);
-            }
-            long auxNeed = pixels * 2L * RESERVOIR_AUX_BYTES;
-            if (reservoirAuxBuf == null || reservoirAuxBuf.size < auxNeed) {
-                if (reservoirAuxBuf != null) {
-                    VK10.vkDeviceWaitIdle(device);
-                    world.memory().destroy(reservoirAuxBuf);
-                }
-                reservoirAuxBuf = world.memory().createBuffer("rt_restir_aux", auxNeed,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                        | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-                LOGGER.info("[VKB-RT] ReSTIR receiver aux {}x{} x2 = {} KiB", w, h, auxNeed / 1024);
-                // No fill: every pixel rewrites its own slot before the spatial pass reads it, and a stale position
-                // next to a zeroed (empty) reservoir is skipped by the M == 0 test there anyway.
-            }
-            if (pixels != reservoirPixels) {
-                // A different resolution moves every pixel: the old records sit at other indices and must not be read.
-                reservoirPixels = pixels;
-                reset = true;
-            }
-            // Only a change of the lights themselves invalidates a stored sample (a removed torch would otherwise keep
-            // glowing through history forever). A streaming section or a camera re-anchor leaves the history valid, and
-            // rebuilding the whole buffer for those would cost hundreds of MB of fill per frame while moving.
-            long lightFingerprint = emitters.fingerprint();
-            if (lightFingerprint != reservoirLightFingerprint) {
-                reservoirLightFingerprint = lightFingerprint;
-                reset = true;
-            }
-            if (reservoirResetRequested) {
-                reset = true;
-                reservoirResetRequested = false;
-            }
-            reservoirAddr = reservoirBuf.address;
-            reservoirAuxAddr = reservoirAuxBuf.address;
-            if (reset) {
-                // A removed torch must not keep contributing through a stored sample: the world changed, drop all history.
-                VK10.vkCmdFillBuffer(cmd, reservoirBuf.handle, 0L, reservoirBuf.size, 0);
-                VkBarriers.fullMemoryBarrier(cmd);
-            }
-        }
         pass.configure(params, useDenoiser);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.GI_DIST, params.giDistance);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.EMIS_DIST, params.emissiveDistance);
@@ -1068,10 +997,10 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.HISTORY_CAP, params.historyCap);
         // StatsBuf.shadowPixel: pixelated-shadow cell edge in texture pixels (1/16 block), 0 = the option is off
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.SHADOW_PIXEL, pixelShadowStatsValue());
-        // StatsBuf.reservoirAddr (488): ReSTIR parity buffer of the ray pass; 0 disables temporal reuse
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, reservoirAddr);
-        // StatsBuf.reservoirAuxAddr (496): camera-relative receiver position per reservoir record (spatial reuse)
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_AUX_ADDR, reservoirAuxAddr);
+        // StatsBuf.reservoirAddr / reservoirAuxAddr: the slots belonged to the deleted ray pass's own ReSTIR ring. The
+        // Slang pass binds its reservoirs as descriptors, so the record keeps the slots at zero for the layout contract.
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, 0L);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_AUX_ADDR, 0L);
         // Temporal reprojection uses the full pose in both projections. Hit positions include the current bob origin, while
         // camDelta remains the raw camera-position delta; the prior full projection already carries the previous bob origin.
         curViewProj.set(frameProjection).mul(camera.viewRotationMatrix);
@@ -1340,11 +1269,11 @@ public final class RtFrameRenderer {
      */
     private static DenoiserMode resolveDenoiseMode() {
         RtSettings.PathDenoiser want = RtSettings.denoiser();
-        if (RtConfig.mode() == RtMode.PATH_TRACED && want != RtSettings.PathDenoiser.OFF) {
-            // The new path does not yet supply the guides required by NRD/DLSS-RR.
-            // Preserve the requested setting, report the disabled stage and never
-            // select a different renderer to make that request appear supported.
-            String reason = "slang_path_has_no_gbuffer";
+        if (RtConfig.mode().isActive() && want != RtSettings.PathDenoiser.OFF) {
+            // The Slang pass writes the DLSS-RR guides, but the denoiser pack has not been re-registered on them yet:
+            // the only layout it was tested with belonged to the deleted GLSL pass. Preserve the requested setting,
+            // report the disabled stage and never select a different renderer to make that request appear supported.
+            String reason = "slang_denoiser_not_wired";
             String line = "requested=" + want + " active=off reason=" + reason;
             denoiserResolutionReason = reason;
             if (!line.equals(lastDenoiserLog)) {
@@ -1475,7 +1404,7 @@ public final class RtFrameRenderer {
         rebuildPassNext = true;
     }
 
-    /** Ray Tracing unless Path Tracing is selected (also the pass of the legacy debug-view-only runs, mode off). */
+    /** Ray Tracing and Path Tracing run the ray profile and the path profile of the same Slang pass. */
     static RtMode passModeFor(RtMode mode) {
         return mode == RtMode.PATH_TRACED ? RtMode.PATH_TRACED : RtMode.RAY_TRACED;
     }
@@ -1494,23 +1423,26 @@ public final class RtFrameRenderer {
     }
 
     private static RtPass createPass(VkDevice device, RtMode mode, boolean gbuffer) {
-        if (mode == RtMode.PATH_TRACED) {
-            RtPass slang = createSlangPathPass(device, gbuffer);
+        if (mode == RtMode.PATH_TRACED || mode == RtMode.RAY_TRACED) {
+            boolean rayMode = mode == RtMode.RAY_TRACED;
+            RtPass slang = createSlangPathPass(device, gbuffer, rayMode);
             if (slang != null) {
                 return slang;
             }
-            throw new RtFailure("slang_path", pathSlangUnavailableReason);
+            throw new RtFailure(rayMode ? "slang_ray" : "slang_path", pathSlangUnavailableReason);
         }
-        // Ray tracing mode has no Slang effect pass yet; the GLSL one is deleted with the legacy renderer.
-        throw new RtFailure("slang_ray", "ray effects are not yet available in the Slang renderer");
+        // AO and DIRECT are debug shadings of the deleted ray pass, not images the Slang tracer produces: a lit path
+        // labelled "ao" would be a wrong picture with a working log.
+        throw new RtFailure("slang_" + mode.logName(),
+            "rt_mode=" + mode.logName() + " shades a debug image the Slang renderer does not produce (use rays or path)");
     }
 
     /**
-     * Creates the AOT Slang path or reports why it cannot run. There is no second renderer to fall back to: a missing
-     * Slang artifact fails the frame, and {@link RtGeometryGate#markFailed} records the reason and turns ray tracing
-     * off for the session.
+     * Creates the AOT Slang path (or its ray profile) or reports why it cannot run. There is no second renderer to fall
+     * back to: a missing Slang artifact fails the frame, and {@link RtGeometryGate#markFailed} records the reason and
+     * turns ray tracing off for the session.
      */
-    private static RtPass createSlangPathPass(VkDevice device, boolean gbuffer) {
+    private static RtPass createSlangPathPass(VkDevice device, boolean gbuffer, boolean rayMode) {
         String debugView = RtConfig.currentDebugView();
         if (!debugView.isEmpty()) {
             pathSlangUnavailableReason = "debug view '" + debugView + "' is not implemented in the Slang path";
@@ -1540,8 +1472,9 @@ public final class RtFrameRenderer {
                 logSlangUnavailable(pathSlangUnavailableReason);
                 return null;
             }
-            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, gbuffer);
-            LOGGER.info("[VKB-RT] path tracing on AOT Slang passes {}+{} (gbuffer={})",
+            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, gbuffer, rayMode);
+            LOGGER.info("[VKB-RT] {} on AOT Slang passes {}+{} (gbuffer={})",
+                rayMode ? "ray effects" : "path tracing",
                 RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
             return slang;
         } catch (RtFailure failure) {
@@ -1550,7 +1483,7 @@ public final class RtFrameRenderer {
         } catch (RuntimeException e) {
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             pathSlangUnavailableReason = reason;
-            throw new RtFailure("slang_path", reason, e);
+            throw new RtFailure(rayMode ? "slang_ray" : "slang_path", reason, e);
         }
     }
 
@@ -1925,10 +1858,6 @@ public final class RtFrameRenderer {
                 w.memory().destroy(entityMotionBuf);
                 entityMotionBuf = null;
             }
-            if (reservoirBuf != null) {
-                w.memory().destroy(reservoirBuf);
-                reservoirBuf = null;
-            }
             w.destroy();
             world = null;
             LOGGER.info("[VKB-RT] world_destroyed reason={}", reason);
@@ -1944,9 +1873,6 @@ public final class RtFrameRenderer {
         dropDlssRrDenoiserNext = false;
         lastPassMode = null;
         dropDenoiserNext = false;
-        reservoirPixels = -1L;
-        reservoirLightFingerprint = Long.MIN_VALUE;
-        reservoirResetRequested = true;
         outputReady = false;
         statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
         lastStatsSequence = -1;

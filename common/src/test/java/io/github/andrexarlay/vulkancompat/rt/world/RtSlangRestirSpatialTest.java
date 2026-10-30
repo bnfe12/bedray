@@ -312,8 +312,9 @@ class RtSlangRestirSpatialTest {
         assertTrue(game.contains("spatialReuse = RtSpatialReuseSlangPass.create(runtime, trace.entityFallback())"
             + ".orElse(null);"),
             "assigned outside the try that builds the trace pass, so a missing stage cannot fail path tracing");
-        assertTrue(game.contains("return backend.spatialAvailable() && diActive() && RtSettings.pathRestirSpatial();"),
-            "the mode log reports the stage only when it exists, is enabled and its parent is on");
+        assertTrue(game.contains("return backend.spatialAvailable() && diActive()\n"
+                + "            && (rayMode ? RtSettings.restirSpatial() : RtSettings.pathRestirSpatial());"),
+            "the mode log reports the stage only when it exists, is enabled and its profile's parent is on");
         assertTrue(game.contains("(input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL) != 0 && diFlags != 0 && emitterCount > 0"),
             "a frame needs records of this convention and a list to pool before the stage runs");
         assertTrue(game.contains("if (spatialReuse != null && (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL) != 0 && diFlags != 0 && emitterCount > 0 && reservoirs != null)"),

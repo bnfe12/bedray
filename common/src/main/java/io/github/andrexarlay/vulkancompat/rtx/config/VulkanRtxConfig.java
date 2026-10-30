@@ -332,9 +332,8 @@ public final class VulkanRtxConfig {
 
     /**
      * Mode used by the renderer: also honours a direct write of {@link #enableHardwareRayTracing} (autotests, tools).
-     * Such a caller says "trace" without naming a mode, and the only renderer in the tree is the path tracer: the
-     * ray-effects passes are not wired yet, so handing back {@code RAY_TRACED} here would be a frame the renderer
-     * refuses ({@code slang_ray}) rather than a frame at all.
+     * Such a caller says "trace" without naming a mode, and path tracing is the fuller frame of the two profiles the
+     * Slang pass runs, so an unnamed request gets {@code PATH_TRACED} rather than the ray-effects profile.
      */
     public static RtMode effectiveRtMode() {
         if (voxelRendererSelected()) {
@@ -710,8 +709,8 @@ public final class VulkanRtxConfig {
                 case "ui_expert" -> uiExpert = Boolean.parseBoolean(val);
                 case "enable_hardware_ray_tracing" -> {
                     // Legacy key of the single on/off toggle, only read by a file that has no rt_mode. It said "trace", not
-                    // "with which renderer", and the path tracer is the only one in the tree: the ray mode it used to name
-                    // now refuses the frame (slang_ray) instead of lighting the world the way the author of the file meant.
+                    // "with which renderer", and path tracing is the fuller of the two profiles the Slang pass runs, so the
+                    // file gets the path profile rather than the ray-effects one it never named.
                     if (!rtModeSeenInFile) {
                         setRtMode(Boolean.parseBoolean(val) ? RtMode.PATH_TRACED : RtMode.OFF);
                     }
