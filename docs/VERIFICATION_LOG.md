@@ -3162,3 +3162,11 @@ what is actually closed and what still needs an owner-verified frame.
 
 Still missing: an owner-verified frame, and per-reason counters (invalid versus
 truncated, visibility overflow) which need a new binding/ABI in the C++ pass.
+
+Deployed for playtest (source-archive build of `3fe438c` + `libs/`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar`, sha256
+`6af033afea19dcca8e07bf9926394570c05309ab43ed908832255a1e150971e6`, to both
+"Bedray Fabric 26.3" and "26.3(1)" (previous jar kept as
+`*.20261030-092850.bak`). Natives are unchanged from the earlier live
+`bedray_core.dll` build. What a playtest should show: `rt_pass ... reject_pct`
+next to `hit_pct` on the F3 line, `n/a` while the slot has no measurement.
