@@ -3420,3 +3420,82 @@ Evidence:
 
 No native build, CTest or deploy: no root imports the module and no runtime
 behavior changed. No owner-verified frame.
+
+## 2026-10-30 — ReSTIR PT temporal stage goes live behind `path_restir_pt` (L1 slangc, L2 unit + mutation, CTest; no owner-verified frame)
+
+Branch `refactor/slang-pipeline`, commit `b2a563a` (35 files, +1366/−112).
+
+What changed: the first ray of a pixel records its diffuse continuation's first
+edge (`PATH_TRACE_OPTION_RESTIR_PT`, bit 17) and `restir/pt_temporal.slang` hands
+it to a per-pixel path reservoir at binding 36. The reservoir owns exactly the
+certified-diffuse, non-emitting first vertex; that suffix leaves the path and
+returns as `f_d * cos * L * W`. Sky, emitter and uncertified first edges, the
+other lobes and DI's NEE stay in the path. Every draw of an eligible receiver
+counts in `M` (`ptAddEmptyAttempt`), and the merge reset now drops only a corrupt
+accumulator. History is keyed on the reprojected camera-relative receiver, not on
+`SurfaceHit.worldPosition` (P1-6). Derivation: `docs/RESTIR_GI_DERIVATION.md` §11.
+
+A measured finding: binding the record exposed that its std430 layout is
+144 B (first vertex 64, path 112), not the 112 B the module had claimed since v2.
+The first compile with the new `gradle/slang.gradle` pin failed with
+`'ptReservoirs' uses RestirPtReservoir of 144 B, the host contract is 112 B`; the
+pin, the Java stride, the native stand-in, the docs and the settings text now all
+say 144 B (597.2 MB at 1080p for the two halves).
+
+Evidence:
+
+- L1 Slang (`slangc` 2026.20, the AOT flags): `path_trace` 1,339,664 B /
+  27 bindings, `path_trace_scene` 1,381,380 B / 27, `rc_path_trace_scene`
+  1,674,148 B / 29, push 112 B, no warnings. Baseline before the batch:
+  1,118,892 / 1,155,372 / 1,448,252 B (+20 %, mostly the filtered resolve walk).
+  `OpUndef` scan: one float `OpUndef` per module, the same as the baseline; zero
+  on handles or pointers.
+- L2 Java: `RestirPtTemporalStageTest` (11 tests: the identity on 200,000 random
+  cases to 1e-9 with the cap hits counted, attempt accounting through the merge,
+  ownership in expectation over 400,000 frames, the ring size, the measured
+  nested layout read from the reflection, and source guards) plus updated guards
+  in `RtSlangHistoryAnchorTest`, `RtRestirSettingsTest`, `RtPathTraceSlangPassTest`,
+  `SlangPassLibraryTest`, `RtSlangRcFieldTest`, `RtSlangDistantBlockLightTest`,
+  `RtSlangNrdMotionTest`, `RtSlangSamplePerPixelTest`. Full
+  `:common:test --rerun`: `944 tests, 0 failures, 0 errors, 3 skipped` (XML; the
+  three skips are the CPU benchmark and the two real-pack surveys).
+- Mutation proof (`--rerun`, each file restored and re-hashed):
+  M1 drop the non-candidate `ptAddEmptyAttempt` → only
+  `everyNonCandidateIsStillAnAttempt`; M2 restore the v4 merge reset → only
+  `everyNonCandidateIsStillAnAttempt`; M3 keep the suffix in the path → only
+  `theReservoirOwnsOnlyTheCertifiedDiffuseContinuation`; M4 drop `INV_PI` → only
+  `theResolvedTermIsTheDiffuseLobeOfTheReceiver`; M5 let every ray record → only
+  `theTracerRecordsTheFirstVertexBehindItsOwnOptionBit`; M6 give the sampler its
+  own reflectance formula → only `theResolvedTermIsTheDiffuseLobeOfTheReceiver`;
+  M7 admit uncertified first vertices → only
+  `theReservoirOwnsOnlyTheCertifiedDiffuseContinuation`. Restored sha256:
+  `pt_temporal.slang` d202ac3b…0d30ec2, `restir_pt.slang` 611608969b…727f60,
+  `path_trace_entry.slang` 34180e8c…c8501d, `bsdf.slang` 8672deb0…81ca5c03 — all OK.
+  A first run of the probes reported nothing because Gradle treated the test task
+  as up to date (shader sources are not test inputs); the probes were re-run with
+  `--rerun` and only those results are recorded here.
+- Native: Release x64 `bedray_core` built in `native/bedray_core/build` (CTest
+  `100% tests passed, 0 tests failed out of 21`) and in
+  `build/bedray-native-readiness` (`... out of 24`). The new
+  `test_restir_pt_binding_is_a_stand_in` checks the 27-binding program is
+  accepted, a non-storage binding 36 is refused, 36 gets a 144-byte stand-in and
+  bits 17..21 are cleared while bit 16 survives. Mutation: forwarding the flag
+  word unmasked failed exactly `path_trace_pass_test.cpp:1248`; restored sha256
+  `a0b87589…69739a2` OK.
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files kept
+as `*.20261030-230121.bak`): JAR built from a `git archive b2a563a` snapshot plus
+`libs/`, sha256 `466345476592f12e32e4fdf6ef9f2cf9a974c396613083d18bd2947ed90e9775`;
+`bedray_core.dll` from `native/bedray_core/build/Release` (the tree equals
+`b2a563a`), sha256 `f652ad75f72b1ffd0f273a3ecac8173ac13e6bea730c6bc85932d4b30df33be4`.
+`bedray_scene.dll` is unchanged.
+
+Not verified: no GPU smoke run (the game was not launched by the agent; another
+instance was running), so neither the registration of the 27-binding programs in
+`latest.log` nor the absence of a device fault with the switch on is proven. What
+a playtest should show: with `path_restir_pt` off (default) the image and the
+`path_slang(...)` log line are as before plus `restir_pt=off`; with it on (Path
+Tracing, ReSTIR Direct Light on) the log reports `Slang ReSTIR PT reservoirs WxH x2
+= N MiB` and `restir_pt=fresh` then `temporal`, the first frame after a reset looks
+the same as with it off, and indirect light on diffuse walls/floors settles faster
+while moving. No spatial stage yet. No owner-verified frame.
