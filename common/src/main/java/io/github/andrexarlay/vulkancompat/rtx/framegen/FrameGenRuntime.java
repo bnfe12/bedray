@@ -1,6 +1,5 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
-import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
@@ -17,7 +16,6 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VkPhysicalDeviceIDProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
-import org.lwjgl.vulkan.VkCommandBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,6 +58,8 @@ public final class FrameGenRuntime {
     private static boolean failed;
     private static String failure = "";
     private static FrameGenGpu gpu;
+    private static final FrameGenHostCommands producerCommands = new FrameGenHostCommands(
+        failure -> LOGGER.warn("[VKB-FG] producer retirement failed; resources retained", failure));
     private static long frameIndex;
     private static int slot;
     private static boolean multiClampLogged;
@@ -435,9 +435,17 @@ public final class FrameGenRuntime {
                 return;
             }
             if (gpu == null) {
-                gpu = new FrameGenGpu(device.vkDevice());
+                gpu = new FrameGenGpu(device);
             }
-            gpu.ensure(fmt, winW, winH, renderW, renderH);
+            if (!gpu.matches(fmt, winW, winH, renderW, renderH)) {
+                drainProducerRecordings();
+                SlNative sl = StreamlineBootstrap.sl();
+                stopGeneration(sl, FLAG_RETAIN_RESOURCES_WHEN_OFF);
+                clearTags(sl);
+                validFrames = 0;
+                prevProj = null;
+                gpu.ensure(fmt, winW, winH, renderW, renderH);
+            }
             long mainImg = WorldTargetManager.extractVkImage(main);
             long depthView = WorldTargetManager.extractVkImageView(depthCopy.getDepthTextureView());
             long mvView = WorldTargetManager.extractVkImageView(mvTarget.getColorTextureView());
@@ -445,19 +453,20 @@ public final class FrameGenRuntime {
                 throw new IllegalStateException("missing Vulkan handle main=" + mainImg + " depthView=" + depthView + " mvView=" + mvView);
             }
             slot = (int) (frameIndex % FrameGenGpu.SETS);
-            VulkanCommandEncoder encoder = device.createCommandEncoder();
-            VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-            VkBarriers.fullMemoryBarrier(cmd);
-            gpu.recordInitialTransitions(cmd);
-            gpu.record(cmd, slot, mainImg, depthView, mvView);
-            VkBarriers.fullMemoryBarrier(cmd);
-            int end = VK10.vkEndCommandBuffer(cmd);
-            if (end != VK10.VK_SUCCESS) {
-                throw new IllegalStateException("vkEndCommandBuffer failed: " + end);
-            }
-            encoder.execute(cmd);
+            FrameGenGpu owner = gpu;
+            producerCommands.record(device, owner, cmd -> {
+                VkBarriers.fullMemoryBarrier(cmd);
+                owner.recordInitialTransitions(cmd);
+                owner.record(cmd, slot, mainImg, depthView, mvView);
+                VkBarriers.fullMemoryBarrier(cmd);
+            });
             worldReady = true;
         } catch (Throwable t) {
+            try {
+                SlNative sl = StreamlineBootstrap.sl();
+                stopGeneration(sl, FLAG_RETAIN_RESOURCES_WHEN_OFF);
+                clearTags(sl);
+            } catch (Throwable cleanup) { t.addSuppressed(cleanup); }
             fail("world_ready", t.toString(), t);
         }
     }
@@ -678,16 +687,13 @@ public final class FrameGenRuntime {
             Fsr3FrameGen.onSurfaceReconfigureBegin();
             return;
         }
-        if (!usable()) {
+        if (!StreamlineBootstrap.isReady()) {
             return;
         }
         try {
+            drainProducerRecordings();
             SlNative sl = StreamlineBootstrap.sl();
-            if (modeOn) {
-                check(sl.dlssgOptions(MODE_OFF, 1, FLAG_RETAIN_RESOURCES_WHEN_OFF, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0),
-                    "slDLSSGSetOptions(off before swapchain reconfigure)");
-                modeOn = false;
-            }
+            stopGeneration(sl, FLAG_RETAIN_RESOURCES_WHEN_OFF);
             validFrames = 0;
             ranOnce = false;
             clearTags(sl);
@@ -698,6 +704,7 @@ public final class FrameGenRuntime {
             LOGGER.info("[VKB-FG] dlssg mode=OFF reason=swapchain_reconfigure");
         } catch (Throwable t) {
             fail("reconfigure", t.toString(), t);
+            throw new IllegalStateException("FG resources retained after failed reconfiguration drain", t);
         }
     }
 
@@ -711,11 +718,9 @@ public final class FrameGenRuntime {
             return;
         }
         try {
+            drainProducerRecordings();
             SlNative sl = StreamlineBootstrap.sl();
-            if (modeOn) {
-                sl.dlssgOptions(MODE_OFF, 1, 0, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0);
-                modeOn = false;
-            }
+            stopGeneration(sl, 0);
             clearTags(sl);
             if (gpu != null) {
                 gpu.close();
@@ -725,6 +730,7 @@ public final class FrameGenRuntime {
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
             LOGGER.error("[VKB-FG] teardown surface_close failed", t);
+            throw new IllegalStateException("FG resources retained after failed surface-close drain", t);
         }
     }
 
@@ -737,6 +743,7 @@ public final class FrameGenRuntime {
         if (!StreamlineBootstrap.isReady()) {
             return;
         }
+        if (gpu != null) onSurfaceClose();
         try {
             SlNative sl = StreamlineBootstrap.sl();
             int r = sl.shutdown();
@@ -748,6 +755,19 @@ public final class FrameGenRuntime {
     }
 
     // ------------------------------------------------------------------------------------------------------- constants/tags
+
+    /** Completes borrowed source reads before WorldTargetManager replaces their images. */
+    public static void drainProducerRecordings() {
+        producerCommands.drain();
+        Fsr3FrameGen.drainProducerRecordings();
+    }
+
+    private static void stopGeneration(SlNative sl, int flags) {
+        if (!modeOn && !ranOnce && !tagsActive) return;
+        check(sl.dlssgOptions(MODE_OFF, 1, flags, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0),
+            "slDLSSGSetOptions(off before resource retirement)");
+        modeOn = false;
+    }
 
     private static void tag(SlNative sl) {
         FrameGenGpu.Img d = gpu.depth(slot);
@@ -865,11 +885,8 @@ public final class FrameGenRuntime {
         return failure;
     }
 
-    /** Releases the GPU resources (device idle first). */
+    /** Ends producer and vendor-consumer lifetimes before releasing the output images. */
     public static void shutdown() {
-        if (gpu != null) {
-            gpu.close();
-            gpu = null;
-        }
+        onSurfaceClose();
     }
 }

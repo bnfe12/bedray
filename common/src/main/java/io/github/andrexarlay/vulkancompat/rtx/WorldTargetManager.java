@@ -500,6 +500,8 @@ public final class WorldTargetManager {
             resetHistory = true;
             logSkyIdentity("create");
         } else if (worldTarget.width != w || worldTarget.height != h) {
+            FrameGenRuntime.drainProducerRecordings();
+            drainVelocityRecordings();
             final RenderTarget identityBefore = worldTarget;
             storageUsageFormat = TargetLifecyclePolicy.resolveStorageScope(true);
             try {
@@ -532,6 +534,11 @@ public final class WorldTargetManager {
      * the XeSS path, both at render (input) resolution. The motion vector image gets STORAGE usage (compute writes it).
      */
     private static void ensureTemporalTargets(int w, int h) {
+        if ((depthCopy != null && (depthCopy.width != w || depthCopy.height != h))
+            || (motionVectorsTarget != null && (motionVectorsTarget.width != w || motionVectorsTarget.height != h))) {
+            FrameGenRuntime.drainProducerRecordings();
+            drainVelocityRecordings();
+        }
         if (depthCopy == null) {
             depthCopy = new TextureTarget("vkb_world_depth_copy", w, h, null, GpuFormat.D32_FLOAT);
             resetHistory = true;
@@ -1028,6 +1035,7 @@ public final class WorldTargetManager {
 
     private static void releaseTargets() {
         RenderSystem.assertOnRenderThread();
+        FrameGenRuntime.drainProducerRecordings();
         drainVelocityRecordings();
         if (velocityPipeline != null) {
             velocityPipeline.cleanup();

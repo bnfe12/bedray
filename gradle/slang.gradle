@@ -112,6 +112,7 @@ def elementBytesOf = { param ->
 // would still desynchronise the host, so the offsets are pinned here as well.
 // Update this map together with the Java mirror when a contract really changes.
 def STRUCT_LAYOUTS = [
+    FgPreparePush: [size: 8, fields: [size: 0]],
     DecodePush: [size: 32, fields: [rawAddress: 0, arenaAddress: 8, flagsAddress: 16, quadCount: 24, reserved: 28]],
     LegacySection: [size: 64, fields: [posAddr: 0, uvAddr: 8, colAddr: 16, lightAddr: 24, quadStart: 32, origin: 48]],
     FrameConstants: [size: 608, fields: [camera: 0, sun: 416, atmosphere: 480, exposure: 560, frame: 592]],
