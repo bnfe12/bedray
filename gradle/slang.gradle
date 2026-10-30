@@ -148,7 +148,10 @@ def STRUCT_LAYOUTS = [
         worldBoundaryDistance: 32, rayCount: 36, segmentCapacity: 40, materialCount: 44,
         environmentPolicy: 48, environmentCascade: 52, frameRotation: 56, frameIndex: 60,
         maxDepth: 64, emitterCount: 68, rcStatusCapacity: 72, reserved: 76,
-        emitterCameraRelative: 80, entityState: 96]]
+        emitterCameraRelative: 80, entityState: 96]],
+    // Push block of passes/frame_stats.slang.  The one value the host really promises is the frame index that rotates
+    // the metered tiles; the padding is part of the block so the manifest size cannot drift from the Java writer.
+    FrameStatsPush: [size: 8, fields: [frameIndex: 0, reserved: 4]]
 ]
 
 def validateStructLayout = { String relative, String bindingName, struct ->

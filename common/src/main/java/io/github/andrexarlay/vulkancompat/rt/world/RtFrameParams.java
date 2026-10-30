@@ -5,7 +5,8 @@ import org.joml.Matrix4f;
 import java.nio.ByteBuffer;
 
 /**
- * Push constants of rt_rays.comp / rt_path.comp (exactly 128 bytes, the guaranteed minimum of maxPushConstantsSize):
+ * Push constants of the traced passes (exactly 128 bytes, the guaranteed minimum of maxPushConstantsSize). The
+ * shader-side mirror is {@code PushConstants} in {@code shaders/slang/bindings.slang}:
  * <pre>
  *   0  mat4  invViewProj
  *  64  uvec2 statsAddr
@@ -20,7 +21,7 @@ import java.nio.ByteBuffer;
 public final class RtFrameParams {
     public static final int BYTES = 128;
 
-    /** PC member types in declaration order (layout(push_constant) uniform PC in rt_common.glsl; verified by RtStatsLayoutTest). */
+    /** PC member types in declaration order (the same seven members {@code PushConstants} declares in bindings.slang). */
     static final String[] PC_TYPES = {"mat4", "uvec2", "uint", "uint", "vec4", "vec4", "vec4"};
     /** std430 offsets of the PC members, computed once by the same rules the GLSL compiler applies. */
     static final int[] PC_OFFSETS = RtStatsLayout.std430Offsets(PC_TYPES);
@@ -140,6 +141,12 @@ public final class RtFrameParams {
     public float emitterCamRelX;
     public float emitterCamRelY;
     public float emitterCamRelZ;
+    // ---- statistics slot of this frame, for the Slang counter pass (the same slot the host reads back) ----
+    /** VkBuffer of the statistics ring and the byte offset of the slot this frame leased. The counter pass binds only
+     * the sixteen-byte head of that slot, so it can reach the four counters and nothing else in the frame's record.
+     * Borrowed from the renderer, never owned. */
+    public long statsBuffer;
+    public long statsOffset;
     public final RtSky.Key key = new RtSky.Key();
     public final float[] skyColor = {0.47f, 0.65f, 1.0f};
 

@@ -730,8 +730,12 @@ public final class RtFrameRenderer {
                     // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
                     lastHistPct = RtAccumulation.acceptedPct(MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED), hits,
                         metadata.accumulated());
-                    // Both counters use the same 1-in-16 pixel mask as countSample, so this is a true share of the hit pixels.
-                    lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT) / hits;
+                    // leafBacklit is the one head counter with no writer. The legacy transparency pass counted the
+                    // sun-through-a-leaf hits behind its own 1-in-16 mask and the statistics pass keeps no count of it,
+                    // so a zero here is the absence of a measurement, not a share of 0%: -1 is what the F3 line prints
+                    // as n/a.
+                    int leafBacklit = MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT);
+                    lastLeafPct = leafBacklit > 0 ? 100.0 * leafBacklit / hits : -1.0;
                 }
                 if (samples > 0) {
                     lastHitPct = 100.0 * hits / samples;
@@ -939,6 +943,10 @@ public final class RtFrameRenderer {
         InstanceMath.inverseViewProjection(frameProjection, camera.viewRotationMatrix, params.invViewProjStable);
         params.invViewProj.set(params.invViewProjStable);
         params.statsAddress = statsBuf.address + writeOffset;
+        // The same slot as a descriptor, for the pass that fills its counters: a device address reaches only the
+        // shaders that take one, and the statistics pass binds the sixteen-byte head like any other buffer.
+        params.statsBuffer = statsBuf.handle;
+        params.statsOffset = writeOffset;
         params.flipY = RtConfig.FLIP_Y;
         params.tonemap = RtConfig.TONEMAP_ACES;
         params.frame = (int) dispatchCounter;

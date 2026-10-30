@@ -22,10 +22,11 @@ import java.util.Objects;
  *
  * <p>The pass fills the seven DLSS-RR guide images when the host binds them ({@code PATH_TRACE_OPTION_GBUFFER}) and
  * NRD's per-pixel {@code IN_MV} vec4 when the frame carries the motion buffer
- * ({@code PATH_TRACE_OPTION_NRD_MOTION}). Not done yet, compared with the GLSL {@link RtPathTracerPass}: no auto
- * exposure (the GLSL shader feeds the luminance statistics; exposure is fixed at 1), a two-colour sky instead of
- * {@code rt_sky.glsl}; the mean is reprojected per pixel through the previous view-projection, so accumulation
- * survives camera motion but restarts on disocclusion.
+ * ({@code PATH_TRACE_OPTION_NRD_MOTION}). Open against the pipeline this replaced: the traced sky is the horizon
+ * gradient plus the sun and moon discs, with neither clouds nor aerial fog in it; the frame's counters come from a
+ * separate pass ({@link RtFrameStatsSlangPass}) that only this backend records, so on the native core auto exposure
+ * has no measurement to follow; and the ray-effect passes (SSR, bloom, particles) still composite over the picture
+ * rather than being traced into it.
  *
  * <p>Recording lifetime: every command buffer passed to {@link #dispatch} keeps native descriptor pools until
  * {@link #releaseRecording(long)}; the renderer calls it from the same submission's completion callback or after
@@ -321,7 +322,8 @@ public final class RtSlangPathPass implements RtPass {
             | ((params.flags & RtFrameParams.FLAG_CAUSTICS) != 0
                 ? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_CAUSTICS : 0);
         backend.record(new PathTraceBackend.Frame(cmd, views, frame, dispatch, emitters, capturedEntities,
-            flags, accumFrames));
+            new RtPathTraceSlangPass.BufferView(params.statsBuffer, params.statsOffset,
+                RtFrameStatsSlangPass.COUNTER_BYTES), flags, accumFrames));
         historyWritten = true;
         diRequests.afterDispatch(diFlags != 0);
     }

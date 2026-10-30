@@ -24,6 +24,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     private final RtPathTraceSlangPass trace;
     private final RtSpatialReuseSlangPass spatialReuse;
     private final SlangProgram display;
+    private final RtFrameStatsSlangPass statistics;
     private final long sampler;
     private final BedrayGpuImagesNative historyImages;
     private final BedrayGpuBuffersNative nativeBuffers;
@@ -49,6 +50,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
             requireDisplayManifest(display);
             sampler = runtime.atlasSampler();
             spatialReuse = RtSpatialReuseSlangPass.create(runtime, trace.entityFallback()).orElse(null);
+            statistics = RtFrameStatsSlangPass.create(runtime).orElse(null);
         } catch (RuntimeException | Error failure) {
             if (nextBuffers != null) nextBuffers.close();
             if (nextImages != null) nextImages.close();
@@ -205,6 +207,14 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         historyParity ^= 1;
         di.afterDispatch(diFlags != 0);
         VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read by the composite, bloom and upscalers next
+        // The frame's counters, measured from the three images the two dispatches above just wrote. It rides the
+        // barrier the picture already needs, so it asks for none of its own, and the renderer's host-visibility
+        // barrier is what makes the four words readable in the readback. Absent when the AOT artifact is missing:
+        // auto exposure then holds its floor and the F3 counters report n/a rather than a plausible zero.
+        if (statistics != null) {
+            statistics.record(cmd, trace.radianceView(), accum[write].view(), views.depth(), input.stats(),
+                width, height, frame.frameIndex);
+        }
     }
 
     @Override public boolean spatialAvailable() { return spatialReuse != null; }
@@ -226,6 +236,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         historyImages.releaseRecording(commandBuffer);
         nativeBuffers.releaseRecording(commandBuffer);
         if (spatialReuse != null) spatialReuse.releaseRecording(commandBuffer);
+        if (statistics != null) statistics.releaseRecording(commandBuffer);
         runtime.releaseRecording(commandBuffer);
         recordings.remove(commandBuffer);
     }
@@ -240,6 +251,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         if (!recordings.isEmpty()) throw new IllegalStateException("reference backend still has pending recordings");
         trace.close();
         if (spatialReuse != null) spatialReuse.close();
+        if (statistics != null) statistics.close();
         historyImages.close();
         nativeBuffers.close();
         closed = true;

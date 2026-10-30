@@ -4,16 +4,19 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Byte layout of one per-frame slot of StatsBuf (buffer StatsBuf in rt_common.glsl): written by
- * RtFrameRenderer / RtSkyState / RtFogState, read by the shaders through pc.statsAddr.
+ * Byte layout of one per-frame slot of StatsBuf. The host fields are written by RtFrameRenderer / RtSkyState /
+ * RtFogState and read by the shaders through {@code pc.statsAddr}; the four counter words at the head are written on
+ * the GPU, by {@code passes/frame_stats.slang} for the Slang path. The shader-side mirror of this struct is
+ * {@code FrameStats} in {@code shaders/slang/bindings.slang}.
  * <p>
  * The member list below is the single Java source of truth: offsets are computed here with the same
- * std430 rules the GLSL compiler applies to the declaration, and {@code RtStatsLayoutTest} parses the
- * GLSL struct and asserts both lists are identical (names, order, types, offsets, total size) — a
- * one-sided edit fails the build instead of silently misreading the frame slot.
+ * std430 rules the shader compiler applies to the declaration. {@code RtStatsLayoutTest} used to parse the GLSL
+ * declaration and compare every field, and it was deleted with the legacy pipeline; {@code RtFrameStatsTest} now
+ * pins the four head words that the counter pass writes, and the rest of the slot is only kept in step by editing
+ * both mirrors together.
  */
 public final class RtStatsLayout {
-    /** One member of buffer StatsBuf: GLSL declaration and its computed std430 placement. */
+    /** One member of the frame slot: shader declaration and its computed std430 placement. */
     public record Member(String name, String glslType, int offset, int size) {}
 
     private static final List<Member> MEMBERS = new ArrayList<>();
@@ -132,7 +135,7 @@ public final class RtStatsLayout {
         }
     }
 
-    /** The declared members in GLSL declaration order, for the source-check test. */
+    /** The declared members in shader declaration order, for {@code RtFrameStatsTest}. */
     public static List<Member> members() {
         return List.copyOf(MEMBERS);
     }
