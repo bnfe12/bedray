@@ -72,4 +72,30 @@ class RaysHiddenTest {
             VulkanRtxConfig.enableHardwareRayTracing = oldHw;
         }
     }
+
+    /**
+     * A scan, not a call: {@code PerfScenario.run()} needs a running game, and a chooser is the kind of line that silently
+     * walks back to the deleted renderer whenever somebody adds a mode. The last two assertions are the whole rule - the
+     * files that decide which renderer a trace request gets must not name the mode the Slang renderer refuses
+     * ({@code slang_ray}).
+     */
+    @Test
+    void theTraceChoosersNeverNameTheRefusedMode() throws Exception {
+        String config = read("src/main/java/io/github/andrexarlay/vulkancompat/rtx/config/VulkanRtxConfig.java");
+        String perf = read("src/main/java/io/github/andrexarlay/vulkancompat/autotest/PerfScenario.java");
+        assertTrue(config.contains("return RtMode.PATH_TRACED;\n        }\n        return rtMode;"),
+            "effectiveRtMode's boolean-only fallback names the path renderer");
+        assertTrue(config.contains("setRtMode(Boolean.parseBoolean(val) ? RtMode.PATH_TRACED : RtMode.OFF);"),
+            "the legacy on/off toml key names the path renderer");
+        assertTrue(perf.contains("VulkanRtxConfig.rtMode = WITH_RT ? RtMode.PATH_TRACED : RtMode.OFF;"),
+            "the perf autotest's perfRt flag names the path renderer");
+        assertFalse(config.contains("RtMode.RAY_TRACED"),
+            "VulkanRtxConfig must not hand out the mode the renderer refuses");
+        assertFalse(perf.contains("RtMode.RAY_TRACED"),
+            "PerfScenario must not hand out the mode the renderer refuses");
+    }
+
+    private static String read(String relativeToCommon) throws java.io.IOException {
+        return java.nio.file.Files.readString(java.nio.file.Path.of(relativeToCommon)).replace("\r\n", "\n");
+    }
 }
