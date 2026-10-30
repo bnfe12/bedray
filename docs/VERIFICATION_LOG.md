@@ -51,6 +51,14 @@ is still unwritten by the Slang pass (it has no stats binding, so
 not forward a leaf counter either; both are follow-ups. Pixel shadows, distant
 block light, the glass-cost guard and the NaN/hot-loop guards remain open holes.
 
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `6b8ecf2055cfaae4…`; the previous
+(denoiser) jar is kept as `….20261030-071636.bak` (sha256 `303f7dc64981bb08…`).
+The bundled `shaders/slang/spv/path_trace.spv` matches the fresh compile
+(`6fffb58748…`, 1 093 832 B). `bedray_core.dll` (`9ca5cd88cc01f823…`) and
+`bedray_scene.dll` (`bf2caba452ef6445…`) are byte-identical to the deployed
+natives, so no native changed.
+
 ## 2026-10-30 — The denoiser is re-enabled on the Slang guides (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.
