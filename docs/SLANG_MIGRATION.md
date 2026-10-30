@@ -150,9 +150,12 @@ re-captured live before a jar ships. A compile or a test is not a frame.
    that compiled them at runtime are deleted; the reference is now the Slang
    contract plus `git log`.  Do not copy the old include graph, and do not
    reintroduce a runtime GLSL compile in the renderer (see
-   `ShadercSurfaceTest`).  What survives Shaderc is not the renderer:
-   `iris_depth.comp`, the `shaders/spatial/` upscaler kernels and the Iris pack
-   host, plus the one-shot opacity-micromap probe in `RtExtensionProbe`.
+   `ShadercSurfaceTest`).  No first-party GLSL ships any more: the Iris depth
+   converter reads the AOT `iris_depth` pass through `SlangPass`, and
+   `shaders/glsl/` is empty.  What survives Shaderc is not the renderer: the
+   `shaders/spatial/` upscaler kernels and the Iris pack host (they compile
+   third-party or user-supplied GLSL), plus the one-shot opacity-micromap probe
+   in `RtExtensionProbe`.
 6. **No binaries in git.**  SDKs, generated SPIR-V, DLLs and JARs stay out of
    the repository.  `*.spv`, `*.exe`, `*.dll` and `*.jar` are already ignored.
 

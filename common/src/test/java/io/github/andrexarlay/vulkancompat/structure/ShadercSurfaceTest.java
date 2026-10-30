@@ -15,9 +15,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * P1-11: the migration target is AOT Slang, but runtime GLSL -> SPIR-V through Shaderc is still load-bearing in
- * code that is not the Slang renderer (the Iris pack host, its depth converter and the spatial upscaler). The
- * inventory is frozen here instead of being re-guessed every audit; the FrameGen producer left it when its AOT pass
- * landed in `passes/fg_prepare.slang`.
+ * code that is not the Slang renderer (the Iris pack host and the spatial upscaler). The inventory is frozen here
+ * instead of being re-guessed every audit; the FrameGen producer left it when `passes/fg_prepare.slang` landed and
+ * the Iris depth converter left it when `passes/iris_depth.slang` replaced `iris_depth.comp`, so the resource tree
+ * now ships no first-party GLSL at all.
  *
  * <p>Ways this silently breaks: a new pass reaches for Shaderc because it is the shortest way to get a compute
  * shader, and every player machine then needs the Shaderc native library at runtime; or the Slang path grows a
@@ -65,14 +66,17 @@ class ShadercSurfaceTest {
      */
     @Test
     void theLegacyRendererStaysDeleted() throws IOException {
-        try (Stream<Path> files = Files.list(RT_SHADERS)) {
-            TreeSet<String> shipped = new TreeSet<>(files.filter(Files::isRegularFile)
-                .map(path -> path.getFileName().toString())
-                .collect(java.util.stream.Collectors.toList()));
-            assertEquals(new TreeSet<>(List.of("iris_depth.comp")), shipped,
-                "the Iris depth converter is the only runtime-compiled GLSL left in the resource tree; FrameGen's"
-                    + " producer is the AOT fg_prepare pass recorded by bedray_core_render_fg_prepare");
+        TreeSet<String> shipped = new TreeSet<>();
+        if (Files.isDirectory(RT_SHADERS)) {
+            try (Stream<Path> files = Files.list(RT_SHADERS)) {
+                files.filter(Files::isRegularFile)
+                    .map(path -> path.getFileName().toString())
+                    .forEach(shipped::add);
+            }
         }
+        assertEquals(new TreeSet<String>(), shipped,
+            "no first-party GLSL ships any more: fg_prepare and the Iris depth converter are AOT Slang passes, and"
+                + " the spatial upscaler kernels are third-party host code");
         TreeSet<String> gone = new TreeSet<>();
         for (String name : new String[] {"RtPipeline.java", "RtShaderCompiler.java", "RtShaderDiskCache.java",
             "RtPathTracerPass.java", "RtRayEffectsPass.java", "RtCompositePipeline.java", "RtVolumetricPass.java"}) {
