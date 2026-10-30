@@ -4,6 +4,89 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — "Rays per Pixel" traces the rays it says it traces (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `edb5650` (11 files, +305/−23).
+
+`path_spp` was a silent no-op. The slider went 1..8, its value reached
+`RtFrameParams.spp`, `RtPathTraceSlangPass.Frame` wrote it into
+`FrameConstants.frame.z` (offset `FRAME+8`), the native descriptor carried it as
+`samples_per_frame` and `path_trace_pass.cpp` copied it into `constants.frame[2]` —
+and nothing read it. No file in the Slang tree mentioned `frame.z`, the Java passes
+pinned `params.spp = 1`, `RtSlangFrameData` pinned `frame.samplesPerFrame = 1`, and
+the F3 overlay printed "Primary rays: 4" while the GPU traced one. The whole ABI
+already existed; only the constant writes and the missing reader were absent.
+
+What landed is a mean over N stratified primary paths per pixel, in
+`pathtrace/path_trace_entry.slang`:
+`pathTraceSampleCount()` clamps the frame word to `1..PATH_TRACE_MAX_SPP` (8, now
+mirrored by `RtPathTraceSlangPass.MAX_SAMPLES_PER_PIXEL`);
+`pathTracePrimaryRay()` takes its jitter as an argument, and
+`pathTracePixelJitter()` returns `f.camera.jitter.xy` unchanged for N=1 — so the
+cheapest setting traces exactly the paths the previous build traced, host jitter and
+all — and otherwise splits the pixel into an N×N stratified grid offset by
+`noise2D`. Each ray gets its own seed
+(`pc.sampleIndex * sampleCount + s`). `prevViewProjection` is not jittered, so
+changing the per-sample offset cannot desync reprojection.
+`PathTraceMean`/`accumulatePathTraceSample()`/`pathTraceMeanResult()` average
+radiance, the primary vertex, view position, normal (renormalized), albedo,
+specular F0, roughness, metallic, direct light, first-hit distance and motion, and
+keep refused paths' radiance in a separate lane: the sample-rejection rule stays
+`INVALID_SAMPLE | RC_UNRESOLVED` (never `TRUNCATED`), one `sampleTrusted` bit feeds
+the alpha lane, the guides and both motion channels, and a pixel whose every ray was
+refused reports the mean of the refused radiance with `alpha = 0` rather than
+poisoning a running mean that lives for thousands of frames. Eight rays with one
+broken number are seven good samples.
+
+ReSTIR DI keeps its one-reservoir-per-pixel-per-frame contract: only ray 0 reads,
+merges and publishes (`directReuse.enabled = s == 0u ? diRequested : 0u`), the rest
+shade the same emitter list with plain next-event estimation, and
+`lights.emittersReusedAtPrimary` follows the same bit so the extra rays cannot
+darken the picture by losing the emissive branch. Every reservoir write — publish,
+occlusion decay, empty record — is gated on `reuseActive()`, so turning reuse off for
+rays 1..N-1 cannot blank what ray 0 published.
+
+The reporting stopped lying on its own: `F3Sections` prints the *governed*
+`RtAdaptiveQuality.spp()`/`.bounces()` rather than the raw setting, and
+`RtSlangPathPass.describe()` now includes `spp=`. spp is deliberately not in the
+pipeline-config hash: the adaptive governor moves it several times a minute, and a
+running mean of frames traced at different sample counts is still a mean of unbiased
+estimators.
+
+Four guards were stale and were updated, not deleted: `RtAdaptiveQualityTest` had
+*required* `params.spp = 1;` (it pinned the no-op; it now requires the governed call,
+because rays go first in the ladder and a pinned one makes both the slider and the
+budget silent), and `RtSlangNrdMotionTest`, `RtSlangRcFieldTest` and
+`RtSlangSampleRejectionTest` each asserted the removed
+`bool sampleTrusted = !pathTraceSampleRejected(result.flags);` spelling, which the
+mean now computes internally. `RtPathTraceSlangPassTest` gained the `FRAME+8` layout
+assertion, and the new `RtSlangSamplePerPixelTest` (6 tests) covers the host word
+behaviourally (requesting 0/1/4/8/99 through `RtSlangFrameData.fill` yields
+1/1/4/8/8) plus the loop, the N=1 equivalence, the reservoir gating and the reject
+split.
+
+Evidence, one run per thing, none concurrent: `:common:compileSlang` OK —
+`path_trace` 1,038,264 → **1,060,976 B** (+22,712 B) and `path_trace_scene`
+1,088,612 B; `:common:test` **806 tests, 0 failures, 0 errors, 6 skipped over 145
+classes**; `:common:runShimTests` 34 passed, 0 failed; ten mutation probes over the
+entry shader, `RtSlangFrameData` and `RtSlangPathPass` — frame word pinned to one,
+pass pins the ray count, `describe()` claims one ray, shader ignores the frame word,
+loop runs one iteration, every ray reuses the reservoir, a refused path enters the
+accepted mean, a single ray loses the host jitter, all rays share one seed, the alpha
+lane hardcoded trusted — **all ten caught** by a named test, each with the file
+restored byte-identically (`sha256` verified) and `touch`ed. One probe was initially
+missed because my own needle `",spp=1,"` did not occur in the mutated source
+(`",spp=1,dist="`); the guard was fixed to a positive `",spp=" + p.spp + ",dist="`
+plus a bare `,spp=1` negative and re-probed to caught.
+
+Not proven, and stated plainly: **no owner-verified frame yet.** Two consequences to
+watch in the game. The default of 2 now genuinely costs about twice what the previous
+build cost, and 8 costs eight times — which is exactly what the adaptive governor was
+built to relieve, and could not, because spp was pinned. And the multi-ray loop is
+new code in the hottest shader in the mod: the mean's guide channels average over the
+accepted rays, so a disagreement between DLSS-RR guides and the radiance lane would
+show up as denoiser ghosting, not as a crash.
+
 ## 2026-10-30 — the legacy renderer is gone, and a trace request that names no mode opens the renderer that exists (L1 build, L2 unit, mutation proof; no live frame yet)
 
 Branch: `refactor/slang-pipeline`, three commits: `1ea94ce` (deletion),
