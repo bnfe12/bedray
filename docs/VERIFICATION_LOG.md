@@ -33,6 +33,17 @@ old config file or a perf run stopped producing a frame at all. All three now na
 is an explicit `experimental_rays` opt-in, and its refusal is pinned by
 `SlangPathUnavailableTest` until the ray-effects passes get a Slang host.
 
+`RtModesChecks` asserts those choices at the call site, and
+`RaysHiddenTest.theTraceChoosersNeverNameTheRefusedMode` pins them as a scan of the
+source: a chooser is the kind of line that walks back to the deleted renderer
+whenever somebody adds a mode, and `PerfScenario.run()` needs a running game so it
+cannot be called from a unit test. Three mutation probes, each a single revert back
+to `RAY_TRACED` (the boolean fallback, the toml key, the perf flag), each with the
+file restored byte-identically (`sha256` verified) and `touch`ed: **all three were
+caught** by that named test. The guard commit itself is the fourth row of the table
+below; the run on the restored tree measured 800 tests, 0 failures, 0 errors, 6
+skipped over 144 classes, with the shim batch at 34 passed / 0 failed.
+
 Evidence, one full run per commit, none concurrent:
 
 | Commit | `:common:test` | `:common:runShimTests` |
@@ -40,6 +51,7 @@ Evidence, one full run per commit, none concurrent:
 | `1ea94ce` | 788 tests, 0 failures, 9 skipped | 34 passed, 0 failed |
 | `27a4ca5` | 798 tests, 0 failures, 6 skipped | 34 passed, 0 failed |
 | `383ae71` | 799 tests, 0 failures, 6 skipped | 34 passed, 0 failed |
+| `31485e5` | 800 tests, 0 failures, 6 skipped | 34 passed, 0 failed |
 
 `27a4ca5` adds `RtSlangWaterTest` (10 tests) over `surface/water.slang`, the water
 rules in `surface/surface.slang`, `pathtrace/path_tracer.slang`,
