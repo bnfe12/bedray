@@ -317,6 +317,8 @@ public final class RtWorld {
         try {
             return NativeSceneBridge.create(runtime);
         } catch (RuntimeException | LinkageError e) {
+            if (RtConfig.SLANG_RADIANCE_CASCADES)
+                throw new IllegalStateException("radianceCascades requires the native scene", e);
             LOGGER.error("[VKB-RT] native scene unavailable: {}; keeping the Java scene", e.getMessage(), e);
             return null;
         }

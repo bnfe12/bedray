@@ -91,6 +91,11 @@ public final class RtConfig {
     public static final boolean SLANG_NATIVE_SCENE =
         Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativeScene", "false"));
 
+    /** Experimental finite-window RC diffuse continuation; requires both native owners. */
+    public static final boolean SLANG_RADIANCE_CASCADES =
+        Boolean.parseBoolean(System.getProperty("vkbridge.rt.radianceCascades", "false"));
+    public static final int SLANG_RC_BASE_AXIS = Integer.getInteger("vkbridge.rt.rcBaseAxis", 8);
+
     /** Horizontal RT radius in sections: override, else the game render distance ("As in game"), else the manual value. */
     public static int radiusXz(int gameRenderDistanceChunks) {
         if (RADIUS_XZ_OVERRIDE > 0) {

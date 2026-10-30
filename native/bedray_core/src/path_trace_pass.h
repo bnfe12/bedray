@@ -2,6 +2,7 @@
 
 #include "bedray_core.h"
 #include "core_internal.h"
+#include "rc_field_pass.h"
 
 #include <bedray/gpu_buffers.hpp>
 #include <bedray/gpu_images.hpp>
@@ -38,6 +39,8 @@ public:
     BedrayStatus configure(BedrayCore* core, const DeviceFns& fns,
         const BedrayPathTraceDesc& desc, BedrayError* error);
 
+    BedrayStatus configure_rc(const BedrayRCDesc& desc, std::uint32_t max_groups_x, BedrayError* error);
+
     BedrayStatus render(const BedrayPathTraceFrameDesc& desc, BedrayError* error,
         const BedrayPathTraceGuides* guides = nullptr, const BedrayPathTraceBuffer* motion = nullptr);
 
@@ -46,7 +49,9 @@ public:
     void discard_recording(std::uint64_t command_buffer) noexcept;
     BedrayStatus release_recording(std::uint64_t command_buffer) noexcept;
 
-    [[nodiscard]] bool has_recordings() const noexcept { return !recordings_.empty(); }
+    [[nodiscard]] bool has_recordings() const noexcept {
+        return !recordings_.empty() || (rc_field_ && rc_field_->has_recordings());
+    }
 
     // True while the configured pipeline still needs this registered program.
     // The core defers destroying such a program instead of leaving the pass
@@ -54,7 +59,8 @@ public:
     [[nodiscard]] bool uses_program(std::uint64_t program) const noexcept {
         return program != 0
             && (program == program_trace_ || program == program_trace_scene_
-                || program == program_spatial_ || program == program_display_);
+                || program == program_spatial_ || program == program_display_
+                || (rc_field_ && rc_field_->uses_program(program)));
     }
 
     // Refuses while any recording still pins a resource. The core already
@@ -87,6 +93,7 @@ private:
 
     std::unique_ptr<gpu::GpuImages> images_;
     std::unique_ptr<gpu::GpuBuffers> buffers_;
+    std::unique_ptr<RCFieldPass> rc_field_;
 
     gpu::ImageId radiance_id_{};
     gpu::ImageId motion_id_{};
@@ -100,6 +107,7 @@ private:
     bool images_initialized_ = false;
     bool trace_guide_bindings_ = false, scene_guide_bindings_ = false;
     bool trace_motion_bindings_ = false, scene_motion_bindings_ = false;
+    bool scene_field_bindings_ = false;
     bool guide_dummies_initialized_ = false;
     std::array<gpu::ImageId, 3> guide_dummy_ids_{};
     std::array<gpu::ImageView, 3> guide_dummy_views_{};

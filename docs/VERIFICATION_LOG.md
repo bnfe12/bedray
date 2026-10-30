@@ -4,6 +4,23 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-29 — Native RC finite-window reconstruction (L1/L2)
+
+RC v2 now builds five dependent cone-transport levels inside the native opaque
+path group and supplies the primary diffuse continuation. Emission remains with
+primary NEE; the field carries reflected direct light. Sky requires a real
+boundary proof and is not fabricated; field history stays disabled. The user
+explicitly authorized RC shader mathematics. The ordinary path remains opt-in.
+
+Native CI [40937161641](https://github.com/bnfe12/bedray/actions/runs/40937161641)
+passed **25 core + one scene + one lifetime** tests on `7dfdf5c`; baseline
+15+1+1 also passed. Clean source `67adc69` passed **861 Java tests: 852 passed,
+nine skipped**, all 26 AOT entries (1m50s). Final source `eb7659a` rebuilt all
+26 entries and passed **46 focused tests** after the geometric-offset correction
+(55s). Native sources are identical to the tested CI revision. Numerical tests
+include independent dense solid-angle integration, not GPU execution.
+Contract, bounds, costs and limitations: [RC_RECONSTRUCTION_PLAN.md](RC_RECONSTRUCTION_PLAN.md).
+No new GPU/game, visual, performance or owner acceptance is claimed.
 ## 2026-10-29 — An underwater camera now knows it is under water (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
 
 Branch: `refactor/slang-pipeline`. The typed path tracer carried a water medium

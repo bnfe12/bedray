@@ -119,7 +119,7 @@ float4 pathTraceNrdMotion(PathTraceResult result) {
     return float4(motion, trusted);
 }
 
-public void pathTraceEntry<T : ISceneTracer>(
+public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     T traversal,
     EntityGeometry entities,
     uint3 tid,
@@ -141,7 +141,7 @@ public void pathTraceEntry<T : ISceneTracer>(
     StructuredBuffer<BlockMaterial> blockMaterials,
     StructuredBuffer<BlockEmitterRecord> emitters,
     RWStructuredBuffer<DIReservoir> reservoirs,
-    PathTracePush pc) {
+    PathTracePush pc, F diffuseField) {
     uint2 size;
     outImage.GetDimensions(size.x, size.y);
     int2 p = int2(tid.xy);
@@ -237,8 +237,8 @@ public void pathTraceEntry<T : ISceneTracer>(
     materialOptions.alphaCutoff = options.alphaCutoff;
     materialOptions.portalTime = f.camera.origin.w;
     materialOptions.autoNormalStrength = asfloat(pc.entityState.w);
-    PathTraceResult result = tracePath(traversal, lights, environment, directReuse, atlas, table,
-        primary, materialOptions, options, seed);
+    PathTraceResult result = tracePathWithField(traversal, lights, environment, directReuse, atlas, table,
+        primary, materialOptions, options, seed, diffuseField);
 
     // Scene-referred linear radiance: no exposure and no tone map here.  Exposure lives in FrameConstants.exposure and
     // is applied once by the display/tonemap pass, so accumulation and denoise keep working in linear HDR.
@@ -260,4 +260,22 @@ public void pathTraceEntry<T : ISceneTracer>(
     if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {
         outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result);
     }
+}
+
+public void pathTraceEntry<T : ISceneTracer>(
+    T traversal, EntityGeometry entities, uint3 tid,
+    RWTexture2D<float4> outImage, Sampler2D albedoAtlas, RWTexture2D<float4> outMotion,
+    Sampler2D materialAtlas, Sampler2D normalAtlas, RWTexture2D<float> outDepth,
+    RWTexture2D<float> outViewZ, RWTexture2D<float4> outNormalRough,
+    RWTexture2D<float4> outSpecular, RWTexture2D<float4> outDiffuse,
+    RWTexture2D<float4> outAlbedo, RWTexture2D<float4> outDirect,
+    RWTexture2D<float4> outSpecAlbedo, RWStructuredBuffer<float4> outMotionBuffer,
+    FrameConstants frame, StructuredBuffer<BlockMaterial> blockMaterials,
+    StructuredBuffer<BlockEmitterRecord> emitters, RWStructuredBuffer<DIReservoir> reservoirs,
+    PathTracePush pc) {
+    NoPathDiffuseField field;
+    pathTraceEntryWithField(traversal, entities, tid, outImage, albedoAtlas, outMotion,
+        materialAtlas, normalAtlas, outDepth, outViewZ, outNormalRough, outSpecular,
+        outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer, frame,
+        blockMaterials, emitters, reservoirs, pc, field);
 }

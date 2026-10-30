@@ -35,6 +35,7 @@ import "surface/surface.slang";
 import "surface/visibility.slang";
 import "surface/water.slang";
 import "traversal/traversal.slang";
+__exported import "pathtrace/diffuse_field.slang";
 
 static const uint PATH_TRACE_FLAG_ENVIRONMENT      = 1u << 0u;
 static const uint PATH_TRACE_FLAG_RUSSIAN_ROULETTE = 1u << 1u;
@@ -56,6 +57,10 @@ static const uint PATH_TRACE_FLAG_TRUNCATED        = 1u << 7u;
 // body.  Kept as a diagnostic: the medium changes what a segment means, and a
 // frame that never sets it is a frame where the fluid was not recognised.
 static const uint PATH_TRACE_FLAG_WATER_MEDIUM     = 1u << 8u;
+static const uint PATH_TRACE_FLAG_RC_FINITE_WINDOW = 1u << 9u;
+static const uint PATH_TRACE_FLAG_RC_OUTSIDE       = 1u << 10u;
+static const uint PATH_TRACE_FLAG_RC_TERMINAL      = 1u << 11u;
+static const uint PATH_TRACE_FLAG_RC_UNRESOLVED    = 1u << 12u;
 
 // Bits of PathTraceOptions.flags.  These are pass options (what the host asks the
 // pass to produce), not properties of a sample: the tracer ignores them and the
@@ -148,7 +153,7 @@ float pathMaxComponent(float3 value) {
 // The one place "do not show this sample to the accumulator" is spelled out, so a pass cannot invent its own rule and
 // silently start dropping truncated paths.
 bool pathTraceSampleRejected(uint flags) {
-    return (flags & PATH_TRACE_FLAG_INVALID_SAMPLE) != 0u;
+    return (flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_RC_UNRESOLVED)) != 0u;
 }
 
 // Shades one direct-light sample: the BSDF term of the legacy NEE times the filtered visibility walk.  The caller
@@ -240,11 +245,11 @@ WaterMedium primaryWaterMedium<T : ISceneTracer>(T traversal, MaterialAtlas atla
 
 // Traces one path.  `seed` is advanced in place so a caller can derive the next
 // path's seed without a global random stream.
-PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
+PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler, F : IPathDiffuseField>(
         T traversal, L lights, E environment, R reuse,
         MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         Ray primaryRay, MaterialSamplingOptions materialOptions,
-        PathTraceOptions options, inout uint seed) {
+    PathTraceOptions options, inout uint seed, F field) {
     PathTraceResult result = emptyPathTraceResult();
     result.firstHitDistance = options.maxDistance;
 
@@ -472,6 +477,32 @@ PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentS
             break;
         }
 
+        // RC replaces only the selected primary diffuse continuation. Its
+        // cosine mean excludes albedo/pi: bsdf.weight already contains the
+        // reflection albedo and the lobe selection probability. Specular,
+        // transmission, and water continuations retain the ordinary path.
+        if (field.active() && receiver.primary && result.depth + 1u < options.maxDepth
+            && bsdf.lobe == BSDF_LOBE_DIFFUSE && !medium.inside
+            && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u) {
+            float3 fieldOffsetNormal = safeNormalize(surface.hit.geometricNormal, normal);
+            if (dot(fieldOffsetNormal, view) < 0.0) fieldOffsetNormal = -fieldOffsetNormal;
+            DiffuseFieldSample incoming = field.evaluate(traversal, lights, environment,
+                atlas, blockMaterials, hit.position, normal, fieldOffsetNormal, materialOptions,
+                options.rayBias, options.maxRadiance, seed);
+            if (incoming.status == DIFFUSE_FIELD_INVALID) {
+                result.flags |= PATH_TRACE_FLAG_RC_UNRESOLVED;
+                break;
+            }
+            if (incoming.status == DIFFUSE_FIELD_VALID) {
+                result.radiance += throughput * bsdf.weight * incoming.cosineMean;
+                result.flags |= PATH_TRACE_FLAG_RC_FINITE_WINDOW;
+                if (incoming.terminalKnown) result.flags |= PATH_TRACE_FLAG_RC_TERMINAL;
+                result.depth++;
+                break;
+            }
+            result.flags |= PATH_TRACE_FLAG_RC_OUTSIDE;
+        }
+
         // A refracted transmission through a horizontal fluid face crosses the
         // water boundary; the transmitted direction says which side the next
         // segment runs on.  A reflection (including total internal reflection)
@@ -553,6 +584,16 @@ PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentS
     }
     result.radiance = clampRadiance(result.radiance, options.maxRadiance);
     return result;
+}
+
+PathTraceResult tracePath<T : ISceneTracer, L : ILightSampler, E : IEnvironmentSampler, R : IReuseSampler>(
+        T traversal, L lights, E environment, R reuse,
+        MaterialAtlas atlas, BlockMaterialTable blockMaterials,
+        Ray primaryRay, MaterialSamplingOptions materialOptions,
+        PathTraceOptions options, inout uint seed) {
+    NoPathDiffuseField field;
+    return tracePathWithField(traversal, lights, environment, reuse, atlas,
+        blockMaterials, primaryRay, materialOptions, options, seed, field);
 }
 
 // Radiance-only convenience for passes that do not need the diagnostics.

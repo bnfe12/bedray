@@ -1379,6 +1379,22 @@ static BedrayStatus record_path_trace(BedrayCore* core, const BedrayPathTraceFra
 #endif
 }
 
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_radiance_cascades(
+    BedrayCore* core, const BedrayRCDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc || !core->path_trace)
+        return fail(error,BEDRAY_ERROR_INVALID_ARGUMENT,"RC requires a configured native path owner");
+    constexpr auto required = BEDRAY_CAP_RAY_QUERY | BEDRAY_CAP_ACCELERATION_STRUCTURE
+        | BEDRAY_CAP_BUFFER_DEVICE_ADDRESS | BEDRAY_CAP_SHADER_INT64;
+    if ((core->capabilities & required) != required)
+        return fail(error,BEDRAY_ERROR_UNSUPPORTED,"RC ray-query/AS/BDA/Int64 features are not enabled");
+    return core->path_trace->configure_rc(*desc,core->properties.limits.maxComputeWorkGroupCount[0],error);
+} catch (const std::bad_alloc&) {
+    return fail(error,BEDRAY_ERROR_OUT_OF_MEMORY,"cannot allocate RC field owner");
+} catch (...) {
+    return fail(error,BEDRAY_ERROR_INTERNAL,"unexpected exception configuring RC field");
+}
+
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace(
     BedrayCore* core, const BedrayPathTraceFrameDesc* desc, BedrayError* error) try {
     return record_path_trace(core, desc, nullptr, nullptr, error);

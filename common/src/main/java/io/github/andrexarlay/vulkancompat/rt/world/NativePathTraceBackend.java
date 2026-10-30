@@ -22,6 +22,10 @@ final class NativePathTraceBackend implements PathTraceBackend {
             return "nativePathTrace requires a core with NATIVE_DI and the 25-binding guide contract";
         if (guides && !runtime.library().hasNativeGuideOutputs())
             return "nativePathTrace guide output requires a matching core with GUIDE_OUTPUTS";
+        if (RtConfig.SLANG_RADIANCE_CASCADES && (!RtConfig.SLANG_NATIVE_SCENE
+            || !SlangPassLibrary.available(RtRadianceCascadesContract.BUILD)
+            || !SlangPassLibrary.available(RtRadianceCascadesContract.TRACE)))
+            return "radianceCascades requires nativeScene=true and both AOT RC field entries";
         return null;
     }
 
@@ -31,15 +35,19 @@ final class NativePathTraceBackend implements PathTraceBackend {
         this.runtime = runtime;
         SlangProgram trace = runtime.program(RtPathTraceSlangPass.PASS_NAME).orElseThrow();
         RtPathTraceSlangPass.requireManifest(trace);
-        SlangProgram scene = SlangPassLibrary.available(RtPathTraceSlangPass.SCENE_PASS_NAME)
-            ? runtime.program(RtPathTraceSlangPass.SCENE_PASS_NAME).orElseThrow() : null;
-        if (scene != null) RtPathTraceSlangPass.requireManifest(scene);
+        boolean rc = RtConfig.SLANG_RADIANCE_CASCADES;
+        String sceneName = rc ? RtRadianceCascadesContract.TRACE : RtPathTraceSlangPass.SCENE_PASS_NAME;
+        SlangProgram scene = SlangPassLibrary.available(sceneName) ? runtime.program(sceneName).orElseThrow() : null;
+        if (scene != null) RtPathTraceSlangPass.requireManifest(scene,rc);
+        SlangProgram builder = rc ? runtime.program(RtRadianceCascadesContract.BUILD).orElseThrow() : null;
+        if (builder != null) RtRadianceCascadesContract.requireBuilder(builder.manifest());
         SlangProgram display = runtime.program(RtSlangPathPass.DISPLAY_PASS).orElseThrow();
         RtSlangPathPass.requireDisplayManifest(display);
         SlangProgram reuse = RtSpatialReuseSlangPass.registerProgram(runtime).orElse(null);
         spatial = reuse != null;
         pass = new BedrayPathTraceNative(runtime, trace.nativeHandle(), scene == null ? 0 : scene.nativeHandle(),
-            reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), runtime.atlasSampler());
+            reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), runtime.atlasSampler(),
+            builder == null ? 0 : builder.nativeHandle());
     }
 
     @Override public void prepare(int width, int height) {
