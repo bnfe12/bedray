@@ -3199,3 +3199,54 @@ Still missing: the host is not wired to the new producer. `FrameGenGpu` still
 compiles `fg_prepare.comp` at runtime through Shaderc; the next increment replaces
 that with `bedray_core_render_fg_prepare` and deletes the GLSL. No owner-verified
 frame.
+
+## 2026-10-30 — Frame generation records its producer through the native core (L0 source, L1 build, L2 unit + mutation)
+
+Commit `ffaf760`. `FrameGenGpu` no longer compiles a shader. It borrows the
+`fg_prepare` artifact from `SlangRuntimePool`, checks the manifest against the C++
+contract before the first frame (8-byte push, 8x8x1 threads, four bindings with
+combined-image-sampler depth at slot 0, storage images at 1/2/3), and calls
+`bedray_core_render_fg_prepare` with a `BedrayFgPrepareFrameDesc` whose layout
+`BedrayCoreLayouts.verify()` pins to the header's 104 bytes and static-assert
+offsets. `FrameGenRuntime` and `Fsr3FrameGen` now stash the returned retire
+handle and hand it to `encoder.queueForDestroy(retire::run)` after the fence;
+record and `vkEndCommandBuffer` failures discard the recording instead. The
+runtime GLSL `fg_prepare.comp` is deleted; without the DLL export or the AOT
+artifact the constructor throws, the failure is logged and sticky, and frame
+generation does not run — there is no Shaderc fallback. `ShadercSurfaceTest` now
+expects `iris_depth.comp` as the only remaining resource shader.
+
+Evidence:
+
+- L1 Slang: `fg_prepare` compiled into the JAR (`shaders/slang/spv/fg_prepare.spv`,
+  1868 B) with reflection, manifest and source alongside.
+- L1 native: Release x64 `bedray_core.dll` rebuilt from `ffaf760`; the
+  `bedray_core_render_fg_prepare` export is present in the PE export table.
+- L2 Java: full `:common:test --rerun-tasks`, `919 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL. The new
+  `FgPrepareNativeWiringTest` adds six tests: the host calls the core instead of
+  Shaderc; the descriptor offsets are the header's; the program contract is
+  checked before dispatch; the legacy shader stays deleted; both callers release
+  after fence, discard when never submitted; and a behavioral test feeds real
+  `SlangPassManifest` records (push 12, three bindings, wrong descriptor type,
+  16x16x1) and expects each to be refused.
+- L2 native: CTest `100% tests passed, 0 tests failed out of 25` (unchanged; the
+  native pass is the same one merged in `2825ec4`).
+- Mutation proof: removing the thread-grid check from `FrameGenGpu` turned
+  `FgPrepareNativeWiringTest` red; the file was restored byte-identical
+  (sha256 `9587100f1584...48a72e`).
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files
+kept as `*.20261030-100946.bak`): JAR built from a `git archive ffaf760` snapshot
+plus `libs/`, sha256
+`067146f0aeabf04edce64aa1fdb56762786d23abf8ebac0fa26bdd6f23f3b660`; DLL
+`bedray_core.dll` sha256
+`8ed33b8021368f80e26d4b42d10bbb61cfa38b82042fbce035f0d4c0dd17ea07`. What a
+playtest should show: FSR3/DLSS-G generating frames with upright motion vectors
+and depth reaching the frame-generation pipeline; if the export or artifact is
+missing the F3 line reports frame generation unavailable instead of a GLSL
+fallback.
+
+Still missing: an owner-verified generated frame, and the shader-side inputs for
+the remaining Shaderc survivors (`iris_depth.comp`, the spatial upscaler kernels,
+the Iris pack host).
