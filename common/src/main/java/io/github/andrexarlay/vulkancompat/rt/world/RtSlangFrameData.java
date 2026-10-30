@@ -68,7 +68,9 @@ final class RtSlangFrameData {
         frame.bloomEnabled = 0;
         frame.frameIndex = p.frame;
         frame.sampleIndex = sampleIndex;
-        frame.samplesPerFrame = 1;
+        // Rays per pixel, as the adaptive governor left them: the tracer reads this word and loops that many primary
+        // paths per pixel. Clamped to the shader's own ceiling so the host cannot ask for a frame the shader will not run.
+        frame.samplesPerFrame = Math.min(RtPathTraceSlangPass.MAX_SAMPLES_PER_PIXEL, Math.max(1, p.spp));
         // One frame word for every native pass, built from the flags RtFrameRenderer already derived from the settings
         // screen: the eye's own medium, and the two switches that decide how the body treats the light passing through
         // it.  A pass that read RtSettings here would diverge from the native core's copy of the same verdict.

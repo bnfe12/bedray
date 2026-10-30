@@ -170,7 +170,7 @@ public final class RtSlangPathPass implements RtPass {
     public String describe(RtFrameParams p) {
         String restir = diActive() ? backend.reservoirState() : "off";
         if (!restir.equals("off") && spatialRequested()) restir += "+spatial";
-        return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
+        return "path_slang(bounces=" + p.bounces + ",spp=" + p.spp + ",dist=" + p.rayDistance
             + (RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS : "")
             + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
             + ",frames=" + (accumFrames + 1) + ",denoiser=" + (requestedGbuffer ? "dlss_rr" : "off") + ")";
@@ -193,7 +193,7 @@ public final class RtSlangPathPass implements RtPass {
     public void configure(RtFrameParams params, boolean denoising) {
         params.mode = RtConfig.effectiveMode();
         params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());
-        params.spp = 1;
+        params.spp = RtAdaptiveQuality.spp(RtSettings.spp());
         params.rayDistance = RtSettings.pathMaxDistance();
         params.flags |= RtFrameParams.FLAG_EMISSIVE;
 
@@ -203,6 +203,10 @@ public final class RtSlangPathPass implements RtPass {
             && (differs(params.key.dir, lastSunDirection)
                 || differs(params.key.color, lastSunColor)
                 || differs(params.skyColor, lastSkyColor));
+        // spp is deliberately not in the hash: the adaptive governor moves it several times a minute, and a running mean
+        // of frames traced at different sample counts is still a mean of unbiased estimators - each frame carries the
+        // pixel's own average, only with a different variance. Restarting the history to equalise the weights would
+        // throw away the convergence the accumulation exists for.
         int settingsHash = Objects.hash(params.bounces, params.rayDistance, RtSettings.accumulate(), params.mode,
             RtSettings.pathPreset, RtSettings.preset);
         if (forceReset || lightingChanged || params.sceneChanged || settingsHash != lastSettingsHash

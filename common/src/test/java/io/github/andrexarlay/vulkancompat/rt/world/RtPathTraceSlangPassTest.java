@@ -52,6 +52,9 @@ class RtPathTraceSlangPassTest {
         assertEquals(17f, out.getFloat(RtPathTraceSlangPass.Frame.EXPOSURE), "ExposureState.values at 560");
         assertEquals(1, out.getInt(RtPathTraceSlangPass.Frame.EXPOSURE + 16), "ExposureState.mode.x at 576");
         assertEquals(42, out.getInt(RtPathTraceSlangPass.Frame.FRAME), "FrameConstants.frame.x at 592");
+        assertEquals(3, out.getInt(RtPathTraceSlangPass.Frame.FRAME + 4), "frame sample index at 596");
+        assertEquals(2, out.getInt(RtPathTraceSlangPass.Frame.FRAME + 8),
+            "frame samples per frame at 600 - the word pathTraceSampleCount reads");
         assertEquals(0x15, out.getInt(RtPathTraceSlangPass.Frame.FRAME + 12), "frame flags at 604");
         assertEquals(RtPathTraceSlangPass.FRAME_CONSTANTS_BYTES, out.capacity());
     }

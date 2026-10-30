@@ -306,9 +306,9 @@ public class RtAdaptiveQualityTest {
         String pass = read(SLANG_PASS);
         assertTrue(pass.contains("params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());"),
             "the pass must trace the governed path length");
-        assertTrue(pass.contains("params.spp = 1;"),
-            "the typed path accumulates one sample per frame, so the governor acts on bounces and on the frame count, "
-                + "not on a per-frame spp");
+        assertTrue(pass.contains("params.spp = RtAdaptiveQuality.spp(RtSettings.spp());"),
+            "the pass must trace the governed rays per pixel: rays go first in the ladder, so a pinned one would make "
+                + "both the slider and the budget silent");
     }
 
     @Test

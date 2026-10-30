@@ -46,13 +46,22 @@ public struct PathTracePush {
                                     // w: auto-normal strength as float bits (0 = off)
 };
 
+// The ceiling of "Rays per Pixel": the host writes the player's own value in the frame word, the adaptive governor
+// writes a smaller one, and a host that never wrote it asks for zero. All three are answered inside the largest ladder
+// the settings screen can reach, so one dispatch can never cost more than the player chose.
+static const uint PATH_TRACE_MAX_SPP = 8u;
+
+uint pathTraceSampleCount(FrameConstants f) {
+    return clamp(f.frame.z, 1u, PATH_TRACE_MAX_SPP);
+}
+
 // Camera-relative ray through the centre of a jittered pixel.  The camera basis
 // is explicit; `origin` is the view-bob eye offset in raw-camera-relative
 // world space, matching the TLAS anchor the host builds around the raw camera
 // position.  The jittered inverse view-projection is for reprojection, not for
 // primary rays.
-Ray pathTracePrimaryRay(FrameConstants f, int2 pixel, float maxDistance) {
-    float2 jittered = float2(pixel) + 0.5 + f.camera.jitter.xy;
+Ray pathTracePrimaryRay(FrameConstants f, int2 pixel, float maxDistance, float2 jitter) {
+    float2 jittered = float2(pixel) + 0.5 + jitter;
     float2 ndc = jittered * f.camera.jitter.zw * 2.0 - 1.0;
     float tanHalf = f.camera.forward.w;
     float aspect = f.camera.right.w;
@@ -66,6 +75,20 @@ uint pathTraceSeed(int2 pixel, uint frameIndex, uint sampleIndex) {
     uint seed = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u;
     seed = pcgHash(seed + frameIndex * 26699u);
     return pcgHash(seed + sampleIndex * 6971u);
+}
+
+// Sub-pixel offset of sample `s` of `n`. The pixel is cut into an n x n grid and each sample takes one stratum per axis
+// - a Latin hypercube, so the n rays of a frame cover every stratum of both axes while their pairing stays a diagonal.
+// The diagonal rotates with the sample's seed, which already carries the frame and the host's sample index, so a still
+// camera walks around the pixel instead of hammering one spot. n == 1 returns the host's own jitter untouched: with one
+// ray per pixel the frame has to be exactly the frame that ran before there was a choice.
+float2 pathTracePixelJitter(FrameConstants f, int2 pixel, uint s, uint n) {
+    if (n <= 1u) {
+        return f.camera.jitter.xy;
+    }
+    uint seed = pathTraceSeed(pixel, f.frame.x, f.frame.y);
+    float2 stratum = float2(float((seed % n + s) % n), float(((seed / n) % n + s) % n));
+    return (stratum + noise2D(pixel, f.frame.x, s, n, 7u)) / float(n) - 0.5;
 }
 
 // Guide channels for the NRD / DLSS-RR input pack, laid out as rt_path.comp writes them: the pack, the denoiser and the
@@ -122,6 +145,107 @@ float4 pathTraceNrdMotion(PathTraceResult result, bool sampleTrusted) {
     float3 motion = result.primaryMotion.xyz;
     float trusted = (result.primaryMotion.w > 0.5 || dot(motion, motion) > 1.0e-8) ? 1.0 : 0.0;
     return float4(motion, trusted);
+}
+
+// The running mean of the samples of one pixel, kept as sums and counts: the registers do not grow with the sample
+// count, and the writers below read one PathTraceResult instead of a second copy of themselves. Radiance is summed
+// twice over - once for the paths the tracer believed, once for the ones it refused - because a refused path is exactly
+// the non-finite value that must never enter the mean the accumulator stores for thousands of frames.
+struct PathTraceMean {
+    float3 acceptedRadiance;
+    float3 refusedRadiance;
+    float4 motion;
+    float3 position;
+    float3 normal;
+    float3 albedo;
+    float3 specularF0;
+    float3 direct;
+    float  roughness;
+    float  metallic;
+    float  firstHit;
+    uint   entityHits;   // believed samples whose primary landed on a captured model
+    uint   accepted;
+    uint   hits;         // believed samples whose primary decoded a surface
+    uint   traced;
+};
+
+PathTraceMean emptyPathTraceMean() {
+    PathTraceMean mean;
+    mean.acceptedRadiance = float3(0.0);
+    mean.refusedRadiance = float3(0.0);
+    mean.motion = float4(0.0);
+    mean.position = float3(0.0);
+    mean.normal = float3(0.0);
+    mean.albedo = float3(0.0);
+    mean.specularF0 = float3(0.0);
+    mean.direct = float3(0.0);
+    mean.roughness = 0.0;
+    mean.metallic = 0.0;
+    mean.firstHit = 0.0;
+    mean.entityHits = 0u;
+    mean.accepted = 0u;
+    mean.hits = 0u;
+    mean.traced = 0u;
+    return mean;
+}
+
+void accumulatePathTraceSample(inout PathTraceMean mean, PathTraceResult result) {
+    mean.traced += 1u;
+    if (pathTraceSampleRejected(result.flags)) {
+        mean.refusedRadiance += result.radiance;
+        return;
+    }
+    mean.accepted += 1u;
+    mean.acceptedRadiance += result.radiance;
+    if (!result.primary.valid) {
+        return;
+    }
+    mean.hits += 1u;
+    mean.position += result.primary.position;
+    mean.normal += result.primary.normal;
+    mean.albedo += result.primary.albedo;
+    mean.specularF0 += result.primary.specularF0;
+    mean.direct += result.primary.direct;
+    mean.roughness += result.primary.roughness;
+    mean.metallic += result.primary.metallic;
+    mean.firstHit += result.firstHitDistance;
+    mean.motion += result.primaryMotion;
+    mean.entityHits += result.primaryMotion.w > 0.5 ? 1u : 0u;
+}
+
+// The one sample the writers already know how to read: a mean radiance for the integrand and a supersampled
+// representative vertex for the guides. Averaging the vertex across the n sub-pixel positions is what a partly covered
+// edge needs - a normal taken from a single sample would keep the aliasing the extra rays were asked to remove.
+PathTraceResult pathTraceMeanResult(PathTraceMean mean, out bool sampleTrusted) {
+    PathTraceResult result = emptyPathTraceResult();
+    if (mean.accepted == 0u) {
+        // Every path refused. The pixel keeps the legacy verdict - zero weight for the accumulator - and the mean of
+        // what those paths produced, which is what a single refusing sample used to write.
+        result.radiance = mean.refusedRadiance / max(float(mean.traced), 1.0);
+        sampleTrusted = false;
+        return result;
+    }
+    result.radiance = mean.acceptedRadiance / float(mean.accepted);
+    sampleTrusted = true;
+    if (mean.hits == 0u) {
+        return result;   // every ray reached the sky: no vertex to average, the writers take the sky pattern
+    }
+    float hits = float(mean.hits);
+    result.primary.valid = true;
+    result.primary.position = mean.position / hits;
+    float3 normal = mean.normal / hits;
+    result.primary.normal = length(normal) > 1.0e-4 ? normalize(normal) : float3(0.0, 0.0, 1.0);
+    result.primary.albedo = mean.albedo / hits;
+    result.primary.specularF0 = mean.specularF0 / hits;
+    result.primary.direct = mean.direct / hits;
+    result.primary.roughness = mean.roughness / hits;
+    result.primary.metallic = mean.metallic / hits;
+    result.firstHitDistance = mean.firstHit / hits;
+    // Whether this pixel belongs to a captured model or to terrain is a verdict, not a mean: the majority of the
+    // samples decides, and a tie reads as terrain because a blurred world vector still reprojects a camera move.
+    result.primaryMotion = float4(mean.motion.xyz / hits, mean.entityHits * 2u > mean.hits ? 1.0 : 0.0);
+    result.flags = PATH_TRACE_FLAG_PRIMARY_HIT;
+    return result;
 }
 
 public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
@@ -237,8 +361,6 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // style changes how much the face tilts and never what the medium does to the light.
     options.waterCaustics = frameWaterCaustics(f);
 
-    Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance);
-    uint seed = pathTraceSeed(p, f.frame.x, pc.sampleIndex);
     // One cutoff for the primary path, material decoding and the filtered
     // shadow walk; otherwise a near-threshold texel can be solid to the camera
     // and a hole to the shadow ray.
@@ -251,16 +373,37 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // the legacy damping of the same tilts.  Absorption, IOR and the bent beam
     // above are identical with either, so both styles are the same body of water.
     materialOptions.waterWaveMix = frameWaterRealisticWaves(f) ? 1.0 : WATER_WAVE_MIX_VANILLA;
-    PathTraceResult result = tracePathWithField(traversal, lights, environment, directReuse, atlas, table,
-        primary, materialOptions, options, seed, diffuseField);
+
+    uint sampleCount = pathTraceSampleCount(f);
+    uint diRequested = directReuse.enabled;
+    PathTraceMean total = emptyPathTraceMean();
+    for (uint s = 0u; s < sampleCount; ++s) {
+        // Each ray gets its own point in the pixel and its own path. With one ray per pixel both are exactly what the
+        // host prepared - the frame's own jitter, the host's own sample index - so the cheapest setting traces the very
+        // paths it traced before this loop existed.
+        Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance, pathTracePixelJitter(f, p, s, sampleCount));
+        uint seed = pathTraceSeed(p, f.frame.x, pc.sampleIndex * sampleCount + s);
+        // The reservoir is one record per pixel per frame, so only the first ray reads, merges and publishes it. The
+        // rest shade the same emitter list with plain next-event estimation, and every write of the reservoir - the
+        // publish, the occlusion decay, the empty record - is gated on reuseActive(), so turning it off here cannot
+        // blank what the first ray published. emittersReusedAtPrimary follows the same value: a ray that did not draw
+        // on the reservoir has to pay for the emissive branch itself, or the extra rays would darken the picture.
+        directReuse.enabled = s == 0u ? diRequested : 0u;
+        lights.emittersReusedAtPrimary = directReuse.enabled != 0u;
+        accumulatePathTraceSample(total, tracePathWithField(traversal, lights, environment, directReuse, atlas, table,
+            primary, materialOptions, options, seed, diffuseField));
+    }
+    // The frame the writers below read is the mean of those rays, not the last one: a pixel that traced eight of them
+    // would otherwise throw seven away and keep only their noise.
+    bool sampleTrusted;
+    PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);
 
     // Scene-referred linear radiance: no exposure and no tone map here.  Exposure lives in FrameConstants.exposure and
     // is applied once by the display/tonemap pass, so accumulation and denoise keep working in linear HDR.
-    // The alpha lane is the sample's verdict, not coverage: rgb has no room left to say "this path could not be
+    // The alpha lane is the pixel's verdict, not coverage: rgb has no room left to say "none of these paths could be
     // trusted", and a non-finite fault must not dilute a running mean that lives for thousands of frames.
     // The verdict is computed once: the guides and both motion lanes read the same bit, so no output can
     // contradict the alpha lane.
-    bool sampleTrusted = !pathTraceSampleRejected(result.flags);
     outImage[p] = float4(result.radiance, sampleTrusted ? 1.0 : 0.0);
     // Legacy depth contract (rt_path.comp): a miss writes 1e6, because bloom.slang treats anything at or beyond
     // BLOOM_SKY_DISTANCE (1e5) as sky and the composite pass uses the same buffer.  firstHitDistance alone defaults

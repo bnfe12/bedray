@@ -146,8 +146,10 @@ class RtSlangSampleRejectionTest {
         assertFalse(helper.contains(TRUNCATED), "a truncated path stays a sample");
         String pass = read(PASS);
         String entry = read(ENTRY);
-        assertTrue(entry.contains("bool sampleTrusted = !pathTraceSampleRejected(result.flags);"),
-            "the pass publishes the helper's answer instead of inventing its own rule");
+        assertTrue(entry.contains("if (pathTraceSampleRejected(result.flags)) {"),
+            "the pass publishes the helper's answer for every ray instead of inventing its own rule");
+        assertTrue(entry.contains("PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);"),
+            "and the pixel's verdict is that answer reduced over the rays of the pixel");
         assertTrue(entry.contains("outImage[p] = float4(result.radiance, sampleTrusted ? 1.0 : 0.0);"),
             "and the alpha lane carries that one answer");
         assertFalse(entry.contains("float4(result.radiance, 1.0)"),

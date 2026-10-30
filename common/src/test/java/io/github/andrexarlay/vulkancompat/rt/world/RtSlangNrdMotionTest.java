@@ -75,8 +75,10 @@ class RtSlangNrdMotionTest {
         assertFalse(rule.contains("PATH_TRACE_FLAG_TRUNCATED"),
             "a truncated path stopped short but its primary vertex is real, so it stays trusted");
         String entry = read(SHADERS + "/pathtrace/path_trace_entry.slang");
-        assertTrue(entry.contains("bool sampleTrusted = !pathTraceSampleRejected(result.flags);"),
-            "the verdict is computed once and every output reads the same bit");
+        assertTrue(entry.contains("if (pathTraceSampleRejected(result.flags)) {"),
+            "the per-sample verdict still comes from the one helper, and a refused path is split off before the mean");
+        assertTrue(entry.contains("PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);"),
+            "the verdict is computed once for the pixel and every output reads the same bit");
         assertTrue(entry.contains("outImage[p] = float4(result.radiance, sampleTrusted ? 1.0 : 0.0);"),
             "the radiance lane and the guides cannot disagree about the same sample");
         assertTrue(entry.contains("outMotion[p] = sampleTrusted && (result.flags & PATH_TRACE_FLAG_PRIMARY_HIT) != 0u"),
@@ -89,7 +91,8 @@ class RtSlangNrdMotionTest {
         assertTrue(block(entry, "float4 pathTraceNrdMotion(").contains("if (!sampleTrusted || !result.primary.valid) {"),
             "NRD's motion gets the same verdict");
         for (String pass : new String[] {PASS, SCENE_PASS}) {
-            assertTrue((read(pass) + "\n" + entry).contains("bool sampleTrusted = !pathTraceSampleRejected(result.flags);"),
+            assertTrue((read(pass) + "\n" + entry)
+                .contains("PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);"),
                 pass + ": the pass wrappers share the one entry body that computes the verdict");
         }
     }

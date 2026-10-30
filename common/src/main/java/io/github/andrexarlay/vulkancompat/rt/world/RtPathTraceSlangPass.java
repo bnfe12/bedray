@@ -51,6 +51,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     /** Native-scene twin of {@link #PASS_NAME}: same bindings, {@code GeometrySection} table and vertex stream. */
     static final String SCENE_PASS_NAME = "path_trace_scene";
     static final int FRAME_CONSTANTS_BYTES = 608;
+    /** Mirrors {@code PATH_TRACE_MAX_SPP}: the ceiling of "Rays per Pixel", and the most rays one pixel may trace. */
+    static final int MAX_SAMPLES_PER_PIXEL = 8;
     static final int PUSH_BYTES = 112;
     static final int BLOCK_MATERIAL_BYTES = 64;
     /** {@code light/block_emitters.slang}: the RtEmitters record, six vec4. */
