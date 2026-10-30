@@ -145,6 +145,21 @@ struct SpatialPush64 {
 static_assert(sizeof(SpatialPush64) == 64, "SpatialPush64 must stay 64 bytes");
 static_assert(offsetof(SpatialPush64, entity_atlas_size) == 48, "SpatialPush64.entityAtlasSize offset");
 
+// passes/frame_stats.slang: FrameStatsPush, 8 bytes. The statistics stage meters
+// one whole 4x4 tile in sixteen, rotated by the frame index, and InterlockedAdds
+// the four counters into stats[0..3] of the host's slot.
+struct FrameStatsPush {
+    std::uint32_t frame_index;
+    std::uint32_t reserved;
+};
+static_assert(sizeof(FrameStatsPush) == 8, "FrameStatsPush must stay 8 bytes");
+static_assert(offsetof(FrameStatsPush, frame_index) == 0, "FrameStatsPush.frameIndex offset");
+static_assert(offsetof(FrameStatsPush, reserved) == 4, "FrameStatsPush.reserved offset");
+// The four head words of the slot the borrowed range must cover: hits, samples,
+// lumLogSum and histAccepted, one uint each.
+constexpr std::uint64_t kStatsCounterBytes = 4u * sizeof(std::uint32_t);
+static_assert(kStatsCounterBytes == 16, "frame_stats adds into stats[0..3]");
+
 BedrayStatus fail(BedrayError* error, BedrayStatus status, const char* format, ...) {
     if (error != nullptr) {
         error->status = status;
@@ -553,6 +568,35 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
             : static_cast<std::uint32_t>(sizeof(SpatialPush));
     }
 
+    // frame_stats.slang is optional here: a zero handle only means the host
+    // lends no statistics program, and the additive call refuses when it is
+    // asked to record one. The manifest is checked the way the trace and display
+    // programs are, so a drifted AOT artifact fails at configure.
+    if (desc.program_stats != 0) {
+        ProgramContract stats_contract{};
+        if (!program_contract(core, desc.program_stats, stats_contract)) {
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "program_stats is not registered");
+        }
+        if (stats_contract.binding_count != 4u
+            || stats_contract.push_constant_bytes != sizeof(FrameStatsPush)) {
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+                "program_stats contract mismatch: %u bindings, %u push bytes (need 4, %zu)",
+                stats_contract.binding_count, stats_contract.push_constant_bytes, sizeof(FrameStatsPush));
+        }
+        // Binding 2 is the borrowed depth image the stage reads, never a buffer;
+        // binding 3 is the host's StatsBuf storage range, never an image.
+        static constexpr ExpectedBinding kStatsBindings[] = {
+            {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+            {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+            {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+            {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        };
+        if (!has_bindings(core, desc.program_stats, kStatsBindings, std::size(kStatsBindings))) {
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+                "program_stats does not declare the frame_stats.slang binding set");
+        }
+    }
+
     if (fns.generation == 0 || fns.device == VK_NULL_HANDLE || fns.physical_device == VK_NULL_HANDLE
         || fns.non_coherent_atom_size == 0 || fns.cmd_pipeline_barrier == nullptr) {
         return fail(error, BEDRAY_ERROR_UNSUPPORTED, "device function table is incomplete");
@@ -598,6 +642,7 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     program_trace_scene_ = desc.program_trace_scene;
     program_spatial_ = desc.program_spatial;
     program_display_ = desc.program_display;
+    program_stats_ = desc.program_stats;
     spatial_push_bytes_ = spatial_push_bytes;
     images_ = std::move(images);
     buffers_ = std::move(buffers);
@@ -1063,6 +1108,14 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     pins.buffer_uses.reserve(8);
     recordings_.emplace(command_handle, std::move(pins));
     RecordingPins& recording = recordings_.at(command_handle);
+    // The statistics stage arrives after this call returns, by which time the
+    // parity has flipped and a later frame may even have resized the images.
+    // Remember the views this recording folds into, pinned by the uses below.
+    recording.radiance = radiance_view_;
+    recording.accum = accum_view_[write];
+    recording.depth_view = desc.depth_view;
+    recording.width = desc.camera.width;
+    recording.height = desc.camera.height;
 
     for (gpu::ImageId id : {radiance_id_, motion_id_, accum_id_[write], history_depth_id_[write],
              accum_id_[read], history_depth_id_[read]}) {
@@ -1376,6 +1429,85 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path trace");
 }
 
+BedrayStatus PathTracePass::record_stats(std::uint64_t command_buffer, std::uint64_t stats_buffer,
+    std::uint64_t stats_offset, std::uint64_t stats_bytes, std::uint32_t frame_index,
+    BedrayError* error) try {
+    const auto it = recordings_.find(command_buffer);
+    if (it == recordings_.end()) {
+        // Nothing to meter: the radiance and accumulation images a recording
+        // reads belong to that recording, so a stray call must fail, not skip.
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "command buffer 0x%llx holds no path-trace recording to measure",
+            static_cast<unsigned long long>(command_buffer));
+    }
+    if (program_stats_ == 0) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "program_stats is unset: query BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS and lend frame_stats.slang");
+    }
+    if (stats_buffer == 0) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "stats_buffer is null");
+    }
+    if (stats_bytes < kStatsCounterBytes) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "a %llu-byte statistics range cannot cover the four counters at stats[0..3]",
+            static_cast<unsigned long long>(stats_bytes));
+    }
+    if ((stats_offset & 3u) != 0u) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "stats_offset %llu is not a multiple of the four-byte counter word",
+            static_cast<unsigned long long>(stats_offset));
+    }
+    if (stats_offset > std::numeric_limits<std::uint64_t>::max() - stats_bytes) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "statistics descriptor range overflows");
+    }
+    const RecordingPins& recording = it->second;
+    if (recording.radiance.view == VK_NULL_HANDLE || recording.accum.view == VK_NULL_HANDLE
+        || recording.depth_view == 0 || recording.width == 0 || recording.height == 0) {
+        return fail(error, BEDRAY_ERROR_INTERNAL, "the pending recording has no statistics snapshot");
+    }
+
+    // The four bindings of passes/frame_stats.slang, in its own order. The
+    // accumulation half is the one the display stage of THIS recording folded,
+    // the depth view and the counter range are borrowed and never retained.
+    std::array<BedrayResource, 4> stats_resources{};
+    stats_resources[0] = image_resource(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, recording.radiance.view);
+    stats_resources[1] = image_resource(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, recording.accum.view);
+    stats_resources[2] = image_resource(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, as_view(recording.depth_view));
+    stats_resources[3] = buffer_resource(3, as_buffer(stats_buffer), stats_offset, stats_bytes);
+
+    FrameStatsPush push{};
+    push.frame_index = frame_index;
+    push.reserved = 0;
+
+    BedrayFrameDesc stats_desc{};
+    stats_desc.abi_version = BEDRAY_CORE_ABI_VERSION;
+    stats_desc.command_buffer = command_buffer;
+    stats_desc.program = program_stats_;
+    // The same full-extent 8x8 grid the display stage used; the shader's own
+    // 8x8x1 workgroup and per-texel guard drop the threads past the extent.
+    stats_desc.group_count_x = groups(recording.width);
+    stats_desc.group_count_y = groups(recording.height);
+    stats_desc.group_count_z = 1;
+    stats_desc.resource_count = static_cast<std::uint32_t>(stats_resources.size());
+    stats_desc.resources = stats_resources.data();
+    stats_desc.push_constants = &push;
+    stats_desc.push_constant_bytes = static_cast<std::uint32_t>(sizeof(push));
+
+    // The display writes sit behind the recording's exit barrier and the pass's
+    // images stay pinned, so the stage needs no barrier, pool or pin of its own:
+    // bedray_core_render_frame gives it the per-dispatch descriptor set that
+    // release_recording for this command buffer already retires.
+    const BedrayStatus status = bedray_core_render_frame(core_, &stats_desc, error);
+    if (status == BEDRAY_ERROR_DEVICE_LOST) {
+        device_lost();
+    }
+    return status;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace statistics state");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path-trace statistics");
+}
+
 void PathTracePass::discard_recording(std::uint64_t command_buffer) noexcept {
     if (recordings_.find(command_buffer) == recordings_.end()) return;
     history_written_ = false;
@@ -1472,6 +1604,7 @@ BedrayStatus PathTracePass::destroy() noexcept {
     program_trace_scene_ = 0;
     program_spatial_ = 0;
     program_display_ = 0;
+    program_stats_ = 0;
     spatial_push_bytes_ = 0;
     return BEDRAY_OK;
 }

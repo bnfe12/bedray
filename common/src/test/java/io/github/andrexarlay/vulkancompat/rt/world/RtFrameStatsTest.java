@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPass;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
@@ -11,6 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -35,6 +38,14 @@ class RtFrameStatsTest {
         + "ReferencePathTraceBackend.java");
     private static final Path NATIVE_BACKEND = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "NativePathTraceBackend.java");
+    private static final Path BRIDGE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "BedrayPathTraceNative.java");
+    private static final Path LAYOUTS = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/core/"
+        + "BedrayCoreLayouts.java");
+    private static final Path CORE_NATIVE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/core/"
+        + "BedrayCoreNative.java");
+    private static final Path CORE_HEADER = Path.of("../native/bedray_core/include/bedray_core.h");
+    private static final Path CORE_SOURCE = Path.of("../native/bedray_core/src/core.cpp");
     private static final Path RENDERER = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtFrameRenderer.java");
     private static final Path EXPOSURE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
@@ -246,7 +257,7 @@ class RtFrameStatsTest {
             "every dispatch holds a descriptor pool until the recording is proven");
     }
 
-    /** The slot the pass writes is the slot the renderer leases and zeroes, and the native core has no writer yet. */
+    /** The slot the pass writes is the slot the renderer leases and zeroes, and the native core is handed it too. */
     @Test
     void theRendererHandsOverTheSlotItReadsBack() throws IOException {
         String renderer = read(RENDERER);
@@ -257,9 +268,39 @@ class RtFrameStatsTest {
         assertTrue(renderer.contains("params.statsBuffer = statsBuf.handle;"));
         // The counters reach the host through the barrier that already exists; a second one would be a cost paid twice.
         assertTrue(renderer.contains("if (traced) recordStatsHostVisibility(cmd, statsLease.slot());"));
-        assertFalse(read(NATIVE_BACKEND).contains("input.stats()"),
-            "the native core records inside bedray_core, where the radiance and accumulation images are its own:"
-                + " it has no counter writer, and says so as n/a rather than as a zero");
+        String nativeBackend = read(NATIVE_BACKEND);
+        assertTrue(nativeBackend.contains("frame.entities(), frame.stats(),"),
+            "the native backend hands over the same sixteen-byte head the reference backend writes itself");
+        assertTrue(nativeBackend.contains("RtFrameStatsSlangPass.registerProgram(runtime)"),
+            "the core runs the AOT counter program from this jar, not a second copy of the maths");
+        String bridge = read(BRIDGE);
+        assertTrue(bridge.indexOf("library.renderPathTrace(core, desc);") < bridge.indexOf(
+                "library.recordPathTraceStats(core, input.commandBuffer()"),
+            "the counters are read from the images the display step just wrote, so they must come after it");
+        assertTrue(bridge.contains("this.frameStats = programStats != 0L && library.hasFrameStats();"),
+            "an older core, or a jar without the artifact, writes nothing and the host then says n/a instead of zero");
+    }
+
+    /**
+     * The native route is two sources that have to agree on numbers: the header plus the static asserts the C++ pass
+     * compiles, and the layout the host packs. A bit that drifts is a stage that never runs; a slot that drifts is a
+     * program handle the pass reads as something else. Both come back as a frame whose counters stay zero, which is
+     * the failure this batch exists to remove, so the numbers are pinned rather than described.
+     */
+    @Test
+    void theNativeCounterStageIsNamedTheSameByBothSides() throws IOException {
+        String header = read(CORE_HEADER);
+        String core = read(CORE_SOURCE);
+        assertEquals(abiBit(header, "BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS"),
+            abiBit(read(LAYOUTS), "PATH_TRACE_FEATURE_FRAME_STATS"),
+            "the host probes the mask bit the core advertises, or the stage is silently absent on every frame");
+        assertEquals(offsetOf(core, "BedrayPathTraceDesc, program_stats"), BedrayCoreLayouts.PTD_PROGRAM_STATS,
+            "the counter program is handed over in the slot the C++ static assert reads");
+        assertTrue(core.contains("static_assert(sizeof(BedrayPathTraceDesc) == 80"),
+            "the core keeps pinning the configure desc an older host packed");
+        assertEquals(80L, BedrayCoreLayouts.PT_DESC.byteSize(), "and the Java mirror is that same size");
+        assertTrue(read(CORE_NATIVE).contains("\"bedray_core_record_path_trace_stats\""),
+            "the host binds the export under the name the header declares it");
     }
 
     /**
@@ -281,6 +322,21 @@ class RtFrameStatsTest {
             manifest.entryPoint(), manifest.stage(), manifest.profile(), manifest.descriptorSet(),
             manifest.threadGroupSize(), pushBytes, manifest.spirvWordCount(), manifest.requiredCapabilities(),
             manifest.spirvCapabilities(), bindings);
+    }
+
+    /** {@code NAME = (1u << N)} in the C header, or {@code NAME = 1 << N} in the Java mirror, as a mask value. */
+    private static int abiBit(String source, String name) {
+        Matcher m = Pattern.compile(name + "\\s*=?\\s*\\(?1u?\\s*<<\\s*(\\d+)\\)?").matcher(source);
+        assertTrue(m.find(), name + " is not declared as a single bit");
+        return 1 << Integer.parseInt(m.group(1));
+    }
+
+    /** A {@code static_assert(offsetof(struct, field) == N)} the C++ pass compiles, as a byte offset. */
+    private static long offsetOf(String source, String structAndField) {
+        Matcher m = Pattern.compile("offsetof\\(\\s*" + Pattern.quote(structAndField)
+            + "\\s*\\)\\s*==\\s*(\\d+)").matcher(source);
+        assertTrue(m.find(), "the core no longer pins the offset of " + structAndField);
+        return Long.parseLong(m.group(1));
     }
 
     private static String needle(String text, String before, String after) {

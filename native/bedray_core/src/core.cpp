@@ -58,6 +58,14 @@ static_assert(offsetof(BedrayPathTraceFrameDesc, lighting) == 760, "path-trace A
 static_assert(offsetof(BedrayPathTraceFrameDesc, atmosphere) == 840, "path-trace ABI: frame.atmosphere offset");
 static_assert(offsetof(BedrayPathTraceFrameDesc, path) == 920, "path-trace ABI: frame.path offset");
 static_assert(sizeof(BedrayPathTraceDesc) == 80, "path-trace ABI: configure desc must stay 80 bytes");
+/* The statistics program takes the former reserved0/reserved1 pair, so the 80-byte
+ * layout and every neighbour offset below are unchanged; the Java host mirrors
+ * these four numbers. */
+static_assert(offsetof(BedrayPathTraceDesc, program_stats) == 56, "path-trace ABI: desc.program_stats offset");
+static_assert(offsetof(BedrayPathTraceDesc, program_trace_scene) == 64, "path-trace ABI: desc.program_trace_scene offset");
+static_assert(offsetof(BedrayPathTraceDesc, reserved) == 72, "path-trace ABI: desc.reserved offset");
+static_assert(offsetof(BedrayPathTraceFrameDesc, frame_index) == 1032, "path-trace ABI: frame.frame_index offset");
+static_assert(offsetof(BedrayPathTraceFrameDesc, frame_time) == 1048, "path-trace ABI: frame.frame_time offset");
 
 namespace {
 
@@ -339,7 +347,8 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_abi_version(void) try {
 
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
     return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS | BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS | BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION
-        | BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER | BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL;
+        | BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER | BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL
+        | BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS;
 } catch (...) {
     return 0;
 }
@@ -1426,6 +1435,27 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_motion(
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace motion frame");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path-trace motion");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_record_path_trace_stats(
+    BedrayCore* core, uint64_t command_buffer, uint64_t stats_buffer,
+    uint64_t stats_offset, uint64_t stats_bytes, uint32_t frame_index,
+    BedrayError* error) try {
+    clear_error(error);
+    if (core == nullptr) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core is null");
+    }
+    if (!core->path_trace) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
+    }
+    // The stage rides the recording the render call already made: same command
+    // buffer, same per-dispatch descriptor set, same release proof.
+    return core->path_trace->record_stats(command_buffer, stats_buffer, stats_offset,
+        stats_bytes, frame_index, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace statistics dispatch");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path-trace statistics");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_path_trace(BedrayCore* core) try {

@@ -18,6 +18,7 @@ namespace bedray::core {
 // Internal owner of the wired path-tracing frame:
 //
 //   path_trace.slang  ->  restir_spatial.slang (optional)  ->  path_display.slang
+//     ->  frame_stats.slang (additive call, only when the host lends the program)
 //
 // The pass owns the radiance/motion/accumulation/history images and the
 // per-recording FrameConstants upload. It records all dispatches through the
@@ -44,6 +45,16 @@ public:
     BedrayStatus render(const BedrayPathTraceFrameDesc& desc, BedrayError* error,
         const BedrayPathTraceGuides* guides = nullptr, const BedrayPathTraceBuffer* motion = nullptr);
 
+    // Statistics stage of a recording the render call above just made: one
+    // frame_stats dispatch over the recording's own radiance, the accumulation
+    // image the display stage folded and the borrowed depth view, adding into
+    // the borrowed StatsBuf range. Refuses instead of skipping when the pass has
+    // no statistics program or the recording is gone, because a silent skip is
+    // indistinguishable from a frame whose counters were always zero.
+    BedrayStatus record_stats(std::uint64_t command_buffer, std::uint64_t stats_buffer,
+        std::uint64_t stats_offset, std::uint64_t stats_bytes, std::uint32_t frame_index,
+        BedrayError* error);
+
     // Idempotent for an unknown command buffer. Completes the pass's own
     // image/buffer uses for that recording and then collects retired objects.
     void discard_recording(std::uint64_t command_buffer) noexcept;
@@ -60,6 +71,7 @@ public:
         return program != 0
             && (program == program_trace_ || program == program_trace_scene_
                 || program == program_spatial_ || program == program_display_
+                || program == program_stats_
                 || (rc_field_ && rc_field_->uses_program(program)));
     }
 
@@ -71,6 +83,15 @@ private:
     struct RecordingPins {
         std::vector<gpu::UseId> image_uses;
         std::vector<gpu::UseId> buffer_uses;
+        // What the statistics stage reads back. The views are copies of handles
+        // this recording already pins, so a later resize cannot make the stage
+        // bind an image newer than the one the display dispatch folded; the two
+        // borrowed handles are never retained and must not outlive the call.
+        gpu::ImageView radiance{};
+        gpu::ImageView accum{};
+        std::uint64_t depth_view = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
     };
 
     BedrayStatus ensure_images(std::uint32_t width, std::uint32_t height, BedrayError* error);
@@ -89,6 +110,7 @@ private:
     std::uint64_t program_trace_scene_ = 0;
     std::uint64_t program_spatial_ = 0;
     std::uint64_t program_display_ = 0;
+    std::uint64_t program_stats_ = 0;
     std::uint32_t spatial_push_bytes_ = 0;
 
     std::unique_ptr<gpu::GpuImages> images_;

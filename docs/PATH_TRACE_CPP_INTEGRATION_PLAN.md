@@ -159,9 +159,12 @@ Known limits of the current Java host:
   still await a live frame that consumes them;
 * auto exposure has a measurement again but no owner-verified adaptation yet: the
   renderer decides the frame's `RtFrameParams.exposure` once, `passes/frame_stats.slang`
-  fills the counters `RtExposure` reads, and `path_display` spends the number — but
-  only the reference backend records that pass, so on `bedray_core` the meter has
-  nothing to follow and the F3 shares print `n/a`;
+  fills the counters `RtExposure` reads, and `path_display` spends the number. Both
+  backends meter: the reference one on the Java side, the native one through
+  `bedray_core_record_path_trace_stats`, which records the same AOT program over the
+  core's own radiance and accumulation images. A core that does not advertise
+  `BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS`, or a jar without the artifact, writes no
+  counters — and then the F3 shares print `n/a` rather than a fabricated zero;
 * the traced sky is the horizon gradient plus the sun and moon discs; it has
   neither clouds nor aerial fog, which the deleted `rt_sky.glsl` used to composite;
 * primary rays are built from the camera basis at the origin; the TLAS is
@@ -292,6 +295,9 @@ typedef struct BedrayPathTraceFrameDesc {
 
 BedrayStatus bedray_core_configure_path_trace(BedrayCore*, const BedrayPathTraceDesc*, BedrayError*);
 BedrayStatus bedray_core_render_path_trace(BedrayCore*, const BedrayPathTraceFrameDesc*, BedrayError*);
+/* additive: the counter stage, recorded into the same pending recording */
+BedrayStatus bedray_core_record_path_trace_stats(BedrayCore*, uint64_t command_buffer, uint64_t stats_buffer,
+    uint64_t stats_offset, uint64_t stats_bytes, uint32_t frame_index, BedrayError*);
 ```
 
 The exact struct version, whether the pass receives `BedraySceneResources` from

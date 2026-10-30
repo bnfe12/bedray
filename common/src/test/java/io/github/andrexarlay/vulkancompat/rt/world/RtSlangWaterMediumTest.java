@@ -282,7 +282,9 @@ class RtSlangWaterMediumTest {
         assertTrue(coreHeader.contains("#define BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER (1u << 4)"),
             "the mapping is a declared feature, not an undocumented bit");
         String coreSource = read("../native/bedray_core/src/core.cpp");
-        assertTrue(coreSource.contains("| BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER | BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL;"),
+        String mask = featureMask(coreSource);
+        assertTrue(mask.contains("BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER")
+                && mask.contains("BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL"),
             "the feature mask has to report what the record validation already accepts");
 
         String corePass = read("../native/bedray_core/src/path_trace_pass.cpp");
@@ -443,7 +445,7 @@ class RtSlangWaterMediumTest {
             "the probe asks the mask the core actually exports");
 
         String coreSource = read("../native/bedray_core/src/core.cpp");
-        assertTrue(coreSource.contains("| BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL;"),
+        assertTrue(featureMask(coreSource).contains("BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL"),
             "the feature mask has to report what the record validation accepts");
 
         String corePass = read("../native/bedray_core/src/path_trace_pass.cpp");
@@ -455,6 +457,15 @@ class RtSlangWaterMediumTest {
             "each host bit becomes its shader bit in the frame word the path tracer reads");
         assertTrue(corePass.contains("| BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC | BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS;"),
             "an unlisted flag is rejected by the record validation, so both have to be admitted");
+    }
+
+    /** The body of {@code bedray_core_path_trace_feature_mask}, read as one block so a new bit cannot slip past. */
+    private static String featureMask(String coreSource) {
+        int start = coreSource.indexOf("bedray_core_path_trace_feature_mask");
+        assertTrue(start >= 0, "the core exports no path-trace feature mask");
+        int end = coreSource.indexOf("} catch", start);
+        assertTrue(end > start, "the feature mask is no longer a single return of advertised bits");
+        return coreSource.substring(start, end);
     }
 
     /** {@code NAME = 1u << N} in the Slang contract, as a bit index. */

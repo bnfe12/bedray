@@ -51,6 +51,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle renderPhasesHandle;
     private final MethodHandle configurePathTraceHandle;
     private final MethodHandle renderPathTraceHandle;
+    private final MethodHandle recordPathTraceStatsHandle;
     private final MethodHandle renderPathTraceGuidesHandle;
     private final MethodHandle renderPathTraceMotionHandle;
     private final MethodHandle destroyPathTraceHandle;
@@ -115,6 +116,9 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            recordPathTraceStatsHandle = bindOptional(linker, lookup, "bedray_core_record_path_trace_stats",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT,
+                    ADDRESS));
             renderPathTraceGuidesHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_guides",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceMotionHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_motion",
@@ -480,17 +484,17 @@ public final class BedrayCoreNative implements AutoCloseable {
      */
     public void configurePathTrace(long core, long programTrace, long programSpatial, long programDisplay,
                                    long imageBudgetBytes, long bufferBudgetBytes, int width, int height) {
-        configurePathTrace(core, programTrace, 0L, programSpatial, programDisplay,
+        configurePathTrace(core, programTrace, 0L, programSpatial, programDisplay, 0L,
             imageBudgetBytes, bufferBudgetBytes, width, height);
     }
 
     /**
-     * Configures the native pass with registered program handles. Scene/spatial programs may be zero.
+     * Configures the native pass with registered program handles. Scene/spatial/stats programs may be zero.
      * The pass owns private images, uploads and dummies and only records into host command buffers.
      */
     public void configurePathTrace(long core, long programTrace, long programTraceScene, long programSpatial,
-                                   long programDisplay, long imageBudgetBytes, long bufferBudgetBytes,
-                                   int width, int height) {
+                                   long programDisplay, long programStats, long imageBudgetBytes,
+                                   long bufferBudgetBytes, int width, int height) {
         ensureOpen();
         requireHandle(core, "core");
         requirePathTrace();
@@ -514,6 +518,8 @@ public final class BedrayCoreNative implements AutoCloseable {
             desc.set(JAVA_INT, BedrayCoreLayouts.PTD_HEIGHT, height);
             // Zero keeps every frame on the legacy section table.
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_TRACE_SCENE, programTraceScene);
+            // Zero leaves the pass without a counter writer; the host then reports the counters as unmeasured.
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_STATS, programStats);
             MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
             int status = (int) configurePathTraceHandle.invokeExact(handle(core), desc, error);
             check("configure_path_trace", status, error);
@@ -543,6 +549,34 @@ public final class BedrayCoreNative implements AutoCloseable {
             check("render_path_trace", status, error);
         } catch (Throwable t) {
             throw rethrow("render_path_trace", t);
+        }
+    }
+
+    /**
+     * Records the counter pass over the pass's own radiance and accumulation images, the host depth view and a
+     * sixteen-byte range of the host statistics buffer. Call it after {@link #renderPathTrace} for the same command
+     * buffer; the accumulation half read is the one that frame's display step wrote.
+     */
+    public void recordPathTraceStats(long core, long commandBuffer, long statsBuffer, long statsOffset,
+                                     long statsBytes, int frameIndex) {
+        ensureOpen();
+        requireHandle(core, "core");
+        requireHandle(commandBuffer, "commandBuffer");
+        requireHandle(statsBuffer, "statsBuffer");
+        if (recordPathTraceStatsHandle == null) {
+            throw new BedrayCoreException("record_path_trace_stats", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+                "the loaded bedray_core has no frame-stats export", null);
+        }
+        if (statsOffset < 0 || statsBytes < 16) {
+            throw new IllegalArgumentException("the counter head is a 16-byte range of this frame's slot");
+        }
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) recordPathTraceStatsHandle.invokeExact(handle(core), commandBuffer, statsBuffer,
+                statsOffset, statsBytes, frameIndex, error);
+            check("record_path_trace_stats", status, error);
+        } catch (Throwable t) {
+            throw rethrow("record_path_trace_stats", t);
         }
     }
 
@@ -609,6 +643,14 @@ public final class BedrayCoreNative implements AutoCloseable {
     /** True when the loaded core accepts and maps both water switches; an older core would reject the frame. */
     public boolean hasWaterModelFlags() {
         return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_WATER_MODEL);
+    }
+
+    /**
+     * True when the loaded core both advertises the counter pass and exports the call that records it. Without either,
+     * the native backend writes no counters and the host reports them as unmeasured rather than as zero.
+     */
+    public boolean hasFrameStats() {
+        return recordPathTraceStatsHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_FRAME_STATS);
     }
 
     public void renderPathTraceMotion(long core, MemorySegment frame, MemorySegment guides, MemorySegment motion) {

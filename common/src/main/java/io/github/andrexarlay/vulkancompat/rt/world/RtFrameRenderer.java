@@ -1507,7 +1507,8 @@ public final class RtFrameRenderer {
 
     /**
      * Creates the AOT Slang path or reports why it cannot run. There is no second renderer to fall back to: a missing
-     * Slang artifact fails the frame, and {@code vkbridge.rt.failure} records the reason.
+     * Slang artifact fails the frame, and {@link RtGeometryGate#markFailed} records the reason and turns ray tracing
+     * off for the session.
      */
     private static RtPass createSlangPathPass(VkDevice device, boolean gbuffer) {
         String debugView = RtConfig.currentDebugView();

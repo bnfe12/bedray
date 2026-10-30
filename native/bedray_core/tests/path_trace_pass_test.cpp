@@ -1,8 +1,9 @@
 // Contract and lifetime tests for the internal PathTracePass.
 //
-// The host reaches the pass through bedray_core_configure_path_trace and
-// bedray_core_render_path_trace; those wrappers live in core.cpp. This test
-// includes the pass implementation directly and supplies the two core render
+// The host reaches the pass through bedray_core_configure_path_trace,
+// bedray_core_render_path_trace and the additive
+// bedray_core_record_path_trace_stats; those wrappers live in core.cpp. This
+// test includes the pass implementation directly and supplies the core render
 // entry points plus a fake buffer/image driver, so it exercises the pass's own
 // validation, program selection and recording lifetime without a Vulkan
 // loader, device, driver or GPU.
@@ -18,6 +19,11 @@
 //   - pins survive until release_recording when the core failed after a dispatch
 //     was already recorded, and are released immediately when the failure is
 //     provably before any recording;
+//   - the additive statistics stage records one frame_stats dispatch after the
+//     display dispatch over the same recording's radiance, the accumulation half
+//     that display folded, the borrowed depth view and the borrowed counter
+//     range; it costs nothing until called, adds no barrier, and refuses loudly
+//     when any precondition is missing;
 //   - a failed frame never publishes history, and resizing retires the old
 //     images without destroying them while a recording still pins them;
 //   - destroy/configure refuse while a recording is outstanding, and
@@ -89,6 +95,7 @@ constexpr std::uint64_t kSpatialProgram = 0x1003;
 constexpr std::uint64_t kDisplayProgram = 0x1004;
 constexpr std::uint64_t kRCTraceProgram = 0x1005;
 constexpr std::uint64_t kRCBuildProgram = 0x1006;
+constexpr std::uint64_t kStatsProgram = 0x1007;
 
 constexpr std::uint64_t kBadTraceCount = 0x2001;
 constexpr std::uint64_t kBadTracePush = 0x2002;
@@ -96,6 +103,10 @@ constexpr std::uint64_t kBadTraceBinding = 0x2003;
 constexpr std::uint64_t kBadSceneBinding = 0x2004;
 constexpr std::uint64_t kBadDisplayPush = 0x2005;
 constexpr std::uint64_t kBadSpatialPush = 0x2006;
+constexpr std::uint64_t kBadStatsCount = 0x2007;
+constexpr std::uint64_t kBadStatsPush = 0x2008;
+constexpr std::uint64_t kBadStatsBinding = 0x2009;
+constexpr std::uint64_t kBadStatsPushSmall = 0x200A;
 
 // Mirrors the binding set the pass requires from path_trace.slang.
 constexpr ProgramBinding kTraceBindings[] = {
@@ -162,6 +173,15 @@ constexpr ProgramBinding kSpatialBindings[] = {
     {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 };
 
+// Mirrors the binding set passes/frame_stats.slang declares: three storage images
+// it only reads and the borrowed four-word counter range it adds into.
+constexpr ProgramBinding kStatsBindings[] = {
+    {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+    {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+};
+
 void clear_programs() {
     g_programs.clear();
 }
@@ -187,6 +207,7 @@ void install_valid_programs() {
     register_program(kTraceSceneProgram, 112, trace.data(), trace.size());
     register_program(kSpatialProgram, 64, kSpatialBindings, std::size(kSpatialBindings));
     register_program(kDisplayProgram, 32, kDisplayBindings, std::size(kDisplayBindings));
+    register_program(kStatsProgram, 8, kStatsBindings, std::size(kStatsBindings));
     auto field_trace = trace;
     field_trace.push_back({34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER});
     field_trace.push_back({35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
@@ -220,6 +241,14 @@ void install_bad_programs() {
 
     register_program(kBadDisplayPush, 31, kDisplayBindings, std::size(kDisplayBindings));
     register_program(kBadSpatialPush, 47, kSpatialBindings, std::size(kSpatialBindings));
+    // A statistics program missing its fourth binding, declaring a wider or a
+    // narrower push block, and reading depth as a buffer instead of an image.
+    register_program(kBadStatsCount, 8, kStatsBindings, std::size(kStatsBindings) - 1u);
+    register_program(kBadStatsPush, 16, kStatsBindings, std::size(kStatsBindings));
+    register_program(kBadStatsPushSmall, 4, kStatsBindings, std::size(kStatsBindings));
+    const std::vector<ProgramBinding> wrong_stats = altered_copy(
+        kStatsBindings, std::size(kStatsBindings), 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    register_program(kBadStatsBinding, 8, wrong_stats.data(), wrong_stats.size());
 }
 
 } // namespace
@@ -260,13 +289,14 @@ using bedray::core::DeviceFns;
 using bedray::core::PathTracePass;
 
 BedrayPathTraceDesc make_config(std::uint64_t scene_program = kTraceSceneProgram,
-    std::uint64_t spatial_program = kSpatialProgram) {
+    std::uint64_t spatial_program = kSpatialProgram, std::uint64_t stats_program = kStatsProgram) {
     BedrayPathTraceDesc desc{};
     desc.abi_version = BEDRAY_CORE_ABI_VERSION;
     desc.program_trace = kTraceProgram;
     desc.program_trace_scene = scene_program;
     desc.program_spatial = spatial_program;
     desc.program_display = kDisplayProgram;
+    desc.program_stats = stats_program;
     return desc;
 }
 
@@ -330,6 +360,18 @@ std::uint32_t push_u32(const std::vector<unsigned char>& push, std::size_t offse
     return value;
 }
 
+std::uint32_t resource_type(
+    const std::vector<BedrayResource>& resources, std::uint32_t binding) {
+    const BedrayResource* resource = find_resource(resources, binding);
+    return resource != nullptr ? resource->descriptor_type : VK_DESCRIPTOR_TYPE_MAX_ENUM;
+}
+
+std::uint64_t resource_offset(
+    const std::vector<BedrayResource>& resources, std::uint32_t binding) {
+    const BedrayResource* resource = find_resource(resources, binding);
+    return resource != nullptr ? resource->offset : 0;
+}
+
 bool read_buffer_bytes(std::uint64_t buffer_handle, std::vector<unsigned char>& out) {
     const auto buffer = fake::buffers.find(fake::handle_id(buffer_handle));
     if (buffer == fake::buffers.end()) {
@@ -351,17 +393,21 @@ void reset_all() {
     g_error = BedrayError{};
 }
 
+// The host's StatsBuf slot is borrowed storage, like output/depth: a handle the
+// fake driver never allocates and the pass must never retain.
+constexpr std::uint64_t kStatsBuffer = 0x8100;
+
 struct Fixture {
     BedrayCore core{};
     PathTracePass pass;
     std::set<std::uint64_t> attempted;
 
     explicit Fixture(std::uint64_t scene_program = kTraceSceneProgram,
-        std::uint64_t spatial_program = kSpatialProgram) {
+        std::uint64_t spatial_program = kSpatialProgram, std::uint64_t stats_program = kStatsProgram) {
         reset_all();
         BedrayError error{};
-        const BedrayStatus status = pass.configure(
-            &core, make_device_fns(), make_config(scene_program, spatial_program), &error);
+        const BedrayStatus status = pass.configure(&core, make_device_fns(),
+            make_config(scene_program, spatial_program, stats_program), &error);
         g_error = error;
         if (status != BEDRAY_OK) {
             std::fprintf(stderr, "FAIL fixture configure: %d (%s)\n",
@@ -390,6 +436,15 @@ struct Fixture {
         attempted.insert(frame.command_buffer);
         BedrayError error{};
         const BedrayStatus status = pass.render(frame, &error);
+        g_error = error;
+        return status;
+    }
+
+    BedrayStatus stats(std::uint64_t command_buffer, std::uint64_t buffer = kStatsBuffer,
+        std::uint64_t offset = 0, std::uint64_t bytes = 16, std::uint32_t frame_index = 1) {
+        BedrayError error{};
+        const BedrayStatus status = pass.record_stats(command_buffer, buffer, offset, bytes,
+            frame_index, &error);
         g_error = error;
         return status;
     }
@@ -1279,6 +1334,288 @@ BedrayRCDesc rc_config() {
     return {BEDRAY_CORE_ABI_VERSION, sizeof(BedrayRCDesc), kRCBuildProgram, 8, 0, 0};
 }
 
+void test_statistics_dispatch_follows_display() {
+    Fixture fixture;
+    BedrayPathTraceFrameDesc frame = valid_frame(0x1601);
+    frame.frame_index = 9;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    const std::size_t dispatches = fake::render_calls.size();
+    const std::uint32_t barriers = fake::barriers;
+    // Trace, optional spatial, display: the statistics stage is not in there
+    // until the host asks for it.
+    CHECK(dispatches == 2);
+    CHECK(fake::phase_calls.empty());
+
+    CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 64, 16, frame.frame_index), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == dispatches + 1);
+    // The display writes are fenced by the barrier the picture already needed, so
+    // the meter records none of its own.
+    CHECK(fake::barriers == barriers);
+    if (fake::render_calls.size() != dispatches + 1) return;
+    const fake::RenderCall& display = fake::render_calls[1];
+    const fake::RenderCall& stats = fake::render_calls[dispatches];
+    CHECK(stats.command_buffer == frame.command_buffer);
+    CHECK(stats.program == kStatsProgram);
+    CHECK(stats.resources.size() == 4);
+    CHECK(stats.push.size() == 8);
+    CHECK(stats.push_bytes == 8);
+    CHECK(push_u32(stats.push, 0) == frame.frame_index);
+    CHECK(push_u32(stats.push, 4) == 0);
+    // The same full-extent 8x8 grid the display stage used at this extent.
+    CHECK(stats.group_x == display.group_x);
+    CHECK(stats.group_y == display.group_y);
+    CHECK(stats.group_z == 1);
+    CHECK(stats.group_x == 8 && stats.group_y == 8);
+    // Acceleration-structure-free: the meter only reads what the two stages above
+    // it wrote, so image, image, image, storage buffer and nothing else.
+    CHECK(resource_type(stats.resources, 0) == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    CHECK(resource_type(stats.resources, 1) == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    CHECK(resource_type(stats.resources, 2) == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    CHECK(resource_type(stats.resources, 3) == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    for (std::uint32_t binding = 0; binding < 4; ++binding) {
+        const BedrayResource* resource = find_resource(stats.resources, binding);
+        CHECK(resource != nullptr);
+        if (resource == nullptr) continue;
+        CHECK(resource->binding == binding);
+        CHECK(resource->descriptor_type != VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
+        if (binding < 3) CHECK(resource->image_layout == VK_IMAGE_LAYOUT_GENERAL);
+    }
+    CHECK(resource_handle(stats.resources, 0) == resource_handle(display.resources, 0));
+    // The accumulation image this recording's display folded (binding 1), never
+    // the half it imported its history from (binding 7).
+    CHECK(resource_handle(stats.resources, 1) == resource_handle(display.resources, 1));
+    CHECK(resource_handle(stats.resources, 1) != resource_handle(display.resources, 7));
+    CHECK(resource_handle(stats.resources, 2) == frame.depth_view);
+    CHECK(resource_handle(stats.resources, 3) == kStatsBuffer);
+    CHECK(resource_offset(stats.resources, 3) == 64);
+    CHECK(resource_range(stats.resources, 3) == 16);
+    CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
+}
+
+// The statistics program must be free until the host calls for it: the same
+// frame on a pass that holds the program and on a pass that does not records
+// the same two dispatches, barriers, images and buffers.
+void test_statistics_program_costs_nothing_until_called() {
+    // Each half gets its own scope: a second Fixture in the same one would reset
+    // the fake driver while the first pass still owns resources to tear down.
+    struct Shape {
+        std::size_t dispatches = 0;
+        std::uint32_t barriers = 0;
+        std::size_t images = 0;
+        std::size_t buffers = 0;
+        std::size_t resources = 0;
+    } without_stats, with_stats;
+
+    {
+        Fixture plain(kTraceSceneProgram, kSpatialProgram, 0);
+        const BedrayPathTraceFrameDesc frame = valid_frame(0x1611);
+        CHECK_STATUS(plain.render(frame), BEDRAY_OK);
+        without_stats.dispatches = fake::render_calls.size();
+        without_stats.barriers = fake::barriers;
+        without_stats.images = fake::images.size();
+        without_stats.buffers = fake::buffers.size();
+        for (const fake::RenderCall& call : fake::render_calls) {
+            without_stats.resources += call.resources.size();
+        }
+        CHECK(without_stats.dispatches == 2);
+        CHECK(fake::render_calls[0].resources.size() == 26);
+        CHECK(fake::render_calls[1].resources.size() == 9);
+        CHECK(plain.release(frame.command_buffer) == BEDRAY_OK);
+    }
+    {
+        Fixture fixture;
+        const BedrayPathTraceFrameDesc frame = valid_frame(0x1612);
+        CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+        with_stats.dispatches = fake::render_calls.size();
+        with_stats.barriers = fake::barriers;
+        with_stats.images = fake::images.size();
+        with_stats.buffers = fake::buffers.size();
+        for (const fake::RenderCall& call : fake::render_calls) {
+            with_stats.resources += call.resources.size();
+        }
+        CHECK(with_stats.dispatches == without_stats.dispatches);
+        CHECK(with_stats.barriers == without_stats.barriers);
+        CHECK(with_stats.images == without_stats.images);
+        CHECK(with_stats.buffers == without_stats.buffers);
+        CHECK(with_stats.resources == without_stats.resources);
+        CHECK(fake::render_calls[0].resources.size() == 26);
+        CHECK(fake::render_calls[1].resources.size() == 9);
+        CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
+    }
+}
+
+// Two recordings are outstanding at once and the parity has already moved on
+// when the host measures the older one, so each meter must read the accumulation
+// half its own display stage wrote.
+void test_statistics_stage_reads_its_own_recording() {
+    Fixture fixture;
+    BedrayPathTraceFrameDesc first = valid_frame(0x1621);
+    first.frame_index = 4;
+    BedrayPathTraceFrameDesc second = valid_frame(0x1622);
+    second.frame_index = 5;
+    second.depth_view = 0x3012;
+    CHECK_STATUS(fixture.render(first), BEDRAY_OK);
+    CHECK_STATUS(fixture.render(second), BEDRAY_OK);
+    const std::size_t dispatches = fake::render_calls.size();
+    CHECK(dispatches == 4);
+    CHECK_STATUS(fixture.stats(first.command_buffer, kStatsBuffer, 0, 16, first.frame_index), BEDRAY_OK);
+    CHECK_STATUS(fixture.stats(second.command_buffer, kStatsBuffer, 0, 16, second.frame_index), BEDRAY_OK);
+    if (fake::render_calls.size() != dispatches + 2) return;
+    const fake::RenderCall& first_display = fake::render_calls[1];
+    const fake::RenderCall& second_display = fake::render_calls[3];
+    const fake::RenderCall& first_stats = fake::render_calls[dispatches];
+    const fake::RenderCall& second_stats = fake::render_calls[dispatches + 1];
+    const std::uint64_t first_accum = resource_handle(first_display.resources, 1);
+    const std::uint64_t second_accum = resource_handle(second_display.resources, 1);
+    CHECK(first_accum != second_accum);
+    CHECK(resource_handle(first_stats.resources, 1) == first_accum);
+    CHECK(resource_handle(second_stats.resources, 1) == second_accum);
+    CHECK(resource_handle(first_stats.resources, 2) == first.depth_view);
+    CHECK(resource_handle(second_stats.resources, 2) == second.depth_view);
+    CHECK(push_u32(first_stats.push, 0) == first.frame_index);
+    CHECK(push_u32(second_stats.push, 0) == second.frame_index);
+    CHECK(fixture.release(first.command_buffer) == BEDRAY_OK);
+    CHECK(fixture.release(second.command_buffer) == BEDRAY_OK);
+}
+
+void test_statistics_stage_groups_follow_the_extent() {
+    Fixture fixture;
+    BedrayPathTraceFrameDesc frame = valid_frame(0x1631);
+    frame.camera.width = 30;
+    frame.camera.height = 17;
+    CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+    const std::size_t dispatches = fake::render_calls.size();
+    CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 0, 64, frame.frame_index), BEDRAY_OK);
+    if (fake::render_calls.size() != dispatches + 1) return;
+    const fake::RenderCall& display = fake::render_calls[dispatches - 1];
+    const fake::RenderCall& stats = fake::render_calls[dispatches];
+    CHECK(display.group_x == 4 && display.group_y == 3);
+    CHECK(stats.group_x == display.group_x);
+    CHECK(stats.group_y == display.group_y);
+    CHECK(stats.group_z == 1);
+    CHECK(resource_range(stats.resources, 3) == 64);
+    CHECK(resource_handle(stats.resources, 1) == resource_handle(display.resources, 1));
+    CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
+}
+
+void test_statistics_stage_refusals() {
+    // Nothing pending: the radiance and accumulation images belong to a
+    // recording, so a released or never-recorded handle has nothing to meter.
+    {
+        Fixture fixture;
+        const BedrayPathTraceFrameDesc frame = valid_frame(0x1641);
+        CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+        const std::size_t dispatches = fake::render_calls.size();
+        CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
+        CHECK_STATUS(fixture.stats(frame.command_buffer), BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK_STATUS(fixture.stats(0xDEAD), BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK(fake::render_calls.size() == dispatches);
+    }
+    // A host that never lent a statistics program must be told, not served a
+    // slot of four zeros that reads as a measured frame.
+    {
+        Fixture plain(kTraceSceneProgram, kSpatialProgram, 0);
+        const BedrayPathTraceFrameDesc frame = valid_frame(0x1642);
+        CHECK_STATUS(plain.render(frame), BEDRAY_OK);
+        CHECK_STATUS(plain.stats(frame.command_buffer), BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK(fake::render_calls.size() == 2);
+        CHECK(plain.release(frame.command_buffer) == BEDRAY_OK);
+    }
+    // The borrowed counter range: present, 4-byte aligned and at least the four
+    // words stats[0..3] live in.
+    {
+        Fixture fixture;
+        const BedrayPathTraceFrameDesc frame = valid_frame(0x1643);
+        CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+        const std::size_t dispatches = fake::render_calls.size();
+        CHECK_STATUS(fixture.stats(frame.command_buffer, 0), BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 0, 15), BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 0, 0), BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 1), BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 3), BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK(fake::render_calls.size() == dispatches);
+        CHECK_STATUS(fixture.stats(frame.command_buffer, kStatsBuffer, 4, 16), BEDRAY_OK);
+        CHECK(fake::render_calls.size() == dispatches + 1);
+        CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
+    }
+    // The manifest check happens at configure, the way the trace and display
+    // programs are checked, and it allocates nothing on the way out.
+    {
+        reset_all();
+        BedrayCore core{};
+        PathTracePass pass;
+        auto config = make_config();
+        config.program_stats = 0x9999;
+        CHECK_STATUS(pass.configure(&core, make_device_fns(), config, &g_error),
+            BEDRAY_ERROR_INVALID_ARGUMENT);
+        config.program_stats = kBadStatsCount;
+        CHECK_STATUS(pass.configure(&core, make_device_fns(), config, &g_error),
+            BEDRAY_ERROR_INVALID_ARGUMENT);
+        config.program_stats = kBadStatsPush;
+        CHECK_STATUS(pass.configure(&core, make_device_fns(), config, &g_error),
+            BEDRAY_ERROR_INVALID_ARGUMENT);
+        config.program_stats = kBadStatsPushSmall;
+        CHECK_STATUS(pass.configure(&core, make_device_fns(), config, &g_error),
+            BEDRAY_ERROR_INVALID_ARGUMENT);
+        config.program_stats = kBadStatsBinding;
+        CHECK_STATUS(pass.configure(&core, make_device_fns(), config, &g_error),
+            BEDRAY_ERROR_INVALID_ARGUMENT);
+        CHECK(fake::buffers.empty());
+        CHECK(fake::images.empty());
+        CHECK(fake::render_calls.empty());
+
+        // No program at all is still a valid configuration; the stage is additive.
+        config.program_stats = 0;
+        CHECK_STATUS(pass.configure(&core, make_device_fns(), config, &g_error), BEDRAY_OK);
+        CHECK(!pass.uses_program(kStatsProgram));
+        CHECK(pass.uses_program(kDisplayProgram));
+        CHECK(fake::buffers.size() == 5);
+        CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+        CHECK(pass.uses_program(kStatsProgram));
+        CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+        CHECK(!pass.uses_program(kStatsProgram));
+    }
+}
+
+void test_statistics_stage_shares_the_recording_lifetime() {
+    {
+        Fixture fixture;
+        const BedrayPathTraceFrameDesc frame = valid_frame(0x1651);
+        CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+        CHECK_STATUS(fixture.stats(frame.command_buffer), BEDRAY_OK);
+        CHECK(fixture.pass.has_recordings());
+        // A meter inside the recording is retired by the same exact proof and
+        // refuses teardown until then.
+        CHECK(fixture.pass.destroy() == BEDRAY_ERROR_IN_USE);
+        CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
+        CHECK(!fixture.pass.has_recordings());
+        CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK); // idempotent
+        CHECK(fixture.pass.destroy() == BEDRAY_OK);
+        CHECK(fake::buffers.empty());
+        CHECK(fake::images.empty());
+        CHECK(fixture.stats(frame.command_buffer) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    }
+    {
+        Fixture fixture;
+        const BedrayPathTraceFrameDesc frame = valid_frame(0x1652);
+        CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+        CHECK_STATUS(fixture.stats(frame.command_buffer), BEDRAY_OK);
+        // Discard only marks the history dirty; the recording, and with it the
+        // meter's borrowed views, lives until the release carries the proof.
+        fixture.pass.discard_recording(frame.command_buffer);
+        CHECK(fixture.pass.has_recordings());
+        CHECK(fixture.pass.destroy() == BEDRAY_ERROR_IN_USE);
+        CHECK_STATUS(fixture.release(frame.command_buffer), BEDRAY_OK);
+        CHECK(!fixture.pass.has_recordings());
+        CHECK(fixture.pass.destroy() == BEDRAY_OK);
+        CHECK(fake::buffers.empty());
+        CHECK(fake::memories.empty());
+        CHECK(fake::images.empty());
+        CHECK(fake::views.empty());
+        CHECK(fake::faults == 0);
+    }
+}
+
 void test_rc_configuration_requires_native_field_program() {
     reset_all(); BedrayCore core{}; PathTracePass pass;
     CHECK_STATUS(pass.configure_rc(rc_config(), 65535, &g_error), BEDRAY_ERROR_UNSUPPORTED);
@@ -1438,6 +1775,12 @@ int main() {
     test_guide_aware_program_contract();
     test_real_guide_outputs();
     test_real_nrd_motion_output();
+    test_statistics_dispatch_follows_display();
+    test_statistics_program_costs_nothing_until_called();
+    test_statistics_stage_reads_its_own_recording();
+    test_statistics_stage_groups_follow_the_extent();
+    test_statistics_stage_refusals();
+    test_statistics_stage_shares_the_recording_lifetime();
     test_rc_configuration_requires_native_field_program();
     test_rc_levels_precede_primary_and_exact_proof_releases_both_owners();
     test_rc_partial_dispatch_failure_keeps_child_and_parent_pins();

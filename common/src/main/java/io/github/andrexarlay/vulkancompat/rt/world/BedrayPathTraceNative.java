@@ -18,7 +18,8 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Host adapter for the additive native path-trace pass
- * ({@code bedray_core_configure_path_trace} / {@code bedray_core_render_path_trace}).
+ * ({@code bedray_core_configure_path_trace} / {@code bedray_core_render_path_trace} /
+ * {@code bedray_core_record_path_trace_stats}).
  *
  * <p>The pass itself owns the radiance, motion, accumulation and history-depth
  * images, the per-recording {@code FrameConstants} upload and the one-element
@@ -41,6 +42,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
     record FrameInput(long commandBuffer, RtFrameBindings.Views views, RtPathTraceSlangPass.Frame frame,
                       RtPathTraceSlangPass.Dispatch dispatch, RtPathTraceSlangPass.Emitters emitters,
                       RtPathTraceSlangPass.Reservoirs reservoirs, RtPathTraceSlangPass.Entities entities,
+                      RtPathTraceSlangPass.BufferView stats,
                       int flags, int accumFrames, int displayFlags, float maxRadiance,
                       float reprojectionTolerance) {
     }
@@ -53,18 +55,20 @@ final class BedrayPathTraceNative implements AutoCloseable {
     private final long programTraceScene;
     private final long programSpatial;
     private final long programDisplay;
+    /** {@code frame_stats}, or 0 when this jar has no AOT counter artifact for the core to run. */
+    private final long programStats;
     private final long sampler;
+    /**
+     * True only when this jar handed the core a counter program and the core both advertises {@code FRAME_STATS} and
+     * exports the call. False means the core writes no counters, which the host reports as unmeasured, not as zero.
+     */
+    private final boolean frameStats;
     private final BedrayRadianceCascadesNative rc;
     private boolean configured;
     private boolean closed;
 
     BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programTraceScene, long programSpatial,
-                          long programDisplay, long sampler) {
-        this(runtime,programTrace,programTraceScene,programSpatial,programDisplay,sampler,0);
-    }
-
-    BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programTraceScene, long programSpatial,
-                          long programDisplay, long sampler, long rcBuilder) {
+                          long programDisplay, long programStats, long sampler, long rcBuilder) {
         if (runtime == null || programTrace == 0L || programDisplay == 0L) {
             throw new IllegalArgumentException("native path trace needs a runtime, a trace and a display program");
         }
@@ -78,7 +82,9 @@ final class BedrayPathTraceNative implements AutoCloseable {
         this.programTraceScene = programTraceScene;
         this.programSpatial = programSpatial;
         this.programDisplay = programDisplay;
+        this.programStats = programStats;
         this.sampler = sampler;
+        this.frameStats = programStats != 0L && library.hasFrameStats();
         this.rc = rcBuilder == 0 ? null : new BedrayRadianceCascadesNative(library,core,rcBuilder,RtConfig.SLANG_RC_BASE_AXIS);
     }
 
@@ -92,7 +98,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
         long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 512L << 20;
         long bufferBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 4) : 512L << 20;
         library.configurePathTrace(core, programTrace, programTraceScene, programSpatial, programDisplay,
-            imageBudget, bufferBudget, frame.width, frame.height);
+            programStats, imageBudget, bufferBudget, frame.width, frame.height);
         configured = true;
         if (rc != null) rc.configure();
     }
@@ -148,6 +154,15 @@ final class BedrayPathTraceNative implements AutoCloseable {
                 }
             } else {
                 library.renderPathTrace(core, desc);
+            }
+            if (frameStats) {
+                RtPathTraceSlangPass.BufferView stats = input.stats();
+                if (stats == null || stats.buffer() == 0L || stats.bytes() < RtFrameStatsSlangPass.COUNTER_BYTES) {
+                    throw new IllegalArgumentException("the native counter pass writes the head of this frame's slot,"
+                        + " and the host handed it " + stats);
+                }
+                library.recordPathTraceStats(core, input.commandBuffer(), stats.buffer(), stats.offset(),
+                    stats.bytes(), frame.frameIndex);
             }
         }
     }

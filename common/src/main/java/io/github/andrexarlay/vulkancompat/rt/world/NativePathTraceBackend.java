@@ -45,8 +45,10 @@ final class NativePathTraceBackend implements PathTraceBackend {
         RtSlangPathPass.requireDisplayManifest(display);
         SlangProgram reuse = RtSpatialReuseSlangPass.registerProgram(runtime).orElse(null);
         spatial = reuse != null;
+        long stats = RtFrameStatsSlangPass.registerProgram(runtime)
+            .map(program -> program.nativeHandle()).orElse(0L);
         pass = new BedrayPathTraceNative(runtime, trace.nativeHandle(), scene == null ? 0 : scene.nativeHandle(),
-            reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), runtime.atlasSampler(),
+            reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), stats, runtime.atlasSampler(),
             builder == null ? 0 : builder.nativeHandle());
     }
 
@@ -60,7 +62,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
         if (!recordings.add(frame.command().address()))
             throw new IllegalStateException("recording still awaits completion/discard");
         pass.render(new BedrayPathTraceNative.FrameInput(frame.command().address(), frame.views(), frame.constants(),
-            frame.dispatch(), frame.emitters(), RtPathTraceSlangPass.Reservoirs.NONE, frame.entities(),
+            frame.dispatch(), frame.emitters(), RtPathTraceSlangPass.Reservoirs.NONE, frame.entities(), frame.stats(),
             frame.flags() | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI, frame.accumFrames(), 0,
             RtSlangPathPass.MAX_RADIANCE, RtSlangPathPass.REPROJECTION_TOLERANCE));
     }

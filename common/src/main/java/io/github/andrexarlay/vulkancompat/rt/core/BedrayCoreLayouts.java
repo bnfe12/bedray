@@ -92,6 +92,8 @@ public final class BedrayCoreLayouts {
     /** The core maps both water switches into the frame word; one bit covers the pair, since a half-mapped pair is a
      * switch the player can see but not use. */
     public static final int PATH_TRACE_FEATURE_WATER_MODEL = 1 << 5;
+    /** The core records the frame-stats pass, so a native frame can drive auto exposure and the F3 counters. */
+    public static final int PATH_TRACE_FEATURE_FRAME_STATS = 1 << 6;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;
@@ -327,8 +329,7 @@ public final class BedrayCoreLayouts {
         ValueLayout.JAVA_LONG.withName("buffer_budget_bytes"),
         ValueLayout.JAVA_INT.withName("width"),
         ValueLayout.JAVA_INT.withName("height"),
-        ValueLayout.JAVA_INT.withName("reserved0"),
-        ValueLayout.JAVA_INT.withName("reserved1"),
+        ValueLayout.JAVA_LONG.withName("program_stats"),
         ValueLayout.JAVA_LONG.withName("program_trace_scene"),
         ValueLayout.JAVA_LONG.withName("reserved")
     ).withName("BedrayPathTraceDesc");
@@ -495,6 +496,7 @@ public final class BedrayCoreLayouts {
     public static final long PTD_BUFFER_BUDGET_BYTES = PT_DESC.byteOffset(groupElement("buffer_budget_bytes"));
     public static final long PTD_WIDTH = PT_DESC.byteOffset(groupElement("width"));
     public static final long PTD_HEIGHT = PT_DESC.byteOffset(groupElement("height"));
+    public static final long PTD_PROGRAM_STATS = PT_DESC.byteOffset(groupElement("program_stats"));
     public static final long PTD_PROGRAM_TRACE_SCENE = PT_DESC.byteOffset(groupElement("program_trace_scene"));
 
     private BedrayCoreLayouts() {
@@ -520,6 +522,7 @@ public final class BedrayCoreLayouts {
         require("BedrayPathTraceGuides", PT_GUIDES_DESC.byteSize(), 64);
         require("BedrayPathTraceFrameDesc", PT_FRAME_DESC.byteSize(), 1072);
         require("BedrayPathTraceDesc", PT_DESC.byteSize(), 80);
+        require("BedrayPathTraceDesc.program_stats", PTD_PROGRAM_STATS, 56);
         require("BedrayPathTraceDesc.program_trace_scene", PTD_PROGRAM_TRACE_SCENE, 64);
         require("BedrayPathTraceFrameDesc.scene", PTFD_SCENE, 32);
         require("BedrayPathTraceFrameDesc.camera", PTFD_CAMERA, 344);

@@ -82,11 +82,16 @@ int main() {
     require((bedray_core_path_trace_feature_mask() & BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS) != 0);
     require((bedray_core_path_trace_feature_mask() & BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS) != 0);
     require((bedray_core_path_trace_feature_mask() & BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION) != 0);
+    require((bedray_core_path_trace_feature_mask() & BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS) != 0);
     require(bedray_core_render_path_trace_motion(nullptr, nullptr, nullptr, nullptr, nullptr) == BEDRAY_ERROR_INVALID_ARGUMENT);
     BedrayError guide_error{};
     BedrayPathTraceGuides guides{};
     require(bedray_core_render_path_trace_guides(nullptr, nullptr, &guides, &guide_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
     require(bedray_core_render_path_trace_guides(nullptr, nullptr, nullptr, &guide_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    // The additive statistics call exists at this ABI version and refuses loudly
+    // rather than silently doing nothing when there is no recording to meter.
+    BedrayError stats_error{};
+    require(bedray_core_record_path_trace_stats(nullptr, 11, 22, 0, 16, 1, &stats_error) == BEDRAY_ERROR_INVALID_ARGUMENT);
     exception_boundaries();
     particle_exception_boundaries();
     auto* core = new BedrayCore;
