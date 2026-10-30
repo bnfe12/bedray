@@ -26,6 +26,9 @@ static const float SURFACE_VISIBILITY_MIN_TRANSMITTANCE = 1.0e-3;
 static const uint SURFACE_VISIBILITY_FLAG_OVERFLOW = 1u << 0u;
 static const uint SURFACE_VISIBILITY_FLAG_FILTERED = 1u << 1u;
 static const uint SURFACE_VISIBILITY_FLAG_ABSORBED = 1u << 2u;
+// The beam was walked as two legs - the column along the refracted direction and
+// the sky along the air one - rather than as one straight ray.
+static const uint SURFACE_VISIBILITY_FLAG_REFRACTED = 1u << 3u;
 
 struct SurfaceVisibility {
     VisibilityResult result;
@@ -253,4 +256,49 @@ SurfaceVisibility traceShadowVisibilityMedium<T : ISceneTracer>(T traversal,
     float tMax = max(distance - bias, bias);
     Ray ray = makeRay(origin, direction, 0.0, tMax);
     return traceFilteredVisibilityMedium(traversal, atlas, blockMaterials, ray, options, medium);
+}
+
+// Shadow beam for an underwater receiver lit by a light that came through the
+// surface.  The straight sight line to that light is not the path the beam took:
+// it bent on crossing the plane, so the column is walked along the refracted
+// direction and whatever is left of the distance along the air direction, from
+// the point where the beam crosses.  Both legs keep the filtered walk, so a cutout
+// hole is still skipped and a stained-glass pane still tints.
+//
+// The face itself is traced by neither leg - the column stops a bias below it and
+// the sky starts a bias above it - because the crossing is what `WaterBeam` names,
+// and a ray that hit its own water sheet would pay the Fresnel twice.
+SurfaceVisibility traceShadowBeam<T : ISceneTracer>(T traversal,
+        MaterialAtlas atlas, BlockMaterialTable blockMaterials,
+        float3 surfacePosition, float3 normal, float3 lightDirection,
+        float distance, float bias, MaterialSamplingOptions options,
+        WaterMedium medium, WaterBeam beam) {
+    float3 origin = surfacePosition + normal * bias;
+    SurfaceVisibility visibility = traceFilteredVisibilityMedium(traversal, atlas, blockMaterials,
+        makeRay(origin, -beam.direction, 0.0, max(beam.column - bias, bias)), options, medium);
+    visibility.flags |= SURFACE_VISIBILITY_FLAG_REFRACTED;
+    if (!surfaceVisibilityProven(visibility)) {
+        // Something opaque sits in the column between the receiver and the
+        // surface.  The sky leg cannot reach this point any more than the water
+        // leg could, so its answer would only hide which blocker mattered.
+        return visibility;
+    }
+
+    // Lifted along the beam rather than along the face normal: the crossing is a
+    // plane the receiver's own normal says nothing about, and a starting point
+    // that stays inside the sheet re-hits it at grazing sun angles.
+    float3 entry = beam.entry + lightDirection * (bias / max(lightDirection.y, 0.1));
+    SurfaceVisibility air = traceFilteredVisibility(traversal, atlas, blockMaterials,
+        makeRay(entry, lightDirection, 0.0, max(distance - beam.column, bias)), options);
+    visibility.layers += air.layers;
+    visibility.flags |= air.flags;
+    // The sky leg has to prove itself the way the column did: an overflow there means the walk stopped counting
+    // filters, not that the sky is open, and the caller only trusts a proven sight line.
+    bool skyClear = surfaceVisibilityProven(air);
+    visibility.result.visible = skyClear;
+    visibility.result.blocker = air.result.blocker;
+    visibility.result.distance = distance;
+    visibility.result.transmittance = visibility.result.transmittance
+        * air.result.transmittance * waterBeamTransmittance(lightDirection.y);
+    return visibility;
 }

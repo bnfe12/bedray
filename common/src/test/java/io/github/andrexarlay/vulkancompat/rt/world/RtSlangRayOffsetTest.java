@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -58,6 +59,27 @@ class RtSlangRayOffsetTest {
             assertTrue(!wrapper.contains("makeRay(origin, direction, bias,"),
                 header + ": the origin shift and a bias tMin together are a double offset");
         }
+
+        // The refracted beam is two legs that cross no face of their own, so the same rule has to be spelled twice:
+        // one bias at the receiver, tMin zero, and a length that paid for that bias instead of running past it.
+        String beam = block(source, "SurfaceVisibility traceShadowBeam<T : ISceneTracer>(");
+        assertTrue(beam.contains("float3 origin = surfacePosition + normal * bias;"),
+            "the column leg leaves the receiver by exactly one bias");
+        assertEquals(2, count(beam, "makeRay("), "the beam is a column leg and a sky leg, no more");
+        assertEquals(2, count(beam, ", 0.0, max("),
+            "both legs keep tMin at zero; a bias there would start every underwater test twice as far away");
+        assertTrue(beam.contains("makeRay(origin, -beam.direction, 0.0, max(beam.column - bias, bias))"),
+            "the column leg stops short of the sheet it is not allowed to re-hit, out of its own length");
+        assertTrue(beam.contains("makeRay(entry, lightDirection, 0.0, max(distance - beam.column, bias))"),
+            "and the sky leg keeps whatever is left of the light distance, not the whole of it");
+    }
+
+    private static int count(String source, String needle) {
+        int found = 0;
+        for (int at = source.indexOf(needle); at >= 0; at = source.indexOf(needle, at + needle.length())) {
+            found++;
+        }
+        return found;
     }
 
     /** The three lines that build the bounce origin, up to the ray that consumes it. */

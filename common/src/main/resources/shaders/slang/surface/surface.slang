@@ -489,7 +489,7 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
             // footprint filtered out.
             material.roughness = clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30);
             material.metallic = 0.0;
-            material.f0 = float3(0.02);
+            material.f0 = float3(WATER_INTERFACE_F0);
             material.flags &= ~MATERIAL_FLAG_METAL;
             material.transmission = 1.0;
             material.thickness = 0.0;

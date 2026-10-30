@@ -934,6 +934,44 @@ the water item is the Snell-refracted NEE beam and its caustics (the shadow ray
 is still straight) and `RtSettings.waterStyle`. No owner-verified frame of any of
 this exists yet.
 
+Status update (2026-10-30, the refracted beam). An underwater receiver is now lit
+along the path the light took instead of the straight sight line. `waterBeamToLight`
+bends the sample's air direction through the plane the medium record names
+(`waterBeamTravel` refracts against the flat sheet and, when a wave crest has turned
+its face to the beam, against that face; the ratio is `1/WATER_IOR`, so entering the
+dense side has no critical angle) and returns the column length, the point where the
+beam crosses, and the étendue weight `cos(air)/cos(water)` — the radiance gain and
+the cone squeeze cancel the indices, so a floor under a flat sheet receives exactly
+the flux the sheet let through. `traceShadowBeam` walks it in two legs: the column
+with the medium-aware filter along the refracted direction, stopping a bias short of
+the sheet, and the sky with the plain filter starting a bias above the crossing
+(lifted along the light, not along the receiver's normal). Neither leg traces the
+face itself; the crossing is charged once, explicitly, with `waterBeamTransmittance`
+at the air cosine, and `surface.slang` now decodes a fluid's `f0` from the same
+`WATER_INTERFACE_F0` so the two cannot drift. `waterBeamFocus` adds the caustic: the
+2x2 Jacobian of the map from entry point to beam footprint at the receiver's depth,
+read by finite difference over three wave normals (no extra ray), clamped to
+`[0.1, 3.0]`, with a fold of the map taking the floor. The beam is offered only to
+`LightKind.Sun`/`Moon` and only while `medium.inside`; a block emitter under water
+keeps the straight column, because it never crossed anything. The direct term shades
+`-beam.direction` — the same direction its cosine test and its BSDF use, so a beam
+bent below the receiver's horizon is simply not lit — and carries
+`beam.solidAngle * focus` in the estimator. Evidence: `:common:compileSlang` with
+`slangc` 2026.20 (path_trace 1,036,436 B / path_trace_scene 1,064,072 B), the
+extended `verify_water.slang` harness compiles on its own (56,708 B),
+`RtSlangWaterBeamTest` (9 guards, double-precision ports of Snell, étendue and the
+finite-difference stencil) and the extended `RtSlangRayOffsetTest` pass, and the full
+`:common:test --rerun-tasks` suite reports 863 tests, 0 failures, 0 errors, 3 skipped.
+All 14 mutation probes are caught (each revert names its guard) and the four shader
+files come back byte-identical. The cost is measured, not assumed: the two extra walk
+instantiations in `traceShadowBeam` are +426 KB / +440 KB of SPIR-V on the two path
+roots (+70 %); reordering the legs onto a single shared callee was tried and is not
+smaller. What remains of the water item is `RtSettings.waterStyle` in the typed path
+(a new host ABI bit, core mapping and feature bit — the `cameraInWater` shape) and
+bending anything other than the direct beam: sky-dome and emission paths, and
+secondary rays that leave the body, still travel straight. No owner-verified frame of
+any of this exists yet.
+
 `bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
 sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
 front-hemisphere diffuse-reflection density that no sample could produce; an
@@ -1152,8 +1190,13 @@ cross-cascade resolve or image comparison was run.
    `primaryWaterMedium` walks up from the eye for the surface it sits under),
    and the optical lobe now refracts from the medium the ray travels in, so a
    path leaving the body bends away from the normal and can totally internally
-   reflect. Still open: Snell refraction and caustics of the underwater NEE beam,
-   and wiring `RtSettings.waterStyle` into the typed path.
+   reflect. Still open: wiring `RtSettings.waterStyle` into the typed path (the
+   legacy toggle needs a host ABI bit, a core mapping and a feature bit, exactly
+   the `cameraInWater` shape), and bending what the direct beam does not bend —
+   the sky-dome and emission paths seen from under water, and secondary rays that
+   leave the body, still travel straight. Closed in the same batch as the medium:
+   the underwater NEE is now a Snell-refracted two-leg beam with a wave-focus
+   caustic (`waterBeamToLight`, `traceShadowBeam`, `waterBeamFocus`).
 4b. **Denoiser G-buffer** — the entry pass writes the seven DLSS-RR guide
    channels (`outViewZ`, `outNormalRough`, `outDiffuse`, `outAlbedo`,
    `outDirect`, `outSpecular`, `outSpecAlbedo`, bindings 26–32) at the primary

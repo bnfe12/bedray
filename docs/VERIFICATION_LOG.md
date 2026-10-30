@@ -4,6 +4,66 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — The underwater light arrives bent, and the waves focus it (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
+
+Branch: `refactor/slang-pipeline`. An underwater receiver sampled the sun along the
+straight sight line to the disc. That line is not the path the light took: it bent
+where it crossed the fluid face, so the shading direction, the absorbed column, the
+crossing loss and the occluders above the sheet were all measured along the wrong
+route — and a flat floor under a wavy sheet got no caustics at all.
+
+A plane interface has a closed-form answer, which is what made this closable in
+Slang alone: no `FrameConstants` field, no push bit, no C++ and no Java change.
+
+What landed:
+
+| Layer | Change |
+|---|---|
+| `surface/water.slang` | `WaterBeam`, `waterBeamTravel` (flat sheet, or the wave face when it still faces the beam), `waterBeamToLight` (depth from the medium's `surfY`, column along the refracted direction, entry point, `solidAngle = cos(air)/cos(water)`), `waterBeamTransmittance` (Schlick at the flat face), `waterBeamAtDepth` + `waterBeamFocus` (the 2x2 Jacobian of entry → footprint by finite difference over three wave normals, reciprocal clamped `[0.1, 3.0]`, a fold takes the floor) |
+| `surface/visibility.slang` | `SURFACE_VISIBILITY_FLAG_REFRACTED` and `traceShadowBeam`: the column leg with the medium-aware filter stopping a bias short of the sheet, the sky leg with the plain filter starting a bias above the crossing, lifted along the light; one explicit Fresnel, both legs proven through `surfaceVisibilityProven` |
+| `pathtrace/path_tracer.slang` | the beam is built for `Sun`/`Moon` only, and the direct term shades `-beam.direction`, walks the beam when it exists and the straight column otherwise, and multiplies the estimator by `beam.solidAngle * waterBeamFocus(...)` on the frame's own `portalTime` |
+| `surface/surface.slang` | the fluid decode takes `material.f0` from `WATER_INTERFACE_F0`, so a traced crossing and the analytic one cannot drift |
+| harness | `verify_water.slang` now reads all of the beam entries and its bounds |
+
+Evidence: `:common:compileSlang` with `slangc` 2026.20 (24 roots; `path_trace.spv`
+1,036,436 B and `path_trace_scene.spv` 1,064,072 B), `verify_water.slang` compiles
+standalone (56,708 B), `:common:test --rerun-tasks` reports **863 tests, 0 failures,
+0 errors, 3 skipped** (153 classes) with the new `RtSlangWaterBeamTest` 9/9 and the
+extended `RtSlangRayOffsetTest` 2/2.
+
+Mutation proof — 14 probes, each a single revert of one wiring point, the named
+guard failing, then the file restored byte-identically (`sha256` compared): the
+inverted étendue ratio, the entry point's sign, the flipped index ratio, the removed
+crest guard, the focus as the area instead of its reciprocal, `WATER_INTERFACE_F0`
+moved, the column walked without the medium, the sky leg left on the sheet, the
+crossing loss dropped, the raw visibility bit read outside its predicate (caught by
+`RtSlangVisibilityOverflowTest`), the lobe asked about the air sight line, the beam
+weight dropped, the beam offered to any light, and a second copy of the interface
+number in the decoder. **14/14 caught.**
+
+Two harness lessons, both fixed in the probe script rather than in the guards. The
+source guards read shader files straight off disk, so Gradle does not see the input
+change and `:common:test` can answer UP-TO-DATE with a stale XML — the probe now
+forces `--rerun` and refuses to trust a run whose `> Task :common:test` line is not a
+real execution. A probe that only matches `startswith("> Task :common:test")` also
+hits `:common:testClasses`; the check is anchored on the exact task token.
+
+Cost, measured and kept: the two walk instantiations `traceShadowBeam` adds are
++426 KB / +440 KB of SPIR-V on the path-trace roots (+70 % over `HEAD`, which
+`git archive` + the same `slangc` line reproduces at 610,276 / 624,376 B — matching
+the SPIR-V inside the jar deployed on 2026-10-29). Routing both legs through one
+shared callee, and through the existing `traceShadowVisibilityMedium` wrapper, were
+both tried and are not smaller (1,048,772 / 1,049,204 B). The caustic itself is
+cheap: removing only the focus call saves 28 KB.
+
+Limits, so a playtest is not asked to prove more than this: the beam bends the
+direct light only — the sky seen from under water, emitted light and secondary rays
+that leave the body still travel straight; the focus is bounded at 3x, so a real
+caustic line is softened rather than exact; total internal reflection of the *beam*
+cannot happen (air into water has no critical angle) but the wave face is only
+sampled at the entry point, not along the column. This is L0/L1/L2 plus a mutation
+proof — no owner-verified frame yet, and nothing here says the water looks right on
+a GPU.
 ## 2026-10-30 — Rejected samples no longer publish denoiser guides (L1/L2, mutation proof; L3 no-regression)
 
 `pathTraceSampleRejected` (`INVALID_SAMPLE | RC_UNRESOLVED`) is now computed once

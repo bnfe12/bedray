@@ -19,7 +19,9 @@
 // leaves it, every segment inside is attenuated by the body's extinction, and
 // each segment adds the light it scatters towards the eye.  The same state
 // travels into the shadow rays, so an underwater receiver is lit through its
-// own water column instead of through clear air.  The water surface itself is
+// own water column instead of through clear air - and the key light's beam is
+// bent where it crosses the face, so the column that gets lit is the one the
+// light actually came down.  The water surface itself is
 // clear (`surface.slang`); all of its colour is this absorption.  A camera that
 // starts inside a body has no entry surface either, so `primaryInWater` seeds the
 // same state before the first segment and the optical lobe refracts from the
@@ -159,7 +161,11 @@ bool pathTraceSampleRejected(uint flags) {
 // Shades one direct-light sample: the BSDF term of the legacy NEE times the filtered visibility walk.  The caller
 // multiplies the result by its throughput.  `traced` says a shadow ray really ran, `occluded` that it came back
 // blocked; a reservoir needs both, because a sample this receiver cannot even see must fade instead of persisting.
-// `medium` is the water body the receiver stands in: an underwater receiver is shadowed through its own column.
+// `medium` is the water body the receiver stands in: an underwater receiver is
+// shadowed through its own column, and a sun or moon sample is walked as the bent
+// beam `waterBeamToLight` names rather than as the straight sight line, which is
+// what puts the light where the surface let it through and gives the floor its
+// caustics.
 float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light, float rayBias,
         MaterialSamplingOptions materialOptions, WaterMedium medium, out bool traced, out bool occluded) {
@@ -170,11 +176,28 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         return zero;
     }
     float3 lightDirection = light.direction;
-    float cosine = max(dot(normal, lightDirection), 0.0);
+    // Under water the key light does not arrive along the sight line to the disc:
+    // the face bends every air direction into the Snell window, so the beam is
+    // what carries the light, not the straight line.  A block emitter that never
+    // crossed the surface is not that problem, which is why the beam is asked for
+    // only of the two lights the sampler treats as directional.
+    WaterBeam beam = invalidWaterBeam();
+    if (medium.inside && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
+        beam = waterBeamToLight(lightDirection, light.distance, position, medium);
+    }
+    float3 arrival = beam.valid ? -beam.direction : lightDirection;
+    // Two weights ride on the bent beam.  The sample was drawn from air solid
+    // angles and is now evaluated on the water side, and the ratio of the two
+    // cones is what leaves the flux the surface actually let through.  The focus
+    // is the wave field gathering that flux onto this point or spreading it thin.
+    float beamWeight = beam.valid
+        ? beam.solidAngle * waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime)
+        : 1.0;
+    float cosine = max(dot(normal, arrival), 0.0);
     if (cosine <= 0.0) {
         return zero;
     }
-    float3 bsdf = bsdfEvaluate(surface.material, view, normal, lightDirection);
+    float3 bsdf = bsdfEvaluate(surface.material, view, normal, arrival);
     if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
         return zero;
     }
@@ -186,8 +209,11 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         shadowNormal = -shadowNormal;
     }
     traced = true;
-    SurfaceVisibility shadow = traceShadowVisibilityMedium(traversal, atlas, blockMaterials, position, shadowNormal,
-        lightDirection, light.distance, rayBias, materialOptions, medium);
+    SurfaceVisibility shadow = beam.valid
+        ? traceShadowBeam(traversal, atlas, blockMaterials, position, shadowNormal, lightDirection,
+            light.distance, rayBias, materialOptions, medium, beam)
+        : traceShadowVisibilityMedium(traversal, atlas, blockMaterials, position, shadowNormal,
+            lightDirection, light.distance, rayBias, materialOptions, medium);
     // Sixteen filters deep the walk gives up and keeps the energy it collected.  That is not a proven sight line:
     // calling it one would light this surface through an opaque blocker hidden behind the glass.  Reporting it as
     // occluded also lets a reused record fade instead of persisting.
@@ -196,7 +222,7 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         occluded = true;
         return zero;
     }
-    return bsdf * light.radiance * transmittance / max(light.sourcePdf, 1.0e-6);
+    return bsdf * light.radiance * transmittance * beamWeight / max(light.sourcePdf, 1.0e-6);
 }
 
 // How far up, and past how many blockers, the search for the surface of the
