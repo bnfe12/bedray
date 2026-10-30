@@ -60,6 +60,14 @@ meaningful once `pixel_shadows` is on in the video settings. Glass cost, the
 distant-block light fallback, the NEE NaN guard and the hot-loop/layout guards
 remain open holes.
 
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `9b2f92a2e07f869d…`; the previous
+(foliage) jar is kept as `….20261030-073842.bak` (sha256 `6b8ecf2055cfaae4…`).
+The bundled `shaders/slang/spv/path_trace.spv` matches the fresh compile
+(`1c4b00aba4…`, 28 SPIR-V entries in the jar). `bedray_core.dll`
+(`9ca5cd88cc01f823…`) and `bedray_scene.dll` (`bf2caba452ef6445…`) are
+byte-identical to the deployed natives, so no native changed.
+
 ## 2026-10-30 — Foliage filters the key light again (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.
