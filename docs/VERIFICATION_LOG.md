@@ -43,6 +43,14 @@ Open: `rays_pixel_shadows` / `rays_pixel_shadow_size` still only select a stats
 pixel and reach no renderer; they are the last stats-only rows and belong to
 their own pass. No owner-verified frame yet.
 
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `7b4bc92f0731c714…`; the previous
+(stage-2a) jar is kept as `….20261030-064728.bak` (sha256 `18876fa4393d77e0…`).
+`bedray_core.dll` rebuilt from this checkout is byte-identical to the deployed
+native (sha256 `9ca5cd88cc01f823…`), so the natives did not change. The Expert
+page now lists five ray rows instead of nine; a `bedray.toml` written by the
+previous build keeps loading.
+
 ## 2026-10-30 — The ray profile reads its own effect switches (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.
