@@ -4,6 +4,71 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — the native core meters its own recording (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `8fa6548` (15 files, +734/−45).
+
+The previous entry gave the reference backend a counter writer; on `bedray_core`
+the radiance and accumulation images live inside the core, so the host could not
+dispatch `passes/frame_stats.slang` over them and the F3 shares still printed
+`n/a`. The core now records that program itself. The addition is layout-neutral:
+`BedrayPathTraceDesc.program_stats` takes the former `reserved0`/`reserved1`
+pair at offset 56, the struct stays 80 bytes, `program_trace_scene` stays at 64
+and `reserved` at 72, and `static_assert`s in `core.cpp` hold those four numbers
+where the Java `BedrayCoreLayouts.verify()` holds the same ones.
+
+`bedray_core_record_path_trace_stats(core, command_buffer, stats_buffer,
+stats_offset, stats_bytes, frame_index, error)` appends one dispatch to the
+recording `bedray_core_render_path_trace` just made, because the images a
+counter can read belong to that recording: the radiance image, the accumulation
+half that recording's display stage folded (not the half it imported history
+from), the borrowed depth view and the borrowed counter range. It records no
+barrier, pool or pin — the display writes already sit behind the recording's
+exit barrier, and the per-dispatch descriptor set is the one
+`bedray_core_release_recording` already retires. It refuses instead of skipping:
+an unknown command buffer, `program_stats == 0`, a null buffer, a range under
+16 bytes, an offset that is not a multiple of four, or a range that overflows all
+return `BEDRAY_ERROR_INVALID_ARGUMENT`, because a silent skip is
+indistinguishable from a frame whose counters were always zero. `configure`
+checks the four bindings (three storage images and the storage buffer) and the
+8-byte `FrameStatsPush` the way it checks the trace and display manifests.
+
+`BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS (1u << 6)` advertises the stage. Either
+side alone degrades honestly: a new jar on a core without the bit calls nothing
+and reports the counters as unmeasured, and an old jar on this core sends
+`program_stats = 0`, so no dispatch is recorded. `leaf_pct` remains `n/a` on
+both backends — no program writes that word.
+
+### Evidence
+
+Native, configured and built fresh in `build/bedray-native/verify-x64` (VS 2022
+BuildTools, x64, Release), CTest **24/24 passed, 0 failed, 0.70 s**. Six of those
+tests are new in `path_trace_pass_test.cpp`: dispatch order and binding set after
+display, the stage costing nothing until called (same dispatches, barriers,
+images and buffers with and without the program), two outstanding recordings
+each metering their own accumulation half, groups following the frame extent,
+the five refusals plus the configure-time manifest check, and the recording
+lifetime (`destroy` refuses until the release proves the meter, and a discarded
+recording still owns it). `sampler_ownership_test` now also requires the feature
+bit and that the export refuses a null core.
+
+Java: `:common:test --rerun-tasks` **825 tests, 0 failures, 0 errors, 6 skipped**
+(the six are the DLL, benchmark-flag and real-shaderpack cases). `RtFrameStatsTest`
+is 12 tests, including `theNativeCounterStageIsNamedTheSameByBothSides`, which
+pins the header's bit and offset to the Java mirror; `RtSlangWaterMediumTest` now
+reads the whole feature-mask body instead of one exact line, so the new bit cannot
+pass unnoticed.
+
+`fabric/build/libs/bedray-fabric-mc26.3-0.2.0-alpha.jar` was built from this
+source (`bedray_core_record_path_trace_stats` in `BedrayCoreNative.class`, the
+`frame_stats` SPIR-V, manifest and reflection inside) and deployed with
+`bedray_core.dll` to both testbed instances, each with a timestamped `.bak`:
+jar `sha256 06b722fa…02c9e`, DLL `sha256 5db03def…22d2d`.
+
+No owner-verified frame yet. What a playtest should show: on the native backend the
+F3 line's `hit_pct` and `hist_pct` become measured shares again and auto exposure
+has a sample to follow; on a core or jar that cannot meter, both stay `n/a`.
+
 ## 2026-10-30 — the frame counts its own pixels again (L0 source, L1 build, L2 unit, 13 mutation probes; no live frame yet)
 
 Branch: `refactor/slang-pipeline`, commit `412d855` (12 files, +665/−29).
