@@ -3170,3 +3170,32 @@ Deployed for playtest (source-archive build of `3fe438c` + `libs/`):
 `*.20261030-092850.bak`). Natives are unchanged from the earlier live
 `bedray_core.dll` build. What a playtest should show: `rt_pass ... reject_pct`
 next to `hit_pct` on the F3 line, `n/a` while the slot has no measurement.
+
+## 2026-10-30 — Native frame-generation producer merged (L1 build, L2 unit)
+
+Branch: `refactor/slang-pipeline`, merge commit `2825ec4` of
+`origin/codex/migration-fg-producer` (`646aa9c`). The branch adds the producer-only
+ABI `bedray_fg_prepare.h` (104-byte `BedrayFgPrepareFrameDesc`, static asserts at
+8/24/32/48/80/96), `passes/fg_prepare.slang`, and `fg_prepare_pass.cpp`, which
+validates the ABI and the program contract (8-byte push, four bindings:
+combined-image-sampler depth at 0, storage-image motion at 1, storage-image depth
+and motion outputs at 2/3), then records barrier -> flipped `vkCmdBlitImage` ->
+the AOT dispatch -> barrier. No textual conflicts.
+
+Evidence:
+
+- L1 Slang: `fg_prepare: 1868 B SPIR-V, 4 binding(s), 8 B push constants, 8x8x1
+  threads`, exactly the contract the C++ pass checks before dispatching.
+- L1 native: Release x64 build of `bedray_core` succeeded; `bedray_core.dll`,
+  `bedray_abi_probe.exe` and the ownership tests linked.
+- L2 native: CTest `100% tests passed, 0 tests failed out of 25`, including the
+  new `bedray_fg_prepare_pass_test` (expects the recorded events
+  `b l d b`, one flipped blit and one dispatch between the barriers).
+- L2 Java: full `:common:test --rerun-tasks`, `913 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL in 45 s. The baseline is unchanged by
+  the merge.
+
+Still missing: the host is not wired to the new producer. `FrameGenGpu` still
+compiles `fg_prepare.comp` at runtime through Shaderc; the next increment replaces
+that with `bedray_core_render_fg_prepare` and deletes the GLSL. No owner-verified
+frame.
