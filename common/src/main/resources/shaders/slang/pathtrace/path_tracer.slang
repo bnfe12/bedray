@@ -85,6 +85,12 @@ struct PathTraceOptions {
     // the same column.  Never read from the push-constant flags, which mirror a
     // host ABI bit for bit; this is a shader-internal decision.
     bool  primaryInWater;
+    // The player's water style switch, read from the frame the same way as primaryInWater and never from the
+    // push-constant mirror.  Realistic style lets the interface bend the key light; vanilla keeps the straight line
+    // the sheet has always had, so the switch changes the light rather than only the label in the debug log.
+    bool  waterVolumeStyle;
+    // The player's caustics switch: the wave field spreads or gathers the bent beam along the receiver's depth.
+    bool  waterCaustics;
 };
 
 PathTraceOptions defaultPathTraceOptions() {
@@ -99,6 +105,8 @@ PathTraceOptions defaultPathTraceOptions() {
     options.alphaCutoff = 0.5;
     options.flags = 0u;
     options.primaryInWater = false;
+    options.waterVolumeStyle = false;
+    options.waterCaustics = false;
     return options;
 }
 
@@ -167,8 +175,9 @@ bool pathTraceSampleRejected(uint flags) {
 // what puts the light where the surface let it through and gives the floor its
 // caustics.
 float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
-        SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light, float rayBias,
-        MaterialSamplingOptions materialOptions, WaterMedium medium, out bool traced, out bool occluded) {
+        SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light,
+        PathTraceOptions options, MaterialSamplingOptions materialOptions, WaterMedium medium,
+        out bool traced, out bool occluded) {
     float3 zero = float3(0.0);
     traced = false;
     occluded = false;
@@ -180,18 +189,23 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     // the face bends every air direction into the Snell window, so the beam is
     // what carries the light, not the straight line.  A block emitter that never
     // crossed the surface is not that problem, which is why the beam is asked for
-    // only of the two lights the sampler treats as directional.
+    // only of the two lights the sampler treats as directional.  The player's
+    // style switch decides whether the body is modelled as a volume at all; in
+    // vanilla style the light comes down the sight line it always used.
     WaterBeam beam = invalidWaterBeam();
-    if (medium.inside && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
+    if (medium.inside && options.waterVolumeStyle && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
         beam = waterBeamToLight(lightDirection, light.distance, position, medium);
     }
     float3 arrival = beam.valid ? -beam.direction : lightDirection;
     // Two weights ride on the bent beam.  The sample was drawn from air solid
     // angles and is now evaluated on the water side, and the ratio of the two
     // cones is what leaves the flux the surface actually let through.  The focus
-    // is the wave field gathering that flux onto this point or spreading it thin.
+    // is the wave field gathering that flux onto this point or spreading it thin,
+    // and it is the part the caustics switch owns: the étendue ratio is flux
+    // conservation, not an effect, so it stays whatever that switch says.
     float beamWeight = beam.valid
-        ? beam.solidAngle * waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime)
+        ? beam.solidAngle * (options.waterCaustics
+            ? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime) : 1.0)
         : 1.0;
     float cosine = max(dot(normal, arrival), 0.0);
     if (cosine <= 0.0) {
@@ -211,9 +225,9 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     traced = true;
     SurfaceVisibility shadow = beam.valid
         ? traceShadowBeam(traversal, atlas, blockMaterials, position, shadowNormal, lightDirection,
-            light.distance, rayBias, materialOptions, medium, beam)
+            light.distance, options.rayBias, materialOptions, medium, beam)
         : traceShadowVisibilityMedium(traversal, atlas, blockMaterials, position, shadowNormal,
-            lightDirection, light.distance, rayBias, materialOptions, medium);
+            lightDirection, light.distance, options.rayBias, materialOptions, medium);
     // Sixteen filters deep the walk gives up and keeps the energy it collected.  That is not a proven sight line:
     // calling it one would light this surface through an opaque blocker hidden behind the glass.  Reporting it as
     // occluded also lets a reused record fade instead of persisting.
@@ -456,19 +470,19 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             LightSample reused = reuse.reuseSample(receiver, seed);
             reuseHandled = true;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                reused, options.rayBias, materialOptions, medium, reusedTraced, reusedOccluded);
+                reused, options, materialOptions, medium, reusedTraced, reusedOccluded);
             // A sample this receiver could not even shade has not been proven visible either: decaying it lets a record
             // that lost its light fade out instead of sitting at full weight until the surface changes.
             reuse.reuseConfirm(!reusedTraced || reusedOccluded);
             bool keyTraced;
             bool keyOccluded;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lights.sample(receiver, seed), options.rayBias, materialOptions, medium, keyTraced, keyOccluded);
+                lights.sample(receiver, seed), options, materialOptions, medium, keyTraced, keyOccluded);
         } else {
             bool lightTraced;
             bool lightOccluded;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lights.sample(receiver, seed), options.rayBias, materialOptions, medium, lightTraced, lightOccluded);
+                lights.sample(receiver, seed), options, materialOptions, medium, lightTraced, lightOccluded);
         }
         if (direct.r + direct.g + direct.b > 0.0) {
             result.flags |= PATH_TRACE_FLAG_FILTERED_SHADOW;

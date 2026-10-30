@@ -754,6 +754,32 @@ void test_successful_frames_and_payloads() {
     }
     CHECK(fixture.release(swimmer.command_buffer) == BEDRAY_OK);
 
+    // The player's water style and caustics switches are host knowledge for the same reason: the core has no settings
+    // screen to read.  Both have to land in the frame word beside the medium bit and the history bit, and a frame that
+    // carries neither has to keep working, because that is what every host before these bits sent.
+    BedrayPathTraceFrameDesc ripples = valid_frame(0xC005);
+    ripples.flags = BEDRAY_PATH_TRACE_FRAME_ACCUMULATE | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER
+        | BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC | BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS;
+    CHECK_STATUS(fixture.render(ripples), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 8);
+    std::vector<unsigned char> focused;
+    CHECK(read_buffer_bytes(resource_handle(fake::render_calls[6].resources, 16), focused));
+    if (focused.size() >= 608) {
+        CHECK(push_u32(focused, 604) == (1u | (1u << 5u) | (1u << 6u) | (1u << 7u)));
+    }
+    CHECK(fixture.release(ripples.command_buffer) == BEDRAY_OK);
+
+    BedrayPathTraceFrameDesc flat = valid_frame(0xC006);
+    flat.flags = BEDRAY_PATH_TRACE_FRAME_ACCUMULATE;
+    CHECK_STATUS(fixture.render(flat), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 10);
+    std::vector<unsigned char> unbent;
+    CHECK(read_buffer_bytes(resource_handle(fake::render_calls[8].resources, 16), unbent));
+    if (unbent.size() >= 608) {
+        CHECK(push_u32(unbent, 604) == 1u);
+    }
+    CHECK(fixture.release(flat.command_buffer) == BEDRAY_OK);
+
     BedrayPathTraceFrameDesc unknown = valid_frame(0xC004);
     unknown.flags = BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER | (1u << 30);
     CHECK_STATUS(fixture.render(unknown), BEDRAY_ERROR_INVALID_ARGUMENT);

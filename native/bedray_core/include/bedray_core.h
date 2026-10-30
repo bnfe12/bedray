@@ -208,6 +208,11 @@ typedef struct BedrayFrameDesc {
  * so. Host-only like NATIVE_SCENE: the core copies it into FRAME_FLAG_CAMERA_IN_WATER (bit 5) of the FrameConstants
  * frame word the shader reads, it never reaches the push block. */
 #define BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER (1u << 8)
+/* The player's two water switches, as the host read them from the settings screen. Host-only like CAMERA_IN_WATER: the
+ * core copies each into its FRAME_FLAG_* bit of the FrameConstants frame word, they never reach the push block. Both
+ * default to off in the shader, so a frame that carries neither traces water as a flat sheet with straight light. */
+#define BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC (1u << 9)
+#define BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS  (1u << 10)
 #define BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI    (1u << 0)
 /* Accepts 25- and 26-binding trace programs with inactive, native-owned guide stand-ins; the 26th adds NRD's
  * IN_MV vec4. Does not enable G-buffer writes or change any ABI-v2 structure layout. */
@@ -219,6 +224,10 @@ typedef struct BedrayFrameDesc {
  * core without it would be rejected by the flag validation, so the host masks the bit out when the feature is absent:
  * the frame then traces as if the eye were in air, which is what every older build did. */
 #define BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER (1u << 4)
+/* Accepts BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC and BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS and maps both into the
+ * frame word. One bit for two flags: they are one switch pair on one screen, and a core that maps only half of them
+ * would report a water model the player cannot actually configure. */
+#define BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL    (1u << 5)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)

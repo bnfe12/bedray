@@ -69,7 +69,12 @@ final class RtSlangFrameData {
         frame.frameIndex = p.frame;
         frame.sampleIndex = sampleIndex;
         frame.samplesPerFrame = 1;
-        frame.flags = p.cameraInWater ? RtPathTraceSlangPass.Frame.FLAG_CAMERA_IN_WATER : 0;
+        // One frame word for every native pass, built from the flags RtFrameRenderer already derived from the settings
+        // screen: the eye's own medium, and the two switches that decide how the body treats the light passing through
+        // it.  A pass that read RtSettings here would diverge from the native core's copy of the same verdict.
+        frame.flags = (p.cameraInWater ? RtPathTraceSlangPass.Frame.FLAG_CAMERA_IN_WATER : 0)
+            | ((p.flags & RtFrameParams.FLAG_WATER_REALISTIC) != 0 ? RtPathTraceSlangPass.Frame.FLAG_WATER_REALISTIC : 0)
+            | ((p.flags & RtFrameParams.FLAG_CAUSTICS) != 0 ? RtPathTraceSlangPass.Frame.FLAG_WATER_CAUSTICS : 0);
     }
 
     private static Vector3f unproject(Matrix4f invViewProj, float x, float y) {

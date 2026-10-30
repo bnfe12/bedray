@@ -27,6 +27,10 @@ constexpr std::uint32_t kFrameFlagResetTemporal = 1u << 2u;
 // contracts/frame.slang: FRAME_FLAG_CAMERA_IN_WATER.  The host knows the eye's own block from the engine's camera
 // fluid state; geometry cannot, because a submerged block hides the surface of the body around it.
 constexpr std::uint32_t kFrameFlagCameraInWater = 1u << 5u;
+// contracts/frame.slang: FRAME_FLAG_WATER_REALISTIC / FRAME_FLAG_WATER_CAUSTICS.  The player's two water switches; the
+// core is the only writer of the frame word in the native path, so the switches reach the shader through this mapping.
+constexpr std::uint32_t kFrameFlagWaterRealistic = 1u << 6u;
+constexpr std::uint32_t kFrameFlagWaterCaustics = 1u << 7u;
 // restir_spatial.slang: RESTIR_SPATIAL_ENABLED, the state.w bit that lets the
 // shader pool the records the trace pass just wrote.
 constexpr std::uint32_t kSpatialEnabled = 1u << 0u;
@@ -378,7 +382,9 @@ FrameConstants make_frame_constants(const BedrayPathTraceFrameDesc& desc, bool h
     constants.frame[1] = desc.path.sample_index;
     constants.frame[2] = desc.samples_per_frame == 0 ? 1u : desc.samples_per_frame;
     constants.frame[3] = (history_written ? kFrameFlagHistoryValid : kFrameFlagResetTemporal)
-        | ((desc.flags & BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER) != 0u ? kFrameFlagCameraInWater : 0u);
+        | ((desc.flags & BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER) != 0u ? kFrameFlagCameraInWater : 0u)
+        | ((desc.flags & BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC) != 0u ? kFrameFlagWaterRealistic : 0u)
+        | ((desc.flags & BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS) != 0u ? kFrameFlagWaterCaustics : 0u);
     return constants;
 }
 
@@ -839,7 +845,8 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         | BEDRAY_PATH_TRACE_FRAME_ACCUMULATE | BEDRAY_PATH_TRACE_FRAME_CAMERA_STATIC
         | BEDRAY_PATH_TRACE_FRAME_FLIP_Y | BEDRAY_PATH_TRACE_FRAME_SPATIAL
         | BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE | BEDRAY_PATH_TRACE_FRAME_NATIVE_DI
-        | BEDRAY_PATH_TRACE_FRAME_RESET_DI | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER;
+        | BEDRAY_PATH_TRACE_FRAME_RESET_DI | BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER
+        | BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC | BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS;
     if ((desc.flags & ~allowed_flags) != 0)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "unknown path-trace frame flags");
     if (desc.output_view == 0 || desc.depth_view == 0) {

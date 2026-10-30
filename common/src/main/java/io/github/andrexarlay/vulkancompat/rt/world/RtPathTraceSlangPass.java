@@ -244,6 +244,13 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         /** Mirrors {@code FRAME_FLAG_CAMERA_IN_WATER}: the eye's own block is water. */
         static final int FLAG_CAMERA_IN_WATER = 1 << 5;
 
+        /**
+         * Mirrors {@code FRAME_FLAG_WATER_REALISTIC} and {@code FRAME_FLAG_WATER_CAUSTICS}: the player's water style
+         * and caustics switches, written from {@code RtFrameParams} so both path entries see one conversion.
+         */
+        static final int FLAG_WATER_REALISTIC = 1 << 6;
+        static final int FLAG_WATER_CAUSTICS = 1 << 7;
+
         void writeTo(ByteBuffer out) {
             int available = out.capacity() - out.position();
             if (available < FRAME_CONSTANTS_BYTES) {

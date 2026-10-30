@@ -309,7 +309,13 @@ public final class RtSlangPathPass implements RtPass {
             | (diRequests.resetPending() ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0)
             // The native backend builds its own FrameConstants, so the eye's medium travels as a host bit and the core
             // puts it in the frame word the shader reads; the Slang backend already wrote that word itself.
-            | (params.cameraInWater ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER : 0);
+            | (params.cameraInWater ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER : 0)
+            // The player's water switches travel the same way: the core has no settings screen to read, and a frame
+            // that says nothing about them traces water as a flat sheet with unbent light.
+            | ((params.flags & RtFrameParams.FLAG_WATER_REALISTIC) != 0
+                ? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_REALISTIC : 0)
+            | ((params.flags & RtFrameParams.FLAG_CAUSTICS) != 0
+                ? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_CAUSTICS : 0);
         backend.record(new PathTraceBackend.Frame(cmd, views, frame, dispatch, emitters, capturedEntities,
             flags, accumFrames));
         historyWritten = true;

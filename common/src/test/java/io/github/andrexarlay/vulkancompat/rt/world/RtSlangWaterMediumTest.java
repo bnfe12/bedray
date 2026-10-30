@@ -248,7 +248,7 @@ class RtSlangWaterMediumTest {
             "the Java mirror drifted from the shader's bit: the pass would never see water");
 
         String frameData = read(JAVA + "/RtSlangFrameData.java");
-        assertTrue(frameData.contains("frame.flags = p.cameraInWater ? RtPathTraceSlangPass.Frame.FLAG_CAMERA_IN_WATER : 0;"),
+        assertTrue(frameData.contains("frame.flags = (p.cameraInWater ? RtPathTraceSlangPass.Frame.FLAG_CAMERA_IN_WATER : 0)"),
             "one conversion for every native pass, or the two path entries could disagree");
         assertFalse(frameData.contains("frame.flags = 0;"), "the flags word has no unconditional zero left to overwrite it");
 
@@ -260,7 +260,7 @@ class RtSlangWaterMediumTest {
         // its own FrameConstants from a host bit, so the medium has to reach both or a playtest of the live path shows
         // no water at all.
         String pathPass = read(JAVA + "/RtSlangPathPass.java");
-        assertTrue(pathPass.contains("| (params.cameraInWater ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER : 0);"),
+        assertTrue(pathPass.contains("| (params.cameraInWater ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER : 0)"),
             "the native backend gets the verdict as a host bit of its own");
         String layouts = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreLayouts.java");
         assertTrue(layouts.contains("public static final int PATH_TRACE_FRAME_CAMERA_IN_WATER = 1 << 8;"),
@@ -282,15 +282,15 @@ class RtSlangWaterMediumTest {
         assertTrue(coreHeader.contains("#define BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER (1u << 4)"),
             "the mapping is a declared feature, not an undocumented bit");
         String coreSource = read("../native/bedray_core/src/core.cpp");
-        assertTrue(coreSource.contains("| BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER;"),
+        assertTrue(coreSource.contains("| BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER | BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL;"),
             "the feature mask has to report what the record validation already accepts");
 
         String corePass = read("../native/bedray_core/src/path_trace_pass.cpp");
         assertTrue(corePass.contains("constexpr std::uint32_t kFrameFlagCameraInWater = 1u << 5u;"),
             "the core names the shader bit it writes, so the contract is readable at the mapping");
-        assertTrue(corePass.contains("| ((desc.flags & BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER) != 0u ? kFrameFlagCameraInWater : 0u);"),
+        assertTrue(corePass.contains("| ((desc.flags & BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER) != 0u ? kFrameFlagCameraInWater : 0u)"),
             "the host bit becomes the shader bit in the frame word the path tracer reads");
-        assertTrue(corePass.contains("| BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER;"),
+        assertTrue(corePass.contains("| BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER"),
             "an unlisted flag is rejected by the record validation, so the new bit has to be admitted");
 
         String fog = read(JAVA + "/RtFogState.java");
@@ -302,6 +302,136 @@ class RtSlangWaterMediumTest {
             "only the water branch may claim the medium");
         assertEquals(2, count(collect, "medium = "),
             "air default plus water: a third value would need its own ABI meaning");
+    }
+
+    /**
+     * The settings screen has always had a water style and a caustics switch, and the debug line has always reported
+     * both — but the typed path read neither, so {@code water=vanilla} and {@code caustics=off} changed a label and
+     * nothing else.  The two verdicts now travel the same two-backend route as the eye's own medium: one params bit
+     * from the settings, a frame word for the Slang backend, a host bit and a mapping for the native core, and one
+     * feature bit so a host never sets bits an older DLL would reject outright.
+     */
+    @Test
+    void thePlayerSwitchesReachTheFrameWord() {
+        String contract = read(SHADERS + "/contracts/frame.slang");
+        int realistic = flagBit(contract, "FRAME_FLAG_WATER_REALISTIC");
+        int caustics = flagBit(contract, "FRAME_FLAG_WATER_CAUSTICS");
+        assertEquals(6, realistic, "bits 0-5 are the history, cut, reset, first-person, debug and camera-medium flags");
+        assertEquals(7, caustics, "one bit per switch, so a frame can carry either alone");
+        assertEquals(1 << realistic, RtPathTraceSlangPass.Frame.FLAG_WATER_REALISTIC,
+            "the Java mirror drifted from the shader's bit");
+        assertEquals(1 << caustics, RtPathTraceSlangPass.Frame.FLAG_WATER_CAUSTICS,
+            "the Java mirror drifted from the shader's bit");
+        assertTrue(contract.contains("bool frameWaterVolumeStyle(FrameConstants frame) {")
+                && contract.contains("bool frameWaterCaustics(FrameConstants frame) {"),
+            "the pass reads the switches through helpers, so a renamed bit cannot be missed");
+
+        String entry = read(SHADERS + "/pathtrace/path_trace_entry.slang");
+        assertTrue(entry.contains("options.waterVolumeStyle = frameWaterVolumeStyle(f);"),
+            "the verdict comes from the frame word the host wrote");
+        assertTrue(entry.contains("options.waterCaustics = frameWaterCaustics(f);"),
+            "and the same for the focus");
+        assertFalse(entry.contains("PATH_TRACE_OPTION_WATER"),
+            "the switches are not push-constant bits: that block mirrors a host ABI word for word and is not the "
+                + "shader's own decision space");
+
+        String tracer = read(TRACER);
+        String term = block(tracer, "float3 pathTraceDirectTerm<T : ISceneTracer>");
+        assertTrue(term.contains("medium.inside && options.waterVolumeStyle &&"),
+            "vanilla style must stop the bend, or the switch still changes nothing in the typed path");
+        assertTrue(term.contains("float beamWeight = beam.valid") && term.contains("(options.waterCaustics"),
+            "the focus is consulted only on a beam that exists, so caustics-on with vanilla style cannot invent one");
+        assertTrue(term.contains("? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime) : 1.0)"),
+            "off is the neutral weight 1.0, not a darkened floor");
+        assertFalse(term.contains("options.flags & PATH_TRACE_OPTION_WATER"),
+            "the direct term asks the options struct, never the mirrored push flags");
+        String defaults = block(tracer, "PathTraceOptions defaultPathTraceOptions() {");
+        assertTrue(defaults.contains("options.waterVolumeStyle = false;") && defaults.contains("options.waterCaustics = false;"),
+            "a frame that says nothing about water traces the flat sheet, the same fallback every older build had");
+
+        // Producer: one conversion from the settings to the params bits, shared by both backends.
+        String renderer = read(JAVA + "/RtFrameRenderer.java");
+        assertTrue(renderer.contains("RtSettings.waterStyle() == 1 ? RtFrameParams.FLAG_WATER_REALISTIC : 0"),
+            "the style switch is read once, for every pass");
+        assertTrue(renderer.contains("RtSettings.caustics() ? RtFrameParams.FLAG_CAUSTICS : 0"),
+            "and so is the caustics switch");
+
+        String frameData = read(JAVA + "/RtSlangFrameData.java");
+        assertTrue(frameData.contains("(p.flags & RtFrameParams.FLAG_WATER_REALISTIC) != 0 "
+                + "? RtPathTraceSlangPass.Frame.FLAG_WATER_REALISTIC : 0)"),
+            "the Slang backend writes its own frame word");
+        assertTrue(frameData.contains("(p.flags & RtFrameParams.FLAG_CAUSTICS) != 0 "
+                + "? RtPathTraceSlangPass.Frame.FLAG_WATER_CAUSTICS : 0)"),
+            "the focus switch goes into the same word, from the same params bit");
+
+        String pathPass = read(JAVA + "/RtSlangPathPass.java");
+        assertTrue(pathPass.contains("? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_REALISTIC : 0)"),
+            "the native backend gets the same two verdicts as host bits");
+        assertTrue(pathPass.contains("? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_CAUSTICS : 0)"));
+
+        String layouts = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreLayouts.java");
+        String coreHeader = read("../native/bedray_core/include/bedray_core.h");
+        int realisticHost = hostBit(layouts, "PATH_TRACE_FRAME_WATER_REALISTIC");
+        int causticsHost = hostBit(layouts, "PATH_TRACE_FRAME_WATER_CAUSTICS");
+        assertEquals(1 << realisticHost, abiBit(coreHeader, "BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC"),
+            "the Java host bit and the core's declaration must be the same number");
+        assertEquals(1 << causticsHost, abiBit(coreHeader, "BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS"),
+            "the Java host bit and the core's declaration must be the same number");
+        assertEquals(hostBit(layouts, "PATH_TRACE_FRAME_CAMERA_IN_WATER") + 1,
+            realisticHost, "the host word stays a single ascending list");
+        assertEquals(realisticHost + 1, causticsHost, "and the pair is adjacent, so one mask can drop both");
+        assertEquals(realistic + 1, caustics, "the two shader bits are neighbours, as the contract documents");
+        assertTrue(layouts.contains("public static final int PATH_TRACE_FEATURE_WATER_MODEL = 1 << 5;"),
+            "one advertised feature for the pair: a core that maps half a switch pair is worse than one that maps "
+                + "neither");
+        assertEquals(abiBit(layouts, "PATH_TRACE_FEATURE_WATER_MODEL"),
+            abiBit(coreHeader, "BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL"),
+            "the host probes the mask bit the core exports, or the pair is masked away on every frame");
+
+        String nativeTrace = read(JAVA + "/BedrayPathTraceNative.java");
+        assertTrue(nativeTrace.contains("if (!library.hasWaterModelFlags()) {"),
+            "an older core answers an unknown flag with a rejected frame: the verdicts are dropped, not negotiated");
+        assertTrue(nativeTrace.contains("flags &= ~(BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_REALISTIC"),
+            "and both go together, so the frame cannot claim a style the core would not map");
+
+        String coreNative = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreNative.java");
+        assertTrue(coreNative.contains("hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_WATER_MODEL)"),
+            "the probe asks the mask the core actually exports");
+
+        String coreSource = read("../native/bedray_core/src/core.cpp");
+        assertTrue(coreSource.contains("| BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL;"),
+            "the feature mask has to report what the record validation accepts");
+
+        String corePass = read("../native/bedray_core/src/path_trace_pass.cpp");
+        assertEquals(1 << realistic, abiBit(corePass, "kFrameFlagWaterRealistic"),
+            "the core names the shader bit it writes");
+        assertEquals(1 << caustics, abiBit(corePass, "kFrameFlagWaterCaustics"));
+        assertTrue(corePass.contains("? kFrameFlagWaterRealistic : 0u)")
+                && corePass.contains("? kFrameFlagWaterCaustics : 0u)"),
+            "each host bit becomes its shader bit in the frame word the path tracer reads");
+        assertTrue(corePass.contains("| BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC | BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS;"),
+            "an unlisted flag is rejected by the record validation, so both have to be admitted");
+    }
+
+    /** {@code NAME = 1u << N} in the Slang contract, as a bit index. */
+    private static int flagBit(String source, String name) {
+        Matcher m = Pattern.compile(name + "\\s*=\\s*1u\\s*<<\\s*(\\d+)u").matcher(source);
+        assertTrue(m.find(), name + " must be declared as a single bit in the contract");
+        return Integer.parseInt(m.group(1));
+    }
+
+    /** A {@code 1 << N} Java constant or a {@code (1u << N)} C define / constexpr, as a value. */
+    private static int abiBit(String source, String name) {
+        Matcher m = Pattern.compile(name + "\\s*=?\\s*\\(?1u?\\s*<<\\s*(\\d+)\\)?").matcher(source);
+        assertTrue(m.find(), name + " is not declared as a single bit");
+        return 1 << Integer.parseInt(m.group(1));
+    }
+
+    /** The same declaration, as the bit index, for the host word. */
+    private static int hostBit(String source, String name) {
+        Matcher m = Pattern.compile(name + "\\s*=\\s*1\\s*<<\\s*(\\d+)").matcher(source);
+        assertTrue(m.find(), name + " is not declared as a single bit");
+        return Integer.parseInt(m.group(1));
     }
 
     private static int count(String source, String needle) {

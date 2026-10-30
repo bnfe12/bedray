@@ -214,9 +214,10 @@ class RtSlangWaterBeamTest {
     @Test
     void theDirectTermShadesTheArrivingBeamNotTheSightLine() {
         String term = block(read(TRACER), "float3 pathTraceDirectTerm<T : ISceneTracer>");
-        assertTrue(term.contains("if (medium.inside && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {"),
+        assertTrue(term.contains("if (medium.inside && options.waterVolumeStyle "
+                + "&& (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {"),
             "only a light that came down through the surface is bent; a block emitter that never crossed it keeps the "
-                + "straight column");
+                + "straight column, and the player's vanilla style keeps it for the sun too");
         assertTrue(term.contains("float3 arrival = beam.valid ? -beam.direction : lightDirection;"),
             "the beam travels down, so the direction the receiver sees the light in is its negation");
         assertTrue(term.contains("float3 bsdf = bsdfEvaluate(surface.material, view, normal, arrival);"),
@@ -290,8 +291,10 @@ class RtSlangWaterBeamTest {
     @Test
     void theBeamUsesTheSameClockAsTheSheetItBendsThrough() {
         String term = block(read(TRACER), "float3 pathTraceDirectTerm<T : ISceneTracer>");
-        assertTrue(term.contains("beam.solidAngle * waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime)"),
-            "area times étendue: the focus rides on the same weight the crossing needs");
+        assertTrue(term.contains("beam.solidAngle * (options.waterCaustics\n"
+            + "            ? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime) : 1.0)"),
+            "area times étendue: the focus rides on the same weight the crossing needs, and 1.0 when the player turned "
+                + "the focus off");
         String surface = block(read(SURFACE), "&& waterIsSurface(true, material.f0");
         assertTrue(surface.contains("options.portalTime"), "the wave normal the decoded face uses");
         assertTrue(term.contains("beam = waterBeamToLight(lightDirection, light.distance, position, medium);"),

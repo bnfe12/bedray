@@ -164,6 +164,10 @@ final class BedrayPathTraceNative implements AutoCloseable {
         if ((flags & BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER) != 0 && !library.hasCameraInWaterFlag()) {
             flags &= ~BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER;
         }
+        if (!library.hasWaterModelFlags()) {
+            flags &= ~(BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_REALISTIC
+                | BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_CAUSTICS);
+        }
         desc.set(JAVA_INT, BedrayCoreLayouts.PTFD_FLAGS, flags);
         desc.set(JAVA_LONG, BedrayCoreLayouts.PTFD_COMMAND_BUFFER, input.commandBuffer());
         desc.set(JAVA_LONG, BedrayCoreLayouts.PTFD_OUTPUT_VIEW, views.output());

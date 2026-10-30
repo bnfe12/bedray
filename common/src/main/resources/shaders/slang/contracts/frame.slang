@@ -60,6 +60,13 @@ static const uint FRAME_FLAG_DEBUG_VIEW         = 1u << 4u;
 // The eye's own block is water.  No surface crossing produced it, so a path that starts here starts inside the medium and
 // cannot learn it from geometry: the water surface above can be hidden by a block submerged in the same body.
 static const uint FRAME_FLAG_CAMERA_IN_WATER    = 1u << 5u;
+// The player's two water switches, as the host read them from the settings screen.  Both are off unless the host says
+// otherwise, so a frame from an older host traces water the way a flat sheet is traced: straight light, no focus.
+// STYLE: realistic water models the body as a volume the light bends through; vanilla keeps the straight sight line.
+static const uint FRAME_FLAG_WATER_REALISTIC    = 1u << 6u;
+// CAUSTICS: the wave field gathers the bent beam onto the floor and ceiling of the body.  Only ever read with the beam,
+// so a vanilla-style frame cannot focus light it never bent.
+static const uint FRAME_FLAG_WATER_CAUSTICS     = 1u << 7u;
 
 struct FrameConstants {
     CameraState     camera;
@@ -83,4 +90,15 @@ float frameDeltaTime(FrameConstants frame) {
 // Whether the host put the eye inside a water body this frame.
 bool frameCameraInWater(FrameConstants frame) {
     return (frame.frame.w & FRAME_FLAG_CAMERA_IN_WATER) != 0u;
+}
+
+// Whether the player asked for water modelled as a volume, and whether the waves are allowed to focus the light that
+// passes through them.  The path tracer consults these instead of reading the bits itself, so the meaning of a switch
+// lives in one place and a renamed bit cannot be missed by a pass that started reading the frame word directly.
+bool frameWaterVolumeStyle(FrameConstants frame) {
+    return (frame.frame.w & FRAME_FLAG_WATER_REALISTIC) != 0u;
+}
+
+bool frameWaterCaustics(FrameConstants frame) {
+    return (frame.frame.w & FRAME_FLAG_WATER_CAUSTICS) != 0u;
 }

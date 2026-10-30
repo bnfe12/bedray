@@ -76,12 +76,22 @@ public final class BedrayCoreLayouts {
      * {@code FRAME_FLAG_CAMERA_IN_WATER} (bit 5) of the FrameConstants frame word, which is a different namespace.
      */
     public static final int PATH_TRACE_FRAME_CAMERA_IN_WATER = 1 << 8;
+    /**
+     * The player's water style and caustics switches, as {@code RtFrameParams} already carries them. Host-only like
+     * {@code CAMERA_IN_WATER}: the core maps them onto {@code FRAME_FLAG_WATER_REALISTIC} (bit 6) and
+     * {@code FRAME_FLAG_WATER_CAUSTICS} (bit 7) of the frame word the shader reads.
+     */
+    public static final int PATH_TRACE_FRAME_WATER_REALISTIC = 1 << 9;
+    public static final int PATH_TRACE_FRAME_WATER_CAUSTICS = 1 << 10;
     public static final int PATH_TRACE_FEATURE_NATIVE_DI = 1 << 0;
     public static final int PATH_TRACE_FEATURE_GUIDE_BINDINGS = 1 << 1;
     public static final int PATH_TRACE_FEATURE_GUIDE_OUTPUTS = 1 << 2;
     public static final int PATH_TRACE_FEATURE_NRD_MOTION = 1 << 3;
     /** The core maps {@code PATH_TRACE_FRAME_CAMERA_IN_WATER} into the frame word the shader reads. */
     public static final int PATH_TRACE_FEATURE_CAMERA_IN_WATER = 1 << 4;
+    /** The core maps both water switches into the frame word; one bit covers the pair, since a half-mapped pair is a
+     * switch the player can see but not use. */
+    public static final int PATH_TRACE_FEATURE_WATER_MODEL = 1 << 5;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;

@@ -231,6 +231,10 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // Whether the eye's own block is water, which only the host can answer: the
     // surface of that body can hide behind a block submerged in the same column.
     options.primaryInWater = frameCameraInWater(f);
+    // The player's two water switches, from the frame word rather than the push-constant mirror: the style says
+    // whether the body bends the key light at all, the caustics gate says whether the waves focus what got through.
+    options.waterVolumeStyle = frameWaterVolumeStyle(f);
+    options.waterCaustics = frameWaterCaustics(f);
 
     Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance);
     uint seed = pathTraceSeed(p, f.frame.x, pc.sampleIndex);
