@@ -38,6 +38,28 @@ public interface RtPass {
     boolean usesGbuffer();
 
     /**
+     * True when this pass produces its own per-pixel world-space motion image. The path pass fills it during
+     * {@link #dispatch}; a denoiser that accepts an image (NRD's MV input) can then read it without a
+     * {@code StatsBuf.motionAddr} buffer copy. Passes that write the motion into that buffer return false.
+     */
+    default boolean providesWorldMotion() {
+        return false;
+    }
+
+    /**
+     * The RGBA16F primary-hit world-motion image of this pass, or 0 before the first dispatch / when the pass does not
+     * produce one. xyz is {@code previous - current} in world blocks and w is 1 for a captured model, 0 for terrain.
+     */
+    default long motionImage() {
+        return 0L;
+    }
+
+    /** The view of {@link #motionImage()}, or 0 when there is none. */
+    default long motionView() {
+        return 0L;
+    }
+
+    /**
      * Whether this pass was built for the requested G-buffer mode. The renderer rebuilds a pass only when this is false,
      * not when {@link #usesGbuffer()} differs: a pass that cannot write the G-buffer but was deliberately built for that
      * request would otherwise be recreated every frame while a denoiser is selected.
