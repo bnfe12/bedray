@@ -57,6 +57,43 @@ float emitterWindow(float d2, float lightRadius) {
     return window * window;
 }
 
+// ---- Distant block light (the deleted rt_common_shade.glsl handover) ----
+// The list is ordered by importance FROM THE CAMERA (RtEmitters: emission * area / distance^2) and holds only emitters
+// within the host's collection range of the camera, while a candidate farther than EMITTER_RADIUS from the shaded point
+// is rejected.  A receiver far from the player therefore has no usable candidate: the torches around it are sampled
+// ~1/d^2 as often as the ones next to the camera and the rest of the time the estimate is exactly zero.  That is why a
+// village, a lit cave or a lamp on the far bank read as unlit, while the same lamp lights its surroundings as soon as
+// the player walks up to it.  The list stops being complete already at `listRange - EMITTER_RADIUS` (an emitter just
+// outside it can still light the receiver), so the handover is the band `listRange ± EMITTER_RADIUS`, and past it the
+// vanilla block-light field (the propagation the game itself shows for that same torch) is the whole term.  Near the
+// player the traced estimate stays the only source, so no baked light appears in the room around the camera.
+float blockLightFarMix(float cameraDist, float listRange) {
+    // The inner edge is floored: a collection range as low as 8 would put baked light on the surfaces around the
+    // player, which is the leak the traced emitters replaced.
+    return smoothstep(max(listRange - EMITTER_RADIUS, 8.0), listRange + EMITTER_RADIUS, cameraDist);
+}
+
+// Past this much of the handover band the traced estimate is spent on candidates that are all rejected and reads zero
+// anyway, so a caller may skip the emitter branch instead of paying for it (the legacy 0.999).
+static const float BLOCK_LIGHT_FAR_FULL = 0.999;
+
+// The vanilla lightmap is a display value, not radiance: its block-light texel is ~0.87 at level 13, while the traced
+// estimate of that same torch on that same floor is ~0.05.  The far field only has to carry the light at the scale the
+// player already sees around the torch, so the field is divided by ~20.  One gain keeps the shape: light.x falls like
+// the level (13 -> 1 over 15 blocks) and the traced attenuation falls like d^-1.25 over the same span.
+static const float BLOCK_LIGHT_FIELD_GAIN = 0.05;
+// The hue of the field.  The deleted renderer sampled the lightmap at its full-block-light-in-darkness texel, so the
+// tint followed the resource pack, the dimension and the effects; a typed path pass binds no lightmap (the native core
+// validates the exact descriptor count of both path passes), so this is the warm tint that predated that sampling.  A
+// pack with a different block-light hue reaches the traced emitters only.
+static const float3 BLOCK_LIGHT_FIELD_TINT = float3(1.0, 0.82, 0.60);
+
+// The baked field in the units of the traced emitter estimate: the vanilla block-light level of the surface, tinted and
+// gained down.  It stands in for the whole term, cosine included, exactly as the legacy `vanillaBlockIrradiance` did.
+float3 vanillaBlockIrradiance(float2 light) {
+    return BLOCK_LIGHT_FIELD_TINT * clamp(light.x, 0.0, 1.0) * BLOCK_LIGHT_FIELD_GAIN;
+}
+
 float3 emitterAttenuationColor(float3 tex) {
     float m = max(tex.r, max(tex.g, tex.b));
     if (m <= 1.0e-4) {
@@ -502,7 +539,10 @@ struct SunAndBlockEmitterSampler : ILightSampler {
 
     LightSample sample(LightReceiver receiver, inout uint seed) {
         bool hasEmitters = blockEmitterCount(emitters.records) > 0u && emitters.candidates > 0u
-            && emitterProbability > 0.0 && !(receiver.primary && emittersReusedAtPrimary);
+            && emitterProbability > 0.0 && !(receiver.primary && emittersReusedAtPrimary)
+            // A receiver the path tracer has handed to the baked field must not draw the branch the field replaces:
+            // the key light still does, with the whole density.
+            && !receiver.bakedBlockLight;
         float sunIntensity = luminance(keyLight.sun.color.rgb) * max(keyLight.sun.color.w, 0.0)
             + luminance(keyLight.sun.moonColor.rgb) * max(keyLight.sun.moonColor.w, 0.0);
         if (!hasEmitters || sunIntensity <= 0.0) {

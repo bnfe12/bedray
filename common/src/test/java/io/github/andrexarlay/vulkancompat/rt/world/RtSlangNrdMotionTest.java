@@ -133,8 +133,10 @@ class RtSlangNrdMotionTest {
         assertTrue(frame.contains("| (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)"),
             "the push follows the bound views, never a setting");
         assertTrue(frame.contains("| rayEffectFlags()\n"
-                + "            | pixelShadowFlags();"),
+                + "            | pixelShadowFlags()\n"),
             "the ray profile's effect bits and the pixel-shadow option OR into the same flag word, not a second one");
+        assertTrue(frame.contains("| (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0);"),
+            "the block-emitter switch closes the same word: a second push word would be a different ABI");
         String backend = read(BACKEND);
         assertTrue(backend.contains("RtPathTraceSlangPass.BufferView motion = (dispatch.flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0"),
             "the backend derives the binding from the same flag the push carries");

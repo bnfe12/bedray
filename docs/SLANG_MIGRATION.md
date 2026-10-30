@@ -1239,16 +1239,45 @@ is supposed to protect or removed.  The first group is closed:
   cell scaling, foliage frame/cell, y-shear, stable seed, stream sync, rotation
   cell, receiver default, host clamp, host flag OR) were each caught, and every
   mutated file was restored by sha256.
+* the distant block-light handover the deleted `rt_common_shade.glsl` ran is
+  back as a mix, not a max. `light/block_emitters.slang` owns the field:
+  `blockLightFarMix` (a smoothstep over `listRange ± EMITTER_RADIUS`, the inner
+  edge floored at 8 blocks so a small collection range cannot put baked light
+  on the player), `BLOCK_LIGHT_FAR_FULL` (0.999), `BLOCK_LIGHT_FIELD_GAIN`
+  (0.05) and `vanillaBlockIrradiance` (the pre-lightmap warm tint
+  `(1.0, 0.82, 0.60)`, block light only - the field stands in for the emitter
+  estimator, not for the sky). The tracer fades the emitter share of the
+  composite draw by `1 - emitterFar` (fresh and reused alike), adds
+  `pathBakedBlockLight * emitterFar` - the reflecting lobe's albedo, the
+  `1 - Fsc` the interface did not take and the LabPBR AO, with no cosine and
+  no 1/pi, exactly the tuned legacy term - and past `BLOCK_LIGHT_FAR_FULL`
+  `LightReceiver.bakedBlockLight` makes `SunAndBlockEmitterSampler` skip the
+  emitter branch entirely; the key light keeps full density, and the
+  end-of-path `reuseClear` keeps a skipped reservoir from persisting. The
+  distance is `length(hit.position)`, camera-relative the way the list was
+  sorted. The range reaches the tracer as `PathTraceOptions.emitterListRange`
+  from `emitterSampler.maxDistance` (offset 76, so `PathTracePush` stays
+  112 B), and the option is flag bit 16, which the host sets only while
+  `SLANG_BLOCK_EMITTERS`/`RtSettings.emissive()` keeps emitters on - a frame
+  with the switch off gets no field either. `RtSlangDistantBlockLightTest` (9)
+  mirrors the band, the gain and tint, the mix structure, the primary-diffuse
+  gate, the exhausted-list skip and the host wiring, read out of
+  `light/block_emitters.slang`, `pathtrace/path_tracer.slang`,
+  `pathtrace/path_trace_entry.slang`, `contracts/light.slang` and the two host
+  classes. Twenty-two mutation probes (band floor, gain, tint, clamp, sampler
+  gate, fade on both branches, distance source, bounce/metal/light gates, reuse
+  skip, verdict, albedo count, entry range, host flag, host switch, path
+  range, contract default, bit collision, clear) were each caught, and every
+  mutated file was restored by sha256.
 
 The second group has no Slang counterpart yet, and each entry is an open hole,
 not a passing test:
 
 * the `StatsBuf` std430 layout of the Slang structs, beyond the two
   self-avatar slots. (`RtStatsLayoutTest`)
-* glass cost, distant-block light, the NEE NaN guard and the primary-path
-  hot-loop invariants. (`RtGlassCostTest`, `RtDistantBlockLightTest`,
-  `RtShaderNaNGuardTest`, `RtPathHotLoopTest`, `RtOptimizationTest`,
-  `RtBlockLightReachTest`)
+* glass cost, the NEE NaN guard and the primary-path hot-loop invariants.
+  (`RtGlassCostTest`, `RtShaderNaNGuardTest`, `RtPathHotLoopTest`,
+  `RtOptimizationTest`, `RtBlockLightReachTest`)
 
 The third group tested the deleted classes themselves (runtime compiler
 options, the SPIR-V disk cache, the GLSL include graph, the `rtx/raytracing`

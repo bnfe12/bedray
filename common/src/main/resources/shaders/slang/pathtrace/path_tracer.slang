@@ -30,9 +30,13 @@
 public module path_tracer;
 
 import "contracts/contracts.slang";
+// The distant block-light handover: the baked field of a receiver the emitter list can no longer serve.  A light module
+// like light/sky.slang, not a backend: the tracer still samples every light through ILightSampler.
+import "light/block_emitters.slang";
 import "light/sky.slang";
 import "sampling.slang";
 import "shading/bsdf.slang";
+import "shading/microfacet.slang";
 import "surface/surface.slang";
 import "surface/visibility.slang";
 import "surface/water.slang";
@@ -84,6 +88,11 @@ static const uint PATH_TRACE_OPTION_HARD_KEY_SHADOWS    = 1u << 6u;
 // treated as off, and the flag clear keeps the exact per-pixel shadow of every earlier build.
 static const uint PATH_TRACE_OPTION_PIXEL_SHADOWS       = 1u << 7u;
 static const uint PATH_TRACE_PIXEL_SHADOW_SIZE_SHIFT    = 8u;
+// The host enabled block emitters for this frame: the list is the frame's, possibly empty.  Read by the distant
+// handover below - past the list's reach the receiver is lit from the vanilla block-light field, and it must then skip
+// the emitter branch instead of paying an NEE batch whose every candidate is rejected.  A frame with the switch off
+// keeps no baked field either, so the deleted renderer's "emissive lighting off" A/B stays exactly that.
+static const uint PATH_TRACE_OPTION_BLOCK_EMITTERS      = 1u << 16u;
 
 struct PathTraceOptions {
     uint  maxDepth;             // scattering events before the path stops
@@ -113,6 +122,10 @@ struct PathTraceOptions {
     float pixelShadowCell;
     uint  frameIndex;
     uint  sampleWord;
+    // The range the host collected this frame's emitter list over, in blocks.  The list only holds emitters within this
+    // reach of the camera, so past `emitterListRange - EMITTER_RADIUS` it is no longer complete for a receiver and the
+    // distant handover starts.  0 is an older host and keeps the whole ray far plane.
+    float emitterListRange;
 };
 
 PathTraceOptions defaultPathTraceOptions() {
@@ -133,6 +146,7 @@ PathTraceOptions defaultPathTraceOptions() {
     options.pixelShadowCell = 0.0;
     options.frameIndex = 0u;
     options.sampleWord = 0u;
+    options.emitterListRange = 0.0;
     return options;
 }
 
@@ -246,6 +260,18 @@ float3 pathPixelShadowOrigin<T : ISceneTracer>(T traversal, float3 position, flo
     // count that triangle as a blocker and reject every snap.
     Ray probe = makeRay(position + normal * bias, lateral / len, 0.0, len + 0.05);
     return traversal.traceVisibility(probe).visible ? position + lateral : position;
+}
+
+// The baked emitter term of the distant handover: the receiver's vanilla block light, tinted and gained, weighted by
+// the same diffuse factors the emitter NEE would have carried - the albedo of the reflecting lobe, the energy the
+// interface did not take ((1 - F) at the view angle, the legacy `Fsc`) and the LabPBR AO.  The legacy look has no
+// cosine and no 1/PI in it: the field stands in for the whole estimate at a tuned scale (`BLOCK_LIGHT_FIELD_GAIN`),
+// not for a second estimator, so these are the numbers the owner tuned rather than a re-derivation.
+float3 pathBakedBlockLight(MaterialSample material, float3 view, float3 normal, float2 light) {
+    float3 fresnelView = fresnelSchlick(max(dot(normal, view), 0.0), bsdfF0(material));
+    float specularShare = max(fresnelView.r, max(fresnelView.g, fresnelView.b));
+    return bsdfReflectionAlbedo(material) * (1.0 - specularShare) * material.ambientOcclusion
+        * vanillaBlockIrradiance(light);
 }
 
 // Shades one direct-light sample: the BSDF term of the legacy NEE times the filtered visibility walk.  The caller
@@ -628,15 +654,37 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             receiver.sunSeed = pathTraceSunSeed(sunCell, options.frameIndex, options.sampleWord);
         }
         float3 direct = float3(0.0);
-        if (receiver.primary && reuse.reuseActive()) {
+        // ---- Distant block light ----
+        // Past the list's reach the camera-sorted emitter list cannot serve this receiver any more, so it is lit from
+        // the vanilla block-light field instead (the deleted rt_common_shade.glsl handover).  Only the primary vertex
+        // has a camera distance - a deeper vertex is shaded where the previous one sent it and keeps the traced
+        // estimate - and a face with no vanilla block light (a LabPBR glow, an emissive item) has nothing to fall back
+        // to, so it keeps tracing.  The legacy branch was diffuse-only for the same reason the field is.
+        float emitterFar = 0.0;
+        bool emitterBaked = false;
+        if (receiver.primary && (options.flags & PATH_TRACE_OPTION_BLOCK_EMITTERS) != 0u
+                && !materialIsMetal(surface.material) && hit.light.x > 0.0) {
+            float listRange = options.emitterListRange > 0.0 ? options.emitterListRange : options.maxDistance;
+            // `hit.position` is camera-relative: the distance is measured from the camera, the way the list was sorted.
+            emitterFar = blockLightFarMix(length(hit.position), listRange);
+            // In the far end of the band the traced batch would spend its candidates on draws that are all rejected:
+            // the emitter branch is skipped and the baked field is the whole term, while the key light keeps sampling.
+            emitterBaked = emitterFar >= BLOCK_LIGHT_FAR_FULL;
+        }
+        receiver.bakedBlockLight = emitterBaked;
+        if (receiver.primary && reuse.reuseActive() && !emitterBaked) {
             // The reservoir carries the emissive branch across frames, so the composite must not also draw it; the key
             // light is still sampled the plain way.  One extra shadow ray per pixel, no duplicated emitter batch.
             bool reusedTraced;
             bool reusedOccluded;
             LightSample reused = reuse.reuseSample(receiver, seed);
             reuseHandled = true;
+            // The handover fades the traced estimate into the baked field across the band.  Mix, not max: the estimate
+            // reads zero on most pixels of the band, so max() would put the whole field on top of an average that is
+            // already lower and leave a bright ring around the player.
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                reused, options, materialOptions, medium, receiver.primary, reusedTraced, reusedOccluded);
+                reused, options, materialOptions, medium, receiver.primary, reusedTraced, reusedOccluded)
+                * (1.0 - emitterFar);
             // A sample this receiver could not even shade has not been proven visible either: decaying it lets a record
             // that lost its light fade out instead of sitting at full weight until the surface changes.
             reuse.reuseConfirm(!reusedTraced || reusedOccluded);
@@ -647,8 +695,16 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         } else {
             bool lightTraced;
             bool lightOccluded;
-            direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lights.sample(receiver, seed), options, materialOptions, medium, receiver.primary, lightTraced, lightOccluded);
+            LightSample lightSample = lights.sample(receiver, seed);
+            float3 term = pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
+                lightSample, options, materialOptions, medium, receiver.primary, lightTraced, lightOccluded);
+            // Only the emitter share of the composite draw fades: the key light is not part of the handover.
+            direct += lightSample.kind == LightKind.Emitter ? term * (1.0 - emitterFar) : term;
+        }
+        // The baked field carries the band's outer share: the part of the term the list can no longer serve.  Added
+        // after the branches, so a reused, a fresh emitter and a key-light draw all see the same field.
+        if (emitterFar > 0.0) {
+            direct += pathBakedBlockLight(surface.material, view, normal, hit.light) * emitterFar;
         }
         if (direct.r + direct.g + direct.b > 0.0) {
             result.flags |= PATH_TRACE_FLAG_FILTERED_SHADOW;

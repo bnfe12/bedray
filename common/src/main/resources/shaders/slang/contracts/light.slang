@@ -65,6 +65,11 @@ struct LightReceiver {
     // with speckle.  The path tracer fills this; every other caller leaves it false and keeps the exact per-path sample.
     bool   stableSun;
     uint   sunSeed;
+    // This receiver stands past the emitter list's reach, where the list cannot serve it any more and the path tracer
+    // lights it from the vanilla block-light field instead (the deleted `distantBlockLight` handover).  An emitter
+    // sampler must then draw nothing for it - the field already carries that term - while a key-light sampler keeps
+    // serving it exactly as before.  False everywhere else, including every non-primary vertex.
+    bool   bakedBlockLight;
 };
 
 LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
@@ -78,6 +83,7 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
     receiver.foliage = false;
     receiver.stableSun = false;
     receiver.sunSeed = 0u;
+    receiver.bakedBlockLight = false;
     return receiver;
 }
 

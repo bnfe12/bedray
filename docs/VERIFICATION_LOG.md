@@ -4,6 +4,61 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — Distant block light hands back to the baked field (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+The deleted `rt_common_shade.glsl` mixed the traced block-emitter estimate back
+to the vanilla block-light field past the emitter list's reach: `blockLightFarMix`
+smoothstepped over `listRange ± EMITTER_RADIUS` (inner edge floored at eight
+blocks) from the camera distance, and a fully faded receiver skipped the emitter
+branch and read the baked field instead. The Slang path kept tracing every
+fragment against the truncated list, so a village lamp, a lit cave or a lamp on
+the far bank dimmed to black instead of handing over to the propagation the game
+itself shows.
+
+- `light/block_emitters.slang` owns the field: `blockLightFarMix`,
+  `BLOCK_LIGHT_FAR_FULL` (0.999), `BLOCK_LIGHT_FIELD_GAIN` (0.05) and
+  `vanillaBlockIrradiance` (warm `(1.0, 0.82, 0.60)` tint, block light only).
+  The legacy renderer tinted the field from the lightmap texel; a typed path
+  pass binds no lightmap and the native core validates the exact descriptor
+  count of both path passes, so the pre-lightmap warm tint stands in and a
+  resource pack's block-light hue reaches the traced emitters only.
+- The handover is a mix, not a max: the emitter share of the composite draw is
+  scaled by `1 - emitterFar` (fresh and reused alike) and `pathBakedBlockLight`
+  - the reflecting lobe's albedo, the `1 - Fsc` the interface did not take and
+  the LabPBR AO, with no cosine and no 1/pi, the tuned legacy term - adds
+  `* emitterFar`. The distance is `length(hit.position)`, camera-relative the
+  way the list was sorted.
+- Past `BLOCK_LIGHT_FAR_FULL` the receiver sets `LightReceiver.bakedBlockLight`;
+  `SunAndBlockEmitterSampler` then draws no emitter share (the key light keeps
+  its full density) and the tracer skips the emitter sample entirely, relying on
+  the end-of-path `reuseClear` so a skipped ReSTIR DI record cannot persist.
+- No push growth: the list range already rides at offset 76
+  (`diCameraDelta.w` -> `emitterSampler.maxDistance`) and now also reaches the
+  tracer as `PathTraceOptions.emitterListRange`; `PathTracePush` stays 112 B.
+  The option is flag bit 16 (`PATH_TRACE_OPTION_BLOCK_EMITTERS`), which the host
+  sets only while `SLANG_BLOCK_EMITTERS` / `RtSettings.emissive()` keeps
+  emitters on, so switching the feature off hands the field nothing.
+- `RtSlangDistantBlockLightTest` (9) mirrors the band, the gain and tint, the
+  mix structure, the primary-diffuse gate, the exhausted-list skip and the host
+  wiring. Twenty-two mutation probes (band floor, gain, tint, clamp, sampler
+  gate, fade on both branches, distance source, bounce/metal/light gates, reuse
+  skip, verdict, albedo count, entry range, host flag, host switch, path range,
+  contract default, bit collision, clear) were each caught, and every mutated
+  file was restored by sha256.
+- Three contract tests were re-aimed at the preserved invariants:
+  `RtSlangBlockEmitterTest` reads the reused-branch gate plus the new baked
+  clause, `RtSlangNrdMotionTest` expects the block-emitter term closing the same
+  OR chain, and `RtSlangPixelShadowTest` reads the option line inside it.
+
+Full `:common:test --rerun-tasks`: 152 classes, 874 tests, 0 failures, 6
+skipped, `BUILD SUCCESSFUL`. All Slang entry passes compile; `path_trace` is
+1 116 428 B SPIR-V, 26 bindings, 112 B push constants (unchanged).
+
+Open: no owner-verified frame shows the handover, and the field's hue is the
+pre-lightmap tint rather than the sampler's lightmap colour.
+
 ## 2026-10-30 — Pixel-shaped key-light shadows return (L0 source, L1 build, L2 unit; no live frame yet)
 
 Branch: `refactor/slang-pipeline`.

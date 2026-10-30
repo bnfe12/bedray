@@ -249,7 +249,7 @@ class RtSlangPixelShadowTest {
         assertTrue(host.contains("static final int PIXEL_SHADOW_SIZE_SHIFT = 8;"), "the size lives in bits 8..15");
         assertTrue(host.contains("static final int PIXEL_SHADOW_MAX_SIZE = 16;"), "the settings screen's ceiling");
         String path = read(SHADER_HOST);
-        assertTrue(path.contains("| pixelShadowFlags();"), "the path trace must receive the option, not just the host");
+        assertTrue(path.contains("| pixelShadowFlags()\n"), "the path trace must receive the option, not just the host");
         assertTrue(path.contains("if (!RtSettings.pixelShadows()) {"), "the option is the settings screen's switch");
         assertTrue(path.contains("Math.max(1, RtSettings.pixelShadowSize())"),
             "a stale zero-sized config must not blank the shadows");

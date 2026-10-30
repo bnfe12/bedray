@@ -144,6 +144,15 @@ public final class RtSlangPathPass implements RtPass {
             : RtConfig.SLANG_EMITTER_CANDIDATES;
     }
 
+    /**
+     * Whether this frame traces block emitters at all: the path mode's A/B property and, in the ray mode, the "RT Block
+     * Light" switch. It gates the bound list, the reservoir branch and the shader's distant block-light handover together,
+     * so the switch keeps meaning "no emissive lighting" instead of leaving a baked field behind.
+     */
+    private boolean blockEmittersEnabled() {
+        return RtConfig.SLANG_BLOCK_EMITTERS && (!rayMode || RtSettings.emissive());
+    }
+
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
     static boolean isSupported(SlangRuntime runtime) {
         return supportProblem(runtime) == null;
@@ -383,8 +392,8 @@ public final class RtSlangPathPass implements RtPass {
         // The emitter list of the legacy path, bound as a second descriptor range: switching block emitters off is an A/B
         // on the shader's NEE branch only, the list keeps being rebuilt either way.
         // "RT Block Light" off drops the emitter list from the trace entirely: no emitter NEE, no reservoir branch.
-        int emitterCount = RtConfig.SLANG_BLOCK_EMITTERS && (!rayMode || RtSettings.emissive())
-            ? Math.max(0, params.emitterCount) : 0;
+        boolean blockEmitters = blockEmittersEnabled();
+        int emitterCount = blockEmitters ? Math.max(0, params.emitterCount) : 0;
         RtPathTraceSlangPass.Emitters emitters = new RtPathTraceSlangPass.Emitters(
             emitterCount > 0 ? params.emitterHandle : 0L, params.emitterOffset, emitterCount);
         int diFlags = emitterCount > 0 && diActive() ? DI_FLAG_ENABLED
@@ -414,7 +423,10 @@ public final class RtSlangPathPass implements RtPass {
         int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)
             | (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)
             | rayEffectFlags()
-            | pixelShadowFlags();
+            | pixelShadowFlags()
+            // The distant block-light handover belongs to the emitter feature: a frame that traced no emitters has no
+            // list to hand over from, and its receivers keep tracing exactly what they traced before.
+            | (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0);
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,

@@ -99,6 +99,13 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final int PIXEL_SHADOW_SIZE_SHIFT = 8;
     static final int PIXEL_SHADOW_MAX_SIZE = 16;
 
+    /**
+     * {@code PathTracePush.flags}: the host enabled block emitters for this frame. Mirrors
+     * {@code PATH_TRACE_OPTION_BLOCK_EMITTERS}; without it a receiver past the emitter list's reach keeps tracing the
+     * list instead of lighting from the vanilla block-light field, so the "RT Block Light" A/B stays exactly that.
+     */
+    static final int OPTION_BLOCK_EMITTERS = 1 << 16;
+
     /** The seven denoiser guide images, in the order {@code gbufferViews()} hands them over. */
     record Guides(long viewZ, long normalRough, long diffuse, long albedo, long direct, long specular, long specAlbedo) {
         /**

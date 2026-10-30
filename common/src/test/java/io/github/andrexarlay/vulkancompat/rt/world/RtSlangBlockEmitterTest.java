@@ -186,9 +186,11 @@ class RtSlangBlockEmitterTest {
             "the plain RIS draw and the ReSTIR DI batch read the same number of candidates, so the A/B is one switch");
         assertTrue(entry.indexOf("receiverEmission") < 0,
             "the sampler has no per-frame receiver state: the emission of the face being shaded travels with the call");
-        assertTrue(composite.contains("&& !(receiver.primary && emittersReusedAtPrimary);"),
+        assertTrue(composite.contains("&& !(receiver.primary && emittersReusedAtPrimary)")
+                && composite.contains("&& !receiver.bakedBlockLight;"),
             "with the reservoir on, the composite leaves the emitter branch to it at the primary vertex instead of"
-                + " drawing the same list a second time");
+                + " drawing the same list a second time; a receiver the distant handover baked draws no emitter"
+                + " branch either");
     }
 
     /** The body of the shared estimator, which turns one reservoir record or one fresh draw into a light sample. */

@@ -365,6 +365,9 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     options.pixelShadowCell = (pc.flags & PATH_TRACE_OPTION_PIXEL_SHADOWS) != 0u
         ? float((pc.flags >> PATH_TRACE_PIXEL_SHADOW_SIZE_SHIFT) & 0xFFu) / 16.0 : 0.0;
     options.frameIndex = f.frame.x;
+    // The reach this frame's emitter list was collected over: the distant block-light handover starts where the list
+    // stops being complete, so the tracer reads the same range the sampler windows its candidates with.
+    options.emitterListRange = emitterSampler.maxDistance;
     // The ray profile's own bounce distances.  A 0 word is the path profile's older host and keeps the ray far plane,
     // so the two words change nothing for a dispatch that does not fill them.
     options.diffuseDistance = asfloat(pc.diState.z) > 0.0 ? asfloat(pc.diState.z) : options.maxDistance;
