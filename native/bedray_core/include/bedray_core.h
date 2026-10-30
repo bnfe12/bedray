@@ -209,8 +209,10 @@ typedef struct BedrayFrameDesc {
  * frame word the shader reads, it never reaches the push block. */
 #define BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER (1u << 8)
 /* The player's two water switches, as the host read them from the settings screen. Host-only like CAMERA_IN_WATER: the
- * core copies each into its FRAME_FLAG_* bit of the FrameConstants frame word, they never reach the push block. Both
- * default to off in the shader, so a frame that carries neither traces water as a flat sheet with straight light. */
+ * core copies each into its FRAME_FLAG_* bit of the FrameConstants frame word, they never reach the push block. Neither
+ * changes the medium: absorption, refraction and the beam the sun takes into the body are identical with either bit,
+ * because a body of water does not become air because a slider moved. STYLE scales the wave field the faces keep,
+ * CAUSTICS decides whether that field focuses the beam; both bits off reads as calm water, not as a different one. */
 #define BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC (1u << 9)
 #define BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS  (1u << 10)
 #define BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI    (1u << 0)

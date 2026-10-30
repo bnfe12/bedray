@@ -310,6 +310,12 @@ class RtSlangWaterMediumTest {
      * nothing else.  The two verdicts now travel the same two-backend route as the eye's own medium: one params bit
      * from the settings, a frame word for the Slang backend, a host bit and a mapping for the native core, and one
      * feature bit so a host never sets bits an older DLL would reject outright.
+     *
+     * What each verdict is allowed to change is the owner's rule, not an implementation detail: <b>style is the wave
+     * field</b> — the same ripples at full tilt or damped toward the flat sheet, and nothing else, so an underwater
+     * floor is lit by the same bent beam in either setting — while <b>caustics is the focusing</b> of that beam by
+     * whatever waves the style left.  A gate that made the style pick a different medium model would have been the
+     * easy version and wrong water.
      */
     @Test
     void thePlayerSwitchesReachTheFrameWord() {
@@ -322,32 +328,70 @@ class RtSlangWaterMediumTest {
             "the Java mirror drifted from the shader's bit");
         assertEquals(1 << caustics, RtPathTraceSlangPass.Frame.FLAG_WATER_CAUSTICS,
             "the Java mirror drifted from the shader's bit");
-        assertTrue(contract.contains("bool frameWaterVolumeStyle(FrameConstants frame) {")
+        assertTrue(contract.contains("bool frameWaterRealisticWaves(FrameConstants frame) {")
                 && contract.contains("bool frameWaterCaustics(FrameConstants frame) {"),
             "the pass reads the switches through helpers, so a renamed bit cannot be missed");
+        assertFalse(contract.contains("frameWaterVolumeStyle"),
+            "the style predicate is named for the waves it scales: a name that claims a volume model invites a "
+                + "gate on the light");
 
         String entry = read(SHADERS + "/pathtrace/path_trace_entry.slang");
-        assertTrue(entry.contains("options.waterVolumeStyle = frameWaterVolumeStyle(f);"),
-            "the verdict comes from the frame word the host wrote");
+        assertTrue(entry.contains("materialOptions.waterWaveMix = frameWaterRealisticWaves(f) ? 1.0 "
+                + ": WATER_WAVE_MIX_VANILLA;"),
+            "the style verdict reaches the wave field, which is the only thing the switch owns");
         assertTrue(entry.contains("options.waterCaustics = frameWaterCaustics(f);"),
             "and the same for the focus");
         assertFalse(entry.contains("PATH_TRACE_OPTION_WATER"),
             "the switches are not push-constant bits: that block mirrors a host ABI word for word and is not the "
                 + "shader's own decision space");
+        assertFalse(entry.contains("waterVolumeStyle"),
+            "there is no volume-style gate left to set");
 
         String tracer = read(TRACER);
+        assertFalse(tracer.contains("waterVolumeStyle"),
+            "the medium never reads the style switch: absorption, IOR and the bent beam are the same water in both "
+                + "styles, and a name for a gate is how the gate comes back");
         String term = block(tracer, "float3 pathTraceDirectTerm<T : ISceneTracer>");
-        assertTrue(term.contains("medium.inside && options.waterVolumeStyle &&"),
-            "vanilla style must stop the bend, or the switch still changes nothing in the typed path");
+        assertTrue(term.contains("if (medium.inside && (light.kind == LightKind.Sun "
+                + "|| light.kind == LightKind.Moon))"),
+            "the beam is asked for under every style: the owner's rule is parity of the light and a difference in "
+                + "the waves");
         assertTrue(term.contains("float beamWeight = beam.valid") && term.contains("(options.waterCaustics"),
-            "the focus is consulted only on a beam that exists, so caustics-on with vanilla style cannot invent one");
-        assertTrue(term.contains("? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime) : 1.0)"),
-            "off is the neutral weight 1.0, not a darkened floor");
+            "the focus is consulted only on a beam that exists, so caustics-off cannot gather light the switch never "
+                + "let through");
+        assertTrue(term.contains("waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime,\n"
+                + "                materialOptions.waterWaveMix) : 1.0)"),
+            "the caustic bends through the same scaled face the receiver's own normal uses, so damped waves dance "
+                + "gently instead of not at all");
         assertFalse(term.contains("options.flags & PATH_TRACE_OPTION_WATER"),
             "the direct term asks the options struct, never the mirrored push flags");
         String defaults = block(tracer, "PathTraceOptions defaultPathTraceOptions() {");
-        assertTrue(defaults.contains("options.waterVolumeStyle = false;") && defaults.contains("options.waterCaustics = false;"),
-            "a frame that says nothing about water traces the flat sheet, the same fallback every older build had");
+        assertTrue(defaults.contains("options.waterCaustics = false;"),
+            "a frame that says nothing gathers nothing, the same fallback every older build had");
+
+        String water = read(WATER);
+        assertTrue(water.contains("static const float WATER_WAVE_MIX_VANILLA = 0.55;"),
+            "the damping is the legacy sheet's own mix, so the switch means the same water it always meant");
+        String styled = block(water, "float3 waterStyledWaveNormal(");
+        assertTrue(styled.contains("waterWaveNormal(worldPosition, geometricNormal, time, footprint, lostVar)")
+                && styled.contains("safeNormalize(lerp(geometricNormal, wave, max(waveMix, 0.0)), geometricNormal)"),
+            "the style leans the analytic normal toward the geometric one and never recomputes a different field");
+        assertTrue(block(water, "float2 waterBeamAtDepth(").contains("waterStyledWaveNormal("),
+            "the beam's entry face is the styled one: the only wave-aware step of the light path");
+        assertFalse(block(water, "WaterBeam waterBeamToLight(").contains("waterStyledWaveNormal")
+                || block(water, "WaterBeam waterBeamToLight(").contains("waveMix"),
+            "the column itself is the plane model: the style cannot move where the light enters or how deep it goes");
+
+        String fluid = block(read(SURFACE), "&& waterIsSurface(true, material.f0");
+        assertTrue(fluid.contains("waterStyledWaveNormal(hit.worldPosition, geometricNormal,\n"
+                + "                options.portalTime, footprint, options.waterWaveMix, lostVar)"),
+            "the decoded face keeps the field the switch scales");
+        assertTrue(fluid.indexOf("material.ior = WATER_IOR;") < fluid.indexOf("options.waterWaveMix >= 1.0"),
+            "the optical profile is set before the style is ever consulted, so no style can pick a different water");
+        assertTrue(fluid.contains("clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30)")
+                && fluid.contains("clamp(0.02 + sqrt(max(lostVar, 0.0)) * 0.8, 0.02, 0.16)"),
+            "the two sheens are the legacy pair: the full field roughens more, because roughness is where the "
+                + "filtered slopes went");
 
         // Producer: one conversion from the settings to the params bits, shared by both backends.
         String renderer = read(JAVA + "/RtFrameRenderer.java");

@@ -60,12 +60,13 @@ static const uint FRAME_FLAG_DEBUG_VIEW         = 1u << 4u;
 // The eye's own block is water.  No surface crossing produced it, so a path that starts here starts inside the medium and
 // cannot learn it from geometry: the water surface above can be hidden by a block submerged in the same body.
 static const uint FRAME_FLAG_CAMERA_IN_WATER    = 1u << 5u;
-// The player's two water switches, as the host read them from the settings screen.  Both are off unless the host says
-// otherwise, so a frame from an older host traces water the way a flat sheet is traced: straight light, no focus.
-// STYLE: realistic water models the body as a volume the light bends through; vanilla keeps the straight sight line.
+// The player's two water switches, as the host read them from the settings screen.  Neither changes what the medium IS:
+// absorption, refraction and the beam the light takes are the same with either, because a body of water does not become
+// air because a slider moved.  STYLE changes only the wave field - realistic takes it as computed, vanilla keeps the
+// same ripples damped toward the flat sheet - and CAUSTICS changes only whether the waves focus the beam.  A frame
+// from a host that predates both bits therefore reads as the calm end of each switch: damped waves, no gathering.  It
+// is a look, not a different body of water.
 static const uint FRAME_FLAG_WATER_REALISTIC    = 1u << 6u;
-// CAUSTICS: the wave field gathers the bent beam onto the floor and ceiling of the body.  Only ever read with the beam,
-// so a vanilla-style frame cannot focus light it never bent.
 static const uint FRAME_FLAG_WATER_CAUSTICS     = 1u << 7u;
 
 struct FrameConstants {
@@ -92,10 +93,9 @@ bool frameCameraInWater(FrameConstants frame) {
     return (frame.frame.w & FRAME_FLAG_CAMERA_IN_WATER) != 0u;
 }
 
-// Whether the player asked for water modelled as a volume, and whether the waves are allowed to focus the light that
-// passes through them.  The path tracer consults these instead of reading the bits itself, so the meaning of a switch
-// lives in one place and a renamed bit cannot be missed by a pass that started reading the frame word directly.
-bool frameWaterVolumeStyle(FrameConstants frame) {
+// Whether the player asked for the wave field at full strength or damped toward the flat sheet.  The name says what the
+// shader does with the switch; the switch itself is the water style, and the medium model does not depend on it.
+bool frameWaterRealisticWaves(FrameConstants frame) {
     return (frame.frame.w & FRAME_FLAG_WATER_REALISTIC) != 0u;
 }
 

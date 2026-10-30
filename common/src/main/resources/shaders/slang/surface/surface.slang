@@ -96,6 +96,7 @@ struct MaterialSamplingOptions {
     float portalTime;         // frame clock in seconds
     float defaultIor;         // dielectric IOR when the atlas has no optical profile
     float defaultThickness;   // slab thickness in blocks
+    float waterWaveMix;       // how much of the analytic wave field a fluid face keeps: 1 realistic, WATER_WAVE_MIX_VANILLA damped
     uint  flags;              // MATERIAL_SAMPLING_FLAG_*
 };
 
@@ -108,6 +109,9 @@ MaterialSamplingOptions defaultMaterialSamplingOptions() {
     options.portalTime = 0.0;
     options.defaultIor = 1.5;
     options.defaultThickness = 1.0;
+    // Realistic waves are the player's default (RtSettings.waterStyle), and an
+    // option that never met a frame keeps the same full wave field.
+    options.waterWaveMix = 1.0;
     options.flags = MATERIAL_SAMPLING_FLAG_NORMAL_MAP |
                     MATERIAL_SAMPLING_FLAG_MATERIAL_ATLAS |
                     MATERIAL_SAMPLING_FLAG_APPLY_TINT |
@@ -479,15 +483,19 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
             float footprint = hit.t * WATER_PIXEL_ANGLE /
                 max(abs(dot(rayDirection, geometricNormal)), 0.06);
             float lostVar = 0.0;
-            float3 waveNormal = waterWaveNormal(hit.worldPosition, geometricNormal,
-                options.portalTime, footprint, lostVar);
+            float3 waveNormal = waterStyledWaveNormal(hit.worldPosition, geometricNormal,
+                options.portalTime, footprint, options.waterWaveMix, lostVar);
             material.sourceFlags |= MATERIAL_SOURCE_FLUID;
             material.alphaMode = AlphaMode.Optical;
             material.ior = WATER_IOR;
-            // The realistic style is the default (RtSettings.waterStyle): the
-            // full wave normal and a sheen roughened by the slopes the pixel
-            // footprint filtered out.
-            material.roughness = clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30);
+            // Both styles are the same water: the medium, the IOR and the light
+            // that reaches the floor do not depend on the switch.  Only the face
+            // does - the realistic style keeps the full tilt, the damped one
+            // leans back toward the flat normal and carries a gentler sheen, the
+            // pair the legacy surface decoder used.
+            material.roughness = options.waterWaveMix >= 1.0
+                ? clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30)
+                : clamp(0.02 + sqrt(max(lostVar, 0.0)) * 0.8, 0.02, 0.16);
             material.metallic = 0.0;
             material.f0 = float3(WATER_INTERFACE_F0);
             material.flags &= ~MATERIAL_FLAG_METAL;

@@ -103,11 +103,24 @@ void main() {
         && !waterBeamToLight(-sun, 40.0, receiver, inside).valid;
     float3 crossing = waterBeamTransmittance(sun.y);
     bool crossingIsLoss = all(crossing >= float3(0.0)) && all(crossing <= float3(1.0));
-    float2 footprint = waterBeamAtDepth(beam.entry.xz, beam.entry.y, receiver.y, sun, 12.5, 1.0);
+    float2 footprint = waterBeamAtDepth(beam.entry.xz, beam.entry.y, receiver.y, sun, 12.5, 1.0, 1.0);
     bool footprintIsFinite = abs(footprint.x) < 1.0e6 && abs(footprint.y) < 1.0e6;
-    float focus = waterBeamFocus(beam, receiver, sun, 12.5);
+    float focus = waterBeamFocus(beam, receiver, sun, 12.5, 1.0);
     bool focusIsBounded = focus >= WATER_CAUSTIC_MIN && focus <= WATER_CAUSTIC_MAX;
-    bool noBeamFocusIsNeutral = waterBeamFocus(invalidWaterBeam(), receiver, sun, 12.5) == 1.0;
+    bool noBeamFocusIsNeutral = waterBeamFocus(invalidWaterBeam(), receiver, sun, 12.5, 1.0) == 1.0;
+    // The style switch owns the wave field and nothing else: a full mix is the
+    // untouched face, no mix is the flat geometric normal, and the beam still
+    // bends through whatever face the style left it with.
+    float lostStyling;
+    float lostDampedStyling;
+    float3 styledFull = waterStyledWaveNormal(float3(3.5, 64.0, -7.25), up, 12.0, 0.05, 1.0, lostStyling);
+    float3 styledFlat = waterStyledWaveNormal(float3(3.5, 64.0, -7.25), up, 12.0, 0.05, 0.0, lostDampedStyling);
+    bool mixEndsAreTheField = length(styledFull - top) < 1.0e-5 && length(styledFlat - up) < 1.0e-5
+        && lostStyling == lostTop && lostDampedStyling == lostTop;
+    float2 dampedFootprint = waterBeamAtDepth(beam.entry.xz, beam.entry.y, receiver.y, sun, 12.5, 1.0, 0.0);
+    bool styleReachesTheBeam = length(dampedFootprint - footprint) > 1.0e-4
+        && abs(dampedFootprint.x) < 1.0e6 && abs(dampedFootprint.y) < 1.0e6
+        && waterBeamFocus(beam, receiver, sun, 12.5, 0.0) >= WATER_CAUSTIC_MIN;
 
     sink[0] = float4(slopeFiltered.x, slopeFiltered.y, lostFiltered, lostTop);
     sink[1] = float4(top.x, top.y, top.z, lostBottom + lostSide);
@@ -125,4 +138,6 @@ void main() {
         shallowReceiverHasNoBeam ? 1.0 : 0.0, crossingIsLoss ? 1.0 : 0.0);
     sink[9] = float4(footprintIsFinite ? 1.0 : 0.0, focusIsBounded ? 1.0 : 0.0,
         noBeamFocusIsNeutral ? 1.0 : 0.0, beam.column);
+    sink[10] = float4(mixEndsAreTheField ? 1.0 : 0.0, styleReachesTheBeam ? 1.0 : 0.0,
+        waterBeamFocus(beam, receiver, sun, 12.5, WATER_WAVE_MIX_VANILLA), dampedFootprint.x);
 }

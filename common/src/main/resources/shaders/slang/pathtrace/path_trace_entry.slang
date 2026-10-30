@@ -16,6 +16,7 @@ import "restir/di_block_emitters.slang";
 __exported import "restir/restir_di.slang";
 import "sampling.slang";
 __exported import "surface/surface.slang";
+import "surface/water.slang";
 __exported import "traversal/entity_geometry.slang";
 import "traversal/traversal.slang";
 
@@ -231,9 +232,9 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // Whether the eye's own block is water, which only the host can answer: the
     // surface of that body can hide behind a block submerged in the same column.
     options.primaryInWater = frameCameraInWater(f);
-    // The player's two water switches, from the frame word rather than the push-constant mirror: the style says
-    // whether the body bends the key light at all, the caustics gate says whether the waves focus what got through.
-    options.waterVolumeStyle = frameWaterVolumeStyle(f);
+    // The player's caustics switch, from the frame word rather than the push-constant mirror: it says whether the
+    // waves focus the beam that got through.  The style switch is the surface decoder's wave mix below, because a
+    // style changes how much the face tilts and never what the medium does to the light.
     options.waterCaustics = frameWaterCaustics(f);
 
     Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance);
@@ -245,6 +246,11 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     materialOptions.alphaCutoff = options.alphaCutoff;
     materialOptions.portalTime = f.camera.origin.w;
     materialOptions.autoNormalStrength = asfloat(pc.entityState.w);
+    // The player's style switch, and it only ever touches the wave field: the
+    // realistic style keeps every tilt the analytic field has, the other keeps
+    // the legacy damping of the same tilts.  Absorption, IOR and the bent beam
+    // above are identical with either, so both styles are the same body of water.
+    materialOptions.waterWaveMix = frameWaterRealisticWaves(f) ? 1.0 : WATER_WAVE_MIX_VANILLA;
     PathTraceResult result = tracePathWithField(traversal, lights, environment, directReuse, atlas, table,
         primary, materialOptions, options, seed, diffuseField);
 

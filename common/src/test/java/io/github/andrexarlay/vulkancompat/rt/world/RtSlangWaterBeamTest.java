@@ -214,10 +214,10 @@ class RtSlangWaterBeamTest {
     @Test
     void theDirectTermShadesTheArrivingBeamNotTheSightLine() {
         String term = block(read(TRACER), "float3 pathTraceDirectTerm<T : ISceneTracer>");
-        assertTrue(term.contains("if (medium.inside && options.waterVolumeStyle "
-                + "&& (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {"),
+        assertTrue(term.contains("if (medium.inside && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {"),
             "only a light that came down through the surface is bent; a block emitter that never crossed it keeps the "
-                + "straight column, and the player's vanilla style keeps it for the sun too");
+                + "straight column.  Both water styles get the bend - the switch is about waves, not about which "
+                + "medium the light is in");
         assertTrue(term.contains("float3 arrival = beam.valid ? -beam.direction : lightDirection;"),
             "the beam travels down, so the direction the receiver sees the light in is its negation");
         assertTrue(term.contains("float3 bsdf = bsdfEvaluate(surface.material, view, normal, arrival);"),
@@ -242,7 +242,8 @@ class RtSlangWaterBeamTest {
     @Test
     void theCausticIsTheAreaTheBundleSpreadsOver() {
         String water = read(WATER);
-        String focus = block(water, "float waterBeamFocus(WaterBeam beam, float3 position, float3 lightDirection, float time) {");
+        String focus = block(water, "float waterBeamFocus(WaterBeam beam, float3 position, float3 lightDirection, "
+            + "float time,");
         assertTrue(focus.contains("float step = clamp(beam.column * 0.5, WATER_CAUSTIC_STEP_MIN, WATER_CAUSTIC_STEP_MAX);"),
             "the ripple that matters at depth is about as wide as the depth, so the sample step scales with the column");
         assertEquals(3, count(focus, "waterBeamAtDepth("),
@@ -258,7 +259,8 @@ class RtSlangWaterBeamTest {
 
         String atDepth = block(water, "float2 waterBeamAtDepth(float2 entryXZ, float entryY, float receiverY, "
             + "float3 lightDirection,");
-        assertTrue(atDepth.contains("waterWaveNormal("), "the face the beam enters is the wavy one");
+        assertTrue(atDepth.contains("waterStyledWaveNormal("),
+            "the face the beam enters is the wavy one, at whatever strength the player's style leaves it");
         assertTrue(atDepth.contains("float3(0.0, 1.0, 0.0)"), "measured on a horizontal sheet, from above");
         assertTrue(atDepth.contains("entryXZ + travel.xz * ((entryY - receiverY) / max(-travel.y, 1.0e-3))"),
             "the footprint is where the beam has fallen to the receiver's depth");
@@ -292,9 +294,10 @@ class RtSlangWaterBeamTest {
     void theBeamUsesTheSameClockAsTheSheetItBendsThrough() {
         String term = block(read(TRACER), "float3 pathTraceDirectTerm<T : ISceneTracer>");
         assertTrue(term.contains("beam.solidAngle * (options.waterCaustics\n"
-            + "            ? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime) : 1.0)"),
-            "area times étendue: the focus rides on the same weight the crossing needs, and 1.0 when the player turned "
-                + "the focus off");
+            + "            ? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime,\n"
+            + "                materialOptions.waterWaveMix) : 1.0)"),
+            "area times étendue: the focus rides on the same weight the crossing needs, bends through the same scaled "
+                + "face the sheet shows, and 1.0 when the player turned the focus off");
         String surface = block(read(SURFACE), "&& waterIsSurface(true, material.f0");
         assertTrue(surface.contains("options.portalTime"), "the wave normal the decoded face uses");
         assertTrue(term.contains("beam = waterBeamToLight(lightDirection, light.distance, position, medium);"),

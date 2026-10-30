@@ -48,6 +48,10 @@ static const float4 WATER_WAVE_A[WATER_WAVES] = {
 };
 static const float WATER_WAVE_PHASE[WATER_WAVES] = { 0.0, 1.3, 2.9, 4.1, 5.2, 0.7 };
 
+// How much of the wave tilt the vanilla style keeps.  The number is the legacy
+// sheet's own mix (rt_common_surface.glsl): clearly visible ripples, not a storm.
+static const float WATER_WAVE_MIX_VANILLA = 0.55;
+
 // Gradient of the height field (dh/dx, dh/dz) at world xz.  A wave whose period
 // the footprint does not resolve fades out, and the slope variance it leaves
 // behind is returned as the extra roughness of the sheen.
@@ -91,6 +95,19 @@ float3 waterWaveNormal(float3 worldPosition, float3 geometricNormal, float time,
     float3 perturbed = safeNormalize(geometricNormal +
         float3(-slope.x, 0.0, -slope.y) * sign(geometricNormal.y), geometricNormal);
     return dot(perturbed, geometricNormal) > 0.0 ? perturbed : geometricNormal;
+}
+
+// The same face under the player's style switch.  Both styles tilt the face by
+// the same analytic field; the mix only decides how far it leans back toward the
+// flat geometric normal, so the wave shape is a slider and never a different
+// surface the light has to be re-solved for.
+float3 waterStyledWaveNormal(float3 worldPosition, float3 geometricNormal, float time,
+        float footprint, float waveMix, out float lostVar) {
+    float3 wave = waterWaveNormal(worldPosition, geometricNormal, time, footprint, lostVar);
+    if (waveMix >= 1.0) {
+        return wave;
+    }
+    return safeNormalize(lerp(geometricNormal, wave, max(waveMix, 0.0)), geometricNormal);
 }
 
 // Vanilla face shade baked into a section vertex colour (mirror of
@@ -301,10 +318,10 @@ float3 waterBeamTransmittance(float airCosine) {
 // Where the beam that enters at `entryXZ` stands horizontally once it has fallen
 // to `receiverY`, measured through the wave normal of the face it entered.
 float2 waterBeamAtDepth(float2 entryXZ, float entryY, float receiverY, float3 lightDirection,
-        float time, float footprint) {
+        float time, float footprint, float waveMix) {
     float lostVar = 0.0;
-    float3 face = waterWaveNormal(float3(entryXZ.x, entryY, entryXZ.y),
-        float3(0.0, 1.0, 0.0), time, footprint, lostVar);
+    float3 face = waterStyledWaveNormal(float3(entryXZ.x, entryY, entryXZ.y),
+        float3(0.0, 1.0, 0.0), time, footprint, waveMix, lostVar);
     float3 travel = waterBeamTravel(lightDirection, face);
     return entryXZ + travel.xz * ((entryY - receiverY) / max(-travel.y, 1.0e-3));
 }
@@ -312,16 +329,20 @@ float2 waterBeamAtDepth(float2 entryXZ, float entryY, float receiverY, float3 li
 // How much of the beam lands on this receiver: the reciprocal of the area the
 // bundle spreads over between the surface and the receiver's depth.  A flat sheet
 // maps every square of surface onto a square of floor the same size and returns
-// 1; a dimple that gathers three of them onto one returns 3.
-float waterBeamFocus(WaterBeam beam, float3 position, float3 lightDirection, float time) {
+// 1; a dimple that gathers three of them onto one returns 3.  Damping the waves
+// damps the focus with them, because the bundle is bent by the same face the
+// receiver's own shading normal uses.
+float waterBeamFocus(WaterBeam beam, float3 position, float3 lightDirection, float time,
+        float waveMix) {
     if (!beam.valid) return 1.0;
     float step = clamp(beam.column * 0.5, WATER_CAUSTIC_STEP_MIN, WATER_CAUSTIC_STEP_MAX);
     float2 base = beam.entry.xz;
-    float2 centre = waterBeamAtDepth(base, beam.entry.y, position.y, lightDirection, time, step * 0.5);
+    float2 centre = waterBeamAtDepth(base, beam.entry.y, position.y, lightDirection,
+        time, step * 0.5, waveMix);
     float2 east = waterBeamAtDepth(base + float2(step, 0.0), beam.entry.y, position.y,
-        lightDirection, time, step * 0.5);
+        lightDirection, time, step * 0.5, waveMix);
     float2 north = waterBeamAtDepth(base + float2(0.0, step), beam.entry.y, position.y,
-        lightDirection, time, step * 0.5);
+        lightDirection, time, step * 0.5, waveMix);
     float2 dx = (east - centre) / step;
     float2 dz = (north - centre) / step;
     float det = dx.x * dz.y - dx.y * dz.x;

@@ -85,11 +85,9 @@ struct PathTraceOptions {
     // the same column.  Never read from the push-constant flags, which mirror a
     // host ABI bit for bit; this is a shader-internal decision.
     bool  primaryInWater;
-    // The player's water style switch, read from the frame the same way as primaryInWater and never from the
-    // push-constant mirror.  Realistic style lets the interface bend the key light; vanilla keeps the straight line
-    // the sheet has always had, so the switch changes the light rather than only the label in the debug log.
-    bool  waterVolumeStyle;
     // The player's caustics switch: the wave field spreads or gathers the bent beam along the receiver's depth.
+    // The style switch is NOT here - it changes the wave field a face keeps, which is the surface decoder's option,
+    // not a different path for the light.
     bool  waterCaustics;
 };
 
@@ -105,7 +103,6 @@ PathTraceOptions defaultPathTraceOptions() {
     options.alphaCutoff = 0.5;
     options.flags = 0u;
     options.primaryInWater = false;
-    options.waterVolumeStyle = false;
     options.waterCaustics = false;
     return options;
 }
@@ -189,11 +186,11 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     // the face bends every air direction into the Snell window, so the beam is
     // what carries the light, not the straight line.  A block emitter that never
     // crossed the surface is not that problem, which is why the beam is asked for
-    // only of the two lights the sampler treats as directional.  The player's
-    // style switch decides whether the body is modelled as a volume at all; in
-    // vanilla style the light comes down the sight line it always used.
+    // only of the two lights the sampler treats as directional.  Both water
+    // styles get it: a body of water does not stop bending light because a slider
+    // moved, so the switch owns the waves and never the sight line.
     WaterBeam beam = invalidWaterBeam();
-    if (medium.inside && options.waterVolumeStyle && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
+    if (medium.inside && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
         beam = waterBeamToLight(lightDirection, light.distance, position, medium);
     }
     float3 arrival = beam.valid ? -beam.direction : lightDirection;
@@ -202,10 +199,12 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     // cones is what leaves the flux the surface actually let through.  The focus
     // is the wave field gathering that flux onto this point or spreading it thin,
     // and it is the part the caustics switch owns: the étendue ratio is flux
-    // conservation, not an effect, so it stays whatever that switch says.
+    // conservation, not an effect, so it stays whatever that switch says.  The
+    // damped style focuses less because the waves that bend the bundle are weaker.
     float beamWeight = beam.valid
         ? beam.solidAngle * (options.waterCaustics
-            ? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime) : 1.0)
+            ? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime,
+                materialOptions.waterWaveMix) : 1.0)
         : 1.0;
     float cosine = max(dot(normal, arrival), 0.0);
     if (cosine <= 0.0) {
