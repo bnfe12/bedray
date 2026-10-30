@@ -420,27 +420,37 @@ and cannot walk a stale slot;
 scene-referred radiance, and
 `FrameConstants.exposure` is applied once by the display/tonemap pass, so
 accumulation and denoise stay in linear HDR and exposure cannot be applied twice.  The pass requires `CAP_RAY_QUERY |
-CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing uses its own
-`SlangRuntime`, created from `SlangDeviceCapabilities.enabledMask`; the mask-0
-runtime in `RtAtmosphere` belongs to bloom only. The final C++ renderer must
+CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing runs on the
+device's one pooled `SlangRuntime`, built from
+`SlangDeviceCapabilities.enabledMask` (`SlangRuntimePool`); `RtAtmosphere`
+borrows that same core for bloom and light shafts instead of keeping a mask-0
+one. The final C++ renderer must
 negotiate the features actually enabled on the game's device and select only
 supported methods. There is no selector and no second renderer any more: the
 `-Dbedray.pathTracer=auto|slang|legacy` switch and the GLSL `rt_path.comp` it
 could fall back to are deleted, so a Slang path the device cannot run fails the
-frame with its reason in `vkbridge.rt.failure` and the game keeps drawing the
-raster image.  Ray Tracing mode (the default when `enableHardwareRayTracing` is
-on) is in the same position: its GLSL effects pass is deleted and the Slang
+frame, `RtGeometryGate.markFailed` records `stage=… result=…`, ray tracing stays
+off for the session and the game keeps drawing the raster image.  A trace request
+that names no mode — `enableHardwareRayTracing` on while `rt_mode` is `off`, or
+the legacy toml key read without `rt_mode` — resolves to Path Tracing
+(`VulkanRtxConfig.effectiveRtMode`).  Ray Tracing mode itself is in the same
+position: its GLSL effects pass is deleted and the Slang
 `ssr.slang`, `composite.slang`, `atrous.slang`, `temporal_accumulate.slang` and
 `velocity_reproject.slang` passes are not wired into the frame loop yet, so
-`createPass` reports `slang_ray` unavailable until they are.  The Slang
-volumetric passes compile but are not yet connected either, so god rays are
-likewise reported unavailable.
+`createPass` throws `RtFailure("slang_ray", …)` — which turns tracing off for the
+session — until they are.  The Slang volumetric passes are connected:
+`RtAtmosphere` records the march and apply dispatches when the post god-ray mode
+is selected with fog on, and a march that refuses to register sets
+`shaftsUnavailable` (one warning, no shafts) instead of failing the frame.
 
-The current `volumetric_march` binding 2 explicitly reads `LegacySection` through
-`LegacySectionTraversal`. The native scene publishes a different GeometrySection
-record, despite both records being 64 bytes. Connecting that pass to native scene
-requires a shader-owner-reviewed native-scene entry/contract; it must not bind the
-native table to the existing legacy descriptor by size alone.
+`volumetric_march` binding 2 reads `LegacySection` through `LegacySectionTraversal`,
+while the native scene publishes a different `GeometrySection` record although both
+are 64 bytes.  That is answered by its own reviewed entry:
+`volumetric_march_scene.slang` binds the native table as `StructuredBuffer<GeometrySection>`
+and traces the world-only instance mask, and `RtSlangVolumetricPass` hands both
+march programs to the core, which selects one from
+`BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE`.  Record size is never by itself a reason to
+rebind one table to the other's descriptor.
 
 #### Native C++ path-trace pass (opt-in)
 

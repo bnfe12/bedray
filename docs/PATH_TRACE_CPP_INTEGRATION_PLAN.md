@@ -1,9 +1,12 @@
 # Path tracing C++ pass — integration plan
 
-Status: **source-only implementation**. The C++ pass, its additive ABI and the
-Java opt-in adapter exist in the working tree, but no build, test, `slangc` run,
-Minecraft launch or deployment was performed for this document, and no
-compilation is claimed. The pass is off by default.
+Status: the C++ pass, its additive ABI and the Java opt-in adapters are built,
+unit-tested and deployed, and both opt-ins (`-Dvkbridge.rt.nativePathTrace`,
+`-Dvkbridge.rt.nativeScene`) have passed live world autotests. What is missing is
+the owner's visual confirmation of a native frame and the render-graph node.
+Evidence is recorded per revision in [VERIFICATION_LOG.md](VERIFICATION_LOG.md);
+nothing in this document is evidence for the current source. Both flags default
+to false, so the shipped jar runs the Java host.
 
 Scope: move the wired Java path-tracing host (`RtSlangPathPass` plus the
 package-private `RtPathTraceSlangPass`) into a C++ pass that owns its pipelines,
@@ -14,7 +17,7 @@ current state, target ownership, resource lifetime, synchronization, the
 scene/shader contract gap, and the decisions that need an owner before code is
 written.
 
-Current implementation state (source review only):
+Current implementation state:
 
 * `native/bedray_core/src/path_trace_pass.{h,cpp}` owns the radiance, motion,
   accumulation and history-depth images, the per-recording `FrameConstants`
@@ -28,16 +31,25 @@ Current implementation state (source review only):
   `BedrayPathTraceDesc` 80 B. The Java mirror in `BedrayCoreLayouts` asserts
   these sizes and field offsets.
 * `BedrayPathTraceNative` packs the host frame and calls
-  `bedray_core_configure_path_trace` / `bedray_core_render_path_trace`; a DLL
-  without the exports keeps the Java path.
+  `bedray_core_configure_path_trace` / `bedray_core_render_path_trace`. The opt-in
+  only works against a matching core: `NativePathTraceBackend.supportProblem`
+  refuses a DLL that does not report the native-DI and guide-binding features,
+  and with the flag off the Java reference backend runs whatever the DLL is.
 * `RtSlangPathPass` selects the native pass only with
-  `-Dvkbridge.rt.nativePathTrace=true` (`RtConfig.SLANG_PATH_TRACE_CPP`); the
-  Java orchestration stays the default until live evidence exists.
+  `-Dvkbridge.rt.nativePathTrace=true` (`RtConfig.SLANG_PATH_TRACE_CPP`); with no
+  such flag the jar runs the Java reference backend.
 * The host still owns the TLAS, section table, atlases, emitter list, ReSTIR DI
   ring, entity rings, output and depth. The native scene recorder
-  (`native/bedray_scene`, ABI v2) and the pass's `program_trace_scene` /
-  `BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE` selection exist source-only; the Java
-  host has not switched to them, and the render-graph connection remains open
+  (`native/bedray_scene`, ABI v2) is wired: `RtWorld.createNativeScene` builds it
+  under `-Dvkbridge.rt.nativeScene=true`
+  ([RtWorld.java:314](../common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtWorld.java#L314)),
+  `RtSlangPathPass` then sets `BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE`
+  ([RtSlangPathPass.java:313](../common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java#L313))
+  and the pass dispatches `program_trace_scene` for that frame. Both native
+  flags together have passed live world autotests — see
+  [VERIFICATION_LOG.md](VERIFICATION_LOG.md), 2026-10-30, `backend=NativePathTraceBackend`
+  and `result=PASS` — while neither flag is on by default, so the shipped jar still
+  runs the Java orchestration. The render-graph connection remains open
   (gap list: `native/bedray_render_graph/RENDER_GRAPH_NOTES.md`, "Path-trace
   pass as a graph node").
 
@@ -59,6 +71,10 @@ Constraints:
 * Java keeps only Minecraft/Fabric integration, game data capture, the host
   command buffer and the submission/completion evidence;
 * do not add a Java-owned renderer or extend the legacy GLSL path as the target;
+* "legacy" below names deleted sources — `rt_path.comp`, `rt_rays.comp`,
+  `rt_common*.glsl`, `rt_sky.glsl` and the rest went with `1ea94ce`, so their
+  behaviour is reachable only through `git show 1ea94ce^`, and a file listed here
+  is not a file on disk;
 * unknown submission outcomes pin resources; they are not recycled after a
   frame count.
 
@@ -84,12 +100,21 @@ recording at lines 343–358. The low-level host
 owns the radiance image and the constant/table buffers, validates the nine-binding
 manifest, and records the trace dispatch.
 
-`RtFrameRenderer` selects this adapter in Path Tracing mode; `AUTO` falls back
-to the legacy GLSL `rt_path.comp` when the AOT passes, the required device
-capabilities, or a G-buffer denoiser block it. The dedicated Slang runtime is
-created with the actual enabled capability mask
-([RtFrameRenderer.java:1455](../common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java#L1455)).
-The mask-0 runtime in `RtAtmosphere` belongs to bloom only.
+`RtFrameRenderer` selects this adapter in Path Tracing mode, and it is the only
+renderer in the tree: a blocked AOT pass (missing artifact, missing device
+capability, a debug view the Slang path does not implement) throws `RtFailure`,
+`RtGeometryGate.markFailed` records `stage=… result=…`, RT stays off for the
+rest of the session and the game keeps drawing the raster image
+([RtFrameRenderer.java:1496](../common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java#L1496)).
+A request that says "trace" without naming a mode — the boolean
+`enableHardwareRayTracing` with `rt_mode = "off"`, or the legacy toml key read
+without `rt_mode` — resolves to Path Tracing rather than to the ray mode that
+would refuse the frame
+([VulkanRtxConfig.java:339](../common/src/main/java/io/github/andrexarlay/vulkancompat/rtx/config/VulkanRtxConfig.java#L339)).
+The Slang runtime is the device's one pooled core, built with the actually
+enabled capability mask
+([SlangRuntimePool.java:8](../common/src/main/java/io/github/andrexarlay/vulkancompat/rt/slang/SlangRuntimePool.java#L8));
+`RtAtmosphere` borrows that same core for bloom and light shafts.
 
 Current host resources:
 
@@ -104,7 +129,7 @@ Current host resources:
 | 12 `outDepth` | R32F storage | renderer `rt_depth` | host-owned, `GENERAL` |
 | 16 `frame` | 608-byte uniform buffer | ring of three Java buffers | one upload per frame |
 | 17 `blockMaterials` | 64-byte structured buffer | one zeroed element, `materialCount = 0` | dummy until material tables exist |
-| 18 `emitters` | 96-byte structured buffer | the `RtEmitters` ring buffer at `segmentOffset()`; one dummy element when the list is empty | the same upload the legacy `rt_path.comp` reads |
+| 18 `emitters` | 96-byte structured buffer | the `RtEmitters` ring buffer at `segmentOffset()`; one dummy element when the list is empty | the same upload the deleted `rt_path.comp` used to read |
 
 The display program binds `radiance` (0), the RGBA32F `accum` (1), the host
 `rt_output` (2), `depth` (3), `historyDepth` (4) and the trace pass's own `frame`
@@ -128,11 +153,17 @@ explicitly.
 Known limits of the current Java host:
 
 * the seven DLSS-RR guide channels and NRD's `IN_MV` vec4 are written by the
-  entry pass when the host binds them, but `AUTO` still keeps the GLSL pass
-  while a denoiser is selected until a live frame consumes them;
-* no auto exposure; `FrameConstants.exposure` is fixed at 1 and the display
-  push also uses 1;
-* a two-colour gradient sky derived from one game sky colour, not `rt_sky.glsl`;
+  Slang entry pass when the host binds them, and the GLSL renderer that used to
+  be the fallback is deleted — so a combination the Slang pass cannot serve
+  blocks the frame instead of quietly lighting it another way, and these outputs
+  still await a live frame that consumes them;
+* auto exposure has a measurement again but no owner-verified adaptation yet: the
+  renderer decides the frame's `RtFrameParams.exposure` once, `passes/frame_stats.slang`
+  fills the counters `RtExposure` reads, and `path_display` spends the number — but
+  only the reference backend records that pass, so on `bedray_core` the meter has
+  nothing to follow and the F3 shares print `n/a`;
+* the traced sky is the horizon gradient plus the sun and moon discs; it has
+  neither clouds nor aerial fog, which the deleted `rt_sky.glsl` used to composite;
 * primary rays are built from the camera basis at the origin; the TLAS is
   camera-relative, so this is consistent, but the view-bob offset is absent;
 * `RtPathTraceSlangPass.ensure` and `close` call `vkDeviceWaitIdle` before
@@ -407,10 +438,13 @@ the pass must not silently reinterpret `rt_depth`.
   `max_compute_work_group_count_*`; exceeding a limit is an error, never a
   silent clamp.
 * Exposure is applied exactly once, in `path_display`; the trace writes
-  scene-referred linear radiance. The current host passes exposure 1 and
-  `autoExposure = 0`; the C++ pass must preserve one application point or
-  implement auto exposure explicitly. It must not apply exposure in both
-  stages.
+  scene-referred linear radiance. The current host decides the number on the CPU
+  (`RtFrameRenderer` → `RtFrameParams.exposure`, measured by `frame_stats.slang` on
+  the reference backend), writes it into `FrameConstants.exposure.x` — the lane
+  `BedrayPathTraceNative` forwards as the descriptor's `lighting.exposure` — and
+  leaves the `autoExposure` selector at 0, because the adaptation is already spent
+  before the frame reaches a shader. The C++ pass must keep one application point
+  and must not apply exposure in both stages.
 * Camera: the current shader builds a primary ray at the origin from
   `forward/right/up`, pixel jitter and `tanHalf/aspect`, and the TLAS instance
   transforms are camera-relative. The target must either keep a camera-relative
@@ -434,8 +468,11 @@ the pass must not silently reinterpret `rt_depth`.
   guide stand-ins, the 26 set also gets a 16-byte `IN_MV` stand-in, and both
   option bits stay clear. It writes no guides, so a C++ host that selects a
   denoiser must still report the unsupported combination instead of silently
-  disabling it. The existing Java `AUTO` fallback is reference behaviour, not
-  the target selection policy.
+  disabling it. The Java host does downgrade a denoiser that fails at runtime
+  (`dropDlssRrDenoiser` → NRD → off, which rebuilds the same Slang path without
+  the G-buffer), but there is no second renderer behind that path: an
+  unsupported trace combination is a failed frame with a recorded reason, and
+  that is the selection policy the target must keep.
 
 ## 8. Frame integration
 
@@ -447,8 +484,11 @@ G-buffer.
 One coarse call per frame replaces the Java trace+display recording. The call is
 made only when path tracing is selected and the pass is supported. A debug view
 that the Slang pass cannot implement is an unsupported combination, not a
-reason to silently return a different renderer in the target; until the C++
-selector exists, the Java `AUTO` fallback remains the reference.
+reason to silently return a different renderer in the target. The Java host is
+the reference for that: it refuses such a request (`createSlangPathPass` reports
+"debug view '…' is not implemented in the Slang path") and the frame fails,
+because the `AUTO` selector and the GLSL renderer it used to fall back to are
+deleted.
 
 Completion integration:
 
