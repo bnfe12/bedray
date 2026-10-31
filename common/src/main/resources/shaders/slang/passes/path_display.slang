@@ -73,6 +73,17 @@ float3 pathDisplayViewDirection(FrameConstants f, int2 p) {
         - f.camera.up.xyz * (ndc.y * tanHalf));
 }
 
+// The display's own depth history is a distance from the raw camera, not the tracer's ray distance from the bobbed eye
+// (outDepth): the reprojection below measures the reprojected point from the previous frame's raw camera, and a history
+// measured from the eye would differ from it by the view-bob offset - more than the 2 % window of every near surface
+// while the player walks. A miss keeps the sky sentinel.
+float pathDisplayHistoryDistance(FrameConstants f, int2 p, float rayDistance) {
+    if (!(rayDistance > 0.0) || rayDistance >= PATH_DISPLAY_SKY_DEPTH) {
+        return rayDistance;
+    }
+    return length(f.camera.origin.xyz + pathDisplayViewDirection(f, p) * rayDistance);
+}
+
 struct PathDisplayHistory {
     bool   valid;
     float3 radiance;
@@ -152,7 +163,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // both the mean and the count exactly as the history had them, so the next accepted sample still divides by N+1.
     float weight = radiance[p].a > 0.0 ? 1.0 : 0.0;
     bool rejected = weight == 0.0;
-    float nextDepth = depth[p];
+    float nextDepth = pathDisplayHistoryDistance(frame, p, depth[p]);
     if (rejected && !(nextDepth > 0.0 && nextDepth < PATH_DISPLAY_SKY_DEPTH)) {
         nextDepth = PATH_DISPLAY_SKY_DEPTH;
     }
@@ -174,7 +185,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
             bool bothSky = hitDistance >= PATH_DISPLAY_SKY_DEPTH && !isinf(hitDistance)
                 && oldDepth >= PATH_DISPLAY_SKY_DEPTH && !isinf(oldDepth);
             bool depthsAgree = hit && oldHit
-                && abs(oldDepth - hitDistance) <= max(pc.reuse.w, 0.0) * max(hitDistance, 1.0);
+                && abs(oldDepth - pathDisplayHistoryDistance(frame, p, hitDistance))
+                    <= max(pc.reuse.w, 0.0) * max(hitDistance, 1.0);
             // A stationary camera can still see a newly uncovered background.
             // Keep rejected samples only when no new depth was established.
             bool compatible = bothSky || depthsAgree || (rejected && !hit);

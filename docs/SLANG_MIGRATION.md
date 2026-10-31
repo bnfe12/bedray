@@ -386,7 +386,7 @@ before the first dispatch.
 | `outMotion` | 5 | RGBA16F storage image the tracer owns, sized with the radiance: rgb is the primary surface's own displacement from last frame, `a` marks it as a moving entity part; `path_display` binds the same image as `motion` |
 | `materialAtlas` | 9 | LabPBR `_s` sampler (legacy binding 9) |
 | `normalAtlas` | 10 | LabPBR `_n` sampler (legacy binding 10) |
-| `outDepth` | 12 | R32F storage image; first-hit distance, `1e6` on a miss |
+| `outDepth` | 12 | R32F storage image; ray distance from the eye (`camera.origin`) to the first hit, `1e6` on a miss - not view depth (see the `outDepth` contract) |
 | `frame` | 16 | 608-byte `FrameConstants` uniform buffer, one upload per frame |
 | `blockMaterials` | 17 | dummy `BlockMaterial` table until voxel materials exist: allocate at least one 64-byte element and push `materialCount = 0` |
 | `emitters` | 18 | the `RtEmitters` ring buffer bound at the current segment offset — the same 96-byte records the legacy `rt_path.comp` reads, so one upload serves both paths; a dummy element when the list is empty |
@@ -543,6 +543,25 @@ Only the first of those is dropped from the running mean, which is what
 `pathTraceSampleRejected` and the alpha lane are for.  `firstHitDistance` is a
 distance along the unit primary direction, not linear view depth; a consumer
 that needs view depth must derive it from the camera contract.
+
+**The `outDepth` contract (binding 12, `rt_depth`; 2026-10-31).** The distance
+along the unit primary ray from the eye the tracer starts at -
+`FrameConstants.camera.origin`, the view-bob offset from the raw camera - to the
+first accepted surface; `1e6` on a miss. It is neither linear view depth nor
+hardware depth, and every consumer reads it as what it is:
+
+| consumer | reads it as |
+|---|---|
+| `path_display` | history validation. Its own history images store the distance from the **raw** camera (`pathDisplayHistoryDistance`), because the reprojection measures the reprojected point from the previous raw camera; before 2026-10-31 it stored the eye distance, and the view-bob offset broke the 2 % window of every near surface while walking |
+| `frame_stats`, `bloom_*` | hit or sky only (`< 999999` / `>= 1e5`) |
+| `composite` | compares with `length(invViewProj * rasterDepth)`, a distance as well |
+| `volumetric_apply` | the march end along the view ray |
+| velocity / `MotionProbe` | `VelocityPipeline.DEPTH_RAY_DISTANCE`, by `RtFrameRenderer.activeDepthConvention()` |
+| DLSS-RR | does not read it: the guide `outViewZ` (binding 26) is linear view depth |
+| DLSS-SR, FSR, XeSS, frame generation | do not read it: they take the raster `D32` depth copy |
+
+`RtSlangDepthContractTest` pins the tracer's write and the display's conversion
+and reproduces the walking-eye rejection numerically.
 
 `RtFrameRenderer` constructs `RtSlangPathPass`, which prepares Minecraft inputs
 and delegates through `PathTraceBackend`. `NativePathTraceBackend` holds borrowed
@@ -1402,9 +1421,9 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    frame data, the reflected descriptor mapping, dispatch, completion/discard and
    retirement; Java supplies Minecraft-owned state and the command buffer. The native
    scene, the seven denoiser guides, NRD motion, the frame-stats stage and the RC field
-   are forwarded by additive calls. Remaining: an owner-verified live frame, and
-   agreeing on view depth versus ray distance before a downstream consumer treats
-   `outDepth` as linear view depth. Unsupported device capabilities are reported, not
+   are forwarded by additive calls. The `outDepth` contract is settled (ray distance from
+   the eye; every consumer listed with its reading next to `firstHitDistance` above).
+   Remaining: an owner-verified live frame. Unsupported device capabilities are reported, not
    routed to GLSL.
 2. **Sample rejection** — the tracer keeps the two bad endings apart
    (`PATH_TRACE_FLAG_INVALID_SAMPLE` for a non-finite fault,
