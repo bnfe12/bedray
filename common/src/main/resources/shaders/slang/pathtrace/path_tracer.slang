@@ -67,6 +67,9 @@ static const uint PATH_TRACE_FLAG_RC_FINITE_WINDOW = 1u << 9u;
 static const uint PATH_TRACE_FLAG_RC_OUTSIDE       = 1u << 10u;
 static const uint PATH_TRACE_FLAG_RC_TERMINAL      = 1u << 11u;
 static const uint PATH_TRACE_FLAG_RC_UNRESOLVED    = 1u << 12u;
+// A shadow walk of this path ran out of its filter budget (SURFACE_VISIBILITY_FLAG_OVERFLOW).  The direct term already
+// reads that walk as occluded; the flag only lets the F3 counters say how often it happened.  Not a rejection.
+static const uint PATH_TRACE_FLAG_VISIBILITY_OVERFLOW = 1u << 13u;
 
 // Bits of PathTraceOptions.flags.  These are pass options (what the host asks the
 // pass to produce), not properties of a sample: the tracer ignores them and the
@@ -360,7 +363,7 @@ float3 pathBakedBlockLight(MaterialSample material, float3 view, float3 normal, 
 float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light,
         PathTraceOptions options, MaterialSamplingOptions materialOptions, WaterMedium medium, bool primary,
-        out bool traced, out bool occluded) {
+        out bool traced, out bool occluded, inout uint pathFlags) {
     float3 zero = float3(0.0);
     traced = false;
     occluded = false;
@@ -461,6 +464,9 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
             light.distance, options.rayBias, materialOptions, medium, beam)
         : traceShadowVisibilityMedium(traversal, atlas, blockMaterials, shadowPosition, shadowNormal,
             lightDirection, light.distance, options.rayBias, materialOptions, medium);
+    if ((shadow.flags & SURFACE_VISIBILITY_FLAG_OVERFLOW) != 0u) {
+        pathFlags |= PATH_TRACE_FLAG_VISIBILITY_OVERFLOW;
+    }
     // Sixteen filters deep the walk gives up and keeps the energy it collected.  That is not a proven sight line:
     // calling it one would light this surface through an opaque blocker hidden behind the glass.  Reporting it as
     // occluded also lets a reused record fade instead of persisting.
@@ -782,7 +788,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             // reads zero on most pixels of the band, so max() would put the whole field on top of an average that is
             // already lower and leave a bright ring around the player.
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                reused, options, materialOptions, medium, receiver.primary, reusedTraced, reusedOccluded)
+                reused, options, materialOptions, medium, receiver.primary, reusedTraced, reusedOccluded, result.flags)
                 * (1.0 - emitterFar);
             // A sample this receiver could not even shade has not been proven visible either: decaying it lets a record
             // that lost its light fade out instead of sitting at full weight until the surface changes.
@@ -790,13 +796,13 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             bool keyTraced;
             bool keyOccluded;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lights.sample(receiver, seed), options, materialOptions, medium, receiver.primary, keyTraced, keyOccluded);
+                lights.sample(receiver, seed), options, materialOptions, medium, receiver.primary, keyTraced, keyOccluded, result.flags);
         } else {
             bool lightTraced;
             bool lightOccluded;
             LightSample lightSample = lights.sample(receiver, seed);
             float3 term = pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lightSample, options, materialOptions, medium, receiver.primary, lightTraced, lightOccluded);
+                lightSample, options, materialOptions, medium, receiver.primary, lightTraced, lightOccluded, result.flags);
             // Only the emitter share of the composite draw fades: the key light is not part of the handover.
             direct += lightSample.kind == LightKind.Emitter ? term * (1.0 - emitterFar) : term;
         }

@@ -479,7 +479,7 @@ public final class RtSlangPathPass implements RtPass {
                 ? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_CAUSTICS : 0);
         backend.record(new PathTraceBackend.Frame(cmd, views, frame, dispatch, emitters, capturedEntities,
             new RtPathTraceSlangPass.BufferView(params.statsBuffer, params.statsOffset,
-                RtFrameStatsSlangPass.COUNTER_BYTES), flags, accumFrames, ptResetRequested, ptSpatialRequested()));
+                RtStatsLayout.SLOT_STRIDE), flags, accumFrames, ptResetRequested, ptSpatialRequested()));
         ptResetRequested = false;
         historyWritten = true;
         diRequests.afterDispatch(diFlags != 0);

@@ -406,6 +406,7 @@ before the first dispatch.
 | `outSpecAlbedo` | 32 | RGBA8, F0 guide with the legacy rule `metal > 0.5 \|\| roughness < 0.6 ? (metal ? albedo : F0) : 0` |
 | `outMotionBuffer` | 33 | `RWStructuredBuffer<float4>`, one 16-byte element per render pixel: the primary hit's world motion (prev minus cur) and the `rt_path.comp:616` trust flag in `w`; the NRD `IN_MV` channel `rt_pack_nrd.comp` reads at `StatsBuf.motionAddr` |
 | `ptReservoirs` | 36 | the ReSTIR PT ring of `ReferencePathTraceBackend`: two halves of one 144-byte `RestirPtReservoir` per pixel (`2 * width * height * 144`, 597.2 MB at 1080p), allocated only while a frame sets `PATH_TRACE_OPTION_RESTIR_PT` (bit 17) and zeroed on a PT reset; a one-record stand-in otherwise. The native core always binds its stand-in and clears bits 17..21 |
+| `outPathStats` | 37 | the frame's whole 576-byte stats slot (`RtStatsLayout.SLOT_STRIDE`, bound at the slot's own 64-byte-aligned offset); the trace adds the F3 split into words 140..143 (`RtStatsLayout.PATH_REJECTS`: refused pixels with a non-finite fault, pixels with a truncated path, pixels with a shadow walk past its filter budget, metered pixels) over `frame_stats`' 1-in-16 tiles. The host zeroes the block each frame. A one-word stand-in otherwise, which the shader refuses to write; the native core always binds that stand-in, so its split reads n/a |
 
 The seven guide images exist for DLSS-RR only. When the host has no complete
 set, it binds pass-owned 1×1 dummies and leaves `PATH_TRACE_OPTION_GBUFFER`
@@ -1402,9 +1403,14 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    (the test enumerates both masks, edge tiles included) and the renderer prints
    `reject_pct = metered - samples` on the F3 `rt_pass` line - n/a when the slot holds
    no measurement or when the count exceeds the mask, which would mean host and shader
-   disagree. Still open: the split by reason (invalid versus truncated) and the
-   visibility-overflow count; those belong to the C++ pass, which owns the buffers, and
-   need a new binding/ABI.
+   disagree. The split is live too: the trace pass adds four words into the end of the
+   slot through binding 37 (`invalid`, `truncated`, `visibility overflow`, `metered`, new
+   sample flag `PATH_TRACE_FLAG_VISIBILITY_OVERFLOW` = bit 13) and the F3 line prints
+   `invalid_pct`, `trunc_pct` and `vis_overflow_pct` - n/a unless the metered word equals
+   `RtStatsMetering`'s own count (`RtPathRejectBreakdownTest`). `invalid_pct` is part of
+   `reject_pct`; the rest of `reject_pct` is `RC_UNRESOLVED`. The native core binds a
+   one-word stand-in at 37 (it has no slot to lend the trace), so on that backend the split
+   stays n/a until the core forwards the slot.
 3. **ReSTIR PT** — the temporal stage is live behind `path_restir_pt` (default off;
    `restir/pt_temporal.slang`, binding 36, Java reference backend; derivation §11).
    The spatial stage is live too (`restir_pt_spatial` / `restir_pt_spatial_scene`, child row

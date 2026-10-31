@@ -176,7 +176,7 @@ class RtSlangEntityTest {
         assertTrue(frame.contains("RtPathTraceSlangPass.Entities capturedEntities = entityBindingsOfThisFrame();"),
             "one place reads the manager, so the push and the descriptors cannot disagree");
         assertTrue(frame.contains("trace.record(cmd, scene, atlases, emitters, reservoirRange, ptRange, capturedEntities,\n"
-            + "            RtPathTraceSlangPass.Guides.of(views.gbuffer()), motion, views.depth(), frame, dispatch)"),
+            + "            RtPathTraceSlangPass.Guides.of(views.gbuffer()), motion, views.depth(), input.stats(), frame, dispatch)"),
             "the ring travels with the rest of the frame's resources");
         assertTrue(frame.contains("if (!RtConfig.SLANG_ENTITIES)"), "and the switch turns the whole thing off");
 

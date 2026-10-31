@@ -469,8 +469,10 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     bool trace_motion = false, scene_motion = false;
     bool trace_field = false, scene_field = false;
     bool trace_pt = false, scene_pt = false;
+    bool trace_stats = false, scene_stats = false;
     auto validate_trace_program = [&](std::uint64_t program, const char* label, bool& guides,
-                                      bool& motion, bool& field, bool& pt_ring, bool native_scene) -> BedrayStatus {
+                                      bool& motion, bool& field, bool& pt_ring, bool& stats_slot,
+                                      bool native_scene) -> BedrayStatus {
         ProgramContract contract{};
         if (!program_contract(core, program, contract)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "%s is not registered", label);
@@ -478,12 +480,16 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
         // The ReSTIR PT ring at 36 is additive: every older layout stays accepted, and the same layout plus one storage
         // buffer at 36 is the current one.  A declaration at 36 of any other type is a drift, not a ring.
         pt_ring = program_has_binding(core, program, 36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        const std::uint32_t base = contract.binding_count - (pt_ring ? 1u : 0u);
+        // The stats slot at 37 is additive the same way: the trace adds its F3 split into the host's slot there.  The
+        // core has no slot to lend the trace (the counters are recorded after it), so it binds a one-word stand-in the
+        // shader refuses to write, and the host reads the split as n/a.
+        stats_slot = program_has_binding(core, program, 37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        const std::uint32_t base = contract.binding_count - (pt_ring ? 1u : 0u) - (stats_slot ? 1u : 0u);
         if ((base != 18u && base != 25u && base != 26u && !(native_scene && base == 28u))
             || contract.push_constant_bytes < sizeof(PathTracePush)) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
                 "%s contract mismatch: %u bindings, %u push bytes (need 18/25/26 or native 28, each optionally + "
-                "the ReSTIR PT storage buffer at 36, %zu)",
+                "the ReSTIR PT storage buffer at 36 and the stats slot at 37, %zu)",
                 label, contract.binding_count, contract.push_constant_bytes, sizeof(PathTracePush));
         }
         if (!has_bindings(core, program, kTraceBindings, std::size(kTraceBindings))) {
@@ -508,13 +514,13 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
         return BEDRAY_OK;
     };
     BedrayStatus trace_status = validate_trace_program(desc.program_trace, "program_trace", trace_guides,
-        trace_motion, trace_field, trace_pt, false);
+        trace_motion, trace_field, trace_pt, trace_stats, false);
     if (trace_status != BEDRAY_OK) {
         return trace_status;
     }
     if (desc.program_trace_scene != 0) {
         BedrayStatus scene_status = validate_trace_program(desc.program_trace_scene, "program_trace_scene",
-            scene_guides, scene_motion, scene_field, scene_pt, true);
+            scene_guides, scene_motion, scene_field, scene_pt, scene_stats, true);
         if (scene_status != BEDRAY_OK) {
             return scene_status;
         }
@@ -665,6 +671,8 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     scene_field_bindings_ = scene_field;
     trace_pt_binding_ = trace_pt;
     scene_pt_binding_ = scene_pt;
+    trace_stats_binding_ = trace_stats;
+    scene_stats_binding_ = scene_stats;
 
     BedrayStatus status = create_dummy(64u, block_materials_id_, block_materials_view_, error);
     if (status == BEDRAY_OK) {
@@ -946,6 +954,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     }
     const bool motion_binding = native_scene ? scene_motion_bindings_ : trace_motion_bindings_;
     const bool pt_binding = native_scene ? scene_pt_binding_ : trace_pt_binding_;
+    const bool stats_binding = native_scene ? scene_stats_binding_ : trace_stats_binding_;
     const bool wants_motion = (desc.path.flags & (1u << 1u)) != 0;
     if (motion) {
         if (!motion_binding) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "selected program has no NRD motion binding");
@@ -1244,7 +1253,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         fns_.cmd_fill_buffer(command, owned_reservoirs_view_.buffer, 0, owned_reservoirs_view_.size, 0);
     entry_barrier(fns_, command);
 
-    std::array<BedrayResource, 29> trace_resources{};
+    std::array<BedrayResource, 30> trace_resources{};
     trace_resources[0] = acceleration_resource(0, as_acceleration(desc.scene.tlas));
     trace_resources[1] = image_resource(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, radiance_view_.view);
     trace_resources[2] = buffer_resource(2, as_buffer(desc.scene.sections.handle),
@@ -1303,6 +1312,12 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     if (pt_binding) {
         trace_resources[pt_slot] = buffer_resource(36, pt_dummy_view_.buffer, 0, pt_dummy_view_.size);
     }
+    // The stats slot is the entity scalar stand-in: one word, which pathTraceCountRejects refuses (it needs the whole
+    // 144-word slot), so nothing is written and the Java host reports the split as n/a for this backend.
+    const std::size_t stats_slot = pt_slot + (pt_binding ? 1u : 0u);
+    if (stats_binding) {
+        trace_resources[stats_slot] = buffer_resource(37, entity_scalar_view_.buffer, 0, entity_scalar_view_.size);
+    }
 
     BedrayFrameDesc trace_desc{};
     trace_desc.abi_version = BEDRAY_CORE_ABI_VERSION;
@@ -1311,7 +1326,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     trace_desc.group_count_x = groups(desc.camera.width);
     trace_desc.group_count_y = groups(desc.camera.height);
     trace_desc.group_count_z = 1;
-    trace_desc.resource_count = static_cast<std::uint32_t>(pt_slot + (pt_binding ? 1u : 0u));
+    trace_desc.resource_count = static_cast<std::uint32_t>(stats_slot + (stats_binding ? 1u : 0u));
     trace_desc.resources = trace_resources.data();
     trace_desc.push_constants = &trace_push;
     trace_desc.push_constant_bytes = static_cast<std::uint32_t>(sizeof(trace_push));
@@ -1649,6 +1664,7 @@ void PathTracePass::reset_state() noexcept {
     trace_motion_bindings_ = scene_motion_bindings_ = false;
     scene_field_bindings_ = false;
     trace_pt_binding_ = scene_pt_binding_ = false;
+    trace_stats_binding_ = scene_stats_binding_ = false;
     guide_dummy_ids_ = {}; guide_dummy_views_ = {};
     radiance_id_ = {};
     motion_id_ = {};

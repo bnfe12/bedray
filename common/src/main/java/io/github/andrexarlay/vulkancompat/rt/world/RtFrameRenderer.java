@@ -137,6 +137,8 @@ public final class RtFrameRenderer {
     private static double lastHitPct = -1.0;
     /** Share of the metered pixels the tracer refused; -1 until a counter slot carries a measurement. */
     private static double lastRejectedPct = -1.0;
+    /** The trace's split of the frame's bad endings, or null while no slot carried a measurement this host agrees with. */
+    private static RtStatsMetering.Breakdown lastRejectSplit;
     /** Share of the hit pixels whose key light reached them through a leaf card (1-in-16 mask, like hist_pct). */
     private static double lastLeafPct = -1.0;
     private static volatile String lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
@@ -713,6 +715,13 @@ public final class RtFrameRenderer {
                 // many pixels it weighed: the difference is the share the tracer refused, which no other word carries.
                 lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(), metadata.height(),
                     metadata.frameIndex(), samples);
+                // The trace pass's own words: why pixels were refused, how many paths ran short, how many shadow walks
+                // gave up. The metered word must equal this mask's count, or the native stand-in left it zero: n/a.
+                lastRejectSplit = RtStatsMetering.breakdown(metadata.width(), metadata.height(),
+                    metadata.frameIndex(), MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS),
+                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 4),
+                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 8),
+                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 12));
                 lastTransparency = metadata.transparency() ? String.format(Locale.ROOT,
                     "[RT-TRANSPARENCY] counters=READBACK queries=%d candidates=%d layers=%d overflows=%d direct_shadow_queries=%d indirect_shadow_queries=%d",
                     Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_QUERIES)),
@@ -897,6 +906,8 @@ public final class RtFrameRenderer {
         // zeroing the slot would keep the count of the frame that used it three slots ago.
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.LEAF_BACKLIT, 4, 0);
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.TRANS_QUERIES, 24, 0);
+        // The trace's own F3 split: zeroed here, added to by the trace, so a slot reused three frames later starts clean.
+        VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.PATH_REJECTS, 16, 0);
         float lightRange = RtConfig.mode() == RtMode.PATH_TRACED
             ? Math.min(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathMaxDistance(), 128)
             : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.emissiveDistance() + 8f;
@@ -1655,10 +1666,13 @@ public final class RtFrameRenderer {
             int userBounces = RtSettings.bounces();
             double budget = RtSettings.adaptiveBudgetMs();
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s reject_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
+                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
                 passFrames, target != null ? (long) target.width * target.height : 0L,
                 lastHitPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHitPct),
                 lastRejectedPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectedPct),
+                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.invalidPct()),
+                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.truncatedPct()),
+                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.overflowPct()),
                 lastHistPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHistPct),
                 lastLeafPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastLeafPct),
                 passMsInWindow / passFramesInWindow,

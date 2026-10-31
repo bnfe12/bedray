@@ -35,6 +35,7 @@
 //   32 outSpecAlbedo    RGBA8 guide (metal albedo or dielectric F0)
 //   33 outMotionBuffer  RWStructuredBuffer<float4> NRD IN_MV (one vec4 per pixel)
 //   36 ptReservoirs     RWStructuredBuffer<RestirPtReservoir> (ReSTIR PT: two parity halves, 144 B per pixel)
+//   37 outPathStats     RWStructuredBuffer<uint> (the frame's stats slot; words 140..143 = the F3 reject split)
 //
 // The section record's vertexAddress is a PhysicalStorageBuffer address of a
 // GeometryVertex array (64 B stride), so the manifest keeps Int64 and
@@ -84,6 +85,9 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 // ReSTIR PT: two parity halves of one 144-byte RestirPtReservoir per pixel (restir/pt_temporal.slang).  A host without the
 // ring binds a one-record stand-in and leaves PATH_TRACE_OPTION_RESTIR_PT clear; the stage refuses a ring that short.
 [[vk::binding(36, 0)]] RWStructuredBuffer<RestirPtReservoir> ptReservoirs;
+// The frame's stats slot (576 B): the trace adds the F3 split of its bad endings into words 140..143.  The native core
+// binds a one-word stand-in, which pathTraceCountRejects refuses to write.
+[[vk::binding(37, 0)]] RWStructuredBuffer<uint> outPathStats;
 
 [[vk::push_constant]] PathTracePush pc;
 
@@ -120,5 +124,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.selfAvatarTriCount = pc.entityState.z;
     pathTraceEntry(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
         outDepth, outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer,
-        frame, blockMaterials, emitters, reservoirs, ptReservoirs, pc);
+        frame, blockMaterials, emitters, reservoirs, ptReservoirs, outPathStats, pc);
 }

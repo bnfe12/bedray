@@ -33,6 +33,31 @@ final class RtStatsMetering {
         return metered;
     }
 
+    /** The F3 split of a frame, each share in percent of the metered pixels. */
+    record Breakdown(double invalidPct, double truncatedPct, double overflowPct) {
+    }
+
+    /**
+     * The trace pass's own block ({@link RtStatsLayout#PATH_REJECTS}), or null when it holds no measurement this host can
+     * vouch for: a metered word of 0 (the native core's stand-in, or an unwritten slot), a metered word that is not this
+     * mask's count (host and shader drifted), or a count above the metered pixels.
+     */
+    static Breakdown breakdown(int width, int height, int frameIndex, int invalid, int truncated, int overflow,
+                               int meteredWord) {
+        long metered = meteredPixels(width, height, frameIndex);
+        long written = Integer.toUnsignedLong(meteredWord);
+        if (metered == 0L || written != metered) {
+            return null;
+        }
+        long a = Integer.toUnsignedLong(invalid);
+        long b = Integer.toUnsignedLong(truncated);
+        long c = Integer.toUnsignedLong(overflow);
+        if (a > metered || b > metered || c > metered) {
+            return null;
+        }
+        return new Breakdown(100.0 * a / metered, 100.0 * b / metered, 100.0 * c / metered);
+    }
+
     /**
      * Share (percent) of the metered pixels the tracer refused, or -1 when the frame holds no measurement: nothing
      * metered, no trusted sample, or more samples than the mask can hold (the host's copy of the shader disagrees).

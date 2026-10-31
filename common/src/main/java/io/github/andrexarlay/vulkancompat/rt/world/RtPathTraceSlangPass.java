@@ -78,6 +78,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final int ENTITY_VECTOR_BYTES = 16;
     /** {@code rt_pack_nrd.comp}: one Vec4Buf element of NRD's IN_MV channel, four floats per render pixel. */
     static final int MOTION_ELEMENT_BYTES = 16;
+    /** One counter word of the stats slot the trace adds its F3 split into (binding 37, {@link RtStatsLayout#PATH_REJECTS}). */
+    static final int PATH_STATS_WORD_BYTES = 4;
     static final int THREAD_GROUP = 8;
 
     /** Optional device capabilities the generated manifest requires; see {@code bedray_core.h}. */
@@ -185,7 +187,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         new Expected("outDirect", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("outSpecAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("outMotionBuffer", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
-        new Expected("ptReservoirs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        new Expected("ptReservoirs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("outPathStats", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
 
     /** The trace bindings the spatial stage reads: the first-edge visibility walk and the ring, nothing it would write. */
     static final List<Expected> PT_SPATIAL_EXPECTED = List.of(
@@ -560,6 +563,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         requireElementBytes(manifest, "entityPrevious", ENTITY_SCALAR_BYTES);
         requireElementBytes(manifest, "outMotionBuffer", MOTION_ELEMENT_BYTES);
         requireElementBytes(manifest, "ptReservoirs", PT_RESERVOIR_BYTES);
+        requireElementBytes(manifest, "outPathStats", PATH_STATS_WORD_BYTES);
         if (radianceCascades) {
             RtRadianceCascadesContract.requireFieldBindings(manifest);
         }
@@ -661,6 +665,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     // The NRD motion channel is a vec4 per pixel; a zero element keeps the descriptor complete when the layout is not
     // NRD and PATH_TRACE_OPTION_NRD_MOTION stays clear.
     private BedrayGpuBuffersNative.Buffer motionDummy;
+    /** One word: the stats binding of a frame without a slot, which the shader refuses to write (shorter than 144 words). */
+    private BedrayGpuBuffersNative.Buffer pathStatsDummy;
     private int width;
     private int height;
     private boolean closed;
@@ -717,6 +723,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             guideDummyRGBA8 = nativeImages.create(1, 1, VK10.VK_FORMAT_R8G8B8A8_UNORM,
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT);
             motionDummy = zeroedBuffer(MOTION_ELEMENT_BYTES);
+            pathStatsDummy = zeroedBuffer(PATH_STATS_WORD_BYTES);
         } catch (RuntimeException | Error e) {
             nativeBuffers.close();
             nativeImages.close();
@@ -783,9 +790,15 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      */
     void record(VkCommandBuffer cmd, Scene scene, Atlases atlases, Emitters emitters, Reservoirs reservoirs,
                 Reservoirs ptReservoirs, Entities entities, Guides guides, BufferView nrdMotion, long depthView,
-                Frame frame, Dispatch dispatch) {
+                BufferView pathStats, Frame frame, Dispatch dispatch) {
         if (closed) {
             throw new IllegalStateException("path trace pass is closed");
+        }
+        // The F3 split lands in words 140..143 of the frame's stats slot: a range that does not cover the whole slot
+        // would make the shader refuse it silently, which reads as n/a forever rather than as the host bug it is.
+        if (pathStats != null && pathStats.buffer() != 0L && pathStats.bytes() < RtStatsLayout.SLOT_STRIDE) {
+            throw new IllegalArgumentException("the stats slot holds " + pathStats.bytes() + " B, the trace writes up to "
+                + RtStatsLayout.SLOT_STRIDE + " B");
         }
         if (frame.width <= 0 || frame.height <= 0) {
             throw new IllegalArgumentException("frame size must be positive, got " + frame.width + "x" + frame.height);
@@ -870,6 +883,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         nativeBuffers.retain(cmd.address(), entityScalarDummy);
         nativeBuffers.retain(cmd.address(), entityVectorDummy);
         nativeBuffers.retain(cmd.address(), motionDummy);
+        nativeBuffers.retain(cmd.address(), pathStatsDummy);
         // Both images are fully overwritten. Declaring their old contents
         // undefined on every recording also handles a discarded first recording.
         VkBarriers.transition(cmd, radiance.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
@@ -891,7 +905,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             SlangProgram active = activeProgram(scene);
             active.dispatch(cmd.address(), active.groups(width, 0), active.groups(height, 1), 1,
                 resources(scene, atlases, emitters, reservoirs, wantsPt ? ptReservoirs : Reservoirs.NONE, entities,
-                    boundGuides, boundMotion, depthView), push);
+                    boundGuides, boundMotion, depthView, pathStats), push);
         }
         VkBarriers.fullMemoryBarrier(cmd);
     }
@@ -979,7 +993,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters,
                                                    Reservoirs reservoirs, Reservoirs ptReservoirs, Entities entities,
-                                                   Guides guides, BufferView nrdMotion, long depthView) {
+                                                   Guides guides, BufferView nrdMotion, long depthView,
+                                                   BufferView pathStats) {
         RtMemory.Buf table = scene.sectionTable();
         // An empty list still needs a descriptor. The dummy table is 64 B, so the fallback range is clamped to it: the
         // shader never indexes past pc.emitterCount, which is 0 for exactly this case.
@@ -1026,7 +1041,19 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             guideImage("outDirect", guides == null ? 0L : guides.direct(), guideDummyRGBA16F),
             guideImage("outSpecAlbedo", guides == null ? 0L : guides.specAlbedo(), guideDummyRGBA8),
             motionBuffer(nrdMotion, motionDummy),
-            ptResource);
+            ptResource,
+            pathStatsBuffer(pathStats, pathStatsDummy));
+    }
+
+    /**
+     * The frame's whole stats slot, bound at the slot's own offset (64-byte aligned, unlike the block inside it), or the
+     * pass's one-word stand-in, which {@code pathTraceCountRejects} refuses to write.
+     */
+    private static SlangProgram.Resource pathStatsBuffer(BufferView view, BedrayGpuBuffersNative.Buffer dummy) {
+        if (view == null || view.buffer() == 0L || view.bytes() <= 0L) {
+            return SlangProgram.Resource.storageBuffer("outPathStats", dummy.handle(), 0L, dummy.size());
+        }
+        return SlangProgram.Resource.storageBuffer("outPathStats", view.buffer(), view.offset(), RtStatsLayout.SLOT_STRIDE);
     }
 
     /**
@@ -1134,6 +1161,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             guideDummyRGBA8 = null;
         }
         motionDummy = null;
+        pathStatsDummy = null;
         nativeBuffers.close();
         nativeImages.close();
         closed = true;

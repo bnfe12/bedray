@@ -132,6 +132,8 @@ private:
     bool scene_field_bindings_ = false;
     // The program declares the ReSTIR PT ring at binding 36; the core binds pt_dummy_ and clears the PT push bits.
     bool trace_pt_binding_ = false, scene_pt_binding_ = false;
+    // The program declares the stats slot at binding 37; the core binds the one-word entity scalar stand-in.
+    bool trace_stats_binding_ = false, scene_stats_binding_ = false;
     bool guide_dummies_initialized_ = false;
     std::array<gpu::ImageId, 3> guide_dummy_ids_{};
     std::array<gpu::ImageView, 3> guide_dummy_views_{};

@@ -1253,6 +1253,39 @@ void test_restir_pt_binding_is_a_stand_in() {
     CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
 }
 
+// The stats slot at 37 is additive like the PT ring: a 28-binding program is accepted, a non-storage 37 is a drift, and
+// the core binds a one-word stand-in (the shader needs the 144-word slot, so it writes nothing there).
+void test_path_stats_binding_is_a_stand_in() {
+    reset_all();
+    auto bindings = trace_bindings(7, true);
+    bindings.push_back({36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
+    bindings.push_back({37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
+    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
+    register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
+    BedrayCore core{};
+    PathTracePass pass;
+    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK(fake::buffers.empty());
+    g_programs[kTraceProgram].bindings.back().descriptor_type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    auto frame = valid_frame(1);
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    const auto& trace = fake::render_calls.front();
+    CHECK(trace.resources.size() == 28);
+    const BedrayResource* slot = find_resource(trace.resources, 37);
+    CHECK(slot != nullptr);
+    if (slot != nullptr) {
+        CHECK(slot->descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        CHECK(slot->range == 4);
+    }
+    CHECK(find_resource(trace.resources, 36) != nullptr);
+    pass.discard_recording(1);
+    CHECK_STATUS(pass.release_recording(1), BEDRAY_OK);
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
+}
+
 void test_real_guide_outputs() {
     reset_all();
     std::vector<ProgramBinding> bindings(std::begin(kTraceBindings), std::end(kTraceBindings));
@@ -1812,6 +1845,7 @@ int main() {
     test_device_lost_configure_cleanup();
     test_guide_aware_program_contract();
     test_restir_pt_binding_is_a_stand_in();
+    test_path_stats_binding_is_a_stand_in();
     test_real_guide_outputs();
     test_real_nrd_motion_output();
     test_statistics_dispatch_follows_display();

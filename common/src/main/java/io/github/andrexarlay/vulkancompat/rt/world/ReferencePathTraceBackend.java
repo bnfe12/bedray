@@ -221,7 +221,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         RtPathTraceSlangPass.Atlases atlases = new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(),
             views.normal(), sampler);
         trace.record(cmd, scene, atlases, emitters, reservoirRange, ptRange, capturedEntities,
-            RtPathTraceSlangPass.Guides.of(views.gbuffer()), motion, views.depth(), frame, dispatch);
+            RtPathTraceSlangPass.Guides.of(views.gbuffer()), motion, views.depth(), input.stats(), frame, dispatch);
         // ReSTIR PT spatial: pools the records the trace just wrote into the other half, which the next frame imports.
         // Nothing in this frame reads it - the pooled winner is shaded by the next temporal stage - so it needs no
         // ordering beyond the trailing barrier recordPtSpatial adds.

@@ -144,7 +144,7 @@ class RtSlangNrdMotionTest {
             "the backend derives the binding from the same flag the push carries");
         assertTrue(backend.contains("(long) width * height * RtPathTraceSlangPass.MOTION_ELEMENT_BYTES)"),
             "and binds exactly the pixels this frame writes");
-        assertTrue(backend.contains("motion, views.depth(), frame, dispatch);"), "the range travels with the frame");
+        assertTrue(backend.contains("motion, views.depth(), input.stats(), frame, dispatch);"), "the range travels with the frame");
     }
 
     @Test

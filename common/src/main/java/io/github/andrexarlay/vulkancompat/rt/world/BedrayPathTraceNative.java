@@ -161,8 +161,9 @@ final class BedrayPathTraceNative implements AutoCloseable {
                     throw new IllegalArgumentException("the native counter pass writes the head of this frame's slot,"
                         + " and the host handed it " + stats);
                 }
-                library.recordPathTraceStats(core, input.commandBuffer(), stats.buffer(), stats.offset(),
-                    stats.bytes(), frame.frameIndex);
+                // The frame hands over the whole slot; frame_stats binds exactly its sixteen-byte head.
+                library.recordPathTraceStats(core, input.commandBuffer(), stats.buffer(),
+                    stats.offset(), RtFrameStatsSlangPass.COUNTER_BYTES, frame.frameIndex);
             }
         }
     }

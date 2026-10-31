@@ -185,6 +185,7 @@ struct PathTraceMean {
     uint   accepted;
     uint   hits;         // believed samples whose primary decoded a surface
     uint   traced;
+    uint   flags;        // PATH_TRACE_FLAG_* of every sample, believed or refused: what the F3 split counts
 };
 
 PathTraceMean emptyPathTraceMean() {
@@ -204,11 +205,13 @@ PathTraceMean emptyPathTraceMean() {
     mean.accepted = 0u;
     mean.hits = 0u;
     mean.traced = 0u;
+    mean.flags = 0u;
     return mean;
 }
 
 void accumulatePathTraceSample(inout PathTraceMean mean, PathTraceResult result) {
     mean.traced += 1u;
+    mean.flags |= result.flags;
     if (pathTraceSampleRejected(result.flags)) {
         mean.refusedRadiance += result.radiance;
         return;
@@ -266,6 +269,37 @@ PathTraceResult pathTraceMeanResult(PathTraceMean mean, out bool sampleTrusted) 
     return result;
 }
 
+// The F3 split of the bad endings, written by the trace itself into the last sixteen bytes of the frame's stats slot
+// (RtStatsLayout.PATH_REJECTS): x refused pixels with a non-finite fault, y pixels with a truncated path, z pixels with a
+// shadow walk past its filter budget, w every metered pixel.  Only frame_stats' tiles are metered - one 4x4 tile in
+// sixteen, rotated by the same frame index - so x sits inside reject_pct and the host can check w against its own mask.
+// The binding is the whole slot so its offset is the slot's own (64-byte aligned); a stand-in shorter than the slot is
+// the native core's, and is never written, which the host reads as no measurement.
+static const uint PATH_REJECT_WORD = 140u;
+static const uint PATH_REJECT_SLOT_WORDS = 144u;
+static const uint PATH_REJECT_TILES_PER_SAMPLE = 16u;
+
+void pathTraceCountRejects(RWStructuredBuffer<uint> stats, int2 p, uint2 size, uint frameIndex, bool trusted,
+        uint flags) {
+    uint count;
+    uint stride;
+    stats.GetDimensions(count, stride);
+    if (count < PATH_REJECT_SLOT_WORDS) return;
+    uint tilesPerRow = (size.x + 3u) >> 2u;
+    uint site = (uint(p.x) >> 2u) + (uint(p.y) >> 2u) * tilesPerRow + frameIndex;
+    if (site % PATH_REJECT_TILES_PER_SAMPLE != 0u) return;
+    if (!trusted && (flags & PATH_TRACE_FLAG_INVALID_SAMPLE) != 0u) {
+        InterlockedAdd(stats[PATH_REJECT_WORD + 0u], 1u);
+    }
+    if ((flags & PATH_TRACE_FLAG_TRUNCATED) != 0u) {
+        InterlockedAdd(stats[PATH_REJECT_WORD + 1u], 1u);
+    }
+    if ((flags & PATH_TRACE_FLAG_VISIBILITY_OVERFLOW) != 0u) {
+        InterlockedAdd(stats[PATH_REJECT_WORD + 2u], 1u);
+    }
+    InterlockedAdd(stats[PATH_REJECT_WORD + 3u], 1u);
+}
+
 public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     T traversal,
     EntityGeometry entities,
@@ -289,6 +323,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     StructuredBuffer<BlockEmitterRecord> emitters,
     RWStructuredBuffer<DIReservoir> reservoirs,
     RWStructuredBuffer<RestirPtReservoir> ptReservoirs,
+    RWStructuredBuffer<uint> outPathStats,
     PathTracePush pc, F diffuseField) {
     uint2 size;
     outImage.GetDimensions(size.x, size.y);
@@ -454,6 +489,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // would otherwise throw seven away and keep only their noise.
     bool sampleTrusted;
     PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);
+    pathTraceCountRejects(outPathStats, p, size, f.frame.x, sampleTrusted, total.flags);
 
     // Scene-referred linear radiance: no exposure and no tone map here.  Exposure lives in FrameConstants.exposure and
     // is applied once by the display/tonemap pass, so accumulation and denoise keep working in linear HDR.
@@ -492,12 +528,12 @@ public void pathTraceEntry<T : ISceneTracer>(
     RWTexture2D<float4> outSpecAlbedo, RWStructuredBuffer<float4> outMotionBuffer,
     FrameConstants frame, StructuredBuffer<BlockMaterial> blockMaterials,
     StructuredBuffer<BlockEmitterRecord> emitters, RWStructuredBuffer<DIReservoir> reservoirs,
-    RWStructuredBuffer<RestirPtReservoir> ptReservoirs, PathTracePush pc) {
+    RWStructuredBuffer<RestirPtReservoir> ptReservoirs, RWStructuredBuffer<uint> outPathStats, PathTracePush pc) {
     NoPathDiffuseField field;
     pathTraceEntryWithField(traversal, entities, tid, outImage, albedoAtlas, outMotion,
         materialAtlas, normalAtlas, outDepth, outViewZ, outNormalRough, outSpecular,
         outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer, frame,
-        blockMaterials, emitters, reservoirs, ptReservoirs, pc, field);
+        blockMaterials, emitters, reservoirs, ptReservoirs, outPathStats, pc, field);
 }
 
 // The ReSTIR PT spatial entry (passes/restir_pt_spatial*.slang): the trace pass's own push block, atlases, block table and

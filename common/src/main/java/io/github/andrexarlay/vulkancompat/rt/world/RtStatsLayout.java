@@ -123,6 +123,12 @@ public final class RtStatsLayout {
     public static final int TRANS_OVERFLOWS = add("transOverflows", "uint");
     public static final int TRANS_DIRECT_SHADOWS = add("transDirectShadows", "uint");
     public static final int TRANS_INDIRECT_SHADOWS = add("transIndirectShadows", "uint");
+    /**
+     * The F3 split the trace pass writes itself (binding 37, words 140..143 of the slot): refused pixels with a
+     * non-finite fault, pixels with a truncated path, pixels with a shadow walk past its filter budget, metered pixels.
+     * The last sixteen bytes of the slot, so the struct fills {@link #SLOT_STRIDE} exactly.
+     */
+    public static final int PATH_REJECTS = add("pathRejects", "uvec4");
 
     /** std430 size of the struct (struct alignment 16). */
     public static final int SIZE = (cursor + 15) & -16;
