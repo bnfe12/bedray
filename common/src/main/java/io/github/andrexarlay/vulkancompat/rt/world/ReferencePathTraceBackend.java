@@ -43,6 +43,8 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
      */
     private BedrayGpuBuffersNative.Buffer ptReservoirs;
     private final RestirDiState pt = new RestirDiState(false);
+    /** True when the last recorded frame ran the PT spatial stage; the mode log reports it. */
+    private boolean ptSpatialLast;
     private boolean closed;
 
     ReferencePathTraceBackend(VkDevice device, SlangRuntime runtime) {
@@ -215,10 +217,18 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
             ? new RtPathTraceSlangPass.BufferView(views.motion(), 0L,
                 (long) width * height * RtPathTraceSlangPass.MOTION_ELEMENT_BYTES)
             : RtPathTraceSlangPass.BufferView.NONE;
-        trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
-            new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
-            emitters, reservoirRange, ptRange, capturedEntities, RtPathTraceSlangPass.Guides.of(views.gbuffer()),
-            motion, views.depth(), frame, dispatch);
+        RtPathTraceSlangPass.Scene scene = new RtPathTraceSlangPass.Scene(views.tlas(), views.table());
+        RtPathTraceSlangPass.Atlases atlases = new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(),
+            views.normal(), sampler);
+        trace.record(cmd, scene, atlases, emitters, reservoirRange, ptRange, capturedEntities,
+            RtPathTraceSlangPass.Guides.of(views.gbuffer()), motion, views.depth(), frame, dispatch);
+        // ReSTIR PT spatial: pools the records the trace just wrote into the other half, which the next frame imports.
+        // Nothing in this frame reads it - the pooled winner is shaded by the next temporal stage - so it needs no
+        // ordering beyond the trailing barrier recordPtSpatial adds.
+        boolean ptSpatialRan = ptFlags != 0 && input.ptSpatial() && trace.ptSpatialAvailable(scene);
+        if (ptSpatialRan) {
+            trace.recordPtSpatial(cmd, scene, atlases, ptRange, capturedEntities, frame, dispatch);
+        }
         // Spatial reuse pools the records the trace pass just wrote, in the half it just wrote. Nothing in this frame
         // reads them - the benefit lands in the next frame's temporal import - so the stage owns its own ordering: the
         // barrier between its two phases and a trailing one, both inside record().
@@ -265,6 +275,8 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         historyParity ^= 1;
         di.afterDispatch(diFlags != 0);
         pt.afterDispatch(ptFlags != 0);
+        if (ptSpatialRan) pt.spatialPublished();
+        ptSpatialLast = ptSpatialRan;
         VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read by the composite, bloom and upscalers next
         // The frame's counters, measured from the three images the two dispatches above just wrote. It rides the
         // barrier the picture already needs, so it asks for none of its own, and the renderer's host-visibility
@@ -291,7 +303,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     }
     @Override public boolean pathReuseAvailable() { return true; }
     @Override public String pathReuseState() {
-        return pt.mode(true, ptReservoirs != null, false);
+        return pt.mode(true, ptReservoirs != null, ptSpatialLast);
     }
     @Override public void releaseRecording(long commandBuffer) {
         if (!recordings.contains(commandBuffer)) return;

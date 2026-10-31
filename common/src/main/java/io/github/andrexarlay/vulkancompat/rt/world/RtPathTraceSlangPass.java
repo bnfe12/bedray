@@ -50,6 +50,12 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final String PASS_NAME = "path_trace";
     /** Native-scene twin of {@link #PASS_NAME}: same bindings, {@code GeometrySection} table and vertex stream. */
     static final String SCENE_PASS_NAME = "path_trace_scene";
+    /**
+     * The ReSTIR PT spatial stage, one program per traversal backend like the trace itself: the same bindings by number
+     * and the same push block, so it is recorded from this pass's own views and push bytes.
+     */
+    static final String PT_SPATIAL_PASS_NAME = "restir_pt_spatial";
+    static final String PT_SPATIAL_SCENE_PASS_NAME = "restir_pt_spatial_scene";
     static final int FRAME_CONSTANTS_BYTES = 608;
     /** Mirrors {@code PATH_TRACE_MAX_SPP}: the ceiling of "Rays per Pixel", and the most rays one pixel may trace. */
     static final int MAX_SAMPLES_PER_PIXEL = 8;
@@ -179,6 +185,23 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         new Expected("outDirect", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("outSpecAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("outMotionBuffer", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("ptReservoirs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
+
+    /** The trace bindings the spatial stage reads: the first-edge visibility walk and the ring, nothing it would write. */
+    static final List<Expected> PT_SPATIAL_EXPECTED = List.of(
+        new Expected("tlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
+        new Expected("sections", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("albedoAtlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
+        new Expected("materialAtlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
+        new Expected("normalAtlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
+        new Expected("frame", BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER),
+        new Expected("blockMaterials", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityPositions", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityIndices", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityAttrs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityRects", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityTexels", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityPrevious", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
         new Expected("ptReservoirs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
 
     /** Scene inputs the host must supply: the frame TLAS and the section table written by {@link RtWorld}. */
@@ -542,6 +565,62 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         }
     }
 
+    /**
+     * The spatial stage's manifest against what {@link #recordPtSpatial} binds: exactly the expected trace bindings, the
+     * trace's push block, and the same element sizes, so a record written by the trace is read with the same layout.
+     */
+    static void requirePtSpatialManifest(SlangPassManifest manifest) {
+        if (manifest.pushConstantBytes() != PUSH_BYTES) {
+            throw new IllegalStateException(manifest.name() + " pushes " + manifest.pushConstantBytes()
+                + " B, the trace push block is " + PUSH_BYTES + " B");
+        }
+        if (manifest.bindings().size() != PT_SPATIAL_EXPECTED.size()) {
+            throw new IllegalStateException(manifest.name() + " declares " + manifest.bindings().size()
+                + " binding(s), host supplies " + PT_SPATIAL_EXPECTED.size());
+        }
+        for (Expected want : PT_SPATIAL_EXPECTED) {
+            SlangPassManifest.Binding binding = manifest.binding(want.name());
+            if (binding == null) {
+                throw new IllegalStateException(manifest.name() + " has no '" + want.name() + "' binding");
+            }
+            if (binding.descriptorType() != want.descriptorType()) {
+                throw new IllegalStateException(manifest.name() + ": '" + want.name() + "' is "
+                    + BedrayCoreLayouts.descriptorTypeName(binding.descriptorType()) + ", host supplies "
+                    + BedrayCoreLayouts.descriptorTypeName(want.descriptorType()));
+            }
+        }
+        requireElementBytes(manifest, "frame", FRAME_CONSTANTS_BYTES);
+        requireElementBytes(manifest, "blockMaterials", BLOCK_MATERIAL_BYTES);
+        requireElementBytes(manifest, "entityPositions", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "entityIndices", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "entityAttrs", ENTITY_VECTOR_BYTES);
+        requireElementBytes(manifest, "entityRects", ENTITY_VECTOR_BYTES);
+        requireElementBytes(manifest, "entityTexels", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "entityPrevious", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "ptReservoirs", PT_RESERVOIR_BYTES);
+    }
+
+    /** An optional program: absent from the jar or refused by its manifest check, the stage stays off and says why. */
+    private static SlangProgram optionalPtSpatial(SlangRuntime runtime, String name) {
+        if (!SlangPassLibrary.available(name)) {
+            LOGGER.info("[VKB-RT] ReSTIR PT spatial stage off for {}: the jar has no artifact", name);
+            return null;
+        }
+        try {
+            SlangProgram spatial = runtime.program(name).orElse(null);
+            if (spatial == null) {
+                LOGGER.info("[VKB-RT] ReSTIR PT spatial stage off for {}: not registered", name);
+                return null;
+            }
+            requirePtSpatialManifest(spatial.manifest());
+            return spatial;
+        } catch (RuntimeException e) {
+            LOGGER.info("[VKB-RT] ReSTIR PT spatial stage off for {}: {}", name,
+                e.getMessage() == null ? e.toString() : e.getMessage());
+            return null;
+        }
+    }
+
     private static void requireElementBytes(SlangPassManifest manifest, String name, int expected) {
         SlangPassManifest.Binding binding = manifest.binding(name);
         if (binding == null) {
@@ -558,6 +637,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private final SlangProgram program;
     /** Native-scene twin, or null when this jar was built without its artifact. */
     private final SlangProgram sceneProgram;
+    /** The ReSTIR PT spatial programs for the two tables; null when the jar lacks one or its manifest disagrees. */
+    private final SlangProgram ptSpatialProgram;
+    private final SlangProgram ptSpatialSceneProgram;
     private final BedrayGpuImagesNative nativeImages;
     private final BedrayGpuBuffersNative nativeBuffers;
     private final BedrayGpuBuffersNative.Buffer blockMaterials;
@@ -607,6 +689,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (sceneProgram != null) {
             requireManifest(sceneProgram);
         }
+        this.ptSpatialProgram = optionalPtSpatial(runtime, PT_SPATIAL_PASS_NAME);
+        this.ptSpatialSceneProgram = sceneProgram == null ? null : optionalPtSpatial(runtime, PT_SPATIAL_SCENE_PASS_NAME);
         long deviceBytes = runtime.capabilities().deviceMemoryBytes();
         long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 256L << 20;
         nativeImages = runtime.createImageOwner(imageBudget);
@@ -822,6 +906,64 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             throw new IllegalStateException("path trace has not uploaded frame constants yet");
         }
         return SlangProgram.Resource.uniformBuffer("frame", frameConstants.handle(), 0, FRAME_CONSTANTS_BYTES);
+    }
+
+    /** True when the spatial stage has a program for the table this frame traced. */
+    boolean ptSpatialAvailable(Scene scene) {
+        return (scene.nativeScene() ? ptSpatialSceneProgram : ptSpatialProgram) != null;
+    }
+
+    /**
+     * Records the ReSTIR PT spatial stage right after {@link #record}: the same table, atlases, entities, frame block and
+     * push word, so the first edges it re-traces are walked exactly as the trace walked them and
+     * {@code PATH_TRACE_PT_PARITY} names the half the trace wrote. {@link #record} ended with a full barrier, so the ring
+     * is readable; the trailing barrier makes the other half visible to the next frame's import.
+     */
+    void recordPtSpatial(VkCommandBuffer cmd, Scene scene, Atlases atlases, Reservoirs ptReservoirs, Entities entities,
+                         Frame frame, Dispatch dispatch) {
+        if (closed) {
+            throw new IllegalStateException("path trace pass is closed");
+        }
+        SlangProgram spatial = scene.nativeScene() ? ptSpatialSceneProgram : ptSpatialProgram;
+        if (spatial == null) {
+            throw new IllegalStateException("the ReSTIR PT spatial stage has no program for this table");
+        }
+        if ((dispatch.flags() & OPTION_RESTIR_PT) == 0) {
+            throw new IllegalArgumentException("the spatial stage pools the temporal stage's records: OPTION_RESTIR_PT is clear");
+        }
+        if (ptReservoirs == null || ptReservoirs.buffer() == 0L
+            || ptReservoirs.bytes() < ptReservoirBytes(frame.width, frame.height)) {
+            throw new IllegalArgumentException("the spatial stage needs the ring of "
+                + ptReservoirBytes(frame.width, frame.height) + " B the trace wrote");
+        }
+        if (frameConstants == null || frameRecording != cmd.address()) {
+            throw new IllegalStateException("the spatial stage records after this frame's trace, in its command buffer");
+        }
+        Entities captured = entities == null ? Entities.NONE : entities;
+        RtMemory.Buf table = scene.sectionTable();
+        List<SlangProgram.Resource> resources = List.of(
+            SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
+            SlangProgram.Resource.storageBuffer("sections", table.handle, 0, table.size),
+            SlangProgram.Resource.sampled("albedoAtlas", atlases.albedoView(), atlases.sampler()),
+            SlangProgram.Resource.sampled("materialAtlas", atlases.materialView(), atlases.sampler()),
+            SlangProgram.Resource.sampled("normalAtlas", atlases.normalView(), atlases.sampler()),
+            frameResource(),
+            SlangProgram.Resource.storageBuffer("blockMaterials", blockMaterials.handle(), 0, BLOCK_MATERIAL_BYTES),
+            entityBuffer("entityPositions", captured.positions(), entityScalarDummy),
+            entityBuffer("entityIndices", captured.indices(), entityScalarDummy),
+            entityBuffer("entityAttrs", captured.attrs(), entityVectorDummy),
+            entityBuffer("entityRects", captured.rects(), entityVectorDummy),
+            entityBuffer("entityTexels", captured.texels(), entityScalarDummy),
+            entityBuffer("entityPrevious", captured.previous(), entityScalarDummy),
+            SlangProgram.Resource.storageBuffer("ptReservoirs", ptReservoirs.buffer(), 0L, ptReservoirs.bytes()));
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer push = stack.malloc(PUSH_BYTES);
+            dispatch.writeTo(push);
+            recordings.add(cmd.address());
+            spatial.dispatch(cmd.address(), spatial.groups(frame.width, 0), spatial.groups(frame.height, 1), 1,
+                resources, push);
+        }
+        VkBarriers.fullMemoryBarrier(cmd);
     }
 
     private SlangProgram activeProgram(Scene scene) {

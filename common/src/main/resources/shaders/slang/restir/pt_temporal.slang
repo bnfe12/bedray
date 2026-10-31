@@ -102,6 +102,17 @@ HistorySample ptStoredReceiver(RestirPtReservoir stored) {
     return sample;
 }
 
+// The receiver a record describes, written into a record that won no sample.  A record with a sample already carries this
+// receiver as its anchor (ptRecordPath, ptShiftPath), so it is left alone; an attempts-only record (M > 0, no weight)
+// would otherwise keep the zero anchor of ptEmptyReservoir, and the spatial stage could not hand that pixel a
+// neighbour's path.  The anchor is data only: ptReservoirHasSample still reads the record as empty.
+RestirPtReservoir ptAnchorReceiver(RestirPtReservoir reservoir, float3 position, float3 normal) {
+    if (ptReservoirHasSample(reservoir)) return reservoir;
+    reservoir.sample.anchorPosition = position;
+    reservoir.sample.anchorNormal = safeNormalize(normal, float3(0.0, 1.0, 0.0));
+    return reservoir;
+}
+
 // One pixel's temporal stage.  Returns the first path's radiance with the reservoir's share swapped in, and publishes the
 // record the next frame reads.  `seedBase` is the path's own seed; the stage draws from a decorrelated stream so turning
 // it on never changes the random numbers the path itself used.
@@ -206,6 +217,7 @@ float3 ptTemporalStage<T : ISceneTracer>(T traversal, MaterialAtlas atlas, Block
         // blocker leaves and dies out if it stays.
         current = ptDecayOnOcclusion(current, true);
     }
+    current = ptAnchorReceiver(current, record.anchorPosition, record.anchorNormal);
     reservoirs[slot] = current;
     return radiance;
 }

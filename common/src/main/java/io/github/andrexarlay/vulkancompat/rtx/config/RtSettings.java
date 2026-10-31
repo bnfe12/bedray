@@ -176,6 +176,12 @@ public final class RtSettings {
      * reference backend, which owns the ring; the native core binds a stand-in.
      */
     public static boolean pathRestirPt = false;
+    /**
+     * The spatial stage of ReSTIR PT (restir/pt_spatial.slang): each pixel pools four neighbours' path records into the
+     * half the next frame imports. On by default under its parent, which already carries the memory price; it costs up to
+     * four first-edge visibility rays a pixel and no memory of its own.
+     */
+    public static boolean pathRestirPtSpatial = true;
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
@@ -268,6 +274,7 @@ public final class RtSettings {
         bool("path_restir_di", () -> pathRestirDi, v -> pathRestirDi = v);
         bool("path_restir_spatial", () -> pathRestirSpatial, v -> pathRestirSpatial = v);
         bool("path_restir_pt", () -> pathRestirPt, v -> pathRestirPt = v);
+        bool("path_restir_pt_spatial", () -> pathRestirPtSpatial, v -> pathRestirPtSpatial = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
@@ -467,6 +474,8 @@ public final class RtSettings {
     public static boolean pathRestirSpatial() { return b("path_restir_spatial"); }
     /** ReSTIR PT temporal reuse of the path tracer's diffuse indirect light; see {@link #pathRestirPt}. */
     public static boolean pathRestirPt() { return b("path_restir_pt"); }
+    /** The PT spatial stage; see {@link #pathRestirPtSpatial}. */
+    public static boolean pathRestirPtSpatial() { return b("path_restir_pt_spatial"); }
     public static int bounces() { return i("path_bounces"); }
     public static int spp() { return i("path_spp"); }
     public static boolean accumulate() { return b("path_accumulate"); }

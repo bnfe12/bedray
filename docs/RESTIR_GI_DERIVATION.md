@@ -272,8 +272,8 @@ including both generic reuse functions.
 
 The property test (`RestirPtReservoirInvariantTest`), the mathematical gates of
 §4–§6, a pass and a manifest-checked host are closed: §11 describes the live
-temporal stage. What remains is a GPU smoke run with the switch on, the spatial
-stage, and an owner-verified frame. The module stays in `experimental/` until
+temporal stage and §12 the live spatial stage. What remains is a GPU smoke run
+with the switches on and an owner-verified frame. The module stays in `experimental/` until
 the GPU gate closes (`experimental/README.md`).
 
 ## 11. Live temporal stage (v5)
@@ -351,3 +351,63 @@ under std430 because a nested struct with a `float3` rounds to 16 B. The ring is
   stored winner is a certified candidate, so this only fires on corrupt data;
 - the occlusion decay and the ratio/weight caps are lag and firefly guards.
 
+## 12. Live spatial stage (v5)
+
+`restir/pt_spatial.slang` runs as its own pass after the trace, on a frame whose
+trace ran the temporal stage and with `path_restir_pt_spatial` on (default on,
+a child row of `path_restir_pt`). Two roots carry it, one per traversal backend
+like the trace: `passes/restir_pt_spatial.slang` (legacy section table) and
+`passes/restir_pt_spatial_scene.slang` (native scene table). Both declare the
+trace pass's own bindings by number - the TLAS, the section table, the three
+atlases, the frame block, the block-material table, the six entity buffers and
+the ring at 36, fourteen in all - and its own 112-byte push block, so the host
+records them from the views and push bytes it used for the trace
+(`RtPathTraceSlangPass.recordPtSpatial`).
+
+**Halves.** Each pixel reads its own record and four neighbours' records from the
+half the trace wrote (`PATH_TRACE_PT_PARITY`) and writes its result into the
+other half. No thread reads a slot another thread writes, so one dispatch needs
+no checker. The ring state counts the spatial publish as a write
+(`RestirDiState.spatialPublished`): the next trace writes the half this trace
+wrote and imports the spatial half, so the pooled records are what the next
+temporal merge reads.
+
+**Merge.** Every neighbour goes through the module's `ptSpatialReuse`: the
+same-surface test (`ptReuseCompatible`, 1 block and the spatial normal bound),
+the first edge re-traced from this receiver through the shared filtered
+visibility walk, the target at this receiver, the fixed-first-vertex Jacobian
+`G_new / G_old` with `originDelta = 0` (same frame), and the spatial ratio cap 5.
+A spatial neighbour is not aged.
+
+**Neighbours.** Four points of a rotated cross on rings of 2.5, 4.5, 6.5 and
+8.5 pixels; the rotation is a per-pixel, per-frame hash. Any two points are more
+than 5 pixels apart before rounding moves each by at most 0.71, so the four are
+always four different pixels and never the pixel itself, which is the
+distinct-neighbour contract `ptSpatialReuse` states (§7).
+`RestirPtSpatialStageTest` checks it on 200,000 rotations for both half-way
+rounding conventions.
+
+**Receivers.** A receiver is any pixel the temporal stage counted an attempt
+for (`M > 0`). A pixel whose attempts all missed would carry the zero anchor of
+`ptEmptyReservoir`, so the temporal stage now writes the receiver's anchor into
+a record without a sample (`ptAnchorReceiver`); a record with a sample already
+carries it. A pixel that is no receiver, or whose neighbours all fail,
+publishes its own record unchanged, so the next import sees at least what
+temporal-only reuse would have handed it.
+
+**No shading in this pass.** The pass resolves nothing. A spatial winner
+reaches the image through the next frame's temporal stage, which resolves every
+reused winner with `ptResolveFiltered` at its own receiver: one frame of lag,
+the same as the DI spatial pass. Shading the pooled record in the same frame
+would need the primary vertex's diffuse reflectance and the sample count's
+weight in a per-pixel buffer, which the ring does not carry.
+
+**Approximations specific to the spatial stage** (on top of §8 and §11):
+
+- the merge has no MIS between the pooled domains: the spatial ratio cap and
+  the visibility test stand in for it, so the pooled estimate is the biased but
+  consistent form the module was written for, not the pairwise-MIS form;
+- a neighbour record holds that pixel's temporal merge, so its `M` can already
+  include history; the merge clamps every incoming `M` at `M_CAP` (20) and the
+  sum at `MAX_M` (400);
+- up to four filtered visibility rays per receiver; no memory beyond the ring.

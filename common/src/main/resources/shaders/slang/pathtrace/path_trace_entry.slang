@@ -15,6 +15,7 @@ import "pathtrace/path_tracer.slang";
 import "restir/di_block_emitters.slang";
 __exported import "restir/restir_di.slang";
 __exported import "restir/pt_temporal.slang";
+__exported import "restir/pt_spatial.slang";
 import "sampling.slang";
 __exported import "surface/surface.slang";
 import "surface/water.slang";
@@ -71,6 +72,21 @@ Ray pathTracePrimaryRay(FrameConstants f, int2 pixel, float maxDistance, float2 
         + f.camera.right.xyz * (ndc.x * tanHalf * aspect)
         - f.camera.up.xyz * (ndc.y * tanHalf));
     return makeRay(f.camera.origin.xyz, direction, 0.0, max(maxDistance, 1.0));
+}
+
+// One cutoff for the primary path, material decoding and the filtered shadow walk; otherwise a near-threshold texel can
+// be solid to the camera and a hole to the shadow ray.  The ReSTIR PT spatial entry reads the same options, so a
+// neighbour's first edge is re-traced through exactly the walk that traced it.
+MaterialSamplingOptions pathTraceMaterialOptions(FrameConstants f, PathTracePush pc) {
+    MaterialSamplingOptions materialOptions = defaultMaterialSamplingOptions();
+    materialOptions.alphaCutoff = pc.alphaCutoff;
+    materialOptions.portalTime = f.camera.origin.w;
+    materialOptions.autoNormalStrength = asfloat(pc.entityState.w);
+    // The player's style switch, and it only ever touches the wave field: the realistic style keeps every tilt the
+    // analytic field has, the other keeps the legacy damping of the same tilts.  Absorption, IOR and the bent beam are
+    // identical with either, so both styles are the same body of water.
+    materialOptions.waterWaveMix = frameWaterRealisticWaves(f) ? 1.0 : WATER_WAVE_MIX_VANILLA;
+    return materialOptions;
 }
 
 uint pathTraceSeed(int2 pixel, uint frameIndex, uint sampleIndex) {
@@ -382,18 +398,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // style changes how much the face tilts and never what the medium does to the light.
     options.waterCaustics = frameWaterCaustics(f);
 
-    // One cutoff for the primary path, material decoding and the filtered
-    // shadow walk; otherwise a near-threshold texel can be solid to the camera
-    // and a hole to the shadow ray.
-    MaterialSamplingOptions materialOptions = defaultMaterialSamplingOptions();
-    materialOptions.alphaCutoff = options.alphaCutoff;
-    materialOptions.portalTime = f.camera.origin.w;
-    materialOptions.autoNormalStrength = asfloat(pc.entityState.w);
-    // The player's style switch, and it only ever touches the wave field: the
-    // realistic style keeps every tilt the analytic field has, the other keeps
-    // the legacy damping of the same tilts.  Absorption, IOR and the bent beam
-    // above are identical with either, so both styles are the same body of water.
-    materialOptions.waterWaveMix = frameWaterRealisticWaves(f) ? 1.0 : WATER_WAVE_MIX_VANILLA;
+    MaterialSamplingOptions materialOptions = pathTraceMaterialOptions(f, pc);
 
     // ReSTIR PT: one path reservoir per pixel, fed by the first ray's diffuse continuation (restir/pt_temporal.slang).
     // Its parity and history travel in the flag word because the ring does not depend on emitters, and DI's own state
@@ -493,4 +498,34 @@ public void pathTraceEntry<T : ISceneTracer>(
         materialAtlas, normalAtlas, outDepth, outViewZ, outNormalRough, outSpecular,
         outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer, frame,
         blockMaterials, emitters, reservoirs, ptReservoirs, pc, field);
+}
+
+// The ReSTIR PT spatial entry (passes/restir_pt_spatial*.slang): the trace pass's own push block, atlases, block table and
+// traversal, so the first edges it re-traces are walked exactly as the trace walked them.  It runs only on a frame whose
+// trace ran the temporal stage; the parity is the half that trace wrote.
+public void pathTracePtSpatialEntry<T : ISceneTracer>(T traversal, EntityGeometry entities, uint3 tid,
+    Sampler2D albedoAtlas,
+    Sampler2D materialAtlas,
+    Sampler2D normalAtlas,
+    FrameConstants frame,
+    StructuredBuffer<BlockMaterial> blockMaterials,
+    RWStructuredBuffer<RestirPtReservoir> ptReservoirs,
+    PathTracePush pc) {
+    FrameConstants f = frame;
+    if ((pc.flags & PATH_TRACE_OPTION_RESTIR_PT) == 0u || f.camera.size.x == 0u || f.camera.size.y == 0u) {
+        return;
+    }
+    MaterialAtlas atlas;
+    atlas.albedo = albedoAtlas;
+    atlas.material = materialAtlas;
+    atlas.normal = normalAtlas;
+    atlas.entities = entities.atlas;
+
+    BlockMaterialTable table;
+    table.materials = blockMaterials;
+    table.count = pc.materialCount;
+
+    MaterialSamplingOptions materialOptions = pathTraceMaterialOptions(f, pc);
+    ptSpatialStage(traversal, atlas, table, materialOptions, max(pc.rayBias, 0.0), ptReservoirs, int2(tid.xy),
+        f.camera.size.xy, (pc.flags & PATH_TRACE_PT_PARITY) != 0u ? 1u : 0u, f.frame.x);
 }

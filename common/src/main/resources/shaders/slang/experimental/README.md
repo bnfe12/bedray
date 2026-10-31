@@ -2,7 +2,8 @@
 
 `compileSlang` only compiles `passes/**/*.slang`. One module here is now reached by those passes:
 `restir_pt.slang` is imported through `restir/pt_temporal.slang` by `path_trace`, `path_trace_scene` and
-`rc_path_trace_scene`, behind the default-off `path_restir_pt` switch. It stays in this directory until its GPU
+`rc_path_trace_scene`, behind the default-off `path_restir_pt` switch, and through `restir/pt_spatial.slang` by
+`restir_pt_spatial` and `restir_pt_spatial_scene` (child switch `path_restir_pt_spatial`). It stays in this directory until its GPU
 smoke gate closes.
 
 ## `restir_pt.slang`

@@ -83,6 +83,11 @@ public final class RtSlangPathPass implements RtPass {
         return !rayMode && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();
     }
 
+    /** The PT spatial stage this frame: only on top of the temporal stage, and only while the player's row is on. */
+    boolean ptSpatialRequested() {
+        return ptActive() && RtSettings.pathRestirPtSpatial();
+    }
+
     /** The accumulate switch that belongs to this profile: the ray mode has its own, the path mode its own. */
     private boolean accumulateRequested() {
         return rayMode ? RtSettings.raysAccumulation() : RtSettings.accumulate();
@@ -474,7 +479,7 @@ public final class RtSlangPathPass implements RtPass {
                 ? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_CAUSTICS : 0);
         backend.record(new PathTraceBackend.Frame(cmd, views, frame, dispatch, emitters, capturedEntities,
             new RtPathTraceSlangPass.BufferView(params.statsBuffer, params.statsOffset,
-                RtFrameStatsSlangPass.COUNTER_BYTES), flags, accumFrames, ptResetRequested));
+                RtFrameStatsSlangPass.COUNTER_BYTES), flags, accumFrames, ptResetRequested, ptSpatialRequested()));
         ptResetRequested = false;
         historyWritten = true;
         diRequests.afterDispatch(diFlags != 0);

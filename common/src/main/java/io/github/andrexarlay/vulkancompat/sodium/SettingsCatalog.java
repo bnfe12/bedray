@@ -324,6 +324,14 @@ public final class SettingsCatalog {
             "Path Tracing with ReSTIR Direct Light on, and only where glowing blocks are traced. The pass is optional: a "
                 + "build without its compiled kernel runs temporal reuse alone and says so in the log.",
             "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_restir_pt_spatial", Tier.ADVANCED, "ReSTIR Spatial Path Reuse",
+            "Each pixel also borrows the bounced-light paths of four neighbours on the same surface - same facing, within a "
+                + "block - and keeps the better one for the next frame, so bounced light settles from more paths than one "
+                + "pixel draws. A neighbour's path is only taken if its first bounce is visible from this pixel.",
+            "FPS: low to medium (up to four visibility rays per pixel; no extra video memory).",
+            "Path Tracing with ReSTIR Path Reuse on, on the default (Java-recorded) backend. Shows up one frame after the "
+                + "pooling: the pooled path is drawn by the next frame's reuse.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
         putNoImage("path_restir_pt", Tier.ADVANCED, "ReSTIR Path Reuse (experimental)",
             "Keeps the indirect light a pixel's first bounce brought back - light bounced off a nearby diffuse wall or floor - "
                 + "in a per-pixel path record and reuses it in the next frames, so bounced light settles faster while you move. "

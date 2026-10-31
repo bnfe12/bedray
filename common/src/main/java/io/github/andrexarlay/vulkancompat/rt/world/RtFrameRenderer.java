@@ -532,7 +532,7 @@ public final class RtFrameRenderer {
         // off, or pooling neighbours on top of it, must not continue an accumulation that was built without it.
         int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)
             | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0)
-            | (RtSettings.pathRestirPt() ? 16 : 0);
+            | (RtSettings.pathRestirPt() ? 16 : 0) | (RtSettings.pathRestirPtSpatial() ? 32 : 0);
 
         boolean presetOrDenoiserChanged = (lastFrameBounces != -1) && (
             curPreset != lastFramePreset

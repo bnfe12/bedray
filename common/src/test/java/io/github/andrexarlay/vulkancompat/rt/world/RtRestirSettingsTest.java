@@ -114,7 +114,7 @@ class RtRestirSettingsTest {
         String renderer = read(RENDERER);
         assertTrue(renderer.contains("int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)\n"
                 + "            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0)\n"
-                + "            | (RtSettings.pathRestirPt() ? 16 : 0);"),
+                + "            | (RtSettings.pathRestirPt() ? 16 : 0) | (RtSettings.pathRestirPtSpatial() ? 32 : 0);"),
             "every reuse switch in one packed int, so a change of any of them is one comparison");
         assertTrue(renderer.contains("|| curReusePolicy != lastFrameReusePolicy"), "and that comparison gates the reset");
         assertTrue(renderer.contains("private static int lastFrameReusePolicy = -1;"),
@@ -176,6 +176,38 @@ class RtRestirSettingsTest {
         for (JsonObject locale : new JsonObject[] {en, ru}) {
             assertNotNull(locale.get("bedray.opt.path_restir_pt"), "name in both locales");
             assertNotNull(locale.get("bedray.opt.path_restir_pt.desc"), "description in both locales");
+        }
+    }
+
+    /**
+     * The spatial stage of ReSTIR PT is its own row under ReSTIR Path Reuse: it traces up to four first-edge rays a pixel,
+     * so the player has to be able to keep the temporal stage without paying for it.
+     */
+    @Test
+    void pathSpatialReuseIsAChildOfPathReuse() {
+        String settings = read(SETTINGS);
+        assertTrue(settings.contains("public static boolean pathRestirPtSpatial = true;"),
+            "on whenever its parent is: the parent already carries the memory price");
+        assertTrue(settings.contains("bool(\"path_restir_pt_spatial\", () -> pathRestirPtSpatial, v -> pathRestirPtSpatial = v);"),
+            "registered, so the file and the override reach it");
+        assertTrue(settings.contains("public static boolean pathRestirPtSpatial() { return b(\"path_restir_pt_spatial\"); }"),
+            "the override-aware getter the controller reads");
+        String pass = read(SLANG_PASS);
+        assertTrue(pass.contains("return ptActive() && RtSettings.pathRestirPtSpatial();"),
+            "the controller asks for it only on a frame that runs the temporal stage");
+        assertTrue(pass.contains("ptResetRequested, ptSpatialRequested()));"), "and hands the answer to the backend");
+        String ui = read(UI);
+        assertTrue(ui.contains("boolOpt(builder, \"path_restir_pt_spatial\", true, v -> RtSettings."), "a row, on by default");
+        assertRowNeedsParent(ui, "path_restir_pt_spatial", "path_restir_pt");
+        String catalog = read(CATALOG);
+        int at = catalog.indexOf("putNoImage(\"path_restir_pt_spatial\"");
+        assertTrue(at >= 0, "catalog entry");
+        String entry = catalog.substring(at, catalog.indexOf("putNoImage(", at + 10));
+        assertTrue(entry.contains("four") && entry.contains("ReSTIR Path Reuse"),
+            "the entry names the ray cost and the parent switch");
+        for (JsonObject locale : new JsonObject[] {readJson(EN), readJson(RU)}) {
+            assertNotNull(locale.get("bedray.opt.path_restir_pt_spatial"), "name in both locales");
+            assertNotNull(locale.get("bedray.opt.path_restir_pt_spatial.desc"), "description in both locales");
         }
     }
 

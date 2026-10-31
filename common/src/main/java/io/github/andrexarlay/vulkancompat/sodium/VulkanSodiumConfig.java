@@ -653,6 +653,12 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             () -> RtSettings.pathRestirPt,
             s -> pathOn.apply(s) && s.readBooleanOption(pathDiId), rtDependencies(modeId, pathDiId),
             Mark.PATH, OptionImpact.HIGH, false, st));
+        // The spatial stage pools the path records the temporal stage writes, so it is live only under that row.
+        Identifier pathPtId = id("path_restir_pt");
+        pt.addOption(boolOpt(builder, "path_restir_pt_spatial", true, v -> RtSettings.pathRestirPtSpatial = v,
+            () -> RtSettings.pathRestirPtSpatial,
+            s -> pathOn.apply(s) && s.readBooleanOption(pathDiId) && s.readBooleanOption(pathPtId),
+            rtDependencies(modeId, pathPtId), Mark.PATH, OptionImpact.MEDIUM, false, st));
         EnumOptionBuilder<RtSettings.AdaptiveQuality> aq = builder.createEnumOption(id("adaptive_quality"), RtSettings.AdaptiveQuality.class);
         aq.setName(nameOf("adaptive_quality")).setTooltip(v -> tipOf("adaptive_quality")).setDefaultValue(RtSettings.AdaptiveQuality.OFF)
             .setAllowedValues(EnumSet.allOf(RtSettings.AdaptiveQuality.class))

@@ -15,11 +15,14 @@ interface PathTraceBackend extends AutoCloseable {
      *
      * <p>{@code ptReset} asks the backend to invalidate its ReSTIR PT ring before this frame reads it: a reset, a resize,
      * a changed light list or a reuse-policy change makes every stored path a claim about a different scene.
+     *
+     * <p>{@code ptSpatial} asks for the ReSTIR PT spatial stage after the trace; a backend runs it only on a frame whose
+     * trace ran the temporal stage, because it pools nothing else.
      */
     record Frame(VkCommandBuffer command, RtFrameBindings.Views views, RtPathTraceSlangPass.Frame constants,
                  RtPathTraceSlangPass.Dispatch dispatch, RtPathTraceSlangPass.Emitters emitters,
                  RtPathTraceSlangPass.Entities entities, RtPathTraceSlangPass.BufferView stats, int flags,
-                 int accumFrames, boolean ptReset) {}
+                 int accumFrames, boolean ptReset, boolean ptSpatial) {}
 
     void prepare(int width, int height);
     void record(Frame frame);
