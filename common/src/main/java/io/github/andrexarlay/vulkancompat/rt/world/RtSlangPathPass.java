@@ -300,7 +300,9 @@ public final class RtSlangPathPass implements RtPass {
             + (!rayMode && RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS : "")
             + (accumulateRequested() ? ",accumulate" : "") + ",restir_di=" + restir
             + ",restir_pt=" + (ptActive() ? backend.pathReuseState() : "off")
-            + ",frames=" + (accumFrames + 1) + ",denoiser=" + (requestedGbuffer ? "dlss_rr" : "off") + ")";
+            // Configuration only: RtFrameRenderer logs this line when it changes, so a per-frame counter here would log it
+            // every accumulating frame. The accumulation count is RtAccumImage's own 2 s line.
+            + ",denoiser=" + (requestedGbuffer ? "dlss_rr" : "off") + ")";
     }
 
     @Override

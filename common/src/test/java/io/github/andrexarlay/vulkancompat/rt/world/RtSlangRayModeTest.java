@@ -97,6 +97,32 @@ class RtSlangRayModeTest {
         assertTrue(path.describe(params).startsWith("path_slang("));
     }
 
+    /**
+     * The mode line is logged when the pass description changes, so the description may only carry configuration. A
+     * per-frame counter in it (the accumulation count) made the line differ on every accumulating frame and logged it
+     * 10-20 times a second; the count is RtAccumImage's own 2 s line.
+     */
+    @Test
+    void theDescriptionDoesNotChangeFromFrameToFrame() {
+        boolean savedAccumulate = RtSettings.pathAccumulate;
+        try {
+            RtSettings.pathAccumulate = true;
+            Backend backend = new Backend();
+            RtSlangPathPass path = pass(backend, false);
+            RtFrameParams params = new RtFrameParams();
+            path.configure(params, false);
+            path.configure(params, false);
+            String first = path.describe(params);
+            for (int frame = 0; frame < 3; frame++) {
+                path.configure(params, false);
+            }
+            assertTrue(params.accumCount > 1, "the frames did accumulate");
+            assertEquals(first, path.describe(params), "three more accumulated frames of the same configuration");
+        } finally {
+            RtSettings.pathAccumulate = savedAccumulate;
+        }
+    }
+
     /** Each profile reads its own reuse switches; neither may leave the other's rows dead. */
     @Test
     void eachProfileReadsItsOwnReuseSwitches() {
