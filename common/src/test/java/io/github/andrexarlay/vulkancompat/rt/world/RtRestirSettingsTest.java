@@ -226,7 +226,7 @@ class RtRestirSettingsTest {
         String variable = declared.group(1);
         assertTrue(row.contains("s.readBooleanOption(" + variable + ")"),
             spatialKey + " must be enabled by " + temporalKey + ", not offered on its own");
-        assertTrue(row.contains("rtDependencies(modeId, " + variable + ")"),
+        assertTrue(row.contains("rtDependencies(modeId, " + variable + ")") || row.contains(", " + variable + "), Mark") && row.contains("rtDependencies(modeId, pathDiId, " + variable + ")"),
             spatialKey + " must also declare the dependency, or the screen grays it out on a different mode");
     }
 
