@@ -3499,3 +3499,71 @@ Tracing, ReSTIR Direct Light on) the log reports `Slang ReSTIR PT reservoirs WxH
 = N MiB` and `restir_pt=fresh` then `temporal`, the first frame after a reset looks
 the same as with it off, and indirect light on diffuse walls/floors settles faster
 while moving. No spatial stage yet. No owner-verified frame.
+
+## 2026-10-31 — ReSTIR PT spatial stage pools neighbours into the next frame's history (L1 slangc, L2 unit + mutation; no owner-verified frame)
+
+Branch `refactor/slang-pipeline`, commit `93aa115` (22 files, +879/−36).
+
+What changed: two new passes, `restir_pt_spatial` (legacy section table) and
+`restir_pt_spatial_scene` (native scene table), run after the trace on a frame
+whose trace ran the ReSTIR PT temporal stage and with the new child row
+`path_restir_pt_spatial` on (default on). They declare the trace pass's own
+bindings by number (14: TLAS, sections, three atlases, frame, block materials,
+six entity buffers, the ring at 36) and its 112-byte push block, so
+`RtPathTraceSlangPass.recordPtSpatial` binds the trace's views and pushes the
+same bytes. Each pixel reads its record and four neighbours' from the half the
+trace wrote, merges them through the module's `ptSpatialReuse` and writes the
+result into the other half; `RestirDiState.spatialPublished` counts that as a
+write, so the next trace imports the pooled half. The pass shades nothing: the
+next frame's temporal stage resolves a pooled winner with `ptResolveFiltered`
+(one frame of lag, like the DI spatial pass). The temporal stage now stores the
+receiver anchor in a record without a sample (`ptAnchorReceiver`). Derivation:
+`docs/RESTIR_GI_DERIVATION.md` §12.
+
+Evidence:
+
+- L1 Slang (`slangc` 2026.20, the AOT flags): `restir_pt_spatial` 136,864 B /
+  14 bindings, `restir_pt_spatial_scene` 142,452 B / 14, push 112 B;
+  `path_trace` 1,347,712 B / 27, `path_trace_scene` 1,389,428 B / 27,
+  `rc_path_trace_scene` 1,682,196 B / 29 (+8 KB each for the anchor write and the
+  shared material-options function). `OpUndef` scan: one float per module, zero
+  on handles or pointers; `SlangPassDriverGate.permits` is asserted for both new
+  modules in the test.
+- L2 Java: `RestirPtSpatialStageTest` (8 tests: the neighbour pattern is four
+  distinct non-self pixels on 200,000 rotations under both half-way rounding
+  conventions; read-one-half/write-the-other; a non-receiver publishes its own
+  record; every neighbour goes through `ptSpatialReuse` and the stage resolves
+  nothing; the temporal stage stores the receiver; both roots match the trace's
+  bindings, types, element sizes and push block in the compiled manifests and
+  pass `requirePtSpatialManifest`; the ring state keeps the pooled half; the
+  backend runs the stage only behind the temporal one) and
+  `RtRestirSettingsTest.pathSpatialReuseIsAChildOfPathReuse`; one updated string
+  guard in `RtSlangEntityTest`. Full `:common:test --rerun`:
+  `953 tests, 0 failures, 0 errors, 3 skipped` (XML).
+- Mutation proof (`--rerun`, each file restored and re-hashed, all OK):
+  S1 write the half that is read → only `theStageReadsTheTemporalHalfAndPublishesTheOther`;
+  S2 drop `ptAnchorReceiver` → only `theTemporalStageStoresItsReceiverEvenWithoutASample`;
+  S3 drop `pt.spatialPublished()` in the backend → only
+  `theBackendRunsTheSpatialStageOnlyBehindTheTemporalOne`; S4 drop the `frame++`
+  in `spatialPublished` → only `theRingCountsTheSpatialPublishAsAWrite`;
+  S5 a non-receiver drops its record → `aPixelThatIsNoReceiverPublishesItsOwnRecord`
+  and `theStageReadsTheTemporalHalfAndPublishesTheOther`; S6 the host promises 13
+  bindings → only `bothRootsShareTheTraceBindingsAndPushBlock`; S7 the controller
+  ignores the new switch → only `pathSpatialReuseIsAChildOfPathReuse`; S8 radius
+  step 1.0 → only `theNeighbourPatternIsFourDistinctOtherPixelsForEveryRotation`.
+- Native: no native source changed in this batch; CTest was not re-run.
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files kept
+as `*.20261031-002047.bak`): JAR built from a `git archive 93aa115` snapshot plus
+`libs/`, sha256 `00e6fd9a8311abbe737823937db3bd54eb1c99303df12c31aabfa022c816aedd`;
+`bedray_core.dll` unchanged from the previous deploy, sha256
+`f652ad75f72b1ffd0f273a3ecac8173ac13e6bea730c6bc85932d4b30df33be4`.
+
+Not verified: no GPU run. Neither the registration of the two spatial programs
+nor the absence of a device fault is proven. What a playtest should show: with
+`path_restir_pt` on, `latest.log` has no `ReSTIR PT spatial stage off for ...`
+line and the mode log reports `restir_pt=temporal+spatial`; turning
+`path_restir_pt_spatial` off reports `restir_pt=temporal` and resets the history
+once. With both on, indirect light on diffuse walls should settle faster than with
+the temporal stage alone while the camera moves; a still frame cannot show it.
+No owner-verified frame.
