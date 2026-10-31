@@ -3702,7 +3702,7 @@ Source: `26.3(1)/minecraft/logs/latest.log`, sessions 01:42 and 01:45-01:50.
   `path_restir_pt_spatial reads pathDiId but declares [modeId, pathPtId]`.
 - `[VKB-RT] mode=path passes=...` appeared 6,500 times in five minutes (10-20 a second): `describe()` carried the
   accumulation count, so the log-on-change line changed every frame. Fixed in `9595db0`
-  (`RtSlangRayModeTest.theDescriptionDoesNotChangeFromFrameToFrame` failed before the fix with `frames=2` vs `frames=5`).
+  (`RtSlangRayModeTest.theDescriptionDoesNotChangeFromFrameToFrame` failed before the fix: the expected line had `frames=2`, the next frame a different count).
 - L3 evidence for earlier batches in the 01:45 session: `registered SlangProgram[path_trace, 28 binding(s), 112 B push]`,
   `path_trace_scene` 28, `restir_pt_spatial` and `restir_pt_spatial_scene` 14 each; `rt_pass ... invalid_pct=0.0
   trunc_pct=2.8..10.1 vis_overflow_pct=0.0` once the first frame was measured. `restir_pt=off` throughout: ReSTIR PT
