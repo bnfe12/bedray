@@ -48,3 +48,16 @@ Fixes found from the 2026-10-31 logs:
 - RC (only with `-Dvkbridge.rt.nativePathTrace=true -Dvkbridge.rt.nativeScene=true -Dvkbridge.rt.radianceCascades=true`):
   the mode line says `rc_reuse=temporal`; indirect light under the field is calmer when standing still and follows a
   moving camera without smearing more than about a block.
+
+## Open owner report (2026-10-31 16:44)
+
+One triangle of block faces see-through, murky water, no sky, lighting unlike the pre-migration build. A/B runs that
+separate the causes, one change at a time, each with a screenshot of the same spot and `latest.log`:
+
+1. Denoiser off (DLSS-RR -> none): a reconstruction artifact disappears, a geometry or shading one stays.
+2. ReSTIR Path Reuse off.
+3. The pre-5.x jar `bedray-fabric-mc26.3-0.2.0-alpha.jar.20261030-104721.bak`: if the triangle is there too, it predates
+   the 5.x batches.
+
+Known migration gaps behind "no sky": the vanilla sun, moon and cloud textures (`RtSkyTextures`) are uploaded but no Slang
+pass samples them; the sky is the gradient dome plus analytic discs.

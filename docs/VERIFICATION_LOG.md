@@ -3756,3 +3756,19 @@ Deployed to both instances as `*.20261031-162511` backups: JAR from `git archive
 `536232e5ea364764b4dda70028f83b53aa65f57eb52fa046d1db7ab60b9f5beb`.
 
 Not verified: RC is opt-in and was never enabled in a logged session; no GPU run, no owner-verified frame.
+
+## 2026-10-31 — Code review round 1 fixes: sun counted once, TIR reflects once, PT stand-in zeroed (L2; no owner-verified frame)
+
+Commit `0f7bb77`. Four read-only reviewers covered the Slang core, the Slang passes, the Java host and the native core
+(code from `b2a563a..HEAD` excluded). Confirmed in the code and fixed here: the sun and moon discs were added on every
+escape on top of their NEE (`bodiesVisible`, `IEnvironmentSampler.skyRadiance`); the optical interface's total internal
+reflection weighed `1/(1-p)` after the specular branch had reflected `F` (now `(1-F)/(1-p)`); `create_dummy` copied 144
+bytes from a 64-byte array for the ReSTIR PT stand-in (a 5.1 defect of mine). Evidence: `RtSlangSunCountTest`,
+`RtSlangTirEnergyTest`, the stand-in zero check in `path_trace_pass_test`; `:common:test --rerun` 981 tests, 0 failures,
+3 skipped; CTest 21/21 and 24/24; two shader mutations killed. Deployed to both instances as `*.20261031-210253`
+backups: JAR sha256 prefix `5fe6077fcd9625a7`, `bedray_core.dll` prefix `c7f75096745f0b5c`.
+
+Owner report at 16:44 (jar `33d07949`, ReSTIR PT on, DLSS-RR): one triangle of block faces see-through, murky water,
+no sky, lighting unlike the pre-migration build. Checked and excluded for the triangle: index order (Java template,
+`sodium_dequantize`, `legacyTriangleVertices` all (0,1,2)(2,3,0)), opacity micromaps (`omm=off` in the log), the per-section
+quad limit (guarded). Not yet explained; needs the A/B runs listed in `MIGRATION_STATUS.md`.
