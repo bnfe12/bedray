@@ -21,6 +21,9 @@ struct SkySample {
 
 interface IEnvironmentSampler {
     float3 radiance(float3 direction);
+    // The same sky without the bodies the light sampler already draws by NEE (the sun and moon discs). A ray that left a
+    // surface whose NEE sampled them pays this one, or the bodies would be counted twice.
+    float3 skyRadiance(float3 direction);
     SkySample sample(float3 normal, inout uint seed);
     float pdf(float3 normal, float3 direction);
 };
@@ -36,6 +39,10 @@ struct GradientSky : IEnvironmentSampler {
         float3 zenith = atmosphere.zenithColor.rgb * max(atmosphere.zenithColor.w, 0.0);
         float3 horizon = atmosphere.horizonColor.rgb * max(atmosphere.horizonColor.w, 0.0);
         return lerp(horizon, zenith, t);
+    }
+
+    float3 skyRadiance(float3 direction) {
+        return radiance(direction);
     }
 
     float pdf(float3 normal, float3 direction) {
@@ -133,6 +140,10 @@ struct SunMoonSky : IEnvironmentSampler {
 
     float3 radiance(float3 direction) {
         return dome.radiance(direction) + celestialRadiance(sun, direction);
+    }
+
+    float3 skyRadiance(float3 direction) {
+        return dome.radiance(direction);
     }
 
     float pdf(float3 normal, float3 direction) {

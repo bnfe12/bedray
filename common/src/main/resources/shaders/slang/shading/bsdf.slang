@@ -228,7 +228,8 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float inciden
             result.valid = true;
             result.delta = true;
             result.direction = safeNormalize(reflect(-V, N), N);
-            result.weight = float3(1.0) / transmissionProbability;
+            // The specular branch above already reflected F of it; this mirror carries the rest, so the two reflect 1.
+            result.weight = (float3(1.0) - fresnel) / transmissionProbability;
             result.pdf = 1.0;
             result.eta = 1.0;
             result.lobe = BSDF_LOBE_SPECULAR;

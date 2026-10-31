@@ -76,7 +76,7 @@ class RtSlangHotLoopTest {
         assertTrue(body.indexOf("float3 escape = ray.direction;") > body.indexOf("if (!hit.hit) {"),
             "and the escape direction is the miss's own ray, bent only on the way out of a water body");
         int miss = body.indexOf("if (!hit.hit) {");
-        int sky = body.indexOf("result.radiance += throughput * escapeWeight * environment.radiance(escape);");
+        int sky = body.indexOf("float3 sky = bodiesVisible ? environment.radiance(escape) : environment.skyRadiance(escape);");
         assertTrue(miss > 0 && sky > miss, "a hit overwrites the colour, so the sky belongs to the miss branch");
         assertTrue(block(body, miss).contains("result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;"),
             "the miss still records why the path ended");

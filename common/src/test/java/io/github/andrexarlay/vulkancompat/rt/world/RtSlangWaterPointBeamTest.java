@@ -209,7 +209,7 @@ class RtSlangWaterPointBeamTest {
             "past the critical angle the sky is not what the ray sees");
         assertTrue(tracer.contains("escapeWeight = waterBeamTransmittance(escape.y) * (WATER_IOR * WATER_IOR);"),
             "inside the window: the sheet's transmission times eta^2, as the optical lobe weights a crossing");
-        assertTrue(tracer.contains("result.radiance += throughput * escapeWeight * environment.radiance(escape);"));
+        assertTrue(tracer.contains("result.radiance += throughput * escapeWeight * sky;"));
     }
 
     private static String read(Path path) throws IOException {

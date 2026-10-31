@@ -1245,6 +1245,9 @@ void test_restir_pt_binding_is_a_stand_in() {
     if (ring != nullptr) {
         CHECK(ring->descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         CHECK(ring->range == 144);
+        std::vector<unsigned char> stand_in;
+        CHECK(read_buffer_bytes(ring->handle, stand_in) && stand_in.size() >= 144);
+        CHECK(std::all_of(stand_in.begin(), stand_in.end(), [](unsigned char b) { return b == 0u; }));
     }
     CHECK((push_u32(trace.push, 16) & pt_bits) == 0);
     CHECK((push_u32(trace.push, 16) & (1u << 16u)) != 0);

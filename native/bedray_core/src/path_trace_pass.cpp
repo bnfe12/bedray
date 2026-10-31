@@ -1,6 +1,7 @@
 #include "path_trace_pass.h"
 
 #include <algorithm>
+#include <vector>
 #include <array>
 #include <cmath>
 #include <cstdarg>
@@ -758,7 +759,8 @@ BedrayStatus PathTracePass::create_dummy(VkDeviceSize bytes, gpu::BufferId& id,
             static_cast<unsigned long long>(bytes), static_cast<int>(result));
     }
 
-    std::array<unsigned char, 64> zero{};
+    // Sized to the dummy itself: the ReSTIR PT stand-in is 144 bytes, more than any fixed scratch array here held.
+    const std::vector<unsigned char> zero(static_cast<std::size_t>(bytes), 0u);
     status = buffers_->write(id, 0, zero.data(), static_cast<std::size_t>(bytes), result);
     if (status != Status::ok) {
         static_cast<void>(buffers_->retire(id));
