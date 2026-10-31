@@ -3631,3 +3631,61 @@ backend the F3 `rt_pass` line carries numbers for `invalid_pct`, `trunc_pct` and
 `vis_overflow_pct` above 0 only where a shadow ray crosses more than the walk's
 filter budget of glass or leaf layers; with
 `-Dvkbridge.rt.nativePathTrace=true` the three read n/a. No owner-verified frame.
+
+## 2026-10-31 — Emitter light and escaped rays bend at the water sheet (L1 slangc, L2 unit + ray geometry + mutation; no owner-verified frame)
+
+Branch `refactor/slang-pipeline`, commit `98b090b` (9 files, +341/−19).
+
+What changed: until this batch only the sun and the moon reached an underwater
+receiver through the Snell crossing. A block emitter above the water was shadowed
+and shaded along the straight sight line, and a ray that left the body upward
+without meeting a face looked up the sky unbent. `waterBeamToPoint`
+(`surface/water.slang`) now solves the crossing of a point light on the flat sheet
+by bisection and weights the sample by the ray Jacobian of the crossing,
+`n^2 d^2 dw/dA_perp`; `traceShadowBeam` walks the bent air leg from
+`WaterBeam.air` / `airDistance`, which for the key light are its sight direction
+and the rest of its distance (so the sun and the moon trace exactly what they
+traced before), and the caustics switch and the wave style act on the emitter
+beam exactly as on the key light. An escaped ray inside the body is refracted out
+of the plane with the sheet's transmission and `eta^2`, or sees no sky past the
+critical angle. Approximations: the emitter's own cosine is kept at the sight
+line's; the totally reflected half of an escaped ray is not traced on.
+
+Evidence:
+
+- L1 Slang (`slangc` 2026.20): `path_trace` 1,370,040 B / 28 bindings,
+  `path_trace_scene` 1,411,756 B / 28, `rc_path_trace_scene` 1,705,516 B / 30
+  (+20 KB each); `OpUndef` one float per module, zero on handles or pointers.
+- L2 ray geometry (`RtSlangWaterPointBeamTest`, the shader arithmetic in double):
+  Snell holds at the bisected crossing to 1e-7 on 100,000 random receivers and
+  lights; the weight equals a finite-difference measurement of the ray map
+  (Richardson-extrapolated central differences) to 1e-4 on 2,000 cases, grazing
+  air legs included; it is 1 with `n = 1` and the key light's
+  `cos(air) / cos(water)` for a light 10^6 blocks up. Before/after for one torch
+  2 blocks under the sheet, 3 above and 4 across: arrival cosine 0.7809 (sight
+  line) -> 0.8587 (bent), crossing 1.19 blocks from the receiver, weight 1.0000 ->
+  1.1086. Source guards pin the solver, the weight, the emitter branch, the key
+  light's unchanged air leg, the shared focus call and the escape branch; old
+  string guards updated in `RtSlangHotLoopTest`, `RtSlangRayOffsetTest`,
+  `RtSlangWaterBeamTest`, `RtSlangWaterMediumTest`. Full `:common:test --rerun`:
+  `967 tests, 0 failures, 0 errors, 3 skipped` (XML).
+- Mutation proof (`--rerun`, each file restored and re-hashed, all OK): W1 drop
+  the emitter branch, W3 drop `n^2`, W4 give the key light's sky leg the whole
+  distance, W5 let total internal reflection see the sky, W6 charge Fresnel at the
+  sight direction — each failed its guard. W2 (bisection stepping the wrong way)
+  first survived: the guard pinned `g` but not the step. The guard now pins the
+  step and W2 fails `theShaderSolvesAndWeightsTheCrossingAsTheModelDoes`.
+- Native: no native source changed; CTest not re-run.
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files kept
+as `*.20261031-012845.bak`): JAR from a `git archive 98b090b` snapshot plus `libs/`,
+sha256 `2f5ddcd3326ae9cb8165a4b811efee555ebc42a0c4938c184f279b82ee3356dd`;
+`bedray_core.dll` unchanged from the previous deploy, sha256
+`40ff573dde0d6f3040f50b56fb82998f0ebf277f6b7b23c694ea0c017018106e`.
+
+Not verified: no GPU run and no before/after screenshot. What a playtest should
+show: under water, a torch or glowstone above the surface lights the floor along
+its bent beams, which fall steeper in the water, so its pool is more concentrated under the light than before, and its pool of light
+moves with the waves when caustics are on; the sun's light under water is
+unchanged; swimming and looking up, the sky still fills the Snell window. No
+owner-verified frame.
