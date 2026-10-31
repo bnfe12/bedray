@@ -3567,3 +3567,67 @@ line and the mode log reports `restir_pt=temporal+spatial`; turning
 once. With both on, indirect light on diffuse walls should settle faster than with
 the temporal stage alone while the camera moves; a still frame cannot show it.
 No owner-verified frame.
+
+## 2026-10-31 — F3 splits rejects by reason and counts shadow-walk overflows (L1 slangc, L2 unit + mutation, CTest; no owner-verified frame)
+
+Branch `refactor/slang-pipeline`, commit `0a90bb6` (21 files, +401/−34).
+
+What changed: a new binding 37 (`outPathStats`) in `path_trace`,
+`path_trace_scene` and `rc_path_trace_scene` is the frame's whole 576-byte stats
+slot, bound at the slot's own 64-byte-aligned offset. The trace adds four words at
+140..143 (`RtStatsLayout.PATH_REJECTS`, the last sixteen bytes of the slot):
+refused pixels with a non-finite fault, pixels with a truncated path, pixels with
+a shadow walk past its filter budget, and metered pixels, over the same rotated
+1-in-16 tiles `frame_stats` meters. The tracer raises the new sample flag
+`PATH_TRACE_FLAG_VISIBILITY_OVERFLOW` (bit 13) where the direct term's shadow walk
+reports `SURFACE_VISIBILITY_FLAG_OVERFLOW`; the pixel mean keeps the union of every
+sample's flags. The host zeroes the block per frame and prints `invalid_pct`,
+`trunc_pct` and `vis_overflow_pct` on the `rt_pass` line, only when the metered word
+equals `RtStatsMetering`'s own count (n/a otherwise). The native core accepts 37 as
+an additive storage buffer and binds a one-word stand-in, which the shader refuses
+to write, so the split reads n/a on that backend.
+
+Evidence:
+
+- L1 Slang (`slangc` 2026.20): `path_trace` 1,349,892 B / 28 bindings,
+  `path_trace_scene` 1,391,608 B / 28, `rc_path_trace_scene` 1,684,376 B / 30,
+  push 112 B; `OpUndef` one float per module, zero on handles or pointers.
+- L2 Java: `RtPathRejectBreakdownTest` (7 tests: the block's offset and the shader's
+  word index agree, the slot is filled exactly; the trace's tile walk is
+  `frame_stats`' walk; each word counts what its name says; the tracer raises the
+  overflow flag at all three direct-term call sites; every root declares 37 and
+  the compiled manifest has a 4-byte storage buffer there; the host prints only a
+  measurement its mask agrees with; the host binds the whole slot, zeroes the
+  block, reads it back and prints it). Updated count/string guards in
+  `SlangPassLibraryTest`, `RtSlangRcFieldTest`, `RtSlangNrdMotionTest`,
+  `RtSlangEntityTest`. Full `:common:test --rerun`:
+  `960 tests, 0 failures, 0 errors, 3 skipped` (XML).
+- Mutation proof (`--rerun`, each file restored and re-hashed, all OK):
+  R1 word index 136 → only `theBlockIsTheLastSixteenBytes…`; R2 drop the flag
+  union → only `theFourWordsCountWhatTheirNamesSay`; R3 drop the overflow raise →
+  only `theTracerRaisesTheOverflowFlag…`; R4 trust a metered word the mask
+  disagrees with → only `theHostPrintsTheSplitOnlyFor…`; R5 drop the per-frame
+  zeroing and R6 hand over only the 16-byte head → only
+  `theHostBindsTheWholeSlot…`; R7 unrotated tiles → only
+  `theTraceMetersTheTilesFrameStatsMeters`; R8 overflow counted as invalid → only
+  `theFourWordsCountWhatTheirNamesSay`.
+- Native: Release `bedray_core` in `native/bedray_core/build` (CTest
+  `100% tests passed, 0 tests failed out of 21`) and `build/bedray-native-readiness`
+  (`... out of 24`). New `test_path_stats_binding_is_a_stand_in`: a non-storage 37
+  is refused, a 28-binding program is accepted and 37 gets a 4-byte stand-in.
+  Mutation: dropping 37 from the resource count failed exactly
+  `path_trace_pass_test.cpp:1275` and `:1277`; restored sha256
+  `8cacde28…48f0764` OK, rebuilt and passing.
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files kept
+as `*.20261031-005546.bak`): JAR from a `git archive 0a90bb6` snapshot plus `libs/`,
+sha256 `096fd4d32152b1b6dbccd0dbc49863e4f43118ecd0b57c1be59edc058063e55a`;
+`bedray_core.dll` from `native/bedray_core/build/Release` (tree equals `0a90bb6`),
+sha256 `40ff573dde0d6f3040f50b56fb82998f0ebf277f6b7b23c694ea0c017018106e`.
+
+Not verified: no GPU run. What a playtest should show: on the default (Java)
+backend the F3 `rt_pass` line carries numbers for `invalid_pct`, `trunc_pct` and
+`vis_overflow_pct` (not n/a), `invalid_pct` never above `reject_pct`, and
+`vis_overflow_pct` above 0 only where a shadow ray crosses more than the walk's
+filter budget of glass or leaf layers; with
+`-Dvkbridge.rt.nativePathTrace=true` the three read n/a. No owner-verified frame.
