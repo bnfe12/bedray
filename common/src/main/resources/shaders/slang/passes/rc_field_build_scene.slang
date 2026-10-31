@@ -1,4 +1,5 @@
-// One dispatch per level, terminal -> finest, with native write/read barriers.
+// One dispatch per level, terminal -> finest, with native write/read barriers.  Each level is blended with the previous
+// recording's field before the next finer level reads it (rcFieldBlendHistory).
 public module rc_field_build_scene_pass;
 import "contracts/contracts.slang";
 import "light/block_emitters.slang";
@@ -35,6 +36,8 @@ struct RCFieldBuildPush {
 [[vk::binding(25,0)]] StructuredBuffer<uint> entityPrevious;
 [[vk::binding(34,0)]] ConstantBuffer<RCFieldConstants> rcField;
 [[vk::binding(35,0)]] RWStructuredBuffer<RCSegment> rcTails;
+// The previous recording's tails, or this recording's own when rcField.history.w is 0 (then it is never read).
+[[vk::binding(38,0)]] StructuredBuffer<RCSegment> rcHistory;
 [[vk::push_constant]] RCFieldBuildPush pc;
 
 [shader("compute")]
@@ -81,7 +84,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
     options.rayBias = pc.rayBias; options.maxRadiance = pc.maxRadiance; options.maxDepth = pc.maxDepth;
     uint seed = pcgHash(tid.x * 747796405u + pc.frameIndex * 2891336453u + pc.level * 277803737u);
     uint3 probe = rcFieldProbeCoordinates(tid.x / rays, field.counts[pc.level].x);
-    rcTails[field.counts[pc.level].w + tid.x] = rcFieldReconstruct(traversal, lights,
+    RCSegment current = rcFieldReconstruct(traversal, lights,
         environment, atlas, table, field, rcTails, pc.level, probe, tid.x % rays,
         materialOptions, options, seed);
+    rcTails[field.counts[pc.level].w + tid.x] = rcFieldBlendHistory(field, rcHistory, pc.level, probe,
+        tid.x % rays, current);
 }

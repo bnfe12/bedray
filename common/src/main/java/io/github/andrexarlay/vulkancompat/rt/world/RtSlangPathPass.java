@@ -297,7 +297,9 @@ public final class RtSlangPathPass implements RtPass {
         String restir = diActive() ? backend.reservoirState() : "off";
         if (!restir.equals("off") && spatialRequested()) restir += "+spatial";
         return (rayMode ? "ray_slang(" : "path_slang(") + "bounces=" + p.bounces + ",spp=" + p.spp + ",dist=" + p.rayDistance
-            + (!rayMode && RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS : "")
+            // rc_reuse: the native owner blends each field with the previous consecutive one (batch 5.6, weight 0.8).
+            + (!rayMode && RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS
+                + ",rc_reuse=temporal" : "")
             + (accumulateRequested() ? ",accumulate" : "") + ",restir_di=" + restir
             + ",restir_pt=" + (ptActive() ? backend.pathReuseState() : "off")
             // Configuration only: RtFrameRenderer logs this line when it changes, so a per-frame counter here would log it

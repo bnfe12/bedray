@@ -28,16 +28,16 @@ class RtSlangRcFieldTest {
         var trace = SlangPassLibrary.load(RtRadianceCascadesContract.TRACE).orElseThrow().manifest();
         assertDoesNotThrow(() -> RtRadianceCascadesContract.requireBuilder(builder));
         assertDoesNotThrow(() -> RtRadianceCascadesContract.requireFieldBindings(trace));
-        assertEquals(80, builder.pushConstantBytes()); assertEquals(16, builder.bindings().size());
+        assertEquals(80, builder.pushConstantBytes()); assertEquals(17, builder.bindings().size());
         assertArrayEquals(new int[] {64, 1, 1}, builder.threadGroupSize());
-        assertArrayEquals(new int[] {0,2,3,9,10,16,17,18,20,21,22,23,24,25,34,35},
+        assertArrayEquals(new int[] {0,2,3,9,10,16,17,18,20,21,22,23,24,25,34,35,38},
             builder.bindings().stream().mapToInt(SlangPassManifest.Binding::binding).toArray());
         assertEquals(112, trace.pushConstantBytes()); assertEquals(30, trace.bindings().size());
         assertArrayEquals(new int[] {8, 8, 1}, trace.threadGroupSize());
         assertArrayEquals(new int[] {0,1,2,3,5,9,10,12,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37},
             trace.bindings().stream().mapToInt(SlangPassManifest.Binding::binding).toArray());
         for (var manifest : List.of(builder, trace)) {
-            assertEquals(272, manifest.binding("rcField").elementBytes());
+            assertEquals(288, manifest.binding("rcField").elementBytes());
             assertEquals(32, manifest.binding("rcTails").elementBytes());
             assertEquals(BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER, manifest.binding("rcField").descriptorType());
             assertEquals(BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER, manifest.binding("rcTails").descriptorType());
@@ -56,7 +56,7 @@ class RtSlangRcFieldTest {
             builderManifest(80, new int[] {32,1,1}, builderBindings())));
         var missing = new ArrayList<>(builderBindings()); missing.removeLast();
         assertThrows(IllegalStateException.class, () -> RtRadianceCascadesContract.requireBuilder(builderManifest(80, new int[] {64,1,1}, missing)));
-        for (String name : List.of("rcField", "rcTails", "frame", "sections")) {
+        for (String name : List.of("rcField", "rcTails", "rcHistory", "frame", "sections")) {
             for (int mismatch = 0; mismatch < 3; mismatch++) {
                 var bindings = new ArrayList<>(builderBindings());
                 for (int i = 0; i < bindings.size(); i++) if (bindings.get(i).name().equals(name)) {
@@ -68,7 +68,7 @@ class RtSlangRcFieldTest {
                 }
                 var bad = builderManifest(80, new int[] {64,1,1}, bindings);
                 assertThrows(IllegalStateException.class, () -> RtRadianceCascadesContract.requireBuilder(bad), name);
-                if (name.startsWith("rc"))
+                if (name.startsWith("rc") && !name.equals("rcHistory"))
                     assertThrows(IllegalStateException.class, () -> RtRadianceCascadesContract.requireFieldBindings(bad), name);
             }
         }
@@ -218,7 +218,8 @@ class RtSlangRcFieldTest {
             binding("normalAtlas",10,image,0), binding("frame",16,uniform,608), binding("blockMaterials",17,storage,64),
             binding("emitters",18,storage,96), binding("entityPositions",20,storage,4), binding("entityIndices",21,storage,4),
             binding("entityAttrs",22,storage,16), binding("entityRects",23,storage,16), binding("entityTexels",24,storage,4),
-            binding("entityPrevious",25,storage,4), binding("rcField",34,uniform,272), binding("rcTails",35,storage,32));
+            binding("entityPrevious",25,storage,4), binding("rcField",34,uniform,288), binding("rcTails",35,storage,32),
+            binding("rcHistory",38,storage,32));
     }
     private static SlangPassManifest.Binding binding(String name, int number, int type, int size) {
         return new SlangPassManifest.Binding(name,number,type,1,size);

@@ -123,3 +123,32 @@ RCSegment rcFieldReconstruct<T : ISceneTracer, L : ILightSampler, E : IEnvironme
     }
     return rcFieldAverageEnd(average);
 }
+
+// Temporal reuse (batch 5.6).  The lattice is fixed relative to the raw camera and the angular cells to the world axes,
+// so the previous recording's field is this lattice displaced by the camera move: the point at this probe was at
+// probe + history.xyz there.  The cell is blended with that field at the same level and ray, read by the trilinear weights
+// of its eight neighbours, as an exponential mean whose weight the native owner decides (history.w; 0 on the first frame,
+// a reset, a skipped frame or another axis).  All-or-nothing like every other RC read: an unresolved cell keeps its own
+// unresolved value, and a history neighbour that is unresolved or outside the lattice drops the history for this cell
+// instead of being renormalised away.  The lerp keeps L and T in the composed form the gather expects.
+RCSegment rcFieldBlendHistory(RCFieldConstants field, StructuredBuffer<RCSegment> history, uint level, uint3 probe,
+        uint ray, RCSegment current) {
+    float w = field.history.w;
+    if (!(w > 0.0) || !rcSegmentValid(current)) return current;
+    float3 p = rcFieldProbe(field, level, probe) + field.history.xyz;
+    int3 base; float3 fraction;
+    if (!rcFieldNeighbors(field, level, p, base, fraction)) return current;
+    RCFieldAverage average = rcFieldAverageBegin();
+    for (uint n = 0u; n < 8u; ++n) {
+        float weight = rcFieldNeighborWeight(fraction, n);
+        if (weight == 0.0) continue;
+        rcFieldAverageAdd(average, history[rcFieldIndex(field, level, rcFieldNeighbor(base, n), ray)], weight);
+    }
+    RCSegment past = rcFieldAverageEnd(average);
+    if (!rcSegmentValid(past)) return current;
+    RCSegment blended = current;
+    blended.radiance = lerp(current.radiance, past.radiance, w);
+    blended.transmittance = lerp(current.transmittance, past.transmittance, w);
+    blended.confidence = min(current.confidence, past.confidence);
+    return blended;
+}

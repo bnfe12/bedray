@@ -8,7 +8,7 @@
 
 struct BedrayCore {};
 namespace {
-constexpr std::array<std::uint32_t,16> bindings{0,2,3,9,10,16,17,18,20,21,22,23,24,25,34,35};
+constexpr std::array<std::uint32_t,17> bindings{0,2,3,9,10,16,17,18,20,21,22,23,24,25,34,35,38};
 bool wrong_push = false, wrong_count = false, unknown_program = false;
 std::uint32_t missing_binding = std::numeric_limits<std::uint32_t>::max();
 std::vector<std::size_t> barrier_after_calls;
@@ -21,7 +21,7 @@ std::uint32_t descriptor_type(std::uint32_t binding) {
 }
 namespace bedray::core {
 bool program_contract(BedrayCore*, std::uint64_t handle, ProgramContract& out) noexcept {
-    out = {wrong_push ? 79u : 80u, wrong_count ? 15u : 16u};
+    out = {wrong_push ? 79u : 80u, wrong_count ? 16u : 17u};
     return !unknown_program && handle == 1;
 }
 bool program_has_binding(BedrayCore*, std::uint64_t handle, std::uint32_t binding, std::uint32_t type) noexcept {
@@ -89,6 +89,7 @@ void metadata_and_configuration() {
         CHECK(bedray::core::rc_field_metadata(axes[n],77,meta));
         CHECK(meta.header[0] == 2 && meta.header[1] == 5 && meta.header[2] == axes[n] && meta.header[3] == totals[n]);
         CHECK(meta.tag[0] == 77 && meta.tag[1] == 0 && meta.tag[2] == 0 && meta.tag[3] == 0);
+        CHECK(meta.history[0] == 0 && meta.history[1] == 0 && meta.history[2] == 0 && meta.history[3] == 0);
         std::uint32_t offset=0;
         for (std::uint32_t c=0;c<5;++c) {
             const auto axis=std::max(1u,axes[n]>>c)+2u, side=1u<<c;
@@ -154,7 +155,7 @@ void dispatch_order_payloads_and_immutable_ranges() {
     CHECK(pass.record(f,data,first,&error) == BEDRAY_OK);
     CHECK(fake::render_calls.size() == 5 && fake::barriers == 6);
     CHECK(barrier_after_calls == std::vector<std::size_t>({0,1,2,3,4,5}));
-    CHECK(first[0].binding == 34 && first[0].descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && first[0].range == 272);
+    CHECK(first[0].binding == 34 && first[0].descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && first[0].range == 288);
     CHECK(first[1].binding == 35 && first[1].descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER && first[1].range == 69168ull*32u);
     const auto upload=bytes(first[0].handle);
     CHECK(get<std::uint32_t>(upload,0) == 2 && get<std::uint32_t>(upload,12) == 69168);
@@ -164,7 +165,7 @@ void dispatch_order_payloads_and_immutable_ranges() {
         const auto& call=fake::render_calls[index]; const auto level=4u-static_cast<std::uint32_t>(index);
         const auto count=metadata.counts[level][2]*6u*metadata.counts[level][1]*metadata.counts[level][1];
         CHECK(call.command_buffer == 11 && call.program == 1 && call.group_y == 1 && call.group_z == 1);
-        CHECK(call.group_x == (count+63u)/64u && call.push_bytes == 80 && call.resources.size() == 16);
+        CHECK(call.group_x == (count+63u)/64u && call.push_bytes == 80 && call.resources.size() == 17);
         CHECK(get<std::uint32_t>(call.push,0) == level && get<std::uint32_t>(call.push,4) == count);
         CHECK(get<std::uint32_t>(call.push,8) == 7 && get<std::uint32_t>(call.push,12) == 13);
         CHECK(get<float>(call.push,16) == 0.01f && get<float>(call.push,20) == 0.4f && get<float>(call.push,24) == 31);
@@ -188,9 +189,44 @@ void dispatch_order_payloads_and_immutable_ranges() {
     CHECK(pass.record(frame(12,8),data,second,&error) == BEDRAY_OK && fake::buffers.size() == 4);
     CHECK(first[0].handle != second[0].handle && first[1].handle != second[1].handle);
     CHECK(bytes(first[0].handle) == upload && get<std::uint32_t>(bytes(second[0].handle),256) == 8);
-    CHECK(pass.release_recording(11) == BEDRAY_OK && fake::buffers.size() == 2);
+    // Frame 8 follows frame 7, so recording 12 read recording 11's tails as history and pins them past 11's proof.
+    CHECK(pass.release_recording(11) == BEDRAY_OK && fake::buffers.size() == 3);
     CHECK(fake::buffers.contains(second[0].handle) && fake::buffers.contains(second[1].handle));
+    CHECK(fake::buffers.contains(first[1].handle));
     CHECK(pass.release_recording(12) == BEDRAY_OK && pass.destroy() == BEDRAY_OK); clean();
+}
+float history_lane(std::uint64_t meta, std::size_t lane) { return get<float>(bytes(meta),272+4u*lane); }
+// Batch 5.6: the tails of the frame just before are the next recording's history at 38, with the host's camera move and
+// the owner's weight in the metadata; a reset, a skipped frame or a failed recording starts the field over.
+void history_chains_consecutive_frames_only() {
+    reset(); BedrayCore core; BedrayError error{}; bedray::core::RCFieldPass pass;
+    CHECK(pass.configure(&core,device(),configuration(),65535,&error) == BEDRAY_OK);
+    const auto data=inputs(); std::array<BedrayResource,2> a{},b{},c{},d{},x{};
+    auto f=frame(21,40);
+    CHECK(pass.record(f,data,a,&error) == BEDRAY_OK);
+    CHECK(history_lane(a[0].handle,3) == 0.0f && resource(fake::render_calls.back(),38).handle == a[1].handle);
+    f=frame(22,41); f.path.di_camera_delta[0]=0.25f; f.path.di_camera_delta[1]=-1.5f; f.path.di_camera_delta[2]=2.0f;
+    const auto before=fake::render_calls.size();
+    CHECK(pass.record(f,data,b,&error) == BEDRAY_OK);
+    CHECK(history_lane(b[0].handle,0) == 0.25f && history_lane(b[0].handle,1) == -1.5f && history_lane(b[0].handle,2) == 2.0f);
+    CHECK(history_lane(b[0].handle,3) == bedray::core::kRCFieldHistoryWeight);
+    for (std::size_t i=before;i<fake::render_calls.size();++i) {
+        const auto& call=fake::render_calls[i];
+        CHECK(resource(call,38).handle == a[1].handle && resource(call,38).range == a[1].range);
+        CHECK(resource(call,35).handle == b[1].handle);
+    }
+    f=frame(23,42); f.flags|=BEDRAY_PATH_TRACE_FRAME_RESET_HISTORY;
+    CHECK(pass.record(f,data,c,&error) == BEDRAY_OK);
+    CHECK(history_lane(c[0].handle,3) == 0.0f && resource(fake::render_calls.back(),38).handle == c[1].handle);
+    CHECK(pass.record(frame(24,44),data,d,&error) == BEDRAY_OK);
+    CHECK(history_lane(d[0].handle,3) == 0.0f);   // frame 43 was never recorded
+    fake::fail_render_at(2,BEDRAY_ERROR_VULKAN);
+    CHECK(pass.record(frame(25,45),data,x,&error) == BEDRAY_ERROR_VULKAN);
+    CHECK(pass.record(frame(26,46),data,x,&error) == BEDRAY_OK);
+    CHECK(history_lane(x[0].handle,3) == 0.0f);   // the failed field is nobody's history
+    for (std::uint64_t command=21;command<=26;++command) CHECK(pass.release_recording(command) == BEDRAY_OK);
+    CHECK(fake::buffers.size() == 1 && fake::buffers.contains(x[1].handle));   // the last field waits as history
+    CHECK(pass.destroy() == BEDRAY_OK); clean();
 }
 void slots_and_partial_failures_require_exact_proof() {
     reset(); BedrayCore core; BedrayError error{}; bedray::core::RCFieldPass pass;
@@ -249,7 +285,8 @@ void device_loss_pins_all_recordings_until_every_proof() {
 }
 int main() {
     metadata_and_configuration(); invalid_inputs_do_not_allocate_or_record();
-    dispatch_order_payloads_and_immutable_ranges(); slots_and_partial_failures_require_exact_proof();
+    dispatch_order_payloads_and_immutable_ranges(); history_chains_consecutive_frames_only();
+    slots_and_partial_failures_require_exact_proof();
     device_loss_pins_all_recordings_until_every_proof();
     if (failures) return EXIT_FAILURE;
     std::puts("RC v2 native field metadata/contracts/dispatch/pinning/failure checks passed (no GPU)");

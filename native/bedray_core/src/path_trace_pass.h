@@ -60,6 +60,8 @@ public:
     void discard_recording(std::uint64_t command_buffer) noexcept;
     BedrayStatus release_recording(std::uint64_t command_buffer) noexcept;
 
+    // True when the RC owner holds a field the next consecutive frame may blend with (batch 5.6).
+    [[nodiscard]] bool rc_history_ready() const noexcept;
     [[nodiscard]] bool has_recordings() const noexcept {
         return !recordings_.empty() || (rc_field_ && rc_field_->has_recordings());
     }

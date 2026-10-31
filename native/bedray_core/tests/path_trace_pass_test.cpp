@@ -221,6 +221,7 @@ void install_valid_programs() {
         {22, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}, {35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {38, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
     };
     register_program(kRCBuildProgram, 80, field_build, std::size(field_build));
 }
@@ -1729,13 +1730,13 @@ void test_rc_levels_precede_primary_and_exact_proof_releases_both_owners() {
     CHECK(fake::render_calls[6].program == kDisplayProgram);
     const auto metadata = resource_handle(primary.resources, 34), tails = resource_handle(primary.resources, 35);
     CHECK(metadata != 0 && tails != 0 && metadata != tails);
-    CHECK(resource_range(primary.resources, 34) == 272 && resource_range(primary.resources, 35) == 69168ull * 32u);
+    CHECK(resource_range(primary.resources, 34) == 288 && resource_range(primary.resources, 35) == 69168ull * 32u);
     std::vector<unsigned char> first_metadata;
     CHECK(read_buffer_bytes(metadata, first_metadata));
     CHECK(push_u32(first_metadata, 256) == 7);
     for (std::size_t level = 0; level < 5; ++level) {
         const auto& call = fake::render_calls[level];
-        CHECK(call.program == kRCBuildProgram && call.command_buffer == first.command_buffer && call.resources.size() == 16);
+        CHECK(call.program == kRCBuildProgram && call.command_buffer == first.command_buffer && call.resources.size() == 17);
         CHECK(push_u32(call.push, 0) == 4u - static_cast<std::uint32_t>(level));
         CHECK(call.push_bytes == 80 && call.group_y == 1 && call.group_z == 1);
         CHECK(resource_handle(call.resources, 34) == metadata && resource_handle(call.resources, 35) == tails);
@@ -1754,6 +1755,7 @@ void test_rc_levels_precede_primary_and_exact_proof_releases_both_owners() {
     CHECK(fake::buffers.contains(metadata) && fake::buffers.contains(tails));
     CHECK_STATUS(fixture.render(first), BEDRAY_ERROR_IN_USE);
     auto second = first; second.command_buffer = 62; second.frame_index = 8;
+    CHECK(fixture.pass.rc_history_ready());   // the first recording succeeded: its field waits as history
     CHECK_STATUS(fixture.render(second), BEDRAY_OK);
     CHECK(fake::render_calls.size() == 14);
     if (fake::render_calls.size() != 14) return;
@@ -1763,13 +1765,17 @@ void test_rc_levels_precede_primary_and_exact_proof_releases_both_owners() {
     std::vector<unsigned char> retained;
     CHECK(read_buffer_bytes(metadata, retained) && retained == first_metadata);
     CHECK(read_buffer_bytes(second_metadata, retained) && push_u32(retained, 256) == 8);
+    // Frame 8 followed frame 7: the second build read the first field as history (binding 38) and pins it.
+    for (std::size_t level = 7; level < 12; ++level)
+        CHECK(resource_handle(fake::render_calls[level].resources, 38) == tails);
     fixture.pass.discard_recording(first.command_buffer);
     CHECK(fake::buffers.contains(metadata) && fake::buffers.contains(tails)); // Discard marks state; release carries the proof.
     CHECK_STATUS(fixture.release(first.command_buffer), BEDRAY_OK);
-    CHECK(!fake::buffers.contains(metadata) && !fake::buffers.contains(tails));
+    CHECK(!fake::buffers.contains(metadata) && fake::buffers.contains(tails));   // still pinned by the second build
     CHECK(fake::buffers.contains(second_metadata) && fake::buffers.contains(second_tails));
     CHECK_STATUS(fixture.release(second.command_buffer), BEDRAY_OK);
-    CHECK(!fake::buffers.contains(second_metadata) && !fake::buffers.contains(second_tails));
+    // Discarding the first recording made the second field (built on the first's unwritten tails) nobody's history.
+    CHECK(!fake::buffers.contains(second_metadata) && !fake::buffers.contains(tails) && !fake::buffers.contains(second_tails));
 }
 
 void test_rc_partial_dispatch_failure_keeps_child_and_parent_pins() {
@@ -1780,6 +1786,8 @@ void test_rc_partial_dispatch_failure_keeps_child_and_parent_pins() {
         fake::fail_render_at(dispatch, BEDRAY_ERROR_VULKAN);
         CHECK_STATUS(fixture.render(frame), BEDRAY_ERROR_VULKAN);
         CHECK(fake::render_calls.size() == static_cast<std::size_t>(dispatch + 1));
+        // A failed recording is never submitted, so its field - complete or not - is no history (batch 5.6).
+        CHECK(!fixture.pass.rc_history_ready());
         CHECK(fixture.pass.has_recordings()); CHECK_STATUS(fixture.pass.destroy(), BEDRAY_ERROR_IN_USE);
         if (fake::render_calls.empty()) continue;
         const auto metadata = resource_handle(fake::render_calls.front().resources, 34);

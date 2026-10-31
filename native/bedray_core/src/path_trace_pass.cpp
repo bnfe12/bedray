@@ -1295,6 +1295,12 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         trace_resources[25] = motion ? buffer_resource(33, as_buffer(motion->handle), motion->offset, motion->bytes)
             : buffer_resource(33, motion_dummy_view_.buffer, 0, motion_dummy_view_.size);
     }
+    // The RC field recorded below becomes the next recording's history; if anything after it fails, this recording is
+    // never submitted and that history would be unwritten memory.
+    struct ForgetRcHistoryOnFailure {
+        RCFieldPass* rc = nullptr;
+        ~ForgetRcHistoryOnFailure() { if (rc) rc->forget_history(); }
+    } rc_guard;
     if (field_bindings) {
         std::array<BedrayResource,2> field_resources{};
         status = rc_field_->record(desc, std::span<const BedrayResource>(trace_resources.data(),26), field_resources, error);
@@ -1306,6 +1312,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         }
         trace_resources[26] = field_resources[0];
         trace_resources[27] = field_resources[1];
+        rc_guard.rc = rc_field_.get();
     }
     const std::size_t pt_slot = 18u + (guide_bindings ? 7u : 0u) + (motion_binding ? 1u : 0u)
         + (field_bindings ? 2u : 0u);
@@ -1461,6 +1468,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     }
 
     exit_barrier(fns_, command);
+    rc_guard.rc = nullptr;   // the whole recording succeeded: its field is a real history
     return BEDRAY_OK;
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame state");
@@ -1547,8 +1555,12 @@ BedrayStatus PathTracePass::record_stats(std::uint64_t command_buffer, std::uint
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path-trace statistics");
 }
 
+bool PathTracePass::rc_history_ready() const noexcept { return rc_field_ && rc_field_->has_history(); }
+
 void PathTracePass::discard_recording(std::uint64_t command_buffer) noexcept {
     if (recordings_.find(command_buffer) == recordings_.end()) return;
+    // A discarded recording never ran, so the RC field it built is not a history the next frame may read.
+    if (rc_field_) rc_field_->forget_history();
     history_written_ = false;
     history_parity_ = 0;
     images_initialized_ = false;

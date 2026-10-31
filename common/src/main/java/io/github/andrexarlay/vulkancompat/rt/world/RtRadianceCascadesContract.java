@@ -9,14 +9,16 @@ final class RtRadianceCascadesContract {
     static final String BUILD = "rc_field_build_scene", TRACE = "rc_path_trace_scene";
     private RtRadianceCascadesContract() {}
     static void requireFieldBindings(SlangPassManifest manifest) {
-        require(manifest,"rcField",34,BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER,272);
+        require(manifest,"rcField",34,BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER,288);
         require(manifest,"rcTails",35,BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER,32);
     }
     static void requireBuilder(SlangPassManifest manifest) {
-        if (manifest.pushConstantBytes()!=80 || manifest.bindings().size()!=16
+        if (manifest.pushConstantBytes()!=80 || manifest.bindings().size()!=17
             || !Arrays.equals(manifest.threadGroupSize(),new int[]{64,1,1}))
-            throw new IllegalStateException("RC builder needs push80, 16 bindings and 64x1x1 threads");
+            throw new IllegalStateException("RC builder needs push80, 17 bindings and 64x1x1 threads");
         requireFieldBindings(manifest);
+        // Temporal reuse: the previous recording's tails, read-only (batch 5.6).
+        require(manifest,"rcHistory",38,BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER,32);
         require(manifest,"frame",16,BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER,608);
         require(manifest,"sections",2,BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER,64);
     }
