@@ -71,10 +71,12 @@ class RtSlangHotLoopTest {
     void theSkyIsPaidOnlyOnAMiss() throws IOException {
         String tracer = read(TRACER);
         String body = block(tracer, tracer.indexOf("PathTraceResult tracePathWithField<"));
-        assertEquals(1, count(body, "environment.radiance(ray.direction)"),
+        assertEquals(1, count(body, "environment.radiance(escape)"),
             "the environment is evaluated on the ray that leaves the world, not before the trace");
+        assertTrue(body.indexOf("float3 escape = ray.direction;") > body.indexOf("if (!hit.hit) {"),
+            "and the escape direction is the miss's own ray, bent only on the way out of a water body");
         int miss = body.indexOf("if (!hit.hit) {");
-        int sky = body.indexOf("result.radiance += throughput * environment.radiance(ray.direction);");
+        int sky = body.indexOf("result.radiance += throughput * escapeWeight * environment.radiance(escape);");
         assertTrue(miss > 0 && sky > miss, "a hit overwrites the colour, so the sky belongs to the miss branch");
         assertTrue(block(body, miss).contains("result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;"),
             "the miss still records why the path ended");

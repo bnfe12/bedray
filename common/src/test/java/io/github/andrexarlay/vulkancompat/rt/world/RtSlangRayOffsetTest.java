@@ -70,8 +70,9 @@ class RtSlangRayOffsetTest {
             "both legs keep tMin at zero; a bias there would start every underwater test twice as far away");
         assertTrue(beam.contains("makeRay(origin, -beam.direction, 0.0, max(beam.column - bias, bias))"),
             "the column leg stops short of the sheet it is not allowed to re-hit, out of its own length");
-        assertTrue(beam.contains("makeRay(entry, lightDirection, 0.0, max(distance - beam.column, bias))"),
-            "and the sky leg keeps whatever is left of the light distance, not the whole of it");
+        assertTrue(beam.contains("makeRay(entry, beam.air, 0.0, max(beam.airDistance, bias))"),
+            "and the sky leg keeps whatever is left of the light distance, not the whole of it (the key light's"
+                + " airDistance is distance - column, RtSlangWaterPointBeamTest)");
     }
 
     private static int count(String source, String needle) {

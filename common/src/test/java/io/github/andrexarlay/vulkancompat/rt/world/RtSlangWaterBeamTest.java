@@ -179,9 +179,9 @@ class RtSlangWaterBeamTest {
             "the sky leg is proven or it is nothing: a walk that ran out of filters did not reach the sun either");
         assertFalse(walk.contains("air.result.visible"),
             "the raw visibility bit is read by the predicate and by nothing else in the file that owns it");
-        assertTrue(walk.contains("float3 entry = beam.entry + lightDirection * (bias / max(lightDirection.y, 0.1));"),
+        assertTrue(walk.contains("float3 entry = beam.entry + beam.air * (bias / max(beam.air.y, 0.1));"),
             "the sky leg is lifted along the beam, not along the receiver's normal, so it starts above the sheet");
-        assertTrue(walk.contains("* air.result.transmittance * waterBeamTransmittance(lightDirection.y)"),
+        assertTrue(walk.contains("* air.result.transmittance * waterBeamTransmittance(beam.air.y)"),
             "one Fresnel for the crossing, charged at the air-side cosine");
         assertFalse(walk.contains("surfaceInterfaceTransmittance("),
             "the face itself is never traced, so its filter cannot be paid for twice");
@@ -297,7 +297,7 @@ class RtSlangWaterBeamTest {
     void theBeamUsesTheSameClockAsTheSheetItBendsThrough() {
         String term = block(read(TRACER), "float3 pathTraceDirectTerm<T : ISceneTracer>");
         assertTrue(term.contains("beam.solidAngle * (options.waterCaustics\n"
-            + "            ? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime,\n"
+            + "            ? waterBeamFocus(beam, position, beam.air, materialOptions.portalTime,\n"
             + "                materialOptions.waterWaveMix) : 1.0)"),
             "area times étendue: the focus rides on the same weight the crossing needs, bends through the same scaled "
                 + "face the sheet shows, and 1.0 when the player turned the focus off");

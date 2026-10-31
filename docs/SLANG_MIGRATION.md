@@ -1009,9 +1009,21 @@ All 16 mutation probes are caught (each revert names its guard) and the four sha
 files come back byte-identical. The cost is measured, not assumed: the two extra walk
 instantiations in `traceShadowBeam` are +426 KB / +440 KB of SPIR-V on the two path
 roots (+70 %); reordering the legs onto a single shared callee was tried and is not
-smaller. What remains of the water item is bending what the direct beam does not bend: the
-sky-dome and emission paths seen from under water are absorbed by the medium but not
-refracted at the sheet. `RtSettings.waterStyle` is no longer on that list - it reaches
+smaller. Status update (2026-10-31, light above the sheet): a block emitter above the water
+now reaches an underwater receiver through the crossing as well. `waterBeamToPoint` solves
+Snell on the flat sheet by bisection, `traceShadowBeam` walks the column and the bent air leg
+(`WaterBeam.air` / `airDistance`; the key light's are its sight direction and the rest of its
+distance, so the sun and moon trace exactly what they traced before), and the sample is
+weighted by the ray Jacobian of the crossing, `n^2 d^2 dw/dA_perp`, which is 1 without a sheet
+and the key light's `cos(air) / cos(water)` for a far light. The caustics switch and the wave
+style act on that beam exactly as on the key light. A camera or path ray that leaves the body
+upward without meeting a face is refracted out of the plane with the sheet's transmission and
+`eta^2` (the optical lobe's crossing weight), or sees no sky past the critical angle; the sky
+seen through a face that is hit was already refracted by the optical lobe. Approximations: the
+emitter's own cosine is kept at the sight line's, and the totally reflected half of an escaped
+ray is not traced on. Evidence: `RtSlangWaterPointBeamTest` (Snell on 100,000 crossings, the
+weight against a measured ray map on 2,000, both limits, a before/after for one torch: arrival
+cosine 0.7809 -> 0.8587, weight 1.1086). `RtSettings.waterStyle` is no longer on that list - it reaches
 the typed path as its own frame flag (`FLAG_WATER_REALISTIC`, carried by
 `RtSlangFrameData` into `Frame.FLAG_WATER_REALISTIC` and consumed by
 `surface/water.slang`), so the switch moves the waves and leaves the rest of the optics
@@ -1437,9 +1449,9 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    the optical lobe refracts from the medium the ray travels in (a path leaving the
    body bends away from the normal and can totally internally reflect), and
    `RtSettings.waterStyle` reaches the typed path as its own frame flag so the toggle
-   moves the waves only. Still open: bending what the direct beam does not bend — the
-   sky-dome and emission paths seen from under water are absorbed but not refracted at
-   the sheet. Closed in the same batch as the medium: the underwater NEE is now a
+   moves the waves only. Closed 2026-10-31: a block emitter above the sheet is reached
+   through the Snell crossing with its ray-Jacobian weight (`waterBeamToPoint`), and an
+   escaped ray inside the body is refracted out of the plane or totally reflected. Closed in the same batch as the medium: the underwater NEE is now a
    Snell-refracted two-leg beam with a wave-focus caustic (`waterBeamToLight`,
    `traceShadowBeam`, `waterBeamFocus`).
 4b. **Denoiser G-buffer** — the entry pass writes the seven DLSS-RR guide

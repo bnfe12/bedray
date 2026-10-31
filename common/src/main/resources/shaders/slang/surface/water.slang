@@ -249,6 +249,8 @@ struct WaterBeam {
     float3 entry;       // where the beam crosses the surface plane
     float  solidAngle;  // solid-angle air / solid-angle water: the weight an air-side
                         // sample needs once the BSDF is evaluated on the water side
+    float3 air;         // unit: entry -> light, the direction of the sky leg
+    float  airDistance; // length of the sky leg, from the crossing to the light
 };
 
 WaterBeam invalidWaterBeam() {
@@ -258,6 +260,8 @@ WaterBeam invalidWaterBeam() {
     beam.column = 0.0;
     beam.entry = float3(0.0);
     beam.solidAngle = 1.0;
+    beam.air = float3(0.0, 1.0, 0.0);
+    beam.airDistance = 0.0;
     return beam;
 }
 
@@ -302,6 +306,72 @@ WaterBeam waterBeamToLight(float3 lightDirection, float distance, float3 positio
     // direction is cos(air) / cos(water), so a floor under a flat sheet keeps
     // exactly the irradiance the surface lets through.
     beam.solidAngle = max(lightDirection.y, 1.0e-3) / max(-travel.y, 1.0e-3);
+    beam.air = lightDirection;
+    beam.airDistance = distance - column;
+    return beam;
+}
+
+// The beam a point light above the sheet takes to a receiver under it: a block emitter, which the key light's
+// directional form cannot describe because its air leg changes direction with the crossing.  The crossing is the point
+// of the flat sheet where n_water sin(water) = n_air sin(air); with the horizontal offset x of the crossing from the
+// receiver, g(x) = n x / |(x, depth)| - (D - x) / |(D - x, rise)| rises monotonically from -1..0 at x = 0 to 0..n at
+// x = D, so bisection finds it without a starting guess.
+//
+// The weight is the ray Jacobian of the crossing.  A water-side bundle of solid angle dw lands, on the light's height
+// plane, on the area r dr dphi, where r(theta) = depth tan(theta) + rise tan(theta_air); the light's perpendicular area
+// is that times cos(air).  So dw / dA_perp = sin(theta) / (r r' cos(air)), with r / sin(theta) =
+// depth / cos(water) + n rise / cos(air) and r' = depth / cos^2(water) + n rise cos(water) / cos^3(air).  The sampler's
+// estimate carries the straight 1 / d^2 of that perpendicular area; radiance rises by n^2 into the dense side.  Hence
+// solidAngle = n^2 d^2 dw / dA_perp: 1 without a sheet (n = 1), and the key light's cos(air) / cos(water) for a light far
+// above (RtSlangWaterPointBeamTest checks both, and the Jacobian against a measured ray map).  The emitter's own cosine
+// is kept at the sight line's (the look kernel floors it); the change of that cosine across the crossing is not modelled.
+static const uint WATER_POINT_BEAM_STEPS = 32u;
+
+WaterBeam waterBeamToPoint(float3 target, float3 position, WaterMedium medium) {
+    WaterBeam beam = invalidWaterBeam();
+    float3 toTarget = target - position;
+    float straight = length(toTarget);
+    if (!medium.inside || !(straight > 0.0) || !isFinite(straight)) return beam;
+    float depth = medium.surfY - position.y;
+    float rise = target.y - medium.surfY;
+    // A light under the sheet never crossed it, and a receiver at the sheet has no column: the sight line stands.
+    if (!(depth > 1.0e-3) || !(rise > 1.0e-3)) return beam;
+    float across = length(toTarget.xz);
+    float2 heading = across > 1.0e-6 ? toTarget.xz / across : float2(1.0, 0.0);
+    float lo = 0.0;
+    float hi = across;
+    for (uint i = 0u; i < WATER_POINT_BEAM_STEPS; ++i) {
+        float mid = 0.5 * (lo + hi);
+        float g = WATER_IOR * mid * rsqrt(mid * mid + depth * depth)
+            - (across - mid) * rsqrt((across - mid) * (across - mid) + rise * rise);
+        if (g > 0.0) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    float x = 0.5 * (lo + hi);
+    float3 entry = float3(position.x + heading.x * x, medium.surfY, position.z + heading.y * x);
+    float3 waterLeg = entry - position;
+    float column = length(waterLeg);
+    float3 airLeg = target - entry;
+    float airDistance = length(airLeg);
+    if (!(column > 0.0) || !(airDistance > 0.0)) return beam;
+    float3 up = waterLeg / column;
+    float3 air = airLeg / airDistance;
+    float cosWater = up.y;
+    float cosAir = air.y;
+    if (!(cosWater > 0.0) || !(cosAir > 1.0e-4)) return beam;
+    float rOverSin = depth / cosWater + rise * WATER_IOR / cosAir;
+    float rPrime = depth / (cosWater * cosWater) + rise * WATER_IOR * cosWater / (cosAir * cosAir * cosAir);
+    beam.solidAngle = WATER_IOR * WATER_IOR * straight * straight / (rOverSin * rPrime * cosAir);
+    if (!isFinite(beam.solidAngle)) return invalidWaterBeam();
+    beam.valid = true;
+    beam.direction = -up;
+    beam.column = column;
+    beam.entry = entry;
+    beam.air = air;
+    beam.airDistance = airDistance;
     return beam;
 }
 

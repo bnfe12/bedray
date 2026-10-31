@@ -381,6 +381,8 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     WaterBeam beam = invalidWaterBeam();
     if (medium.inside && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
         beam = waterBeamToLight(lightDirection, light.distance, position, medium);
+    } else if (medium.inside && light.kind == LightKind.Emitter) {
+        beam = waterBeamToPoint(light.position, position, medium);
     }
     float3 arrival = beam.valid ? -beam.direction : lightDirection;
     // Two weights ride on the bent beam.  The sample was drawn from air solid
@@ -392,7 +394,7 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     // damped style focuses less because the waves that bend the bundle are weaker.
     float beamWeight = beam.valid
         ? beam.solidAngle * (options.waterCaustics
-            ? waterBeamFocus(beam, position, lightDirection, materialOptions.portalTime,
+            ? waterBeamFocus(beam, position, beam.air, materialOptions.portalTime,
                 materialOptions.waterWaveMix) : 1.0)
         : 1.0;
     float cosine = max(dot(normal, arrival), 0.0);
@@ -630,7 +632,22 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 result.pt.vertexNormal = -ray.direction;
                 result.pt.vertexFlags = PATH_PT_VERTEX_ENVIRONMENT;
             }
-            result.radiance += throughput * environment.radiance(ray.direction);
+            // A ray that leaves the body upward without meeting a face (the walk up from the eye found none, or the sheet
+            // is not in the scene) still crosses the plane the body was entered through: it leaves the dense side, so it
+            // bends away from the vertical with the sheet's transmission and eta^2, exactly as the optical lobe weights a
+            // crossing, or it is totally reflected and sees no sky.  The reflected half is not traced on.
+            float3 escape = ray.direction;
+            float3 escapeWeight = float3(1.0);
+            if (medium.inside && ray.direction.y > 0.0) {
+                float3 bent = refract(ray.direction, float3(0.0, -1.0, 0.0), WATER_IOR);
+                if (dot(bent, bent) <= 1.0e-8) {
+                    escapeWeight = float3(0.0);   // total internal reflection: this ray sees no sky
+                } else {
+                    escape = safeNormalize(bent, ray.direction);
+                    escapeWeight = waterBeamTransmittance(escape.y) * (WATER_IOR * WATER_IOR);
+                }
+            }
+            result.radiance += throughput * escapeWeight * environment.radiance(escape);
             result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;
             break;
         }

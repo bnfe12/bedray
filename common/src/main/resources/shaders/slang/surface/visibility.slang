@@ -327,9 +327,11 @@ SurfaceVisibility traceShadowBeam<T : ISceneTracer>(T traversal,
     // Lifted along the beam rather than along the face normal: the crossing is a
     // plane the receiver's own normal says nothing about, and a starting point
     // that stays inside the sheet re-hits it at grazing sun angles.
-    float3 entry = beam.entry + lightDirection * (bias / max(lightDirection.y, 0.1));
+    // The sky leg runs along the beam's own air direction for its own length: the key light's is the sight direction
+    // and the rest of the distance, a point light's bends at the crossing and ends on the light.
+    float3 entry = beam.entry + beam.air * (bias / max(beam.air.y, 0.1));
     SurfaceVisibility air = traceFilteredVisibility(traversal, atlas, blockMaterials,
-        makeRay(entry, lightDirection, 0.0, max(distance - beam.column, bias)), options);
+        makeRay(entry, beam.air, 0.0, max(beam.airDistance, bias)), options);
     visibility.layers += air.layers;
     visibility.flags |= air.flags;
     // The sky leg has to prove itself the way the column did: an overflow there means the walk stopped counting
@@ -339,6 +341,6 @@ SurfaceVisibility traceShadowBeam<T : ISceneTracer>(T traversal,
     visibility.result.blocker = air.result.blocker;
     visibility.result.distance = distance;
     visibility.result.transmittance = visibility.result.transmittance
-        * air.result.transmittance * waterBeamTransmittance(lightDirection.y);
+        * air.result.transmittance * waterBeamTransmittance(beam.air.y);
     return visibility;
 }
