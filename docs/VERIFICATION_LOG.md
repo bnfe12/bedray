@@ -3689,3 +3689,30 @@ its bent beams, which fall steeper in the water, so its pool is more concentrate
 moves with the waves when caustics are on; the sun's light under water is
 unchanged; swimming and looking up, the sky still fills the Snell window. No
 owner-verified frame.
+
+## 2026-10-31 — Settings screen, log spam and the outDepth contract, found from the first logged session (L3 log evidence for 5.2/5.3; L2 for the fixes; no owner-verified frame)
+
+Source: `26.3(1)/minecraft/logs/latest.log`, sessions 01:42 and 01:45-01:50.
+
+- The Bedray settings screen showed no rows: 13 x `IllegalStateException: Attempted to read option value that is not a
+  declared dependency` from `SettingsDraft.visible`, raised by the `path_restir_pt_spatial` row of `93aa115` (it read
+  `path_restir_di` but declared only the mode and `path_restir_pt`). Fixed in `e5a68bb`. `2bed1f3` makes the screen log
+  every failing option as `[VKB-SETTINGS] option=<id> category=<c>` before failing, and adds
+  `SettingsDeclaredDependenciesTest`, which fails on the reverted fix with
+  `path_restir_pt_spatial reads pathDiId but declares [modeId, pathPtId]`.
+- `[VKB-RT] mode=path passes=...` appeared 6,500 times in five minutes (10-20 a second): `describe()` carried the
+  accumulation count, so the log-on-change line changed every frame. Fixed in `9595db0`
+  (`RtSlangRayModeTest.theDescriptionDoesNotChangeFromFrameToFrame` failed before the fix with `frames=2` vs `frames=5`).
+- L3 evidence for earlier batches in the 01:45 session: `registered SlangProgram[path_trace, 28 binding(s), 112 B push]`,
+  `path_trace_scene` 28, `restir_pt_spatial` and `restir_pt_spatial_scene` 14 each; `rt_pass ... invalid_pct=0.0
+  trunc_pct=2.8..10.1 vis_overflow_pct=0.0` once the first frame was measured. `restir_pt=off` throughout: ReSTIR PT
+  itself was not switched on.
+- 5.5 `outDepth` contract (`9ed9fcc`): ray distance from the eye (`camera.origin`), `1e6` on a miss; consumers checked
+  and listed in `SLANG_MIGRATION.md`. `path_display` compared an eye-distance history with a raw-camera expected
+  distance; with a bobbing eye 1.5 blocks from a wall the gap (0.047) exceeds the 2 % window (0.044), so near surfaces
+  lost accumulation while walking. The history now stores raw-camera distances. `RtSlangDepthContractTest`; two
+  mutations killed; `:common:test --rerun` 971 tests, 0 failures, 3 skipped.
+
+Deployed to both instances as `*.20261031-160548` backups: JAR from `git archive 9ed9fcc` plus `libs/`, sha256
+`b46c6379ab499e9e36360e00f9ba7dbec9f8b34ed5cf6d6fbe1fb6bfb2d24c0e`; `bedray_core.dll` unchanged
+(`40ff573d…18106e`). No owner-verified frame.
