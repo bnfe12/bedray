@@ -13,6 +13,7 @@ owner. Evidence for every line is in [VERIFICATION_LOG.md](VERIFICATION_LOG.md) 
 | 5.3 | F3 split of rejects (`invalid_pct`, `trunc_pct`, `vis_overflow_pct`, binding 37) | `0a90bb6` | L3: numbers in `rt_pass` (invalid 0.0, trunc 2.8-10.1, overflow 0.0), 01:46-01:50 |
 | 5.4 | Underwater refraction of emitter light and escaped rays (`waterBeamToPoint`) | `98b090b` | L2: ray-geometry tests; no underwater frame logged |
 | 5.5 | `outDepth` contract written down, consumers checked; `path_display` history depth fixed (raw-camera distance) | `9ed9fcc` | L2 |
+| 5.6 | RC v2 temporal reuse: each field blended with the previous consecutive one (builder binding 38, weight 0.8, 288-byte metadata) | `f215c35` | L2 + native CTest; RC is opt-in (`nativePathTrace` + `nativeScene` + `radianceCascades`) and has never run in a logged session |
 
 Fixes found from the 2026-10-31 logs:
 
@@ -23,17 +24,15 @@ Fixes found from the 2026-10-31 logs:
 
 ## Left to reach 100 %
 
-1. **5.6 Radiance Cascades temporal reuse** - implement within a 192 MiB budget (without wiring the legacy float4 resolve
-   to the typed atlas), or record an explicit owner deferral in the docs. Needs the owner's decision.
-2. **5.7 Final gates**
+1. **5.7 Final gates**
    - owner playtest of the checklist below, with `latest.log` and screenshots;
    - reconcile `SLANG_MIGRATION.md` (Big Four, Next steps), `AUDIT_DEFECTS_AND_ISSUES.md`, `VERIFICATION_LOG.md` and the
      module README with the results; everything without an owner-verified frame stays marked so.
-3. **Code review of the pre-existing code** (correctness, dead code, duplication) - started 2026-10-31, interrupted before
+2. **Code review of the pre-existing code** (correctness, dead code, duplication) - started 2026-10-31, interrupted before
    results; to be repeated.
-4. **ReSTIR PT `experimental/` exit** - `restir_pt.slang` moves back to `restir/` only after a GPU run with
+3. **ReSTIR PT `experimental/` exit** - `restir_pt.slang` moves back to `restir/` only after a GPU run with
    `path_restir_pt` on.
-5. **Native backend parity** - with `-Dvkbridge.rt.nativePathTrace=true` the core binds stand-ins at 36 and 37: no
+4. **Native backend parity** - with `-Dvkbridge.rt.nativePathTrace=true` the core binds stand-ins at 36 and 37: no
    ReSTIR PT and an n/a F3 split until the core owns a PT ring and lends the trace the stats slot.
 
 ## Owner playtest checklist
@@ -46,3 +45,6 @@ Fixes found from the 2026-10-31 logs:
 - F3: `invalid_pct`, `trunc_pct`, `vis_overflow_pct` are numbers on the default backend.
 - Settings screen: every tab shows rows; no `[VKB-SETTINGS]` error lines.
 - Walking past a wall at arm's length: the image does not turn noisy on every step (5.5 fix).
+- RC (only with `-Dvkbridge.rt.nativePathTrace=true -Dvkbridge.rt.nativeScene=true -Dvkbridge.rt.radianceCascades=true`):
+  the mode line says `rc_reuse=temporal`; indirect light under the field is calmer when standing still and follows a
+  moving camera without smearing more than about a block.

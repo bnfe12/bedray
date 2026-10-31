@@ -3716,3 +3716,43 @@ Source: `26.3(1)/minecraft/logs/latest.log`, sessions 01:42 and 01:45-01:50.
 Deployed to both instances as `*.20261031-160548` backups: JAR from `git archive 9ed9fcc` plus `libs/`, sha256
 `b46c6379ab499e9e36360e00f9ba7dbec9f8b34ed5cf6d6fbe1fb6bfb2d24c0e`; `bedray_core.dll` unchanged
 (`40ff573d…18106e`). No owner-verified frame.
+
+## 2026-10-31 — RC v2 temporal reuse (batch 5.6; L1 slangc + MSVC, L2 unit + native CTest + mutation; no GPU run)
+
+Branch `refactor/slang-pipeline`, commit `f215c35` (16 files, +411/−46).
+
+What changed: the RC v2 builder blends each reconstructed cell with the previous consecutive field, read at
+`probe + di_camera_delta` on the same level and ray by trilinear weights (`rcFieldBlendHistory`), with the native owner's
+weight 0.8; all-or-nothing on unresolved data. The native `RCFieldPass` keeps the last successful recording's tails alive
+as history at builder binding 38, pins them for the recording that reads them, and forgets them on a reset, a skipped
+frame, a non-finite move, a failed or a discarded recording. Metadata 288 bytes (`float4 history` at 272), builder
+17 bindings, one extra tails buffer inside the 192 MiB budget; the legacy float4 resolve is not wired to the typed atlas.
+Design and approximations: `docs/RC_RECONSTRUCTION_PLAN.md` "Temporal reuse".
+
+Evidence:
+
+- L1: `slangc` 2026.20 `rc_field_build_scene` 583,396 B / 17 bindings / 80 B push, `rc_path_trace_scene` 1,706,780 B / 30;
+  MSVC Release `bedray_core` rebuilt in both trees.
+- L2 Java: `RtRcFieldHistoryTest` (CPU model of the blend: a still camera reads its own cell, a whole-probe move reads the
+  neighbour and a half move interpolates, a missing or outside neighbour is never renormalised away, weight 0 is the field
+  without reuse, the exponential mean's variance is `(1-w)/(1+w)` on 400,000 frames; shader guards; the compiled builder
+  manifest has `rcHistory` at 38 and a 288-byte `rcField`). `RtSlangRcFieldTest` updated for 17 bindings and 288 bytes.
+  Full `:common:test --rerun`: `977 tests, 0 failures, 0 errors, 3 skipped`.
+- Native: `rc_field_pass_test` `history_chains_consecutive_frames_only` (consecutive frame reads the previous tails at 38
+  with the camera move and weight 0.8 in the metadata; reset, skipped frame and failed recording give weight 0; the last
+  field waits as history until destroy) and `path_trace_pass_test` (the second build reads the first tails at 38; a
+  recording that fails before or after its field leaves no history; a discard forgets it). CTest
+  `100% tests passed, 0 tests failed out of 21` and `... out of 24`.
+- Mutations: H1 inverted lerp and H2 history read without the camera move each fail `theShaderBlendsAsTheModelDoes`;
+  N1 dropping the failure guard fails `path_trace_pass_test.cpp:1790`, N2 reusing a non-consecutive field fails
+  `rc_field_pass_test` line 222, N3 keeping the history on discard fails `path_trace_pass_test.cpp:1778`. N1 first
+  survived because the partial-failure test discarded before checking; the test now checks right after the failed
+  recording. A first native probe round was invalid: restored sources kept older timestamps than the mutated objects, so
+  MSBuild did not rebuild them; the sources were touched and every probe rerun on a clean build.
+
+Deployed to both instances as `*.20261031-162511` backups: JAR from `git archive f215c35` plus `libs/`, sha256
+`33d079494a07d44d65a4af75cfa838c932bdd2b6831f385101ba518d22681475`; `bedray_core.dll` from
+`native/bedray_core/build/Release` (tree equals `f215c35`), sha256
+`536232e5ea364764b4dda70028f83b53aa65f57eb52fa046d1db7ab60b9f5beb`.
+
+Not verified: RC is opt-in and was never enabled in a logged session; no GPU run, no owner-verified frame.
