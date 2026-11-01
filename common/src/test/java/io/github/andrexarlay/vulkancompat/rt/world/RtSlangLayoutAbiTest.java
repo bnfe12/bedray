@@ -31,11 +31,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * file is the second, compiler-free half: it reads the source a checkout can see and pins the Java mirror beside it, so
  * a reorder that keeps the size (the dangerous kind) still fails a unit test.
  *
- * <p>The {@code StatsBuf} tail needs its own answer. Since the legacy pipeline was deleted no typed pass has read the
- * old 65-field frame slot: {@code passes/frame_stats.slang} binds exactly the four counter words at its head, and
- * {@code bindings.slang} is imported only by the two module surfaces. The Java tail in {@link RtStatsLayout} is
- * therefore host-side scratch, not an ABI a shader can misread; the reachability checks below prove that boundary
- * instead of pretending the dead declaration is still a live layout.
+ * <p>The whole private frame slot also carries versioned sky display input and
+ * reject counters. Those have explicit small contracts; the deleted legacy
+ * declarations remain unreachable from typed passes.
  */
 class RtSlangLayoutAbiTest {
 
@@ -126,9 +124,8 @@ class RtSlangLayoutAbiTest {
     }
 
     @Test
-    void theStatsSlotTailIsUnreachableFromEveryPass() throws IOException {
-        // The 4-word head is the whole live ABI. Everything behind it is host-side scratch: if any pass could import the
-        // legacy declarations, this boundary would need a field-by-field test again; while none can, it must not.
+    void theLegacyStatsDeclarationIsUnreachableFromEveryPass() throws IOException {
+        // Typed consumers use their explicit counter/sky contracts, never the legacy struct.
         List<String> importers = new ArrayList<>();
         try (Stream<Path> files = Files.walk(Path.of(SLANG))) {
             for (Path file : files.filter(p -> p.toString().endsWith(".slang")).toList()) {

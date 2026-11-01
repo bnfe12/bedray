@@ -8,9 +8,8 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * {@link #prepare} (pass-owned images), {@link #configure} (push constants from the settings of this pass),
  * {@link #bind} (descriptor set, only rewritten when a view changed), {@link #dispatch}.
  * <p>
- * Implementations: {@link RtRayEffectsPass} (Ray Tracing mode), {@link RtPathTracerPass} (Path Tracing mode on GLSL) and
- * {@link RtSlangPathPass} (Path Tracing mode on the AOT Slang programs). Each reads only its own settings group
- * (RtSettings), so the modes stay independent.
+ * {@link RtSlangPathPass} supplies the AOT ray/path profiles. The pass reads its
+ * profile's settings; resource ownership and host submission stay outside it.
  */
 public interface RtPass {
     RtMode mode();
@@ -36,6 +35,9 @@ public interface RtPass {
 
     /** True when the pipeline writes the NRD G-buffer (bindings 4..8). */
     boolean usesGbuffer();
+
+    /** Whether the backend forwards the full private frame slot used by the display-sky packet. */
+    default boolean supportsDisplaySky() { return false; }
 
     /**
      * Whether this pass was built for the requested G-buffer mode. The renderer rebuilds a pass only when this is false,

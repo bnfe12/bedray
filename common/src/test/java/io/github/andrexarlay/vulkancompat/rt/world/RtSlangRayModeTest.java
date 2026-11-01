@@ -301,8 +301,8 @@ class RtSlangRayModeTest {
         String renderer = read(RENDERER);
         assertFalse(renderer.contains("rt_restir"), "the host allocation of the deleted ray pass is gone");
         assertFalse(renderer.contains("RESERVOIR_BYTES"), "and so are its size constants");
-        assertTrue(renderer.contains("MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, 0L);"),
-            "the record keeps the two slots at zero for the layout contract");
+        assertFalse(renderer.contains("RtStatsLayout.RESERVOIR_ADDR"),
+            "the private sky packet replaces the deleted ring pointers; the active backend binds its own ring");
         assertTrue(renderer.contains("createPass(device, passModeFor(RtConfig.mode()), wantGbuffer(passModeFor(RtConfig.mode())));"),
             "the ray mode now builds a pass instead of failing the session gate");
         String pass = read(PASS);

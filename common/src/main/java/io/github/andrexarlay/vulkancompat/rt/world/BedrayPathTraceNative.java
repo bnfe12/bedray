@@ -119,6 +119,8 @@ final class BedrayPathTraceNative implements AutoCloseable {
     }
 
     /** True when the core owns the ReSTIR PT ring, so the host sends NATIVE_PT and leaves history and parity to it. */
+    boolean displaySkyAvailable() { return library.hasStatsSlot(); }
+
     boolean nativePt() {
         return library.hasNativePt();
     }

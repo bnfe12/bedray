@@ -115,12 +115,14 @@ class RtSlangSkyDiscTest {
     @Test
     void thePassHandsTheSamplerItsSun() throws IOException {
         String entry = read(ENTRY);
-        assertTrue(entry.contains("SunMoonSky environment;"),
-            "the path-trace entry builds the dome-plus-disc sampler");
-        assertTrue(entry.contains("environment.dome.atmosphere = f.atmosphere;"),
+        assertTrue(entry.contains("FrameSky environment;"),
+            "the path-trace entry builds the display/illumination adapter");
+        assertTrue(entry.contains("environment.fallback.dome.atmosphere = f.atmosphere;"),
             "the dome comes from the frame's atmosphere");
-        assertTrue(entry.contains("environment.sun = f.sun;"),
+        assertTrue(entry.contains("environment.fallback.sun = f.sun;"),
             "the bodies come from the frame's key light - the same SunState the shadow rays use");
+        assertTrue(entry.contains("environment.display = readSkyDisplayState(outPathStats);"),
+            "a complete versioned sky packet supplies the textured background");
         assertEquals(0, count(entry, "GradientSky environment;"),
             "no pass builds a bare gradient dome any more");
 

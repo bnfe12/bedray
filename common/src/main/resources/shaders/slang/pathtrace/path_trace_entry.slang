@@ -9,7 +9,7 @@ public module path_trace_entry;
 
 __exported import "contracts/contracts.slang";
 __exported import "light/block_emitters.slang";
-import "light/sky.slang";
+import "light/frame_sky.slang";
 import "light/sun.slang";
 import "pathtrace/path_tracer.slang";
 import "restir/di_block_emitters.slang";
@@ -400,9 +400,10 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // describes drawn into it.  A reflection or an escaped ray that points at the
     // sun now shows it; the sampled environment stays the dome alone, because the
     // sun and moon are discrete entries in the MIS list above.
-    SunMoonSky environment;
-    environment.dome.atmosphere = f.atmosphere;
-    environment.sun = f.sun;
+    FrameSky environment;
+    environment.fallback.dome.atmosphere = f.atmosphere;
+    environment.fallback.sun = f.sun;
+    environment.display = readSkyDisplayState(outPathStats);
 
     PathTraceOptions options = defaultPathTraceOptions();
     options.maxDepth = max(pc.maxDepth, 1u);

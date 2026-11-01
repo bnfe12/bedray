@@ -99,6 +99,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
 
     @Override public boolean spatialAvailable() { return spatial; }
     @Override public boolean pathReuseAvailable() { return pass.nativePt(); }
+    @Override public boolean displaySkyAvailable() { return pass.displaySkyAvailable(); }
     @Override public String pathReuseState() { return ptState; }
     @Override public String reservoirState() { return "native"; }
 

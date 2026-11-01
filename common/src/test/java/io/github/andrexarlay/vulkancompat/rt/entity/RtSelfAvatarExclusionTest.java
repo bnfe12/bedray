@@ -45,9 +45,9 @@ public class RtSelfAvatarExclusionTest {
 
     @Test
     public void rangeIsPublishedInTheStatsSlotAndReadByTheTraversal() {
-        assertEquals(RtStatsLayout.RESERVOIR_AUX_ADDR + 12, RtStatsLayout.SELF_AVATAR_TRI_START,
-            "the trailing uints follow the reservoir stats block directly");
-        assertEquals(RtStatsLayout.RESERVOIR_AUX_ADDR + 16, RtStatsLayout.SELF_AVATAR_TRI_COUNT, "two separate uints, no uvec2 padding");
+        assertEquals(RtStatsLayout.SKY_DISPLAY_COLOR_B_DAY + 12, RtStatsLayout.SELF_AVATAR_TRI_START,
+            "the trailing uints retain their offsets after the private sky colour/day packet");
+        assertEquals(RtStatsLayout.SKY_DISPLAY_COLOR_B_DAY + 16, RtStatsLayout.SELF_AVATAR_TRI_COUNT, "two separate uints, no uvec2 padding");
         assertTrue(RtStatsLayout.SIZE <= RtStatsLayout.SLOT_STRIDE, "the slot ring must still fit the struct");
         String renderer = readJava("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
         assertTrue(renderer.contains("memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_START, entOk ? capture.selfAvatarTriStart() : 0)"),
