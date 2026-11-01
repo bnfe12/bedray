@@ -146,9 +146,9 @@ class RtSlangWaterMediumTest {
             "the segment absorbs what the path continues with");
         assertTrue(tracer.contains("result.radiance += throughput * waterInScatter(medium, midpoint.y, waterDown, segment);"),
             "and scatters the light it received while the throughput was higher");
-        assertTrue(tracer.contains("mediumStart = -options.rayBias;"),
-            "a cutout advance moves the origin, so the candidate sits rayBias behind it");
-        assertTrue(tracer.contains("waterDown = environment.radiance(float3(0.0, 1.0, 0.0));"),
+        assertTrue(tracer.contains("mediumStart = -holeStep;"),
+            "a cutout advance moves the origin, so the candidate sits one hole step behind it");
+        assertTrue(tracer.contains("waterDown = environment.skyRadiance(float3(0.0, 1.0, 0.0));"),
             "the downwelling light is the sky the body sees from above");
         assertTrue(tracer.contains("float tail = clamp(ray.tMax - mediumStart, 0.0, 48.0);"),
             "a ray inside the body that escapes is still absorbed, bounded like the legacy tail");
@@ -181,7 +181,7 @@ class RtSlangWaterMediumTest {
         assertTrue(seed.contains("medium = waterMediumFrom(float3(1.0), primaryRay.origin.y);"),
             "the host has already named the medium, so a walk that missed still absorbs, at the shallowest depth "
                 + "that cannot invent column the body does not have");
-        assertTrue(seed.contains("waterDown = environment.radiance(float3(0.0, 1.0, 0.0));"),
+        assertTrue(seed.contains("waterDown = environment.skyRadiance(float3(0.0, 1.0, 0.0));"),
             "in-scatter needs the downwelling light before the first segment, so it cannot wait for an entry");
         assertTrue(seed.contains("result.flags |= PATH_TRACE_FLAG_WATER_MEDIUM;"),
             "an underwater frame is tellable from the flags the host already reads");

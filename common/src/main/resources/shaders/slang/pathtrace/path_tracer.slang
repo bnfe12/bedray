@@ -48,6 +48,19 @@ static const uint PATH_TRACE_FLAG_RUSSIAN_ROULETTE = 1u << 1u;
 static const uint PATH_TRACE_FLAG_DEPTH_LIMIT      = 1u << 2u;
 static const uint PATH_TRACE_FLAG_INVALID_SAMPLE   = 1u << 3u;
 static const uint PATH_TRACE_FLAG_SURFACE_LIMIT    = 1u << 4u;
+
+// How far a ray steps past a cutout hole before it looks again. The scattering bias (rayBias, 0.01 of a block) is far too
+// long for this: flat overlays sit a few thousandths of a block above the face they cover (glow lichen 0.1/16, leaf
+// litter, vines), so stepping 0.01 past a hole in one jumped over that face too. The ray then ran inside solid stone,
+// where no faces exist between blocks, and left the loaded world as sky: blue holes in cave walls, grey ones on a forest
+// floor at night (owner screenshots 2026-11-01). The step only has to clear the hole's own triangle, so it is a float
+// precision margin: 1e-4 plus a share of the distance, 1.1e-3 at 512 blocks.
+static const float PATH_TRACE_HOLE_STEP_MIN = 1.0e-4;
+static const float PATH_TRACE_HOLE_STEP_PER_BLOCK = 2.0e-6;
+
+float pathTraceHoleStep(float distance) {
+    return PATH_TRACE_HOLE_STEP_MIN + abs(distance) * PATH_TRACE_HOLE_STEP_PER_BLOCK;
+}
 static const uint PATH_TRACE_FLAG_FILTERED_SHADOW  = 1u << 5u;
 // The primary ray hit an accepted surface, so firstHitDistance is a real depth rather than the far plane.  A depth
 // buffer cannot infer this from surfaceHits: a path that only crosses cutout holes never accepted a surface.
@@ -507,7 +520,7 @@ WaterMedium primaryWaterMedium<T : ISceneTracer>(T traversal, MaterialAtlas atla
         if (!face.hit || !isFinite(face.t) || !(face.t > 0.0)) {
             break;
         }
-        float advance = face.t + rayBias;
+        float advance = face.t + pathTraceHoleStep(face.t);
         origin = origin + up * advance;
         remaining -= advance;
         SurfaceSample body = decodeSurface(atlas, blockMaterials, face, materialOptions, up, false);
@@ -569,7 +582,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
 
     // The water body the current ray runs in and the ray coordinate where its
     // current segment began.  A hole advance moves the origin, so the same
-    // physical point sits at -rayBias on the new ray; tracking the coordinate
+    // physical point sits at -holeStep on the new ray; tracking the coordinate
     // rather than an accumulated length keeps the next segment exact.
     WaterMedium medium = noWaterMedium();
     float mediumStart = 0.0;
@@ -590,7 +603,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (!medium.inside) {
             medium = waterMediumFrom(float3(1.0), primaryRay.origin.y);
         }
-        waterDown = environment.radiance(float3(0.0, 1.0, 0.0));
+        waterDown = environment.skyRadiance(float3(0.0, 1.0, 0.0));
         waterDownReady = true;
         result.flags |= PATH_TRACE_FLAG_WATER_MEDIUM;
     }
@@ -683,7 +696,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (surfaceIsHole(surface, options.alphaCutoff)) {
             // A cutout hole is not a surface: continue the same ray just past
             // the candidate without spending a scattering event.
-            float advance = hit.t + options.rayBias;
+            float holeStep = pathTraceHoleStep(hit.t);
+            float advance = hit.t + holeStep;
             if (!isFinite(advance) || advance <= 0.0 ||
                 (!firstSurfaceAccepted && !isFinite(primaryAdvance + advance))) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
@@ -698,9 +712,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             ray.origin = advancedOrigin;
             ray.tMax = max(ray.tMax - advance, 0.0);
             ray.tMin = 0.0;
-            // The candidate now sits rayBias behind the new origin, so the
+            // The candidate now sits holeStep behind the new origin, so the
             // medium segment must continue from there, not from zero.
-            mediumStart = -options.rayBias;
+            mediumStart = -holeStep;
             continue;
         }
 
@@ -941,7 +955,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             float faceY = surface.hit.geometricNormal.y;
             if (waterEntersMedium(medium.inside, faceY, bsdf.direction.y)) {
                 if (!waterDownReady) {
-                    waterDown = environment.radiance(float3(0.0, 1.0, 0.0));
+                    waterDown = environment.skyRadiance(float3(0.0, 1.0, 0.0));
                     waterDownReady = true;
                 }
                 medium = waterMediumFrom(waterBiomeTint(hit.tint, surface.hit.geometricNormal),
