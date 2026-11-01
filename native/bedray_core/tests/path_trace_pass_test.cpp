@@ -1851,13 +1851,17 @@ constexpr std::uint64_t kBadPtSpatialPush = 0x200B;
 constexpr std::uint32_t kPtOption = 1u << 17u, kPtHistoryBit = 1u << 18u, kPtParityBit = 1u << 19u;
 constexpr std::uint32_t kPtStaticBit = 1u << 20u;
 
-void test_native_pt_owner() {
-    reset_all();
+void install_native_pt_trace_programs() {
     auto bindings = trace_bindings(7, true);
     bindings.push_back({36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
     bindings.push_back({37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
     register_program(kTraceProgram, 112, bindings.data(), bindings.size());
     register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
+}
+
+void test_native_pt_owner() {
+    reset_all();
+    install_native_pt_trace_programs();
     constexpr ProgramBinding pt_spatial[] = {
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
@@ -1956,6 +1960,30 @@ void test_native_pt_owner() {
     CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
 }
 
+void test_native_pt_shutdown_does_not_require_an_off_frame() {
+    reset_all();
+    install_native_pt_trace_programs();
+    BedrayCore core{};
+    PathTracePass pass;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    auto frame = valid_frame(0xE101);
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
+    frame.path.flags |= kPtOption;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    const auto ring = resource_handle(fake::render_calls.front().resources, 36);
+    CHECK(fake::buffers.count(ring) == 1);
+    CHECK_STATUS(pass.destroy(), BEDRAY_ERROR_IN_USE);
+    CHECK(fake::buffers.count(ring) == 1);
+    CHECK_STATUS(pass.release_recording(frame.command_buffer), BEDRAY_OK);
+    CHECK(fake::buffers.count(ring) == 1); // Still owned as the active history, though no recording pins it.
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    CHECK(fake::buffers.empty());
+    CHECK(fake::memories.empty());
+    CHECK(fake::images.empty());
+    CHECK(fake::views.empty());
+    CHECK(fake::faults == 0);
+}
+
 int main() {
     test_configure_validation();
     test_render_validation();
@@ -1971,6 +1999,7 @@ int main() {
     test_restir_pt_binding_is_a_stand_in();
     test_path_stats_binding_is_a_stand_in();
     test_native_pt_owner();
+    test_native_pt_shutdown_does_not_require_an_off_frame();
     test_real_guide_outputs();
     test_real_nrd_motion_output();
     test_statistics_dispatch_follows_display();

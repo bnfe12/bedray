@@ -1811,7 +1811,7 @@ BedrayStatus PathTracePass::destroy() noexcept {
         if (lost_) {
             static_cast<void>(buffers_->release_after_device_loss());
         } else {
-            for (const gpu::BufferId id : {block_materials_id_, reservoir_dummy_id_, owned_reservoirs_id_,
+            for (const gpu::BufferId id : {block_materials_id_, reservoir_dummy_id_, owned_reservoirs_id_, owned_pt_id_,
                      entity_scalar_id_, entity_vector_id_, motion_dummy_id_, pt_dummy_id_}) {
                 if (id.serial != 0) {
                     static_cast<void>(buffers_->retire(id));
