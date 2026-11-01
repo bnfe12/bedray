@@ -152,13 +152,13 @@ class RtSlangNrdMotionTest {
         String renderer = read(RENDERER);
         assertTrue(renderer.contains("if (useDenoiser && denoiseMode.isNrd() && wantsEntityMotion()) {"),
             "only the NRD layout reads this buffer from the trace; RR keeps its velocity pass");
-        assertTrue(renderer.contains("motionHandle = entityMotionBuf.handle;"),
+        assertTrue(renderer.contains("motionHandle = frameMotion().handle;"),
             "the pass receives the handle of the buffer the pack reads by address");
         assertTrue(renderer.contains("lightmapView, motionHandle));"), "the handle rides with the frame's views");
-        assertTrue(renderer.contains("private static void ensureEntityMotionBuffer(int w, int h) {"),
+        assertTrue(read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameResources.java").contains("void ensureMotion(int w, int h) {"),
             "one allocation site for both the address and the binding");
         String preflight = block(renderer, "private static void prepareFrameResources(");
-        assertTrue(preflight.contains("ensureEntityMotionBuffer(w, h);"));
+        assertTrue(preflight.contains("frameResources.ensureMotion(w, h);"));
         String frame = block(renderer, "private static void frame(");
         int prepare = frame.indexOf("prepareFrameResources(device, target.width, target.height)");
         int allocateCommand = frame.indexOf("encoder.allocateAndBeginTransientCommandBuffer()");
@@ -166,7 +166,7 @@ class RtSlangNrdMotionTest {
             "motion allocation and any required drain happen before a new recording captures the previous generation");
         String record = block(renderer, "private static void recordPrimaryRays(");
         assertFalse(record.contains("ensureEntityMotionBuffer("), "an open command buffer may only borrow prepared storage");
-        int require = record.indexOf("requireEntityMotionBuffer(w, h);");
+        int require = record.indexOf("frameResources.requireMotion(w, h);");
         int bind = record.indexOf("pass.bind(new RtFrameBindings.Views(");
         assertTrue(require >= 0 && bind > require, "the prepared range is checked before its handle is bound");
         assertFalse(renderer.contains("the Slang path does not fill yet"),

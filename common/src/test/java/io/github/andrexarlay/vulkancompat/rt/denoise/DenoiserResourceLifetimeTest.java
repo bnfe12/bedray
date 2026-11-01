@@ -54,19 +54,22 @@ class DenoiserResourceLifetimeTest {
             < frame.indexOf("encoder.allocateAndBeginTransientCommandBuffer()"));
         String preflight = body(renderer, "private static void prepareFrameResources(");
         int drain = preflight.indexOf("drainHostSubmissions(device, \"frame_resources_drain\")");
-        assertTrue(drain >= 0 && drain < preflight.indexOf("replaceOutputImages(w, h)"));
-        assertTrue(drain < preflight.indexOf("dlssRrDenoiser.ensure(w, h, output)"));
-        assertTrue(drain < preflight.indexOf("denoiser.ensure(w, h, output.view)"));
-        assertTrue(drain < preflight.indexOf("ensureEntityMotionBuffer(w, h)"));
+        assertTrue(drain >= 0 && drain < preflight.indexOf("frameResources.ensureOutput(w, h)"));
+        assertTrue(drain < preflight.indexOf("dlssRrDenoiser.ensure(w, h, frameOutput())"));
+        assertTrue(drain < preflight.indexOf("denoiser.ensure(w, h, frameOutput().view)"));
+        assertTrue(drain < preflight.indexOf("frameResources.ensureMotion(w, h)"));
+        assertTrue(preflight.contains("wantsEntityMotion() && frameResources.needsMotion(w, h)"),
+            "first-time motion allocation also needs completion of prior frame readers");
         String record = body(renderer, "private static void recordPrimaryRays(");
         assertFalse(record.contains(".ensure(w, h, output"));
         assertFalse(record.contains("vkDeviceWaitIdle"));
-        assertFalse(record.contains("ensureEntityMotionBuffer("));
-        assertTrue(record.contains("requireEntityMotionBuffer(w, h)"));
-        String replace = body(renderer, "private static void replaceOutputImages(");
-        assertTrue(replace.indexOf("nextComposite = memory.createImage") < replace.indexOf("memory.destroy(output)"));
-        assertTrue(replace.indexOf("throw failure;") < replace.indexOf("memory.destroy(output)"),
-            "allocation failure must preserve the old complete triplet");
+        assertFalse(record.contains("frameResources.ensureMotion("));
+        assertTrue(record.contains("frameResources.requireMotion(w, h)"));
+        String resources = source("world/RtFrameResources.java");
+        String replace = body(resources, "void ensureOutput(");
+        assertTrue(replace.indexOf("next[2] = allocator.image") < replace.indexOf("destroyOutputs()"));
+        assertTrue(replace.indexOf("throw failure;") < replace.indexOf("output = next[0]"),
+            "allocation failure must not publish a partial replacement");
     }
 
     @Test void neitherDenoiserCanFreeGuidesWhileOnlyPreparationReferencesThem() throws Exception {
@@ -98,7 +101,7 @@ class DenoiserResourceLifetimeTest {
             assertTrue(preflight.contains(context), context);
         assertTrue(preflight.contains("failure);"));
         assertFalse(preflight.contains("LOGGER."), "the existing frame failure boundary logs the contextual cause once");
-        assertTrue(body(renderer, "private static void destroyFailedOutput(").contains("original.addSuppressed(cleanup)"));
+        assertTrue(body(source("world/RtFrameResources.java"), "void ensureOutput(").contains("failure.addSuppressed(cleanup)"));
         for (String file : new String[]{"NrdDenoiser.java", "DlssRrDenoiser.java"}) {
             String denoiser = source("denoise/" + file);
             String context = body(denoiser, "private String resourceContext(");

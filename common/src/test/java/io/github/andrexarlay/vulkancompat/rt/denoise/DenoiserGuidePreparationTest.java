@@ -13,7 +13,7 @@ class DenoiserGuidePreparationTest {
         String source = source("world/RtFrameRenderer.java");
         String preflight = body(source, "private static void prepareFrameResources(");
         int create = preflight.indexOf("createDenoiser(device, w, h)");
-        int ensure = preflight.indexOf("denoiser.ensure(w, h, output.view)", create);
+        int ensure = preflight.indexOf("denoiser.ensure(w, h, frameOutput().view)", create);
         assertTrue(create >= 0 && ensure > create, "creation and resizing must finish before recording");
         String renderer = body(source, "private static void recordPrimaryRays(");
         int owner = renderer.indexOf("NrdDenoiser owner = denoiser;");
