@@ -34,3 +34,28 @@ unchanged successful frames do not gain new recurring log messages.
 Verification results belong to `VERIFICATION_LOG.md` with the tested source
 revision. CPU tests and AOT/native builds do not establish GPU, visual,
 performance or owner acceptance.
+
+## Follow-up findings and modular owners
+
+The next bounded review and implementation pass also repaired:
+
+| Finding | Repair |
+|---|---|
+| Active native PT history was missing from shutdown retirement | Retire its exact owner without requiring an OFF frame; native regression covers pending and completed shutdown |
+| Java allocation/decoding failure after native scene acceptance could lose the accepted frame | Reserve a single command/frame token before the downcall and mark native acceptance/release before Java post-call work |
+| Temporal SDK teardown relied on elapsed frame heads or device-idle and ignored failed release | Captured-device host submit/fence, checked SDK release and preserved handles on failure, including FAILED cleanup |
+| A rejected temporal SDK recording could still be executed | Discard the whole unsubmitted recording before end/execute; keep unknown submissions pending |
+| First frame called a null-unsafe resource destroy; failed rollback could lose allocations | One frame-resource owner with null-safe call sites, fixed rollback slots and exact initialization/recording pins |
+| Atlas reload could free a BDA still referenced by queued work and miss same-pack reloads | Immutable atlas replacement in preflight, successful resource epoch and host completion before old retirement |
+| Slang never consumed the resource-pack sky atlas | Typed display modules and versioned bounded packet, preserving the former display equations and neutral lighting ownership |
+
+`RtFrameResources`, `SceneFrameRecordings`, `VelocityRecordingOwner`,
+`UpscalerContextRetirement`, `SkyTextureAtlasData` and `RtSkyTextures` separate
+ownership, proof, CPU encoding and orchestration. Four uncalled legacy
+upscaler/velocity stubs (338 lines) were removed. The large renderer still has
+orchestration responsibilities; this is a concrete reduction of coupled state,
+not a claim of universal architectural completion.
+
+The combined source `2bd6cea` passes 1,067 no-GPU tests and all 29 AOT builds.
+Native CI `41324759791` passes 27+1+1 tests. The exact runs and remaining game
+acceptance limits are in `VERIFICATION_LOG.md`.
