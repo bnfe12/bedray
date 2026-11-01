@@ -988,6 +988,13 @@ public final class RtFrameRenderer {
             params.skyColor[1] = sky.skyColor.y();
             params.skyColor[2] = sky.skyColor.z();
         }
+        // The sky as a light: the legacy hemisphere model (near-neutral, AMBIENT_SCALE at noon), not the display colour.
+        float sunY = params.key.isMoon ? -params.key.dir[1] : params.key.dir[1];
+        RtSky.SkyLight skyLight = new RtSky.SkyLight();
+        RtSky.skyLight(params.skyColor, params.key.day, sunY, -sunY, skyState.moonLight, skyState.rainBrightness,
+            params.key.color, hasSky, skyLight);
+        System.arraycopy(skyLight.zenith, 0, params.skyLightZenith, 0, 3);
+        System.arraycopy(skyLight.horizon, 0, params.skyLightHorizon, 0, 3);
         params.volumetricFogEnabled = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.volumetricFogEnabled();
         params.fogDensity = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.fogDensity();
         params.fogInScattering = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.fogInScattering();

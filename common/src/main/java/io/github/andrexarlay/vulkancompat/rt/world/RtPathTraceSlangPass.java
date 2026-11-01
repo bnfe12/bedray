@@ -301,8 +301,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
         final Vector4f zenithColor = new Vector4f();
         final Vector4f horizonColor = new Vector4f();
-        final Vector4f fogColor = new Vector4f();
-        final Vector4f fog = new Vector4f();
+        /** The sky as a light (AtmosphereState.skyLightZenith/Horizon); the two vectors above are the visible sky. */
+        final Vector4f skyLightZenith = new Vector4f();
+        final Vector4f skyLightHorizon = new Vector4f();
         final Vector4f cloud = new Vector4f();
 
         final Vector4f exposure = new Vector4f(1f, 0f, 0f, 0f); // x exposure, y bloom, z speed, w dt
@@ -354,8 +355,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
             putVector(out, base + ATMOSPHERE, zenithColor);
             putVector(out, base + ATMOSPHERE + 16, horizonColor);
-            putVector(out, base + ATMOSPHERE + 32, fogColor);
-            putVector(out, base + ATMOSPHERE + 48, fog);
+            putVector(out, base + ATMOSPHERE + 32, skyLightZenith);
+            putVector(out, base + ATMOSPHERE + 48, skyLightHorizon);
             putVector(out, base + ATMOSPHERE + 64, cloud);
 
             putVector(out, base + EXPOSURE, exposure);

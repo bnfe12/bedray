@@ -295,8 +295,9 @@ final class BedrayPathTraceNative implements AutoCloseable {
         long atmosphere = BedrayCoreLayouts.PTFD_ATMOSPHERE;
         putVector(desc, atmosphere + BedrayCoreLayouts.PTA_ZENITH_COLOR, frame.zenithColor);
         putVector(desc, atmosphere + BedrayCoreLayouts.PTA_HORIZON_COLOR, frame.horizonColor);
-        putVector(desc, atmosphere + BedrayCoreLayouts.PTA_FOG_COLOR, frame.fogColor);
-        putVector(desc, atmosphere + BedrayCoreLayouts.PTA_FOG, frame.fog);
+        // fog_color / fog of the C mirror carry the sky light (AtmosphereState.skyLightZenith / skyLightHorizon).
+        putVector(desc, atmosphere + BedrayCoreLayouts.PTA_FOG_COLOR, frame.skyLightZenith);
+        putVector(desc, atmosphere + BedrayCoreLayouts.PTA_FOG, frame.skyLightHorizon);
         putVector(desc, atmosphere + BedrayCoreLayouts.PTA_CLOUD, frame.cloud);
 
         fillPath(desc.asSlice(BedrayCoreLayouts.PTFD_PATH, BedrayCoreLayouts.PT_PATH.byteSize()), dispatch, entities);

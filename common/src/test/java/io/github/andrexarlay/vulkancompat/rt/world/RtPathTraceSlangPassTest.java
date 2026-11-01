@@ -30,7 +30,7 @@ class RtPathTraceSlangPassTest {
         frame.displayWidth = 2560;
         frame.displayHeight = 1440;
         frame.sunColor.set(9f, 10f, 11f, 12f);
-        frame.fog.set(13f, 14f, 15f, 16f);
+        frame.skyLightHorizon.set(13f, 14f, 15f, 16f);
         frame.exposure.set(17f, 18f, 19f, 20f);
         frame.autoExposure = 1;
         frame.frameIndex = 42;

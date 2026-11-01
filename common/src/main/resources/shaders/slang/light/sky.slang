@@ -41,8 +41,19 @@ struct GradientSky : IEnvironmentSampler {
         return lerp(horizon, zenith, t);
     }
 
+    // The sky as a light: the near-neutral hemisphere the host derives from the legacy model. The visible dome above is
+    // the display colour run back through the tone map (about 4x and saturated blue at noon); lighting surfaces with it
+    // washed the whole scene blue. An eye or a mirror sees the visible dome, every other bounce receives this one.
+    float3 lightRadiance(float3 direction) {
+        float3 d = safeNormalize(direction, float3(0.0, 1.0, 0.0));
+        float t = saturate(d.y * 0.5 + 0.5);
+        float3 zenith = atmosphere.skyLightZenith.rgb * max(atmosphere.skyLightZenith.w, 0.0);
+        float3 horizon = atmosphere.skyLightHorizon.rgb * max(atmosphere.skyLightHorizon.w, 0.0);
+        return lerp(horizon, zenith, t);
+    }
+
     float3 skyRadiance(float3 direction) {
-        return radiance(direction);
+        return lightRadiance(direction);
     }
 
     float pdf(float3 normal, float3 direction) {
@@ -64,7 +75,7 @@ struct GradientSky : IEnvironmentSampler {
 
         result.valid = true;
         result.direction = direction;
-        result.radiance = radiance(direction);
+        result.radiance = lightRadiance(direction);
         result.pdf = probability;
         return result;
     }

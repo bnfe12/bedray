@@ -38,8 +38,8 @@ struct SunState {
 struct AtmosphereState {
     float4 zenithColor;     // rgb: zenith radiance, w: intensity
     float4 horizonColor;    // rgb: horizon radiance, w: intensity
-    float4 fogColor;        // rgb: fog in-scattering, w: reserved
-    float4 fog;             // x: density, y: distance, z: height falloff, w: mode
+    float4 skyLightZenith;  // rgb: the sky as a light at the zenith (what a bounce receives), w: intensity
+    float4 skyLightHorizon; // rgb: the sky as a light at the horizon, w: intensity
     float4 cloud;           // x: coverage, y: speed, z: base height, w: reserved
 };
 

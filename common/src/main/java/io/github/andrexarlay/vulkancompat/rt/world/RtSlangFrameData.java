@@ -60,8 +60,8 @@ final class RtSlangFrameData {
         float[] horizon = RtTonemap.invert(sky[0] * 0.7f + 0.3f, sky[1] * 0.7f + 0.3f, sky[2] * 0.7f + 0.3f);
         frame.zenithColor.set(zenith[0], zenith[1], zenith[2], 1f);
         frame.horizonColor.set(horizon[0], horizon[1], horizon[2], 1f);
-        frame.fogColor.set(frame.horizonColor);
-        frame.fog.set(0f, 0f, 0f, 0f);
+        frame.skyLightZenith.set(p.skyLightZenith[0], p.skyLightZenith[1], p.skyLightZenith[2], 1f);
+        frame.skyLightHorizon.set(p.skyLightHorizon[0], p.skyLightHorizon[1], p.skyLightHorizon[2], 1f);
         frame.cloud.set(0f, 0f, 0f, 0f);
 
         // The frame's exposure, in the one lane both backends read: the Java display push takes it from here, and

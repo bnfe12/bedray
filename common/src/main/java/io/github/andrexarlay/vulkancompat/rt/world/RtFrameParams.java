@@ -158,6 +158,13 @@ public final class RtFrameParams {
     public long statsOffset;
     public final RtSky.Key key = new RtSky.Key();
     public final float[] skyColor = {0.47f, 0.65f, 1.0f};
+    /**
+     * CPU only: the sky as a light source, zenith and horizon radiance of the dome a bounce or a sky sample receives
+     * ({@link RtSky#skyLight}, the legacy hemisphere model). The visible sky ({@link #skyColor}) is far brighter and
+     * bluer; lighting the scene with it washed every surface blue.
+     */
+    public final float[] skyLightZenith = new float[3];
+    public final float[] skyLightHorizon = new float[3];
 
     public int modeBits() {
         return (mode & 0xFF) | ((aoSamples & 0xFF) << 8) | (flipY ? 1 << 16 : 0) | (tonemap ? 1 << 17 : 0)
