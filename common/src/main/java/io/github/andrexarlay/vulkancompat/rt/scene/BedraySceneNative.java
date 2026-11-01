@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -412,13 +413,16 @@ public final class BedraySceneNative implements AutoCloseable {
     }
 
     /** Abandons a proven non-resubmittable frame and poisons scene reuse until recreation. */
-    public void discardFrame(long scene, long frameIndex) {
+    public void discardFrame(long scene, SceneFrameRecordings.Frame recording) {
         ensureOpen();
         requireHandle(scene, "scene");
+        requireRecording(scene, recording);
+        long frameIndex = recording.index();
         requireHandle(frameIndex, "frameIndex");
         try (Arena a = Arena.ofConfined()) {
             MemorySegment error = a.allocate(BedraySceneLayouts.ERROR);
             int status = (int) discardFrameHandle.invokeExact(handle(scene), frameIndex, error);
+            if (status == BedraySceneLayouts.STATUS_OK) recording.markReleased();
             check("discard_frame", status, error);
         } catch (Throwable t) { throw rethrow("discard_frame", t); }
     }
@@ -438,9 +442,13 @@ public final class BedraySceneNative implements AutoCloseable {
     }
 
     /** Records uploads/AS builds into the host buffer and publishes borrowed resources. */
-    public FrameInfo prepareFrame(long scene, long frameIndex, long commandBuffer) {
+    public FrameInfo prepareFrame(long scene, SceneFrameRecordings.Frame recording) {
         ensureOpen();
         requireHandle(scene, "scene");
+        requireRecording(scene, recording);
+        if (recording.prepared()) throw new IllegalStateException("scene recording was already prepared");
+        long frameIndex = recording.index();
+        long commandBuffer = recording.command();
         requireHandle(frameIndex, "frameIndex");
         requireHandle(commandBuffer, "commandBuffer");
         try (Arena a = Arena.ofConfined()) {
@@ -452,6 +460,7 @@ public final class BedraySceneNative implements AutoCloseable {
             MemorySegment info = a.allocate(BedraySceneLayouts.FRAME_INFO);
             MemorySegment error = a.allocate(BedraySceneLayouts.ERROR);
             int status = (int) prepareFrameHandle.invokeExact(handle(scene), desc, info, error);
+            if (status == BedraySceneLayouts.STATUS_OK) recording.markPrepared();
             check("prepare_frame", status, error);
             return new FrameInfo(
                 info.get(JAVA_INT, BedraySceneLayouts.FI_ABI_VERSION),
@@ -474,13 +483,16 @@ public final class BedraySceneNative implements AutoCloseable {
      * the recording was discarded). Until then the frame's transient upload
      * buffers, scratch memory and BLAS pins stay alive.
      */
-    public void releaseFrame(long scene, long frameIndex) {
+    public void releaseFrame(long scene, SceneFrameRecordings.Frame recording) {
         ensureOpen();
         requireHandle(scene, "scene");
+        requireRecording(scene, recording);
+        long frameIndex = recording.index();
         requireHandle(frameIndex, "frameIndex");
         try (Arena a = Arena.ofConfined()) {
             MemorySegment error = a.allocate(BedraySceneLayouts.ERROR);
             int status = (int) releaseFrameHandle.invokeExact(handle(scene), frameIndex, error);
+            if (status == BedraySceneLayouts.STATUS_OK) recording.markReleased();
             check("release_frame", status, error);
         } catch (Throwable t) {
             throw rethrow("release_frame", t);
@@ -592,6 +604,12 @@ public final class BedraySceneNative implements AutoCloseable {
 
     private static MemorySegment handle(long address) {
         return MemorySegment.ofAddress(address);
+    }
+
+    private static void requireRecording(long scene, SceneFrameRecordings.Frame recording) {
+        Objects.requireNonNull(recording, "scene recording must be reserved before the native call");
+        if (recording.scene() != scene || recording.released())
+            throw new IllegalArgumentException("scene recording belongs to another scene or was already released");
     }
 
     private static void requireHandle(long value, String name) {
