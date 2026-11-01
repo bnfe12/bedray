@@ -57,6 +57,8 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle renderPathTraceMotionHandle;
     private final MethodHandle destroyPathTraceHandle;
     private final MethodHandle pathTraceFeatureMaskHandle;
+    private final MethodHandle configurePathTracePtHandle;
+    private final MethodHandle renderPathTraceExtHandle;
 
     /** Values reported by {@code bedray_core_abi_info}. */
     public record AbiInfo(int abiVersion, int sizeofCoreDesc, int sizeofCapabilities, int sizeofProgramDesc,
@@ -130,6 +132,10 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS));
             pathTraceFeatureMaskHandle = bindOptional(linker, lookup, "bedray_core_path_trace_feature_mask",
                 FunctionDescriptor.of(JAVA_INT));
+            configurePathTracePtHandle = bindOptional(linker, lookup, "bedray_core_configure_path_trace_pt",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS));
+            renderPathTraceExtHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_ext",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
         } catch (RuntimeException | Error e) {
             arena.close();
             throw e;
@@ -683,6 +689,47 @@ public final class BedrayCoreNative implements AutoCloseable {
      */
     public boolean hasFrameStats() {
         return recordPathTraceStatsHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_FRAME_STATS);
+    }
+
+    /** True when the core owns a ReSTIR PT ring ({@code NATIVE_PT}) and exports the call that lends its spatial stage. */
+    public boolean hasNativePt() {
+        return configurePathTracePtHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_PT);
+    }
+
+    /** True when the trace can add its F3 reject split into the host's StatsBuf slot ({@code render_path_trace_ext}). */
+    public boolean hasStatsSlot() {
+        return renderPathTraceExtHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_STATS_SLOT);
+    }
+
+    /** Lends the ReSTIR PT spatial stage per section table; 0 leaves that table without it. */
+    public void configurePathTracePt(long core, long programPtSpatial, long programPtSpatialScene) {
+        ensureOpen(); requireHandle(core, "core");
+        if (!hasNativePt()) throw new BedrayCoreException("configure_path_trace_pt", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+            "the loaded bedray_core owns no ReSTIR PT ring", null);
+        try (Arena arena = Arena.ofConfined()) {
+            var error = arena.allocate(BedrayCoreLayouts.ERROR);
+            check("configure_path_trace_pt", (int) configurePathTracePtHandle.invokeExact(handle(core),
+                programPtSpatial, programPtSpatialScene, error), error);
+        } catch (Throwable failure) { throw rethrow("configure_path_trace_pt", failure); }
+    }
+
+    /**
+     * One render call for every output combination: {@code guides} and {@code motion} as for the guide/motion calls,
+     * {@code statsSlot} a {@link BedrayCoreLayouts#PT_BUFFER} over the frame's whole StatsBuf slot. Null skips one.
+     */
+    public void renderPathTraceExt(long core, MemorySegment frame, MemorySegment guides, MemorySegment motion,
+                                   MemorySegment statsSlot) {
+        ensureOpen(); requireHandle(core, "core"); requirePathTrace();
+        if (!hasStatsSlot()) throw new BedrayCoreException("render_path_trace_ext", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+            "the loaded bedray_core has no render_path_trace_ext", null);
+        if (frame == null || !frame.isNative() || frame.byteSize() < BedrayCoreLayouts.PT_FRAME_DESC.byteSize())
+            throw new IllegalArgumentException("a native BedrayPathTraceFrameDesc is required");
+        try (Arena arena = Arena.ofConfined()) {
+            var error = arena.allocate(BedrayCoreLayouts.ERROR);
+            check("render_path_trace_ext", (int) renderPathTraceExtHandle.invokeExact(handle(core), frame,
+                guides == null ? MemorySegment.NULL : guides, motion == null ? MemorySegment.NULL : motion,
+                statsSlot == null ? MemorySegment.NULL : statsSlot, error), error);
+        } catch (Throwable failure) { throw rethrow("render_path_trace_ext", failure); }
     }
 
     public void renderPathTraceMotion(long core, MemorySegment frame, MemorySegment guides, MemorySegment motion) {

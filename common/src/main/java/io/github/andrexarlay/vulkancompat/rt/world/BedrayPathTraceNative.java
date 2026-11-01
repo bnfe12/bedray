@@ -64,11 +64,23 @@ final class BedrayPathTraceNative implements AutoCloseable {
      */
     private final boolean frameStats;
     private final BedrayRadianceCascadesNative rc;
+    /** {@code restir_pt_spatial(_scene)}, lent to a core that owns the PT ring; 0 leaves that table without the stage. */
+    private final long programPtSpatial;
+    private final long programPtSpatialScene;
     private boolean configured;
     private boolean closed;
 
     BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programTraceScene, long programSpatial,
                           long programDisplay, long programStats, long sampler, long rcBuilder) {
+        this(runtime, programTrace, programTraceScene, programSpatial, programDisplay, programStats, sampler, rcBuilder,
+            0L, 0L);
+    }
+
+    BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programTraceScene, long programSpatial,
+                          long programDisplay, long programStats, long sampler, long rcBuilder,
+                          long programPtSpatial, long programPtSpatialScene) {
+        this.programPtSpatial = programPtSpatial;
+        this.programPtSpatialScene = programPtSpatialScene;
         if (runtime == null || programTrace == 0L || programDisplay == 0L) {
             throw new IllegalArgumentException("native path trace needs a runtime, a trace and a display program");
         }
@@ -91,16 +103,29 @@ final class BedrayPathTraceNative implements AutoCloseable {
     /**
      * Configures the pass on first use. The budgets mirror the Java path's
      * owners: an eighth of device memory for images (capped at 1 GiB) and a
-     * quarter for the constant-buffer pool.
+     * quarter for the buffers, which hold both reservoir rings (1.36 GiB at
+     * 2560x1370 with ReSTIR PT, so no 1 GiB cap here).
      */
     private void configure(RtPathTraceSlangPass.Frame frame) {
         long deviceBytes = runtime.capabilities().deviceMemoryBytes();
         long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 512L << 20;
-        long bufferBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 4) : 512L << 20;
+        long bufferBudget = ReferencePathTraceBackend.bufferBudget(deviceBytes);
         library.configurePathTrace(core, programTrace, programTraceScene, programSpatial, programDisplay,
             programStats, imageBudget, bufferBudget, frame.width, frame.height);
         configured = true;
+        if (nativePt() && (programPtSpatial != 0L || programPtSpatialScene != 0L))
+            library.configurePathTracePt(core, programPtSpatial, programPtSpatialScene);
         if (rc != null) rc.configure();
+    }
+
+    /** True when the core owns the ReSTIR PT ring, so the host sends NATIVE_PT and leaves history and parity to it. */
+    boolean nativePt() {
+        return library.hasNativePt();
+    }
+
+    /** True when the core lends a spatial stage for the table this frame traces. */
+    boolean ptSpatialFor(boolean nativeScene) {
+        return nativePt() && (nativeScene ? programPtSpatialScene : programPtSpatial) != 0L;
     }
 
     void render(FrameInput input) {
@@ -142,7 +167,24 @@ final class BedrayPathTraceNative implements AutoCloseable {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment desc = arena.allocate(BedrayCoreLayouts.PT_FRAME_DESC);
             fill(desc, input);
-            if (wantsGuides) {
+            if (library.hasStatsSlot()) {
+                // One call: the trace also adds its F3 reject split into the frame's whole StatsBuf slot at 37.
+                MemorySegment targets = null, motion = null, slot = null;
+                if (wantsGuides) {
+                    targets = arena.allocate(BedrayCoreLayouts.PT_GUIDES_DESC);
+                    fillGuides(targets, guides);
+                }
+                if (wantsMotion) {
+                    motion = arena.allocate(BedrayCoreLayouts.PT_BUFFER);
+                    fillMotion(motion, input.views().motion(), frame.width, frame.height);
+                }
+                RtPathTraceSlangPass.BufferView stats = input.stats();
+                if (stats != null && stats.buffer() != 0L && stats.bytes() >= RtStatsLayout.SLOT_STRIDE) {
+                    slot = arena.allocate(BedrayCoreLayouts.PT_BUFFER);
+                    fillStatsSlot(slot, stats);
+                }
+                library.renderPathTraceExt(core, desc, targets, motion, slot);
+            } else if (wantsGuides) {
                 MemorySegment targets = arena.allocate(BedrayCoreLayouts.PT_GUIDES_DESC);
                 fillGuides(targets, guides);
                 if (wantsMotion) {
@@ -297,6 +339,16 @@ final class BedrayPathTraceNative implements AutoCloseable {
         packet.putLong(40, guides.albedo());
         packet.putLong(48, guides.direct());
         packet.putLong(56, guides.specAlbedo());
+    }
+
+    /** The frame's whole StatsBuf slot as a {@code BedrayPathTraceBuffer}: the trace's reject split needs all 576 bytes. */
+    static void fillStatsSlot(MemorySegment out, RtPathTraceSlangPass.BufferView stats) {
+        if (out.byteSize() != BedrayCoreLayouts.PT_BUFFER.byteSize() || stats == null || stats.buffer() == 0L
+            || stats.bytes() < RtStatsLayout.SLOT_STRIDE)
+            throw new IllegalArgumentException("the stats slot is a whole " + RtStatsLayout.SLOT_STRIDE + "-byte range");
+        var packet = out.asByteBuffer().order(ByteOrder.nativeOrder());
+        packet.putLong(0, stats.buffer()).putLong(8, stats.offset()).putLong(16, RtStatsLayout.SLOT_STRIDE)
+            .putInt(24, 0).putInt(28, 0);
     }
 
     static void fillMotion(MemorySegment out, long buffer, int width, int height) {

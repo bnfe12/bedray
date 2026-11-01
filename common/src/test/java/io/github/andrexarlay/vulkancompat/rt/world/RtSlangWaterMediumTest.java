@@ -455,7 +455,7 @@ class RtSlangWaterMediumTest {
         assertTrue(corePass.contains("? kFrameFlagWaterRealistic : 0u)")
                 && corePass.contains("? kFrameFlagWaterCaustics : 0u)"),
             "each host bit becomes its shader bit in the frame word the path tracer reads");
-        assertTrue(corePass.contains("| BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC | BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS;"),
+        assertTrue(corePass.contains("| BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC | BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS\n"),
             "an unlisted flag is rejected by the record validation, so both have to be admitted");
     }
 

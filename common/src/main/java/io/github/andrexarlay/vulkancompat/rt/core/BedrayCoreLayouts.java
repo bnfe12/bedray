@@ -83,6 +83,11 @@ public final class BedrayCoreLayouts {
      */
     public static final int PATH_TRACE_FRAME_WATER_REALISTIC = 1 << 9;
     public static final int PATH_TRACE_FRAME_WATER_CAUSTICS = 1 << 10;
+    /** The core owns the ReSTIR PT ring, its clear, history and parity ({@code BEDRAY_PATH_TRACE_FRAME_NATIVE_PT}). */
+    public static final int PATH_TRACE_FRAME_NATIVE_PT = 1 << 11;
+    public static final int PATH_TRACE_FRAME_RESET_PT = 1 << 12;
+    /** Also run the lent ReSTIR PT spatial stage this frame. */
+    public static final int PATH_TRACE_FRAME_PT_SPATIAL = 1 << 13;
     public static final int PATH_TRACE_FEATURE_NATIVE_DI = 1 << 0;
     public static final int PATH_TRACE_FEATURE_GUIDE_BINDINGS = 1 << 1;
     public static final int PATH_TRACE_FEATURE_GUIDE_OUTPUTS = 1 << 2;
@@ -94,6 +99,8 @@ public final class BedrayCoreLayouts {
     public static final int PATH_TRACE_FEATURE_WATER_MODEL = 1 << 5;
     /** The core records the frame-stats pass, so a native frame can drive auto exposure and the F3 counters. */
     public static final int PATH_TRACE_FEATURE_FRAME_STATS = 1 << 6;
+    public static final int PATH_TRACE_FEATURE_NATIVE_PT = 1 << 7;
+    public static final int PATH_TRACE_FEATURE_STATS_SLOT = 1 << 8;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;

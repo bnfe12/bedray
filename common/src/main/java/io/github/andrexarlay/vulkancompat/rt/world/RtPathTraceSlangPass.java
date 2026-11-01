@@ -605,7 +605,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     }
 
     /** An optional program: absent from the jar or refused by its manifest check, the stage stays off and says why. */
-    private static SlangProgram optionalPtSpatial(SlangRuntime runtime, String name) {
+    static SlangProgram optionalPtSpatial(SlangRuntime runtime, String name) {
         if (!SlangPassLibrary.available(name)) {
             LOGGER.info("[VKB-RT] ReSTIR PT spatial stage off for {}: the jar has no artifact", name);
             return null;

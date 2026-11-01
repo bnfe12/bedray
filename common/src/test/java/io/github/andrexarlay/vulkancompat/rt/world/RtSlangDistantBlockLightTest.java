@@ -213,7 +213,7 @@ class RtSlangDistantBlockLightTest {
         assertTrue(renderer.contains("RtSettings.emissiveDistance() + 8f"),
             "and over emissiveDistance() + 8 blocks in ray mode");
         String nativeCore = read(NATIVE_CORE);
-        assertTrue(nativeCore.contains("trace_push.flags = desc.path.flags & ~kPathOptionRestirPtMask;")
+        assertTrue(nativeCore.contains("trace_push.flags = (desc.path.flags & ~kPathOptionRestirPtMask) | pt_flags;")
                 && nativeCore.contains("constexpr std::uint32_t kPathOptionRestirPtMask = 0x1Fu << 17u;"),
             "the native core forwards the host's option word bit for bit except the ReSTIR PT ring state (17..21), so"
                 + " bit 16 needs no native change");
