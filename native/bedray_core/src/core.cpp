@@ -350,7 +350,8 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_abi_version(void) try {
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
     return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS | BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS | BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION
         | BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER | BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL
-        | BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS;
+        | BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS | BEDRAY_PATH_TRACE_FEATURE_NATIVE_PT
+        | BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT;
 } catch (...) {
     return 0;
 }
@@ -1350,8 +1351,9 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
     auto frame_graph = std::make_unique<bedray::core::FrameGraphOwner>();
     const auto record = [](void* pointer, const BedrayPathTraceFrameDesc& frame,
-        const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion, BedrayError* err) {
-        return static_cast<BedrayCore*>(pointer)->path_trace->render(frame, err, guides, motion);
+        const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion, const BedrayPathTraceBuffer* stats,
+        BedrayError* err) {
+        return static_cast<BedrayCore*>(pointer)->path_trace->render(frame, err, guides, motion, stats);
     };
     const auto release = [](void* pointer, std::uint64_t command) {
         return bedray_core_release_recording(static_cast<BedrayCore*>(pointer), command);
@@ -1370,7 +1372,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace(
 }
 
 static BedrayStatus record_path_trace(BedrayCore* core, const BedrayPathTraceFrameDesc* desc,
-    const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion, BedrayError* error) {
+    const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion, BedrayError* error,
+    const BedrayPathTraceBuffer* stats_slot = nullptr) {
     clear_error(error);
     if (core == nullptr || desc == nullptr) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/desc is null");
@@ -1385,10 +1388,36 @@ static BedrayStatus record_path_trace(BedrayCore* core, const BedrayPathTraceFra
     if (guides && (guides->abi_version != BEDRAY_CORE_ABI_VERSION || guides->struct_size != sizeof(*guides)))
         return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "path-trace guide ABI/size mismatch");
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
-    return core->frame_graph->record(*desc, error, guides, motion);
+    return core->frame_graph->record(*desc, error, guides, motion, stats_slot);
 #else
-    return core->path_trace->render(*desc, error, guides, motion);
+    return core->path_trace->render(*desc, error, guides, motion, stats_slot);
 #endif
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_ext(
+    BedrayCore* core, const BedrayPathTraceFrameDesc* desc, const BedrayPathTraceGuides* guides,
+    const BedrayPathTraceBuffer* motion, const BedrayPathTraceBuffer* stats_slot, BedrayError* error) try {
+    clear_error(error);
+    if (motion && !guides) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "motion output needs the guide outputs");
+    return record_path_trace(core, desc, guides, motion, error, stats_slot);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording path trace");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(
+    BedrayCore* core, uint64_t program_pt_spatial, uint64_t program_pt_spatial_scene, BedrayError* error) try {
+    clear_error(error);
+    if (core == nullptr || !core->path_trace)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "ReSTIR PT needs a configured path-trace pass");
+#if defined(BEDRAY_CORE_FRAME_GRAPH)
+    if (core->frame_graph && core->frame_graph->has_recordings())
+        return fail(error, BEDRAY_ERROR_IN_USE, "native graph recordings must be released before reconfiguration");
+#endif
+    return core->path_trace->configure_pt(program_pt_spatial, program_pt_spatial_scene, error);
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring ReSTIR PT");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_radiance_cascades(

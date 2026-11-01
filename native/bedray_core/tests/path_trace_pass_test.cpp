@@ -1843,6 +1843,119 @@ void test_rc_device_loss_after_build_retains_fields_until_all_recordings_are_pro
 
 } // namespace
 
+// NATIVE_PT: the core owns the ReSTIR PT ring the way NATIVE_DI owns the DI ring. It allocates two 144-byte records per
+// pixel, clears them once, derives PT_HISTORY and PT_PARITY itself, runs the lent spatial stage between the trace and
+// the display, and drops the ring on a frame without PT. render_path_trace_ext lends the host's StatsBuf slot at 37.
+constexpr std::uint64_t kPtSpatialProgram = 0x1008;
+constexpr std::uint64_t kBadPtSpatialPush = 0x200B;
+constexpr std::uint32_t kPtOption = 1u << 17u, kPtHistoryBit = 1u << 18u, kPtParityBit = 1u << 19u;
+constexpr std::uint32_t kPtStaticBit = 1u << 20u;
+
+void test_native_pt_owner() {
+    reset_all();
+    auto bindings = trace_bindings(7, true);
+    bindings.push_back({36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
+    bindings.push_back({37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
+    register_program(kTraceProgram, 112, bindings.data(), bindings.size());
+    register_program(kTraceSceneProgram, 112, bindings.data(), bindings.size());
+    constexpr ProgramBinding pt_spatial[] = {
+        {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+        {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {16, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+        {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {21, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {22, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+        {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}};
+    register_program(kPtSpatialProgram, 112, pt_spatial, std::size(pt_spatial));
+    register_program(kBadPtSpatialPush, 64, pt_spatial, std::size(pt_spatial));
+    BedrayCore core{};
+    PathTracePass pass;
+    CHECK_STATUS(pass.configure(&core, make_device_fns(), make_config(), &g_error), BEDRAY_OK);
+    CHECK_STATUS(pass.configure_pt(kBadPtSpatialPush, 0, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    CHECK_STATUS(pass.configure_pt(kPtSpatialProgram, 0, &g_error), BEDRAY_OK);
+    CHECK(pass.uses_program(kPtSpatialProgram));
+
+    auto frame = valid_frame(0xE001);
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT | BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL;
+    frame.path.flags |= kPtOption | kPtStaticBit;
+    auto invalid = frame;
+    invalid.path.flags |= kPtHistoryBit;                       // the core owns history
+    CHECK_STATUS(pass.render(invalid, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    invalid = frame;
+    invalid.flags = BEDRAY_PATH_TRACE_FRAME_RESET_PT;           // a reset of a ring the core does not own
+    CHECK_STATUS(pass.render(invalid, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
+    invalid = frame;
+    invalid.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;      // no spatial stage lent for the scene table
+    CHECK_STATUS(pass.render(invalid, &g_error), BEDRAY_ERROR_UNSUPPORTED);
+    CHECK(fake::render_calls.empty() && fake::fills == 0);
+
+    const std::uint64_t ring_bytes = 64ull * 64ull * 2ull * 144ull;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::fills == 1);
+    CHECK(fake::render_calls.size() == 3);
+    const auto& first = fake::render_calls[0];
+    const auto ring = resource_handle(first.resources, 36);
+    CHECK(resource_range(first.resources, 36) == ring_bytes);
+    CHECK((push_u32(first.push, 16) & (kPtOption | kPtStaticBit)) == (kPtOption | kPtStaticBit));
+    CHECK((push_u32(first.push, 16) & (kPtHistoryBit | kPtParityBit)) == 0);
+    const auto& spatial = fake::render_calls[1];
+    CHECK(spatial.program == kPtSpatialProgram);
+    CHECK(spatial.resources.size() == 14);
+    CHECK(resource_handle(spatial.resources, 36) == ring && resource_range(spatial.resources, 36) == ring_bytes);
+    CHECK(resource_handle(spatial.resources, 0) == frame.scene.tlas);
+    CHECK(spatial.push == first.push);
+    CHECK(fake::render_calls[2].program == kDisplayProgram);
+
+    // Trace and spatial stage both moved the parity: the next frame writes the trace's half again, with history.
+    frame.command_buffer = 0xE002;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::fills == 1);
+    CHECK(resource_handle(fake::render_calls[3].resources, 36) == ring);
+    CHECK((push_u32(fake::render_calls[3].push, 16) & kPtHistoryBit) != 0);
+    CHECK((push_u32(fake::render_calls[3].push, 16) & kPtParityBit) == 0);
+    // Without the spatial stage only the trace moves it.
+    frame.command_buffer = 0xE003;
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::render_calls.size() == 8);
+    CHECK((push_u32(fake::render_calls[6].push, 16) & kPtParityBit) == 0);
+    frame.command_buffer = 0xE004;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK((push_u32(fake::render_calls[8].push, 16) & kPtParityBit) != 0);
+    // A reset clears the ring again and withholds history.
+    frame.command_buffer = 0xE005;
+    frame.flags |= BEDRAY_PATH_TRACE_FRAME_RESET_PT;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::fills == 2);
+    CHECK((push_u32(fake::render_calls[10].push, 16) & kPtHistoryBit) == 0);
+    // A discarded recording never ran: nothing it would have published may be read.
+    pass.discard_recording(0xE005);
+    frame.command_buffer = 0xE006;
+    frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
+    CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
+    CHECK(fake::fills == 3);
+    CHECK((push_u32(fake::render_calls[12].push, 16) & (kPtHistoryBit | kPtParityBit)) == 0);
+
+    // A frame without PT binds the stand-in, clears the bits and lets the ring go once its recordings are proven.
+    frame.command_buffer = 0xE007;
+    frame.path.flags &= ~(kPtOption | kPtStaticBit);
+    BedrayPathTraceBuffer slot{};
+    slot.handle = kStatsBuffer; slot.offset = 1152; slot.bytes = 575;
+    CHECK_STATUS(pass.render(frame, &g_error, nullptr, nullptr, &slot), BEDRAY_ERROR_INVALID_ARGUMENT);
+    slot.bytes = 576;
+    CHECK_STATUS(pass.render(frame, &g_error, nullptr, nullptr, &slot), BEDRAY_OK);
+    const auto& plain = fake::render_calls[14];
+    CHECK(resource_range(plain.resources, 36) == 144 && resource_handle(plain.resources, 36) != ring);
+    CHECK((push_u32(plain.push, 16) & (kPtOption | kPtHistoryBit | kPtParityBit)) == 0);
+    CHECK(resource_handle(plain.resources, 37) == kStatsBuffer && resource_range(plain.resources, 37) == 576);
+    CHECK(fake::buffers.count(ring) == 1);
+    for (std::uint64_t command = 0xE001; command <= 0xE007; ++command)
+        CHECK_STATUS(pass.release_recording(command), BEDRAY_OK);
+    CHECK(fake::buffers.count(ring) == 0);
+    CHECK_STATUS(pass.destroy(), BEDRAY_OK);
+    CHECK(fake::buffers.empty()); CHECK(fake::memories.empty()); CHECK(fake::faults == 0);
+}
+
 int main() {
     test_configure_validation();
     test_render_validation();
@@ -1857,6 +1970,7 @@ int main() {
     test_guide_aware_program_contract();
     test_restir_pt_binding_is_a_stand_in();
     test_path_stats_binding_is_a_stand_in();
+    test_native_pt_owner();
     test_real_guide_outputs();
     test_real_nrd_motion_output();
     test_statistics_dispatch_follows_display();

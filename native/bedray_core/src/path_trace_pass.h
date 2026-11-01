@@ -43,7 +43,12 @@ public:
     BedrayStatus configure_rc(const BedrayRCDesc& desc, std::uint32_t max_groups_x, BedrayError* error);
 
     BedrayStatus render(const BedrayPathTraceFrameDesc& desc, BedrayError* error,
-        const BedrayPathTraceGuides* guides = nullptr, const BedrayPathTraceBuffer* motion = nullptr);
+        const BedrayPathTraceGuides* guides = nullptr, const BedrayPathTraceBuffer* motion = nullptr,
+        const BedrayPathTraceBuffer* stats_slot = nullptr);
+
+    // The ReSTIR PT spatial stage per section table; 0 leaves that table without it.
+    BedrayStatus configure_pt(std::uint64_t program_pt_spatial, std::uint64_t program_pt_spatial_scene,
+        BedrayError* error);
 
     // Statistics stage of a recording the render call above just made: one
     // frame_stats dispatch over the recording's own radiance, the accumulation
@@ -73,7 +78,8 @@ public:
         return program != 0
             && (program == program_trace_ || program == program_trace_scene_
                 || program == program_spatial_ || program == program_display_
-                || program == program_stats_
+                || program == program_stats_ || program == program_pt_spatial_
+                || program == program_pt_spatial_scene_
                 || (rc_field_ && rc_field_->uses_program(program)));
     }
 
@@ -101,6 +107,8 @@ private:
     BedrayStatus create_dummy(VkDeviceSize bytes, gpu::BufferId& id,
         gpu::BufferView& view, BedrayError* error);
     BedrayStatus ensure_reservoirs(std::uint64_t bytes, BedrayError* error);
+    BedrayStatus ensure_pt_ring(std::uint64_t bytes, BedrayError* error);
+    void retire_pt_ring() noexcept;
     BedrayStatus pin_image(gpu::ImageId id, RecordingPins& pins, BedrayError* error);
     BedrayStatus pin_buffer(gpu::BufferId id, RecordingPins& pins, BedrayError* error);
     void device_lost() noexcept;
@@ -113,6 +121,8 @@ private:
     std::uint64_t program_spatial_ = 0;
     std::uint64_t program_display_ = 0;
     std::uint64_t program_stats_ = 0;
+    std::uint64_t program_pt_spatial_ = 0;
+    std::uint64_t program_pt_spatial_scene_ = 0;
     std::uint32_t spatial_push_bytes_ = 0;
 
     std::unique_ptr<gpu::GpuImages> images_;
@@ -162,6 +172,14 @@ private:
     std::uint32_t owned_di_parity_ = 0;
     bool owned_di_history_ = false;
     bool owned_di_needs_clear_ = false;
+    // NATIVE_PT: the ReSTIR PT ring, the counterpart of the DI ring above. The parity names the half the next trace
+    // writes; a frame with the spatial stage moves it twice (trace, then spatial), so the next frame imports the
+    // spatial half and writes the one the trace wrote.
+    gpu::BufferId owned_pt_id_{};
+    gpu::BufferView owned_pt_view_{};
+    std::uint32_t owned_pt_parity_ = 0;
+    bool owned_pt_history_ = false;
+    bool owned_pt_needs_clear_ = false;
 
     std::uint32_t history_parity_ = 0;
     bool history_written_ = false;

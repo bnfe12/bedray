@@ -18,7 +18,7 @@ struct Context {
     BedrayStatus record_status = BEDRAY_OK, release_status = BEDRAY_OK;
 };
 BedrayStatus record(void* pointer, const BedrayPathTraceFrameDesc&, const BedrayPathTraceGuides* guides,
-    const BedrayPathTraceBuffer* motion, BedrayError* error) {
+    const BedrayPathTraceBuffer* motion, const BedrayPathTraceBuffer*, BedrayError* error) {
     auto& c = *static_cast<Context*>(pointer);
     ++c.records;
     c.last_guide_view = guides ? guides->view_z : 0;
