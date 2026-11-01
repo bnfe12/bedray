@@ -48,7 +48,11 @@ final class RtSlangFrameData {
         float[] color = p.key.color;
         float sunRadius = Math.max(RtSettings.sunRadiusRad(), 1.0e-4f);
         frame.sunDirection.set(dir[0], dir[1], dir[2], sunRadius);
-        frame.sunColor.set(color[0], color[1], color[2], 1f);
+        // The key colour is an irradiance (the legacy shading was albedo * key * cos); the Slang sampler treats the disc as
+        // a radiance over its solid angle. Written as 1, a 0.27-degree sun lit a floor about a thousandth as strongly as
+        // the sky did: no sunlight, no shadows (autotest rt_look 2026-11-01 03:19). pi / omega makes a diffuse floor
+        // receive exactly albedo * key * cos again.
+        frame.sunColor.set(color[0], color[1], color[2], discRadianceScale(sunRadius));
         frame.moonDirection.set(-dir[0], -dir[1], -dir[2], sunRadius);
         frame.moonColor.set(0f, 0f, 0f, 0f);
 
@@ -89,6 +93,12 @@ final class RtSlangFrameData {
         Vector4f v = new Vector4f(x, y, 0.5f, 1f).mul(invViewProj);
         float w = Math.abs(v.w) < 1.0e-12f ? 1.0e-12f : v.w;
         return new Vector3f(v.x / w, v.y / w, v.z / w);
+    }
+
+    /** Radiance of a disc of angular radius {@code radius} whose irradiance at normal incidence is 1: pi over its solid angle. */
+    static float discRadianceScale(float radius) {
+        double omega = 2.0 * Math.PI * (1.0 - Math.cos(Math.max(radius, 1.0e-4f)));
+        return (float) (Math.PI / omega);
     }
 
     private static float halton(int index, int base) {
