@@ -155,12 +155,20 @@ class RtSlangNrdMotionTest {
         assertTrue(renderer.contains("motionHandle = entityMotionBuf.handle;"),
             "the pass receives the handle of the buffer the pack reads by address");
         assertTrue(renderer.contains("lightmapView, motionHandle));"), "the handle rides with the frame's views");
-        assertTrue(renderer.contains("private static void ensureEntityMotionBuffer(VkDevice device, int w, int h) {"),
+        assertTrue(renderer.contains("private static void ensureEntityMotionBuffer(int w, int h) {"),
             "one allocation site for both the address and the binding");
-        int alloc = renderer.indexOf("ensureEntityMotionBuffer(device, w, h);");
-        int bind = renderer.indexOf("pass.bind(new RtFrameBindings.Views(");
-        assertTrue(alloc >= 0 && bind >= 0 && alloc < bind,
-            "the buffer has to exist before bind, or the pass captures zero and never writes");
+        String preflight = block(renderer, "private static void prepareFrameResources(");
+        assertTrue(preflight.contains("ensureEntityMotionBuffer(w, h);"));
+        String frame = block(renderer, "private static void frame(");
+        int prepare = frame.indexOf("prepareFrameResources(device, target.width, target.height)");
+        int allocateCommand = frame.indexOf("encoder.allocateAndBeginTransientCommandBuffer()");
+        assertTrue(prepare >= 0 && allocateCommand > prepare,
+            "motion allocation and any required drain happen before a new recording captures the previous generation");
+        String record = block(renderer, "private static void recordPrimaryRays(");
+        assertFalse(record.contains("ensureEntityMotionBuffer("), "an open command buffer may only borrow prepared storage");
+        int require = record.indexOf("requireEntityMotionBuffer(w, h);");
+        int bind = record.indexOf("pass.bind(new RtFrameBindings.Views(");
+        assertTrue(require >= 0 && bind > require, "the prepared range is checked before its handle is bound");
         assertFalse(renderer.contains("the Slang path does not fill yet"),
             "the refusal that used to gate this buffer must not come back");
         String views = block(read(BINDINGS), "public record Views(");
