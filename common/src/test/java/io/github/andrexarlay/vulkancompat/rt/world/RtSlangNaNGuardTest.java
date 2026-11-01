@@ -31,7 +31,6 @@ class RtSlangNaNGuardTest {
     private static final String EMITTERS = "src/main/resources/shaders/slang/light/block_emitters.slang";
     private static final String SUN = "src/main/resources/shaders/slang/light/sun.slang";
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
-    private static final String VISIBILITY_PASS = "src/main/resources/shaders/slang/passes/velocity_reproject.slang";
 
     /** Mirror of {@code MATH_EPSILON}: the gate compares a squared length, so the length gate is its square root. */
     private static final double GATE = 1.0e-6;
@@ -178,28 +177,15 @@ class RtSlangNaNGuardTest {
 
     @Test
     void theVelocityPassSanitisesItsOwnHomogeneousDivide() {
-        // velocity.slang and velocity_live.slang are ports of velocity_reproject.comp, which divided by w bare and
-        // relied on its final non-finite sanitise. Both ports keep that protection, so a degenerate inverse
-        // projection costs one disoccluded pixel instead of a poisoned motion vector; the pass gates the clip-w
-        // divide on a finite value, which NaN fails.
-        String velocity = read("src/main/resources/shaders/slang/history/velocity.slang");
-        assertTrue(velocity.contains("if (!isFinite(result.motionPixels.x) || !isFinite(result.motionPixels.y) || "
-                + "!isFinite(result.dynamicMask) ||"),
-            "the typed walk owns the sanitise of its own motion, dynamic and disocclusion outputs");
-        assertTrue(velocity.contains("result.motionPixels = float2(0.0);\n        result.dynamicMask = 0.0;\n"
-                + "        result.disocclusionMask = 1.0;"),
-            "a non-finite reprojection becomes no motion plus a full disocclusion, never a NaN history tap");
-
+        // velocity_live.slang is the port of velocity_reproject.comp, which divided by w bare and
+        // relied on its final non-finite sanitise. The port keeps that protection, so a degenerate inverse
+        // projection costs one disoccluded pixel instead of a poisoned motion vector.
         String live = read("src/main/resources/shaders/slang/history/velocity_live.slang");
         assertTrue(live.contains("// Protection against NaN, Inf"),
             "the live port keeps the legacy sanitise that made its bare w divide safe");
         assertTrue(live.contains("motionVector = float2(0.0);\n        disocclusionMask = 1.0;"),
             "the live sanitise must clear the vector and force the disocclusion");
 
-        String pass = read(VISIBILITY_PASS);
-        assertTrue(pass.contains("params.hasPrevDepth && abs(result.previousClipW) > 1.0e-7) {"),
-            "the linear-viewZ depth test is gated on a finite clip w: NaN fails the comparison and skips it");
-        assertTrue(pass.contains("params.hasPrevDepth && result.previousClipW > 1.0e-6) {"));
     }
 
     // ---- helpers ----

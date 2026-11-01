@@ -128,11 +128,6 @@ def STRUCT_LAYOUTS = [
     // routes RWStructuredBuffer<RCSegment> descriptors with this stride; a
     // packed float3/float3 layout would not match the reflected record.
     RCSegment: [size: 32, fields: [radiance: 0, confidence: 12, transmittance: 16, flags: 28]],
-    // Diagnostic record written by passes/rc_probe_trace.slang; one element per
-    // dispatched ray.  Keep the counters in this order so a future Java reader
-    // cannot silently reinterpret them.
-    RCTraceEntryStatus: [size: 32, fields: [code: 0, rays: 4, stored: 8, storeFailed: 12,
-        invalidInput: 16, unresolved: 20, clamped: 24, truncated: 28]],
     // Push block shared by passes/path_trace.slang and path_trace_scene.slang.  The manifest checks the total size;
     // pinning the fields catches a same-size reorder that would otherwise reach the Java writer unnoticed.
     PathTracePush: [size: 112, fields: [maxDepth: 0, maxSurfaceSteps: 4, sampleIndex: 8, materialCount: 12,

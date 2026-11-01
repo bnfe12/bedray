@@ -29,7 +29,6 @@ class RtSlangSampleRejectionTest {
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
     private static final String STATS = "src/main/resources/shaders/slang/passes/frame_stats.slang";
-    private static final String CASCADER = "src/main/resources/shaders/slang/radiance_cascades/rc_trace.slang";
     private static final String HOST_PASS =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java";
     private static final String STATS_PASS =
@@ -40,7 +39,7 @@ class RtSlangSampleRejectionTest {
     private static final String INVALID = "PATH_TRACE_FLAG_INVALID_SAMPLE";
     private static final String TRUNCATED = "PATH_TRACE_FLAG_TRUNCATED";
 
-    /** The radiance cascades already separate the two endings; the path tracer must not invent a third vocabulary. */
+    /** The two bad endings are separate bits; the path tracer must not fold them into one. */
     @Test
     void theTwoBadEndingsAreDifferentBits() {
         String tracer = read(TRACER);
@@ -52,9 +51,6 @@ class RtSlangSampleRejectionTest {
             .map(name -> name + "=" + flag(tracer, name))
             .collect(Collectors.toList());
         assertEquals(bits.size(), java.util.Set.copyOf(bits).size(), "every flag needs its own bit: " + bits);
-        String cascader = read(CASCADER);
-        assertTrue(cascader.contains("RC_SEGMENT_TRUNCATED") || cascader.contains("TRUNCATED"),
-            "the shared vocabulary exists in the reference trace: " + TRUNCATED + " is that word, not a new one");
     }
 
     /**
