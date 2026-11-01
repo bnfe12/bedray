@@ -31,6 +31,12 @@ Existing-feature transfers in the current working tree:
   matching DLL the producer is logged as unavailable and framegen does not run -
   there is no Shaderc fallback. No owner-verified generated frame yet.
 
+* FSR1/NIS use AOT `fsr1_easu`, `fsr1_rcas` and `nis_scaler` through
+  `bedray_core_render_spatial`. Native owns the complete chain's immutable
+  descriptors, push copies, dispatch groups and barriers. Host completion pins
+  and pre-resize fence drains retain borrowed images. Vendor headers are
+  unchanged; historical GLSL hosts are test fixtures only.
+
 * The typed path trace now writes the legacy denoiser guide set for DLSS-RR:
   the entry pass fills `outViewZ` through `outSpecAlbedo` (bindings 26–32) at
   the primary vertex when the host sets `PATH_TRACE_OPTION_GBUFFER`, so an
@@ -39,8 +45,10 @@ Existing-feature transfers in the current working tree:
   hit's world motion as the legacy 16-byte `Vec4` at
   `PATH_TRACE_OPTION_NRD_MOTION` (bit 1), from the same `entity_motion_px`
   buffer the renderer already hands both denoisers by device address. `NRD` is
-  therefore accepted with an explicit `SLANG` path as well; `AUTO` keeps the
-  GLSL pass until a live frame consumes the guides.
+  accepted through the current Slang renderer. `DenoiserResolution` chooses from
+  the requested setting and available libraries; the old renderer selector and
+  GLSL fallback are deleted. Guide/output replacement runs in host preflight
+  before command allocation, with exact guide-generation recording pins.
 
 Finish migrating the existing renderer functionality into the new Slang/C++
 architecture first, starting with path tracing. Java retains Minecraft capture,
@@ -153,9 +161,9 @@ re-captured live before a jar ships. A compile or a test is not a frame.
    `ShadercSurfaceTest`).  No first-party GLSL ships any more: the Iris depth
    converter reads the AOT `iris_depth` pass through `SlangPass`, and
    `shaders/glsl/` is empty.  What survives Shaderc is not the renderer: the
-   `shaders/spatial/` upscaler kernels and the Iris pack host (they compile
-   third-party or user-supplied GLSL), plus the one-shot opacity-micromap probe
-   in `RtExtensionProbe`.
+   Iris pack host (user-supplied GLSL), plus the one-shot opacity-micromap probe
+   in `RtExtensionProbe`. FSR1/NIS use AOT Slang; their historical GLSL hosts
+   exist only under test resources.
 6. **No binaries in git.**  SDKs, generated SPIR-V, DLLs and JARs stay out of
    the repository.  `*.spv`, `*.exe`, `*.dll` and `*.jar` are already ignored.
 
@@ -1085,7 +1093,7 @@ completion through `release_proven`; configuring again, destroying the pass or
 destroying the core is refused while a lease remains. The owner test
 (`bedray_frame_graph_owner`) covers the capability refusal, the opaque-group
 shape, double release and a failed release that retains its slot, and it is part
-of the 25-test CTest suite. Bloom, volumetric, particles and the frame-generation
+of the native CTest suite (27 core tests on 2026-11-01). Bloom, volumetric, particles and the frame-generation
 producer still record directly; the graph is not yet the whole-frame recorder.
 
 Adopting the graph for those passes, and for the rest of a frame, still needs the

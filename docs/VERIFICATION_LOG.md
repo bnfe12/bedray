@@ -4,6 +4,34 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-11-01 — Parallel audit and spatial AOT integration (L1/L2)
+
+Exact combined source `2fd2d0b` passed **1,033 Java tests: 1,024 passed, nine
+skipped**, zero failures/errors (2m44s). All **29 AOT entries** rebuilt with
+Slang 2026.20. The source contains FSR1/NIS `d67af1d`, denoiser preflight/pins
+`a4b7c9d`, RC fixes `019cbfa`, FG audit #40 and upstream fixes through `8476cfc`.
+
+Native Windows CI [41271544574](https://github.com/bnfe12/bedray/actions/runs/41271544574)
+on `d67af1d` passed **27 core + one scene + one lifetime** tests; baseline
+15+1+1 passed. Combined native sources are byte-identical to that CI revision.
+The eight new spatial tests passed without skips, including all 1,024 coefficient
+floats, source parity, reflected contracts, ABI offsets and resize-proof ordering.
+
+Three parallel audits found six correctness defects: denoiser/output lifetime,
+partial vendor tags, native FG quarantine, ignored FSR disable result, RC shadow
+offset and temporal classification. Repairs, module boundaries and runtime
+diagnostic fields: [PARALLEL_AUDIT_20261101.md](ai-agent-addenda/PARALLEL_AUDIT_20261101.md).
+The previous combined run on `019cbfa` had one stale source guard expecting
+motion allocation inside recording. `a4b7c9d` strengthens it to require allocation
+before command creation and range validation before binding; the full rerun above
+is green. No runtime workaround was added for that test.
+
+Command: JDK 25.0.3.9, pinned `SLANG_DIR`, available launcher/loader dependency
+roots; `gradlew --offline --max-workers=1 --no-daemon --console=plain
+-Pneoforge_libs_dir=<dependency-root> :common:test`, with the bounded JVM settings
+used by the previous entries. No binaries/SDKs/dependency jars were committed.
+No new game, visual, performance or owner acceptance is claimed.
+
 ## 2026-11-01 — FG exact lifetime, failure quarantine and diagnostics (L1/L2)
 
 Revision `5059372` passed a clean isolated `:common:test`: **1,011 tests,
