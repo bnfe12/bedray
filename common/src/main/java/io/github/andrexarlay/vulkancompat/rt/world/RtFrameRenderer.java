@@ -601,6 +601,10 @@ public final class RtFrameRenderer {
             drainHostSubmissions(device, "legacy_world_inputs_drain");
             world.prepareLegacyFrameAfterHostDrain();
         }
+        if (target != null && target.width > 0 && target.height > 0
+            && camera.projectionMatrix != null && camera.viewRotationMatrix != null) {
+            prepareFrameResources(device, target.width, target.height);
+        }
         long frameStart = System.nanoTime();
         if (emitters == null) emitters = new RtEmitters(world.memory());
         RtEmitters recordingEmitters = emitters;
@@ -773,6 +777,78 @@ public final class RtFrameRenderer {
         }
     }
 
+    /** Resource replacement happens before any command buffer can capture the previous generation. */
+    private static void prepareFrameResources(VkDevice device, int w, int h) {
+        int previousWidth = output != null ? output.width : 0;
+        int previousHeight = output != null ? output.height : 0;
+        DenoiserMode previousMode = denoiseMode;
+        boolean outputChanged = output == null || output.width != w || output.height != h;
+        long outputView = output != null ? output.view : 0L;
+        long outputImage = output != null ? output.image : 0L;
+        boolean denoiserChanged = denoiser != null && denoiser.needsEnsure(w, h, outputView);
+        boolean rrChanged = dlssRrDenoiser != null && dlssRrDenoiser.needsEnsure(w, h, outputImage, outputView);
+        boolean motionChanged = wantsEntityMotion() && entityMotionBuf != null && entityMotionBuf.size < (long) w * h * 16L;
+        String stage = "drain";
+        try {
+            if ((outputChanged && output != null) || denoiserChanged || rrChanged || motionChanged)
+                drainHostSubmissions(device, "frame_resources_drain");
+            stage = "output_replace";
+            if (outputChanged) replaceOutputImages(w, h);
+            if (denoiseMode == DenoiserMode.DLSS_RR) {
+                stage = "dlss_rr_ensure";
+                if (pass.usesGbuffer() && dlssRrDenoiser == null) createDlssRrDenoiser(device, w, h);
+                if (dlssRrDenoiser != null) dlssRrDenoiser.ensure(w, h, output);
+            }
+            if (denoiseMode.isNrd()) {
+                stage = "nrd_ensure";
+                if (pass.usesGbuffer() && denoiser == null) createDenoiser(device, w, h);
+                if (denoiser != null) denoiser.ensure(w, h, output.view);
+            }
+            stage = "entity_motion_ensure";
+            if (pass.usesGbuffer() && wantsEntityMotion()) ensureEntityMotionBuffer(w, h);
+        } catch (RuntimeException | Error failure) {
+            throw new RtFailure("frame_resources_" + stage,
+                "profile=" + previousMode.logName() + " previousExtent=" + previousWidth + "x" + previousHeight
+                    + " requestedExtent=" + w + "x" + h + " previousOutputView=0x" + Long.toUnsignedString(outputView, 16)
+                    + " currentOutputView=0x" + Long.toUnsignedString(output != null ? output.view : 0L, 16)
+                    + " outputChanged=" + outputChanged + " denoiserChanged=" + denoiserChanged
+                    + " rrChanged=" + rrChanged + " motionChanged=" + motionChanged,
+                failure);
+        }
+    }
+
+    /** Build the complete replacement before releasing any of the old output triplet. */
+    private static void replaceOutputImages(int w, int h) {
+        RtMemory memory = world.memory();
+        RtMemory.Img nextOutput = null, nextDepth = null, nextComposite = null;
+        try {
+            nextOutput = memory.createImage("rt_output", w, h, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+                VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
+            nextDepth = memory.createImage("rt_depth", w, h, VK10.VK_FORMAT_R32_SFLOAT,
+                VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
+            nextComposite = memory.createImage("rt_composite", w, h, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+                VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        } catch (RuntimeException | Error failure) {
+            destroyFailedOutput(memory, nextComposite, failure);
+            destroyFailedOutput(memory, nextDepth, failure);
+            destroyFailedOutput(memory, nextOutput, failure);
+            throw failure;
+        }
+        memory.destroy(output);
+        memory.destroy(outputDepth);
+        memory.destroy(compositeOutput);
+        output = nextOutput;
+        outputDepth = nextDepth;
+        compositeOutput = nextComposite;
+        outputReady = false;
+        LOGGER.info("[VKB-RT] rt_output {}x{} RGBA8, rt_depth R32F, rt_composite RGBA8", w, h);
+    }
+
+    private static void destroyFailedOutput(RtMemory memory, RtMemory.Img image, Throwable original) {
+        try { memory.destroy(image); }
+        catch (RuntimeException | Error cleanup) { original.addSuppressed(cleanup); }
+    }
+
     /** Output image, dispatch and (debug view only) the copy into the engine colour image, inside the open command buffer. */
     private static void recordPrimaryRays(VkCommandBuffer cmd, VulkanDevice vulkanDevice, CameraRenderState camera,
                                          RenderTarget target, LevelRenderState levelState, boolean sceneChanged,
@@ -795,28 +871,8 @@ public final class RtFrameRenderer {
         }
         int w = target.width;
         int h = target.height;
-        if (output == null || output.width != w || output.height != h) {
-            if (output != null) {
-                VK10.vkDeviceWaitIdle(device); // frames in flight may still write or copy the old image
-                world.memory().destroy(output);
-                if (outputDepth != null) {
-                    world.memory().destroy(outputDepth);
-                    outputDepth = null;
-                }
-                if (compositeOutput != null) {
-                    world.memory().destroy(compositeOutput);
-                    compositeOutput = null;
-                }
-            }
-            output = world.memory().createImage("rt_output", w, h, VK10.VK_FORMAT_R8G8B8A8_UNORM,
-                VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
-            outputDepth = world.memory().createImage("rt_depth", w, h, VK10.VK_FORMAT_R32_SFLOAT,
-                VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
-            compositeOutput = world.memory().createImage("rt_composite", w, h, VK10.VK_FORMAT_R8G8B8A8_UNORM,
-                VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-            outputReady = false;
-            LOGGER.info("[VKB-RT] rt_output {}x{} RGBA8, rt_depth R32F, rt_composite RGBA8", w, h);
-        }
+        if (output == null || output.width != w || output.height != h)
+            throw new RtFailure("frame_resources", "output generation was not prepared before recording");
         if (statsBuf == null) {
             statsBuf = world.memory().createBuffer("rt_stats", (long) STATS_SLOTS * STATS_STRIDE,
                 VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
@@ -846,36 +902,24 @@ public final class RtFrameRenderer {
         } catch (RuntimeException | LinkageError e) {
             LOGGER.debug("[VKB-RT] lightmap view unavailable: {}", e.toString());
         }
-        if (denoiseMode == DenoiserMode.DLSS_RR) {
-            // [DLSS-RR]
-            if (pass.usesGbuffer() && dlssRrDenoiser == null) {
-                createDlssRrDenoiser(device, w, h);
-            }
-            if (dlssRrDenoiser != null) {
-                DlssRrDenoiser owner = dlssRrDenoiser;
-                denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
-                    () -> owner.discardRecording(cmd.address()));
-                owner.ensure(cmd, w, h, output);
-            }
+        if (denoiseMode == DenoiserMode.DLSS_RR && dlssRrDenoiser != null) {
+            DlssRrDenoiser owner = dlssRrDenoiser;
+            denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
+                () -> owner.discardRecording(cmd.address()));
+            owner.prepare(cmd);
         }
-        if (denoiseMode.isNrd()) {
-            if (pass.usesGbuffer() && denoiser == null) {
-                createDenoiser(device, w, h);
-            }
-            if (denoiser != null) {
-                NrdDenoiser owner = denoiser;
-                denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
-                    () -> owner.discardRecording(cmd.address()));
-                owner.ensure(w, h, output.view);
-                owner.prepare(cmd);
-            }
+        if (denoiseMode.isNrd() && denoiser != null) {
+            NrdDenoiser owner = denoiser;
+            denoiserProof[0] = new Retirement(() -> owner.releaseRecording(cmd.address()),
+                () -> owner.discardRecording(cmd.address()));
+            owner.prepare(cmd);
         }
         boolean useDenoiser = pass.usesGbuffer() && (denoiser != null || dlssRrDenoiser != null);
         // NRD reads this frame's per-pixel world motion through its own binding, so the buffer has to exist before the
         // pass binds its views: the handle travels with them, and the pass writes exactly that range.
         long motionHandle = 0L;
         if (useDenoiser && denoiseMode.isNrd() && wantsEntityMotion()) {
-            ensureEntityMotionBuffer(device, w, h);
+            requireEntityMotionBuffer(w, h);
             motionHandle = entityMotionBuf.handle;
         }
         if (materials == null) {
@@ -1081,7 +1125,7 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_RECT_ADDR, eg.rectAddress());
         long motionAddr = 0L;
         if (useDenoiser && wantsEntityMotion()) {
-            ensureEntityMotionBuffer(device, w, h);
+            requireEntityMotionBuffer(w, h);
             motionAddr = entityMotionBuf.address;
             if (dlssRrDenoiser != null) {
                 dlssRrDenoiser.entityMotionAddress = motionAddr;
@@ -1255,22 +1299,19 @@ public final class RtFrameRenderer {
         return (denoiser != null || dlssRrDenoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off");
     }
 
-    /**
-     * One vec4 per render pixel, storage+device-address: NRD's {@code IN_MV} channel and the RR velocity pass's entity
-     * term. Idempotent within a frame sized like the last one; a resize waits for the device because the old extent may
-     * still be in flight.
-     */
-    private static void ensureEntityMotionBuffer(VkDevice device, int w, int h) {
+    /** One world-space motion vec4 per pixel; called only by frame preflight after any required drain. */
+    private static void ensureEntityMotionBuffer(int w, int h) {
         long need = (long) w * h * 16L;
-        if (entityMotionBuf != null && entityMotionBuf.size >= need) {
-            return;
-        }
-        if (entityMotionBuf != null) {
-            VK10.vkDeviceWaitIdle(device);
-            world.memory().destroy(entityMotionBuf);
-        }
-        entityMotionBuf = world.memory().createBuffer("entity_motion_px", need,
-            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        if (entityMotionBuf != null && entityMotionBuf.size >= need) return;
+        RtMemory.Buf next = world.memory().createBuffer("entity_motion_px", need,
+            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+        world.memory().destroy(entityMotionBuf);
+        entityMotionBuf = next;
+    }
+
+    private static void requireEntityMotionBuffer(int w, int h) {
+        if (entityMotionBuf == null || entityMotionBuf.size < (long) w * h * 16L)
+            throw new RtFailure("frame_resources", "entity motion buffer was not prepared before recording");
     }
 
     /** Once per world: locates the NRD natives and logs the denoiser that will be used. */
@@ -1339,7 +1380,8 @@ public final class RtFrameRenderer {
                 pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
         } catch (Exception e) {
             denoiserRuntimeFailure = "dlss_rr_init: " + String.valueOf(e.getMessage());
-            LOGGER.error("[DLSS-RR] status=disabled reason=init {} (falling back to NRD if available)", e.getMessage(), e);
+            LOGGER.error("[DLSS-RR] status=disabled stage=init profile=dlss_rr extent={}x{} outputView=0x{} reason={} (falling back to NRD if available)",
+                w, h, Long.toUnsignedString(output != null ? output.view : 0L, 16), e.getMessage(), e);
             dlssRrFailed = true;
             if (!nrdFailed && denoiseAvailability != null && denoiseAvailability.usable()) {
                 LOGGER.warn("[DLSS-RR] Falling back to NRD_REBLUR (keeping G-Buffer pipeline)");
@@ -1379,7 +1421,8 @@ public final class RtFrameRenderer {
                 pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
         } catch (NrdException | RtFailure e) {
             denoiserRuntimeFailure = "nrd_init: " + String.valueOf(e.getMessage());
-            LOGGER.error("[VKB-NRD] status=disabled reason=init {} (off for this session, setting kept)", e.getMessage(), e);
+            LOGGER.error("[VKB-NRD] status=disabled stage=init profile={} extent={}x{} outputView=0x{} reason={} (off for this session, setting kept)",
+                denoiseMode.logName(), w, h, Long.toUnsignedString(output != null ? output.view : 0L, 16), e.getMessage(), e);
             nrdFailed = true;
             denoiseMode = DenoiserMode.OFF;
             rebuildPlainPipeline(device);
