@@ -10,8 +10,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+
+import static io.github.andrexarlay.vulkancompat.rt.rc.RcGeometry.*;
+import static io.github.andrexarlay.vulkancompat.rt.rc.RcTransport.*;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -151,9 +156,9 @@ class RtRcFieldHistoryTest {
                 && transport.contains("if (!rcFieldNeighbors(field, level, p, base, fraction)) return current;")
                 && transport.contains("RCSegment past = rcFieldAverageEnd(average);")
                 && transport.contains("if (!rcSegmentValid(past)) return current;")
-                && transport.contains("blended.radiance = lerp(current.radiance, past.radiance, w);")
-                && transport.contains("blended.transmittance = lerp(current.transmittance, past.transmittance, w);")
-                && transport.contains("blended.confidence = min(current.confidence, past.confidence);"),
+                && transport.contains("rcFieldAverageAdd(temporal, current, 1.0 - w);")
+                && transport.contains("rcFieldAverageAdd(temporal, past, w);")
+                && transport.contains("return rcFieldAverageEnd(temporal);"),
             "same level, same ray, trilinear, all-or-nothing, lerp by the owner's weight");
         assertTrue(transport.contains("if (!(w > 0.0) || !rcSegmentValid(current)) return current;"));
         String builder = read(BUILDER);
@@ -161,6 +166,44 @@ class RtRcFieldHistoryTest {
         assertTrue(builder.contains("rcTails[field.counts[pc.level].w + tid.x] = rcFieldBlendHistory(field, rcHistory, pc.level, probe,\n"
                 + "        tid.x % rays, current);"),
             "each level is blended before the next finer level reads it");
+    }
+
+    @Test
+    void temporalInterpolationNeedsBothContributorsToProveTheSurvivingTail() {
+        Segment opaque = interval(new Vec3(5, 3, 1), ZERO, 0.7);
+        Segment bounded = finiteMiss();
+        Segment opening = average(List.of(new WeightedSample(0.2, opaque), new WeightedSample(0.8, bounded)));
+        assertEquals(0.8, opening.transmission().x(), 1e-15);
+        assertTrue(opening.valid());
+        assertFalse(opening.opaque() || opening.terminalKnown(),
+            "a current opaque cell blended with bounded history is no longer a terminal proof");
+        Segment closing = average(List.of(new WeightedSample(0.2, bounded), new WeightedSample(0.8, opaque)));
+        assertEquals(0.2, closing.transmission().x(), 1e-15);
+        assertFalse(closing.opaque() || closing.terminalKnown());
+        assertEquals(0.7, opening.confidence(), "confidence is minimum evidence, not the temporal weight");
+        Segment bothOpaque = average(List.of(new WeightedSample(0.2, opaque), new WeightedSample(0.8, opaque)));
+        assertTrue(bothOpaque.opaque() && bothOpaque.terminalKnown());
+        Segment tinyTail = interval(ZERO, new Vec3(1e-30, 0, 0), 1);
+        Segment almostOpaque = average(List.of(new WeightedSample(0.2, opaque), new WeightedSample(0.8, tinyTail)));
+        assertTrue(almostOpaque.transmission().x() > 0 && !almostOpaque.terminalKnown(),
+            "small surviving transport still needs its back boundary");
+    }
+
+    @Test
+    void temporalMetadataUsesTheSameClassificationAndClampEvidenceAsSpatialReads() throws IOException {
+        String transport = read(TRANSPORT);
+        int start = transport.indexOf("RCSegment rcFieldBlendHistory(");
+        String temporal = transport.substring(start);
+        assertTrue(temporal.contains("RCFieldAverage temporal = rcFieldAverageBegin();"));
+        assertTrue(temporal.contains("rcFieldAverageAdd(temporal, current, 1.0 - w);"));
+        assertTrue(temporal.contains("rcFieldAverageAdd(temporal, past, w);"));
+        assertTrue(temporal.contains("return rcFieldAverageEnd(temporal);"));
+        assertFalse(temporal.contains("RCSegment blended = current;"),
+            "classifications cannot be copied from just the current contributor");
+        assertTrue(transport.contains("a.diagnostics |= s.flags & RC_SEGMENT_CLAMPED;"),
+            "clamping in either contributing frame remains observable");
+        assertTrue(transport.contains("a.terminalKnown = a.terminalKnown &&"));
+        assertTrue(transport.contains("if (all(s.transmittance == float3(0.0))) s.flags |= RC_SEGMENT_BLOCKED;"));
     }
 
     @Test

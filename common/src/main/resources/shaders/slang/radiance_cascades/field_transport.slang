@@ -146,9 +146,12 @@ RCSegment rcFieldBlendHistory(RCFieldConstants field, StructuredBuffer<RCSegment
     }
     RCSegment past = rcFieldAverageEnd(average);
     if (!rcSegmentValid(past)) return current;
-    RCSegment blended = current;
-    blended.radiance = lerp(current.radiance, past.radiance, w);
-    blended.transmittance = lerp(current.transmittance, past.transmittance, w);
-    blended.confidence = min(current.confidence, past.confidence);
-    return blended;
+    // Temporal interpolation has the same evidence rules as spatial/angular
+    // averaging. In particular, a formerly opaque cell may become transmissive
+    // after blending and cannot keep its old terminal proof. Both contributors
+    // also own their clamp diagnostics and confidence.
+    RCFieldAverage temporal = rcFieldAverageBegin();
+    rcFieldAverageAdd(temporal, current, 1.0 - w);
+    rcFieldAverageAdd(temporal, past, w);
+    return rcFieldAverageEnd(temporal);
 }
