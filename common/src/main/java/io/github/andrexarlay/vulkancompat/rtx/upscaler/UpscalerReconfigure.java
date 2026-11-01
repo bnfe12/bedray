@@ -10,15 +10,10 @@ import java.util.Objects;
  * once the GPU work that may still reference it has finished), FAILED (this request failed, no retry until the request
  * changes: an explicit new choice of the user is not a hidden retry).
  * <p>
- * Safe destruction without {@code vkDeviceWaitIdle} in the frame path: the old context is retired and destroyed
- * {@link #RETIRE_DELAY_FRAMES} frame heads later. The same number is used by {@code RtWorld.DEFER_FRAMES} for section
- * buffers ("the engine keeps up to 2 submissions in flight", RtWorld class comment), so every command buffer that was
- * recorded with the old context has been submitted frames ago and its fence-bound work is complete by then.
+ * This class only requests retirement. The runtime must submit queued host work and prove its completion before
+ * destroying the retired context. Frame age is never completion evidence.
  */
 public final class UpscalerReconfigure {
-    /** Frame heads to wait before the retired context is destroyed (see class comment). */
-    public static final int RETIRE_DELAY_FRAMES = 3;
-
     public enum Phase { IDLE, READY, RECONFIGURE_PENDING, FAILED }
 
     public enum Step {
@@ -26,7 +21,7 @@ public final class UpscalerReconfigure {
         NONE,
         /** READY context no longer matches the request: take it out of use (state -> RECONFIGURE_PENDING). */
         BEGIN_RETIRE,
-        /** The retire delay elapsed: destroy the old context (state -> IDLE), then plan again. */
+        /** Prove host completion and destroy the old context (state -> IDLE), then plan again. */
         DESTROY_RETIRED,
         /** No context and something is requested: create it. */
         CREATE,
@@ -40,12 +35,10 @@ public final class UpscalerReconfigure {
      * @param desired   mode requested for this technology, null when it is not the selected backend
      * @param active    mode of the READY context (null otherwise)
      * @param attempted mode of the context that was created last (the one a FAILED state belongs to)
-     * @param frame     index of the current frame head
-     * @param retireAt  frame head at which the retired context may be destroyed
      */
-    public static <M> Step plan(Phase phase, M desired, M active, M attempted, long frame, long retireAt) {
+    public static <M> Step plan(Phase phase, M desired, M active, M attempted) {
         return switch (phase) {
-            case RECONFIGURE_PENDING -> frame >= retireAt ? Step.DESTROY_RETIRED : Step.NONE;
+            case RECONFIGURE_PENDING -> Step.DESTROY_RETIRED;
             case READY -> Objects.equals(desired, active) ? Step.NONE : Step.BEGIN_RETIRE;
             case FAILED -> Objects.equals(desired, attempted) ? Step.NONE : Step.CLEAR_FAILED;
             case IDLE -> desired != null ? Step.CREATE : Step.NONE;
