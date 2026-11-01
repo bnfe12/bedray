@@ -67,7 +67,7 @@ public final class FrameGenRuntime {
     // per-frame state
     private static boolean worldReady;
     private static int renderW, renderH, winW, winH;
-    private static boolean tagsActive;
+    private static final FrameGenResourceTags resourceTags = new FrameGenResourceTags();
 
     // temporal history for the constants (WorldTargetManager advances its own history before our hook)
     private static Matrix4f prevProj, prevView;
@@ -763,7 +763,7 @@ public final class FrameGenRuntime {
     }
 
     private static void stopGeneration(SlNative sl, int flags) {
-        if (!modeOn && !ranOnce && !tagsActive) return;
+        if (!modeOn && !ranOnce && !resourceTags.isActive()) return;
         check(sl.dlssgOptions(MODE_OFF, 1, flags, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0),
             "slDLSSGSetOptions(off before resource retirement)");
         modeOn = false;
@@ -774,21 +774,20 @@ public final class FrameGenRuntime {
         FrameGenGpu.Img m = gpu.mv(slot);
         FrameGenGpu.Img h = gpu.hudless(slot);
         int usage = h.usage();
-        check(sl.tag(BT_DEPTH, d.image(), d.view(), LAYOUT_GENERAL, d.width(), d.height(), d.format(), d.usage(), LIFE_UNTIL_PRESENT, VIEWPORT), "tag depth");
-        check(sl.tag(BT_MVEC, m.image(), m.view(), LAYOUT_GENERAL, m.width(), m.height(), m.format(), m.usage(), LIFE_UNTIL_PRESENT, VIEWPORT), "tag mvec");
-        check(sl.tag(BT_HUDLESS, h.image(), h.view(), LAYOUT_GENERAL, h.width(), h.height(), h.format(), usage, LIFE_UNTIL_PRESENT, VIEWPORT), "tag hudless");
-        tagsActive = true;
+        resourceTags.register(() -> {
+            check(sl.tag(BT_DEPTH, d.image(), d.view(), LAYOUT_GENERAL, d.width(), d.height(), d.format(), d.usage(), LIFE_UNTIL_PRESENT, VIEWPORT), "tag depth");
+            check(sl.tag(BT_MVEC, m.image(), m.view(), LAYOUT_GENERAL, m.width(), m.height(), m.format(), m.usage(), LIFE_UNTIL_PRESENT, VIEWPORT), "tag mvec");
+            check(sl.tag(BT_HUDLESS, h.image(), h.view(), LAYOUT_GENERAL, h.width(), h.height(), h.format(), usage, LIFE_UNTIL_PRESENT, VIEWPORT), "tag hudless");
+        });
     }
 
     private static void clearTags(SlNative sl) {
-        if (!tagsActive) {
-            return;
-        }
         // Guide 5.2: when the inputs are not valid (menus, loading) set all tags to null.
-        check(sl.tag(BT_DEPTH, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear depth tag");
-        check(sl.tag(BT_MVEC, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear mvec tag");
-        check(sl.tag(BT_HUDLESS, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear hudless tag");
-        tagsActive = false;
+        resourceTags.clear(() -> {
+            check(sl.tag(BT_DEPTH, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear depth tag");
+            check(sl.tag(BT_MVEC, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear mvec tag");
+            check(sl.tag(BT_HUDLESS, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear hudless tag");
+        });
     }
 
     /**

@@ -67,8 +67,9 @@ void volumetricMarchEntry<T : ISceneTracer>(T traversal, uint3 dispatchThreadID,
     float3 up = safeNormalize(frame.camera.up.xyz, float3(0.0, 1.0, 0.0));
     float tanHalf = max(frame.camera.forward.w, 1.0e-4);
     float aspect = max(frame.camera.right.w, 1.0e-4);
+    // No y mirror here: the basis already carries the renderer's flip (exactly as pathTracePrimaryRay uses it). Only
+    // the history reprojection below mirrors, because it starts from a matrix NDC.
     float2 ndc = (float2(pf) + 0.5) / fullSize * 2.0 - 1.0;
-    if (pc.flipY != 0u) ndc.y = -ndc.y;
     float3 dir = normalize(forward + right * (ndc.x * tanHalf * aspect) - up * (ndc.y * tanHalf));
 
     float dark = volumetricDarkness(pc.exposure);

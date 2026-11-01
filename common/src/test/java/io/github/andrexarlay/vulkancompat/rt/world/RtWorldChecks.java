@@ -13,11 +13,6 @@ public final class RtWorldChecks {
     private RtWorldChecks() {
     }
 
-    /** Full expansion of the rt_common.glsl umbrella (the modules in umbrella order) for shader source checks. */
-    public static String rtCommon() {
-        return RtShaderCompiler.resolveIncludes(
-            RtShaderCompiler.loadSource("/shaders/glsl/rt_common.glsl"), "/shaders/glsl/rt_common.glsl");
-    }
 
     public static void runAll() {
         allocatorBasics();
@@ -28,38 +23,29 @@ public final class RtWorldChecks {
         inverseViewProjection();
         cameraBobProjectionParity();
         debugModes();
-        primaryShaderCompiles();
         skyModel();
         frameParamsLayout();
         lightingEquation();
         samplingHelpers();
-        modesAndIncludes();
+        modeSelection();
         instanceWriterLayout();
         RtModesChecks.runAll();
     }
 
-    private static void modesAndIncludes() {
+    /** The mode string the config reads and the pass it selects: one parse table, no silent default. */
+    private static void modeSelection() {
         check(RtMode.parse("off") == RtMode.OFF && RtMode.parse("RAYS") == RtMode.RAY_TRACED
-            && RtMode.parse("path") == RtMode.PATH_TRACED && RtMode.parse("path_traced") == RtMode.PATH_TRACED, "RtMode.parse names");
-        check(RtMode.parse("bogus") == null && RtMode.parse(null) == null && RtMode.parse("") == null, "RtMode.parse rejects unknown");
+            && RtMode.parse("path") == RtMode.PATH_TRACED && RtMode.parse("path_traced") == RtMode.PATH_TRACED,
+            "RtMode.parse names");
+        check(RtMode.parse("bogus") == null && RtMode.parse(null) == null && RtMode.parse("") == null,
+            "RtMode.parse rejects unknown");
         check(!RtMode.OFF.isActive() && RtMode.RAY_TRACED.isActive() && RtMode.PATH_TRACED.isActive(), "isActive");
-        check(RtFrameRenderer.passModeFor(RtMode.OFF) == RtMode.RAY_TRACED && RtFrameRenderer.passModeFor(RtMode.RAY_TRACED) == RtMode.RAY_TRACED
-            && RtFrameRenderer.passModeFor(RtMode.PATH_TRACED) == RtMode.PATH_TRACED, "pass chosen per mode");
-        String raw = RtShaderCompiler.loadSource(RtPipeline.SHADER_PATH);
-        check(raw.contains("#include \"rt_common.glsl\""), "rt_rays.comp includes the common file");
-        String expanded = RtShaderCompiler.resolveIncludes(raw, RtPipeline.SHADER_PATH);
-        check(!expanded.contains("#include") && expanded.contains("accelerationStructureEXT tlas"), "include expanded");
-        String twice = RtShaderCompiler.resolveIncludes("#version 460\n#include \"rt_common.glsl\"\n#include \"rt_common.glsl\"\nvoid main(){}\n",
-            RtPipeline.SHADER_PATH);
-        check(twice.indexOf("accelerationStructureEXT tlas") == twice.lastIndexOf("accelerationStructureEXT tlas"), "include-once");
-        boolean threw = false;
-        try {
-            RtShaderCompiler.resolveIncludes("#version 460\n#include \"missing.glsl\"\n", RtPipeline.SHADER_PATH);
-        } catch (RtFailure e) {
-            threw = e.stage().equals("shader_load");
-        }
-        check(threw, "missing include is an RtFailure(shader_load)");
+        check(RtFrameRenderer.passModeFor(RtMode.OFF) == RtMode.RAY_TRACED
+            && RtFrameRenderer.passModeFor(RtMode.RAY_TRACED) == RtMode.RAY_TRACED
+            && RtFrameRenderer.passModeFor(RtMode.PATH_TRACED) == RtMode.PATH_TRACED,
+            "pass chosen per mode");
     }
+
 
     private static void instanceWriterLayout() {
         long address = org.lwjgl.system.MemoryUtil.nmemAlloc(64);
@@ -247,18 +233,6 @@ public final class RtWorldChecks {
         near((expectedPrevUvY - uvY) * 1080f, mv.mvY(), 2e-3f, "bob velocity reprojection y");
     }
 
-    private static void primaryShaderCompiles() {
-        java.nio.ByteBuffer spv = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
-        check(spv.remaining() > 1000 && spv.remaining() % 4 == 0, "rt_rays.comp SPIR-V size " + spv.remaining());
-        check(spv.getInt(0) == 0x07230203, "SPIR-V magic number");
-        boolean threw = false;
-        try {
-            RtShaderCompiler.compile("#version 460\nvoid main() { undefined_symbol(); }\n", "broken.comp");
-        } catch (RtFailure f) {
-            threw = f.stage().equals("shader_compile");
-        }
-        check(threw, "a compile error is reported as RtFailure(shader_compile), not swallowed");
-    }
 
     private static void debugModes() {
         check(RtConfig.parseMode("normals") == RtConfig.MODE_NORMALS, "normals");
@@ -405,7 +379,7 @@ public final class RtWorldChecks {
         p.skyColor[0] = 0.4f; p.skyColor[1] = 0.5f; p.skyColor[2] = 0.6f;
         java.nio.ByteBuffer b = java.nio.ByteBuffer.allocateDirect(RtFrameParams.BYTES).order(java.nio.ByteOrder.LITTLE_ENDIAN);
         p.write(b);
-        check(RtFrameParams.BYTES == 128 && RtPipeline.PUSH_BYTES == 128, "push constants are 128 bytes");
+        check(RtFrameParams.BYTES == 128 && RtFrameBindings.PUSH_BYTES == 128, "push constants are 128 bytes");
         near(1f, b.getFloat(0), 0f, "m00");
         near(7f, b.getFloat(48), 0f, "m30 in the 13th float (column-major)");
         check(b.getLong(64) == 0x1122334455667788L, "statsAddr at 64");

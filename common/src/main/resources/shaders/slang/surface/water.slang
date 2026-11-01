@@ -16,8 +16,12 @@
 // `waterSegmentTransmittance` / `waterInScatter` evaluate one segment inside
 // the body.  The path tracer and the visibility walk own the state (when a ray
 // is inside a body and which body); this module only does the arithmetic.
-// Caustics are still missing: they need the refracted sun footprint on the
-// bottom, which belongs to the lighting path, not to the medium.
+//
+// The beam a light sends into the body is here as well (`waterBeamToLight`): a
+// plane interface maps one air direction to one water direction, so the path
+// the sun took to an underwater receiver is knowable without tracing it.  The
+// wave field then focuses that beam, and `waterBeamFocus` measures the focus as
+// the area the bundle spreads over on the floor - the caustic.
 
 public module water;
 
@@ -43,6 +47,10 @@ static const float4 WATER_WAVE_A[WATER_WAVES] = {
     float4(-0.200, -0.980, 11.5, 0.012)
 };
 static const float WATER_WAVE_PHASE[WATER_WAVES] = { 0.0, 1.3, 2.9, 4.1, 5.2, 0.7 };
+
+// How much of the wave tilt the vanilla style keeps.  The number is the legacy
+// sheet's own mix (rt_common_surface.glsl): clearly visible ripples, not a storm.
+static const float WATER_WAVE_MIX_VANILLA = 0.55;
 
 // Gradient of the height field (dh/dx, dh/dz) at world xz.  A wave whose period
 // the footprint does not resolve fades out, and the slope variance it leaves
@@ -87,6 +95,19 @@ float3 waterWaveNormal(float3 worldPosition, float3 geometricNormal, float time,
     float3 perturbed = safeNormalize(geometricNormal +
         float3(-slope.x, 0.0, -slope.y) * sign(geometricNormal.y), geometricNormal);
     return dot(perturbed, geometricNormal) > 0.0 ? perturbed : geometricNormal;
+}
+
+// The same face under the player's style switch.  Both styles tilt the face by
+// the same analytic field; the mix only decides how far it leans back toward the
+// flat geometric normal, so the wave shape is a slider and never a different
+// surface the light has to be re-solved for.
+float3 waterStyledWaveNormal(float3 worldPosition, float3 geometricNormal, float time,
+        float footprint, float waveMix, out float lostVar) {
+    float3 wave = waterWaveNormal(worldPosition, geometricNormal, time, footprint, lostVar);
+    if (waveMix >= 1.0) {
+        return wave;
+    }
+    return safeNormalize(lerp(geometricNormal, wave, max(waveMix, 0.0)), geometricNormal);
 }
 
 // Vanilla face shade baked into a section vertex colour (mirror of
@@ -186,4 +207,223 @@ float3 waterInScatter(WaterMedium medium, float segmentMidY, float3 downRadiance
     float3 column = WATER_MULTIPLE_SCATTER_FLOOR
         + (1.0 - WATER_MULTIPLE_SCATTER_FLOOR) * exp(-medium.sigmaT * depth * 0.65);
     return downRadiance * medium.scatterAlbedo * column * (float3(1.0) - transmittance);
+}
+
+// ---- the beam a light sends into the body ------------------------------------
+//
+// A horizontal fluid face is a plane, so one air-side direction maps to one
+// water-side direction and the key light reaches an underwater receiver along a
+// path that can be named without tracing it: Snell gives the direction, the
+// surface height the medium already carries gives the crossing point, and the
+// distance between them is the column the light had to cross.  A straight sight
+// line to the disc is not that path - the whole sky compresses into the Snell
+// window, so the sun is always high overhead under water.
+//
+// The wave field then decides how much of the beam lands on this particular
+// square of floor.  A dimple gathers several surface squares onto one floor
+// square; the ratio is the Jacobian of the map from entry point to footprint,
+// and reading it costs three refractions through three wave normals and no trace.
+
+// Reflectance of the air-water face at normal incidence.  The fluid decode hands
+// the same number to the optical interface (surface.slang), so a beam that
+// crosses the plane and a ray that hits the traced face pay the same crossing.
+static const float WATER_INTERFACE_F0 = 0.02;
+
+// The finite difference that reads the focus is a wave-scale question: the ripple
+// that matters at depth is about as wide as the depth, and a step fixed in blocks
+// would measure ripples that have already blurred into a sheen by the time the
+// floor is three blocks down.
+static const float WATER_CAUSTIC_STEP_MIN = 0.25;
+static const float WATER_CAUSTIC_STEP_MAX = 4.0;
+
+// A fold focuses the bundle onto a line and the integrand has no answer for that.
+// The clamp bounds what one sample can put into a history that lives for
+// thousands of frames while still letting the pattern reach three times the mean.
+static const float WATER_CAUSTIC_MIN = 0.1;
+static const float WATER_CAUSTIC_MAX = 3.0;
+
+struct WaterBeam {
+    bool   valid;
+    float3 direction;   // unit: the direction light travels inside the body (points down)
+    float  column;      // distance from the receiver to the surface along the beam
+    float3 entry;       // where the beam crosses the surface plane
+    float  solidAngle;  // solid-angle air / solid-angle water: the weight an air-side
+                        // sample needs once the BSDF is evaluated on the water side
+    float3 air;         // unit: entry -> light, the direction of the sky leg
+    float  airDistance; // length of the sky leg, from the crossing to the light
+};
+
+WaterBeam invalidWaterBeam() {
+    WaterBeam beam;
+    beam.valid = false;
+    beam.direction = float3(0.0, 1.0, 0.0);
+    beam.column = 0.0;
+    beam.entry = float3(0.0);
+    beam.solidAngle = 1.0;
+    beam.air = float3(0.0, 1.0, 0.0);
+    beam.airDistance = 0.0;
+    return beam;
+}
+
+// Snell at the fluid face for an air beam arriving from `lightDirection` (the
+// receiver-to-light direction, so the beam itself runs the other way) through the
+// face whose normal is `faceNormal`.  Air into water cannot totally internally
+// reflect, so the only failure worth naming is a crest that has turned its face
+// away from the beam; the flat sheet answers that one.
+float3 waterBeamTravel(float3 lightDirection, float3 faceNormal) {
+    float3 flat = refract(-lightDirection, float3(0.0, 1.0, 0.0), 1.0 / WATER_IOR);
+    if (dot(faceNormal, lightDirection) <= 0.0) return flat;
+    float3 bent = refract(-lightDirection, faceNormal, 1.0 / WATER_IOR);
+    return dot(bent, bent) > 1.0e-8 ? safeNormalize(bent, flat) : flat;
+}
+
+// The beam the light takes into the body the receiver stands in.  Anything the
+// plane model cannot answer - a light below the horizon, a receiver at or above
+// the recorded surface, an emitter nearer than the column - leaves the beam
+// invalid, and the caller keeps the straight sight line, which is the right path
+// for a light that never crossed the face.
+WaterBeam waterBeamToLight(float3 lightDirection, float distance, float3 position, WaterMedium medium) {
+    WaterBeam beam = invalidWaterBeam();
+    beam.direction = lightDirection;
+    if (!medium.inside || !(distance > 0.0) || !(lightDirection.y > 0.0)) return beam;
+    float depth = medium.surfY - position.y;
+    if (!(depth > 0.0)) return beam;
+    float3 travel = waterBeamTravel(lightDirection, float3(0.0, 1.0, 0.0));
+    // The refracted beam is never shallower than the critical angle, so this
+    // guard only fires on a degenerate sample; a horizontal beam would make the
+    // column infinite.
+    if (!(travel.y < -0.05)) return beam;
+    float column = depth / -travel.y;
+    if (!(column > 0.0) || !(column < distance)) return beam;
+    beam.valid = true;
+    beam.direction = travel;
+    beam.column = column;
+    beam.entry = position - travel * column;
+    // Radiance rises by 1/eta-squared entering the denser side while the cone
+    // narrows by eta-squared times the cosine ratio, and the two cancel in the
+    // flux that crosses the same horizontal patch.  What is left for an
+    // estimator that sampled air solid angles and now evaluates a water
+    // direction is cos(air) / cos(water), so a floor under a flat sheet keeps
+    // exactly the irradiance the surface lets through.
+    beam.solidAngle = max(lightDirection.y, 1.0e-3) / max(-travel.y, 1.0e-3);
+    beam.air = lightDirection;
+    beam.airDistance = distance - column;
+    return beam;
+}
+
+// The beam a point light above the sheet takes to a receiver under it: a block emitter, which the key light's
+// directional form cannot describe because its air leg changes direction with the crossing.  The crossing is the point
+// of the flat sheet where n_water sin(water) = n_air sin(air); with the horizontal offset x of the crossing from the
+// receiver, g(x) = n x / |(x, depth)| - (D - x) / |(D - x, rise)| rises monotonically from -1..0 at x = 0 to 0..n at
+// x = D, so bisection finds it without a starting guess.
+//
+// The weight is the ray Jacobian of the crossing.  A water-side bundle of solid angle dw lands, on the light's height
+// plane, on the area r dr dphi, where r(theta) = depth tan(theta) + rise tan(theta_air); the light's perpendicular area
+// is that times cos(air).  So dw / dA_perp = sin(theta) / (r r' cos(air)), with r / sin(theta) =
+// depth / cos(water) + n rise / cos(air) and r' = depth / cos^2(water) + n rise cos(water) / cos^3(air).  The sampler's
+// estimate carries the straight 1 / d^2 of that perpendicular area; radiance rises by n^2 into the dense side.  Hence
+// solidAngle = n^2 d^2 dw / dA_perp: 1 without a sheet (n = 1), and the key light's cos(air) / cos(water) for a light far
+// above (RtSlangWaterPointBeamTest checks both, and the Jacobian against a measured ray map).  The emitter's own cosine
+// is kept at the sight line's (the look kernel floors it); the change of that cosine across the crossing is not modelled.
+static const uint WATER_POINT_BEAM_STEPS = 32u;
+
+WaterBeam waterBeamToPoint(float3 target, float3 position, WaterMedium medium) {
+    WaterBeam beam = invalidWaterBeam();
+    float3 toTarget = target - position;
+    float straight = length(toTarget);
+    if (!medium.inside || !(straight > 0.0) || !isFinite(straight)) return beam;
+    float depth = medium.surfY - position.y;
+    float rise = target.y - medium.surfY;
+    // A light under the sheet never crossed it, and a receiver at the sheet has no column: the sight line stands.
+    if (!(depth > 1.0e-3) || !(rise > 1.0e-3)) return beam;
+    float across = length(toTarget.xz);
+    float2 heading = across > 1.0e-6 ? toTarget.xz / across : float2(1.0, 0.0);
+    float lo = 0.0;
+    float hi = across;
+    for (uint i = 0u; i < WATER_POINT_BEAM_STEPS; ++i) {
+        float mid = 0.5 * (lo + hi);
+        float g = WATER_IOR * mid * rsqrt(mid * mid + depth * depth)
+            - (across - mid) * rsqrt((across - mid) * (across - mid) + rise * rise);
+        if (g > 0.0) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    float x = 0.5 * (lo + hi);
+    float3 entry = float3(position.x + heading.x * x, medium.surfY, position.z + heading.y * x);
+    float3 waterLeg = entry - position;
+    float column = length(waterLeg);
+    float3 airLeg = target - entry;
+    float airDistance = length(airLeg);
+    if (!(column > 0.0) || !(airDistance > 0.0)) return beam;
+    float3 up = waterLeg / column;
+    float3 air = airLeg / airDistance;
+    float cosWater = up.y;
+    float cosAir = air.y;
+    if (!(cosWater > 0.0) || !(cosAir > 1.0e-4)) return beam;
+    float rOverSin = depth / cosWater + rise * WATER_IOR / cosAir;
+    float rPrime = depth / (cosWater * cosWater) + rise * WATER_IOR * cosWater / (cosAir * cosAir * cosAir);
+    beam.solidAngle = WATER_IOR * WATER_IOR * straight * straight / (rOverSin * rPrime * cosAir);
+    if (!isFinite(beam.solidAngle)) return invalidWaterBeam();
+    beam.valid = true;
+    beam.direction = -up;
+    beam.column = column;
+    beam.entry = entry;
+    beam.air = air;
+    beam.airDistance = airDistance;
+    return beam;
+}
+
+// Fresnel share of the flat face for a beam that crosses it at the air-side
+// cosine `airCosine`.  The mirror of `surfaceInterfaceTransmittance`'s fluid
+// branch in surface.slang: the colour of the water stays in the column, so the
+// interface is charged for the reflection only.
+float3 waterBeamTransmittance(float airCosine) {
+    float cosine = clamp(airCosine, 0.05, 1.0);
+    float fresnel = WATER_INTERFACE_F0 + (1.0 - WATER_INTERFACE_F0) * pow5(1.0 - cosine);
+    return float3(1.0 - fresnel);
+}
+
+// Where the beam that enters at `entryXZ` stands horizontally once it has fallen
+// to `receiverY`, measured through the wave normal of the face it entered.
+// `entryXZ` is camera-relative like every hit position; `waveAnchor` moves it
+// onto the world anchor the visible surface reads its waves at
+// (`SurfaceHit.worldPosition`), or the caustic pattern would slide with the
+// camera and never match the waves it comes from.
+float2 waterBeamAtDepth(float2 entryXZ, float entryY, float receiverY, float3 lightDirection,
+        float time, float footprint, float waveMix, float2 waveAnchor) {
+    float lostVar = 0.0;
+    float2 waveXZ = entryXZ + waveAnchor;
+    float3 face = waterStyledWaveNormal(float3(waveXZ.x, entryY, waveXZ.y),
+        float3(0.0, 1.0, 0.0), time, footprint, waveMix, lostVar);
+    float3 travel = waterBeamTravel(lightDirection, face);
+    return entryXZ + travel.xz * ((entryY - receiverY) / max(-travel.y, 1.0e-3));
+}
+
+// How much of the beam lands on this receiver: the reciprocal of the area the
+// bundle spreads over between the surface and the receiver's depth.  A flat sheet
+// maps every square of surface onto a square of floor the same size and returns
+// 1; a dimple that gathers three of them onto one returns 3.  Damping the waves
+// damps the focus with them, because the bundle is bent by the same face the
+// receiver's own shading normal uses.
+float waterBeamFocus(WaterBeam beam, float3 position, float3 lightDirection, float time,
+        float waveMix, float2 waveAnchor) {
+    if (!beam.valid) return 1.0;
+    float step = clamp(beam.column * 0.5, WATER_CAUSTIC_STEP_MIN, WATER_CAUSTIC_STEP_MAX);
+    float2 base = beam.entry.xz;
+    float2 centre = waterBeamAtDepth(base, beam.entry.y, position.y, lightDirection,
+        time, step * 0.5, waveMix, waveAnchor);
+    float2 east = waterBeamAtDepth(base + float2(step, 0.0), beam.entry.y, position.y,
+        lightDirection, time, step * 0.5, waveMix, waveAnchor);
+    float2 north = waterBeamAtDepth(base + float2(0.0, step), beam.entry.y, position.y,
+        lightDirection, time, step * 0.5, waveMix, waveAnchor);
+    float2 dx = (east - centre) / step;
+    float2 dz = (north - centre) / step;
+    float det = dx.x * dz.y - dx.y * dz.x;
+    // A non-positive determinant is a fold: the neighbouring beams have crossed
+    // over each other, and the area they enclose is not the flux this receiver
+    // gets.  Take the dim floor instead of the reciprocal of a signed number.
+    if (!isFinite(det) || det <= 1.0e-3) return WATER_CAUSTIC_MIN;
+    return clamp(1.0 / det, WATER_CAUSTIC_MIN, WATER_CAUSTIC_MAX);
 }

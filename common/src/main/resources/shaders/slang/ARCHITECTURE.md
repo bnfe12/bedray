@@ -113,8 +113,8 @@ owns the concept, not import "upward" from a pass.
 | `traversal/legacy_section_traversal.slang` | legacy 64-byte section table + device-address arena (opt-in) |
 | `traversal/entity_geometry.slang` | entity ring decode and atlas data |
 | `surface/surface.slang` | `MaterialAtlas`, `BlockMaterialTable`, `decodeSurface` |
-| `surface/water.slang` | wave field, fluid classification, biome tint, volumetric medium |
-| `surface/visibility.slang` | filtered shadow walk (plain and medium-aware) and proof predicate |
+| `surface/water.slang` | wave field, fluid classification, biome tint, volumetric medium, the beam a light sends into the body and its caustic focus |
+| `surface/visibility.slang` | filtered shadow walk (plain, medium-aware, and the two-leg refracted beam) and proof predicate |
 | `shading/microfacet.slang` | GGX/Fresnel math |
 | `shading/bsdf.slang` | diffuse/GGX/transmission evaluation |
 | `light/sun.slang` | sun/moon sampler |
@@ -310,7 +310,7 @@ Current harnesses:
 | `verify_rc_trace_api.slang` | every public RC trace entry, options, history, ownership |
 | `verify_bedray_roots.slang` | both public roots compile together; typed and legacy resolve names stay distinct |
 | `verify_scene_tracer.slang` | `HybridTraversal` and mock backends |
-| `verify_water.slang` | both slope overloads, wave normal on top/underside/vertical faces, biome tint, fluid classification, medium extinction/in-scatter/boundary rules |
+| `verify_water.slang` | both slope overloads, wave normal on top/underside/vertical faces, biome tint, fluid classification, medium extinction/in-scatter/boundary rules, the refracted beam and its focus bounds |
 
 Evidence levels: L0 source review, L1 shader compile, L2 native unit/ABI
 tests, L3 shader execution on a GPU, L4 live frame, L5 visual comparison.  This

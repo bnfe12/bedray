@@ -25,12 +25,13 @@ class RtSlangVolumetricSceneTest {
         // Fingerprint of the pre-extraction main body on 0898b004, with only its
         // four traversal setup statements removed. Normalize only the deliberate
         // origin input/endpoint coordinate changes; all other arithmetic remains pinned.
+        // 2026-11-01: the second ndc.y mirror of the march was removed (RtSlangVolumetricFlipTest).
         body = body.replace("marchLightShaft(traversal, frame.camera.origin.xyz, dir,",
                 "marchLightShaft(traversal, dir,")
             .replace("float3 rayEnd = frame.camera.origin.xyz + dir * tEnd;", "float3 rayEnd = dir * tEnd;");
         String fingerprint = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
             .digest(body.replaceAll("\\s+", "").getBytes(StandardCharsets.UTF_8)));
-        assertEquals("d0b6a58f09d5e34d59db20268af6e559de94e5be8959e88745fc642b2d379cf7", fingerprint,
+        assertEquals("ba61272bb63ed18c8f5a875e2268919251e496a42b5d6d7fc301105d60087355", fingerprint,
             "an interface extraction must not silently change the ray, history or accumulation math");
         assertFalse(read(KERNEL).contains("[[vk::binding("), "the shared kernel has no descriptor ownership");
         assertFalse(read(KERNEL).contains("LegacySectionTraversal"));

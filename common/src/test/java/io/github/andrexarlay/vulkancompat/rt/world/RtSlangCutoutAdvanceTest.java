@@ -40,8 +40,11 @@ class RtSlangCutoutAdvanceTest {
     @Test
     void theAdvanceMovesTheOriginAndShortensTheIntervalByTheSameAmount() {
         String hole = holeBranch();
-        assertTrue(hole.contains("float advance = hit.t + options.rayBias;"),
-            "one bias, on the distance the origin actually moved");
+        assertTrue(hole.contains("float holeStep = pathTraceHoleStep(hit.t);")
+                && hole.contains("float advance = hit.t + holeStep;"),
+            "one hole step, on the distance the origin actually moved");
+        assertTrue(!hole.contains("options.rayBias"),
+            "never the scattering bias: 0.01 of a block jumps over the face a flat overlay covers");
         assertTrue(hole.contains("float3 advancedOrigin = ray.origin + ray.direction * advance;"),
             "the new origin is the old one plus the advance along the same ray");
         assertTrue(hole.contains("ray.origin = advancedOrigin;"), "the origin is really moved");
@@ -79,7 +82,7 @@ class RtSlangCutoutAdvanceTest {
         assertTrue(hole.contains("ray.tMin = 0.0;"),
             "the origin is one bias off the surface it just left; a tMin of options.rayBias would test twice "
                 + "as far and re-open the hole the step just closed");
-        assertTrue(hole.contains("mediumStart = -options.rayBias;"),
+        assertTrue(hole.contains("mediumStart = -holeStep;"),
             "the candidate sits a bias behind the new origin, so the next segment starts there and not at zero");
         assertEquals(-1, hole.indexOf("ray.tMin = options.rayBias"),
             "no bias may reappear as an interval start inside the hole step");

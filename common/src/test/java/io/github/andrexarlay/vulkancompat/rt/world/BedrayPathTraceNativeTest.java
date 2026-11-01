@@ -33,7 +33,7 @@ class BedrayPathTraceNativeTest {
     }
     private static RtPathTraceSlangPass.Dispatch dispatch(int atlas, int first, int count) {
         return new RtPathTraceSlangPass.Dispatch(3, 8, 7, 5, 6, 0.01f, 0.5f, 72f, 64f, 0.5f,
-            2, 0.25f, 1f, 2f, 3f, 8, 4f, 5f, 6f, 1, 0, atlas, first, count, 1.25f);
+            2, 0.25f, 1f, 2f, 3f, 8, 4f, 5f, 6f, 1, 0, atlas, first, count, 1.25f, 0f, 0f, 0f);
     }
 
     @Test void heapAndNativePacketsPreserveTheCanonicalPushAndBothRangeGuards() {

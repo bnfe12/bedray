@@ -41,7 +41,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
             // Halo: compact Lorentzian core + gentle exponential glow.
             float g = (0.38 / (1.0 + (theta / 0.028) * (theta / 0.028)) + 0.045 * exp(-theta / 0.18)) * fgMask;
             if (g > 1.0e-3) {
-                float vis = bloomSunVisibility(depthTex, finalImg, int2(size), pc);
+                float vis = srcTex.Load(int3(0, 0, 0)).a;
                 add += float3(1.0, 0.93, 0.80) * (g * 2.2 * glareK * vis);
             }
         }

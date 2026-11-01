@@ -33,9 +33,11 @@ final class RtSlangFrameData {
         frame.right.set(right.x, right.y, right.z, rightLen / downLen);
         frame.up.set(up.x, up.y, up.z, 0f);
         frame.origin.set(bob.x, bob.y, bob.z, p.frame / 20f);
-        // Sub-pixel jitter per frame so the running mean also antialiases; zw is the pixel size the shader uses for NDC.
-        float jx = accumFrames == 0 ? 0f : halton(sampleIndex + 1, 2) - 0.5f;
-        float jy = accumFrames == 0 ? 0f : halton(sampleIndex + 1, 3) - 0.5f;
+        // Sub-pixel jitter; zw is the pixel size the shader uses for NDC. With an upscaler jittering the frame it is the
+        // upscaler's offset - the one DLSS-RR and NRD are told - or the denoiser reprojects every sample to the wrong spot.
+        // Otherwise the running mean antialiases with its own sequence.
+        float jx = p.upscalerJittered ? p.upscalerJitterX : accumFrames == 0 ? 0f : halton(sampleIndex + 1, 2) - 0.5f;
+        float jy = p.upscalerJittered ? p.upscalerJitterY : accumFrames == 0 ? 0f : halton(sampleIndex + 1, 3) - 0.5f;
         frame.jitter.set(jx, jy, 1f / width, 1f / height);
         frame.width = width;
         frame.height = height;
@@ -58,18 +60,29 @@ final class RtSlangFrameData {
         float[] horizon = RtTonemap.invert(sky[0] * 0.7f + 0.3f, sky[1] * 0.7f + 0.3f, sky[2] * 0.7f + 0.3f);
         frame.zenithColor.set(zenith[0], zenith[1], zenith[2], 1f);
         frame.horizonColor.set(horizon[0], horizon[1], horizon[2], 1f);
-        frame.fogColor.set(frame.horizonColor);
-        frame.fog.set(0f, 0f, 0f, 0f);
+        frame.skyLightZenith.set(p.skyLightZenith[0], p.skyLightZenith[1], p.skyLightZenith[2], 1f);
+        frame.skyLightHorizon.set(p.skyLightHorizon[0], p.skyLightHorizon[1], p.skyLightHorizon[2], 1f);
         frame.cloud.set(0f, 0f, 0f, 0f);
 
-        frame.exposure.set(1f, 0f, 0f, 0f);
+        // The frame's exposure, in the one lane both backends read: the Java display push takes it from here, and
+        // BedrayPathTraceNative forwards it as the native descriptor's lighting.exposure. The other three lanes stay
+        // zero - no Slang shader reads the bloom or tonemap-operator selectors, the native core writes its own zero into
+        // the auto bit, and the Java path keeps its frame time in origin.w rather than in values.w.
+        frame.exposure.set(p.exposure, 0f, 0f, 0f);
         frame.autoExposure = 0;
         frame.tonemapOperator = 0;
         frame.bloomEnabled = 0;
         frame.frameIndex = p.frame;
         frame.sampleIndex = sampleIndex;
-        frame.samplesPerFrame = 1;
-        frame.flags = p.cameraInWater ? RtPathTraceSlangPass.Frame.FLAG_CAMERA_IN_WATER : 0;
+        // Rays per pixel, as the adaptive governor left them: the tracer reads this word and loops that many primary
+        // paths per pixel. Clamped to the shader's own ceiling so the host cannot ask for a frame the shader will not run.
+        frame.samplesPerFrame = Math.min(RtPathTraceSlangPass.MAX_SAMPLES_PER_PIXEL, Math.max(1, p.spp));
+        // One frame word for every native pass, built from the flags RtFrameRenderer already derived from the settings
+        // screen: the eye's own medium, and the two switches that decide how the body treats the light passing through
+        // it.  A pass that read RtSettings here would diverge from the native core's copy of the same verdict.
+        frame.flags = (p.cameraInWater ? RtPathTraceSlangPass.Frame.FLAG_CAMERA_IN_WATER : 0)
+            | ((p.flags & RtFrameParams.FLAG_WATER_REALISTIC) != 0 ? RtPathTraceSlangPass.Frame.FLAG_WATER_REALISTIC : 0)
+            | ((p.flags & RtFrameParams.FLAG_CAUSTICS) != 0 ? RtPathTraceSlangPass.Frame.FLAG_WATER_CAUSTICS : 0);
     }
 
     private static Vector3f unproject(Matrix4f invViewProj, float x, float y) {

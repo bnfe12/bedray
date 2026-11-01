@@ -324,6 +324,25 @@ public final class SettingsCatalog {
             "Path Tracing with ReSTIR Direct Light on, and only where glowing blocks are traced. The pass is optional: a "
                 + "build without its compiled kernel runs temporal reuse alone and says so in the log.",
             "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_restir_pt_spatial", Tier.ADVANCED, "ReSTIR Spatial Path Reuse",
+            "Each pixel also borrows the bounced-light paths of four neighbours on the same surface - same facing, within a "
+                + "block - and keeps the better one for the next frame, so bounced light settles from more paths than one "
+                + "pixel draws. A neighbour's path is only taken if its first bounce is visible from this pixel.",
+            "FPS: low to medium (up to four visibility rays per pixel; no extra video memory).",
+            "Path Tracing with ReSTIR Path Reuse on, on the default (Java-recorded) backend. Shows up one frame after the "
+                + "pooling: the pooled path is drawn by the next frame's reuse.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_restir_pt", Tier.ADVANCED, "ReSTIR Path Reuse (experimental)",
+            "Keeps the indirect light a pixel's first bounce brought back - light bounced off a nearby diffuse wall or floor - "
+                + "in a per-pixel path record and reuses it in the next frames, so bounced light settles faster while you move. "
+                + "Only rough, non-glowing surfaces seen through a diffuse bounce are reused; sky, glass, metal, water and "
+                + "glowing blocks keep the per-frame path. With an empty history the picture is exactly the one without it.",
+            "FPS: low to medium (one extra visibility ray per pixel for a reused path) and about 0.6 GB of video memory at "
+                + "1080p (two 144-byte records per pixel), allocated only while the switch is on.",
+            "Path Tracing only, with ReSTIR Direct Light on, on the default (Java-recorded) backend. The native backend "
+                + "(-Dvkbridge.rt.nativePathTrace=true) has no path reservoir and ignores the switch.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames. Not yet confirmed "
+                + "in a live game frame.");
         putNoImage("adaptive_quality", Tier.ADVANCED, "Adaptive Quality",
             "Keeps Path Tracing inside a GPU frame budget: when the measured time of the traced rays and the denoiser is over it, rays per pixel drop first and then bounces, "
                 + "below the values you chose; when the frame has room again they come back. It never goes above your values. Off by default - turn it on if you want a steadier "
@@ -460,15 +479,11 @@ public final class SettingsCatalog {
             "Needs ray tracing on; it applies to Path Tracing and to Ray Tracing (Fast).",
             "A look option with no preview screenshot yet.");
         for (String[] e : new String[][] {
-            {"rays_shadow_quality", "RT Shadow Rays", "Shadow rays per pixel."},
             {"rays_pixel_shadow_size", "RT Pixel Shadow Size", "Size of a pixelated shadow in texture pixels (1 = one pixel of a 16x16 block texture); larger means chunkier edges. Only used when RT Pixel Shadows is on."},
-            {"rays_reflection_quality", "RT Reflection Rays", "Reflection rays per pixel."},
             {"rays_reflection_distance", "RT Reflection Distance", "Longest reflection ray in blocks."},
-            {"rays_ao_quality", "RT AO Rays", "Occlusion rays per pixel."},
             {"rays_ao_radius", "RT AO Radius", "Occluders farther than this do not darken."},
             {"rays_emissive_quality", "RT Block Light Samples", "Light samples per pixel."},
             {"rays_emissive_distance", "RT Block Light Distance", "Glowing blocks farther than this do not light a surface."},
-            {"rays_gi_quality", "RT GI Rays", "Bounce rays per pixel."},
             {"rays_gi_distance", "RT GI Distance", "Longest bounce ray in blocks."}}) {
             putNoImage(e[0], Tier.EXPERT, e[1], e[2], "",
                 e[0].equals("rays_pixel_shadow_size")

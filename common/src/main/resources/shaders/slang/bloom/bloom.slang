@@ -148,7 +148,10 @@ float3 bloomPixelDir(int2 p, int2 size, BloomPush pc) {
 
 // Fraction of the sun disk that is visible: sky pixels (ray distance >= 1e5) on the actual solar disk core around
 // the projected sun position; 0 when the sun is occluded by foliage/terrain or outside the frame.
-float bloomSunVisibility(Sampler2D depth, RWTexture2D<float4> finalImg, int2 size, BloomPush pc) {
+// Read from the unmodified frame: the prefilter stage samples it before the apply stage adds any glow, and parks the
+// result in the alpha of mip 0. Reading the final image inside the apply dispatch raced with the neighbouring workgroups
+// that were already adding the halo to the same sun pixels, so the glare flickered with the scheduling order.
+float bloomSunVisibility(Sampler2D depth, Sampler2D frame, int2 size, BloomPush pc) {
     float2 ndc = pc.p1.zw;
     float edge = max(abs(ndc.x), abs(ndc.y));
     float fade = 1.0 - smoothstep(0.95, 1.25, edge);
@@ -167,7 +170,7 @@ float bloomSunVisibility(Sampler2D depth, RWTexture2D<float4> finalImg, int2 siz
         float w = i == 0 ? 2.5 : (i < 5 ? 1.2 : 0.7);
         int2 t = clamp(int2(center + o), int2(0), size - 1);
         float sky = depth.Load(int3(t, 0)).r >= BLOOM_SKY_DISTANCE ? 1.0 : 0.0;
-        float3 sc = finalImg[t].rgb;
+        float3 sc = frame.Load(int3(t, 0)).rgb;
         // Daytime blue sky has high blue (~0.9) but lower red/green; the sun disk is warm-white (all channels high).
         float sunLum = dot(sc, BLOOM_LUMA);
         float bright = smoothstep(0.88, 0.98, sunLum) * smoothstep(0.85, 0.96, sc.r);

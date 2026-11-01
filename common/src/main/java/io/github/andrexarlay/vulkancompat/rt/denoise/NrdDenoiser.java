@@ -148,7 +148,7 @@ public final class NrdDenoiser {
         }
     }
 
-    /** Views of the seven G-buffer images rt_rays.comp / rt_path.comp write (bindings 4..8 and 13..14 of the gbuffer RtPipeline). */
+    /** Views of the seven G-buffer images rt_rays.comp / rt_path.comp write (bindings 4..8 and 13..14 of the G-buffer variant). */
     public long[] gbufferViews() {
         return new long[] {gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view,
             gbSpecular.view, gbSpecAlbedo.view};

@@ -4,6 +4,892 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-10-30 — Glass cost and NaN guards return as typed tests (L0 source, L1 build, L2 unit; no runtime change)
+
+Branch: `refactor/slang-pipeline`.
+
+Two of the tests the GLSL deletion invalidated compared the port against GLSL text, so they were removed rather than re-aimed. Their coverage is back, read out of the Slang sources that own the behaviour; no shader changed in this batch, so the deployed jar and natives are untouched.
+
+- `RtSlangGlassCostTest` (5) pins the cost of the typed visibility walk: the
+  1e-3 transmittance floor ends an absorbed ray before the next pane, each of
+  the four floor branches closes into its own `skipSurfaceCandidate` advance
+  (`ray.tMin = hitDistance + bias`, the origin stays), the six advances, the
+  hole's advance without a filter, and the medium walk's order - the water
+  column's `waterSegmentTransmittance` first, the fluid interface's
+  `1 - Fsc` Fresnel share second, so water is tinted once. The numeric half
+  reads `SURFACE_VISIBILITY_MAX_LAYERS` (16) and
+  `SURFACE_VISIBILITY_MIN_TRANSMITTANCE` (1e-3) out of the shader and shows
+  five 25 % panes end the ray while a clean window fills the budget.
+- `RtSlangNaNGuardTest` (9) re-establishes the deleted `RtShaderNaNGuardTest`:
+  `safeNormalize`'s squared-length gate, both GGX half vectors, the block
+  emitter's density/cosine rejections and its weight and shadow-length floors,
+  the sun's axis fallbacks and post-divide PDF rejection, the tangent frame's
+  det gate plus guarded numerators (with the collinear-UV numeric case), both
+  primary-normal gates, and a tree-wide count of bare `normalize(` calls.
+- The deleted test's `safeW` camera-ray guard has no typed counterpart to fix:
+  `pathTracePrimaryRay` builds the ray from the explicit camera basis - no
+  matrix multiply, no division - which is stronger than guarding the divisor,
+  and the two velocity modules sanitise a non-finite reprojection to zero
+  motion plus full disocclusion, so the live-parity module keeps the bare `w`
+  divide its GLSL source had. Both facts are pinned instead of rewriting
+  live-parity arithmetic.
+
+Thirty-one mutation probes (floor branch/order/value, layer budget, hole
+skip/break/filter, skip origin, medium filter, fluid and non-fluid share, gate
+value and comparison, both half vectors, emitter direction/cosine/floor/bias,
+sun axis and PDF order, tangent det and numerator, both entry gates, a new bare
+normalize, the camera divide and a camera matrix, both velocity sanitises, the
+pass clip-w gate) were each caught, and every shader was restored by sha256.
+
+Full `:common:test --rerun-tasks`: 154 classes, 888 tests, 0 failures, 6
+skipped, `BUILD SUCCESSFUL`. No shader, Java main source or native source
+changed, so there is no new distribution to deploy: the instance jars stay at
+`5f52f205295d0d4e…`.
+
+## 2026-10-30 — Distant block light hands back to the baked field (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+The deleted `rt_common_shade.glsl` mixed the traced block-emitter estimate back
+to the vanilla block-light field past the emitter list's reach: `blockLightFarMix`
+smoothstepped over `listRange ± EMITTER_RADIUS` (inner edge floored at eight
+blocks) from the camera distance, and a fully faded receiver skipped the emitter
+branch and read the baked field instead. The Slang path kept tracing every
+fragment against the truncated list, so a village lamp, a lit cave or a lamp on
+the far bank dimmed to black instead of handing over to the propagation the game
+itself shows.
+
+- `light/block_emitters.slang` owns the field: `blockLightFarMix`,
+  `BLOCK_LIGHT_FAR_FULL` (0.999), `BLOCK_LIGHT_FIELD_GAIN` (0.05) and
+  `vanillaBlockIrradiance` (warm `(1.0, 0.82, 0.60)` tint, block light only).
+  The legacy renderer tinted the field from the lightmap texel; a typed path
+  pass binds no lightmap and the native core validates the exact descriptor
+  count of both path passes, so the pre-lightmap warm tint stands in and a
+  resource pack's block-light hue reaches the traced emitters only.
+- The handover is a mix, not a max: the emitter share of the composite draw is
+  scaled by `1 - emitterFar` (fresh and reused alike) and `pathBakedBlockLight`
+  - the reflecting lobe's albedo, the `1 - Fsc` the interface did not take and
+  the LabPBR AO, with no cosine and no 1/pi, the tuned legacy term - adds
+  `* emitterFar`. The distance is `length(hit.position)`, camera-relative the
+  way the list was sorted.
+- Past `BLOCK_LIGHT_FAR_FULL` the receiver sets `LightReceiver.bakedBlockLight`;
+  `SunAndBlockEmitterSampler` then draws no emitter share (the key light keeps
+  its full density) and the tracer skips the emitter sample entirely, relying on
+  the end-of-path `reuseClear` so a skipped ReSTIR DI record cannot persist.
+- No push growth: the list range already rides at offset 76
+  (`diCameraDelta.w` -> `emitterSampler.maxDistance`) and now also reaches the
+  tracer as `PathTraceOptions.emitterListRange`; `PathTracePush` stays 112 B.
+  The option is flag bit 16 (`PATH_TRACE_OPTION_BLOCK_EMITTERS`), which the host
+  sets only while `SLANG_BLOCK_EMITTERS` / `RtSettings.emissive()` keeps
+  emitters on, so switching the feature off hands the field nothing.
+- `RtSlangDistantBlockLightTest` (9) mirrors the band, the gain and tint, the
+  mix structure, the primary-diffuse gate, the exhausted-list skip and the host
+  wiring. Twenty-two mutation probes (band floor, gain, tint, clamp, sampler
+  gate, fade on both branches, distance source, bounce/metal/light gates, reuse
+  skip, verdict, albedo count, entry range, host flag, host switch, path range,
+  contract default, bit collision, clear) were each caught, and every mutated
+  file was restored by sha256.
+- Three contract tests were re-aimed at the preserved invariants:
+  `RtSlangBlockEmitterTest` reads the reused-branch gate plus the new baked
+  clause, `RtSlangNrdMotionTest` expects the block-emitter term closing the same
+  OR chain, and `RtSlangPixelShadowTest` reads the option line inside it.
+
+Full `:common:test --rerun-tasks`: 152 classes, 874 tests, 0 failures, 6
+skipped, `BUILD SUCCESSFUL`. All Slang entry passes compile; `path_trace` is
+1 116 428 B SPIR-V, 26 bindings, 112 B push constants (unchanged).
+
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `5f52f205295d0d4e…`; the previous
+(pixel-shadow) jar is kept as `….20261030-080400.bak` (sha256
+`9b2f92a2e07f869d…`). The bundled `shaders/slang/spv/path_trace.spv` is
+1 116 428 B, sha256 `a29b017aced495f0…`, equal to the fresh compile;
+`bedray_core.dll` (`9ca5cd88cc01f823…`) is byte-identical to the deployed
+native, so no native changed.
+
+Open: no owner-verified frame shows the handover, and the field's hue is the
+pre-lightmap tint rather than the sampler's lightmap colour.
+
+## 2026-10-30 — Pixel-shaped key-light shadows return (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+The deleted `rt_common_pixel_shadow.glsl` evaluated the key-light shadow once per
+world cell: it snapped the receiver horizontally to the cell centre, accepted the
+snap only when one validation ray was unblocked, and rotated the sun/moon disc
+from a cell-stable seed so the quantised penumbra was one value instead of
+per-pixel speckle. The Slang path lit every fragment exactly, so the look option
+did nothing. This batch ports the policy without growing the push block:
+
+- `PATH_TRACE_OPTION_PIXEL_SHADOWS` is flag bit 7 and bits 8..15 carry the cell
+  size in texture pixels (1..16, one sixteenth of a block each, the legacy
+  `StatsBuf.shadowPixel/16`); `PathTracePush` stays 112 B and
+  `RtSlangPathPass.pixelShadowFlags()` clamps a stale setting instead of
+  refusing the frame.
+- `pathPixelShadowOrigin` snapshots only the receiver, keeps the lateral
+  displacement horizontal, projects it into the surface plane and returns the
+  exact position when the probe is blocked. It runs for the primary receiver
+  only - a deeper vertex is 1-3 spp and each one would spend a validation ray -
+  and never for a leaf, an entity or an underwater receiver, whose sun-side and
+  bent-beam origins win.
+- `pathTraceShadowCell`, `pathTraceStableSunCell` and `pathTraceFoliageSunCell`
+  name the world-locked rotation cell: the estimator and the disc seed hash the
+  same cell, a non-cell fragment keeps a 1/16-block sheared world cell while the
+  option is on, and a leaf freezes to its own block at frame 0 exactly as the
+  legacy `sunSampleFrame(foliage)` did. `LightReceiver.stableSun`/`sunSeed`
+  carry the choice into `SunMoonSampler`, which replays the same draws into the
+  path stream when it is off, so an ordinary receiver keeps its exact seed.
+- `worldPosition` is the world-anchored (modulo 1024 blocks) hit anchor every
+  backend fills; every cell size the host can send divides that wrap, so a cell
+  never drifts across the anchor boundary. `RtSlangHistoryAnchorTest` now lists
+  the tracer as a reader with that reason.
+- `RtSlangPixelShadowTest` (10) mirrors the cell arithmetic, the projection,
+  the blocked-cell fallback, the primary-only rule, the foliage freeze, the
+  shared estimator/rotation cell, the stream sync and the host clamp, read out
+  of `pathtrace/path_tracer.slang`, `pathtrace/path_trace_entry.slang`,
+  `light/sun.slang` and `contracts/light.slang`. Eighteen mutation probes (flag
+  bit, size shift, entry decode, primary gate, underwater gate, blocked snap,
+  projection sign, cell scaling, foliage frame and cell, y-shear, stable seed,
+  stream sync, rotation cell, receiver default, host clamp, host flag OR) were
+  each caught, and every mutated file was restored by sha256.
+- Three contract tests were re-aimed at the preserved invariants:
+  `RtSlangRayModeTest` reads `coneAround(axis, radius, drawSeed)`,
+  `RtSlangSamplePerPixelTest` reads the named `sampleWord`, and
+  `RtSlangNrdMotionTest` expects the pixel-shadow flags in the same OR chain.
+
+Full `:common:test --rerun-tasks`: 151 classes, 865 tests, 0 failures, 6
+skipped, `BUILD SUCCESSFUL` (42 s). All Slang entry passes compile;
+`path_trace` is 1 112 528 B SPIR-V, 26 bindings, 112 B push constants (unchanged).
+
+Open: no owner-verified frame shows the staircase yet, and the look is only
+meaningful once `pixel_shadows` is on in the video settings. Glass cost, the
+distant-block light fallback, the NEE NaN guard and the hot-loop/layout guards
+remain open holes.
+
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `9b2f92a2e07f869d…`; the previous
+(foliage) jar is kept as `….20261030-073842.bak` (sha256 `6b8ecf2055cfaae4…`).
+The bundled `shaders/slang/spv/path_trace.spv` matches the fresh compile
+(`1c4b00aba4…`, 28 SPIR-V entries in the jar). `bedray_core.dll`
+(`9ca5cd88cc01f823…`) and `bedray_scene.dll` (`bf2caba452ef6445…`) are
+byte-identical to the deployed natives, so no native changed.
+
+## 2026-10-30 — Foliage filters the key light again (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+The deleted GLSL path treated a canopy as a coloured filter: the shadow walk
+multiplied its transmittance by `0.60 * mix(1, hue, 0.45)` per leaf face, the
+direct term added a back-lit transmission lobe outside the front-face gate, and
+the key-light ray started on the sun side of the leaf. The Slang port had only
+the traversal flags (`HIT_FLAG_FOLIAGE` / `HIT_FLAG_LEAF_CUBE`), so every plant
+shaded like stone and a back-lit leaf was a black dot on a sunlit slope.
+
+- `decodeSurface` copies `HIT_FLAG_FOLIAGE` into `MATERIAL_SOURCE_FOLIAGE`; the
+  new `MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE` is set by exactly the three shadow
+  wrappers (`traceShadowVisibility`, `...Medium`, `traceShadowBeam`), so camera,
+  AO and sky walks keep the binary cutout and the hole skip still runs before a
+  leaf layer is counted.
+- `materialFiltersAsFoliage` accepts cutout, non-emissive plants only;
+  `foliageLayerTransmittance` keeps the legacy 0.60 / 0.45 rule (~36 % through
+  one leaf block), with the hue divisor floored so a black texel is a neutral
+  filter instead of NaN.
+- `pathTraceDirectTerm` adds `albedo * leafBack * 0.42 *
+  smoothstep(0, 0.08, leafBack) * (1 - luminance(f0)) * (1.05, 1.25, 0.75)`
+  outside the front-face gate, for the key light only, and starts the shadow ray
+  one block along the sun-side normal for a front-face leaf cube or 1 cm along
+  the sun for a card; under water the refracted beam origin wins.
+- `SunMoonSampler` accepts a foliage receiver from either face (absolute cosine)
+  instead of the shaded one, so a front-lit plant keeps its sample;
+  `receiver.foliage` carries the tag with the same emissive exclusion the
+  estimator uses.
+- `RtSlangFoliageTransmissionTest` (12) pins the constants, a Java mirror of the
+  arithmetic, both gates, the walk ordering, the two-sided cosine and the shadow
+  origins. Fifteen mutation probes (two-sided cosine, beam and occluded setter,
+  layer constant, tag copy, flag bit, both emissive gates, sun-side normal, cube
+  step, underwater origin, estimator and no-shadow branch, front-face gate,
+  silhouette ramp) were each caught, and every shader was restored by sha256.
+  `RtSlangWaterBeamTest` was re-aimed at the preserved invariants
+  (`shadowPosition` defaults to the receiver; `bsdf = bsdfEvaluate(... arrival)`).
+- Full `:common:test --rerun-tasks`: 150 classes, 855 tests, 0 failures,
+  6 skipped. All 27 Slang entry passes compile (`:common:compileSlang`, 14 s,
+  112 B push constants on the path pass unchanged).
+
+Open: no owner-verified frame shows the canopy yet. The F3 `leafBacklit` counter
+is still unwritten by the Slang pass (it has no stats binding, so
+`RtFrameStatsTest` keeps reporting n/a), and the native `bedray_core` path does
+not forward a leaf counter either; both are follow-ups. Pixel shadows, distant
+block light, the glass-cost guard and the NaN/hot-loop guards remain open holes.
+
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `6b8ecf2055cfaae4…`; the previous
+(denoiser) jar is kept as `….20261030-071636.bak` (sha256 `303f7dc64981bb08…`).
+The bundled `shaders/slang/spv/path_trace.spv` matches the fresh compile
+(`6fffb58748…`, 1 093 832 B). `bedray_core.dll` (`9ca5cd88cc01f823…`) and
+`bedray_scene.dll` (`bf2caba452ef6445…`) are byte-identical to the deployed
+natives, so no native changed.
+
+## 2026-10-30 — The denoiser is re-enabled on the Slang guides (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+Every active trace mode used to resolve the denoiser setting to OFF with
+`slang_denoiser_not_wired`. The refusal dated from the first Slang wiring, when
+the pass wrote no G-buffer; it outlived its reason. The Slang pass has written
+the seven DLSS-RR guide channels and NRD's `IN_MV` since the guide/motion
+batches, the pack, the denoiser and the compose are unchanged, and
+`RtSlangGbufferGuidesTest` already pins every channel against the deleted
+`rt_path.comp` layout. This batch removes the gate:
+
+- `DenoiserResolution` owns the decision table as a pure function: setting
+  (`path_denoiser`) × library usability × session failures → mode + reason,
+  including the DLSS-RR→NRD fallback and the frame-generation/Streamline
+  limitation. `RtFrameRenderer.resolveDenoiseMode` gathers the live
+  availability, calls it and logs the result once per change.
+- An enabled denoiser makes `wantGbuffer` true, so the pass builds the guide
+  variant and the renderer binds the denoiser's seven images and the motion
+  buffer. On the native backend a core without `GUIDE_OUTPUTS` (or
+  `NRD_MOTION` for NRD) still refuses with its existing reason instead of
+  running guide-less.
+- Tests: new `DenoiserResolutionTest` (9) covers NRD and the `-Dvkrtx.denoiser`
+  variant, a session failure, a missing library with its reason, DLSS-RR,
+  frame generation owning NGX, the NRD fallback, OFF, and source guards that
+  the two refusal strings are gone, `resolveDenoiseMode` no longer reads
+  `RtConfig.mode()`, `wantGbuffer` follows the denoiser, and the motion-export
+  check survived.
+
+Tests: **843 tests, 149 classes, 0 failures, 0 errors, 6 skipped**, `BUILD
+SUCCESSFUL` (`:common:test --rerun-tasks`). `RtSlangGbufferGuidesTest` (8) and
+`RtSlangNrdMotionTest` (6) re-ran green with the batch.
+
+Open: no owner-verified frame consumes the guides yet. The first live check is
+`[VKB-RT] denoiser requested=… active=nrd_reblur|dlss_rr` plus a look for
+ghosting and haloes; the guide layout and the resolution table are unit-proven,
+not run. Reflections stay noisy under NRD (no specular denoiser input).
+
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `303f7dc64981bb08…`; the previous
+(dead-slider) jar is kept as `….20261030-065439.bak` (sha256
+`7b4bc92f0731c714…`). `bedray_core.dll` was rebuilt from this checkout and is
+byte-identical to the deployed native (sha256 `9ca5cd88cc01f823…`), so the
+natives did not change. With the default `path_denoiser` (NRD) the next run
+should log `denoiser requested=NRD active=nrd_reblur` once the world loads.
+
+## 2026-10-30 — The dead ray-count sliders are deleted (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+The ray profile traces one sample per pixel per frame, so the four per-effect
+sample-count sliders counted nothing and moved no pixel. They are gone rather
+than wired to a second meaning:
+
+- `RtSettings` loses `raysShadowQuality`, `raysReflectionQuality`,
+  `raysAoQuality`, `raysGiQuality`: the fields, the `integer(...)` registry
+  entries, the getters (`shadowQuality()`, …) and every `applyPreset`
+  assignment. `resetLevel` and the UI profile gating iterate the registries, so
+  they picked the removal up without edits.
+- The Expert page built a row per slider in `VulkanSodiumConfig`; it now builds
+  five (reflection distance, AO radius, emissive sample count, emissive
+  distance, GI distance), and `SettingsCatalog`'s labels and owned-row checks
+  follow. The ray mode's remaining sample count is the block-light one.
+- Autotest: `RtModesScenario`'s `q` modifier now sets `raysEmissiveQuality`;
+  six scenarios drop their post-`LOW` `raysShadowQuality = 2` line.
+  `RtModesChecks.resetLevels` exercises `raysEmissiveDistance`, and
+  `RtShadingFixesTest` replaces the ULTRA quality assertion with "ULTRA's GI
+  distance reaches farther than HIGH's".
+- Old configs: `applyKeyValue` returns false for a key in neither registry and
+  the callers ignore the result, so a `bedray.toml` that still lists the four
+  keys loads silently and the next save writes them out. The sample
+  `common/config/bedray.toml` no longer lists them; `docs/SETTINGS_AUDIT.md`
+  records the removal with the reason.
+- `RtModesDebug.reflectionSettings()` had no consumer left once the slider was
+  gone, so it and its test are deleted.
+
+Tests: **834 tests, 148 classes, 0 failures, 0 errors, 6 skipped**, `BUILD
+SUCCESSFUL` (`:common:test --rerun-tasks`). One test fewer than the previous
+batch: `reflectionSettingsShowConfiguredCostControlsOnlyWhenEnabled` tested the
+deleted formatter.
+
+Open: `rays_pixel_shadows` / `rays_pixel_shadow_size` still only select a stats
+pixel and reach no renderer; they are the last stats-only rows and belong to
+their own pass. No owner-verified frame yet.
+
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `7b4bc92f0731c714…`; the previous
+(stage-2a) jar is kept as `….20261030-064728.bak` (sha256 `18876fa4393d77e0…`).
+`bedray_core.dll` rebuilt from this checkout is byte-identical to the deployed
+native (sha256 `9ca5cd88cc01f823…`), so the natives did not change. The Expert
+page now lists five ray rows instead of nine; a `bedray.toml` written by the
+previous build keeps loading.
+
+## 2026-10-30 — The ray profile reads its own effect switches (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`.
+
+Stage 1 left the six ray-effect switches as labels on a profile that traced
+everything. This batch makes each one a choice the shader acts on:
+
+- `path_tracer.slang` grows five `PATH_TRACE_OPTION_*` bits (2..6) and two
+  per-lobe far planes. `NO_SPECULAR_BOUNCE` / `NO_DIFFUSE_BOUNCE` end that
+  continuation with `PATH_TRACE_FLAG_TRUNCATED` - the existing "short path,
+  still trusted" flag - after the vertex's own emission and NEE are already in
+  the radiance. `AMBIENT_ONLY_BOUNCE` lets a diffuse continuation collect only
+  the environment: an accepted geometry hit ends the path unshaded (sky-light
+  occlusion). Transmission is deliberately never gated, so water and glass stay
+  see-through with every effect off.
+- `NO_KEY_SHADOWS` returns the key light's NEE term before the visibility walk;
+  sun/moon only, block emitters keep their traced shadows. `HARD_KEY_SHADOWS`
+  is `sun.slang`: the sampler draws the disc axis while keeping the true disc's
+  source density, so flux is unchanged and only the penumbra disappears.
+- The three push words that were reserved zeros (76, 88, 92) now carry the
+  emitter collection range, the diffuse far plane and the specular far plane as
+  floats; the C++ path-trace pass already copies them verbatim, and a zero still
+  means "the ray far plane", so the path profile and the RC probe pass are
+  unchanged.
+- Host: `RtSlangPathPass.rayEffectFlags()` maps RT Shadows / Soft Shadows /
+  Reflections / AO / GI to bits (GI supersedes AO); `diffuseBounceDistance()` is
+  GI distance or the AO radius, `specularBounceDistance()` is Reflection
+  Distance, `emitterBounceDistance()` is Emissive Distance + 8 (the list was
+  collected within that range; the shader still caps the light radius at 24
+  blocks), and `rays_emissive_quality` becomes `min(4,max(1,q))*8` RIS
+  candidates. "RT Block Light" off now drops the emitter list from the trace
+  entirely. The ray profile's ray far plane is `rtRadiusXz * 16`, the extent the
+  scene was built for, instead of the path mode's 384.
+- F3: `[RT-EFFECTS]` names the six switches and four ranges for the frame.
+
+Tests: **835 tests, 148 classes, 0 failures, 0 errors, 6 skipped**, `BUILD
+SUCCESSFUL` (`:common:test --rerun-tasks`). Four older source-scan guards moved
+with the code: the NRD-motion line now ORs `rayEffectFlags()` into the same
+word, the bounce ray asserts the continuation far plane, the RC outside-support
+check reads the field block instead of a raw substring, and the TRUNCATED
+inventory is six stops instead of four.
+
+Open: the four remaining quality sliders of the ray mode
+(`rays_shadow_quality`, `rays_reflection_quality`, `rays_ao_quality`,
+`rays_gi_quality`) still do not change a traced image; they are dead controls
+until the next batch deletes them or gives them a meaning. `rays_pixel_shadows`
+/ `rays_pixel_shadow_size` remain stats-only. No owner-verified frame yet for
+any of this.
+
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `18876fa4393d77e0…`; the previous
+jar is kept as `….20261030-064129.bak` (sha256 `56b429aa791f902a…`).
+`bedray_core.dll` was rebuilt from this checkout and is byte-identical to the
+deployed native (sha256 `9ca5cd88cc01f823…`), so the natives did not change.
+The line to look for is `[RT-EFFECTS] shadows=… soft=… reflections=…
+diffuse=… emissive=… distances=refl…`; no owner-verified frame yet.
+
+## 2026-10-30 — Ray Tracing mode runs as the Slang pass's ray profile (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `028d2d8` (9 files, +293/−149).
+
+Ray Tracing mode had been refused with `slang_ray` since the legacy GLSL ray
+pass went away, although the AOT path transport already produces its effect
+set: sun shadows through NEE, reflections and one-bounce indirect light through
+the BSDF sample, emissive blocks through their own NEE. The mode now builds the
+same two Slang programs and differs only in the profile. `RtSlangPathPass`
+takes a `rayMode`: `configure` pins two scattering events — the surface the
+camera sees plus one indirect one, because `path_tracer.slang` counts the
+primary as depth 0 — and one sample per pixel, and it bypasses the adaptive
+governor. `describe` prints `ray_slang(...)` without the radiance-cascade axis.
+Each profile reads its own switches (`rays_restir_*` + `rays_accumulate` for the
+ray profile, `path_restir_*` + `accumulate` for the path profile), so neither
+profile's rows are dead.
+
+With the backend owning both profiles' reservoirs, the renderer's `rt_restir`
+and `rt_restir_aux` ring, its size constants, pixel count, light fingerprint and
+reset flag are deleted; the two `StatsBuf` address slots stay in the record
+layout at zero (`RtStatsLayout` offsets unchanged). The denoiser refusal now
+covers every active mode with one reason, `slang_denoiser_not_wired`: the NL
+pack was only ever validated against the deleted GLSL G-buffer. `AO` and
+`DIRECT` are debug shadings of that deleted pass and are refused under their own
+stage names (`slang_ao`, `slang_direct`) instead of showing a lit image labelled
+as a debug shading. A boolean-only `enable_hardware_ray_tracing` request still
+resolves to `PATH_TRACED`, the fuller of the two profiles.
+
+Open: the per-effect ray switches (`rays_shadows`, `rays_soft_shadows`,
+`rays_ao`, `rays_reflections`, `rays_emissive`, `rays_gi` and their quality and
+distance sliders) still do not change the traced image — they only label the F3
+line and the `RtModesDebug` description — so those rows remain dead controls
+until the ray profile reads them as path options.
+
+### Evidence
+
+Java: `:common:test --rerun-tasks` **831 tests, 0 failures, 0 errors, 6 skipped**
+(the six are the DLL, benchmark-flag and real-shaderpack cases). New
+`RtSlangRayModeTest` (6 tests) drives the controller through a recording
+backend: the ray profile keeps 2 bounces / 1 sample while `path_spp`/`path_bounces`
+say 8/5, reports its own mode, ignores the governor, reads its own reuse and
+accumulate switches, refuses AO/DIRECT by stage name, and pins the renderer source
+so the host reservoir ring cannot come back. Four existing string guards that
+named the pre-profile source text were updated to the new lines. `FEATURE_MATRIX`
+ray rows now say what this revision shows: L2 for the ray profile (the old L4
+screenshots belong to the deleted GLSL pass), NOT_IMPLEMENTED for AO/DIRECT.
+
+Deployed to both FreesmLauncher instances (`Bedray Fabric 26.3` and `26.3(1)`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar` sha256 `56b429aa791f902a…` and
+`bedray_core.dll` sha256 `9ca5cd88cc01f823…`, previous files backed up under
+`bedray-backups/`. The line to look for is
+`[VKB-RT] ray effects on AOT Slang passes passes/path_trace.slang+passes/path_display.slang`
+followed by `ray_slang(bounces=2,spp=1,...)`; no owner-verified frame yet.
+
+## 2026-10-30 — the native core meters its own recording (L0 source, L1 build, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `8fa6548` (15 files, +734/−45).
+
+The previous entry gave the reference backend a counter writer; on `bedray_core`
+the radiance and accumulation images live inside the core, so the host could not
+dispatch `passes/frame_stats.slang` over them and the F3 shares still printed
+`n/a`. The core now records that program itself. The addition is layout-neutral:
+`BedrayPathTraceDesc.program_stats` takes the former `reserved0`/`reserved1`
+pair at offset 56, the struct stays 80 bytes, `program_trace_scene` stays at 64
+and `reserved` at 72, and `static_assert`s in `core.cpp` hold those four numbers
+where the Java `BedrayCoreLayouts.verify()` holds the same ones.
+
+`bedray_core_record_path_trace_stats(core, command_buffer, stats_buffer,
+stats_offset, stats_bytes, frame_index, error)` appends one dispatch to the
+recording `bedray_core_render_path_trace` just made, because the images a
+counter can read belong to that recording: the radiance image, the accumulation
+half that recording's display stage folded (not the half it imported history
+from), the borrowed depth view and the borrowed counter range. It records no
+barrier, pool or pin — the display writes already sit behind the recording's
+exit barrier, and the per-dispatch descriptor set is the one
+`bedray_core_release_recording` already retires. It refuses instead of skipping:
+an unknown command buffer, `program_stats == 0`, a null buffer, a range under
+16 bytes, an offset that is not a multiple of four, or a range that overflows all
+return `BEDRAY_ERROR_INVALID_ARGUMENT`, because a silent skip is
+indistinguishable from a frame whose counters were always zero. `configure`
+checks the four bindings (three storage images and the storage buffer) and the
+8-byte `FrameStatsPush` the way it checks the trace and display manifests.
+
+`BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS (1u << 6)` advertises the stage. Either
+side alone degrades honestly: a new jar on a core without the bit calls nothing
+and reports the counters as unmeasured, and an old jar on this core sends
+`program_stats = 0`, so no dispatch is recorded. `leaf_pct` remains `n/a` on
+both backends — no program writes that word.
+
+### Evidence
+
+Native, configured and built fresh in `build/bedray-native/verify-x64` (VS 2022
+BuildTools, x64, Release), CTest **24/24 passed, 0 failed, 0.70 s**. Six of those
+tests are new in `path_trace_pass_test.cpp`: dispatch order and binding set after
+display, the stage costing nothing until called (same dispatches, barriers,
+images and buffers with and without the program), two outstanding recordings
+each metering their own accumulation half, groups following the frame extent,
+the five refusals plus the configure-time manifest check, and the recording
+lifetime (`destroy` refuses until the release proves the meter, and a discarded
+recording still owns it). `sampler_ownership_test` now also requires the feature
+bit and that the export refuses a null core.
+
+Java: `:common:test --rerun-tasks` **825 tests, 0 failures, 0 errors, 6 skipped**
+(the six are the DLL, benchmark-flag and real-shaderpack cases). `RtFrameStatsTest`
+is 12 tests, including `theNativeCounterStageIsNamedTheSameByBothSides`, which
+pins the header's bit and offset to the Java mirror; `RtSlangWaterMediumTest` now
+reads the whole feature-mask body instead of one exact line, so the new bit cannot
+pass unnoticed.
+
+`fabric/build/libs/bedray-fabric-mc26.3-0.2.0-alpha.jar` was built from this
+source (`bedray_core_record_path_trace_stats` in `BedrayCoreNative.class`, the
+`frame_stats` SPIR-V, manifest and reflection inside) and deployed with
+`bedray_core.dll` to both testbed instances, each with a timestamped `.bak`:
+jar `sha256 06b722fa…02c9e`, DLL `sha256 5db03def…22d2d`.
+
+No owner-verified frame yet. What a playtest should show: on the native backend the
+F3 line's `hit_pct` and `hist_pct` become measured shares again and auto exposure
+has a sample to follow; on a core or jar that cannot meter, both stay `n/a`.
+
+## 2026-10-30 — the frame counts its own pixels again (L0 source, L1 build, L2 unit, 13 mutation probes; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `412d855` (12 files, +665/−29).
+
+The four words at the head of a StatsBuf slot — `hits`, `samples`, `lumLogSum`,
+`histAccepted` — were written inline by the GLSL ray pass and nothing replaced them
+when the legacy pipeline was deleted. Two failures hid behind that: `RtExposure.observe`
+never received a sample, so `path_auto_exposure` could not adapt and the exposure
+batch above could only make the compensation slider live; and the F3 overlay divided
+zeros, so `hit_pct` and `hist_pct` printed as if the frame had been measured.
+
+`passes/frame_stats.slang` now derives the four words from images the path already
+produces, and `RtFrameStatsSlangPass` dispatches it from `ReferencePathTraceBackend`
+immediately after the barrier the composite already needs — no new image, no new
+synchronization, no descriptor-set change:
+
+- It reads the tracer's `radiance` (RGBA16F), the running mean `accum` (RGBA32F) and
+  `depth` (R32F), and binds **only the sixteen-byte head** of the slot it writes, so
+  the pass cannot reach the emitter address that lives behind the counters.
+- The luminance word is the ABI the host already decoded — `64*(log2(lum)+16)`,
+  clamped to its own fixed-point range at 2^-16 and 2^16 — so `RtExposure` and the F3
+  average needed no change, and `RtFrameStatsTest` reads all three files instead of
+  trusting one side.
+- A pixel whose verdict alpha is zero, or whose radiance is NaN/Inf, is not added at
+  all: one such frame would otherwise sit in a mean that lives for thousands of
+  frames. This is the same bit `path_display.slang` rejects on, so the meter and the
+  picture agree.
+- One whole 4×4 tile in sixteen is metered, rotated by `pc.frameIndex`, so a still
+  camera does not weigh the same pixels all session. At 1920×1080 that is 8 100 tiles
+  and ~129 600 metered pixels per frame — 1/16 of the screen, the rate the legacy
+  counters and the shares were calibrated for.
+- The slot is handed over through two new borrowed fields (`RtFrameParams.statsBuffer`
+  / `statsOffset`) set beside `statsAddress`, after the `vkCmdFillBuffer` that clears
+  the head, so the pass writes into the slot the renderer leases and reads back.
+
+`gradle/slang.gradle` pins `FrameStatsPush` (8 bytes: `frameIndex` at 0, `reserved` at
+4). The compiled artifact is 4 712 B of SPIR-V, 1 178 words, four bindings
+(`radiance`/`accum`/`depth` as `STORAGE_IMAGE`, `stats` as `STORAGE_BUFFER` with
+`elementBytes` 4), 8 B push, 8×8×1 workgroup, capabilities `ImageQuery`+`Shader` and
+`requiredCapabilities` 0 — no new negotiated capability, and the generated pass index
+now lists 27 entries with `frame_stats` among them.
+
+Honesty changes that came with it: `leafBacklit` had no writer either, and a zero in
+that word read as a measured "no leaf is backlit" — `leaf_pct` now reports `n/a`. The
+native core records the whole frame inside `bedray_core`, where the radiance and
+accumulation images are its own, so it still has no counter writer; both backends
+report "no measurement" rather than a fabricated number, and `PathTraceBackend.Frame`
+documents which backend writes what.
+
+### Evidence
+
+`:common:compileSlang` green (27 passes). `:common:test`: **824 tests, 0 failures,
+0 errors, 6 skipped** (the six are the native-ABI, benchmark and real-pack tests that
+need a DLL, a flag or a shaderpack on disk). New `RtFrameStatsTest` (11 tests) covers
+the round trip of the luminance word, the three-file formula pin, the counter offsets,
+the 1-in-16 mask and its rotation, the rejection gate, the sixteen-byte bind, the
+generated manifest plus three rejected mutations of it, the ordering after the
+composite barrier, the slot handover, and `n/a` for the unwritten leaf counter.
+`RtSlangSampleRejectionTest.nothingElseReadsTheLaneTheVerdictLivesIn` was rewritten as
+`everyReaderOfTheVerdictLaneTreatsItAsAVerdict`: the meter is the second consumer of
+the verdict lane, so the guard now names all three files that bind it and requires each
+reader to reject on the bit or ignore it, never to weight by it.
+
+### Mutation probes (13)
+
+Ten against the meter: the luminance formula, the metered rate, a swapped counter slot,
+the deleted verdict gate, alpha used as a weight, a descriptor bound to the whole slot,
+the wrong accumulation half, `params.statsOffset` pinned to zero, the leaf counter
+printed as a measurement, and a third consumer of `radianceView`. Three against the
+head mirror: the Slang `FrameStats` field order, the Java `RtStatsLayout` field order,
+and a renamed counter field. Each reported exactly the owning test red, and every file
+restored to its pre-probe sha256.
+
+Two probes first reported green and were **harness bugs, not weak guards**: the needles
+spanned two lines, this checkout stores CRLF, and `str.replace` on the raw bytes
+matched nothing, so Gradle ran against an untouched file and the green was true for the
+source it was given. Re-run with the needle tried in both spellings and an assertion
+that the old text is gone and the new text present before trusting a result: both went
+red, each naming its own test. Probes whose needle sits on one line were unaffected,
+which is why all ten probes of the first batch — single-line needles each — fired on the
+first pass.
+
+### Still open
+
+The native path-trace core needs its own writer (or an ABI route that lets the host
+dispatch this pass over core-owned images) — that is the follow-up task, and an
+ABI-layout change needs the owner's word first. Nothing here is a live frame: no
+Vulkan device, no game launch, no measured brightness change. The owner's playtest
+still decides whether the exposure now adapts and whether F3 prints real shares.
+
+## 2026-10-30 — the frame's exposure is spent where the picture is made (L0 source, L2 unit; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `f131804` (7 files, +168/−12), with the
+distribution-doc correction `248a298`. Recorded here two batches late: the fix
+landed before the rays-per-pixel entry below, its log section did not.
+
+The typed path applied no exposure at all. The display push literal was `1.0f`
+(`ReferencePathTraceBackend`, offset 8 of the display block), the volumetric
+composite pushed `1`, and `FLAG_AUTO_EXPOSURE` was read in three call sites that
+nothing ever set — so `path_ev_compensation` brightened the denoiser's guide pack
+while the traced image stayed where it was: one setting, two numbers.
+
+`RtFrameRenderer` now decides the exposure once per frame, from the settings
+switch (`RtSettings.autoExposure()`) and the compensation, through
+`RtExposure.applied`, and stores it in `RtFrameParams.exposure`; the flag bit is
+composed from the same switch, so the bit and the number cannot disagree. Every
+consumer reads that field: the StatsBuf slot (`RtStatsLayout.EXPOSURE`),
+`FrameConstants.exposure.x` — already the lane `BedrayPathTraceNative` forwards as
+the native descriptor's `lighting.exposure`, so no ABI change — the Java display
+push, the DLSS-RR and NRD packs' tonemap, and the light shafts composited after
+tone mapping.
+
+`248a298` rewrites `native/bedray_core/DISTRIBUTION.md`, which promised both DLLs
+are staged next to each other. `gradle/bedray-distribution.gradle` says otherwise:
+`fabricBedrayDistribution`/`neoforgeBedrayDistribution` depend on `buildBedrayNative`
+and copy `nativeDll` plus the combined JAR, and `buildBedrayScene` is not in the
+chain, so an instance fed only the task's output runs without `bedray_scene.dll`.
+
+### Evidence
+
+`RtSlangExposureTest` (new, 7 tests): the EV compensation is a power of two; a
+measured scene moves the auto value and not the fixed one; the frame computes
+exposure once; the switch reaches the frame flags; one lane feeds both backends;
+the volumetric composite shares the picture's exposure; only the display step
+spends it. `RtSlangVolumetricPassTest` and `RtSlangExposureTest` pass in a full
+`:common:test`; L0/L2 only — no Vulkan device, no game launch, no measured
+brightness change.
+
+What was still missing at that revision, stated plainly because the commit says so:
+adaptive exposure had nothing to adapt to. No Slang pass wrote the luminance sum,
+the hits or the samples counters since the legacy GLSL ray pass was deleted, so
+`RtExposure.observe` never ran and the meter sat at the ray-mode floor. The
+compensation slider was the live half of the setting. The batch below closes the
+measurement; neither has an owner-verified frame yet.
+
+## 2026-10-30 — "Rays per Pixel" traces the rays it says it traces (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, commit `edb5650` (11 files, +305/−23).
+
+`path_spp` was a silent no-op. The slider went 1..8, its value reached
+`RtFrameParams.spp`, `RtPathTraceSlangPass.Frame` wrote it into
+`FrameConstants.frame.z` (offset `FRAME+8`), the native descriptor carried it as
+`samples_per_frame` and `path_trace_pass.cpp` copied it into `constants.frame[2]` —
+and nothing read it. No file in the Slang tree mentioned `frame.z`, the Java passes
+pinned `params.spp = 1`, `RtSlangFrameData` pinned `frame.samplesPerFrame = 1`, and
+the F3 overlay printed "Primary rays: 4" while the GPU traced one. The whole ABI
+already existed; only the constant writes and the missing reader were absent.
+
+What landed is a mean over N stratified primary paths per pixel, in
+`pathtrace/path_trace_entry.slang`:
+`pathTraceSampleCount()` clamps the frame word to `1..PATH_TRACE_MAX_SPP` (8, now
+mirrored by `RtPathTraceSlangPass.MAX_SAMPLES_PER_PIXEL`);
+`pathTracePrimaryRay()` takes its jitter as an argument, and
+`pathTracePixelJitter()` returns `f.camera.jitter.xy` unchanged for N=1 — so the
+cheapest setting traces exactly the paths the previous build traced, host jitter and
+all — and otherwise splits the pixel into an N×N stratified grid offset by
+`noise2D`. Each ray gets its own seed
+(`pc.sampleIndex * sampleCount + s`). `prevViewProjection` is not jittered, so
+changing the per-sample offset cannot desync reprojection.
+`PathTraceMean`/`accumulatePathTraceSample()`/`pathTraceMeanResult()` average
+radiance, the primary vertex, view position, normal (renormalized), albedo,
+specular F0, roughness, metallic, direct light, first-hit distance and motion, and
+keep refused paths' radiance in a separate lane: the sample-rejection rule stays
+`INVALID_SAMPLE | RC_UNRESOLVED` (never `TRUNCATED`), one `sampleTrusted` bit feeds
+the alpha lane, the guides and both motion channels, and a pixel whose every ray was
+refused reports the mean of the refused radiance with `alpha = 0` rather than
+poisoning a running mean that lives for thousands of frames. Eight rays with one
+broken number are seven good samples.
+
+ReSTIR DI keeps its one-reservoir-per-pixel-per-frame contract: only ray 0 reads,
+merges and publishes (`directReuse.enabled = s == 0u ? diRequested : 0u`), the rest
+shade the same emitter list with plain next-event estimation, and
+`lights.emittersReusedAtPrimary` follows the same bit so the extra rays cannot
+darken the picture by losing the emissive branch. Every reservoir write — publish,
+occlusion decay, empty record — is gated on `reuseActive()`, so turning reuse off for
+rays 1..N-1 cannot blank what ray 0 published.
+
+The reporting stopped lying on its own: `F3Sections` prints the *governed*
+`RtAdaptiveQuality.spp()`/`.bounces()` rather than the raw setting, and
+`RtSlangPathPass.describe()` now includes `spp=`. spp is deliberately not in the
+pipeline-config hash: the adaptive governor moves it several times a minute, and a
+running mean of frames traced at different sample counts is still a mean of unbiased
+estimators.
+
+Four guards were stale and were updated, not deleted: `RtAdaptiveQualityTest` had
+*required* `params.spp = 1;` (it pinned the no-op; it now requires the governed call,
+because rays go first in the ladder and a pinned one makes both the slider and the
+budget silent), and `RtSlangNrdMotionTest`, `RtSlangRcFieldTest` and
+`RtSlangSampleRejectionTest` each asserted the removed
+`bool sampleTrusted = !pathTraceSampleRejected(result.flags);` spelling, which the
+mean now computes internally. `RtPathTraceSlangPassTest` gained the `FRAME+8` layout
+assertion, and the new `RtSlangSamplePerPixelTest` (6 tests) covers the host word
+behaviourally (requesting 0/1/4/8/99 through `RtSlangFrameData.fill` yields
+1/1/4/8/8) plus the loop, the N=1 equivalence, the reservoir gating and the reject
+split.
+
+Evidence, one run per thing, none concurrent: `:common:compileSlang` OK —
+`path_trace` 1,038,264 → **1,060,976 B** (+22,712 B) and `path_trace_scene`
+1,088,612 B; `:common:test` **806 tests, 0 failures, 0 errors, 6 skipped over 145
+classes**; `:common:runShimTests` 34 passed, 0 failed; ten mutation probes over the
+entry shader, `RtSlangFrameData` and `RtSlangPathPass` — frame word pinned to one,
+pass pins the ray count, `describe()` claims one ray, shader ignores the frame word,
+loop runs one iteration, every ray reuses the reservoir, a refused path enters the
+accepted mean, a single ray loses the host jitter, all rays share one seed, the alpha
+lane hardcoded trusted — **all ten caught** by a named test, each with the file
+restored byte-identically (`sha256` verified) and `touch`ed. One probe was initially
+missed because my own needle `",spp=1,"` did not occur in the mutated source
+(`",spp=1,dist="`); the guard was fixed to a positive `",spp=" + p.spp + ",dist="`
+plus a bare `,spp=1` negative and re-probed to caught.
+
+Not proven, and stated plainly: **no owner-verified frame yet.** Two consequences to
+watch in the game. The default of 2 now genuinely costs about twice what the previous
+build cost, and 8 costs eight times — which is exactly what the adaptive governor was
+built to relieve, and could not, because spp was pinned. And the multi-ray loop is
+new code in the hottest shader in the mod: the mean's guide channels average over the
+accepted rays, so a disagreement between DLSS-RR guides and the radiance lane would
+show up as denoiser ghosting, not as a crash.
+
+## 2026-10-30 — the legacy renderer is gone, and a trace request that names no mode opens the renderer that exists (L1 build, L2 unit, mutation proof; no live frame yet)
+
+Branch: `refactor/slang-pipeline`, three commits: `1ea94ce` (deletion),
+`27a4ca5` (water guards), `383ae71` (mode honesty).
+
+`1ea94ce` removes the second renderer: 99 files, −13,476 lines. Gone are
+`RtPipeline`, `RtShaderCompiler`, `RtShaderDiskCache`, `RtPathTracerPass`,
+`RtRayEffectsPass`, `RtCompositePipeline`, `RtVolumetricPass`, `RtTestPipeline`,
+`SimpleAccelerationStructureBuilder`, the four `rtx/raytracing` experiment-engine
+classes, the 26 GLSL files under `shaders/glsl/`, and the `-Dbedray.pathTracer`
+selector. Two things were split out of `RtPipeline` before it went, because
+surviving code still needed them: `RtFrameBindings` (the legacy binding numbers and
+the `Views` record) and `RtExtensionProbe.supportsOpacityMicromap()`. The Shaderc
+surface left in the tree is seven users, of which only `fg_prepare.comp` and
+`iris_depth.comp` (plus `shaders/spatial/`) are still compiled at runtime — the
+inventory is frozen by `ShadercSurfaceTest`, which also forbids a runtime GLSL
+compile in `rt/slang` and `RtFrameRenderer`.
+
+What that deletion exposed is the subject of `383ae71`. Three entry points said
+"trace" without naming a renderer and answered themselves with `RAY_TRACED`:
+`VulkanRtxConfig.effectiveRtMode()`'s boolean fallback, the legacy
+`enable_hardware_ray_tracing` toml key (read only by a file that has no `rt_mode`),
+and the perf autotest's `-Dvkrtx.autotest.perfRt`. Post-deletion,
+`RtFrameRenderer.createPass` refuses that mode (`RtFailure("slang_ray")`), so an
+old config file or a perf run stopped producing a frame at all. All three now name
+`PATH_TRACED`. A *named* `rays|ao|direct` request is deliberately left alone: that
+is an explicit `experimental_rays` opt-in, and its refusal is pinned by
+`SlangPathUnavailableTest` until the ray-effects passes get a Slang host.
+
+`RtModesChecks` asserts those choices at the call site, and
+`RaysHiddenTest.theTraceChoosersNeverNameTheRefusedMode` pins them as a scan of the
+source: a chooser is the kind of line that walks back to the deleted renderer
+whenever somebody adds a mode, and `PerfScenario.run()` needs a running game so it
+cannot be called from a unit test. Three mutation probes, each a single revert back
+to `RAY_TRACED` (the boolean fallback, the toml key, the perf flag), each with the
+file restored byte-identically (`sha256` verified) and `touch`ed: **all three were
+caught** by that named test. The guard commit itself is the fourth row of the table
+below; the run on the restored tree measured 800 tests, 0 failures, 0 errors, 6
+skipped over 144 classes, with the shim batch at 34 passed / 0 failed.
+
+Evidence, one full run per commit, none concurrent:
+
+| Commit | `:common:test` | `:common:runShimTests` |
+|---|---|---|
+| `1ea94ce` | 788 tests, 0 failures, 9 skipped | 34 passed, 0 failed |
+| `27a4ca5` | 798 tests, 0 failures, 6 skipped | 34 passed, 0 failed |
+| `383ae71` | 799 tests, 0 failures, 6 skipped | 34 passed, 0 failed |
+| `31485e5` | 800 tests, 0 failures, 6 skipped | 34 passed, 0 failed |
+
+`27a4ca5` adds `RtSlangWaterTest` (10 tests) over `surface/water.slang`, the water
+rules in `surface/surface.slang`, `pathtrace/path_tracer.slang`,
+`pathtrace/path_trace_entry.slang` and the Java side of the fluid identity
+(`AutoPbr`, `OpticalMaterials`). It pins the owner's water rule as a test: the
+style switch moves the waves and nothing else, so `waterSigmaT`, `waterMediumFrom`,
+`waterSegmentTransmittance`, `waterInScatter`, `waterBeamTravel` and
+`waterBeamTransmittance` must not contain a `waveMix` token, while the étendue
+ratio stays outside the caustics switch. Six mutation probes on
+`surface/water.slang`, each a compile-valid single revert (`--tests
+"*RtSlangWaterTest"`, then the file restored byte-identically with `sha256`
+verified and `touch`ed so the next build cannot reuse the mutated artifact): the
+vanilla wave mix retuned, the wave dispersion law replaced by a linear one, the
+caustic fold guard dropped, the étendue ratio frozen to 1.0, the absorption made to
+read the style switch, and the light column taken from the straight sight line
+instead of the refracted one. **All six were caught** by a named test.
+
+First jar with no legacy code in it, built from this tree and installed in both
+testbed instances: `bedray-fabric.jar` 15,273,193 B (`dfbdbcb4d1b2aa41…`),
+`bedray_core.dll` 437,760 B (`685905c6028f90b8…`), `bedray_scene.dll` 224,768 B
+(`bf2caba452ef6445…`). Neither instance had any BedRay artifact before, so no
+timestamped `.bak` was due; each file was hash-checked after the copy.
+
+Not proven, and stated plainly: **no owner-verified frame** from any of the three.
+The jar is the first build whose path mode does not depend on the deleted code, and
+that is a build fact, not a game fact. Two known open holes are recorded rather
+than hidden: the ray-effects chain has no Slang host at all (`createPass` refuses
+`slang_ray`), and the deleted GLSL guards left coverage holes listed in
+[SLANG_MIGRATION.md](SLANG_MIGRATION.md) under "What the deleted GLSL guards
+covered". A harness correction came out of the deploy: `fabricBedrayDistribution`
+does **not** stage `bedray_scene.dll`, although `native/bedray_core/DISTRIBUTION.md`
+says both distribution tasks copy it — the task was run separately and the DLL
+copied by hand.
+
+## 2026-10-30 — The underwater light arrives bent, and the waves focus it (L0 source, L1 build, L2 unit, mutation proof; no live frame yet)
+
+Branch: `refactor/slang-pipeline`. An underwater receiver sampled the sun along the
+straight sight line to the disc. That line is not the path the light took: it bent
+where it crossed the fluid face, so the shading direction, the absorbed column, the
+crossing loss and the occluders above the sheet were all measured along the wrong
+route — and a flat floor under a wavy sheet got no caustics at all.
+
+A plane interface has a closed-form answer, which is what made this closable in
+Slang alone: no `FrameConstants` field, no push bit, no C++ and no Java change.
+
+What landed:
+
+| Layer | Change |
+|---|---|
+| `surface/water.slang` | `WaterBeam`, `waterBeamTravel` (flat sheet, or the wave face when it still faces the beam), `waterBeamToLight` (depth from the medium's `surfY`, column along the refracted direction, entry point, `solidAngle = cos(air)/cos(water)`), `waterBeamTransmittance` (Schlick at the flat face), `waterBeamAtDepth` + `waterBeamFocus` (the 2x2 Jacobian of entry → footprint by finite difference over three wave normals, reciprocal clamped `[0.1, 3.0]`, a fold takes the floor) |
+| `surface/visibility.slang` | `SURFACE_VISIBILITY_FLAG_REFRACTED` and `traceShadowBeam`: the column leg with the medium-aware filter stopping a bias short of the sheet, the sky leg with the plain filter starting a bias above the crossing, lifted along the light; one explicit Fresnel, both legs proven through `surfaceVisibilityProven` |
+| `pathtrace/path_tracer.slang` | the beam is built for `Sun`/`Moon` only, and the direct term shades `-beam.direction`, walks the beam when it exists and the straight column otherwise, and multiplies the estimator by `beam.solidAngle * waterBeamFocus(...)` on the frame's own `portalTime` |
+| `surface/surface.slang` | the fluid decode takes `material.f0` from `WATER_INTERFACE_F0`, so a traced crossing and the analytic one cannot drift |
+| harness | `verify_water.slang` now reads all of the beam entries and its bounds |
+
+Evidence: `:common:compileSlang` with `slangc` 2026.20 (24 roots; `path_trace.spv`
+1,038,264 B and `path_trace_scene.spv` 1,065,900 B on the rebased tree),
+`verify_water.slang` compiles standalone (56,708 B), `:common:test --rerun-tasks`
+reports **896 tests, 0 failures, 0 errors, 3 skipped** (160 classes) with the new
+`RtSlangWaterBeamTest` 9/9 and the extended `RtSlangRayOffsetTest` 2/2. Before the
+rebase onto the RC/guide branch the same batch measured 863 tests in 153 classes,
+also green.
+
+Mutation proof — 16 probes, each a single revert of one wiring point, the named
+guard failing, then the file restored byte-identically (`sha256` compared): the
+inverted étendue ratio, the entry point's sign, the flipped index ratio, the removed
+crest guard, the focus as the area instead of its reciprocal, `WATER_INTERFACE_F0`
+moved, the column walked without the medium, the sky leg left on the sheet, the
+crossing loss dropped, the raw visibility bit read outside its predicate (caught by
+`RtSlangVisibilityOverflowTest`), the lobe asked about the air sight line, the beam
+weight dropped, the beam offered to any light, and a second copy of the interface
+number in the decoder, the column allowed past the light it was sampled from, and
+the sky leg let off the filter budget. **16/16 caught.**
+
+Two harness lessons, both fixed in the probe script rather than in the guards. The
+source guards read shader files straight off disk, so Gradle does not see the input
+change and `:common:test` can answer UP-TO-DATE with a stale XML — the probe now
+forces `--rerun` and refuses to trust a run whose `> Task :common:test` line is not a
+real execution. A probe that only matches `startswith("> Task :common:test")` also
+hits `:common:testClasses`; the check is anchored on the exact task token.
+
+Cost, measured and kept: the two walk instantiations `traceShadowBeam` adds are
++426 KB / +440 KB of SPIR-V on the path-trace roots (+70 % over the parent
+revision, which `git archive` + the same `slangc` line reproduces at 611,764 /
+625,864 B — and the pre-RC revision the jar deployed on 2026-10-29 carries,
+610,276 / 624,376 B, compiles the same way). Routing both legs through one shared
+callee, and through the existing `traceShadowVisibilityMedium` wrapper, were both
+tried on the same sources and are not smaller (+12 KB / +13 KB). The caustic itself
+is cheap: removing only the focus call saves 28 KB.
+
+Limits, so a playtest is not asked to prove more than this: the beam bends the
+direct light only — the sky seen from under water, emitted light and secondary rays
+that leave the body still travel straight; the focus is bounded at 3x, so a real
+caustic line is softened rather than exact; total internal reflection of the *beam*
+cannot happen (air into water has no critical angle) but the wave face is only
+sampled at the entry point, not along the column. This is L0/L1/L2 plus a mutation
+proof — no owner-verified frame yet, and nothing here says the water looks right on
+a GPU.
+## 2026-10-30 — Rejected samples no longer publish denoiser guides (L1/L2, mutation proof; L3 no-regression)
+
+`pathTraceSampleRejected` (`INVALID_SAMPLE | RC_UNRESOLVED`) is now computed once
+in `pathtrace/path_trace_entry.slang`; the alpha lane, `outMotion`, the seven
+DLSS-RR guides and NRD's binding-33 vec4 all read that one verdict. A refused
+sample writes the neutral miss set (view depth 1e6, flat normal, zero signal)
+and zero motion, so no output can contradict the zero weight in the radiance
+lane. A truncated path stays trusted: it stopped short, but its primary vertex
+is real.
+
+Source revision `e267a2f` plus this change. The shader compiles and the Fabric
+jar builds. `:common:test` passed **887 tests in 159 suites: 0 failures, 0
+errors, 3 skipped**; CTest passed **24/24**. The new
+`RtSlangNrdMotionTest.theRejectedSampleNeverPublishesGuidesOrMotion` was
+mutation-tested: removing `!sampleTrusted ||` from the two neutral branches
+fails it (and `theMotionRecordIsTheLegacyVec4`), restoring the guard passes.
+
+Two live world runs on the installed jar and `bedray_core.dll` passed with the
+native path tracer: `nativeScene=true` + `nativePathTrace=true`
+(`backend=NativePathTraceBackend spatial=true`, `result=PASS`, three 2560x1440
+shots, per-channel mean 157.4/158.9/165.9 and stdev 52.6/53.9/51.0), and
+`nativePathTrace=true` alone (`result=PASS`, 577 frames). Both ran with
+`denoiser=off`, so `gbuffer=off` and the guide bindings were not consumed: this
+proves no regression in the shared entry, not live guide consumption. No new
+crash dump appeared; `hs_err_pid26912.log` remains the 2026-10-29 spatial
+artifact. The Java-host run was not completed because the user stopped
+launching Minecraft, so no claim is made for it. L4 visual acceptance and owner
+confirmation are not claimed.
+
 ## 2026-10-30 — Guide initialization precedes primary writes (L2)
 
 NRD now prepares a new image generation before the primary pass writes its
@@ -2170,3 +3056,719 @@ Targeted evidence after the fix: `74 tests, 0 failures` for `RtSlang*`,
 `RtRestirSettingsTest` and `SlangPassLibraryTest`, `BUILD SUCCESSFUL`. This is
 L2 (Java source scans, no GPU, no game). It does not change the L1 shader
 compile evidence or prove runtime behaviour.
+
+## 2026-10-30 — Hot-loop and layout guards for the typed path (L1 + L2, no GPU)
+
+Branch: `refactor/slang-pipeline`, commit `7d33541`.
+
+Closes the last open holes left by the GLSL guard deletions (#81): the
+primary-path hot-loop invariants and the std430 layouts that still have a
+Slang consumer.
+
+Runtime change (one, value-preserving): `surface/surface.slang` decodes with
+the legacy `wantNormal` switch again. Both walks of `surface/visibility.slang`
+and `pathtrace/path_tracer.slang`'s `primaryWaterMedium` pass `false`, so a
+shadow or probe walk no longer pays for the atlas normal, the AO texel, the
+entity auto-normal or the water wave normal. Every value those walks read
+(material, geometric normal, tint) is produced on both paths, and a 5-arg
+overload keeps the shaded callers byte-for-byte unchanged.
+
+New guards, all mutation-proved (each mutation caught by the named test,
+each file restored and verified by SHA-256):
+
+- `RtSlangHotLoopTest` (7): one `decodeSurface` per accepted hit, one
+  `SurfaceSample` local, emission added once, the primary guide record filled
+  at the first accepted surface, `environment.radiance` only in the miss
+  branch, an ambient-only bounce `break`ing at geometry, two key-light draws
+  (reservoir and plain branches), the reservoir reset by
+  `emitters.fingerprint()`, and the `wantNormal` gate structure.
+- `RtSlangBlockLightReachTest` (7): `d^-1.5` → `0.84090 * d^-1.25` seam at
+  two blocks, the 24-block squared window, the rsqrt form with no `pow`, the
+  candidate gate before both atlas fetches, the hoisted
+  `lightRadius = min(maxDistance, EMITTER_RADIUS)` in both batch entries, and
+  the sqrt-ladder index PMF.
+- `RtSlangLayoutAbiTest` (8): std430 parse of `FrameConstants` (608 B, every
+  section offset), `PathTracePush` (112 B, 16 members, offsets 48/64/76/80/96),
+  `DIReservoir` (64 B), `BlockEmitterRecord` (96 B = 24 floats),
+  `FrameStatsPush` (8 B), the four counter words against the host's 16 B, and
+  the legacy 128-byte push against `RtFrameParams`. The same-size
+  `diState`/`entityState` swap is caught by `gradle/slang.gradle`'s build pin
+  and, with that task skipped, by the unit test. `RtStatsLayoutTest` has no
+  field successor on purpose: the AOT manifests prove `frame_stats.slang`
+  binds one 4-byte `uint` per counter, and no pass imports the legacy
+  `FrameStats`/`PushConstants` declarations (importers are
+  `backend_query.slang` and `bedray_legacy.slang`, neither naming them), so
+  the slot tail is host-only scratch.
+
+The `wantNormal` restructuring moved the water call four columns right, so
+`RtSlangWaterMediumTest.thePlayerSwitchesReachTheFrameWord` now matches the new
+indentation; no assertion changed meaning. `RtStatsLayout`'s javadoc no longer
+claims a full-struct mirror.
+
+Evidence:
+
+- L1: `:common:compileSlang` compiled all 27 passes with `slangc` 2026.20,
+  `BUILD SUCCESSFUL`.
+- L2: full `:common:test`, `910 tests, 0 failures, 0 errors, 6 skipped`
+  (XML totals), `BUILD SUCCESSFUL` in 23 s.
+- Nine mutation probes, all caught: entity gate, atlas gate, shaded overload,
+  one visibility walk, `EMITTER_RADIUS`, sky branch, fingerprint, and the push
+  reorder (build pin + unit test).
+
+Still missing: an owner-verified frame. No jar from this commit has been
+played yet; shader compiles and unit tests are not a runtime check.
+
+Deployed for playtest (source-archive build of `7ddba13` + `libs/`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar`, sha256
+`6183c04d1f2d4547a54767b7d5c660d9dedc2216dd6c1b469d82ec8b37fcf4e6`, to both
+"Bedray Fabric 26.3" and "26.3(1)" (previous jar kept as
+`*.20261030-090243.bak`). Natives are unchanged from the earlier live
+`bedray_core.dll` build.
+
+## 2026-10-30 — The refused-sample share reaches the F3 line (L0 source, L1 build, L2 unit)
+
+Branch: `refactor/slang-pipeline`.
+
+`passes/frame_stats.slang` meters one whole 4x4 tile in sixteen and adds only the
+samples it trusts, so the share it refused was already implied by the slot's own
+numbers - no host code read it. `RtStatsMetering` now mirrors the pass's tile walk
+(edge tiles clipped, the rotation taken unsigned, which is the same modulo because
+2^32 is divisible by sixteen), and `RtFrameRenderer` prints
+`reject_pct = 100 * (metered - samples) / metered` on the `rt_pass` line. The value
+is `n/a` when the slot carries no measurement, or when the sample count exceeds the
+mask - which would mean the host's copy of the shader disagrees with the pass that
+ran. The readback metadata now carries the extent and the frame index the pass
+metered with (`params.frame`, the same word pushed to the counter pass).
+
+Evidence:
+
+- L1/L2: full `:common:test --rerun-tasks`, `913 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL in 52 s; all 27 Slang passes were
+  compiled by `slangc` 2026.20 in the same run.
+- `RtFrameStatsTest` (15, three new): the host mask equals a brute-force
+  enumeration of the shader's own pixels for 1x1, 6x3, 256x128 and 63x65 across
+  all sixteen rotations; the share is 3.125 % for 64 refused pixels of 2048 and
+  `n/a` for zero metered, zero trusted or an over-counted slot; the renderer
+  passes the slot's own extent/rotation and prints the field.
+- Three mutation probes, all caught by the named guard: the edge-tile x-clip
+  dropped, the frame rotation dropped, and the over-count refusal dropped. Every
+  mutated file came back byte-identical (SHA-256 checked).
+
+The ledger's stale rows were reconciled in the same batch: the Big Four table now
+records the RC v2 field as integrated (five dependent dispatches, bindings 34/35,
+192 MiB default budget, switch and axis properties) and ReSTIR PT as a quarantined
+in-tree module rather than one outside the checkout; Next steps 1, 2, 4a and 5 say
+what is actually closed and what still needs an owner-verified frame.
+
+Still missing: an owner-verified frame, and per-reason counters (invalid versus
+truncated, visibility overflow) which need a new binding/ABI in the C++ pass.
+
+Deployed for playtest (source-archive build of `3fe438c` + `libs/`):
+`bedray-fabric-mc26.3-0.2.0-alpha.jar`, sha256
+`6af033afea19dcca8e07bf9926394570c05309ab43ed908832255a1e150971e6`, to both
+"Bedray Fabric 26.3" and "26.3(1)" (previous jar kept as
+`*.20261030-092850.bak`). Natives are unchanged from the earlier live
+`bedray_core.dll` build. What a playtest should show: `rt_pass ... reject_pct`
+next to `hit_pct` on the F3 line, `n/a` while the slot has no measurement.
+
+## 2026-10-30 — Native frame-generation producer merged (L1 build, L2 unit)
+
+Branch: `refactor/slang-pipeline`, merge commit `2825ec4` of
+`origin/codex/migration-fg-producer` (`646aa9c`). The branch adds the producer-only
+ABI `bedray_fg_prepare.h` (104-byte `BedrayFgPrepareFrameDesc`, static asserts at
+8/24/32/48/80/96), `passes/fg_prepare.slang`, and `fg_prepare_pass.cpp`, which
+validates the ABI and the program contract (8-byte push, four bindings:
+combined-image-sampler depth at 0, storage-image motion at 1, storage-image depth
+and motion outputs at 2/3), then records barrier -> flipped `vkCmdBlitImage` ->
+the AOT dispatch -> barrier. No textual conflicts.
+
+Evidence:
+
+- L1 Slang: `fg_prepare: 1868 B SPIR-V, 4 binding(s), 8 B push constants, 8x8x1
+  threads`, exactly the contract the C++ pass checks before dispatching.
+- L1 native: Release x64 build of `bedray_core` succeeded; `bedray_core.dll`,
+  `bedray_abi_probe.exe` and the ownership tests linked.
+- L2 native: CTest `100% tests passed, 0 tests failed out of 25`, including the
+  new `bedray_fg_prepare_pass_test` (expects the recorded events
+  `b l d b`, one flipped blit and one dispatch between the barriers).
+- L2 Java: full `:common:test --rerun-tasks`, `913 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL in 45 s. The baseline is unchanged by
+  the merge.
+
+Still missing: the host is not wired to the new producer. `FrameGenGpu` still
+compiles `fg_prepare.comp` at runtime through Shaderc; the next increment replaces
+that with `bedray_core_render_fg_prepare` and deletes the GLSL. No owner-verified
+frame.
+
+## 2026-10-30 — Frame generation records its producer through the native core (L0 source, L1 build, L2 unit + mutation)
+
+Commit `ffaf760`. `FrameGenGpu` no longer compiles a shader. It borrows the
+`fg_prepare` artifact from `SlangRuntimePool`, checks the manifest against the C++
+contract before the first frame (8-byte push, 8x8x1 threads, four bindings with
+combined-image-sampler depth at slot 0, storage images at 1/2/3), and calls
+`bedray_core_render_fg_prepare` with a `BedrayFgPrepareFrameDesc` whose layout
+`BedrayCoreLayouts.verify()` pins to the header's 104 bytes and static-assert
+offsets. `FrameGenRuntime` and `Fsr3FrameGen` now stash the returned retire
+handle and hand it to `encoder.queueForDestroy(retire::run)` after the fence;
+record and `vkEndCommandBuffer` failures discard the recording instead. The
+runtime GLSL `fg_prepare.comp` is deleted; without the DLL export or the AOT
+artifact the constructor throws, the failure is logged and sticky, and frame
+generation does not run — there is no Shaderc fallback. `ShadercSurfaceTest` now
+expects `iris_depth.comp` as the only remaining resource shader.
+
+Evidence:
+
+- L1 Slang: `fg_prepare` compiled into the JAR (`shaders/slang/spv/fg_prepare.spv`,
+  1868 B) with reflection, manifest and source alongside.
+- L1 native: Release x64 `bedray_core.dll` rebuilt from `ffaf760`; the
+  `bedray_core_render_fg_prepare` export is present in the PE export table.
+- L2 Java: full `:common:test --rerun-tasks`, `919 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL. The new
+  `FgPrepareNativeWiringTest` adds six tests: the host calls the core instead of
+  Shaderc; the descriptor offsets are the header's; the program contract is
+  checked before dispatch; the legacy shader stays deleted; both callers release
+  after fence, discard when never submitted; and a behavioral test feeds real
+  `SlangPassManifest` records (push 12, three bindings, wrong descriptor type,
+  16x16x1) and expects each to be refused.
+- L2 native: CTest `100% tests passed, 0 tests failed out of 25` (unchanged; the
+  native pass is the same one merged in `2825ec4`).
+- Mutation proof: removing the thread-grid check from `FrameGenGpu` turned
+  `FgPrepareNativeWiringTest` red; the file was restored byte-identical
+  (sha256 `9587100f1584...48a72e`).
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files
+kept as `*.20261030-100946.bak`): JAR built from a `git archive ffaf760` snapshot
+plus `libs/`, sha256
+`067146f0aeabf04edce64aa1fdb56762786d23abf8ebac0fa26bdd6f23f3b660`; DLL
+`bedray_core.dll` sha256
+`8ed33b8021368f80e26d4b42d10bbb61cfa38b82042fbce035f0d4c0dd17ea07`. What a
+playtest should show: FSR3/DLSS-G generating frames with upright motion vectors
+and depth reaching the frame-generation pipeline; if the export or artifact is
+missing the F3 line reports frame generation unavailable instead of a GLSL
+fallback.
+
+Still missing: an owner-verified generated frame, and the shader-side inputs for
+the remaining Shaderc survivors (`iris_depth.comp`, the spatial upscaler kernels,
+the Iris pack host).
+
+## 2026-10-30 — The Iris depth converter is an AOT Slang pass (L0 source, L1 build, L2 unit + mutation)
+
+Commit `a4cbc04`. `iris_depth.comp` — the last first-party GLSL in the resource
+tree — is deleted. `passes/iris_depth.slang` reproduces the conversion exactly
+(encoding 0 scale/bias, 1 window clamp, 2/3 linear ray distance, column-major
+inverse view, `far/(far-near)` mapping, non-finite depth becomes 1) and
+`IrisDepthConverter` now loads it with `SlangPass.load("iris_depth")`, checks
+`requireManifest` (128-byte push, 8x8x1 threads, binding 0 combined `rasterDepth`
+sampler, binding 1 `r32f` `irisDepth` storage image), runs the same
+`SlangPassDriverGate` as core-registered passes, and builds the module from the
+AOT words. The pipeline still belongs to the Iris bridge, which is host code, not
+the renderer. No GLSL or Shaderc fallback: without the artifact the constructor
+throws and depth conversion does not run.
+
+Evidence:
+
+- L1 Slang: `iris_depth: 4800 B SPIR-V, 2 binding(s), 128 B push constants,
+  8x8x1 threads` (1200 words), exactly what the bridge writes and dispatches.
+- L2 Java: full `:common:test --rerun-tasks`, `924 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL. The new `IrisDepthAotTest` covers the
+  bridge loading the AOT pass instead of Shaderc, the deleted GLSL, the shader
+  contract (push block, bindings, thread grid, every encoding branch, the
+  column-vs-row matrix convention), the built artifact against `requireManifest`,
+  and four refused manifests (120-byte push, 16x16 threads, wrong slot types).
+  `ShadercSurfaceTest` now requires an empty `shaders/glsl/` tree.
+- Mutation proof: deleting the thread-grid check from `requireManifest` turned
+  `aManifestThatDisagreesWithTheBridgeIsRefused` red; the file was restored
+  byte-identical (sha256 `31186b396a26...fdf17fb`).
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous jar kept
+as `*.20261030-104721.bak`): JAR built from a `git archive a4cbc04` snapshot plus
+`libs/`, sha256
+`a6ae897e0297ef50fc6a5fa639876971cb11c4f77c766f1038eac8f1c6caa7c0`, containing
+`shaders/slang/spv/iris_depth.spv` (4800 B) and no `shaders/glsl/` entry. Natives
+are unchanged; both instances still carry `bedray_core.dll` sha256
+`8ed33b8021368f80e26d4b42d10bbb61cfa38b82042fbce035f0d4c0dd17ea07`. What a
+playtest should show: Iris shader packs see the same converted depth as before
+(fog, shadows and pack effects unchanged); a jar built without the Slang SDK logs
+`iris_depth is not in this build` once instead of falling back to GLSL.
+
+Still missing: an owner-verified frame, and the two Shaderc users that compile
+third-party or user-supplied GLSL (the `shaders/spatial/` upscaler kernels and the
+Iris pack host).
+
+## 2026-10-30 — Render-graph docs corrected to the shipped state (L0, CTest re-run)
+
+Four documents still said the native core neither constructs nor executes the
+render graph. That stopped being true at `5fb4ad1` (2026-10-28):
+`configure_path_trace` builds a `FrameGraphOwner`, the whole native path-trace
+group is one opaque `path_trace.frame` node compiled from the reported
+capability mask, `bedray_core_render_path_trace` records it through
+`FrameScheduler`, and `bedray_core_release_recording` proves completion through
+`release_proven`; configure, pass destroy and core destroy refuse outstanding
+leases. `docs/SLANG_MIGRATION.md`,
+`native/bedray_render_graph/README.md`, `RENDER_GRAPH_NOTES.md` and
+`VULKAN_INTEGRATION.md` now say that, and keep the accurate parts: every other
+pass records directly, the history bridge is linked but not driven, no GPU or
+game frame through the graph has been captured, and the capability mapping lives
+only in `FrameGraphOwner::plan_capabilities`.
+
+Evidence: the Release x64 build directory that produced the deployed
+`bedray_core.dll` re-ran CTest: `100% tests passed, 0 tests failed out of 25`,
+including `bedray_frame_graph_owner` and `bedray_history_submission`. No native
+source changed in this batch. No owner-verified frame.
+
+## 2026-10-30 — ReSTIR PT: change of measure derived, implemented and CPU-validated (L1 slangc, L2 unit)
+
+`experimental/restir_pt.slang` used to reuse a stored first edge as if the anchor
+had not moved: the merge applied only the target ratio, so a candidate sampled at
+one receiver was weighted by that receiver's solid-angle density. v3 derives the
+correction for the fixed-first-vertex shift and restricts reuse to the class
+where it holds. With `G(x) = |cos at the first vertex| / r^2`, the same vertex
+sample has density `q_new = q_old * G_old / G_new` at the new anchor, so the
+merge multiplies the target ratio by `J = G_new / G_old`
+(`ptFirstEdgeShiftJacobian`), and the resolve normalisation by the target
+density cancels — the target is a variance control only. Reuse is limited to a
+certified diffuse first vertex (`RESTIR_PT_PATH_FLAG_DIFFUSE_FIRST`); sky and
+emitter first edges, delta and glossy first vertices are rejected because their
+suffix radiance or density depends on the incoming direction. Duplicate
+rejection now compares a stable `sampleId` instead of a first-vertex position.
+The record grew only its first vertex, 48 to 52 B, filling existing tail
+padding: the path stays 80 B and the reservoir 112 B.
+
+Derivation, rejected classes, documented approximations (ratio caps 8/5, edge
+cosine 1e-3, target cosine floor 0.05) and the remaining integration gates are
+in `docs/RESTIR_GI_DERIVATION.md`. The module stays quarantined: no root
+imports it, there is no pass or host, and no GPU run exists.
+
+Evidence:
+
+- L1 Slang: a temporary probe root (kept outside the repository) imports the
+  module, instantiates `ptSpatialReuse`, `ptResolveFiltered` and `ptResolveVisible`
+  and calls every other entry; the pinned `slangc` (2026.20) with
+  `-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major` emits
+  323,420 B of SPIR-V with no warnings.
+- L2 Java: `RestirPtChangeOfMeasureTest`, four tests. Algebra on one candidate
+  resolves to `1/q_new` within 1e-12 and is invariant to a 7.25x target scale.
+  A two-million-sample Monte Carlo against a closed-form indirect integral
+  (`0.6 * 0.5 * 0.5 = 0.15`) measures `0.149937 ± 0.000172` with the Jacobian
+  and `0.170995` without it (the v2 merge is 14% high). Source guards pin the
+  flag, both geometry functions, the merge ratio, the rejection lines, the
+  `sampleId` test and the two reuse call sites.
+- Full `:common:test` with the pinned slangc: `928 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals), BUILD SUCCESSFUL.
+- Mutation proof: replacing the temporal reuse's `originDelta` with
+  `float3(0.0)` (which would silently drop the change of measure whenever the
+  camera moves) turned exactly
+  `theShaderImplementsTheDerivedShiftJacobian()` red; the shader was restored
+  byte-identical, sha256 `a7b51eef353f5f02c80145e83364fbc53eff957f0e68dff6779db02413896e12`.
+
+No native build, CTest or deploy: no root imports the module and no runtime
+behavior changed. No owner-verified frame.
+
+## 2026-10-30 — ReSTIR PT v4: attempt accounting matches the reservoir normalisation (L1 slangc, L2 unit)
+
+v3's change of measure was correct, but its reservoir was still biased by the
+other half of the same theorem. `ptAddPath` returned early unless
+`ptPathReusable` held, so a sky, emitter, delta or glossy first edge never
+reached `M`, and `W = wSum / (M * p-hat)` normalised by the number of *recorded*
+reusable hits instead of the number of attempts. That conditions the estimate on
+a recording and scales it by `1/P(recorded)`. With `K` recorded attempts out of
+`N`, each recording with probability `p`, the v3 estimator has expectation
+`Pr(K > 0) * A / p = (1 - (1-p)^N) * A / p`, where `A` is the integral an
+unbiased estimator targets. In the half-sky wall scene (`p = 1/2`, `A = 0.15`)
+that is 0.225 at `N = 2` (+50%) and 0.28125 at `N = 4` (+87.5%); the isolation
+model measured 0.224808 ± 0.000333 and 0.281228 ± 0.000539, against the
+analytic 0.15 measured by the counting variant (0.149496 ± 0.000330).
+
+v4 splits admission from reuse. `ptAddPath` now admits every `ptPathValid` path
+with `first.pdf > 0`, which is what makes `M` the number of attempts; the
+certified-class gate stays in `ptMergeReservoir`, `ptTemporalReuse` and
+`ptSpatialReuse`, where a stored density is actually transported. A
+non-contributing attempt cannot corrupt the reservoir: its target sits at the
+`ptTargetPdf` floor (`max(bsdfPdf, 1e-8) * cos`) and a sky record carries
+`bsdfPdf = 0`, so its weight is ~1e-8/q and its resolved contribution ~1e-8.
+The same floor proves the merge reset
+`if (!ptReservoirHasSample(current)) current = ptEmptyReservoir();` unreachable
+for a legitimate accumulator: every admitted attempt adds a strictly positive
+weight, so after any add `wSum > 0`. The reset is kept for empty and corrupt
+records only, and the derivation now says so (`docs/RESTIR_GI_DERIVATION.md`
+§6, sections 6-9 renumbered, README, `SLANG_MIGRATION.md` and the P1-7 audit
+entry updated).
+
+Evidence:
+
+- L1 Slang: the same temporary probe root (outside the repository) imports the
+  edited module and calls every entry, including `ptSpatialReuse`,
+  `ptResolveFiltered` and `ptResolveVisible`; the pinned `slangc` (2026.20)
+  with `-target spirv -profile cs_6_5 -entry main -matrix-layout-column-major`
+  emits 323,028 B of SPIR-V with no warnings (v3: 323,420 B).
+- L2 Java: `RestirPtReservoirInvariantTest`, four tests. Source guards pin the
+  split (`ptAddPath` admits on `ptPathValid` + `first.pdf > 0` and never names
+  `ptPathReusable`; the merge keeps it). A 300,000-trial comparison of two
+  identical fresh reservoirs whose only difference is the admission rule puts
+  the counting one within 4 standard errors and 1% of 0.15 and the v3-gated
+  twin within 2% of `1.5 * 0.15`. Temporal reuse stays on 0.15 both transported
+  into an empty reservoir and merged with the fresh one, and a deterministic
+  merge checks `W_merged = W_source * J` exactly (1e-12) with `|J-1| > 0.05`.
+- Full `:common:test` with the pinned slangc: `932 tests, 0 failures, 0 errors,
+  6 skipped` (XML totals; the previous 928 plus the four new tests), BUILD
+  SUCCESSFUL.
+- Mutation proof: restoring the v3 gate
+  (`if (!ptPathReusable(path)) return reservoir;`) in `ptAddPath` turned exactly
+  `admissionCountsEveryAttemptWhileReuseStaysInTheMerge()` red and left the
+  other seven ReSTIR PT tests green; the shader was restored byte-identical,
+  sha256 `4c31aeede4968a07c8658d41adbad0d02151897b6cc3c5c5f5b4e8d323a461ef`.
+
+No native build, CTest or deploy: no root imports the module and no runtime
+behavior changed. No owner-verified frame.
+
+## 2026-10-30 — ReSTIR PT temporal stage goes live behind `path_restir_pt` (L1 slangc, L2 unit + mutation, CTest; no owner-verified frame)
+
+Branch `refactor/slang-pipeline`, commit `b2a563a` (35 files, +1366/−112).
+
+What changed: the first ray of a pixel records its diffuse continuation's first
+edge (`PATH_TRACE_OPTION_RESTIR_PT`, bit 17) and `restir/pt_temporal.slang` hands
+it to a per-pixel path reservoir at binding 36. The reservoir owns exactly the
+certified-diffuse, non-emitting first vertex; that suffix leaves the path and
+returns as `f_d * cos * L * W`. Sky, emitter and uncertified first edges, the
+other lobes and DI's NEE stay in the path. Every draw of an eligible receiver
+counts in `M` (`ptAddEmptyAttempt`), and the merge reset now drops only a corrupt
+accumulator. History is keyed on the reprojected camera-relative receiver, not on
+`SurfaceHit.worldPosition` (P1-6). Derivation: `docs/RESTIR_GI_DERIVATION.md` §11.
+
+A measured finding: binding the record exposed that its std430 layout is
+144 B (first vertex 64, path 112), not the 112 B the module had claimed since v2.
+The first compile with the new `gradle/slang.gradle` pin failed with
+`'ptReservoirs' uses RestirPtReservoir of 144 B, the host contract is 112 B`; the
+pin, the Java stride, the native stand-in, the docs and the settings text now all
+say 144 B (597.2 MB at 1080p for the two halves).
+
+Evidence:
+
+- L1 Slang (`slangc` 2026.20, the AOT flags): `path_trace` 1,339,664 B /
+  27 bindings, `path_trace_scene` 1,381,380 B / 27, `rc_path_trace_scene`
+  1,674,148 B / 29, push 112 B, no warnings. Baseline before the batch:
+  1,118,892 / 1,155,372 / 1,448,252 B (+20 %, mostly the filtered resolve walk).
+  `OpUndef` scan: one float `OpUndef` per module, the same as the baseline; zero
+  on handles or pointers.
+- L2 Java: `RestirPtTemporalStageTest` (11 tests: the identity on 200,000 random
+  cases to 1e-9 with the cap hits counted, attempt accounting through the merge,
+  ownership in expectation over 400,000 frames, the ring size, the measured
+  nested layout read from the reflection, and source guards) plus updated guards
+  in `RtSlangHistoryAnchorTest`, `RtRestirSettingsTest`, `RtPathTraceSlangPassTest`,
+  `SlangPassLibraryTest`, `RtSlangRcFieldTest`, `RtSlangDistantBlockLightTest`,
+  `RtSlangNrdMotionTest`, `RtSlangSamplePerPixelTest`. Full
+  `:common:test --rerun`: `944 tests, 0 failures, 0 errors, 3 skipped` (XML; the
+  three skips are the CPU benchmark and the two real-pack surveys).
+- Mutation proof (`--rerun`, each file restored and re-hashed):
+  M1 drop the non-candidate `ptAddEmptyAttempt` → only
+  `everyNonCandidateIsStillAnAttempt`; M2 restore the v4 merge reset → only
+  `everyNonCandidateIsStillAnAttempt`; M3 keep the suffix in the path → only
+  `theReservoirOwnsOnlyTheCertifiedDiffuseContinuation`; M4 drop `INV_PI` → only
+  `theResolvedTermIsTheDiffuseLobeOfTheReceiver`; M5 let every ray record → only
+  `theTracerRecordsTheFirstVertexBehindItsOwnOptionBit`; M6 give the sampler its
+  own reflectance formula → only `theResolvedTermIsTheDiffuseLobeOfTheReceiver`;
+  M7 admit uncertified first vertices → only
+  `theReservoirOwnsOnlyTheCertifiedDiffuseContinuation`. Restored sha256:
+  `pt_temporal.slang` d202ac3b…0d30ec2, `restir_pt.slang` 611608969b…727f60,
+  `path_trace_entry.slang` 34180e8c…c8501d, `bsdf.slang` 8672deb0…81ca5c03 — all OK.
+  A first run of the probes reported nothing because Gradle treated the test task
+  as up to date (shader sources are not test inputs); the probes were re-run with
+  `--rerun` and only those results are recorded here.
+- Native: Release x64 `bedray_core` built in `native/bedray_core/build` (CTest
+  `100% tests passed, 0 tests failed out of 21`) and in
+  `build/bedray-native-readiness` (`... out of 24`). The new
+  `test_restir_pt_binding_is_a_stand_in` checks the 27-binding program is
+  accepted, a non-storage binding 36 is refused, 36 gets a 144-byte stand-in and
+  bits 17..21 are cleared while bit 16 survives. Mutation: forwarding the flag
+  word unmasked failed exactly `path_trace_pass_test.cpp:1248`; restored sha256
+  `a0b87589…69739a2` OK.
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files kept
+as `*.20261030-230121.bak`): JAR built from a `git archive b2a563a` snapshot plus
+`libs/`, sha256 `466345476592f12e32e4fdf6ef9f2cf9a974c396613083d18bd2947ed90e9775`;
+`bedray_core.dll` from `native/bedray_core/build/Release` (the tree equals
+`b2a563a`), sha256 `f652ad75f72b1ffd0f273a3ecac8173ac13e6bea730c6bc85932d4b30df33be4`.
+`bedray_scene.dll` is unchanged.
+
+Not verified: no GPU smoke run (the game was not launched by the agent; another
+instance was running), so neither the registration of the 27-binding programs in
+`latest.log` nor the absence of a device fault with the switch on is proven. What
+a playtest should show: with `path_restir_pt` off (default) the image and the
+`path_slang(...)` log line are as before plus `restir_pt=off`; with it on (Path
+Tracing, ReSTIR Direct Light on) the log reports `Slang ReSTIR PT reservoirs WxH x2
+= N MiB` and `restir_pt=fresh` then `temporal`, the first frame after a reset looks
+the same as with it off, and indirect light on diffuse walls/floors settles faster
+while moving. No spatial stage yet. No owner-verified frame.
+
+## 2026-10-31 — ReSTIR PT spatial stage pools neighbours into the next frame's history (L1 slangc, L2 unit + mutation; no owner-verified frame)
+
+Branch `refactor/slang-pipeline`, commit `93aa115` (22 files, +879/−36).
+
+What changed: two new passes, `restir_pt_spatial` (legacy section table) and
+`restir_pt_spatial_scene` (native scene table), run after the trace on a frame
+whose trace ran the ReSTIR PT temporal stage and with the new child row
+`path_restir_pt_spatial` on (default on). They declare the trace pass's own
+bindings by number (14: TLAS, sections, three atlases, frame, block materials,
+six entity buffers, the ring at 36) and its 112-byte push block, so
+`RtPathTraceSlangPass.recordPtSpatial` binds the trace's views and pushes the
+same bytes. Each pixel reads its record and four neighbours' from the half the
+trace wrote, merges them through the module's `ptSpatialReuse` and writes the
+result into the other half; `RestirDiState.spatialPublished` counts that as a
+write, so the next trace imports the pooled half. The pass shades nothing: the
+next frame's temporal stage resolves a pooled winner with `ptResolveFiltered`
+(one frame of lag, like the DI spatial pass). The temporal stage now stores the
+receiver anchor in a record without a sample (`ptAnchorReceiver`). Derivation:
+`docs/RESTIR_GI_DERIVATION.md` §12.
+
+Evidence:
+
+- L1 Slang (`slangc` 2026.20, the AOT flags): `restir_pt_spatial` 136,864 B /
+  14 bindings, `restir_pt_spatial_scene` 142,452 B / 14, push 112 B;
+  `path_trace` 1,347,712 B / 27, `path_trace_scene` 1,389,428 B / 27,
+  `rc_path_trace_scene` 1,682,196 B / 29 (+8 KB each for the anchor write and the
+  shared material-options function). `OpUndef` scan: one float per module, zero
+  on handles or pointers; `SlangPassDriverGate.permits` is asserted for both new
+  modules in the test.
+- L2 Java: `RestirPtSpatialStageTest` (8 tests: the neighbour pattern is four
+  distinct non-self pixels on 200,000 rotations under both half-way rounding
+  conventions; read-one-half/write-the-other; a non-receiver publishes its own
+  record; every neighbour goes through `ptSpatialReuse` and the stage resolves
+  nothing; the temporal stage stores the receiver; both roots match the trace's
+  bindings, types, element sizes and push block in the compiled manifests and
+  pass `requirePtSpatialManifest`; the ring state keeps the pooled half; the
+  backend runs the stage only behind the temporal one) and
+  `RtRestirSettingsTest.pathSpatialReuseIsAChildOfPathReuse`; one updated string
+  guard in `RtSlangEntityTest`. Full `:common:test --rerun`:
+  `953 tests, 0 failures, 0 errors, 3 skipped` (XML).
+- Mutation proof (`--rerun`, each file restored and re-hashed, all OK):
+  S1 write the half that is read → only `theStageReadsTheTemporalHalfAndPublishesTheOther`;
+  S2 drop `ptAnchorReceiver` → only `theTemporalStageStoresItsReceiverEvenWithoutASample`;
+  S3 drop `pt.spatialPublished()` in the backend → only
+  `theBackendRunsTheSpatialStageOnlyBehindTheTemporalOne`; S4 drop the `frame++`
+  in `spatialPublished` → only `theRingCountsTheSpatialPublishAsAWrite`;
+  S5 a non-receiver drops its record → `aPixelThatIsNoReceiverPublishesItsOwnRecord`
+  and `theStageReadsTheTemporalHalfAndPublishesTheOther`; S6 the host promises 13
+  bindings → only `bothRootsShareTheTraceBindingsAndPushBlock`; S7 the controller
+  ignores the new switch → only `pathSpatialReuseIsAChildOfPathReuse`; S8 radius
+  step 1.0 → only `theNeighbourPatternIsFourDistinctOtherPixelsForEveryRotation`.
+- Native: no native source changed in this batch; CTest was not re-run.
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files kept
+as `*.20261031-002047.bak`): JAR built from a `git archive 93aa115` snapshot plus
+`libs/`, sha256 `00e6fd9a8311abbe737823937db3bd54eb1c99303df12c31aabfa022c816aedd`;
+`bedray_core.dll` unchanged from the previous deploy, sha256
+`f652ad75f72b1ffd0f273a3ecac8173ac13e6bea730c6bc85932d4b30df33be4`.
+
+Not verified: no GPU run. Neither the registration of the two spatial programs
+nor the absence of a device fault is proven. What a playtest should show: with
+`path_restir_pt` on, `latest.log` has no `ReSTIR PT spatial stage off for ...`
+line and the mode log reports `restir_pt=temporal+spatial`; turning
+`path_restir_pt_spatial` off reports `restir_pt=temporal` and resets the history
+once. With both on, indirect light on diffuse walls should settle faster than with
+the temporal stage alone while the camera moves; a still frame cannot show it.
+No owner-verified frame.
+
+## 2026-10-31 — F3 splits rejects by reason and counts shadow-walk overflows (L1 slangc, L2 unit + mutation, CTest; no owner-verified frame)
+
+Branch `refactor/slang-pipeline`, commit `0a90bb6` (21 files, +401/−34).
+
+What changed: a new binding 37 (`outPathStats`) in `path_trace`,
+`path_trace_scene` and `rc_path_trace_scene` is the frame's whole 576-byte stats
+slot, bound at the slot's own 64-byte-aligned offset. The trace adds four words at
+140..143 (`RtStatsLayout.PATH_REJECTS`, the last sixteen bytes of the slot):
+refused pixels with a non-finite fault, pixels with a truncated path, pixels with
+a shadow walk past its filter budget, and metered pixels, over the same rotated
+1-in-16 tiles `frame_stats` meters. The tracer raises the new sample flag
+`PATH_TRACE_FLAG_VISIBILITY_OVERFLOW` (bit 13) where the direct term's shadow walk
+reports `SURFACE_VISIBILITY_FLAG_OVERFLOW`; the pixel mean keeps the union of every
+sample's flags. The host zeroes the block per frame and prints `invalid_pct`,
+`trunc_pct` and `vis_overflow_pct` on the `rt_pass` line, only when the metered word
+equals `RtStatsMetering`'s own count (n/a otherwise). The native core accepts 37 as
+an additive storage buffer and binds a one-word stand-in, which the shader refuses
+to write, so the split reads n/a on that backend.
+
+Evidence:
+
+- L1 Slang (`slangc` 2026.20): `path_trace` 1,349,892 B / 28 bindings,
+  `path_trace_scene` 1,391,608 B / 28, `rc_path_trace_scene` 1,684,376 B / 30,
+  push 112 B; `OpUndef` one float per module, zero on handles or pointers.
+- L2 Java: `RtPathRejectBreakdownTest` (7 tests: the block's offset and the shader's
+  word index agree, the slot is filled exactly; the trace's tile walk is
+  `frame_stats`' walk; each word counts what its name says; the tracer raises the
+  overflow flag at all three direct-term call sites; every root declares 37 and
+  the compiled manifest has a 4-byte storage buffer there; the host prints only a
+  measurement its mask agrees with; the host binds the whole slot, zeroes the
+  block, reads it back and prints it). Updated count/string guards in
+  `SlangPassLibraryTest`, `RtSlangRcFieldTest`, `RtSlangNrdMotionTest`,
+  `RtSlangEntityTest`. Full `:common:test --rerun`:
+  `960 tests, 0 failures, 0 errors, 3 skipped` (XML).
+- Mutation proof (`--rerun`, each file restored and re-hashed, all OK):
+  R1 word index 136 → only `theBlockIsTheLastSixteenBytes…`; R2 drop the flag
+  union → only `theFourWordsCountWhatTheirNamesSay`; R3 drop the overflow raise →
+  only `theTracerRaisesTheOverflowFlag…`; R4 trust a metered word the mask
+  disagrees with → only `theHostPrintsTheSplitOnlyFor…`; R5 drop the per-frame
+  zeroing and R6 hand over only the 16-byte head → only
+  `theHostBindsTheWholeSlot…`; R7 unrotated tiles → only
+  `theTraceMetersTheTilesFrameStatsMeters`; R8 overflow counted as invalid → only
+  `theFourWordsCountWhatTheirNamesSay`.
+- Native: Release `bedray_core` in `native/bedray_core/build` (CTest
+  `100% tests passed, 0 tests failed out of 21`) and `build/bedray-native-readiness`
+  (`... out of 24`). New `test_path_stats_binding_is_a_stand_in`: a non-storage 37
+  is refused, a 28-binding program is accepted and 37 gets a 4-byte stand-in.
+  Mutation: dropping 37 from the resource count failed exactly
+  `path_trace_pass_test.cpp:1275` and `:1277`; restored sha256
+  `8cacde28…48f0764` OK, rebuilt and passing.
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files kept
+as `*.20261031-005546.bak`): JAR from a `git archive 0a90bb6` snapshot plus `libs/`,
+sha256 `096fd4d32152b1b6dbccd0dbc49863e4f43118ecd0b57c1be59edc058063e55a`;
+`bedray_core.dll` from `native/bedray_core/build/Release` (tree equals `0a90bb6`),
+sha256 `40ff573dde0d6f3040f50b56fb82998f0ebf277f6b7b23c694ea0c017018106e`.
+
+Not verified: no GPU run. What a playtest should show: on the default (Java)
+backend the F3 `rt_pass` line carries numbers for `invalid_pct`, `trunc_pct` and
+`vis_overflow_pct` (not n/a), `invalid_pct` never above `reject_pct`, and
+`vis_overflow_pct` above 0 only where a shadow ray crosses more than the walk's
+filter budget of glass or leaf layers; with
+`-Dvkbridge.rt.nativePathTrace=true` the three read n/a. No owner-verified frame.
+
+## 2026-10-31 — Emitter light and escaped rays bend at the water sheet (L1 slangc, L2 unit + ray geometry + mutation; no owner-verified frame)
+
+Branch `refactor/slang-pipeline`, commit `98b090b` (9 files, +341/−19).
+
+What changed: until this batch only the sun and the moon reached an underwater
+receiver through the Snell crossing. A block emitter above the water was shadowed
+and shaded along the straight sight line, and a ray that left the body upward
+without meeting a face looked up the sky unbent. `waterBeamToPoint`
+(`surface/water.slang`) now solves the crossing of a point light on the flat sheet
+by bisection and weights the sample by the ray Jacobian of the crossing,
+`n^2 d^2 dw/dA_perp`; `traceShadowBeam` walks the bent air leg from
+`WaterBeam.air` / `airDistance`, which for the key light are its sight direction
+and the rest of its distance (so the sun and the moon trace exactly what they
+traced before), and the caustics switch and the wave style act on the emitter
+beam exactly as on the key light. An escaped ray inside the body is refracted out
+of the plane with the sheet's transmission and `eta^2`, or sees no sky past the
+critical angle. Approximations: the emitter's own cosine is kept at the sight
+line's; the totally reflected half of an escaped ray is not traced on.
+
+Evidence:
+
+- L1 Slang (`slangc` 2026.20): `path_trace` 1,370,040 B / 28 bindings,
+  `path_trace_scene` 1,411,756 B / 28, `rc_path_trace_scene` 1,705,516 B / 30
+  (+20 KB each); `OpUndef` one float per module, zero on handles or pointers.
+- L2 ray geometry (`RtSlangWaterPointBeamTest`, the shader arithmetic in double):
+  Snell holds at the bisected crossing to 1e-7 on 100,000 random receivers and
+  lights; the weight equals a finite-difference measurement of the ray map
+  (Richardson-extrapolated central differences) to 1e-4 on 2,000 cases, grazing
+  air legs included; it is 1 with `n = 1` and the key light's
+  `cos(air) / cos(water)` for a light 10^6 blocks up. Before/after for one torch
+  2 blocks under the sheet, 3 above and 4 across: arrival cosine 0.7809 (sight
+  line) -> 0.8587 (bent), crossing 1.19 blocks from the receiver, weight 1.0000 ->
+  1.1086. Source guards pin the solver, the weight, the emitter branch, the key
+  light's unchanged air leg, the shared focus call and the escape branch; old
+  string guards updated in `RtSlangHotLoopTest`, `RtSlangRayOffsetTest`,
+  `RtSlangWaterBeamTest`, `RtSlangWaterMediumTest`. Full `:common:test --rerun`:
+  `967 tests, 0 failures, 0 errors, 3 skipped` (XML).
+- Mutation proof (`--rerun`, each file restored and re-hashed, all OK): W1 drop
+  the emitter branch, W3 drop `n^2`, W4 give the key light's sky leg the whole
+  distance, W5 let total internal reflection see the sky, W6 charge Fresnel at the
+  sight direction — each failed its guard. W2 (bisection stepping the wrong way)
+  first survived: the guard pinned `g` but not the step. The guard now pins the
+  step and W2 fails `theShaderSolvesAndWeightsTheCrossingAsTheModelDoes`.
+- Native: no native source changed; CTest not re-run.
+
+Deployed for playtest (both "Bedray Fabric 26.3" and "26.3(1)", previous files kept
+as `*.20261031-012845.bak`): JAR from a `git archive 98b090b` snapshot plus `libs/`,
+sha256 `2f5ddcd3326ae9cb8165a4b811efee555ebc42a0c4938c184f279b82ee3356dd`;
+`bedray_core.dll` unchanged from the previous deploy, sha256
+`40ff573dde0d6f3040f50b56fb82998f0ebf277f6b7b23c694ea0c017018106e`.
+
+Not verified: no GPU run and no before/after screenshot. What a playtest should
+show: under water, a torch or glowstone above the surface lights the floor along
+its bent beams, which fall steeper in the water, so its pool is more concentrated under the light than before, and its pool of light
+moves with the waves when caustics are on; the sun's light under water is
+unchanged; swimming and looking up, the sky still fills the Snell window. No
+owner-verified frame.
+
+## 2026-10-31 — Settings screen, log spam and the outDepth contract, found from the first logged session (L3 log evidence for 5.2/5.3; L2 for the fixes; no owner-verified frame)
+
+Source: `26.3(1)/minecraft/logs/latest.log`, sessions 01:42 and 01:45-01:50.
+
+- The Bedray settings screen showed no rows: 13 x `IllegalStateException: Attempted to read option value that is not a
+  declared dependency` from `SettingsDraft.visible`, raised by the `path_restir_pt_spatial` row of `93aa115` (it read
+  `path_restir_di` but declared only the mode and `path_restir_pt`). Fixed in `e5a68bb`. `2bed1f3` makes the screen log
+  every failing option as `[VKB-SETTINGS] option=<id> category=<c>` before failing, and adds
+  `SettingsDeclaredDependenciesTest`, which fails on the reverted fix with
+  `path_restir_pt_spatial reads pathDiId but declares [modeId, pathPtId]`.
+- `[VKB-RT] mode=path passes=...` appeared 6,500 times in five minutes (10-20 a second): `describe()` carried the
+  accumulation count, so the log-on-change line changed every frame. Fixed in `9595db0`
+  (`RtSlangRayModeTest.theDescriptionDoesNotChangeFromFrameToFrame` failed before the fix: the expected line had `frames=2`, the next frame a different count).
+- L3 evidence for earlier batches in the 01:45 session: `registered SlangProgram[path_trace, 28 binding(s), 112 B push]`,
+  `path_trace_scene` 28, `restir_pt_spatial` and `restir_pt_spatial_scene` 14 each; `rt_pass ... invalid_pct=0.0
+  trunc_pct=2.8..10.1 vis_overflow_pct=0.0` once the first frame was measured. `restir_pt=off` throughout: ReSTIR PT
+  itself was not switched on.
+- 5.5 `outDepth` contract (`9ed9fcc`): ray distance from the eye (`camera.origin`), `1e6` on a miss; consumers checked
+  and listed in `SLANG_MIGRATION.md`. `path_display` compared an eye-distance history with a raw-camera expected
+  distance; with a bobbing eye 1.5 blocks from a wall the gap (0.047) exceeds the 2 % window (0.044), so near surfaces
+  lost accumulation while walking. The history now stores raw-camera distances. `RtSlangDepthContractTest`; two
+  mutations killed; `:common:test --rerun` 971 tests, 0 failures, 3 skipped.
+
+Deployed to both instances as `*.20261031-160548` backups: JAR from `git archive 9ed9fcc` plus `libs/`, sha256
+`b46c6379ab499e9e36360e00f9ba7dbec9f8b34ed5cf6d6fbe1fb6bfb2d24c0e`; `bedray_core.dll` unchanged
+(`40ff573d…18106e`). No owner-verified frame.
+
+## 2026-10-31 — RC v2 temporal reuse (batch 5.6; L1 slangc + MSVC, L2 unit + native CTest + mutation; no GPU run)
+
+Branch `refactor/slang-pipeline`, commit `f215c35` (16 files, +411/−46).
+
+What changed: the RC v2 builder blends each reconstructed cell with the previous consecutive field, read at
+`probe + di_camera_delta` on the same level and ray by trilinear weights (`rcFieldBlendHistory`), with the native owner's
+weight 0.8; all-or-nothing on unresolved data. The native `RCFieldPass` keeps the last successful recording's tails alive
+as history at builder binding 38, pins them for the recording that reads them, and forgets them on a reset, a skipped
+frame, a non-finite move, a failed or a discarded recording. Metadata 288 bytes (`float4 history` at 272), builder
+17 bindings, one extra tails buffer inside the 192 MiB budget; the legacy float4 resolve is not wired to the typed atlas.
+Design and approximations: `docs/RC_RECONSTRUCTION_PLAN.md` "Temporal reuse".
+
+Evidence:
+
+- L1: `slangc` 2026.20 `rc_field_build_scene` 583,396 B / 17 bindings / 80 B push, `rc_path_trace_scene` 1,706,780 B / 30;
+  MSVC Release `bedray_core` rebuilt in both trees.
+- L2 Java: `RtRcFieldHistoryTest` (CPU model of the blend: a still camera reads its own cell, a whole-probe move reads the
+  neighbour and a half move interpolates, a missing or outside neighbour is never renormalised away, weight 0 is the field
+  without reuse, the exponential mean's variance is `(1-w)/(1+w)` on 400,000 frames; shader guards; the compiled builder
+  manifest has `rcHistory` at 38 and a 288-byte `rcField`). `RtSlangRcFieldTest` updated for 17 bindings and 288 bytes.
+  Full `:common:test --rerun`: `977 tests, 0 failures, 0 errors, 3 skipped`.
+- Native: `rc_field_pass_test` `history_chains_consecutive_frames_only` (consecutive frame reads the previous tails at 38
+  with the camera move and weight 0.8 in the metadata; reset, skipped frame and failed recording give weight 0; the last
+  field waits as history until destroy) and `path_trace_pass_test` (the second build reads the first tails at 38; a
+  recording that fails before or after its field leaves no history; a discard forgets it). CTest
+  `100% tests passed, 0 tests failed out of 21` and `... out of 24`.
+- Mutations: H1 inverted lerp and H2 history read without the camera move each fail `theShaderBlendsAsTheModelDoes`;
+  N1 dropping the failure guard fails `path_trace_pass_test.cpp:1790`, N2 reusing a non-consecutive field fails
+  `rc_field_pass_test` line 222, N3 keeping the history on discard fails `path_trace_pass_test.cpp:1778`. N1 first
+  survived because the partial-failure test discarded before checking; the test now checks right after the failed
+  recording. A first native probe round was invalid: restored sources kept older timestamps than the mutated objects, so
+  MSBuild did not rebuild them; the sources were touched and every probe rerun on a clean build.
+
+Deployed to both instances as `*.20261031-162511` backups: JAR from `git archive f215c35` plus `libs/`, sha256
+`33d079494a07d44d65a4af75cfa838c932bdd2b6831f385101ba518d22681475`; `bedray_core.dll` from
+`native/bedray_core/build/Release` (tree equals `f215c35`), sha256
+`536232e5ea364764b4dda70028f83b53aa65f57eb52fa046d1db7ab60b9f5beb`.
+
+Not verified: RC is opt-in and was never enabled in a logged session; no GPU run, no owner-verified frame.
+
+## 2026-10-31 — Code review round 1 fixes: sun counted once, TIR reflects once, PT stand-in zeroed (L2; no owner-verified frame)
+
+Commit `0f7bb77`. Four read-only reviewers covered the Slang core, the Slang passes, the Java host and the native core
+(code from `b2a563a..HEAD` excluded). Confirmed in the code and fixed here: the sun and moon discs were added on every
+escape on top of their NEE (`bodiesVisible`, `IEnvironmentSampler.skyRadiance`); the optical interface's total internal
+reflection weighed `1/(1-p)` after the specular branch had reflected `F` (now `(1-F)/(1-p)`); `create_dummy` copied 144
+bytes from a 64-byte array for the ReSTIR PT stand-in (a 5.1 defect of mine). Evidence: `RtSlangSunCountTest`,
+`RtSlangTirEnergyTest`, the stand-in zero check in `path_trace_pass_test`; `:common:test --rerun` 981 tests, 0 failures,
+3 skipped; CTest 21/21 and 24/24; two shader mutations killed. Deployed to both instances as `*.20261031-210253`
+backups: JAR sha256 prefix `5fe6077fcd9625a7`, `bedray_core.dll` prefix `c7f75096745f0b5c`.
+
+Owner report at 16:44 (jar `33d07949`, ReSTIR PT on, DLSS-RR): one triangle of block faces see-through, murky water,
+no sky, lighting unlike the pre-migration build. Checked and excluded for the triangle: index order (Java template,
+`sodium_dequantize`, `legacyTriangleVertices` all (0,1,2)(2,3,0)), opacity micromaps (`omm=off` in the log), the per-section
+quad limit (guarded). Not yet explained; needs the A/B runs listed in `MIGRATION_STATUS.md`.

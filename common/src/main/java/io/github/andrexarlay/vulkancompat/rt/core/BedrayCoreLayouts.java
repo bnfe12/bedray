@@ -76,12 +76,31 @@ public final class BedrayCoreLayouts {
      * {@code FRAME_FLAG_CAMERA_IN_WATER} (bit 5) of the FrameConstants frame word, which is a different namespace.
      */
     public static final int PATH_TRACE_FRAME_CAMERA_IN_WATER = 1 << 8;
+    /**
+     * The player's water style and caustics switches, as {@code RtFrameParams} already carries them. Host-only like
+     * {@code CAMERA_IN_WATER}: the core maps them onto {@code FRAME_FLAG_WATER_REALISTIC} (bit 6) and
+     * {@code FRAME_FLAG_WATER_CAUSTICS} (bit 7) of the frame word the shader reads.
+     */
+    public static final int PATH_TRACE_FRAME_WATER_REALISTIC = 1 << 9;
+    public static final int PATH_TRACE_FRAME_WATER_CAUSTICS = 1 << 10;
+    /** The core owns the ReSTIR PT ring, its clear, history and parity ({@code BEDRAY_PATH_TRACE_FRAME_NATIVE_PT}). */
+    public static final int PATH_TRACE_FRAME_NATIVE_PT = 1 << 11;
+    public static final int PATH_TRACE_FRAME_RESET_PT = 1 << 12;
+    /** Also run the lent ReSTIR PT spatial stage this frame. */
+    public static final int PATH_TRACE_FRAME_PT_SPATIAL = 1 << 13;
     public static final int PATH_TRACE_FEATURE_NATIVE_DI = 1 << 0;
     public static final int PATH_TRACE_FEATURE_GUIDE_BINDINGS = 1 << 1;
     public static final int PATH_TRACE_FEATURE_GUIDE_OUTPUTS = 1 << 2;
     public static final int PATH_TRACE_FEATURE_NRD_MOTION = 1 << 3;
     /** The core maps {@code PATH_TRACE_FRAME_CAMERA_IN_WATER} into the frame word the shader reads. */
     public static final int PATH_TRACE_FEATURE_CAMERA_IN_WATER = 1 << 4;
+    /** The core maps both water switches into the frame word; one bit covers the pair, since a half-mapped pair is a
+     * switch the player can see but not use. */
+    public static final int PATH_TRACE_FEATURE_WATER_MODEL = 1 << 5;
+    /** The core records the frame-stats pass, so a native frame can drive auto exposure and the F3 counters. */
+    public static final int PATH_TRACE_FEATURE_FRAME_STATS = 1 << 6;
+    public static final int PATH_TRACE_FEATURE_NATIVE_PT = 1 << 7;
+    public static final int PATH_TRACE_FEATURE_STATS_SLOT = 1 << 8;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;
@@ -317,11 +336,30 @@ public final class BedrayCoreLayouts {
         ValueLayout.JAVA_LONG.withName("buffer_budget_bytes"),
         ValueLayout.JAVA_INT.withName("width"),
         ValueLayout.JAVA_INT.withName("height"),
-        ValueLayout.JAVA_INT.withName("reserved0"),
-        ValueLayout.JAVA_INT.withName("reserved1"),
+        ValueLayout.JAVA_LONG.withName("program_stats"),
         ValueLayout.JAVA_LONG.withName("program_trace_scene"),
         ValueLayout.JAVA_LONG.withName("reserved")
     ).withName("BedrayPathTraceDesc");
+
+    /** Additive producer-only ABI of {@code bedray_fg_prepare.h}: host images, core-owned recording. */
+    public static final StructLayout FG_PREPARE_DESC = MemoryLayout.structLayout(
+        ValueLayout.JAVA_INT.withName("abi_version"),
+        ValueLayout.JAVA_INT.withName("struct_size"),
+        ValueLayout.JAVA_LONG.withName("command_buffer"),
+        ValueLayout.JAVA_LONG.withName("program"),
+        ValueLayout.JAVA_LONG.withName("sampler"),
+        ValueLayout.JAVA_LONG.withName("source_color_image"),
+        ValueLayout.JAVA_LONG.withName("hudless_image"),
+        ValueLayout.JAVA_LONG.withName("depth_view"),
+        ValueLayout.JAVA_LONG.withName("input_motion_view"),
+        ValueLayout.JAVA_LONG.withName("output_depth_view"),
+        ValueLayout.JAVA_LONG.withName("output_motion_view"),
+        ValueLayout.JAVA_INT.withName("window_width"),
+        ValueLayout.JAVA_INT.withName("window_height"),
+        ValueLayout.JAVA_INT.withName("render_width"),
+        ValueLayout.JAVA_INT.withName("render_height"),
+        ValueLayout.JAVA_LONG.withName("reserved")
+    ).withName("BedrayFgPrepareFrameDesc");
 
     static final long ERROR_STATUS = ERROR.byteOffset(groupElement("status"));
     static final long ERROR_MESSAGE = ERROR.byteOffset(groupElement("message"));
@@ -485,7 +523,25 @@ public final class BedrayCoreLayouts {
     public static final long PTD_BUFFER_BUDGET_BYTES = PT_DESC.byteOffset(groupElement("buffer_budget_bytes"));
     public static final long PTD_WIDTH = PT_DESC.byteOffset(groupElement("width"));
     public static final long PTD_HEIGHT = PT_DESC.byteOffset(groupElement("height"));
+    public static final long PTD_PROGRAM_STATS = PT_DESC.byteOffset(groupElement("program_stats"));
     public static final long PTD_PROGRAM_TRACE_SCENE = PT_DESC.byteOffset(groupElement("program_trace_scene"));
+
+    public static final long FGP_ABI_VERSION = FG_PREPARE_DESC.byteOffset(groupElement("abi_version"));
+    public static final long FGP_STRUCT_SIZE = FG_PREPARE_DESC.byteOffset(groupElement("struct_size"));
+    public static final long FGP_COMMAND_BUFFER = FG_PREPARE_DESC.byteOffset(groupElement("command_buffer"));
+    public static final long FGP_PROGRAM = FG_PREPARE_DESC.byteOffset(groupElement("program"));
+    public static final long FGP_SAMPLER = FG_PREPARE_DESC.byteOffset(groupElement("sampler"));
+    public static final long FGP_SOURCE_COLOR_IMAGE = FG_PREPARE_DESC.byteOffset(groupElement("source_color_image"));
+    public static final long FGP_HUDLESS_IMAGE = FG_PREPARE_DESC.byteOffset(groupElement("hudless_image"));
+    public static final long FGP_DEPTH_VIEW = FG_PREPARE_DESC.byteOffset(groupElement("depth_view"));
+    public static final long FGP_INPUT_MOTION_VIEW = FG_PREPARE_DESC.byteOffset(groupElement("input_motion_view"));
+    public static final long FGP_OUTPUT_DEPTH_VIEW = FG_PREPARE_DESC.byteOffset(groupElement("output_depth_view"));
+    public static final long FGP_OUTPUT_MOTION_VIEW = FG_PREPARE_DESC.byteOffset(groupElement("output_motion_view"));
+    public static final long FGP_WINDOW_WIDTH = FG_PREPARE_DESC.byteOffset(groupElement("window_width"));
+    public static final long FGP_WINDOW_HEIGHT = FG_PREPARE_DESC.byteOffset(groupElement("window_height"));
+    public static final long FGP_RENDER_WIDTH = FG_PREPARE_DESC.byteOffset(groupElement("render_width"));
+    public static final long FGP_RENDER_HEIGHT = FG_PREPARE_DESC.byteOffset(groupElement("render_height"));
+    public static final long FGP_RESERVED = FG_PREPARE_DESC.byteOffset(groupElement("reserved"));
 
     private BedrayCoreLayouts() {
     }
@@ -510,7 +566,15 @@ public final class BedrayCoreLayouts {
         require("BedrayPathTraceGuides", PT_GUIDES_DESC.byteSize(), 64);
         require("BedrayPathTraceFrameDesc", PT_FRAME_DESC.byteSize(), 1072);
         require("BedrayPathTraceDesc", PT_DESC.byteSize(), 80);
+        require("BedrayPathTraceDesc.program_stats", PTD_PROGRAM_STATS, 56);
         require("BedrayPathTraceDesc.program_trace_scene", PTD_PROGRAM_TRACE_SCENE, 64);
+        require("BedrayFgPrepareFrameDesc", FG_PREPARE_DESC.byteSize(), 104);
+        require("BedrayFgPrepareFrameDesc.command_buffer", FGP_COMMAND_BUFFER, 8);
+        require("BedrayFgPrepareFrameDesc.sampler", FGP_SAMPLER, 24);
+        require("BedrayFgPrepareFrameDesc.source_color_image", FGP_SOURCE_COLOR_IMAGE, 32);
+        require("BedrayFgPrepareFrameDesc.depth_view", FGP_DEPTH_VIEW, 48);
+        require("BedrayFgPrepareFrameDesc.window_width", FGP_WINDOW_WIDTH, 80);
+        require("BedrayFgPrepareFrameDesc.reserved", FGP_RESERVED, 96);
         require("BedrayPathTraceFrameDesc.scene", PTFD_SCENE, 32);
         require("BedrayPathTraceFrameDesc.camera", PTFD_CAMERA, 344);
         require("BedrayPathTraceFrameDesc.lighting", PTFD_LIGHTING, 760);

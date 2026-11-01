@@ -371,7 +371,6 @@ public final class RtModesScenario implements AutotestScenario {
     private static void applySettings(Step s) {
         // defaults of RtSettings (preset Custom), then the modifiers of the step
         RtSettings.applyPreset(RtSettings.Preset.LOW);
-        RtSettings.raysShadowQuality = 2;
         RtSettings.raysReflectionDistance = 128;
         RtSettings.raysEmissiveDistance = 32;
         RtSettings.raysGiDistance = 64;
@@ -420,11 +419,7 @@ public final class RtModesScenario implements AutotestScenario {
                         RtSettings.applyPreset(RtSettings.Preset.valueOf(m.substring(2).toUpperCase(Locale.ROOT)));
                     } else if (m.startsWith("q")) {
                         int q = Integer.parseInt(m.substring(1));
-                        RtSettings.raysShadowQuality = q;
-                        RtSettings.raysAoQuality = q;
                         RtSettings.raysEmissiveQuality = q;
-                        RtSettings.raysGiQuality = q;
-                        RtSettings.raysReflectionQuality = Math.min(4, q);
                     } else if (m.startsWith("b")) {
                         RtSettings.pathBounces = Integer.parseInt(m.substring(1));
                     } else if (m.matches("s\\d+")) {

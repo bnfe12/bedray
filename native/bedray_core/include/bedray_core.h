@@ -176,16 +176,18 @@ typedef struct BedrayFrameDesc {
  * These declarations do not change any layout above and are optional for a
  * host that only uses bedray_core_render_frame/render_phases. The pass records
  * path_trace.slang -> restir_spatial.slang (optional) -> path_display.slang into
- * the host command buffer. It never submits or waits.
+ * the host command buffer, and the additive statistics call appends the
+ * frame_stats.slang meter over what those stages just wrote. It never submits
+ * or waits.
  *
  * Ownership:
  *   - the core owns radiance, motion, the two accumulation images, the two
  *     history-depth images, FrameConstants uploads and one-element dummies;
  *   - with NATIVE_DI the core also owns the DI ring, reset and parity;
  *   - the host owns the TLAS, section table, atlases, emitters, external reservoirs,
- *     entity rings, output view and depth view, and keeps them alive and in the
- *     declared layouts until bedray_core_release_recording for the command
- *     buffer;
+ *     entity rings, output view, depth view and the StatsBuf range the statistics
+ *     call borrows, and keeps them alive and in the declared layouts until
+ *     bedray_core_release_recording for the command buffer;
  *   - the host must call bedray_core_release_recording after proven GPU
  *     completion or proven discard, exactly as for every other core recording.
  */
@@ -208,6 +210,22 @@ typedef struct BedrayFrameDesc {
  * so. Host-only like NATIVE_SCENE: the core copies it into FRAME_FLAG_CAMERA_IN_WATER (bit 5) of the FrameConstants
  * frame word the shader reads, it never reaches the push block. */
 #define BEDRAY_PATH_TRACE_FRAME_CAMERA_IN_WATER (1u << 8)
+/* The player's two water switches, as the host read them from the settings screen. Host-only like CAMERA_IN_WATER: the
+ * core copies each into its FRAME_FLAG_* bit of the FrameConstants frame word, they never reach the push block. Neither
+ * changes the medium: absorption, refraction and the beam the sun takes into the body are identical with either bit,
+ * because a body of water does not become air because a slider moved. STYLE scales the wave field the faces keep,
+ * CAUSTICS decides whether that field focuses the beam; both bits off reads as calm water, not as a different one. */
+#define BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC (1u << 9)
+#define BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS  (1u << 10)
+/* Optional host-only extension, the ReSTIR PT counterpart of NATIVE_DI. With NATIVE_PT the core owns the PT ring (two
+ * halves of one 144-byte RestirPtReservoir per pixel), its clear, history bit and parity; the host asks for the stage
+ * with PATH_TRACE_OPTION_RESTIR_PT and the PT_STATIC/PT_FLIP_Y bits of path.flags and leaves PT_HISTORY/PT_PARITY
+ * zero. RESET_PT invalidates the ring; PT_SPATIAL also runs the spatial stage lent by
+ * bedray_core_configure_path_trace_pt. Without NATIVE_PT the PT bits are cleared and a one-record stand-in is bound,
+ * exactly as before. Query BEDRAY_PATH_TRACE_FEATURE_NATIVE_PT before use. */
+#define BEDRAY_PATH_TRACE_FRAME_NATIVE_PT       (1u << 11)
+#define BEDRAY_PATH_TRACE_FRAME_RESET_PT        (1u << 12)
+#define BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL      (1u << 13)
 #define BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI    (1u << 0)
 /* Accepts 25- and 26-binding trace programs with inactive, native-owned guide stand-ins; the 26th adds NRD's
  * IN_MV vec4. Does not enable G-buffer writes or change any ABI-v2 structure layout. */
@@ -219,6 +237,21 @@ typedef struct BedrayFrameDesc {
  * core without it would be rejected by the flag validation, so the host masks the bit out when the feature is absent:
  * the frame then traces as if the eye were in air, which is what every older build did. */
 #define BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER (1u << 4)
+/* Accepts BEDRAY_PATH_TRACE_FRAME_WATER_REALISTIC and BEDRAY_PATH_TRACE_FRAME_WATER_CAUSTICS and maps both into the
+ * frame word. One bit for two flags: they are one switch pair on one screen, and a core that maps only half of them
+ * would report a water model the player cannot actually configure. */
+#define BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL    (1u << 5)
+/* Records the frame_stats statistics stage: accepts BedrayPathTraceDesc.program_stats and answers
+ * bedray_core_record_path_trace_stats, which adds the four head counters of the host's StatsBuf slot from the radiance,
+ * the accumulation image the display stage just folded and the borrowed depth view of the pending recording. A core
+ * without this bit leaves those words zero, so auto exposure holds its floor and the F3 overlay prints n/a; the host
+ * must query the bit rather than assume the stage exists. */
+#define BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS    (1u << 6)
+/* Accepts BEDRAY_PATH_TRACE_FRAME_NATIVE_PT / RESET_PT / PT_SPATIAL and answers bedray_core_configure_path_trace_pt. */
+#define BEDRAY_PATH_TRACE_FEATURE_NATIVE_PT      (1u << 7)
+/* Answers bedray_core_render_path_trace_ext: the trace adds its F3 reject split (PATH_REJECTS, words 140..143) into the
+ * host's StatsBuf slot bound at 37 instead of a one-word stand-in. */
+#define BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT     (1u << 8)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)
@@ -359,8 +392,11 @@ typedef struct BedrayPathTraceDesc {
     uint64_t buffer_budget_bytes;   /* 0 selects 16 MiB */
     uint32_t width;                 /* initial extent hint; frame desc wins */
     uint32_t height;
-    uint32_t reserved0;
-    uint32_t reserved1;
+    /* frame_stats.slang; the statistics stage of the additive
+     * bedray_core_record_path_trace_stats call. The field occupies the former
+     * reserved0/reserved1 pair, so the struct size is unchanged. 0 means the
+     * host lends no statistics program, and the call then refuses. */
+    uint64_t program_stats;
     /* path_trace_scene.slang; 0 keeps the legacy table for every frame. The
      * field occupies the former reserved[0], so the struct size is unchanged. */
     uint64_t program_trace_scene;
@@ -404,6 +440,28 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_guides(
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_motion(
     BedrayCore* core, const BedrayPathTraceFrameDesc* desc,
     const BedrayPathTraceGuides* guides, const BedrayPathTraceBuffer* motion, BedrayError* error);
+
+/* Statistics stage: records the AOT frame_stats program into the pending
+ * recording of command_buffer, adding the four head counters of the host's
+ * StatsBuf slot. Call after the render call, before submission. Never
+ * submits, waits or retains the borrowed range. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_record_path_trace_stats(
+    BedrayCore* core, uint64_t command_buffer, uint64_t stats_buffer,
+    uint64_t stats_offset, uint64_t stats_bytes, uint32_t frame_index,
+    BedrayError* error);
+
+/* Lends the ReSTIR PT spatial stage (restir_pt_spatial.slang for the legacy section table, restir_pt_spatial_scene.slang
+ * for NATIVE_SCENE; either may be 0 when that table never asks for it). Call after bedray_core_configure_path_trace,
+ * which forgets them; refused while a recording remains. Programs stay host-owned. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(
+    BedrayCore* core, uint64_t program_pt_spatial, uint64_t program_pt_spatial_scene, BedrayError* error);
+
+/* One call for every output combination: guides and motion as for the _guides/_motion calls (motion needs guides),
+ * stats_slot a borrowed range of the frame's whole 576-byte StatsBuf slot that the trace adds its reject split into.
+ * Any of the three may be null. The host retains the slot through the same exact proof as every other output. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_ext(
+    BedrayCore* core, const BedrayPathTraceFrameDesc* desc, const BedrayPathTraceGuides* guides,
+    const BedrayPathTraceBuffer* motion, const BedrayPathTraceBuffer* stats_slot, BedrayError* error);
 
 /* Refuses while a path-trace recording remains. Programs stay host-owned and
  * must not be destroyed while the pass can still record with them. */

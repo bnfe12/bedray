@@ -28,16 +28,18 @@ class RtSlangSampleRejectionTest {
     private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
-    private static final String CASCADER = "src/main/resources/shaders/slang/radiance_cascades/rc_trace.slang";
+    private static final String STATS = "src/main/resources/shaders/slang/passes/frame_stats.slang";
     private static final String HOST_PASS =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java";
+    private static final String STATS_PASS =
+        "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameStatsSlangPass.java";
     private static final String GAME_PASS =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java";
 
     private static final String INVALID = "PATH_TRACE_FLAG_INVALID_SAMPLE";
     private static final String TRUNCATED = "PATH_TRACE_FLAG_TRUNCATED";
 
-    /** The radiance cascades already separate the two endings; the path tracer must not invent a third vocabulary. */
+    /** The two bad endings are separate bits; the path tracer must not fold them into one. */
     @Test
     void theTwoBadEndingsAreDifferentBits() {
         String tracer = read(TRACER);
@@ -49,9 +51,6 @@ class RtSlangSampleRejectionTest {
             .map(name -> name + "=" + flag(tracer, name))
             .collect(Collectors.toList());
         assertEquals(bits.size(), java.util.Set.copyOf(bits).size(), "every flag needs its own bit: " + bits);
-        String cascader = read(CASCADER);
-        assertTrue(cascader.contains("RC_SEGMENT_TRUNCATED") || cascader.contains("TRUNCATED"),
-            "the shared vocabulary exists in the reference trace: " + TRUNCATED + " is that word, not a new one");
     }
 
     /**
@@ -76,11 +75,11 @@ class RtSlangSampleRejectionTest {
         }
         assertEquals(8, sites, "eight arithmetic faults: primary ray, interval, hit parameter, two cutout advances, "
             + "primary advance, throughput and the final radiance");
-        assertEquals(4, count(tracer, "result.flags |= " + TRUNCATED + ";"),
-            "and four stops that only cut the path short");
+        assertEquals(6, count(tracer, "result.flags |= " + TRUNCATED + ";"),
+            "and six stops that only cut the path short: the four above plus the ray profile's two effect gates");
     }
 
-    /** Each of the four stops, named by the guard that decides it. */
+    /** Each of the stops, named by the guard that decides it. */
     @Test
     void theStopsThatOnlyCutThePathShort() {
         String tracer = read(TRACER);
@@ -92,6 +91,10 @@ class RtSlangSampleRejectionTest {
             "a lobe with nothing left to sample is an ordinary end of a path");
         assertEquals("truncated", flagSetBy(tracer, "if (pathMaxComponent(throughput) > options.maxRadiance) {"),
             "the firefly guard clamps, it does not invalidate");
+        assertEquals("truncated", flagSetBy(tracer, "if ((options.flags & PATH_TRACE_OPTION_NO_SPECULAR_BOUNCE) != 0u) {"),
+            "reflections off ends a specular continuation, and the vertex's own light is already gathered");
+        assertEquals("truncated", flagSetBy(tracer, "if ((options.flags & PATH_TRACE_OPTION_NO_DIFFUSE_BOUNCE) != 0u) {"),
+            "GI and AO off ends a diffuse continuation the same way");
         assertEquals("invalid", flagSetBy(tracer, "if (!isFinite(throughput)) {"),
             "but a throughput that is not a number ends the sample, not just the path");
         assertEquals("invalid", flagSetBy(tracer, "if (!isFinite(ray.tMax)) {"),
@@ -146,9 +149,12 @@ class RtSlangSampleRejectionTest {
         assertFalse(helper.contains(TRUNCATED), "a truncated path stays a sample");
         String pass = read(PASS);
         String entry = read(ENTRY);
-        assertTrue(entry.contains("outImage[p] = float4(result.radiance, pathTraceSampleRejected(result.flags)"
-                + " ? 0.0 : 1.0);"),
-            "the pass publishes the helper's answer instead of inventing its own rule");
+        assertTrue(entry.contains("if (pathTraceSampleRejected(result.flags)) {"),
+            "the pass publishes the helper's answer for every ray instead of inventing its own rule");
+        assertTrue(entry.contains("PathTraceResult result = pathTraceMeanResult(total, sampleTrusted);"),
+            "and the pixel's verdict is that answer reduced over the rays of the pixel");
+        assertTrue(entry.contains("outImage[p] = float4(result.radiance, sampleTrusted ? 1.0 : 0.0);"),
+            "and the alpha lane carries that one answer");
         assertFalse(entry.contains("float4(result.radiance, 1.0)"),
             "a hardcoded 1.0 would make the whole rejection chain dead code");
         assertTrue(pass.contains("//   1  outImage") && pass.contains("a = 0 for a"),
@@ -205,20 +211,33 @@ class RtSlangSampleRejectionTest {
             "the flag is the same decision the weight already made");
     }
 
-    /** The radiance image has one consumer, so the lane is free; if that changes, the verdict needs a real channel. */
+    /**
+     * The verdict lives in a lane that could carry coverage instead, so what protects it is not exclusivity but the
+     * readers: each one has to reject on it or ignore it, never weight by it. The statistics meter joined the display
+     * mean as a second consumer, and a third reader that treated the bit as a blend factor would dim the picture and
+     * the hit share at the same time.
+     */
     @Test
-    void nothingElseReadsTheLaneTheVerdictLivesIn() {
-        String pass = read(PASS);
+    void everyReaderOfTheVerdictLaneTreatsItAsAVerdict() {
         String display = read(DISPLAY);
         assertTrue(display.contains("[[vk::image_format(\"rgba16f\")]] [[vk::binding(0, 0)]] RWTexture2D<float4>"
             + " radiance;"), "the display pass reads the image the trace pass wrote");
         assertTrue(display.contains("pathDisplaySanitize(radiance[p].rgb, limit)"),
             "and only its rgb for radiance, so the alpha lane is not double-used");
-        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
-        assertTrue(game.contains("SlangProgram.Resource.storageImage(\"radiance\", trace.radianceView())"),
-            "the host binds it to exactly one pass");
-        assertEquals(2, javaFilesMentioning("radianceView"),
-            "the producer's view and that binding: a second consumer would start reading a verdict as coverage");
+        String stats = read(STATS);
+        assertTrue(stats.contains("[[vk::image_format(\"rgba16f\")]] [[vk::binding(0, 0)]] RWTexture2D<float4>"
+            + " radiance;"), "the meter reads the same image the tracer wrote, not a copy of it");
+        assertEquals(1, count(stats, "sample.a"), "one reader of the verdict inside the meter");
+        assertTrue(block(stats, "if (!(sample.a > 0.0)").contains("return;"),
+            "and it drops the pixel, the way a verdict does, instead of scaling what it counts");
+        String host = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
+        assertTrue(host.contains("SlangProgram.Resource.storageImage(\"radiance\", trace.radianceView())"),
+            "the host binds the producer's view to the display pass");
+        assertTrue(read(STATS_PASS).contains("SlangProgram.Resource.storageImage(\"radiance\", radianceView)"),
+            "and the same view to the meter, whose parameter is the view the producer handed over");
+        assertEquals(3, javaFilesMentioning("radianceView"),
+            "the producer's accessor and the two bindings that read the verdict: a fourth mention means a consumer"
+                + " that has not been shown to treat the lane as a verdict");
         assertTrue(read(HOST_PASS).contains("radianceView()"), "declared by the trace pass itself");
     }
 

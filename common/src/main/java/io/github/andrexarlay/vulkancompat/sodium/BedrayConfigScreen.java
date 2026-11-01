@@ -23,6 +23,7 @@ import java.util.Locale;
 
 /** The single Bedray settings interface. Only Apply commits its private option state. */
 public final class BedrayConfigScreen extends Screen {
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("VKB-SETTINGS");
     private static final int ROW_HEIGHT = 30;
     private final Screen parent;
     private SettingsDraft draft;
@@ -93,10 +94,29 @@ public final class BedrayConfigScreen extends Screen {
         List<SettingsDraft.Entry> nextRows = new ArrayList<>();
         List<AbstractWidget> nextWidgets = new ArrayList<>();
         String filter = query.trim().toLowerCase(Locale.ROOT);
+        // One broken option predicate (e.g. Sodium's "not a declared dependency") used to throw out of the first row it
+        // reached and leave the whole screen empty with no option name in the log. Every row is evaluated, every failure
+        // is logged with its option, and the screen still fails loudly afterwards: the error is reported, never hidden.
+        List<String> broken = new ArrayList<>();
+        RuntimeException firstFailure = null;
         for (SettingsDraft.Entry entry : draft.entries) {
-            if (!draft.visible(entry)) continue;
+            boolean visible;
+            try {
+                visible = draft.visible(entry);
+            } catch (RuntimeException failure) {
+                LOGGER.error("[VKB-SETTINGS] option={} category={} failed to evaluate its state: {}", entry.path(),
+                    entry.category(), failure.toString());
+                broken.add(entry.path());
+                if (firstFailure == null) firstFailure = failure;
+                continue;
+            }
+            if (!visible) continue;
             if (filter.isEmpty() ? entry.category() != category : !entry.searchText().contains(filter)) continue;
             nextRows.add(entry);
+        }
+        if (firstFailure != null) {
+            throw new IllegalStateException(broken.size() + " Bedray setting(s) cannot evaluate their state: " + broken,
+                firstFailure);
         }
         int controls = Math.max(70, Math.min(160, contentWidth / 2));
         for (SettingsDraft.Entry entry : nextRows) {

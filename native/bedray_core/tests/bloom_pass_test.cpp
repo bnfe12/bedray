@@ -88,9 +88,18 @@ void chain_and_validation() {
     CHECK(pass.release_recording(999) == BEDRAY_OK);
     CHECK(pass.release_recording(1) == BEDRAY_OK);
     std::memset(push.data() + 104, 0, 4);
-    const auto calls = fake::render_calls.size();
+    // Glare without bloom: the prefilter still runs, it measures the sun on the frame before the apply stage writes it.
+    auto calls = fake::render_calls.size();
     CHECK(pass.render(frame(1, push.data(), false), &error) == BEDRAY_OK);
-    CHECK(fake::render_calls.size() == calls + 1); CHECK(fake::barriers == 21);
+    CHECK(fake::render_calls.size() == calls + 2); CHECK(fake::barriers == 22);
+    CHECK(fake::render_calls[calls].program == 1 && fake::render_calls[calls + 1].program == 4);
+    CHECK(pass.release_recording(1) == BEDRAY_OK);
+    // Neither bloom nor glare: the apply stage alone, which adds nothing.
+    std::memset(push.data() + 76, 0, 4);
+    calls = fake::render_calls.size();
+    CHECK(pass.render(frame(1, push.data(), false), &error) == BEDRAY_OK);
+    CHECK(fake::render_calls.size() == calls + 1); CHECK(fake::barriers == 24);
+    CHECK(fake::render_calls.back().program == 4);
     CHECK(pass.release_recording(1) == BEDRAY_OK);
     CHECK(pass.destroy() == BEDRAY_OK); CHECK(pass.destroy() == BEDRAY_OK); clean();
 }

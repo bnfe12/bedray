@@ -24,6 +24,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     private final RtPathTraceSlangPass trace;
     private final RtSpatialReuseSlangPass spatialReuse;
     private final SlangProgram display;
+    private final RtFrameStatsSlangPass statistics;
     private final long sampler;
     private final BedrayGpuImagesNative historyImages;
     private final BedrayGpuBuffersNative nativeBuffers;
@@ -34,6 +35,20 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     private int historyParity;
     private int lastWidth, lastHeight;
     private final RestirDiState di = new RestirDiState(false);
+    /**
+     * The ReSTIR PT ring: two halves of one 144-byte record per pixel, allocated only while a frame asks for it (597.2 MB
+     * at 1080p) and retired as soon as one does not. Its bookkeeping is the host-owned DI ring's - parity, history and
+     * pending clear - in its own instance, because the two rings are written by different frames: DI only runs with
+     * emitters, PT on every eligible frame.
+     */
+    private BedrayGpuBuffersNative.Buffer ptReservoirs;
+    private final RestirDiState pt = new RestirDiState(false);
+    /** True when the last recorded frame ran the PT spatial stage; the mode log reports it. */
+    private boolean ptSpatialLast;
+    /** The buffer owner's budget; both reservoir rings live in it. */
+    private final long bufferBudget;
+    /** The extent the budget log line was written for, so a refused ring is logged once per size, not per frame. */
+    private long ptBudgetLoggedExtent = -1L;
     private boolean closed;
 
     ReferencePathTraceBackend(VkDevice device, SlangRuntime runtime) {
@@ -41,14 +56,16 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         trace = new RtPathTraceSlangPass(device, runtime);
         BedrayGpuImagesNative nextImages = null;
         BedrayGpuBuffersNative nextBuffers = null;
+        long bytes = runtime.capabilities().deviceMemoryBytes();
+        bufferBudget = bufferBudget(bytes);
         try {
-            long bytes = runtime.capabilities().deviceMemoryBytes();
             nextImages = runtime.createImageOwner(bytes > 0 ? Math.min(1L << 30, bytes / 8) : 256L << 20);
-            nextBuffers = runtime.createBufferOwner(bytes > 0 ? Math.min(1L << 30, bytes / 4) : 512L << 20);
+            nextBuffers = runtime.createBufferOwner(bufferBudget(bytes));
             display = runtime.program(DISPLAY_PASS).orElseThrow();
             requireDisplayManifest(display);
             sampler = runtime.atlasSampler();
             spatialReuse = RtSpatialReuseSlangPass.create(runtime, trace.entityFallback()).orElse(null);
+            statistics = RtFrameStatsSlangPass.create(runtime).orElse(null);
         } catch (RuntimeException | Error failure) {
             if (nextBuffers != null) nextBuffers.close();
             if (nextImages != null) nextImages.close();
@@ -121,6 +138,63 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
             Math.max(1L, need / (1024L * 1024L)));
     }
 
+    /**
+     * The reservoir buffer owner's budget: a quarter of device memory (4 GiB on a 16 GB card), 512 MiB when the device
+     * does not report it. Both rings live here - 1.36 GiB at 2560x1370 - so a fixed 1 GiB cap failed a maximised window.
+     */
+    static long bufferBudget(long deviceMemoryBytes) {
+        return deviceMemoryBytes > 0 ? deviceMemoryBytes / 4 : 512L << 20;
+    }
+
+    /** True when a PT ring of {@code need} bytes fits next to the DI ring inside the owner's budget. */
+    static boolean ptRingFits(long need, long diBytes, long budget) {
+        return need <= budget - diBytes;
+    }
+
+    /**
+     * Allocates the PT ring when this frame asks for it and retires it when it does not. The retired buffer stays alive
+     * until the native owner has drained every recording that still uses it, so a switch flip mid-session needs no idle.
+     */
+    private void preparePathReservoirs(boolean wanted, int width, int height) {
+        if (!wanted) {
+            if (ptReservoirs != null) {
+                nativeBuffers.retire(ptReservoirs);
+                ptReservoirs = null;
+                LOGGER.info("[VKB-RT] Slang ReSTIR PT reservoirs released");
+            }
+            pt.reset();
+            return;
+        }
+        long need = RtPathTraceSlangPass.ptReservoirBytes(width, height);
+        if (ptReservoirs != null && ptReservoirs.size() >= need) {
+            if (pt.extentDiffers(width, height)) pt.layoutFor(width, height);
+            return;
+        }
+        long diBytes = reservoirs != null ? reservoirs.size() : 0L;
+        if (!ptRingFits(need, diBytes, bufferBudget)) {
+            // An optional ring the device cannot hold: this frame traces without path reuse, the rest of RT keeps running.
+            if (ptReservoirs != null) {
+                nativeBuffers.retire(ptReservoirs);
+                ptReservoirs = null;
+            }
+            pt.reset();
+            long extent = ((long) width << 32) | (height & 0xffffffffL);
+            if (ptBudgetLoggedExtent != extent) {
+                ptBudgetLoggedExtent = extent;
+                LOGGER.warn("[VKB-RT] restir_pt=off reason=budget extent={}x{} need={} MiB di={} MiB budget={} MiB",
+                    width, height, need / (1024L * 1024L), diBytes / (1024L * 1024L), bufferBudget / (1024L * 1024L));
+            }
+            return;
+        }
+        BedrayGpuBuffersNative.Buffer next = nativeBuffers.createDeviceLocal(need,
+            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        nativeBuffers.retire(ptReservoirs);
+        ptReservoirs = next;
+        pt.layoutFor(width, height);
+        LOGGER.info("[VKB-RT] Slang ReSTIR PT reservoirs {}x{} x2 = {} MiB", width, height,
+            Math.max(1L, need / (1024L * 1024L)));
+    }
+
     @Override public void record(Frame input) {
         if (closed || accum[0] == null) throw new IllegalStateException("reference path is not prepared");
         var cmd = input.command();
@@ -149,16 +223,46 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         }
         int diParity = di.parity();
         dispatch = dispatch.withDiState(diFlags, diParity);
+        // ReSTIR PT: the controller asks with OPTION_RESTIR_PT and the camera bits; the ring's own parity and history are
+        // this backend's to fill, so a stale host mirror can never point the shader at the half it is writing.
+        if (input.ptReset()) pt.reset();
+        int requestedPt = dispatch.flags() & RtPathTraceSlangPass.PT_STATE_MASK;
+        boolean ptWanted = (requestedPt & RtPathTraceSlangPass.OPTION_RESTIR_PT) != 0;
+        preparePathReservoirs(ptWanted, width, height);
+        int ptFlags = 0;
+        RtPathTraceSlangPass.Reservoirs ptRange = RtPathTraceSlangPass.Reservoirs.NONE;
+        if (ptWanted && ptReservoirs != null) {
+            nativeBuffers.retain(cmd.address(), ptReservoirs);
+            if (pt.resetPending()) {
+                VK10.vkCmdFillBuffer(cmd, ptReservoirs.handle(), 0L, ptReservoirs.size(), 0);
+                VkBarriers.fullMemoryBarrier(cmd);
+                pt.ringCleared();
+            }
+            ptFlags = RtPathTraceSlangPass.OPTION_RESTIR_PT
+                | (requestedPt & (RtPathTraceSlangPass.PT_STATIC | RtPathTraceSlangPass.PT_FLIP_Y))
+                | (pt.historyWritten() ? RtPathTraceSlangPass.PT_HISTORY : 0)
+                | (pt.parity() == 1 ? RtPathTraceSlangPass.PT_PARITY : 0);
+            ptRange = new RtPathTraceSlangPass.Reservoirs(ptReservoirs.handle(), ptReservoirs.size());
+        }
+        dispatch = dispatch.withFlags((dispatch.flags() & ~RtPathTraceSlangPass.PT_STATE_MASK) | ptFlags);
         // NRD's IN_MV channel: the frame's own vec4-per-pixel range when the push asked for it, never a stale binding.
         RtPathTraceSlangPass.BufferView motion = (dispatch.flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0
             && views.motion() != 0L
             ? new RtPathTraceSlangPass.BufferView(views.motion(), 0L,
                 (long) width * height * RtPathTraceSlangPass.MOTION_ELEMENT_BYTES)
             : RtPathTraceSlangPass.BufferView.NONE;
-        trace.record(cmd, new RtPathTraceSlangPass.Scene(views.tlas(), views.table()),
-            new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(), views.normal(), sampler),
-            emitters, reservoirRange, capturedEntities, RtPathTraceSlangPass.Guides.of(views.gbuffer()),
-            motion, views.depth(), frame, dispatch);
+        RtPathTraceSlangPass.Scene scene = new RtPathTraceSlangPass.Scene(views.tlas(), views.table());
+        RtPathTraceSlangPass.Atlases atlases = new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(),
+            views.normal(), sampler);
+        trace.record(cmd, scene, atlases, emitters, reservoirRange, ptRange, capturedEntities,
+            RtPathTraceSlangPass.Guides.of(views.gbuffer()), motion, views.depth(), input.stats(), frame, dispatch);
+        // ReSTIR PT spatial: pools the records the trace just wrote into the other half, which the next frame imports.
+        // Nothing in this frame reads it - the pooled winner is shaded by the next temporal stage - so it needs no
+        // ordering beyond the trailing barrier recordPtSpatial adds.
+        boolean ptSpatialRan = ptFlags != 0 && input.ptSpatial() && trace.ptSpatialAvailable(scene);
+        if (ptSpatialRan) {
+            trace.recordPtSpatial(cmd, scene, atlases, ptRange, capturedEntities, frame, dispatch);
+        }
         // Spatial reuse pools the records the trace pass just wrote, in the half it just wrote. Nothing in this frame
         // reads them - the benefit lands in the next frame's temporal import - so the stage owns its own ordering: the
         // barrier between its two phases and a trailing one, both inside record().
@@ -185,7 +289,10 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer push = stack.malloc(DISPLAY_PUSH_BYTES);
-            push.putInt(0, accumFrames).putInt(4, flags).putFloat(8, 1.0f).putFloat(12, MAX_RADIANCE);
+            // The frame's exposure, the same lane the native core takes as its descriptor's lighting.exposure: the
+            // display step is the one place the path's linear radiance becomes a tone-mapped picture, so this is where
+            // the EV compensation of the settings screen is spent.
+            push.putInt(0, accumFrames).putInt(4, flags).putFloat(8, frame.exposure.x).putFloat(12, MAX_RADIANCE);
             push.putFloat(16, dispatch.diCamDeltaX()).putFloat(20, dispatch.diCamDeltaY())
                 .putFloat(24, dispatch.diCamDeltaZ()).putFloat(28, REPROJECTION_TOLERANCE);
             display.dispatch(cmd.address(), display.groups(width, 0), display.groups(height, 1), 1, List.of(
@@ -201,7 +308,18 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         }
         historyParity ^= 1;
         di.afterDispatch(diFlags != 0);
+        pt.afterDispatch(ptFlags != 0);
+        if (ptSpatialRan) pt.spatialPublished();
+        ptSpatialLast = ptSpatialRan;
         VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read by the composite, bloom and upscalers next
+        // The frame's counters, measured from the three images the two dispatches above just wrote. It rides the
+        // barrier the picture already needs, so it asks for none of its own, and the renderer's host-visibility
+        // barrier is what makes the four words readable in the readback. Absent when the AOT artifact is missing:
+        // auto exposure then holds its floor and the F3 counters report n/a rather than a plausible zero.
+        if (statistics != null) {
+            statistics.record(cmd, trace.radianceView(), accum[write].view(), views.depth(), input.stats(),
+                width, height, frame.frameIndex);
+        }
     }
 
     @Override public boolean spatialAvailable() { return spatialReuse != null; }
@@ -217,18 +335,24 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     @Override public String reservoirState() {
         return di.mode(true, reservoirs != null, false);
     }
+    @Override public boolean pathReuseAvailable() { return true; }
+    @Override public String pathReuseState() {
+        return pt.mode(true, ptReservoirs != null, ptSpatialLast);
+    }
     @Override public void releaseRecording(long commandBuffer) {
         if (!recordings.contains(commandBuffer)) return;
         trace.releaseRecording(commandBuffer);
         historyImages.releaseRecording(commandBuffer);
         nativeBuffers.releaseRecording(commandBuffer);
         if (spatialReuse != null) spatialReuse.releaseRecording(commandBuffer);
+        if (statistics != null) statistics.releaseRecording(commandBuffer);
         runtime.releaseRecording(commandBuffer);
         recordings.remove(commandBuffer);
     }
     @Override public boolean discardRecording(long commandBuffer) {
         if (!recordings.contains(commandBuffer)) return false;
         di.reset();
+        pt.reset();
         releaseRecording(commandBuffer);
         return true;
     }
@@ -237,6 +361,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         if (!recordings.isEmpty()) throw new IllegalStateException("reference backend still has pending recordings");
         trace.close();
         if (spatialReuse != null) spatialReuse.close();
+        if (statistics != null) statistics.close();
         historyImages.close();
         nativeBuffers.close();
         closed = true;

@@ -22,8 +22,6 @@ class RtRestirSettingsTest {
     private static final String SETTINGS = "src/main/java/io/github/andrexarlay/vulkancompat/rtx/config/RtSettings.java";
     private static final String RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtFrameRenderer.java";
-    private static final String RAYS_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
-        + "RtRayEffectsPass.java";
     private static final String SLANG_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
@@ -70,8 +68,8 @@ class RtRestirSettingsTest {
         String pass = read(SLANG_PASS);
         assertTrue(pass.contains("return RtConfig.SLANG_BLOCK_EMITTERS && RtConfig.SLANG_RESTIR_DI;"),
             "diRequested() stays the static capability, so flipping the switch never frees a ring mid-frame");
-        assertTrue(pass.contains("return diRequested() && RtSettings.pathRestirDi();"),
-            "diActive() is the per-frame decision the player controls");
+        assertTrue(pass.contains("return diRequested() && (rayMode ? RtSettings.restirTemporal() : RtSettings.pathRestirDi());"),
+            "diActive() is the per-frame decision the player controls, read from the profile's own switch");
         assertTrue(pass.contains("int diFlags = emitterCount > 0 && diActive() ? DI_FLAG_ENABLED"),
             "the controller hands the chosen backend the current per-frame reuse decision");
         assertTrue(pass.contains("String restir = diActive() ? backend.reservoirState() : \"off\";"),
@@ -93,20 +91,21 @@ class RtRestirSettingsTest {
             "and the retired ring waits for the native owner to drain its uses, never for the whole device");
     }
 
-    /** The ray pass reads the same two switches, each at the place where its own work is decided. */
+    /** The ray profile reads the ray switches, each at the place where its own work is decided. */
     @Test
     void theRayPassReadsItsTwoStagesWhereTheyHappen() {
         String renderer = read(RENDERER);
-        assertTrue(renderer.contains("if (pass.mode() == RtMode.RAY_TRACED && RtSettings.restirTemporal()\n"
-                + "            && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {"),
-            "the reuse needs the emissive term it would reuse, and it is the switch that decides whether the ring is handed over");
-        assertTrue(renderer.contains("long reservoirAddr = 0L;"),
-            "off means the shader is handed a zero reservoir address, which is the shader's own off test");
-        String rays = read(RAYS_PASS);
-        assertTrue(rays.contains("if (restirSpatial != null && RtSettings.restirSpatial() && params.mode == RtConfig.MODE_LIT"),
-            "spatial reuse is gated where the two checker phases are dispatched, not where the pipeline is built");
-        assertTrue(rays.contains("private static final boolean RESTIR_SPATIAL"),
-            "the session switch still decides whether the kernel exists at all");
+        String path = read(SLANG_PASS);
+        assertTrue(path.contains(
+                "return diRequested() && (rayMode ? RtSettings.restirTemporal() : RtSettings.pathRestirDi());"),
+            "the temporal switch is chosen by profile where the frame is recorded");
+        assertTrue(path.contains("&& (rayMode ? RtSettings.restirSpatial() : RtSettings.pathRestirSpatial());"),
+            "spatial reuse is gated where the frame is recorded, not where the pipeline is built: a backend without the "
+                + "reservoir ring cannot be asked to reuse it");
+        assertTrue(renderer.contains("MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, 0L);"),
+            "the host no longer owns a reservoir ring: the backend binds its own");
+        assertTrue(path.contains("spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0"),
+            "the switch reaches the core as one frame bit, so the shader and the host cannot disagree mid-session");
     }
 
     /** A reused record is a claim about the past: any technique change invalidates it, so the frame diff has to see them. */
@@ -114,7 +113,8 @@ class RtRestirSettingsTest {
     void aReuseChangeDropsEveryHistoryItInvalidates() {
         String renderer = read(RENDERER);
         assertTrue(renderer.contains("int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)\n"
-                + "            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0);"),
+                + "            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0)\n"
+                + "            | (RtSettings.pathRestirPt() ? 16 : 0) | (RtSettings.pathRestirPtSpatial() ? 32 : 0);"),
             "every reuse switch in one packed int, so a change of any of them is one comparison");
         assertTrue(renderer.contains("|| curReusePolicy != lastFrameReusePolicy"), "and that comparison gates the reset");
         assertTrue(renderer.contains("private static int lastFrameReusePolicy = -1;"),
@@ -146,6 +146,72 @@ class RtRestirSettingsTest {
     }
 
     /**
+     * ReSTIR PT is the one reuse switch that is off by default: its ring is two 144-byte records per pixel. It still has
+     * to be a real switch - persisted, overridable, read by the controller, shown under its parent and named in both
+     * locales - and the catalog has to name the price and the parent, or the player cannot judge it.
+     */
+    @Test
+    void pathReuseIsARealSwitchThatIsOffByDefault() {
+        String settings = read(SETTINGS);
+        assertTrue(settings.contains("public static boolean pathRestirPt = false;"),
+            "off by default: 597.2 MB at 1080p is not a cost to impose silently");
+        assertTrue(settings.contains("bool(\"path_restir_pt\", () -> pathRestirPt, v -> pathRestirPt = v);"),
+            "registered, so the file and -Dvkrtx.rt.path_restir_pt reach it");
+        assertTrue(settings.contains("public static boolean pathRestirPt() { return b(\"path_restir_pt\"); }"),
+            "the override-aware getter the controller reads");
+        String pass = read(SLANG_PASS);
+        assertTrue(pass.contains("return !rayMode && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();"),
+            "the controller asks only the path profile, only a backend with a ring, only under direct-light reuse");
+        String ui = read(UI);
+        assertTrue(ui.contains("boolOpt(builder, \"path_restir_pt\", false, v -> RtSettings."), "a row, off by default");
+        assertRowNeedsParent(ui, "path_restir_pt", "path_restir_di");
+        String catalog = read(CATALOG);
+        int at = catalog.indexOf("putNoImage(\"path_restir_pt\"");
+        assertTrue(at >= 0, "catalog entry");
+        String entry = catalog.substring(at, catalog.indexOf("putNoImage(", at + 10));
+        assertTrue(entry.contains("0.6 GB") && entry.contains("ReSTIR Direct Light"),
+            "the entry names the video memory and the parent switch");
+        JsonObject en = readJson(EN);
+        JsonObject ru = readJson(RU);
+        for (JsonObject locale : new JsonObject[] {en, ru}) {
+            assertNotNull(locale.get("bedray.opt.path_restir_pt"), "name in both locales");
+            assertNotNull(locale.get("bedray.opt.path_restir_pt.desc"), "description in both locales");
+        }
+    }
+
+    /**
+     * The spatial stage of ReSTIR PT is its own row under ReSTIR Path Reuse: it traces up to four first-edge rays a pixel,
+     * so the player has to be able to keep the temporal stage without paying for it.
+     */
+    @Test
+    void pathSpatialReuseIsAChildOfPathReuse() {
+        String settings = read(SETTINGS);
+        assertTrue(settings.contains("public static boolean pathRestirPtSpatial = true;"),
+            "on whenever its parent is: the parent already carries the memory price");
+        assertTrue(settings.contains("bool(\"path_restir_pt_spatial\", () -> pathRestirPtSpatial, v -> pathRestirPtSpatial = v);"),
+            "registered, so the file and the override reach it");
+        assertTrue(settings.contains("public static boolean pathRestirPtSpatial() { return b(\"path_restir_pt_spatial\"); }"),
+            "the override-aware getter the controller reads");
+        String pass = read(SLANG_PASS);
+        assertTrue(pass.contains("return ptActive() && RtSettings.pathRestirPtSpatial();"),
+            "the controller asks for it only on a frame that runs the temporal stage");
+        assertTrue(pass.contains("ptResetRequested, ptSpatialRequested()));"), "and hands the answer to the backend");
+        String ui = read(UI);
+        assertTrue(ui.contains("boolOpt(builder, \"path_restir_pt_spatial\", true, v -> RtSettings."), "a row, on by default");
+        assertRowNeedsParent(ui, "path_restir_pt_spatial", "path_restir_pt");
+        String catalog = read(CATALOG);
+        int at = catalog.indexOf("putNoImage(\"path_restir_pt_spatial\"");
+        assertTrue(at >= 0, "catalog entry");
+        String entry = catalog.substring(at, catalog.indexOf("putNoImage(", at + 10));
+        assertTrue(entry.contains("four") && entry.contains("ReSTIR Path Reuse"),
+            "the entry names the ray cost and the parent switch");
+        for (JsonObject locale : new JsonObject[] {readJson(EN), readJson(RU)}) {
+            assertNotNull(locale.get("bedray.opt.path_restir_pt_spatial"), "name in both locales");
+            assertNotNull(locale.get("bedray.opt.path_restir_pt_spatial.desc"), "description in both locales");
+        }
+    }
+
+    /**
      * A spatial row is only enabled while its temporal row is on, because that is where its records come from. The screen
      * names the parent through an {@code Identifier} variable, so the pin follows the variable to its key: a row wired to
      * the wrong parent, or to none, fails here.
@@ -160,7 +226,7 @@ class RtRestirSettingsTest {
         String variable = declared.group(1);
         assertTrue(row.contains("s.readBooleanOption(" + variable + ")"),
             spatialKey + " must be enabled by " + temporalKey + ", not offered on its own");
-        assertTrue(row.contains("rtDependencies(modeId, " + variable + ")"),
+        assertTrue(row.contains("rtDependencies(modeId, " + variable + ")") || row.contains(", " + variable + "), Mark") && row.contains("rtDependencies(modeId, pathDiId, " + variable + ")"),
             spatialKey + " must also declare the dependency, or the screen grays it out on a different mode");
     }
 

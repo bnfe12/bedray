@@ -14,6 +14,8 @@ final class NativePathTraceBackend implements PathTraceBackend {
     private final BedrayPathTraceNative pass;
     private final boolean spatial;
     private final Set<Long> recordings = new LinkedHashSet<>();
+    /** The mode-log word of the last recorded frame's path reuse. */
+    private String ptState = "off";
     private boolean closed;
 
     static String supportProblem(SlangRuntime runtime, boolean guides) {
@@ -45,9 +47,18 @@ final class NativePathTraceBackend implements PathTraceBackend {
         RtSlangPathPass.requireDisplayManifest(display);
         SlangProgram reuse = RtSpatialReuseSlangPass.registerProgram(runtime).orElse(null);
         spatial = reuse != null;
+        long stats = RtFrameStatsSlangPass.registerProgram(runtime)
+            .map(program -> program.nativeHandle()).orElse(0L);
+        // The PT spatial stage for each table the core may trace; the RC trace program writes no PT ring.
+        boolean ownsPt = runtime.library().hasNativePt();
+        SlangProgram ptSpatial = ownsPt
+            ? RtPathTraceSlangPass.optionalPtSpatial(runtime, RtPathTraceSlangPass.PT_SPATIAL_PASS_NAME) : null;
+        SlangProgram ptSpatialScene = ownsPt && scene != null && !rc
+            ? RtPathTraceSlangPass.optionalPtSpatial(runtime, RtPathTraceSlangPass.PT_SPATIAL_SCENE_PASS_NAME) : null;
         pass = new BedrayPathTraceNative(runtime, trace.nativeHandle(), scene == null ? 0 : scene.nativeHandle(),
-            reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), runtime.atlasSampler(),
-            builder == null ? 0 : builder.nativeHandle());
+            reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), stats, runtime.atlasSampler(),
+            builder == null ? 0 : builder.nativeHandle(),
+            ptSpatial == null ? 0 : ptSpatial.nativeHandle(), ptSpatialScene == null ? 0 : ptSpatialScene.nativeHandle());
     }
 
     @Override public void prepare(int width, int height) {
@@ -59,13 +70,36 @@ final class NativePathTraceBackend implements PathTraceBackend {
         if (closed) throw new IllegalStateException("native path backend is closed");
         if (!recordings.add(frame.command().address()))
             throw new IllegalStateException("recording still awaits completion/discard");
+        int flags = frame.flags() | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI | ptFlags(frame);
+        // The core owns the PT ring's history and parity; whatever the host mirror holds stays out of the push.
+        RtPathTraceSlangPass.Dispatch dispatch = pass.nativePt() ? frame.dispatch().withFlags(frame.dispatch().flags()
+            & ~(RtPathTraceSlangPass.PT_HISTORY | RtPathTraceSlangPass.PT_PARITY)) : frame.dispatch();
         pass.render(new BedrayPathTraceNative.FrameInput(frame.command().address(), frame.views(), frame.constants(),
-            frame.dispatch(), frame.emitters(), RtPathTraceSlangPass.Reservoirs.NONE, frame.entities(),
-            frame.flags() | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI, frame.accumFrames(), 0,
-            RtSlangPathPass.MAX_RADIANCE, RtSlangPathPass.REPROJECTION_TOLERANCE));
+            dispatch, frame.emitters(), RtPathTraceSlangPass.Reservoirs.NONE, frame.entities(), frame.stats(),
+            flags, frame.accumFrames(), 0, RtSlangPathPass.MAX_RADIANCE, RtSlangPathPass.REPROJECTION_TOLERANCE));
+        boolean pt = (flags & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_PT) != 0
+            && (dispatch.flags() & RtPathTraceSlangPass.OPTION_RESTIR_PT) != 0;
+        ptState = !pt ? "off" : (flags & BedrayCoreLayouts.PATH_TRACE_FRAME_PT_SPATIAL) != 0 ? "native+spatial" : "native";
+    }
+
+    /**
+     * The NATIVE_PT bits of one frame: ownership whenever the core has a ring, its reset when the controller asked for
+     * one, and the spatial stage only for a frame that runs PT on a table the core has the stage for.
+     */
+    private int ptFlags(Frame frame) {
+        if (!pass.nativePt()) return 0;
+        int flags = BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_PT;
+        if (frame.ptReset()) flags |= BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_PT;
+        boolean nativeScene = (frame.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE) != 0;
+        if ((frame.dispatch().flags() & RtPathTraceSlangPass.OPTION_RESTIR_PT) != 0 && frame.ptSpatial()
+            && pass.ptSpatialFor(nativeScene))
+            flags |= BedrayCoreLayouts.PATH_TRACE_FRAME_PT_SPATIAL;
+        return flags;
     }
 
     @Override public boolean spatialAvailable() { return spatial; }
+    @Override public boolean pathReuseAvailable() { return pass.nativePt(); }
+    @Override public String pathReuseState() { return ptState; }
     @Override public String reservoirState() { return "native"; }
 
     @Override public void releaseRecording(long commandBuffer) {

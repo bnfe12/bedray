@@ -19,17 +19,16 @@ import static org.junit.jupiter.api.Assertions.*;
  *    - reflection rays (mirrorRadiance / traceSecondary in water/glass): 0x03 (entities reflect off-screen and on-screen)
  *    - refraction rays: 0x03 (entities visible through water/ice)
  * 2. RtFrameRenderer hermetic frame graph:
- *    - compositePipeline (screen-space raster depth composite) is disabled/OFF with native RT
+ *    - the renderer holds no screen-space raster depth composite at all (the legacy pipeline is deleted, not disabled)
  *    - pure RT radiance is routed directly to the final frame buffer (finalSource=RT_OUTPUT)
  * 3. F3 telemetry format:
- *    [RT-HERMETIC] worldInstance=READY entityInstance=READY legacyRasterEntityComposite=OFF finalSource=RT_OUTPUT reflectionMask=0x03 shadowMask=0x03
- * 4. Runtime shader compilation into valid SPIR-V.
+ *    [RT-HERMETIC] worldInstance=READY entityInstance=READY finalSource=RT_OUTPUT reflectionMask=0x03 shadowMask=0x03
  */
 public class RtEntityHermeticityTest {
 
     // Headless unit test: no RtWorld exists, so the world instance honestly reports UNAVAILABLE (READY needs a live world and frame stats).
     private static final String EXPECTED_F3_TELEMETRY =
-        "[RT-HERMETIC] worldInstance=UNAVAILABLE entityInstance=EMPTY legacyRasterEntityComposite=OFF finalSource=RT_OUTPUT reflectionMask=0x03 shadowMask=0x03";
+        "[RT-HERMETIC] worldInstance=UNAVAILABLE entityInstance=EMPTY finalSource=RT_OUTPUT reflectionMask=0x03 shadowMask=0x03";
 
     @Test
     public void testHermeticConstantsAndTelemetry() {
@@ -39,7 +38,8 @@ public class RtEntityHermeticityTest {
 
         assertEquals(0x03, RtFrameRenderer.getReflectionMask(), "Reflection mask must be 0x03");
         assertEquals(0x03, RtFrameRenderer.getShadowMask(), "Shadow mask must be 0x03");
-        assertFalse(RtFrameRenderer.isLegacyRasterEntityCompositeEnabled(), "Legacy raster depth composite must be OFF");
+        assertFalse(rendererSource().contains("RtCompositePipeline"),
+            "the screen-space raster depth composite is deleted, not switched off");
         assertEquals("RT_OUTPUT", RtFrameRenderer.getFinalSource(), "Final frame graph output source must be RT_OUTPUT");
 
         assertEquals(EXPECTED_F3_TELEMETRY, RtFrameRenderer.getHermeticTelemetry(),
@@ -59,40 +59,34 @@ public class RtEntityHermeticityTest {
         }
     }
 
-    @Test
-    public void testShaderCompilation() {
-        ByteBuffer raysSpv = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
-        assertNotNull(raysSpv, "rt_rays.comp SPIR-V must compile successfully");
-        assertTrue(raysSpv.remaining() > 1000, "rt_rays.comp SPIR-V must have non-trivial size");
-        assertEquals(0x07230203, raysSpv.getInt(0), "rt_rays.comp SPIR-V magic number mismatch");
-
-        ByteBuffer pathSpv = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp", RtPathTracerPass.ACCUM_DEFINE);
-        assertNotNull(pathSpv, "rt_path.comp SPIR-V must compile successfully");
-        assertTrue(pathSpv.remaining() > 1000, "rt_path.comp SPIR-V must have non-trivial size");
-        assertEquals(0x07230203, pathSpv.getInt(0), "rt_path.comp SPIR-V magic number mismatch");
-    }
 
     @Test
     public void testShaderSourceRayMasksAndTransmittanceContract() {
-        String glsl = RtWorldChecks.rtCommon();
+        String types = read("src/main/resources/shaders/slang/types.slang");
+        assertTrue(types.contains("static const uint MASK_WORLD    = 0x01u;")
+                && types.contains("static const uint MASK_ENTITIES = 0x02u;")
+                && types.contains("static const uint MASK_ALL      = 0x03u;"),
+            "types.slang must define the hermetic mask 0x03 = world | entities");
 
-        assertTrue(glsl.contains("const uint MASK_HERMETIC = MASK_WORLD | MASK_ENTITIES; // 0x03u"),
-            "rt_common.glsl must define MASK_HERMETIC = MASK_WORLD | MASK_ENTITIES (0x03)");
+        String scene = read("src/main/resources/shaders/slang/traversal/scene_traversal.slang");
+        assertTrue(scene.contains("query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);"),
+            "the full walk takes its mask from the traversal's own field");
+        assertTrue(scene.contains("query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);"),
+            "and so does the first-hit visibility walk: one mask for both, no per-call literal");
 
-        assertTrue(glsl.contains("traceTransmittance(vec3 origin, vec3 d, float tmax)"),
-            "rt_common.glsl must define traceTransmittance shadow transmittance contract");
+        String path = read("src/main/resources/shaders/slang/passes/path_trace.slang");
+        assertTrue(path.contains("static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;")
+                && path.contains("traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_SCENE;"),
+            "the path trace sets the scene mask before any ray leaves, so entities cannot be missed by a shadow ray");
+    }
 
-        // Verify that traceSurface initializes rayQuery with mask 0x03
-        assertTrue(glsl.contains("rayQueryInitializeEXT(rq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, tmin, dir, tmax);"),
-            "traceSurface must initialize rayQuery with mask 0x03");
-
-        // Verify that traceVisibility initializes rayQuery with mask 0x03
-        assertTrue(glsl.contains("rayQueryInitializeEXT(sq, tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x03, origin, 0.001, d, tmax);"),
-            "traceVisibility must initialize rayQuery with mask 0x03");
-
-        // Verify that traceDist initializes rayQuery with mask 0x03
-        assertTrue(glsl.contains("rayQueryInitializeEXT(sq, tlas, gl_RayFlagsNoneEXT, 0x03, origin, 0.001, d, tmax);"),
-            "traceDist must initialize rayQuery with mask 0x03");
+    private static String read(String relative) {
+        try {
+            return java.nio.file.Files.readString(java.nio.file.Path.of(relative), java.nio.charset.StandardCharsets.UTF_8)
+                .replace("\r\n", "\n");
+        } catch (java.io.IOException e) {
+            throw new AssertionError("cannot read " + relative, e);
+        }
     }
 
     @Test
@@ -163,9 +157,14 @@ public class RtEntityHermeticityTest {
 
     @Test
     public void testNoRasterEntityCompositeFallback() {
-        assertFalse(RtFrameRenderer.isLegacyRasterEntityCompositeEnabled(),
-            "Screen-space raster depth composite must be strictly disabled");
+        String source = rendererSource();
+        assertFalse(source.contains("compositePipeline"),
+            "the renderer has no raster depth composite field left to fall back to");
         assertEquals("RT_OUTPUT", RtFrameRenderer.getFinalSource(),
             "Pure ray-traced buffer (RT_OUTPUT) must be the definitive final source");
+    }
+
+    private static String rendererSource() {
+        return read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
     }
 }

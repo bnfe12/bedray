@@ -6,6 +6,7 @@ import io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
 import io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry;
+import io.github.andrexarlay.vulkancompat.rt.world.RtAdaptiveQuality;
 import io.github.andrexarlay.vulkancompat.rt.world.RtConfig;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
@@ -246,8 +247,11 @@ public final class F3Sections {
                 colored(b, WARN, " pass " + pass.logName());
             }
             if (sel == RtMode.PATH_TRACED) {
-                b.append(' ').append(VAL).append(RtSettings.bounces()).append(R).append(" bounce ")
-                    .append(VAL).append(RtSettings.spp()).append(R).append(" spp");
+                // What the frame actually traces: the governor's ladder, not the ceiling on the settings page.
+                int userSpp = RtSettings.spp();
+                b.append(' ').append(VAL).append(RtAdaptiveQuality.bounces(userSpp, RtSettings.bounces()))
+                    .append(R).append(" bounce ")
+                    .append(VAL).append(RtAdaptiveQuality.spp(userSpp)).append(R).append(" spp");
             } else if (sel == RtMode.RAY_TRACED) {
                 b.append(' ').append(OFF).append('[');
                 appendFlag(b, RtSettings.shadows(), "sh");
@@ -550,7 +554,7 @@ public final class F3Sections {
         int rh = DebugInfo.renderH();
         if (DebugInfo.worldPhase() && rw > 0 && rh > 0) {
             RtMode sel = VulkanRtxConfig.effectiveRtMode();
-            int spp = sel == RtMode.PATH_TRACED ? Math.max(1, RtSettings.spp()) : 1;
+            int spp = sel == RtMode.PATH_TRACED ? RtAdaptiveQuality.spp(RtSettings.spp()) : 1;
             b = sb().append("Primary rays: ").append(VAL);
             mega(b, (double) rw * rh * spp).append(R).append("/frame ").append(OFF).append('(').append(rw).append('x').append(rh)
                 .append(" px x ").append(spp).append(" spp)").append(R);

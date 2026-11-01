@@ -19,7 +19,9 @@
 // leaves it, every segment inside is attenuated by the body's extinction, and
 // each segment adds the light it scatters towards the eye.  The same state
 // travels into the shadow rays, so an underwater receiver is lit through its
-// own water column instead of through clear air.  The water surface itself is
+// own water column instead of through clear air - and the key light's beam is
+// bent where it crosses the face, so the column that gets lit is the one the
+// light actually came down.  The water surface itself is
 // clear (`surface.slang`); all of its colour is this absorption.  A camera that
 // starts inside a body has no entry surface either, so `primaryInWater` seeds the
 // same state before the first segment and the optical lobe refracts from the
@@ -28,9 +30,13 @@
 public module path_tracer;
 
 import "contracts/contracts.slang";
+// The distant block-light handover: the baked field of a receiver the emitter list can no longer serve.  A light module
+// like light/sky.slang, not a backend: the tracer still samples every light through ILightSampler.
+import "light/block_emitters.slang";
 import "light/sky.slang";
 import "sampling.slang";
 import "shading/bsdf.slang";
+import "shading/microfacet.slang";
 import "surface/surface.slang";
 import "surface/visibility.slang";
 import "surface/water.slang";
@@ -42,6 +48,19 @@ static const uint PATH_TRACE_FLAG_RUSSIAN_ROULETTE = 1u << 1u;
 static const uint PATH_TRACE_FLAG_DEPTH_LIMIT      = 1u << 2u;
 static const uint PATH_TRACE_FLAG_INVALID_SAMPLE   = 1u << 3u;
 static const uint PATH_TRACE_FLAG_SURFACE_LIMIT    = 1u << 4u;
+
+// How far a ray steps past a cutout hole before it looks again. The scattering bias (rayBias, 0.01 of a block) is far too
+// long for this: flat overlays sit a few thousandths of a block above the face they cover (glow lichen 0.1/16, leaf
+// litter, vines), so stepping 0.01 past a hole in one jumped over that face too. The ray then ran inside solid stone,
+// where no faces exist between blocks, and left the loaded world as sky: blue holes in cave walls, grey ones on a forest
+// floor at night (owner screenshots 2026-11-01). The step only has to clear the hole's own triangle, so it is a float
+// precision margin: 1e-4 plus a share of the distance, 1.1e-3 at 512 blocks.
+static const float PATH_TRACE_HOLE_STEP_MIN = 1.0e-4;
+static const float PATH_TRACE_HOLE_STEP_PER_BLOCK = 2.0e-6;
+
+float pathTraceHoleStep(float distance) {
+    return PATH_TRACE_HOLE_STEP_MIN + abs(distance) * PATH_TRACE_HOLE_STEP_PER_BLOCK;
+}
 static const uint PATH_TRACE_FLAG_FILTERED_SHADOW  = 1u << 5u;
 // The primary ray hit an accepted surface, so firstHitDistance is a real depth rather than the far plane.  A depth
 // buffer cannot infer this from surfaceHits: a path that only crosses cutout holes never accepted a surface.
@@ -61,12 +80,108 @@ static const uint PATH_TRACE_FLAG_RC_FINITE_WINDOW = 1u << 9u;
 static const uint PATH_TRACE_FLAG_RC_OUTSIDE       = 1u << 10u;
 static const uint PATH_TRACE_FLAG_RC_TERMINAL      = 1u << 11u;
 static const uint PATH_TRACE_FLAG_RC_UNRESOLVED    = 1u << 12u;
+// A shadow walk of this path ran out of its filter budget (SURFACE_VISIBILITY_FLAG_OVERFLOW).  The direct term already
+// reads that walk as occluded; the flag only lets the F3 counters say how often it happened.  Not a rejection.
+static const uint PATH_TRACE_FLAG_VISIBILITY_OVERFLOW = 1u << 13u;
 
 // Bits of PathTraceOptions.flags.  These are pass options (what the host asks the
 // pass to produce), not properties of a sample: the tracer ignores them and the
 // entry pass reads them.
 static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;  // fill PathTraceResult.primary for the denoiser guides
 static const uint PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;  // also write the primary hit's world motion for NRD's IN_MV
+// The effect set of the ray profile (Ray Tracing mode).  Absent bits are the full transport the path profile runs, so a
+// host that sets none of them - Path Tracing, the RC probe pass - traces exactly what it always traced.
+static const uint PATH_TRACE_OPTION_NO_SPECULAR_BOUNCE  = 1u << 2u;  // a specular continuation ends the path
+static const uint PATH_TRACE_OPTION_NO_DIFFUSE_BOUNCE   = 1u << 3u;  // a diffuse continuation ends the path
+// A diffuse continuation may only collect the environment: a geometry hit is an occluder (sky-light ambient occlusion).
+static const uint PATH_TRACE_OPTION_AMBIENT_ONLY_BOUNCE = 1u << 4u;
+static const uint PATH_TRACE_OPTION_NO_KEY_SHADOWS      = 1u << 5u;  // key-light NEE skips the visibility walk
+// The key-light sampler draws the disc axis instead of a point of the disc: the same flux, a hard shadow edge.
+static const uint PATH_TRACE_OPTION_HARD_KEY_SHADOWS    = 1u << 6u;
+// Pixel-shaped key-light shadows: the primary receiver is evaluated once per world cell instead of once per pixel, so the
+// shadow edge becomes the staircase of the block texture the cell is measured in (the deleted rt_common_pixel_shadow.glsl).
+// Bits 8..15 carry the cell size in texture pixels, one sixteenth of a block each; the flag set with a zero size is
+// treated as off, and the flag clear keeps the exact per-pixel shadow of every earlier build.
+static const uint PATH_TRACE_OPTION_PIXEL_SHADOWS       = 1u << 7u;
+static const uint PATH_TRACE_PIXEL_SHADOW_SIZE_SHIFT    = 8u;
+// The host enabled block emitters for this frame: the list is the frame's, possibly empty.  Read by the distant
+// handover below - past the list's reach the receiver is lit from the vanilla block-light field, and it must then skip
+// the emitter branch instead of paying an NEE batch whose every candidate is rejected.  A frame with the switch off
+// keeps no baked field either, so the deleted renderer's "emissive lighting off" A/B stays exactly that.
+static const uint PATH_TRACE_OPTION_BLOCK_EMITTERS      = 1u << 16u;
+// ReSTIR PT (restir/pt_temporal.slang): record where this path's diffuse continuation of the primary vertex first
+// scattered, so the entry can hand that suffix to the pixel's path reservoir.  Bit 17 is the first free bit (8..15 carry
+// the pixel-shadow cell, 16 the block emitters).  The tracer only records; it never reads or writes a reservoir, and a
+// host that leaves the bit clear traces exactly what it traced before.
+static const uint PATH_TRACE_OPTION_RESTIR_PT        = 1u << 17u;
+
+// PathPtRecord.status.  NONE: the bit was clear or the primary receiver is not one the reservoir may own (sky pixel, water,
+// an RC field continuation, an optical interface, a ray profile without a full diffuse bounce) - the pixel publishes an
+// empty record and the reservoir adds nothing.  ATTEMPT: an eligible receiver drew one sample that never reached a first
+// scattered vertex (specular lobe, no lobe, truncation, firefly, depth limit) - still one draw from the first-edge
+// density, so it counts in M with no contribution.  VERTEX: the continuation reached its first vertex or escaped.
+static const uint PATH_PT_RECORD_NONE    = 0u;
+static const uint PATH_PT_RECORD_ATTEMPT = 1u;
+static const uint PATH_PT_RECORD_VERTEX  = 2u;
+// PathPtRecord.vertexFlags.  The stage maps them onto RESTIR_PT_PATH_FLAG_*; the tracer keeps its own namespace so it
+// never imports the reservoir module.
+static const uint PATH_PT_VERTEX_ENVIRONMENT = 1u << 0u;   // the continuation escaped: no vertex, a sky lookup
+static const uint PATH_PT_VERTEX_EMISSIVE    = 1u << 1u;   // the first vertex emits (decoded material, not a hit hint)
+static const uint PATH_PT_VERTEX_CERTIFIED   = 1u << 2u;   // the first vertex carries the diffuse certificate
+
+// The first edge of one path, as the reservoir needs it.  Positions are camera-relative like every hit.
+struct PathPtRecord {
+    uint   status;               // PATH_PT_RECORD_*
+    float3 anchorPosition;       // the primary vertex
+    float3 anchorNormal;         // its view-facing shading normal
+    float3 diffuseReflectance;   // pi * f_d at the anchor for this view: bsdfDiffuseReflectanceAt
+    float3 direction;            // the diffuse continuation (anchor -> first vertex)
+    float  sourcePdf;            // its solid-angle density, the lobe probability included
+    float3 continuationWeight;   // the throughput the continuation left with (bsdf.weight at the primary)
+    float3 radianceBefore;       // result.radiance when it left
+    float3 vertexPosition;
+    float3 vertexNormal;         // view-facing (towards the anchor)
+    float  reversePdf;           // the first vertex's density of sampling the edge back to the anchor
+    uint   vertexFlags;          // PATH_PT_VERTEX_*
+    float3 suffixContribution;   // what the path gathered after the continuation left: the term the stage takes out
+    float3 suffix;               // the same divided by continuationWeight: radiance arriving at the anchor
+};
+
+PathPtRecord emptyPathPtRecord() {
+    PathPtRecord record;
+    record.status = PATH_PT_RECORD_NONE;
+    record.anchorPosition = float3(0.0);
+    record.anchorNormal = float3(0.0, 1.0, 0.0);
+    record.diffuseReflectance = float3(0.0);
+    record.direction = float3(0.0, 1.0, 0.0);
+    record.sourcePdf = 0.0;
+    record.continuationWeight = float3(0.0);
+    record.radianceBefore = float3(0.0);
+    record.vertexPosition = float3(0.0);
+    record.vertexNormal = float3(0.0, 1.0, 0.0);
+    record.reversePdf = 0.0;
+    record.vertexFlags = 0u;
+    record.suffixContribution = float3(0.0);
+    record.suffix = float3(0.0);
+    return record;
+}
+
+// The emitter decision of a first vertex, made on the decoded material - the twin of ptTerminalEmits in
+// experimental/restir_pt.slang.  HIT_FLAG_EMISSIVE is a backend hint the hardware traversal never sets.
+bool ptTerminalEmitsMaterial(MaterialSample material) {
+    return material.emission.r > 0.0 || material.emission.g > 0.0 || material.emission.b > 0.0;
+}
+
+// The diffuse-first certificate (RESTIR_PT_PATH_FLAG_DIFFUSE_FIRST): an opaque, non-fluid, non-foliage, non-metal surface
+// rough enough to be read as Lambertian.  The BSDF still has a GGX lobe at roughness >= 0.6, so treating that share as
+// direction-independent is a documented approximation (docs/RESTIR_GI_DERIVATION.md, "Live temporal stage"), not a
+// claim; the threshold is the denoiser's specular-guide rule, so one notion of "glossy" governs both.  Foliage is out
+// because its back-lit NEE term depends on the side the light arrives from.
+bool pathPtCertifiedDiffuse(MaterialSample material) {
+    return material.alphaMode == AlphaMode.Opaque
+        && (material.sourceFlags & (MATERIAL_SOURCE_FLUID | MATERIAL_SOURCE_FOLIAGE)) == 0u
+        && material.metallic <= 0.5 && material.roughness >= 0.6;
+}
 
 struct PathTraceOptions {
     uint  maxDepth;             // scattering events before the path stops
@@ -78,11 +193,28 @@ struct PathTraceOptions {
     float maxRadiance;          // firefly / overflow guard
     float alphaCutoff;
     uint  flags;
+    // Per-lobe far planes of a continuation (0 = maxDistance).  The ray profile stops its bounce rays at the distances
+    // its own sliders name, so "Reflection Distance" and "GI Distance" are what the traced rays actually use.
+    float diffuseDistance;
+    float specularDistance;
     // The host's verdict that the eye itself sits in water.  Geometry cannot
     // answer it: the surface of that body can be hidden by a block submerged in
     // the same column.  Never read from the push-constant flags, which mirror a
     // host ABI bit for bit; this is a shader-internal decision.
     bool  primaryInWater;
+    // The player's caustics switch: the wave field spreads or gathers the bent beam along the receiver's depth.
+    // The style switch is NOT here - it changes the wave field a face keeps, which is the surface decoder's option,
+    // not a different path for the light.
+    bool  waterCaustics;
+    // Pixel-shadow cell in blocks (0 = the exact per-pixel shadow), and the frame/sample words the world-locked sun
+    // rotation is hashed from.  Pass options like the flags above: the entry sets them, the tracer only reads them.
+    float pixelShadowCell;
+    uint  frameIndex;
+    uint  sampleWord;
+    // The range the host collected this frame's emitter list over, in blocks.  The list only holds emitters within this
+    // reach of the camera, so past `emitterListRange - EMITTER_RADIUS` it is no longer complete for a receiver and the
+    // distant handover starts.  0 is an older host and keeps the whole ray far plane.
+    float emitterListRange;
 };
 
 PathTraceOptions defaultPathTraceOptions() {
@@ -96,7 +228,14 @@ PathTraceOptions defaultPathTraceOptions() {
     options.maxRadiance = 1.0e6;
     options.alphaCutoff = 0.5;
     options.flags = 0u;
+    options.diffuseDistance = 0.0;
+    options.specularDistance = 0.0;
     options.primaryInWater = false;
+    options.waterCaustics = false;
+    options.pixelShadowCell = 0.0;
+    options.frameIndex = 0u;
+    options.sampleWord = 0u;
+    options.emitterListRange = 0.0;
     return options;
 }
 
@@ -121,6 +260,7 @@ struct PathTraceResult {
     float4 primaryMotion;       // xyz: where the primary surface stood one frame ago minus where it is now, in
                                 // world blocks; w: 1 when that surface is a captured model rather than terrain
     PathPrimaryGuide primary;   // guide channels, filled only when the primary ray hit a decodable surface
+    PathPtRecord pt;            // ReSTIR PT first edge, recorded only under PATH_TRACE_OPTION_RESTIR_PT
     uint   depth;
     uint   surfaceHits;
     uint   flags;
@@ -140,6 +280,7 @@ PathTraceResult emptyPathTraceResult() {
     result.primary.roughness = 1.0;
     result.primary.metallic = 0.0;
     result.primary.valid = false;
+    result.pt = emptyPathPtRecord();
     result.depth = 0u;
     result.surfaceHits = 0u;
     result.flags = 0u;
@@ -156,13 +297,86 @@ bool pathTraceSampleRejected(uint flags) {
     return (flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_RC_UNRESOLVED)) != 0u;
 }
 
+// ---- Pixel-shaped shadows (the deleted rt_common_pixel_shadow.glsl) ----
+// The option evaluates the shadow once per world cell: the receiver is snapped horizontally to the centre of its cell,
+// so a whole cell shares one shadow ray and the edge becomes the staircase of the block texture the cell is measured in.
+// Three rules keep the look from becoming a cheat, and all three live here: only the receiver moves (never the caster),
+// a cell that crosses geometry keeps the exact shadow, and geometry that is not part of the block grid (a mob, a leaf)
+// is never snapped.  The cell is world-locked: `SurfaceHit.worldPosition` is the world anchor modulo 1024 blocks, and
+// every cell size the host can send (1/16 .. 1 block) divides the 1024-block wrap exactly.
+
+// Cell index that rotates the sun/moon disc sequence: each fragment of a pixel-shadow cell draws the same disc point, so
+// the quantised penumbra is one value instead of per-pixel speckle.
+int3 pathTraceShadowCell(float3 worldPosition, float cell) {
+    return int3(int(floor(worldPosition.x / cell)), int(floor(worldPosition.z / cell)), 0);
+}
+
+// World-locked rotation for a fragment that keeps its exact origin: the penumbra rays stay still in the world while the
+// accumulating sub-pixel jitter moves the hit, instead of boiling.  The y shear decorrelates stacked surfaces, so a floor
+// under a roof does not repeat the roof's sample pattern; the 1/16-block cell is the legacy one.
+int3 pathTraceStableSunCell(float3 worldPosition) {
+    float2 sheared = (worldPosition.xz + worldPosition.y * 0.5) * 16.0;
+    return int3(int(floor(sheared.x)), int(floor(sheared.y)), 0);
+}
+
+// A leaf's rotation is its own block, frame term included in the caller: a leaf card never leaves that block, and hashing
+// a 1/16-block cell would restart the whole disc sequence as jitter moves the hit across those cell borders.
+int3 pathTraceFoliageSunCell(float3 worldPosition) {
+    return int3(floor(worldPosition));
+}
+
+// The cell-stable seed of the sun/moon sample: same cell, same frame and same sample stratum draw the same disc point.
+uint pathTraceSunSeed(int3 cell, uint frame, uint sampleWord) {
+    uint seed = uint(cell.x) * 1973u + uint(cell.y) * 9277u + uint(cell.z) * 4093u;
+    return pcgHash(pcgHash(seed + frame * 26699u) + sampleWord * 6971u);
+}
+
+// Origin of the shared shadow ray of a fragment's cell.  Returns `position` unchanged whenever sharing is not possible
+// (the option is off or the cell crosses geometry), so a caller can use the result unconditionally.  The displacement
+// stays horizontal and is projected into the surface plane - a naive world snap pushes wall fragments sideways into the
+// wall - and the validation ray is the whole test: blocks are convex, so "the cell centre is inside geometry or behind a
+// step" is exactly "the short segment from the fragment to that centre is blocked".  A fragment whose snap is rejected
+// keeps its exact origin, which is what keeps shadows attached to their casters.
+float3 pathPixelShadowOrigin<T : ISceneTracer>(T traversal, float3 position, float3 normal, float bias,
+        float3 worldPosition, float cell) {
+    float2 w = worldPosition.xz;
+    float3 lateral = float3((floor(w.x / cell) + 0.5) * cell - w.x, 0.0,
+                            (floor(w.y / cell) + 0.5) * cell - w.y);
+    lateral -= normal * dot(lateral, normal);
+    float len = length(lateral);
+    if (len <= 1.0e-5) {
+        return position;   // the fragment already sits on the cell centre
+    }
+    // The probe starts where the shadow ray will start, not on the face itself: a ray lying in its own triangle would
+    // count that triangle as a blocker and reject every snap.
+    Ray probe = makeRay(position + normal * bias, lateral / len, 0.0, len + 0.05);
+    return traversal.traceVisibility(probe).visible ? position + lateral : position;
+}
+
+// The baked emitter term of the distant handover: the receiver's vanilla block light, tinted and gained, weighted by
+// the same diffuse factors the emitter NEE would have carried - the albedo of the reflecting lobe, the energy the
+// interface did not take ((1 - F) at the view angle, the legacy `Fsc`) and the LabPBR AO.  The legacy look has no
+// cosine and no 1/PI in it: the field stands in for the whole estimate at a tuned scale (`BLOCK_LIGHT_FIELD_GAIN`),
+// not for a second estimator, so these are the numbers the owner tuned rather than a re-derivation.
+float3 pathBakedBlockLight(MaterialSample material, float3 view, float3 normal, float2 light) {
+    float3 fresnelView = fresnelSchlick(max(dot(normal, view), 0.0), bsdfF0(material));
+    float specularShare = max(fresnelView.r, max(fresnelView.g, fresnelView.b));
+    return bsdfReflectionAlbedo(material) * (1.0 - specularShare) * material.ambientOcclusion
+        * vanillaBlockIrradiance(light);
+}
+
 // Shades one direct-light sample: the BSDF term of the legacy NEE times the filtered visibility walk.  The caller
 // multiplies the result by its throughput.  `traced` says a shadow ray really ran, `occluded` that it came back
 // blocked; a reservoir needs both, because a sample this receiver cannot even see must fade instead of persisting.
-// `medium` is the water body the receiver stands in: an underwater receiver is shadowed through its own column.
+// `medium` is the water body the receiver stands in: an underwater receiver is
+// shadowed through its own column, and a sun or moon sample is walked as the bent
+// beam `waterBeamToLight` names rather than as the straight sight line, which is
+// what puts the light where the surface let it through and gives the floor its
+// caustics.
 float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
-        SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light, float rayBias,
-        MaterialSamplingOptions materialOptions, WaterMedium medium, out bool traced, out bool occluded) {
+        SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light,
+        PathTraceOptions options, MaterialSamplingOptions materialOptions, WaterMedium medium, bool primary,
+        out bool traced, out bool occluded, inout uint pathFlags) {
     float3 zero = float3(0.0);
     traced = false;
     occluded = false;
@@ -170,14 +384,33 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         return zero;
     }
     float3 lightDirection = light.direction;
-    float cosine = max(dot(normal, lightDirection), 0.0);
-    if (cosine <= 0.0) {
-        return zero;
+    // Under water the key light does not arrive along the sight line to the disc:
+    // the face bends every air direction into the Snell window, so the beam is
+    // what carries the light, not the straight line.  A block emitter that never
+    // crossed the surface is not that problem, which is why the beam is asked for
+    // only of the two lights the sampler treats as directional.  Both water
+    // styles get it: a body of water does not stop bending light because a slider
+    // moved, so the switch owns the waves and never the sight line.
+    WaterBeam beam = invalidWaterBeam();
+    if (medium.inside && (light.kind == LightKind.Sun || light.kind == LightKind.Moon)) {
+        beam = waterBeamToLight(lightDirection, light.distance, position, medium);
+    } else if (medium.inside && light.kind == LightKind.Emitter) {
+        beam = waterBeamToPoint(light.position, position, medium);
     }
-    float3 bsdf = bsdfEvaluate(surface.material, view, normal, lightDirection);
-    if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
-        return zero;
-    }
+    float3 arrival = beam.valid ? -beam.direction : lightDirection;
+    // Two weights ride on the bent beam.  The sample was drawn from air solid
+    // angles and is now evaluated on the water side, and the ratio of the two
+    // cones is what leaves the flux the surface actually let through.  The focus
+    // is the wave field gathering that flux onto this point or spreading it thin,
+    // and it is the part the caustics switch owns: the étendue ratio is flux
+    // conservation, not an effect, so it stays whatever that switch says.  The
+    // damped style focuses less because the waves that bend the bundle are weaker.
+    float beamWeight = beam.valid
+        ? beam.solidAngle * (options.waterCaustics
+            ? waterBeamFocus(beam, position, beam.air, materialOptions.portalTime,
+                materialOptions.waterWaveMix, (surface.hit.worldPosition - surface.hit.position).xz) : 1.0)
+        : 1.0;
+    float cosine = max(dot(normal, arrival), 0.0);
     // Offset from the geometric face, not the normal-mapped
     // shading normal: a tilted normal can start the shadow ray
     // inside the surface and either leak light or self-shadow.
@@ -185,9 +418,70 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     if (dot(shadowNormal, view) < 0.0) {
         shadowNormal = -shadowNormal;
     }
+    bool keyLight = light.kind == LightKind.Sun || light.kind == LightKind.Moon;
+    // Light through a thin leaf card.  A plant seen against the sun has its shaded face toward the camera, so this
+    // cosine is zero and the BSDF below has no front lobe; the legacy path lit exactly that case with a transmission
+    // term, and without it every back-lit plant is a dark dot on a sunlit slope.  The term reads the light-facing
+    // normal, and an emissive plant is excluded the way the filter is: a flame drawn in the cutout pass transmits no
+    // sunlight.
+    bool foliage = (surface.material.sourceFlags & MATERIAL_SOURCE_FOLIAGE) != 0u
+        && (surface.material.flags & MATERIAL_FLAG_EMISSIVE) == 0u;
+    float leafBack = foliage && keyLight ? max(dot(-shadowNormal, arrival), 0.0) : 0.0;
+    if (cosine <= 0.0 && leafBack <= 0.0) {
+        return zero;
+    }
+    float3 bsdf = zero;
+    if (cosine > 0.0) {
+        bsdf = bsdfEvaluate(surface.material, view, normal, arrival);
+        if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
+            return zero;
+        }
+    }
+    // The transmission term carries no cosine of the shaded face; its own ramp does that job.  The energy split the
+    // legacy term took from the specular lobe is the same (1 - F) at the leaf's dielectric F0.
+    float3 leafTerm = zero;
+    if (leafBack > 0.0) {
+        float leafGain = leafBack * FOLIAGE_BACKLIT_GAIN * smoothstep(0.0, 0.08, leafBack)
+            * (1.0 - clamp(luminance(surface.material.f0), 0.0, 1.0));
+        leafTerm = surface.material.albedo * (leafGain * FOLIAGE_BACKLIT_TINT);
+    }
+    // The ray profile's "RT Shadows" switch: with it off the key light still lights the surface, it simply skips the
+    // visibility walk - the sun arrives unshadowed, while every block emitter keeps its traced shadow.
+    if ((options.flags & PATH_TRACE_OPTION_NO_KEY_SHADOWS) != 0u && keyLight) {
+        float3 unshadowed = leafBack > 0.0 ? leafTerm : bsdf;
+        return unshadowed * light.radiance * beamWeight / max(light.sourcePdf, 1.0e-6);
+    }
     traced = true;
-    SurfaceVisibility shadow = traceShadowVisibilityMedium(traversal, atlas, blockMaterials, position, shadowNormal,
-        lightDirection, light.distance, rayBias, materialOptions, medium);
+    // The back-lit shadow ray has to start on the sun side of the leaf or it re-hits the caster.  A full leaf cube is
+    // one block thick: its sun-side face is exactly one block along -normal, so the step crosses its own cell.  A card
+    // (or a back-face hit, already on the sun-side face) is zero thickness and is cleared by 1 cm along the sun.  An
+    // underwater receiver keeps the beam origin: the bent column, not the straight sight line, carries its light.
+    float3 shadowPosition = position;
+    if (leafBack > 0.0 && !medium.inside) {
+        bool leafCube = (surface.hit.flags & HIT_FLAG_LEAF_CUBE) != 0u;
+        bool frontFace = (surface.hit.flags & HIT_FLAG_FRONT_FACE) != 0u;
+        shadowPosition = leafCube && frontFace
+            ? position - shadowNormal * 1.01
+            : position + lightDirection * 0.01;
+    }
+    // Pixel-shaped shadows: the primary fragment is shaded from the centre of its world cell, so one whole cell shares
+    // one shadow ray.  Only the primary vertex pays for this - a deeper vertex is 1-3 spp and the denoiser dissolves
+    // its quantization, while each one would spend a validation ray.  A leaf keeps the sun-side origin its transmission
+    // needs, an entity moves inside a world-locked cell, and an underwater receiver's cell above means nothing.  The
+    // same rule gates both the key light and a block emitter, which is what makes a torch cast the same staircase.
+    if (primary && options.pixelShadowCell > 0.0 && leafBack <= 0.0 && !medium.inside
+            && (surface.hit.flags & HIT_FLAG_ENTITY) == 0u) {
+        shadowPosition = pathPixelShadowOrigin(traversal, position, shadowNormal, options.rayBias,
+            surface.hit.worldPosition, options.pixelShadowCell);
+    }
+    SurfaceVisibility shadow = beam.valid
+        ? traceShadowBeam(traversal, atlas, blockMaterials, shadowPosition, shadowNormal, lightDirection,
+            light.distance, options.rayBias, materialOptions, medium, beam)
+        : traceShadowVisibilityMedium(traversal, atlas, blockMaterials, shadowPosition, shadowNormal,
+            lightDirection, light.distance, options.rayBias, materialOptions, medium);
+    if ((shadow.flags & SURFACE_VISIBILITY_FLAG_OVERFLOW) != 0u) {
+        pathFlags |= PATH_TRACE_FLAG_VISIBILITY_OVERFLOW;
+    }
     // Sixteen filters deep the walk gives up and keeps the energy it collected.  That is not a proven sight line:
     // calling it one would light this surface through an opaque blocker hidden behind the glass.  Reporting it as
     // occluded also lets a reused record fade instead of persisting.
@@ -196,7 +490,8 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         occluded = true;
         return zero;
     }
-    return bsdf * light.radiance * transmittance / max(light.sourcePdf, 1.0e-6);
+    float3 estimator = leafBack > 0.0 ? leafTerm : bsdf;
+    return estimator * light.radiance * transmittance * beamWeight / max(light.sourcePdf, 1.0e-6);
 }
 
 // How far up, and past how many blockers, the search for the surface of the
@@ -225,10 +520,10 @@ WaterMedium primaryWaterMedium<T : ISceneTracer>(T traversal, MaterialAtlas atla
         if (!face.hit || !isFinite(face.t) || !(face.t > 0.0)) {
             break;
         }
-        float advance = face.t + rayBias;
+        float advance = face.t + pathTraceHoleStep(face.t);
         origin = origin + up * advance;
         remaining -= advance;
-        SurfaceSample body = decodeSurface(atlas, blockMaterials, face, materialOptions, up);
+        SurfaceSample body = decodeSurface(atlas, blockMaterials, face, materialOptions, up, false);
         if (!body.valid || surfaceIsHole(body, alphaCutoff)) {
             continue;
         }
@@ -275,14 +570,19 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     float3 throughput = float3(1.0);
     Ray ray = primaryRay;
     bool firstSurfaceAccepted = false;
+    // The previous continuation was an ambient-only (AO) bounce: the next opaque surface it reaches blocks the sky
+    // light this ray carries, so the path ends there without shading that surface.
+    bool ambientOnlyPending = false;
     // Cutout holes move the origin along the current ray. Keep the displacement
     // of the primary ray only, so a later hit is measured from the camera.
     float primaryAdvance = 0.0;
     uint step = 0u;
+    // The diffuse continuation of the primary vertex is in flight and its first vertex is not recorded yet.
+    bool ptArmed = false;
 
     // The water body the current ray runs in and the ray coordinate where its
     // current segment began.  A hole advance moves the origin, so the same
-    // physical point sits at -rayBias on the new ray; tracking the coordinate
+    // physical point sits at -holeStep on the new ray; tracking the coordinate
     // rather than an accumulated length keeps the next segment exact.
     WaterMedium medium = noWaterMedium();
     float mediumStart = 0.0;
@@ -303,11 +603,14 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (!medium.inside) {
             medium = waterMediumFrom(float3(1.0), primaryRay.origin.y);
         }
-        waterDown = environment.radiance(float3(0.0, 1.0, 0.0));
+        waterDown = environment.skyRadiance(float3(0.0, 1.0, 0.0));
         waterDownReady = true;
         result.flags |= PATH_TRACE_FLAG_WATER_MEDIUM;
     }
 
+    // Whether an escape may pay the sun and moon discs: the primary ray, or a continuation of a delta lobe, whose vertex's
+    // NEE contributed nothing.  After any other continuation the vertex already sampled the bodies by NEE.
+    bool bodiesVisible = true;
     for (; step < options.maxSurfaceSteps; ++step) {
         // A non-finite interval cannot be traced at all; an empty one is a path cut short by the cutout advances.
         if (!isFinite(ray.tMax)) {
@@ -336,7 +639,32 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 result.radiance += throughput * waterInScatter(medium, tailMidpoint.y, waterDown, tail);
                 throughput *= waterSegmentTransmittance(medium, tail);
             }
-            result.radiance += throughput * environment.radiance(ray.direction);
+            if (ptArmed) {
+                // An escaped continuation has no vertex: the sky lookup is direction-dependent radiance, which the path
+                // keeps (the stage never takes an ENVIRONMENT first edge into the reservoir).
+                ptArmed = false;
+                result.pt.status = PATH_PT_RECORD_VERTEX;
+                result.pt.vertexPosition = ray.origin + ray.direction * ray.tMax;
+                result.pt.vertexNormal = -ray.direction;
+                result.pt.vertexFlags = PATH_PT_VERTEX_ENVIRONMENT;
+            }
+            // A ray that leaves the body upward without meeting a face (the walk up from the eye found none, or the sheet
+            // is not in the scene) still crosses the plane the body was entered through: it leaves the dense side, so it
+            // bends away from the vertical with the sheet's transmission and eta^2, exactly as the optical lobe weights a
+            // crossing, or it is totally reflected and sees no sky.  The reflected half is not traced on.
+            float3 escape = ray.direction;
+            float3 escapeWeight = float3(1.0);
+            if (medium.inside && ray.direction.y > 0.0) {
+                float3 bent = refract(ray.direction, float3(0.0, -1.0, 0.0), WATER_IOR);
+                if (dot(bent, bent) <= 1.0e-8) {
+                    escapeWeight = float3(0.0);   // total internal reflection: this ray sees no sky
+                } else {
+                    escape = safeNormalize(bent, ray.direction);
+                    escapeWeight = waterBeamTransmittance(escape.y) * (WATER_IOR * WATER_IOR);
+                }
+            }
+            float3 sky = bodiesVisible ? environment.radiance(escape) : environment.skyRadiance(escape);
+            result.radiance += throughput * escapeWeight * sky;
             result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;
             break;
         }
@@ -368,7 +696,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (surfaceIsHole(surface, options.alphaCutoff)) {
             // A cutout hole is not a surface: continue the same ray just past
             // the candidate without spending a scattering event.
-            float advance = hit.t + options.rayBias;
+            float holeStep = pathTraceHoleStep(hit.t);
+            float advance = hit.t + holeStep;
             if (!isFinite(advance) || advance <= 0.0 ||
                 (!firstSurfaceAccepted && !isFinite(primaryAdvance + advance))) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
@@ -383,10 +712,15 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             ray.origin = advancedOrigin;
             ray.tMax = max(ray.tMax - advance, 0.0);
             ray.tMin = 0.0;
-            // The candidate now sits rayBias behind the new origin, so the
+            // The candidate now sits holeStep behind the new origin, so the
             // medium segment must continue from there, not from zero.
-            mediumStart = -options.rayBias;
+            mediumStart = -holeStep;
             continue;
+        }
+
+        if (ambientOnlyPending) {
+            // An ambient-only bounce that found geometry collects nothing: the sky it would have seen is occluded.
+            break;
         }
 
         if (!firstSurfaceAccepted) {
@@ -409,6 +743,19 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         float3 view = -ray.direction;
         if (dot(normal, view) < 0.0) normal = -normal;
 
+        if (ptArmed) {
+            // The first scattered vertex of the primary diffuse continuation.  `view` points back along the edge to the
+            // anchor, so bsdfPdf(material, view, normal, view) is this vertex's density of sampling that edge in reverse
+            // - the module's `bsdfPdf` field.  (L = +direction faces into the surface and would always read 0.)
+            ptArmed = false;
+            result.pt.status = PATH_PT_RECORD_VERTEX;
+            result.pt.vertexPosition = hit.position;
+            result.pt.vertexNormal = normal;
+            result.pt.reversePdf = bsdfPdf(surface.material, view, normal, view);
+            result.pt.vertexFlags = (ptTerminalEmitsMaterial(surface.material) ? PATH_PT_VERTEX_EMISSIVE : 0u)
+                | (pathPtCertifiedDiffuse(surface.material) ? PATH_PT_VERTEX_CERTIFIED : 0u);
+        }
+
         // The face of a glowing block is seen as its own emission, and the light it casts on other surfaces comes from
         // NEE; a sampler that reads the emitter list rejects the receiver's own quad through LightReceiver.emission.
         result.radiance += throughput * surface.material.emission;
@@ -421,28 +768,83 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // The reservoir belongs to this surface, so its history has to be looked up where this surface was - which for
         // a mob part is not the pixel the camera alone points at.
         receiver.motion = result.primaryMotion.xyz;
+        // The leaf transmission term below needs a key-light sample on the sun side of the card; the samplers read the
+        // tag from the same place the estimator does, emissive exclusion included, so a glowing cutout plant is not
+        // handed a key-light sample the estimator would discard.
+        receiver.foliage = (surface.material.sourceFlags & MATERIAL_SOURCE_FOLIAGE) != 0u
+            && (surface.material.flags & MATERIAL_FLAG_EMISSIVE) == 0u;
+        // The world-locked rotation of the sun/moon disc for this vertex.  A leaf freezes to its own block AND to a fixed
+        // frame term: its transmission is a 0.6-per-layer staircase, so re-rolling the disc point every frame flips whole
+        // texels - the ripple the owner kept reporting.  With pixel shadows on, a cell shares one disc point and every
+        // vertex that keeps its exact origin still gets a world-locked one, so accumulating jitter cannot make the
+        // penumbra boil.  With the option off nothing changes: the sample stays the exact per-path one.
+        receiver.stableSun = false;
+        receiver.sunSeed = 0u;
+        if (receiver.foliage) {
+            receiver.stableSun = true;
+            receiver.sunSeed = pathTraceSunSeed(pathTraceFoliageSunCell(surface.hit.worldPosition), 0u,
+                options.sampleWord);
+        } else if (options.pixelShadowCell > 0.0) {
+            bool cellShadow = receiver.primary && !medium.inside
+                && (surface.hit.flags & HIT_FLAG_ENTITY) == 0u;
+            int3 sunCell = cellShadow
+                ? pathTraceShadowCell(surface.hit.worldPosition, options.pixelShadowCell)
+                : pathTraceStableSunCell(surface.hit.worldPosition);
+            receiver.stableSun = true;
+            receiver.sunSeed = pathTraceSunSeed(sunCell, options.frameIndex, options.sampleWord);
+        }
         float3 direct = float3(0.0);
-        if (receiver.primary && reuse.reuseActive()) {
+        // ---- Distant block light ----
+        // Past the list's reach the camera-sorted emitter list cannot serve this receiver any more, so it is lit from
+        // the vanilla block-light field instead (the deleted rt_common_shade.glsl handover).  Only the primary vertex
+        // has a camera distance - a deeper vertex is shaded where the previous one sent it and keeps the traced
+        // estimate - and a face with no vanilla block light (a LabPBR glow, an emissive item) has nothing to fall back
+        // to, so it keeps tracing.  The legacy branch was diffuse-only for the same reason the field is.
+        float emitterFar = 0.0;
+        bool emitterBaked = false;
+        if (receiver.primary && (options.flags & PATH_TRACE_OPTION_BLOCK_EMITTERS) != 0u
+                && !materialIsMetal(surface.material) && hit.light.x > 0.0) {
+            float listRange = options.emitterListRange > 0.0 ? options.emitterListRange : options.maxDistance;
+            // `hit.position` is camera-relative: the distance is measured from the camera, the way the list was sorted.
+            emitterFar = blockLightFarMix(length(hit.position), listRange);
+            // In the far end of the band the traced batch would spend its candidates on draws that are all rejected:
+            // the emitter branch is skipped and the baked field is the whole term, while the key light keeps sampling.
+            emitterBaked = emitterFar >= BLOCK_LIGHT_FAR_FULL;
+        }
+        receiver.bakedBlockLight = emitterBaked;
+        if (receiver.primary && reuse.reuseActive() && !emitterBaked) {
             // The reservoir carries the emissive branch across frames, so the composite must not also draw it; the key
             // light is still sampled the plain way.  One extra shadow ray per pixel, no duplicated emitter batch.
             bool reusedTraced;
             bool reusedOccluded;
             LightSample reused = reuse.reuseSample(receiver, seed);
             reuseHandled = true;
+            // The handover fades the traced estimate into the baked field across the band.  Mix, not max: the estimate
+            // reads zero on most pixels of the band, so max() would put the whole field on top of an average that is
+            // already lower and leave a bright ring around the player.
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                reused, options.rayBias, materialOptions, medium, reusedTraced, reusedOccluded);
+                reused, options, materialOptions, medium, receiver.primary, reusedTraced, reusedOccluded, result.flags)
+                * (1.0 - emitterFar);
             // A sample this receiver could not even shade has not been proven visible either: decaying it lets a record
             // that lost its light fade out instead of sitting at full weight until the surface changes.
             reuse.reuseConfirm(!reusedTraced || reusedOccluded);
             bool keyTraced;
             bool keyOccluded;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lights.sample(receiver, seed), options.rayBias, materialOptions, medium, keyTraced, keyOccluded);
+                lights.sample(receiver, seed), options, materialOptions, medium, receiver.primary, keyTraced, keyOccluded, result.flags);
         } else {
             bool lightTraced;
             bool lightOccluded;
-            direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
-                lights.sample(receiver, seed), options.rayBias, materialOptions, medium, lightTraced, lightOccluded);
+            LightSample lightSample = lights.sample(receiver, seed);
+            float3 term = pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
+                lightSample, options, materialOptions, medium, receiver.primary, lightTraced, lightOccluded, result.flags);
+            // Only the emitter share of the composite draw fades: the key light is not part of the handover.
+            direct += lightSample.kind == LightKind.Emitter ? term * (1.0 - emitterFar) : term;
+        }
+        // The baked field carries the band's outer share: the part of the term the list can no longer serve.  Added
+        // after the branches, so a reused, a fresh emitter and a key-light draw all see the same field.
+        if (emitterFar > 0.0) {
+            direct += pathBakedBlockLight(surface.material, view, normal, hit.light) * emitterFar;
         }
         if (direct.r + direct.g + direct.b > 0.0) {
             result.flags |= PATH_TRACE_FLAG_FILTERED_SHADOW;
@@ -461,6 +863,23 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.primary.direct = direct;
         }
         result.radiance += throughput * direct;
+
+        // ReSTIR PT owns the diffuse continuation of an eligible primary vertex.  Eligibility is a property of the receiver,
+        // decided before the lobe is drawn: whatever this sample then does, it is one attempt of that receiver's reservoir.
+        // A receiver the reservoir must never add to - in water (the first edge is attenuated by the medium), an RC field
+        // continuation, an optical interface (its sampler has no diffuse branch), a ray profile without a full diffuse
+        // bounce - stays NONE and keeps every term in the path.
+        if (receiver.primary && (options.flags & PATH_TRACE_OPTION_RESTIR_PT) != 0u && !medium.inside
+                && !field.active() && surface.material.alphaMode != AlphaMode.Optical
+                && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u
+                && (options.flags & (PATH_TRACE_OPTION_NO_DIFFUSE_BOUNCE | PATH_TRACE_OPTION_AMBIENT_ONLY_BOUNCE)) == 0u) {
+            result.pt.status = PATH_PT_RECORD_ATTEMPT;
+            result.pt.anchorPosition = hit.position;
+            result.pt.anchorNormal = normal;
+            // The same N.V floor bsdfSample uses, so the resolved f_d and the sampler's diffuse weight are one value.
+            result.pt.diffuseReflectance = bsdfDiffuseReflectanceAt(surface.material,
+                max(dot(normal, view), 1.0e-4));
+        }
 
         // ---- BSDF sampling ----
         // The lobe refracts from the medium this ray travels in, not from air:
@@ -503,6 +922,30 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.flags |= PATH_TRACE_FLAG_RC_OUTSIDE;
         }
 
+        // Which continuations this pass may trace.  The ray profile switches whole effects off (reflections, GI, AO)
+        // and bounds the ones that stay with their own distances; the path profile leaves every bit clear and keeps the
+        // full transport.  Transmission is never gated this way: looking through water or glass is not a ray effect.
+        float continuationDistance = options.maxDistance;
+        bool continuationAmbientOnly = false;
+        if (bsdf.lobe == BSDF_LOBE_SPECULAR) {
+            if ((options.flags & PATH_TRACE_OPTION_NO_SPECULAR_BOUNCE) != 0u) {
+                result.flags |= PATH_TRACE_FLAG_TRUNCATED;
+                break;
+            }
+            if (options.specularDistance > 0.0) {
+                continuationDistance = options.specularDistance;
+            }
+        } else if (bsdf.lobe == BSDF_LOBE_DIFFUSE) {
+            if ((options.flags & PATH_TRACE_OPTION_NO_DIFFUSE_BOUNCE) != 0u) {
+                result.flags |= PATH_TRACE_FLAG_TRUNCATED;
+                break;
+            }
+            continuationAmbientOnly = (options.flags & PATH_TRACE_OPTION_AMBIENT_ONLY_BOUNCE) != 0u;
+            if (options.diffuseDistance > 0.0) {
+                continuationDistance = options.diffuseDistance;
+            }
+        }
+
         // A refracted transmission through a horizontal fluid face crosses the
         // water boundary; the transmitted direction says which side the next
         // segment runs on.  A reflection (including total internal reflection)
@@ -512,7 +955,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             float faceY = surface.hit.geometricNormal.y;
             if (waterEntersMedium(medium.inside, faceY, bsdf.direction.y)) {
                 if (!waterDownReady) {
-                    waterDown = environment.radiance(float3(0.0, 1.0, 0.0));
+                    waterDown = environment.skyRadiance(float3(0.0, 1.0, 0.0));
                     waterDownReady = true;
                 }
                 medium = waterMediumFrom(waterBiomeTint(hit.tint, surface.hit.geometricNormal),
@@ -524,6 +967,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         }
 
         throughput *= bsdf.weight;
+        bodiesVisible = bsdf.delta;
         result.depth++;
 
         if (pathMaxComponent(throughput) <= 0.0) {
@@ -561,7 +1005,17 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         float3 bounceNormal = safeNormalize(surface.hit.geometricNormal, normal);
         float3 origin = hit.position
             + bounceNormal * (dot(bsdf.direction, bounceNormal) >= 0.0 ? options.rayBias : -options.rayBias);
-        ray = makeRay(origin, bsdf.direction, 0.0, options.maxDistance);
+        if (result.pt.status == PATH_PT_RECORD_ATTEMPT && result.surfaceHits == 1u
+                && bsdf.lobe == BSDF_LOBE_DIFFUSE && !continuationAmbientOnly && !medium.inside) {
+            // The continuation the reservoir may own leaves now.  Everything the path adds from here on is its suffix.
+            ptArmed = true;
+            result.pt.direction = bsdf.direction;
+            result.pt.sourcePdf = bsdf.pdf;
+            result.pt.continuationWeight = throughput;
+            result.pt.radianceBefore = result.radiance;
+        }
+        ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
+        ambientOnlyPending = continuationAmbientOnly;
         // The new origin sits one bias off the interaction along the face; the segment starts there (the legacy path
         // ignored this offset too).
         mediumStart = 0.0;
@@ -581,6 +1035,17 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     if (!isFinite(result.radiance)) {
         result.radiance = float3(0.0);
         result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+    }
+    if (result.pt.status == PATH_PT_RECORD_VERTEX) {
+        // Taken before the clamp below, so subtracting it removes exactly what the suffix added.  A rejected sample keeps
+        // a zero suffix, and the stage refuses it as a candidate anyway.
+        float3 radianceSuffix = (result.flags & PATH_TRACE_FLAG_INVALID_SAMPLE) != 0u
+            ? float3(0.0) : max(result.radiance - result.pt.radianceBefore, float3(0.0));
+        result.pt.suffixContribution = radianceSuffix;
+        float3 weight = result.pt.continuationWeight;
+        result.pt.suffix = float3(weight.r > 0.0 ? radianceSuffix.r / weight.r : 0.0,
+            weight.g > 0.0 ? radianceSuffix.g / weight.g : 0.0,
+            weight.b > 0.0 ? radianceSuffix.b / weight.b : 0.0);
     }
     result.radiance = clampRadiance(result.radiance, options.maxRadiance);
     return result;

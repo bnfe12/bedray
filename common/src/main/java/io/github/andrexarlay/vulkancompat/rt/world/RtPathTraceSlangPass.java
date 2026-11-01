@@ -50,13 +50,27 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final String PASS_NAME = "path_trace";
     /** Native-scene twin of {@link #PASS_NAME}: same bindings, {@code GeometrySection} table and vertex stream. */
     static final String SCENE_PASS_NAME = "path_trace_scene";
+    /**
+     * The ReSTIR PT spatial stage, one program per traversal backend like the trace itself: the same bindings by number
+     * and the same push block, so it is recorded from this pass's own views and push bytes.
+     */
+    static final String PT_SPATIAL_PASS_NAME = "restir_pt_spatial";
+    static final String PT_SPATIAL_SCENE_PASS_NAME = "restir_pt_spatial_scene";
     static final int FRAME_CONSTANTS_BYTES = 608;
+    /** Mirrors {@code PATH_TRACE_MAX_SPP}: the ceiling of "Rays per Pixel", and the most rays one pixel may trace. */
+    static final int MAX_SAMPLES_PER_PIXEL = 8;
     static final int PUSH_BYTES = 112;
     static final int BLOCK_MATERIAL_BYTES = 64;
     /** {@code light/block_emitters.slang}: the RtEmitters record, six vec4. */
     static final int EMITTER_BYTES = 96;
     /** {@code restir/restir_di.slang}: one ReSTIR DI reservoir per pixel, pinned by {@code gradle/slang.gradle}. */
     static final int RESERVOIR_BYTES = 64;
+    /**
+     * {@code experimental/restir_pt.slang}: one {@code RestirPtReservoir} per pixel and parity half - the std430 layout
+     * the reflection measures (112 B path, 16 B stats, 16 B source), pinned by {@code gradle/slang.gradle}. The module
+     * claimed 112 B until the first host bound it; that was the packed payload, not the layout.
+     */
+    static final int PT_RESERVOIR_BYTES = 144;
     static final int SECTION_BYTES = 64;
     /** {@code traversal/entity_geometry.slang}: one float of a captured position or one texel of the entity atlas. */
     static final int ENTITY_SCALAR_BYTES = 4;
@@ -64,6 +78,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final int ENTITY_VECTOR_BYTES = 16;
     /** {@code rt_pack_nrd.comp}: one Vec4Buf element of NRD's IN_MV channel, four floats per render pixel. */
     static final int MOTION_ELEMENT_BYTES = 16;
+    /** One counter word of the stats slot the trace adds its F3 split into (binding 37, {@link RtStatsLayout#PATH_REJECTS}). */
+    static final int PATH_STATS_WORD_BYTES = 4;
     static final int THREAD_GROUP = 8;
 
     /** Optional device capabilities the generated manifest requires; see {@code bedray_core.h}. */
@@ -76,6 +92,46 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     /** {@code PathTracePush.flags}: the pass also writes NRD's world-space motion channel. Mirrors the shader bit. */
     static final int OPTION_NRD_MOTION = 2;
+
+    /**
+     * The effect set of the ray profile, mirroring {@code PATH_TRACE_OPTION_*} in {@code path_tracer.slang}. Absent
+     * bits are the full transport, so the path profile - which sets none of them - traces what it always traced.
+     */
+    static final int OPTION_NO_SPECULAR_BOUNCE = 4;
+    static final int OPTION_NO_DIFFUSE_BOUNCE = 8;
+    static final int OPTION_AMBIENT_ONLY_BOUNCE = 16;
+    static final int OPTION_NO_KEY_SHADOWS = 32;
+    static final int OPTION_HARD_KEY_SHADOWS = 64;
+
+    /**
+     * {@code PathTracePush.flags}: the primary receiver's shadow is evaluated once per world cell. Mirrors
+     * {@code PATH_TRACE_OPTION_PIXEL_SHADOWS}; bits 8..15 of the same word carry the cell size in texture pixels
+     * (1..16, one sixteenth of a block each), so the 112-byte push block did not have to grow a word.
+     */
+    static final int OPTION_PIXEL_SHADOWS = 128;
+
+    static final int PIXEL_SHADOW_SIZE_SHIFT = 8;
+    static final int PIXEL_SHADOW_MAX_SIZE = 16;
+
+    /**
+     * {@code PathTracePush.flags}: the host enabled block emitters for this frame. Mirrors
+     * {@code PATH_TRACE_OPTION_BLOCK_EMITTERS}; without it a receiver past the emitter list's reach keeps tracing the
+     * list instead of lighting from the vanilla block-light field, so the "RT Block Light" A/B stays exactly that.
+     */
+    static final int OPTION_BLOCK_EMITTERS = 1 << 16;
+
+    /**
+     * ReSTIR PT, mirroring {@code PATH_TRACE_OPTION_RESTIR_PT} and the {@code PATH_TRACE_PT_*} bits of
+     * {@code restir/pt_temporal.slang}: the first ray of a pixel hands its diffuse continuation to the path reservoir.
+     * The ring has its own parity and history bits because it does not need emitters - DI's copies are only written
+     * while DI runs - and its own camera bits for the same reason. The flag requires {@link #ptReservoirBytes} of ring.
+     */
+    static final int OPTION_RESTIR_PT = 1 << 17;
+    static final int PT_HISTORY = 1 << 18;
+    static final int PT_PARITY = 1 << 19;
+    static final int PT_STATIC = 1 << 20;
+    static final int PT_FLIP_Y = 1 << 21;
+    static final int PT_STATE_MASK = OPTION_RESTIR_PT | PT_HISTORY | PT_PARITY | PT_STATIC | PT_FLIP_Y;
 
     /** The seven denoiser guide images, in the order {@code gbufferViews()} hands them over. */
     record Guides(long viewZ, long normalRough, long diffuse, long albedo, long direct, long specular, long specAlbedo) {
@@ -130,7 +186,26 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         new Expected("outAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("outDirect", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
         new Expected("outSpecAlbedo", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE),
-        new Expected("outMotionBuffer", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        new Expected("outMotionBuffer", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("ptReservoirs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("outPathStats", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
+
+    /** The trace bindings the spatial stage reads: the first-edge visibility walk and the ring, nothing it would write. */
+    static final List<Expected> PT_SPATIAL_EXPECTED = List.of(
+        new Expected("tlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR),
+        new Expected("sections", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("albedoAtlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
+        new Expected("materialAtlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
+        new Expected("normalAtlas", BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
+        new Expected("frame", BedrayCoreLayouts.DESCRIPTOR_TYPE_UNIFORM_BUFFER),
+        new Expected("blockMaterials", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityPositions", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityIndices", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityAttrs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityRects", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityTexels", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("entityPrevious", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        new Expected("ptReservoirs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
 
     /** Scene inputs the host must supply: the frame TLAS and the section table written by {@link RtWorld}. */
     record Scene(long tlas, RtMemory.Buf sectionTable) {
@@ -226,8 +301,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
         final Vector4f zenithColor = new Vector4f();
         final Vector4f horizonColor = new Vector4f();
-        final Vector4f fogColor = new Vector4f();
-        final Vector4f fog = new Vector4f();
+        /** The sky as a light (AtmosphereState.skyLightZenith/Horizon); the two vectors above are the visible sky. */
+        final Vector4f skyLightZenith = new Vector4f();
+        final Vector4f skyLightHorizon = new Vector4f();
         final Vector4f cloud = new Vector4f();
 
         final Vector4f exposure = new Vector4f(1f, 0f, 0f, 0f); // x exposure, y bloom, z speed, w dt
@@ -243,6 +319,13 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
         /** Mirrors {@code FRAME_FLAG_CAMERA_IN_WATER}: the eye's own block is water. */
         static final int FLAG_CAMERA_IN_WATER = 1 << 5;
+
+        /**
+         * Mirrors {@code FRAME_FLAG_WATER_REALISTIC} and {@code FRAME_FLAG_WATER_CAUSTICS}: the player's water style
+         * and caustics switches, written from {@code RtFrameParams} so both path entries see one conversion.
+         */
+        static final int FLAG_WATER_REALISTIC = 1 << 6;
+        static final int FLAG_WATER_CAUSTICS = 1 << 7;
 
         void writeTo(ByteBuffer out) {
             int available = out.capacity() - out.position();
@@ -272,8 +355,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
             putVector(out, base + ATMOSPHERE, zenithColor);
             putVector(out, base + ATMOSPHERE + 16, horizonColor);
-            putVector(out, base + ATMOSPHERE + 32, fogColor);
-            putVector(out, base + ATMOSPHERE + 48, fog);
+            putVector(out, base + ATMOSPHERE + 32, skyLightZenith);
+            putVector(out, base + ATMOSPHERE + 48, skyLightHorizon);
             putVector(out, base + ATMOSPHERE + 64, cloud);
 
             putVector(out, base + EXPOSURE, exposure);
@@ -299,7 +382,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
 
     /**
      * The 112-byte push block of {@code passes/path_trace.slang}: path limits, sampling inputs, the emitter list of the
-     * frame, the ReSTIR DI temporal state and the entity ring of this frame. Exposure is not
+     * frame, the ReSTIR DI temporal state, the ray profile's bounce ranges and the entity ring of this frame. Exposure is not
      * here on purpose: the pass writes scene-referred radiance and the display step applies {@code FrameConstants.exposure}
      * exactly once.
      */
@@ -308,7 +391,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                     int emitterCount, float emitterProbability, float emitterCamRelX, float emitterCamRelY,
                     float emitterCamRelZ, int emitterCandidates,
                     float diCamDeltaX, float diCamDeltaY, float diCamDeltaZ, int diFlags, int diParity,
-                    int entityAtlasSize, int selfAvatarTriStart, int selfAvatarTriCount, float autoNormalStrength) {
+                    int entityAtlasSize, int selfAvatarTriStart, int selfAvatarTriCount, float autoNormalStrength,
+                    float emitterDistance, float diffuseDistance, float specularDistance) {
         Dispatch {
             if (maxDepth < 1) {
                 throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
@@ -359,6 +443,21 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             if (!(autoNormalStrength >= 0f) || !Float.isFinite(autoNormalStrength)) {
                 throw new IllegalArgumentException("auto-normal strength must be finite and >= 0, got " + autoNormalStrength);
             }
+            if (!Float.isFinite(emitterDistance) || !Float.isFinite(diffuseDistance)
+                || !Float.isFinite(specularDistance)) {
+                throw new IllegalArgumentException("the bounce distances must be finite, got "
+                    + emitterDistance + "/" + diffuseDistance + "/" + specularDistance);
+            }
+        }
+
+        /** The same dispatch with another option word: the backend fills the ReSTIR PT parity and history bits. */
+        Dispatch withFlags(int optionFlags) {
+            return new Dispatch(maxDepth, maxSurfaceSteps, sampleIndex, materialCount, optionFlags,
+                rayBias, alphaCutoff, maxDistance, maxRadiance, sunProbability,
+                emitterCount, emitterProbability, emitterCamRelX, emitterCamRelY, emitterCamRelZ, emitterCandidates,
+                diCamDeltaX, diCamDeltaY, diCamDeltaZ, diFlags, diParity,
+                entityAtlasSize, selfAvatarTriStart, selfAvatarTriCount, autoNormalStrength,
+                emitterDistance, diffuseDistance, specularDistance);
         }
 
         Dispatch withDiState(int diFlags, int diParity) {
@@ -366,7 +465,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
                 rayBias, alphaCutoff, maxDistance, maxRadiance, sunProbability,
                 emitterCount, emitterProbability, emitterCamRelX, emitterCamRelY, emitterCamRelZ, emitterCandidates,
                 diCamDeltaX, diCamDeltaY, diCamDeltaZ, diFlags, diParity,
-                entityAtlasSize, selfAvatarTriStart, selfAvatarTriCount, autoNormalStrength);
+                entityAtlasSize, selfAvatarTriStart, selfAvatarTriCount, autoNormalStrength,
+                emitterDistance, diffuseDistance, specularDistance);
         }
 
         void writeTo(ByteBuffer out) {
@@ -394,16 +494,26 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             out.putFloat(base + 64, diCamDeltaX);
             out.putFloat(base + 68, diCamDeltaY);
             out.putFloat(base + 72, diCamDeltaZ);
-            out.putInt(base + 76, 0);
+            // The three words the reservoir and DI state left reserved now carry the ray profile's bounce ranges; a
+            // dispatch that does not fill them (0) traces with the ray far plane exactly as before.
+            out.putFloat(base + 76, emitterDistance);
             out.putInt(base + 80, diFlags);
             out.putInt(base + 84, diParity);
-            out.putInt(base + 88, 0);
-            out.putInt(base + 92, 0);
+            out.putFloat(base + 88, diffuseDistance);
+            out.putFloat(base + 92, specularDistance);
             out.putInt(base + 96, entityAtlasSize);
             out.putInt(base + 100, selfAvatarTriStart);
             out.putInt(base + 104, selfAvatarTriCount);
             out.putFloat(base + 108, autoNormalStrength);
         }
+    }
+
+    /**
+     * Bytes of the ReSTIR PT ring at a render extent: two parity halves of one {@link #PT_RESERVOIR_BYTES} record per
+     * pixel - 597.2 MB at 1080p, which is why the switch is off by default.
+     */
+    static long ptReservoirBytes(int width, int height) {
+        return 2L * width * height * PT_RESERVOIR_BYTES;
     }
 
     /** True when this device runtime can register the pass: the AOT artifact exists and every required bit is enabled. */
@@ -453,8 +563,66 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         requireElementBytes(manifest, "entityTexels", ENTITY_SCALAR_BYTES);
         requireElementBytes(manifest, "entityPrevious", ENTITY_SCALAR_BYTES);
         requireElementBytes(manifest, "outMotionBuffer", MOTION_ELEMENT_BYTES);
+        requireElementBytes(manifest, "ptReservoirs", PT_RESERVOIR_BYTES);
+        requireElementBytes(manifest, "outPathStats", PATH_STATS_WORD_BYTES);
         if (radianceCascades) {
             RtRadianceCascadesContract.requireFieldBindings(manifest);
+        }
+    }
+
+    /**
+     * The spatial stage's manifest against what {@link #recordPtSpatial} binds: exactly the expected trace bindings, the
+     * trace's push block, and the same element sizes, so a record written by the trace is read with the same layout.
+     */
+    static void requirePtSpatialManifest(SlangPassManifest manifest) {
+        if (manifest.pushConstantBytes() != PUSH_BYTES) {
+            throw new IllegalStateException(manifest.name() + " pushes " + manifest.pushConstantBytes()
+                + " B, the trace push block is " + PUSH_BYTES + " B");
+        }
+        if (manifest.bindings().size() != PT_SPATIAL_EXPECTED.size()) {
+            throw new IllegalStateException(manifest.name() + " declares " + manifest.bindings().size()
+                + " binding(s), host supplies " + PT_SPATIAL_EXPECTED.size());
+        }
+        for (Expected want : PT_SPATIAL_EXPECTED) {
+            SlangPassManifest.Binding binding = manifest.binding(want.name());
+            if (binding == null) {
+                throw new IllegalStateException(manifest.name() + " has no '" + want.name() + "' binding");
+            }
+            if (binding.descriptorType() != want.descriptorType()) {
+                throw new IllegalStateException(manifest.name() + ": '" + want.name() + "' is "
+                    + BedrayCoreLayouts.descriptorTypeName(binding.descriptorType()) + ", host supplies "
+                    + BedrayCoreLayouts.descriptorTypeName(want.descriptorType()));
+            }
+        }
+        requireElementBytes(manifest, "frame", FRAME_CONSTANTS_BYTES);
+        requireElementBytes(manifest, "blockMaterials", BLOCK_MATERIAL_BYTES);
+        requireElementBytes(manifest, "entityPositions", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "entityIndices", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "entityAttrs", ENTITY_VECTOR_BYTES);
+        requireElementBytes(manifest, "entityRects", ENTITY_VECTOR_BYTES);
+        requireElementBytes(manifest, "entityTexels", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "entityPrevious", ENTITY_SCALAR_BYTES);
+        requireElementBytes(manifest, "ptReservoirs", PT_RESERVOIR_BYTES);
+    }
+
+    /** An optional program: absent from the jar or refused by its manifest check, the stage stays off and says why. */
+    static SlangProgram optionalPtSpatial(SlangRuntime runtime, String name) {
+        if (!SlangPassLibrary.available(name)) {
+            LOGGER.info("[VKB-RT] ReSTIR PT spatial stage off for {}: the jar has no artifact", name);
+            return null;
+        }
+        try {
+            SlangProgram spatial = runtime.program(name).orElse(null);
+            if (spatial == null) {
+                LOGGER.info("[VKB-RT] ReSTIR PT spatial stage off for {}: not registered", name);
+                return null;
+            }
+            requirePtSpatialManifest(spatial.manifest());
+            return spatial;
+        } catch (RuntimeException e) {
+            LOGGER.info("[VKB-RT] ReSTIR PT spatial stage off for {}: {}", name,
+                e.getMessage() == null ? e.toString() : e.getMessage());
+            return null;
         }
     }
 
@@ -474,10 +642,15 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private final SlangProgram program;
     /** Native-scene twin, or null when this jar was built without its artifact. */
     private final SlangProgram sceneProgram;
+    /** The ReSTIR PT spatial programs for the two tables; null when the jar lacks one or its manifest disagrees. */
+    private final SlangProgram ptSpatialProgram;
+    private final SlangProgram ptSpatialSceneProgram;
     private final BedrayGpuImagesNative nativeImages;
     private final BedrayGpuBuffersNative nativeBuffers;
     private final BedrayGpuBuffersNative.Buffer blockMaterials;
     private final BedrayGpuBuffersNative.Buffer reservoirDummy;
+    /** One RestirPtReservoir: the ReSTIR PT binding of a frame without the ring, which the stage then refuses. */
+    private final BedrayGpuBuffersNative.Buffer ptReservoirDummy;
     private final BedrayGpuBuffersNative.Buffer entityScalarDummy;
     private final BedrayGpuBuffersNative.Buffer entityVectorDummy;
     private final Set<Long> recordings = new LinkedHashSet<>();
@@ -493,6 +666,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     // The NRD motion channel is a vec4 per pixel; a zero element keeps the descriptor complete when the layout is not
     // NRD and PATH_TRACE_OPTION_NRD_MOTION stays clear.
     private BedrayGpuBuffersNative.Buffer motionDummy;
+    /** One word: the stats binding of a frame without a slot, which the shader refuses to write (shorter than 144 words). */
+    private BedrayGpuBuffersNative.Buffer pathStatsDummy;
     private int width;
     private int height;
     private boolean closed;
@@ -521,6 +696,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (sceneProgram != null) {
             requireManifest(sceneProgram);
         }
+        this.ptSpatialProgram = optionalPtSpatial(runtime, PT_SPATIAL_PASS_NAME);
+        this.ptSpatialSceneProgram = sceneProgram == null ? null : optionalPtSpatial(runtime, PT_SPATIAL_SCENE_PASS_NAME);
         long deviceBytes = runtime.capabilities().deviceMemoryBytes();
         long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 256L << 20;
         nativeImages = runtime.createImageOwner(imageBudget);
@@ -535,6 +712,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             // their bound lengths/counts and never indexes absent scene data.
             blockMaterials = zeroedBuffer(BLOCK_MATERIAL_BYTES);
             reservoirDummy = zeroedBuffer(RESERVOIR_BYTES);
+            ptReservoirDummy = zeroedBuffer(PT_RESERVOIR_BYTES);
             entityScalarDummy = zeroedBuffer(ENTITY_SCALAR_BYTES);
             entityVectorDummy = zeroedBuffer(ENTITY_VECTOR_BYTES);
             // One texel per guide format, owned by the pass: the core never reads them back, and the shader only
@@ -546,6 +724,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             guideDummyRGBA8 = nativeImages.create(1, 1, VK10.VK_FORMAT_R8G8B8A8_UNORM,
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT);
             motionDummy = zeroedBuffer(MOTION_ELEMENT_BYTES);
+            pathStatsDummy = zeroedBuffer(PATH_STATS_WORD_BYTES);
         } catch (RuntimeException | Error e) {
             nativeBuffers.close();
             nativeImages.close();
@@ -611,9 +790,16 @@ final class RtPathTraceSlangPass implements AutoCloseable {
      * that makes both outputs visible to their consumers.
      */
     void record(VkCommandBuffer cmd, Scene scene, Atlases atlases, Emitters emitters, Reservoirs reservoirs,
-                Entities entities, Guides guides, BufferView nrdMotion, long depthView, Frame frame, Dispatch dispatch) {
+                Reservoirs ptReservoirs, Entities entities, Guides guides, BufferView nrdMotion, long depthView,
+                BufferView pathStats, Frame frame, Dispatch dispatch) {
         if (closed) {
             throw new IllegalStateException("path trace pass is closed");
+        }
+        // The F3 split lands in words 140..143 of the frame's stats slot: a range that does not cover the whole slot
+        // would make the shader refuse it silently, which reads as n/a forever rather than as the host bug it is.
+        if (pathStats != null && pathStats.buffer() != 0L && pathStats.bytes() < RtStatsLayout.SLOT_STRIDE) {
+            throw new IllegalArgumentException("the stats slot holds " + pathStats.bytes() + " B, the trace writes up to "
+                + RtStatsLayout.SLOT_STRIDE + " B");
         }
         if (frame.width <= 0 || frame.height <= 0) {
             throw new IllegalArgumentException("frame size must be positive, got " + frame.width + "x" + frame.height);
@@ -664,6 +850,17 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (dispatch.diFlags() != 0 && (reservoirs == null || reservoirs.buffer() == 0L)) {
             throw new IllegalArgumentException("the push enables ReSTIR DI but no reservoir ring is bound");
         }
+        // The PT ring is addressed as two halves of the frame extent: a shorter ring would make the stage refuse every
+        // pixel (it checks the bound length), which is a silent off switch rather than an error, so it is refused here.
+        boolean wantsPt = (dispatch.flags() & OPTION_RESTIR_PT) != 0;
+        if (wantsPt && (ptReservoirs == null || ptReservoirs.buffer() == 0L
+            || ptReservoirs.bytes() < ptReservoirBytes(frame.width, frame.height))) {
+            throw new IllegalArgumentException("the push enables ReSTIR PT but no ring of "
+                + ptReservoirBytes(frame.width, frame.height) + " B is bound");
+        }
+        if (!wantsPt && (dispatch.flags() & PT_STATE_MASK) != 0) {
+            throw new IllegalArgumentException("ReSTIR PT state bits without OPTION_RESTIR_PT");
+        }
         // The push counts and the bound ranges have to agree: an entity hit is decoded by index into these buffers, so
         // naming a range the descriptor does not carry would read past the binding rather than past the scene.
         if (dispatch.selfAvatarTriCount() > 0 && (entities == null || entities.indices().bytes() == 0L)) {
@@ -683,9 +880,11 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         nativeImages.retain(cmd.address(), guideDummyRGBA8);
         nativeBuffers.retain(cmd.address(), blockMaterials);
         nativeBuffers.retain(cmd.address(), reservoirDummy);
+        nativeBuffers.retain(cmd.address(), ptReservoirDummy);
         nativeBuffers.retain(cmd.address(), entityScalarDummy);
         nativeBuffers.retain(cmd.address(), entityVectorDummy);
         nativeBuffers.retain(cmd.address(), motionDummy);
+        nativeBuffers.retain(cmd.address(), pathStatsDummy);
         // Both images are fully overwritten. Declaring their old contents
         // undefined on every recording also handles a discarded first recording.
         VkBarriers.transition(cmd, radiance.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
@@ -706,7 +905,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             // follows the table the host actually bound, not a global switch.
             SlangProgram active = activeProgram(scene);
             active.dispatch(cmd.address(), active.groups(width, 0), active.groups(height, 1), 1,
-                resources(scene, atlases, emitters, reservoirs, entities, boundGuides, boundMotion, depthView), push);
+                resources(scene, atlases, emitters, reservoirs, wantsPt ? ptReservoirs : Reservoirs.NONE, entities,
+                    boundGuides, boundMotion, depthView, pathStats), push);
         }
         VkBarriers.fullMemoryBarrier(cmd);
     }
@@ -723,6 +923,64 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         return SlangProgram.Resource.uniformBuffer("frame", frameConstants.handle(), 0, FRAME_CONSTANTS_BYTES);
     }
 
+    /** True when the spatial stage has a program for the table this frame traced. */
+    boolean ptSpatialAvailable(Scene scene) {
+        return (scene.nativeScene() ? ptSpatialSceneProgram : ptSpatialProgram) != null;
+    }
+
+    /**
+     * Records the ReSTIR PT spatial stage right after {@link #record}: the same table, atlases, entities, frame block and
+     * push word, so the first edges it re-traces are walked exactly as the trace walked them and
+     * {@code PATH_TRACE_PT_PARITY} names the half the trace wrote. {@link #record} ended with a full barrier, so the ring
+     * is readable; the trailing barrier makes the other half visible to the next frame's import.
+     */
+    void recordPtSpatial(VkCommandBuffer cmd, Scene scene, Atlases atlases, Reservoirs ptReservoirs, Entities entities,
+                         Frame frame, Dispatch dispatch) {
+        if (closed) {
+            throw new IllegalStateException("path trace pass is closed");
+        }
+        SlangProgram spatial = scene.nativeScene() ? ptSpatialSceneProgram : ptSpatialProgram;
+        if (spatial == null) {
+            throw new IllegalStateException("the ReSTIR PT spatial stage has no program for this table");
+        }
+        if ((dispatch.flags() & OPTION_RESTIR_PT) == 0) {
+            throw new IllegalArgumentException("the spatial stage pools the temporal stage's records: OPTION_RESTIR_PT is clear");
+        }
+        if (ptReservoirs == null || ptReservoirs.buffer() == 0L
+            || ptReservoirs.bytes() < ptReservoirBytes(frame.width, frame.height)) {
+            throw new IllegalArgumentException("the spatial stage needs the ring of "
+                + ptReservoirBytes(frame.width, frame.height) + " B the trace wrote");
+        }
+        if (frameConstants == null || frameRecording != cmd.address()) {
+            throw new IllegalStateException("the spatial stage records after this frame's trace, in its command buffer");
+        }
+        Entities captured = entities == null ? Entities.NONE : entities;
+        RtMemory.Buf table = scene.sectionTable();
+        List<SlangProgram.Resource> resources = List.of(
+            SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
+            SlangProgram.Resource.storageBuffer("sections", table.handle, 0, table.size),
+            SlangProgram.Resource.sampled("albedoAtlas", atlases.albedoView(), atlases.sampler()),
+            SlangProgram.Resource.sampled("materialAtlas", atlases.materialView(), atlases.sampler()),
+            SlangProgram.Resource.sampled("normalAtlas", atlases.normalView(), atlases.sampler()),
+            frameResource(),
+            SlangProgram.Resource.storageBuffer("blockMaterials", blockMaterials.handle(), 0, BLOCK_MATERIAL_BYTES),
+            entityBuffer("entityPositions", captured.positions(), entityScalarDummy),
+            entityBuffer("entityIndices", captured.indices(), entityScalarDummy),
+            entityBuffer("entityAttrs", captured.attrs(), entityVectorDummy),
+            entityBuffer("entityRects", captured.rects(), entityVectorDummy),
+            entityBuffer("entityTexels", captured.texels(), entityScalarDummy),
+            entityBuffer("entityPrevious", captured.previous(), entityScalarDummy),
+            SlangProgram.Resource.storageBuffer("ptReservoirs", ptReservoirs.buffer(), 0L, ptReservoirs.bytes()));
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer push = stack.malloc(PUSH_BYTES);
+            dispatch.writeTo(push);
+            recordings.add(cmd.address());
+            spatial.dispatch(cmd.address(), spatial.groups(frame.width, 0), spatial.groups(frame.height, 1), 1,
+                resources, push);
+        }
+        VkBarriers.fullMemoryBarrier(cmd);
+    }
+
     private SlangProgram activeProgram(Scene scene) {
         if (!scene.nativeScene()) {
             return program;
@@ -735,8 +993,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     }
 
     private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters,
-                                                   Reservoirs reservoirs, Entities entities, Guides guides,
-                                                   BufferView nrdMotion, long depthView) {
+                                                   Reservoirs reservoirs, Reservoirs ptReservoirs, Entities entities,
+                                                   Guides guides, BufferView nrdMotion, long depthView,
+                                                   BufferView pathStats) {
         RtMemory.Buf table = scene.sectionTable();
         // An empty list still needs a descriptor. The dummy table is 64 B, so the fallback range is clamped to it: the
         // shader never indexes past pc.emitterCount, which is 0 for exactly this case.
@@ -749,6 +1008,12 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         long reservoirBuffer = reservoirs != null && reservoirs.buffer() != 0L
             ? reservoirs.buffer() : reservoirDummy.handle();
         long reservoirBytes = reservoirBuffer == reservoirDummy.handle() ? RESERVOIR_BYTES : reservoirs.bytes();
+        // The ReSTIR PT ring, or its one-record stand-in: the stage reads the bound length and turns itself off for a ring
+        // shorter than two halves of the frame, so the stand-in can never be written past.
+        boolean ptRing = ptReservoirs != null && ptReservoirs.buffer() != 0L;
+        SlangProgram.Resource ptResource = SlangProgram.Resource.storageBuffer("ptReservoirs",
+            ptRing ? ptReservoirs.buffer() : ptReservoirDummy.handle(), 0L,
+            ptRing ? ptReservoirs.bytes() : PT_RESERVOIR_BYTES);
         Entities captured = entities == null ? Entities.NONE : entities;
         return List.of(
             SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
@@ -776,7 +1041,20 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             guideImage("outAlbedo", guides == null ? 0L : guides.albedo(), guideDummyRGBA8),
             guideImage("outDirect", guides == null ? 0L : guides.direct(), guideDummyRGBA16F),
             guideImage("outSpecAlbedo", guides == null ? 0L : guides.specAlbedo(), guideDummyRGBA8),
-            motionBuffer(nrdMotion, motionDummy));
+            motionBuffer(nrdMotion, motionDummy),
+            ptResource,
+            pathStatsBuffer(pathStats, pathStatsDummy));
+    }
+
+    /**
+     * The frame's whole stats slot, bound at the slot's own offset (64-byte aligned, unlike the block inside it), or the
+     * pass's one-word stand-in, which {@code pathTraceCountRejects} refuses to write.
+     */
+    private static SlangProgram.Resource pathStatsBuffer(BufferView view, BedrayGpuBuffersNative.Buffer dummy) {
+        if (view == null || view.buffer() == 0L || view.bytes() <= 0L) {
+            return SlangProgram.Resource.storageBuffer("outPathStats", dummy.handle(), 0L, dummy.size());
+        }
+        return SlangProgram.Resource.storageBuffer("outPathStats", view.buffer(), view.offset(), RtStatsLayout.SLOT_STRIDE);
     }
 
     /**
@@ -884,6 +1162,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             guideDummyRGBA8 = null;
         }
         motionDummy = null;
+        pathStatsDummy = null;
         nativeBuffers.close();
         nativeImages.close();
         closed = true;

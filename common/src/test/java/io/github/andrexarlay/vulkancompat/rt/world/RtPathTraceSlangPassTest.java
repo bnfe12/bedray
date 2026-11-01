@@ -30,7 +30,7 @@ class RtPathTraceSlangPassTest {
         frame.displayWidth = 2560;
         frame.displayHeight = 1440;
         frame.sunColor.set(9f, 10f, 11f, 12f);
-        frame.fog.set(13f, 14f, 15f, 16f);
+        frame.skyLightHorizon.set(13f, 14f, 15f, 16f);
         frame.exposure.set(17f, 18f, 19f, 20f);
         frame.autoExposure = 1;
         frame.frameIndex = 42;
@@ -52,6 +52,9 @@ class RtPathTraceSlangPassTest {
         assertEquals(17f, out.getFloat(RtPathTraceSlangPass.Frame.EXPOSURE), "ExposureState.values at 560");
         assertEquals(1, out.getInt(RtPathTraceSlangPass.Frame.EXPOSURE + 16), "ExposureState.mode.x at 576");
         assertEquals(42, out.getInt(RtPathTraceSlangPass.Frame.FRAME), "FrameConstants.frame.x at 592");
+        assertEquals(3, out.getInt(RtPathTraceSlangPass.Frame.FRAME + 4), "frame sample index at 596");
+        assertEquals(2, out.getInt(RtPathTraceSlangPass.Frame.FRAME + 8),
+            "frame samples per frame at 600 - the word pathTraceSampleCount reads");
         assertEquals(0x15, out.getInt(RtPathTraceSlangPass.Frame.FRAME + 12), "frame flags at 604");
         assertEquals(RtPathTraceSlangPass.FRAME_CONSTANTS_BYTES, out.capacity());
     }
@@ -67,7 +70,7 @@ class RtPathTraceSlangPassTest {
     void pushBlockKeepsTheSlangLayout() {
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(
             8, 32, 5, 0, 0x21, 0.01f, 0.5f, 512f, 1000f, 0.75f, 64, 0.5f, 1.5f, -2.25f, 0.75f, 8,
-            0.25f, -0.5f, 1.75f, 0b1011, 1, 2048, 120, 24, 1.75f);
+            0.25f, -0.5f, 1.75f, 0b1011, 1, 2048, 120, 24, 1.75f, 37.5f, 64f, 128f);
         ByteBuffer out = ByteBuffer.allocate(RtPathTraceSlangPass.PUSH_BYTES);
         dispatch.writeTo(out);
 
@@ -90,11 +93,11 @@ class RtPathTraceSlangPassTest {
         assertEquals(0.25f, out.getFloat(64), "diCameraDelta.x at 64");
         assertEquals(-0.5f, out.getFloat(68), "diCameraDelta.y at 68");
         assertEquals(1.75f, out.getFloat(72), "diCameraDelta.z at 72");
-        assertEquals(0, out.getInt(76), "diCameraDelta.w is the reserved lane");
+        assertEquals(37.5f, out.getFloat(76), "diCameraDelta.w carries the emitter collection range");
         assertEquals(0b1011, out.getInt(80), "diState.x at 80");
         assertEquals(1, out.getInt(84), "diState.y (parity) at 84");
-        assertEquals(0, out.getInt(88), "diState.z is a reserved lane");
-        assertEquals(0, out.getInt(92), "diState.w is a reserved lane");
+        assertEquals(64f, out.getFloat(88), "diState.z carries the diffuse bounce far plane");
+        assertEquals(128f, out.getFloat(92), "diState.w carries the specular bounce far plane");
         assertEquals(2048, out.getInt(96), "entityState.x (atlas texels per side) at 96");
         assertEquals(120, out.getInt(100), "entityState.y (first self-avatar triangle) at 100");
         assertEquals(24, out.getInt(104), "entityState.z (self-avatar triangle count) at 104");
@@ -129,10 +132,10 @@ class RtPathTraceSlangPassTest {
     void autoNormalStrengthMustBeFiniteAndNonNegative() {
         assertThrows(IllegalArgumentException.class, () -> new RtPathTraceSlangPass.Dispatch(
             8, 32, 0, 0, 0, 0.01f, 0.1f, 100f, 1000f, 0.5f, 0, 0f, 0f, 0f, 0f, 8,
-            0f, 0f, 0f, 0, 0, 0, 0, 0, Float.NaN));
+            0f, 0f, 0f, 0, 0, 0, 0, 0, Float.NaN, 0f, 0f, 0f));
         assertThrows(IllegalArgumentException.class, () -> new RtPathTraceSlangPass.Dispatch(
             8, 32, 0, 0, 0, 0.01f, 0.1f, 100f, 1000f, 0.5f, 0, 0f, 0f, 0f, 0f, 8,
-            0f, 0f, 0f, 0, 0, 0, 0, 0, -0.1f));
+            0f, 0f, 0f, 0, 0, 0, 0, 0, -0.1f, 0f, 0f, 0f));
     }
 
     @Test
@@ -182,7 +185,8 @@ class RtPathTraceSlangPassTest {
                                                           int avatarTriCount) {
         return new RtPathTraceSlangPass.Dispatch(depth, steps, 0, 0, 0, 0.01f, alphaCutoff, maxDistance, maxRadiance,
             sunProbability, emitterCount, emitterProbability, 0f, 0f, 0f, emitterCandidates,
-            diDeltaX, diDeltaY, diDeltaZ, diFlags, diParity, entityAtlasSize, avatarTriStart, avatarTriCount, 1f);
+            diDeltaX, diDeltaY, diDeltaZ, diFlags, diParity, entityAtlasSize, avatarTriStart, avatarTriCount, 1f,
+            0f, 0f, 0f);
     }
 
     @Test
@@ -228,6 +232,9 @@ class RtPathTraceSlangPassTest {
             "one atlas slot: rect and authored PBR");
         assertEquals(RtPathTraceSlangPass.ENTITY_SCALAR_BYTES, manifest.binding("entityTexels").elementBytes(),
             "one packed texel of the RT entity atlas");
+        assertEquals(RtPathTraceSlangPass.PT_RESERVOIR_BYTES, manifest.binding("ptReservoirs").elementBytes(),
+            "RestirPtReservoir: the 112-byte path, stats and source, std430");
+        assertEquals(36, manifest.binding("ptReservoirs").binding(), "the PT ring sits above the RC field bindings 34/35");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[0], "group x");
         assertEquals(RtPathTraceSlangPass.THREAD_GROUP, manifest.threadGroupSize()[1], "group y");
     }

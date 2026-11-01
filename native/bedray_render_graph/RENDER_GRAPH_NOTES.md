@@ -526,7 +526,8 @@ Live-validation gap: none of this has been executed against a real Vulkan
 driver, a real device, Minecraft, Sodium, a denoiser or an upscaler. The adapter
 records only images in a limited layout set, uses broad barriers, supports one
 queue, does not prove aliasing safety, and is not wired into the Java frame
-path. The frame scheduler is not constructed by `core.cpp`; its serials are
-host-supplied and unverified by this module, and its slots do not allocate GPU
-memory. The core DLL still exposes ABI v2 only. GPU performance and correctness
-remain unmeasured.
+path. The frame scheduler is constructed by `core.cpp` through
+`FrameGraphOwner` for the native path-trace group; its frame serials come from
+the owner's own counter and are still not verified by this module, and its slots
+do not allocate GPU memory. The core DLL still exposes ABI v2 only. GPU
+performance and correctness remain unmeasured.

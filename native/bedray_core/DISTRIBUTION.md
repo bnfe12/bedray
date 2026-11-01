@@ -24,6 +24,11 @@ the C++/Slang renderer is still not verified in game. Build and installation
 evidence does not prove live rendering correctness.
 
 The GPU scene (`native/bedray_scene`) is a separate CMake project and a second
-DLL. `buildBedrayScene` configures and builds it, and both distribution tasks
-copy `bedray_scene.dll` next to `bedray_core.dll`; `BedraySceneLocator` resolves
-it from `<gameDir>/bedray/natives`, so the pair is installed together.
+DLL. `buildBedrayScene` configures and builds it, but neither distribution task
+depends on it: they stage `bedray_core.dll` and the loader JAR only. The task was
+read on 2026-10-30 - `fabricBedrayDistribution`/`neoforgeBedrayDistribution` copy
+`nativeDll` plus the combined JAR into `build/bedray-distribution/<loader>/`, and
+nothing else. `BedraySceneLocator` resolves `bedray_scene.dll` from
+`<gameDir>/bedray/natives`, so that file has to be built and installed by hand
+beside the pair the task produces; an instance that gets only the task's output
+runs with the scene builder missing.

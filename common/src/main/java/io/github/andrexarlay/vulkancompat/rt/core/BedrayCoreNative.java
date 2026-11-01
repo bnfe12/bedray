@@ -51,10 +51,14 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle renderPhasesHandle;
     private final MethodHandle configurePathTraceHandle;
     private final MethodHandle renderPathTraceHandle;
+    private final MethodHandle recordPathTraceStatsHandle;
+    private final MethodHandle renderFgPrepareHandle;
     private final MethodHandle renderPathTraceGuidesHandle;
     private final MethodHandle renderPathTraceMotionHandle;
     private final MethodHandle destroyPathTraceHandle;
     private final MethodHandle pathTraceFeatureMaskHandle;
+    private final MethodHandle configurePathTracePtHandle;
+    private final MethodHandle renderPathTraceExtHandle;
 
     /** Values reported by {@code bedray_core_abi_info}. */
     public record AbiInfo(int abiVersion, int sizeofCoreDesc, int sizeofCapabilities, int sizeofProgramDesc,
@@ -115,6 +119,11 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            recordPathTraceStatsHandle = bindOptional(linker, lookup, "bedray_core_record_path_trace_stats",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT,
+                    ADDRESS));
+            renderFgPrepareHandle = bindOptional(linker, lookup, "bedray_core_render_fg_prepare",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceGuidesHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_guides",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             renderPathTraceMotionHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_motion",
@@ -123,6 +132,10 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS));
             pathTraceFeatureMaskHandle = bindOptional(linker, lookup, "bedray_core_path_trace_feature_mask",
                 FunctionDescriptor.of(JAVA_INT));
+            configurePathTracePtHandle = bindOptional(linker, lookup, "bedray_core_configure_path_trace_pt",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS));
+            renderPathTraceExtHandle = bindOptional(linker, lookup, "bedray_core_render_path_trace_ext",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
         } catch (RuntimeException | Error e) {
             arena.close();
             throw e;
@@ -480,17 +493,17 @@ public final class BedrayCoreNative implements AutoCloseable {
      */
     public void configurePathTrace(long core, long programTrace, long programSpatial, long programDisplay,
                                    long imageBudgetBytes, long bufferBudgetBytes, int width, int height) {
-        configurePathTrace(core, programTrace, 0L, programSpatial, programDisplay,
+        configurePathTrace(core, programTrace, 0L, programSpatial, programDisplay, 0L,
             imageBudgetBytes, bufferBudgetBytes, width, height);
     }
 
     /**
-     * Configures the native pass with registered program handles. Scene/spatial programs may be zero.
+     * Configures the native pass with registered program handles. Scene/spatial/stats programs may be zero.
      * The pass owns private images, uploads and dummies and only records into host command buffers.
      */
     public void configurePathTrace(long core, long programTrace, long programTraceScene, long programSpatial,
-                                   long programDisplay, long imageBudgetBytes, long bufferBudgetBytes,
-                                   int width, int height) {
+                                   long programDisplay, long programStats, long imageBudgetBytes,
+                                   long bufferBudgetBytes, int width, int height) {
         ensureOpen();
         requireHandle(core, "core");
         requirePathTrace();
@@ -514,6 +527,8 @@ public final class BedrayCoreNative implements AutoCloseable {
             desc.set(JAVA_INT, BedrayCoreLayouts.PTD_HEIGHT, height);
             // Zero keeps every frame on the legacy section table.
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_TRACE_SCENE, programTraceScene);
+            // Zero leaves the pass without a counter writer; the host then reports the counters as unmeasured.
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_STATS, programStats);
             MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
             int status = (int) configurePathTraceHandle.invokeExact(handle(core), desc, error);
             check("configure_path_trace", status, error);
@@ -543,6 +558,63 @@ public final class BedrayCoreNative implements AutoCloseable {
             check("render_path_trace", status, error);
         } catch (Throwable t) {
             throw rethrow("render_path_trace", t);
+        }
+    }
+
+    /**
+     * Records the counter pass over the pass's own radiance and accumulation images, the host depth view and a
+     * sixteen-byte range of the host statistics buffer. Call it after {@link #renderPathTrace} for the same command
+     * buffer; the accumulation half read is the one that frame's display step wrote.
+     */
+    public void recordPathTraceStats(long core, long commandBuffer, long statsBuffer, long statsOffset,
+                                     long statsBytes, int frameIndex) {
+        ensureOpen();
+        requireHandle(core, "core");
+        requireHandle(commandBuffer, "commandBuffer");
+        requireHandle(statsBuffer, "statsBuffer");
+        if (recordPathTraceStatsHandle == null) {
+            throw new BedrayCoreException("record_path_trace_stats", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+                "the loaded bedray_core has no frame-stats export", null);
+        }
+        if (statsOffset < 0 || statsBytes < 16) {
+            throw new IllegalArgumentException("the counter head is a 16-byte range of this frame's slot");
+        }
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) recordPathTraceStatsHandle.invokeExact(handle(core), commandBuffer, statsBuffer,
+                statsOffset, statsBytes, frameIndex, error);
+            check("record_path_trace_stats", status, error);
+        } catch (Throwable t) {
+            throw rethrow("record_path_trace_stats", t);
+        }
+    }
+
+    /** True when the loaded DLL carries the additive frame-generation producer export. */
+    public boolean hasFgPrepare() {
+        return renderFgPrepareHandle != null;
+    }
+
+    /**
+     * Records the frame-generation input preparation through the core: it owns the flipped blit, the compute
+     * dispatch and the barriers, and the host images stay in GENERAL. {@code desc} holds a
+     * {@link BedrayCoreLayouts#FG_PREPARE_DESC}; the descriptor is read synchronously.
+     */
+    public void renderFgPrepare(long core, MemorySegment desc) {
+        ensureOpen();
+        requireHandle(core, "core");
+        if (renderFgPrepareHandle == null) {
+            throw new BedrayCoreException("render_fg_prepare", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+                "the loaded bedray_core has no frame-generation producer export", null);
+        }
+        if (desc == null || !desc.isNative() || desc.byteSize() < BedrayCoreLayouts.FG_PREPARE_DESC.byteSize()) {
+            throw new IllegalArgumentException("desc must hold a BedrayFgPrepareFrameDesc");
+        }
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
+            int status = (int) renderFgPrepareHandle.invokeExact(handle(core), desc, error);
+            check("render_fg_prepare", status, error);
+        } catch (Throwable t) {
+            throw rethrow("render_fg_prepare", t);
         }
     }
 
@@ -604,6 +676,60 @@ public final class BedrayCoreNative implements AutoCloseable {
     /** True when the loaded core accepts and maps the camera-medium frame bit; an older core would reject the frame. */
     public boolean hasCameraInWaterFlag() {
         return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_CAMERA_IN_WATER);
+    }
+
+    /** True when the loaded core accepts and maps both water switches; an older core would reject the frame. */
+    public boolean hasWaterModelFlags() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_WATER_MODEL);
+    }
+
+    /**
+     * True when the loaded core both advertises the counter pass and exports the call that records it. Without either,
+     * the native backend writes no counters and the host reports them as unmeasured rather than as zero.
+     */
+    public boolean hasFrameStats() {
+        return recordPathTraceStatsHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_FRAME_STATS);
+    }
+
+    /** True when the core owns a ReSTIR PT ring ({@code NATIVE_PT}) and exports the call that lends its spatial stage. */
+    public boolean hasNativePt() {
+        return configurePathTracePtHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_PT);
+    }
+
+    /** True when the trace can add its F3 reject split into the host's StatsBuf slot ({@code render_path_trace_ext}). */
+    public boolean hasStatsSlot() {
+        return renderPathTraceExtHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_STATS_SLOT);
+    }
+
+    /** Lends the ReSTIR PT spatial stage per section table; 0 leaves that table without it. */
+    public void configurePathTracePt(long core, long programPtSpatial, long programPtSpatialScene) {
+        ensureOpen(); requireHandle(core, "core");
+        if (!hasNativePt()) throw new BedrayCoreException("configure_path_trace_pt", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+            "the loaded bedray_core owns no ReSTIR PT ring", null);
+        try (Arena arena = Arena.ofConfined()) {
+            var error = arena.allocate(BedrayCoreLayouts.ERROR);
+            check("configure_path_trace_pt", (int) configurePathTracePtHandle.invokeExact(handle(core),
+                programPtSpatial, programPtSpatialScene, error), error);
+        } catch (Throwable failure) { throw rethrow("configure_path_trace_pt", failure); }
+    }
+
+    /**
+     * One render call for every output combination: {@code guides} and {@code motion} as for the guide/motion calls,
+     * {@code statsSlot} a {@link BedrayCoreLayouts#PT_BUFFER} over the frame's whole StatsBuf slot. Null skips one.
+     */
+    public void renderPathTraceExt(long core, MemorySegment frame, MemorySegment guides, MemorySegment motion,
+                                   MemorySegment statsSlot) {
+        ensureOpen(); requireHandle(core, "core"); requirePathTrace();
+        if (!hasStatsSlot()) throw new BedrayCoreException("render_path_trace_ext", BedrayCoreLayouts.STATUS_UNSUPPORTED,
+            "the loaded bedray_core has no render_path_trace_ext", null);
+        if (frame == null || !frame.isNative() || frame.byteSize() < BedrayCoreLayouts.PT_FRAME_DESC.byteSize())
+            throw new IllegalArgumentException("a native BedrayPathTraceFrameDesc is required");
+        try (Arena arena = Arena.ofConfined()) {
+            var error = arena.allocate(BedrayCoreLayouts.ERROR);
+            check("render_path_trace_ext", (int) renderPathTraceExtHandle.invokeExact(handle(core), frame,
+                guides == null ? MemorySegment.NULL : guides, motion == null ? MemorySegment.NULL : motion,
+                statsSlot == null ? MemorySegment.NULL : statsSlot, error), error);
+        } catch (Throwable failure) { throw rethrow("render_path_trace_ext", failure); }
     }
 
     public void renderPathTraceMotion(long core, MemorySegment frame, MemorySegment guides, MemorySegment motion) {

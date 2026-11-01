@@ -15,7 +15,8 @@ ordinary native path remains opt-in pending owner live acceptance.
 ## Mapping and transport
 
 Five levels share one raw-camera-relative center. A fresh field is built per
-recording; there is no temporal field history or independently snapped grid.
+recording and blended with the previous consecutive recording's field (see
+"Temporal reuse" below); there is no independently snapped grid.
 At level c, spacing is 2^c, allocated axis is max(1,N>>c)+2, and angular side
 is 2^c on each of six cubemap faces. Each angular cell has four nested children.
 The corner winding and face mapping live in field_mapping.slang. Spherical
@@ -60,8 +61,36 @@ RC_OUTSIDE diagnostic. A required unresolved field sets RC_UNRESOLVED; the
 sample is excluded from accumulation, separately from non-finite faults.
 RC_FINITE_WINDOW and RC_TERMINAL distinguish a bounded estimate from one whose
 surviving transport is known. A terminal bounded miss is not proof of open sky.
-No environment is inserted without a real boundary provider. No field temporal
-reuse is implemented or advertised.
+No environment is inserted without a real boundary provider.
+
+## Temporal reuse (2026-10-31)
+
+The lattice is fixed relative to the raw camera and the angular cells to the world
+axes, so the previous recording's field is the same lattice displaced by the camera
+move. After a cell is reconstructed, `rcFieldBlendHistory` reads the previous field at
+the same level and ray at `probe + history.xyz` (this raw camera minus the history's,
+the host's `di_camera_delta`) by the trilinear weights of its eight neighbours and
+blends `L = lerp(L_now, L_then, w)`, `T = lerp(T_now, T_then, w)`, confidence the
+minimum. Each level is blended before the next finer level reads it. All-or-nothing
+like every other RC read: an unresolved cell stays unresolved, and an unresolved or
+out-of-lattice history neighbour drops the history for that cell.
+
+The native owner decides `w` (`kRCFieldHistoryWeight` = 0.8, an exponential mean of
+about five frames; variance of independent frame noise falls to `(1-w)/(1+w)` = 0.11).
+It is 0 - the field without reuse - on the first frame, on
+`BEDRAY_PATH_TRACE_FRAME_RESET_HISTORY`, when the frame index is not the history's
+plus one, for a non-finite move, and after any recording that failed or was
+discarded: that recording never runs, so its tails were never written. The tails of
+the last successful recording stay alive (not retired) and are bound at builder
+binding 38 to the next one, which pins them until its own proof; they are retired
+when a newer field replaces them. The extra memory is one tails buffer (2.2 / 4.7 /
+20.9 MB for N = 8 / 16 / 32) inside the same 192 MiB budget. The legacy float4
+resolve is not wired to the typed atlas.
+
+Approximations: a moving camera reads the history by trilinear interpolation of
+`L`/`T` between probes, which blurs by up to one probe spacing per level; a lighting
+change (sun, emitters) reaches the field with the lag of the exponential mean; the
+weight is fixed, not adapted to motion or confidence.
 
 This is a discretized cone estimator with bent bridge paths. It is not an exact
 shifted straight-ray integral, an infinite-range GI solution or a measured
@@ -73,8 +102,9 @@ solver.
 
 The additive BedrayRCDesc is 32 bytes. Existing ABI-v2 layouts and render calls
 stay unchanged. PathTracePass recognizes only the native 28-binding RC variant;
-34 is a 272-byte metadata UBO and 35 a 32-byte-per-cell tail buffer. The builder
-uses 16 bindings, an 80-byte reflected push block and 64 threads. The native
+34 is a 288-byte metadata UBO (272 until the 16-byte `history` block was added) and
+35 a 32-byte-per-cell tail buffer. The builder uses 17 bindings (38: the previous
+field's tails), an 80-byte reflected push block and 64 threads. The native
 owner records five dependent dispatches and their barriers before primary
 tracing. The existing opaque graph node owns this complete chain; no second
 barrier/history authority is introduced.

@@ -38,8 +38,8 @@ struct SunState {
 struct AtmosphereState {
     float4 zenithColor;     // rgb: zenith radiance, w: intensity
     float4 horizonColor;    // rgb: horizon radiance, w: intensity
-    float4 fogColor;        // rgb: fog in-scattering, w: reserved
-    float4 fog;             // x: density, y: distance, z: height falloff, w: mode
+    float4 skyLightZenith;  // rgb: the sky as a light at the zenith (what a bounce receives), w: intensity
+    float4 skyLightHorizon; // rgb: the sky as a light at the horizon, w: intensity
     float4 cloud;           // x: coverage, y: speed, z: base height, w: reserved
 };
 
@@ -60,6 +60,14 @@ static const uint FRAME_FLAG_DEBUG_VIEW         = 1u << 4u;
 // The eye's own block is water.  No surface crossing produced it, so a path that starts here starts inside the medium and
 // cannot learn it from geometry: the water surface above can be hidden by a block submerged in the same body.
 static const uint FRAME_FLAG_CAMERA_IN_WATER    = 1u << 5u;
+// The player's two water switches, as the host read them from the settings screen.  Neither changes what the medium IS:
+// absorption, refraction and the beam the light takes are the same with either, because a body of water does not become
+// air because a slider moved.  STYLE changes only the wave field - realistic takes it as computed, vanilla keeps the
+// same ripples damped toward the flat sheet - and CAUSTICS changes only whether the waves focus the beam.  A frame
+// from a host that predates both bits therefore reads as the calm end of each switch: damped waves, no gathering.  It
+// is a look, not a different body of water.
+static const uint FRAME_FLAG_WATER_REALISTIC    = 1u << 6u;
+static const uint FRAME_FLAG_WATER_CAUSTICS     = 1u << 7u;
 
 struct FrameConstants {
     CameraState     camera;
@@ -83,4 +91,14 @@ float frameDeltaTime(FrameConstants frame) {
 // Whether the host put the eye inside a water body this frame.
 bool frameCameraInWater(FrameConstants frame) {
     return (frame.frame.w & FRAME_FLAG_CAMERA_IN_WATER) != 0u;
+}
+
+// Whether the player asked for the wave field at full strength or damped toward the flat sheet.  The name says what the
+// shader does with the switch; the switch itself is the water style, and the medium model does not depend on it.
+bool frameWaterRealisticWaves(FrameConstants frame) {
+    return (frame.frame.w & FRAME_FLAG_WATER_REALISTIC) != 0u;
+}
+
+bool frameWaterCaustics(FrameConstants frame) {
+    return (frame.frame.w & FRAME_FLAG_WATER_CAUSTICS) != 0u;
 }

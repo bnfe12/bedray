@@ -9,10 +9,11 @@ static const uint RC_FIELD_TERMINAL_KNOWN = 1u << 16u;
 struct RCFieldConstants {
     uint4 header;       // version, levels, base core axis, total tail records
     uint4 counts[5];    // allocated axis, angular side, probe count, tail offset
-    float4 origins[5];  // first probe xyz, spacing; one shared center, no history
+    float4 origins[5];  // first probe xyz, spacing; one shared center, fixed relative to the raw camera
     float4 ranges[5];   // near radius, far radius, reserved zero
     uint4 tag;          // frame index, reserved zero
-};                      // 272 bytes
+    float4 history;     // xyz: this raw camera minus the history field's, w: history weight (0 = none)
+};                      // 288 bytes
 
 bool rcFieldMetadataValid(RCFieldConstants f) {
     if (f.header.x != RC_FIELD_VERSION || f.header.y != RC_FIELD_LEVELS
@@ -29,7 +30,8 @@ bool rcFieldMetadataValid(RCFieldConstants f) {
             || any(f.ranges[c] != float4(4.0 * spacing, 8.0 * spacing, 0.0, 0.0))) return false;
         offset += axis * axis * axis * 6u * side * side;
     }
-    return f.header.w == offset && all(f.tag.yzw == uint3(0u));
+    return f.header.w == offset && all(f.tag.yzw == uint3(0u))
+        && isFinite(f.history.xyz) && isFinite(f.history.w) && f.history.w >= 0.0 && f.history.w < 1.0;
 }
 
 float3 rcCubeDirection(uint face, float2 uv) {

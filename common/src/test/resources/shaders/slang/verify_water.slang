@@ -16,6 +16,11 @@
 // length but stays positive, and the enter/leave rules only fire on horizontal
 // faces in the direction that crosses them.
 //
+// The last half reads the beam a light sends into the body: it arrives travelling
+// downward, its column is bounded by the sample's distance, its crossing loss
+// stays inside the unit interval, and its focus stays between the bounds the
+// module declares.
+//
 // Usage (same arguments as gradle/slang.gradle):
 //   slangc -target spirv -profile cs_6_5 -entry main ^
 //     -matrix-layout-column-major -I common/src/main/resources/shaders/slang ^
@@ -86,6 +91,37 @@ void main() {
     bool leaves = waterLeavesMedium(true, 1.0, 1.0) && !waterLeavesMedium(false, 1.0, 1.0)
         && !waterLeavesMedium(true, 0.0, 1.0) && !waterLeavesMedium(true, 1.0, -1.0);
 
+    // ---- beam ----
+    float3 sun = normalize(float3(0.3, 1.0, -0.2));
+    float3 receiver = float3(2.0, 58.0, 3.0);
+    WaterBeam beam = waterBeamToLight(sun, 40.0, receiver, inside);
+    bool beamArrivesFromAbove = beam.valid && beam.direction.y < 0.0 && beam.column > 0.0
+        && beam.solidAngle > 0.0 && beam.column < 40.0;
+    bool flatBeam = length(waterBeamTravel(sun, float3(0.0, 1.0, 0.0)) - beam.direction) < 1.0e-4;
+    bool shallowReceiverHasNoBeam = !waterBeamToLight(sun, 40.0, float3(2.0, 62.5, 3.0), inside).valid
+        && !waterBeamToLight(sun, 40.0, receiver, outside).valid
+        && !waterBeamToLight(-sun, 40.0, receiver, inside).valid;
+    float3 crossing = waterBeamTransmittance(sun.y);
+    bool crossingIsLoss = all(crossing >= float3(0.0)) && all(crossing <= float3(1.0));
+    float2 footprint = waterBeamAtDepth(beam.entry.xz, beam.entry.y, receiver.y, sun, 12.5, 1.0, 1.0, float2(0.0));
+    bool footprintIsFinite = abs(footprint.x) < 1.0e6 && abs(footprint.y) < 1.0e6;
+    float focus = waterBeamFocus(beam, receiver, sun, 12.5, 1.0, float2(0.0));
+    bool focusIsBounded = focus >= WATER_CAUSTIC_MIN && focus <= WATER_CAUSTIC_MAX;
+    bool noBeamFocusIsNeutral = waterBeamFocus(invalidWaterBeam(), receiver, sun, 12.5, 1.0, float2(0.0)) == 1.0;
+    // The style switch owns the wave field and nothing else: a full mix is the
+    // untouched face, no mix is the flat geometric normal, and the beam still
+    // bends through whatever face the style left it with.
+    float lostStyling;
+    float lostDampedStyling;
+    float3 styledFull = waterStyledWaveNormal(float3(3.5, 64.0, -7.25), up, 12.0, 0.05, 1.0, lostStyling);
+    float3 styledFlat = waterStyledWaveNormal(float3(3.5, 64.0, -7.25), up, 12.0, 0.05, 0.0, lostDampedStyling);
+    bool mixEndsAreTheField = length(styledFull - top) < 1.0e-5 && length(styledFlat - up) < 1.0e-5
+        && lostStyling == lostTop && lostDampedStyling == lostTop;
+    float2 dampedFootprint = waterBeamAtDepth(beam.entry.xz, beam.entry.y, receiver.y, sun, 12.5, 1.0, 0.0, float2(0.0));
+    bool styleReachesTheBeam = length(dampedFootprint - footprint) > 1.0e-4
+        && abs(dampedFootprint.x) < 1.0e6 && abs(dampedFootprint.y) < 1.0e6
+        && waterBeamFocus(beam, receiver, sun, 12.5, 0.0, float2(0.0)) >= WATER_CAUSTIC_MIN;
+
     sink[0] = float4(slopeFiltered.x, slopeFiltered.y, lostFiltered, lostTop);
     sink[1] = float4(top.x, top.y, top.z, lostBottom + lostSide);
     sink[2] = float4(bottom.x, bottom.y, bottom.z, vertical.x);
@@ -98,4 +134,10 @@ void main() {
         outsideIsClear ? 1.0 : 0.0, outsideScattersNothing ? 1.0 : 0.0);
     sink[7] = float4(absorptionFalls ? 1.0 : 0.0, scatterPositive ? 1.0 : 0.0,
         enters ? 1.0 : 0.0, leaves ? 1.0 : 0.0);
+    sink[8] = float4(beamArrivesFromAbove ? 1.0 : 0.0, flatBeam ? 1.0 : 0.0,
+        shallowReceiverHasNoBeam ? 1.0 : 0.0, crossingIsLoss ? 1.0 : 0.0);
+    sink[9] = float4(footprintIsFinite ? 1.0 : 0.0, focusIsBounded ? 1.0 : 0.0,
+        noBeamFocusIsNeutral ? 1.0 : 0.0, beam.column);
+    sink[10] = float4(mixEndsAreTheField ? 1.0 : 0.0, styleReachesTheBeam ? 1.0 : 0.0,
+        waterBeamFocus(beam, receiver, sun, 12.5, WATER_WAVE_MIX_VANILLA, float2(0.0)), dampedFootprint.x);
 }

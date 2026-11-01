@@ -21,6 +21,9 @@ struct SkySample {
 
 interface IEnvironmentSampler {
     float3 radiance(float3 direction);
+    // The same sky without the bodies the light sampler already draws by NEE (the sun and moon discs). A ray that left a
+    // surface whose NEE sampled them pays this one, or the bodies would be counted twice.
+    float3 skyRadiance(float3 direction);
     SkySample sample(float3 normal, inout uint seed);
     float pdf(float3 normal, float3 direction);
 };
@@ -36,6 +39,21 @@ struct GradientSky : IEnvironmentSampler {
         float3 zenith = atmosphere.zenithColor.rgb * max(atmosphere.zenithColor.w, 0.0);
         float3 horizon = atmosphere.horizonColor.rgb * max(atmosphere.horizonColor.w, 0.0);
         return lerp(horizon, zenith, t);
+    }
+
+    // The sky as a light: the near-neutral hemisphere the host derives from the legacy model. The visible dome above is
+    // the display colour run back through the tone map (about 4x and saturated blue at noon); lighting surfaces with it
+    // washed the whole scene blue. An eye or a mirror sees the visible dome, every other bounce receives this one.
+    float3 lightRadiance(float3 direction) {
+        float3 d = safeNormalize(direction, float3(0.0, 1.0, 0.0));
+        float t = saturate(d.y * 0.5 + 0.5);
+        float3 zenith = atmosphere.skyLightZenith.rgb * max(atmosphere.skyLightZenith.w, 0.0);
+        float3 horizon = atmosphere.skyLightHorizon.rgb * max(atmosphere.skyLightHorizon.w, 0.0);
+        return lerp(horizon, zenith, t);
+    }
+
+    float3 skyRadiance(float3 direction) {
+        return lightRadiance(direction);
     }
 
     float pdf(float3 normal, float3 direction) {
@@ -57,7 +75,7 @@ struct GradientSky : IEnvironmentSampler {
 
         result.valid = true;
         result.direction = direction;
-        result.radiance = radiance(direction);
+        result.radiance = lightRadiance(direction);
         result.pdf = probability;
         return result;
     }
@@ -133,6 +151,10 @@ struct SunMoonSky : IEnvironmentSampler {
 
     float3 radiance(float3 direction) {
         return dome.radiance(direction) + celestialRadiance(sun, direction);
+    }
+
+    float3 skyRadiance(float3 direction) {
+        return dome.radiance(direction);
     }
 
     float pdf(float3 normal, float3 direction) {

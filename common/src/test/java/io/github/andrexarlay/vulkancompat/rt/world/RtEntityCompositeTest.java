@@ -19,16 +19,6 @@ public class RtEntityCompositeTest {
 
     private static final float EPSILON = 1e-4f;
 
-    @Test
-    public void testShadercCompilation() {
-        ByteBuffer spirv = RtShaderCompiler.compileResource(RtCompositePipeline.SHADER_PATH, "rt_composite.comp");
-        assertNotNull(spirv, "Compiled SPIR-V buffer must not be null");
-        assertTrue(spirv.remaining() > 0, "SPIR-V bytes must not be empty");
-        // Verify standard Vulkan SPIR-V magic number 0x07230203
-        assertEquals(0x07230203, spirv.getInt(0), "SPIR-V magic number mismatch");
-        assertEquals(80, RtCompositePipeline.PUSH_BYTES, "Push constant size must be exactly 80 bytes");
-        assertEquals("/shaders/glsl/rt_composite.comp", RtCompositePipeline.SHADER_PATH);
-    }
 
     @Test
     public void testDepthSeparationSky() {

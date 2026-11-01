@@ -18,6 +18,7 @@ namespace bedray::core {
 // Internal owner of the wired path-tracing frame:
 //
 //   path_trace.slang  ->  restir_spatial.slang (optional)  ->  path_display.slang
+//     ->  frame_stats.slang (additive call, only when the host lends the program)
 //
 // The pass owns the radiance/motion/accumulation/history images and the
 // per-recording FrameConstants upload. It records all dispatches through the
@@ -42,13 +43,30 @@ public:
     BedrayStatus configure_rc(const BedrayRCDesc& desc, std::uint32_t max_groups_x, BedrayError* error);
 
     BedrayStatus render(const BedrayPathTraceFrameDesc& desc, BedrayError* error,
-        const BedrayPathTraceGuides* guides = nullptr, const BedrayPathTraceBuffer* motion = nullptr);
+        const BedrayPathTraceGuides* guides = nullptr, const BedrayPathTraceBuffer* motion = nullptr,
+        const BedrayPathTraceBuffer* stats_slot = nullptr);
+
+    // The ReSTIR PT spatial stage per section table; 0 leaves that table without it.
+    BedrayStatus configure_pt(std::uint64_t program_pt_spatial, std::uint64_t program_pt_spatial_scene,
+        BedrayError* error);
+
+    // Statistics stage of a recording the render call above just made: one
+    // frame_stats dispatch over the recording's own radiance, the accumulation
+    // image the display stage folded and the borrowed depth view, adding into
+    // the borrowed StatsBuf range. Refuses instead of skipping when the pass has
+    // no statistics program or the recording is gone, because a silent skip is
+    // indistinguishable from a frame whose counters were always zero.
+    BedrayStatus record_stats(std::uint64_t command_buffer, std::uint64_t stats_buffer,
+        std::uint64_t stats_offset, std::uint64_t stats_bytes, std::uint32_t frame_index,
+        BedrayError* error);
 
     // Idempotent for an unknown command buffer. Completes the pass's own
     // image/buffer uses for that recording and then collects retired objects.
     void discard_recording(std::uint64_t command_buffer) noexcept;
     BedrayStatus release_recording(std::uint64_t command_buffer) noexcept;
 
+    // True when the RC owner holds a field the next consecutive frame may blend with (batch 5.6).
+    [[nodiscard]] bool rc_history_ready() const noexcept;
     [[nodiscard]] bool has_recordings() const noexcept {
         return !recordings_.empty() || (rc_field_ && rc_field_->has_recordings());
     }
@@ -60,6 +78,8 @@ public:
         return program != 0
             && (program == program_trace_ || program == program_trace_scene_
                 || program == program_spatial_ || program == program_display_
+                || program == program_stats_ || program == program_pt_spatial_
+                || program == program_pt_spatial_scene_
                 || (rc_field_ && rc_field_->uses_program(program)));
     }
 
@@ -71,6 +91,15 @@ private:
     struct RecordingPins {
         std::vector<gpu::UseId> image_uses;
         std::vector<gpu::UseId> buffer_uses;
+        // What the statistics stage reads back. The views are copies of handles
+        // this recording already pins, so a later resize cannot make the stage
+        // bind an image newer than the one the display dispatch folded; the two
+        // borrowed handles are never retained and must not outlive the call.
+        gpu::ImageView radiance{};
+        gpu::ImageView accum{};
+        std::uint64_t depth_view = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
     };
 
     BedrayStatus ensure_images(std::uint32_t width, std::uint32_t height, BedrayError* error);
@@ -78,6 +107,8 @@ private:
     BedrayStatus create_dummy(VkDeviceSize bytes, gpu::BufferId& id,
         gpu::BufferView& view, BedrayError* error);
     BedrayStatus ensure_reservoirs(std::uint64_t bytes, BedrayError* error);
+    BedrayStatus ensure_pt_ring(std::uint64_t bytes, BedrayError* error);
+    void retire_pt_ring() noexcept;
     BedrayStatus pin_image(gpu::ImageId id, RecordingPins& pins, BedrayError* error);
     BedrayStatus pin_buffer(gpu::BufferId id, RecordingPins& pins, BedrayError* error);
     void device_lost() noexcept;
@@ -89,6 +120,9 @@ private:
     std::uint64_t program_trace_scene_ = 0;
     std::uint64_t program_spatial_ = 0;
     std::uint64_t program_display_ = 0;
+    std::uint64_t program_stats_ = 0;
+    std::uint64_t program_pt_spatial_ = 0;
+    std::uint64_t program_pt_spatial_scene_ = 0;
     std::uint32_t spatial_push_bytes_ = 0;
 
     std::unique_ptr<gpu::GpuImages> images_;
@@ -108,6 +142,10 @@ private:
     bool trace_guide_bindings_ = false, scene_guide_bindings_ = false;
     bool trace_motion_bindings_ = false, scene_motion_bindings_ = false;
     bool scene_field_bindings_ = false;
+    // The program declares the ReSTIR PT ring at binding 36; the core binds pt_dummy_ and clears the PT push bits.
+    bool trace_pt_binding_ = false, scene_pt_binding_ = false;
+    // The program declares the stats slot at binding 37; the core binds the one-word entity scalar stand-in.
+    bool trace_stats_binding_ = false, scene_stats_binding_ = false;
     bool guide_dummies_initialized_ = false;
     std::array<gpu::ImageId, 3> guide_dummy_ids_{};
     std::array<gpu::ImageView, 3> guide_dummy_views_{};
@@ -122,16 +160,26 @@ private:
     // pass declares. The C++ host never sets the option bits that would write them, so they only keep the
     // descriptor set complete.
     gpu::BufferId motion_dummy_id_{};
+    gpu::BufferId pt_dummy_id_{};
     gpu::BufferView block_materials_view_{};
     gpu::BufferView reservoir_dummy_view_{};
     gpu::BufferView entity_scalar_view_{};
     gpu::BufferView entity_vector_view_{};
     gpu::BufferView motion_dummy_view_{};
+    gpu::BufferView pt_dummy_view_{};
     gpu::BufferId owned_reservoirs_id_{};
     gpu::BufferView owned_reservoirs_view_{};
     std::uint32_t owned_di_parity_ = 0;
     bool owned_di_history_ = false;
     bool owned_di_needs_clear_ = false;
+    // NATIVE_PT: the ReSTIR PT ring, the counterpart of the DI ring above. The parity names the half the next trace
+    // writes; a frame with the spatial stage moves it twice (trace, then spatial), so the next frame imports the
+    // spatial half and writes the one the trace wrote.
+    gpu::BufferId owned_pt_id_{};
+    gpu::BufferView owned_pt_view_{};
+    std::uint32_t owned_pt_parity_ = 0;
+    bool owned_pt_history_ = false;
+    bool owned_pt_needs_clear_ = false;
 
     std::uint32_t history_parity_ = 0;
     bool history_written_ = false;

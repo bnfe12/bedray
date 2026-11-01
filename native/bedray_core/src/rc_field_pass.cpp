@@ -1,5 +1,6 @@
 #include "rc_field_pass.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -16,6 +17,7 @@ template<class T> std::uint64_t bits(T value) noexcept {
     else return static_cast<std::uint64_t>(value);
 }
 constexpr std::array<std::uint32_t,14> scene_bindings{0,2,3,9,10,16,17,18,20,21,22,23,24,25};
+constexpr std::uint32_t kHistoryBinding = 38;
 std::uint32_t type(std::uint32_t b) noexcept {
     if (b == 0) return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     if (b == 3 || b == 9 || b == 10) return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -89,11 +91,11 @@ BedrayStatus RCFieldPass::configure(BedrayCore* core,const DeviceFns& f,const Be
             return fail(e,BEDRAY_ERROR_UNSUPPORTED,"RC dispatch exceeds device group limit");
     ProgramContract contract{};
     if (!program_contract(core,d.program_build,contract) || contract.push_constant_bytes != sizeof(BuildPush)
-        || contract.binding_count != 16)
+        || contract.binding_count != 17)
         return fail(e,BEDRAY_ERROR_INVALID_ARGUMENT,"RC build program contract mismatch");
     for (auto b:scene_bindings) if (!program_has_binding(core,d.program_build,b,type(b)))
         return fail(e,BEDRAY_ERROR_INVALID_ARGUMENT,"RC build scene binding mismatch");
-    for (auto b:{34u,35u}) if (!program_has_binding(core,d.program_build,b,type(b)))
+    for (auto b:{34u,35u,kHistoryBinding}) if (!program_has_binding(core,d.program_build,b,type(b)))
         return fail(e,BEDRAY_ERROR_INVALID_ARGUMENT,"RC build field binding mismatch");
     gpu::DeviceContext context{};
     context.device=f.device; context.functions=f.buffer_functions; context.memory_properties=f.memory_properties;
@@ -105,7 +107,7 @@ BedrayStatus RCFieldPass::configure(BedrayCore* core,const DeviceFns& f,const Be
     core_=core; fns_=f; desc_=d; buffers_=std::move(next); return BEDRAY_OK;
 }
 BedrayStatus RCFieldPass::allocate(std::uint64_t bytes,std::uint32_t usage,const void* data,
-        gpu::UseId& pin,gpu::BufferView& view,BedrayError* e) {
+        gpu::UseId& pin,gpu::BufferView& view,BedrayError* e,gpu::BufferId* keep) {
     gpu::BufferDesc d{}; d.size=bytes; d.usage=usage;
     d.required=data ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
         : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
@@ -114,9 +116,15 @@ BedrayStatus RCFieldPass::allocate(std::uint64_t bytes,std::uint32_t usage,const
     auto s=buffers_->create(d,id,view,vk); if (s != gpu::Status::ok) return gpu_status(s,vk,e);
     if (data) s=buffers_->write(id,0,data,static_cast<std::size_t>(bytes),vk);
     if (s == gpu::Status::ok) s=buffers_->begin_use(id,pin);
-    (void)buffers_->retire(id);
+    // A kept buffer (the tails, which may become the next recording's history) is retired by its owner later.
+    if (!keep || s != gpu::Status::ok) (void)buffers_->retire(id);
+    else *keep=id;
     if (s != gpu::Status::ok) { (void)buffers_->collect(); return gpu_status(s,vk,e); }
     return BEDRAY_OK;
+}
+void RCFieldPass::drop_history() noexcept {
+    if (history_id_.serial && buffers_) (void)buffers_->retire(history_id_);
+    history_id_={}; history_view_={}; history_frame_=0;
 }
 BedrayStatus RCFieldPass::record(const BedrayPathTraceFrameDesc& frame,std::span<const BedrayResource> inputs,
         std::array<BedrayResource,2>& outputs,BedrayError* e) {
@@ -125,7 +133,7 @@ BedrayStatus RCFieldPass::record(const BedrayPathTraceFrameDesc& frame,std::span
         return fail(e,BEDRAY_ERROR_INVALID_ARGUMENT,"RC requires native scene recording");
     if (recordings_.contains(frame.command_buffer) || recordings_.size() >= 8)
         return fail(e,BEDRAY_ERROR_IN_USE,"RC recording/slots still in use");
-    std::array<BedrayResource,16> resources{};
+    std::array<BedrayResource,17> resources{};
     for (std::size_t i=0;i<scene_bindings.size();++i) {
         const auto binding=scene_bindings[i];
         const auto found=std::find_if(inputs.begin(),inputs.end(),[&](const auto& r){return r.binding==binding;});
@@ -136,15 +144,34 @@ BedrayStatus RCFieldPass::record(const BedrayPathTraceFrameDesc& frame,std::span
         resources[i]=*found;
     }
     RCFieldMetadata metadata{}; (void)rc_field_metadata(desc_.base_axis,frame.frame_index,metadata);
+    // Temporal reuse only of the field recorded for the frame just before this one: the camera move the host reports is
+    // relative to that frame, so a skipped frame, a reset or a first frame starts the field over (weight 0).
+    const auto& delta=frame.path.di_camera_delta;
+    const bool reuse=history_id_.serial && !(frame.flags & BEDRAY_PATH_TRACE_FRAME_RESET_HISTORY)
+        && frame.frame_index == history_frame_+1u
+        && std::isfinite(delta[0]) && std::isfinite(delta[1]) && std::isfinite(delta[2]);
+    if (reuse) {
+        metadata.history[0]=delta[0]; metadata.history[1]=delta[1]; metadata.history[2]=delta[2];
+        metadata.history[3]=kRCFieldHistoryWeight;
+    } else {
+        drop_history();
+    }
     auto& pins=recordings_.try_emplace(frame.command_buffer).first->second;
     gpu::BufferView meta{},tails{};
+    gpu::BufferId tails_id{};
     auto status=allocate(sizeof(metadata),VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,&metadata,pins.uses[0],meta,e);
-    if (status != BEDRAY_OK) return status;
+    if (status != BEDRAY_OK) { drop_history(); return status; }
     status=allocate(static_cast<std::uint64_t>(metadata.header[3])*32u,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        nullptr,pins.uses[1],tails,e);
-    if (status != BEDRAY_OK) return status;
+        nullptr,pins.uses[1],tails,e,&tails_id);
+    if (status != BEDRAY_OK) { drop_history(); return status; }
+    if (reuse) {
+        const auto s=buffers_->begin_use(history_id_,pins.uses[2]);
+        if (s != gpu::Status::ok) { (void)buffers_->retire(tails_id); drop_history(); return gpu_status(s,VK_SUCCESS,e); }
+    }
     outputs={resource(34,meta),resource(35,tails)};
     resources[14]=outputs[0]; resources[15]=outputs[1];
+    // Without history the shader never reads 38 (weight 0); this recording's own tails keep the descriptor valid.
+    resources[16]=resource(kHistoryBinding,reuse ? history_view_ : tails);
     const auto& p=frame.path;
     BuildPush push{0,0,frame.frame_index,p.material_count,p.ray_bias,p.alpha_cutoff,p.max_radiance,
         p.sun_probability,p.emitter_count,2,p.emitter_probability,0};
@@ -152,7 +179,7 @@ BedrayStatus RCFieldPass::record(const BedrayPathTraceFrameDesc& frame,std::span
     std::memcpy(push.entities,p.entity_state,sizeof(push.entities));
     BedrayFrameDesc call{}; call.abi_version=BEDRAY_CORE_ABI_VERSION;
     call.command_buffer=frame.command_buffer; call.program=desc_.program_build;
-    call.group_count_y=call.group_count_z=1; call.resources=resources.data(); call.resource_count=16;
+    call.group_count_y=call.group_count_z=1; call.resources=resources.data(); call.resource_count=17;
     call.push_constants=&push; call.push_constant_bytes=sizeof(push);
     const auto cmd=reinterpret_cast<VkCommandBuffer>(static_cast<std::uintptr_t>(frame.command_buffer));
     barrier(fns_,cmd);
@@ -162,11 +189,16 @@ BedrayStatus RCFieldPass::record(const BedrayPathTraceFrameDesc& frame,std::span
         call.group_count_x=(push.count+63u)/64u;
         status=bedray_core_render_frame(core_,&call,e);
         if (status != BEDRAY_OK) {
+            // A partial field is nobody's history, and the field before it no longer precedes the next frame.
+            (void)buffers_->retire(tails_id); drop_history();
             if (status==BEDRAY_ERROR_DEVICE_LOST) { lost_=true; buffers_->device_lost(); }
             return status;
         }
         barrier(fns_,cmd);
     }
+    // This field is the next recording's history; the one it read stays pinned by this recording until its proof.
+    drop_history();
+    history_id_=tails_id; history_view_=tails; history_frame_=frame.frame_index;
     return BEDRAY_OK;
 }
 BedrayStatus RCFieldPass::release_recording(std::uint64_t cmd) noexcept {
@@ -186,6 +218,8 @@ BedrayStatus RCFieldPass::release_recording(std::uint64_t cmd) noexcept {
 }
 BedrayStatus RCFieldPass::destroy() noexcept {
     if (has_recordings()) return BEDRAY_ERROR_IN_USE;
+    if (!lost_) { drop_history(); if (buffers_) (void)buffers_->collect(); }
+    history_id_={}; history_view_={}; history_frame_=0;
     if (buffers_) {
         auto s=lost_ ? buffers_->release_after_device_loss() : buffers_->close();
         if (s != gpu::Status::ok) return gpu_status(s,VK_SUCCESS,nullptr);

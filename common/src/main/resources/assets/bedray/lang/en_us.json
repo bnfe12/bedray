@@ -110,7 +110,6 @@
   "bedray.group.rt_advanced": "Path Tracing Details",
   "bedray.group.rt_expert": "Expert: Numbers",
   "bedray.group.dlss_rr_advanced": "DLSS Ray Reconstruction Advanced",
-  "bedray.group.dlss_nr": "DLSS 5 Neural Rendering (not implemented)",
   "bedray.group.debug_diagnostics": "Debug, Overlays & Diagnostics",
   "bedray.option.enable_hardware_ray_tracing": "Hardware Ray Tracing",
   "bedray.option.enable_hardware_ray_tracing.tooltip": "Enables hardware-accelerated ray tracing using Vulkan Ray Queries (VK_KHR_ray_query). Requires compatible GPU hardware.",
@@ -409,5 +408,9 @@
   "bedray.opt.rays_restir_spatial": "ReSTIR Spatial Block Light",
   "bedray.opt.rays_restir_spatial.desc": "A pixel also borrows samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Temporal Block Light on.",
   "bedray.opt.path_restir_spatial": "ReSTIR Spatial Direct Light",
-  "bedray.opt.path_restir_spatial.desc": "A pixel also borrows light samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Direct Light on."
+  "bedray.opt.path_restir_spatial.desc": "A pixel also borrows light samples from neighbours on the same surface (same normal, same plane), so one torch lights a wall from fewer, better-chosen samples. Needs ReSTIR Direct Light on.",
+  "bedray.opt.path_restir_pt": "ReSTIR Path Reuse (experimental)",
+  "bedray.opt.path_restir_pt.desc": "Reuses the light a pixel's first diffuse bounce brought back over the next frames, so bounced light settles while the camera moves. Costs about 0.6 GB of video memory at 1080p and one extra ray per reused pixel. Needs ReSTIR Direct Light on; the native backend ignores it.",
+  "bedray.opt.path_restir_pt_spatial": "ReSTIR Spatial Path Reuse",
+  "bedray.opt.path_restir_pt_spatial.desc": "Each pixel also borrows the bounced-light paths of four neighbouring pixels on the same surface, so bounced light settles from more paths. Up to four extra rays per pixel, no extra video memory. Needs ReSTIR Path Reuse on."
 }

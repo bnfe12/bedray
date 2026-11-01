@@ -58,13 +58,14 @@ public final class RtExposure {
     }
 
     /**
-     * One readback: {@code lumLogSum} as written by rt_path.comp over {@code samples} pixels, {@code dt} seconds since the last
+     * One readback: {@code lumLogSum} as summed by {@code passes/frame_stats.slang} over {@code samples} metered
+     * pixels, {@code dt} seconds since the last
      * readback. The exposure follows KEY / average luminance with a time constant (not a per-frame step, so the speed does not
      * depend on the frame rate) and a dead band, slower when the scene gets darker than when it gets brighter.
      */
     public void observe(long lumLogSum, int samples, float dt) {
         if (samples <= 0 || lumLogSum == 0L) {
-            return; // the ray pass does not write the sum
+            return; // nothing measured this frame: a zero sum is not a pitch-dark scene
         }
         if (Float.isNaN(value) || Float.isInfinite(value) || value < MIN) {
             value = MIN;

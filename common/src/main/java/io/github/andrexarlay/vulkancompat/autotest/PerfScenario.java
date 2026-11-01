@@ -38,7 +38,7 @@ public final class PerfScenario implements AutotestScenario {
     private static final double LOAD_SEC = Double.parseDouble(System.getProperty("vkrtx.autotest.perfLoadSec", "20"));
     private static final int SAMPLES = Integer.getInteger("vkrtx.autotest.perfSamples", 6);
     private static final int RENDER_DISTANCE = Integer.getInteger("vkrtx.autotest.renderDistance", 0);
-    /** {@code -Dvkrtx.autotest.perfRt=true}: ray tracing (RtMode RAY_TRACED) stays ON in every step (GPU-heavy case, also with XeSS/DLSS/FSR). */
+    /** {@code -Dvkrtx.autotest.perfRt=true}: path tracing (RtMode PATH_TRACED) stays ON in every step (GPU-heavy case, also with XeSS/DLSS/FSR). */
     private static final boolean WITH_RT = Boolean.getBoolean("vkrtx.autotest.perfRt");
 
     record Step(UpscalerBackend backend, UpscalerMode mode, VulkanRtxConfig.QualityPreset preset) {
@@ -90,7 +90,7 @@ public final class PerfScenario implements AutotestScenario {
         List<Step> steps = parseSteps(System.getProperty(STEPS_PROPERTY, DEFAULT_STEPS));
         var mc = ctx.minecraft();
         // default: capture off for every step. Session value only (rtMode, not setRtMode: the persisted mode is not touched).
-        VulkanRtxConfig.rtMode = WITH_RT ? RtMode.RAY_TRACED : RtMode.OFF;
+        VulkanRtxConfig.rtMode = WITH_RT ? RtMode.PATH_TRACED : RtMode.OFF;
         VulkanRtxConfig.enableHardwareRayTracing = WITH_RT;
         mc.debugEntries.setOverlayVisible(false);
         if (RENDER_DISTANCE > 0) {

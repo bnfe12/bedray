@@ -5,6 +5,7 @@ import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayFgPrepareNative;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -30,6 +31,9 @@ import java.util.Map;
  */
 public final class FrameGenGpu implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/FrameGenGpu");
+    static final String PASS_NAME = "fg_prepare";
+    static final int PUSH_BYTES = 8;
+    static final int[] THREADS = {8, 8, 1};
     public static final int SETS = 3;
     public static final int FORMAT_DEPTH = VK10.VK_FORMAT_R32_SFLOAT;
     public static final int FORMAT_MV = VK10.VK_FORMAT_R16G16_SFLOAT;
@@ -59,18 +63,8 @@ public final class FrameGenGpu implements AutoCloseable {
         try {
             properties = VkPhysicalDeviceMemoryProperties.calloc();
             VK10.vkGetPhysicalDeviceMemoryProperties(device.getPhysicalDevice(), properties);
-            var pass = runtime.program("fg_prepare").orElseThrow(() -> new IllegalStateException("Missing AOT fg_prepare"));
-            var manifest = pass.manifest();
-            if (manifest.pushConstantBytes() != 8 || manifest.bindings().size() != 4
-                || !Arrays.equals(manifest.threadGroupSize(), new int[]{8,8,1}))
-                throw new IllegalStateException("Invalid FG preparation manifest");
-            String[] names = {"depthTexture","inMotionVectors","outDepth","outMotionVectors"};
-            for (int index = 0; index < names.length; ++index) {
-                var binding = manifest.binding(names[index]);
-                int type = index == 0 ? BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                if (binding == null || binding.binding() != index || binding.descriptorType() != type)
-                    throw new IllegalStateException("Invalid FG binding: " + names[index]);
-            }
+            var pass = runtime.program(PASS_NAME).orElseThrow(() -> new IllegalStateException("Missing AOT " + PASS_NAME));
+            requireManifest(pass.manifest());
             program = pass.nativeHandle();
             sampler = runtime.atlasSampler(); // integer texel fetch: filtering/address mode is not consulted
             nativePass = new BedrayFgPrepareNative(runtime.library(), runtime.core(), program, sampler);
@@ -79,6 +73,20 @@ public final class FrameGenGpu implements AutoCloseable {
             if (properties != null) properties.free();
             runtimeLease.close();
             throw failure;
+        }
+    }
+
+    static void requireManifest(SlangPassManifest manifest) {
+        if (manifest.pushConstantBytes() != PUSH_BYTES || manifest.bindings().size() != 4
+            || !Arrays.equals(manifest.threadGroupSize(), THREADS))
+            throw new IllegalStateException("Invalid FG preparation manifest");
+        String[] names = {"depthTexture", "inMotionVectors", "outDepth", "outMotionVectors"};
+        for (int index = 0; index < names.length; ++index) {
+            var binding = manifest.binding(names[index]);
+            int type = index == 0 ? BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                : BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            if (binding == null || binding.binding() != index || binding.descriptorType() != type)
+                throw new IllegalStateException("Invalid FG binding: " + names[index]);
         }
     }
 

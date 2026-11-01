@@ -55,6 +55,21 @@ struct LightReceiver {
     bool   primary;     // this is the primary hit of the pixel that owns the reservoir
     float3 motion;      // this surface's own displacement: where it stood last frame minus where it is now, in
                         // world blocks; zero for terrain and for a backend that tracks no moving geometry
+    // A plant or leaf card: one-sided for reflection, but its back side transmits the key light.  A sun sampler that
+    // gates on the shaded face alone rejects every back-lit leaf, which is why the legacy path lit it with a separate
+    // transmission term; the sampler reads this flag to hand such a receiver the sample it must shade.
+    bool   foliage;
+    // World-locked sun/moon rotation.  With `stableSun` set the sampler draws the disc point from `sunSeed` instead of
+    // the path's own stream, so every fragment of one world cell (or one leaf block) draws the same point: the pixel-
+    // shadow option evaluates the shadow once per cell, and a per-pixel disc point would fill that quantised penumbra
+    // with speckle.  The path tracer fills this; every other caller leaves it false and keeps the exact per-path sample.
+    bool   stableSun;
+    uint   sunSeed;
+    // This receiver stands past the emitter list's reach, where the list cannot serve it any more and the path tracer
+    // lights it from the vanilla block-light field instead (the deleted `distantBlockLight` handover).  An emitter
+    // sampler must then draw nothing for it - the field already carries that term - while a key-light sampler keeps
+    // serving it exactly as before.  False everywhere else, including every non-primary vertex.
+    bool   bakedBlockLight;
 };
 
 LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
@@ -65,6 +80,10 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
     // Conservative default: a caller that wants its surface served from the reservoir opts in explicitly.
     receiver.primary = false;
     receiver.motion = float3(0.0);
+    receiver.foliage = false;
+    receiver.stableSun = false;
+    receiver.sunSeed = 0u;
+    receiver.bakedBlockLight = false;
     return receiver;
 }
 

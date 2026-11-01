@@ -87,6 +87,18 @@ static const uint MATERIAL_SAMPLING_FLAG_NORMAL_MAP     = 1u << 0u;
 static const uint MATERIAL_SAMPLING_FLAG_MATERIAL_ATLAS = 1u << 1u;
 static const uint MATERIAL_SAMPLING_FLAG_APPLY_TINT     = 1u << 2u;
 static const uint MATERIAL_SAMPLING_FLAG_EMISSIVE       = 1u << 3u;
+// Shadow queries only: a cutout plant or leaf filters the key light instead of blocking it.  Visibility, AO, sky and
+// camera queries keep the binary cutout, because a canopy still occludes them.
+static const uint MATERIAL_SAMPLING_FLAG_FILTER_FOLIAGE = 1u << 4u;
+
+// Share of the key light one leaf face lets through, and how far that share bends toward the texel's own hue.  The
+// legacy path used the same pair: ~60 % per face keeps ~36 % through the entry and exit face of one leaf block.
+static const float FOLIAGE_LAYER_TRANSMITTANCE = 0.60;
+static const float FOLIAGE_HUE_MIX = 0.45;
+// Back-lit leaf term of the direct estimator (rt_path.comp): strength, the smooth ramp that keeps the term from
+// flickering at the silhouette, and the warm scatter tint of light that crossed a leaf.
+static const float FOLIAGE_BACKLIT_GAIN = 0.42;
+static const float3 FOLIAGE_BACKLIT_TINT = float3(1.05, 1.25, 0.75);
 
 struct MaterialSamplingOptions {
     float alphaCutoff;        // cutout threshold, 0.5 matches the legacy path
@@ -96,6 +108,7 @@ struct MaterialSamplingOptions {
     float portalTime;         // frame clock in seconds
     float defaultIor;         // dielectric IOR when the atlas has no optical profile
     float defaultThickness;   // slab thickness in blocks
+    float waterWaveMix;       // how much of the analytic wave field a fluid face keeps: 1 realistic, WATER_WAVE_MIX_VANILLA damped
     uint  flags;              // MATERIAL_SAMPLING_FLAG_*
 };
 
@@ -108,6 +121,9 @@ MaterialSamplingOptions defaultMaterialSamplingOptions() {
     options.portalTime = 0.0;
     options.defaultIor = 1.5;
     options.defaultThickness = 1.0;
+    // Realistic waves are the player's default (RtSettings.waterStyle), and an
+    // option that never met a frame keeps the same full wave field.
+    options.waterWaveMix = 1.0;
     options.flags = MATERIAL_SAMPLING_FLAG_NORMAL_MAP |
                     MATERIAL_SAMPLING_FLAG_MATERIAL_ATLAS |
                     MATERIAL_SAMPLING_FLAG_APPLY_TINT |
@@ -259,8 +275,11 @@ float3 decodeEntityAutoNormal(EntityAtlas atlas, SurfaceHit hit,
 // Decodes one hit.  A miss or a malformed hit returns valid = false; a cutout
 // hole is still a valid surface (surfaceIsHole decides whether it is a hole),
 // because a visibility walk must distinguish a hole from a filter.
+// `wantNormal` is the transmittance-walk switch of the legacy decoder: a shadow ray reads only the material, the
+// geometric normal and the tint, so it must not pay for the atlas normal, the AO texel or the water wave normal. Every
+// value those walks consume is computed on both paths, so the filter it applies is the same one a shaded hit gets.
 SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMaterials,
-        SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection) {
+        SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection, bool wantNormal) {
     SurfaceSample surface;
     surface.valid = false;
     surface.hit = hit;
@@ -363,7 +382,7 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
             glassy = false;
             pbr.roughness = 0.05;
         }
-        if (!endPortal && !outline && alpha >= ENTITY_ALPHA_HOLE) {
+        if (wantNormal && !endPortal && !outline && alpha >= ENTITY_ALPHA_HOLE) {
             shadingNormal = decodeEntityAutoNormal(atlas.entities, hit, geometricNormal, options.autoNormalStrength);
         }
 
@@ -467,29 +486,38 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         if ((options.flags & MATERIAL_SAMPLING_FLAG_APPLY_TINT) != 0u) {
             material.albedo *= hit.tint;
         }
-        shadingNormal = decodeAtlasNormal(atlas, options, hit, geometricNormal,
-            ambientOcclusion);
-        material.ambientOcclusion = ambientOcclusion;
+        if (wantNormal) {
+            shadingNormal = decodeAtlasNormal(atlas, options, hit, geometricNormal,
+                ambientOcclusion);
+            material.ambientOcclusion = ambientOcclusion;
+        }
         // A fluid is not a tinted pane.  The auto-PBR atlas tags it with water's
         // reflectance and roughness, the sheet takes the analytic wave normal
         // and the Fresnel split of an optical interface, and its transmission is
         // tinted by the biome colour instead of by the opaque 16x16 sprite.
         if ((hit.flags & HIT_FLAG_TRANSLUCENT) != 0u
                 && waterIsSurface(true, material.f0, material.roughness, material.metallic)) {
-            float footprint = hit.t * WATER_PIXEL_ANGLE /
-                max(abs(dot(rayDirection, geometricNormal)), 0.06);
-            float lostVar = 0.0;
-            float3 waveNormal = waterWaveNormal(hit.worldPosition, geometricNormal,
-                options.portalTime, footprint, lostVar);
             material.sourceFlags |= MATERIAL_SOURCE_FLUID;
             material.alphaMode = AlphaMode.Optical;
             material.ior = WATER_IOR;
-            // The realistic style is the default (RtSettings.waterStyle): the
-            // full wave normal and a sheen roughened by the slopes the pixel
-            // footprint filtered out.
-            material.roughness = clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30);
+            if (wantNormal) {
+                float footprint = hit.t * WATER_PIXEL_ANGLE /
+                    max(abs(dot(rayDirection, geometricNormal)), 0.06);
+                float lostVar = 0.0;
+                float3 waveNormal = waterStyledWaveNormal(hit.worldPosition, geometricNormal,
+                    options.portalTime, footprint, options.waterWaveMix, lostVar);
+                // Both styles are the same water: the medium, the IOR and the light
+                // that reaches the floor do not depend on the switch.  Only the face
+                // does - the realistic style keeps the full tilt, the damped one
+                // leans back toward the flat normal and carries a gentler sheen, the
+                // pair the legacy surface decoder used.
+                material.roughness = options.waterWaveMix >= 1.0
+                    ? clamp(sqrt(max(lostVar, 0.0)) * 1.6, 0.02, 0.30)
+                    : clamp(0.02 + sqrt(max(lostVar, 0.0)) * 0.8, 0.02, 0.16);
+                shadingNormal = waveNormal;
+            }
             material.metallic = 0.0;
-            material.f0 = float3(0.02);
+            material.f0 = float3(WATER_INTERFACE_F0);
             material.flags &= ~MATERIAL_FLAG_METAL;
             material.transmission = 1.0;
             material.thickness = 0.0;
@@ -499,12 +527,18 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
             // caller that does not gets the tint from surfaceTransmittance,
             // which reads the biome colour off the hit.
             material.albedo = float3(1.0);
-            shadingNormal = waveNormal;
         }
     }
 
     // Source flags are authoritative for tags that do not change geometry:
     // foliage is cutout, a fluid filters light, an emitter has emission.
+    //
+    // Foliage arrives with the geometry, not with the material table: the host
+    // classifies plants and leaves per quad while staging a section, and both
+    // traversal backends surface that tag as HIT_FLAG_FOLIAGE.
+    if ((hit.flags & HIT_FLAG_FOLIAGE) != 0u) {
+        material.sourceFlags |= MATERIAL_SOURCE_FOLIAGE;
+    }
     if ((material.sourceFlags & MATERIAL_SOURCE_REDSTONE) != 0u) {
         // Redstone dust is forced into the translucent pass by the vanilla
         // model, but the tagged texel is a cutout solid, not glass.
@@ -553,12 +587,37 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
     return surface;
 }
 
+// A caller that shades the surface needs the decoded normal and AO.
+SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMaterials,
+        SurfaceHit hit, MaterialSamplingOptions options, float3 rayDirection) {
+    return decodeSurface(atlas, blockMaterials, hit, options, rayDirection, true);
+}
+
 // A cutout texel below the threshold is a hole, not a filter.  Opaque and
 // translucent materials never become holes through this test.
 bool surfaceIsHole(SurfaceSample surface, float alphaCutoff) {
     if (!surface.valid) return true;
     if (!materialIsCutout(surface.material)) return false;
     return !materialAcceptsAlpha(surface.material, alphaCutoff);
+}
+
+// A leaf texel is a coloured filter for the key light, not an opaque blocker.  Only the cutout-pass vegetation tag may
+// filter: bars, chains, panes, ladders and doors share the cutout pass, and a glowing plant (a torch flower, a campfire
+// model drawn as a cutout) is an opaque emitter - a flame does not transmit sunlight.
+bool materialFiltersAsFoliage(MaterialSample material) {
+    if ((material.sourceFlags & MATERIAL_SOURCE_FOLIAGE) == 0u) return false;
+    if ((material.flags & MATERIAL_FLAG_CUTOUT) == 0u) return false;
+    return (material.flags & MATERIAL_FLAG_EMISSIVE) == 0u;
+}
+
+// Transmittance of one leaf face: 60 % of the light, bent toward the texel's own hue (its albedo over the strongest
+// channel), so a canopy shades green instead of grey.
+float3 foliageLayerTransmittance(SurfaceSample surface) {
+    if (!surface.valid) return float3(1.0);
+    float3 albedo = max(surface.material.albedo, float3(0.0));
+    float maximum = max(albedo.r, max(albedo.g, albedo.b));
+    float3 hue = albedo / max(maximum, 1.0e-3);
+    return FOLIAGE_LAYER_TRANSMITTANCE * lerp(float3(1.0), hue, FOLIAGE_HUE_MIX);
 }
 
 // Filtered transmittance of one translucent layer.  Thin panes use the texel

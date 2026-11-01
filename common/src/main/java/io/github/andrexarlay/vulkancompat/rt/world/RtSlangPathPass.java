@@ -15,17 +15,20 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Path Tracing mode on the AOT Slang programs: {@code passes/path_trace.slang} traces one path per pixel into linear
- * HDR radiance ({@link RtPathTraceSlangPass}), then {@code passes/path_display.slang} folds it into a running mean and
- * writes exposure + tone curve into the renderer's RGBA8 {@code rt_output}. Depth goes straight into {@code rt_depth},
- * so the composite, bloom, particles and upscalers downstream are unchanged.
+ * Both hardware tracing modes on the AOT Slang programs: {@code passes/path_trace.slang} traces one path per pixel into
+ * linear HDR radiance ({@link RtPathTraceSlangPass}), then {@code passes/path_display.slang} folds it into a running mean
+ * and writes exposure + tone curve into the renderer's RGBA8 {@code rt_output}. Depth goes straight into
+ * {@code rt_depth}, so the composite, bloom, particles and upscalers downstream are unchanged.
+ *
+ * <p>Ray Tracing mode is the same pipeline with a one-indirect-bounce profile ({@link #rayMode}): one sample, no adaptive
+ * governor, its own {@code rays_restir_*} and {@code rays_accumulate} switches. Path Tracing mode traces the player's
+ * bounce and sample counts through the adaptive governor.
  *
  * <p>The pass fills the seven DLSS-RR guide images when the host binds them ({@code PATH_TRACE_OPTION_GBUFFER}) and
  * NRD's per-pixel {@code IN_MV} vec4 when the frame carries the motion buffer
- * ({@code PATH_TRACE_OPTION_NRD_MOTION}). Not done yet, compared with the GLSL {@link RtPathTracerPass}: no auto
- * exposure (the GLSL shader feeds the luminance statistics; exposure is fixed at 1), a two-colour sky instead of
- * {@code rt_sky.glsl}; the mean is reprojected per pixel through the previous view-projection, so accumulation
- * survives camera motion but restarts on disocclusion.
+ * ({@code PATH_TRACE_OPTION_NRD_MOTION}). Open against the pipeline this replaced: the traced sky is the horizon
+ * gradient plus the sun and moon discs, with neither clouds nor aerial fog in it, and the frame's counters come from a
+ * separate pass ({@link RtFrameStatsSlangPass}) recorded on both backends.
  *
  * <p>Recording lifetime: every command buffer passed to {@link #dispatch} keeps native descriptor pools until
  * {@link #releaseRecording(long)}; the renderer calls it from the same submission's completion callback or after
@@ -56,14 +59,112 @@ public final class RtSlangPathPass implements RtPass {
         return RtConfig.SLANG_BLOCK_EMITTERS && RtConfig.SLANG_RESTIR_DI;
     }
 
-    /** True when this frame should read and write the reservoirs: allocated above, and the player left reuse switched on. */
-    static boolean diActive() {
-        return diRequested() && RtSettings.pathRestirDi();
+    /**
+     * True when this frame should read and write the reservoirs: allocated above, and the player left reuse switched on.
+     * Each profile keeps its own switches - the ray mode's {@code rays_restir_*} predate this pass, the path mode's
+     * {@code path_restir_*} were added with it - and a profile that read the other's would leave its own rows dead.
+     */
+    boolean diActive() {
+        return diRequested() && (rayMode ? RtSettings.restirTemporal() : RtSettings.pathRestirDi());
     }
 
     /** The same decision without the frame's own gates: what the mode log reports and what the dispatch refines. */
     boolean spatialRequested() {
-        return backend.spatialAvailable() && diActive() && RtSettings.pathRestirSpatial();
+        return backend.spatialAvailable() && diActive()
+            && (rayMode ? RtSettings.restirSpatial() : RtSettings.pathRestirSpatial());
+    }
+
+    /**
+     * ReSTIR PT this frame: the path profile only, a backend that owns a PT ring, and the player's row - which the
+     * settings page offers as a child of ReSTIR Direct Light, so it follows that switch too. Emitters are not required:
+     * the reservoir carries indirect light, which a daylight frame with an empty list has as much as an interior.
+     */
+    boolean ptActive() {
+        return !rayMode && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();
+    }
+
+    /** The PT spatial stage this frame: only on top of the temporal stage, and only while the player's row is on. */
+    boolean ptSpatialRequested() {
+        return ptActive() && RtSettings.pathRestirPtSpatial();
+    }
+
+    /** The accumulate switch that belongs to this profile: the ray mode has its own, the path mode its own. */
+    private boolean accumulateRequested() {
+        return rayMode ? RtSettings.raysAccumulation() : RtSettings.accumulate();
+    }
+
+    /**
+     * The effect switches of the ray mode, as {@code PATH_TRACE_OPTION_*} bits. The path profile sets none: it always
+     * traces the full transport, and its own screen has no per-effect switches to honour.
+     */
+    int rayEffectFlags() {
+        if (!rayMode) {
+            return 0;
+        }
+        int flags = 0;
+        if (!RtSettings.reflections()) {
+            flags |= RtPathTraceSlangPass.OPTION_NO_SPECULAR_BOUNCE;
+        }
+        if (!RtSettings.gi()) {
+            // Without GI a diffuse bounce either collects the sky alone (AO) or is not traced at all.
+            flags |= RtSettings.ao() ? RtPathTraceSlangPass.OPTION_AMBIENT_ONLY_BOUNCE
+                : RtPathTraceSlangPass.OPTION_NO_DIFFUSE_BOUNCE;
+        }
+        if (!RtSettings.shadows()) {
+            flags |= RtPathTraceSlangPass.OPTION_NO_KEY_SHADOWS;
+        }
+        if (!RtSettings.softShadows()) {
+            flags |= RtPathTraceSlangPass.OPTION_HARD_KEY_SHADOWS;
+        }
+        return flags;
+    }
+
+    /**
+     * The pixel-shadow look option, as the flag plus the cell size in texture pixels. It belongs to both profiles: the
+     * deleted legacy renderer honoured it in the path and the ray pass alike, and the setting lives in the shared look
+     * page. A size outside the settings screen's 1..16 range is clamped rather than refused: a stale config must not
+     * blank the shadows of a frame.
+     */
+    static int pixelShadowFlags() {
+        if (!RtSettings.pixelShadows()) {
+            return 0;
+        }
+        int size = Math.min(RtPathTraceSlangPass.PIXEL_SHADOW_MAX_SIZE,
+            Math.max(1, RtSettings.pixelShadowSize()));
+        return RtPathTraceSlangPass.OPTION_PIXEL_SHADOWS | (size << RtPathTraceSlangPass.PIXEL_SHADOW_SIZE_SHIFT);
+    }
+
+    /** Far plane of a diffuse bounce: GI's own distance, or the AO radius when that bounce only collects the sky. */
+    float diffuseBounceDistance() {
+        if (!rayMode) {
+            return 0f;
+        }
+        return RtSettings.gi() ? RtSettings.giDistance() : RtSettings.aoRadius();
+    }
+
+    /** Far plane of a specular bounce, from the ray mode's "Reflection Distance"; 0 = the ray far plane. */
+    float specularBounceDistance() {
+        return rayMode ? RtSettings.reflectionDistance() : 0f;
+    }
+
+    /** The range the emitter list of this frame was collected over, so the sampler never reaches past it. */
+    float emitterBounceDistance(RtFrameParams params) {
+        return rayMode ? RtSettings.emissiveDistance() + 8f : Math.min(params.rayDistance, 128f);
+    }
+
+    /** Candidate count per light sample: the ray mode's own quality slider, the path mode's A/B property. */
+    int emitterCandidates() {
+        return rayMode ? Math.min(4, Math.max(1, RtSettings.emissiveQuality())) * 8
+            : RtConfig.SLANG_EMITTER_CANDIDATES;
+    }
+
+    /**
+     * Whether this frame traces block emitters at all: the path mode's A/B property and, in the ray mode, the "RT Block
+     * Light" switch. It gates the bound list, the reservoir branch and the shader's distant block-light handover together,
+     * so the switch keeps meaning "no emissive lighting" instead of leaving a baked field behind.
+     */
+    private boolean blockEmittersEnabled() {
+        return RtConfig.SLANG_BLOCK_EMITTERS && (!rayMode || RtSettings.emissive());
     }
 
     /** True when this runtime can run both Slang programs: AOT artifacts present and every required capability enabled. */
@@ -95,10 +196,23 @@ public final class RtSlangPathPass implements RtPass {
         return RtConfig.SLANG_PATH_TRACE_CPP ? NativePathTraceBackend.supportProblem(runtime, guides) : null;
     }
 
+    /** Scattering events the ray mode traces: the surface the camera sees plus one indirect one. */
+    static final int RAY_MODE_MAX_DEPTH = 2;
+    /** Samples per pixel the ray mode traces: one, because a frame is one sample and the mean carries the rest. */
+    static final int RAY_MODE_SPP = 1;
+
     private final boolean requestedGbuffer;
+    /**
+     * Ray Tracing mode: the same two AOT programs, traced with one bounce and one sample, reading the ray profile's own
+     * {@code rays_restir_*} and {@code rays_accumulate} switches. The effect set is the one the deleted
+     * {@code rt_rays.comp} produced - sun shadows through NEE, reflections and one-bounce indirect light through the
+     * BSDF sample, emissive blocks through their own NEE - but it comes from the path transport instead of a
+     * per-effect raycaster, so there is one shader to keep correct.
+     */
+    private final boolean rayMode;
     private final PathTraceBackend backend;
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
-    private RtPipeline.Views views;
+    private RtFrameBindings.Views views;
     private int accumFrames;
     private boolean forceReset = true;
     /** True when the previous display dispatch left a mean and a depth history that reprojection can read. */
@@ -106,6 +220,8 @@ public final class RtSlangPathPass implements RtPass {
     private long reservoirFingerprint = Long.MIN_VALUE;
     // Backend owns the ring; host tracks only whether its reset request ran DI.
     private final RestirDiState diRequests = new RestirDiState(true);
+    /** One-shot request for the backend to invalidate its ReSTIR PT ring before the next frame reads it. */
+    private boolean ptResetRequested = true;
     private int lastSettingsHash;
     private int lastWidth;
     private int lastHeight;
@@ -122,15 +238,25 @@ public final class RtSlangPathPass implements RtPass {
      * them and records the request so the renderer does not rebuild it every frame (see {@link #builtFor(boolean)}).
      */
     RtSlangPathPass(VkDevice device, SlangRuntime runtime, boolean requestedGbuffer) {
-        this(createBackend(device, runtime), requestedGbuffer);
+        this(device, runtime, requestedGbuffer, false);
+    }
+
+    /** {@code rayMode}: Ray Tracing mode instead of Path Tracing; see {@link #rayMode}. */
+    RtSlangPathPass(VkDevice device, SlangRuntime runtime, boolean requestedGbuffer, boolean rayMode) {
+        this(createBackend(device, runtime), requestedGbuffer, rayMode);
     }
 
     RtSlangPathPass(PathTraceBackend backend, boolean requestedGbuffer) {
+        this(backend, requestedGbuffer, false);
+    }
+
+    RtSlangPathPass(PathTraceBackend backend, boolean requestedGbuffer, boolean rayMode) {
         this.requestedGbuffer = requestedGbuffer;
+        this.rayMode = rayMode;
         this.backend = Objects.requireNonNull(backend);
-        LOGGER.info("[VKB-RT] path tracing backend={} spatial={} gbuffer={}",
-            backend.getClass().getSimpleName(), backend.spatialAvailable(),
-            requestedGbuffer ? "dlss_rr guides" : "off");
+        LOGGER.info("[VKB-RT] {} backend={} spatial={} gbuffer={}",
+            rayMode ? "ray effects" : "path tracing", backend.getClass().getSimpleName(),
+            backend.spatialAvailable(), requestedGbuffer ? "dlss_rr guides" : "off");
     }
 
     private static PathTraceBackend createBackend(VkDevice device, SlangRuntime runtime) {
@@ -163,17 +289,22 @@ public final class RtSlangPathPass implements RtPass {
 
     @Override
     public RtMode mode() {
-        return RtMode.PATH_TRACED;
+        return rayMode ? RtMode.RAY_TRACED : RtMode.PATH_TRACED;
     }
 
     @Override
     public String describe(RtFrameParams p) {
         String restir = diActive() ? backend.reservoirState() : "off";
         if (!restir.equals("off") && spatialRequested()) restir += "+spatial";
-        return "path_slang(bounces=" + p.bounces + ",spp=1,dist=" + p.rayDistance
-            + (RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS : "")
-            + (RtSettings.accumulate() ? ",accumulate" : "") + ",restir_di=" + restir
-            + ",frames=" + (accumFrames + 1) + ",denoiser=" + (requestedGbuffer ? "dlss_rr" : "off") + ")";
+        return (rayMode ? "ray_slang(" : "path_slang(") + "bounces=" + p.bounces + ",spp=" + p.spp + ",dist=" + p.rayDistance
+            // rc_reuse: the native owner blends each field with the previous consecutive one (batch 5.6, weight 0.8).
+            + (!rayMode && RtConfig.SLANG_RADIANCE_CASCADES ? ",rc=finite-window-v2,rc_axis=" + RtConfig.SLANG_RC_BASE_AXIS
+                + ",rc_reuse=temporal" : "")
+            + (accumulateRequested() ? ",accumulate" : "") + ",restir_di=" + restir
+            + ",restir_pt=" + (ptActive() ? backend.pathReuseState() : "off")
+            // Configuration only: RtFrameRenderer logs this line when it changes, so a per-frame counter here would log it
+            // every accumulating frame. The accumulation count is RtAccumImage's own 2 s line.
+            + ",denoiser=" + (requestedGbuffer ? "dlss_rr" : "off") + ")";
     }
 
     @Override
@@ -181,6 +312,7 @@ public final class RtSlangPathPass implements RtPass {
         backend.prepare(width, height);
         if (lastWidth != width || lastHeight != height) {
             diRequests.layoutFor(width, height);
+            ptResetRequested = true;
             lastWidth = width;
             lastHeight = height;
             historyWritten = false;
@@ -192,9 +324,22 @@ public final class RtSlangPathPass implements RtPass {
     @Override
     public void configure(RtFrameParams params, boolean denoising) {
         params.mode = RtConfig.effectiveMode();
-        params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());
-        params.spp = 1;
-        params.rayDistance = RtSettings.pathMaxDistance();
+        if (rayMode) {
+            // The ray profile: the surface the camera sees plus one indirect one, one sample, no adaptive governor. What
+            // the deleted ray pass drew as separate rays (sun shadows through NEE, reflections and one-bounce GI through
+            // the BSDF sample, emissive blocks through their own NEE) falls out of that one path.
+            params.bounces = RAY_MODE_MAX_DEPTH;
+            params.spp = RAY_MODE_SPP;
+        } else {
+            params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());
+            params.spp = RtAdaptiveQuality.spp(RtSettings.spp());
+        }
+        // The ray mode's far plane is its world radius ("RT Distance"), exactly the extent the scene was built for;
+        // the path mode keeps its own longest-ray slider.
+        params.rayDistance = rayMode ? Math.max(32, params.rtRadiusXz * 16) : RtSettings.pathMaxDistance();
+        params.giDistance = RtSettings.giDistance();
+        params.emissiveDistance = RtSettings.emissiveDistance();
+        params.aoRadius = RtSettings.aoRadius();
         params.flags |= RtFrameParams.FLAG_EMISSIVE;
 
         // The mean is reprojected per pixel, so camera motion no longer invalidates the whole history; only a change
@@ -203,10 +348,15 @@ public final class RtSlangPathPass implements RtPass {
             && (differs(params.key.dir, lastSunDirection)
                 || differs(params.key.color, lastSunColor)
                 || differs(params.skyColor, lastSkyColor));
-        int settingsHash = Objects.hash(params.bounces, params.rayDistance, RtSettings.accumulate(), params.mode,
-            RtSettings.pathPreset, RtSettings.preset);
+        // spp is deliberately not in the hash: the adaptive governor moves it several times a minute, and a running mean
+        // of frames traced at different sample counts is still a mean of unbiased estimators - each frame carries the
+        // pixel's own average, only with a different variance. Restarting the history to equalise the weights would
+        // throw away the convergence the accumulation exists for.
+        int settingsHash = Objects.hash(params.bounces, params.rayDistance, accumulateRequested(), params.mode,
+            RtSettings.pathPreset, RtSettings.preset, rayEffectFlags(), diffuseBounceDistance(),
+            specularBounceDistance(), emitterBounceDistance(params), emitterCandidates());
         if (forceReset || lightingChanged || params.sceneChanged || settingsHash != lastSettingsHash
-            || !RtSettings.accumulate()) {
+            || !accumulateRequested()) {
             accumFrames = 0;
             historyWritten = false;
         } else if (accumFrames < RtFrameParams.MAX_ACCUM) {
@@ -218,6 +368,8 @@ public final class RtSlangPathPass implements RtPass {
         // filling hundreds of MB every frame would cost far more than the reuse saves.
         if (forceReset || settingsHash != lastSettingsHash || params.emitterFingerprint != reservoirFingerprint) {
             diRequests.reset();
+            // A stored path's suffix carries the light of the list it was traced with, so the same rule drops it.
+            ptResetRequested = true;
         }
         reservoirFingerprint = params.emitterFingerprint;
         forceReset = false;
@@ -236,7 +388,7 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     @Override
-    public void bind(RtPipeline.Views common) {
+    public void bind(RtFrameBindings.Views common) {
         views = common;
     }
 
@@ -255,6 +407,7 @@ public final class RtSlangPathPass implements RtPass {
         forceReset = true;
         historyWritten = false;
         diRequests.reset();
+        ptResetRequested = true;
     }
 
     @Override
@@ -263,7 +416,9 @@ public final class RtSlangPathPass implements RtPass {
         fillFrame(params, width, height);
         // The emitter list of the legacy path, bound as a second descriptor range: switching block emitters off is an A/B
         // on the shader's NEE branch only, the list keeps being rebuilt either way.
-        int emitterCount = RtConfig.SLANG_BLOCK_EMITTERS ? Math.max(0, params.emitterCount) : 0;
+        // "RT Block Light" off drops the emitter list from the trace entirely: no emitter NEE, no reservoir branch.
+        boolean blockEmitters = blockEmittersEnabled();
+        int emitterCount = blockEmitters ? Math.max(0, params.emitterCount) : 0;
         RtPathTraceSlangPass.Emitters emitters = new RtPathTraceSlangPass.Emitters(
             emitterCount > 0 ? params.emitterHandle : 0L, params.emitterOffset, emitterCount);
         int diFlags = emitterCount > 0 && diActive() ? DI_FLAG_ENABLED
@@ -291,17 +446,27 @@ public final class RtSlangPathPass implements RtPass {
         // motion buffer, bound only for that layout, so its push bit follows the buffer the frame actually carries.
         RtPathTraceSlangPass.Guides guides = RtPathTraceSlangPass.Guides.of(views.gbuffer());
         int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)
-            | (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0);
+            | (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)
+            | rayEffectFlags()
+            | pixelShadowFlags()
+            // The distant block-light handover belongs to the emitter feature: a frame that traced no emitters has no
+            // list to hand over from, and its receivers keep tracing exactly what they traced before.
+            | (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0)
+            // ReSTIR PT: the request and the camera facts. Parity and history belong to the backend that owns the ring.
+            | (ptActive() ? RtPathTraceSlangPass.OPTION_RESTIR_PT
+                | (params.cameraStatic ? RtPathTraceSlangPass.PT_STATIC : 0)
+                | (params.flipY ? RtPathTraceSlangPass.PT_FLIP_Y : 0) : 0);
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
             8, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
-            params.emitterCamRelY, params.emitterCamRelZ, RtConfig.SLANG_EMITTER_CANDIDATES,
+            params.emitterCamRelY, params.emitterCamRelZ, emitterCandidates(),
             params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, 0,
             capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount(),
-            RtSettings.autoNormalsOn() ? RtSettings.autoNormalStrengthPercent() / 100f : 0f);
+            RtSettings.autoNormalsOn() ? RtSettings.autoNormalStrengthPercent() / 100f : 0f,
+            emitterBounceDistance(params), diffuseBounceDistance(), specularBounceDistance());
         boolean nativeScene = views.table() != null && views.table().sceneOwned;
         int flags = (historyWritten ? 0 : BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY)
-            | (RtSettings.accumulate() ? BedrayCoreLayouts.PATH_TRACE_FRAME_ACCUMULATE : 0)
+            | (accumulateRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_ACCUMULATE : 0)
             | (params.cameraStatic ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_STATIC : 0)
             | (params.flipY ? BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y : 0)
             | (spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0)
@@ -309,9 +474,17 @@ public final class RtSlangPathPass implements RtPass {
             | (diRequests.resetPending() ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0)
             // The native backend builds its own FrameConstants, so the eye's medium travels as a host bit and the core
             // puts it in the frame word the shader reads; the Slang backend already wrote that word itself.
-            | (params.cameraInWater ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER : 0);
+            | (params.cameraInWater ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER : 0)
+            // The player's water switches travel the same way: the core has no settings screen to read, and a frame
+            // that says nothing about them traces water as a flat sheet with unbent light.
+            | ((params.flags & RtFrameParams.FLAG_WATER_REALISTIC) != 0
+                ? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_REALISTIC : 0)
+            | ((params.flags & RtFrameParams.FLAG_CAUSTICS) != 0
+                ? BedrayCoreLayouts.PATH_TRACE_FRAME_WATER_CAUSTICS : 0);
         backend.record(new PathTraceBackend.Frame(cmd, views, frame, dispatch, emitters, capturedEntities,
-            flags, accumFrames));
+            new RtPathTraceSlangPass.BufferView(params.statsBuffer, params.statsOffset,
+                RtStatsLayout.SLOT_STRIDE), flags, accumFrames, ptResetRequested, ptSpatialRequested()));
+        ptResetRequested = false;
         historyWritten = true;
         diRequests.afterDispatch(diFlags != 0);
     }

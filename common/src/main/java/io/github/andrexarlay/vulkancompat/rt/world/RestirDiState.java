@@ -121,6 +121,17 @@ final class RestirDiState {
         }
     }
 
+    /**
+     * A second dispatch of the same frame published its records into the other half (the ReSTIR PT spatial stage). That
+     * half is now the newest one, so it counts as a write: the next frame writes the half the trace wrote and imports the
+     * spatial half. A native ring's parity is the core's, so nothing moves here.
+     */
+    void spatialPublished() {
+        if (!nativeRing) {
+            frame++;
+        }
+    }
+
     /** The {@code restir_di} field of the mode log: what this frame will actually do, not what is switched on. */
     String mode(boolean enabled, boolean hostRingBound, boolean spatial) {
         if (!enabled || !available(hostRingBound)) {

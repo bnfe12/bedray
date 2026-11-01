@@ -26,5 +26,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     uint2 srcSize;
     srcTex.GetDimensions(srcSize.x, srcSize.y);
     float2 texel = 1.0 / float2(srcSize);
-    dstImg[p] = float4(bloomSanitize(bloomDown13Prefilter(srcTex, depthTex, uv, texel, pc)), 1.0);
+    // Alpha: the sun's visibility on the frame before any glow, the same value in every texel; the apply stage reads it.
+    float sunVisibility = pc.sunDir.w > 0.0 ? bloomSunVisibility(depthTex, srcTex, int2(srcSize), pc) : 0.0;
+    dstImg[p] = float4(bloomSanitize(bloomDown13Prefilter(srcTex, depthTex, uv, texel, pc)), sunVisibility);
 }

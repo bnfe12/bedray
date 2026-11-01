@@ -30,7 +30,7 @@ public interface RtPass {
     void configure(RtFrameParams params, boolean denoising);
 
     /** Points the descriptor set at the views of this frame ({@code accum} of {@code common} is 0; the pass adds its own). */
-    void bind(RtPipeline.Views common);
+    void bind(RtFrameBindings.Views common);
 
     void dispatch(VkCommandBuffer cmd, RtFrameParams params, int width, int height);
 

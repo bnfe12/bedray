@@ -4,16 +4,19 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Byte layout of one per-frame slot of StatsBuf (buffer StatsBuf in rt_common.glsl): written by
- * RtFrameRenderer / RtSkyState / RtFogState, read by the shaders through pc.statsAddr.
+ * Byte layout of one per-frame slot of StatsBuf. The four counter words at the head are the whole live ABI: the host
+ * binds exactly those sixteen bytes to {@code passes/frame_stats.slang}, which writes them on the GPU. Since the legacy
+ * pipeline was deleted no typed pass reads {@code pc.statsAddr}, so the rest of the slot is host-side scratch with no
+ * shader on the other end - {@code RtSlangLayoutAbiTest} proves that boundary (no pass imports the legacy declarations)
+ * instead of pretending {@code FrameStats} in {@code bindings.slang} is still a mirror to keep in step.
  * <p>
  * The member list below is the single Java source of truth: offsets are computed here with the same
- * std430 rules the GLSL compiler applies to the declaration, and {@code RtStatsLayoutTest} parses the
- * GLSL struct and asserts both lists are identical (names, order, types, offsets, total size) — a
- * one-sided edit fails the build instead of silently misreading the frame slot.
+ * std430 rules the shader compiler applies to the declaration. {@code RtFrameStatsTest} pins the four head words that
+ * the counter pass writes; {@code gradle/slang.gradle} and {@code RtSlangLayoutAbiTest} pin the blocks that still have
+ * a Slang consumer.
  */
 public final class RtStatsLayout {
-    /** One member of buffer StatsBuf: GLSL declaration and its computed std430 placement. */
+    /** One member of the frame slot: shader declaration and its computed std430 placement. */
     public record Member(String name, String glslType, int offset, int size) {}
 
     private static final List<Member> MEMBERS = new ArrayList<>();
@@ -120,6 +123,12 @@ public final class RtStatsLayout {
     public static final int TRANS_OVERFLOWS = add("transOverflows", "uint");
     public static final int TRANS_DIRECT_SHADOWS = add("transDirectShadows", "uint");
     public static final int TRANS_INDIRECT_SHADOWS = add("transIndirectShadows", "uint");
+    /**
+     * The F3 split the trace pass writes itself (binding 37, words 140..143 of the slot): refused pixels with a
+     * non-finite fault, pixels with a truncated path, pixels with a shadow walk past its filter budget, metered pixels.
+     * The last sixteen bytes of the slot, so the struct fills {@link #SLOT_STRIDE} exactly.
+     */
+    public static final int PATH_REJECTS = add("pathRejects", "uvec4");
 
     /** std430 size of the struct (struct alignment 16). */
     public static final int SIZE = (cursor + 15) & -16;
@@ -132,7 +141,7 @@ public final class RtStatsLayout {
         }
     }
 
-    /** The declared members in GLSL declaration order, for the source-check test. */
+    /** The declared members in shader declaration order, for {@code RtFrameStatsTest}. */
     public static List<Member> members() {
         return List.copyOf(MEMBERS);
     }

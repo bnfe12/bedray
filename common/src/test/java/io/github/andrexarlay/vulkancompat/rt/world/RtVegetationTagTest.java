@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The leaf transmission of {@code rt_common_surface.glsl} is gated by {@link RtWorld#VEGETATION_BIT}, a per-quad tag the
+ * The leaf transmission of the surface layer is gated by {@link RtWorld#VEGETATION_BIT}, a per-quad tag the
  * renderer writes from the block state while a section is staged. Before it, every cutout quad (bars, fences, panes,
  * ladders, rails, doors) took the leaf term: each back-lit one glowed warm, and the one-block shadow start of a leaf
  * block could step past a thin pane into a lit cell. The bit must therefore mark exactly the plants and leaves, and it
@@ -27,8 +27,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class RtVegetationTagTest {
 
-    private static final String CORE = "/shaders/glsl/rt_common_core.glsl";
-    private static final String SURFACE = "/shaders/glsl/rt_common_surface.glsl";
 
     @Test
     public void tagsOnlyVegetationCutoutQuads() {
@@ -169,34 +167,31 @@ public class RtVegetationTagTest {
         assertCubeBit(out, 0, false, "no one-block caster step for a diagonal quad");
     }
 
+
+
+    /**
+     * The tag is only worth writing if the shader reads the same bit. The section traversal decodes it into the two hit
+     * flags the surface layer consumes, so the Java constant and the shader constant have to stay one number.
+     */
     @Test
-    public void shaderUsesTheSameBitAsJava() {
+    public void theTraversalReadsTheSameBitsAsJava() throws java.io.IOException {
         assertEquals(0x01000000, RtWorld.VEGETATION_BIT, "bit 24 of the light word");
         assertEquals(0x02000000, RtWorld.LEAF_CUBE_BIT, "bit 25 of the light word");
-        String core = RtShaderCompiler.loadSource(CORE);
-        assertTrue(core.contains("const uint VERT_FLAG_VEGETATION = 0x01000000u;"),
-            "the GLSL constant must equal RtWorld.VEGETATION_BIT");
-        assertTrue(core.contains("const uint VERT_FLAG_LEAF_CUBE = 0x02000000u;"),
-            "the GLSL constant must equal RtWorld.LEAF_CUBE_BIT");
-        String surface = RtShaderCompiler.loadSource(SURFACE);
-        assertTrue(surface.contains("s.isFoliage = (rawLight0 & VERT_FLAG_VEGETATION) != 0u && geomPass == 1u"),
-            "foliage must require the per-quad tag, not just the cutout pass");
-        assertFalse(surface.contains("s.isFoliage = (geomPass == 1u)"),
-            "the render pass alone made bars, panes, ladders and rails glow warm when back-lit");
-        assertTrue(surface.contains("s.leafCube = s.isFoliage && (rawLight0 & VERT_FLAG_LEAF_CUBE) != 0u;"),
-            "the one-block caster step belongs to full leaf cubes only");
-    }
-
-    @Test
-    public void casterStepComesFromTheTagNotTheNormal() {
-        String surface = RtShaderCompiler.loadSource(SURFACE);
-        assertTrue(surface.contains("return s.leafCube && !s.backFace ? s.pos - s.ng * 1.01 : s.pos + L * 0.01;"),
-            "a card is cleared by 1 cm; a leaf cube starts on its sun-side face");
-        assertFalse(surface.contains("axis < 0.98"),
-            "an axis-aligned normal is not a full cube: a wall vine has one too, and the step started inside the wall");
+        String traversal = java.nio.file.Files.readString(
+            java.nio.file.Path.of("src/main/resources/shaders/slang/traversal/legacy_section_traversal.slang"),
+            java.nio.charset.StandardCharsets.UTF_8).replace("\r\n", "\n");
+        assertTrue(traversal.contains("static const uint LEGACY_VERT_FLAG_VEGETATION   = 0x01000000u;"),
+            "the shader constant must equal RtWorld.VEGETATION_BIT");
+        assertTrue(traversal.contains("static const uint LEGACY_VERT_FLAG_LEAF_CUBE    = 0x02000000u;"),
+            "the shader constant must equal RtWorld.LEAF_CUBE_BIT");
+        assertTrue(traversal.contains("(light0 & LEGACY_VERT_FLAG_VEGETATION) != 0u) result.flags |= HIT_FLAG_FOLIAGE;"),
+            "foliage is the per-quad tag, not the cutout pass: bars, panes, ladders and rails must not glow warm when back-lit");
+        assertTrue(traversal.contains("(light0 & LEGACY_VERT_FLAG_LEAF_CUBE) != 0u) result.flags |= HIT_FLAG_LEAF_CUBE;"),
+            "the one-block shadow caster step belongs to full leaf cubes only");
     }
 
     // ---- synthetic section builders (compact vertex layout, see SodiumMeshDecoder) ----
+
 
     private static int[] stagedLight(DecodedSection d, RtWorld.BlockLookup lookup) {
         if (lookup == null) {

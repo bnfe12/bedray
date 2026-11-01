@@ -19,6 +19,18 @@ Existing-feature transfers in the current working tree:
   path also uses an opaque frame-graph node and scheduler; its private histories
   remain owned by PathTracePass, as recorded in MIGRATION_INTEGRATION_DECISIONS.md.
 
+* Frame generation (DLSS-G and FSR 3) prepares its inputs through the AOT pass
+  `passes/fg_prepare.slang` recorded by `bedray_core_render_fg_prepare`: the core
+  owns the flipped blit of the engine main target into the hudless image, the
+  depth/motion flip dispatch, its descriptors and the barriers, and the host only
+  hands over the images it already owns (the `BedrayFgPrepareFrameDesc` mirror is
+  `BedrayCoreLayouts.FG_PREPARE_DESC`). `FrameGenGpu` borrows the per-device
+  `SlangRuntime` from `SlangRuntimePool`, validates the manifest (4 bindings,
+  uint2 push, 8x8x1) before the first dispatch, and hands each recording back once
+  the encoder's fence proves retirement. `fg_prepare.comp` is deleted; without the
+  matching DLL the producer is logged as unavailable and framegen does not run -
+  there is no Shaderc fallback. No owner-verified generated frame yet.
+
 * The typed path trace now writes the legacy denoiser guide set for DLSS-RR:
   the entry pass fills `outViewZ` through `outSpecAlbedo` (bindings 26–32) at
   the primary vertex when the host sets `PATH_TRACE_OPTION_GBUFFER`, so an
@@ -110,12 +122,13 @@ described a 1:1 port of the existing GLSL.  Bedray 2.0 is a new shader core:
 the old GLSL stays in the tree as a behavioural reference, not as a source to
 copy line by line.
 
-**Current whole-migration evidence: L0 — source and build wiring.** Prior
-agents reported scoped compilation and unit tests for particular revisions;
-those results do not establish that the current complete tree builds. Existing
-bloom now requires AOT Slang and fails when unavailable, but other legacy
-GLSL consumers still exist and must be migrated. A compile or test is not proof
-of rendering in Minecraft; that requires a fresh matching live run and evidence.
+**Current whole-migration evidence: L1 — the tree builds and its unit suites
+pass.** `:common:compileJava`, `:common:compileTestJava`, `:common:test` and
+`runShimTests` are green on `refactor/slang-pipeline` after the legacy renderer
+was deleted, and `native/` CTest passes on its own build. None of that is
+proof of rendering in Minecraft: with the GLSL path gone, the Slang path is the
+only renderer, so the frame that used to be carried by the fallback has to be
+re-captured live before a jar ships. A compile or a test is not a frame.
 
 ## Design rules
 
@@ -130,9 +143,19 @@ of rendering in Minecraft; that requires a fresh matching live run and evidence.
 4. **One module = one concern.**  Material rules do not live in traversal;
    reservoir math does not live in the light sampler; cascade addressing does
    not live in the trace pass.
-5. **The old GLSL is a reference.**  Do not delete it and do not copy its
-   include graph.  When behaviour is unclear, read it; when writing new code,
-   use the new contracts.
+5. **The old GLSL is gone.**  The rule used to be "keep it as a reference".
+   The owner overrode it: while a second renderer existed, every gap was
+   silently filled by the GLSL path and the Slang path never had to close it.
+   `common/src/main/resources/shaders/glsl/rt_*.comp|glsl` and the Java passes
+   that compiled them at runtime are deleted; the reference is now the Slang
+   contract plus `git log`.  Do not copy the old include graph, and do not
+   reintroduce a runtime GLSL compile in the renderer (see
+   `ShadercSurfaceTest`).  No first-party GLSL ships any more: the Iris depth
+   converter reads the AOT `iris_depth` pass through `SlangPass`, and
+   `shaders/glsl/` is empty.  What survives Shaderc is not the renderer: the
+   `shaders/spatial/` upscaler kernels and the Iris pack host (they compile
+   third-party or user-supplied GLSL), plus the one-shot opacity-micromap probe
+   in `RtExtensionProbe`.
 6. **No binaries in git.**  SDKs, generated SPIR-V, DLLs and JARs stay out of
    the repository.  `*.spv`, `*.exe`, `*.dll` and `*.jar` are already ignored.
 
@@ -278,7 +301,9 @@ common/src/main/resources/shaders/slang/
     ├── volumetric_apply.slang
     ├── path_trace.slang               first path-trace entry over LegacySectionTraversal
     ├── path_display.slang             exposure, tone map, accumulation of the path radiance
-    └── restir_spatial.slang           neighbour pooling over the reservoirs path_trace wrote
+    ├── restir_spatial.slang           neighbour pooling over the reservoirs path_trace wrote
+    ├── restir_pt_spatial.slang        ReSTIR PT neighbour pooling into the half the next frame imports
+    └── restir_pt_spatial_scene.slang  the same over the native scene table
 ```
 
 `passes/` is the AOT entry-point root: `compileSlang` compiles every
@@ -336,7 +361,7 @@ hardware paths agree on foliage and glass.
 |---|---|---|---|
 | Bloom + sun glare | `bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` -> coarse native `BloomPass` | C++ owns mip images, descriptor/push packing, dispatch/barriers and exact retirement; programs/samplers remain runtime-owned. L1/L2, no live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
+| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `restir_pt_spatial`, `restir_pt_spatial_scene`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
 | Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
 | Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
 
@@ -361,7 +386,7 @@ before the first dispatch.
 | `outMotion` | 5 | RGBA16F storage image the tracer owns, sized with the radiance: rgb is the primary surface's own displacement from last frame, `a` marks it as a moving entity part; `path_display` binds the same image as `motion` |
 | `materialAtlas` | 9 | LabPBR `_s` sampler (legacy binding 9) |
 | `normalAtlas` | 10 | LabPBR `_n` sampler (legacy binding 10) |
-| `outDepth` | 12 | R32F storage image; first-hit distance, `1e6` on a miss |
+| `outDepth` | 12 | R32F storage image; ray distance from the eye (`camera.origin`) to the first hit, `1e6` on a miss - not view depth (see the `outDepth` contract) |
 | `frame` | 16 | 608-byte `FrameConstants` uniform buffer, one upload per frame |
 | `blockMaterials` | 17 | dummy `BlockMaterial` table until voxel materials exist: allocate at least one 64-byte element and push `materialCount = 0` |
 | `emitters` | 18 | the `RtEmitters` ring buffer bound at the current segment offset — the same 96-byte records the legacy `rt_path.comp` reads, so one upload serves both paths; a dummy element when the list is empty |
@@ -380,6 +405,8 @@ before the first dispatch.
 | `outDirect` | 31 | RGBA16F, the primary vertex's own next-event estimate |
 | `outSpecAlbedo` | 32 | RGBA8, F0 guide with the legacy rule `metal > 0.5 \|\| roughness < 0.6 ? (metal ? albedo : F0) : 0` |
 | `outMotionBuffer` | 33 | `RWStructuredBuffer<float4>`, one 16-byte element per render pixel: the primary hit's world motion (prev minus cur) and the `rt_path.comp:616` trust flag in `w`; the NRD `IN_MV` channel `rt_pack_nrd.comp` reads at `StatsBuf.motionAddr` |
+| `ptReservoirs` | 36 | the ReSTIR PT ring of `ReferencePathTraceBackend`: two halves of one 144-byte `RestirPtReservoir` per pixel (`2 * width * height * 144`, 597.2 MB at 1080p), allocated only while a frame sets `PATH_TRACE_OPTION_RESTIR_PT` (bit 17) and zeroed on a PT reset; a one-record stand-in otherwise. The native core always binds its stand-in and clears bits 17..21 |
+| `outPathStats` | 37 | the frame's whole 576-byte stats slot (`RtStatsLayout.SLOT_STRIDE`, bound at the slot's own 64-byte-aligned offset); the trace adds the F3 split into words 140..143 (`RtStatsLayout.PATH_REJECTS`: refused pixels with a non-finite fault, pixels with a truncated path, pixels with a shadow walk past its filter budget, metered pixels) over `frame_stats`' 1-in-16 tiles. The host zeroes the block each frame. A one-word stand-in otherwise, which the shader refuses to write; the native core always binds that stand-in, so its split reads n/a |
 
 The seven guide images exist for DLSS-RR only. When the host has no complete
 set, it binds pass-owned 1×1 dummies and leaves `PATH_TRACE_OPTION_GBUFFER`
@@ -411,21 +438,37 @@ and cannot walk a stale slot;
 scene-referred radiance, and
 `FrameConstants.exposure` is applied once by the display/tonemap pass, so
 accumulation and denoise stay in linear HDR and exposure cannot be applied twice.  The pass requires `CAP_RAY_QUERY |
-CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing uses its own
-`SlangRuntime`, created from `SlangDeviceCapabilities.enabledMask`; the mask-0
-runtime in `RtAtmosphere` belongs to bloom only. The final C++ renderer must
+CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing runs on the
+device's one pooled `SlangRuntime`, built from
+`SlangDeviceCapabilities.enabledMask` (`SlangRuntimePool`); `RtAtmosphere`
+borrows that same core for bloom and light shafts instead of keeping a mask-0
+one. The final C++ renderer must
 negotiate the features actually enabled on the game's device and select only
-supported methods. If this path is unsupported, the Java selector reports the
-reason; it no longer falls back to legacy GLSL `rt_path.comp`. The legacy ray
-effects pass is likewise reported unavailable until its Slang replacement is
-connected. The Slang volumetric passes compile but are not yet connected, so
-god rays are currently reported unavailable.
+supported methods. There is no selector and no second renderer any more: the
+`-Dbedray.pathTracer=auto|slang|legacy` switch and the GLSL `rt_path.comp` it
+could fall back to are deleted, so a Slang path the device cannot run fails the
+frame, `RtGeometryGate.markFailed` records `stage=… result=…`, ray tracing stays
+off for the session and the game keeps drawing the raster image.  A trace request
+that names no mode — `enableHardwareRayTracing` on while `rt_mode` is `off`, or
+the legacy toml key read without `rt_mode` — resolves to Path Tracing
+(`VulkanRtxConfig.effectiveRtMode`).  Ray Tracing mode itself is in the same
+position: its GLSL effects pass is deleted and the Slang
+`ssr.slang`, `composite.slang`, `atrous.slang`, `temporal_accumulate.slang` and
+`velocity_reproject.slang` passes are not wired into the frame loop yet, so
+`createPass` throws `RtFailure("slang_ray", …)` — which turns tracing off for the
+session — until they are.  The Slang volumetric passes are connected:
+`RtAtmosphere` records the march and apply dispatches when the post god-ray mode
+is selected with fog on, and a march that refuses to register sets
+`shaftsUnavailable` (one warning, no shafts) instead of failing the frame.
 
-The current `volumetric_march` binding 2 explicitly reads `LegacySection` through
-`LegacySectionTraversal`. The native scene publishes a different GeometrySection
-record, despite both records being 64 bytes. Connecting that pass to native scene
-requires a shader-owner-reviewed native-scene entry/contract; it must not bind the
-native table to the existing legacy descriptor by size alone.
+`volumetric_march` binding 2 reads `LegacySection` through `LegacySectionTraversal`,
+while the native scene publishes a different `GeometrySection` record although both
+are 64 bytes.  That is answered by its own reviewed entry:
+`volumetric_march_scene.slang` binds the native table as `StructuredBuffer<GeometrySection>`
+and traces the world-only instance mask, and `RtSlangVolumetricPass` hands both
+march programs to the core, which selects one from
+`BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE`.  Record size is never by itself a reason to
+rebind one table to the other's descriptor.
 
 #### Native C++ path-trace pass (opt-in)
 
@@ -500,6 +543,25 @@ Only the first of those is dropped from the running mean, which is what
 `pathTraceSampleRejected` and the alpha lane are for.  `firstHitDistance` is a
 distance along the unit primary direction, not linear view depth; a consumer
 that needs view depth must derive it from the camera contract.
+
+**The `outDepth` contract (binding 12, `rt_depth`; 2026-10-31).** The distance
+along the unit primary ray from the eye the tracer starts at -
+`FrameConstants.camera.origin`, the view-bob offset from the raw camera - to the
+first accepted surface; `1e6` on a miss. It is neither linear view depth nor
+hardware depth, and every consumer reads it as what it is:
+
+| consumer | reads it as |
+|---|---|
+| `path_display` | history validation. Its own history images store the distance from the **raw** camera (`pathDisplayHistoryDistance`), because the reprojection measures the reprojected point from the previous raw camera; before 2026-10-31 it stored the eye distance, and the view-bob offset broke the 2 % window of every near surface while walking |
+| `frame_stats`, `bloom_*` | hit or sky only (`< 999999` / `>= 1e5`) |
+| `composite` | compares with `length(invViewProj * rasterDepth)`, a distance as well |
+| `volumetric_apply` | the march end along the view ray |
+| velocity / `MotionProbe` | `VelocityPipeline.DEPTH_RAY_DISTANCE`, by `RtFrameRenderer.activeDepthConvention()` |
+| DLSS-RR | does not read it: the guide `outViewZ` (binding 26) is linear view depth |
+| DLSS-SR, FSR, XeSS, frame generation | do not read it: they take the raster `D32` depth copy |
+
+`RtSlangDepthContractTest` pins the tracer's write and the display's conversion
+and reproduces the walking-eye rejection numerically.
 
 `RtFrameRenderer` constructs `RtSlangPathPass`, which prepares Minecraft inputs
 and delegates through `PathTraceBackend`. `NativePathTraceBackend` holds borrowed
@@ -934,6 +996,60 @@ the water item is the Snell-refracted NEE beam and its caustics (the shadow ray
 is still straight) and `RtSettings.waterStyle`. No owner-verified frame of any of
 this exists yet.
 
+Status update (2026-10-30, the refracted beam). An underwater receiver is now lit
+along the path the light took instead of the straight sight line. `waterBeamToLight`
+bends the sample's air direction through the plane the medium record names
+(`waterBeamTravel` refracts against the flat sheet and, when a wave crest has turned
+its face to the beam, against that face; the ratio is `1/WATER_IOR`, so entering the
+dense side has no critical angle) and returns the column length, the point where the
+beam crosses, and the étendue weight `cos(air)/cos(water)` — the radiance gain and
+the cone squeeze cancel the indices, so a floor under a flat sheet receives exactly
+the flux the sheet let through. `traceShadowBeam` walks it in two legs: the column
+with the medium-aware filter along the refracted direction, stopping a bias short of
+the sheet, and the sky with the plain filter starting a bias above the crossing
+(lifted along the light, not along the receiver's normal). Neither leg traces the
+face itself; the crossing is charged once, explicitly, with `waterBeamTransmittance`
+at the air cosine, and `surface.slang` now decodes a fluid's `f0` from the same
+`WATER_INTERFACE_F0` so the two cannot drift. `waterBeamFocus` adds the caustic: the
+2x2 Jacobian of the map from entry point to beam footprint at the receiver's depth,
+read by finite difference over three wave normals (no extra ray), clamped to
+`[0.1, 3.0]`, with a fold of the map taking the floor. The beam is offered only to
+`LightKind.Sun`/`Moon` and only while `medium.inside`; a block emitter under water
+keeps the straight column, because it never crossed anything. The direct term shades
+`-beam.direction` — the same direction its cosine test and its BSDF use, so a beam
+bent below the receiver's horizon is simply not lit — and carries
+`beam.solidAngle * focus` in the estimator. Evidence: `:common:compileSlang` with
+`slangc` 2026.20 (path_trace 1,038,264 B / path_trace_scene 1,065,900 B), the
+extended `verify_water.slang` harness compiles on its own (56,708 B),
+`RtSlangWaterBeamTest` (9 guards, double-precision ports of Snell, étendue and the
+finite-difference stencil) and the extended `RtSlangRayOffsetTest` pass, and the full
+`:common:test --rerun-tasks` suite reports 896 tests, 0 failures, 0 errors, 3 skipped.
+All 16 mutation probes are caught (each revert names its guard) and the four shader
+files come back byte-identical. The cost is measured, not assumed: the two extra walk
+instantiations in `traceShadowBeam` are +426 KB / +440 KB of SPIR-V on the two path
+roots (+70 %); reordering the legs onto a single shared callee was tried and is not
+smaller. Status update (2026-10-31, light above the sheet): a block emitter above the water
+now reaches an underwater receiver through the crossing as well. `waterBeamToPoint` solves
+Snell on the flat sheet by bisection, `traceShadowBeam` walks the column and the bent air leg
+(`WaterBeam.air` / `airDistance`; the key light's are its sight direction and the rest of its
+distance, so the sun and moon trace exactly what they traced before), and the sample is
+weighted by the ray Jacobian of the crossing, `n^2 d^2 dw/dA_perp`, which is 1 without a sheet
+and the key light's `cos(air) / cos(water)` for a far light. The caustics switch and the wave
+style act on that beam exactly as on the key light. A camera or path ray that leaves the body
+upward without meeting a face is refracted out of the plane with the sheet's transmission and
+`eta^2` (the optical lobe's crossing weight), or sees no sky past the critical angle; the sky
+seen through a face that is hit was already refracted by the optical lobe. Approximations: the
+emitter's own cosine is kept at the sight line's, and the totally reflected half of an escaped
+ray is not traced on. Evidence: `RtSlangWaterPointBeamTest` (Snell on 100,000 crossings, the
+weight against a measured ray map on 2,000, both limits, a before/after for one torch: arrival
+cosine 0.7809 -> 0.8587, weight 1.1086). `RtSettings.waterStyle` is no longer on that list - it reaches
+the typed path as its own frame flag (`FLAG_WATER_REALISTIC`, carried by
+`RtSlangFrameData` into `Frame.FLAG_WATER_REALISTIC` and consumed by
+`surface/water.slang`), so the switch moves the waves and leaves the rest of the optics
+alone; the secondary BSDF lobe already refracts through the interface
+(`bsdfSample(..., medium.inside ? WATER_IOR : 1.0, ...)`). No owner-verified frame of
+any of this exists yet.
+
 `bsdfSample` and `bsdfPdf` now describe the same thin-pane mixture.  The
 sampler used to always transmit the diffuse branch while `bsdfPdf` reported a
 front-hemisphere diffuse-reflection density that no sample could produce; an
@@ -957,19 +1073,26 @@ already radiance and is left unchanged.  This is a source-only Java change
 
 ### Render-graph recording boundary
 
-`native/bedray_render_graph/` is the planned recording layer: it compiles a
-pass graph, tracks image layouts and emits broad `ALL_COMMANDS` barriers before
-each pass.  The native core links it by default (`BEDRAY_ENABLE_RENDER_GRAPH`),
-but `core.cpp` neither constructs nor executes it. A previous agent reported
-scoped compilation and ABI tests; those reports do not cover later graph and
-history changes and do not prove a rendered frame. The current sources have
-not been independently built as a complete migration.
+`native/bedray_render_graph/` compiles a pass graph, tracks image layouts and
+emits broad `ALL_COMMANDS` barriers before each pass. The native core links it by
+default (`BEDRAY_ENABLE_RENDER_GRAPH`) and now drives it for the main renderer
+workload: `configure_path_trace` constructs a `FrameGraphOwner`
+(`src/frame_graph_owner.cpp`), which registers the whole native path-trace group
+as one opaque `path_trace.frame` node, compiles the plan from the capability mask
+the host reports, and binds the scheduler. `bedray_core_render_path_trace` records
+that node through `record_frame`; `bedray_core_release_recording` proves
+completion through `release_proven`; configuring again, destroying the pass or
+destroying the core is refused while a lease remains. The owner test
+(`bedray_frame_graph_owner`) covers the capability refusal, the opaque-group
+shape, double release and a failed release that retains its slot, and it is part
+of the 25-test CTest suite. Bloom, volumetric, particles and the frame-generation
+producer still record directly; the graph is not yet the whole-frame recorder.
 
-When the frame moves to the graph, path tracing becomes one
-`record_vulkan_graph` pass.  The adapter records into the host command buffer
-through the supplied `vkCmdPipelineBarrier`, never creates a device and never
-submits, so the Minecraft host keeps ownership of the queue and presentation.
-The pass must then:
+Adopting the graph for those passes, and for the rest of a frame, still needs the
+following before it can be claimed. The adapter records into the host command
+buffer through the supplied `vkCmdPipelineBarrier`, never creates a device and
+never submits, so the Minecraft host keeps ownership of the queue and
+presentation. Each pass must then:
 
 * call `prepare_vulkan_recording` before recording, with the actual
   `initial_layout`, the full `VkImageSubresourceRange`, and the capabilities
@@ -985,16 +1108,17 @@ The pass must then:
 * use one `BedrayFrameDesc` per compute pass if adopting `record_core_dispatches`;
   the C++ integration must resolve reflected named bindings into that descriptor
   and supply the matching 64-byte push block. The bridge does not do this mapping
-  itself and has not yet been connected or validated in a live frame.
+  itself.
 
-Two contracts still need one owner before integration: the graph's 64-bit
+Two contracts must keep one owner as more passes move over: the graph's 64-bit
 `required_capabilities` (logical-device feature bits) and the 10-bit Slang
-capability mask (517) must share one mapping, otherwise `compile` fails with
-`missing_capability` or `is_current` reports a stale plan; and
-`RtMemory.createImage` creates EXCLUSIVE images without a queue family index,
-so single-graphics-family ownership must be proven or an ownership transfer
-added.  History stays on `completed_only` until submission outcomes are
-connected; this pass does not read or write history.
+capability mask (517) share the mapping in `FrameGraphOwner::plan_capabilities`
+today, and a second copy elsewhere would make `compile` fail with
+`missing_capability` or `is_current` report a stale plan; and
+`RtMemory.createImage` creates EXCLUSIVE images without a queue family index, so
+single-graphics-family ownership must be proven or an ownership transfer added.
+History stays on `completed_only` until submission outcomes are connected; the
+graph node does not read or write history.
 
 The history registry now has a provisional C ABI and is referenced by the core
 build, but neither the frame path nor the host drives its submission protocol.
@@ -1009,9 +1133,9 @@ candidates, not a validated or active runtime.
 | Algorithm | Module | State |
 |---|---|---|
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
-| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/rc_atlas_layout.slang`, `radiance_cascades/rc_trace.slang`, `radiance_cascades/interval_transport.slang`, `radiance_cascades/segment_store.slang` | typed trace facade split into options/shade/walk/dispatch/history/ownership; `segment_store.slang` is a facade over `segment_record.slang` and `probe_resolve.slang`, and the typed probe resolve is `rcResolveProbe`/`rcProbeComplete` returning `RCProbeRadiance`; these are source-only in this checkout. The legacy float4 store is isolated behind `legacy_float4_store.slang`/`radiance_cascades_store.slang` and its resolve is named `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete`; it is incompatible with the typed atlas. Environment is opt-in on a positive world boundary, so a terminal-cascade miss under a roof is not treated as sky. Cross-cascade reconstruction, unbiased temporal reuse and host integration are unfinished. |
-| ReSTIR PT | isolated agent workspace | source candidate exists outside the shared checkout; review and integration remain open. |
-| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
+| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/field_mapping.slang`, `field_gather.slang`, `field_transport.slang`, `passes/rc_field_build_scene.slang`, `passes/rc_path_trace_scene.slang` | v2 finite-window field integrated into the native path-trace group: `rc_field_build_scene` builds five haloed cubemap levels (terminal trace, then reconstruct 3→0 with compose-before-average bridges) and `rc_path_trace_scene` gathers reflected direct light for a primary diffuse continuation; the core records five dependent dispatches, a 288-byte metadata UBO and the 32-byte-per-cell tails (bindings 34/35) under a 192 MiB default budget. Switch `-Dvkbridge.rt.radianceCascades=true`, which requires `nativePathTrace` + `nativeScene` and both AOT entries; the axis is `-Dvkbridge.rt.rcBaseAxis` (8/16/32). Temporal field reuse: each cell blended with the previous consecutive field (builder binding 38, weight 0.8, 288-byte metadata). The v1 typed atlas (`rc_probe_trace.slang`) is host-agnostic source, not the field the renderer dispatches, and its legacy float4 resolve must not be wired to the typed atlas. Evidence is the native contract plus `RtSlangRcFieldTest`; no owner-verified frame yet. |
+| ReSTIR PT | `experimental/restir_pt.slang` + `restir/pt_temporal.slang` + `restir/pt_spatial.slang` | **Temporal stage live behind `path_restir_pt` (default off, Java reference backend only; the native core binds a stand-in). Spatial stage live behind its child row `path_restir_pt_spatial` (default on): `restir_pt_spatial(_scene)` pools four distinct neighbours through `ptSpatialReuse` into the other half, which the next frame's temporal import reads (derivation §12; `RestirPtSpatialStageTest`, 8 mutations each killed).** The first ray of a pixel records its diffuse continuation's first edge; the reservoir owns exactly the certified-diffuse, non-emitting first vertex and every other term stays in the path; every draw of an eligible receiver is an attempt (`ptAddEmptyAttempt`); history is keyed on the reprojected camera-relative receiver; record measured at 144 B (std430). Evidence: `RestirPtTemporalStageTest` (identity to 1e-9 on 200k cases, attempt accounting, ownership, layout), 7 shader mutations each killed by one guard, CTest stand-in test. No GPU smoke run, no owner-verified frame. Earlier history: Source candidate in the tree and imported by no root (a test enforces it). v3 derives the change of measure for the fixed-first-vertex shift: reuse is restricted to a certified diffuse first vertex, the stored density transports as `q_new = q_old * G_old / G_new`, and the merge multiplies the target ratio by the Jacobian `G_new / G_old` (sky/emitter, delta and glossy first vertices are rejected). v4 makes the reservoir's `M` the number of attempts: `ptAddPath` admits every valid first edge (v3 gated it on `ptPathReusable`, which conditioned the estimate on a recorded hit and scaled it by `1/P(recorded)`), while the certified-class gate stays in the merge/temporal/spatial steps that transport a density. Derivation and CPU validation: `docs/RESTIR_GI_DERIVATION.md`; `RestirPtChangeOfMeasureTest` and `RestirPtReservoirInvariantTest`; the module compiles through the pinned `slangc`. Still missing: a pass, a manifest-checked host and GPU evidence. |
+| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `restir_pt_spatial`, `restir_pt_spatial_scene`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
 | Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
 | Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
 
@@ -1112,34 +1236,225 @@ code-generation evidence for that revision only: it is not a Gradle build, no
 manifest was validated by `compileSlang`, and no GPU dispatch, stride check,
 cross-cascade resolve or image comparison was run.
 
+### What the deleted GLSL guards covered
+
+Deleting the GLSL invalidated every test whose oracle was GLSL text. Such a
+test compares the port against a file that no longer exists, which proves
+nothing about the port, so each one was either re-aimed at the Slang source it
+is supposed to protect or removed.  The first group is closed:
+
+* the self-avatar exclusion now reads `traversal/scene_traversal.slang`
+  (`selfAvatarPrimitive`, `tracePrimary`) and `passes/path_trace.slang`;
+* the vegetation hit bits now read `traversal/legacy_section_traversal.slang`;
+* the ReSTIR DI and spatial pool numbers are pinned literally against
+  `restir/*.slang` instead of by comparison with `rt_restir_spatial.comp`;
+* the live velocity reprojection body is pinned inside
+  `history/velocity_live.slang`;
+* the NRD motion channel reads `pathtrace/path_tracer.slang` and the
+  binding record in `RtFrameBindings`;
+* the block-emitter falloff, chromatic categories and shadow bias read
+  `light/block_emitters.slang`, and the entity and G-buffer hermetic masks read
+  `surface/surface.slang` and `pathtrace/path_trace_entry.slang`;
+* the whole water model is guarded by `RtSlangWaterTest`: the wave table and
+  its deep-water dispersion, the volumetric absorption and dye split, the
+  medium entry rules, the refracted beam and its column bound, the étendue
+  ratio and the caustic Jacobian, all read out of `surface/water.slang` and
+  cross-checked against the host's own water rule in `AutoPbr` and
+  `OpticalMaterials`. Six mutation probes (retuned wave mix, replaced
+  dispersion law, dropped fold guard, frozen étendue, absorption reading the
+  style switch, column taken from the sight line) were each caught, and the
+  shader was restored byte-identically.
+* the canopy is a filter again, as the legacy path had it:
+  `RtSlangFoliageTransmissionTest` pins the shadow-only leaf layer
+  (`0.60 * mix(1, hue, 0.45)`, ~36 % through one leaf block), the
+  cutout-and-not-emissive gate, the two-sided key-light acceptance, the
+  back-lit term outside the front-face gate (`0.42`,
+  `smoothstep(0, 0.08, ...)`, `float3(1.05, 1.25, 0.75)`), and the sun-side
+  shadow origin (one block for a front-face leaf cube, one centimetre for a
+  card, the bent beam under water), read out of `surface/surface.slang`,
+  `surface/visibility.slang`, `light/sun.slang` and
+  `pathtrace/path_tracer.slang`. Fifteen mutation probes (two-sided cosine,
+  beam and occluded setter, layer constant, tag copy, flag bit, both emissive
+  gates, sun-side normal, cube step, underwater origin, estimator and
+  no-shadow branch, front-face gate, silhouette ramp) were each caught, and
+  the shaders were restored byte-identically.
+* pixel shadows are the cell policy the deleted
+  `rt_common_pixel_shadow.glsl` ran, carried in the existing flag word:
+  `PATH_TRACE_OPTION_PIXEL_SHADOWS` (bit 7) plus the cell size in bits 8..15
+  in 1/16-block units (the legacy `shadowPixel/16`), so `PathTracePush` stays
+  112 B. `pathPixelShadowOrigin` snaps the receiver - never the caster -
+  horizontally to its cell centre, projects the lateral onto the surface
+  plane and keeps the snap only when the one validation ray is unblocked; the
+  estimator and the world-locked disc rotation hash the same
+  `pathTraceShadowCell`, only the primary, non-entity, non-leaf, above-water
+  receiver pays, and a leaf freezes to its block at frame 0 as the legacy
+  `sunSampleFrame` did. The sampler draws from `LightReceiver.sunSeed` when
+  `stableSun` is set and replays the same draws into the path stream otherwise,
+  so an ordinary receiver keeps its exact per-path sequence.
+  `RtSlangPixelShadowTest` (10) mirrors the cell arithmetic, the projection,
+  the blocked-cell fallback, the primary-only rule, the foliage freeze, the
+  stream sync and the host clamp, read out of `pathtrace/path_tracer.slang`,
+  `pathtrace/path_trace_entry.slang`, `light/sun.slang` and
+  `contracts/light.slang`. Eighteen mutation probes (flag bit, size shift,
+  entry decode, primary gate, underwater gate, blocked snap, projection sign,
+  cell scaling, foliage frame/cell, y-shear, stable seed, stream sync, rotation
+  cell, receiver default, host clamp, host flag OR) were each caught, and every
+  mutated file was restored by sha256.
+* the distant block-light handover the deleted `rt_common_shade.glsl` ran is
+  back as a mix, not a max. `light/block_emitters.slang` owns the field:
+  `blockLightFarMix` (a smoothstep over `listRange ± EMITTER_RADIUS`, the inner
+  edge floored at 8 blocks so a small collection range cannot put baked light
+  on the player), `BLOCK_LIGHT_FAR_FULL` (0.999), `BLOCK_LIGHT_FIELD_GAIN`
+  (0.05) and `vanillaBlockIrradiance` (the pre-lightmap warm tint
+  `(1.0, 0.82, 0.60)`, block light only - the field stands in for the emitter
+  estimator, not for the sky). The tracer fades the emitter share of the
+  composite draw by `1 - emitterFar` (fresh and reused alike), adds
+  `pathBakedBlockLight * emitterFar` - the reflecting lobe's albedo, the
+  `1 - Fsc` the interface did not take and the LabPBR AO, with no cosine and
+  no 1/pi, exactly the tuned legacy term - and past `BLOCK_LIGHT_FAR_FULL`
+  `LightReceiver.bakedBlockLight` makes `SunAndBlockEmitterSampler` skip the
+  emitter branch entirely; the key light keeps full density, and the
+  end-of-path `reuseClear` keeps a skipped reservoir from persisting. The
+  distance is `length(hit.position)`, camera-relative the way the list was
+  sorted. The range reaches the tracer as `PathTraceOptions.emitterListRange`
+  from `emitterSampler.maxDistance` (offset 76, so `PathTracePush` stays
+  112 B), and the option is flag bit 16, which the host sets only while
+  `SLANG_BLOCK_EMITTERS`/`RtSettings.emissive()` keeps emitters on - a frame
+  with the switch off gets no field either. `RtSlangDistantBlockLightTest` (9)
+  mirrors the band, the gain and tint, the mix structure, the primary-diffuse
+  gate, the exhausted-list skip and the host wiring, read out of
+  `light/block_emitters.slang`, `pathtrace/path_tracer.slang`,
+  `pathtrace/path_trace_entry.slang`, `contracts/light.slang` and the two host
+  classes. Twenty-two mutation probes (band floor, gain, tint, clamp, sampler
+  gate, fade on both branches, distance source, bounce/metal/light gates, reuse
+  skip, verdict, albedo count, entry range, host flag, host switch, path
+  range, contract default, bit collision, clear) were each caught, and every
+  mutated file was restored by sha256.
+* the glass cost the deleted `RtGlassCostTest` measured is now a policy of the
+  typed walk. `surface/visibility.slang` spends one closest-hit query per
+  layer, so the transmittance floor (`SURFACE_VISIBILITY_MIN_TRANSMITTANCE`,
+  1e-3) ends an absorbed ray before the next pane, and every filtered layer and
+  every hole advances past its own candidate through `skipSurfaceCandidate`
+  (`ray.tMin = hitDistance + bias`; the origin stays, so `hit.t` is still
+  measured from the original ray). The medium walk applies
+  `waterSegmentTransmittance` to the column first and the interface's
+  `1 - Fsc` Fresnel share second, because a fluid face tints once and the
+  colour is the distance absorption. `RtSlangGlassCostTest` (5) reads the two
+  constants out of the shader as the model's own inputs, proves five 25 %
+  panes trip the floor before the 16-layer budget while a clean window fills
+  it, and pins the four floor-to-skip adjacencies, the six advances, the
+  hole's advance-without-filter and the fluid share against
+  `surface/visibility.slang` and `surface/surface.slang`.
+* the NaN guards the deleted `RtShaderNaNGuardTest` pinned are structural in
+  the typed modules. `safeNormalize` gates the squared length on
+  `MATH_EPSILON` (1e-6), both GGX half vectors are
+  `safeNormalize(V + L, N)`, the block emitter rejects a zero density and a
+  zero cosine before its divisions and keeps the `max(cosReceiver, 1e-4)` and
+  `0.001` shadow-length floors, the sun rejects a zero source PDF after the
+  divide, the tangent frame needs its det gate *and* guarded numerators (a
+  collinear edge zeroes one while the UVs stay distinct), and the primary
+  normal is replaced below 1e-4 at both entry points; no shading or NEE module
+  carries a bare `normalize(`, and the entry's three are the explicit camera
+  basis plus the two gated lines. The camera ray builder has no homogeneous
+  divide at all (explicit basis, no matrix multiply, no division) - stronger
+  than the deleted `safeW` guard - and both velocity modules sanitise a
+  non-finite reprojection to zero motion plus a full disocclusion, which is why
+  the live-parity module keeps the bare `w` divide its GLSL source had.
+  `RtSlangNaNGuardTest` (9) mirrors the helpers numerically and the call sites
+  structurally, read out of `contracts/math.slang`, `shading/bsdf.slang`,
+  `shading/microfacet.slang`, `light/block_emitters.slang`, `light/sun.slang`,
+  `pathtrace/path_trace_entry.slang`, the two velocity modules and the
+  velocity pass. Thirty-one mutation probes (floor branch, floor order, floor
+  value, layer budget, hole skip/break/filter, skip origin, medium filter,
+  fluid and non-fluid share, gate value and comparison, both half vectors,
+  emitter direction/cosine/floor/bias, sun axis and PDF order, tangent det and
+  numerator, both entry gates, a new bare normalize, the camera divide and the
+  camera matrix, both velocity sanitises, the pass clip-w gate) were each
+  caught, and every shader was restored by sha256.
+
+The second group was closed in the hot-loop/layout batch, with one deliberate
+reinterpretation:
+
+* the rules of the deleted `RtPathHotLoopTest` and `RtOptimizationTest` are now
+  `RtSlangHotLoopTest` (7): one decode per accepted hit, the primary record
+  filled at the first accepted surface, the sky evaluated only on a miss, an
+  ambient-only bounce stopping at geometry, one key-light draw per vertex, the
+  reservoir reset by `emitters.fingerprint()` rather than a section version,
+  and no shading normal built by a transmittance walk. The last rule had been
+  lost in the port: `decodeSurface` carries the legacy `wantNormal` switch
+  again, and both walks of `surface/visibility.slang` plus the camera's
+  `primaryWaterMedium` decode with `false`, so a shadow walk pays for no atlas
+  normal, AO texel, entity auto-normal or wave fit. Seven mutation probes
+  (entity gate, atlas gate, the shaded overload, one visibility walk, the sky
+  branch, the fingerprint, plus the build pin) were each caught, and every file
+  was restored by sha256.
+* the reach the deleted `RtBlockLightReachTest` measured is
+  `RtSlangBlockLightReachTest` (7): the `d^-1.5` → `d^-1.25` seam at two
+  blocks, the 24-block squared window, the rsqrt form (no `pow`), the candidate
+  distance/self gate read before the atlas fetch, the hoisted `lightRadius`,
+  and the sqrt-ladder index PMF. Mutation-proved by moving `EMITTER_RADIUS`.
+* `RtStatsLayoutTest` has no field-by-field successor, because the struct it
+  mirrored has no shader on the other end. The typed stats ABI is the four
+  counter words (16 B) that `passes/frame_stats.slang` writes through
+  `RWStructuredBuffer<uint>`; no pass imports the legacy `FrameStats` or
+  `PushConstants` declarations (only `backend_query.slang` and
+  `bedray_legacy.slang` import the module, and neither names them), so the
+  slot's tail is host-only scratch, not a layout a shader can misread.
+  `RtSlangLayoutAbiTest` (8) pins the blocks that do have a consumer -
+  `FrameConstants` 608 B with every section offset, `PathTracePush` 112 B with
+  the 16 members and the emitter/di/entity offsets, `DIReservoir` 64 B,
+  `BlockEmitterRecord` 96 B, `FrameStatsPush` 8 B, the four counter words vs
+  the host's 16 B, and the legacy 128-byte push against `RtFrameParams` - and
+  proves the reachability boundary that keeps the tail dead. `gradle/slang.gradle`
+  keeps the build-time pin; a same-size swap of `diState`/`entityState` fails
+  that pin, and with it skipped fails the unit test, then was restored by
+  sha256.
+
+The third group tested the deleted classes themselves (runtime compiler
+options, the SPIR-V disk cache, the GLSL include graph, the `rtx/raytracing`
+experiment engine) and is gone with no loss. The sun and moon disc did not
+lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
+
 ## Next steps
 
-1. **Path-trace native integration** — migrate resource allocation, frame data,
-   reflected descriptor mapping, dispatch and retirement into the C++ renderer.
-   The ownership split, scene/shader contract gap, lifetimes and open decisions
-   are recorded in [PATH_TRACE_CPP_INTEGRATION_PLAN.md](PATH_TRACE_CPP_INTEGRATION_PLAN.md).
-   Java supplies Minecraft-owned state and the existing command buffer through a
-   narrow boundary. Replace the legacy scene representation with the new scene
-   contract; the existing `LegacySectionTraversal` is reference-stage work, not
-   proof of the target architecture. Apply exposure once in the display pass.
-   Unsupported device capabilities must be reported, not routed to GLSL.
-   The cutout-distance correction is in the source and compiles to SPIR-V
-   (`passes/path_trace.slang`, `cs_6_5`); it has not been exercised on a GPU or
-   in game. Invalid/truncated primary paths are flagged and excluded from the
-   sky path. Still agree on view depth versus ray distance before a downstream
-   consumer treats `outDepth` as linear view depth.
+1. **Path-trace native integration** — the C++ group owns resource allocation,
+   frame data, the reflected descriptor mapping, dispatch, completion/discard and
+   retirement; Java supplies Minecraft-owned state and the command buffer. The native
+   scene, the seven denoiser guides, NRD motion, the frame-stats stage and the RC field
+   are forwarded by additive calls. The `outDepth` contract is settled (ray distance from
+   the eye; every consumer listed with its reading next to `firstHitDistance` above).
+   Remaining: an owner-verified live frame. Unsupported device capabilities are reported, not
+   routed to GLSL.
 2. **Sample rejection** — the tracer keeps the two bad endings apart
    (`PATH_TRACE_FLAG_INVALID_SAMPLE` for a non-finite fault,
    `PATH_TRACE_FLAG_TRUNCATED` for a path that only stopped short) and
-   `pathTraceSampleRejected` publishes that verdict through the alpha lane of
-   the radiance image, which the display pass turns into a weight of 0 or 1.
-   The host still has no readback of either flag, so a fault that is not
-   non-finite - a traversal that returns a hit the decoder cannot name, an
-   exhausted visibility budget (now rejected by `surfaceVisibilityProven`, so
-   it darkens instead of leaking light) - is invisible in a log. A counter per
-   reason belongs to the C++ pass, which owns the buffers.
-3. **ReSTIR PT** — path-space reservoirs on top of `PathVertex`; keep it
-   separate from the DI reservoir so the two reuse policies do not merge.
+   `pathTraceSampleRejected` publishes that verdict through the alpha lane of the
+   radiance image, which the display pass turns into a weight of 0 or 1. The host now
+   reads the total back: `RtStatsMetering` mirrors the counter pass's 1-in-16 tile walk
+   (the test enumerates both masks, edge tiles included) and the renderer prints
+   `reject_pct = metered - samples` on the F3 `rt_pass` line - n/a when the slot holds
+   no measurement or when the count exceeds the mask, which would mean host and shader
+   disagree. The split is live too: the trace pass adds four words into the end of the
+   slot through binding 37 (`invalid`, `truncated`, `visibility overflow`, `metered`, new
+   sample flag `PATH_TRACE_FLAG_VISIBILITY_OVERFLOW` = bit 13) and the F3 line prints
+   `invalid_pct`, `trunc_pct` and `vis_overflow_pct` - n/a unless the metered word equals
+   `RtStatsMetering`'s own count (`RtPathRejectBreakdownTest`). `invalid_pct` is part of
+   `reject_pct`; the rest of `reject_pct` is `RC_UNRESOLVED`. The native core binds a
+   one-word stand-in at 37 (it has no slot to lend the trace), so on that backend the split
+   stays n/a until the core forwards the slot.
+3. **ReSTIR PT** — the temporal stage is live behind `path_restir_pt` (default off;
+   `restir/pt_temporal.slang`, binding 36, Java reference backend; derivation §11).
+   The spatial stage is live too (`restir_pt_spatial` / `restir_pt_spatial_scene`, child row
+   `path_restir_pt_spatial`; derivation §12): it pools neighbours with `ptSpatialReuse` into the
+   other half, and the next frame's temporal stage resolves the pooled winner with
+   `ptResolveFiltered`. Remaining: a GPU smoke run with both switches on and an owner-verified frame. Earlier notes:
+   path-space reservoirs on top of `PathVertex`; keep it
+   separate from the DI reservoir so the two reuse policies do not merge. The source
+   candidate is quarantined in `experimental/restir_pt.slang`. Its change of measure is
+   derived and CPU-validated (diffuse first vertex, `G_new/G_old` Jacobian; see
+   `docs/RESTIR_GI_DERIVATION.md`), and v4 makes its attempt count match the estimator
+   (every valid first edge is an attempt; only certified paths may merge). Reuse cannot
+   ship until the module has a pass, a manifest-checked host and a GPU smoke run.
 4. **Entity shading parity** — closed in `e1bcd82`: the ring is traced, moving
    parts reproject, an End Portal is drawn as the procedural starfield, mob skin
    gets its **Sobel auto-normal**, and glowing parts are **next-event
@@ -1150,30 +1465,46 @@ cross-cascade resolve or image comparison was run.
    walk. Closed: a camera that starts *inside* water seeds its own body (the
    host publishes `FRAME_FLAG_CAMERA_IN_WATER` from `RtFogState.medium`, and
    `primaryWaterMedium` walks up from the eye for the surface it sits under),
-   and the optical lobe now refracts from the medium the ray travels in, so a
-   path leaving the body bends away from the normal and can totally internally
-   reflect. Still open: Snell refraction and caustics of the underwater NEE beam,
-   and wiring `RtSettings.waterStyle` into the typed path.
+   the optical lobe refracts from the medium the ray travels in (a path leaving the
+   body bends away from the normal and can totally internally reflect), and
+   `RtSettings.waterStyle` reaches the typed path as its own frame flag so the toggle
+   moves the waves only. Closed 2026-10-31: a block emitter above the sheet is reached
+   through the Snell crossing with its ray-Jacobian weight (`waterBeamToPoint`), and an
+   escaped ray inside the body is refracted out of the plane or totally reflected. Closed in the same batch as the medium: the underwater NEE is now a
+   Snell-refracted two-leg beam with a wave-focus caustic (`waterBeamToLight`,
+   `traceShadowBeam`, `waterBeamFocus`).
 4b. **Denoiser G-buffer** — the entry pass writes the seven DLSS-RR guide
    channels (`outViewZ`, `outNormalRough`, `outDiffuse`, `outAlbedo`,
    `outDirect`, `outSpecular`, `outSpecAlbedo`, bindings 26–32) at the primary
    vertex, plus NRD's per-pixel `IN_MV` vec4 into binding 33
-   (`outMotionBuffer`, the renderer's existing `entity_motion_px`); explicit
-   `SLANG` + `DLSS_RR` and `SLANG` + `NRD` are accepted, and `AUTO` declines the Slang denoiser path until a live frame consumes the guides. The C++ backend forwards
+   (`outMotionBuffer`, the renderer's existing `entity_motion_px`). The
+   renderer no longer refuses the denoiser under a trace mode: the pure
+   `DenoiserResolution` table decides from the setting and the libraries alone,
+   and the pass builds its guide variant whenever a denoiser is active. The C++ backend forwards
    the seven guides through the additive
    `bedray_core_render_path_trace_guides` call (`GUIDE_OUTPUTS`), so
    `nativePathTrace` + `DLSS_RR` no longer blocks on missing outputs. The additive NRD_MOTION feature and
    `bedray_core_render_path_trace_motion` also forward the borrowed vec4-per-pixel
    buffer at binding 33. Native NRD requires that matching feature/export; the
-   old calls reject enabled motion writes without real targets. Open: a rejected
-   (invalid/truncated) sample can still carry a guide.
-5. **Radiance Cascades trace/update** — typed trace, store and probe resolve
-   are now in the shared checkout as source-only. Environment is opt-in on a
-   positive world boundary that the terminal window reaches; a zero boundary
-   adds no sky, because a terminal-cascade miss can end inside a cave. Align
-   temporal history and prove that boundary, then define cross-cascade
-   reconstruction and host integration before connecting a pass. Do not wire
-   the legacy float4 resolve to the typed atlas.
+   old calls reject enabled motion writes without real targets. A rejected
+   sample is closed: the entry computes `pathTraceSampleRejected`
+   (`INVALID_SAMPLE | RC_UNRESOLVED`) once, and the alpha lane, `outMotion`, the
+   seven guides and binding 33 all read that one verdict, so a refused sample
+   writes the neutral miss set and zero motion. A truncated path stays trusted:
+   it stopped short, but its primary vertex is real. Open: an owner-verified
+   frame that consumes the guides through DLSS RR/NRD, and the artifact check
+   that goes with it (the table and the guide layout are unit-proven, not run).
+5. **Radiance Cascades trace/update** — the v2 finite-window field is integrated into
+   the native path-trace group: `rc_field_build_scene` builds five haloed cubemap
+   levels (terminal trace, then reconstruct 3→0 with compose-before-average bridges)
+   and `rc_path_trace_scene` gathers reflected direct light for a primary diffuse
+   continuation. Enable with `-Dvkbridge.rt.radianceCascades=true` (which needs
+   `nativePathTrace` + `nativeScene` and both AOT entries) and pick the axis with
+   `-Dvkbridge.rt.rcBaseAxis` (8/16/32). Temporal field reuse is implemented
+   (2026-10-31, `RC_RECONSTRUCTION_PLAN.md` "Temporal reuse": the previous consecutive
+   field blended at weight 0.8 through builder binding 38). Remaining: an owner-verified
+   frame that proves the field in a real scene. The v1 typed atlas is
+   host-agnostic source; do not wire the legacy float4 resolve to the typed atlas.
 6. **More entry passes** — denoise/composite follow the same one-file-per-entry
    pattern and the same ABI; no second pipeline path.
 7. **Live game check** — only after the above and an explicit request.  A

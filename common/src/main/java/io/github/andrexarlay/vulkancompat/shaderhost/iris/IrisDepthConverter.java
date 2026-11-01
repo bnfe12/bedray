@@ -1,25 +1,59 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.iris;
 
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangPass;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassDriverGate;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
-import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
 import org.joml.Matrix4f;
 import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import static org.lwjgl.vulkan.VK10.*;
 
 /** Converts the host's reverse-Z raster depth into Iris/OpenGL 0-near/1-far depth.
+ * The pass is the AOT {@code iris_depth} artifact; the pipeline belongs to the bridge, which is not the renderer.
  * Resources belong to the Bedray device; the bridge flushes/waits before closing them.
  */
 final class IrisDepthConverter implements AutoCloseable {
+    /** {@code IrisDepthPush}: float4x4 + four float4. */
+    static final int PUSH_BYTES = 128;
+    static final int[] THREADS = {8, 8, 1};
     private final VkDevice device;
     private final RtMemory memory;
     private RtMemory.Img output;
     private long sampler, setLayout, pipelineLayout, pipeline, pool, set;
     private boolean initialized;
+
+    /** The bridge writes a fixed push block and divides by a fixed group size, so the artifact has to agree. */
+    static void requireManifest(SlangPassManifest manifest) {
+        if (manifest.pushConstantBytes() != PUSH_BYTES) {
+            throw new IllegalArgumentException("iris_depth: push constants are " + manifest.pushConstantBytes()
+                + " bytes, the bridge writes " + PUSH_BYTES);
+        }
+        if (!Arrays.equals(manifest.threadGroupSize(), THREADS)) {
+            throw new IllegalArgumentException("iris_depth: threads " + Arrays.toString(manifest.threadGroupSize())
+                + ", the bridge dispatches " + Arrays.toString(THREADS));
+        }
+        if (manifest.bindings().size() != 2) {
+            throw new IllegalArgumentException("iris_depth: " + manifest.bindings().size()
+                + " bindings, the bridge sets 2");
+        }
+        SlangPassManifest.Binding depth = manifest.binding("rasterDepth");
+        if (depth == null || depth.binding() != 0
+            || depth.descriptorType() != BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+            throw new IllegalArgumentException("iris_depth: binding 0 must be the combined rasterDepth sampler");
+        }
+        SlangPassManifest.Binding out = manifest.binding("irisDepth");
+        if (out == null || out.binding() != 1
+            || out.descriptorType() != BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE) {
+            throw new IllegalArgumentException("iris_depth: binding 1 must be the irisDepth storage image");
+        }
+    }
     IrisDepthConverter(VkDevice device, int width, int height, long sourceView) {
         this.device=device; memory=new RtMemory(device);
         try { create(width,height,sourceView); }
@@ -44,12 +78,12 @@ final class IrisDepthConverter implements AutoCloseable {
             check(vkCreateDescriptorSetLayout(device,VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings),null,handle)); setLayout=handle.get(0);
             var range=VkPushConstantRange.calloc(1,stack);range.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(128);
             check(vkCreatePipelineLayout(device,VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(range),null,handle));pipelineLayout=handle.get(0);
-            String source;
-            try(var stream=IrisDepthConverter.class.getResourceAsStream("/shaders/glsl/iris_depth.comp")) {
-                if(stream==null)throw new IllegalStateException("Missing iris_depth.comp");
-                source=new String(stream.readAllBytes(),StandardCharsets.UTF_8);
-            }
-            var bytecode=SpirvCompiler.compile(source,org.lwjgl.util.shaderc.Shaderc.shaderc_glsl_compute_shader,"iris_depth.comp");
+            SlangPass pass = SlangPass.load("iris_depth").orElseThrow(() -> new IllegalStateException(
+                "iris_depth is not in this build; the Iris depth bridge has no runtime GLSL fallback"));
+            requireManifest(pass.manifest());
+            String blocker = SlangPassDriverGate.blocker("iris_depth", pass.spirv());
+            if (blocker != null) throw new IllegalStateException(blocker);
+            var bytecode = ByteBuffer.wrap(pass.spirv()).order(ByteOrder.nativeOrder());
             check(vkCreateShaderModule(device,VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(bytecode),null,handle));
             long shader=handle.get(0);
             try {

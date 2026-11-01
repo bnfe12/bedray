@@ -10,6 +10,7 @@ import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retire
 import io.github.andrexarlay.vulkancompat.rt.denoise.BridgeNrdLocator;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserConfig;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
+import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserResolution;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DlssRrDenoiser;
 import io.github.andrexarlay.vulkancompat.rt.denoise.NrdAvailability;
 import io.github.andrexarlay.vulkancompat.rt.denoise.NrdDenoiser;
@@ -73,10 +74,6 @@ public final class RtFrameRenderer {
      * RtSkyState the sky block, RtFogState the fog block.
      */
     private static final int STATS_STRIDE = RtStatsLayout.SLOT_STRIDE;
-    /** Bytes per pixel of one ReSTIR parity half (Reservoir in rt_common.glsl, cross-checked by RtStatsLayoutTest). */
-    static final int RESERVOIR_BYTES = 64;
-    /** Bytes per pixel of one ReSTIR receiver-position half (ReservoirAuxBuf: vec4 camera-relative position). */
-    static final int RESERVOIR_AUX_BYTES = 16;
     /** Rebuilt sections closer than this (squared section distance, ~2 sections) reset the path tracing accumulation. */
     static final long SCENE_CHANGE_RADIUS_SQ = 8;
 
@@ -131,19 +128,17 @@ public final class RtFrameRenderer {
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtMemory.Buf entityMotionBuf;
-    /** ReSTIR DI reservoirs of rt_rays.comp: two parity halves of 64 B per pixel (ReservoirBuf in rt_common.glsl). */
-    private static RtMemory.Buf reservoirBuf;
-    /** ReSTIR DI receiver positions of rt_rays.comp: two parity halves of 16 B per pixel, written with the reservoirs. */
-    private static RtMemory.Buf reservoirAuxBuf;
-    private static long reservoirPixels = -1L;
-    private static long reservoirLightFingerprint = Long.MIN_VALUE;
-    private static boolean reservoirResetRequested = true;
-    private record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence, long recordedNanos) {}
+    private record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence,
+                                 long recordedNanos, int width, int height, int frameIndex) {}
     private static RecordingReadbackSlots<StatsMetadata> statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
     private static long lastStatsSequence = -1;
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
     private static double lastHitPct = -1.0;
+    /** Share of the metered pixels the tracer refused; -1 until a counter slot carries a measurement. */
+    private static double lastRejectedPct = -1.0;
+    /** The trace's split of the frame's bad endings, or null while no slot carried a measurement this host agrees with. */
+    private static RtStatsMetering.Breakdown lastRejectSplit;
     /** Share of the hit pixels whose key light reached them through a leaf card (1-in-16 mask, like hist_pct). */
     private static double lastLeafPct = -1.0;
     private static volatile String lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
@@ -211,21 +206,9 @@ public final class RtFrameRenderer {
     /** The ReSTIR technique switches of this frame, packed; a change of any of them invalidates every reservoir. */
     private static int lastFrameReusePolicy = -1;
 
-    /**
-     * Screen-space depth composite pipeline for legacy raster entity compositing.
-     * When native RT is active, this pipeline is permanently disabled (OFF): dynamic entities
-     * are fully integrated into the RT TLAS, so pure RT radiance (finalSource=RT_OUTPUT) is copied
-     * directly into the final render target without raster depth composite mixing.
-     */
-    private static RtCompositePipeline compositePipeline = null;
-    private static final boolean LEGACY_RASTER_ENTITY_COMPOSITE = false;
     private static final String FINAL_OUTPUT_SOURCE = "RT_OUTPUT";
     private static final int REFLECTION_MASK = 0x03;
     private static final int SHADOW_MASK = 0x03;
-
-    public static boolean isLegacyRasterEntityCompositeEnabled() {
-        return LEGACY_RASTER_ENTITY_COMPOSITE && compositePipeline != null;
-    }
 
     public static String getFinalSource() {
         return FINAL_OUTPUT_SOURCE;
@@ -254,10 +237,9 @@ public final class RtFrameRenderer {
         var entityStatus = getEntityInstanceStatus();
         String worldStatus = world == null ? "UNAVAILABLE" : (lastStats == null ? "INITIALIZING" : "READY");
         return String.format(Locale.ROOT,
-            "[RT-HERMETIC] worldInstance=%s entityInstance=%s legacyRasterEntityComposite=%s finalSource=%s reflectionMask=0x%02X shadowMask=0x%02X",
+            "[RT-HERMETIC] worldInstance=%s entityInstance=%s finalSource=%s reflectionMask=0x%02X shadowMask=0x%02X",
             worldStatus,
             entityStatus,
-            isLegacyRasterEntityCompositeEnabled() ? "ON" : "OFF",
             FINAL_OUTPUT_SOURCE,
             REFLECTION_MASK,
             SHADOW_MASK);
@@ -419,7 +401,6 @@ public final class RtFrameRenderer {
         }
         exposure.reset();
         atmosphere.resetHistory();
-        reservoirResetRequested = true;
         lastHistPct = -1.0;
         lastLeafPct = -1.0;
         lastTracedNs = 0L;   // the gap before the next traced frame describes the old setup, not a slow one
@@ -552,7 +533,8 @@ public final class RtFrameRenderer {
         // ReSTIR is a per-technique switch, and every one of them changes what a stored record means: turning reuse on or
         // off, or pooling neighbours on top of it, must not continue an accumulation that was built without it.
         int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)
-            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0);
+            | (RtSettings.pathRestirDi() ? 4 : 0) | (RtSettings.pathRestirSpatial() ? 8 : 0)
+            | (RtSettings.pathRestirPt() ? 16 : 0) | (RtSettings.pathRestirPtSpatial() ? 32 : 0);
 
         boolean presetOrDenoiserChanged = (lastFrameBounces != -1) && (
             curPreset != lastFramePreset
@@ -729,6 +711,17 @@ public final class RtFrameRenderer {
                 long base = statsBuf.mapped + (long) lease.slot() * STATS_STRIDE;
                 int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
                 int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
+                // The counter pass only adds the samples it trusts, so this slot's own extent and rotation say how
+                // many pixels it weighed: the difference is the share the tracer refused, which no other word carries.
+                lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(), metadata.height(),
+                    metadata.frameIndex(), samples);
+                // The trace pass's own words: why pixels were refused, how many paths ran short, how many shadow walks
+                // gave up. The metered word must equal this mask's count, or the native stand-in left it zero: n/a.
+                lastRejectSplit = RtStatsMetering.breakdown(metadata.width(), metadata.height(),
+                    metadata.frameIndex(), MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS),
+                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 4),
+                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 8),
+                    MemoryUtil.memGetInt(base + RtStatsLayout.PATH_REJECTS + 12));
                 lastTransparency = metadata.transparency() ? String.format(Locale.ROOT,
                     "[RT-TRANSPARENCY] counters=READBACK queries=%d candidates=%d layers=%d overflows=%d direct_shadow_queries=%d indirect_shadow_queries=%d",
                     Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_QUERIES)),
@@ -743,8 +736,12 @@ public final class RtFrameRenderer {
                     // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
                     lastHistPct = RtAccumulation.acceptedPct(MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED), hits,
                         metadata.accumulated());
-                    // Both counters use the same 1-in-16 pixel mask as countSample, so this is a true share of the hit pixels.
-                    lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT) / hits;
+                    // leafBacklit is the one head counter with no writer. The legacy transparency pass counted the
+                    // sun-through-a-leaf hits behind its own 1-in-16 mask and the statistics pass keeps no count of it,
+                    // so a zero here is the absence of a measurement, not a share of 0%: -1 is what the F3 line prints
+                    // as n/a.
+                    int leafBacklit = MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT);
+                    lastLeafPct = leafBacklit > 0 ? 100.0 * leafBacklit / hits : -1.0;
                 }
                 if (samples > 0) {
                     lastHitPct = 100.0 * hits / samples;
@@ -899,7 +896,7 @@ public final class RtFrameRenderer {
                 gbViews = denoiser.gbufferViews();
             }
         }
-        pass.bind(new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
+        pass.bind(new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
             materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L, lightmapView, motionHandle));
 
         int writeSlot = statsLease.slot();
@@ -909,6 +906,8 @@ public final class RtFrameRenderer {
         // zeroing the slot would keep the count of the frame that used it three slots ago.
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.LEAF_BACKLIT, 4, 0);
         VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.TRANS_QUERIES, 24, 0);
+        // The trace's own F3 split: zeroed here, added to by the trace, so a slot reused three frames later starts clean.
+        VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.PATH_REJECTS, 16, 0);
         float lightRange = RtConfig.mode() == RtMode.PATH_TRACED
             ? Math.min(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.pathMaxDistance(), 128)
             : io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.emissiveDistance() + 8f;
@@ -927,8 +926,12 @@ public final class RtFrameRenderer {
         io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setEnabled(
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.cullSharedGlass());
         MemoryUtil.memPutInt(hdr + RtStatsLayout.EMITTER_COUNT, emitters.count());
-        MemoryUtil.memPutFloat(hdr + RtStatsLayout.EXPOSURE, exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
-            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths()));
+        // One exposure number for the frame, read from the switch rather than from the flag bit that is composed below:
+        // the display step, the volumetric composite, the denoiser packs and this slot all take params.exposure, so a
+        // change of the compensation cannot brighten one of them and leave another where it was.
+        params.exposure = exposure.applied(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoExposure(),
+            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths());
+        MemoryUtil.memPutFloat(hdr + RtStatsLayout.EXPOSURE, params.exposure);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL, (float) (camera.pos.x - emitters.originX()));
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 4, (float) (camera.pos.y - emitters.originY()));
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 8, (float) (camera.pos.z - emitters.originZ()));
@@ -948,9 +951,14 @@ public final class RtFrameRenderer {
         InstanceMath.inverseViewProjection(frameProjection, camera.viewRotationMatrix, params.invViewProjStable);
         params.invViewProj.set(params.invViewProjStable);
         params.statsAddress = statsBuf.address + writeOffset;
+        // The same slot as a descriptor, for the pass that fills its counters: a device address reaches only the
+        // shaders that take one, and the statistics pass binds the sixteen-byte head like any other buffer.
+        params.statsBuffer = statsBuf.handle;
+        params.statsOffset = writeOffset;
         params.flipY = RtConfig.FLIP_Y;
         params.tonemap = RtConfig.TONEMAP_ACES;
         params.frame = (int) dispatchCounter;
+        params.rtRadiusXz = lastRadiusXz;
         params.cameraX = camera.pos.x;
         params.cameraY = camera.pos.y;
         params.cameraZ = camera.pos.z;
@@ -980,6 +988,13 @@ public final class RtFrameRenderer {
             params.skyColor[1] = sky.skyColor.y();
             params.skyColor[2] = sky.skyColor.z();
         }
+        // The sky as a light: the legacy hemisphere model (near-neutral, AMBIENT_SCALE at noon), not the display colour.
+        float sunY = params.key.isMoon ? -params.key.dir[1] : params.key.dir[1];
+        RtSky.SkyLight skyLight = new RtSky.SkyLight();
+        RtSky.skyLight(params.skyColor, params.key.day, sunY, -sunY, skyState.moonLight, skyState.rainBrightness,
+            params.key.color, hasSky, skyLight);
+        System.arraycopy(skyLight.zenith, 0, params.skyLightZenith, 0, 3);
+        System.arraycopy(skyLight.horizon, 0, params.skyLightHorizon, 0, 3);
         params.volumetricFogEnabled = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.volumetricFogEnabled();
         params.fogDensity = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.fogDensity();
         params.fogInScattering = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.fogInScattering();
@@ -991,6 +1006,7 @@ public final class RtFrameRenderer {
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.waterStyle() == 1 ? RtFrameParams.FLAG_WATER_REALISTIC : 0)
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.vibrantVisuals() ? RtFrameParams.FLAG_VIBRANT_VISUALS : 0)
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.caustics() ? RtFrameParams.FLAG_CAUSTICS : 0)
+            | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoExposure() ? RtFrameParams.FLAG_AUTO_EXPOSURE : 0)
             | ((denoiseMode == DenoiserMode.DLSS_RR && dlssRrDenoiser != null
                 || denoiseMode.isNrd() && NRD_DENOISE_SUN) ? RtFrameParams.FLAG_SUN_DENOISED : 0)
             | (DEMODULATE ? RtFrameParams.FLAG_DEMODULATE : 0)
@@ -999,65 +1015,6 @@ public final class RtFrameRenderer {
         if (!io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.indirectTranslucentShadows()) params.flags |= RtFrameParams.FLAG_SKIP_INDIRECT_TRANSLUCENT;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.transparencyStats()) params.flags |= RtFrameParams.FLAG_TRANSPARENCY_STATS;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials()) params.flags |= RtFrameParams.FLAG_OPTICAL_MATERIALS;
-        // ReSTIR DI: one reservoir per pixel, two parity halves. Only the ray pass reads it; path tracing keeps plain RIS.
-        // With reuse switched off the shader is handed a zero reservoir address, which is the shader's own "off" test, and
-        // the ring is not even filled - so switching back on converges from nothing rather than from stale records.
-        long reservoirAddr = 0L;
-        long reservoirAuxAddr = 0L;
-        if (pass.mode() == RtMode.RAY_TRACED && RtSettings.restirTemporal()
-            && (params.flags & RtFrameParams.FLAG_EMISSIVE) != 0) {
-            long pixels = (long) w * h;
-            long need = pixels * 2L * RESERVOIR_BYTES;
-            boolean reset = false;
-            if (reservoirBuf == null || reservoirBuf.size < need) {
-                if (reservoirBuf != null) {
-                    VK10.vkDeviceWaitIdle(device);
-                    world.memory().destroy(reservoirBuf);
-                }
-                reservoirBuf = world.memory().createBuffer("rt_restir", need,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                        | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-                reset = true;
-                LOGGER.info("[VKB-RT] ReSTIR reservoirs {}x{} x2 = {} KiB", w, h, need / 1024);
-            }
-            long auxNeed = pixels * 2L * RESERVOIR_AUX_BYTES;
-            if (reservoirAuxBuf == null || reservoirAuxBuf.size < auxNeed) {
-                if (reservoirAuxBuf != null) {
-                    VK10.vkDeviceWaitIdle(device);
-                    world.memory().destroy(reservoirAuxBuf);
-                }
-                reservoirAuxBuf = world.memory().createBuffer("rt_restir_aux", auxNeed,
-                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
-                        | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-                LOGGER.info("[VKB-RT] ReSTIR receiver aux {}x{} x2 = {} KiB", w, h, auxNeed / 1024);
-                // No fill: every pixel rewrites its own slot before the spatial pass reads it, and a stale position
-                // next to a zeroed (empty) reservoir is skipped by the M == 0 test there anyway.
-            }
-            if (pixels != reservoirPixels) {
-                // A different resolution moves every pixel: the old records sit at other indices and must not be read.
-                reservoirPixels = pixels;
-                reset = true;
-            }
-            // Only a change of the lights themselves invalidates a stored sample (a removed torch would otherwise keep
-            // glowing through history forever). A streaming section or a camera re-anchor leaves the history valid, and
-            // rebuilding the whole buffer for those would cost hundreds of MB of fill per frame while moving.
-            long lightFingerprint = emitters.fingerprint();
-            if (lightFingerprint != reservoirLightFingerprint) {
-                reservoirLightFingerprint = lightFingerprint;
-                reset = true;
-            }
-            if (reservoirResetRequested) {
-                reset = true;
-                reservoirResetRequested = false;
-            }
-            reservoirAddr = reservoirBuf.address;
-            reservoirAuxAddr = reservoirAuxBuf.address;
-            if (reset) {
-                // A removed torch must not keep contributing through a stored sample: the world changed, drop all history.
-                VK10.vkCmdFillBuffer(cmd, reservoirBuf.handle, 0L, reservoirBuf.size, 0);
-                VkBarriers.fullMemoryBarrier(cmd);
-            }
-        }
         pass.configure(params, useDenoiser);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.GI_DIST, params.giDistance);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.EMIS_DIST, params.emissiveDistance);
@@ -1068,10 +1025,10 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.HISTORY_CAP, params.historyCap);
         // StatsBuf.shadowPixel: pixelated-shadow cell edge in texture pixels (1/16 block), 0 = the option is off
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.SHADOW_PIXEL, pixelShadowStatsValue());
-        // StatsBuf.reservoirAddr (488): ReSTIR parity buffer of the ray pass; 0 disables temporal reuse
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, reservoirAddr);
-        // StatsBuf.reservoirAuxAddr (496): camera-relative receiver position per reservoir record (spatial reuse)
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_AUX_ADDR, reservoirAuxAddr);
+        // StatsBuf.reservoirAddr / reservoirAuxAddr: the slots belonged to the deleted ray pass's own ReSTIR ring. The
+        // Slang pass binds its reservoirs as descriptors, so the record keeps the slots at zero for the layout contract.
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, 0L);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_AUX_ADDR, 0L);
         // Temporal reprojection uses the full pose in both projections. Hit positions include the current bob origin, while
         // camDelta remains the raw camera-position delta; the prior full projection already carries the previous bob origin.
         curViewProj.set(frameProjection).mul(camera.viewRotationMatrix);
@@ -1137,12 +1094,16 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutInt(hdr + RtStatsLayout.ENT_ATLAS_SIZE, eg.atlasAddress() != 0L ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0);
         float jitterPxX = 0.0f;
         float jitterPxY = 0.0f;
-        if (io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
+        boolean upscalerJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
             && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive()
-            && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isScalingActive()) {
+            && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isScalingActive();
+        if (upscalerJittered) {
             jitterPxX = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterX();
             jitterPxY = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterY();
         }
+        params.upscalerJittered = upscalerJittered;
+        params.upscalerJitterX = jitterPxX;
+        params.upscalerJitterY = jitterPxY;
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_JITTER, jitterPxX);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_JITTER + 4, jitterPxY);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAMERA_BOB_ORIGIN, bobOrigin.x);
@@ -1175,7 +1136,8 @@ public final class RtFrameRenderer {
         }
         statsReadbacks.written(statsLease, new StatsMetadata(
             (params.flags & RtFrameParams.FLAG_ACCUMULATE) != 0 && params.accumCount > 0,
-            (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0, params.key.day, dispatchCounter, System.nanoTime()));
+            (params.flags & RtFrameParams.FLAG_TRANSPARENCY_STATS) != 0, params.key.day, dispatchCounter,
+            System.nanoTime(), w, h, params.frame));
         dispatchCounter++;
         VkBarriers.fullMemoryBarrier(cmd);
         if (probePrev != null && outputDepth != null) {
@@ -1191,8 +1153,8 @@ public final class RtFrameRenderer {
             if (dlssRrDenoiser != null) {
                 // [DLSS-RR] Record DLSS Ray Reconstruction
                 try {
-                    float composeExposure = exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
-                        io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths());
+                    // The frame's own exposure, decided once above: the pack's tonemap and the path display cannot diverge.
+                    float composeExposure = params.exposure;
                     long depthView = (dlssRrDenoiser != null && dlssRrDenoiser.gbViewZ() != null)
                         ? dlssRrDenoiser.gbViewZ().view
                         : (target != null ? WorldTargetManager.extractVkImageView(target.getDepthTextureView()) : 0L);
@@ -1223,8 +1185,8 @@ public final class RtFrameRenderer {
                 }
             } else if (denoiser != null) {
                 try {
-                    float composeExposure = exposure.applied((params.flags & RtFrameParams.FLAG_AUTO_EXPOSURE) != 0,
-                        io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.exposureEvTenths());
+                    // The frame's own exposure, decided once above: the pack's tonemap and the path display cannot diverge.
+                    float composeExposure = params.exposure;
                     boolean nrdJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
                         && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive()
                         && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isScalingActive();
@@ -1265,7 +1227,7 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_ATMO, false);
         }
         atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
-            new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
+            new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, outputDepth.view, lightmapView),
             w, h, bobOrigin.x, bobOrigin.y, bobOrigin.z);
         if (gpuTimer != null) {
@@ -1334,59 +1296,29 @@ public final class RtFrameRenderer {
     }
 
     /**
-     * Path tracing denoiser requested for this frame: reads the setting (RtSettings.denoiser()).
-     * Falls back to OFF when the library is missing or the denoiser failed earlier in this session;
-     * every change of the outcome is logged once (rule 4).
+     * Denoiser requested for this frame: reads the setting (RtSettings.denoiser()) and resolves it against the
+     * libraries and session state through {@link DenoiserResolution}. The Slang pass supplies the seven DLSS-RR guide
+     * channels and NRD's motion, so an active trace mode no longer disables the setting. Every change of the outcome
+     * is logged once (rule 4).
      */
     private static DenoiserMode resolveDenoiseMode() {
         RtSettings.PathDenoiser want = RtSettings.denoiser();
-        if (RtConfig.mode() == RtMode.PATH_TRACED && want != RtSettings.PathDenoiser.OFF) {
-            // The new path does not yet supply the guides required by NRD/DLSS-RR.
-            // Preserve the requested setting, report the disabled stage and never
-            // select a different renderer to make that request appear supported.
-            String reason = "slang_path_has_no_gbuffer";
-            String line = "requested=" + want + " active=off reason=" + reason;
-            denoiserResolutionReason = reason;
-            if (!line.equals(lastDenoiserLog)) {
-                lastDenoiserLog = line;
-                LOGGER.info("[VKB-RT] denoiser {}", line);
-            }
-            return DenoiserMode.OFF;
+        boolean nrdUsable = denoiseAvailability != null && denoiseAvailability.usable();
+        String nrdReason = denoiseAvailability == null ? "null" : denoiseAvailability.reason();
+        boolean dlssUsable = false;
+        String dlssReason = "null";
+        boolean frameGenOwnsNgx = false;
+        if (want == RtSettings.PathDenoiser.DLSS_RR) {
+            DlssAvailability.Library lib = DlssAvailability.library();
+            dlssUsable = lib != null && lib.usable();
+            dlssReason = lib == null ? "null" : lib.reason();
+            frameGenOwnsNgx = io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.isReady()
+                && !io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.rrViaStreamline();
         }
-        DenoiserMode mode = DenoiserMode.OFF;
-        String reason = "setting";
-        switch (want) {
-            case OFF -> { }
-            case DLSS_RR -> {
-                DlssAvailability.Library lib = DlssAvailability.library();
-                if (dlssRrFailed) {
-                    reason = "dlss_rr_failed_earlier_this_session";
-                } else if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.isReady()
-                    && !io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.rrViaStreamline()) {
-                    // Frame generation owns NGX: raw NGX cannot create Ray Reconstruction next to it (0xBAD0000B in the log of the
-                    // owner's configuration), only the Streamline plugin can. Say so instead of trying and failing.
-                    reason = "frame_generation_needs_sl.dlss_d.dll+nvngx_dlssd.dll_in_the_streamline_folder";
-                } else if (lib == null || !lib.usable()) {
-                    reason = "dlss_library_unusable " + (lib == null ? "null" : lib.reason());
-                } else {
-                    mode = DenoiserMode.DLSS_RR;
-                }
-                if (mode == DenoiserMode.OFF && !nrdFailed && denoiseAvailability != null && denoiseAvailability.usable()) {
-                    mode = DenoiserMode.NRD_REBLUR;
-                    reason += " -> fallback_to_nrd";
-                }
-            }
-            case NRD -> {
-                if (nrdFailed) {
-                    reason = "nrd_failed_earlier_this_session";
-                } else if (denoiseAvailability == null || !denoiseAvailability.usable()) {
-                    reason = "nrd_library_unusable " + (denoiseAvailability == null ? "null" : denoiseAvailability.reason());
-                } else {
-                    DenoiserMode flag = DenoiserConfig.requested();
-                    mode = flag.isNrd() ? flag : DenoiserMode.NRD_REBLUR;
-                }
-            }
-        }
+        DenoiserResolution.Result resolved = DenoiserResolution.resolve(want, dlssRrFailed, nrdFailed,
+            dlssUsable, dlssReason, frameGenOwnsNgx, nrdUsable, nrdReason, DenoiserConfig.requested());
+        DenoiserMode mode = resolved.mode();
+        String reason = resolved.reason();
         String line = "requested=" + want + " active=" + mode.logName() + (mode == DenoiserMode.OFF && want != RtSettings.PathDenoiser.OFF ? " reason=" + reason : "");
         denoiserResolutionReason = reason;
         if (!line.equals(lastDenoiserLog)) {
@@ -1475,7 +1407,7 @@ public final class RtFrameRenderer {
         rebuildPassNext = true;
     }
 
-    /** Ray Tracing unless Path Tracing is selected (also the pass of the legacy debug-view-only runs, mode off). */
+    /** Ray Tracing and Path Tracing run the ray profile and the path profile of the same Slang pass. */
     static RtMode passModeFor(RtMode mode) {
         return mode == RtMode.PATH_TRACED ? RtMode.PATH_TRACED : RtMode.RAY_TRACED;
     }
@@ -1494,44 +1426,26 @@ public final class RtFrameRenderer {
     }
 
     private static RtPass createPass(VkDevice device, RtMode mode, boolean gbuffer) {
-        if (mode == RtMode.PATH_TRACED) {
-            RtPass slang = createSlangPathPass(device, gbuffer);
+        if (mode == RtMode.PATH_TRACED || mode == RtMode.RAY_TRACED) {
+            boolean rayMode = mode == RtMode.RAY_TRACED;
+            RtPass slang = createSlangPathPass(device, gbuffer, rayMode);
             if (slang != null) {
                 return slang;
             }
-            throw new RtFailure("slang_path", pathSlangUnavailableReason);
+            throw new RtFailure(rayMode ? "slang_ray" : "slang_path", pathSlangUnavailableReason);
         }
-        // The old effect pass compiles GLSL at runtime. Keep its source as a
-        // reference, but do not silently route the new renderer through it.
-        throw new RtFailure("slang_ray", "ray effects are not yet available in the Slang renderer");
+        // AO and DIRECT are debug shadings of the deleted ray pass, not images the Slang tracer produces: a lit path
+        // labelled "ao" would be a wrong picture with a working log.
+        throw new RtFailure("slang_" + mode.logName(),
+            "rt_mode=" + mode.logName() + " shades a debug image the Slang renderer does not produce (use rays or path)");
     }
 
     /**
-     * Creates the AOT Slang path or reports why it cannot run. A missing path
-     * never silently selects runtime-compiled GLSL.
+     * Creates the AOT Slang path (or its ray profile) or reports why it cannot run. There is no second renderer to fall
+     * back to: a missing Slang artifact fails the frame, and {@link RtGeometryGate#markFailed} records the reason and
+     * turns ray tracing off for the session.
      */
-    private static RtPass createSlangPathPass(VkDevice device, boolean gbuffer) {
-        RtConfig.PathTracer selector = RtConfig.PATH_TRACER;
-        if (selector == RtConfig.PathTracer.LEGACY) {
-            pathSlangUnavailableReason = "legacy GLSL path tracing is not supported by the new renderer";
-            return null;
-        }
-        if (gbuffer) {
-            // Both backends supply guide outputs; native NRD additionally requires its motion-output export below.
-            // AUTO remains conservative until a live frame validates the denoiser inputs.
-            String blocker = selector == RtConfig.PathTracer.AUTO ? slangPathBlocker() : null;
-            if (blocker == null && selector == RtConfig.PathTracer.AUTO) {
-                blocker = "AUTO does not select the Slang path while a denoiser is enabled;"
-                    + " set bedray.pathTracer=slang to test the guides";
-            }
-            if (blocker != null) {
-                pathSlangUnavailableReason = blocker;
-                if (selector == RtConfig.PathTracer.AUTO) {
-                    logSlangUnavailable(blocker);
-                }
-                return null;
-            }
-        }
+    private static RtPass createSlangPathPass(VkDevice device, boolean gbuffer, boolean rayMode) {
         String debugView = RtConfig.currentDebugView();
         if (!debugView.isEmpty()) {
             pathSlangUnavailableReason = "debug view '" + debugView + "' is not implemented in the Slang path";
@@ -1541,69 +1455,38 @@ public final class RtFrameRenderer {
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             pathSlangUnavailableReason = "VulkanDevice is not available";
-            if (selector == RtConfig.PathTracer.AUTO) {
-                logSlangUnavailable(pathSlangUnavailableReason);
-            }
+            logSlangUnavailable(pathSlangUnavailableReason);
             return null;
         }
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
             String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
             if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && denoiseMode.isNrd()
-                && !runtime.library().hasNativeMotion())
+                && !runtime.library().hasNativeMotion()) {
                 problem = "native NRD requires a matching core with NRD_MOTION";
+            }
             if (problem != null) {
                 pathSlangUnavailableReason = problem;
-                if (selector == RtConfig.PathTracer.AUTO) {
-                    logSlangUnavailable(problem);
-                }
+                logSlangUnavailable(problem);
                 return null;
             }
             if (world == null) {
                 pathSlangUnavailableReason = "the RT world is not initialized";
-                if (selector == RtConfig.PathTracer.AUTO) {
-                    logSlangUnavailable(pathSlangUnavailableReason);
-                }
+                logSlangUnavailable(pathSlangUnavailableReason);
                 return null;
             }
-            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, gbuffer);
-            LOGGER.info("[VKB-RT] path_tracer selector={} on AOT Slang passes {}+{} (gbuffer={})",
-                selector.name().toLowerCase(Locale.ROOT), RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
+            RtSlangPathPass slang = new RtSlangPathPass(device, runtime, gbuffer, rayMode);
+            LOGGER.info("[VKB-RT] {} on AOT Slang passes {}+{} (gbuffer={})",
+                rayMode ? "ray effects" : "path tracing",
+                RtPathTraceSlangPass.PASS_NAME, RtSlangPathPass.DISPLAY_PASS, gbuffer);
             return slang;
+        } catch (RtFailure failure) {
+            pathSlangUnavailableReason = failure.result();
+            throw failure;
         } catch (RuntimeException e) {
             String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             pathSlangUnavailableReason = reason;
-            if (selector == RtConfig.PathTracer.SLANG || RtConfig.SLANG_PATH_TRACE_CPP) {
-                if (e instanceof RtFailure failure) {
-                    throw failure;
-                }
-                throw new RtFailure("slang_path", reason, e);
-            }
-            logSlangUnavailable(reason);
-            return null;
-        }
-    }
-
-    /**
-     * Null when AUTO can render Path Tracing through the Slang pass, otherwise the reason it is unavailable. Never logs:
-     * the pass creation path owns the diagnostic. The runtime is created here on first use, so a missing native
-     * or AOT artifact is discovered before the denoiser is switched off.
-     */
-    private static String slangPathBlocker() {
-        if (!RtConfig.currentDebugView().isEmpty()) {
-            return "debug view is not implemented in the Slang path";
-        }
-        VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
-        if (vulkanDevice == null) {
-            return "VulkanDevice is not available";
-        }
-        if (world == null) {
-            return "the RT world is not initialized";
-        }
-        try {
-            return RtSlangPathPass.supportProblem(pathSlangRuntime(vulkanDevice));
-        } catch (RuntimeException e) {
-            return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw new RtFailure(rayMode ? "slang_ray" : "slang_path", reason, e);
         }
     }
 
@@ -1794,9 +1677,13 @@ public final class RtFrameRenderer {
             int userBounces = RtSettings.bounces();
             double budget = RtSettings.adaptiveBudgetMs();
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
+                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
                 passFrames, target != null ? (long) target.width * target.height : 0L,
                 lastHitPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHitPct),
+                lastRejectedPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectedPct),
+                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.invalidPct()),
+                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.truncatedPct()),
+                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.overflowPct()),
                 lastHistPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHistPct),
                 lastLeafPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastLeafPct),
                 passMsInWindow / passFramesInWindow,
@@ -1966,10 +1853,6 @@ public final class RtFrameRenderer {
                 w.memory().destroy(compositeOutput);
                 compositeOutput = null;
             }
-            if (compositePipeline != null) {
-                compositePipeline.destroy();
-                compositePipeline = null;
-            }
             if (statsBuf != null) {
                 w.memory().destroy(statsBuf);
                 statsBuf = null;
@@ -1981,10 +1864,6 @@ public final class RtFrameRenderer {
             if (entityMotionBuf != null) {
                 w.memory().destroy(entityMotionBuf);
                 entityMotionBuf = null;
-            }
-            if (reservoirBuf != null) {
-                w.memory().destroy(reservoirBuf);
-                reservoirBuf = null;
             }
             w.destroy();
             world = null;
@@ -2001,9 +1880,6 @@ public final class RtFrameRenderer {
         dropDlssRrDenoiserNext = false;
         lastPassMode = null;
         dropDenoiserNext = false;
-        reservoirPixels = -1L;
-        reservoirLightFingerprint = Long.MIN_VALUE;
-        reservoirResetRequested = true;
         outputReady = false;
         statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
         lastStatsSequence = -1;

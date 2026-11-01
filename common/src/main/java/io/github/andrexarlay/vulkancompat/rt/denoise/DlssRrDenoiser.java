@@ -414,8 +414,8 @@ public final class DlssRrDenoiser {
     }
 
     /**
-     * Views of the seven G-buffer images rt_rays.comp / rt_path.comp write (bindings 4..8 and 13..14 of the gbuffer
-     * RtPipeline). The count must match {@link io.github.andrexarlay.vulkancompat.rt.world.RtPipeline#GBUFFER_VIEWS}:
+     * Views of the seven G-buffer images the path tracer writes (bindings 4..8 and 13..14 of the G-buffer variant).
+     * The count must match {@link io.github.andrexarlay.vulkancompat.rt.world.RtFrameBindings#GBUFFER_VIEWS}:
      * a short array fails the bind of the gbuffer variant on the first frame and disables RT for the session.
      */
     public long[] gbufferViews() {

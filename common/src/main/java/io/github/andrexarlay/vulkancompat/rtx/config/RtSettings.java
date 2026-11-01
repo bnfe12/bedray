@@ -70,20 +70,17 @@ public final class RtSettings {
     public static final int DISTANCE_MIN = 16;
     public static final int DISTANCE_MAX = 512;
 
-    // ---- Ray Tracing mode: one switch + quality (rays per pixel) + distance per effect ----
+    // ---- Ray Tracing mode: one switch + distance per effect (block light also has a sample count) ----
     public static boolean raysShadows = true;
-    /** Shadow rays jittered inside a widened sun disk (soft penumbra), {@link #raysShadowQuality} rays per pixel. */
+    /** Shadow rays jittered inside a widened sun disk (soft penumbra); the accumulation averages them. */
     public static boolean raysSoftShadows = false;
-    public static int raysShadowQuality = 2;
     /** Stylised retro shadows: the sun visibility is evaluated once per world-space cell, so edges are blocky like a low-res shadow map. */
     public static boolean raysPixelShadows = false;
     /** Edge of a pixelated-shadow cell in texture pixels (1 = one pixel of a 16x16 block texture = 1/16 block), both modes. */
     public static int raysPixelShadowSize = 1;
     public static boolean raysReflections = false;
-    public static int raysReflectionQuality = 1;
     public static int raysReflectionDistance = 128;
     public static boolean raysAo = false;
-    public static int raysAoQuality = 2;
     /** AO radius in blocks. */
     public static int raysAoRadius = 3;
     public static boolean raysEmissive = true;
@@ -91,7 +88,6 @@ public final class RtSettings {
     public static int raysEmissiveDistance = 32;
     /** One-bounce ray traced global illumination (replaces the vanilla sky-light ambient). */
     public static boolean raysGi = false;
-    public static int raysGiQuality = 1;
     public static int raysGiDistance = 64;
     /** Temporal accumulation of the stochastic effects while the camera and the scene stand still. */
     public static boolean raysAccumulate = true;
@@ -173,6 +169,19 @@ public final class RtSettings {
      * direct-light reuse off there are no records to pool, so this switch alone does nothing.
      */
     public static boolean pathRestirSpatial = true;
+    /**
+     * ReSTIR PT of the Slang path tracer: the diffuse indirect light of a pixel's first bounce is kept in a per-pixel path
+     * reservoir and reprojected into the next frame (restir/pt_temporal.slang). Off by default: the ring costs two
+     * 144-byte records per pixel (597.2 MB at 1080p). Offered as a child of {@link #pathRestirDi}, and run only by the
+     * reference backend, which owns the ring; the native core binds a stand-in.
+     */
+    public static boolean pathRestirPt = false;
+    /**
+     * The spatial stage of ReSTIR PT (restir/pt_spatial.slang): each pixel pools four neighbours' path records into the
+     * half the next frame imports. On by default under its parent, which already carries the memory price; it costs up to
+     * four first-edge visibility rays a pixel and no memory of its own.
+     */
+    public static boolean pathRestirPtSpatial = true;
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
@@ -201,14 +210,6 @@ public final class RtSettings {
     public static boolean rtParticles = true;
     /** Rain and snow columns are drawn into the ray traced image too (RtWeatherLayer, on the particle layer of RtParticleLayer). */
     public static boolean rtWeather = true;
-
-    // ---- DLSS 5 Neural Rendering (DLSS-NR) [EXPERIMENTAL] ----
-    public static boolean dlssNrEnabled = false;
-    public static float dlssNrTransferStrength = 1.0f;
-    public static float dlssNrColourStrength = 1.0f;
-    public static float dlssNrMaxRatio = 2.0f;
-    public static float dlssNrWorkingScale = 1.0f;
-    public static int dlssNrDebugView = 0;
 
     /** Texture LOD bias for ray tracing material samplers. */
     public static float textureLodBias() {
@@ -245,20 +246,16 @@ public final class RtSettings {
         bool("rays_transparency_stats", () -> transparencyStats, v -> transparencyStats = v);
         bool("rays_shadows", () -> raysShadows, v -> raysShadows = v);
         bool("rays_soft_shadows", () -> raysSoftShadows, v -> raysSoftShadows = v);
-        integer("rays_shadow_quality", () -> raysShadowQuality, v -> raysShadowQuality = v, 1, 8);
         bool("rays_pixel_shadows", () -> raysPixelShadows, v -> raysPixelShadows = v);
         integer("rays_pixel_shadow_size", () -> raysPixelShadowSize, v -> raysPixelShadowSize = v, 1, 16);
         bool("rays_reflections", () -> raysReflections, v -> raysReflections = v);
-        integer("rays_reflection_quality", () -> raysReflectionQuality, v -> raysReflectionQuality = v, 1, 4);
         integer("rays_reflection_distance", () -> raysReflectionDistance, v -> raysReflectionDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("rays_ao", () -> raysAo, v -> raysAo = v);
-        integer("rays_ao_quality", () -> raysAoQuality, v -> raysAoQuality = v, 1, 8);
         integer("rays_ao_radius", () -> raysAoRadius, v -> raysAoRadius = v, 1, 8);
         bool("rays_emissive", () -> raysEmissive, v -> raysEmissive = v);
         integer("rays_emissive_quality", () -> raysEmissiveQuality, v -> raysEmissiveQuality = v, 1, 8);
         integer("rays_emissive_distance", () -> raysEmissiveDistance, v -> raysEmissiveDistance = v, 8, 64);
         bool("rays_gi", () -> raysGi, v -> raysGi = v);
-        integer("rays_gi_quality", () -> raysGiQuality, v -> raysGiQuality = v, 1, 8);
         integer("rays_gi_distance", () -> raysGiDistance, v -> raysGiDistance = v, DISTANCE_MIN, 256);
         bool("rays_accumulate", () -> raysAccumulate, v -> raysAccumulate = v);
         bool("rays_restir_temporal", () -> raysRestirTemporal, v -> raysRestirTemporal = v);
@@ -268,6 +265,8 @@ public final class RtSettings {
         bool("path_accumulate", () -> pathAccumulate, v -> pathAccumulate = v);
         bool("path_restir_di", () -> pathRestirDi, v -> pathRestirDi = v);
         bool("path_restir_spatial", () -> pathRestirSpatial, v -> pathRestirSpatial = v);
+        bool("path_restir_pt", () -> pathRestirPt, v -> pathRestirPt = v);
+        bool("path_restir_pt_spatial", () -> pathRestirPtSpatial, v -> pathRestirPtSpatial = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
@@ -297,8 +296,6 @@ public final class RtSettings {
         integer("water_style", () -> waterStyle, v -> waterStyle = v, 0, 1);
         bool("waving_foliage", () -> wavingFoliage, v -> wavingFoliage = v);
         integer("waving_foliage_strength", () -> wavingFoliageStrength, v -> wavingFoliageStrength = v, 0, 200);
-        bool("dlss_nr_enabled", () -> dlssNrEnabled, v -> dlssNrEnabled = v);
-        integer("dlss_nr_debug_view", () -> dlssNrDebugView, v -> dlssNrDebugView = v, 0, 3);
         bool("rt_fog", () -> volumetricFogEnabled, v -> { volumetricFogEnabled = v; rtFog = v; });
         bool("volumetric_fog_enabled", () -> volumetricFogEnabled, v -> { volumetricFogEnabled = v; rtFog = v; });
         integer("rt_fog_density", () -> Math.round(fogDensity * 100f), v -> {
@@ -336,22 +333,6 @@ public final class RtSettings {
             try {
                 fogDistanceScale = clampFloat(Float.parseFloat(fogDistProp.trim()), 0.2f, 2.0f);
             } catch (Exception ignored) {}
-        }
-        String nrTStr = System.getProperty("vkrtx.rt.dlss_nr_transfer_strength");
-        if (nrTStr != null) {
-            try { dlssNrTransferStrength = clampFloat(Float.parseFloat(nrTStr.trim()), 0.0f, 2.0f); } catch (Exception ignored) {}
-        }
-        String nrCStr = System.getProperty("vkrtx.rt.dlss_nr_colour_strength");
-        if (nrCStr != null) {
-            try { dlssNrColourStrength = clampFloat(Float.parseFloat(nrCStr.trim()), 0.0f, 1.0f); } catch (Exception ignored) {}
-        }
-        String nrMStr = System.getProperty("vkrtx.rt.dlss_nr_max_ratio");
-        if (nrMStr != null) {
-            try { dlssNrMaxRatio = clampFloat(Float.parseFloat(nrMStr.trim()), 1.0f, 10.0f); } catch (Exception ignored) {}
-        }
-        String nrWStr = System.getProperty("vkrtx.rt.dlss_nr_working_scale");
-        if (nrWStr != null) {
-            try { dlssNrWorkingScale = clampFloat(Float.parseFloat(nrWStr.trim()), 0.5f, 1.0f); } catch (Exception ignored) {}
         }
         for (Map.Entry<String, IntSetting> e : INTS.entrySet()) {
             String v = System.getProperty("vkrtx.rt." + e.getKey());
@@ -436,20 +417,16 @@ public final class RtSettings {
     public static boolean cullSharedGlass() { return b("rays_cull_shared_glass"); }
     public static boolean transparencyStats() { return b("rays_transparency_stats"); }
     public static boolean softShadows() { return b("rays_soft_shadows"); }
-    public static int shadowQuality() { return i("rays_shadow_quality"); }
     public static boolean pixelShadows() { return b("rays_pixel_shadows"); }
     public static int pixelShadowSize() { return i("rays_pixel_shadow_size"); }
     public static boolean reflections() { return b("rays_reflections"); }
-    public static int reflectionQuality() { return i("rays_reflection_quality"); }
     public static int reflectionDistance() { return i("rays_reflection_distance"); }
     public static boolean ao() { return b("rays_ao"); }
-    public static int aoQuality() { return i("rays_ao_quality"); }
     public static int aoRadius() { return i("rays_ao_radius"); }
     public static boolean emissive() { return b("rays_emissive"); }
     public static int emissiveQuality() { return i("rays_emissive_quality"); }
     public static int emissiveDistance() { return i("rays_emissive_distance"); }
     public static boolean gi() { return b("rays_gi"); }
-    public static int giQuality() { return i("rays_gi_quality"); }
     public static int giDistance() { return i("rays_gi_distance"); }
     public static boolean raysAccumulation() { return b("rays_accumulate"); }
     /**
@@ -469,6 +446,10 @@ public final class RtSettings {
      * no rays. The Slang kernel is optional: without its AOT artifact this reads true and the pass simply never runs.
      */
     public static boolean pathRestirSpatial() { return b("path_restir_spatial"); }
+    /** ReSTIR PT temporal reuse of the path tracer's diffuse indirect light; see {@link #pathRestirPt}. */
+    public static boolean pathRestirPt() { return b("path_restir_pt"); }
+    /** The PT spatial stage; see {@link #pathRestirPtSpatial}. */
+    public static boolean pathRestirPtSpatial() { return b("path_restir_pt_spatial"); }
     public static int bounces() { return i("path_bounces"); }
     public static int spp() { return i("path_spp"); }
     public static boolean accumulate() { return b("path_accumulate"); }
@@ -524,23 +505,7 @@ public final class RtSettings {
     public static boolean wavingFoliage() { return b("waving_foliage"); }
     public static int wavingFoliageStrength() { return i("waving_foliage_strength"); }
 
-    public static boolean dlssNr() { return b("dlss_nr_enabled"); }
-    public static float dlssNrTransferStrength() { return dlssNrTransferStrength; }
-    public static float dlssNrColourStrength() { return dlssNrColourStrength; }
-    public static float dlssNrMaxRatio() { return dlssNrMaxRatio; }
-    public static float dlssNrWorkingScale() { return dlssNrWorkingScale; }
-    public static int dlssNrDebugView() { return i("dlss_nr_debug_view"); }
 
-    public static io.github.andrexarlay.vulkancompat.rt.upscale.dlss.nr.DlssNrConfig getDlssNrConfig() {
-        io.github.andrexarlay.vulkancompat.rt.upscale.dlss.nr.DlssNrConfig cfg = new io.github.andrexarlay.vulkancompat.rt.upscale.dlss.nr.DlssNrConfig();
-        cfg.setEnabled(dlssNr());
-        cfg.setTransferStrength(dlssNrTransferStrength);
-        cfg.setColourStrength(dlssNrColourStrength);
-        cfg.setMaxRatio(dlssNrMaxRatio);
-        cfg.setWorkingScale(dlssNrWorkingScale);
-        cfg.setDebugView(dlssNrDebugView());
-        return cfg;
-    }
 
     public static float clampFloat(float v, float lo, float hi) {
         if (Float.isNaN(v)) return lo;
@@ -655,7 +620,7 @@ public final class RtSettings {
      * Applies a preset. LOW..ULTRA write the Ray Tracing values (the mode is not changed: the "Tracing" option decides); OFF
      * also switches tracing off (older config files, autotests). FAST / QUALITY / PATH_TRACING (older files and autotests)
      * switch to Path Tracing and apply the matching {@link PathPreset}; {@link #preset} stays as it was. CUSTOM only stores the
-     * preset. Values per preset are documented in docs/experiments/rt-modes.md.
+     * preset. The LOW..ULTRA values are written below.
      */
     public static void applyPreset(Preset p) {
         if (p == Preset.FAST || p == Preset.QUALITY || p == Preset.PATH_TRACING) {
@@ -676,21 +641,17 @@ public final class RtSettings {
         // common base (LOW): sun/moon as a disk (soft shadows), accumulation smooths the single shadow ray
         raysShadows = true;
         raysSoftShadows = true;
-        raysShadowQuality = 1;
         raysPixelShadows = false;
         raysPixelShadowSize = 1;
         raysReflections = false;
-        raysReflectionQuality = 1;
         raysReflectionDistance = 64;
         // rays = fast RT: sun shadows, contact AO (one short cosine ray per pixel, accumulated) and local-light shadows
         raysAo = true;
-        raysAoQuality = 1;
         raysAoRadius = 3;
         raysEmissive = true;
         raysEmissiveQuality = 1;
         raysEmissiveDistance = 24;
         raysGi = false;
-        raysGiQuality = 1;
         raysGiDistance = 48;
         raysAccumulate = true;
         volumetricFogEnabled = true;
@@ -705,44 +666,33 @@ public final class RtSettings {
             case MEDIUM -> {
                 waterStyle = WATER_STYLE_REALISTIC;
                 raysSoftShadows = true;
-                raysShadowQuality = 2;
                 raysReflections = true;
                 raysAo = true;
-                raysAoQuality = 2;
                 raysEmissiveDistance = 32;
                 // one traced bounce: the cheapest light leak that removes the flat "ambient only" look indoors
                 raysGi = true;
-                raysGiQuality = 1;
                 raysGiDistance = 48;
             }
             case HIGH -> {
                 waterStyle = WATER_STYLE_REALISTIC;
                 raysSoftShadows = true;
-                raysShadowQuality = 2;
                 raysReflections = true;
-                raysReflectionQuality = 2;
                 raysReflectionDistance = 128;
                 raysAo = true;
-                raysAoQuality = 4;
                 raysEmissiveQuality = 2;
                 raysEmissiveDistance = 32;
                 raysGi = true;
-                raysGiQuality = 1;
                 raysGiDistance = 64;
             }
             case ULTRA -> {
                 waterStyle = WATER_STYLE_REALISTIC;
                 raysSoftShadows = true;
-                raysShadowQuality = 4;
                 raysReflections = true;
-                raysReflectionQuality = 4;
                 raysReflectionDistance = 256;
                 raysAo = true;
-                raysAoQuality = 8;
                 raysEmissiveQuality = 4;
                 raysEmissiveDistance = 48;
                 raysGi = true;
-                raysGiQuality = 2;
                 raysGiDistance = 128;
             }
             default -> {
@@ -911,38 +861,6 @@ public final class RtSettings {
                 }
                 return true;
             }
-            case "dlss_nr_transfer_strength" -> {
-                try {
-                    dlssNrTransferStrength = clampFloat(Float.parseFloat(val.trim()), 0.0f, 2.0f);
-                } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid dlss_nr_transfer_strength '{}', keeping {}", val, dlssNrTransferStrength);
-                }
-                return true;
-            }
-            case "dlss_nr_colour_strength" -> {
-                try {
-                    dlssNrColourStrength = clampFloat(Float.parseFloat(val.trim()), 0.0f, 1.0f);
-                } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid dlss_nr_colour_strength '{}', keeping {}", val, dlssNrColourStrength);
-                }
-                return true;
-            }
-            case "dlss_nr_max_ratio" -> {
-                try {
-                    dlssNrMaxRatio = clampFloat(Float.parseFloat(val.trim()), 1.0f, 10.0f);
-                } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid dlss_nr_max_ratio '{}', keeping {}", val, dlssNrMaxRatio);
-                }
-                return true;
-            }
-            case "dlss_nr_working_scale" -> {
-                try {
-                    dlssNrWorkingScale = clampFloat(Float.parseFloat(val.trim()), 0.5f, 1.0f);
-                } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid dlss_nr_working_scale '{}', keeping {}", val, dlssNrWorkingScale);
-                }
-                return true;
-            }
             case "volumetric_fog_enabled" -> {
                 volumetricFogEnabled = Boolean.parseBoolean(val.trim());
                 rtFog = volumetricFogEnabled;
@@ -1047,13 +965,5 @@ public final class RtSettings {
         w.write("adaptive_quality = \"" + (adaptiveQuality != null ? adaptiveQuality.name() : "OFF") + "\"\n");
         w.write("# DLSS Ray Reconstruction: flat voxel geometric normals (ng) for sharp block edges (true), or smooth/perturbed (false)\n");
         w.write("dlss_rr_geometric_normals = " + dlssRrGeometricNormals + "\n");
-        w.write("\n[dlss_neural_rendering]\n");
-        w.write("# DLSS 5 Neural Rendering (DLSS-NR) [EXPERIMENTAL]\n");
-        w.write("dlss_nr_enabled = " + dlssNrEnabled + "\n");
-        w.write("dlss_nr_transfer_strength = " + dlssNrTransferStrength + "\n");
-        w.write("dlss_nr_colour_strength = " + dlssNrColourStrength + "\n");
-        w.write("dlss_nr_max_ratio = " + dlssNrMaxRatio + "\n");
-        w.write("dlss_nr_working_scale = " + dlssNrWorkingScale + "\n");
-        w.write("dlss_nr_debug_view = " + dlssNrDebugView + "\n");
     }
 }

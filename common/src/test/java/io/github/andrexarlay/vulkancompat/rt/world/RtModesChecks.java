@@ -29,7 +29,6 @@ final class RtModesChecks {
         settingsKeys();
         telemetry();
         scenarioSteps();
-        shadersCompile();
         exposureAndEmitters();
         autoNormals();
         resetLevels();
@@ -39,24 +38,24 @@ final class RtModesChecks {
         RtVolumetricFogTest.runAll();
         RtAtmosphereTest.runAll();
         RtIceGlassOpticsTest.runAll();
-        RtWaterMediumTest.runAll();
-        RtVanillaWaterLightTest.runAll();
-        RtShaderNaNGuardTest.runAll();
     }
 
     private static void resetLevels() {
         RtSettings.applyPreset(RtSettings.Preset.HIGH);
-        RtSettings.raysAoQuality = 7;
+        RtSettings.raysEmissiveDistance = 7;
         RtSettings.raysAo = false;
         RtSettings.preset = RtSettings.Preset.HIGH;
         RtSettings.resetLevel(RtSettings.Level.EXPERT);
-        check(RtSettings.raysAoQuality == 4 && !RtSettings.raysAo, "expert reset: numbers from HIGH, switches kept");
+        check(RtSettings.raysEmissiveDistance == 32 && !RtSettings.raysAo,
+            "expert reset: numbers from HIGH, switches kept");
         RtSettings.preset = RtSettings.Preset.HIGH;
-        RtSettings.raysAoQuality = 7;
+        RtSettings.raysEmissiveDistance = 7;
         RtSettings.resetLevel(RtSettings.Level.ADVANCED);
-        check(RtSettings.raysAo && RtSettings.raysAoQuality == 7, "advanced reset: switches from HIGH, numbers kept");
+        check(RtSettings.raysAo && RtSettings.raysEmissiveDistance == 7,
+            "advanced reset: switches from HIGH, numbers kept");
         RtSettings.resetLevel(RtSettings.Level.ALL);
-        check(RtSettings.raysAoQuality == 2 && RtSettings.preset == RtSettings.Preset.MEDIUM, "all: Custom -> MEDIUM values");
+        check(RtSettings.raysEmissiveDistance == 32 && RtSettings.preset == RtSettings.Preset.MEDIUM,
+            "all: Custom -> MEDIUM values");
         RtSettings.applyPathPreset(RtSettings.PathPreset.FAST);
         check(RtSettings.pathPreset == RtSettings.PathPreset.FAST && RtSettings.pathBounces == 2 && RtSettings.pathSpp == 1
             && RtSettings.pathDistance == 128 && !RtSettings.caustics && RtSettings.autoExposure(), "path preset FAST values");
@@ -447,7 +446,14 @@ final class RtModesChecks {
             check(VulkanRtxConfig.rtMode == RtMode.PATH_TRACED, "legacy key ignored after rt_mode");
             VulkanRtxConfig.setRtMode(RtMode.OFF);
             VulkanRtxConfig.enableHardwareRayTracing = true;
-            check(VulkanRtxConfig.effectiveRtMode() == RtMode.RAY_TRACED, "legacy boolean write means the ray mode");
+            // A caller that only says "trace" (the legacy boolean, not a mode name) gets the renderer that exists; the
+            // ray-effects pass is not wired, so RAY_TRACED here would be a refused frame rather than a frame.
+            check(VulkanRtxConfig.effectiveRtMode() == RtMode.PATH_TRACED, "legacy boolean write means the path renderer");
+            VulkanRtxConfig.enableHardwareRayTracing = false;
+            check(VulkanRtxConfig.effectiveRtMode() == RtMode.OFF, "no trace request, no renderer");
+            VulkanRtxConfig.rtMode = RtMode.RAY_TRACED;
+            check(VulkanRtxConfig.effectiveRtMode() == RtMode.RAY_TRACED, "a named rays request is not silently rewritten");
+            VulkanRtxConfig.rtMode = RtMode.OFF;
 
             // Test F3 debug provider formatting for PATH_TRACED denoiser line
             io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.setForTests(true);
@@ -488,26 +494,4 @@ final class RtModesChecks {
         }
     }
 
-    private static void shadersCompile() {
-        ByteBuffer rays = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
-        ByteBuffer raysGb = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp+gbuffer", RtPipeline.GBUFFER_DEFINE);
-        ByteBuffer path = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp", RtPathTracerPass.ACCUM_DEFINE);
-        ByteBuffer pathGb = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+gbuffer",
-            RtPipeline.GBUFFER_DEFINE + RtPathTracerPass.ACCUM_DEFINE);
-        // These two passes are compiled from their own files: naming rt_path.comp in the log line while compiling it made the
-        // check pass for shaders that had never been compiled at all.
-        ByteBuffer atrous = RtShaderCompiler.compileResource("/shaders/glsl/rt_atrous.comp", "rt_atrous.comp",
-            RtRayEffectsPass.ACCUM_DEFINE);
-        ByteBuffer restir = RtShaderCompiler.compileResource("/shaders/glsl/rt_restir_spatial.comp", "rt_restir_spatial.comp",
-            RtRayEffectsPass.ACCUM_DEFINE);
-        // The spatial pass runs under a denoiser too (it merges reservoir records, not pixels), so both binding layouts are
-        // compiled here: a gbuffer-only layout error would otherwise only surface when a player enables DLSS-RR.
-        ByteBuffer restirGb = RtShaderCompiler.compileResource("/shaders/glsl/rt_restir_spatial.comp", "rt_restir_spatial.comp+gbuffer",
-            RtPipeline.GBUFFER_DEFINE + RtRayEffectsPass.ACCUM_DEFINE);
-        // GPU dequantization of the Sodium mesh capture: standalone (no umbrella include), pure buffer_reference + BDA.
-        ByteBuffer dequant = RtShaderCompiler.compileResource("/shaders/glsl/sodium_dequantize.comp", "sodium_dequantize.comp");
-        for (ByteBuffer b : new ByteBuffer[] {rays, raysGb, path, pathGb, atrous, restir, restirGb, dequant}) {
-            check(b.remaining() > 1000 && b.getInt(0) == 0x07230203, "SPIR-V magic / size " + b.remaining());
-        }
-    }
 }

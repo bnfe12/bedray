@@ -10,9 +10,10 @@ class RtSlangVolumetricPassTest {
         var p = new RtFrameParams();
         p.frame = 17; p.cameraDeltaX = 1; p.cameraDeltaY = 2; p.cameraDeltaZ = 3;
         p.cameraY = 80; p.flipY = true; p.key.bodyAlpha = 0.25f;
+        p.exposure = 1.35f;   // not the default: the lanes must carry the frame's number, not a constant
         var frame = new RtPathTraceSlangPass.Frame();
         RtSlangFrameData.fill(frame, p, 19, 9, 0, 0);
-        assertEquals(1f, frame.exposure.x); assertEquals(19, frame.width); assertEquals(9, frame.height);
+        assertEquals(1.35f, frame.exposure.x); assertEquals(19, frame.width); assertEquals(9, frame.height);
         assertEquals(0f, frame.jitter.x); assertEquals(1f / 19, frame.jitter.z);
         var march = ByteBuffer.allocate(96).order(ByteOrder.nativeOrder());
         var apply = ByteBuffer.allocate(24).order(ByteOrder.nativeOrder());

@@ -73,13 +73,16 @@ or lost device; rejects stale schedules, stale tickets and regressing serials;
 records at most once per ticket; and holds a one-shot release callback for the
 core recording. It refuses history reads whose producer is not proven complete
 on the supplied timeline. It does not allocate GPU memory, insert cross-queue
-semaphores, submit or wait, and it is not constructed by the current frame path.
+semaphores, submit or wait. `core.cpp` constructs it through `FrameGraphOwner`
+for the native path-trace group; no other pass leases slots yet.
 
 The graph uses whole-resource uses only; it therefore may reject independent
 subresources, and its pairwise hazards can be redundant. Adding finer ranges
 must preserve explicit ordering and avoid deriving correctness from declaration
 order. The graph, adapter, history bridge and frame scheduler build as part of
 the native core, and four focused L1 contract tests pass (see
-`RENDER_GRAPH_NOTES.md`). The core frame path still does not construct or
-execute a graph, Slang reflection is not connected to pipeline creation, and no
-Vulkan/Minecraft validation has been performed.
+`RENDER_GRAPH_NOTES.md`). The core constructs and records the graph for the
+path-trace group only; the other passes still record directly, the history
+bridge is not driven, Slang reflection is not connected to graph pipeline
+creation, and no Vulkan/Minecraft validation of the graph path has been
+captured.

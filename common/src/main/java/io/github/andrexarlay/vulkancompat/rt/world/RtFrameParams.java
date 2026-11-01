@@ -5,7 +5,8 @@ import org.joml.Matrix4f;
 import java.nio.ByteBuffer;
 
 /**
- * Push constants of rt_rays.comp / rt_path.comp (exactly 128 bytes, the guaranteed minimum of maxPushConstantsSize):
+ * Push constants of the traced passes (exactly 128 bytes, the guaranteed minimum of maxPushConstantsSize). The
+ * shader-side mirror is {@code PushConstants} in {@code shaders/slang/bindings.slang}:
  * <pre>
  *   0  mat4  invViewProj
  *  64  uvec2 statsAddr
@@ -20,7 +21,7 @@ import java.nio.ByteBuffer;
 public final class RtFrameParams {
     public static final int BYTES = 128;
 
-    /** PC member types in declaration order (layout(push_constant) uniform PC in rt_common.glsl; verified by RtStatsLayoutTest). */
+    /** PC member types in declaration order (the same seven members {@code PushConstants} declares in bindings.slang). */
     static final String[] PC_TYPES = {"mat4", "uvec2", "uint", "uint", "vec4", "vec4", "vec4"};
     /** std430 offsets of the PC members, computed once by the same rules the GLSL compiler applies. */
     static final int[] PC_OFFSETS = RtStatsLayout.std430Offsets(PC_TYPES);
@@ -43,7 +44,8 @@ public final class RtFrameParams {
     public static final int FLAG_ACCUMULATE = 1 << 6;
     /** Normal maps from the LabPBR _n atlas. */
     public static final int FLAG_NORMAL_MAPS = 1 << 7;
-    /** Path tracing: tone mapping uses the auto exposure from the frame slot (see RtExposure). */
+    /** Path tracing: tone mapping adapts to the measured luminance ({@code path_auto_exposure}); the number it adapts to
+     * is {@link #exposure}. */
     public static final int FLAG_AUTO_EXPOSURE = 1 << 8;
     /** Ray mode: one-bounce ray traced global illumination. */
     public static final int FLAG_GI = 1 << 9;
@@ -95,12 +97,20 @@ public final class RtFrameParams {
     public int bounces;
     public int spp = 1;
     public int rayDistance = 128;
+    /** Section radius of the RT world this frame (16 blocks each): the ray profile traces no farther than this. */
+    public int rtRadiusXz = 8;
     /** Ray mode: rays per pixel nibbles (RtRayEffectsPass.packQualities) replacing quality/bounces/spp in params2; -1 = path layout. */
     public int rayQualities = -1;
     /** Ray mode spatial filter (rt_atrous.comp): iteration index (params2 bits 16-19) and iteration count (20-23). */
     public int filterIter;
     public int filterIters;
     // ---- written to the per-frame slot (RtFrameRenderer), not pushed ----
+    /**
+     * The frame's tone-mapping exposure: {@link RtExposure#applied} of the auto state and the EV compensation. One number
+     * for the whole frame - the display step, the volumetric composite, the denoiser packs and the StatsBuf slot all read
+     * this field, so a slider cannot brighten one lane and leave another where it was.
+     */
+    public float exposure = RtExposure.MIN;
     public float giDistance = 64f;
     public float emissiveDistance = 32f;
     public float aoRadius = 2.5f;
@@ -118,6 +128,13 @@ public final class RtFrameParams {
     public float bobX;
     public float bobY;
     public float bobZ;
+    /**
+     * The upscaler's sub-pixel jitter of this frame in pixels, the value DLSS-RR and NRD are told; the primary rays use it
+     * whenever it is active so the denoiser reprojects each sample to where it was traced.
+     */
+    public boolean upscalerJittered;
+    public float upscalerJitterX;
+    public float upscalerJitterY;
     public boolean sceneChanged;
     /** The camera stands in water ({@code FogType.WATER}), so a primary ray starts inside the medium. */
     public boolean cameraInWater;
@@ -133,8 +150,21 @@ public final class RtFrameParams {
     public float emitterCamRelX;
     public float emitterCamRelY;
     public float emitterCamRelZ;
+    // ---- statistics slot of this frame, for the Slang counter pass (the same slot the host reads back) ----
+    /** VkBuffer of the statistics ring and the byte offset of the slot this frame leased. The counter pass binds only
+     * the sixteen-byte head of that slot, so it can reach the four counters and nothing else in the frame's record.
+     * Borrowed from the renderer, never owned. */
+    public long statsBuffer;
+    public long statsOffset;
     public final RtSky.Key key = new RtSky.Key();
     public final float[] skyColor = {0.47f, 0.65f, 1.0f};
+    /**
+     * CPU only: the sky as a light source, zenith and horizon radiance of the dome a bounce or a sky sample receives
+     * ({@link RtSky#skyLight}, the legacy hemisphere model). The visible sky ({@link #skyColor}) is far brighter and
+     * bluer; lighting the scene with it washed every surface blue.
+     */
+    public final float[] skyLightZenith = new float[3];
+    public final float[] skyLightHorizon = new float[3];
 
     public int modeBits() {
         return (mode & 0xFF) | ((aoSamples & 0xFF) << 8) | (flipY ? 1 << 16 : 0) | (tonemap ? 1 << 17 : 0)

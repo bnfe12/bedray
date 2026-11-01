@@ -29,6 +29,9 @@ float sunSolidAngle(float angularRadius) {
 struct SunMoonSampler : ILightSampler {
     SunState sun;
     float sunProbability;   // host-provided split between sun and moon
+    // Draw the disc axis instead of a point of the disc.  The density stays the true disc's, so the flux the estimate
+    // carries is unchanged and only the penumbra disappears: a hard-edged shadow from the same sun.
+    bool hardShadows;
 
     LightSample sample(LightReceiver receiver, inout uint seed) {
         LightSample result = invalidLightSample();
@@ -41,7 +44,14 @@ struct SunMoonSampler : ILightSampler {
         bool hasMoon = moonPdf > 0.0;
         if (!hasSun && !hasMoon) return result;
 
-        bool pickSun = hasSun && (!hasMoon || rand01(seed) < sunPdf);
+        // A shadow cell shares one disc point: the tracer hands over a seed built from the cell and the frame/sample
+        // strata, so every pixel of the cell draws the same direction, and a leaf keeps one direction of its own block
+        // (its transmission is a 0.6-per-layer staircase, and re-rolling it per frame flips whole texels).  The ordinary
+        // case keeps drawing from - and advancing - the path's own stream; not consuming it would correlate the draws
+        // that follow with the ones before.
+        uint drawSeed = receiver.stableSun ? receiver.sunSeed : seed;
+        bool pickSun = hasSun && (!hasMoon || rand01(drawSeed) < sunPdf);
+        if (!receiver.stableSun) seed = drawSeed;
         LightKind kind = pickSun ? LightKind.Sun : LightKind.Moon;
         float3 axis = pickSun ? safeNormalize(sun.direction.xyz, float3(0.0, 1.0, 0.0))
                               : safeNormalize(sun.moonDirection.xyz, float3(0.0, -1.0, 0.0));
@@ -52,8 +62,15 @@ struct SunMoonSampler : ILightSampler {
             : sun.moonColor.rgb * max(sun.moonColor.w, 0.0);
         if (luminance(radiance) <= 0.0) return result;
 
-        float3 direction = coneAround(axis, radius, seed);
-        float cosSurface = lightCosine(receiver.normal, direction);
+        // A hard shadow samples the axis while keeping the disc's density: the same flux, no penumbra.
+        float3 direction = hardShadows ? axis : coneAround(axis, radius, drawSeed);
+        if (!receiver.stableSun) seed = drawSeed;
+        // A leaf card is one-sided for reflection but its far side transmits the key light: a plant seen against the
+        // sun has the shaded face toward the camera, and gating on that face would hand it no sample at all - the
+        // legacy path lit exactly this case with its own transmission term.  The acceptance must stay two-sided, so it
+        // is the absolute cosine: flipping the normal would answer only the back-lit half and starve a front-lit plant.
+        float cosSurface = receiver.foliage ? abs(dot(receiver.normal, direction))
+                                            : lightCosine(receiver.normal, direction);
         if (cosSurface <= 0.0) return result;
 
         float selectionPdf = pickSun ? sunPdf : moonPdf;
@@ -87,7 +104,10 @@ struct SunMoonSampler : ILightSampler {
         float3 radiance = isSun
             ? sun.color.rgb * max(sun.color.w, 0.0)
             : sun.moonColor.rgb * max(sun.moonColor.w, 0.0);
-        float cosSurface = lightCosine(receiver.normal, direction);
+        // Same leaf rule as sample(): the far side of a plant transmits the key light, so the estimate is normalised
+        // on whichever face reaches the sun, never only on the shaded one.
+        float cosSurface = receiver.foliage ? abs(dot(receiver.normal, direction))
+                                            : lightCosine(receiver.normal, direction);
         if (cosSurface <= 0.0 || luminance(radiance) <= 0.0) return result;
 
         float sunIntensity = luminance(sun.color.rgb) * max(sun.color.w, 0.0);
