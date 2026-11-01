@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneLayouts;
 import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneNative;
+import io.github.andrexarlay.vulkancompat.rt.scene.SceneFrameRecordings;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
@@ -13,10 +14,8 @@ import java.lang.foreign.MemorySegment;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Host facade over the scene exports in {@code bedray_core.dll}: owner of the section BLAS,
@@ -75,9 +74,8 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     private final Map<Long, Long> sectionIds = new LinkedHashMap<>();
     private final Map<Long, PendingSection> updates = new LinkedHashMap<>();
     private final Map<Long, Long> removals = new LinkedHashMap<>();
-    /** Frame indices the scene accepted and has not released yet. */
-    private final Set<Long> frames = new LinkedHashSet<>();
-    private final Map<Long, Long> recordingFrames = new LinkedHashMap<>();
+    /** Tracking is reserved before native preparation can accept a frame. */
+    private final SceneFrameRecordings recordings;
     private long nextSectionId = 1;
     private long nextRevision = 1;
     private boolean entityPresent;
@@ -97,6 +95,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     private NativeSceneBridge(BedraySceneNative library, long scene) {
         this.library = library;
         this.scene = scene;
+        this.recordings = new SceneFrameRecordings(scene);
     }
 
     /**
@@ -237,39 +236,33 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
      * piles all section-local geometry at the origin instead.
      */
     void prepareFrame(long commandBuffer, long frameIndex, double camX, double camY, double camZ) {
-        if (recordingFrames.containsKey(commandBuffer)) {
-            throw new IllegalStateException("native scene recording still requires completion/discard");
-        }
-        library.setView(scene, camX, camY, camZ);
-        flushUpdates();
-        BedraySceneNative.FrameInfo info = library.prepareFrame(scene, frameIndex, commandBuffer);
-        // Track the frame before reading the resources: once the scene accepted it,
-        // only releaseFrame may free its transient uploads. A query failure below
-        // must not leave an untracked outstanding frame that blocks close().
-        frames.add(frameIndex);
-        recordingFrames.put(commandBuffer, frameIndex);
-        // RtFrameRenderer attaches one completion callback AFTER execute accepts
-        // this command buffer. Scene and compute resources share that proof.
-        BedraySceneNative.Resources resources = library.queryResources(scene);
-        tlas = resources.tlas();
-        sectionCount = resources.sectionCount();
-        long handle = resources.sectionTableBuffer();
-        long bytes = resources.sectionTableBytes();
-        if (handle == 0L || bytes <= 0L) {
-            table = null;
-        } else if (table == null || table.handle != handle || table.size != bytes) {
-            // Borrowed: the scene retires the buffer only after referencing frames
-            // complete or are discarded; the host must not destroy it through RtMemory. The
-            // flag is also what tells the Slang path which program to dispatch.
-            table = new RtMemory.Buf(handle, 0L, bytes, resources.sectionTableAddress(), 0L, false, true);
-        }
-        activeThisFrame = info.tlas() != 0L;
-        lastViewX = camX;
-        lastViewY = camY;
-        lastViewZ = camZ;
-        lastInstances = info.instanceCount();
-        lastBlasBuilds = Math.toIntExact(info.blasBuilds());
-        logActivePeriodically();
+        recordings.prepare(commandBuffer, frameIndex, recording -> {
+            library.setView(scene, camX, camY, camZ);
+            flushUpdates();
+            BedraySceneNative.FrameInfo info = library.prepareFrame(scene, recording);
+            // RtFrameRenderer attaches one completion callback AFTER execute accepts
+            // this command buffer. Scene and compute resources share that proof.
+            BedraySceneNative.Resources resources = library.queryResources(scene);
+            tlas = resources.tlas();
+            sectionCount = resources.sectionCount();
+            long handle = resources.sectionTableBuffer();
+            long bytes = resources.sectionTableBytes();
+            if (handle == 0L || bytes <= 0L) {
+                table = null;
+            } else if (table == null || table.handle != handle || table.size != bytes) {
+                // Borrowed: the scene retires the buffer only after referencing frames
+                // complete or are discarded; the host must not destroy it through RtMemory. The
+                // flag is also what tells the Slang path which program to dispatch.
+                table = new RtMemory.Buf(handle, 0L, bytes, resources.sectionTableAddress(), 0L, false, true);
+            }
+            activeThisFrame = info.tlas() != 0L;
+            lastViewX = camX;
+            lastViewY = camY;
+            lastViewZ = camZ;
+            lastInstances = info.instanceCount();
+            lastBlasBuilds = Math.toIntExact(info.blasBuilds());
+            logActivePeriodically();
+        });
     }
 
     /**
@@ -297,19 +290,11 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
      * close can retry it.
      */
     void releaseRecording(long commandBuffer) {
-        Long frame = recordingFrames.get(commandBuffer);
-        if (frame == null) return;
-        library.releaseFrame(scene, frame);
-        frames.remove(frame);
-        recordingFrames.remove(commandBuffer);
+        recordings.release("release_frame", commandBuffer, frame -> library.releaseFrame(scene, frame));
     }
 
     void discardRecording(long commandBuffer) {
-        Long frame = recordingFrames.get(commandBuffer);
-        if (frame == null) return;
-        library.discardFrame(scene, frame);
-        frames.remove(frame);
-        recordingFrames.remove(commandBuffer);
+        if (!recordings.release("discard_frame", commandBuffer, frame -> library.discardFrame(scene, frame))) return;
         activeThisFrame = false;
         tlas = 0;
         table = null;
@@ -340,24 +325,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
 
     /** Releases every prepared frame after the host proved completion or discard. */
     void releaseAllFrames() {
-        RuntimeException failure = null;
-        for (Iterator<Long> it = frames.iterator(); it.hasNext(); ) {
-            long frame = it.next();
-            try {
-                library.releaseFrame(scene, frame);
-                it.remove();
-                recordingFrames.values().removeIf(value -> value == frame);
-            } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
-            }
-        }
-        if (failure != null) {
-            throw failure;
-        }
+        recordings.releaseAll(frame -> library.releaseFrame(scene, frame));
     }
 
     @Override
@@ -377,7 +345,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
 
     @Override
     public String toString() {
-        return "NativeSceneBridge[sections=" + sectionIds.size() + ", frames=" + frames.size()
+        return "NativeSceneBridge[sections=" + sectionIds.size() + ", frames=" + recordings.pendingCount()
             + (activeThisFrame ? ", active" : ", idle") + "]";
     }
 }
