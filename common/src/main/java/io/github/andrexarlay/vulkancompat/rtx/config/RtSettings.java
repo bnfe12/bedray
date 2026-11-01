@@ -211,14 +211,6 @@ public final class RtSettings {
     /** Rain and snow columns are drawn into the ray traced image too (RtWeatherLayer, on the particle layer of RtParticleLayer). */
     public static boolean rtWeather = true;
 
-    // ---- DLSS 5 Neural Rendering (DLSS-NR) [EXPERIMENTAL] ----
-    public static boolean dlssNrEnabled = false;
-    public static float dlssNrTransferStrength = 1.0f;
-    public static float dlssNrColourStrength = 1.0f;
-    public static float dlssNrMaxRatio = 2.0f;
-    public static float dlssNrWorkingScale = 1.0f;
-    public static int dlssNrDebugView = 0;
-
     /** Texture LOD bias for ray tracing material samplers. */
     public static float textureLodBias() {
         return TextureLodBias.getEffectiveLodBias();
@@ -304,8 +296,6 @@ public final class RtSettings {
         integer("water_style", () -> waterStyle, v -> waterStyle = v, 0, 1);
         bool("waving_foliage", () -> wavingFoliage, v -> wavingFoliage = v);
         integer("waving_foliage_strength", () -> wavingFoliageStrength, v -> wavingFoliageStrength = v, 0, 200);
-        bool("dlss_nr_enabled", () -> dlssNrEnabled, v -> dlssNrEnabled = v);
-        integer("dlss_nr_debug_view", () -> dlssNrDebugView, v -> dlssNrDebugView = v, 0, 3);
         bool("rt_fog", () -> volumetricFogEnabled, v -> { volumetricFogEnabled = v; rtFog = v; });
         bool("volumetric_fog_enabled", () -> volumetricFogEnabled, v -> { volumetricFogEnabled = v; rtFog = v; });
         integer("rt_fog_density", () -> Math.round(fogDensity * 100f), v -> {
@@ -343,22 +333,6 @@ public final class RtSettings {
             try {
                 fogDistanceScale = clampFloat(Float.parseFloat(fogDistProp.trim()), 0.2f, 2.0f);
             } catch (Exception ignored) {}
-        }
-        String nrTStr = System.getProperty("vkrtx.rt.dlss_nr_transfer_strength");
-        if (nrTStr != null) {
-            try { dlssNrTransferStrength = clampFloat(Float.parseFloat(nrTStr.trim()), 0.0f, 2.0f); } catch (Exception ignored) {}
-        }
-        String nrCStr = System.getProperty("vkrtx.rt.dlss_nr_colour_strength");
-        if (nrCStr != null) {
-            try { dlssNrColourStrength = clampFloat(Float.parseFloat(nrCStr.trim()), 0.0f, 1.0f); } catch (Exception ignored) {}
-        }
-        String nrMStr = System.getProperty("vkrtx.rt.dlss_nr_max_ratio");
-        if (nrMStr != null) {
-            try { dlssNrMaxRatio = clampFloat(Float.parseFloat(nrMStr.trim()), 1.0f, 10.0f); } catch (Exception ignored) {}
-        }
-        String nrWStr = System.getProperty("vkrtx.rt.dlss_nr_working_scale");
-        if (nrWStr != null) {
-            try { dlssNrWorkingScale = clampFloat(Float.parseFloat(nrWStr.trim()), 0.5f, 1.0f); } catch (Exception ignored) {}
         }
         for (Map.Entry<String, IntSetting> e : INTS.entrySet()) {
             String v = System.getProperty("vkrtx.rt." + e.getKey());
@@ -531,23 +505,7 @@ public final class RtSettings {
     public static boolean wavingFoliage() { return b("waving_foliage"); }
     public static int wavingFoliageStrength() { return i("waving_foliage_strength"); }
 
-    public static boolean dlssNr() { return b("dlss_nr_enabled"); }
-    public static float dlssNrTransferStrength() { return dlssNrTransferStrength; }
-    public static float dlssNrColourStrength() { return dlssNrColourStrength; }
-    public static float dlssNrMaxRatio() { return dlssNrMaxRatio; }
-    public static float dlssNrWorkingScale() { return dlssNrWorkingScale; }
-    public static int dlssNrDebugView() { return i("dlss_nr_debug_view"); }
 
-    public static io.github.andrexarlay.vulkancompat.rt.upscale.dlss.nr.DlssNrConfig getDlssNrConfig() {
-        io.github.andrexarlay.vulkancompat.rt.upscale.dlss.nr.DlssNrConfig cfg = new io.github.andrexarlay.vulkancompat.rt.upscale.dlss.nr.DlssNrConfig();
-        cfg.setEnabled(dlssNr());
-        cfg.setTransferStrength(dlssNrTransferStrength);
-        cfg.setColourStrength(dlssNrColourStrength);
-        cfg.setMaxRatio(dlssNrMaxRatio);
-        cfg.setWorkingScale(dlssNrWorkingScale);
-        cfg.setDebugView(dlssNrDebugView());
-        return cfg;
-    }
 
     public static float clampFloat(float v, float lo, float hi) {
         if (Float.isNaN(v)) return lo;
@@ -903,38 +861,6 @@ public final class RtSettings {
                 }
                 return true;
             }
-            case "dlss_nr_transfer_strength" -> {
-                try {
-                    dlssNrTransferStrength = clampFloat(Float.parseFloat(val.trim()), 0.0f, 2.0f);
-                } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid dlss_nr_transfer_strength '{}', keeping {}", val, dlssNrTransferStrength);
-                }
-                return true;
-            }
-            case "dlss_nr_colour_strength" -> {
-                try {
-                    dlssNrColourStrength = clampFloat(Float.parseFloat(val.trim()), 0.0f, 1.0f);
-                } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid dlss_nr_colour_strength '{}', keeping {}", val, dlssNrColourStrength);
-                }
-                return true;
-            }
-            case "dlss_nr_max_ratio" -> {
-                try {
-                    dlssNrMaxRatio = clampFloat(Float.parseFloat(val.trim()), 1.0f, 10.0f);
-                } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid dlss_nr_max_ratio '{}', keeping {}", val, dlssNrMaxRatio);
-                }
-                return true;
-            }
-            case "dlss_nr_working_scale" -> {
-                try {
-                    dlssNrWorkingScale = clampFloat(Float.parseFloat(val.trim()), 0.5f, 1.0f);
-                } catch (NumberFormatException e) {
-                    LOGGER.warn("Invalid dlss_nr_working_scale '{}', keeping {}", val, dlssNrWorkingScale);
-                }
-                return true;
-            }
             case "volumetric_fog_enabled" -> {
                 volumetricFogEnabled = Boolean.parseBoolean(val.trim());
                 rtFog = volumetricFogEnabled;
@@ -1039,13 +965,5 @@ public final class RtSettings {
         w.write("adaptive_quality = \"" + (adaptiveQuality != null ? adaptiveQuality.name() : "OFF") + "\"\n");
         w.write("# DLSS Ray Reconstruction: flat voxel geometric normals (ng) for sharp block edges (true), or smooth/perturbed (false)\n");
         w.write("dlss_rr_geometric_normals = " + dlssRrGeometricNormals + "\n");
-        w.write("\n[dlss_neural_rendering]\n");
-        w.write("# DLSS 5 Neural Rendering (DLSS-NR) [EXPERIMENTAL]\n");
-        w.write("dlss_nr_enabled = " + dlssNrEnabled + "\n");
-        w.write("dlss_nr_transfer_strength = " + dlssNrTransferStrength + "\n");
-        w.write("dlss_nr_colour_strength = " + dlssNrColourStrength + "\n");
-        w.write("dlss_nr_max_ratio = " + dlssNrMaxRatio + "\n");
-        w.write("dlss_nr_working_scale = " + dlssNrWorkingScale + "\n");
-        w.write("dlss_nr_debug_view = " + dlssNrDebugView + "\n");
     }
 }

@@ -110,7 +110,6 @@
   "bedray.group.rt_advanced": "Детали трассировки пути",
   "bedray.group.rt_expert": "Эксперт: числа",
   "bedray.group.dlss_rr_advanced": "Расширенная реконструкция лучей DLSS-RR",
-  "bedray.group.dlss_nr": "DLSS 5 Neural Rendering (не реализовано)",
   "bedray.group.debug_diagnostics": "Отладка, оверлеи и диагностика",
   "bedray.option.enable_hardware_ray_tracing": "Аппаратная трассировка лучей",
   "bedray.option.enable_hardware_ray_tracing.tooltip": "Включает аппаратную трассировку лучей через Vulkan Ray Queries (VK_KHR_ray_query). Требуется видеокарта с аппаратным ускорением трассировки лучей.",

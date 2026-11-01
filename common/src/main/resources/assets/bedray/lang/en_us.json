@@ -110,7 +110,6 @@
   "bedray.group.rt_advanced": "Path Tracing Details",
   "bedray.group.rt_expert": "Expert: Numbers",
   "bedray.group.dlss_rr_advanced": "DLSS Ray Reconstruction Advanced",
-  "bedray.group.dlss_nr": "DLSS 5 Neural Rendering (not implemented)",
   "bedray.group.debug_diagnostics": "Debug, Overlays & Diagnostics",
   "bedray.option.enable_hardware_ray_tracing": "Hardware Ray Tracing",
   "bedray.option.enable_hardware_ray_tracing.tooltip": "Enables hardware-accelerated ray tracing using Vulkan Ray Queries (VK_KHR_ray_query). Requires compatible GPU hardware.",

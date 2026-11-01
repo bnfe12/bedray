@@ -1109,12 +1109,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         RtSettings.rtFogInScattering = 100;
         RtSettings.fogDistanceScale = 1.0f;
         RtSettings.dlssRrGeometricNormals = true;
-        RtSettings.dlssNrEnabled = false;
-        RtSettings.dlssNrTransferStrength = 1.0f;
-        RtSettings.dlssNrColourStrength = 1.0f;
-        RtSettings.dlssNrMaxRatio = 2.0f;
-        RtSettings.dlssNrWorkingScale = 1.0f;
-        RtSettings.dlssNrDebugView = 0;
         RtConfig.setDebugView("");
         for (RtAtmosphereSettings.Option o : RtAtmosphereSettings.options()) {
             RtAtmosphereSettings.set(o.key(), o.def());
