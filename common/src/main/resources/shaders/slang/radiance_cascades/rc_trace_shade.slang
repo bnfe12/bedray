@@ -85,8 +85,12 @@ RCShadedSurface rcShadeSurface<T : ISceneTracer, L : ILightSampler>(
             float3 bsdf = bsdfEvaluate(surface.material, view, normal, light.direction);
             if (!isFinite(bsdf) || any(bsdf < float3(0.0))) return result;
             if (bsdf.r + bsdf.g + bsdf.b > 0.0) {
+                // The BSDF uses the mapped normal, but a numerical ray origin
+                // must stay on the viewer's side of the actual triangle.
+                float3 shadowNormal = safeNormalize(surface.hit.geometricNormal, normal);
+                if (dot(shadowNormal, view) < 0.0) shadowNormal = -shadowNormal;
                 SurfaceVisibility shadow = traceShadowVisibility(traversal,
-                    atlas, blockMaterials, surface.hit.position, normal,
+                    atlas, blockMaterials, surface.hit.position, shadowNormal,
                     light.direction, light.distance, options.rayBias,
                     materialOptions);
                 if ((shadow.flags & SURFACE_VISIBILITY_FLAG_OVERFLOW) != 0u) {

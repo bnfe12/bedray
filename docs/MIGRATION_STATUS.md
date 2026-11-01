@@ -1,6 +1,6 @@
 # BedRay 2.0 migration status
 
-Snapshot of 2026-10-31, branch `refactor/slang-pipeline`. Levels: L1 builds (slangc / javac / MSVC), L2 unit and
+Snapshot of 2026-11-01, branch `refactor/slang-pipeline`. Levels: L1 builds (slangc / javac / MSVC), L2 unit and
 source tests, L3 the game starts and the feature runs (log line), L4 effect visible on a screenshot, L5 confirmed by the
 owner. Evidence for every line is in [VERIFICATION_LOG.md](VERIFICATION_LOG.md) under the named commit.
 
@@ -28,8 +28,10 @@ Fixes found from the 2026-10-31 logs:
    - owner playtest of the checklist below, with `latest.log` and screenshots;
    - reconcile `SLANG_MIGRATION.md` (Big Four, Next steps), `AUDIT_DEFECTS_AND_ISSUES.md`, `VERIFICATION_LOG.md` and the
      module README with the results; everything without an owner-verified frame stays marked so.
-2. **Code review of the pre-existing code** (correctness, dead code, duplication) - started 2026-10-31, interrupted before
-   results; to be repeated.
+2. **Code review** — three parallel reviews completed on 2026-11-01. Six confirmed
+   lifetime/vendor/shader defects were fixed; this is a bounded audit, not proof
+   that all code is defect-free. Findings and repairs are recorded in
+   [PARALLEL_AUDIT_20261101.md](ai-agent-addenda/PARALLEL_AUDIT_20261101.md).
 3. **ReSTIR PT `experimental/` exit** - `restir_pt.slang` moves back to `restir/` only after a GPU run with
    `path_restir_pt` on.
 4. ~~Native backend parity~~ - done 2026-11-01 (`124e619`, `a754582`, L2): the core owns the PT ring (`NATIVE_PT`,
