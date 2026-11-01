@@ -6,7 +6,7 @@ import java.nio.ByteOrder;
 /**
  * Java port of {@code NVScalerUpdateConfig} (NVIDIA Image Scaling SDK v1.0.3, {@code NIS_Config.h} lines 154-252, MIT) for
  * SDR input (NISHDRMode::None), whole-texture viewports. Produces the 112-byte {@code NISConfig} block in the member order
- * of the struct (= the push constant block of {@code nis_scaler.comp}). No Minecraft classes.
+ * of the struct (= the push constant block of {@code nis_scaler.slang}). No Minecraft classes.
  */
 public final class NisConstants {
     /** sizeof(NISConfig) without the NIS_ALIGNED(256) padding: 28 four-byte members. */
