@@ -184,9 +184,15 @@ BedrayStatus BloomPass::render(const BedrayBloomFrameDesc& frame, BedrayError* e
         if (result == BEDRAY_OK) memory_barrier(fns_, command, stage == 3);
         return result;
     };
-    if (frame.bloom_enabled) {
+    float glare = 0;
+    std::memcpy(&glare, push.data() + 76, sizeof(glare));
+    // The prefilter also measures the sun's visibility on the unmodified frame (mip 0 alpha), so the sun glare needs it
+    // even without bloom; the apply stage must not read the image it is writing.
+    if (frame.bloom_enabled || glare > 0) {
         status = dispatch(0, views_[0].width, views_[0].height, frame.output_view, bits(views_[0].view));
         if (status != BEDRAY_OK) return status;
+    }
+    if (frame.bloom_enabled) {
         for (std::size_t i = 1; i < levels; ++i) {
             status = dispatch(1, views_[i].width, views_[i].height, bits(views_[i-1].view), bits(views_[i].view));
             if (status != BEDRAY_OK) return status;
