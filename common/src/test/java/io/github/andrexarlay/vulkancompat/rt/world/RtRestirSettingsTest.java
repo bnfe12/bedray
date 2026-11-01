@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -102,7 +103,7 @@ class RtRestirSettingsTest {
         assertTrue(path.contains("&& (rayMode ? RtSettings.restirSpatial() : RtSettings.pathRestirSpatial());"),
             "spatial reuse is gated where the frame is recorded, not where the pipeline is built: a backend without the "
                 + "reservoir ring cannot be asked to reuse it");
-        assertTrue(renderer.contains("MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, 0L);"),
+        assertFalse(renderer.contains("RtStatsLayout.RESERVOIR_ADDR"),
             "the host no longer owns a reservoir ring: the backend binds its own");
         assertTrue(path.contains("spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0"),
             "the switch reaches the core as one frame bit, so the shader and the host cannot disagree mid-session");

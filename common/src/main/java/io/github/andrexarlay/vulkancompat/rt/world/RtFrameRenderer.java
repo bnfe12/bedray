@@ -154,6 +154,7 @@ public final class RtFrameRenderer {
     /** Vanilla sky parameters of the frame (RtSkyState) and the resource pack sun / moon / cloud textures. */
     private static final RtSkyState skyState = new RtSkyState();
     private static RtSkyTextures skyTextures;
+    private static String lastSkyDisplayLog = "";
     private static long lastShadingLogNs = 0L;
     private static volatile float lastSunAngle = Float.NaN;
 
@@ -812,6 +813,9 @@ public final class RtFrameRenderer {
             }
             stage = "entity_motion_ensure";
             if (pass.usesGbuffer() && wantsEntityMotion()) frameResources.ensureMotion(w, h);
+            stage = "sky_atlas_prepare";
+            if (skyTextures == null) skyTextures = new RtSkyTextures(world.memory());
+            skyTextures.prepare(() -> drainHostSubmissions(device, "sky_atlas_reload_drain"));
         } catch (RuntimeException | Error failure) {
             throw new RtFailure("frame_resources_" + stage,
                 "profile=" + previousMode.logName() + " previousExtent=" + previousWidth + "x" + previousHeight
@@ -979,10 +983,8 @@ public final class RtFrameRenderer {
         params.sceneChanged = sceneChanged;
         lastSunAngle = sky.sunAngle;
         boolean hasSky = sky.skybox == DimensionType.Skybox.OVERWORLD;
-        if (skyTextures == null) {
-            skyTextures = new RtSkyTextures(world.memory());
-        }
-        skyTextures.ensure(device);
+        if (skyTextures == null || skyTextures.address() == 0)
+            throw new RtFailure("sky_atlas", "atlas was not prepared before command recording");
         skyState.collect(levelState, camera.pos.x + bobOrigin.x, camera.pos.y + bobOrigin.y, camera.pos.z + bobOrigin.z, RtConfig.SUN_FLIP_X,
             skyTextures.cloudWidth(), skyTextures.cloudHeight());
         RtSky.keyLight(sky.sunAngle, sky.moonAngle, RtConfig.SUN_FLIP_X, hasSky, skyState.moonLight, skyState.rainBrightness,
@@ -1036,10 +1038,7 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.HISTORY_CAP, params.historyCap);
         // StatsBuf.shadowPixel: pixelated-shadow cell edge in texture pixels (1/16 block), 0 = the option is off
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.SHADOW_PIXEL, pixelShadowStatsValue());
-        // StatsBuf.reservoirAddr / reservoirAuxAddr: the slots belonged to the deleted ray pass's own ReSTIR ring. The
-        // Slang pass binds its reservoirs as descriptors, so the record keeps the slots at zero for the layout contract.
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_ADDR, 0L);
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.RESERVOIR_AUX_ADDR, 0L);
+        // The deleted ray pass's dormant reservoir slots now carry the private display-sky packet below.
         // Temporal reprojection uses the full pose in both projections. Hit positions include the current bob origin, while
         // camDelta remains the raw camera-position delta; the prior full projection already carries the previous bob origin.
         curViewProj.set(frameProjection).mul(camera.viewRotationMatrix);
@@ -1134,6 +1133,16 @@ public final class RtFrameRenderer {
         prevCamY = camera.pos.y;
         prevCamZ = camera.pos.z;
         lastParams = params;
+        RtSkyDisplayLayout.write(MemoryUtil.memByteBuffer(hdr, STATS_STRIDE), params.skyColor,
+            params.key.day, params.tonemap, skyTextures.wordCount());
+        String skyDisplayState = pass.mode().logName() + ":" + pass.supportsDisplaySky() + ":"
+            + skyTextures.wordCount() + ":" + skyTextures.loadedMask();
+        if (!skyDisplayState.equals(lastSkyDisplayLog)) {
+            lastSkyDisplayLog = skyDisplayState;
+            LOGGER.info("[VKB-SKY] display={} profile={} packet_version=1 words={} loaded_mask=0x{} reason={}",
+                pass.supportsDisplaySky() ? "textured" : "gradient", pass.mode().logName(), skyTextures.wordCount(),
+                Integer.toHexString(skyTextures.loadedMask()), pass.supportsDisplaySky() ? "ready" : "native_stats_slot_unavailable");
+        }
         lastPassMode = pass.mode();
         logShading(atlasW, atlasH, hasSky, sky);
         skyState.log(params.key, exposure.value(), skyTextures.loadedMask());
@@ -1859,6 +1868,7 @@ public final class RtFrameRenderer {
         teardownPending = false;
         lastStats = null;
         lastPassLog = "";
+        lastSkyDisplayLog = "";
         rebuildPassNext = false;
         dropDlssRrDenoiserNext = false;
         lastPassMode = null;

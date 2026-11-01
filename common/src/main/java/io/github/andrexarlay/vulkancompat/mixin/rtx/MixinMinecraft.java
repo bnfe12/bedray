@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.mixin.rtx;
 
 import io.github.andrexarlay.vulkancompat.rt.keybind.VulkanRtxKeyBinds;
+import io.github.andrexarlay.vulkancompat.resources.ResourceReloadEpoch;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.PreferredGraphicsApi;
 import org.slf4j.LoggerFactory;
@@ -16,6 +17,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(value = Minecraft.class, remap = false)
 public abstract class MixinMinecraft {
+
+    @Inject(method = "onResourceLoadFinished(Lnet/minecraft/client/GameLoadCookie;)V", at = @At("TAIL"))
+    private void vkb$resourceReloadCompleted(CallbackInfo ci) {
+        long epoch = ResourceReloadEpoch.completed();
+        LoggerFactory.getLogger("VKB-RESOURCES").info("[VKB-RESOURCES] reload completed epoch={}", epoch);
+    }
 
     @Inject(method = "handleKeybinds()V", at = @At("TAIL"))
     private void vkb$handleKeybinds(CallbackInfo ci) {

@@ -27,10 +27,10 @@ interface PathTraceBackend extends AutoCloseable {
     void prepare(int width, int height);
     void record(Frame frame);
     boolean spatialAvailable();
+    default boolean displaySkyAvailable() { return true; }
     String reservoirState();
     /**
-     * True when this backend owns a ReSTIR PT ring and may be handed {@code OPTION_RESTIR_PT}. The native core owns
-     * none: it binds a one-record stand-in at binding 36 and strips the bits, so the controller never asks it.
+     * True when this backend owns a ReSTIR PT ring and may be handed {@code OPTION_RESTIR_PT}.
      */
     default boolean pathReuseAvailable() { return false; }
     /** The {@code restir_pt} field of the mode log. */

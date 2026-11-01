@@ -4,11 +4,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Byte layout of one per-frame slot of StatsBuf. The four counter words at the head are the whole live ABI: the host
- * binds exactly those sixteen bytes to {@code passes/frame_stats.slang}, which writes them on the GPU. Since the legacy
- * pipeline was deleted no typed pass reads {@code pc.statsAddr}, so the rest of the slot is host-side scratch with no
- * shader on the other end - {@code RtSlangLayoutAbiTest} proves that boundary (no pass imports the legacy declarations)
- * instead of pretending {@code FrameStats} in {@code bindings.slang} is still a mirror to keep in step.
+ * Byte layout of one per-frame slot. The counter pass writes its sixteen-byte head;
+ * the path pass writes its reject counters and reads the versioned private display-sky
+ * packet. {@link RtSkyDisplayLayout} owns that packet's validation and input semantics.
+ * The remaining historical offsets are host scratch, not an imported legacy shader struct.
  * <p>
  * The member list below is the single Java source of truth: offsets are computed here with the same
  * std430 rules the shader compiler applies to the declaration. {@code RtFrameStatsTest} pins the four head words that
@@ -111,8 +110,8 @@ public final class RtStatsLayout {
     public static final int FOG_MEDIUM = add("fogMedium", "vec4");
     public static final int FOG_FADE = add("fogFade", "vec4");
     public static final int SHADOW_PIXEL = add("shadowPixel", "float");
-    public static final int RESERVOIR_ADDR = add("reservoirAddr", "uvec2");
-    public static final int RESERVOIR_AUX_ADDR = add("reservoirAuxAddr", "uvec2");
+    public static final int SKY_DISPLAY_COLOR_RG = add("skyDisplayColorRg", "vec2");
+    public static final int SKY_DISPLAY_COLOR_B_DAY = add("skyDisplayColorBDay", "vec2");
     public static final int LEAF_BACKLIT = add("leafBacklit", "uint");
     public static final int SELF_AVATAR_TRI_START = add("selfAvatarTriStart", "uint");
     public static final int SELF_AVATAR_TRI_COUNT = add("selfAvatarTriCount", "uint");

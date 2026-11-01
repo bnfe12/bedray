@@ -211,6 +211,7 @@ public final class RtSlangPathPass implements RtPass {
      */
     private final boolean rayMode;
     private final PathTraceBackend backend;
+    @Override public boolean supportsDisplaySky() { return backend.displaySkyAvailable(); }
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
     private RtFrameBindings.Views views;
     private int accumFrames;
