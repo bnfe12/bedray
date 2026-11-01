@@ -128,6 +128,13 @@ public final class RtFrameParams {
     public float bobX;
     public float bobY;
     public float bobZ;
+    /**
+     * The upscaler's sub-pixel jitter of this frame in pixels, the value DLSS-RR and NRD are told; the primary rays use it
+     * whenever it is active so the denoiser reprojects each sample to where it was traced.
+     */
+    public boolean upscalerJittered;
+    public float upscalerJitterX;
+    public float upscalerJitterY;
     public boolean sceneChanged;
     /** The camera stands in water ({@code FogType.WATER}), so a primary ray starts inside the medium. */
     public boolean cameraInWater;

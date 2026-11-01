@@ -45,6 +45,10 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     private final RestirDiState pt = new RestirDiState(false);
     /** True when the last recorded frame ran the PT spatial stage; the mode log reports it. */
     private boolean ptSpatialLast;
+    /** The buffer owner's budget; both reservoir rings live in it. */
+    private final long bufferBudget;
+    /** The extent the budget log line was written for, so a refused ring is logged once per size, not per frame. */
+    private long ptBudgetLoggedExtent = -1L;
     private boolean closed;
 
     ReferencePathTraceBackend(VkDevice device, SlangRuntime runtime) {
@@ -52,10 +56,11 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         trace = new RtPathTraceSlangPass(device, runtime);
         BedrayGpuImagesNative nextImages = null;
         BedrayGpuBuffersNative nextBuffers = null;
+        long bytes = runtime.capabilities().deviceMemoryBytes();
+        bufferBudget = bufferBudget(bytes);
         try {
-            long bytes = runtime.capabilities().deviceMemoryBytes();
             nextImages = runtime.createImageOwner(bytes > 0 ? Math.min(1L << 30, bytes / 8) : 256L << 20);
-            nextBuffers = runtime.createBufferOwner(bytes > 0 ? Math.min(1L << 30, bytes / 4) : 512L << 20);
+            nextBuffers = runtime.createBufferOwner(bufferBudget(bytes));
             display = runtime.program(DISPLAY_PASS).orElseThrow();
             requireDisplayManifest(display);
             sampler = runtime.atlasSampler();
@@ -134,6 +139,19 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     }
 
     /**
+     * The reservoir buffer owner's budget: a quarter of device memory (4 GiB on a 16 GB card), 512 MiB when the device
+     * does not report it. Both rings live here - 1.36 GiB at 2560x1370 - so a fixed 1 GiB cap failed a maximised window.
+     */
+    static long bufferBudget(long deviceMemoryBytes) {
+        return deviceMemoryBytes > 0 ? deviceMemoryBytes / 4 : 512L << 20;
+    }
+
+    /** True when a PT ring of {@code need} bytes fits next to the DI ring inside the owner's budget. */
+    static boolean ptRingFits(long need, long diBytes, long budget) {
+        return need <= budget - diBytes;
+    }
+
+    /**
      * Allocates the PT ring when this frame asks for it and retires it when it does not. The retired buffer stays alive
      * until the native owner has drained every recording that still uses it, so a switch flip mid-session needs no idle.
      */
@@ -150,6 +168,22 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         long need = RtPathTraceSlangPass.ptReservoirBytes(width, height);
         if (ptReservoirs != null && ptReservoirs.size() >= need) {
             if (pt.extentDiffers(width, height)) pt.layoutFor(width, height);
+            return;
+        }
+        long diBytes = reservoirs != null ? reservoirs.size() : 0L;
+        if (!ptRingFits(need, diBytes, bufferBudget)) {
+            // An optional ring the device cannot hold: this frame traces without path reuse, the rest of RT keeps running.
+            if (ptReservoirs != null) {
+                nativeBuffers.retire(ptReservoirs);
+                ptReservoirs = null;
+            }
+            pt.reset();
+            long extent = ((long) width << 32) | (height & 0xffffffffL);
+            if (ptBudgetLoggedExtent != extent) {
+                ptBudgetLoggedExtent = extent;
+                LOGGER.warn("[VKB-RT] restir_pt=off reason=budget extent={}x{} need={} MiB di={} MiB budget={} MiB",
+                    width, height, need / (1024L * 1024L), diBytes / (1024L * 1024L), bufferBudget / (1024L * 1024L));
+            }
             return;
         }
         BedrayGpuBuffersNative.Buffer next = nativeBuffers.createDeviceLocal(need,

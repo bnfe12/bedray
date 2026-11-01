@@ -33,9 +33,11 @@ final class RtSlangFrameData {
         frame.right.set(right.x, right.y, right.z, rightLen / downLen);
         frame.up.set(up.x, up.y, up.z, 0f);
         frame.origin.set(bob.x, bob.y, bob.z, p.frame / 20f);
-        // Sub-pixel jitter per frame so the running mean also antialiases; zw is the pixel size the shader uses for NDC.
-        float jx = accumFrames == 0 ? 0f : halton(sampleIndex + 1, 2) - 0.5f;
-        float jy = accumFrames == 0 ? 0f : halton(sampleIndex + 1, 3) - 0.5f;
+        // Sub-pixel jitter; zw is the pixel size the shader uses for NDC. With an upscaler jittering the frame it is the
+        // upscaler's offset - the one DLSS-RR and NRD are told - or the denoiser reprojects every sample to the wrong spot.
+        // Otherwise the running mean antialiases with its own sequence.
+        float jx = p.upscalerJittered ? p.upscalerJitterX : accumFrames == 0 ? 0f : halton(sampleIndex + 1, 2) - 0.5f;
+        float jy = p.upscalerJittered ? p.upscalerJitterY : accumFrames == 0 ? 0f : halton(sampleIndex + 1, 3) - 0.5f;
         frame.jitter.set(jx, jy, 1f / width, 1f / height);
         frame.width = width;
         frame.height = height;

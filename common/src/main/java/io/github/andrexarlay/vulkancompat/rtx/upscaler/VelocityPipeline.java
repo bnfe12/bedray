@@ -148,6 +148,27 @@ public final class VelocityPipeline implements AutoCloseable {
         data.putFloat(312, historyReset ? 1f : 0f).putFloat(316, 16f);
         data.putLong(320, entityMotion).putLong(328, mask).putLong(336, previousDepth).putLong(344, 0);
         data.putFloat(352, jitterX).putFloat(356, jitterY).putFloat(360, previousJitterX).putFloat(364, previousJitterY);
+        String nonFinite = nonFiniteField(data);
+        if (nonFinite != null)
+            throw new IllegalArgumentException("velocity uniforms: non-finite " + nonFinite + " (the native core would refuse the frame)");
+    }
+
+    /**
+     * The first float word the native core would refuse as non-finite, named by its field, or null. The core checks the
+     * same words but answers "invalid velocity uniform contract" for every one of them, which leaves the log silent on
+     * which input broke.
+     */
+    private static String nonFiniteField(ByteBuffer data) {
+        for (int offset = 0; offset < UNIFORM_BYTES; offset += Float.BYTES) {
+            if (offset >= 320 && offset < 352) continue; // device addresses, not floats
+            if (Float.isFinite(data.getFloat(offset))) continue;
+            String field = offset < 64 ? "invViewProj" : offset < 128 ? "prevViewProj" : offset < 140 ? "camDelta"
+                : offset < 144 ? "convention" : offset < 160 ? "bobOrigin" : offset < 176 ? "extent"
+                : offset < 240 ? "entityCurrent" : offset < 304 ? "entityPrevious" : offset < 320 ? "entityFlags"
+                : offset < 360 ? "jitter" : "previousJitter";
+            return field + " at byte " + offset + " = " + data.getFloat(offset);
+        }
+        return null;
     }
 
     public record ReprojectionResult(

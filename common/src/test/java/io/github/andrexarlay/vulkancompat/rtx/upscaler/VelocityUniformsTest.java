@@ -37,6 +37,24 @@ class VelocityUniformsTest {
         assertEquals(0.25f, payload.getFloat(352)); assertEquals(-0.375f, payload.getFloat(356));
         assertEquals(-0.125f, payload.getFloat(360)); assertEquals(0.5f, payload.getFloat(364));
     }
+    /**
+     * The native core refuses a non-finite uniform with one sentence for all 92 words ("invalid velocity uniform
+     * contract", 26.3(1)/latest.log 2026-11-01 01:09:19), and DLSS goes off for the session. The host now names the
+     * field before the call, so the log says which input was broken.
+     */
+    @Test void aNonFiniteInputIsNamedBeforeTheNativeCall() {
+        var singular = new Matrix4f().zero().invert();
+        var data = ByteBuffer.allocateDirect(368).order(ByteOrder.nativeOrder());
+        var thrown = assertThrows(IllegalArgumentException.class, () -> VelocityPipeline.fillUniforms(data, singular,
+            new Matrix4f(), null, new Vector3f(), 8, 9, null, null, 0, false, 0, 0, 0, 0, 0, 0, 0, 0));
+        assertTrue(thrown.getMessage().contains("invViewProj"), thrown.getMessage());
+        var jitter = assertThrows(IllegalArgumentException.class, () -> VelocityPipeline.fillUniforms(data, null,
+            null, null, new Vector3f(), 8, 9, null, null, 0, false, 0, 0, 0, 0, 0, 0, Float.NaN, 0));
+        assertTrue(jitter.getMessage().contains("previousJitter"), jitter.getMessage());
+        var bob = assertThrows(IllegalArgumentException.class, () -> VelocityPipeline.fillUniforms(data, null,
+            null, new Vec3(0, Double.POSITIVE_INFINITY, 0), new Vector3f(), 8, 9, null, null, 0, false, 0, 0, 0, 0, 0, 0, 0, 0));
+        assertTrue(bob.getMessage().contains("camDelta"), bob.getMessage());
+    }
     @Test void disabledOptionalInputsStayZeroAndAllDepthConventionsRemainAvailable() {
         for (int convention : new int[]{0, 1, 2}) {
             var data = ByteBuffer.allocateDirect(368).order(ByteOrder.nativeOrder());
