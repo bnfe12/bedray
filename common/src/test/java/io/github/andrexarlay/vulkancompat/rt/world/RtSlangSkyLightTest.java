@@ -55,6 +55,8 @@ class RtSlangSkyLightTest {
         String sky = Files.readString(SKY).replace("\r\n", "\n");
         assertTrue(sky.contains("    float3 skyRadiance(float3 direction) {\n        return lightRadiance(direction);\n    }"),
             "a non-delta escape receives the light dome");
+        assertTrue(sky.contains("    float3 skyRadiance(float3 direction) {\n        return dome.skyRadiance(direction);\n    }"),
+            "and so does the sun-and-moon sky the tracer actually uses, not the visible dome");
         assertTrue(sky.contains("result.radiance = lightRadiance(direction);"), "so does a cosine sky sample");
         assertTrue(sky.contains("float3 zenith = atmosphere.skyLightZenith.rgb * max(atmosphere.skyLightZenith.w, 0.0);"));
         assertTrue(sky.contains("float3 zenith = atmosphere.zenithColor.rgb * max(atmosphere.zenithColor.w, 0.0);"),

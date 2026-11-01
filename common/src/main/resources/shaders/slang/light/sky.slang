@@ -153,8 +153,10 @@ struct SunMoonSky : IEnvironmentSampler {
         return dome.radiance(direction) + celestialRadiance(sun, direction);
     }
 
+    // The body-free sky as a light: the dome's light radiance, not the visible dome (which lit every diffuse bounce
+    // with the display sky, about 4x and saturated blue, until 2026-11-01).
     float3 skyRadiance(float3 direction) {
-        return dome.radiance(direction);
+        return dome.skyRadiance(direction);
     }
 
     float pdf(float3 normal, float3 direction) {

@@ -59,7 +59,7 @@ class RtSlangSunCountTest {
         String sky = read(SKY);
         assertTrue(sky.contains("    float3 skyRadiance(float3 direction);"),
             "the environment names its body-free part");
-        assertTrue(sky.contains("    float3 skyRadiance(float3 direction) {\n        return dome.radiance(direction);\n    }"),
+        assertTrue(sky.contains("    float3 skyRadiance(float3 direction) {\n        return dome.skyRadiance(direction);\n    }"),
             "the sun-and-moon sky leaves its discs to NEE there");
         String tracer = read(TRACER);
         assertTrue(tracer.contains("    bool bodiesVisible = true;"), "the primary ray sees the discs");
