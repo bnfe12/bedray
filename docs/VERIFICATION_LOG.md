@@ -4,6 +4,27 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-11-01 — FG exact lifetime, failure quarantine and diagnostics (L1/L2)
+
+Revision `5059372` passed a clean isolated `:common:test`: **1,011 tests,
+1,002 passed, nine skipped**, zero failures/errors (4m55s); all 26 AOT entries
+rebuilt. The 23 focused recording/vendor-failure tests also passed independently.
+Native Windows CI [41271076392](https://github.com/bnfe12/bedray/actions/runs/41271076392)
+passed **26 core + one scene + one lifetime** tests; baseline 15+1+1 passed.
+
+Both FG providers now retain exact producer recordings through completion or
+permanent discard, drain before borrowed target replacement, retain failed SDK
+consumer teardown, track partial Streamline tags/unknown mode and disable native
+interpolation when frame production fails. Logs carry stage/provider/frame/slot,
+extent, command/proof and retained state, preserving original and cleanup errors.
+Canonical FG ABI layouts/export bindings are shared with upstream.
+Details: [FRAMEGEN_PRODUCER_RECORDING.md](ai-agent-addenda/FRAMEGEN_PRODUCER_RECORDING.md).
+
+Merge `3b3d4fb` preserves the three later upstream sky/sun fixes through `8476cfc`;
+its native sources are identical to `5059372`. The final combined AOT/Java check
+will also include those upstream changes. No GPU, visual, performance or new
+per-slot vendor-consumption evidence is claimed.
+
 ## 2026-10-30 — Glass cost and NaN guards return as typed tests (L0 source, L1 build, L2 unit; no runtime change)
 
 Branch: `refactor/slang-pipeline`.

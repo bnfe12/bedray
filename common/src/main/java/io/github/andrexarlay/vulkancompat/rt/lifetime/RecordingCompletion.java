@@ -46,7 +46,8 @@ public final class RecordingCompletion {
 
     public Ticket beginWithDiscard(long commandBuffer, Retirement... release) {
         if (commandBuffer == 0 || pending.containsKey(commandBuffer)) {
-            throw new IllegalStateException("command buffer has no completed/discarded prior recording");
+            throw new IllegalStateException("command buffer has no completed/discarded prior recording command=0x"
+                + Long.toHexString(commandBuffer));
         }
         for (Retirement action : release) Objects.requireNonNull(action);
         Ticket ticket = new Ticket(commandBuffer, release);
@@ -117,8 +118,10 @@ public final class RecordingCompletion {
                 (ticket.discardedProof ? action.discarded() : action.completed()).run();
                 ticket.released[i] = true;
             } catch (RuntimeException | Error failure) {
-                if (failures == null) failures = new IllegalStateException("recording owner release failed");
-                failures.addSuppressed(failure);
+                if (failures == null) failures = new IllegalStateException("recording owner release failed command=0x"
+                    + Long.toHexString(ticket.commandBuffer) + " state=" + ticket.state
+                    + " proof=" + (ticket.discardedProof ? "discarded" : "completed") + " resources=retained");
+                failures.addSuppressed(new IllegalStateException("owner_index=" + i, failure));
             }
         }
         if (failures != null) throw failures;

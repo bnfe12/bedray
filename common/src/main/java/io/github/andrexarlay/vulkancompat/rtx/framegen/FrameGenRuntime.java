@@ -1,12 +1,10 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
-import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrCamera;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.fsr3.Fsr3FrameGen;
 import net.minecraft.client.Minecraft;
@@ -17,7 +15,6 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VkPhysicalDeviceIDProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
-import org.lwjgl.vulkan.VkCommandBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,6 +57,8 @@ public final class FrameGenRuntime {
     private static boolean failed;
     private static String failure = "";
     private static FrameGenGpu gpu;
+    private static final FrameGenHostCommands producerCommands = new FrameGenHostCommands(
+        failure -> LOGGER.warn("[VKB-FG] producer retirement failed; resources retained", failure));
     private static long frameIndex;
     private static int slot;
     private static boolean multiClampLogged;
@@ -67,13 +66,15 @@ public final class FrameGenRuntime {
     // per-frame state
     private static boolean worldReady;
     private static int renderW, renderH, winW, winH;
-    private static boolean tagsActive;
+    private static final FrameGenResourceTags resourceTags = new FrameGenResourceTags();
 
     // temporal history for the constants (WorldTargetManager advances its own history before our hook)
     private static Matrix4f prevProj, prevView;
     private static Vec3 prevCam;
     private static int validFrames;
     private static boolean modeOn;
+    /** A failed options call can leave the vendor enabled even before modeOn is published. */
+    private static boolean generationStateUnknown;
     private static boolean ranOnce;
     private static long lastSurfaceGeneration = -1;
     private static boolean unsupportedLogged;
@@ -343,7 +344,18 @@ public final class FrameGenRuntime {
     private static void fail(String stage, String detail, Throwable t) {
         failed = true;
         failure = stage + ": " + detail;
-        LOGGER.error("[VKB-FG] fg=FAILED stage={} {}", stage, detail, t);
+        Throwable cause = t != null ? t : new IllegalStateException(failure);
+        if (StreamlineBootstrap.isReady()) {
+            // Present interception survives Java's failed flag. Stop the actual vendor consumer too.
+            FrameGenFailureCleanup.run(cause,
+                () -> stopGeneration(StreamlineBootstrap.sl(), FLAG_RETAIN_RESOURCES_WHEN_OFF),
+                () -> clearTags(StreamlineBootstrap.sl()));
+        }
+        LOGGER.error("[VKB-FG] provider=nvidia fg=FAILED stage={} frame={} slot={} output={}x{} render={}x{} "
+                + "mode_on={} vendor_mode_unknown={} vendor_tags_retained={} output_owner_retained={} "
+                + "producer_recordings_retained={} detail={}",
+            stage, frameIndex, slot, winW, winH, renderW, renderH, modeOn, generationStateUnknown, resourceTags.isActive(), gpu != null,
+            gpu != null && gpu.hasPendingRecordings(), detail, cause);
     }
 
     private static void check(int r, String what) {
@@ -437,7 +449,15 @@ public final class FrameGenRuntime {
             if (gpu == null) {
                 gpu = new FrameGenGpu(device);
             }
-            gpu.ensure(fmt, winW, winH, renderW, renderH);
+            if (!gpu.matches(fmt, winW, winH, renderW, renderH)) {
+                drainProducerRecordings();
+                SlNative sl = StreamlineBootstrap.sl();
+                stopGeneration(sl, FLAG_RETAIN_RESOURCES_WHEN_OFF);
+                clearTags(sl);
+                validFrames = 0;
+                prevProj = null;
+                gpu.ensure(fmt, winW, winH, renderW, renderH);
+            }
             long mainImg = WorldTargetManager.extractVkImage(main);
             long depthView = WorldTargetManager.extractVkImageView(depthCopy.getDepthTextureView());
             long mvView = WorldTargetManager.extractVkImageView(mvTarget.getColorTextureView());
@@ -445,25 +465,12 @@ public final class FrameGenRuntime {
                 throw new IllegalStateException("missing Vulkan handle main=" + mainImg + " depthView=" + depthView + " mvView=" + mvView);
             }
             slot = (int) (frameIndex % FrameGenGpu.SETS);
-            VulkanCommandEncoder encoder = device.createCommandEncoder();
-            VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-            VkBarriers.fullMemoryBarrier(cmd);
-            gpu.recordInitialTransitions(cmd);
-            Runnable retire;
-            try {
-                retire = gpu.record(cmd, slot, mainImg, depthView, mvView);
-            } catch (RuntimeException | Error failure) {
-                gpu.discardRecording(cmd.address());
-                throw failure;
-            }
-            VkBarriers.fullMemoryBarrier(cmd);
-            int end = VK10.vkEndCommandBuffer(cmd);
-            if (end != VK10.VK_SUCCESS) {
-                gpu.discardRecording(cmd.address());
-                throw new IllegalStateException("vkEndCommandBuffer failed: " + end);
-            }
-            encoder.execute(cmd);
-            encoder.queueForDestroy(retire::run);
+            FrameGenGpu owner = gpu;
+            producerCommands.record(device, owner, cmd -> {
+                owner.recordInitialTransitions(cmd);
+                // The native producer owns its entry/exit dependencies.
+                owner.record(cmd, slot, mainImg, depthView, mvView);
+            });
             worldReady = true;
         } catch (Throwable t) {
             fail("world_ready", t.toString(), t);
@@ -511,8 +518,10 @@ public final class FrameGenRuntime {
             if (want != modeOn || (want && (!ranOnce || generate != appliedGenerate || dyn != appliedDynRes))) {
                 int mode = want ? MODE_ON : MODE_OFF;
                 int flags = FLAG_RETAIN_RESOURCES_WHEN_OFF | (dyn ? FLAG_DYNAMIC_RESOLUTION : 0);
+                generationStateUnknown = true;
                 check(sl.dlssgOptions(mode, generate, flags, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT,
                     dyn ? renderW : 0, dyn ? renderH : 0), "slDLSSGSetOptions(mode=" + mode + ")");
+                generationStateUnknown = false;
                 boolean was = modeOn;
                 modeOn = want;
                 if (!want) {
@@ -573,14 +582,8 @@ public final class FrameGenRuntime {
                 StreamlineBootstrap.pumpLog(sl);
             }
             if (st[0] != 0) {
-                fail("evaluate", "NGX error 0x" + Integer.toHexString(st[0]), null);
-                modeOn = false;
                 FrameGenSettings.setMode(FrameGenSettings.Mode.OFF);
-                clearTags(sl);
-                try {
-                    sl.dlssgOptions(MODE_OFF, 1, 0, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0);
-                } catch (Throwable ignored) {
-                }
+                fail("evaluate", "NGX error 0x" + Integer.toHexString(st[0]), null);
                 return;
             }
             long now = System.nanoTime();
@@ -686,16 +689,13 @@ public final class FrameGenRuntime {
             Fsr3FrameGen.onSurfaceReconfigureBegin();
             return;
         }
-        if (!usable()) {
+        if (!StreamlineBootstrap.isReady()) {
             return;
         }
         try {
+            drainProducerRecordings();
             SlNative sl = StreamlineBootstrap.sl();
-            if (modeOn) {
-                check(sl.dlssgOptions(MODE_OFF, 1, FLAG_RETAIN_RESOURCES_WHEN_OFF, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0),
-                    "slDLSSGSetOptions(off before swapchain reconfigure)");
-                modeOn = false;
-            }
+            stopGeneration(sl, FLAG_RETAIN_RESOURCES_WHEN_OFF);
             validFrames = 0;
             ranOnce = false;
             clearTags(sl);
@@ -706,6 +706,7 @@ public final class FrameGenRuntime {
             LOGGER.info("[VKB-FG] dlssg mode=OFF reason=swapchain_reconfigure");
         } catch (Throwable t) {
             fail("reconfigure", t.toString(), t);
+            throw new IllegalStateException("FG resources retained after failed reconfiguration drain", t);
         }
     }
 
@@ -719,11 +720,9 @@ public final class FrameGenRuntime {
             return;
         }
         try {
+            drainProducerRecordings();
             SlNative sl = StreamlineBootstrap.sl();
-            if (modeOn) {
-                sl.dlssgOptions(MODE_OFF, 1, 0, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0);
-                modeOn = false;
-            }
+            stopGeneration(sl, 0);
             clearTags(sl);
             if (gpu != null) {
                 gpu.close();
@@ -732,7 +731,8 @@ public final class FrameGenRuntime {
             LOGGER.info("[VKB-FG] teardown surface_close rendered_total={} presented_total={} doubled_frames={}", renderedTotal, presentedTotal, doubledFrames);
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
-            LOGGER.error("[VKB-FG] teardown surface_close failed", t);
+            fail("surface_close", t.toString(), t);
+            throw new IllegalStateException("FG resources retained after failed surface-close drain", t);
         }
     }
 
@@ -745,45 +745,62 @@ public final class FrameGenRuntime {
         if (!StreamlineBootstrap.isReady()) {
             return;
         }
+        if (gpu != null) onSurfaceClose();
         try {
             SlNative sl = StreamlineBootstrap.sl();
             int r = sl.shutdown();
             LOGGER.info("[VKB-FG] teardown slShutdown result={}", r);
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
-            LOGGER.error("[VKB-FG] teardown slShutdown failed", t);
+            LOGGER.error("[VKB-FG] provider=nvidia stage=device_close_sl_shutdown frame={} mode_on={} "
+                + "vendor_mode_unknown={} vendor_tags_retained={} output_owner_retained={}", frameIndex, modeOn,
+                generationStateUnknown, resourceTags.isActive(), gpu != null, t);
         }
     }
 
     // ------------------------------------------------------------------------------------------------------- constants/tags
+
+    /** Completes borrowed source reads before WorldTargetManager replaces their images. */
+    public static void drainProducerRecordings() {
+        producerCommands.drain();
+        Fsr3FrameGen.drainProducerRecordings();
+    }
+
+    private static void stopGeneration(SlNative sl, int flags) {
+        if (!modeOn && !ranOnce && !generationStateUnknown && !resourceTags.isActive()) return;
+        generationStateUnknown = true;
+        check(sl.dlssgOptions(MODE_OFF, 1, flags, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0),
+            "slDLSSGSetOptions(off before resource retirement)");
+        generationStateUnknown = false;
+        modeOn = false;
+    }
 
     private static void tag(SlNative sl) {
         FrameGenGpu.Img d = gpu.depth(slot);
         FrameGenGpu.Img m = gpu.mv(slot);
         FrameGenGpu.Img h = gpu.hudless(slot);
         int usage = h.usage();
-        check(sl.tag(BT_DEPTH, d.image(), d.view(), LAYOUT_GENERAL, d.width(), d.height(), d.format(), d.usage(), LIFE_UNTIL_PRESENT, VIEWPORT), "tag depth");
-        check(sl.tag(BT_MVEC, m.image(), m.view(), LAYOUT_GENERAL, m.width(), m.height(), m.format(), m.usage(), LIFE_UNTIL_PRESENT, VIEWPORT), "tag mvec");
-        check(sl.tag(BT_HUDLESS, h.image(), h.view(), LAYOUT_GENERAL, h.width(), h.height(), h.format(), usage, LIFE_UNTIL_PRESENT, VIEWPORT), "tag hudless");
-        tagsActive = true;
+        resourceTags.register(() -> {
+            check(sl.tag(BT_DEPTH, d.image(), d.view(), LAYOUT_GENERAL, d.width(), d.height(), d.format(), d.usage(), LIFE_UNTIL_PRESENT, VIEWPORT), "tag depth");
+            check(sl.tag(BT_MVEC, m.image(), m.view(), LAYOUT_GENERAL, m.width(), m.height(), m.format(), m.usage(), LIFE_UNTIL_PRESENT, VIEWPORT), "tag mvec");
+            check(sl.tag(BT_HUDLESS, h.image(), h.view(), LAYOUT_GENERAL, h.width(), h.height(), h.format(), usage, LIFE_UNTIL_PRESENT, VIEWPORT), "tag hudless");
+        });
     }
 
     private static void clearTags(SlNative sl) {
-        if (!tagsActive) {
-            return;
-        }
         // Guide 5.2: when the inputs are not valid (menus, loading) set all tags to null.
-        check(sl.tag(BT_DEPTH, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear depth tag");
-        check(sl.tag(BT_MVEC, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear mvec tag");
-        check(sl.tag(BT_HUDLESS, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear hudless tag");
-        tagsActive = false;
+        resourceTags.clear(() -> {
+            check(sl.tag(BT_DEPTH, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear depth tag");
+            check(sl.tag(BT_MVEC, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear mvec tag");
+            check(sl.tag(BT_HUDLESS, 0L, 0L, 0, 0, 0, 0, 0, LIFE_UNTIL_PRESENT, VIEWPORT), "clear hudless tag");
+        });
     }
 
     /**
      * Common constants (guide 7.0 and sl_consts.h). SL matrices are row-major with row vectors; the JOML float array
      * (column-major, column vectors) of M is byte-identical to the row-major array of M transposed, i.e. the row-vector form,
      * so {@code Matrix4f.get} is passed as is. Depth: reverse-Z hardware depth; motion vectors: pixels, previous minus current,
-     * camera + object motion, no jitter, already flipped to the back buffer orientation by the fg_prepare pass.
+     * camera + object motion, no jitter, already flipped to the back buffer orientation by fg_prepare.comp.
      */
     private static long constantsFrame = -1;
 
@@ -873,11 +890,8 @@ public final class FrameGenRuntime {
         return failure;
     }
 
-    /** Releases the GPU resources (device idle first). */
+    /** Ends producer and vendor-consumer lifetimes before releasing the output images. */
     public static void shutdown() {
-        if (gpu != null) {
-            gpu.close();
-            gpu = null;
-        }
+        onSurfaceClose();
     }
 }

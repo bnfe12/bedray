@@ -5,6 +5,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class Fsr3TeardownTest {
     @Test
@@ -38,5 +39,14 @@ class Fsr3TeardownTest {
         List<String> calls = new ArrayList<>();
         Fsr3Teardown.releaseSwapchainContext(0L, () -> calls.add("invalid wait"), () -> calls.add("destroy"));
         assertEquals(List.of("destroy"), calls);
+    }
+
+    @Test
+    void failedConsumerWaitKeepsTheGenerationAlive() {
+        List<String> calls = new ArrayList<>();
+        assertThrows(IllegalStateException.class, () -> Fsr3Teardown.releaseGeneration(0x1234L,
+            handle -> calls.add("disable"), () -> { throw new IllegalStateException("wait failed"); },
+            () -> calls.add("destroy")));
+        assertEquals(List.of("disable"), calls);
     }
 }

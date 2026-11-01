@@ -38,6 +38,10 @@ class FgPrepareNativeWiringTest {
         + "Fsr3FrameGen.java");
     private static final Path NATIVE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/core/"
         + "BedrayCoreNative.java");
+    private static final Path PRODUCER = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/core/"
+        + "BedrayFgPrepareNative.java");
+    private static final Path HOST = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rtx/framegen/"
+        + "FrameGenHostCommands.java");
     private static final Path HEADER = Path.of("../native/bedray_core/include/bedray_fg_prepare.h");
     private static final Path PASS = Path.of("src/main/resources/shaders/slang/passes/fg_prepare.slang");
     private static final Path LEGACY = Path.of("src/main/resources/shaders/glsl/fg_prepare.comp");
@@ -57,7 +61,7 @@ class FgPrepareNativeWiringTest {
             "the pass is borrowed from the per-device native core, so the program handle has an owner");
         assertTrue(gpu.contains("runtime.program(PASS_NAME)"),
             "the AOT artifact is registered by the runtime cache, not re-created here");
-        assertTrue(gpu.contains("library.renderFgPrepare(core, desc)"),
+        assertTrue(gpu.contains("nativePass.record(") && read(PRODUCER).contains("library.renderFgPrepare(core, desc)"),
             "the core records the flipped blit, the barriers and the dispatch");
         assertFalse(gpu.contains("vkCmdBlitImage") || gpu.contains("vkCmdDispatch"),
             "the host owns no part of the recording, so the two paths cannot drift");
@@ -173,16 +177,17 @@ class FgPrepareNativeWiringTest {
     @Test
     void theRecordingIsReleasedAfterTheEncoderProvesRetirement() throws IOException {
         String gpu = read(GPU);
-        assertTrue(gpu.contains("library.releaseRecording(core, command)"),
+        assertTrue(gpu.contains("runtime.releaseRecording(command)"),
             "the pool is recycled once the encoder's fence proved the work retired");
-        assertTrue(gpu.contains("library.discardRecording(core, command)"),
+        assertTrue(gpu.contains("runtime.discardRecording(command)"),
             "an unsubmitted recording is invalidated instead of pinned");
+        String host = read(HOST);
+        assertTrue(host.contains("encoder.queueForDestroy("), "both providers use the same host completion bridge");
+        assertTrue(host.contains("owner.discardRecording(handle)"), "the bridge captures the exact output owner");
         for (Path caller : new Path[] {DLSS, FSR3}) {
             String source = read(caller);
-            assertTrue(source.contains("encoder.queueForDestroy("),
-                caller.getFileName() + ": the release rides the fence the encoder already owns");
-            assertTrue(source.contains("gpu.discardRecording("),
-                caller.getFileName() + ": a failed submission discards the recording");
+            assertTrue(source.contains("producerCommands.record(device, owner,"),
+                caller.getFileName() + ": the shared bridge preserves uncertain execution for a later drain");
         }
     }
 }
