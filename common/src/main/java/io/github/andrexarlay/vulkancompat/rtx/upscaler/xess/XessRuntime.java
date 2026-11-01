@@ -4,11 +4,12 @@ import com.mojang.renderpearl.api.device.DeviceInfo;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
+import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerContextRetirement;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerReconfigure;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerRequest;
 import net.minecraft.client.Minecraft;
-import org.lwjgl.vulkan.VK10;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,8 +28,8 @@ import java.util.Set;
  * (normal rendering continues; there is no hidden retry: only a changed request leaves FAILED).
  * <p>
  * Runtime switch: when the request no longer matches the active mode the context goes READY -> RECONFIGURE_PENDING (out of
- * use at once, the frame falls back to the other path), is destroyed {@link UpscalerReconfigure#RETIRE_DELAY_FRAMES} frame
- * heads later (no vkDeviceWaitIdle) and a new context is created for the new request; the init epoch increases, which
+ * use at once, the frame falls back to the other path). Queued host work is submitted and fenced before destruction,
+ * then a new context is created for the new request; the init epoch increases, which
  * resets the temporal history.
  * <p>
  * All methods must run on the render thread. {@link #onFrameBegin(int, int)} is called from the HEAD of
@@ -49,6 +50,7 @@ public final class XessRuntime {
     private static State state = State.IDLE;
     private static XessNative nativeLib;
     private static MemorySegment context;
+    private static VulkanDevice contextDevice;
     private static XessQuality activeMode;
     private static XessNative.Resolution activeInput;
     private static int outputWidth;
@@ -58,9 +60,8 @@ public final class XessRuntime {
     private static boolean pendingDestroy;
     /** Frame heads seen so far (incremented in {@link #onFrameBegin}). */
     private static long frameCounter;
-    /** Context taken out of use by a reconfiguration, destroyed at frame {@link #retireAtFrame}. */
+    /** Context taken out of use, retained until host completion and SDK destruction both succeed. */
     private static MemorySegment retiredContext;
-    private static long retireAtFrame;
     /** Mode of the context created last: a FAILED state belongs to this request. */
     private static XessQuality attempted;
     /** Custom render percent of the READY context / of the last attempt / of the context being created (0 = mode size). */
@@ -148,7 +149,7 @@ public final class XessRuntime {
         for (int guard = 0; guard < 4; guard++) {
             UpscalerReconfigure.Step step = UpscalerReconfigure.plan(UpscalerReconfigure.Phase.valueOf(state.name()),
                 UpscalerReconfigure.target(desired, desiredPct), UpscalerReconfigure.target(activeMode, activeCustom),
-                UpscalerReconfigure.target(attempted, attemptedCustom), frameCounter, retireAtFrame);
+                UpscalerReconfigure.target(attempted, attemptedCustom));
             switch (step) {
                 case NONE -> {
                     return;
@@ -171,27 +172,22 @@ public final class XessRuntime {
         }
     }
 
-    /** READY context no longer matches the request: out of use now, destroyed after the retire delay. */
+    /** READY context no longer matches the request: out of use now, pending host completion. */
     private static void beginRetire(XessQuality desired) {
         String from = UpscalerReconfigure.describe("XESS", activeMode);
-        LOGGER.info("[VKB-AUTOTEST] upscaler_reconfigure from={} to={} reason=request phase=retire tech=xess destroy_at_frame={} frame={}",
-            from, UpscalerReconfigure.describe("XESS", desired), frameCounter + UpscalerReconfigure.RETIRE_DELAY_FRAMES, frameCounter);
+        LOGGER.info("[VKB-AUTOTEST] upscaler_reconfigure from={} to={} reason=request phase=retire tech=xess proof=host_fence_required frame={}",
+            from, UpscalerReconfigure.describe("XESS", desired), frameCounter);
         reconfigureFrom = from;
         retiredContext = context;
         context = null;
         activeMode = null;
         activeInput = null;
-        retireAtFrame = frameCounter + UpscalerReconfigure.RETIRE_DELAY_FRAMES;
         state = State.RECONFIGURE_PENDING;
     }
 
-    /** Destroys the context retired by {@link #beginRetire}; the GPU work that used it was submitted frames ago. */
+    /** Keeps the retired handle available if completion proof or native destruction fails. */
     private static void destroyRetired() {
-        if (nativeLib != null && retiredContext != null) {
-            int r = nativeLib.destroyContext(retiredContext);
-            LOGGER.info("[VKB-AUTOTEST] xess=context_destroyed result={} reason=reconfigure", r);
-        }
-        retiredContext = null;
+        retiredContext = releaseContext(retiredContext, "destroy_retired");
     }
 
     private static void createWhenPossible(XessQuality mode, int winW, int winH) {
@@ -218,6 +214,8 @@ public final class XessRuntime {
     }
 
     private static void create(XessQuality mode, VulkanDevice device, int winW, int winH) {
+        if (context != null || retiredContext != null)
+            throw new IllegalStateException("provider=xess stage=create retained_context=true");
         Path gameDir = resolveGameDir();
         Path dll = XessConfig.libraryPath(gameDir);
         DeviceInfo info = device.getDeviceInfo();
@@ -315,6 +313,7 @@ public final class XessRuntime {
             return;
         }
         context = ctx.handle();
+        contextDevice = device;
         LOGGER.info("[VKB-AUTOTEST] xess=context_created result={}", ctx.result());
 
         int logR = nativeLib.installLoggingCallback(context, XessNative.LOG_LEVEL_INFO);
@@ -399,26 +398,20 @@ public final class XessRuntime {
 
     /**
      * The window size changed: the context is bound to the output resolution, so it is destroyed and re-created.
-     * No XeSS work of earlier frames may be in flight (vkDeviceWaitIdle on the render thread; resizes are rare).
+     * Queued host work is submitted and fenced before any old context is released.
      */
     private static void resizeReinit(int winW, int winH) {
         LOGGER.info("[VKB-AUTOTEST] xess=resize_reinit from={}x{} to={}x{}", outputWidth, outputHeight, winW, winH);
-        VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
-        if (device != null) {
-            int idle = VK10.vkDeviceWaitIdle(device.vkDevice());
-            if (idle != VK10.VK_SUCCESS) {
-                LOGGER.error("vkDeviceWaitIdle before XeSS re-init returned {}", idle);
-            }
-        }
         cleanup();
     }
 
     /**
-     * Called when {@code xessVKExecute} reported an error: logs the stage, disables XeSS for the rest of the session
-     * (the caller falls back to the plain bilinear path) and releases the context after the GPU is idle.
+     * A failed execute disables this request and schedules context release after host completion.
      */
     public static synchronized void executeFailed(String result) {
-        LOGGER.error("[VKB-AUTOTEST] xess=FAILED stage=execute result={} (falling back to bilinear; XeSS disabled for this session)", result);
+        LOGGER.error("[VKB-AUTOTEST] provider=xess stage=execute frame={} context=0x{} output={}x{} retained={} result={}",
+            frameCounter, context == null ? "0" : Long.toHexString(context.address()), outputWidth, outputHeight, context != null, result);
+        lastFailure = "stage=execute result=" + result;
         pendingDestroy = true;
         activeMode = null;
         activeInput = null;
@@ -426,15 +419,10 @@ public final class XessRuntime {
     }
 
     /**
-     * The command buffer that recorded the failed execute may still be submitted this frame, so the context is only
-     * destroyed at the head of the next frame (after the GPU is idle).
+     * Runs at the next frame's preflight, after the failed recording has been discarded or submitted and fenced.
      */
     private static void destroyPendingContext() {
-        VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
-        if (device != null) {
-            VK10.vkDeviceWaitIdle(device.vkDevice());
-        }
-        destroyQuietlyAfterFailure();
+        context = releaseContext(context, "destroy_after_execute_failure");
         pendingDestroy = false;
     }
 
@@ -467,45 +455,56 @@ public final class XessRuntime {
     private static void fail(String stage, String result) {
         LOGGER.error("[VKB-AUTOTEST] xess=FAILED stage={} result={}", stage, result);
         lastFailure = "stage=" + stage + " result=" + result;
-        destroyQuietlyAfterFailure();
         state = State.FAILED;
+        destroyQuietlyAfterFailure();
     }
 
     /** Releases whatever was created before a failure; problems here are logged, the original failure stays the reported one. */
     private static void destroyQuietlyAfterFailure() {
-        if (nativeLib != null && context != null) {
-            try {
-                int r = nativeLib.destroyContext(context);
-                if (r != XessNative.RESULT_SUCCESS) {
-                    LOGGER.warn("xessDestroyContext after failure returned {}", r);
-                }
-            } catch (RuntimeException e) {
-                LOGGER.error("xessDestroyContext after failure threw", e);
-            }
+        try {
+            context = releaseContext(context, "destroy_after_setup_failure");
+        } catch (RuntimeException | Error failure) {
+            pendingDestroy = true;
+            LOGGER.error("[VKB-AUTOTEST] provider=xess stage=setup_cleanup frame={} context=0x{} retained=true",
+                frameCounter, Long.toHexString(context.address()), failure);
         }
-        context = null;
+    }
+
+    private static MemorySegment releaseContext(MemorySegment owned, String stage) {
+        return UpscalerContextRetirement.release(owned, () -> {
+            try {
+                if (contextDevice == null) throw new IllegalStateException("XeSS context lost its host device");
+                WorldTargetManager.drainTemporalRecordings(contextDevice);
+            } catch (RuntimeException | Error failure) {
+                LOGGER.error("[VKB-AUTOTEST] provider=xess stage={} frame={} context=0x{} output={}x{} proof=FAILED retained=true",
+                    stage, frameCounter, Long.toHexString(owned.address()), outputWidth, outputHeight, failure);
+                throw failure;
+            }
+        }, handle -> {
+            try {
+                if (nativeLib == null) throw new IllegalStateException("XeSS context lost its native library");
+                int result = nativeLib.destroyContext(handle);
+                if (result != XessNative.RESULT_SUCCESS) throw new IllegalStateException("sdk_return=" + result);
+                LOGGER.info("[VKB-AUTOTEST] xess=context_destroyed stage={} context=0x{} frame={}",
+                    stage, Long.toHexString(handle.address()), frameCounter);
+            } catch (RuntimeException | Error failure) {
+                LOGGER.error("[VKB-AUTOTEST] provider=xess stage={} frame={} context=0x{} output={}x{} sdk=FAILED retained=true",
+                    stage, frameCounter, Long.toHexString(handle.address()), outputWidth, outputHeight, failure);
+                throw failure;
+            }
+        });
     }
 
     /**
-     * Destroys the context immediately (render thread; teardown and resize paths only: the caller guarantees that no XeSS
-     * work is in flight). Runtime mode switches do not use this, they retire the context ({@link #beginRetire}).
+     * Proves host completion and releases every retained context, including FAILED state and pending execute failures.
      * The runtime returns to IDLE and creates a new context on the next frame if XeSS is still requested.
      * The DLL stays loaded for the process lifetime (unloading is unsafe while XeSS worker threads may still exist).
      */
     public static synchronized void cleanup() {
-        if (state == State.RECONFIGURE_PENDING) {
-            destroyRetired(); // teardown path: the caller guarantees nothing is in flight
-            state = State.IDLE;
-            return;
-        }
-        if (state == State.IDLE || state == State.FAILED) {
-            return;
-        }
-        if (nativeLib != null && context != null) {
-            int r = nativeLib.destroyContext(context);
-            LOGGER.info("[VKB-AUTOTEST] xess=context_destroyed result={}", r);
-        }
-        context = null;
+        destroyRetired();
+        context = releaseContext(context, "cleanup");
+        contextDevice = null;
+        pendingDestroy = false;
         activeMode = null;
         activeInput = null;
         state = State.IDLE;

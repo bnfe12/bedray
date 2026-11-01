@@ -166,7 +166,7 @@ public final class UpscalerSwitchChecks {
             "XeSS mode while FSR is selected is not a reconfiguration");
         check(UpscalerRequest.set(UpscalerBackend.FSR, null, null, UpscalerMode.QUALITY, FsrVersion.FSR_2, "t"), "FSR version change re-creates");
         check(UpscalerRequest.current().toString().equals("FSR/QUALITY@FSR_2"), "toString FSR: " + UpscalerRequest.current());
-        check(UpscalerReconfigure.plan(Phase.READY, UpscalerRequest.current().fsrRequest(), fsrQ, fsrQ, 1, 0) == Step.BEGIN_RETIRE,
+        check(UpscalerReconfigure.plan(Phase.READY, UpscalerRequest.current().fsrRequest(), fsrQ, fsrQ) == Step.BEGIN_RETIRE,
             "READY FSR context with another version is retired");
         threw = false;
         try {
@@ -179,23 +179,20 @@ public final class UpscalerSwitchChecks {
     }
 
     private static void reconfigurePlanning() {
-        long retireAt = 13;
-        check(UpscalerReconfigure.plan(Phase.READY, XessQuality.QUALITY, XessQuality.QUALITY, XessQuality.QUALITY, 10, 0) == Step.NONE, "READY, same");
-        check(UpscalerReconfigure.plan(Phase.READY, XessQuality.PERFORMANCE, XessQuality.QUALITY, XessQuality.QUALITY, 10, 0) == Step.BEGIN_RETIRE,
+        check(UpscalerReconfigure.plan(Phase.READY, XessQuality.QUALITY, XessQuality.QUALITY, XessQuality.QUALITY) == Step.NONE, "READY, same");
+        check(UpscalerReconfigure.plan(Phase.READY, XessQuality.PERFORMANCE, XessQuality.QUALITY, XessQuality.QUALITY) == Step.BEGIN_RETIRE,
             "READY, other mode");
-        check(UpscalerReconfigure.plan(Phase.READY, (XessQuality) null, XessQuality.QUALITY, XessQuality.QUALITY, 10, 0) == Step.BEGIN_RETIRE,
+        check(UpscalerReconfigure.plan(Phase.READY, (XessQuality) null, XessQuality.QUALITY, XessQuality.QUALITY) == Step.BEGIN_RETIRE,
             "READY, backend switched away");
-        check(UpscalerReconfigure.plan(Phase.RECONFIGURE_PENDING, XessQuality.PERFORMANCE, null, XessQuality.QUALITY, 12, retireAt) == Step.NONE,
-            "PENDING before the retire frame");
-        check(UpscalerReconfigure.plan(Phase.RECONFIGURE_PENDING, XessQuality.PERFORMANCE, null, XessQuality.QUALITY, 13, retireAt) == Step.DESTROY_RETIRED,
-            "PENDING at the retire frame");
-        check(UpscalerReconfigure.plan(Phase.IDLE, XessQuality.PERFORMANCE, null, null, 13, 0) == Step.CREATE, "IDLE, requested");
-        check(UpscalerReconfigure.plan(Phase.IDLE, (XessQuality) null, null, null, 13, 0) == Step.NONE, "IDLE, not requested");
-        check(UpscalerReconfigure.plan(Phase.FAILED, XessQuality.QUALITY, null, XessQuality.QUALITY, 13, 0) == Step.NONE,
+        check(UpscalerReconfigure.plan(Phase.RECONFIGURE_PENDING, XessQuality.PERFORMANCE, null, XessQuality.QUALITY) == Step.DESTROY_RETIRED,
+            "PENDING requires a real completion proof before destruction");
+        check(UpscalerReconfigure.plan(Phase.IDLE, XessQuality.PERFORMANCE, null, null) == Step.CREATE, "IDLE, requested");
+        check(UpscalerReconfigure.plan(Phase.IDLE, (XessQuality) null, null, null) == Step.NONE, "IDLE, not requested");
+        check(UpscalerReconfigure.plan(Phase.FAILED, XessQuality.QUALITY, null, XessQuality.QUALITY) == Step.NONE,
             "FAILED for this very request: no hidden retry");
-        check(UpscalerReconfigure.plan(Phase.FAILED, XessQuality.BALANCED, null, XessQuality.QUALITY, 13, 0) == Step.CLEAR_FAILED,
+        check(UpscalerReconfigure.plan(Phase.FAILED, XessQuality.BALANCED, null, XessQuality.QUALITY) == Step.CLEAR_FAILED,
             "FAILED, request changed: explicit new request");
-        check(UpscalerReconfigure.plan(Phase.FAILED, (XessQuality) null, null, XessQuality.QUALITY, 13, 0) == Step.CLEAR_FAILED,
+        check(UpscalerReconfigure.plan(Phase.FAILED, (XessQuality) null, null, XessQuality.QUALITY) == Step.CLEAR_FAILED,
             "FAILED, switched away: cleared so that a later re-selection retries");
 
         // frame-by-frame simulation of XESS QUALITY -> PERFORMANCE (the loop of XessRuntime.onFrameBegin)
@@ -203,12 +200,11 @@ public final class UpscalerSwitchChecks {
         XessQuality active = XessQuality.QUALITY;
         XessQuality desired = XessQuality.PERFORMANCE;
         XessQuality attempted = XessQuality.QUALITY;
-        long retire = 0;
         long destroyedAt = -1;
         long createdAt = -1;
         for (long frame = 10; frame <= 20 && createdAt < 0; frame++) {
             for (int guard = 0; guard < 4; guard++) {
-                Step step = UpscalerReconfigure.plan(phase, desired, active, attempted, frame, retire);
+                Step step = UpscalerReconfigure.plan(phase, desired, active, attempted);
                 if (step == Step.NONE) {
                     break;
                 }
@@ -216,7 +212,6 @@ public final class UpscalerSwitchChecks {
                     case BEGIN_RETIRE -> {
                         phase = Phase.RECONFIGURE_PENDING;
                         active = null;
-                        retire = frame + UpscalerReconfigure.RETIRE_DELAY_FRAMES;
                     }
                     case DESTROY_RETIRED -> {
                         destroyedAt = frame;
@@ -236,11 +231,9 @@ public final class UpscalerSwitchChecks {
                 }
             }
         }
-        check(destroyedAt == 10 + UpscalerReconfigure.RETIRE_DELAY_FRAMES, "old context destroyed " + UpscalerReconfigure.RETIRE_DELAY_FRAMES
-            + " frame heads after it was retired, got " + destroyedAt);
+        check(destroyedAt == 10, "retirement requests a host completion proof immediately, got " + destroyedAt);
         check(createdAt == destroyedAt, "the new context is created in the same frame head the old one is destroyed");
         check(phase == Phase.READY && active == XessQuality.PERFORMANCE, "ends READY in the new mode");
-        check(UpscalerReconfigure.RETIRE_DELAY_FRAMES >= 3, "not shorter than RtWorld.DEFER_FRAMES (3): the engine keeps up to 2 submissions in flight");
         check(UpscalerReconfigure.describe("XESS", XessQuality.QUALITY).equals("XESS/QUALITY") && UpscalerReconfigure.describe("XESS", null).equals("none"),
             "log text");
     }

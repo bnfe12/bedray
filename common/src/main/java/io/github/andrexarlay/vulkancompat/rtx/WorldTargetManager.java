@@ -15,7 +15,6 @@ import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement;
-import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
@@ -67,11 +66,9 @@ public final class WorldTargetManager {
     private static RenderTarget savedMainRenderTarget;
     private static RenderTarget savedHud3DTarget;
 
-    private static VelocityPipeline velocityPipeline;
-    private static SlangRuntimePool.Lease velocityRuntimeLease;
-    private static final RecordingCompletion velocityCompletion = new RecordingCompletion(
-        failure -> LOGGER.warn("[WorldTargetManager] velocity retirement failed; resources retained", failure));
-    private static boolean recordingVelocity, drainingVelocity;
+    private static final io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityRecordingOwner velocityRecordings =
+        new io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityRecordingOwner(
+            failure -> LOGGER.warn("[WorldTargetManager] temporal retirement failed; resources retained", failure));
     private static final RecordingCompletion spatialCompletion = new RecordingCompletion(
         failure -> LOGGER.warn("[WorldTargetManager] spatial retirement failed; resources retained", failure));
     private static boolean recordingSpatial, drainingSpatial;
@@ -711,7 +708,7 @@ public final class WorldTargetManager {
                 + " mvView=" + mvView + " colorView=" + colorView + " outView=" + outView + " color=" + colorImg
                 + " depth=" + rasterDepthImg + " mv=" + mvImg + " out=" + outImg + ")");
         }
-        ensureVelocityPipeline(vulkanDevice);
+        VelocityPipeline velocityPipeline = velocityRecordings.ensure(vulkanDevice);
 
         final int inW = worldTarget.width;
         final int inH = worldTarget.height;
@@ -797,7 +794,7 @@ public final class WorldTargetManager {
         if (rasterDepthView == 0L || mvView == 0L || rasterDepthImg == 0L || mvImg == 0L) {
             return;
         }
-        ensureVelocityPipeline(vulkanDevice);
+        VelocityPipeline velocityPipeline = velocityRecordings.ensure(vulkanDevice);
 
         final int inW = worldTarget.width;
         final int inH = worldTarget.height;
@@ -821,67 +818,17 @@ public final class WorldTargetManager {
         });
     }
 
-    private static void ensureVelocityPipeline(VulkanDevice device) {
-        if (velocityRuntimeLease != null && velocityRuntimeLease.runtime().hostDevice() != device)
-            throw new IllegalStateException("velocity runtime belongs to a different host device");
-        if (velocityRuntimeLease == null) velocityRuntimeLease = SlangRuntimePool.acquire(device);
-        if (velocityPipeline == null) velocityPipeline = new VelocityPipeline(velocityRuntimeLease.runtime());
-    }
-
-    /** Attaches immutable velocity uploads to this encoder's exact destruction proof. */
     private static boolean recordVelocityCommands(VulkanDevice device, java.util.function.Function<VkCommandBuffer, Boolean> commands) {
-        if (recordingVelocity || drainingVelocity) throw new IllegalStateException("recursive velocity recording/drain");
-        VelocityPipeline pass = velocityPipeline;
-        if (pass == null) throw new IllegalStateException("velocity pass is unavailable");
-        VulkanCommandEncoder encoder = device.createCommandEncoder();
-        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        var ticket = velocityCompletion.beginWithDiscard(cmd.address(), new Retirement(
-            () -> pass.releaseRecording(cmd.address()), () -> pass.discardRecording(cmd.address())));
-        boolean executeAttempted = false;
-        recordingVelocity = true;
-        try {
-            boolean result = commands.apply(cmd);
-            int status = VK10.vkEndCommandBuffer(cmd);
-            if (status != VK10.VK_SUCCESS) throw new IllegalStateException("velocity vkEndCommandBuffer failed: " + status);
-            velocityCompletion.submissionAttempted(ticket);
-            executeAttempted = true;
-            encoder.execute(cmd);
-            velocityCompletion.submitted(ticket, action -> encoder.queueForDestroy(action::run));
-            return result;
-        } catch (RuntimeException | Error failure) {
-            if (!executeAttempted) {
-                // This local recording was never passed to execute and is abandoned permanently.
-                try { velocityCompletion.discard(ticket); }
-                catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
-            }
-            throw failure; // An execute/enqueue exception stays UNKNOWN until the host drain.
-        } finally {
-            recordingVelocity = false;
-        }
+        return velocityRecordings.record(device, commands);
     }
 
-    /** Pending encoder work must be submitted before its fence can prove retirement. */
+    /** Completion proof for the velocity and temporal SDK commands recorded together. */
+    public static void drainTemporalRecordings(VulkanDevice expectedDevice) {
+        velocityRecordings.drain(expectedDevice);
+    }
+
     private static void drainVelocityRecordings() {
-        if (velocityCompletion.pendingCount() == 0) return;
-        if (recordingVelocity || drainingVelocity) throw new IllegalStateException("velocity drain during an active recording");
-        if (velocityRuntimeLease == null) throw new IllegalStateException("velocity recordings lost their runtime lease");
-        VulkanDevice device = velocityRuntimeLease.runtime().hostDevice();
-        if (VulkanCapabilityChecker.getVulkanDevice() != device)
-            throw new IllegalStateException("velocity host device changed; resources retained");
-        drainingVelocity = true;
-        try {
-            VulkanCommandEncoder encoder = device.createCommandEncoder();
-            try (var completion = encoder.createFence()) {
-                encoder.submit();
-                if (!completion.awaitCompletion(5_000_000_000L))
-                    throw new IllegalStateException("velocity host submission completion timed out; resources retained");
-                velocityCompletion.afterHostDrain();
-            }
-            if (velocityCompletion.pendingCount() != 0)
-                throw new IllegalStateException("velocity recording proof unavailable; resources retained");
-        } finally {
-            drainingVelocity = false;
-        }
+        velocityRecordings.drain();
     }
 
     /** Display-size RGBA8 STORAGE image between FSR 1 EASU and RCAS (created only when RCAS runs). */
@@ -1083,14 +1030,6 @@ public final class WorldTargetManager {
     private static void releaseTargets() {
         RenderSystem.assertOnRenderThread();
         drainBorrowedWorldTargetRecordings();
-        if (velocityPipeline != null) {
-            velocityPipeline.cleanup();
-            velocityPipeline = null;
-        }
-        if (velocityRuntimeLease != null) {
-            velocityRuntimeLease.close();
-            velocityRuntimeLease = null;
-        }
         TemporalUpscaler.cleanup();
         UpscalerBackend active = VulkanRtxConfig.activeBackend;
         if (active != null && active != UpscalerBackend.BILINEAR) {
@@ -1099,6 +1038,7 @@ public final class WorldTargetManager {
                 backend.cleanup();
             }
         }
+        velocityRecordings.close();
         {
             VulkanDevice idleDevice = VulkanCapabilityChecker.getVulkanDevice();
             if (idleDevice != null) {
@@ -1239,7 +1179,7 @@ public final class WorldTargetManager {
     }
 
     public static VelocityPipeline getVelocityPipeline() {
-        return velocityPipeline;
+        return velocityRecordings.pipeline();
     }
 
     public static boolean isInWorldPhase() {
