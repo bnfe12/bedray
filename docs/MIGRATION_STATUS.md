@@ -48,6 +48,10 @@ Fixes found from the 2026-10-31 logs:
 - F3: `invalid_pct`, `trunc_pct`, `vis_overflow_pct` are numbers on the default backend.
 - Settings screen: every tab shows rows; no `[VKB-SETTINGS]` error lines.
 - Walking past a wall at arm's length: the image does not turn noisy on every step (5.5 fix).
+- Sky: sun/moon phases, stars, FAST/FANCY clouds and End display; resource reload with unchanged pack IDs,
+  resize and world close; no atlas lifetime errors in the log.
+- Temporal upscalers: switch modes, resize, disable and close the world; check exact host-fence retirement and
+  absence of retained SDK context failures. Close once with ReSTIR PT still on.
 - RC (only with `-Dvkbridge.rt.nativePathTrace=true -Dvkbridge.rt.nativeScene=true -Dvkbridge.rt.radianceCascades=true`):
   the mode line says `rc_reuse=temporal`; indirect light under the field is calmer when standing still and follows a
   moving camera without smearing more than about a block.
@@ -62,8 +66,9 @@ separate the causes, one change at a time, each with a screenshot of the same sp
 3. The pre-5.x jar `bedray-fabric-mc26.3-0.2.0-alpha.jar.20261030-104721.bak`: if the triangle is there too, it predates
    the 5.x batches.
 
-Known migration gaps behind "no sky": the vanilla sun, moon and cloud textures (`RtSkyTextures`) are uploaded but no Slang
-pass samples them; the sky is the gradient dome plus analytic discs.
+The source gap behind the missing textured sky is addressed by `d9b671c`: the typed `FrameSky` adapter now reads the
+resource-pack atlas through bounded modules. Display equations come from the former GLSL path. L1/L2 checks pass;
+the owner's visual report remains open until the new build is checked at the same location.
 
 ## Fixes of 2026-11-01 (L2, no owner-verified frame)
 
@@ -80,5 +85,20 @@ From `26.3(1)/latest.log` 01:09 and the review of the pre-existing code:
 | `124e619`, `a754582` | Native backend parity (item 4 above). |
 
 Still open from the 01:09 log: DLSS SR fails on the first frame (`invalid velocity uniform contract`); the next log names
-the field. The sky is the gradient dome without the vanilla sun, moon and cloud textures.
+the field. Its actual runtime cause has not been established by a new log.
+
+## Ownership and modularity follow-up (2026-11-01, L1/L2)
+
+The complete source in `2bd6cea` passes 1,067 tests (1,058 passed, nine skipped,
+zero failures/errors) and all 29 AOT builds. Native CI on `13ead08` passes 27+1+1
+tests. The code now has explicit owners for scene frame tokens, temporal
+recordings/SDK contexts, output/depth/composite/motion generations and immutable
+sky atlases. Their failure paths preserve retryable ownership and contextual
+logs; four unused pre-integration upscaler stubs are deleted. The textured sky
+source transfer is complete; game/visual acceptance is still outstanding.
+
+The renderer remains an orchestration class; these changes do not claim every
+large subsystem has been decomposed or that the bounded audits establish an
+error-free engine. Details and exact evidence are in `VERIFICATION_LOG.md` and
+the linked owner contracts.
 

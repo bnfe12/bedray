@@ -4,6 +4,42 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-11-01 — Resource owners, temporal retirement and typed sky (L1/L2)
+
+The combined source committed as `2bd6cea` passed **1,067 Java tests: 1,058
+passed, nine skipped**, zero failures/errors (2m41s). Main Java compiled and all
+**29 AOT entries** built with pinned Slang 2026.20 (2m21s L1 run). The first full
+run also passed (2m37s); the final run includes first-time motion drain, a
+strengthened cleanup-order guard and deletion of four unused upscaler stubs.
+
+Native Windows CI [41324759791](https://github.com/bnfe12/bedray/actions/runs/41324759791)
+on `13ead08` passed **27 core + one scene + one lifetime** tests, with baseline
+15+1+1 also green. It includes direct shutdown of an active native PT history,
+without an intervening PT-OFF frame. Combined native sources are byte-identical
+to that revision. No native submission/wait authority or public ABI layout changed.
+
+New behavioral tests cover scene acceptance followed by Java allocation failure,
+checked SDK retirement and retry, exact frame-resource pins and initialization,
+first-frame null safety, partial allocation/rollback, and atlas upload/drain/
+cleanup failures. Source guards retain denoiser, motion and submission-order
+coverage. Sky display tests pin the private packet, bounded physical reads and
+thirteen transferred equation fingerprints. The path wrappers retain their
+28/28/30 bindings and 112-byte push.
+
+Integrated changes: PT retirement #44, scene ledger #45, temporal owners #46,
+frame images/motion owner #47, modular resource-pack sky #48 and unused stubs #49.
+Ownership and diagnostic contracts are recorded in
+[FRAME_RESOURCE_OWNERSHIP.md](ai-agent-addenda/FRAME_RESOURCE_OWNERSHIP.md),
+[TEMPORAL_CONTEXT_RETIREMENT.md](ai-agent-addenda/TEMPORAL_CONTEXT_RETIREMENT.md)
+and [SKY_DISPLAY_PACKET.md](ai-agent-addenda/SKY_DISPLAY_PACKET.md).
+
+Command and bounded JDK/launcher dependency settings match the following entry.
+Local text evidence: `work/modular-owners-final-tests.log`,
+`work/modular-resources-l1.log` and `work/pt-retirement-native-ci.log` (outside the
+tracked repository). No binaries, dependency jars or SDKs were committed.
+This is build/unit evidence; no new game, rendered image, vendor execution,
+performance or owner acceptance is claimed.
+
 ## 2026-11-01 — Parallel audit and spatial AOT integration (L1/L2)
 
 Exact combined source `2fd2d0b` passed **1,033 Java tests: 1,024 passed, nine

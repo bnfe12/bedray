@@ -4,6 +4,22 @@
 
 Existing-feature transfers in the current working tree:
 
+* Resource-pack sky display is transferred into small typed modules for packet
+  decoding, checked atlas reads, celestial bodies, clouds, composition and the
+  `FrameSky` adapter. The existing lighting sample/pdf contract stays in
+  `SunMoonSky`. A private packet reuses the 576-byte frame slot without growing
+  public ABI, descriptors or push constants. Atlas preparation runs before
+  recording; a completed resource-reload epoch triggers replacement only after
+  host proof. See `ai-agent-addenda/SKY_DISPLAY_PACKET.md` (L1/L2, no new image).
+* `RtFrameResources` owns frame images/motion and initialization/recording pins;
+  `VelocityRecordingOwner` owns temporal recordings and the Slang borrow;
+  `UpscalerContextRetirement` requires completion then checked SDK destruction;
+  `SceneFrameRecordings` reserves exact ownership before native acceptance.
+  The host orchestration classes borrow resources from these owners. Failed
+  release preserves the owning handle and stage-specific diagnostic cause.
+  Frame age is no longer used as temporal SDK completion evidence. Four unused
+  pre-integration upscaler/CPU velocity stubs are deleted.
+
 * Sodium compact-vertex decoding now uses `passes/sodium_dequantize.slang` AOT
   and a core-owned pipeline instead of Shaderc/Java pipeline creation. It keeps
   the planar arena contract and the compute-to-AS/attribute-read dependencies.
