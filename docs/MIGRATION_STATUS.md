@@ -32,8 +32,9 @@ Fixes found from the 2026-10-31 logs:
    results; to be repeated.
 3. **ReSTIR PT `experimental/` exit** - `restir_pt.slang` moves back to `restir/` only after a GPU run with
    `path_restir_pt` on.
-4. **Native backend parity** - with `-Dvkbridge.rt.nativePathTrace=true` the core binds stand-ins at 36 and 37: no
-   ReSTIR PT and an n/a F3 split until the core owns a PT ring and lends the trace the stats slot.
+4. ~~Native backend parity~~ - done 2026-11-01 (`124e619`, `a754582`, L2): the core owns the PT ring (`NATIVE_PT`,
+   spatial stage through `configure_path_trace_pt`) and binds the host's StatsBuf slot at 37
+   (`render_path_trace_ext`). Not run in a logged session.
 
 ## Owner playtest checklist
 
@@ -61,3 +62,21 @@ separate the causes, one change at a time, each with a screenshot of the same sp
 
 Known migration gaps behind "no sky": the vanilla sun, moon and cloud textures (`RtSkyTextures`) are uploaded but no Slang
 pass samples them; the sky is the gradient dome plus analytic discs.
+
+## Fixes of 2026-11-01 (L2, no owner-verified frame)
+
+From `26.3(1)/latest.log` 01:09 and the review of the pre-existing code:
+
+| commit | fix |
+|---|---|
+| `d1618ad` | RT survived no resize to 2560x1370: the reservoir buffer owner was capped at 1 GiB (DI 428 + PT 963 MiB); now a quarter of VRAM, and a PT ring that still does not fit is left out with `[VKB-RT] restir_pt=off reason=budget`. The Slang rays use the upscaler jitter DLSS-RR/NRD are told (they used their own Halton sequence). The velocity uniforms name a non-finite field before the native call. |
+| `bc98fd5` | Sun glare flickered: `bloom_apply` read the final image it was writing; visibility is now measured in the prefilter. |
+| `48333ed` | Caustics slid with the camera: the focus read waves at camera-relative positions, the surface at the world anchor. |
+| `006fdda` | Volumetric shafts were marched through the vertically mirrored pixel (second `ndc.y` flip). |
+| `4273eb2` | Six DLSS-NR options and their 721-line package did nothing; removed, `RtSettingsReachTest` guards new ones. |
+| `82fd364` | 5 passes no host runs and 21 modules nothing imports (3,486 lines) removed; `SlangDeadCodeTest` guards. |
+| `124e619`, `a754582` | Native backend parity (item 4 above). |
+
+Still open from the 01:09 log: DLSS SR fails on the first frame (`invalid velocity uniform contract`); the next log names
+the field. The sky is the gradient dome without the vanilla sun, moon and cloud textures.
+
