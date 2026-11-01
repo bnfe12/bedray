@@ -10,16 +10,18 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class DenoiserGuidePreparationTest {
     @Test void nrdGuideTransitionsPrecedePrimaryWritesOnCreationAndResize() throws Exception {
-        String renderer = body(source("world/RtFrameRenderer.java"), "private static void recordPrimaryRays(");
-        int create = renderer.indexOf("createDenoiser(device, w, h)");
-        int ensure = renderer.indexOf("owner.ensure(w, h, output.view)", create);
-        int prepare = renderer.indexOf("owner.prepare(cmd)", ensure);
+        String source = source("world/RtFrameRenderer.java");
+        String preflight = body(source, "private static void prepareFrameResources(");
+        int create = preflight.indexOf("createDenoiser(device, w, h)");
+        int ensure = preflight.indexOf("denoiser.ensure(w, h, output.view)", create);
+        assertTrue(create >= 0 && ensure > create, "creation and resizing must finish before recording");
+        String renderer = body(source, "private static void recordPrimaryRays(");
+        int owner = renderer.indexOf("NrdDenoiser owner = denoiser;");
+        int prepare = renderer.indexOf("owner.prepare(cmd)", owner);
         int bind = renderer.indexOf("pass.bind(new RtFrameBindings.Views(", prepare);
         int primary = renderer.indexOf("pass.dispatch(cmd, params, w, h)", bind);
         int record = renderer.indexOf("owner.record(cmd, camera.projectionMatrix", primary);
-        assertTrue(create >= 0 && ensure > create && prepare > ensure && bind > prepare && primary > bind && record > primary);
-        assertFalse(renderer.substring(create, ensure).contains("else if (denoiser != null)"),
-            "a just-created denoiser must prepare in the same frame");
+        assertTrue(owner >= 0 && prepare > owner && bind > prepare && primary > bind && record > primary);
         String nrd = source("denoise/NrdDenoiser.java");
         String preparation = body(nrd, "public void prepare(VkCommandBuffer cmd)");
         assertTrue(preparation.contains("if (!imagesReady)"));
@@ -33,13 +35,12 @@ class DenoiserGuidePreparationTest {
         String renderer = body(source("world/RtFrameRenderer.java"), "private static void recordPrimaryRays(");
         int rrOwner = renderer.indexOf("DlssRrDenoiser owner = dlssRrDenoiser;");
         int rrProof = renderer.indexOf("denoiserProof[0] = new Retirement", rrOwner);
-        int rrPrepare = renderer.indexOf("owner.ensure(cmd, w, h, output)", rrProof);
+        int rrPrepare = renderer.indexOf("owner.prepare(cmd)", rrProof);
         int nrdOwner = renderer.indexOf("NrdDenoiser owner = denoiser;");
         int nrdProof = renderer.indexOf("denoiserProof[0] = new Retirement", nrdOwner);
-        int nrdEnsure = renderer.indexOf("owner.ensure(w, h, output.view)", nrdProof);
-        int nrdPrepare = renderer.indexOf("owner.prepare(cmd)", nrdEnsure);
+        int nrdPrepare = renderer.indexOf("owner.prepare(cmd)", nrdProof);
         assertTrue(rrOwner >= 0 && rrProof > rrOwner && rrPrepare > rrProof);
-        assertTrue(nrdOwner >= 0 && nrdProof > nrdOwner && nrdEnsure > nrdProof && nrdPrepare > nrdEnsure);
+        assertTrue(nrdOwner >= 0 && nrdProof > nrdOwner && nrdPrepare > nrdProof);
         assertEquals(2, renderer.split("denoiserProof\\[0\\] = new Retirement", -1).length - 1,
             "each denoiser captures one instance before preparation, without a later replacement");
     }

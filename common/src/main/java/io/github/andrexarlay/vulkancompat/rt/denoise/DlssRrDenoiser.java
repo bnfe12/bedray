@@ -67,6 +67,7 @@ public final class DlssRrDenoiser {
     private final boolean ownsVelocityPipeline;
 
     private long feature;
+    private long guideGeneration;
     private int width;
     private int height;
     private long boundOutputImage;
@@ -93,6 +94,7 @@ public final class DlssRrDenoiser {
     static final boolean DEPTH_OCC_OFF = Boolean.getBoolean("vkrtx.dlssrr.depthocc.off");
     static final boolean DISOCC_OFF = Boolean.getBoolean("vkrtx.dlssrr.disocc.off");
     private NrdPackPipeline packPipeline;
+    private final DenoiserRecordingPins recordingPins = new DenoiserRecordingPins();
 
     private boolean imagesReady;
     private long imageInitRecording;
@@ -290,6 +292,7 @@ public final class DlssRrDenoiser {
 
         imagesReady = false;
         imageInitRecording = 0;
+        guideGeneration++;
         restartNext = true;
         havePrev = false;
     }
@@ -446,24 +449,45 @@ public final class DlssRrDenoiser {
 
     public void ensure(VkCommandBuffer cmd, int w, int h, RtMemory.Img output) {
         ensure(w, h, output);
-        if (cmd != null && !imagesReady) {
-            initImages(cmd);
+        if (cmd != null) prepare(cmd);
+    }
+
+    public boolean needsEnsure(int w, int h, long outputImage, long outputView) {
+        return w != width || h != height || outputImage != boundOutputImage || outputView != boundOutputView;
+    }
+
+    /** Pins the guide generation before initialization or primary writes can reference it. */
+    public void prepare(VkCommandBuffer cmd) {
+        if (cmd == null) throw new IllegalArgumentException("guide preparation needs a recording");
+        try {
+            recordingPins.retain(cmd.address());
+            if (!imagesReady) {
+                imageInitRecording = cmd.address();
+                initImages(cmd);
+            }
+        } catch (RuntimeException | Error failure) {
+            throw new IllegalStateException(resourceContext("guide_prepare", width, height, boundOutputView, cmd.address()), failure);
         }
     }
 
+    private String resourceContext(String stage, int requestedWidth, int requestedHeight, long requestedView, long command) {
+        return "DLSS-RR stage=" + stage + " profile=dlss_rr generation=" + guideGeneration
+            + " extent=" + width + "x" + height + " requestedExtent=" + requestedWidth + "x" + requestedHeight
+            + " outputView=0x" + Long.toUnsignedString(boundOutputView, 16)
+            + " requestedView=0x" + Long.toUnsignedString(requestedView, 16)
+            + " command=0x" + Long.toUnsignedString(command, 16);
+    }
+
+    /** Allocation-only frame preflight; the host drains submissions before any generation change. */
     public void ensure(int w, int h, long outputImage, long outputView) {
+        if (!needsEnsure(w, h, outputImage, outputView)) return;
+        recordingPins.requireUnreferenced(resourceContext("ensure", w, h, outputView, 0));
         if (w == width && h == height) {
             this.boundOutputImage = outputImage;
             if (this.boundOutputView != outputView) {
-                if (device != null) {
-                    VK10.vkDeviceWaitIdle(device);
-                }
                 writeSet(outputView);
             }
             return;
-        }
-        if (device != null) {
-            VK10.vkDeviceWaitIdle(device);
         }
         if (feature != 0L) {
             rr.releaseFeature(feature);
@@ -498,9 +522,7 @@ public final class DlssRrDenoiser {
      */
     public void record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
                        boolean tonemap, float exposure, long depthView, float jitterPixelsX, float jitterPixelsY) {
-        if (!imagesReady) {
-            initImages(cmd);
-        }
+        prepare(cmd);
         ensureFeature(cmd);
         MotionProbe.tick();
         float frameDeltaMs = frameDeltaMs();
@@ -736,34 +758,43 @@ public final class DlssRrDenoiser {
 
     /** Exact host proof for the shared-core pack/compose recording. */
     public void releaseRecording(long command) {
-        if (packPipeline != null) packPipeline.releaseRecording(command);
-        if (velocityPipeline != null) velocityPipeline.releaseRecording(command);
-        if (imageInitRecording == command) imageInitRecording = 0;
+        try {
+            if (packPipeline != null) packPipeline.releaseRecording(command);
+            if (velocityPipeline != null) velocityPipeline.releaseRecording(command);
+            if (imageInitRecording == command) imageInitRecording = 0;
+            recordingPins.release(command);
+        } catch (RuntimeException | Error failure) {
+            throw new IllegalStateException(resourceContext("guide_complete", width, height, boundOutputView, command), failure);
+        }
     }
 
     public void discardRecording(long command) {
-        if (packPipeline != null) packPipeline.discardRecording(command);
-        if (velocityPipeline != null) velocityPipeline.discardRecording(command);
-        if (imageInitRecording == command) {
-            imageInitRecording = 0;
-            imagesReady = false;
+        try {
+            if (packPipeline != null) packPipeline.discardRecording(command);
+            if (velocityPipeline != null) velocityPipeline.discardRecording(command);
+            if (imageInitRecording == command) {
+                imageInitRecording = 0;
+                imagesReady = false;
+            }
+            restartNext = true;
+            havePrev = false;
+            prevViewZValid = false;
+            recordingPins.release(command);
+        } catch (RuntimeException | Error failure) {
+            throw new IllegalStateException(resourceContext("guide_discard", width, height, boundOutputView, command), failure);
         }
-        restartNext = true;
-        havePrev = false;
-        prevViewZValid = false;
     }
 
     public void releaseRecordingsAfterHostDrain() {
         if (packPipeline != null) packPipeline.releaseRecordingsAfterHostDrain();
         if (velocityPipeline != null) velocityPipeline.releaseRecordingsAfterHostDrain();
         imageInitRecording = 0;
+        recordingPins.clearAfterHostDrain();
     }
 
     /** Caller closes/discards open recordings and drains host submissions first. */
     public void destroy() {
-        if (device != null) {
-            VK10.vkDeviceWaitIdle(device);
-        }
+        recordingPins.requireUnreferenced(resourceContext("destroy", width, height, boundOutputView, 0));
         if (feature != 0L) {
             rr.releaseFeature(feature);
             feature = 0L;

@@ -51,6 +51,7 @@ public final class NrdDenoiser {
     private final DenoiserMode mode;
     private final NrdReblurParams reblur = NrdReblurParams.defaults();
     private final NrdPackPipeline packPipeline;
+    private final DenoiserRecordingPins recordingPins = new DenoiserRecordingPins();
     private final Arena arena = Arena.ofShared();
     private final MemorySegment resources = arena.allocate((long) NrdLayouts.RES_COUNT * NrdLayouts.RESOURCE_SIZE, 8);
     private final MemorySegment frameSettingsSeg = arena.allocate(NrdLayouts.FRAME_SETTINGS_SIZE, 8);
@@ -58,6 +59,7 @@ public final class NrdDenoiser {
     private final NrdFrameSettings frame = new NrdFrameSettings();
 
     private long handle;
+    private long guideGeneration;
     private int width;
     private int height;
     private RtMemory.Img gbViewZ;
@@ -191,6 +193,7 @@ public final class NrdDenoiser {
         writeSet(outputView);
         imagesReady = false;
         imageInitRecording = 0;
+        guideGeneration++;
         restartNext = true;
         havePrev = false;
     }
@@ -225,19 +228,20 @@ public final class NrdDenoiser {
         boundOutputView = outputView;
     }
 
-    /**
-     * Follows a resize of the RT output. Waits for the device to go idle, so call it only when the size or the output view changed.
-     * A size change recreates all images and the NRD pools and restarts the history.
-     */
+    public boolean needsEnsure(int w, int h, long outputView) {
+        return w != width || h != height || outputView != boundOutputView;
+    }
+
+    /** Called at the frame boundary after a host submission drain when this generation changes. */
     public void ensure(int w, int h, long outputView) {
+        if (!needsEnsure(w, h, outputView)) return;
+        recordingPins.requireUnreferenced(resourceContext("ensure", w, h, outputView, 0));
         if (w == width && h == height) {
             if (outputView != boundOutputView) {
-                VK10.vkDeviceWaitIdle(device);
                 writeSet(outputView);
             }
             return;
         }
-        VK10.vkDeviceWaitIdle(device);
         nat.destroyDenoiser(handle);
         handle = 0L;
         destroyImages();
@@ -248,11 +252,24 @@ public final class NrdDenoiser {
     /** Initializes this generation before the primary pass writes any of its borrowed guide views. */
     public void prepare(VkCommandBuffer cmd) {
         if (cmd == null || cmd.address() == 0) throw new IllegalArgumentException("guide preparation needs a recording");
-        if (!imagesReady) {
-            imageInitRecording = cmd.address();
-            initImages(cmd);
-            imagesReady = true;
+        try {
+            recordingPins.retain(cmd.address());
+            if (!imagesReady) {
+                imageInitRecording = cmd.address();
+                initImages(cmd);
+                imagesReady = true;
+            }
+        } catch (RuntimeException | Error failure) {
+            throw new IllegalStateException(resourceContext("guide_prepare", width, height, boundOutputView, cmd.address()), failure);
         }
+    }
+
+    private String resourceContext(String stage, int requestedWidth, int requestedHeight, long requestedView, long command) {
+        return "NRD stage=" + stage + " profile=" + mode.logName() + " generation=" + guideGeneration
+            + " extent=" + width + "x" + height + " requestedExtent=" + requestedWidth + "x" + requestedHeight
+            + " outputView=0x" + Long.toUnsignedString(boundOutputView, 16)
+            + " requestedView=0x" + Long.toUnsignedString(requestedView, 16)
+            + " command=0x" + Long.toUnsignedString(command, 16);
     }
 
     /**
@@ -407,28 +424,39 @@ public final class NrdDenoiser {
 
     /** Exact host recording proof, including the native pack/compose descriptors. */
     public void releaseRecording(long command) {
-        packPipeline.releaseRecording(command);
-        if (imageInitRecording == command) imageInitRecording = 0;
+        try {
+            packPipeline.releaseRecording(command);
+            if (imageInitRecording == command) imageInitRecording = 0;
+            recordingPins.release(command);
+        } catch (RuntimeException | Error failure) {
+            throw new IllegalStateException(resourceContext("guide_complete", width, height, boundOutputView, command), failure);
+        }
     }
 
     public void discardRecording(long command) {
-        packPipeline.discardRecording(command);
-        if (imageInitRecording == command) {
-            imageInitRecording = 0;
-            imagesReady = false;
+        try {
+            packPipeline.discardRecording(command);
+            if (imageInitRecording == command) {
+                imageInitRecording = 0;
+                imagesReady = false;
+            }
+            restartNext = true;
+            havePrev = false;
+            recordingPins.release(command);
+        } catch (RuntimeException | Error failure) {
+            throw new IllegalStateException(resourceContext("guide_discard", width, height, boundOutputView, command), failure);
         }
-        restartNext = true;
-        havePrev = false;
     }
 
     public void releaseRecordingsAfterHostDrain() {
         packPipeline.releaseRecordingsAfterHostDrain();
         imageInitRecording = 0;
+        recordingPins.clearAfterHostDrain();
     }
 
     /** Caller first closes/discards open recordings and drains host submissions. */
     public void destroy() {
-        VK10.vkDeviceWaitIdle(device);
+        recordingPins.requireUnreferenced(resourceContext("destroy", width, height, boundOutputView, 0));
         destroyAll();
         packPipeline.destroy();
         arena.close();
