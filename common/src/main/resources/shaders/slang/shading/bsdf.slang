@@ -127,12 +127,8 @@ float bsdfPdf(MaterialSample material, float3 V, float3 N, float3 L) {
     bool optical = material.alphaMode == AlphaMode.Optical && material.transmission > 0.0;
 
     if (NdotL <= 0.0) {
-        // A thin pane samples diffuse transmission through the back side; an
-        // optical interface refracts as a delta lobe, which has no density.
-        if (thinPane) {
-            float transmission = clamp(material.transmission, 0.0, 1.0);
-            return (1.0 - specularProbability) * transmission * cosinePdf(-N, L);
-        }
+        // Both transmissions are delta lobes with no density: a thin pane passes the ray straight through, an
+        // optical interface refracts it.
         return 0.0;
     }
 
@@ -247,30 +243,37 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float inciden
         return result;
     }
 
-    // Diffuse reflection, or diffuse transmission for a thin pane.  The pane
-    // splits its diffuse energy by transmission, so the density and weight
-    // carry the branch probability exactly as bsdfPdf reports it.
+    // Diffuse reflection, or transmission through a thin pane.  A pane of glass passes the ray straight on, tinted
+    // by its colour to the power of the texel alpha (the authored thickness, the rule the shadow filter uses); it
+    // used to scatter it into a cosine lobe, which made stained glass a frosted, opaque block of colour.
     bool thinPane = material.alphaMode == AlphaMode.Translucent;
     float transmission = thinPane ? clamp(material.transmission, 0.0, 1.0) : 0.0;
     bool transmit = thinPane && (transmission >= 1.0 || rand01(seed) < transmission);
-    float3 lobeNormal = transmit ? -N : N;
+    if (transmit) {
+        float3 tint = pow(clamp(material.albedo, float3(0.001), float3(1.0)),
+            float3(max(material.alpha, 0.0) * transmission));
+        float3 fresnelPass = fresnelSchlick(NdotV, bsdfF0(material));
+        float passProbability = transmissionProbability * (transmission >= 1.0 ? 1.0 : transmission);
+        result.valid = true;
+        result.delta = true;
+        result.direction = -V;
+        result.weight = tint * (1.0 - material.metallic) * (float3(1.0) - fresnelPass)
+            / max(passProbability, 1.0e-6);
+        result.pdf = 1.0;
+        result.eta = 1.0;
+        result.lobe = BSDF_LOBE_TRANSMISSION;
+        return result;
+    }
+    float3 lobeNormal = N;
     float3 L = cosineAround(lobeNormal, seed);
     float cosTheta = max(dot(lobeNormal, L), 0.0);
     if (cosTheta <= 0.0) return result;
 
-    // Same legacy-parity factor as bsdfEvaluate: sampler and NEE evaluator
+    // Same legacy-parity factor as bsdfEvaluate (inside bsdfDiffuseReflectanceAt): sampler and NEE evaluator
     // must use one convention or the estimator stops matching.
-    float3 fresnelView = fresnelSchlick(NdotV, bsdfF0(material));
     float branchProbability = transmissionProbability;
-    float3 albedo;
-    if (transmit) {
-        albedo = material.albedo * (1.0 - material.metallic) * transmission *
-            (float3(1.0) - fresnelView);
-        branchProbability *= transmission;
-    } else {
-        albedo = bsdfDiffuseReflectanceAt(material, NdotV);
-        if (thinPane) branchProbability *= max(1.0 - transmission, 0.0);
-    }
+    float3 albedo = bsdfDiffuseReflectanceAt(material, NdotV);
+    if (thinPane) branchProbability *= max(1.0 - transmission, 0.0);
 
     result.valid = true;
     result.delta = false;
@@ -278,6 +281,6 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float inciden
     result.weight = albedo / max(branchProbability, 1.0e-6);
     result.pdf = branchProbability * cosTheta * INV_PI;
     result.eta = 1.0;
-    result.lobe = transmit ? BSDF_LOBE_TRANSMISSION : BSDF_LOBE_DIFFUSE;
+    result.lobe = BSDF_LOBE_DIFFUSE;
     return result;
 }
