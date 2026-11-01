@@ -72,7 +72,9 @@ class FrameGenProducerRecordingsTest {
     @Test void executeFailureRetainsAllOwnersUntilAnExplicitSubmissionFence() {
         var records = recordings(); var submission = new Submission(); var owner = new Owner();
         submission.failExecute = true;
-        assertThrows(IllegalStateException.class, () -> records.record(submission, owner.retirement(), () -> {}));
+        var failure = assertThrows(IllegalStateException.class, () -> records.record(submission, owner.retirement(), () -> {}));
+        assertTrue(failure.getMessage().contains("stage=execute command=0x2a outcome=unknown pending=1"));
+        assertEquals("execute", failure.getCause().getMessage());
         assertEquals(1, records.pendingCount());
         assertEquals(0, owner.discarded);
         boolean[] waited = {false};

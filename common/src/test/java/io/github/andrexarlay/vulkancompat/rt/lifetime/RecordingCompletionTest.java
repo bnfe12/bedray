@@ -6,8 +6,24 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RecordingCompletionTest {
+    @Test
+    void failedRetirementReportsTheRecordingProofAndOwnerWithoutLosingTheCause() {
+        List<Throwable> failures = new ArrayList<>();
+        var completion = new RecordingCompletion(failures::add);
+        var original = new IllegalStateException("native image collect failed");
+        var ticket = completion.begin(42, () -> { throw original; });
+        completion.submissionAttempted(ticket);
+        completion.submitted(ticket, Runnable::run);
+        assertEquals(1, completion.pendingCount());
+        Throwable reported = failures.getFirst();
+        assertTrue(reported.getMessage().contains("command=0x2a state=UNKNOWN proof=completed resources=retained"));
+        assertEquals("owner_index=0", reported.getSuppressed()[0].getMessage());
+        assertEquals(original, reported.getSuppressed()[0].getCause());
+    }
+
     @Test
     void hostProofRetiresOnlyTheMatchingRecordingGeneration() {
         RecordingCompletionChecks.main(new String[0]);

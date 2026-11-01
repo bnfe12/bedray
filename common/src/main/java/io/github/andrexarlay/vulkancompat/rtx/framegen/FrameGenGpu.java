@@ -3,9 +3,10 @@ package io.github.andrexarlay.vulkancompat.rtx.framegen;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayFgPrepareNative;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
-import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -47,11 +48,16 @@ public final class FrameGenGpu implements AutoCloseable {
     private final SlangRuntimePool.Lease runtimeLease;
     private final SlangRuntime runtime;
     private final BedrayFgPrepareNative nativePass;
-    private final long program, sampler;
-    private final Img[] hudless = new Img[SETS], depth = new Img[SETS], mv = new Img[SETS];
+    private final long program;
+    private final long sampler;
+    private final Img[] hudless = new Img[SETS];
+    private final Img[] depth = new Img[SETS];
+    private final Img[] mv = new Img[SETS];
     // false = first-use transitions only, true = producer phase attempted.
     private final Map<Long, Boolean> recordings = new LinkedHashMap<>();
-    private boolean needInitialTransition, resourcesClosed, closed;
+    private boolean needInitialTransition;
+    private boolean resourcesClosed;
+    private boolean closed;
     private long initializationRecording;
     private int hudFormat, winW, winH, renderW, renderH;
 
@@ -91,128 +97,195 @@ public final class FrameGenGpu implements AutoCloseable {
     }
 
     public Img hudless(int set) { return hudless[set]; }
-    public VulkanDevice hostDevice() { return runtime.hostDevice(); }
     public Img depth(int set) { return depth[set]; }
     public Img mv(int set) { return mv[set]; }
+    public VulkanDevice hostDevice() { return runtime.hostDevice(); }
+
     public boolean matches(int format, int width, int height, int inputWidth, int inputHeight) {
-        return hudless[0] != null && hudFormat == format && winW == width && winH == height && renderW == inputWidth && renderH == inputHeight;
+        return hudless[0] != null && hudFormat == format && winW == width && winH == height
+            && renderW == inputWidth && renderH == inputHeight;
     }
-    private void requireOpen() { if (closed || resourcesClosed) throw new IllegalStateException("FG producer is closed"); }
+
+    private void requireOpen() {
+        if (closed || resourcesClosed) throw new IllegalStateException("FG producer is closed");
+    }
 
     /** Caller also proves vendor-consumer idleness before replacing image outputs. */
     public void ensure(int format, int width, int height, int inputWidth, int inputHeight) {
         requireOpen();
-        if (width <= 0 || height <= 0 || inputWidth <= 0 || inputHeight <= 0) throw new IllegalArgumentException("FG extent must be positive");
-        if (matches(format,width,height,inputWidth,inputHeight)) return;
+        if (width <= 0 || height <= 0 || inputWidth <= 0 || inputHeight <= 0)
+            throw new IllegalArgumentException("FG extent must be positive");
+        if (matches(format, width, height, inputWidth, inputHeight)) return;
         if (!recordings.isEmpty()) throw new IllegalStateException("FG producers need completion/discard before resize");
         check(VK10.vkDeviceWaitIdle(device), "FG output replacement wait");
+
+        Img[][] next = createImages(format, width, height, inputWidth, inputHeight);
+        destroyImages();
+        System.arraycopy(next[0], 0, hudless, 0, SETS);
+        System.arraycopy(next[1], 0, depth, 0, SETS);
+        System.arraycopy(next[2], 0, mv, 0, SETS);
+        hudFormat = format;
+        winW = width;
+        winH = height;
+        renderW = inputWidth;
+        renderH = inputHeight;
+        needInitialTransition = true;
+        initializationRecording = 0;
+        LOGGER.info("[VKB-FG] images created sets={} hudless={}x{} fmt={} depth/mv={}x{}",
+            SETS, width, height, format, inputWidth, inputHeight);
+    }
+
+    /** Builds a complete replacement before the published generation is touched. */
+    private Img[][] createImages(int format, int width, int height, int inputWidth, int inputHeight) {
         Img[][] next = new Img[3][SETS];
         try {
             for (int index = 0; index < SETS; ++index) {
-                next[0][index] = createImage(format,width,height);
-                next[1][index] = createImage(FORMAT_DEPTH,inputWidth,inputHeight);
-                next[2][index] = createImage(FORMAT_MV,inputWidth,inputHeight);
+                next[0][index] = createImage(format, width, height);
+                next[1][index] = createImage(FORMAT_DEPTH, inputWidth, inputHeight);
+                next[2][index] = createImage(FORMAT_MV, inputWidth, inputHeight);
             }
+            return next;
         } catch (RuntimeException | Error failure) {
-            for (Img[] group : next) for (Img image : group) destroyImage(image);
+            destroyImages(next);
             throw failure;
         }
-        destroyImages();
-        System.arraycopy(next[0],0,hudless,0,SETS); System.arraycopy(next[1],0,depth,0,SETS); System.arraycopy(next[2],0,mv,0,SETS);
-        hudFormat=format; winW=width; winH=height; renderW=inputWidth; renderH=inputHeight;
-        needInitialTransition=true; initializationRecording=0;
-        LOGGER.info("[VKB-FG] images created sets={} hudless={}x{} fmt={} depth/mv={}x{}",SETS,width,height,format,inputWidth,inputHeight);
     }
 
     private Img createImage(int format, int width, int height) {
-        long image=0, memory=0, view=0;
+        long image = 0;
+        long memory = 0;
+        long view = 0;
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            var info=VkImageCreateInfo.calloc(stack).sType$Default().imageType(VK10.VK_IMAGE_TYPE_2D).format(format)
+            var info = VkImageCreateInfo.calloc(stack).sType$Default().imageType(VK10.VK_IMAGE_TYPE_2D).format(format)
                 .mipLevels(1).arrayLayers(1).samples(VK10.VK_SAMPLE_COUNT_1_BIT).tiling(VK10.VK_IMAGE_TILING_OPTIMAL)
                 .usage(USAGE).sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
-            info.extent().set(width,height,1);
-            LongBuffer output=stack.mallocLong(1);
-            check(VK10.vkCreateImage(device,info,null,output),"FG create image"); image=output.get(0);
-            var requirements=VkMemoryRequirements.calloc(stack);
-            VK10.vkGetImageMemoryRequirements(device,image,requirements);
-            int memoryType=findMemoryType(requirements.memoryTypeBits(),VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            info.extent().set(width, height, 1);
+            LongBuffer output = stack.mallocLong(1);
+            check(VK10.vkCreateImage(device, info, null, output), "FG create image");
+            image = output.get(0);
+            var requirements = VkMemoryRequirements.calloc(stack);
+            VK10.vkGetImageMemoryRequirements(device, image, requirements);
+            int memoryType = findMemoryType(requirements.memoryTypeBits(), VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
             if (memoryType < 0) throw new IllegalStateException("no device-local memory for FG outputs");
-            var allocation=VkMemoryAllocateInfo.calloc(stack).sType$Default().allocationSize(requirements.size()).memoryTypeIndex(memoryType);
-            check(VK10.vkAllocateMemory(device,allocation,null,output),"FG allocate memory"); memory=output.get(0);
-            check(VK10.vkBindImageMemory(device,image,memory,0),"FG bind image");
-            var imageView=VkImageViewCreateInfo.calloc(stack).sType$Default().image(image).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(format);
+            var allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default()
+                .allocationSize(requirements.size()).memoryTypeIndex(memoryType);
+            check(VK10.vkAllocateMemory(device, allocation, null, output), "FG allocate memory");
+            memory = output.get(0);
+            check(VK10.vkBindImageMemory(device, image, memory, 0), "FG bind image");
+            var imageView = VkImageViewCreateInfo.calloc(stack).sType$Default()
+                .image(image).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(format);
             imageView.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
-            check(VK10.vkCreateImageView(device,imageView,null,output),"FG create view"); view=output.get(0);
-            return new Img(image,view,memory,format,width,height,USAGE);
+            check(VK10.vkCreateImageView(device, imageView, null, output), "FG create view");
+            view = output.get(0);
+            return new Img(image, view, memory, format, width, height, USAGE);
         } catch (RuntimeException | Error failure) {
-            if (view != 0) VK10.vkDestroyImageView(device,view,null);
-            if (image != 0) VK10.vkDestroyImage(device,image,null);
-            if (memory != 0) VK10.vkFreeMemory(device,memory,null);
+            if (view != 0) VK10.vkDestroyImageView(device, view, null);
+            if (image != 0) VK10.vkDestroyImage(device, image, null);
+            if (memory != 0) VK10.vkFreeMemory(device, memory, null);
             throw failure;
         }
     }
+
     private int findMemoryType(int filter, int properties) {
-        for(int index=0;index<memProps.memoryTypeCount();++index)
-            if((filter&(1<<index))!=0 && (memProps.memoryTypes(index).propertyFlags()&properties)==properties) return index;
+        for (int index = 0; index < memProps.memoryTypeCount(); ++index) {
+            if ((filter & (1 << index)) != 0 && (memProps.memoryTypes(index).propertyFlags() & properties) == properties)
+                return index;
+        }
         return -1;
     }
+
     private void destroyImage(Img image) {
-        if(image==null) return;
-        VK10.vkDestroyImageView(device,image.view(),null); VK10.vkDestroyImage(device,image.image(),null); VK10.vkFreeMemory(device,image.memory(),null);
+        if (image == null) return;
+        VK10.vkDestroyImageView(device, image.view(), null);
+        VK10.vkDestroyImage(device, image.image(), null);
+        VK10.vkFreeMemory(device, image.memory(), null);
     }
+
     private void destroyImages() {
-        for(Img[] group:new Img[][]{hudless,depth,mv}) for(int index=0;index<SETS;++index) { destroyImage(group[index]); group[index]=null; }
+        destroyImages(new Img[][]{hudless, depth, mv});
     }
-    private static void check(int result,String operation) {
-        if(result!=VK10.VK_SUCCESS) throw new IllegalStateException(operation+" failed: "+result);
+
+    private void destroyImages(Img[][] groups) {
+        for (Img[] group : groups) {
+            for (int index = 0; index < group.length; ++index) {
+                destroyImage(group[index]);
+                group[index] = null;
+            }
+        }
+    }
+
+    private static void check(int result, String operation) {
+        if (result != VK10.VK_SUCCESS) throw new IllegalStateException(operation + " failed: " + result);
     }
 
     /** First-use transitions remain with the host output-image owner. */
     public void recordInitialTransitions(VkCommandBuffer command) {
         requireOpen();
-        if(command==null || hudless[0]==null) throw new IllegalStateException("FG images/command unavailable");
-        if(!needInitialTransition) return;
-        if(recordings.containsKey(command.address())) throw new IllegalStateException("FG command still pending");
-        recordings.put(command.address(),false); initializationRecording=command.address(); needInitialTransition=false;
-        for(int index=0;index<SETS;++index) for(Img image:new Img[]{hudless[index],depth[index],mv[index]})
-            io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.transition(command,image.image(),VK10.VK_IMAGE_ASPECT_COLOR_BIT,
-                VK10.VK_IMAGE_LAYOUT_UNDEFINED,VK10.VK_IMAGE_LAYOUT_GENERAL);
+        if (command == null || command.address() == 0 || hudless[0] == null)
+            throw new IllegalStateException("FG images/command unavailable");
+        if (!needInitialTransition) return;
+        if (recordings.containsKey(command.address())) throw new IllegalStateException("FG command still pending");
+        recordings.put(command.address(), false);
+        initializationRecording = command.address();
+        needInitialTransition = false;
+        for (int index = 0; index < SETS; ++index) {
+            for (Img image : new Img[]{hudless[index], depth[index], mv[index]}) {
+                VkBarriers.transition(command, image.image(), VK10.VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
+            }
+        }
     }
 
     /** Native producer; caller holds the separate vendor output-image lease. */
-    public void record(VkCommandBuffer command,int set,long sourceColor,long depthView,long motionView) {
+    public void record(VkCommandBuffer command, int set, long sourceColor, long depthView, long motionView) {
         requireOpen();
-        if(command==null || set<0 || set>=SETS || hudless[set]==null || needInitialTransition)
+        if (command == null || set < 0 || set >= SETS || hudless[set] == null || needInitialTransition)
             throw new IllegalStateException("FG producer requires initialized images and a valid command/slot");
-        long handle=command.address();
-        BedrayFgPrepareNative.validate(handle,program,sampler,sourceColor,hudless[set].image(),depthView,motionView,
-            depth[set].view(),mv[set].view(),winW,winH,renderW,renderH);
-        if(Boolean.TRUE.equals(recordings.get(handle))) throw new IllegalStateException("FG producer command still pending");
-        recordings.put(handle,true); // native failure can follow the emitted blit
-        nativePass.record(handle,sourceColor,hudless[set].image(),depthView,motionView,depth[set].view(),mv[set].view(),winW,winH,renderW,renderH);
+        long handle = command.address();
+        BedrayFgPrepareNative.validate(handle, program, sampler, sourceColor, hudless[set].image(), depthView, motionView,
+            depth[set].view(), mv[set].view(), winW, winH, renderW, renderH);
+        if (Boolean.TRUE.equals(recordings.get(handle))) throw new IllegalStateException("FG producer command still pending");
+        recordings.put(handle, true); // Native failure can follow the emitted blit.
+        nativePass.record(handle, sourceColor, hudless[set].image(), depthView, motionView, depth[set].view(), mv[set].view(),
+            winW, winH, renderW, renderH);
     }
+
     public void releaseRecording(long command) {
-        if(!recordings.containsKey(command)) return;
-        runtime.releaseRecording(command); recordings.remove(command);
-        if(initializationRecording==command) initializationRecording=0;
+        if (!recordings.containsKey(command)) return;
+        runtime.releaseRecording(command);
+        recordings.remove(command);
+        if (initializationRecording == command) initializationRecording = 0;
     }
+
     public void discardRecording(long command) {
-        if(!recordings.containsKey(command)) return;
-        runtime.discardRecording(command); recordings.remove(command);
-        if(initializationRecording==command) { initializationRecording=0; needInitialTransition=true; }
+        if (!recordings.containsKey(command)) return;
+        runtime.discardRecording(command);
+        recordings.remove(command);
+        if (initializationRecording == command) {
+            initializationRecording = 0;
+            needInitialTransition = true;
+        }
     }
+
     public boolean hasPendingRecordings() { return !recordings.isEmpty(); }
+
     /** Only after all producer commands completed and open recordings were closed/discarded. */
-    public void releaseRecordingsAfterHostDrain() { for(long command:List.copyOf(recordings.keySet())) releaseRecording(command); }
+    public void releaseRecordingsAfterHostDrain() {
+        for (long command : List.copyOf(recordings.keySet())) releaseRecording(command);
+    }
 
     /** Caller also ends the asynchronous vendor consumer lifetime before close. */
-    @Override public void close() {
-        if(closed) return;
-        if(!recordings.isEmpty()) throw new IllegalStateException("FG producers need completion/discard before close");
-        if(!resourcesClosed) {
-            check(VK10.vkDeviceWaitIdle(device),"FG close wait");
-            destroyImages(); memProps.free(); resourcesClosed=true;
+    @Override
+    public void close() {
+        if (closed) return;
+        if (!recordings.isEmpty()) throw new IllegalStateException("FG producers need completion/discard before close");
+        if (!resourcesClosed) {
+            check(VK10.vkDeviceWaitIdle(device), "FG close wait");
+            destroyImages();
+            memProps.free();
+            resourcesClosed = true;
         }
-        runtimeLease.close(); closed=true;
+        runtimeLease.close();
+        closed = true;
     }
 }

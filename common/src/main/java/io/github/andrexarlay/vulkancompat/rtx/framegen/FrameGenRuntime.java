@@ -5,7 +5,6 @@ import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrCamera;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.fsr3.Fsr3FrameGen;
 import net.minecraft.client.Minecraft;
@@ -74,6 +73,8 @@ public final class FrameGenRuntime {
     private static Vec3 prevCam;
     private static int validFrames;
     private static boolean modeOn;
+    /** A failed options call can leave the vendor enabled even before modeOn is published. */
+    private static boolean generationStateUnknown;
     private static boolean ranOnce;
     private static long lastSurfaceGeneration = -1;
     private static boolean unsupportedLogged;
@@ -343,7 +344,18 @@ public final class FrameGenRuntime {
     private static void fail(String stage, String detail, Throwable t) {
         failed = true;
         failure = stage + ": " + detail;
-        LOGGER.error("[VKB-FG] fg=FAILED stage={} {}", stage, detail, t);
+        Throwable cause = t != null ? t : new IllegalStateException(failure);
+        if (StreamlineBootstrap.isReady()) {
+            // Present interception survives Java's failed flag. Stop the actual vendor consumer too.
+            FrameGenFailureCleanup.run(cause,
+                () -> stopGeneration(StreamlineBootstrap.sl(), FLAG_RETAIN_RESOURCES_WHEN_OFF),
+                () -> clearTags(StreamlineBootstrap.sl()));
+        }
+        LOGGER.error("[VKB-FG] provider=nvidia fg=FAILED stage={} frame={} slot={} output={}x{} render={}x{} "
+                + "mode_on={} vendor_mode_unknown={} vendor_tags_retained={} output_owner_retained={} "
+                + "producer_recordings_retained={} detail={}",
+            stage, frameIndex, slot, winW, winH, renderW, renderH, modeOn, generationStateUnknown, resourceTags.isActive(), gpu != null,
+            gpu != null && gpu.hasPendingRecordings(), detail, cause);
     }
 
     private static void check(int r, String what) {
@@ -455,18 +467,12 @@ public final class FrameGenRuntime {
             slot = (int) (frameIndex % FrameGenGpu.SETS);
             FrameGenGpu owner = gpu;
             producerCommands.record(device, owner, cmd -> {
-                VkBarriers.fullMemoryBarrier(cmd);
                 owner.recordInitialTransitions(cmd);
+                // The native producer owns its entry/exit dependencies.
                 owner.record(cmd, slot, mainImg, depthView, mvView);
-                VkBarriers.fullMemoryBarrier(cmd);
             });
             worldReady = true;
         } catch (Throwable t) {
-            try {
-                SlNative sl = StreamlineBootstrap.sl();
-                stopGeneration(sl, FLAG_RETAIN_RESOURCES_WHEN_OFF);
-                clearTags(sl);
-            } catch (Throwable cleanup) { t.addSuppressed(cleanup); }
             fail("world_ready", t.toString(), t);
         }
     }
@@ -512,8 +518,10 @@ public final class FrameGenRuntime {
             if (want != modeOn || (want && (!ranOnce || generate != appliedGenerate || dyn != appliedDynRes))) {
                 int mode = want ? MODE_ON : MODE_OFF;
                 int flags = FLAG_RETAIN_RESOURCES_WHEN_OFF | (dyn ? FLAG_DYNAMIC_RESOLUTION : 0);
+                generationStateUnknown = true;
                 check(sl.dlssgOptions(mode, generate, flags, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT,
                     dyn ? renderW : 0, dyn ? renderH : 0), "slDLSSGSetOptions(mode=" + mode + ")");
+                generationStateUnknown = false;
                 boolean was = modeOn;
                 modeOn = want;
                 if (!want) {
@@ -574,14 +582,8 @@ public final class FrameGenRuntime {
                 StreamlineBootstrap.pumpLog(sl);
             }
             if (st[0] != 0) {
-                fail("evaluate", "NGX error 0x" + Integer.toHexString(st[0]), null);
-                modeOn = false;
                 FrameGenSettings.setMode(FrameGenSettings.Mode.OFF);
-                clearTags(sl);
-                try {
-                    sl.dlssgOptions(MODE_OFF, 1, 0, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0);
-                } catch (Throwable ignored) {
-                }
+                fail("evaluate", "NGX error 0x" + Integer.toHexString(st[0]), null);
                 return;
             }
             long now = System.nanoTime();
@@ -729,7 +731,7 @@ public final class FrameGenRuntime {
             LOGGER.info("[VKB-FG] teardown surface_close rendered_total={} presented_total={} doubled_frames={}", renderedTotal, presentedTotal, doubledFrames);
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
-            LOGGER.error("[VKB-FG] teardown surface_close failed", t);
+            fail("surface_close", t.toString(), t);
             throw new IllegalStateException("FG resources retained after failed surface-close drain", t);
         }
     }
@@ -750,7 +752,9 @@ public final class FrameGenRuntime {
             LOGGER.info("[VKB-FG] teardown slShutdown result={}", r);
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
-            LOGGER.error("[VKB-FG] teardown slShutdown failed", t);
+            LOGGER.error("[VKB-FG] provider=nvidia stage=device_close_sl_shutdown frame={} mode_on={} "
+                + "vendor_mode_unknown={} vendor_tags_retained={} output_owner_retained={}", frameIndex, modeOn,
+                generationStateUnknown, resourceTags.isActive(), gpu != null, t);
         }
     }
 
@@ -763,9 +767,11 @@ public final class FrameGenRuntime {
     }
 
     private static void stopGeneration(SlNative sl, int flags) {
-        if (!modeOn && !ranOnce && !resourceTags.isActive()) return;
+        if (!modeOn && !ranOnce && !generationStateUnknown && !resourceTags.isActive()) return;
+        generationStateUnknown = true;
         check(sl.dlssgOptions(MODE_OFF, 1, flags, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT, 0, 0),
             "slDLSSGSetOptions(off before resource retirement)");
+        generationStateUnknown = false;
         modeOn = false;
     }
 

@@ -28,13 +28,17 @@ public final class FrameGenProducerRecordings {
         if (recording || draining) throw new IllegalStateException("nested FG producer recording/drain");
         var ticket = completion.beginWithDiscard(submission.commandBuffer(), owner);
         boolean executeAttempted = false;
+        String stage = "commands";
         recording = true;
         try {
             commands.run();
+            stage = "end";
             submission.end();
             completion.submissionAttempted(ticket);
             executeAttempted = true;
+            stage = "execute";
             submission.execute();
+            stage = "enqueue_completion";
             completion.submitted(ticket, submission::afterCompletion);
         } catch (RuntimeException | Error failure) {
             if (!executeAttempted) {
@@ -42,7 +46,13 @@ public final class FrameGenProducerRecordings {
                 try { completion.discard(ticket); }
                 catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
             }
-            throw failure;
+            String context = "FG producer stage=" + stage + " command=0x" + Long.toHexString(submission.commandBuffer())
+                + " outcome=" + (executeAttempted ? "unknown" : "unsubmitted") + " pending=" + completion.pendingCount();
+            if (failure instanceof Error error) {
+                error.addSuppressed(new IllegalStateException(context));
+                throw error;
+            }
+            throw new IllegalStateException(context, failure);
         } finally {
             recording = false;
         }

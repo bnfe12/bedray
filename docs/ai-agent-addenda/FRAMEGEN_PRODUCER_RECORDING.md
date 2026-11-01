@@ -30,6 +30,22 @@ The three output slots and the vendor present/tag lifecycle remain host
 owned. This change does not claim a new per-slot vendor-consumption proof or
 GPU/visual validation.
 
+Vendor failure quarantine also turns interpolation off. Streamline tag ownership
+starts before the first tag assignment, so partial registration and failed clears
+remain retryable. An unacknowledged options call keeps native mode state unknown;
+teardown must obtain an acknowledged OFF before freeing outputs. FSR 3 checks the
+menu/no-world disable result as well as teardown results. Cleanup attempts every
+required action and preserves the initiating error plus suppressed cleanup errors.
+
+The canonical 104-byte layout and export binding live in `BedrayCoreLayouts` and
+`BedrayCoreNative`. `BedrayFgPrepareNative` validates and builds that descriptor;
+it does not create a second native binding or an independent layout.
+
+Failure logs identify provider, frame/slot, extents, mode state and cleanup outcome.
+Producer failures add the exact command buffer, commands/end/execute/enqueue stage
+and unsubmitted/unknown outcome. Shared recording-retirement errors identify the
+command buffer, proof and failing owner index; failed owners remain pinned.
+
 Evidence: focused CPU tests cover completion, body/end discard, execute and
 enqueue uncertainty, failed drain retry, stale callbacks and reentrant
 drain rejection. Native recording and AOT compilation are validated by the
