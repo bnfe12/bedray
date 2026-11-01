@@ -196,7 +196,7 @@ class RtSlangWaterPointBeamTest {
                 + "        beam = waterBeamToPoint(light.position, position, medium);"),
             "a block emitter above the sheet is reached through the crossing");
         assertTrue(tracer.contains("waterBeamFocus(beam, position, beam.air, materialOptions.portalTime,\n"
-                + "                materialOptions.waterWaveMix)"),
+                + "                materialOptions.waterWaveMix, (surface.hit.worldPosition - surface.hit.position).xz)"),
             "wave parity: the caustics switch and the wave style act on the emitter beam exactly as on the key light");
     }
 

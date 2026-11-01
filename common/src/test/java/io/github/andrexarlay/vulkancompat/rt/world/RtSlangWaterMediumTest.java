@@ -362,7 +362,7 @@ class RtSlangWaterMediumTest {
             "the focus is consulted only on a beam that exists, so caustics-off cannot gather light the switch never "
                 + "let through");
         assertTrue(term.contains("waterBeamFocus(beam, position, beam.air, materialOptions.portalTime,\n"
-                + "                materialOptions.waterWaveMix) : 1.0)"),
+                + "                materialOptions.waterWaveMix, (surface.hit.worldPosition - surface.hit.position).xz) : 1.0)"),
             "the caustic bends through the same scaled face the receiver's own normal uses, so damped waves dance "
                 + "gently instead of not at all");
         assertFalse(term.contains("options.flags & PATH_TRACE_OPTION_WATER"),

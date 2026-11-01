@@ -387,10 +387,15 @@ float3 waterBeamTransmittance(float airCosine) {
 
 // Where the beam that enters at `entryXZ` stands horizontally once it has fallen
 // to `receiverY`, measured through the wave normal of the face it entered.
+// `entryXZ` is camera-relative like every hit position; `waveAnchor` moves it
+// onto the world anchor the visible surface reads its waves at
+// (`SurfaceHit.worldPosition`), or the caustic pattern would slide with the
+// camera and never match the waves it comes from.
 float2 waterBeamAtDepth(float2 entryXZ, float entryY, float receiverY, float3 lightDirection,
-        float time, float footprint, float waveMix) {
+        float time, float footprint, float waveMix, float2 waveAnchor) {
     float lostVar = 0.0;
-    float3 face = waterStyledWaveNormal(float3(entryXZ.x, entryY, entryXZ.y),
+    float2 waveXZ = entryXZ + waveAnchor;
+    float3 face = waterStyledWaveNormal(float3(waveXZ.x, entryY, waveXZ.y),
         float3(0.0, 1.0, 0.0), time, footprint, waveMix, lostVar);
     float3 travel = waterBeamTravel(lightDirection, face);
     return entryXZ + travel.xz * ((entryY - receiverY) / max(-travel.y, 1.0e-3));
@@ -403,16 +408,16 @@ float2 waterBeamAtDepth(float2 entryXZ, float entryY, float receiverY, float3 li
 // damps the focus with them, because the bundle is bent by the same face the
 // receiver's own shading normal uses.
 float waterBeamFocus(WaterBeam beam, float3 position, float3 lightDirection, float time,
-        float waveMix) {
+        float waveMix, float2 waveAnchor) {
     if (!beam.valid) return 1.0;
     float step = clamp(beam.column * 0.5, WATER_CAUSTIC_STEP_MIN, WATER_CAUSTIC_STEP_MAX);
     float2 base = beam.entry.xz;
     float2 centre = waterBeamAtDepth(base, beam.entry.y, position.y, lightDirection,
-        time, step * 0.5, waveMix);
+        time, step * 0.5, waveMix, waveAnchor);
     float2 east = waterBeamAtDepth(base + float2(step, 0.0), beam.entry.y, position.y,
-        lightDirection, time, step * 0.5, waveMix);
+        lightDirection, time, step * 0.5, waveMix, waveAnchor);
     float2 north = waterBeamAtDepth(base + float2(0.0, step), beam.entry.y, position.y,
-        lightDirection, time, step * 0.5, waveMix);
+        lightDirection, time, step * 0.5, waveMix, waveAnchor);
     float2 dx = (east - centre) / step;
     float2 dz = (north - centre) / step;
     float det = dx.x * dz.y - dx.y * dz.x;

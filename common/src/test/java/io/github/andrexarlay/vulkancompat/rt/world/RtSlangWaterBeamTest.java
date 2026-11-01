@@ -262,6 +262,10 @@ class RtSlangWaterBeamTest {
 
         String atDepth = block(water, "float2 waterBeamAtDepth(float2 entryXZ, float entryY, float receiverY, "
             + "float3 lightDirection,");
+        assertTrue(atDepth.contains("float2 waveXZ = entryXZ + waveAnchor;")
+                && atDepth.contains("waterStyledWaveNormal(float3(waveXZ.x, entryY, waveXZ.y),"),
+            "the beam reads the waves at the world anchor the visible sheet uses (SurfaceHit.worldPosition), not at the "
+                + "camera-relative entry, or the caustic pattern slides with the camera");
         assertTrue(atDepth.contains("waterStyledWaveNormal("),
             "the face the beam enters is the wavy one, at whatever strength the player's style leaves it");
         assertTrue(atDepth.contains("float3(0.0, 1.0, 0.0)"), "measured on a horizontal sheet, from above");
@@ -298,7 +302,7 @@ class RtSlangWaterBeamTest {
         String term = block(read(TRACER), "float3 pathTraceDirectTerm<T : ISceneTracer>");
         assertTrue(term.contains("beam.solidAngle * (options.waterCaustics\n"
             + "            ? waterBeamFocus(beam, position, beam.air, materialOptions.portalTime,\n"
-            + "                materialOptions.waterWaveMix) : 1.0)"),
+            + "                materialOptions.waterWaveMix, (surface.hit.worldPosition - surface.hit.position).xz) : 1.0)"),
             "area times étendue: the focus rides on the same weight the crossing needs, bends through the same scaled "
                 + "face the sheet shows, and 1.0 when the player turned the focus off");
         String surface = block(read(SURFACE), "&& waterIsSurface(true, material.f0");

@@ -260,7 +260,7 @@ class RtSlangWaterTest {
         assertTrue(tracer.contains("? beam.solidAngle * (options.waterCaustics"),
             "the étendue ratio is multiplied by the focus only when caustics are on: the ratio is conservation,"
                 + " the focus is the effect the switch owns");
-        assertTrue(tracer.contains("materialOptions.waterWaveMix) : 1.0)"),
+        assertTrue(tracer.contains("materialOptions.waterWaveMix, (surface.hit.worldPosition - surface.hit.position).xz) : 1.0)"),
             "and with the focus off the beam still arrives along the refracted path with weight 1");
         assertTrue(tracer.contains("beam = waterBeamToLight(lightDirection, light.distance, position, medium);"),
             "the beam is asked for only of a directional light: a block emitter that never crossed the face"

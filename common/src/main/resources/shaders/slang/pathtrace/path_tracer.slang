@@ -395,7 +395,7 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     float beamWeight = beam.valid
         ? beam.solidAngle * (options.waterCaustics
             ? waterBeamFocus(beam, position, beam.air, materialOptions.portalTime,
-                materialOptions.waterWaveMix) : 1.0)
+                materialOptions.waterWaveMix, (surface.hit.worldPosition - surface.hit.position).xz) : 1.0)
         : 1.0;
     float cosine = max(dot(normal, arrival), 0.0);
     // Offset from the geometric face, not the normal-mapped
