@@ -10,7 +10,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Builds the GLSL sources of the built-in spatial upscalers from the host files in {@code /shaders/spatial/} and the
+ * Historical GLSL reference for the spatial AOT parity/constant tests, retained outside the runtime. Builds from the host files in {@code /shaders/spatial/} and the
  * unmodified third-party headers in {@code /shaders/third_party/} (no {@code #include}: Shaderc runs without an include
  * callback here). Every text patch is checked: a pattern that is not found exactly the expected number of times throws, so a
  * changed upstream header fails loudly instead of compiling something else.

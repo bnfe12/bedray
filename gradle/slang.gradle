@@ -113,6 +113,15 @@ def elementBytesOf = { param ->
 // Update this map together with the Java mirror when a contract really changes.
 def STRUCT_LAYOUTS = [
     FgPreparePush: [size: 8, fields: [size: 0]],
+    SpatialEasuPush: [size: 80, fields: [con0: 0, con1: 16, con2: 32, con3: 48, outSize: 64]],
+    SpatialRcasPush: [size: 32, fields: [con: 0, size: 16]],
+    SpatialNisPush: [size: 112, fields: [kDetectRatio: 0, kDetectThres: 4, kMinContrastRatio: 8, kRatioNorm: 12,
+        kContrastBoost: 16, kEps: 20, kSharpStartY: 24, kSharpScaleY: 28,
+        kSharpStrengthMin: 32, kSharpStrengthScale: 36, kSharpLimitMin: 40, kSharpLimitScale: 44,
+        kScaleX: 48, kScaleY: 52, kDstNormX: 56, kDstNormY: 60, kSrcNormX: 64, kSrcNormY: 68,
+        kInputViewportOriginX: 72, kInputViewportOriginY: 76, kInputViewportWidth: 80, kInputViewportHeight: 84,
+        kOutputViewportOriginX: 88, kOutputViewportOriginY: 92, kOutputViewportWidth: 96, kOutputViewportHeight: 100,
+        reserved0: 104, reserved1: 108]],
     DecodePush: [size: 32, fields: [rawAddress: 0, arenaAddress: 8, flagsAddress: 16, quadCount: 24, reserved: 28]],
     LegacySection: [size: 64, fields: [posAddr: 0, uvAddr: 8, colAddr: 16, lightAddr: 24, quadStart: 32, origin: 48]],
     FrameConstants: [size: 608, fields: [camera: 0, sun: 416, atmosphere: 480, exposure: 560, frame: 592]],
@@ -153,7 +162,9 @@ def STRUCT_LAYOUTS = [
 ]
 
 def validateStructLayout = { String relative, String bindingName, struct ->
-    def spec = STRUCT_LAYOUTS[struct?.name]
+    // A named HLSL cbuffer reflects an anonymous element type. Its parameter name
+    // is the contract name, while ordinary struct-backed blocks keep their type name.
+    def spec = STRUCT_LAYOUTS[struct?.name] ?: STRUCT_LAYOUTS[bindingName]
     if (spec == null) {
         return
     }
@@ -243,6 +254,7 @@ def compileSlang = tasks.register('compileSlang') {
     group = 'build'
     description = 'Compiles Slang entry passes to SPIR-V and reflection manifests'
     inputs.dir(slangRoot).withPropertyName('slangSources')
+    inputs.dir(new File(slangRoot.parentFile, 'third_party')).withPropertyName('spatialVendorHeaders')
     inputs.property('slangProfile', slangProfile)
     inputs.property('slangPasses', slangPasses)
     inputs.property('slangArguments', slangArgs.join(' '))

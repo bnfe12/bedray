@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * P1-11: the migration target is AOT Slang, but runtime GLSL -> SPIR-V through Shaderc is still load-bearing in
- * code that is not the Slang renderer (the Iris pack host and the spatial upscaler). The inventory is frozen here
+ * code that is not the Slang renderer (the Iris pack host and an extension probe). The inventory is frozen here
  * instead of being re-guessed every audit; the FrameGen producer left it when `passes/fg_prepare.slang` landed and
  * the Iris depth converter left it when `passes/iris_depth.slang` replaced `iris_depth.comp`, so the resource tree
  * now ships no first-party GLSL at all.
@@ -34,6 +34,24 @@ class ShadercSurfaceTest {
     private static final Path RT_SHADERS = Path.of("src", "main", "resources", "shaders", "glsl");
     private static final Path WORLD_PACKAGE =
         SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt/world");
+
+    @Test
+    void runtimeCompilationRemainsLimitedToUserPacksAndTheExtensionProbe() throws IOException {
+        TreeSet<String> actual = new TreeSet<>();
+        try (Stream<Path> files = Files.walk(SOURCES)) {
+            for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
+                String source = Files.readString(file);
+                if (source.contains("Shaderc.shaderc_") || source.contains("import org.lwjgl.util.shaderc.Shaderc;"))
+                    actual.add(SOURCES.relativize(file).toString().replace('\\', '/'));
+            }
+        }
+        assertEquals(new TreeSet<>(List.of(
+            "io/github/andrexarlay/vulkancompat/rt/world/RtExtensionProbe.java",
+            "io/github/andrexarlay/vulkancompat/shaderhost/glsl/IrisSourcePreprocessor.java",
+            "io/github/andrexarlay/vulkancompat/shaderhost/glsl/SpirvCompiler.java",
+            "io/github/andrexarlay/vulkancompat/shaderhost/glsl/VulkanGlslPackCompiler.java")), actual,
+            "built-in renderer and upscaler passes use AOT Slang; user packs remain runtime inputs");
+    }
 
 
     /** The Slang renderer is the one place where a runtime GLSL compile is a regression, not a shortcut. */

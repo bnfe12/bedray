@@ -72,6 +72,9 @@ public final class WorldTargetManager {
     private static final RecordingCompletion velocityCompletion = new RecordingCompletion(
         failure -> LOGGER.warn("[WorldTargetManager] velocity retirement failed; resources retained", failure));
     private static boolean recordingVelocity, drainingVelocity;
+    private static final RecordingCompletion spatialCompletion = new RecordingCompletion(
+        failure -> LOGGER.warn("[WorldTargetManager] spatial retirement failed; resources retained", failure));
+    private static boolean recordingSpatial, drainingSpatial;
 
     /**
      * The dedicated worldTarget colour texture is ALWAYS created with STORAGE usage (see {@link TargetLifecyclePolicy}), so
@@ -497,8 +500,7 @@ public final class WorldTargetManager {
             resetHistory = true;
             logSkyIdentity("create");
         } else if (worldTarget.width != w || worldTarget.height != h) {
-            FrameGenRuntime.drainProducerRecordings();
-            drainVelocityRecordings();
+            drainBorrowedWorldTargetRecordings();
             final RenderTarget identityBefore = worldTarget;
             storageUsageFormat = TargetLifecyclePolicy.resolveStorageScope(true);
             try {
@@ -588,6 +590,7 @@ public final class WorldTargetManager {
         if (xessOutput != null && xessOutput.width == w && xessOutput.height == h) {
             return;
         }
+        if (xessOutput != null) drainSpatialRecordings();
         storageUsageFormat = GpuFormat.RGBA8_UNORM;
         try {
             if (xessOutput == null) {
@@ -899,6 +902,7 @@ public final class WorldTargetManager {
         ensureXessOutput(fullMain.width, fullMain.height);
         boolean needTmp = SpatialUpscaler.selected() == UpscalerBackend.FSR1 && VulkanRtxConfig.fsr1Sharpness > 0.0f;
         if (needTmp && (spatialTmp == null || spatialTmp.width != fullMain.width || spatialTmp.height != fullMain.height)) {
+            if (spatialTmp != null) drainSpatialRecordings();
             storageUsageFormat = GpuFormat.RGBA8_UNORM;
             try {
                 if (spatialTmp == null) {
@@ -916,20 +920,67 @@ public final class WorldTargetManager {
         if (inView == 0L || outView == 0L || (needTmp && tmpView == 0L)) {
             throw new IllegalStateException("spatial upscaler: missing image view (in=" + inView + " out=" + outView + " tmp=" + tmpView + ")");
         }
+        if (recordingSpatial || drainingSpatial) throw new IllegalStateException("recursive spatial recording/drain");
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        boolean ok = SpatialUpscaler.record(vulkanDevice.vkDevice(), cmd, inView, worldTarget.width, worldTarget.height,
-            tmpView, outView, xessOutput.width, xessOutput.height);
-        int endErr = VK10.vkEndCommandBuffer(cmd);
-        if (endErr != VK10.VK_SUCCESS) {
-            throw new IllegalStateException("spatial upscaler: vkEndCommandBuffer failed: " + endErr);
-        }
-        encoder.execute(cmd);
-        if (!ok) {
-            return false;
+        var ticket = spatialCompletion.beginWithDiscard(cmd.address(), new Retirement(
+            () -> SpatialUpscaler.releaseRecording(cmd.address()), () -> SpatialUpscaler.discardRecording(cmd.address())));
+        boolean executeAttempted = false;
+        recordingSpatial = true;
+        try {
+            boolean ok = SpatialUpscaler.record(vulkanDevice.vkDevice(), cmd, inView, worldTarget.width, worldTarget.height,
+                tmpView, outView, xessOutput.width, xessOutput.height);
+            if (!ok) {
+                spatialCompletion.discard(ticket);
+                return false;
+            }
+            int status = VK10.vkEndCommandBuffer(cmd);
+            if (status != VK10.VK_SUCCESS) throw new IllegalStateException("spatial vkEndCommandBuffer failed: " + status);
+            spatialCompletion.submissionAttempted(ticket);
+            executeAttempted = true;
+            encoder.execute(cmd);
+            spatialCompletion.submitted(ticket, action -> encoder.queueForDestroy(action::run));
+        } catch (RuntimeException | Error failure) {
+            if (!executeAttempted) {
+                // The complete chain is abandoned, including a successful EASU before a failed RCAS.
+                try { spatialCompletion.discard(ticket); }
+                catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
+            }
+            throw failure;
+        } finally {
+            recordingSpatial = false;
         }
         copyXessOutputToMain(fullMain);
         return true;
+    }
+
+    private static void drainSpatialRecordings() {
+        if (spatialCompletion.pendingCount() == 0) return;
+        if (recordingSpatial || drainingSpatial) throw new IllegalStateException("spatial drain during an active recording");
+        VulkanDevice device = SpatialUpscaler.hostDevice();
+        if (device == null || VulkanCapabilityChecker.getVulkanDevice() != device)
+            throw new IllegalStateException("spatial host device unavailable or changed; resources retained");
+        drainingSpatial = true;
+        try {
+            VulkanCommandEncoder encoder = device.createCommandEncoder();
+            try (var completion = encoder.createFence()) {
+                encoder.submit();
+                if (!completion.awaitCompletion(5_000_000_000L))
+                    throw new IllegalStateException("spatial host submission completion timed out; resources retained");
+                spatialCompletion.afterHostDrain();
+            }
+            if (spatialCompletion.pendingCount() != 0)
+                throw new IllegalStateException("spatial recording proof unavailable; resources retained");
+        } finally {
+            drainingSpatial = false;
+        }
+    }
+
+    /** A target's Java identity survives resize; its borrowed Vulkan views do not. */
+    private static void drainBorrowedWorldTargetRecordings() {
+        FrameGenRuntime.drainProducerRecordings();
+        drainVelocityRecordings();
+        drainSpatialRecordings();
     }
 
     /** Engine-side 1:1 copy (vkCmdCopyImage) of the XeSS output into the full-size main target; no render pass may be open. */
@@ -1031,8 +1082,7 @@ public final class WorldTargetManager {
 
     private static void releaseTargets() {
         RenderSystem.assertOnRenderThread();
-        FrameGenRuntime.drainProducerRecordings();
-        drainVelocityRecordings();
+        drainBorrowedWorldTargetRecordings();
         if (velocityPipeline != null) {
             velocityPipeline.cleanup();
             velocityPipeline = null;

@@ -10,6 +10,7 @@
 #include "velocity_pass.h"
 #include "nrd_pack_pass.h"
 #include "fg_prepare_pass.h"
+#include "spatial_pass.h"
 #include "volumetric_pass.h"
 #if defined(BEDRAY_CORE_FRAME_GRAPH)
 #include "frame_graph_owner.h"
@@ -1598,6 +1599,18 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_nrd_pack(
     return fail(error,BEDRAY_ERROR_OUT_OF_MEMORY,"cannot allocate NRD pack recording");
 } catch (...) {
     return fail(error,BEDRAY_ERROR_INTERNAL,"unexpected exception recording NRD pack");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_spatial(
+    BedrayCore* core, const BedraySpatialFrameDesc* desc, BedrayError* error) try {
+    clear_error(error);
+    if (!core || !desc)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/spatial descriptor is null");
+    return bedray::core::record_spatial(core, core->cmd_pipeline_barrier, *desc, error);
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate spatial recording");
+} catch (...) {
+    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording spatial upscaling");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_fg_prepare(

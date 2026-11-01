@@ -5,19 +5,20 @@ import io.github.andrexarlay.vulkancompat.rtx.config.UpscalerModes;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerRequest;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VK10;
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkancompat.rt.core.BedraySpatialNative;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
+import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.LongBuffer;
 import java.util.Locale;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Built-in spatial upscalers (no vendor library, any Vulkan GPU): AMD FidelityFX FSR 1 (EASU, then RCAS when the sharpness is
@@ -25,19 +26,19 @@ import java.util.Locale;
  * size) and write the display-size output image; the caller copies that into the main target.
  * <p>
  * The render scale comes from {@link UpscalerRequest#current()}: the FSR 1 mode ratio (GPUOpen table, UpscalerModes) or the
- * custom percent. Pipelines are compiled on first use (Shaderc, a few ms) and destroyed on teardown after the GPU is idle.
+ * custom percent. AOT programs and samplers belong to a shared runtime lease; native owns immutable descriptors and barriers.
  * A failure is logged once as {@code [VKB-SPATIAL] spatial=FAILED stage=.. backend=..} and the frame falls back to the
  * bilinear blit; the backend stays disabled until the request changes (no hidden retry). Render thread only.
  */
 public final class SpatialUpscaler {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/SpatialUpscaler");
 
-    private static VkDevice device;
+    private static SlangRuntimePool.Lease runtimeLease;
+    private static BedraySpatialNative recorder;
+    private static final Set<Long> recordings = new LinkedHashSet<>();
     private static SpatialComputePass easu;
     private static SpatialComputePass rcas;
     private static SpatialComputePass nis;
-    private static long linearSampler;
-    private static long nearestSampler;
     private static UpscalerRequest.Request failedFor;
     private static long dispatches;
     private static String lastLogged;
@@ -98,34 +99,29 @@ public final class SpatialUpscaler {
         try {
             ensure(vkDevice, backend);
             stage = "record";
-            boolean sharpen;
-            VkBarriers.fullMemoryBarrier(cmd);
+            boolean sharpen = backend == UpscalerBackend.FSR1 && VulkanRtxConfig.fsr1Sharpness > 0f;
+            ByteBuffer primary, secondary = null;
             if (backend == UpscalerBackend.FSR1) {
-                sharpen = VulkanRtxConfig.fsr1Sharpness > 0.0f;
-                int[] con = Fsr1Constants.easu(inW, inH, outW, outH);
-                ByteBuffer pc = ints(con, outW, outH);
-                easu.record(cmd, new long[] {inView, sharpen ? tmpView : outView}, linearSampler, pc,
-                    (outW + 7) / 8, (outH + 7) / 8);
-                if (sharpen) {
-                    VkBarriers.fullMemoryBarrier(cmd);
-                    int[] rc = Fsr1Constants.rcas(Fsr1Constants.stopsForSlider(VulkanRtxConfig.fsr1Sharpness));
-                    rcas.record(cmd, new long[] {tmpView, outView}, nearestSampler, ints(rc, outW, outH),
-                        (outW + 7) / 8, (outH + 7) / 8);
-                }
+                primary = ints(Fsr1Constants.easu(inW, inH, outW, outH), outW, outH);
+                if (sharpen) secondary = ints(Fsr1Constants.rcas(Fsr1Constants.stopsForSlider(VulkanRtxConfig.fsr1Sharpness)), outW, outH);
             } else {
-                sharpen = true;
-                ByteBuffer pc = NisConstants.scaler(VulkanRtxConfig.nisSharpness, inW, inH, outW, outH);
-                // NIS block 32x24 per workgroup (nis_scaler.comp NIS_BLOCK_WIDTH/HEIGHT)
-                nis.record(cmd, new long[] {0L, inView, outView}, linearSampler, pc, (outW + 31) / 32, (outH + 23) / 24);
+                primary = NisConstants.scaler(VulkanRtxConfig.nisSharpness, inW, inH, outW, outH);
             }
-            VkBarriers.fullMemoryBarrier(cmd);
-            log(backend, request, inW, inH, outW, outH, sharpen);
+            long[] programs = {easu == null ? 0 : easu.nativeHandle(), rcas == null ? 0 : rcas.nativeHandle(), nis == null ? 0 : nis.nativeHandle()};
+            var runtime = runtimeLease.runtime();
+            recordings.add(cmd.address());
+            recorder.record(cmd.address(), programs, runtime.linearSampler(), runtime.atlasSampler(), inView, tmpView, outView,
+                inW, inH, outW, outH, backend == UpscalerBackend.FSR1 ? BedraySpatialNative.FSR1 : BedraySpatialNative.NIS,
+                sharpen ? BedraySpatialNative.SHARPEN : 0, primary, secondary);
+            log(backend, request, inW, inH, outW, outH, sharpen || backend == UpscalerBackend.NIS);
             return true;
         } catch (RuntimeException | Error e) {
             failedFor = request;
             LOGGER.error("[VKB-SPATIAL] [VKB-AUTOTEST] spatial=FAILED stage={} backend={} request={} input={}x{} output={}x{} result={} (bilinear until the request changes)",
                 stage, backend, request, inW, inH, outW, outH, e.toString(), e);
-            return false;
+            // A failed chain can contain an earlier EASU dispatch. The host
+            // must abandon the complete local CB before choosing bilinear.
+            throw e;
         }
     }
 
@@ -153,72 +149,45 @@ public final class SpatialUpscaler {
     }
 
     private static void ensure(VkDevice vkDevice, UpscalerBackend backend) {
-        if (device != null && device != vkDevice) {
-            throw new IllegalStateException("Vulkan device changed under the spatial upscaler");
-        }
-        device = vkDevice;
-        if (linearSampler == 0L) {
-            linearSampler = sampler(VK10.VK_FILTER_LINEAR);
-            nearestSampler = sampler(VK10.VK_FILTER_NEAREST);
-        }
-        long t0 = System.nanoTime();
-        if (backend == UpscalerBackend.FSR1 && easu == null) {
-            easu = new SpatialComputePass(device, "fsr1_easu.comp", SpatialShaderSource.easuSource(),
-                new SpatialComputePass.Binding[] {SpatialComputePass.Binding.COMBINED, SpatialComputePass.Binding.STORAGE}, 80);
-            rcas = new SpatialComputePass(device, "fsr1_rcas.comp", SpatialShaderSource.rcasSource(),
-                new SpatialComputePass.Binding[] {SpatialComputePass.Binding.COMBINED, SpatialComputePass.Binding.STORAGE}, 32);
-            LOGGER.info("[VKB-SPATIAL] [VKB-AUTOTEST] fsr1=pipelines_created ms={} source=ffx_fsr1.h(FidelityFX SDK v2.3.0)",
-                (System.nanoTime() - t0) / 1_000_000L);
+        VulkanDevice host = VulkanCapabilityChecker.getVulkanDevice();
+        if (host == null || host.vkDevice().address() != vkDevice.address())
+            throw new IllegalStateException("spatial upscaler host device is unavailable or changed");
+        if (runtimeLease != null && runtimeLease.runtime().hostDevice() != host)
+            throw new IllegalStateException("spatial runtime belongs to a different host device");
+        if (runtimeLease == null) runtimeLease = SlangRuntimePool.acquire(host);
+        var runtime = runtimeLease.runtime();
+        if (recorder == null) recorder = new BedraySpatialNative(runtime.library(), runtime.core());
+        if (backend == UpscalerBackend.FSR1 && (easu == null || rcas == null)) {
+            if (easu == null) easu = new SpatialComputePass(runtime, SpatialComputePass.Stage.EASU);
+            if (rcas == null) rcas = new SpatialComputePass(runtime, SpatialComputePass.Stage.RCAS);
+            LOGGER.info("[VKB-SPATIAL] fsr1=pipelines_ready source=AOT_FidelityFX_v2.3.0");
         }
         if (backend == UpscalerBackend.NIS && nis == null) {
-            nis = new SpatialComputePass(device, "nis_scaler.comp", SpatialShaderSource.nisSource(),
-                new SpatialComputePass.Binding[] {SpatialComputePass.Binding.SAMPLER, SpatialComputePass.Binding.SAMPLED,
-                    SpatialComputePass.Binding.STORAGE}, NisConstants.BYTES);
-            LOGGER.info("[VKB-SPATIAL] [VKB-AUTOTEST] nis=pipeline_created ms={} source=NIS_Scaler.h(NIS SDK v1.0.3)",
-                (System.nanoTime() - t0) / 1_000_000L);
+            nis = new SpatialComputePass(runtime, SpatialComputePass.Stage.NIS);
+            LOGGER.info("[VKB-SPATIAL] nis=pipeline_ready source=AOT_NIS_v1.0.3");
         }
     }
 
-    private static long sampler(int filter) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
-                .magFilter(filter).minFilter(filter).mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
-                .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                .maxLod(0.0f);
-            LongBuffer p = stack.mallocLong(1);
-            int r = VK10.vkCreateSampler(device, info, null, p);
-            if (r != VK10.VK_SUCCESS) {
-                throw new IllegalStateException("vkCreateSampler failed: " + r);
-            }
-            return p.get(0);
-        }
+    public static void releaseRecording(long command) {
+        if (!recordings.contains(command)) return;
+        runtimeLease.runtime().releaseRecording(command); recordings.remove(command);
     }
+    public static void discardRecording(long command) {
+        if (!recordings.contains(command)) return;
+        runtimeLease.runtime().discardRecording(command); recordings.remove(command);
+    }
+    public static boolean hasPendingRecordings() { return !recordings.isEmpty(); }
+    /** Called only after pending host encoder work was submitted and its fence completed. */
+    public static void releaseRecordingsAfterHostDrain() {
+        for (long command : java.util.List.copyOf(recordings)) releaseRecording(command);
+    }
+    public static VulkanDevice hostDevice() { return runtimeLease == null ? null : runtimeLease.runtime().hostDevice(); }
 
-    /** Teardown (the caller waited for the device to be idle). */
+    /** Closes this feature's lease only after exact proof released its recordings. */
     public static void cleanup() {
-        if (device == null) {
-            return;
-        }
-        for (SpatialComputePass p : new SpatialComputePass[] {easu, rcas, nis}) {
-            if (p != null) {
-                p.destroy();
-            }
-        }
-        easu = null;
-        rcas = null;
-        nis = null;
-        if (linearSampler != 0L) {
-            VK10.vkDestroySampler(device, linearSampler, null);
-            linearSampler = 0L;
-        }
-        if (nearestSampler != 0L) {
-            VK10.vkDestroySampler(device, nearestSampler, null);
-            nearestSampler = 0L;
-        }
-        device = null;
-        failedFor = null;
-        lastLogged = null;
+        if (!recordings.isEmpty()) throw new IllegalStateException("spatial recordings require completion/discard");
+        if (runtimeLease != null) runtimeLease.close(); // Refusal preserves all fields for retry.
+        runtimeLease = null; recorder = null; easu = rcas = nis = null;
+        failedFor = null; lastLogged = null;
     }
 }
