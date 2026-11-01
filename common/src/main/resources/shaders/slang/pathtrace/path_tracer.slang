@@ -611,6 +611,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // Whether an escape may pay the sun and moon discs: the primary ray, or a continuation of a delta lobe, whose vertex's
     // NEE contributed nothing.  After any other continuation the vertex already sampled the bodies by NEE.
     bool bodiesVisible = true;
+    // A glossy reflection or a transmission sees the visible dome (minus the discs, which its NEE sampled); only a
+    // diffuse bounce receives the sky light. Without this, rippled water reflected the dim sky light and went black.
+    bool glossyEscape = false;
     for (; step < options.maxSurfaceSteps; ++step) {
         // A non-finite interval cannot be traced at all; an empty one is a path cut short by the cutout advances.
         if (!isFinite(ray.tMax)) {
@@ -663,7 +666,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                     escapeWeight = waterBeamTransmittance(escape.y) * (WATER_IOR * WATER_IOR);
                 }
             }
-            float3 sky = bodiesVisible ? environment.radiance(escape) : environment.skyRadiance(escape);
+            float3 sky = bodiesVisible ? environment.radiance(escape)
+                : glossyEscape ? environment.viewRadiance(escape) : environment.skyRadiance(escape);
             result.radiance += throughput * escapeWeight * sky;
             result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;
             break;
@@ -968,6 +972,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
 
         throughput *= bsdf.weight;
         bodiesVisible = bsdf.delta;
+        glossyEscape = bsdf.lobe != BSDF_LOBE_DIFFUSE;
         result.depth++;
 
         if (pathMaxComponent(throughput) <= 0.0) {

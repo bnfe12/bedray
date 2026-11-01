@@ -24,6 +24,9 @@ interface IEnvironmentSampler {
     // The same sky without the bodies the light sampler already draws by NEE (the sun and moon discs). A ray that left a
     // surface whose NEE sampled them pays this one, or the bodies would be counted twice.
     float3 skyRadiance(float3 direction);
+    // The visible sky without the bodies: what a glossy reflection (water with waves, a polished block) sees. It is
+    // the dome the eye sees, not the sky light, but the discs stay with NEE as for skyRadiance.
+    float3 viewRadiance(float3 direction);
     SkySample sample(float3 normal, inout uint seed);
     float pdf(float3 normal, float3 direction);
 };
@@ -54,6 +57,10 @@ struct GradientSky : IEnvironmentSampler {
 
     float3 skyRadiance(float3 direction) {
         return lightRadiance(direction);
+    }
+
+    float3 viewRadiance(float3 direction) {
+        return radiance(direction);
     }
 
     float pdf(float3 normal, float3 direction) {
@@ -153,7 +160,13 @@ struct SunMoonSky : IEnvironmentSampler {
         return dome.radiance(direction) + celestialRadiance(sun, direction);
     }
 
+    // The body-free sky as a light: the dome's light radiance, not the visible dome (which lit every diffuse bounce
+    // with the display sky, about 4x and saturated blue, until 2026-11-01).
     float3 skyRadiance(float3 direction) {
+        return dome.skyRadiance(direction);
+    }
+
+    float3 viewRadiance(float3 direction) {
         return dome.radiance(direction);
     }
 
