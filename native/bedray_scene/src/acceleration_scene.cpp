@@ -274,6 +274,21 @@ bool create_buffer(
     return create_buffer_impl(scene, size, usage, host_visible, out, error);
 }
 
+bool create_scratch_buffer(Scene& scene, uint64_t bytes, Buffer& out, BedraySceneError* error) {
+    if (!scene.scratch_alignment || bytes > UINT64_MAX - (scene.scratch_alignment - 1))
+        return fail(error, BEDRAY_SCENE_ERROR_LIMIT, "scratch size/alignment overflow") == BEDRAY_SCENE_OK;
+    Buffer buffer;
+    const auto usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    if (!create_buffer(scene, bytes + scene.scratch_alignment - 1, usage, false, buffer, error)) return false;
+    if (buffer.address > UINT64_MAX - (scene.scratch_alignment - 1)) {
+        destroy_buffer(scene, buffer);
+        return fail(error, BEDRAY_SCENE_ERROR_LIMIT, "scratch device address alignment overflow") == BEDRAY_SCENE_OK;
+    }
+    buffer.address = align_up(buffer.address, scene.scratch_alignment);
+    out = buffer;
+    return true;
+}
+
 bool flush_buffer(
     Scene& scene,
     Buffer& buffer,

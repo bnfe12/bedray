@@ -259,6 +259,7 @@ bool create_buffer(
     Buffer& out,
     BedraySceneError* error);
 void destroy_buffer(Scene& scene, Buffer& buffer);
+bool create_scratch_buffer(Scene&, uint64_t bytes, Buffer&, BedraySceneError*);
 bool create_acceleration_object(
     Scene& scene,
     VkAccelerationStructureTypeKHR type,

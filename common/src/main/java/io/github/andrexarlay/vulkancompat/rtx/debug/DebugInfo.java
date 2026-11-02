@@ -126,6 +126,7 @@ public final class DebugInfo {
 
     /** From PerfMonitor at the end of each window: only the periodic log is due here, no text is built otherwise. */
     static void onPerfPublished() {
+        NativeMemoryDiagnostics.sample();
         PerfHistory.sample();
         if (LOG_INTERVAL_NS > 0) {
             long now = System.nanoTime();

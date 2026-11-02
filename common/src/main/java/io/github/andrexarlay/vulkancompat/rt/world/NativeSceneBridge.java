@@ -113,13 +113,15 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
             return null;
         }
         BedraySceneNative library = null;
+        long scene = 0;
         try {
             library = BedraySceneNative.load(runtime.library().libraryPath());
             int capabilities = BedraySceneLayouts.CAP_ACCELERATION_STRUCTURE | BedraySceneLayouts.CAP_DEVICE_ADDRESS;
-            long scene = library.create(runtime.instance().address(), runtime.physicalDevice().address(),
+            scene = library.create(runtime.instance().address(), runtime.physicalDevice().address(),
                 runtime.device().address(), runtime.apiVersion(), runtime.getInstanceProcAddr(),
                 runtime.getDeviceProcAddr(), capabilities, FRAMES_IN_FLIGHT, RtConfig.MAX_INSTANCES,
                 MAX_ENTITIES, RtConfig.MAX_INSTANCES, TABLE_BYTES, MAX_GEOMETRY_BYTES);
+            runtime.attachSceneMemory(scene);
             LOGGER.info("[VKB-RT] native scene ready: dll={} abi={} frames={} max_sections={} max_geometry_mb={}",
                 library.libraryPath().getFileName(), BedraySceneLayouts.ABI_VERSION, FRAMES_IN_FLIGHT,
                 RtConfig.MAX_INSTANCES, MAX_GEOMETRY_BYTES >> 20);
@@ -127,12 +129,18 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         } catch (RuntimeException e) {
             LOGGER.error("[VKB-RT] native scene unavailable: {}; keeping the Java scene", e.getMessage(), e);
             if (library != null) {
+                if (scene != 0) {
+                    try { library.destroy(scene); }
+                    catch (RuntimeException cleanup) { e.addSuppressed(cleanup); }
+                }
                 try {
                     library.close();
                 } catch (RuntimeException closeFailure) {
                     e.addSuppressed(closeFailure);
                 }
             }
+            if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure
+                && nativeFailure.status() == io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts.STATUS_DEVICE_LOST) throw e;
             return null;
         }
     }

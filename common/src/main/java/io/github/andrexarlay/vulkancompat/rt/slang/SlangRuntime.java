@@ -8,6 +8,9 @@ import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLocator;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreNative;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuImagesNative;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuBuffersNative;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayMemoryNative;
+import io.github.andrexarlay.vulkancompat.rt.core.NativeMemoryPolicy;
+import io.github.andrexarlay.vulkancompat.rtx.debug.NativeMemoryDiagnostics;
 import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
@@ -53,6 +56,7 @@ public final class SlangRuntime implements AutoCloseable {
     private final VulkanDevice hostDevice;
     private final Map<String, SlangProgram> programs = new HashMap<>();
     private final RuntimeShutdown shutdown = new RuntimeShutdown();
+    private final BedrayMemoryNative memory;
 
     private SlangRuntime(BedrayCoreNative library, long core, BedrayCoreNative.Capabilities capabilities,
                          int enabledCapabilities, VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
@@ -68,6 +72,11 @@ public final class SlangRuntime implements AutoCloseable {
         this.getDeviceProcAddr = getDeviceProcAddr;
         this.apiVersion = apiVersion;
         this.hostDevice = hostDevice;
+        memory = library.hasMemoryService()
+            ? new BedrayMemoryNative(library, core, NativeMemoryPolicy.configured(capabilities.deviceMemoryBytes()),
+                device.getCapabilities().VK_EXT_memory_budget) : null;
+        if (memory != null) NativeMemoryDiagnostics.register(memory);
+        else LOGGER.warn("[VKB-MEMORY] shared_allocator=unavailable reason=old_core_export_missing; per-owner dedicated limits only");
     }
 
     /**
@@ -90,6 +99,7 @@ public final class SlangRuntime implements AutoCloseable {
         }
 
         BedrayCoreNative library = BedrayCoreNative.load(location.file());
+        long core = 0;
         try {
             int requestedCapabilities = enabledCapabilities;
             enabledCapabilities = SlangProgramFeatures.compatibleCapabilities(enabledCapabilities, library.programFeatureMask());
@@ -112,7 +122,7 @@ public final class SlangRuntime implements AutoCloseable {
                 VK10.vkGetPhysicalDeviceProperties(physical, properties);
                 apiVersion = properties.apiVersion();
             }
-            long core = library.create(instance.address(), physical.address(), vkDevice.address(),
+            core = library.create(instance.address(), physical.address(), vkDevice.address(),
                 queue.vkQueue().address(), queue.queueFamilyIndex(), apiVersion, getInstanceProcAddr, getDeviceProcAddr,
                 enabledCapabilities);
             BedrayCoreNative.Capabilities capabilities = library.queryCapabilities(core);
@@ -126,7 +136,10 @@ public final class SlangRuntime implements AutoCloseable {
             return new SlangRuntime(library, core, capabilities, enabledCapabilities, instance, physical, vkDevice,
                 getInstanceProcAddr, getDeviceProcAddr, apiVersion, device);
         } catch (RuntimeException | Error e) {
-            library.close();
+            if (core != 0) {
+                try { library.destroy(core); } catch (RuntimeException cleanup) { e.addSuppressed(cleanup); }
+            }
+            try { library.close(); } catch (RuntimeException cleanup) { e.addSuppressed(cleanup); }
             throw e;
         }
     }
@@ -224,12 +237,31 @@ public final class SlangRuntime implements AutoCloseable {
     /** Creates a native image owner on the same game-owned logical device. */
     public BedrayGpuImagesNative createImageOwner(long budgetBytes) {
         if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
-        return new BedrayGpuImagesNative(library, physicalDevice, device, budgetBytes);
+        var owner = new BedrayGpuImagesNative(library, physicalDevice, device, budgetBytes);
+        try {
+            if (memory != null) memory.attach(owner);
+            return owner;
+        } catch (RuntimeException | Error failure) {
+            try { owner.close(); } catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
     }
 
     public BedrayGpuBuffersNative createBufferOwner(long budgetBytes) {
         if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
-        return new BedrayGpuBuffersNative(library, physicalDevice, device, budgetBytes);
+        var owner = new BedrayGpuBuffersNative(library, physicalDevice, device, budgetBytes);
+        try {
+            if (memory != null) memory.attach(owner);
+            return owner;
+        } catch (RuntimeException | Error failure) {
+            try { owner.close(); } catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
+    }
+
+    public void attachSceneMemory(long scene) {
+        if (!shutdown.isOpen()) throw new IllegalStateException("SlangRuntime is closed");
+        if (memory != null) memory.attachScene(scene);
     }
 
     /**
@@ -315,6 +347,7 @@ public final class SlangRuntime implements AutoCloseable {
             shutdown.close(() -> library.destroy(core), () -> {
                 for (SlangProgram program : programs.values()) program.coreDestroyed();
                 programs.clear();
+                if (memory != null) NativeMemoryDiagnostics.unregister(memory);
             }, library::close);
         } catch (RuntimeException failure) {
             if (!shutdown.isOpen()) throw failure;

@@ -983,9 +983,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         scene.scratch_alignment);
     if (slot.tlas_scratch.handle == VK_NULL_HANDLE || slot.tlas_scratch_capacity < scratch_need) {
         plan.new_tlas_scratch = std::make_unique<Buffer>();
-        const VkBufferUsageFlags usage =
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-        if (!create_buffer(scene, scratch_need, usage, false, *plan.new_tlas_scratch, error)) {
+        if (!create_scratch_buffer(scene, scratch_need, *plan.new_tlas_scratch, error)) {
             return false;
         }
     }
@@ -1046,9 +1044,7 @@ bool plan_blas_scratch(Scene& scene, PreparePlan& plan, BedraySceneError* error)
     if (total == 0) {
         return true;
     }
-    const VkBufferUsageFlags usage =
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    if (!create_buffer(scene, total, usage, false, plan.blas_scratch, error)) {
+    if (!create_scratch_buffer(scene, total, plan.blas_scratch, error)) {
         return false;
     }
     plan.blas_scratch_present = true;
