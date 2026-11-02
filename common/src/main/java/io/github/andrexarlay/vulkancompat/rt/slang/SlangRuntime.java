@@ -7,6 +7,7 @@ import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLocator;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreNative;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuImagesNative;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuBuffersNative;
+import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import org.lwjgl.system.FunctionProvider;
@@ -113,6 +114,9 @@ public final class SlangRuntime implements AutoCloseable {
                 capabilities.abiVersion(), capabilities.maxPushConstants(), capabilities.maxComputeWorkGroupCountX(),
                 capabilities.maxComputeWorkGroupCountY(), capabilities.maxComputeWorkGroupCountZ(),
                 capabilities.maxComputeWorkGroupInvocations());
+            LOGGER.info("[VKB-PIPELINE-CACHE] native={} reason={}",
+                library.hasPipelineCacheRegistration() ? "shared" : "uncached",
+                library.hasPipelineCacheRegistration() ? "synchronous_host_borrow" : "native_export_unavailable");
             return new SlangRuntime(library, core, capabilities, enabledCapabilities, instance, physical, vkDevice,
                 getInstanceProcAddr, getDeviceProcAddr, apiVersion, device);
         } catch (RuntimeException | Error e) {
@@ -171,7 +175,9 @@ public final class SlangRuntime implements AutoCloseable {
                 + (unsupported != 0 ? " (the device lacks 0x" + Integer.toHexString(unsupported) + ")" : ""));
         }
         try {
-            SlangProgram program = SlangProgram.register(library, core, pass.get());
+            SlangProgram program = library.hasPipelineCacheRegistration()
+                ? RtVulkanPipelineCache.withCache(device, cache -> SlangProgram.register(library, core, pass.get(), cache))
+                : SlangProgram.register(library, core, pass.get());
             programs.put(name, program);
             LOGGER.info("[VKB-SLANG] registered {}", program);
             return Optional.of(program);

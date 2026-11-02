@@ -78,6 +78,10 @@ public final class SlangProgram implements AutoCloseable {
      * layout and compute pipeline; nothing is submitted here.
      */
     public static SlangProgram register(BedrayCoreNative library, long core, SlangPass pass) {
+        return register(library, core, pass, 0L);
+    }
+
+    public static SlangProgram register(BedrayCoreNative library, long core, SlangPass pass, long pipelineCache) {
         SlangPassManifest manifest = pass.manifest();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment spirv = pass.toNative(arena);
@@ -91,7 +95,7 @@ public final class SlangProgram implements AutoCloseable {
                 }
             }
             long handle = library.registerProgram(core, manifest.name(), manifest.entryPoint(), spirv, pass.wordCount(),
-                bindings, manifest.bindings().size(), manifest.pushConstantBytes());
+                bindings, manifest.bindings().size(), manifest.pushConstantBytes(), pipelineCache);
             return new SlangProgram(library, core, handle, manifest);
         }
     }

@@ -501,6 +501,15 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
     uint64_t* out_program,
     BedrayError* error);
 
+/* Additive synchronous cache borrow. pipeline_cache is a VkPipelineCache from
+ * the same VkDevice, or zero. The host serializes all uses and destruction of
+ * the cache for this entire call. The core neither retains nor destroys it;
+ * created programs are independent of its lifetime after the call returns.
+ * Existing register_program keeps its uncached behavior and ABI-v2 layouts. */
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program_cached(
+    BedrayCore* core, const BedrayProgramDesc* desc, uint64_t pipeline_cache,
+    uint64_t* out_program, BedrayError* error);
+
 BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
     BedrayCore* core,
     uint64_t program);

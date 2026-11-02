@@ -42,6 +42,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private final MethodHandle destroyHandle;
     private final MethodHandle queryCapabilitiesHandle;
     private final MethodHandle registerProgramHandle;
+    private final MethodHandle registerProgramCachedHandle;
     private final MethodHandle destroyProgramHandle;
     private final MethodHandle renderFrameHandle;
     private final MethodHandle releaseRecordingHandle;
@@ -99,6 +100,8 @@ public final class BedrayCoreNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
             registerProgramHandle = bind(linker, lookup, "bedray_core_register_program",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+            registerProgramCachedHandle = bindOptional(linker, lookup, "bedray_core_register_program_cached",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
             destroyProgramHandle = bind(linker, lookup, "bedray_core_destroy_program",
                 FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
             renderFrameHandle = bind(linker, lookup, "bedray_core_render_frame",
@@ -349,6 +352,14 @@ public final class BedrayCoreNative implements AutoCloseable {
      */
     public long registerProgram(long core, String name, String entryPoint, MemorySegment spirv, long spirvWordCount,
                                 MemorySegment bindings, int bindingCount, int pushConstantBytes) {
+        return registerProgram(core, name, entryPoint, spirv, spirvWordCount, bindings, bindingCount, pushConstantBytes, 0L);
+    }
+
+    public boolean hasPipelineCacheRegistration() { return registerProgramCachedHandle != null; }
+
+    /** Cache is borrowed only for this call; the caller holds its device cache lock through return. */
+    public long registerProgram(long core, String name, String entryPoint, MemorySegment spirv, long spirvWordCount,
+                                MemorySegment bindings, int bindingCount, int pushConstantBytes, long pipelineCache) {
         ensureOpen();
         requireHandle(core, "core");
         if (name == null || name.isBlank()) {
@@ -380,7 +391,9 @@ public final class BedrayCoreNative implements AutoCloseable {
 
             MemorySegment out = a.allocate(ADDRESS);
             MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
-            int status = (int) registerProgramHandle.invokeExact(handle(core), desc, out, error);
+            int status = registerProgramCachedHandle != null
+                ? (int) registerProgramCachedHandle.invokeExact(handle(core), desc, pipelineCache, out, error)
+                : (int) registerProgramHandle.invokeExact(handle(core), desc, out, error);
             check("register_program", status, error);
             long program = out.get(JAVA_LONG, 0);
             if (program == 0) {
