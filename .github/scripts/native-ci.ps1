@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory)][string]$SourceRoot,
     [Parameter(Mandatory)][string]$Headers,
-    [Parameter(Mandatory)][string]$BuildRoot
+    [Parameter(Mandatory)][string]$BuildRoot,
+    [string]$Slangc = "",
+    [string]$NrdHeaders = ""
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -9,6 +11,8 @@ New-Item -ItemType Directory -Force -Path $BuildRoot | Out-Null
 $BuildRoot = (Resolve-Path -LiteralPath $BuildRoot).Path
 $SourceRoot = (Resolve-Path -LiteralPath $SourceRoot).Path
 $Headers = (Resolve-Path -LiteralPath $Headers).Path
+if ($Slangc) { $Slangc = (Resolve-Path -LiteralPath $Slangc).Path }
+if ($NrdHeaders) { $NrdHeaders = (Resolve-Path -LiteralPath $NrdHeaders).Path }
 $log = Join-Path $BuildRoot 'commands.log'
 
 function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
@@ -22,7 +26,11 @@ function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
 Invoke-Checked 'cmake' @('--version')
 Invoke-Checked 'ctest' @('--version')
 Invoke-Checked 'git' @('-C', $SourceRoot, 'rev-parse', 'HEAD')
-foreach ($module in @('bedray_core', 'bedray_scene', 'bedray_frame_lifetime')) {
+$modules = @('bedray_core', 'bedray_scene', 'bedray_frame_lifetime')
+if ($NrdHeaders -and (Test-Path -LiteralPath (Join-Path $SourceRoot 'native/nrd_bridge/CMakeLists.txt'))) {
+    $modules += 'nrd_bridge'
+}
+foreach ($module in $modules) {
     $build = Join-Path $BuildRoot $module
     $options = @('-S', (Join-Path $SourceRoot "native/$module"), '-B', $build,
         '-G', 'Visual Studio 17 2022', '-A', 'x64')
@@ -33,7 +41,9 @@ foreach ($module in @('bedray_core', 'bedray_scene', 'bedray_frame_lifetime')) {
         $options += @('-DBEDRAY_ENABLE_RENDER_GRAPH=ON', '-DBEDRAY_GRAPH_BUILD_TESTS=ON',
             '-DBEDRAY_HISTORY_BUILD_TESTS=ON', '-DBEDRAY_GPU_RESOURCES_TESTS=ON',
             '-DBEDRAY_GPU_RESOURCES_SHARED_ABI=ON')
+        if ($Slangc) { $options += "-DBEDRAY_SLANGC=$Slangc" }
     }
+    if ($module -eq 'nrd_bridge') { $options += "-DBEDRAY_NRD_HEADERS=$NrdHeaders" }
     if ($module -eq 'bedray_frame_lifetime') { $options += '-DBUILD_TESTING=ON' }
     Invoke-Checked 'cmake' $options
     Invoke-Checked 'cmake' @('--build', $build, '--config', 'Release', '--parallel', '2')

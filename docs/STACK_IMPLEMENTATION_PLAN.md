@@ -6,6 +6,15 @@ This supersedes the earlier scope deferral in `SLANG_MIGRATION.md`; it does not
 declare those features implemented. Baseline: `78a4836`. Three read-only audits
 checked the actual source, not the old percentage scorecard.
 
+Follow-up progress on 2026-11-02: shared pipeline cache/lifetime repairs are
+merged, as is the optional [ray-generation/NV SER backend](ai-agent-addenda/EXPERIMENTAL_SER.md)
+(PR #58, native-tested `fe75d59`). The [primary-lobe signal implementation](ai-agent-addenda/PRIMARY_DENOISER_SIGNALS.md)
+adds the previously missing split/distances and symmetric composition, with
+explicit unsupported-transport bypass and remaining vendor/quality work.
+These advances do not complete the other unchecked obligations below. The
+owner's performance acceptance target is 1080p at 60 real frames/s on RTX 5060
+Ti 8 GiB, Ryzen 5 5600XT and 16 GiB RAM; it has not been measured here.
+
 The manifesto remains the feature target. Its fixed performance claims are not
 acceptance evidence. A requirement which conflicts with API semantics must be
 implemented through a valid architecture rather than copied literally.

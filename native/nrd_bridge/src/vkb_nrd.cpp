@@ -38,6 +38,7 @@
 
 #include "NRD.h"   // headers only: struct layouts. No NRD symbol is referenced, NRD.dll is loaded dynamically.
 #include "vkb_nrd.h"
+#include "primary_lobe_settings.h"
 
 #include <algorithm>
 #include <cstdarg>
@@ -539,6 +540,7 @@ static int createPipelinesAndSets(Denoiser* d) {
 extern "C" {
 
 VKB_NRD_API uint32_t vkb_nrd_get_api_version(void) { return VKB_NRD_API_VERSION; }
+VKB_NRD_API uint32_t vkb_nrd_get_signal_contract_version(void) { return 1u; }
 VKB_NRD_API const char* vkb_nrd_get_last_error_string(void) { return g_lastError; }
 VKB_NRD_API uint32_t vkb_nrd_get_required_features(void) {
     return VKB_NRD_FEATURE_STORAGE_IMAGE_READ_WITHOUT_FORMAT | VKB_NRD_FEATURE_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT |
@@ -682,6 +684,24 @@ VKB_NRD_API int32_t vkb_nrd_create_denoiser(const VkbNrdCreateInfo* info, uint64
         destroyDenoiser(d);
         return fail(VKB_NRD_ERR_NRD, "NRD CreateInstance failed: nrd::Result=%u (requested mode mask 0x%X)", unsigned(nr), info->mode_mask);
     }
+    if (d->modeMask & VKB_NRD_MODE_REBLUR_DIFFUSE_SPECULAR) {
+        nrd::ReblurSettings settings;
+        bedray::nrd_bridge::configure_primary_lobe_signals(settings);
+        nr = g.nrd.SetDenoiserSettings(*d->instance, nrd::Identifier(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR), &settings);
+        if (nr != nrd::Result::SUCCESS) {
+            destroyDenoiser(d);
+            return fail(VKB_NRD_ERR_NRD, "NRD primary-lobe settings(REBLUR) failed: nrd::Result=%u", unsigned(nr));
+        }
+    }
+    if (d->modeMask & VKB_NRD_MODE_RELAX_DIFFUSE_SPECULAR) {
+        nrd::RelaxSettings settings;
+        bedray::nrd_bridge::configure_primary_lobe_signals(settings);
+        nr = g.nrd.SetDenoiserSettings(*d->instance, nrd::Identifier(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR), &settings);
+        if (nr != nrd::Result::SUCCESS) {
+            destroyDenoiser(d);
+            return fail(VKB_NRD_ERR_NRD, "NRD primary-lobe settings(RELAX) failed: nrd::Result=%u", unsigned(nr));
+        }
+    }
     d->idesc = g.nrd.GetInstanceDesc(*d->instance);
     if (!d->idesc) { destroyDenoiser(d); return fail(VKB_NRD_ERR_NRD, "NRD GetInstanceDesc returned null"); }
 
@@ -783,6 +803,7 @@ VKB_NRD_API int32_t vkb_nrd_set_reblur_settings(uint64_t handle, const VkbNrdReb
     rs.specularPrepassBlurRadius = s->specular_prepass_blur_radius;
     rs.planeDistanceSensitivity = s->plane_distance_sensitivity;
     rs.enableAntiFirefly = s->enable_anti_firefly != 0;
+    bedray::nrd_bridge::configure_primary_lobe_signals(rs);
     nrd::Result nr = g.nrd.SetDenoiserSettings(*d->instance, nrd::Identifier(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR), &rs);
     if (nr != nrd::Result::SUCCESS) return fail(VKB_NRD_ERR_NRD, "NRD SetDenoiserSettings(REBLUR) failed: nrd::Result=%u", unsigned(nr));
     return VKB_NRD_OK;

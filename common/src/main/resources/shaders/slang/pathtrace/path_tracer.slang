@@ -42,6 +42,8 @@ import "surface/visibility.slang";
 import "surface/water.slang";
 import "traversal/traversal.slang";
 __exported import "pathtrace/diffuse_field.slang";
+__exported import "pathtrace/denoiser_signal.slang";
+import "denoise/material_factors.slang";
 
 static const uint PATH_TRACE_FLAG_ENVIRONMENT      = 1u << 0u;
 static const uint PATH_TRACE_FLAG_RUSSIAN_ROULETTE = 1u << 1u;
@@ -245,8 +247,9 @@ PathTraceOptions defaultPathTraceOptions() {
 struct PathPrimaryGuide {
     float3 position;      // camera-relative world position of the primary surface
     float3 normal;        // view-facing shading normal
-    float3 albedo;        // linear diffuse albedo, floored for the demodulation
+    float3 albedo;        // linear diffuse reflection albedo; zero on metals (factor floor is applied by the pack)
     float3 specularF0;    // interface reflectance at normal incidence
+    float3 specularReflectance; // view/roughness-dependent GGX environment reflectance (RR + NRD material guide)
     float3 direct;        // primary next-event contribution, including camera-medium throughput
     float  roughness;     // linear roughness (0..1)
     float  metallic;      // 0 = dielectric, 1 = metal
@@ -260,6 +263,7 @@ struct PathTraceResult {
     float4 primaryMotion;       // xyz: where the primary surface stood one frame ago minus where it is now, in
                                 // world blocks; w: 1 when that surface is a captured model rather than terrain
     PathPrimaryGuide primary;   // guide channels, filled only when the primary ray hit a decodable surface
+    PathDenoiserSignal denoiser; // camera-weighted selected-primary-lobe contributions, independent of raw HDR
     PathPtRecord pt;            // ReSTIR PT first edge, recorded only under PATH_TRACE_OPTION_RESTIR_PT
     uint   depth;
     uint   surfaceHits;
@@ -276,10 +280,12 @@ PathTraceResult emptyPathTraceResult() {
     result.primary.normal = float3(0.0, 0.0, 1.0);
     result.primary.albedo = float3(0.0);
     result.primary.specularF0 = float3(0.0);
+    result.primary.specularReflectance = float3(0.0);
     result.primary.direct = float3(0.0);
     result.primary.roughness = 1.0;
     result.primary.metallic = 0.0;
     result.primary.valid = false;
+    result.denoiser = emptyPathDenoiserSignal();
     result.pt = emptyPathPtRecord();
     result.depth = 0u;
     result.surfaceHits = 0u;
@@ -579,6 +585,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     uint step = 0u;
     // The diffuse continuation of the primary vertex is in flight and its first vertex is not recorded yet.
     bool ptArmed = false;
+    PathDenoiserContinuation denoiserContinuation = emptyPathDenoiserContinuation();
+    // RR consumes total HDR. Only NRD needs selected-lobe bookkeeping; keep this state out of the ordinary path.
+    bool wantDenoiserSignals = (options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u;
 
     // The water body the current ray runs in and the ray coordinate where its
     // current segment began.  A hole advance moves the origin, so the same
@@ -633,6 +642,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)
                                                   : traversal.traceClosest(ray);
         if (!hit.hit) {
+            if (wantDenoiserSignals) pathDenoiserMiss(denoiserContinuation);
             // A ray inside the body that finds no surface still crossed water:
             // the tail is absorbed like every other segment (the legacy bound
             // of 48 blocks keeps an open ray from going black at the far plane).
@@ -733,6 +743,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             continue;
         }
 
+        // Only accepted, decoded surfaces end the primary continuation's guide edge.
+        // Measuring endpoints includes cutout/pane advances without adding camera depth or later bounces.
+        if (wantDenoiserSignals) pathDenoiserHit(denoiserContinuation, hit.position);
         if (ambientOnlyPending) {
             // An ambient-only bounce that found geometry collects nothing: the sky it would have seen is occluded.
             break;
@@ -871,8 +884,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.primary.valid = true;
             result.primary.position = hit.position;
             result.primary.normal = normal;
-            result.primary.albedo = clamp(surface.material.albedo, float3(0.02), float3(1.0));
+            result.primary.albedo = clamp(bsdfReflectionAlbedo(surface.material), float3(0.0), float3(1.0));
             result.primary.specularF0 = surface.material.f0;
+            if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u)
+                result.primary.specularReflectance = denoiserEnvironmentReflectance(bsdfF0(surface.material),
+                    abs(dot(normal, view)), surface.material.roughness);
             result.primary.roughness = surface.material.roughness;
             result.primary.metallic = surface.material.metallic;
             result.primary.direct = directContribution;
@@ -1030,6 +1046,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.pt.continuationWeight = throughput;
             result.pt.radianceBefore = result.radiance;
         }
+        if (wantDenoiserSignals && receiver.primary && !medium.inside) {
+            // Arm only once a real continuation launches. Transmission and RC have no opaque in-lobe guide.
+            pathDenoiserBegin(denoiserContinuation, bsdf.lobe, result.radiance, hit.position);
+        }
         ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
         ambientOnlyPending = continuationAmbientOnly;
         // The new origin sits one bias off the interaction along the face; the segment starts there (the legacy path
@@ -1063,7 +1083,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             weight.g > 0.0 ? radianceSuffix.g / weight.g : 0.0,
             weight.b > 0.0 ? radianceSuffix.b / weight.b : 0.0);
     }
+    float3 radianceBeforeClamp = result.radiance;
     result.radiance = clampRadiance(result.radiance, options.maxRadiance);
+    if (wantDenoiserSignals)
+        result.denoiser = pathDenoiserResolve(denoiserContinuation, radianceBeforeClamp, result.radiance,
+            (result.flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_WATER_MEDIUM
+                | PATH_TRACE_FLAG_RC_FINITE_WINDOW)) != 0u);
     return result;
 }
 

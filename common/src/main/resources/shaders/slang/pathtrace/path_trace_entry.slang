@@ -147,16 +147,19 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result, bool
     n = length(n) > 1.0e-4 ? normalize(n) : float3(0.0, 0.0, 1.0);
     outViewZ[p] = viewZ;
     outNormalRough[p] = float4(n, clamp(result.primary.roughness, 0.0, 1.0));
-    // The path tracer sums diffuse and specular per sample: the split channel stays empty and the whole signal goes
-    // through the colour input as raw radiance (specular albedo is a material guide only), exactly as in rt_path.comp.
-    outSpecular[p] = float4(0.0);
-    outDiffuse[p] = float4(result.radiance - result.primary.direct, result.firstHitDistance);
-    outAlbedo[p] = float4(result.primary.albedo, 1.0);
-    outDirect[p] = float4(result.primary.direct, 0.0);
-    bool specularGuide = result.primary.metallic > 0.5 || result.primary.roughness < 0.6;
-    float3 specAlbedo = !specularGuide ? float3(0.0)
-        : (result.primary.metallic > 0.5 ? result.primary.albedo : result.primary.specularF0);
-    outSpecAlbedo[p] = float4(clamp(specAlbedo, float3(0.0), float3(1.0)), 1.0);
+    // The first selected lobe owns its whole suffix, not the material at the last bounce.
+    // Missing lobes have hitT=0. Camera depth is exclusively outViewZ; these distances start at the primary vertex.
+    outSpecular[p] = float4(result.denoiser.specular, result.denoiser.specularHitDistance);
+    outDiffuse[p] = float4(result.denoiser.diffuse, result.denoiser.diffuseHitDistance);
+    // The R10 NRD encoding supports material IDs; separate deterministic zero diffuse on metals from dielectrics.
+    // RR consumes RGB only. SNORM normal encoding has no material-ID support in NRD.
+    outAlbedo[p] = float4(result.primary.albedo, result.primary.metallic > 0.5 ? 1.0 : 0.0);
+    // Emission, primary NEE, medium/transmission, cached RC and replaced PT remain exact bypass radiance.
+    // RR still receives diffuse + specular + bypass, i.e. the complete noisy HDR integrand.
+    outDirect[p] = float4(pathDenoiserBypass(result.radiance, result.denoiser),
+        result.denoiser.bypass ? 1.0 : 0.0);
+    outSpecAlbedo[p] = float4(clamp(result.primary.specularReflectance, float3(0.0), float3(1.0)),
+        clamp(result.primary.roughness, 0.0, 1.0));
 }
 
 // `traversal` arrives with its backend-specific fields set (TLAS and the section/geometry provider); everything that
@@ -182,7 +185,10 @@ struct PathTraceMean {
     float3 normal;
     float3 albedo;
     float3 specularF0;
+    float3 specularReflectance;
     float3 direct;
+    PathDenoiserSignal denoiser;
+    uint diffuseHitCount;
     float  roughness;
     float  metallic;
     float  firstHit;
@@ -203,7 +209,10 @@ PathTraceMean emptyPathTraceMean() {
     mean.normal = float3(0.0);
     mean.albedo = float3(0.0);
     mean.specularF0 = float3(0.0);
+    mean.specularReflectance = float3(0.0);
     mean.direct = float3(0.0);
+    mean.denoiser = emptyPathDenoiserSignal();
+    mean.diffuseHitCount = 0u;
     mean.roughness = 0.0;
     mean.metallic = 0.0;
     mean.firstHit = 0.0;
@@ -225,6 +234,20 @@ void accumulatePathTraceSample(inout PathTraceMean mean, PathTraceResult result)
     }
     mean.accepted += 1u;
     mean.acceptedRadiance += result.radiance;
+    mean.denoiser.diffuse += result.denoiser.diffuse;
+    mean.denoiser.specular += result.denoiser.specular;
+    mean.denoiser.bypass = mean.denoiser.bypass || result.denoiser.bypass;
+    // Radiance includes the sampler's 1/p already. Distances never include p and only count sampled lobes.
+    if (result.denoiser.diffuseHitDistance > 0.0) {
+        mean.denoiser.diffuseHitDistance += result.denoiser.diffuseHitDistance;
+        mean.diffuseHitCount++;
+    }
+    // NRD_FrontEnd_SpecHitDistAveraging_* uses the minimum nonzero distance across paths.
+    if (result.denoiser.specularHitDistance > 0.0) {
+        mean.denoiser.specularHitDistance = mean.denoiser.specularHitDistance > 0.0
+            ? min(mean.denoiser.specularHitDistance, result.denoiser.specularHitDistance)
+            : result.denoiser.specularHitDistance;
+    }
     if (!result.primary.valid) {
         mean.sky += (result.flags & PATH_TRACE_FLAG_ENVIRONMENT) != 0u ? 1u : 0u;
         return;
@@ -234,6 +257,7 @@ void accumulatePathTraceSample(inout PathTraceMean mean, PathTraceResult result)
     mean.normal += result.primary.normal;
     mean.albedo += result.primary.albedo;
     mean.specularF0 += result.primary.specularF0;
+    mean.specularReflectance += result.primary.specularReflectance;
     mean.direct += result.primary.direct;
     mean.roughness += result.primary.roughness;
     mean.metallic += result.primary.metallic;
@@ -255,6 +279,14 @@ PathTraceResult pathTraceMeanResult(PathTraceMean mean, out bool sampleTrusted) 
         return result;
     }
     result.radiance = mean.acceptedRadiance / float(mean.accepted);
+    result.denoiser.diffuse = mean.denoiser.diffuse / float(mean.accepted);
+    result.denoiser.specular = mean.denoiser.specular / float(mean.accepted);
+    result.denoiser.diffuseHitDistance = mean.diffuseHitCount > 0u
+        ? mean.denoiser.diffuseHitDistance / float(mean.diffuseHitCount) : 0.0;
+    result.denoiser.specularHitDistance = mean.denoiser.specularHitDistance;
+    // One unsupported subsample makes this pixel's guide estimator unsupported. Keep its exact raw mean,
+    // rather than allowing NRD to reconstruct neighbors on top of a partial cached/medium/transmission bypass.
+    if (mean.denoiser.bypass) result.denoiser = bypassedPathDenoiserSignal();
     sampleTrusted = true;
     if (mean.hits == 0u) {
         // Carry only a proven trusted-sky classification; mean.flags also contains refused samples.
@@ -268,6 +300,7 @@ PathTraceResult pathTraceMeanResult(PathTraceMean mean, out bool sampleTrusted) 
     result.primary.normal = length(normal) > 1.0e-4 ? normalize(normal) : float3(0.0, 0.0, 1.0);
     result.primary.albedo = mean.albedo / hits;
     result.primary.specularF0 = mean.specularF0 / hits;
+    result.primary.specularReflectance = mean.specularReflectance / hits;
     // Radiometric terms use the HDR sample denominator; a sky sample contributes zero primary direct light.
     result.primary.direct = mean.direct / float(mean.accepted);
     result.primary.roughness = mean.roughness / hits;
@@ -494,6 +527,11 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
             // The same guards the tracer applies to its own sum: a finite, non-negative radiance under the firefly cap.
             traced.radiance = isFinite(swapped)
                 ? clampRadiance(max(swapped, float3(0.0)), options.maxRadiance) : traced.radiance;
+            // The PT reservoir replaced a suffix using RIS, not the independent in-lobe guide sample.
+            // Until it exports a certified guide estimator, keep this sample's complete signal in the bypass.
+            if (traced.pt.status != PATH_PT_RECORD_NONE && ptTemporalActive(ptState, ptReservoirs)) {
+                traced.denoiser = bypassedPathDenoiserSignal();
+            }
         }
         accumulatePathTraceSample(total, traced);
     }
