@@ -23,8 +23,8 @@ class RtSkyCloudPlaneTest {
         assertTrue(Float.isNaN(distance(-10, -1, 100)));
         assertEquals(10, distance(10, -1, 100));
         assertEquals(10, distance(-10, 1, 100));
-        assertEquals(0, distance(0, 1, 100));
-        assertEquals(0, distance(0, -1, 100));
+        assertEquals(0, distance(0, 1, 100), 0.0); // both IEEE zero signs are the same plane crossing
+        assertEquals(0, distance(0, -1, 100), 0.0);
     }
 
     @Test void parallelNearParallelAndFarEndpointHaveDistinctGeometricMeaning() {
