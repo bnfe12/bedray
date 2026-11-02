@@ -97,6 +97,9 @@ MemoryAllocation get(MemoryAllocator& m, bool mapped = false, bool bda = false) 
     return a;
 }
 void pooling_holes_and_accounting() {
+    auto properties = context().properties;
+    properties.memoryHeapCount = 2; properties.memoryHeaps[1] = {16384, 0};
+    CHECK(device_local_bytes(properties) == 8192); // host-visible nonlocal RAM is not extra VRAM
     MemoryAllocator m(context()); CHECK(m.valid());
     const auto allocated_before = allocations;
     auto a = get(m), b = get(m);

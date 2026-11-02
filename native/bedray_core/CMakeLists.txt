@@ -39,6 +39,7 @@ enable_testing()
 
 add_library(bedray_core SHARED
     src/core.cpp
+    src/core_memory.cpp
     src/ray_generation_pipeline.cpp
     src/path_trace_pass.cpp src/rc_field_pass.cpp
     src/bloom_pass.cpp

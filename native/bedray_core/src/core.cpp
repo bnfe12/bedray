@@ -1,7 +1,5 @@
 #define VK_NO_PROTOTYPES
 #include "bedray_core.h"
-#include "bedray_core_memory.h"
-#include "bedray/memory_binding.hpp"
 
 #include <vulkan/vulkan_core.h>
 
@@ -316,6 +314,11 @@ BedrayStatus release_every(Release&&... release) {
 } // namespace
 
 namespace bedray::core {
+MemoryAccess memory_access(BedrayCore* core) noexcept {
+    if (!core) return {};
+    return {&core->device_fns, core->instance, core->get_instance_proc_addr, core->get_device_proc_addr,
+        core->properties.limits.maxMemoryAllocationCount, core->programs.empty()};
+}
 
 bool program_contract(BedrayCore* core, uint64_t handle, ProgramContract& out) noexcept {
     out = {};
@@ -791,10 +794,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(
     if (core == nullptr || out_capabilities == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
-    uint64_t device_memory = 0;
-    for (uint32_t i = 0; i < core->memory_properties.memoryHeapCount; ++i) {
-        device_memory += core->memory_properties.memoryHeaps[i].size;
-    }
+    const uint64_t device_memory = bedray::gpu::device_local_bytes(core->memory_properties);
     out_capabilities->abi_version = BEDRAY_CORE_ABI_VERSION;
     out_capabilities->flags = core->capabilities;
     out_capabilities->max_push_constants = core->properties.limits.maxPushConstantsSize;
@@ -1786,78 +1786,5 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_volumetric(BedrayCore* c
     return BEDRAY_ERROR_INTERNAL;
 }
 
-BEDRAY_API uint32_t BEDRAY_CALL bedray_core_memory_version(void) try { return 1; } catch (...) { return 0; }
-
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_memory_configure(
-    BedrayCore* core, uint64_t limit, uint64_t block, uint32_t flags, BedrayError* error) try {
-    clear_error(error);
-    if (!core || !limit || block < 4096 || block > (256ull << 20) || (block & (block - 1))
-        || (flags & ~BEDRAY_MEMORY_HEAP_BUDGET))
-        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "memory service needs a positive budget and power-of-two 4KiB..256MiB blocks");
-    if (core->device_fns.memory || !core->programs.empty())
-        return fail(error, BEDRAY_ERROR_IN_USE, "configure shared memory once, before registering programs");
-    bedray::gpu::MemoryContext context;
-    context.device = core->device; context.physical = core->physical_device;
-    context.properties = core->memory_properties;
-    context.limit = limit; context.block_size = block;
-    context.atom_size = core->properties.limits.nonCoherentAtomSize;
-    context.max_blocks = std::min(2048u, core->properties.limits.maxMemoryAllocationCount);
-    context.heap_budget_enabled = (flags & BEDRAY_MEMORY_HEAP_BUDGET) != 0;
-    auto& f = context.functions;
-    const auto& buffers = core->device_fns.buffer_functions;
-    f.allocate = buffers.allocate_memory; f.free = buffers.free_memory;
-    f.map = buffers.map_memory; f.unmap = buffers.unmap_memory; f.flush = buffers.flush; f.invalidate = buffers.invalidate;
-    load_device(core, f.buffer_requirements, "vkGetBufferMemoryRequirements2");
-    load_device(core, f.image_requirements, "vkGetImageMemoryRequirements2");
-    load_instance(core, f.heap_properties, "vkGetPhysicalDeviceMemoryProperties2");
-    auto memory = std::make_shared<bedray::gpu::MemoryAllocator>(context);
-    if (!memory->valid()) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "shared memory needs Vulkan 1.1 requirements2, valid heap limits and enabled budget query functions");
-    core->device_fns.memory = std::move(memory);
-    return BEDRAY_OK;
-} catch (const std::bad_alloc&) {
-    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate shared memory service");
-} catch (...) {
-    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring shared memory");
-}
-
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_memory_attach(
-    BedrayCore* core, uint32_t kind, void* owner, BedrayError* error) try {
-    clear_error(error);
-    if (!core || !core->device_fns.memory || !owner)
-        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "memory attachment needs a configured core and empty owner");
-    if (core->device_fns.memory->lost())
-        return fail(error, BEDRAY_ERROR_DEVICE_LOST, "shared allocation service observed device loss");
-    auto memory = core->device_fns.memory;
-    bedray::gpu::Status status = bedray::gpu::Status::invalid_argument;
-    switch (kind) {
-        case BEDRAY_MEMORY_BUFFERS: status = bedray::gpu::attach_memory(static_cast<BedrayGpuOwner*>(owner), memory); break;
-        case BEDRAY_MEMORY_IMAGES: status = bedray::gpu::attach_memory(static_cast<BedrayGpuImageOwner*>(owner), memory); break;
-        case BEDRAY_MEMORY_SCENE: status = bedray::gpu::attach_memory(static_cast<BedrayScene*>(owner), memory); break;
-        default: return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "unknown memory owner kind %u", kind);
-    }
-    if (status == bedray::gpu::Status::ok) return BEDRAY_OK;
-    return fail(error, status == bedray::gpu::Status::in_use ? BEDRAY_ERROR_IN_USE : BEDRAY_ERROR_INVALID_ARGUMENT,
-        "memory attachment refused: kind=%u resource_status=%u (owner must be empty and match the core device)", kind, static_cast<uint32_t>(status));
-} catch (const std::bad_alloc&) {
-    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot attach shared memory service");
-} catch (...) {
-    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception attaching shared memory");
-}
-
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_memory_stats(
-    BedrayCore* core, BedrayMemoryStats* out, uint32_t size, BedrayError* error) try {
-    clear_error(error);
-    static_assert(sizeof(BedrayMemoryStats) == 72);
-    if (!core || !core->device_fns.memory || !out || size < sizeof(*out))
-        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "memory stats need a configured core and 72-byte output");
-    const auto stats = core->device_fns.memory->stats();
-    *out = {stats.limit, stats.reserved, stats.used, stats.peak_reserved, stats.allocations, stats.blocks,
-        stats.heap_budget, stats.heap_usage, stats.flags};
-    return BEDRAY_OK;
-} catch (const std::bad_alloc&) {
-    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot query memory service");
-} catch (...) {
-    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception querying shared memory");
-}
 
 } // extern "C"

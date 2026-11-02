@@ -4,6 +4,15 @@
 #include <limits>
 
 namespace bedray::gpu {
+VkDeviceSize device_local_bytes(const VkPhysicalDeviceMemoryProperties& properties) noexcept {
+    VkDeviceSize bytes = 0;
+    for (std::uint32_t h = 0; h < std::min(properties.memoryHeapCount, std::uint32_t(VK_MAX_MEMORY_HEAPS)); ++h)
+        if (properties.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+            if (properties.memoryHeaps[h].size > UINT64_MAX - bytes) return UINT64_MAX;
+            bytes += properties.memoryHeaps[h].size;
+        }
+    return bytes;
+}
 namespace {
 bool power_two(VkDeviceSize n) noexcept { return n && (n & (n - 1)) == 0; }
 bool align(VkDeviceSize n, VkDeviceSize a, VkDeviceSize& out) noexcept {

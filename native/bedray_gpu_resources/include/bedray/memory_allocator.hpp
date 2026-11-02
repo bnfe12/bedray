@@ -5,6 +5,7 @@
 
 namespace bedray::gpu {
 enum class Status : std::uint32_t;
+VkDeviceSize device_local_bytes(const VkPhysicalDeviceMemoryProperties&) noexcept;
 
 struct MemoryFunctions {
     PFN_vkAllocateMemory allocate = nullptr;
