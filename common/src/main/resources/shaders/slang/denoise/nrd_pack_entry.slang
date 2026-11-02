@@ -17,9 +17,10 @@ void nrdPackRrPixel(uint2 pixel, NrdPackPush pc, RWTexture2D<float4> normalOutpu
     if (any(pixel >= pc.size)) return;
     NrdPackInput input = {};
     input.viewZ = gbViewZ[pixel];
+    // DLSS-RR also reads the sky colour of an ignored pixel (the trace writes it into the diffuse guide).
+    input.diffuse = gbDiffuse[pixel];
     if (!nrdIgnored(input.viewZ, pc)) {
         input.normalRoughness = gbNormalRough[pixel];
-        input.diffuse = gbDiffuse[pixel];
         input.specular = gbSpecular[pixel];
         input.direct = gbDirect[pixel].rgb;
         input.specularAlbedo = gbSpecAlbedo[pixel].rgb;

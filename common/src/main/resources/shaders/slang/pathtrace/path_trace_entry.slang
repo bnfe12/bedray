@@ -126,10 +126,15 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result, bool
     // below is the same one a miss gets, so the guides never disagree with the zero weight in the
     // radiance lane.  A truncated path is still trusted: it stopped short, its primary vertex is real.
     if (!sampleTrusted || !result.primary.valid) {
+        // A trusted miss is sky: its radiance rides in the colour lane, so DLSS-RR, which filters across a silhouette,
+        // blends the edge with the sky it borders instead of with black (dark, noisy fringes around every object against
+        // the sky, owner report 2026-11-02). Zero albedo still keeps it out of the demodulation; NRD skips the pixel by
+        // its view depth.
+        bool sky = sampleTrusted && (result.flags & PATH_TRACE_FLAG_ENVIRONMENT) != 0u;
         outViewZ[p] = 1.0e6;
         outNormalRough[p] = float4(0.0, 0.0, 1.0, 1.0);
         outSpecular[p] = float4(0.0);
-        outDiffuse[p] = float4(0.0);
+        outDiffuse[p] = sky ? float4(max(result.radiance, float3(0.0)), 0.0) : float4(0.0);
         outAlbedo[p] = float4(0.0);
         outDirect[p] = float4(0.0);
         outSpecAlbedo[p] = float4(0.0);

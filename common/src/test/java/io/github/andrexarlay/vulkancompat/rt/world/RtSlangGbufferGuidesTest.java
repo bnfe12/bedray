@@ -64,7 +64,11 @@ class RtSlangGbufferGuidesTest {
     }
 
     @Test
-    void aSkyPixelLooksLikeSkyToTheDenoiser() {
+    void aSkyPixelLooksLikeSkyToTheDenoiser() throws java.io.IOException {
+        String pack = java.nio.file.Files.readString(java.nio.file.Path.of(
+            "src/main/resources/shaders/slang/denoise/nrd_pack.slang"));
+        assertTrue(pack.contains("if (pc.denoiser == 2u && !nrdInvalid3(input.diffuse.rgb))"),
+            "the RR pack forwards the sky colour of an ignored pixel; NRD keeps its zero");
         String source = read(ENTRY);
         String guides = block(source, "void pathTraceWriteGuides(");
         assertTrue(guides.contains("if (!sampleTrusted || !result.primary.valid) {"),
@@ -72,6 +76,8 @@ class RtSlangGbufferGuidesTest {
         assertTrue(guides.contains("outViewZ[p] = 1.0e6;"), "the sky depth rt_path.comp writes");
         assertTrue(guides.contains("outNormalRough[p] = float4(0.0, 0.0, 1.0, 1.0);"), "the flat sky normal");
         assertTrue(guides.contains("outAlbedo[p] = float4(0.0);"), "zero albedo keeps sky out of the demodulation");
+        assertTrue(guides.contains("outDiffuse[p] = sky ? float4(max(result.radiance, float3(0.0)), 0.0) : float4(0.0);"),
+            "but the sky colour reaches DLSS-RR, or every silhouette against the sky blends with black");
     }
 
     @Test
