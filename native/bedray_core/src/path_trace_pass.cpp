@@ -1475,7 +1475,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     trace_desc.command_buffer = desc.command_buffer;
     trace_desc.program = native_scene ? program_trace_scene_ : program_trace_;
     ProgramContract trace_contract{};
-    static_cast<void>(program_contract(core, trace_desc.program, trace_contract));
+    static_cast<void>(program_contract(core_, trace_desc.program, trace_contract));
     trace_desc.group_count_x = trace_contract.ray_generation ? desc.camera.width : groups(desc.camera.width);
     trace_desc.group_count_y = trace_contract.ray_generation ? desc.camera.height : groups(desc.camera.height);
     trace_desc.group_count_z = 1;
