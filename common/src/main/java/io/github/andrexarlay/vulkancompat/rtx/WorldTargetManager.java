@@ -102,6 +102,9 @@ public final class WorldTargetManager {
     private static final Matrix4f prevViewProj = new Matrix4f();
 
     private static boolean resetHistory = true;
+    /** True only when {@link #computeMatrices()} accepted this frame's camera; history advances only then. */
+    private static boolean cameraMatricesValidThisFrame = false;
+    private static long lastDegenerateCameraLogNanos = 0L;
     private static boolean inWorldPhase = false;
     /**
      * The hand is drawn into the low-resolution world target without motion vectors and with a depth buffer of its own,
@@ -290,21 +293,59 @@ public final class WorldTargetManager {
 
     /**
      * Computes invViewProj = (currProj * currViewRotation)^-1 and prevViewProj = prevProj * prevViewRotation.
+     * <p>
+     * A degenerate camera (the zero-quaternion first RT frame, a zero-size projection, a non-finite position) is not
+     * inverted: the last usable matrices stay in place, history is reset and the caller must skip this temporal frame.
+     * Feeding the NaN inverse to the native velocity contract disabled DLSS for the whole session (26.3/latest.log
+     * 2026-11-02 23:20:41: {@code non-finite invViewProj at byte 0 = NaN}).
+     *
+     * @return false when this frame's camera cannot produce a finite inverse view-projection
      */
-    public static void computeMatrices() {
-        if (currProjMatrix != null && currViewRotationMatrix != null) {
-            Matrix4f currViewProj = new Matrix4f(currProjMatrix).mul(currViewRotationMatrix);
-            currViewProj.invert(invViewProj);
-
-            if (prevProjMatrix != null && prevViewRotationMatrix != null && !resetHistory) {
-                prevProjMatrix.mul(prevViewRotationMatrix, prevViewProj);
-            } else {
-                prevViewProj.set(currViewProj);
-            }
-        } else {
-            invViewProj.identity();
-            prevViewProj.identity();
+    public static boolean computeMatrices() {
+        cameraMatricesValidThisFrame = false;
+        if (currCameraPos != null && !isFinite(currCameraPos)) {
+            resetHistory = true;
+            logDegenerateCamera("camera_position=" + currCameraPos);
+            return false;
         }
+        CameraMatrixGuard.Update update = CameraMatrixGuard.update(
+            currProjMatrix, currViewRotationMatrix, prevProjMatrix, prevViewRotationMatrix,
+            resetHistory, invViewProj, prevViewProj);
+        if (!update.usable()) {
+            resetHistory = true;
+            Matrix4f combined = currProjMatrix != null && currViewRotationMatrix != null
+                ? new Matrix4f(currProjMatrix).mul(currViewRotationMatrix) : null;
+            logDegenerateCamera(CameraMatrixGuard.describe(currProjMatrix, currViewRotationMatrix, combined));
+            return false;
+        }
+        if (update.resetHistory()) {
+            resetHistory = true;
+        }
+        cameraMatricesValidThisFrame = true;
+        return true;
+    }
+
+    private static void logDegenerateCamera(String detail) {
+        long now = System.nanoTime();
+        if (now - lastDegenerateCameraLogNanos < 1_000_000_000L) {
+            return;
+        }
+        lastDegenerateCameraLogNanos = now;
+        LOGGER.warn("[VKB-AUTOTEST] camera_matrices=degenerate {} (temporal frame skipped, history reset, upscaler kept)",
+            detail);
+    }
+
+    private static boolean isFinite(Vec3 value) {
+        return Double.isFinite(value.x) && Double.isFinite(value.y) && Double.isFinite(value.z);
+    }
+
+    /** Camera translation since the last submitted temporal frame; zero whenever the history was reset. */
+    private static Vec3 cameraDelta() {
+        if (currCameraPos == null || prevCameraPos == null || resetHistory
+            || !isFinite(currCameraPos) || !isFinite(prevCameraPos)) {
+            return Vec3.ZERO;
+        }
+        return currCameraPos.subtract(prevCameraPos);
     }
 
     /**
@@ -455,22 +496,29 @@ public final class WorldTargetManager {
     }
 
     private static void advanceFrameHistory() {
-        if (currProjMatrix != null) {
-            if (prevProjMatrix == null) {
-                prevProjMatrix = new Matrix4f(currProjMatrix);
-            } else {
-                prevProjMatrix.set(currProjMatrix);
+        // A skipped or degenerate frame must not become the previous frame: the next submitted temporal frame has to
+        // reproject against the last camera that actually produced motion vectors.
+        if (cameraMatricesValidThisFrame) {
+            if (currProjMatrix != null) {
+                if (prevProjMatrix == null) {
+                    prevProjMatrix = new Matrix4f(currProjMatrix);
+                } else {
+                    prevProjMatrix.set(currProjMatrix);
+                }
             }
-        }
-        if (currViewRotationMatrix != null) {
-            if (prevViewRotationMatrix == null) {
-                prevViewRotationMatrix = new Matrix4f(currViewRotationMatrix);
-            } else {
-                prevViewRotationMatrix.set(currViewRotationMatrix);
+            if (currViewRotationMatrix != null) {
+                if (prevViewRotationMatrix == null) {
+                    prevViewRotationMatrix = new Matrix4f(currViewRotationMatrix);
+                } else {
+                    prevViewRotationMatrix.set(currViewRotationMatrix);
+                }
             }
+            if (currCameraPos != null && isFinite(currCameraPos)) {
+                prevCameraPos = currCameraPos;
+            }
+            resetHistory = false;
         }
-        prevCameraPos = currCameraPos;
-        resetHistory = false;
+        cameraMatricesValidThisFrame = false;
     }
 
     /**
@@ -675,9 +723,10 @@ public final class WorldTargetManager {
         }
         depthCopiedThisFrame = false;
         ensureXessOutput(fullMain.width, fullMain.height);
-        computeMatrices();
-        final Vec3 camDelta = currCameraPos != null && prevCameraPos != null && !resetHistory
-            ? currCameraPos.subtract(prevCameraPos) : Vec3.ZERO;
+        if (!computeMatrices()) {
+            return false; // degenerate camera: skip this temporal frame instead of failing the upscaler for the session
+        }
+        final Vec3 camDelta = cameraDelta();
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             throw new IllegalStateException("XeSS: no Vulkan device");
@@ -779,9 +828,10 @@ public final class WorldTargetManager {
         if (worldTarget == null || depthCopy == null || motionVectorsTarget == null) {
             return;
         }
-        computeMatrices();
-        final Vec3 camDelta = currCameraPos != null && prevCameraPos != null && !resetHistory
-            ? currCameraPos.subtract(prevCameraPos) : Vec3.ZERO;
+        if (!computeMatrices()) {
+            return;
+        }
+        final Vec3 camDelta = cameraDelta();
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             return;
@@ -1079,6 +1129,10 @@ public final class WorldTargetManager {
         levelProjection.identity();
         levelCameraOrigin.zero();
         resetHistory = true;
+        cameraMatricesValidThisFrame = false;
+        lastDegenerateCameraLogNanos = 0L;
+        invViewProj.identity();
+        prevViewProj.identity();
         currProjMatrix = null;
         prevProjMatrix = null;
         currViewRotationMatrix = null;
