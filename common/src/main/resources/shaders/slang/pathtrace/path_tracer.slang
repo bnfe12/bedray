@@ -697,7 +697,18 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             break;
         }
 
-        if (surfaceIsHole(surface, options.alphaCutoff)) {
+        // A thin pane (glass, stained glass, panes; not a fluid) is a coloured filter on the same ray, as in the legacy
+        // renderer: it tints the throughput by its transmittance and costs no scattering event. As a BSDF vertex every
+        // face spent one of the path's bounces, so five layers of glass cut a 4-bounce path short and rendered black
+        // (autotest rt_look G scene, 2026-11-02). The pane's own Fresnel reflection is not traced here.
+        bool paneFilter = surface.material.alphaMode == AlphaMode.Translucent
+            && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u
+            && surface.material.transmission >= 1.0;
+        if (paneFilter) {
+            throughput *= surfaceTransmittance(surface, ray.direction);
+            if (pathMaxComponent(throughput) <= 0.0) break;
+        }
+        if (paneFilter || surfaceIsHole(surface, options.alphaCutoff)) {
             // A cutout hole is not a surface: continue the same ray just past
             // the candidate without spending a scattering event.
             float holeStep = pathTraceHoleStep(hit.t);

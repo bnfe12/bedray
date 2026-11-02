@@ -30,7 +30,7 @@ class RtSlangCutoutAdvanceTest {
     /** The whole hole branch, up to and including the {@code continue} that keeps it a free step. */
     private static String holeBranch() {
         String tracer = read(TRACER);
-        int at = tracer.indexOf("if (surfaceIsHole(surface, options.alphaCutoff)) {");
+        int at = tracer.indexOf("if (paneFilter || surfaceIsHole(surface, options.alphaCutoff)) {");
         assertTrue(at >= 0, "the tracer no longer treats a cutout hole as a step");
         String body = block(tracer, at);
         assertTrue(body.contains("continue;"), "a hole must not consume a scattering event");

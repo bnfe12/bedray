@@ -89,6 +89,12 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     /** The accumulate switch that belongs to this profile: the ray mode has its own, the path mode its own. */
+    /**
+     * Geometric candidates one path may walk: cutout holes and glass panes cost a step but no bounce. Eight ended a ray
+     * that crossed a few glass blocks (two faces each) and returned black.
+     */
+    static final int MAX_SURFACE_STEPS = 32;
+
     private boolean accumulateRequested() {
         return rayMode ? RtSettings.raysAccumulation() : RtSettings.accumulate();
     }
@@ -458,7 +464,7 @@ public final class RtSlangPathPass implements RtPass {
                 | (params.cameraStatic ? RtPathTraceSlangPass.PT_STATIC : 0)
                 | (params.flipY ? RtPathTraceSlangPass.PT_FLIP_Y : 0) : 0);
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
-            8, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
+            MAX_SURFACE_STEPS, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
             params.emitterCamRelY, params.emitterCamRelZ, emitterCandidates(),
             params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, 0,
