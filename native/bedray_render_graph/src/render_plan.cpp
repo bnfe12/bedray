@@ -55,8 +55,7 @@ std::uint64_t traversal_capabilities(TraversalMode mode) noexcept {
             return static_cast<std::uint64_t>(PlanCapability::hybrid_traversal) |
                    static_cast<std::uint64_t>(PlanCapability::ray_query);
         case TraversalMode::bitmask_hdda:
-            return static_cast<std::uint64_t>(PlanCapability::bitmask_hdda) |
-                   static_cast<std::uint64_t>(PlanCapability::ray_query);
+            return static_cast<std::uint64_t>(PlanCapability::bitmask_hdda);
     }
     return 0;
 }
