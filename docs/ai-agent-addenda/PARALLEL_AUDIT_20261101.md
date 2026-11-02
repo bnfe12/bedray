@@ -1,5 +1,17 @@
 # Parallel migration audit — 2026-11-01
 
+The 2026-11-02 follow-up expanded to the full stack and compared the manifesto
+with current source and primary API/research references. Findings and decisions
+are in [STACK_IMPLEMENTATION_PLAN.md](../STACK_IMPLEMENTATION_PLAN.md).
+Confirmed cache lifetime/integrity, No-RT capability, FAST cloud intersection,
+direct/exposure radiometry, trusted-sky mean and FFM post-acceptance ownership
+defects were repaired and tested. The complete denoiser signal contract remains
+implementation work in
+[DENOISER_SIGNAL_CONTRACT_PLAN.md](../DENOISER_SIGNAL_CONTRACT_PLAN.md).
+This follow-up does not turn the remaining full-stack features into completed
+work. Exact combined evidence: source `7d7bf47`, 1,099 tests, 29 AOT entries and
+native CI `41368013821`, recorded in `VERIFICATION_LOG.md`.
+
 Audit baseline: `e40109b` on `refactor/slang-pipeline`. The current upstream
 renderer and its fixes take priority over the paused local preparation. Historical
 GLSL ray-effects prototypes are not reintroduced into the renderer that replaced

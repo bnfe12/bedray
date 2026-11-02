@@ -4,6 +4,60 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-11-02 — Expanded stack audit, cache and guide corrections (L1/L2)
+
+Exact combined source `7d7bf47` passed **1,099 Java tests: 1,090 passed, nine
+skipped**, zero failures/errors (2m7s). All **29 AOT entries** rebuilt with pinned
+Slang 2026.20. This includes the eight upstream commits through `2346ac3`:
+sky exposure offset, RR silhouette colour, glass filtering, cutout revert,
+surface-step budget, stage timings and settings. Those changes were merged
+without removing either side's fixes.
+
+Native Windows CI [41368013821](https://github.com/bnfe12/bedray/actions/runs/41368013821)
+on `88b39d3` passed **28 core + one scene + one lifetime** tests, with baseline
+15+1+1 also green. Final native sources are byte-identical. The earlier cache
+integration CI [41367395527](https://github.com/bnfe12/bedray/actions/runs/41367395527)
+on `90f9660` passed the same counts. Cache-only Java source `cc96f5e` passed
+1,081 tests (1,072 passed, nine skipped, 2m23s); 23 focused cache/driver-gate
+checks passed independently with all AOT entries built (2m46s).
+
+Changes integrated through PRs #51–#56:
+
+* Native program registration borrows the existing host pipeline cache for one
+  synchronized call. Binary files are bounded, checksummed and checked against
+  the Vulkan header/device; closed device identities survive repeated numerical
+  address reuse. No extra native cache owner or GPU wait was added.
+* A bitmask-only render plan no longer falsely requires hardware ray query.
+  This is a planning repair, not a claim that shared Slang Tier 1 is wired.
+* FAST clouds reject behind-camera/parallel plane hits while keeping valid
+  near-horizontal intersections and the existing FANCY/shading equations.
+* Denoiser compose applies exposure in both output modes. Primary direct stores
+  the actual camera-weighted HDR contribution and uses the accepted-sample
+  denominator. Trusted sky survives sample mean into the upstream RR pack fix.
+* FFM core ownership is reserved before native creation. Post-native Java OOM
+  cannot hide a live core from library cleanup, and acknowledged destruction
+  clears the primitive ownership milestone before later Java cleanup.
+
+The first shader full run found a signed-zero assertion in the new plane test
+and an old source guard anchored on the former direct expression. Both were
+corrected with the geometric/order assertions retained. After merging upstream,
+`941b752` passed 1,090 tests; the final run above also covers the additional sky
+classification, repeated device-address reuse and core-acceptance regressions.
+
+The owner expanded the task to deferred technologies and requested better
+alternatives. Three source/primary-reference audits produced the requirement
+ledger and decisions in [STACK_IMPLEMENTATION_PLAN.md](STACK_IMPLEMENTATION_PLAN.md).
+The complete NRD lobe/hit-distance and RR reflection-guide work remains open in
+[DENOISER_SIGNAL_CONTRACT_PLAN.md](DENOISER_SIGNAL_CONTRACT_PLAN.md). No full-stack
+completion, GPU image, vendor execution, startup/FPS gain or owner acceptance
+is claimed by these build/unit checks.
+
+Commands/settings match the preceding JDK 25/offline entries. Local text evidence
+outside the repository: `work/stack-final-acceptance.log`,
+`work/stack-quality-upstream-full.log`, `work/shared-pipeline-cache-full.log`,
+`work/shared-pipeline-cache-native-ci.log` and `work/no-rt-plan-native-ci.log`.
+No generated binaries, proprietary dependencies or SDKs were committed.
+
 ## 2026-11-01 — Resource owners, temporal retirement and typed sky (L1/L2)
 
 The combined source committed as `2bd6cea` passed **1,067 Java tests: 1,058

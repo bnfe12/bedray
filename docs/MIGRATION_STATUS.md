@@ -1,5 +1,12 @@
 # BedRay 2.0 migration status
 
+On 2026-11-02 the owner expanded the task to all previously deferred stack
+technologies/modes and requested a comparison with better approaches. The
+requirement-level ledger, actual implementation gaps, corrected API assumptions
+and execution order are in [STACK_IMPLEMENTATION_PLAN.md](STACK_IMPLEMENTATION_PLAN.md).
+The migration backlog below is a subset of that expanded task; completing its
+source transfers does not complete the full architecture manifesto.
+
 Snapshot of 2026-11-01, branch `refactor/slang-pipeline`. Levels: L1 builds (slangc / javac / MSVC), L2 unit and
 source tests, L3 the game starts and the feature runs (log line), L4 effect visible on a screenshot, L5 confirmed by the
 owner. Evidence for every line is in [VERIFICATION_LOG.md](VERIFICATION_LOG.md) under the named commit.
@@ -23,6 +30,11 @@ Fixes found from the 2026-10-31 logs:
   log-on-change line).
 
 ## Left to reach 100 %
+
+For the original migration backlog only; the expanded stack has additional
+implementation work, not merely final GPU checks. The full NRD/RR signal split
+and hit-distance contract is tracked in
+[DENOISER_SIGNAL_CONTRACT_PLAN.md](DENOISER_SIGNAL_CONTRACT_PLAN.md).
 
 1. **5.7 Final gates**
    - owner playtest of the checklist below, with `latest.log` and screenshots;

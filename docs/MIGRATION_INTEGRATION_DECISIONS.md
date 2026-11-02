@@ -12,8 +12,8 @@ native path; L1/L2 checks do not establish GPU/game behavior or visual parity.
 2. **Pass shape and resource identity.** `RecordingKind::opaque_group` wraps
    `PathTracePass::render`, including trace, optional two-checker spatial and
    display. It has no pretend single-dispatch shape/push block or graph-local
-   bindings for its private images. Its real 18-or-25/6/9 descriptor and push contracts
-   are validated by the existing program registry/pass before recording. The
+   bindings for its private images. Its actual reflected descriptor and push
+   contracts are validated by the existing program registry/pass before recording. The
    native scene flag selects the existing `path_trace_scene` contract. Output
    and depth views remain host-owned, GENERAL and retained through completion.
 3. **Barrier authority.** The opaque pass owns private image transitions and
