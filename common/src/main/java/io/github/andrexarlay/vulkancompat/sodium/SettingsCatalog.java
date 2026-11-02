@@ -337,10 +337,10 @@ public final class SettingsCatalog {
                 + "in a per-pixel path record and reuses it in the next frames, so bounced light settles faster while you move. "
                 + "Only rough, non-glowing surfaces seen through a diffuse bounce are reused; sky, glass, metal, water and "
                 + "glowing blocks keep the per-frame path. With an empty history the picture is exactly the one without it.",
-            "FPS: low to medium (one extra visibility ray per pixel for a reused path) and about 0.6 GB of video memory at "
-                + "1080p (two 144-byte records per pixel), allocated only while the switch is on.",
-            "Path Tracing only, with ReSTIR Direct Light on, on the default (Java-recorded) backend. The native backend "
-                + "(-Dvkbridge.rt.nativePathTrace=true) has no path reservoir and ignores the switch.",
+            "FPS: HIGH. Measured on an RTX 5060 Ti at 1485x835 (DLSS Balanced to 1440p), 1 path, 3 bounces: the trace "
+                + "takes about 3x longer (16 -> 45 ms in an open scene, 25 -> 41 ms indoors at night), plus a 6-8 ms spatial "
+                + "pass. About 0.6 GB of video memory at 1080p (two 144-byte records per pixel), only while the switch is on.",
+            "Path Tracing only, with ReSTIR Direct Light on.",
             "A still cannot show reuse: the difference is the noise of a moving camera over several frames. Not yet confirmed "
                 + "in a live game frame.");
         putNoImage("adaptive_quality", Tier.ADVANCED, "Adaptive Quality",
@@ -517,7 +517,7 @@ public final class SettingsCatalog {
         putNoImage("rt_debug_view", Tier.EXPERT, "RT Debug Buffer", "Replaces the world with an internal buffer (normals, depth, albedo...). For diagnosis only.",
             "", "", "A diagnostic view, not a look.");
         putNoImage("voxel_quality_profile", Tier.ESSENTIAL, "Voxel Quality", "Fast lowers the memory budget and turns off the diffuse bounce and layered transparent optics. Beautiful enables them. Both follow Minecraft's distance; Custom unlocks those settings. The upscaler, frame generation and lighting stay editable in every profile.", "", "Experimental renderer.", "No voxel quality comparison has been captured.");
-        putNoImage("path_quality_profile", Tier.ESSENTIAL, "Path Tracing Quality", "Fast traces one path per pixel with 2 bounces over 256 blocks; Beautiful traces two paths with 4 bounces over 512 blocks. Custom unlocks the three values. The upscaler, frame generation and lighting stay editable in every profile; the denoiser choice is never changed by a profile.", "", "Hardware Path Tracing only.", "Existing previews show individual hardware settings, not these profiles.");
+        putNoImage("path_quality_profile", Tier.ESSENTIAL, "Path Tracing Quality", "Fast traces one path per pixel with 2 bounces over 256 blocks; Beautiful traces one path with 3 bounces over 512 blocks. Custom unlocks the three values. The upscaler, frame generation and lighting stay editable in every profile; the denoiser choice is never changed by a profile.", "", "Hardware Path Tracing only.", "Existing previews show individual hardware settings, not these profiles.");
         putNoImage("voxel_distance_auto", Tier.ADVANCED, "Voxel Distance: Follow Minecraft", "Request the game's render distance. Only loaded sections can become resident; actual coverage depends on the capture and memory budgets.", "", "Voxel renderer only.", "Coverage is reported by runtime statistics.");
         putNoImage("voxel_distance_chunks", Tier.ADVANCED, "Voxel Distance (chunks)", "Requested horizontal radius when Follow Minecraft is off. Increasing this value does not load or generate chunks.", "", "Voxel renderer only.", "Coverage is reported by runtime statistics.");
         putNoImage("voxel_memory_budget_mib", Tier.ADVANCED, "Voxel GPU Memory Budget", "Maximum GPU scene storage in MiB. The provider prioritizes nearby sections; memory pressure can reduce resident coverage below the requested distance.", "", "Voxel renderer only.", "Memory use is reported by runtime statistics.");

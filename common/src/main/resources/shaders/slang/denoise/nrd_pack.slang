@@ -90,7 +90,12 @@ NrdPackedSample nrdPackSample(NrdPackInput input, NrdPackPush pc) {
     result.diffuse = float4(0.0);
     result.specular = float4(0.0);
     result.motion = float4(0.0);
-    if (nrdIgnored(input.viewZ, pc)) return result;
+    if (nrdIgnored(input.viewZ, pc)) {
+        // DLSS-RR filters across silhouettes, so it gets the sky colour; NRD keeps the zero it skips.
+        if (pc.denoiser == 2u && !nrdInvalid3(input.diffuse.rgb))
+            result.diffuse = float4(clamp(input.diffuse.rgb, float3(0.0), float3(NRD_FP16_MAX)), 1.0);
+        return result;
+    }
     float4 nr = input.normalRoughness;
     float3 normal = nr.xyz * rsqrt(dot(nr.xyz, nr.xyz) + 1.0e-9);
     result.normalRoughness = nrdPackNormalRoughness(normal, nr.w, pc);

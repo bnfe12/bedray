@@ -23,7 +23,7 @@ final class RtGpuTimer {
     static final boolean ENABLED = !"false".equalsIgnoreCase(System.getProperty("vkrtx.rt.gpuTimers", "true"));
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     private static final int RING = 4;
-    private static final int WINDOW_FRAMES = 900;
+    private static final int WINDOW_FRAMES = Integer.getInteger("vkrtx.rt.gpuTimerWindow", 900);
 
     private final VkDevice device;
     private final String label;
@@ -72,6 +72,19 @@ final class RtGpuTimer {
         harvest(slot);
         VK10.vkCmdResetQueryPool(cmd, pool, slot * marks, marks);
         frame++;
+    }
+
+    /**
+     * The renderer's timer while one exists, for the passes inside the "rays" span: the path backend marks its own
+     * dispatches (trace, the two spatial stages, display) so a slow frame names the stage, not just "rays".
+     */
+    static RtGpuTimer active;
+    static final int SPAN_TRACE = 4, SPAN_PT_SPATIAL = 5, SPAN_DI_SPATIAL = 6, SPAN_DISPLAY = 7;
+
+    /** Stamps {@code span} on the active timer when it has that span; a no-op without one. */
+    static void mark(VkCommandBuffer cmd, int span, boolean end) {
+        RtGpuTimer timer = active;
+        if (timer != null && span < timer.names.length) timer.stamp(cmd, span, end);
     }
 
     /** Stamp of span {@code span}: {@code end} false = begin, true = end. */

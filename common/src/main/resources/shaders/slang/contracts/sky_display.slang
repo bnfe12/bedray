@@ -7,7 +7,7 @@ import "contracts/math.slang";
 static const uint SKY_DISPLAY_PACKET_BYTES = 576u;
 static const uint SKY_DISPLAY_ATLAS_WORD_COUNT_BYTE = 72u;
 static const uint SKY_DISPLAY_COLOR_DAY_BYTE = 488u;
-static const uint SKY_DISPLAY_EXPOSURE_BYTE = 36u;
+static const uint SKY_DISPLAY_EXPOSURE_BYTE = 44u;   // RtStatsLayout.EXPOSURE (36 is the high word of the emitter address)
 static const uint SKY_DISPLAY_SUN_BYTE = 256u;
 static const uint SKY_DISPLAY_MOON_BYTE = 272u;
 static const uint SKY_DISPLAY_FOG_BYTE = 288u;
