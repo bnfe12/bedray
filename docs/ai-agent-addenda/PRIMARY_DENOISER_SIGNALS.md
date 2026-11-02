@@ -55,7 +55,9 @@ Remaining acceptance and limitations:
 - RC/PT/medium bypass, disocclusion, thin geometry, underwater transitions,
   SNORM material leakage and actual SDK output need GPU/image evaluation.
 - No fix for the previously reported first-frame RR velocity rejection or a
-  measured FPS improvement is claimed here.
+  measured FPS improvement is claimed here. 2026-11-02 follow-up: `f107816`
+  guards the singular first-frame view-projection before the velocity uniforms
+  are filled; see VERIFICATION_LOG.md. That is L1/L2, not a live confirmation.
 
 The CPU harness executes the actual production Slang signal, mean and pack/
 compose helpers through generated C++, covering 16 conservation, lobe-distance,
