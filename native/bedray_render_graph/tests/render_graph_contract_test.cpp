@@ -372,9 +372,15 @@ void render_plan_selects_optional_capabilities() {
 
     RenderPlan all;
     all.traversal = TraversalMode::bitmask_hdda;
+    const auto bitmask = static_cast<std::uint64_t>(PlanCapability::bitmask_hdda);
+    check(plan_passes(all, bitmask, passes, resolution, error), "No-RT traversal resolves without hardware ray query");
+    check((resolution.required_capabilities & query) == 0, "No-RT plan never requires ray-query support");
+    check(!plan_passes(all, 0, passes, resolution, error)
+        && error.code == PlanErrorCode::unsupported_traversal && error.missing_capabilities == bitmask,
+        "No-RT still requires an implemented bitmask backend");
     all.features = all_render_features;
     const std::uint64_t all_caps = static_cast<std::uint64_t>(PlanCapability::bitmask_hdda) |
-        query | static_cast<std::uint64_t>(PlanCapability::restir_di) |
+        static_cast<std::uint64_t>(PlanCapability::restir_di) |
         static_cast<std::uint64_t>(PlanCapability::restir_pt) |
         static_cast<std::uint64_t>(PlanCapability::radiance_cascades) |
         denoise | static_cast<std::uint64_t>(PlanCapability::upscale);
