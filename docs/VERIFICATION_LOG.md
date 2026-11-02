@@ -4,6 +4,28 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-11-02 — Native-resolution target and additional technology audit (L0)
+
+After PR #59 the owner clarified that the performance target excludes all
+upscalers: native 1920x1080 at stable 60 real FPS, without reduced/dynamic
+internal resolution or generated-frame substitution. Source `97abf82` was
+checked for additional mechanisms and compared with primary NVIDIA, RTXDI,
+VMA, NRD and PresentMon documentation. The prioritized findings are recorded
+in [NATIVE_1080P_60_AUDIT.md](NATIVE_1080P_60_AUDIT.md).
+
+Confirmed additional gaps include native AS compaction/build policy, aggregate
+VRAM budgeting/suballocation, local light proposals, SER live-state profiling,
+coordinated sampling and raw-frame acceptance measurement. Existing engine
+timestamps/window averages are real; the Python automation prototype consumes
+nonexistent markers, calls a nonexistent loader task and supplies unconsumed
+properties. Its README incorrectly claimed working Tracy/native automation;
+that documentation is corrected. The prototype was not launched and its code
+is not claimed repaired by this audit.
+
+This is a documentation/source audit, with no renderer change or new FPS
+measurement. The prior 1,120 Java / 35 AOT / 33 native checks remain evidence
+for the unchanged renderer source, not evidence of native 60 FPS.
+
 ## 2026-11-02 — Optional SER and primary-lobe denoiser signals (L1/L2)
 
 The final combined Java source `7fa5d404f5d4377054a1685e1fc1968a9b91f4f5`

@@ -12,6 +12,9 @@ is merged through PR #58; [primary-lobe denoiser signals](ai-agent-addenda/PRIMA
 document the current split/distance/bypass implementation and remaining vendor
 contracts. SER is experimental and opt-in. The requested 1080p/60 FPS on the
 owner's RTX 5060 Ti 8 GiB is an unmeasured target, not an acceptance result.
+It means native 1920x1080 with no upscaler, reduced/dynamic internal resolution
+or generated-frame substitution. Additional performance obligations and tooling
+findings are in [NATIVE_1080P_60_AUDIT.md](NATIVE_1080P_60_AUDIT.md).
 
 Snapshot of 2026-11-01, branch `refactor/slang-pipeline`. Levels: L1 builds (slangc / javac / MSVC), L2 unit and
 source tests, L3 the game starts and the feature runs (log line), L4 effect visible on a screenshot, L5 confirmed by the

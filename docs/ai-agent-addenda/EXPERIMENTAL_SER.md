@@ -41,9 +41,10 @@ The native path barriers cover both compute and ray stages only on a device
 that enabled the ray-pipeline feature. Scene producer barriers cover subsequent
 shader stages, including acceleration-structure reads.
 
-The owner's performance target is 1920x1080 at a stable 60 real frames/s on
-RTX 5060 Ti 8 GiB, Ryzen 5 5600XT and 16 GiB RAM. The corresponding whole-frame
-budget is 16.67 ms. Frame generation does not count toward that target. This
+The owner's performance target is native 1920x1080 at a stable 60 real frames/s
+on RTX 5060 Ti 8 GiB, Ryzen 5 5600XT and 16 GiB RAM, without DLSS SR, FSR, XeSS,
+other spatial/temporal upscaling or reduced/dynamic internal resolution. The
+whole-frame budget is 16.67 ms. Frame generation does not count toward that target. This
 is an acceptance target, not a measured FPS guarantee. Compare identical scene,
 camera, settings, warm cache and completed GPU timestamps across compute,
 raygen and SER; record median/p95 frame time, memory pressure and images. Keep
