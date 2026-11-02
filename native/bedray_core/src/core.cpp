@@ -785,16 +785,17 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(
     return BEDRAY_ERROR_INTERNAL;
 }
 
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
+static BedrayStatus register_program(
     BedrayCore* core,
     const BedrayProgramDesc* desc,
+    VkPipelineCache pipeline_cache,
     uint64_t* out_program,
     BedrayError* error) try {
     clear_error(error);
+    if (out_program != nullptr) *out_program = 0;
     if (core == nullptr || desc == nullptr || out_program == nullptr) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/desc/out_program is null");
     }
-    *out_program = 0;
     if (desc->abi_version != BEDRAY_CORE_ABI_VERSION) {
         return fail(error, BEDRAY_ERROR_ABI_MISMATCH,
             "ABI mismatch: host=%u core=%u", desc->abi_version, BEDRAY_CORE_ABI_VERSION);
@@ -959,7 +960,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
     pipeline_info.stage.pName = program->entry_point.c_str();
     pipeline_info.layout = program->pipeline_layout;
     result = core->create_compute_pipelines(
-        core->device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &program->pipeline);
+        core->device, pipeline_cache, 1, &pipeline_info, nullptr, &program->pipeline);
     if (result != VK_SUCCESS) {
         const BedrayStatus status = vk_status(result);
         return fail(error, status, "vkCreateComputePipelines(%s) failed: VkResult=%d",
@@ -978,6 +979,18 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate program state");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception registering program");
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program(
+    BedrayCore* core, const BedrayProgramDesc* desc, uint64_t* out_program, BedrayError* error) {
+    return register_program(core, desc, VK_NULL_HANDLE, out_program, error);
+}
+
+BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program_cached(
+    BedrayCore* core, const BedrayProgramDesc* desc, uint64_t pipeline_cache,
+    uint64_t* out_program, BedrayError* error) {
+    return register_program(core, desc, reinterpret_cast<VkPipelineCache>(static_cast<uintptr_t>(pipeline_cache)),
+        out_program, error);
 }
 
 BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
