@@ -285,6 +285,7 @@ bool create_scratch_buffer(Scene& scene, uint64_t bytes, Buffer& out, BedrayScen
         return fail(error, BEDRAY_SCENE_ERROR_LIMIT, "scratch device address alignment overflow") == BEDRAY_SCENE_OK;
     }
     buffer.address = align_up(buffer.address, scene.scratch_alignment);
+    buffer.size = bytes; // capacity after rebasing, excluding the alignment padding
     out = buffer;
     return true;
 }
