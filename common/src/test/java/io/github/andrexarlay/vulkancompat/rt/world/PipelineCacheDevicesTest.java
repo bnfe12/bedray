@@ -41,4 +41,25 @@ class PipelineCacheDevicesTest {
         retained.close(handle -> assertEquals(17, handle));
         assertTrue(retained.isClosed());
     }
+
+    @Test void addressReuseCannotForgetAnyStillReachableRetiredDeviceIdentity() {
+        var registry = new PipelineCacheDevices<Object>(); var first = new Object(); var second = new Object();
+        var old = registry.forUse(first, 9, owner -> owner.initialized(17)); old.close(handle -> {});
+        var next = registry.forUse(second, 9, owner -> owner.initialized(29)); next.close(handle -> {});
+        assertSame(old, registry.forUse(first, 9, owner -> fail("retired first device resurrected")));
+        assertThrows(IllegalStateException.class, () -> old.use(handle -> fail("destroyed device")));
+        assertSame(next, registry.forUse(second, 9, owner -> fail("retired second device resurrected")));
+    }
+
+    @Test void staleCloseOfOldWrapperCannotReplaceTheNewDeviceTombstone() {
+        var registry = new PipelineCacheDevices<Object>(); var first = new Object(); var second = new Object();
+        var old = registry.forUse(first, 9, owner -> owner.initialized(17)); old.close(handle -> {});
+        var next = registry.forUse(second, 9, owner -> owner.initialized(29));
+        registry.forClose(first, 9).close(handle -> fail("old cache freed twice"));
+        assertEquals(29L, next.use(handle -> handle).longValue());
+        next.close(handle -> {});
+        registry.forClose(first, 9).close(handle -> fail("stale close after second retirement"));
+        assertSame(next, registry.forUse(second, 9, owner -> fail("stale close erased the second tombstone")));
+        assertThrows(IllegalStateException.class, () -> next.use(handle -> fail("destroyed second device")));
+    }
 }

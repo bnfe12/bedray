@@ -1,25 +1,32 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import java.lang.ref.WeakReference;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 
 /** Device identity plus address prevents closed-cache resurrection and permits genuine VkDevice address reuse. */
 final class PipelineCacheDevices<D> {
-    private record Scope<D>(WeakReference<D> device, PipelineCacheOwner owner) {}
-    private final Map<Long, Scope<D>> devices = new HashMap<>();
+    private record Scope<D>(WeakReference<D> device, long address, PipelineCacheOwner owner) {}
+    // Device creation is rare. Retain every reachable identity, including old generations of the same address.
+    private final List<Scope<D>> devices = new ArrayList<>();
 
     synchronized PipelineCacheOwner forUse(D device, long address, Consumer<PipelineCacheOwner> initialize) {
         Objects.requireNonNull(device);
-        devices.values().removeIf(scope -> scope.owner.isClosed() && scope.device.get() == null);
-        Scope<D> scope = devices.get(address);
-        if (scope != null && scope.device.get() == device) return scope.owner;
-        if (scope != null && !scope.owner.isClosed())
-            throw new IllegalStateException("pipeline cache device identity changed before retirement; device=0x" + Long.toHexString(address));
+        devices.removeIf(scope -> scope.owner.isClosed() && scope.device.get() == null);
+        for (Scope<D> scope : devices) {
+            if (scope.device.get() == device) {
+                if (scope.address != address) throw new IllegalStateException("pipeline cache device address changed");
+                return scope.owner;
+            }
+        }
+        for (Scope<D> scope : devices) {
+            if (scope.address == address && !scope.owner.isClosed())
+                throw new IllegalStateException("pipeline cache device identity changed before retirement; device=0x" + Long.toHexString(address));
+        }
         var owner = new PipelineCacheOwner(0L, null);
-        devices.put(address, new Scope<>(new WeakReference<>(device), owner));
+        devices.add(new Scope<>(new WeakReference<>(device), address, owner));
         // All bookkeeping allocations precede the first native cache allocation.
         try { initialize.accept(owner); }
         catch (RuntimeException | Error failure) { owner.initializationFailed(); throw failure; }
