@@ -68,10 +68,12 @@ Existing-feature transfers in the current working tree:
 
 Finish migrating the existing renderer functionality into the new Slang/C++
 architecture first, starting with path tracing. Java retains Minecraft capture,
-loader integration and host submission/completion evidence. New rendering
-methods, vendor extensions and additional stack technologies are deferred until
-the existing functionality has migrated. The architecture manifesto remains the
-target design; its advanced features are not prerequisites for this transfer.
+loader integration and host submission/completion evidence. On 2026-11-02 the
+owner expanded the task to the deferred modes and technologies and requested
+comparison with better approaches. Their complete inventory, API corrections,
+dependencies and implementation order are now in
+[STACK_IMPLEMENTATION_PLAN.md](STACK_IMPLEMENTATION_PLAN.md). This expanded
+scope is work to implement, not an assertion that the full stack already exists.
 
 The path atlas sampler now belongs to the C++ core and is borrowed by the Java
 adapter through `bedray_core_atlas_sampler`. The core releases it after all its
@@ -303,7 +305,6 @@ common/src/main/resources/shaders/slang/
 │   ├── radiance_cascades_store.slang  legacy compatibility facade
 │   └── rc_trace_segments.slang        obsolete experiment, not exported, not compiled by default
 ├── radiance_cascades.slang            cascade/probe/ray addressing (existing)
-├── render_plan.slang                  RenderPlan, modes, capability mask (existing)
 ├── types.slang, bindings.slang        legacy 1:1 scaffold, kept as reference
 ├── sampling.slang, brdf.slang         pure math, still used by the new modules
 ├── tonemap.slang, ray_backend.slang   legacy scaffold, kept as reference
@@ -430,7 +431,7 @@ before the first dispatch.
 | `outSpecAlbedo` | 32 | RGBA8, F0 guide with the legacy rule `metal > 0.5 \|\| roughness < 0.6 ? (metal ? albedo : F0) : 0` |
 | `outMotionBuffer` | 33 | `RWStructuredBuffer<float4>`, one 16-byte element per render pixel: the primary hit's world motion (prev minus cur) and the `rt_path.comp:616` trust flag in `w`; the NRD `IN_MV` channel `rt_pack_nrd.comp` reads at `StatsBuf.motionAddr` |
 | `ptReservoirs` | 36 | the ReSTIR PT ring of `ReferencePathTraceBackend`: two halves of one 144-byte `RestirPtReservoir` per pixel (`2 * width * height * 144`, 597.2 MB at 1080p), allocated only while a frame sets `PATH_TRACE_OPTION_RESTIR_PT` (bit 17) and zeroed on a PT reset; a one-record stand-in otherwise. The native core always binds its stand-in and clears bits 17..21 |
-| `outPathStats` | 37 | the frame's whole 576-byte stats slot (`RtStatsLayout.SLOT_STRIDE`, bound at the slot's own 64-byte-aligned offset); the trace adds the F3 split into words 140..143 (`RtStatsLayout.PATH_REJECTS`: refused pixels with a non-finite fault, pixels with a truncated path, pixels with a shadow walk past its filter budget, metered pixels) over `frame_stats`' 1-in-16 tiles. The host zeroes the block each frame. A one-word stand-in otherwise, which the shader refuses to write; the native core always binds that stand-in, so its split reads n/a |
+| `outPathStats` | 37 | the frame's whole 576-byte stats slot (`RtStatsLayout.SLOT_STRIDE`, bound at the slot's own 64-byte-aligned offset); the trace adds the F3 split into words 140..143 (`RtStatsLayout.PATH_REJECTS`: refused pixels with a non-finite fault, pixels with a truncated path, pixels with a shadow walk past its filter budget, metered pixels) over `frame_stats`' 1-in-16 tiles. The host zeroes the block each frame. A one-word stand-in otherwise, which the shader refuses to write; matching current native adapters forward the real slot through `render_path_trace_ext`; old clients keep the stand-in and read n/a |
 
 The seven guide images exist for DLSS-RR only. When the host has no complete
 set, it binds pass-owned 1×1 dummies and leaves `PATH_TRACE_OPTION_GBUFFER`
@@ -1158,7 +1159,7 @@ candidates, not a validated or active runtime.
 |---|---|---|
 | ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
 | Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/field_mapping.slang`, `field_gather.slang`, `field_transport.slang`, `passes/rc_field_build_scene.slang`, `passes/rc_path_trace_scene.slang` | v2 finite-window field integrated into the native path-trace group: `rc_field_build_scene` builds five haloed cubemap levels (terminal trace, then reconstruct 3→0 with compose-before-average bridges) and `rc_path_trace_scene` gathers reflected direct light for a primary diffuse continuation; the core records five dependent dispatches, a 288-byte metadata UBO and the 32-byte-per-cell tails (bindings 34/35) under a 192 MiB default budget. Switch `-Dvkbridge.rt.radianceCascades=true`, which requires `nativePathTrace` + `nativeScene` and both AOT entries; the axis is `-Dvkbridge.rt.rcBaseAxis` (8/16/32). Temporal field reuse: each cell blended with the previous consecutive field (builder binding 38, weight 0.8, 288-byte metadata). The v1 typed atlas (`rc_probe_trace.slang`) is host-agnostic source, not the field the renderer dispatches, and its legacy float4 resolve must not be wired to the typed atlas. Evidence is the native contract plus `RtSlangRcFieldTest`; no owner-verified frame yet. |
-| ReSTIR PT | `experimental/restir_pt.slang` + `restir/pt_temporal.slang` + `restir/pt_spatial.slang` | **Temporal stage live behind `path_restir_pt` (default off, Java reference backend only; the native core binds a stand-in). Spatial stage live behind its child row `path_restir_pt_spatial` (default on): `restir_pt_spatial(_scene)` pools four distinct neighbours through `ptSpatialReuse` into the other half, which the next frame's temporal import reads (derivation §12; `RestirPtSpatialStageTest`, 8 mutations each killed).** The first ray of a pixel records its diffuse continuation's first edge; the reservoir owns exactly the certified-diffuse, non-emitting first vertex and every other term stays in the path; every draw of an eligible receiver is an attempt (`ptAddEmptyAttempt`); history is keyed on the reprojected camera-relative receiver; record measured at 144 B (std430). Evidence: `RestirPtTemporalStageTest` (identity to 1e-9 on 200k cases, attempt accounting, ownership, layout), 7 shader mutations each killed by one guard, CTest stand-in test. No GPU smoke run, no owner-verified frame. Earlier history: Source candidate in the tree and imported by no root (a test enforces it). v3 derives the change of measure for the fixed-first-vertex shift: reuse is restricted to a certified diffuse first vertex, the stored density transports as `q_new = q_old * G_old / G_new`, and the merge multiplies the target ratio by the Jacobian `G_new / G_old` (sky/emitter, delta and glossy first vertices are rejected). v4 makes the reservoir's `M` the number of attempts: `ptAddPath` admits every valid first edge (v3 gated it on `ptPathReusable`, which conditioned the estimate on a recorded hit and scaled it by `1/P(recorded)`), while the certified-class gate stays in the merge/temporal/spatial steps that transport a density. Derivation and CPU validation: `docs/RESTIR_GI_DERIVATION.md`; `RestirPtChangeOfMeasureTest` and `RestirPtReservoirInvariantTest`; the module compiles through the pinned `slangc`. Still missing: a pass, a manifest-checked host and GPU evidence. |
+| ReSTIR PT | `experimental/restir_pt.slang`, `restir/pt_temporal.slang`, `restir/pt_spatial.slang`, `restir_pt_spatial(_scene)` | Temporal and optional spatial stages are integrated in the Java reference backend and the native core. Native owns the two-half 144-byte reservoir ring through NATIVE_PT and `configure_path_trace_pt`; the feature is default off and budgeted. Primary diffuse eligibility, change of measure, attempt accounting and first-frame invariants have CPU/source tests. Runtime/GPU acceptance and exit from experimental status remain open; see MIGRATION_STATUS.md and RESTIR_GI_DERIVATION.md. |
 | Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `restir_pt_spatial`, `restir_pt_spatial_scene`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
 | Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
 | Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
@@ -1171,11 +1172,13 @@ filter or an opaque wall.
 
 ## Render plan
 
-`render_plan.slang` already contains `RenderWorldMode` (VoxelVanilla,
-VoxelHybrid, FullHardware), `RenderProfile` (Fast, Quality), the four lighting
-algorithms plus Vanilla/ScreenSpace, traversal/denoiser modes and a capability
-mask (`HARDWARE_RT`, `SER`, `OMM`, `DLSS_RR`, `FRAME_GENERATION`).  The GPU-tier
-table from the first draft is now an input to this plan, not a shader variant:
+The native `bedray_render_graph` render-plan contract selects hardware, hybrid
+or bitmask traversal and optional lighting/denoiser/upscale passes by enabled
+capabilities. The old `render_plan.slang` is no longer in the source tree. A plan
+enum does not establish a live backend: shared Tier 1/2 integration is remaining
+work in STACK_IMPLEMENTATION_PLAN.md. The GPU-tier table below is a design
+proposal; availability must come from enabled capabilities and implemented
+backends, and quality/performance must be measured:
 
 | Tier | GPUs | Tracing | Denoiser | Upscaler |
 |---|---|---|---|---|
@@ -1464,10 +1467,11 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    `invalid_pct`, `trunc_pct` and `vis_overflow_pct` - n/a unless the metered word equals
    `RtStatsMetering`'s own count (`RtPathRejectBreakdownTest`). `invalid_pct` is part of
    `reject_pct`; the rest of `reject_pct` is `RC_UNRESOLVED`. The native core binds a
-   one-word stand-in at 37 (it has no slot to lend the trace), so on that backend the split
-   stays n/a until the core forwards the slot.
+   legacy one-word stand-in only for older clients. The current Java native backend
+   forwards the actual host stats slot through `render_path_trace_ext`, guarded by
+   its additive feature/export; it no longer inherently lacks the reject split.
 3. **ReSTIR PT** — the temporal stage is live behind `path_restir_pt` (default off;
-   `restir/pt_temporal.slang`, binding 36, Java reference backend; derivation §11).
+   `restir/pt_temporal.slang`, binding 36, Java reference and native backends; derivation §11).
    The spatial stage is live too (`restir_pt_spatial` / `restir_pt_spatial_scene`, child row
    `path_restir_pt_spatial`; derivation §12): it pools neighbours with `ptSpatialReuse` into the
    other half, and the next frame's temporal stage resolves the pooled winner with
@@ -1478,7 +1482,8 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    derived and CPU-validated (diffuse first vertex, `G_new/G_old` Jacobian; see
    `docs/RESTIR_GI_DERIVATION.md`), and v4 makes its attempt count match the estimator
    (every valid first edge is an attempt; only certified paths may merge). Reuse cannot
-   ship until the module has a pass, a manifest-checked host and a GPU smoke run.
+   leave experimental status until a GPU smoke run and owner acceptance; the pass
+   and manifest-checked host/native adapters are now implemented.
 4. **Entity shading parity** — closed in `e1bcd82`: the ring is traced, moving
    parts reproject, an End Portal is drawn as the procedural starfield, mob skin
    gets its **Sobel auto-normal**, and glowing parts are **next-event
