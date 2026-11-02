@@ -129,9 +129,10 @@ class RtSlangSampleRejectionTest {
 
         String tracer = read(TRACER);
         int emission = tracer.indexOf("result.radiance += throughput * surface.material.emission;");
-        int direct = tracer.indexOf("result.radiance += throughput * direct;");
+        int contribution = tracer.indexOf("float3 directContribution = throughput * direct;");
+        int direct = tracer.indexOf("result.radiance += directContribution;");
         int sampled = tracer.indexOf("BSDFSample bsdf = bsdfSample(surface.material, view, normal,");
-        assertTrue(emission >= 0 && direct > emission && sampled > direct,
+        assertTrue(emission >= 0 && contribution > emission && direct > contribution && sampled > direct,
             "emission and next-event estimation must both be accumulated before the lobe is drawn, or the stop "
                 + "throws away light this vertex earned");
         assertEquals("truncated", flagSetBy(tracer, "if (!bsdf.valid || bsdf.pdf <= 0.0) {"),

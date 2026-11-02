@@ -247,7 +247,7 @@ struct PathPrimaryGuide {
     float3 normal;        // view-facing shading normal
     float3 albedo;        // linear diffuse albedo, floored for the demodulation
     float3 specularF0;    // interface reflectance at normal incidence
-    float3 direct;        // this sample's next-event estimate at the primary vertex
+    float3 direct;        // primary next-event contribution, including camera-medium throughput
     float  roughness;     // linear roughness (0..1)
     float  metallic;      // 0 = dielectric, 1 = metal
     bool   valid;
@@ -864,9 +864,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (direct.r + direct.g + direct.b > 0.0) {
             result.flags |= PATH_TRACE_FLAG_FILTERED_SHADOW;
         }
-        // The guide channels of the surface the camera sees, captured here because this is where its material, its
-        // view-facing normal and its own next-event estimate exist.  `receiver.primary` is true exactly once per path,
-        // at the first accepted surface; the throughput there is still 1, so `direct` is the primary vertex's own term.
+        // The direct guide is the same camera-weighted contribution that enters raw HDR. Camera water/medium
+        // transport can already have attenuated throughput before the first surface.
+        float3 directContribution = throughput * direct;
         if (receiver.primary) {
             result.primary.valid = true;
             result.primary.position = hit.position;
@@ -875,9 +875,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.primary.specularF0 = surface.material.f0;
             result.primary.roughness = surface.material.roughness;
             result.primary.metallic = surface.material.metallic;
-            result.primary.direct = direct;
+            result.primary.direct = directContribution;
         }
-        result.radiance += throughput * direct;
+        result.radiance += directContribution;
 
         // ReSTIR PT owns the diffuse continuation of an eligible primary vertex.  Eligibility is a property of the receiver,
         // decided before the lobe is drawn: whatever this sample then does, it is one attempt of that receiver's reservoir.

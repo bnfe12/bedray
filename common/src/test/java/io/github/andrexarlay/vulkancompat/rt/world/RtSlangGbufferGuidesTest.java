@@ -38,7 +38,7 @@ class RtSlangGbufferGuidesTest {
         assertTrue(capture.contains("result.primary.normal = normal;"), "the view-facing normal the BSDF used");
         assertTrue(capture.contains("result.primary.albedo = clamp(surface.material.albedo, float3(0.02), float3(1.0));"),
             "the demodulation needs the same albedo the radiance was built from, floored as in rt_path.comp");
-        assertTrue(capture.contains("result.primary.direct = direct;"), "the primary vertex's own NEE, not a re-trace");
+        assertTrue(capture.contains("result.primary.direct = directContribution;"), "the same camera-weighted NEE as raw HDR");
         assertTrue(capture.contains("result.primary.roughness = surface.material.roughness;"), "the material roughness");
         assertTrue(capture.contains("result.primary.metallic = surface.material.metallic;"),
             "the specular-albedo guide rule needs the metal flag");

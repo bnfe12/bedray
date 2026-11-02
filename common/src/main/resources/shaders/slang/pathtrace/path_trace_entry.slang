@@ -189,6 +189,7 @@ struct PathTraceMean {
     uint   entityHits;   // believed samples whose primary landed on a captured model
     uint   accepted;
     uint   hits;         // believed samples whose primary decoded a surface
+    uint   sky;          // accepted primary misses which actually reached the environment
     uint   traced;
     uint   flags;        // PATH_TRACE_FLAG_* of every sample, believed or refused: what the F3 split counts
 };
@@ -209,6 +210,7 @@ PathTraceMean emptyPathTraceMean() {
     mean.entityHits = 0u;
     mean.accepted = 0u;
     mean.hits = 0u;
+    mean.sky = 0u;
     mean.traced = 0u;
     mean.flags = 0u;
     return mean;
@@ -224,6 +226,7 @@ void accumulatePathTraceSample(inout PathTraceMean mean, PathTraceResult result)
     mean.accepted += 1u;
     mean.acceptedRadiance += result.radiance;
     if (!result.primary.valid) {
+        mean.sky += (result.flags & PATH_TRACE_FLAG_ENVIRONMENT) != 0u ? 1u : 0u;
         return;
     }
     mean.hits += 1u;
@@ -254,6 +257,8 @@ PathTraceResult pathTraceMeanResult(PathTraceMean mean, out bool sampleTrusted) 
     result.radiance = mean.acceptedRadiance / float(mean.accepted);
     sampleTrusted = true;
     if (mean.hits == 0u) {
+        // Carry only a proven trusted-sky classification; mean.flags also contains refused samples.
+        if (mean.sky == mean.accepted) result.flags = PATH_TRACE_FLAG_ENVIRONMENT;
         return result;   // every ray reached the sky: no vertex to average, the writers take the sky pattern
     }
     float hits = float(mean.hits);
@@ -263,7 +268,8 @@ PathTraceResult pathTraceMeanResult(PathTraceMean mean, out bool sampleTrusted) 
     result.primary.normal = length(normal) > 1.0e-4 ? normalize(normal) : float3(0.0, 0.0, 1.0);
     result.primary.albedo = mean.albedo / hits;
     result.primary.specularF0 = mean.specularF0 / hits;
-    result.primary.direct = mean.direct / hits;
+    // Radiometric terms use the HDR sample denominator; a sky sample contributes zero primary direct light.
+    result.primary.direct = mean.direct / float(mean.accepted);
     result.primary.roughness = mean.roughness / hits;
     result.primary.metallic = mean.metallic / hits;
     result.firstHitDistance = mean.firstHit / hits;
