@@ -43,6 +43,15 @@ int main() {
     desc.spirv = spirv; desc.spirv_word_count = 5;
     BedrayError error{};
     uint64_t program = 99;
+    require(bedray_core_program_feature_mask() == (BEDRAY_PROGRAM_RAYGEN | BEDRAY_PROGRAM_SER_NV));
+    desc.flags = 0x80000000u;
+    require(bedray_core_register_program_cached(core, &desc, 77, &program, &error) == BEDRAY_ERROR_INVALID_ARGUMENT && program == 0);
+    desc.flags = BEDRAY_PROGRAM_SER_NV;
+    require(bedray_core_register_program_cached(core, &desc, 77, &program, &error) == BEDRAY_ERROR_INVALID_ARGUMENT && program == 0);
+    desc.flags = BEDRAY_PROGRAM_RAYGEN;
+    require(bedray_core_register_program_cached(core, &desc, 77, &program, &error) == BEDRAY_ERROR_UNSUPPORTED && program == 0);
+    require(modules == 0 && layouts == 0 && pipelines == 0);
+    desc.flags = 0;
     require(bedray_core_register_program_cached(nullptr, &desc, 77, &program, &error) == BEDRAY_ERROR_INVALID_ARGUMENT && program == 0);
     require(bedray_core_register_program_cached(core, &desc, 77, &program, &error) == BEDRAY_OK && program != 0);
     require(received_cache == reinterpret_cast<VkPipelineCache>(77));

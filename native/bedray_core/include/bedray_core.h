@@ -67,7 +67,9 @@ typedef enum BedrayCapability {
     /* Needed by SPIR-V that does 64-bit integer work, including physical-storage-buffer
        addressing (the legacy section table stores device addresses). */
     BEDRAY_CAP_SHADER_INT64 = 1u << 9,
-    BEDRAY_CAP_STORAGE_IMAGE_EXTENDED_FORMATS = 1u << 10
+    BEDRAY_CAP_STORAGE_IMAGE_EXTENDED_FORMATS = 1u << 10,
+    BEDRAY_CAP_RAY_TRACING_PIPELINE = 1u << 11,
+    BEDRAY_CAP_INVOCATION_REORDER_NV = 1u << 12
 } BedrayCapability;
 
 typedef struct BedrayError {
@@ -139,6 +141,19 @@ typedef struct BedrayProgramDesc {
     uint32_t binding_count;
     uint32_t push_constant_bytes;
 } BedrayProgramDesc;
+
+/* Additive program kinds. Existing flags=0 remains a compute program.
+ * RAYGEN runs a ray-generation-only pipeline with RayQuery traversal; no
+ * miss/hit groups are needed. FrameDesc group_count_* then means launch
+ * dimensions in pixels, not compute workgroups. No ABI-v2 layout changes. */
+typedef enum BedrayProgramFlags {
+    BEDRAY_PROGRAM_RAYGEN = 1u << 0,
+    BEDRAY_PROGRAM_SER_NV = 1u << 1
+} BedrayProgramFlags;
+
+/* Query before requesting optional device capabilities. An older ABI-v2 DLL
+ * has no export and remains compute-only. */
+BEDRAY_API uint32_t BEDRAY_CALL bedray_core_program_feature_mask(void);
 
 typedef struct BedrayResource {
     uint32_t binding;

@@ -1173,8 +1173,10 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
             ? (VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR)
             : 0;
         const uint32_t memory_count = as_work ? 1u : 0u;
+        /* The host may consume this scene from compute ray queries or a ray-generation pipeline.
+           ALL_COMMANDS covers either without requiring the scene ABI to assume rayTracingPipeline was enabled. */
         scene.fns.cmd_pipeline_barrier(command_buffer, src_stage,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
             memory_count, as_work ? &memory : nullptr,
             static_cast<uint32_t>(barriers.size()), barriers.data(), 0, nullptr);
     }

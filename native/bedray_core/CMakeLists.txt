@@ -39,6 +39,7 @@ enable_testing()
 
 add_library(bedray_core SHARED
     src/core.cpp
+    src/ray_generation_pipeline.cpp
     src/path_trace_pass.cpp src/rc_field_pass.cpp
     src/bloom_pass.cpp
     src/particles_pass.cpp
@@ -150,6 +151,16 @@ if(MSVC)
 endif()
 add_test(NAME bedray_pipeline_cache COMMAND bedray_pipeline_cache_test)
 
+add_executable(bedray_ray_generation_pipeline_test tests/ray_generation_pipeline_test.cpp src/ray_generation_pipeline.cpp)
+target_link_libraries(bedray_ray_generation_pipeline_test PRIVATE bedray_gpu_resources)
+target_include_directories(bedray_ray_generation_pipeline_test PRIVATE include "${BEDRAY_VULKAN_HEADERS}")
+target_compile_definitions(bedray_ray_generation_pipeline_test PRIVATE BEDRAY_CORE_BUILD WIN32_LEAN_AND_MEAN NOMINMAX)
+if(MSVC)
+    target_compile_options(bedray_ray_generation_pipeline_test PRIVATE /W4 /permissive- /EHsc /utf-8)
+    set_property(TARGET bedray_ray_generation_pipeline_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_test(NAME bedray_ray_generation_pipeline COMMAND bedray_ray_generation_pipeline_test)
+
 add_executable(bedray_sampler_ownership_test tests/sampler_ownership_test.cpp src/path_trace_pass.cpp src/rc_field_pass.cpp src/bloom_pass.cpp src/particles_pass.cpp src/sodium_pass.cpp src/velocity_pass.cpp src/nrd_pack_pass.cpp src/fg_prepare_pass.cpp src/spatial_pass.cpp src/volumetric_pass.cpp)
 target_link_libraries(bedray_sampler_ownership_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_sampler_ownership_test PRIVATE
@@ -162,6 +173,11 @@ if(MSVC)
     set_property(TARGET bedray_sampler_ownership_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 add_test(NAME bedray_sampler_ownership_test COMMAND bedray_sampler_ownership_test)
+
+# These white-box targets include core.cpp and its optional pipeline owner.
+foreach(core_test bedray_descriptor_cache_test bedray_pipeline_cache_test bedray_sampler_ownership_test)
+    target_sources(${core_test} PRIVATE src/ray_generation_pipeline.cpp)
+endforeach()
 
 # White-box test: includes src/path_trace_pass.cpp directly, stubs the core's
 # render entry points and program registry, and drives the pass through a fake

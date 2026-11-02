@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.rt.slang;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import com.mojang.renderpearl.backend.vulkan.VulkanQueue;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLocator;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreNative;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayGpuImagesNative;
@@ -90,6 +91,11 @@ public final class SlangRuntime implements AutoCloseable {
 
         BedrayCoreNative library = BedrayCoreNative.load(location.file());
         try {
+            int requestedCapabilities = enabledCapabilities;
+            enabledCapabilities = SlangProgramFeatures.compatibleCapabilities(enabledCapabilities, library.programFeatureMask());
+            if (enabledCapabilities != requestedCapabilities)
+                LOGGER.info("[VKB-RAYGEN] core_features=0x{} capabilities_removed=0x{} reason=native_backend_unavailable",
+                    Integer.toHexString(library.programFeatureMask()), Integer.toHexString(requestedCapabilities ^ enabledCapabilities));
             VkDevice vkDevice = device.vkDevice();
             VkPhysicalDevice physical = vkDevice.getPhysicalDevice();
             VkInstance instance = device.instance().vkInstance();
@@ -137,6 +143,19 @@ public final class SlangRuntime implements AutoCloseable {
     /** True when every optional capability bit the pass was compiled to require is enabled on this runtime. */
     public boolean supports(int requiredCapabilities) {
         return (requiredCapabilities & ~enabledCapabilities) == 0;
+    }
+
+    /** The extension may expose hit objects while reordering itself remains a no-op. */
+    public boolean supportsInvocationReordering() {
+        if (!supports(BedrayCoreLayouts.CAP_INVOCATION_REORDER_NV)) return false;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var reorder = org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderPropertiesNV.calloc(stack)
+                .sType$Default();
+            var properties = org.lwjgl.vulkan.VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(reorder);
+            org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceProperties2(physicalDevice, properties);
+            return reorder.rayTracingInvocationReorderReorderingHint()
+                == org.lwjgl.vulkan.NVRayTracingInvocationReorder.VK_RAY_TRACING_INVOCATION_REORDER_MODE_REORDER_NV;
+        }
     }
 
     /**

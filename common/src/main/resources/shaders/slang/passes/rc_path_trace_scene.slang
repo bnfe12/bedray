@@ -8,6 +8,9 @@ import "contracts/contracts.slang";
 import "pathtrace/path_trace_entry.slang";
 import "traversal/hardware_traversal.slang";
 import "traversal/scene_traversal.slang";
+#ifdef BEDRAY_NVSER
+import "traversal/reordering_traversal.slang";
+#endif
 
 // Terrain and the entity ring are one scene: the same TLAS holds both, and the
 // instance's custom-index bit is what tells a mob quad from a section quad.
@@ -54,9 +57,15 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 [[vk::binding(35, 0)]] StructuredBuffer<RCSegment> rcTails;
 [[vk::push_constant]] PathTracePush pc;
 
+#ifdef BEDRAY_RAYGEN
+[shader("raygeneration")]
+void main() {
+    uint3 tid = DispatchRaysIndex();
+#else
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
+#endif
     // This frame's captured models, shared with the legacy entry.
     EntityAtlas entityAtlas;
     entityAtlas.rects = entityRects;
@@ -87,7 +96,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.selfAvatarTriCount = pc.entityState.z;
     RCPathDiffuseField field;
     field.field = rcField; field.tails = rcTails; field.frameIndex = frame.frame.x;
-    pathTraceEntryWithField(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
+#ifdef BEDRAY_NVSER
+    ReorderingTraversal<SceneTraversal> reorderedTraversal;
+    reorderedTraversal.base = traversal;
+#define BEDRAY_PATH_TRAVERSAL reorderedTraversal
+#else
+#define BEDRAY_PATH_TRAVERSAL traversal
+#endif
+    pathTraceEntryWithField(BEDRAY_PATH_TRAVERSAL, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
         outDepth, outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer,
         frame, blockMaterials, emitters, reservoirs, ptReservoirs, outPathStats, pc, field);
+#undef BEDRAY_PATH_TRAVERSAL
 }

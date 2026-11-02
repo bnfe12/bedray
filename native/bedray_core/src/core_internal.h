@@ -24,11 +24,13 @@ struct DeviceFns {
     gpu::BufferFunctions buffer_functions{};
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
     PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
+    VkPipelineStageFlags path_shader_stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 };
 
 struct ProgramContract {
     std::uint32_t push_constant_bytes = 0;
     std::uint32_t binding_count = 0;
+    bool ray_generation = false;
 };
 
 // Read-only queries over the core's registered programs. They do not retain or

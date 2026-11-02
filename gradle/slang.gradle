@@ -1,6 +1,6 @@
 // AOT compilation of Slang entry passes (Bedray 2.0).
 //
-// One file under src/main/resources/shaders/slang/passes is one compute entry
+// One file under src/main/resources/shaders/slang/passes is one compute or ray-generation entry
 // point named `main`. slangc compiles it to SPIR-V plus a small JSON manifest
 // that mirrors the descriptor contract the native core has to register with
 // Vulkan. Both land in build/generated/slang, which is a resource root: they are
@@ -30,6 +30,7 @@ def slangRoot = file('src/main/resources/shaders/slang')
 def passesDir = new File(slangRoot, 'passes')
 def generatedRoot = layout.buildDirectory.dir('generated/slang')
 def slangProfile = (project.findProperty('slangProfile') ?: 'cs_6_5').toString()
+def slangRaygenProfile = (project.findProperty('slangRaygenProfile') ?: 'lib_6_5').toString()
 def slangPasses = (project.findProperty('slangPasses') ?: '**/*.slang').toString()
 // The arguments shared by every pass. They are also a declared task input, so a
 // profile or include-path change invalidates cached SPIR-V even when no source
@@ -195,8 +196,51 @@ def ABI_SPIRV_CAPABILITIES = [
     11  : [name: 'Int64', abi: 1 << 9],                        // BEDRAY_CAP_SHADER_INT64
     49  : [name: 'StorageImageExtendedFormats', abi: 1 << 10],
     4472: [name: 'RayQueryKHR', abi: 1 << 0],                  // BEDRAY_CAP_RAY_QUERY
-    5347: [name: 'PhysicalStorageBufferAddresses', abi: 1 << 2] // BEDRAY_CAP_BUFFER_DEVICE_ADDRESS
+    4479: [name: 'RayTracingKHR', abi: 1 << 11],               // BEDRAY_CAP_RAY_TRACING_PIPELINE
+    5347: [name: 'PhysicalStorageBufferAddresses', abi: 1 << 2], // BEDRAY_CAP_BUFFER_DEVICE_ADDRESS
+    5383: [name: 'ShaderInvocationReorderNV', abi: 1 << 12]    // BEDRAY_CAP_INVOCATION_REORDER_NV
 ]
+
+/** Execution model of main. Slang's ray-generation reflection can omit its stage, so SPIR-V owns this contract. */
+def spirvStageOf = { File spv ->
+    byte[] bytes = spv.bytes
+    if (bytes.length < 20 || bytes.length % 4 != 0) {
+        throw new GradleException("[slang] ${spv.name}: invalid SPIR-V word stream")
+    }
+    def buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    if (buffer.getInt(0) != 0x07230203) {
+        throw new GradleException("[slang] ${spv.name}: invalid SPIR-V magic")
+    }
+    String stage = null
+    for (int at = 5; at < bytes.length.intdiv(4);) {
+        int instruction = buffer.getInt(at * 4)
+        int count = instruction >>> 16
+        int opcode = instruction & 0xFFFF
+        if (count == 0 || count > bytes.length.intdiv(4) - at) {
+            throw new GradleException("[slang] ${spv.name}: invalid instruction at word ${at}")
+        }
+        if (opcode == 15) { // OpEntryPoint execution-model id name interfaces...
+            if (count < 4) throw new GradleException("[slang] ${spv.name}: truncated OpEntryPoint")
+            int start = (at + 3) * 4, end = start
+            while (end < (at + count) * 4 && bytes[end] != 0) ++end
+            if (end == (at + count) * 4) {
+                throw new GradleException("[slang] ${spv.name}: unterminated entry-point name")
+            }
+            String name = new String(bytes, start, end - start, java.nio.charset.StandardCharsets.UTF_8)
+            if (name == 'main') {
+                if (stage != null) throw new GradleException("[slang] ${spv.name}: duplicate main entry point")
+                int model = buffer.getInt((at + 1) * 4)
+                stage = [5: 'compute', 5313: 'raygeneration'][model]
+                if (stage == null) {
+                    throw new GradleException("[slang] ${spv.name}: unsupported main execution model ${model}")
+                }
+            }
+        }
+        at += count
+    }
+    if (stage == null) throw new GradleException("[slang] ${spv.name}: no main execution model")
+    stage
+}
 
 /** SPIR-V capabilities referenced by the module. */
 def spirvCapabilitiesOf = { File spv ->
@@ -256,6 +300,7 @@ def compileSlang = tasks.register('compileSlang') {
     inputs.dir(slangRoot).withPropertyName('slangSources')
     inputs.dir(new File(slangRoot.parentFile, 'third_party')).withPropertyName('spatialVendorHeaders')
     inputs.property('slangProfile', slangProfile)
+    inputs.property('slangRaygenProfile', slangRaygenProfile)
     inputs.property('slangPasses', slangPasses)
     inputs.property('slangArguments', slangArgs.join(' '))
     // The binary participates by content hash, which covers its version and local
@@ -299,7 +344,15 @@ def compileSlang = tasks.register('compileSlang') {
             File spv = new File(spvDir, name + '.spv')
             File reflection = new File(reflectionDir, name + '.reflection.json')
 
-            List<String> command = [slangc.absolutePath] + slangArgs + [
+            boolean ser = relative.endsWith('.ser.slang')
+            boolean raygen = ser || relative.endsWith('.raygen.slang')
+            String passProfile = raygen ? slangRaygenProfile : slangProfile
+            List<String> passArgs = raygen
+                ? ['-target', 'spirv', '-profile', passProfile, '-entry', 'main', '-stage', 'raygeneration',
+                   '-matrix-layout-column-major', '-I', slangRoot.absolutePath, '-emit-spirv-directly']
+                : slangArgs
+            if (ser) passArgs += ['-capability', 'spvShaderInvocationReorderNV']
+            List<String> command = [slangc.absolutePath] + passArgs + [
                 '-o', spv.absolutePath,
                 '-reflection-json', reflection.absolutePath,
                 pass.absolutePath
@@ -324,6 +377,11 @@ def compileSlang = tasks.register('compileSlang') {
             def entryPoint = reflected.entryPoints?.find { it.name == 'main' }
             if (entryPoint == null) {
                 throw new GradleException("[slang] ${relative}: no 'main' entry point in the reflection")
+            }
+            String stage = spirvStageOf(spv)
+            String expectedStage = raygen ? 'raygeneration' : 'compute'
+            if (stage != expectedStage) {
+                throw new GradleException("[slang] ${relative}: main execution model is ${stage}, expected ${expectedStage}")
             }
             // Only the bindings the entry point actually uses belong in its pipeline layout. A module may declare
             // globals that another entry point needs; including them here would force the host to bind resources
@@ -420,7 +478,8 @@ def compileSlang = tasks.register('compileSlang') {
                     }
                 }
             }
-            List<Integer> groupSize = (entryPoint.threadGroupSize ?: [1, 1, 1])*.asType(Integer)
+            List<Integer> groupSize = stage == 'raygeneration' ? [1, 1, 1]
+                : (entryPoint.threadGroupSize ?: [1, 1, 1])*.asType(Integer)
 
             byte[] source = pass.bytes
             String sourceHash = MessageDigest.getInstance('SHA-256').digest(source).encodeHex().toString()
@@ -431,8 +490,8 @@ def compileSlang = tasks.register('compileSlang') {
                 source           : 'passes/' + relative,
                 sourceSha256     : sourceHash,
                 entryPoint       : 'main',
-                stage            : (entryPoint.stage ?: 'compute').toString(),
-                profile          : slangProfile,
+                stage            : stage,
+                profile          : passProfile,
                 descriptorSet    : 0,
                 threadGroupSize  : groupSize,
                 pushConstantBytes: pushConstantBytes,

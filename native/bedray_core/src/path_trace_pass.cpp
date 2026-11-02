@@ -330,7 +330,7 @@ void transition_image(const DeviceFns& fns, VkCommandBuffer command, VkImage ima
         : static_cast<VkAccessFlags>(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     barrier.dstAccessMask = static_cast<VkAccessFlags>(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     fns.cmd_pipeline_barrier(command,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        fns.path_shader_stages, fns.path_shader_stages,
         0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
@@ -338,9 +338,10 @@ void entry_barrier(const DeviceFns& fns, VkCommandBuffer command) {
     VkMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = static_cast<VkAccessFlags>(VK_ACCESS_MEMORY_WRITE_BIT);
-    barrier.dstAccessMask = static_cast<VkAccessFlags>(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    barrier.dstAccessMask = static_cast<VkAccessFlags>(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
+        | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
     fns.cmd_pipeline_barrier(command,
-        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, fns.path_shader_stages,
         0, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
@@ -350,7 +351,7 @@ void compute_barrier(const DeviceFns& fns, VkCommandBuffer command) {
     barrier.srcAccessMask = static_cast<VkAccessFlags>(VK_ACCESS_SHADER_WRITE_BIT);
     barrier.dstAccessMask = static_cast<VkAccessFlags>(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     fns.cmd_pipeline_barrier(command,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        fns.path_shader_stages, fns.path_shader_stages,
         0, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
@@ -1473,8 +1474,10 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     trace_desc.abi_version = BEDRAY_CORE_ABI_VERSION;
     trace_desc.command_buffer = desc.command_buffer;
     trace_desc.program = native_scene ? program_trace_scene_ : program_trace_;
-    trace_desc.group_count_x = groups(desc.camera.width);
-    trace_desc.group_count_y = groups(desc.camera.height);
+    ProgramContract trace_contract{};
+    static_cast<void>(program_contract(core_, trace_desc.program, trace_contract));
+    trace_desc.group_count_x = trace_contract.ray_generation ? desc.camera.width : groups(desc.camera.width);
+    trace_desc.group_count_y = trace_contract.ray_generation ? desc.camera.height : groups(desc.camera.height);
     trace_desc.group_count_z = 1;
     trace_desc.resource_count = static_cast<std::uint32_t>(stats_index + (stats_binding ? 1u : 0u));
     trace_desc.resources = trace_resources.data();

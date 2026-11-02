@@ -50,7 +50,7 @@ class SlangPassLibraryTest {
             SlangPassManifest manifest = pass.manifest();
             assertEquals(name, manifest.name());
             assertEquals(0, manifest.descriptorSet(), "ABI v2 has one descriptor set");
-            assertEquals("compute", manifest.stage());
+            assertTrue(List.of("compute", "raygeneration").contains(manifest.stage()), manifest.name());
             assertTrue(manifest.pushConstantBytes() <= 128, "push constants fit the Vulkan minimum");
             assertTrue(pass.wordCount() > 5, "SPIR-V carries at least the header");
             assertEquals(pass.wordCount(), manifest.spirvWordCount());

@@ -53,6 +53,9 @@ public module path_trace_pass;
 import "contracts/contracts.slang";
 import "pathtrace/path_trace_entry.slang";
 import "traversal/legacy_section_traversal.slang";
+#ifdef BEDRAY_NVSER
+import "traversal/reordering_traversal.slang";
+#endif
 
 // Terrain and the entity ring are one scene: the same TLAS holds both, and the
 // instance's custom-index bit is what tells a mob quad from a section quad.
@@ -97,9 +100,15 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 
 [[vk::push_constant]] PathTracePush pc;
 
+#ifdef BEDRAY_RAYGEN
+[shader("raygeneration")]
+void main() {
+    uint3 tid = DispatchRaysIndex();
+#else
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
+#endif
     // This frame's captured models.  The buffers are bound at the ring slot's
     // own offset, so the bound length is the frame's vertex and triangle count:
     // a frame with nothing captured binds one-element dummies and decodes zero
@@ -130,7 +139,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // past it; every other ray of the path crosses it like any other geometry.
     traversal.selfAvatarTriStart = pc.entityState.y;
     traversal.selfAvatarTriCount = pc.entityState.z;
-    pathTraceEntry(traversal, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
+#ifdef BEDRAY_NVSER
+    ReorderingTraversal<LegacySectionTraversal> reorderedTraversal;
+    reorderedTraversal.base = traversal;
+#define BEDRAY_PATH_TRAVERSAL reorderedTraversal
+#else
+#define BEDRAY_PATH_TRAVERSAL traversal
+#endif
+    pathTraceEntry(BEDRAY_PATH_TRAVERSAL, entities, tid, outImage, albedoAtlas, outMotion, materialAtlas, normalAtlas,
         outDepth, outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect, outSpecAlbedo, outMotionBuffer,
         frame, blockMaterials, emitters, reservoirs, ptReservoirs, outPathStats, pc);
+#undef BEDRAY_PATH_TRAVERSAL
 }

@@ -85,6 +85,7 @@ struct ProgramBinding {
 struct ProgramInfo {
     std::uint32_t push_bytes;
     std::vector<ProgramBinding> bindings;
+    bool ray_generation = false;
 };
 
 std::map<std::uint64_t, ProgramInfo> g_programs;
@@ -263,6 +264,7 @@ bool program_contract(BedrayCore*, std::uint64_t handle, ProgramContract& out) n
     }
     out.push_constant_bytes = it->second.push_bytes;
     out.binding_count = static_cast<std::uint32_t>(it->second.bindings.size());
+    out.ray_generation = it->second.ray_generation;
     return true;
 }
 
@@ -1984,7 +1986,28 @@ void test_native_pt_shutdown_does_not_require_an_off_frame() {
     CHECK(fake::faults == 0);
 }
 
+void test_ray_generation_launch_dimensions_preserve_compute_postprocessing() {
+    Fixture fixture;
+    g_programs[kTraceProgram].ray_generation = true;
+    g_programs[kTraceSceneProgram].ray_generation = true;
+    for (bool native_scene : {false, true}) {
+        BedrayPathTraceFrameDesc frame = valid_frame(native_scene ? 0x9912 : 0x9911);
+        frame.camera.width = 65;
+        frame.camera.height = 41;
+        if (native_scene) frame.flags |= BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE;
+        const auto before = fake::render_calls.size();
+        CHECK_STATUS(fixture.render(frame), BEDRAY_OK);
+        CHECK(fake::render_calls.size() == before + 2);
+        const auto& trace = fake::render_calls[before];
+        CHECK(trace.group_x == 65 && trace.group_y == 41 && trace.group_z == 1);
+        const auto& display = fake::render_calls[before + 1];
+        CHECK(display.group_x == 9 && display.group_y == 6 && display.group_z == 1);
+        CHECK(fixture.release(frame.command_buffer) == BEDRAY_OK);
+    }
+}
+
 int main() {
+    test_ray_generation_launch_dimensions_preserve_compute_postprocessing();
     test_configure_validation();
     test_render_validation();
     test_successful_frames_and_payloads();

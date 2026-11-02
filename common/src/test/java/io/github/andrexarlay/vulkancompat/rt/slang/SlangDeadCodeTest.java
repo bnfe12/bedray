@@ -42,7 +42,13 @@ class SlangDeadCodeTest {
             if (!pass.startsWith("passes/")) continue;
             String name = pass.substring("passes/".length(), pass.length() - ".slang".length()).replace('/', '.');
             String base = name.substring(name.lastIndexOf('.') + 1);
-            if (!hosts.contains("\"" + name + "\"") && !hosts.contains("\"" + base + "\"")) orphans.add(pass);
+            boolean schedulingVariant = base.equals("raygen") || base.equals("ser");
+            String transport = schedulingVariant ? name.substring(0, name.lastIndexOf('.')) : name;
+            boolean selectedVariant = schedulingVariant && hosts.contains("SlangTracePrograms.select(runtime,")
+                && hosts.contains("\"" + transport + "\"")
+                && SlangTracePrograms.candidates(transport,
+                    io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts.CAP_ALL, true, true, true).contains(name);
+            if (!hosts.contains("\"" + name + "\"") && !hosts.contains("\"" + base + "\"") && !selectedVariant) orphans.add(pass);
         }
         assertEquals(List.of(), orphans, "passes compiled into the jar that no host registers");
     }
