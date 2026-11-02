@@ -3998,3 +3998,40 @@ Owner report at 16:44 (jar `33d07949`, ReSTIR PT on, DLSS-RR): one triangle of b
 no sky, lighting unlike the pre-migration build. Checked and excluded for the triangle: index order (Java template,
 `sodium_dequantize`, `legacyTriangleVertices` all (0,1,2)(2,3,0)), opacity micromaps (`omm=off` in the log), the per-section
 quad limit (guarded). Not yet explained; needs the A/B runs listed in `MIGRATION_STATUS.md`.
+
+## 2026-11-02 — Raw native-frame evidence and compact-intersection SER (L1/L2; no GPU acceptance)
+
+Production revisions `4e91eb6cfffa7d06849292b05ed22f8064c819fc` (capture) and
+`f2f5ae175d063f7f56a7e9c06b7c78cfa707883b` (intersection/decode boundary), PR #62.
+`native_perf` records every application frame after warmup, actual dispatch program/quality/extent,
+current-frame RT display provenance, upscaler/FG/focus/screen evidence, CPU segments and available GPU
+timestamps correlated by original frame ID. It seals a bounded capture before asynchronous CSV/manifest
+persistence. Partial data and missing queries are explicit. Offline acceptance computes tail FPS from raw
+intervals and rejects invalid/mixed evidence; harness PASS only means the capture was saved. The old
+disconnected process/log/Tracy launchers were removed. No existing game logs are deleted or overwritten.
+
+Legacy/native scene adapters now share the nearest-triangle query. SER carries a compact intersection
+through reorder, then decodes the surface; primary-only self-avatar exclusion and material filtering stay
+in their existing owners. Descriptor/push/public ABI-v2 layouts and host submission/completion ownership
+are unchanged. Filtered visibility still reaches reordered closest queries; live path state and real
+performance remain profiling obligations.
+
+Validation: all 35 production AOT entries rebuilt with Slang 2026.20. Final `:common:test`:
+1,128 total, 1,119 passed, 9 skipped, 0 failures/errors (`native-capture-compact-acceptance.log`, 2m14s).
+The first compact run found two old source-location assertions; they were updated to follow the shared
+query and the final full suite passed. Python: 11 standard-library unittest cases passed, including
+missing/partial GPU results, nonfinite data, changed quality, dropped frames, non-native/FG state and
+hitches. The Python wheel built successfully and contains both modules plus the console entry point.
+
+Windows native CI [41538199959](https://github.com/bnfe12/bedray/actions/runs/41538199959),
+candidate job 125595346392 at `f2f5ae1`: 31 core + 1 scene + 1 lifetime + 1 NRD settings tests passed;
+baseline also passed. Core includes execution of 16 production Slang denoiser cases and the new 12
+production triangle exclusion/miss/scheduling cases through generated C++. Subsequent edits only
+correct Java source-location tests and record evidence; native and shader inputs are identical.
+
+No game run, RTX image comparison, GPU live-state/spill measurement, VRAM-budget measurement or
+5060 Ti FPS result was obtained on this Intel UHD host. Older owner-reported image defects are not
+declared fixed by these checks. Capture usage and exact percentile formulas:
+[tools/automation/README.md](../tools/automation/README.md). Scalar conditional evaluation was checked
+against [the Slang operator reference](https://docs.shader-slang.org/en/stable/external/slang/docs/language-reference/expressions-operators.html);
+the decode branch takes a scalar hit condition.

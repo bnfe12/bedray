@@ -16,12 +16,12 @@ every renderer must adopt.
 
 | Priority | Mechanism / actual state | Concrete next obligation |
 |---|---|---|
-| P0 | Whole-frame regression measurement: engine `PerfMonitor` already has CPU/GPU segments and frame-interval averages; `RtGpuTimer` has nonblocking available GPU spans. The automation runner is not connected to these producers | Record raw application-frame intervals plus effective resolution, mode, upscaler and FG state; collect average, p95/p99, slow-frame counts and scene/settings metadata. Do not infer 1% lows from 0.5-second averages |
+| P0 | Raw capture now connected: `native_perf`/FrameCapture records application-frame intervals, native/PT/display/focus/FG evidence and delayed GPU segments matched by frame ID; offline analyzer rejects incomplete/invalid captures | Collect matching-hardware captures and image-quality references. GPU total excludes submission/present; no VRAM-budget capture or hardware performance result yet |
 | P0 | Unified memory budget/residency: the game has VMA; native buffer/image owners have separate limits and native scene allocates its own memory | One native allocation/budget service, queried heap budget/usage, suballocation, bounded scratch reuse and exact accounting of active plus retained generations. Do not pass a foreign host VMA pointer across an unverified implementation ABI |
 | P0 | AS compaction and build/refit policy: native `acceleration_scene.cpp` builds ordinary BLAS/TLAS, but no compaction-size query/compacted-copy path exists. Native flags currently reflect only `ALLOW_UPDATE`; Java terrain already asks for fast trace | Measure static BLAS fast-trace/compaction separately from dynamic builds/refits and traversal quality. Implement query/copy/generation retirement with host completion proof. Compaction adds build/copy work; it is not an automatic FPS gain |
 | P0 | Local light proposals / ReGIR: camera-global emitter importance and ReSTIR DI exist; receiver-local grid proposals do not | Spatial candidate construction with a correct proposal PDF, global fallback support and secondary-surface policy; test disocclusion/invalidation. Avoid spending more rays to compensate for poor proposals |
 | P1 | NRD primary-lobe split/distances now exist; primary lobe selection is still white noise | Coordinate primary sampling for reconstruction-neighborhood coverage, including probability compensation and affected PDFs. Keep unsupported RC/PT/medium transport explicit until a valid guide estimator exists. RR distance/reflected motion remains separate work |
-| P1 | SER now exists, but filtered visibility also reaches reordered `traceClosest`; large surface/path state can remain live across reorder | Profile compute vs ordinary raygen vs SER with identical samples/settings. Inspect spills/live state, move unnecessary decode/state beyond reorder, and test omitting visibility reorder. Keep the best measured backend per device/profile |
+| P1 | SER now reorders a compact intersection before full surface decode; native/legacy table adapters share the nearest-triangle query. Filtered visibility still reaches reordered `traceClosest`, and path state can remain live | Profile compute vs ordinary raygen vs SER with identical samples/settings. Inspect spills/live state and test omitting visibility reorder. Keep the best measured backend per device/profile |
 | P1 | Native scene OMM attachment is absent, although Java OMM capture exists | Transfer opacity generations/attachments and animated-alpha invalidation into the native scene strategy; retain candidate-alpha fallback and verify foliage appearance before measuring cost |
 | P1 | General low-discrepancy / spatiotemporal sampling policy: current paths use `rand01`; camera jitter is not a complete BSDF/light sampling sequence | Evaluate stratified/Owen-scrambled or spatiotemporal sequences by sampling dimension and motion behavior. This targets noise per ray; changing RNG alone need not reduce GPU time |
 | P1 | Radiance guidance: current RC is a finite camera-centred world field, not SPWI/RCPG; no directional proposal/product PDF exists | Compare bounded current RC, screen-space probes, guiding and SHaRC-like alternatives on the same captures. Implement one valid estimator rather than accumulating several caches in 8 GiB |
@@ -36,26 +36,24 @@ workload and enabled features. Their names on a checklist prove no benefit.
 ReSTIR PT's current two-half 144-byte ring alone is about 569 MiB at 1080p,
 so enabling every cache/reservoir by default is inappropriate for 8 GiB.
 
-## Confirmed benchmark-tooling defects
+## Replaced benchmark prototype
 
-`tools/automation/game_session.py` invokes `:fabric-26.1:runClient`, while root
-settings declare `fabric`. Its `bedray.mode`, `bedray.preset`,
-`bedray.benchmark.*` and `bedray.tracy.*` JVM properties have no matching
-renderer consumers. Repeated `-Djvm.args=` is not an implemented argument
-forwarding contract for the current loader task.
+The disconnected launcher/log parser and external Tracy-launcher prototypes
+were removed. They used a nonexistent client task, unconsumed properties and
+nonexistent raw telemetry markers, measured startup and could delete a game
+log or turn missing samples into zeros.
 
-The parser expects `[VKB-FRAME]`/`[VKB-PASS]` producers absent from the renderer.
-Actual telemetry is `[VKB-PERF]` window averages and RT `gpu_ms ... (n=...)`
-spans. The runner starts its clock before startup/build finishes, does not
-drain stdout while waiting, and tries to delete the existing game log. Missing
-samples can become a zero-valued report rather than a rejected benchmark.
-These are source findings, not a successful execution test. Do not run this
-prototype for acceptance until its launch/protocol/lifecycle are repaired.
+Use [the capture instructions](../tools/automation/README.md). `native_perf`
+sets session-only native PT/FG-off, loads for 20 seconds, warms up for 10 seconds
+of valid world rendering, and captures 30 seconds without removing slow or
+invalid frames. CSV and manifest writes happen asynchronously after sealing;
+the scenario waits for persistence. Unique directories and CREATE_NEW preserve
+existing evidence. Partial/overflow/timeout/query failures remain explicit.
+The analyzer has no game/process lifecycle responsibilities.
 
-`tracy_session.py` can launch `tracy-capture`; it does not implement a Tracy
-protocol client or prove Bedray Vulkan GPU zones. The game has jtracy/host
-profiling facilities, but Bedray's raw-command-buffer GPU-zone integration is
-not implemented. The old README's stronger claims have been corrected.
+Tracy raw-Vulkan GPU zones, presentation correlation, budget accounting and
+image-quality acceptance remain separate integration work. The denoiser field
+is a requested setting, and the revision hint is caller supplied.
 
 ## Measurement and comparison
 

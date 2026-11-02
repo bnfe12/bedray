@@ -331,6 +331,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     }
 
     @Override public boolean spatialAvailable() { return spatialReuse != null; }
+    @Override public String traceProgramName(boolean nativeScene) { return trace.traceProgramName(nativeScene); }
 
     static int displayFlags(int frameFlags) {
         int flags = DISPLAY_FLAG_TONEMAP;

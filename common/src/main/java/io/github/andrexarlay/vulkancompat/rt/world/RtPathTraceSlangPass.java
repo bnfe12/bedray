@@ -993,6 +993,10 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         return sceneProgram;
     }
 
+    String traceProgramName(boolean nativeScene) {
+        return nativeScene ? (sceneProgram == null ? "" : sceneProgram.name()) : program.name();
+    }
+
     private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters,
                                                    Reservoirs reservoirs, Reservoirs ptReservoirs, Entities entities,
                                                    Guides guides, BufferView nrdMotion, long depthView,

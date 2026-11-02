@@ -47,8 +47,7 @@ class RtSlangEntityTest {
             "terrain and the entity ring are one TLAS; the mask is what separates them from world-only passes");
         assertTrue(pass.contains("traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_SCENE;"),
             "and the path-trace entry is the pass that asks for both");
-        String traversal = read(TRAVERSAL);
-        String trace = block(traversal, "SurfaceHit traceNearest(Ray ray, bool excludeSelfAvatar) {");
+        String trace = read(SHADERS + "/traversal/triangle_query.slang");
         assertTrue(trace.contains("query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);"),
             "the mask the pass sets is the mask the query uses");
     }
@@ -105,8 +104,8 @@ class RtSlangEntityTest {
         String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
         assertTrue(!visibility.contains("selfAvatarPrimitive"),
             "and neither does a shadow ray - an emitters-only skip would light the body through itself");
-        String skip = block(traversal, "bool selfAvatarPrimitive(uint instanceId, uint primitive) {");
-        assertTrue(skip.contains("if (selfAvatarTriCount == 0u || !entityInstance(instanceId)) return false;"),
+        String skip = read(SHADERS + "/contracts/triangle_intersection.slang");
+        assertTrue(skip.contains("primary && entity && count != 0u"),
             "a count of 0 (third person, or the option off) skips nothing at all");
 
         String pass = read(PASS);

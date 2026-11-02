@@ -26,6 +26,8 @@ import "contracts/hit.slang";
 import "contracts/math.slang";
 import "traversal/entity_geometry.slang";
 import "traversal/traversal.slang";
+import "contracts/triangle_intersection.slang";
+import "traversal/triangle_query.slang";
 
 static const uint LEGACY_INSTANCE_MASK_WORLD    = 0x01u;
 static const uint LEGACY_INSTANCE_MASK_ENTITIES = 0x02u;
@@ -163,7 +165,7 @@ SurfaceHit legacyHitToSurface(StructuredBuffer<LegacySection> sections, Ray ray,
     return result;
 }
 
-struct LegacySectionTraversal : ISceneTracer {
+struct LegacySectionTraversal : ITriangleTracer {
     RaytracingAccelerationStructure tlas;
     StructuredBuffer<LegacySection> sections;
     uint instanceMask;
@@ -182,11 +184,6 @@ struct LegacySectionTraversal : ISceneTracer {
     uint selfAvatarTriStart;
     uint selfAvatarTriCount;
 
-    bool selfAvatarPrimitive(uint instanceId, uint primitive) {
-        if (selfAvatarTriCount == 0u || !entityInstance(instanceId)) return false;
-        return primitive >= selfAvatarTriStart && primitive < selfAvatarTriStart + selfAvatarTriCount;
-    }
-
     // One committed hit named: the instance bit says whether the triangle came
     // out of the entity ring or out of a section, and nothing else distinguishes
     // them because both live in the same acceleration structure.
@@ -204,28 +201,16 @@ struct LegacySectionTraversal : ISceneTracer {
     // are not filtered here - they are a material question, and the surface
     // layer answers it.
     SurfaceHit traceNearest(Ray ray, bool excludeSelfAvatar) {
-        SurfaceHit result = missHit(ray.tMax);
-        if (ray.tMax <= ray.tMin) return result;
+        return decodeIntersection(ray, traceIntersection(ray, excludeSelfAvatar));
+    }
 
-        RayDesc desc;
-        desc.Origin = ray.origin;
-        desc.Direction = ray.direction;
-        desc.TMin = ray.tMin;
-        desc.TMax = ray.tMax;
+    TriangleIntersection traceIntersection(Ray ray, bool excludeSelfAvatar) {
+        return traceTriangleIntersection(tlas, ray, instanceMask, selfAvatarTriStart, selfAvatarTriCount, excludeSelfAvatar);
+    }
 
-        RayQuery<RAY_FLAG_NONE> query;
-        query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);
-        while (query.Proceed()) {
-            if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-            if (excludeSelfAvatar && selfAvatarPrimitive(query.CandidateInstanceID(),
-                    query.CandidatePrimitiveIndex())) continue;
-            query.CommitNonOpaqueTriangleHit();
-        }
-
-        if (query.CommittedStatus() == COMMITTED_NOTHING) return result;
-        return decodeHit(ray, query.CommittedInstanceID(), query.CommittedGeometryIndex(),
-            query.CommittedPrimitiveIndex(), query.CommittedTriangleBarycentrics(),
-            query.CommittedRayT());
+    SurfaceHit decodeIntersection(Ray ray, TriangleIntersection hit) {
+        return hit.hit ? decodeHit(ray, hit.instanceId, hit.geometryIndex, hit.primitiveId, hit.barycentrics, hit.t)
+            : missHit(ray.tMax);
     }
 
     SurfaceHit traceClosest(Ray ray) {
