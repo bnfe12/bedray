@@ -34,6 +34,6 @@ class RtSlangPaneFilterTest {
     @Test
     void tenGlassFacesFitTheStepBudget() {
         assertTrue(RtSlangPathPass.MAX_SURFACE_STEPS >= 2 * 5 + 2, "five glass blocks and the surface behind them");
-        assertEquals(32, RtSlangPathPass.MAX_SURFACE_STEPS);
+        assertEquals(16, RtSlangPathPass.MAX_SURFACE_STEPS);
     }
 }

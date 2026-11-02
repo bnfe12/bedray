@@ -91,9 +91,10 @@ public final class RtSlangPathPass implements RtPass {
     /** The accumulate switch that belongs to this profile: the ray mode has its own, the path mode its own. */
     /**
      * Geometric candidates one path may walk: cutout holes and glass panes cost a step but no bounce. Eight ended a ray
-     * that crossed a few glass blocks (two faces each) and returned black.
+     * that crossed a few glass blocks (two faces each) and returned black; 32 let rays wander through foliage and
+     * doubled the trace cost of a forest (gpu_rt 23 -> 48 ms, rt_look 2026-11-02).
      */
-    static final int MAX_SURFACE_STEPS = 32;
+    static final int MAX_SURFACE_STEPS = 16;
 
     private boolean accumulateRequested() {
         return rayMode ? RtSettings.raysAccumulation() : RtSettings.accumulate();
