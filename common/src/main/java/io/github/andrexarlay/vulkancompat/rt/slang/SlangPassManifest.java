@@ -18,7 +18,7 @@ import java.util.Set;
  * shader edit cannot silently desynchronise the host from the pipeline layout. The Java side addresses bindings by
  * name ({@link Binding#name()}), so moving a binding number in the shader does not break the caller.
  *
- * <p>ABI v2 has one descriptor set, one descriptor per binding and compute-only programs; every rule below is
+ * <p>ABI v2 has one descriptor set and one descriptor per binding. Optional raygen programs use additive flags; each rule is
  * enforced here, at load time, before the native core sees the program.
  */
 public record SlangPassManifest(int schema, String name, String source, String sourceSha256, String entryPoint,
@@ -46,8 +46,8 @@ public record SlangPassManifest(int schema, String name, String source, String s
         if (entryPoint == null || entryPoint.isBlank()) {
             throw new IllegalArgumentException(name + ": manifest has no entry point");
         }
-        if (!"compute".equals(stage)) {
-            throw new IllegalArgumentException(name + ": ABI v2 registers compute programs, manifest says " + stage);
+        if (!"compute".equals(stage) && !"raygeneration".equals(stage)) {
+            throw new IllegalArgumentException(name + ": unsupported program stage " + stage);
         }
         if (descriptorSet != 0) {
             throw new IllegalArgumentException(name + ": ABI v2 has one descriptor set, manifest says " + descriptorSet);
@@ -59,6 +59,14 @@ public record SlangPassManifest(int schema, String name, String source, String s
             if (size <= 0) {
                 throw new IllegalArgumentException(name + ": threadGroupSize components must be positive");
             }
+        }
+        if ("raygeneration".equals(stage)) {
+            if ((requiredCapabilities & BedrayCoreLayouts.CAP_RAY_TRACING_PIPELINE) == 0
+                || !java.util.Arrays.equals(threadGroupSize, new int[]{1, 1, 1}))
+                throw new IllegalArgumentException(name + ": raygeneration needs its capability and a 1x1x1 launch unit");
+        } else if ((requiredCapabilities & (BedrayCoreLayouts.CAP_RAY_TRACING_PIPELINE
+                | BedrayCoreLayouts.CAP_INVOCATION_REORDER_NV)) != 0) {
+            throw new IllegalArgumentException(name + ": ray pipeline/SER capabilities require raygeneration stage");
         }
         if (pushConstantBytes < 0 || pushConstantBytes > 128) {
             // 128 is the Vulkan minimum guaranteed maxPushConstantsSize; the core rejects larger layouts anyway.
@@ -91,6 +99,17 @@ public record SlangPassManifest(int schema, String name, String source, String s
     @Override
     public int[] threadGroupSize() {
         return threadGroupSize.clone();
+    }
+
+    public int shaderStage() {
+        return "raygeneration".equals(stage) ? BedrayCoreLayouts.VK_SHADER_STAGE_RAYGEN_BIT_KHR
+            : BedrayCoreLayouts.VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+
+    public int programFlags() {
+        return "raygeneration".equals(stage) ? BedrayCoreLayouts.PROGRAM_RAYGEN
+            | ((requiredCapabilities & BedrayCoreLayouts.CAP_INVOCATION_REORDER_NV) == 0
+                ? 0 : BedrayCoreLayouts.PROGRAM_SER_NV) : 0;
     }
 
     /** Dispatch group count that covers {@code pixels} along {@code axis} (0 = x, 1 = y, 2 = z). */

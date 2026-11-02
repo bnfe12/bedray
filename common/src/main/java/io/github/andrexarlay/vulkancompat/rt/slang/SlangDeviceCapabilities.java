@@ -5,6 +5,8 @@ import com.mojang.renderpearl.backend.vulkan.init.FeatureSet;
 import com.mojang.renderpearl.backend.vulkan.init.VulkanFeature;
 import io.github.andrexarlay.vulkancompat.mixin.rt.MixinVulkanDeviceFeaturesAccessor;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts;
+import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV;
+import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelineFeaturesKHR;
 
 import java.util.Map;
 
@@ -35,13 +37,27 @@ public final class SlangDeviceCapabilities {
         if (!((Object) device instanceof MixinVulkanDeviceFeaturesAccessor accessor)) {
             return 0;
         }
-        FeatureSet enabled = accessor.vkb$enabledFeatures();
+        return enabledFeaturesMask(accessor.vkb$enabledFeatures());
+    }
+
+    static int enabledFeaturesMask(FeatureSet enabled) {
         if (enabled == null) {
             return 0;
         }
         int mask = 0;
         for (VulkanFeature feature : enabled.features()) {
             mask |= FEATURE_BITS.getOrDefault(feature.name(), 0);
+            if (feature.name().equals("rayTracingPipeline")
+                && feature.struct().pNextStructClass() == VkPhysicalDeviceRayTracingPipelineFeaturesKHR.class
+                && enabled.extensions().contains("VK_KHR_ray_tracing_pipeline")) {
+                mask |= BedrayCoreLayouts.CAP_RAY_TRACING_PIPELINE;
+            }
+            // EXT and NV use the same feature member name but different shader capabilities. Never conflate them.
+            if (feature.name().equals("rayTracingInvocationReorder")
+                && feature.struct().pNextStructClass() == VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV.class
+                && enabled.extensions().contains("VK_NV_ray_tracing_invocation_reorder")) {
+                mask |= BedrayCoreLayouts.CAP_INVOCATION_REORDER_NV;
+            }
         }
         return mask;
     }

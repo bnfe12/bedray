@@ -42,6 +42,7 @@ public final class RtDeviceRequirements {
 
     public static void register(DeviceFeatureRegistry registry) {
         registry.register(requirement());
+        RtRayPipelineDeviceRequirements.register(registry);
     }
 
     public static final String OMM_ID = "Opacity Micromaps";

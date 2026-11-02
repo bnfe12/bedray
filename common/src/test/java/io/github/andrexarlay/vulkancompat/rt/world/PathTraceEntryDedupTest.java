@@ -29,8 +29,10 @@ class PathTraceEntryDedupTest {
         assertTrue(scene.contains("import \"pathtrace/path_trace_entry.slang\";"),
             "path_trace_scene.slang must import the shared entry body");
         assertTrue(shared.contains("public void pathTraceEntry"), "shared module must expose pathTraceEntry");
-        assertTrue(legacy.contains("pathTraceEntry(traversal"), "path_trace.slang must call the shared body");
-        assertTrue(scene.contains("pathTraceEntry(traversal"), "path_trace_scene.slang must call the shared body");
+        assertTrue(legacy.contains("pathTraceEntry(BEDRAY_PATH_TRAVERSAL,"), "path_trace.slang must call the shared body");
+        assertTrue(scene.contains("pathTraceEntry(BEDRAY_PATH_TRAVERSAL,"), "path_trace_scene.slang must call the shared body");
+        assertTrue(legacy.contains("#define BEDRAY_PATH_TRAVERSAL traversal"));
+        assertTrue(scene.contains("#define BEDRAY_PATH_TRAVERSAL traversal"));
 
         // A copied tracePath call means the integration moved back into one entry point and can drift.
         assertFalse(legacy.contains("tracePath("), "path_trace.slang must not duplicate the integrator call");

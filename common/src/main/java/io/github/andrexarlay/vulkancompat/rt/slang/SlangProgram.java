@@ -9,7 +9,7 @@ import java.nio.ByteBuffer;
 import java.util.List;
 
 /**
- * A Slang entry pass registered with the native Bedray core (ABI v2): one compute pipeline, with a separate
+ * A Slang entry pass registered with the native Bedray core (ABI v2): one compute or optional raygen pipeline, with a separate
  * descriptor set for each recorded dispatch, recorded into a command buffer the host supplies.
  *
  * <p>Resources are addressed by the Slang parameter name from the generated manifest, not by a hard-coded binding
@@ -91,11 +91,11 @@ public final class SlangProgram implements AutoCloseable {
                 for (int i = 0; i < manifest.bindings().size(); i++) {
                     SlangPassManifest.Binding binding = manifest.bindings().get(i);
                     BedrayCoreNative.writeDescriptorBinding(bindings, i, binding.binding(), binding.descriptorType(),
-                        binding.count(), BedrayCoreLayouts.VK_SHADER_STAGE_COMPUTE_BIT);
+                        binding.count(), manifest.shaderStage());
                 }
             }
             long handle = library.registerProgram(core, manifest.name(), manifest.entryPoint(), spirv, pass.wordCount(),
-                bindings, manifest.bindings().size(), manifest.pushConstantBytes(), pipelineCache);
+                bindings, manifest.bindings().size(), manifest.pushConstantBytes(), pipelineCache, manifest.programFlags());
             return new SlangProgram(library, core, handle, manifest);
         }
     }

@@ -7,6 +7,7 @@ import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangPassManifest;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangTracePrograms;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
@@ -682,7 +683,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         }
         this.device = device;
         this.runtime = runtime;
-        Optional<SlangProgram> pass = runtime.program(PASS_NAME);
+        Optional<SlangProgram> pass = SlangTracePrograms.select(runtime, PASS_NAME);
         if (pass.isEmpty()) {
             throw new IllegalStateException("missing Slang pass " + PASS_NAME);
         }
@@ -691,7 +692,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         // Optional: only a jar that compiled the native-scene entry point can trace
         // the bedray_scene table. Without it the host keeps the Java scene.
         Optional<SlangProgram> scene = SlangPassLibrary.available(SCENE_PASS_NAME)
-            ? runtime.program(SCENE_PASS_NAME) : Optional.empty();
+            ? SlangTracePrograms.select(runtime, SCENE_PASS_NAME) : Optional.empty();
         this.sceneProgram = scene.orElse(null);
         if (sceneProgram != null) {
             requireManifest(sceneProgram);

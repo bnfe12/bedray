@@ -689,9 +689,8 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
             b.get(0).sType$Default()
                 .srcStageMask(EXTOpacityMicromap.VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT)
                 .srcAccessMask(EXTOpacityMicromap.VK_ACCESS_2_MICROMAP_WRITE_BIT_EXT)
-                .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
-                    | EXTOpacityMicromap.VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT
-                    | KHRSynchronization2.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR)
+                // Includes ray-generation traversal without assuming that its optional feature was enabled.
+                .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR)
                 .dstAccessMask(KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR
                     | KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR
                     | EXTOpacityMicromap.VK_ACCESS_2_MICROMAP_READ_BIT_EXT

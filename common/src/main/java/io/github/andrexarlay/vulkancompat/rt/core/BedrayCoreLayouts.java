@@ -41,11 +41,16 @@ public final class BedrayCoreLayouts {
     /** {@code shaderInt64}; required by physical-storage-buffer addressing and 64-bit shader work. */
     public static final int CAP_SHADER_INT64 = 1 << 9;
     public static final int CAP_STORAGE_IMAGE_EXTENDED_FORMATS = 1 << 10;
+    public static final int CAP_RAY_TRACING_PIPELINE = 1 << 11;
+    public static final int CAP_INVOCATION_REORDER_NV = 1 << 12;
     /** Every capability bit this ABI version defines. */
-    public static final int CAP_ALL = (1 << 11) - 1;
+    public static final int CAP_ALL = (1 << 13) - 1;
 
     /** {@code VkShaderStageFlagBits#VK_SHADER_STAGE_COMPUTE_BIT}; ABI v2 registers compute programs only. */
     public static final int VK_SHADER_STAGE_COMPUTE_BIT = 0x20;
+    public static final int VK_SHADER_STAGE_RAYGEN_BIT_KHR = 0x100;
+    public static final int PROGRAM_RAYGEN = 1;
+    public static final int PROGRAM_SER_NV = 2;
 
     /** {@code VkImageLayout#VK_IMAGE_LAYOUT_GENERAL}; the RT renderer keeps every storage image in GENERAL. */
     public static final int VK_IMAGE_LAYOUT_GENERAL = 1;
@@ -400,6 +405,7 @@ public final class BedrayCoreLayouts {
     static final long DB_STAGE_FLAGS = DESCRIPTOR_BINDING.byteOffset(groupElement("stage_flags"));
 
     static final long PD_ABI_VERSION = PROGRAM_DESC.byteOffset(groupElement("abi_version"));
+    static final long PD_FLAGS = PROGRAM_DESC.byteOffset(groupElement("flags"));
     static final long PD_NAME = PROGRAM_DESC.byteOffset(groupElement("name"));
     static final long PD_ENTRY_POINT = PROGRAM_DESC.byteOffset(groupElement("entry_point"));
     static final long PD_SPIRV = PROGRAM_DESC.byteOffset(groupElement("spirv"));

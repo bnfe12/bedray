@@ -4,6 +4,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include "path_trace_pass.h"
+#include "ray_generation_pipeline.h"
 #include "bloom_pass.h"
 #include "particles_pass.h"
 #include "sodium_pass.h"
@@ -95,9 +96,11 @@ struct BedrayProgram {
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
+    std::unique_ptr<bedray::core::RayGenerationPipeline> ray_generation;
     std::vector<BedrayDescriptorBinding> bindings;
     std::vector<VkDescriptorPoolSize> pool_sizes;
     uint32_t push_constant_bytes = 0;
+    VkShaderStageFlags shader_stage = VK_SHADER_STAGE_COMPUTE_BIT;
     bool retired = false;
     // Only explicitly released recordings enter this bounded cache. In-flight
     // sets remain immutable and never appear here. Fixed storage keeps release
@@ -263,6 +266,7 @@ void destroy_program(BedrayCore* core, BedrayProgram* program) {
     if (program->pipeline != VK_NULL_HANDLE) {
         core->destroy_pipeline(core->device, program->pipeline, nullptr);
     }
+    program->ray_generation.reset();
     if (program->pipeline_layout != VK_NULL_HANDLE) {
         core->destroy_pipeline_layout(core->device, program->pipeline_layout, nullptr);
     }
@@ -322,6 +326,7 @@ bool program_contract(BedrayCore* core, uint64_t handle, ProgramContract& out) n
     }
     out.push_constant_bytes = program->push_constant_bytes;
     out.binding_count = static_cast<uint32_t>(program->bindings.size());
+    out.ray_generation = program->ray_generation != nullptr;
     return true;
 }
 
@@ -646,6 +651,25 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
         }
     }
 
+    if (has_extension(extension_names, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR features{};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+        VkPhysicalDeviceFeatures2 query{};
+        query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        query.pNext = &features;
+        core->get_physical_device_features2(core->physical_device, &query);
+        if (features.rayTracingPipeline) detected |= BEDRAY_CAP_RAY_TRACING_PIPELINE;
+    }
+    if (has_extension(extension_names, VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME)) {
+        VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV features{};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
+        VkPhysicalDeviceFeatures2 query{};
+        query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        query.pNext = &features;
+        core->get_physical_device_features2(core->physical_device, &query);
+        if (features.rayTracingInvocationReorder) detected |= BEDRAY_CAP_INVOCATION_REORDER_NV;
+    }
+
     const uint32_t requested = desc->capabilities;
     const uint32_t missing = requested & ~detected;
     if (missing != 0) {
@@ -654,6 +678,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_create(
             requested, missing);
     }
     core->capabilities = requested;
+    if ((requested & BEDRAY_CAP_RAY_TRACING_PIPELINE) != 0)
+        core->device_fns.path_shader_stages |= VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
 
     *out_core = core.release();
     return BEDRAY_OK;
@@ -803,6 +829,16 @@ static BedrayStatus register_program(
     if (desc->name == nullptr || desc->name[0] == '\0') {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "program name is empty");
     }
+    const bool ray_generation = (desc->flags & BEDRAY_PROGRAM_RAYGEN) != 0;
+    if ((desc->flags & ~(BEDRAY_PROGRAM_RAYGEN | BEDRAY_PROGRAM_SER_NV)) != 0
+        || ((desc->flags & BEDRAY_PROGRAM_SER_NV) != 0 && !ray_generation))
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid program flags 0x%x", desc->flags);
+    uint32_t required = ray_generation ? BEDRAY_CAP_RAY_TRACING_PIPELINE | BEDRAY_CAP_BUFFER_DEVICE_ADDRESS : 0u;
+    if ((desc->flags & BEDRAY_PROGRAM_SER_NV) != 0) required |= BEDRAY_CAP_INVOCATION_REORDER_NV;
+    if ((core->capabilities & required) != required)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "program flags 0x%x require enabled capabilities 0x%x (have 0x%x)",
+            desc->flags, required, core->capabilities);
+    const VkShaderStageFlags shader_stage = ray_generation ? VK_SHADER_STAGE_RAYGEN_BIT_KHR : VK_SHADER_STAGE_COMPUTE_BIT;
     if (desc->entry_point == nullptr || desc->entry_point[0] == '\0') {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "entry point is empty");
     }
@@ -854,9 +890,9 @@ static BedrayStatus register_program(
                 "binding %u: descriptor type %u is not supported in ABI v2",
                 binding.binding, binding.descriptor_type);
         }
-        if ((binding.stage_flags & VK_SHADER_STAGE_COMPUTE_BIT) == 0) {
+        if ((binding.stage_flags & shader_stage) == 0) {
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "binding %u: stage flags must include VK_SHADER_STAGE_COMPUTE_BIT", binding.binding);
+                "binding %u: stage flags 0x%x do not match program stage 0x%x", binding.binding, binding.stage_flags, shader_stage);
         }
         if (binding.descriptor_type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR
             && (core->capabilities & BEDRAY_CAP_ACCELERATION_STRUCTURE) == 0) {
@@ -879,6 +915,7 @@ static BedrayStatus register_program(
     program->entry_point = desc->entry_point;
     program->bindings = std::move(bindings);
     program->push_constant_bytes = desc->push_constant_bytes;
+    program->shader_stage = shader_stage;
 
     VkShaderModuleCreateInfo module_info{};
     module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -917,7 +954,7 @@ static BedrayStatus register_program(
     }
 
     VkPushConstantRange push_range{};
-    push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    push_range.stageFlags = shader_stage;
     push_range.offset = 0;
     push_range.size = program->push_constant_bytes;
     VkPipelineLayoutCreateInfo pipeline_layout_info{};
@@ -952,19 +989,26 @@ static BedrayStatus register_program(
         }
     }
 
-    VkComputePipelineCreateInfo pipeline_info{};
-    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    pipeline_info.stage.module = program->module;
-    pipeline_info.stage.pName = program->entry_point.c_str();
-    pipeline_info.layout = program->pipeline_layout;
-    result = core->create_compute_pipelines(
-        core->device, pipeline_cache, 1, &pipeline_info, nullptr, &program->pipeline);
+    if (ray_generation) {
+        program->ray_generation = std::make_unique<bedray::core::RayGenerationPipeline>(
+            core->device_fns, core->get_device_proc_addr, core->get_physical_device_properties2);
+        result = program->ray_generation->create(pipeline_cache, program->module, program->entry_point.c_str(),
+            program->pipeline_layout, program->pipeline);
+    } else {
+        VkComputePipelineCreateInfo pipeline_info{};
+        pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipeline_info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        pipeline_info.stage.module = program->module;
+        pipeline_info.stage.pName = program->entry_point.c_str();
+        pipeline_info.layout = program->pipeline_layout;
+        result = core->create_compute_pipelines(
+            core->device, pipeline_cache, 1, &pipeline_info, nullptr, &program->pipeline);
+    }
     if (result != VK_SUCCESS) {
         const BedrayStatus status = vk_status(result);
-        return fail(error, status, "vkCreateComputePipelines(%s) failed: VkResult=%d",
-            desc->name, static_cast<int>(result));
+        return fail(error, status, "%s pipeline/SBT creation (%s) failed: VkResult=%d",
+            ray_generation ? "raygen" : "compute", desc->name, static_cast<int>(result));
     }
 
     try {
@@ -991,6 +1035,10 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_register_program_cached(
     uint64_t* out_program, BedrayError* error) {
     return register_program(core, desc, reinterpret_cast<VkPipelineCache>(static_cast<uintptr_t>(pipeline_cache)),
         out_program, error);
+}
+
+BEDRAY_API uint32_t BEDRAY_CALL bedray_core_program_feature_mask(void) {
+    return BEDRAY_PROGRAM_RAYGEN | BEDRAY_PROGRAM_SER_NV;
 }
 
 BEDRAY_API void BEDRAY_CALL bedray_core_destroy_program(
@@ -1100,9 +1148,11 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "dispatch group counts must be non-zero");
     }
     const uint32_t* limits = core->properties.limits.maxComputeWorkGroupCount;
-    if (desc->group_count_x > limits[0]
+    if (program->ray_generation ? !program->ray_generation->valid_extent(
+            desc->group_count_x, desc->group_count_y, desc->group_count_z)
+        : (desc->group_count_x > limits[0]
         || desc->group_count_y > limits[1]
-        || desc->group_count_z > limits[2]) {
+        || desc->group_count_z > limits[2])) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
             "dispatch %ux%ux%u exceeds the device limit %ux%ux%u",
             desc->group_count_x, desc->group_count_y, desc->group_count_z,
@@ -1277,17 +1327,19 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_frame(
             static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
-    core->cmd_bind_pipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, program->pipeline);
+    const auto bind_point = program->ray_generation ? VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR : VK_PIPELINE_BIND_POINT_COMPUTE;
+    core->cmd_bind_pipeline(command_buffer, bind_point, program->pipeline);
     if (dispatch_set != VK_NULL_HANDLE) {
-        core->cmd_bind_descriptor_sets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+        core->cmd_bind_descriptor_sets(command_buffer, bind_point,
             program->pipeline_layout, 0, 1, &dispatch_set, 0, nullptr);
     }
     if (desc->push_constant_bytes > 0) {
         core->cmd_push_constants(command_buffer, program->pipeline_layout,
-            VK_SHADER_STAGE_COMPUTE_BIT, 0, desc->push_constant_bytes, desc->push_constants);
+            program->shader_stage, 0, desc->push_constant_bytes, desc->push_constants);
     }
-    core->cmd_dispatch(command_buffer,
+    if (program->ray_generation) program->ray_generation->record(command_buffer,
         desc->group_count_x, desc->group_count_y, desc->group_count_z);
+    else core->cmd_dispatch(command_buffer, desc->group_count_x, desc->group_count_y, desc->group_count_z);
     return BEDRAY_OK;
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate frame state");
@@ -1304,7 +1356,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_phases(
         || desc->push_constant_bytes < 4 || phase_offset > desc->push_constant_bytes - 4)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid compute phase range");
     BedrayProgram* program = find_program(core, desc->program);
-    if (program == nullptr || desc->push_constant_bytes > program->push_constant_bytes)
+    if (program == nullptr || program->ray_generation || desc->push_constant_bytes > program->push_constant_bytes)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid compute phase program/push size");
     std::vector<unsigned char> push(desc->push_constant_bytes);
     std::memcpy(push.data(), desc->push_constants, push.size());

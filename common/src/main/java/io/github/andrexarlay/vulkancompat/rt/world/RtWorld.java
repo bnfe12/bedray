@@ -1216,12 +1216,12 @@ public final class RtWorld {
             KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR(cmd, info, pp);
         }
         RtTimings.stop(RtTimings.Phase.TLAS_RECORD, tt);
-        // AS builds and geometry decoding -> ray queries and attribute loads.
+        // AS builds and geometry decoding -> ray queries and attribute loads in compute or ray generation.
         barrier(cmd, KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
                 | VK10.VK_PIPELINE_STAGE_TRANSFER_BIT | VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK10.VK_ACCESS_TRANSFER_WRITE_BIT
                 | VK10.VK_ACCESS_SHADER_WRITE_BIT,
-            VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK10.VK_ACCESS_SHADER_READ_BIT);
         return n;
     }

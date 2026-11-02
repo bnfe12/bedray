@@ -1094,22 +1094,32 @@ static void test_first_frame_records_full_pipeline() {
     const int build_build = fake::find_barrier(
         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, true);
-    const int final_compute = fake::find_barrier(
+    const int final_shader = fake::find_barrier(
         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
             | VK_PIPELINE_STAGE_TRANSFER_BIT
             | VK_PIPELINE_STAGE_HOST_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, true);
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, true);
     CHECK(host_transfer >= 0);
     CHECK(transfer_build >= 0);
     CHECK(build_build >= 0);
-    CHECK(final_compute >= 0);
+    CHECK(final_shader >= 0);
     CHECK(host_transfer < transfer_build);
     CHECK(transfer_build < build_build);
-    CHECK(build_build < final_compute);
+    CHECK(build_build < final_shader);
     if (build_build >= 0) {
         const VkMemoryBarrier& barrier = fake::g.barriers[build_build].memory;
         CHECK(barrier.srcAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
         CHECK(barrier.dstAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    }
+    if (final_shader >= 0) {
+        const fake::BarrierRecord& final = fake::g.barriers[final_shader];
+        // Compute and ray-generation consumers both read the AS and uploaded shader tables.
+        CHECK(final.memory.srcAccessMask == VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
+        CHECK(final.memory.dstAccessMask == (VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_SHADER_READ_BIT));
+        CHECK(!final.buffers.empty());
+        for (const VkBufferMemoryBarrier& buffer : final.buffers) {
+            CHECK(buffer.dstAccessMask == VK_ACCESS_SHADER_READ_BIT);
+        }
     }
 
     /* 4 mesh copies + 2 tables + 1 section table. */
