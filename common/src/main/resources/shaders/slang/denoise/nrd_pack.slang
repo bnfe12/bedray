@@ -131,6 +131,7 @@ float3 nrdComposeColor(float3 diffuse, float3 specular, float3 albedo, float3 di
         float3 reflection = pc.denoiser == 0u ? nrdYCoCgToLinear(specular) : max(specular, float3(0.0));
         color = albedo * ambient + reflection + direct;
     }
-    if ((pc.flags & 1u) != 0u) color = tonemapColor(color * pc.exposure);
+    color *= max(pc.exposure, 0.0);
+    if ((pc.flags & 1u) != 0u) color = tonemapColor(color);
     return clamp(color, float3(0.0), float3(1.0));
 }

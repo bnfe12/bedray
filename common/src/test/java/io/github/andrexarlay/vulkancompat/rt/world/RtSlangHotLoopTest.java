@@ -62,7 +62,7 @@ class RtSlangHotLoopTest {
         for (String field : new String[] {"result.primary.valid = true;", "result.primary.position = hit.position;",
             "result.primary.normal = normal;", "result.primary.albedo = clamp(surface.material.albedo",
             "result.primary.specularF0 = surface.material.f0;", "result.primary.roughness = surface.material.roughness;",
-            "result.primary.metallic = surface.material.metallic;", "result.primary.direct = direct;"}) {
+            "result.primary.metallic = surface.material.metallic;", "result.primary.direct = directContribution;"}) {
             assertTrue(guides.contains(field), "the guide block lost " + field);
         }
     }

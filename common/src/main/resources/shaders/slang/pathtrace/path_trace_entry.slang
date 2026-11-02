@@ -258,7 +258,8 @@ PathTraceResult pathTraceMeanResult(PathTraceMean mean, out bool sampleTrusted) 
     result.primary.normal = length(normal) > 1.0e-4 ? normalize(normal) : float3(0.0, 0.0, 1.0);
     result.primary.albedo = mean.albedo / hits;
     result.primary.specularF0 = mean.specularF0 / hits;
-    result.primary.direct = mean.direct / hits;
+    // Radiometric terms use the HDR sample denominator; a sky sample contributes zero primary direct light.
+    result.primary.direct = mean.direct / float(mean.accepted);
     result.primary.roughness = mean.roughness / hits;
     result.primary.metallic = mean.metallic / hits;
     result.firstHitDistance = mean.firstHit / hits;
