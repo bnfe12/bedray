@@ -31,7 +31,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     private static final AtomicLong RESOURCE_GENERATIONS = new AtomicLong(1);
     private final Arena arena;
     private final Path libraryPath;
-    private final Set<Long> liveCores = ConcurrentHashMap.newKeySet();
+    private final NativeCoreOwners liveCores = new NativeCoreOwners();
     private final Set<Long> liveResourceOwners = ConcurrentHashMap.newKeySet();
     private final SymbolLookup symbols;
     private volatile boolean closed;
@@ -265,6 +265,7 @@ public final class BedrayCoreNative implements AutoCloseable {
     public long create(long instance, long physicalDevice, long device, long queue, int queueFamily, int apiVersion,
                        long getInstanceProcAddr, long getDeviceProcAddr, int capabilities) {
         ensureOpen();
+        NativeCoreOwners.Reservation creation = liveCores.reserve();
         try (Arena a = Arena.ofConfined()) {
             MemorySegment desc = a.allocate(BedrayCoreLayouts.CORE_DESC);
             desc.set(JAVA_INT, BedrayCoreLayouts.CD_ABI_VERSION, BedrayCoreLayouts.ABI_VERSION);
@@ -281,14 +282,15 @@ public final class BedrayCoreNative implements AutoCloseable {
             MemorySegment out = a.allocate(ADDRESS);
             MemorySegment error = a.allocate(BedrayCoreLayouts.ERROR);
             int status = (int) createHandle.invokeExact(desc, out, error);
+            if (status == BedrayCoreLayouts.STATUS_OK) creation.accepted(out.get(JAVA_LONG, 0));
             check("create", status, error);
-            long core = out.get(JAVA_LONG, 0);
+            long core = creation.handle();
             if (core == 0) {
                 throw new BedrayCoreException("create", BedrayCoreLayouts.STATUS_INTERNAL, "core handle is zero", null);
             }
-            liveCores.add(core);
             return core;
         } catch (Throwable t) {
+            liveCores.failed(creation);
             throw rethrow("create", t);
         }
     }
@@ -801,14 +803,15 @@ public final class BedrayCoreNative implements AutoCloseable {
             return;
         }
         ensureOpen();
+        NativeCoreOwners.Reservation owner = liveCores.require(core);
         try {
             int status = (int) destroyHandle.invokeExact(handle(core));
+            if (status == BedrayCoreLayouts.STATUS_OK) liveCores.released(owner);
             if (status == BedrayCoreLayouts.STATUS_IN_USE) {
                 throw new BedrayCoreException("destroy", status,
                     "recordings still reference the core; release them after GPU completion or discard", null);
             }
             check("destroy", status, MemorySegment.NULL);
-            liveCores.remove(core);
         } catch (Throwable t) {
             throw rethrow("destroy", t);
         }
@@ -820,9 +823,7 @@ public final class BedrayCoreNative implements AutoCloseable {
             return;
         }
         requireResourceOwnersReleased();
-        for (long core : Set.copyOf(liveCores)) {
-            destroy(core);
-        }
+        liveCores.destroyAll(this::destroy);
         closed = true;
         arena.close();
     }
