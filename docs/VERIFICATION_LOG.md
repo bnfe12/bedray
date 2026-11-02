@@ -4035,3 +4035,35 @@ declared fixed by these checks. Capture usage and exact percentile formulas:
 [tools/automation/README.md](../tools/automation/README.md). Scalar conditional evaluation was checked
 against [the Slang operator reference](https://docs.shader-slang.org/en/stable/external/slang/docs/language-reference/expressions-operators.html);
 the decode branch takes a scalar hit condition.
+
+## 2026-11-02 — A degenerate first camera frame no longer disables DLSS (L1/L2; no live re-run)
+
+Commit `f107816`. In `Vulkan Experimental RT 26.3/minecraft/logs/latest.log` at 23:20:41 the first velocity
+dispatch after `world_ready` failed with `velocity uniforms: non-finite invViewProj at byte 0 = NaN` and
+`temporal_upscaler active=false backend=null`; DLSS stayed off for the session. A later launch at 23:37 in the
+same instance dispatched 2,401 frames with `temporal_upscaler active=true backend=DLSS`, so the trigger is the
+first RT frame, not a missing DLL or a device capability.
+
+A JOML 1.10.9 probe reproduced the exact value: a zero-quaternion view rotation is `diag(0,0,0,1)`, its product
+with the perspective projection is singular, and `Matrix4f.invert` writes NaN into every element (`m00 = NaN`).
+A perspective with `aspect = 0/0` behaves the same; `zFar = 0` leaves NaN outside `m00`.
+
+`CameraMatrixGuard` now validates the projection, the view rotation and their product (finite elements and
+`|det| > 1e-12`) before inversion. On failure `computeMatrices()` keeps the last usable `invViewProj` and
+`prevViewProj`, forces `resetHistory`, logs `camera_matrices=degenerate ...` at most once per second, and returns
+false. `recordXess()` then returns false without `executeFailed`, so the caller uses the bilinear blit and the
+upscaler stays active; `runMotionVectorsOnly()` skips the same frame. `advanceFrameHistory()` no longer promotes
+a skipped/degenerate frame, and `cameraDelta()` rejects non-finite positions.
+
+Validation: `CameraMatrixGuardTest` (zero quaternion, singular/NaN projection, degenerate previous frame, recovery
+after one bad frame, and the skip-not-fail source contract). `:common:test` 1,134 tests, 0 failures, 0 errors,
+3 skipped; `:common:runShimTests` 34 passed, 0 failed; native CTest 28/28. Fabric jar 19,176,660 B SHA-256
+`325b66d1d5b777b4080bb65ed3d4cff7064079f14a87ca89f843bec1a128ed88`; NeoForge jar 19,183,875 B SHA-256
+`74ce317390a33d3ee22501e9924a3c2736a4584e9c52f035b994fe164ed89dd3`; both manifests `Git-Commit f107816`,
+`Git-Dirty false`.
+
+Deployed to the five BedRay instances (backup `bedray-deploy-20261102-234747`). `Vulkan Experimental RT 26.3`
+was still running its 23:37 session when its jar was replaced in place; the process was not restarted, so no frame
+from that session is evidence for `f107816` and the instance should be restarted before play. No live run of the
+fixed jar was made here, so this entry is L1/L2 only: the failure mechanism and the skip path are proven, the
+in-game absence of the failure is not.
