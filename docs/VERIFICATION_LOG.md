@@ -4,6 +4,21 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-11-02 — Architecture alternatives before further implementation (L0)
+
+The owner requested another review of what to improve, add or change before
+implementation. Source `61ea2da` was checked against origin and primary
+Khronos, NVIDIA research/SDK and 2026 Split RC references. The proposals in
+[ARCHITECTURE_REASSESSMENT.md](ARCHITECTURE_REASSESSMENT.md) cover compact
+intersection/late decode for SER, three geometry representations, rigid vs
+deforming AS ownership, local-grid vs light-tree proposals, bounded indirect
+caches, dimension-aware sampling, actual frame-graph boundaries and reference
+quality capture. Shifted R2 emitter samples and working engine timing are
+explicitly preserved; they are not misreported as absent.
+
+Only audit documents change. No backend is selected, rendering math changed,
+new technology implemented or FPS improvement established by this review.
+
 ## 2026-11-02 — Native-resolution target and additional technology audit (L0)
 
 After PR #59 the owner clarified that the performance target excludes all

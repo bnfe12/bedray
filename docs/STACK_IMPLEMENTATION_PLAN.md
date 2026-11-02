@@ -18,6 +18,11 @@ Ti 8 GiB, Ryzen 5 5600XT and 16 GiB RAM. The owner explicitly requires native
 frames counted toward the target. It has not been measured here. The follow-up
 [native-60 technology audit](NATIVE_1080P_60_AUDIT.md) prioritizes actual frame
 and memory costs and records additional missing mechanisms/tooling defects.
+The subsequent [architecture alternatives review](ARCHITECTURE_REASSESSMENT.md)
+proposes changing module boundaries and comparing alternatives, including
+light BVH vs ReGIR and hardware-assisted voxels vs triangles/HDDA. These are
+unmeasured proposals requested before further implementation, not adopted
+backend choices or additional implementation claims.
 
 The manifesto remains the feature target. Its fixed performance claims are not
 acceptance evidence. A requirement which conflicts with API semantics must be
