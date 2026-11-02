@@ -69,7 +69,9 @@ public class RtEntityHermeticityTest {
             "types.slang must define the hermetic mask 0x03 = world | entities");
 
         String scene = read("src/main/resources/shaders/slang/traversal/scene_traversal.slang");
-        assertTrue(scene.contains("query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);"),
+        assertTrue(scene.contains("traceTriangleIntersection(tlas, ray, instanceMask,")
+                && read("src/main/resources/shaders/slang/traversal/triangle_query.slang")
+                    .contains("query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);"),
             "the full walk takes its mask from the traversal's own field");
         assertTrue(scene.contains("query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);"),
             "and so does the first-hit visibility walk: one mask for both, no per-call literal");

@@ -99,7 +99,8 @@ public class RtSelfAvatarExclusionTest {
 
     @Test
     public void helperOnlyMatchesEntityTrianglesOfThisFrame() {
-        String helper = read(SHADERS + "/contracts/triangle_intersection.slang");
+        String helper = block(read(SHADERS + "/contracts/triangle_intersection.slang"),
+            "bool excludedSelfAvatar(bool primary, bool entity, uint primitive, uint start, uint count) {");
         assertTrue(helper.contains("primary && entity"),
             "world sections use the same primitive numbering: the check must not match their triangles");
         assertTrue(helper.contains("count != 0u"),
