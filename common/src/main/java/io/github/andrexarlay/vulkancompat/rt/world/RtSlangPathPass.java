@@ -493,6 +493,10 @@ public final class RtSlangPathPass implements RtPass {
             new RtPathTraceSlangPass.BufferView(params.statsBuffer, params.statsOffset,
                 RtStatsLayout.SLOT_STRIDE), flags, accumFrames, ptResetRequested, ptSpatialRequested()));
         ptResetRequested = false;
+        if (io.github.andrexarlay.vulkancompat.rtx.debug.FrameBenchmark.active())
+            io.github.andrexarlay.vulkancompat.rtx.debug.FrameBenchmark.traceRecorded(
+                mode().logName(), backend.traceProgramName(nativeScene), width, height,
+                params.spp, params.bounces, params.rayDistance, optionFlags);
         historyWritten = true;
         diRequests.afterDispatch(diFlags != 0);
     }

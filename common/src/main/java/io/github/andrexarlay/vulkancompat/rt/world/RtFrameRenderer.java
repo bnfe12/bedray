@@ -336,7 +336,12 @@ public final class RtFrameRenderer {
 
     /** Current-frame color provenance; old output allocations are not evidence that RT replaced this frame. */
     public static boolean displayedThisFrame(RenderTarget target) {
-        return displayedStamp != null && displayedTarget == target
+        return displayedTarget == target && displayedThisFrame();
+    }
+
+    /** Diagnostic proof independent of the target temporarily swapped during world rendering. */
+    public static boolean displayedThisFrame() {
+        return displayedStamp != null && displayedTarget != null
             && io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.isCurrent(displayedStamp);
     }
 

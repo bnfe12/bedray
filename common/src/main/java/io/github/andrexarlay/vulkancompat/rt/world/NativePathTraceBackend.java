@@ -14,6 +14,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
     private final SlangRuntime runtime;
     private final BedrayPathTraceNative pass;
     private final boolean spatial;
+    private final String traceName, sceneTraceName;
     private final Set<Long> recordings = new LinkedHashSet<>();
     /** The mode-log word of the last recorded frame's path reuse. */
     private String ptState = "off";
@@ -42,6 +43,8 @@ final class NativePathTraceBackend implements PathTraceBackend {
         String sceneName = rc ? RtRadianceCascadesContract.TRACE : RtPathTraceSlangPass.SCENE_PASS_NAME;
         SlangProgram scene = SlangPassLibrary.available(sceneName) ? SlangTracePrograms.select(runtime, sceneName).orElseThrow() : null;
         if (scene != null) RtPathTraceSlangPass.requireManifest(scene,rc);
+        traceName = trace.name();
+        sceneTraceName = scene == null ? "" : scene.name();
         SlangProgram builder = rc ? runtime.program(RtRadianceCascadesContract.BUILD).orElseThrow() : null;
         if (builder != null) RtRadianceCascadesContract.requireBuilder(builder.manifest());
         SlangProgram display = runtime.program(RtSlangPathPass.DISPLAY_PASS).orElseThrow();
@@ -99,6 +102,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
     }
 
     @Override public boolean spatialAvailable() { return spatial; }
+    @Override public String traceProgramName(boolean nativeScene) { return nativeScene ? sceneTraceName : traceName; }
     @Override public boolean pathReuseAvailable() { return pass.nativePt(); }
     @Override public boolean displaySkyAvailable() { return pass.displaySkyAvailable(); }
     @Override public String pathReuseState() { return ptState; }
