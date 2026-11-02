@@ -105,8 +105,13 @@ From `26.3(1)/latest.log` 01:09 and the review of the pre-existing code:
 | `82fd364` | 5 passes no host runs and 21 modules nothing imports (3,486 lines) removed; `SlangDeadCodeTest` guards. |
 | `124e619`, `a754582` | Native backend parity (item 4 above). |
 
-Still open from the 01:09 log: DLSS SR fails on the first frame (`invalid velocity uniform contract`); the next log names
-the field. Its actual runtime cause has not been established by a new log.
+2026-11-02 update: the first-frame DLSS failure is explained and fixed by `f107816`. The first velocity dispatch after
+`world_ready` received a NaN `invViewProj` from a zero-quaternion view rotation (a singular `projection * view`), not a
+missing field. `CameraMatrixGuard` now skips that frame, keeps the last usable matrices and forces a history reset
+without calling `executeFailed`, so DLSS stays active. L1/L2 only: the fixed jar has not run live yet. The same run
+showed `phase=0` on every 120-frame DLSS line; that is the expected phase after 120 frames because QUALITY at
+1485x794 -> 2560x1369 has scale 1.724 and therefore 24 phases. `jitter=(0,0)` with `jitter_source=denoiser_resolved`
+is the deliberate zero jitter for an image the denoiser already resolved on the pixel grid.
 
 ## Ownership and modularity follow-up (2026-11-01, L1/L2)
 
