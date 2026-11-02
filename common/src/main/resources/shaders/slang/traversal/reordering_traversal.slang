@@ -2,28 +2,26 @@
 public module reordering_traversal;
 import "contracts/hit.slang";
 import "traversal/traversal.slang";
+import "contracts/triangle_intersection.slang";
+import "traversal/entity_geometry.slang";
 
-uint surfaceCoherenceHint(SurfaceHit hit) {
-    if (!hit.hit) return 0u;
-    uint alphaClass = (hit.flags & HIT_FLAG_TRANSLUCENT) != 0u ? 2u
-        : (hit.flags & HIT_FLAG_CUTOUT) != 0u ? 1u : 0u;
-    return 1u + alphaClass + (hit.kind == HitKind.Entity ? 4u : 0u);
+uint intersectionCoherenceHint(TriangleIntersection hit) {
+    return triangleScheduleClass(hit, entityInstance(hit.instanceId));
 }
 
-struct ReorderingTraversal<T : ISceneTracer> : ISceneTracer {
+struct ReorderingTraversal<T : ITriangleTracer> : ISceneTracer {
     T base;
 
     SurfaceHit traceClosest(Ray ray) {
-        // The query has finished inside base: only ordinary hit data crosses the repack instruction.
-        SurfaceHit hit = base.traceClosest(ray);
-        ReorderThread(surfaceCoherenceHint(hit), 3u);
-        return hit;
+        TriangleIntersection hit = base.traceIntersection(ray, false);
+        ReorderThread(intersectionCoherenceHint(hit), 2u);
+        return base.decodeIntersection(ray, hit);
     }
 
     override SurfaceHit tracePrimary(Ray ray) {
-        SurfaceHit hit = base.tracePrimary(ray);
-        ReorderThread(surfaceCoherenceHint(hit), 3u);
-        return hit;
+        TriangleIntersection hit = base.traceIntersection(ray, true);
+        ReorderThread(intersectionCoherenceHint(hit), 2u);
+        return base.decodeIntersection(ray, hit);
     }
 
     VisibilityResult traceVisibility(Ray ray) { return base.traceVisibility(ray); }

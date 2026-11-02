@@ -86,9 +86,8 @@ public class RtSelfAvatarExclusionTest {
 
     @Test
     public void theCandidateLoopSkipsBeforeItCommits() {
-        String traversal = read(TRAVERSAL);
-        String trace = block(traversal, "SurfaceHit traceNearest(Ray ray, bool excludeSelfAvatar) {");
-        int skip = trace.indexOf("if (excludeSelfAvatar && selfAvatarPrimitive(");
+        String trace = read(SHADERS + "/traversal/triangle_query.slang");
+        int skip = trace.indexOf("if (excludedSelfAvatar(excludeSelfAvatar, entityInstance(");
         int commit = trace.indexOf("query.CommitNonOpaqueTriangleHit();");
         assertTrue(skip >= 0, "the candidate loop has to drop the avatar's triangles");
         assertTrue(commit >= 0, "the walk commits the terminal surface it really hits");
@@ -100,12 +99,12 @@ public class RtSelfAvatarExclusionTest {
 
     @Test
     public void helperOnlyMatchesEntityTrianglesOfThisFrame() {
-        String helper = block(read(TRAVERSAL), "bool selfAvatarPrimitive(uint instanceId, uint primitive) {");
-        assertTrue(helper.contains("!entityInstance(instanceId)"),
+        String helper = read(SHADERS + "/contracts/triangle_intersection.slang");
+        assertTrue(helper.contains("primary && entity"),
             "world sections use the same primitive numbering: the check must not match their triangles");
-        assertTrue(helper.contains("selfAvatarTriCount == 0u"),
+        assertTrue(helper.contains("count != 0u"),
             "third person and a disabled option publish 0: nothing may be skipped then");
-        assertTrue(helper.contains("primitive < selfAvatarTriStart + selfAvatarTriCount"),
+        assertTrue(helper.contains("primitive >= start && primitive - start < count"),
             "half-open range: the triangle right after the body is the next entity");
         assertFalse(helper.contains("RayQuery"), "the helper is a pure range test, called with the candidate's own indices");
         assertTrue(readJava(CONFIG).contains("System.getProperty(\"vkbridge.rt.selfAvatar\", \"true\")"),
