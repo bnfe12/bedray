@@ -182,6 +182,26 @@ struct LegacySectionTraversal : ISceneTracer {
     uint selfAvatarTriStart;
     uint selfAvatarTriCount;
 
+    // The block atlas and the pass's cutout threshold, so a candidate that lands on a transparent texel of a cutout
+    // face is skipped inside the ray query. Every caller assigns both (an unassigned resource field crashes the NVIDIA
+    // pipeline compile, P0-9). The surface layer still applies the same rule (materialAcceptsAlpha) to whatever is
+    // committed; this only spares it the work: a leaf hole used to end the query and start a new one from the hole,
+    // which doubled the trace cost in a forest once the step budget let rays through foliage (rt_look 2026-11-02).
+    Sampler2D alphaAtlas;
+    float alphaCutoff;
+
+    bool candidateIsHole(uint instanceId, uint geometryIndex, uint primitiveId, float2 bary) {
+        if (!(alphaCutoff > 0.0) || entityInstance(instanceId)) return false;
+        LegacySection section = sections[instanceId];
+        if (geometryIndex >= section.quadStart.w) return false;
+        if (((uint(section.origin.w) >> (2u * geometryIndex)) & 3u) != 1u) return false;   // cutout pass only
+        uint3 v = legacyTriangleVertices(section.quadStart[geometryIndex] + (primitiveId >> 1u), primitiveId);
+        float3 w = float3(1.0 - bary.x - bary.y, bary.x, bary.y);
+        float2 uv = legacyLoadUv(section, v.x) * w.x + legacyLoadUv(section, v.y) * w.y
+            + legacyLoadUv(section, v.z) * w.z;
+        return alphaAtlas.SampleLevel(uv, 0.0).a < alphaCutoff;
+    }
+
     bool selfAvatarPrimitive(uint instanceId, uint primitive) {
         if (selfAvatarTriCount == 0u || !entityInstance(instanceId)) return false;
         return primitive >= selfAvatarTriStart && primitive < selfAvatarTriStart + selfAvatarTriCount;
@@ -219,6 +239,8 @@ struct LegacySectionTraversal : ISceneTracer {
             if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
             if (excludeSelfAvatar && selfAvatarPrimitive(query.CandidateInstanceID(),
                     query.CandidatePrimitiveIndex())) continue;
+            if (candidateIsHole(query.CandidateInstanceID(), query.CandidateGeometryIndex(),
+                    query.CandidatePrimitiveIndex(), query.CandidateTriangleBarycentrics())) continue;
             query.CommitNonOpaqueTriangleHit();
         }
 
@@ -259,6 +281,8 @@ struct LegacySectionTraversal : ISceneTracer {
         query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
         while (query.Proceed()) {
             if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                if (candidateIsHole(query.CandidateInstanceID(), query.CandidateGeometryIndex(),
+                        query.CandidatePrimitiveIndex(), query.CandidateTriangleBarycentrics())) continue;
                 query.CommitNonOpaqueTriangleHit();
             }
         }

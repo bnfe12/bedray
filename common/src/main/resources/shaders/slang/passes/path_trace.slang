@@ -121,6 +121,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.sections = sections;
     traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_SCENE;
     traversal.entities = entities;
+    traversal.alphaAtlas = albedoAtlas;
+    traversal.alphaCutoff = pc.alphaCutoff;
     // An entity hit has no section to anchor to, so its world position is
     // `hit + camRel`, where camRel is the camera against the origin the frame
     // was anchored at.  worldPosition is a wrapped neighbourhood proxy, not a
