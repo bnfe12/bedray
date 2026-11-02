@@ -36,6 +36,7 @@ RayGenerationPipeline::RayGenerationPipeline(const DeviceFns& device,
         context.functions.get_buffer_device_address = reinterpret_cast<PFN_vkGetBufferDeviceAddress>(
             get_proc(device_, "vkGetBufferDeviceAddressKHR"));
     context.memory_properties = device.memory_properties;
+    context.memory = device.memory;
     context.non_coherent_atom_size = device.non_coherent_atom_size;
     context.dedicated_allocation_enabled = true; // the core requires Vulkan 1.1+
     context.buffer_device_address_enabled = true; // checked before constructing this owner

@@ -89,6 +89,7 @@ BedrayStatus BloomPass::configure(BedrayCore* core, const DeviceFns& fns,
     context.device = fns.device;
     context.functions = fns.image_functions;
     context.memory_properties = fns.memory_properties;
+    context.memory = fns.memory;
     context.dedicated_allocation_enabled = true;
     context.generation = fns.generation;
     auto images = std::make_unique<gpu::GpuImages>(context, desc.image_budget_bytes ? desc.image_budget_bytes : 256ull << 20);

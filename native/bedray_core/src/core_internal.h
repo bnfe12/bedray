@@ -22,6 +22,7 @@ struct DeviceFns {
     std::uint64_t generation = 0;
     gpu::ImageFunctions image_functions{};
     gpu::BufferFunctions buffer_functions{};
+    std::shared_ptr<gpu::MemoryAllocator> memory;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
     PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
     VkPipelineStageFlags path_shader_stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;

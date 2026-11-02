@@ -68,6 +68,13 @@ target_sources(bedray_core PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_reso
 target_compile_definitions(bedray_core PRIVATE BEDRAY_GPU_RESOURCES_EXPORTS)
 target_link_libraries(bedray_core PRIVATE bedray_gpu_resources)
 
+add_executable(bedray_memory_allocator_test ../bedray_gpu_resources/tests/memory_allocator_test.cpp)
+target_link_libraries(bedray_memory_allocator_test PRIVATE bedray_gpu_resources)
+if(MSVC)
+    set_property(TARGET bedray_memory_allocator_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+add_test(NAME bedray_memory_allocator COMMAND bedray_memory_allocator_test)
+
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../bedray_scene"
                  "${CMAKE_CURRENT_BINARY_DIR}/bedray_scene")
 target_link_libraries(bedray_core PRIVATE bedray_scene_objects)
@@ -262,6 +269,7 @@ add_test(NAME bedray_abi_exception COMMAND bedray_abi_exception_test)
 
 add_executable(bedray_core_scene_exports_test tests/core_scene_exports_test.cpp)
 target_include_directories(bedray_core_scene_exports_test PRIVATE
+    include
     "${CMAKE_CURRENT_LIST_DIR}/../bedray_scene/include")
 target_compile_definitions(bedray_core_scene_exports_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 if(MSVC)

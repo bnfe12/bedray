@@ -3,6 +3,8 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <vector>
+#include <memory>
+#include "bedray/memory_allocator.hpp"
 
 namespace bedray::gpu {
 
@@ -50,6 +52,7 @@ struct DeviceContext {
     bool dedicated_allocation_enabled = false;
     bool buffer_device_address_enabled = false;
     std::uint64_t generation = 0;
+    std::shared_ptr<MemoryAllocator> memory;
 };
 
 struct BufferDesc {
@@ -99,13 +102,14 @@ public:
     // recordings covered by the current uses cannot be submitted or resubmitted.
     [[nodiscard]] Status device_idle() noexcept;
     // Device loss does not imply that ordinary completion was observed.
-    void device_lost() noexcept { lost_ = true; }
+    void device_lost() noexcept { lost_ = true; if (context_.memory) context_.memory->device_lost(); }
     // Host-only device-loss teardown: after it quiesces all Vulkan callers and
     // before VkDevice destruction. This releases even unknown pinned uses.
     [[nodiscard]] Status release_after_device_loss() noexcept;
     // Refuses while any live/retired buffer or use remains.
     [[nodiscard]] Status close() noexcept;
     [[nodiscard]] VkDeviceSize resident_bytes() const noexcept { return resident_bytes_; }
+    [[nodiscard]] Status share_memory(std::shared_ptr<MemoryAllocator> memory) noexcept;
 
 private:
     struct Buffer {
@@ -119,6 +123,7 @@ private:
         bool retired = false;
         VkBufferUsageFlags usage = 0;
         bool upload_slot = false;
+        MemoryAllocation allocation{};
     };
     struct Use { UseId id; BufferId buffer; };
     [[nodiscard]] Buffer* find(BufferId id) noexcept;

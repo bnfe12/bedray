@@ -641,6 +641,7 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     image_context.device = fns.device;
     image_context.functions = fns.image_functions;
     image_context.memory_properties = fns.memory_properties;
+    image_context.memory = fns.memory;
     image_context.dedicated_allocation_enabled = true;
     image_context.generation = fns.generation;
 
@@ -653,6 +654,7 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     buffer_context.device = fns.device;
     buffer_context.functions = fns.buffer_functions;
     buffer_context.memory_properties = fns.memory_properties;
+    buffer_context.memory = fns.memory;
     buffer_context.non_coherent_atom_size = fns.non_coherent_atom_size;
     buffer_context.dedicated_allocation_enabled = true;
     buffer_context.buffer_device_address_enabled = false;

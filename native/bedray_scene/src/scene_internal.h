@@ -5,6 +5,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include "bedray_scene.h"
+#include "bedray/memory_allocator.hpp"
 
 #include <array>
 #include <cstdint>
@@ -61,6 +62,7 @@ struct Buffer {
     void* mapped = nullptr;
     bool coherent = true;
     bool host_visible = false;
+    bedray::gpu::MemoryAllocation allocation{};
 };
 
 struct Acceleration {
@@ -179,6 +181,7 @@ struct Scene {
     uint64_t scratch_alignment = kDefaultScratchAlignment;
     uint32_t capabilities = 0;
     uint64_t resident_bytes = 0;
+    std::shared_ptr<bedray::gpu::MemoryAllocator> memory;
 
     bool failed = false;
     BedraySceneStatus failure_status = BEDRAY_SCENE_OK;

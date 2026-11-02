@@ -37,6 +37,12 @@ add_library(bedray_scene_objects OBJECT
     src/acceleration_scene.cpp
 )
 
+if(NOT TARGET bedray_gpu_resources)
+    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../bedray_gpu_resources"
+                     "${CMAKE_CURRENT_BINARY_DIR}/bedray_gpu_resources")
+endif()
+target_link_libraries(bedray_scene_objects PUBLIC bedray_gpu_resources)
+
 target_include_directories(bedray_scene_objects
     PUBLIC  include
     PRIVATE "${BEDRAY_VULKAN_HEADERS}"

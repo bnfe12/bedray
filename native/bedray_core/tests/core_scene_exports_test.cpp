@@ -1,4 +1,5 @@
 #include "bedray_scene.h"
+#include "bedray_core_memory.h"
 #include <windows.h>
 #include <cstdio>
 
@@ -8,6 +9,7 @@ int wmain(int argc, wchar_t** argv) {
     if (!library) return 2;
     const char* exports[] = {
         "bedray_core_discard_recording",
+        "bedray_core_memory_version", "bedray_core_memory_configure", "bedray_core_memory_attach", "bedray_core_memory_stats",
         "bedray_scene_abi_version", "bedray_scene_abi_info", "bedray_scene_create",
         "bedray_scene_update", "bedray_scene_update_table", "bedray_scene_set_view",
         "bedray_scene_prepare_frame", "bedray_scene_release_frame", "bedray_scene_discard_frame",
@@ -26,7 +28,14 @@ int wmain(int argc, wchar_t** argv) {
         GetProcAddress(library, "bedray_scene_abi_info"));
     BedraySceneAbiInfo abi{};
     info(&abi);
-    const bool valid = version() == BEDRAY_SCENE_ABI_VERSION
+    const auto memory_version = reinterpret_cast<decltype(&bedray_core_memory_version)>(
+        GetProcAddress(library, "bedray_core_memory_version"));
+    const auto configure_memory = reinterpret_cast<decltype(&bedray_core_memory_configure)>(
+        GetProcAddress(library, "bedray_core_memory_configure"));
+    BedrayError memory_error{};
+    const bool valid = memory_version() == 1 && sizeof(BedrayMemoryStats) == 72
+        && configure_memory(nullptr, 0, 0, 0, &memory_error) == BEDRAY_ERROR_INVALID_ARGUMENT
+        && memory_error.message[0] != 0 && version() == BEDRAY_SCENE_ABI_VERSION
         && abi.sizeof_section_record == sizeof(BedraySceneSectionRecord)
         && abi.sizeof_resources == sizeof(BedraySceneResources);
     FreeLibrary(library);

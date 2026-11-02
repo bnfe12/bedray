@@ -99,6 +99,7 @@ BedrayStatus RCFieldPass::configure(BedrayCore* core,const DeviceFns& f,const Be
         return fail(e,BEDRAY_ERROR_INVALID_ARGUMENT,"RC build field binding mismatch");
     gpu::DeviceContext context{};
     context.device=f.device; context.functions=f.buffer_functions; context.memory_properties=f.memory_properties;
+    context.memory=f.memory;
     context.non_coherent_atom_size=f.non_coherent_atom_size; context.dedicated_allocation_enabled=true;
     context.generation=f.generation;
     auto next=std::make_unique<gpu::GpuBuffers>(context,d.buffer_budget_bytes ? d.buffer_budget_bytes : 192ull<<20);

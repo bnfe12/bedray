@@ -1,4 +1,5 @@
 #include "scene_internal.h"
+#include "bedray/memory_binding.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,13 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+bedray::gpu::Status bedray::gpu::attach_memory(BedrayScene* scene, std::shared_ptr<MemoryAllocator> memory) noexcept {
+    if (!scene || !memory || !memory->valid() || memory->device() != scene->impl.device) return Status::invalid_argument;
+    if (scene->impl.resident_bytes || scene->impl.failed) return Status::in_use;
+    scene->impl.memory = std::move(memory);
+    return Status::ok;
+}
 
 static_assert(sizeof(BedraySceneError) == 1028, "scene ABI: BedraySceneError must stay 1028 bytes");
 static_assert(sizeof(BedraySceneAbiInfo) == 48, "scene ABI: BedraySceneAbiInfo must stay 48 bytes");
@@ -98,6 +106,7 @@ BedraySceneStatus vk_status(VkResult result) {
 }
 
 void mark_failed(Scene& scene, BedraySceneStatus status, const char* message) {
+    if (status == BEDRAY_SCENE_ERROR_DEVICE_LOST && scene.memory) scene.memory->device_lost();
     if (!scene.failed) {
         scene.failed = true;
         scene.failure_status = status;

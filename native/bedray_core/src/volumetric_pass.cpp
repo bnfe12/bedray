@@ -92,11 +92,13 @@ BedrayStatus VolumetricPass::configure(BedrayCore* core, const DeviceFns& fns,
     gpu::ImageDeviceContext image_context{};
     image_context.physical_device = fns.physical_device; image_context.device = fns.device;
     image_context.functions = fns.image_functions; image_context.memory_properties = fns.memory_properties;
+    image_context.memory = fns.memory;
     image_context.dedicated_allocation_enabled = true; image_context.generation = fns.generation;
     auto images = std::make_unique<gpu::GpuImages>(image_context, desc.image_budget_bytes ? desc.image_budget_bytes : 256ull << 20);
     gpu::DeviceContext buffer_context{};
     buffer_context.device = fns.device; buffer_context.functions = fns.buffer_functions;
     buffer_context.memory_properties = fns.memory_properties; buffer_context.non_coherent_atom_size = fns.non_coherent_atom_size;
+    buffer_context.memory = fns.memory;
     buffer_context.dedicated_allocation_enabled = true; buffer_context.generation = fns.generation;
     auto buffers = std::make_unique<gpu::GpuBuffers>(buffer_context, desc.buffer_budget_bytes ? desc.buffer_budget_bytes : 64ull << 20);
     if (!images->valid() || !buffers->valid()) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "volumetric owners unavailable");
