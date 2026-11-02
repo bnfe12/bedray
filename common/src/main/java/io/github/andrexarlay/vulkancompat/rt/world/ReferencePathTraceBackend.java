@@ -254,23 +254,29 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         RtPathTraceSlangPass.Scene scene = new RtPathTraceSlangPass.Scene(views.tlas(), views.table());
         RtPathTraceSlangPass.Atlases atlases = new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(),
             views.normal(), sampler);
+        RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_TRACE, false);
         trace.record(cmd, scene, atlases, emitters, reservoirRange, ptRange, capturedEntities,
             RtPathTraceSlangPass.Guides.of(views.gbuffer()), motion, views.depth(), input.stats(), frame, dispatch);
+        RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_TRACE, true);
         // ReSTIR PT spatial: pools the records the trace just wrote into the other half, which the next frame imports.
         // Nothing in this frame reads it - the pooled winner is shaded by the next temporal stage - so it needs no
         // ordering beyond the trailing barrier recordPtSpatial adds.
         boolean ptSpatialRan = ptFlags != 0 && input.ptSpatial() && trace.ptSpatialAvailable(scene);
         if (ptSpatialRan) {
+            RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_PT_SPATIAL, false);
             trace.recordPtSpatial(cmd, scene, atlases, ptRange, capturedEntities, frame, dispatch);
+            RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_PT_SPATIAL, true);
         }
         // Spatial reuse pools the records the trace pass just wrote, in the half it just wrote. Nothing in this frame
         // reads them - the benefit lands in the next frame's temporal import - so the stage owns its own ordering: the
         // barrier between its two phases and a trailing one, both inside record().
         if (spatialReuse != null && (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL) != 0 && diFlags != 0 && emitterCount > 0 && reservoirs != null) {
+            RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_DI_SPATIAL, false);
             spatialReuse.record(cmd, new RtPathTraceSlangPass.Atlases(views.atlas(), views.material(),
                     views.normal(), sampler), emitters, reservoirRange, capturedEntities, trace.frameResource(),
                 width, height, frame.frameIndex, diParity, dispatch.emitterCamRelX(), dispatch.emitterCamRelY(),
                 dispatch.emitterCamRelZ(), dispatch.maxDistance());
+            RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_DI_SPATIAL, true);
         }
 
         int flags = displayFlags(input.flags());
@@ -295,6 +301,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
             push.putInt(0, accumFrames).putInt(4, flags).putFloat(8, frame.exposure.x).putFloat(12, MAX_RADIANCE);
             push.putFloat(16, dispatch.diCamDeltaX()).putFloat(20, dispatch.diCamDeltaY())
                 .putFloat(24, dispatch.diCamDeltaZ()).putFloat(28, REPROJECTION_TOLERANCE);
+            RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_DISPLAY, false);
             display.dispatch(cmd.address(), display.groups(width, 0), display.groups(height, 1), 1, List.of(
                 SlangProgram.Resource.storageImage("radiance", trace.radianceView()),
                 SlangProgram.Resource.storageImage("accum", accum[write].view()),
@@ -305,6 +312,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
                 SlangProgram.Resource.storageImage("previousAccum", accum[read].view()),
                 SlangProgram.Resource.storageImage("previousDepth", historyDepth[read].view()),
                 trace.frameResource()), push);
+            RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_DISPLAY, true);
         }
         historyParity ^= 1;
         di.afterDispatch(diFlags != 0);

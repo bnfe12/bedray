@@ -486,7 +486,9 @@ public final class RtFrameRenderer {
             world.setBlockLookup(VegetationBlocks::foliageKindAt);
             if (RtGpuTimer.ENABLED) {
                 try {
-                    gpuTimer = new RtGpuTimer(device, "VKB-RT-GPU", "world", "rays", "denoise", "atmo");
+                    gpuTimer = new RtGpuTimer(device, "VKB-RT-GPU", "world", "rays", "denoise", "atmo",
+                        "trace", "pt_spatial", "di_spatial", "display");
+                    RtGpuTimer.active = gpuTimer;
                 } catch (RuntimeException e) {
                     // A device without timestamp queries must lose the timings, not the whole RT frame.
                     LOGGER.warn("[VKB-RT] gpu timers unavailable: {}", e.getMessage());
@@ -1826,6 +1828,7 @@ public final class RtFrameRenderer {
             pathSlangUnavailableReason = "Slang path runtime is not initialized";
             if (gpuTimer != null) {
                 gpuTimer.destroy();
+                if (RtGpuTimer.active == gpuTimer) RtGpuTimer.active = null;
                 gpuTimer = null;
             }
             if (denoiser != null) {
