@@ -13,8 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The Slang path fills the DLSS-RR guide channels out of the primary vertex it already traced: view depth, normal +
- * roughness, the direct and residual radiance split, albedo and the specular-albedo guide. The denoiser, its input pack
- * and the compose are unchanged, so the guides have to stay in the legacy {@code rt_path.comp} layout.
+ * roughness, primary-lobe radiance, albedo and the view-dependent specular-reflectance guide. The seven image
+ * formats stay compatible with the shared NRD/RR pack; bypass alpha explicitly excludes unsupported NRD pixels.
  * <p>
  * Four ways this silently breaks: a guide recomputed from a second primary ray that disagrees with the shaded one, a
  * split radiance that no longer sums back to the colour input (a bright halo around every light), a sky pixel packed as
@@ -36,8 +36,8 @@ class RtSlangGbufferGuidesTest {
         String capture = block(tracer, "if (receiver.primary) {");
         assertTrue(capture.contains("result.primary.position = hit.position;"), "the shaded vertex's own position");
         assertTrue(capture.contains("result.primary.normal = normal;"), "the view-facing normal the BSDF used");
-        assertTrue(capture.contains("result.primary.albedo = clamp(surface.material.albedo, float3(0.02), float3(1.0));"),
-            "the demodulation needs the same albedo the radiance was built from, floored as in rt_path.comp");
+        assertTrue(capture.contains("result.primary.albedo = clamp(bsdfReflectionAlbedo(surface.material), float3(0.0), float3(1.0));"),
+            "the diffuse material guide is zero for metals; the stable demodulation floor belongs to the pack");
         assertTrue(capture.contains("result.primary.direct = directContribution;"), "the same camera-weighted NEE as raw HDR");
         assertTrue(capture.contains("result.primary.roughness = surface.material.roughness;"), "the material roughness");
         assertTrue(capture.contains("result.primary.metallic = surface.material.metallic;"),
@@ -48,19 +48,20 @@ class RtSlangGbufferGuidesTest {
     void theSplitRadianceStillSumsToTheColourInput() {
         String source = read(ENTRY);
         String guides = block(source, "void pathTraceWriteGuides(");
-        assertTrue(guides.contains("outDiffuse[p] = float4(result.radiance - result.primary.direct, result.firstHitDistance);"),
-            "the residual is the whole signal minus the direct term the pack adds back");
-        assertTrue(guides.contains("outDirect[p] = float4(result.primary.direct, 0.0);"),
-            "the direct term is the one the residual removed");
-        assertTrue(guides.contains("outSpecular[p] = float4(0.0);"),
-            "the path tracer has no split specular channel, exactly as rt_path.comp writes zeros");
-        assertTrue(guides.contains("outAlbedo[p] = float4(result.primary.albedo, 1.0);"), "albedo guide");
+        assertTrue(guides.contains("outDiffuse[p] = float4(result.denoiser.diffuse, result.denoiser.diffuseHitDistance);"),
+            "diffuse owns only the suffix of a selected primary diffuse lobe, with secondary distance");
+        assertTrue(guides.contains("outDirect[p] = float4(pathDenoiserBypass(result.radiance, result.denoiser),"),
+            "the exact remainder includes emission and unsupported transport without changing raw HDR");
+        assertTrue(guides.contains("outSpecular[p] = float4(result.denoiser.specular, result.denoiser.specularHitDistance);"),
+            "specular owns the primary specular suffix even if a later bounce is diffuse");
+        assertTrue(guides.contains("outAlbedo[p] = float4(result.primary.albedo, result.primary.metallic > 0.5 ? 1.0 : 0.0);"),
+            "diffuse albedo and the NRD metal/nonmetal material ID");
         assertTrue(guides.contains("outNormalRough[p] = float4(n, clamp(result.primary.roughness, 0.0, 1.0));"),
             "normal + roughness");
         assertTrue(guides.contains("float viewZ = -dot(toSurface, f.camera.forward.xyz);"),
             "NRD's view depth is backwards along the view axis, as in rt_path.comp");
-        assertTrue(guides.contains("result.primary.metallic > 0.5 || result.primary.roughness < 0.6"),
-            "the legacy specular-albedo rule (metal or glossy only)");
+        assertTrue(guides.contains("clamp(result.primary.specularReflectance, float3(0.0), float3(1.0))"),
+            "all roughnesses have GGX reflectance; a roughness threshold must not remove the RR guide");
     }
 
     @Test

@@ -12,7 +12,12 @@ void nrdPackPixel(uint2 pixel, NrdPackPush pc, RWTexture2D<float4> normalOutput)
         input.normalRoughness = gbNormalRough[pixel];
         input.diffuse = gbDiffuse[pixel];
         input.specular = gbSpecular[pixel];
-        input.albedo = gbAlbedo[pixel].rgb;
+        float4 diffuseMaterial = gbAlbedo[pixel];
+        input.albedo = diffuseMaterial.rgb;
+        input.materialId = diffuseMaterial.a;
+        float4 specularMaterial = gbSpecAlbedo[pixel];
+        input.specularAlbedo = specularMaterial.rgb;
+        input.materialRoughness = specularMaterial.a;
         if (pc.motionAddress != 0) {
             float4* values = (float4*)pc.motionAddress;
             input.motion = values[pixel.y * pc.size.x + pixel.x];

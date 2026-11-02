@@ -7,6 +7,12 @@ and execution order are in [STACK_IMPLEMENTATION_PLAN.md](STACK_IMPLEMENTATION_P
 The migration backlog below is a subset of that expanded task; completing its
 source transfers does not complete the full architecture manifesto.
 
+Latest source follow-ups: [optional ray-generation/NV SER](ai-agent-addenda/EXPERIMENTAL_SER.md)
+is merged through PR #58; [primary-lobe denoiser signals](ai-agent-addenda/PRIMARY_DENOISER_SIGNALS.md)
+document the current split/distance/bypass implementation and remaining vendor
+contracts. SER is experimental and opt-in. The requested 1080p/60 FPS on the
+owner's RTX 5060 Ti 8 GiB is an unmeasured target, not an acceptance result.
+
 Snapshot of 2026-11-01, branch `refactor/slang-pipeline`. Levels: L1 builds (slangc / javac / MSVC), L2 unit and
 source tests, L3 the game starts and the feature runs (log line), L4 effect visible on a screenshot, L5 confirmed by the
 owner. Evidence for every line is in [VERIFICATION_LOG.md](VERIFICATION_LOG.md) under the named commit.

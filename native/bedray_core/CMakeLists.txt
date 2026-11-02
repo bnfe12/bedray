@@ -268,3 +268,24 @@ if(MSVC)
     target_compile_options(bedray_core_scene_exports_test PRIVATE /W4 /permissive- /EHsc /utf-8)
 endif()
 add_test(NAME bedray_core_scene_exports COMMAND bedray_core_scene_exports_test $<TARGET_FILE:bedray_core>)
+
+# CPU execution of production shader helpers. CI supplies the pinned SDK; the
+# ordinary native build remains independent of a local shader compiler.
+set(BEDRAY_SLANGC "" CACHE FILEPATH "Slang compiler for CPU shader contract tests")
+if(BEDRAY_SLANGC)
+    get_filename_component(shader_root "${CMAKE_CURRENT_LIST_DIR}/../../common/src/main/resources/shaders/slang" ABSOLUTE)
+    set(shader_test "${CMAKE_CURRENT_LIST_DIR}/../../common/src/test/resources/shaders/slang/verify_denoiser_signals.slang")
+    set(generated_signals "${CMAKE_CURRENT_BINARY_DIR}/denoiser_signals.generated.cpp")
+    file(GLOB_RECURSE signal_dependencies CONFIGURE_DEPENDS "${shader_root}/*.slang")
+    add_custom_command(OUTPUT "${generated_signals}"
+        COMMAND "${BEDRAY_SLANGC}" "${shader_test}" -target cpp -entry main
+            -matrix-layout-column-major -I "${shader_root}" -o "${generated_signals}"
+        DEPENDS "${shader_test}" ${signal_dependencies} VERBATIM)
+    set_source_files_properties("${generated_signals}" PROPERTIES HEADER_FILE_ONLY TRUE)
+    add_executable(bedray_denoiser_signals_test tests/denoiser_signals_test.cpp "${generated_signals}")
+    target_include_directories(bedray_denoiser_signals_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    if(MSVC)
+        set_property(TARGET bedray_denoiser_signals_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+    add_test(NAME bedray_denoiser_signals COMMAND bedray_denoiser_signals_test)
+endif()

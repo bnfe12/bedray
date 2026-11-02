@@ -1,5 +1,12 @@
 # Denoiser signal ownership — remaining integration
 
+Implementation update, 2026-11-02: primary-lobe split, secondary hit distances,
+sum-preserving bypass, material factors and native reconstruction settings are
+implemented in [PRIMARY_DENOISER_SIGNALS.md](ai-agent-addenda/PRIMARY_DENOISER_SIGNALS.md).
+RR reflection resources, coordinated lobe selection and GPU/image acceptance
+remain open. The findings and proposed steps below describe the earlier audit
+baseline and preserve the rationale; they are not a current-source scorecard.
+
 Audit baseline: `78a4836`. This is a remaining implementation plan, not a claim
 that the complete NRD/RR signal contract is already correct.
 

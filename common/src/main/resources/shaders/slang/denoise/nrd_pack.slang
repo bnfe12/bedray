@@ -3,6 +3,7 @@
 public module nrd_pack;
 
 import "tonemap_curve.slang";
+import "denoise/material_factors.slang";
 
 struct NrdPackPush {
     uint normalEncoding;
@@ -34,10 +35,10 @@ float3 nrdEncodeOct1010(float3 normal, float roughness) {
     return result;
 }
 
-float4 nrdPackNormalRoughness(float3 normal, float roughness, NrdPackPush pc) {
+float4 nrdPackNormalRoughness(float3 normal, float roughness, NrdPackPush pc, float materialId = 0.0) {
     if (pc.roughnessEncoding == 2u) roughness = sqrt(clamp(roughness, 0.0, 1.0));
     else if (pc.roughnessEncoding == 0u) roughness *= roughness;
-    if (pc.normalEncoding == 2u) return float4(nrdEncodeOct1010(normal, roughness), 0.0);
+    if (pc.normalEncoding == 2u) return float4(nrdEncodeOct1010(normal, roughness), saturate(materialId / 3.0));
     normal /= max(abs(normal.x), max(abs(normal.y), abs(normal.z)));
     if (pc.normalEncoding == 0u || pc.normalEncoding == 3u) normal = normal * 0.5 + 0.5;
     return float4(normal, roughness);
@@ -74,6 +75,8 @@ struct NrdPackInput {
     float3 albedo;
     float3 direct;
     float3 specularAlbedo;
+    float materialRoughness; // quantized alongside specularAlbedo, identical for demodulation and composition
+    float materialId;
     float4 motion;
 };
 
@@ -98,7 +101,7 @@ NrdPackedSample nrdPackSample(NrdPackInput input, NrdPackPush pc) {
     }
     float4 nr = input.normalRoughness;
     float3 normal = nr.xyz * rsqrt(dot(nr.xyz, nr.xyz) + 1.0e-9);
-    result.normalRoughness = nrdPackNormalRoughness(normal, nr.w, pc);
+    result.normalRoughness = nrdPackNormalRoughness(normal, nr.w, pc, input.materialId);
     float roughness = clamp(nr.w, 0.0, 1.0);
     float3 radiance = nrdInvalid3(input.diffuse.rgb) ? float3(0.0) :
         clamp(input.diffuse.rgb, float3(0.0), float3(NRD_FP16_MAX));
@@ -114,7 +117,10 @@ NrdPackedSample nrdPackSample(NrdPackInput input, NrdPackPush pc) {
     }
     if (input.motion.w > 0.5 && !nrdInvalid3(input.motion.xyz) && !(input.motion.x > 1.0e29))
         result.motion = float4(input.motion.xyz, 0.0);
-    float3 ambient = radiance / max(input.albedo, float3(0.02));
+    float3 ambient = radiance / denoiserDiffuseFactor(input.albedo, input.specularAlbedo);
+    specular /= denoiserSpecularFactor(input.specularAlbedo, input.materialRoughness);
+    ambient = clamp(ambient, float3(0.0), float3(NRD_FP16_MAX));
+    specular = clamp(specular, float3(0.0), float3(NRD_FP16_MAX));
     if (pc.denoiser == 0u) {
         float3 parameters = float3(pc.hitDistA, pc.hitDistB, pc.hitDistC);
         float distanceScale = nrdHitDistanceNormalization(input.viewZ, parameters, 1.0);
@@ -128,13 +134,16 @@ NrdPackedSample nrdPackSample(NrdPackInput input, NrdPackPush pc) {
     return result;
 }
 
-float3 nrdComposeColor(float3 diffuse, float3 specular, float3 albedo, float3 direct, NrdPackPush pc) {
+float3 nrdComposeColor(float3 diffuse, float3 specular, float3 albedo, float4 specularMaterial,
+        float4 direct, NrdPackPush pc) {
     float3 color;
     if (pc.denoiser == 2u) color = max(diffuse, float3(0.0));
+    else if (direct.a > 0.5) color = max(direct.rgb, float3(0.0));
     else {
         float3 ambient = pc.denoiser == 0u ? nrdYCoCgToLinear(diffuse) : max(diffuse, float3(0.0));
         float3 reflection = pc.denoiser == 0u ? nrdYCoCgToLinear(specular) : max(specular, float3(0.0));
-        color = albedo * ambient + reflection + direct;
+        color = denoiserDiffuseFactor(albedo, specularMaterial.rgb) * ambient
+            + denoiserSpecularFactor(specularMaterial.rgb, specularMaterial.a) * reflection + direct.rgb;
     }
     color *= max(pc.exposure, 0.0);
     if ((pc.flags & 1u) != 0u) color = tonemapColor(color);

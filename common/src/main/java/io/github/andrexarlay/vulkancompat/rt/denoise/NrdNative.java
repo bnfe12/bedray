@@ -42,6 +42,7 @@ public final class NrdNative implements AutoCloseable {
     private final MethodHandle getApiVersion;
     private final MethodHandle getLastError;
     private final MethodHandle getRequiredFeatures;
+    private final MethodHandle getSignalContractVersion;
     private final MethodHandle init;
     private final MethodHandle createDenoiser;
     private final MethodHandle resize;
@@ -66,6 +67,8 @@ public final class NrdNative implements AutoCloseable {
             getApiVersion = bind(linker, lookup, "vkb_nrd_get_api_version", FunctionDescriptor.of(JAVA_INT));              // vkb_nrd.h:195
             getLastError = bind(linker, lookup, "vkb_nrd_get_last_error_string", FunctionDescriptor.of(ADDRESS));           // :196
             getRequiredFeatures = bind(linker, lookup, "vkb_nrd_get_required_features", FunctionDescriptor.of(JAVA_INT));   // :197
+            getSignalContractVersion = lookup.find("vkb_nrd_get_signal_contract_version")
+                .map(symbol -> linker.downcallHandle(symbol, FunctionDescriptor.of(JAVA_INT))).orElse(null);
             // int32 vkb_nrd_init(u64 instance, u64 phys, u64 device, void* gipa, void* gdpa, const char* path, VkbNrdLibraryInfo*)  :201
             init = bind(linker, lookup, "vkb_nrd_init",
                 FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, ADDRESS));
@@ -79,7 +82,7 @@ public final class NrdNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_INT, ADDRESS, ADDRESS));
             destroy = bind(linker, lookup, "vkb_nrd_destroy", FunctionDescriptor.ofVoid(JAVA_LONG));                          // :222
             shutdown = bind(linker, lookup, "vkb_nrd_shutdown", FunctionDescriptor.ofVoid());                                // :223
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
             arena.close();
             throw e;
         }
@@ -91,13 +94,27 @@ public final class NrdNative implements AutoCloseable {
             throw new NrdException("load", "vkb_nrd.dll not found at " + LogPaths.show(wrapperDll), null);
         }
         NrdNative n = new NrdNative(wrapperDll.toAbsolutePath().normalize());
-        int v = n.apiVersion();
-        if (v != NrdLayouts.API_VERSION) {
+        try {
+            int v = n.apiVersion();
+            if (v != NrdLayouts.API_VERSION) {
+                throw new NrdException("load", "vkb_nrd.dll API version 0x" + Integer.toHexString(v) + " != expected 0x"
+                    + Integer.toHexString(NrdLayouts.API_VERSION) + " (rebuild it from this repository)", null);
+            }
+            requirePrimaryLobeSignals(n.signalContractVersion());
+            return n;
+        } catch (RuntimeException | Error failure) {
             n.arena.close();
-            throw new NrdException("load", "vkb_nrd.dll API version 0x" + Integer.toHexString(v) + " != expected 0x"
-                + Integer.toHexString(NrdLayouts.API_VERSION) + " (rebuild it from this repository)", null);
+            throw failure;
         }
-        return n;
+    }
+
+    static void requirePrimaryLobeSignals(int version) {
+        if (version != 1) throw new NrdException("signal_contract", "vkb_nrd.dll signal contract " + version
+            + " != required 1 (rebuild the bridge for primary-lobe reconstruction)", null);
+    }
+
+    public int signalContractVersion() {
+        return getSignalContractVersion == null ? 0 : invokeInt("signal_contract_version", getSignalContractVersion);
     }
 
     private static MethodHandle bind(Linker linker, SymbolLookup lookup, String name, FunctionDescriptor fd) {

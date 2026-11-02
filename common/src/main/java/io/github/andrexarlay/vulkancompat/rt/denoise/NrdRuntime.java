@@ -64,9 +64,9 @@ final class NrdRuntime {
             NrdNative.LibraryInfo li = n.init(instance, device.getPhysicalDevice().address(), device.address(), gipa, gdpa, availability.nrdDll());
             nativeLib = n;
             info = li;
-            LOGGER.info("[VKB-NRD] loaded path={} nrd={} normEnc={} roughEnc={} normFormat={} wrapper_api=0x{} required_features=0x{}",
+            LOGGER.info("[VKB-NRD] loaded path={} nrd={} normEnc={} roughEnc={} normFormat={} wrapper_api=0x{} required_features=0x{} signal_contract={}",
                 io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(availability.nrdDll()), li, li.normalEncoding(), li.roughnessEncoding(), li.normalRoughnessVkFormat(),
-                Integer.toHexString(n.apiVersion()), Integer.toHexString(n.requiredFeatures()));
+                Integer.toHexString(n.apiVersion()), Integer.toHexString(n.requiredFeatures()), n.signalContractVersion());
         } catch (NrdException e) {
             failure = e.getMessage();
             throw e;

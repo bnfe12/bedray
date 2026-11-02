@@ -24,7 +24,7 @@ static_assert(offsetof(Push, a) == 16 && offsetof(Push, width) == 32);
 static_assert(offsetof(Push, exposure) == 40 && offsetof(Push, motion) == 48);
 constexpr std::array<std::uint32_t, 11> pack_bindings{0,1,2,3,4,5,6,9,10,12,13};
 constexpr std::array<std::uint32_t, 9> rr_bindings{0,1,2,4,5,6,9,10,13};
-constexpr std::array<std::uint32_t, 6> compose_bindings{0,3,4,7,8,11};
+constexpr std::array<std::uint32_t, 7> compose_bindings{0,3,4,7,8,11,13};
 
 void barrier(PFN_vkCmdPipelineBarrier command_barrier, VkCommandBuffer command) {
     VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};

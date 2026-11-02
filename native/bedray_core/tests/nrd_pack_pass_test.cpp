@@ -95,9 +95,14 @@ int main() {
     check(render(frame) == BEDRAY_OK && records.back().resources.size() == 9 && !records.back().push.motion);
     for (const auto& resource : records.back().resources) check(resource.binding != 12 && resource.binding != 3);
     check(records.front().resources.front().handle == 21); // copied identities, no mutable descriptor table
-    frame.phase = BEDRAY_NRD_COMPOSE; contract.binding_count = 6;
+    frame.phase = BEDRAY_NRD_COMPOSE; contract.binding_count = 7;
     frame.views[11] = frame.views[7]; // RR's duplicate read view is legal
-    check(render(frame) == BEDRAY_OK && records.back().resources.size() == 6);
+    check(render(frame) == BEDRAY_OK && records.back().resources.size() == 7);
+    check(records.back().resources.back().binding == 13);
+    check(records.back().resources.back().handle == frame.views[13]);
+    events.clear(); records.clear();
+    bad([](auto& f) { f.views[13] = 0; });
+    bad([](auto& f) { f.views[8] = f.views[13]; });
     events.clear(); result = BEDRAY_ERROR_OUT_OF_MEMORY;
     check(render(frame) == result && events == std::vector<char>({'b','d'}));
     std::puts("native NRD phase/ABI/descriptor/push/barrier contracts passed (no GPU)");
