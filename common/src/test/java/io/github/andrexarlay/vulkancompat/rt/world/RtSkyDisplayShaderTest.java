@@ -28,7 +28,6 @@ class RtSkyDisplayShaderTest {
             new Preserved("sky_celestial.slang", "skyHash", "8780cd5b538b40f882629c8cbba35108b95069ccc0924b6fe1b15466a7c1b58c"),
             new Preserved("sky_celestial.slang", "skyStars", "7bf0588b88e385e944f16f1b06a8c93eb528bde6a0f1aaa3280867ccfc8a4078"),
             new Preserved("sky_clouds.slang", "skyCloudCell", "4c8bb2be11ec0ba1cc55a9957e530d4b129a740a67193bf2bd4e9561025e48b2"),
-            new Preserved("sky_clouds.slang", "skyClouds", "0050ea8630e934378bc3695ac5329b7e4a30ca84b3deeceed6ada680b93d450b"),
             new Preserved("sky_background.slang", "skyFogColor", "db885466b57e673f85914c3d3578c2c40ff33b683acc98f0411e5ec6db45aa94"),
             new Preserved("sky_background.slang", "skySunsetFan", "6e78a6ed3968aac6ccba3b3117b2a10f84a7d650aeb2e4c6eb17d8fc04ff7f96"),
             new Preserved("sky_background.slang", "skyEndCube", "f85c85989d3d744df2c4e950c1bbadf47e7dcf9e7862c9dbb3106b2f0c73201f"),

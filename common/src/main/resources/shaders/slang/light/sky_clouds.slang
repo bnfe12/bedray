@@ -8,6 +8,14 @@ float4 skyCloudCell(SkyDisplayState sky, int2 cell, uint2 size) {
     return skyTexelAt(sky, 9u, t);
 }
 
+// FAST is a forward plane crossing, not a slab whose empty interval can be collapsed to t=0.
+bool skyFastCloudDistance(float originY, float directionY, float fadeEnd, out float distance) {
+    distance = 0.0;
+    if (!isfinite(originY) || !isfinite(directionY) || !isfinite(fadeEnd) || directionY == 0.0) return false;
+    distance = -originY / directionY;
+    return isfinite(distance) && distance >= 0.0 && distance < fadeEnd;
+}
+
 // Vanilla clouds seen along d from the camera (display rgb, alpha). Space: cloud texture blocks, x/z wrapped as in
 // CloudRenderer.render, y relative to the cloud bottom (LevelRenderState.cloudHeight); cells 12 x 4 x 12.
 float4 skyClouds(SkyDisplayState sky, float3 d) {
@@ -23,7 +31,10 @@ float4 skyClouds(SkyDisplayState sky, float3 d) {
     // slab [0, top] (FAST: the plane y = 0)
     float t0;
     float t1;
-    if (abs(d.y) < 1.0e-5) {
+    if (status == 1u) {
+        if (!skyFastCloudDistance(o.y, d.y, fadeEnd, t0)) return float4(0.0);
+        t1 = t0;
+    } else if (abs(d.y) < 1.0e-5) {
         if (o.y < 0.0 || o.y > top) {
             return float4(0.0);
         }
@@ -34,9 +45,6 @@ float4 skyClouds(SkyDisplayState sky, float3 d) {
         float tb = (top - o.y) / d.y;
         t0 = max(min(ta, tb), 0.0);
         t1 = min(max(ta, tb), fadeEnd);
-    }
-    if (status == 1u) {
-        t1 = t0;   // FAST: single plane
     }
     if (t0 > t1 + 1.0e-4 || t0 >= fadeEnd) {
         return float4(0.0);
