@@ -4,6 +4,56 @@ Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.
 
+## 2026-11-02 — Optional SER and primary-lobe denoiser signals (L1/L2)
+
+The final combined Java source `7fa5d404f5d4377054a1685e1fc1968a9b91f4f5`
+passed **1,120 tests: 1,111 passed, nine skipped, zero failures/errors**
+(`nrd-signals-acceptance.log`, 1m48s). The preceding combined run rebuilt all
+**35 AOT entries** with Slang 2026.20 and passed 1,118 tests (1,109 passed,
+nine skipped, zero failures/errors, `ser-signals-final.log`, 4m7s). Only the
+bridge semantic-version check and its two tests were added afterward; shader
+sources are identical. Real SPIR-V stage/capability/reorder instructions and
+equal resource/push contracts of all six new variants are checked by
+`SlangRayGenerationTest`.
+
+SER source `fe75d598062c3f26b7bfe9949dfbdbebb783fe05` passed Native Windows
+CI [41522940428](https://github.com/bnfe12/bedray/actions/runs/41522940428):
+**29 core + one scene + one lifetime** tests; baseline 15+1+1 also green.
+PR [#58](https://github.com/bnfe12/bedray/pull/58) merged the optional
+ray-generation/NV SER backend, additive ABI-v2 program flags/export, aligned
+immutable SBT, pixel launches, exact recording retirement, enabled-feature and
+driver-hint gates, shared cache borrow, stage barriers and compute fallback.
+The initial native run caught a wrong core-owner variable in the new launch
+query; the corrected exact source above was rebuilt and passed. Independent
+resource review also found and repaired device-lost SBT-flush rollback before
+the passing run; fake-driver tests cover that cleanup explicitly.
+
+NRD source `7fa5d404f5d4377054a1685e1fc1968a9b91f4f5` passed Native Windows
+CI [41524004924](https://github.com/bnfe12/bedray/actions/runs/41524004924):
+**30 core + one scene + one lifetime + one NRD settings** tests; baseline
+15+1+1 also green. The core total includes CPU execution of **16 cases in the
+actual production Slang helpers**, generated as C++ by the pinned compiler:
+lobe ownership, first secondary distance, miss, common clamp, accepted-sample
+means, sky/refusal, whole-pixel bypass, symmetric REBLUR/RELAX composition,
+RR total colour and material guides. The complete NRD bridge and its probe
+also compile against pinned NRD **4.18.0** headers at
+`8f12a22fc90e6a3c7f5da4c9c3103633c842963a`. NRD.dll is neither bundled nor run.
+
+The signal module preserves raw HDR and explicit bypass for unsupported
+RC/PT/medium/transmission guide estimators. Only NRD pays per-path lobe
+bookkeeping; reflectance guide computation is conditional on guide output.
+The additive signal-contract export rejects old bridges without required
+reconstruction settings. Public struct sizes remain unchanged.
+
+No GPU/game evidence is added. The execution machine reports Intel UHD, not
+the owner's RTX 5060 Ti. The accepted target is **1080p at stable 60 real FPS**
+on RTX 5060 Ti 8 GiB, Ryzen 5 5600XT and 16 GiB RAM; it is unmeasured and frame
+generation does not count. No SER speedup, complete NRD/RR quality, resolution
+of the first-frame RR velocity rejection, or completion of the full technology
+ledger is claimed. See [EXPERIMENTAL_SER.md](ai-agent-addenda/EXPERIMENTAL_SER.md),
+[PRIMARY_DENOISER_SIGNALS.md](ai-agent-addenda/PRIMARY_DENOISER_SIGNALS.md) and
+[STACK_IMPLEMENTATION_PLAN.md](STACK_IMPLEMENTATION_PLAN.md) for exact limits.
+
 ## 2026-11-02 — Expanded stack audit, cache and guide corrections (L1/L2)
 
 Exact combined source `7d7bf47` passed **1,099 Java tests: 1,090 passed, nine
