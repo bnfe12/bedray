@@ -70,8 +70,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     traversal.sections = sections;
     traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_SCENE;
     traversal.entities = entities;
-    traversal.alphaAtlas = albedoAtlas;
-    traversal.alphaCutoff = pc.alphaCutoff;
     traversal.cameraAnchor = pc.emitterCameraRelative.xyz;
     traversal.selfAvatarTriStart = pc.entityState.y;
     traversal.selfAvatarTriCount = pc.entityState.z;
