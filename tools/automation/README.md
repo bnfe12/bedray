@@ -1,70 +1,34 @@
-# Bedray 2.0 Automation & Benchmarking (Python 3.15+ & uv)
+# Benchmark automation prototype
 
-Modern, zero-configuration benchmark runner and Tracy Profiler controller for Bedray 2.0.
+This directory is a prototype and is not connected to the renderer's real
+launch/configuration/telemetry contracts. It must not be used as evidence for
+native 1080p/60 FPS, percentile lows, Tracy integration or GPU performance.
+The earlier description of a complete zero-configuration runner was inaccurate.
 
-## 1. Quick Start with Astral `uv`
+Confirmed gaps in `game_session.py` and `run_bench.py`:
 
-Astral `uv` is an extremely fast, standalone Python project and package manager that manages Python versions (including Python 3.15+) and isolated virtual environments automatically.
+- The client task `:fabric-26.1:runClient` does not exist in root settings.
+- Generated `bedray.mode`, `bedray.preset`, `bedray.benchmark.*` and
+  `bedray.tracy.*` properties have no corresponding renderer consumers.
+- Expected `[VKB-FRAME]`/`[VKB-PASS]` markers are not emitted. The renderer uses
+  `[VKB-PERF]` window averages and separate RT `gpu_ms` span logs.
+- Startup/build time is included in the nominal interval, stdout is not
+  drained while the child runs, and an existing game log may be deleted.
+- No effective resolution/upscaler/frame-generation acceptance check exists.
+  Missing samples can become a zero-valued report instead of a failed run.
+- `tracy_session.py` launches a capture executable; it does not implement a
+  Tracy protocol client or Bedray raw-Vulkan GPU zones.
 
-### Install `uv` (one-time setup)
-* **Windows (PowerShell):**
-  ```powershell
-  irm https://astral.sh/uv/install.ps1 | iex
-  ```
-* **macOS / Linux:**
-  ```bash
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  ```
+`pyproject.toml` requires Python 3.12+ and lists psutil/rich. Installing those
+dependencies does not resolve these protocol gaps. Do not launch this
+prototype against an existing game instance until its lifecycle is repaired.
 
-### Run Benchmark
-From the repository root or `tools/automation/`, run with `uv`:
+The actual in-game diagnostic path is `PerfScenario`, `PerfMonitor`,
+`DebugInfo` and `[VKB-PERF]`. The scenario's default comparison includes
+upscalers with RT off; configure it explicitly for native PT. Its window
+averages cannot produce honest per-frame 1%/0.1% lows.
 
-```bash
-# Run 30-second Path Tracing benchmark with Quality preset and Tracy profiling
-uv run tools/automation/run_bench.py --duration 30 --mode path_tracing --preset quality --tracy
-```
-
-`uv` will automatically:
-1. Download and pin the required Python version (Python 3.12 - 3.15+) without touching your system Python.
-2. Install isolated dependencies (`psutil`, `rich`).
-3. Connect to Tracy Profiler on TCP port 8086.
-4. Launch the game session and record frametimes and pass breakdowns.
-5. Generate a Markdown report in `reports/benchmarks/`.
-
----
-
-## 2. Tracy Profiler Integration
-
-Bedray 2.0 natively integrates the **Tracy Profiler** client (`VK_EXT_calibrated_timestamps` and `tracy-client` Vulkan GPU zones).
-
-### Live Viewing
-To view live zones and GPU execution timelines:
-1. Download the [Tracy Profiler GUI](https://github.com/wolfpld/tracy/releases) (`Tracy.exe` on Windows, `Tracy` on macOS/Linux).
-2. Launch `Tracy.exe` and click **Connect** (default port `8086`).
-3. Start the game or benchmark script — Tracy will immediately stream frame data and compute pass timelines.
-
-### Headless Capture (`tracy-capture`)
-For CI/CD and automated regression testing:
-* Place `tracy-capture` in your PATH or under `tools/tracy/`.
-* `run_bench.py` will automatically start `tracy-capture` in the background and output a standalone `.tracy` trace file in `reports/benchmarks/` alongside the Markdown summary.
-
----
-
-## 3. CLI Reference
-
-```
-usage: run_bench.py [-h] [--duration DURATION] [--warmup WARMUP]
-                    [--mode {voxel_vanilla,voxel_rt,path_tracing}]
-                    [--preset {fast,quality,expert}]
-                    [--render-distance RENDER_DISTANCE] [--tracy] [--no-tracy]
-                    [--output-dir OUTPUT_DIR]
-
-Options:
-  --duration DURATION   Measurement window in seconds (default: 30)
-  --warmup WARMUP       Warmup period before collecting stats (default: 10)
-  --mode MODE           Rendering mode: voxel_vanilla | voxel_rt | path_tracing
-  --preset PRESET       Quality preset: fast | quality | expert
-  --render-distance N   Render distance in chunks (default: 12)
-  --tracy / --no-tracy  Enable/disable background Tracy capture (default: True)
-  --output-dir PATH     Output folder for reports and traces
-```
+The owner target is native 1920x1080 at stable 60 real FPS without upscaling,
+reduced/dynamic internal resolution or generated-frame substitution. The
+implementation gaps, external measurement tools and required evidence are
+recorded in [the native-60 audit](../../docs/NATIVE_1080P_60_AUDIT.md).

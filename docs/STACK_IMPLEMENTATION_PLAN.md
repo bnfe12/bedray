@@ -13,7 +13,11 @@ adds the previously missing split/distances and symmetric composition, with
 explicit unsupported-transport bypass and remaining vendor/quality work.
 These advances do not complete the other unchecked obligations below. The
 owner's performance acceptance target is 1080p at 60 real frames/s on RTX 5060
-Ti 8 GiB, Ryzen 5 5600XT and 16 GiB RAM; it has not been measured here.
+Ti 8 GiB, Ryzen 5 5600XT and 16 GiB RAM. The owner explicitly requires native
+1920x1080, with no upscaler, reduced/dynamic internal resolution or generated
+frames counted toward the target. It has not been measured here. The follow-up
+[native-60 technology audit](NATIVE_1080P_60_AUDIT.md) prioritizes actual frame
+and memory costs and records additional missing mechanisms/tooling defects.
 
 The manifesto remains the feature target. Its fixed performance claims are not
 acceptance evidence. A requirement which conflicts with API semantics must be
