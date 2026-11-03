@@ -236,7 +236,6 @@ public final class ParticlesScenario implements AutotestScenario {
 
     private void applySettings(Step s) {
         RtSettings.applyPreset(RtSettings.Preset.LOW);
-        RtSettings.raysShadowQuality = 2;
         RtSettings.raysEmissiveDistance = 32;
         RtSettings.pathBounces = 3;
         RtSettings.pathSpp = 1;

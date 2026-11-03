@@ -87,6 +87,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
             // after resetPhase: the XeSS/DLSS runtimes have applied the current request (the RT block reads their state)
             RtCaptureControl.onFrameBegin();
             io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.beginFrame();
+            io.github.andrexarlay.vulkancompat.rt.overlay.RtBlockOutline.beginFrame();
             // entity/block-entity/item submits of renderLevel() are captured for the RT scene only while RT is gated on;
             // RtFrameRenderer.render (head of render3dHud, before the hand) publishes and closes the capture
             io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().beginFrame(
@@ -125,7 +126,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
             io.github.andrexarlay.vulkancompat.rtx.config.SamplerBiasSync.onFrameBegin();
             var wt = WorldTargetManager.getWorldTarget();
             boolean phase = WorldTargetManager.isInWorldPhase() && wt != null;
-            DebugInfo.noteWorldPhase(phase, phase ? wt.width : winW, phase ? wt.height : winH, winW, winH);
+            DebugInfo.noteWorldPhase(phase, phase ? WorldTargetManager.traceWidth(wt.width) : winW,
+                phase ? WorldTargetManager.traceHeight(wt.height) : winH, winW, winH);
             PerfMonitor.mark(PerfMonitor.Mark.WORLD_BEGIN);
         }
     }
@@ -155,7 +157,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
                 // the hand (hud3d) projection that follows in the same frame must not replace the full bobbed world projection.
                 WorldTargetManager.setCurrentProjectionMatrix(WorldTargetManager.levelProjectionOr(projMatrix));
             }
-            return CameraJitterManager.applyJitter(projMatrix);
+            return WorldTargetManager.rrResolvesOutput() ? projMatrix : CameraJitterManager.applyJitter(projMatrix);
         }
         return projMatrix;
     }
@@ -216,6 +218,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
                     : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.RASTER;
             io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.renderFrame(
                 this.mainRenderTarget, this.gameRenderState.levelRenderState.cameraRenderState, producer);
+            io.github.andrexarlay.vulkancompat.rt.overlay.RtBlockOutline.replay(this.mainRenderTarget,
+                producer == io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.HARDWARE_RT);
             PerfMonitor.mark(PerfMonitor.Mark.RT_END);
             WorldTargetManager.copyWorldDepth();
         }

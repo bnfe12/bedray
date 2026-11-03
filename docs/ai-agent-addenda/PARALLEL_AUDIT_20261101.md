@@ -1,0 +1,73 @@
+# Parallel migration audit — 2026-11-01
+
+The 2026-11-02 follow-up expanded to the full stack and compared the manifesto
+with current source and primary API/research references. Findings and decisions
+are in [STACK_IMPLEMENTATION_PLAN.md](../STACK_IMPLEMENTATION_PLAN.md).
+Confirmed cache lifetime/integrity, No-RT capability, FAST cloud intersection,
+direct/exposure radiometry, trusted-sky mean and FFM post-acceptance ownership
+defects were repaired and tested. The complete denoiser signal contract remains
+implementation work in
+[DENOISER_SIGNAL_CONTRACT_PLAN.md](../DENOISER_SIGNAL_CONTRACT_PLAN.md).
+This follow-up does not turn the remaining full-stack features into completed
+work. Exact combined evidence: source `7d7bf47`, 1,099 tests, 29 AOT entries and
+native CI `41368013821`, recorded in `VERIFICATION_LOG.md`.
+
+Audit baseline: `e40109b` on `refactor/slang-pipeline`. The current upstream
+renderer and its fixes take priority over the paused local preparation. Historical
+GLSL ray-effects prototypes are not reintroduced into the renderer that replaced
+them. Recovery snapshots remain outside the source tree.
+
+Three independent reviews covered resource lifetime, module boundaries and
+shader/ABI correctness. Confirmed findings and resulting changes:
+
+| Finding | Repair |
+|---|---|
+| NRD/RR/output resize could free images referenced by host-queued command buffers | Preflight before command allocation; host submit/fence before replacement; guide-generation pins from first preparation; transactional output replacement |
+| Partial Streamline tag registration could leave a borrowed view untracked | Small tag-ownership module marks possible references before the first native call and retains them on failed clear |
+| A failed FG frame could stop Java updates while native interpolation remained enabled | Shared failure cleanup attempts disable/clear, preserves the original error and retains uncertain state/resources |
+| FSR 3 menu/no-world disable failure was ignored | Check the SDK result before claiming OFF |
+| RC NEE shadow origins used the normal map | Geometric face normal controls origin offset; shading normal still controls illumination |
+| RC history blend copied current-only completion/opacity flags | Reuse the common weighted transport accumulator for values, confidence and classification |
+| Concurrent FG implementations duplicated the C ABI wrapper/layout | One canonical `BedrayCoreNative` binding and `BedrayCoreLayouts` descriptor; separate validation/payload adapter |
+
+Module boundaries remain explicit: `FrameGenProducerRecordings` handles proof
+state, `FrameGenHostCommands` adapts the engine encoder/fence, tag ownership tracks
+vendor references, and the failure-cleanup helper aggregates independent actions.
+`DenoiserRecordingPins` guards a complete guide generation, including failures
+before the pack pass. No new native submission or wait authority is introduced.
+
+Runtime diagnostics are emitted through the existing application logger into the
+game log. Error messages name the stage/provider/profile, frame or command buffer,
+old/requested extent, image view or guide generation, native result and retained
+resource state where relevant. Original exceptions remain causes; cleanup errors
+remain suppressed exceptions. Resource changes can produce lifecycle entries;
+unchanged successful frames do not gain new recurring log messages.
+
+Verification results belong to `VERIFICATION_LOG.md` with the tested source
+revision. CPU tests and AOT/native builds do not establish GPU, visual,
+performance or owner acceptance.
+
+## Follow-up findings and modular owners
+
+The next bounded review and implementation pass also repaired:
+
+| Finding | Repair |
+|---|---|
+| Active native PT history was missing from shutdown retirement | Retire its exact owner without requiring an OFF frame; native regression covers pending and completed shutdown |
+| Java allocation/decoding failure after native scene acceptance could lose the accepted frame | Reserve a single command/frame token before the downcall and mark native acceptance/release before Java post-call work |
+| Temporal SDK teardown relied on elapsed frame heads or device-idle and ignored failed release | Captured-device host submit/fence, checked SDK release and preserved handles on failure, including FAILED cleanup |
+| A rejected temporal SDK recording could still be executed | Discard the whole unsubmitted recording before end/execute; keep unknown submissions pending |
+| First frame called a null-unsafe resource destroy; failed rollback could lose allocations | One frame-resource owner with null-safe call sites, fixed rollback slots and exact initialization/recording pins |
+| Atlas reload could free a BDA still referenced by queued work and miss same-pack reloads | Immutable atlas replacement in preflight, successful resource epoch and host completion before old retirement |
+| Slang never consumed the resource-pack sky atlas | Typed display modules and versioned bounded packet, preserving the former display equations and neutral lighting ownership |
+
+`RtFrameResources`, `SceneFrameRecordings`, `VelocityRecordingOwner`,
+`UpscalerContextRetirement`, `SkyTextureAtlasData` and `RtSkyTextures` separate
+ownership, proof, CPU encoding and orchestration. Four uncalled legacy
+upscaler/velocity stubs (338 lines) were removed. The large renderer still has
+orchestration responsibilities; this is a concrete reduction of coupled state,
+not a claim of universal architectural completion.
+
+The combined source `2bd6cea` passes 1,067 no-GPU tests and all 29 AOT builds.
+Native CI `41324759791` passes 27+1+1 tests. The exact runs and remaining game
+acceptance limits are in `VERIFICATION_LOG.md`.

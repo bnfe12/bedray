@@ -4,13 +4,14 @@ import com.mojang.renderpearl.api.device.DeviceInfo;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
+import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerContextRetirement;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerReconfigure;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerRequest;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.system.FunctionProvider;
 import org.lwjgl.vulkan.VK;
-import org.lwjgl.vulkan.VK10;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,8 +31,8 @@ import java.util.Set;
  * bilinear rendering continues, no hidden retry: only a changed request leaves FAILED).
  * <p>
  * Runtime switch: when the request no longer matches the active mode the runtime goes READY -> RECONFIGURE_PENDING (out of
- * use at once), the feature is released {@link UpscalerReconfigure#RETIRE_DELAY_FRAMES} frame heads later (no
- * vkDeviceWaitIdle), then the new mode is set up (NGX stays initialised for the device) and the init epoch increases, which
+ * use at once), then queued host work is submitted and fenced before the feature is released. The new mode is set up
+ * afterwards (NGX stays initialised for the device) and the init epoch increases, which
  * resets the temporal history.
  * <p>
  * Steps (each logs a {@code [VKB-DLSS] [VKB-AUTOTEST] dlss=<step>} line): {@code lib_loaded}, {@code required_instance_ext},
@@ -66,6 +67,8 @@ public final class DlssRuntime {
     private static long initializingStartNanos;
     private static long lastInitializingPollLogNanos;
     private static DlssNative nativeLib;
+    /** Actual device NGX was initialized against; a different current device is never completion proof. */
+    private static VulkanDevice contextDevice;
     private static boolean ngxInitialised;
     private static DlssQuality activeMode;
     private static Size activeInput;
@@ -79,9 +82,8 @@ public final class DlssRuntime {
     private static String unsupportedReason;
     /** Frame heads seen so far (incremented in {@link #onFrameBegin}). */
     private static long frameCounter;
-    /** Feature taken out of use by a reconfiguration, released at frame {@link #retireAtFrame}. */
+    /** Feature taken out of use by a reconfiguration, retained until host completion and SDK acknowledgement. */
     private static long retiredFeature;
-    private static long retireAtFrame;
     /** Mode of the setup made last: a FAILED state belongs to this request. */
     private static DlssQuality attempted;
     /** Custom render percent of the READY setup / of the last attempt / of the setup being created (0 = NGX's size of the mode). */
@@ -184,7 +186,7 @@ public final class DlssRuntime {
         for (int guard = 0; guard < 4; guard++) {
             UpscalerReconfigure.Step step = UpscalerReconfigure.plan(UpscalerReconfigure.Phase.valueOf(state.name()),
                 UpscalerReconfigure.target(desired, desiredPct), UpscalerReconfigure.target(activeMode, activeCustom),
-                UpscalerReconfigure.target(attempted, attemptedCustom), frameCounter, retireAtFrame);
+                UpscalerReconfigure.target(attempted, attemptedCustom));
             switch (step) {
                 case NONE -> {
                     return;
@@ -207,32 +209,23 @@ public final class DlssRuntime {
         }
     }
 
-    /** READY setup no longer matches the request: out of use now, the feature is released after the retire delay. */
+    /** READY setup no longer matches the request: out of use now, pending a host completion proof. */
     private static void beginRetire(DlssQuality desired) {
         String from = UpscalerReconfigure.describe("DLSS", activeMode);
-        LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] upscaler_reconfigure from={} to={} reason=request phase=retire tech=dlss destroy_at_frame={} frame={}",
-            from, UpscalerReconfigure.describe("DLSS", desired), frameCounter + UpscalerReconfigure.RETIRE_DELAY_FRAMES, frameCounter);
+        LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] upscaler_reconfigure from={} to={} reason=request phase=retire tech=dlss proof=host_fence_required frame={}",
+            from, UpscalerReconfigure.describe("DLSS", desired), frameCounter);
         reconfigureFrom = from;
         retiredFeature = feature; // 0 when no evaluate happened yet
         feature = 0L;
         featureEpoch = -1;
         activeMode = null;
         activeInput = null;
-        retireAtFrame = frameCounter + UpscalerReconfigure.RETIRE_DELAY_FRAMES;
         state = State.RECONFIGURE_PENDING;
     }
 
-    /** Releases the feature retired by {@link #beginRetire}; the GPU work that used it was submitted frames ago. */
+    /** Releases the feature retired by {@link #beginRetire}, preserving its handle if either proof or SDK release fails. */
     private static void releaseRetired() {
-        if (retiredFeature != 0L && nativeLib != null) {
-            DlssNative.Status st = nativeLib.releaseFeature(retiredFeature);
-            if (!st.ok()) {
-                LOGGER.error("[VKB-DLSS] vkb_dlss_release_feature (retired) failed: {}", st);
-            } else {
-                LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] dlss=feature_destroyed reason=reconfigure");
-            }
-        }
-        retiredFeature = 0L;
+        retiredFeature = releaseFeature(retiredFeature, "release_retired");
     }
 
     private static void createWhenPossible(DlssQuality mode, int winW, int winH) {
@@ -259,6 +252,9 @@ public final class DlssRuntime {
     }
 
     private static void create(DlssQuality mode, VulkanDevice device, int winW, int winH) {
+        if (ngxInitialised && contextDevice != null && contextDevice != device)
+            throw new IllegalStateException("provider=dlss stage=create device_changed=true NGX remains bound to its original device");
+        contextDevice = device;
         DeviceInfo info = device.getDeviceInfo();
         LOGGER.info("[VKB-DLSS] requested: mode={} gpu='{}' vendor='{}' driver='{}'", mode, info.name(), info.vendorName(), info.driverInfo());
 
@@ -526,11 +522,10 @@ public final class DlssRuntime {
 
     /**
      * The window size changed: the render size must be asked from NGX again and the feature is re-created on the next
-     * evaluate. The GPU is idle first (resizes are rare); NGX itself stays initialised (it is bound to the device).
+     * evaluate. Queued host work is submitted and fenced first; NGX stays initialised on its original device.
      */
     private static void resize(int winW, int winH) {
         LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] dlss=resize from={}x{} to={}x{}", outputWidth, outputHeight, winW, winH);
-        waitIdle();
         releaseFeature();
         if (activeCustom > 0) {
             CustomChoice c = chooseCustom(winW, winH, activeCustom);
@@ -560,15 +555,17 @@ public final class DlssRuntime {
             return true;
         }
         if (feature != 0L) {
-            // Stale feature of an older size: the previous frame's commands may still use it.
-            waitIdle();
-            releaseFeature();
+            // This method runs inside an open CB; destruction belongs to the next frame's preflight.
+            executeFailed("stale_feature:handle=0x" + Long.toHexString(feature) + ",cmd=0x" + Long.toHexString(commandBuffer));
+            return false;
         }
         long[] out = new long[1];
         long t0 = System.nanoTime();
         DlssNative.Status st = nativeLib.createFeature(commandBuffer, activeInput.x(), activeInput.y(), outputWidth, outputHeight,
             featureMode != null ? featureMode : activeMode, FEATURE_FLAGS, out);
         if (!st.ok()) {
+            // Preserve an SDK-returned partial feature for retirement after this CB is discarded or fenced.
+            feature = out[0];
             executeFailed("create_feature:" + st);
             return false;
         }
@@ -589,12 +586,14 @@ public final class DlssRuntime {
 
     /**
      * Called when creating the feature or {@code vkb_dlss_evaluate} reported an error: logs the stage, disables DLSS for
-     * the rest of the session (the caller falls back to the bilinear path); the feature is released after the GPU is idle,
-     * at the head of the next frame (the failed command buffer may still be submitted this frame). NGX itself is shared
+     * the current request (the caller falls back to bilinear); the feature is released after host completion,
+     * at the head of the next frame. NGX itself is shared
      * with Streamline in-process and must remain initialized for Streamline's DLSS-G feature.
      */
     public static synchronized void executeFailed(String result) {
-        LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] dlss=FAILED stage=execute result={} (falling back to bilinear; DLSS disabled for this session)", result);
+        LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] provider=dlss stage=execute frame={} feature=0x{} output={}x{} retained={} result={}",
+            frameCounter, Long.toHexString(feature), outputWidth, outputHeight, feature != 0, result);
+        lastFailure = "stage=execute result=" + result;
         pendingDestroy = true;
         activeMode = null;
         activeInput = null;
@@ -602,30 +601,41 @@ public final class DlssRuntime {
     }
 
     private static void destroyPending() {
-        waitIdle();
         releaseFeature();
         pendingDestroy = false;
     }
 
-    private static void waitIdle() {
-        VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
-        if (device != null) {
-            int idle = VK10.vkDeviceWaitIdle(device.vkDevice());
-            if (idle != VK10.VK_SUCCESS) {
-                LOGGER.error("vkDeviceWaitIdle for DLSS returned {}", idle);
-            }
-        }
+    private static void releaseFeature() {
+        feature = releaseFeature(feature, "release_feature");
+        featureEpoch = -1;
     }
 
-    private static void releaseFeature() {
-        if (feature != 0L && nativeLib != null) {
-            DlssNative.Status st = nativeLib.releaseFeature(feature);
-            if (!st.ok()) {
-                LOGGER.error("[VKB-DLSS] vkb_dlss_release_feature failed: {}", st);
-            }
+    private static long releaseFeature(long ownedFeature, String stage) {
+        return UpscalerContextRetirement.release(ownedFeature,
+            () -> proveCompletion(stage, ownedFeature), handle -> {
+                try {
+                    if (nativeLib == null) throw new IllegalStateException("DLSS feature lost its native library");
+                    DlssNative.Status status = nativeLib.releaseFeature(handle);
+                    if (!status.ok()) throw new IllegalStateException("sdk_return=" + status);
+                    LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] dlss=feature_destroyed stage={} feature=0x{} frame={}",
+                        stage, Long.toHexString(handle), frameCounter);
+                } catch (RuntimeException | Error failure) {
+                    LOGGER.error("[VKB-DLSS] provider=dlss stage={} frame={} feature=0x{} output={}x{} sdk=FAILED retained=true",
+                        stage, frameCounter, Long.toHexString(handle), outputWidth, outputHeight, failure);
+                    throw failure;
+                }
+            });
+    }
+
+    private static void proveCompletion(String stage, long handle) {
+        try {
+            if (contextDevice == null) throw new IllegalStateException("DLSS feature lost its host device");
+            WorldTargetManager.drainTemporalRecordings(contextDevice);
+        } catch (RuntimeException | Error failure) {
+            LOGGER.error("[VKB-DLSS] provider=dlss stage={} frame={} feature=0x{} output={}x{} proof=FAILED retained=true",
+                stage, frameCounter, Long.toHexString(handle), outputWidth, outputHeight, failure);
+            throw failure;
         }
-        feature = 0L;
-        featureEpoch = -1;
     }
 
     /**
@@ -633,22 +643,9 @@ public final class DlssRuntime {
      * still requested. NGX stays initialised for the device; the wrapper DLL stays loaded for the process lifetime.
      */
     public static synchronized void cleanup() {
-        if (state == State.RECONFIGURE_PENDING) {
-            waitIdle(); // teardown path only, never the frame path
-            releaseRetired();
-            state = State.IDLE;
-            return;
-        }
-        if (state == State.INITIALIZING) {
-            state = State.IDLE;
-            return;
-        }
-        if (state == State.IDLE || state == State.FAILED) {
-            return;
-        }
-        waitIdle();
+        releaseRetired();
         releaseFeature();
-        LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] dlss=feature_destroyed");
+        pendingDestroy = false;
         activeMode = null;
         activeInput = null;
         state = State.IDLE;
@@ -664,6 +661,7 @@ public final class DlssRuntime {
     static synchronized void resetForTests() {
         state = State.IDLE;
         nativeLib = null;
+        contextDevice = null;
         ngxInitialised = false;
         activeMode = null;
         activeInput = null;
@@ -676,7 +674,6 @@ public final class DlssRuntime {
         unsupportedReason = null;
         frameCounter = 0L;
         retiredFeature = 0L;
-        retireAtFrame = 0L;
         attempted = null;
         reconfigureFrom = null;
         initializingStartNanos = 0L;

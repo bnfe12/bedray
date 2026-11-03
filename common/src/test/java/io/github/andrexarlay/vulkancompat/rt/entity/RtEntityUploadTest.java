@@ -83,6 +83,7 @@ public class RtEntityUploadTest {
     }
 
     @Test
+    @SuppressWarnings("removal") // Exercise the retained null-memory compatibility overload.
     public void testUploadAndGetGpuFrameNullMem() {
         RtEntityGeometryManager gm = new RtEntityGeometryManager();
         // With null mem, uploadAndGetGpuFrame should return EMPTY without crashing

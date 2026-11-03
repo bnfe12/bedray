@@ -66,7 +66,7 @@ public final class VkBarriers {
             VkMemoryBarrier.Buffer b = VkMemoryBarrier.calloc(1, stack);
             b.get(0).sType$Default()
                 .srcAccessMask(VK10.VK_ACCESS_SHADER_WRITE_BIT)
-                .dstAccessMask(KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
+                .dstAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT | KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR
                     | KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
             VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,

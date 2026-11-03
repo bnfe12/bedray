@@ -3,13 +3,15 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 import java.util.Locale;
 
 /**
- * The two hardware ray tracing modes of the world renderer, mutually exclusive:
+ * The two hardware ray tracing modes of the world renderer, mutually exclusive, both on the AOT Slang pipeline:
  * <ul>
- *   <li>{@link #RAY_TRACED}: primary rays plus ray traced effects (sun shadows, reflections, ambient occlusion, emissive
- *       lights), one pass {@code rt_rays.comp};</li>
+ *   <li>{@link #RAY_TRACED}: primary rays plus ray traced effects (sun shadows, reflections, ambient light, emissive
+ *       lights, one-bounce indirect light), traced as a one-indirect-bounce path in the same pass as Path Tracing;</li>
  *   <li>{@link #PATH_TRACED}: full light transport (several bounces, next event estimation of the sun, early probabilistic path termination,
- *       temporal accumulation), one pass {@code rt_path.comp}.</li>
+ *       temporal accumulation), the same pass with the player's bounce and sample counts.</li>
  * </ul>
+ * {@link #AO} and {@link #DIRECT} are debug shadings of the deleted ray pass; the Slang renderer refuses them by name
+ * instead of labelling a lit image with their name.
  * The mode is stored in {@code config/bedray.toml} ({@code rt_mode}) and can be forced for a session with
  * {@code -Dvkrtx.rt.mode=off|rays|path} (autotests).
  */

@@ -19,7 +19,6 @@ import io.github.andrexarlay.vulkancompat.rtx.config.UpscalerSelection;
 import io.github.andrexarlay.vulkancompat.rtx.config.TextureLodBias;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
-import io.github.andrexarlay.vulkancompat.rtx.raytracing.DefaultRtExperimentEngine;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
@@ -637,6 +636,29 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setBinding(customPath(v -> RtSettings.pathDenoiser = v, () -> RtSettings.pathDenoiser), () -> RtSettings.pathDenoiser)
             .setImpact(OptionImpact.HIGH).setStorageHandler(st);
         pt.addOption(track("path_denoiser", den));
+        // ReSTIR for the direct light of the path tracer: a pixel keeps its torch sample across frames instead of redrawing
+        // it every frame. This is what makes an interior converge while the camera moves, so it is worth a row of its own.
+        pt.addOption(boolOpt(builder, "path_restir_di", true, v -> RtSettings.pathRestirDi = v, () -> RtSettings.pathRestirDi,
+            pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st));
+        // The second stage pools the records the first writes, so the row is only live while reuse itself is on - an
+        // independent switch would be a control that changes nothing.
+        Identifier pathDiId = id("path_restir_di");
+        pt.addOption(boolOpt(builder, "path_restir_spatial", true, v -> RtSettings.pathRestirSpatial = v,
+            () -> RtSettings.pathRestirSpatial,
+            s -> pathOn.apply(s) && s.readBooleanOption(pathDiId), rtDependencies(modeId, pathDiId),
+            Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Path reuse of the indirect light. Off by default for its video memory, and a child of direct-light reuse: the
+        // reservoir owns the bounced light while DI owns the direct light, and the page offers them in that order.
+        pt.addOption(boolOpt(builder, "path_restir_pt", false, v -> RtSettings.pathRestirPt = v,
+            () -> RtSettings.pathRestirPt,
+            s -> pathOn.apply(s) && s.readBooleanOption(pathDiId), rtDependencies(modeId, pathDiId),
+            Mark.PATH, OptionImpact.HIGH, false, st));
+        // The spatial stage pools the path records the temporal stage writes, so it is live only under that row.
+        Identifier pathPtId = id("path_restir_pt");
+        pt.addOption(boolOpt(builder, "path_restir_pt_spatial", true, v -> RtSettings.pathRestirPtSpatial = v,
+            () -> RtSettings.pathRestirPtSpatial,
+            s -> pathOn.apply(s) && s.readBooleanOption(pathDiId) && s.readBooleanOption(pathPtId),
+            rtDependencies(modeId, pathDiId, pathPtId), Mark.PATH, OptionImpact.MEDIUM, false, st));
         EnumOptionBuilder<RtSettings.AdaptiveQuality> aq = builder.createEnumOption(id("adaptive_quality"), RtSettings.AdaptiveQuality.class);
         aq.setName(nameOf("adaptive_quality")).setTooltip(v -> tipOf("adaptive_quality")).setDefaultValue(RtSettings.AdaptiveQuality.OFF)
             .setAllowedValues(EnumSet.allOf(RtSettings.AdaptiveQuality.class))
@@ -867,24 +889,32 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         for (int i = 0; i < names.length; i++) {
             g.addOption(boolOpt(builder, names[i], defs[i], sets.get(i), gets.get(i), raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
         }
+        // The two ReSTIR stages of the ray pass, offered separately because each one is a different kind of reuse: temporal
+        // keeps a pixel's own light sample across frames, spatial pools the samples of neighbouring pixels. Spatial merges
+        // the records the temporal stage writes, so it is only ever useful with temporal on.
+        Identifier temporalId = id("rays_restir_temporal");
+        g.addOption(boolOpt(builder, "rays_restir_temporal", true, v -> RtSettings.raysRestirTemporal = v,
+            () -> RtSettings.raysRestirTemporal, raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
+        g.addOption(boolOpt(builder, "rays_restir_spatial", true, v -> RtSettings.raysRestirSpatial = v,
+            () -> RtSettings.raysRestirSpatial,
+            s -> raysOn.apply(s) && s.readBooleanOption(temporalId), rtDependencies(modeId, temporalId),
+            Mark.RT, OptionImpact.MEDIUM, false, st));
     }
 
     private void addExpertOptions(ConfigBuilder builder, OptionGroupBuilder ex, Function<ConfigState, Boolean> raysOn,
                                   Function<ConfigState, Boolean> anyRt, Function<ConfigState, Boolean> pathOn, Identifier[] dMode,
                                   Identifier modeId, Path gameDir, StorageEventHandler st) {
-        String[] names = {"rays_shadow_quality", "rays_reflection_quality", "rays_reflection_distance", "rays_ao_quality",
-            "rays_ao_radius", "rays_emissive_quality", "rays_emissive_distance", "rays_gi_quality", "rays_gi_distance"};
-        int[][] r = {{2, 1, 8, 1}, {1, 1, 4, 1}, {128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {2, 1, 8, 1},
-            {3, 1, 8, 1}, {1, 1, 8, 1}, {32, 8, 64, 8}, {1, 1, 8, 1}, {64, RtSettings.DISTANCE_MIN, 256, 16}};
-        String[] units = {"", "", " blocks", "", " blocks", "", " blocks", "", " blocks"};
-        List<Supplier<Integer>> gets = List.of(() -> RtSettings.raysShadowQuality,
-            () -> RtSettings.raysReflectionQuality, () -> RtSettings.raysReflectionDistance, () -> RtSettings.raysAoQuality,
+        String[] names = {"rays_reflection_distance", "rays_ao_radius", "rays_emissive_quality", "rays_emissive_distance",
+            "rays_gi_distance"};
+        int[][] r = {{128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {3, 1, 8, 1}, {1, 1, 8, 1},
+            {32, 8, 64, 8}, {64, RtSettings.DISTANCE_MIN, 256, 16}};
+        String[] units = {" blocks", " blocks", "", " blocks", " blocks"};
+        List<Supplier<Integer>> gets = List.of(() -> RtSettings.raysReflectionDistance,
             () -> RtSettings.raysAoRadius, () -> RtSettings.raysEmissiveQuality, () -> RtSettings.raysEmissiveDistance,
-            () -> RtSettings.raysGiQuality, () -> RtSettings.raysGiDistance);
-        List<Consumer<Integer>> sets = List.of(v -> RtSettings.raysShadowQuality = v,
-            v -> RtSettings.raysReflectionQuality = v, v -> RtSettings.raysReflectionDistance = v, v -> RtSettings.raysAoQuality = v,
+            () -> RtSettings.raysGiDistance);
+        List<Consumer<Integer>> sets = List.of(v -> RtSettings.raysReflectionDistance = v,
             v -> RtSettings.raysAoRadius = v, v -> RtSettings.raysEmissiveQuality = v, v -> RtSettings.raysEmissiveDistance = v,
-            v -> RtSettings.raysGiQuality = v, v -> RtSettings.raysGiDistance = v);
+            v -> RtSettings.raysGiDistance = v);
         for (int i = 0; i < names.length; i++) {
             ex.addOption(intOpt(builder, names[i], r[i][0], r[i][1], r[i][2], r[i][3], unit(units[i]), sets.get(i), gets.get(i),
                 raysOn, dMode, Mark.RT, OptionImpact.HIGH, false, st));
@@ -1079,12 +1109,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         RtSettings.rtFogInScattering = 100;
         RtSettings.fogDistanceScale = 1.0f;
         RtSettings.dlssRrGeometricNormals = true;
-        RtSettings.dlssNrEnabled = false;
-        RtSettings.dlssNrTransferStrength = 1.0f;
-        RtSettings.dlssNrColourStrength = 1.0f;
-        RtSettings.dlssNrMaxRatio = 2.0f;
-        RtSettings.dlssNrWorkingScale = 1.0f;
-        RtSettings.dlssNrDebugView = 0;
         RtConfig.setDebugView("");
         for (RtAtmosphereSettings.Option o : RtAtmosphereSettings.options()) {
             RtAtmosphereSettings.set(o.key(), o.def());
@@ -1161,9 +1185,9 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         if (before != VulkanRtxConfig.effectiveRtMode()) {
             afterModeChange(before, VulkanRtxConfig.effectiveRtMode(), "reset");
         }
-        LOGGER.info("[VKB-AUTOTEST] ui_reset level={} {} mode={} rays: shadows={} refl={} ao={} gi={} shadow_rays={} ao_rays={} | {}",
+        LOGGER.info("[VKB-AUTOTEST] ui_reset level={} {} mode={} rays: shadows={} refl={} ao={} gi={} | {}",
             level.name().toLowerCase(Locale.ROOT), what, VulkanRtxConfig.effectiveRtMode().logName(), RtSettings.raysShadows,
-            RtSettings.raysReflections, RtSettings.raysAo, RtSettings.raysGi, RtSettings.raysShadowQuality, RtSettings.raysAoQuality,
+            RtSettings.raysReflections, RtSettings.raysAo, RtSettings.raysGi,
             RtSettings.pathSummary());
         if (current instanceof VideoSettingsScreenAccess access) {
             net.minecraft.client.Minecraft.getInstance().gui.setScreen(
@@ -1189,11 +1213,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     /** Engine hooks after the RT mode changed through the page (preset or mode option). */
     private static void afterModeChange(RtMode before, RtMode after, String reason) {
-        if (after.isActive()) {
-            DefaultRtExperimentEngine.getInstance().init();
-        } else {
-            DefaultRtExperimentEngine.getInstance().cleanup();
-        }
         if (!after.isActive()) {
             // explicit user action: a session failure is forgotten, switching RT on again retries (RtGeometryGate)
             RtGeometryGate.clearFailure();

@@ -96,6 +96,7 @@ public final class PerfMonitor {
     private static final boolean[] written = new boolean[RING * MARKS];
     private static long frameIndex;
     private static int slot;
+    private static final long[] slotFrames = new long[RING];
     private static boolean gpuUnavailableLogged;
     private static String gpuUnavailableReason;
 
@@ -139,9 +140,12 @@ public final class PerfMonitor {
         java.util.Arrays.fill(cpuWritten, false);
         frameOpen = true;
         slot = (int) (frameIndex % RING);
+        GameplayCapture.tick(now);
+        FrameBenchmark.begin(frameIndex, now);
         if (ensurePool()) {
             harvest(slot);
         }
+        slotFrames[slot] = frameIndex;
         mark(Mark.FRAME_BEGIN);
     }
 
@@ -169,6 +173,9 @@ public final class PerfMonitor {
         mark(Mark.FRAME_END);
         frameOpen = false;
         accumulate(cpuNs, cpuWritten, 1.0e-6, cpuSum, cpuCount);
+        if (FrameBenchmark.active()) {
+            FrameBenchmark.end(frameIndex, cpuWritten[Mark.WORLD_BEGIN.ordinal()], samples(cpuNs, cpuWritten, 1.0e-6));
+        }
         frameIndex++;
         long now = System.nanoTime();
         if (now - windowStartNs >= WINDOW_NS) {
@@ -243,10 +250,24 @@ public final class PerfMonitor {
             written[q] = false;
         }
         accumulate(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6, gpuSum, gpuCount);
+        if (FrameBenchmark.active()) FrameBenchmark.gpu(slotFrames[s], samples(gpuTicks, gpuHave, timestampPeriodNs * 1.0e-6));
     }
 
     private static final long[] gpuTicks = new long[MARKS];
     private static final boolean[] gpuHave = new boolean[MARKS];
+
+    private static double[] samples(long[] ticks, boolean[] have, double toMs) {
+        double[] values = new double[SEGS];
+        java.util.Arrays.fill(values, Double.NaN);
+        for (Segment segment : SEG_VALUES) {
+            Mark from = segment.from;
+            if (segment == Segment.GUI && !have[Mark.UPSCALE_END.ordinal()] && !have[Mark.WORLD_BEGIN.ordinal()])
+                from = Mark.FRAME_BEGIN;
+            int a = from.ordinal(), b = segment.to.ordinal();
+            if (have[a] && have[b] && ticks[b] >= ticks[a]) values[segment.ordinal()] = (ticks[b] - ticks[a]) * toMs;
+        }
+        return values;
+    }
 
     /** Adds every segment whose two marks are present; GUI starts at FRAME_BEGIN when no world was rendered. */
     private static void accumulate(long[] t, boolean[] have, double toMs, double[] sum, int[] count) {

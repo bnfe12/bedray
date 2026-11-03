@@ -25,7 +25,7 @@ import net.minecraft.client.renderer.texture.AbstractTexture;
 import org.joml.Vector4f;
 import org.joml.Vector4fc;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkDevice;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,6 +80,7 @@ public final class RtParticleLayer {
 
     private static TextureTarget layer;
     private static RtParticleComposite composite;
+    private static final List<TextureTarget> retiredLayers = new ArrayList<>();
     private static boolean layerReady;
     private static boolean failed;
 
@@ -193,7 +194,7 @@ public final class RtParticleLayer {
      * Inside the RT command buffer, after the denoiser and before bloom: lays the layer over {@code rtOutputView}.
      * @return true when the layer was composited
      */
-    public static boolean composite(VkCommandBuffer cmd, VkDevice device, long rtOutputView, int width, int height) {
+    public static boolean composite(VkCommandBuffer cmd, SlangRuntime runtime, long rtOutputView, int width, int height) {
         if (!layerReady || layer == null || failed) {
             return false;
         }
@@ -203,12 +204,10 @@ public final class RtParticleLayer {
             return false;
         }
         if (composite == null) {
-            composite = new RtParticleComposite(device);
+            composite = new RtParticleComposite(runtime);
             LOGGER.info("[VKB-RT] particles composite pipeline ready");
         }
-        io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.fullMemoryBarrier(cmd);
         composite.record(cmd, layerView, rtOutputView, width, height, 1.0f);
-        io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.fullMemoryBarrier(cmd);
         compositedFrames++;
         return true;
     }
@@ -218,7 +217,11 @@ public final class RtParticleLayer {
             layer = new TextureTarget("bedray_rt_particles", w, h, GpuFormat.RGBA8_UNORM, null);
             LOGGER.info("[VKB-RT] particles layer created {}x{} RGBA8 (depth: world depth of the raster pass)", w, h);
         } else if (layer.width != w || layer.height != h) {
-            layer.resize(w, h);
+            // Never resize an image still referenced by a queued composite.
+            // The renderer collects the old target only after its host drain.
+            TextureTarget next = new TextureTarget("bedray_rt_particles", w, h, GpuFormat.RGBA8_UNORM, null);
+            retiredLayers.add(layer);
+            layer = next;
             LOGGER.info("[VKB-RT] particles layer resized {}x{}", w, h);
         }
     }
@@ -226,17 +229,45 @@ public final class RtParticleLayer {
     /** Frees the layer target and the compute pipeline (RT shutdown, setting turned off). */
     public static void release(String reason) {
         boolean had = layer != null || composite != null;
-        if (composite != null) {
-            composite.destroy();
-            composite = null;
-        }
         if (layer != null) {
-            layer.destroyBuffers();
+            retiredLayers.add(layer);
             layer = null;
         }
         layerReady = false;
         if (had) {
             LOGGER.info("[VKB-RT] particles layer released reason={}", reason);
+        }
+    }
+
+    public static boolean needsHostDrain() {
+        return !retiredLayers.isEmpty();
+    }
+
+    /** Caller proves completion or discard, never merely command-buffer reuse. */
+    public static void releaseRecording(long commandBuffer) {
+        if (composite != null) composite.releaseRecording(commandBuffer);
+    }
+
+    /** Capture the recorded owner so a late completion cannot target its replacement. */
+    public static Runnable recordingRelease(long commandBuffer) {
+        RtParticleComposite recorded = composite;
+        return () -> { if (recorded != null) recorded.releaseRecording(commandBuffer); };
+    }
+
+    /** Caller has drained the game's submissions and excluded resubmission. */
+    public static void collectAfterHostDrain(boolean shutdown) {
+        if (composite != null) {
+            if (shutdown) {
+                composite.destroyAfterHostDrain();
+                composite = null;
+            } else {
+                composite.releaseRecordingsAfterHostDrain();
+            }
+        }
+        while (!retiredLayers.isEmpty()) {
+            TextureTarget retired = retiredLayers.get(0);
+            retired.destroyBuffers();
+            retiredLayers.remove(0);
         }
     }
 

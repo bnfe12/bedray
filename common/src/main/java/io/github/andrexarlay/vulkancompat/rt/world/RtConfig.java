@@ -59,6 +59,43 @@ public final class RtConfig {
      * turns it off for an A/B check). */
     public static final boolean SELF_AVATAR = Boolean.parseBoolean(System.getProperty("vkbridge.rt.selfAvatar", "true"));
 
+    /** Block-emitter next-event estimation in the Slang path tracer. {@code -Dvkbridge.rt.blockEmitters=false} falls back to
+     * sun-and-moon only, which is what a torch-lit room looked like before the port. The number of resampled quads per
+     * bounce and the share of the NEE draw given to the emitter list follow the same switch family. */
+    public static final boolean SLANG_BLOCK_EMITTERS = Boolean.parseBoolean(System.getProperty("vkbridge.rt.blockEmitters", "true"));
+    public static final int SLANG_EMITTER_CANDIDATES = Math.max(1, Math.min(32, Integer.getInteger("vkbridge.rt.emitterCandidates", 8)));
+    public static final float SLANG_EMITTER_PROBABILITY = Math.min(1.0f,
+        Math.max(0.0f, Float.parseFloat(System.getProperty("vkbridge.rt.emitterProbability", "0.5"))));
+
+    /** Captured mobs, items and armour stands in the Slang path tracer: the ring {@link RtEntityGeometryManager} uploads
+     * every frame, bound as five buffers instead of reached through the statistics buffer like the legacy shader.
+     * {@code -Dvkbridge.rt.slangEntities=false} traces the terrain alone, which is the fastest A/B for an entity artifact. */
+    public static final boolean SLANG_ENTITIES = Boolean.parseBoolean(System.getProperty("vkbridge.rt.slangEntities", "true"));
+
+    /** ReSTIR direct illumination in the Slang path tracer: the block-emitter sample of a pixel is kept in a per-pixel
+     * reservoir and reused across frames instead of being redrawn from one batch every time. This is what lets a
+     * torch-lit wall converge while the camera moves; {@code -Dvkbridge.rt.restirDi=false} falls back to plain per-frame
+     * RIS sampling of the same emitter list. */
+    public static final boolean SLANG_RESTIR_DI = Boolean.parseBoolean(System.getProperty("vkbridge.rt.restirDi", "true"));
+
+    /** Record the whole path-trace frame (radiance, motion, accumulation, history depth, ReSTIR spatial and the
+     * display step) inside {@code bedray_core} instead of this Java host. The ABI is additive: a DLL without the
+     * exports keeps the Java path, and the switch exists so the two can be compared on the same frame.
+     * {@code -Dvkbridge.rt.nativePathTrace=true} opts in. */
+    public static final boolean SLANG_PATH_TRACE_CPP =
+        Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativePathTrace", "false"));
+
+    /** {@code bedray_scene.dll} owns the section BLAS, the TLAS and the 64-byte section table; the path tracer then
+     * dispatches {@code path_trace_scene}. {@code -Dvkbridge.rt.nativeScene=true} opts in. The scene is optional: a
+     * missing DLL, ABI mismatch or missing {@code path_trace_scene} artifact keeps the Java scene and logs why. */
+    public static final boolean SLANG_NATIVE_SCENE =
+        Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativeScene", "false"));
+
+    /** Experimental finite-window RC diffuse continuation; requires both native owners. */
+    public static final boolean SLANG_RADIANCE_CASCADES =
+        Boolean.parseBoolean(System.getProperty("vkbridge.rt.radianceCascades", "false"));
+    public static final int SLANG_RC_BASE_AXIS = Integer.getInteger("vkbridge.rt.rcBaseAxis", 8);
+
     /** Horizontal RT radius in sections: override, else the game render distance ("As in game"), else the manual value. */
     public static int radiusXz(int gameRenderDistanceChunks) {
         if (RADIUS_XZ_OVERRIDE > 0) {

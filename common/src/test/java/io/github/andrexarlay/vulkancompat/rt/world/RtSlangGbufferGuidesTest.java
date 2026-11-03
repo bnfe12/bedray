@@ -1,0 +1,195 @@
+package io.github.andrexarlay.vulkancompat.rt.world;
+
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * The Slang path fills the DLSS-RR guide channels out of the primary vertex it already traced: view depth, normal +
+ * roughness, primary-lobe radiance, albedo and the view-dependent specular-reflectance guide. The seven image
+ * formats stay compatible with the shared NRD/RR pack; bypass alpha explicitly excludes unsupported NRD pixels.
+ * <p>
+ * Four ways this silently breaks: a guide recomputed from a second primary ray that disagrees with the shaded one, a
+ * split radiance that no longer sums back to the colour input (a bright halo around every light), a sky pixel packed as
+ * a surface (the denoiser smears the horizon), and a host that sets the push flag without binding the images, or binds
+ * them with the flag clear (stale texels denoised as if they were this frame).
+ */
+class RtSlangGbufferGuidesTest {
+
+    private static final String SHADERS = "src/main/resources/shaders/slang";
+    private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String SCENE_PASS = SHADERS + "/passes/path_trace_scene.slang";
+    private static final String ENTRY = SHADERS + "/pathtrace/path_trace_entry.slang";
+
+    @Test
+    void theGuideChannelsAreThePrimaryVertexThePathShaded() {
+        String tracer = read(TRACER);
+        assertTrue(tracer.contains("struct PathPrimaryGuide {"), "the guide is filled by the tracer, not re-derived by the pass");
+        String capture = block(tracer, "if (receiver.primary) {");
+        assertTrue(capture.contains("result.primary.position = hit.position;"), "the shaded vertex's own position");
+        assertTrue(capture.contains("result.primary.normal = normal;"), "the view-facing normal the BSDF used");
+        assertTrue(capture.contains("result.primary.albedo = clamp(bsdfReflectionAlbedo(surface.material), float3(0.0), float3(1.0));"),
+            "the diffuse material guide is zero for metals; the stable demodulation floor belongs to the pack");
+        assertTrue(capture.contains("result.primary.direct = directContribution;"), "the same camera-weighted NEE as raw HDR");
+        assertTrue(capture.contains("result.primary.roughness = surface.material.roughness;"), "the material roughness");
+        assertTrue(capture.contains("result.primary.metallic = surface.material.metallic;"),
+            "the specular-albedo guide rule needs the metal flag");
+    }
+
+    @Test
+    void theSplitRadianceStillSumsToTheColourInput() {
+        String source = read(ENTRY);
+        String guides = block(source, "void pathTraceWriteGuides(");
+        assertTrue(guides.contains("outDiffuse[p] = float4(result.denoiser.diffuse, result.denoiser.diffuseHitDistance);"),
+            "diffuse owns only the suffix of a selected primary diffuse lobe, with secondary distance");
+        assertTrue(guides.contains("outDirect[p] = float4(pathDenoiserBypass(result.radiance, result.denoiser),"),
+            "the exact remainder includes emission and unsupported transport without changing raw HDR");
+        assertTrue(guides.contains("outSpecular[p] = float4(result.denoiser.specular, result.denoiser.specularHitDistance);"),
+            "specular owns the primary specular suffix even if a later bounce is diffuse");
+        assertTrue(guides.contains("outAlbedo[p] = float4(result.primary.albedo, result.primary.metallic > 0.5 ? 1.0 : 0.0);"),
+            "diffuse albedo and the NRD metal/nonmetal material ID");
+        assertTrue(guides.contains("outNormalRough[p] = float4(n, clamp(result.primary.roughness, 0.0, 1.0));"),
+            "normal + roughness");
+        assertTrue(guides.contains("float viewZ = -dot(toSurface, f.camera.forward.xyz);"),
+            "NRD's view depth is backwards along the view axis, as in rt_path.comp");
+        assertTrue(guides.contains("clamp(result.primary.specularReflectance, float3(0.0), float3(1.0))"),
+            "all roughnesses have GGX reflectance; a roughness threshold must not remove the RR guide");
+    }
+
+    @Test
+    void aSkyPixelLooksLikeSkyToTheDenoiser() throws java.io.IOException {
+        String pack = java.nio.file.Files.readString(java.nio.file.Path.of(
+            "src/main/resources/shaders/slang/denoise/nrd_pack.slang"));
+        assertTrue(pack.contains("if (pc.denoiser == 2u && !nrdInvalid3(input.diffuse.rgb))"),
+            "the RR pack forwards the sky colour of an ignored pixel; NRD keeps its zero");
+        String source = read(ENTRY);
+        String guides = block(source, "void pathTraceWriteGuides(");
+        assertTrue(guides.contains("if (!sampleTrusted || !result.primary.valid) {"),
+            "a miss and a rejected sample have no surface to guide on");
+        assertTrue(guides.contains("outViewZ[p] = 1.0e6;"), "the sky depth rt_path.comp writes");
+        assertTrue(guides.contains("outNormalRough[p] = float4(0.0, 0.0, 1.0, 1.0);"), "the flat sky normal");
+        assertTrue(guides.contains("outAlbedo[p] = float4(0.0);"), "zero albedo keeps sky out of the demodulation");
+        assertTrue(guides.contains("outDiffuse[p] = sky ? float4(max(result.radiance, float3(0.0)), 0.0) : float4(0.0);"),
+            "but the sky colour reaches DLSS-RR, or every silhouette against the sky blends with black");
+    }
+
+    @Test
+    void theGuidesAreWrittenOnlyWhenTheHostAsksForThem() {
+        String tracer = read(TRACER);
+        assertTrue(tracer.contains("static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;"),
+            "the option bit is the host contract for the guides");
+        String source = read(ENTRY);
+        assertTrue(source.contains("if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u) {"),
+            "the guide stores are gated by the option bit");
+        assertTrue(source.contains("pathTraceWriteGuides(p, f, result, "), "one write site");
+        // The option word is the push's fifth field, which the host leaves zero unless it binds the images.
+        String host = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");
+        assertTrue(host.contains("int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)"),
+            "the push flag follows the bound guides, never a setting");
+        String record = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java");
+        assertTrue(record.contains("static final int OPTION_GBUFFER = 1;"), "the Java mirror of the shader option bit");
+        assertTrue(record.contains("if (wantsGuides != (boundGuides != null)) {"),
+            "record refuses a flag without images and images without the flag");
+    }
+
+    @Test
+    void bothEntriesBindTheSevenGuidesAndForwardThem() {
+        for (String pass : new String[] {PASS, SCENE_PASS}) {
+            String source = read(pass);
+            for (int binding = 26; binding <= 32; binding++) {
+                assertTrue(source.contains("[[vk::binding(" + binding + ", 0)]]"),
+                    pass + ": guide binding " + binding + " must be declared by the thin wrapper");
+            }
+            assertTrue(source.contains("outViewZ, outNormalRough, outSpecular, outDiffuse, outAlbedo, outDirect,"
+                    + " outSpecAlbedo,"),
+                pass + ": the wrapper forwards all seven guides to the shared body");
+        }
+    }
+
+    @Test
+    void aShortGuideArrayIsAHostBug() {
+        assertThrows(IllegalArgumentException.class, () -> RtPathTraceSlangPass.Guides.of(new long[] {1L, 2L, 3L}),
+            "six guides would leave one binding stale");
+        assertTrue(RtPathTraceSlangPass.Guides.of(null) == null, "no G-buffer, no guides");
+        RtPathTraceSlangPass.Guides seven = RtPathTraceSlangPass.Guides.of(new long[] {1L, 2L, 3L, 4L, 5L, 6L, 7L});
+        assertTrue(seven.complete(), "seven non-zero views are a complete G-buffer");
+        assertFalse(RtPathTraceSlangPass.Guides.of(new long[] {1L, 2L, 3L, 4L, 5L, 6L, 0L}).complete(),
+            "a zero view is not a guide");
+    }
+
+    @Test
+    void theGuideOrderIsTheDenoiserOrder() {
+        // Guides.of reads views[0..6] as viewZ, normalRough, diffuse, albedo, direct, specular, specAlbedo. Both
+        // denoisers hand the G-buffer over in that order, and swapping two would denoise against another channel.
+        String record = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java");
+        assertTrue(record.contains("viewZ != 0L && normalRough != 0L && diffuse != 0L && albedo != 0L && direct != 0L"),
+            "the completeness check lists the seven channels in bind order");
+        for (String denoiser : new String[] {"DlssRrDenoiser.java", "NrdDenoiser.java"}) {
+            String source = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/denoise/" + denoiser);
+            assertTrue(source.contains("new long[] {gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view,"),
+                denoiser + ": viewZ, normalRough, diffuse, albedo, direct...");
+            assertTrue(source.contains("gbSpecular.view, gbSpecAlbedo.view};"),
+                denoiser + "... then specular and the specular albedo");
+        }
+    }
+
+    @Test
+    void theRendererRefusesAnUnfeedableDenoiserInsteadOfFallingBack() {
+        String renderer = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
+        assertTrue(renderer.contains("!runtime.library().hasNativeMotion()"),
+            "native NRD needs the additive output feature/export before pass selection");
+        assertFalse(renderer.contains("the \" + denoiseMode + \" layout needs the world-space motion buffer\""),
+            "the Java Slang path fills NRD's motion now");
+        assertTrue(renderer.contains("RtSlangPathPass.supportProblem(runtime, gbuffer)"),
+            "the native core must support the requested outputs before the pass is created");
+        String backend = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/NativePathTraceBackend.java");
+        assertTrue(backend.contains("guides && !runtime.library().hasNativeGuideOutputs()"),
+            "a guide request needs the additive native feature and export");
+        assertTrue(renderer.contains("native NRD requires a matching core with NRD_MOTION"),
+            "a denoiser the native core cannot feed is refused by name, not silently moved onto unproven guides");
+        assertTrue(renderer.contains(
+                "throw new RtFailure(rayMode ? \"slang_ray\" : \"slang_path\", pathSlangUnavailableReason);"),
+            "there is no second renderer to fall back to: an unusable Slang profile fails the frame with its reason");
+        for (String gone : new String[] {"RtPathTracerPass", "RtRayEffectsPass", "RtShaderCompiler", "rt_path.comp"}) {
+            assertFalse(renderer.contains(gone), gone + " is deleted; a reference here means the legacy path is coming back");
+        }
+        String pass = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");
+        String uses = block(pass, "public boolean usesGbuffer() {");
+        assertTrue(uses.contains("return requestedGbuffer;"),
+            "usesGbuffer reports what the renderer asked for, so the denoiser is created and the views reach bind()");
+    }
+
+    private static String block(String source, String header) {
+        int at = source.indexOf(header);
+        assertTrue(at >= 0, "missing block: " + header);
+        int depth = 0;
+        for (int i = source.indexOf('{', at); i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return source.substring(at, i + 1);
+                }
+            }
+        }
+        throw new AssertionError("unbalanced block: " + header);
+    }
+
+    private static String read(String relative) {
+        try {
+            return Files.readString(Path.of(relative), StandardCharsets.UTF_8).replace("\r\n", "\n");
+        } catch (IOException e) {
+            throw new AssertionError("cannot read " + relative, e);
+        }
+    }
+}

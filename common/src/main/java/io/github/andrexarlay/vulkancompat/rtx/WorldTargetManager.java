@@ -13,9 +13,10 @@ import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
+import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
-import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanRtExperimentEngine;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.FrameContext;
@@ -65,7 +66,12 @@ public final class WorldTargetManager {
     private static RenderTarget savedMainRenderTarget;
     private static RenderTarget savedHud3DTarget;
 
-    private static VelocityPipeline velocityPipeline;
+    private static final io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityRecordingOwner velocityRecordings =
+        new io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityRecordingOwner(
+            failure -> LOGGER.warn("[WorldTargetManager] temporal retirement failed; resources retained", failure));
+    private static final RecordingCompletion spatialCompletion = new RecordingCompletion(
+        failure -> LOGGER.warn("[WorldTargetManager] spatial retirement failed; resources retained", failure));
+    private static boolean recordingSpatial, drainingSpatial;
 
     /**
      * The dedicated worldTarget colour texture is ALWAYS created with STORAGE usage (see {@link TargetLifecyclePolicy}), so
@@ -96,6 +102,9 @@ public final class WorldTargetManager {
     private static final Matrix4f prevViewProj = new Matrix4f();
 
     private static boolean resetHistory = true;
+    /** True only when {@link #computeMatrices()} accepted this frame's camera; history advances only then. */
+    private static boolean cameraMatricesValidThisFrame = false;
+    private static long lastDegenerateCameraLogNanos = 0L;
     private static boolean inWorldPhase = false;
     /**
      * The hand is drawn into the low-resolution world target without motion vectors and with a depth buffer of its own,
@@ -110,6 +119,14 @@ public final class WorldTargetManager {
     private static int lastLogWinH = -1;
 
     private WorldTargetManager() {}
+    private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan resolutionPlan;
+
+    public static boolean rrResolvesOutput() { return inWorldPhase && resolutionPlan != null && resolutionPlan.rayReconstructionOutput(); }
+    public static int traceWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceWidth() : fallback; }
+    public static int traceHeight(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceHeight() : fallback; }
+    public static int presentationWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.worldWidth() : fallback; }
+    public static int presentationHeight(int fallback) { return rrResolvesOutput() ? resolutionPlan.worldHeight() : fallback; }
+    private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan lastLoggedResolutionPlan;
 
     /**
      * Checks whether 3D resolution scaling or hardware ray tracing isolation is active.
@@ -284,21 +301,59 @@ public final class WorldTargetManager {
 
     /**
      * Computes invViewProj = (currProj * currViewRotation)^-1 and prevViewProj = prevProj * prevViewRotation.
+     * <p>
+     * A degenerate camera (the zero-quaternion first RT frame, a zero-size projection, a non-finite position) is not
+     * inverted: the last usable matrices stay in place, history is reset and the caller must skip this temporal frame.
+     * Feeding the NaN inverse to the native velocity contract disabled DLSS for the whole session (26.3/latest.log
+     * 2026-11-02 23:20:41: {@code non-finite invViewProj at byte 0 = NaN}).
+     *
+     * @return false when this frame's camera cannot produce a finite inverse view-projection
      */
-    public static void computeMatrices() {
-        if (currProjMatrix != null && currViewRotationMatrix != null) {
-            Matrix4f currViewProj = new Matrix4f(currProjMatrix).mul(currViewRotationMatrix);
-            currViewProj.invert(invViewProj);
-
-            if (prevProjMatrix != null && prevViewRotationMatrix != null && !resetHistory) {
-                prevProjMatrix.mul(prevViewRotationMatrix, prevViewProj);
-            } else {
-                prevViewProj.set(currViewProj);
-            }
-        } else {
-            invViewProj.identity();
-            prevViewProj.identity();
+    public static boolean computeMatrices() {
+        cameraMatricesValidThisFrame = false;
+        if (currCameraPos != null && !isFinite(currCameraPos)) {
+            resetHistory = true;
+            logDegenerateCamera("camera_position=" + currCameraPos);
+            return false;
         }
+        CameraMatrixGuard.Update update = CameraMatrixGuard.update(
+            currProjMatrix, currViewRotationMatrix, prevProjMatrix, prevViewRotationMatrix,
+            resetHistory, invViewProj, prevViewProj);
+        if (!update.usable()) {
+            resetHistory = true;
+            Matrix4f combined = currProjMatrix != null && currViewRotationMatrix != null
+                ? new Matrix4f(currProjMatrix).mul(currViewRotationMatrix) : null;
+            logDegenerateCamera(CameraMatrixGuard.describe(currProjMatrix, currViewRotationMatrix, combined));
+            return false;
+        }
+        if (update.resetHistory()) {
+            resetHistory = true;
+        }
+        cameraMatricesValidThisFrame = true;
+        return true;
+    }
+
+    private static void logDegenerateCamera(String detail) {
+        long now = System.nanoTime();
+        if (now - lastDegenerateCameraLogNanos < 1_000_000_000L) {
+            return;
+        }
+        lastDegenerateCameraLogNanos = now;
+        LOGGER.warn("[VKB-AUTOTEST] camera_matrices=degenerate {} (temporal frame skipped, history reset, upscaler kept)",
+            detail);
+    }
+
+    private static boolean isFinite(Vec3 value) {
+        return Double.isFinite(value.x) && Double.isFinite(value.y) && Double.isFinite(value.z);
+    }
+
+    /** Camera translation since the last submitted temporal frame; zero whenever the history was reset. */
+    private static Vec3 cameraDelta() {
+        if (currCameraPos == null || prevCameraPos == null || resetHistory
+            || !isFinite(currCameraPos) || !isFinite(prevCameraPos)) {
+            return Vec3.ZERO;
+        }
+        return currCameraPos.subtract(prevCameraPos);
     }
 
     /**
@@ -307,6 +362,7 @@ public final class WorldTargetManager {
      * low-res {@code worldTarget} and {@code worldHud3d}, and advances the sub-pixel jitter frame.
      */
     public static void beginWorldPhase(GameRenderer renderer, int winW, int winH) {
+        resolutionPlan = null;
         // Always start from "unresolved": only this frame's denoiser record may claim the colour is already resolved.
         io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.resetFrameColorTemporallyResolved();
         if (!isScalingActive()) {
@@ -330,14 +386,29 @@ public final class WorldTargetManager {
             return;
         }
 
-        ensureTargets(targetW, targetH);
+        resolutionPlan = io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan.choose(
+            targetW, targetH, winW, winH,
+            io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady()
+                && !Boolean.getBoolean("bedray.rt.disableRrOutput"),
+            TemporalUpscaler.active(), SpatialUpscaler.isSelected(),
+            io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.mode()
+                == io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.Mode.OFF);
+        ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
+        if (!resolutionPlan.equals(lastLoggedResolutionPlan)) {
+            lastLoggedResolutionPlan = resolutionPlan;
+            resetHistory = true;
+            LOGGER.info("[VKB-RESOLVE] rr_output={} trace={}x{} raster={}x{} output={}x{} framegen_off={}",
+                resolutionPlan.rayReconstructionOutput(), targetW, targetH, resolutionPlan.worldWidth(),
+                resolutionPlan.worldHeight(), winW, winH,
+                io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.mode()
+                    == io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.Mode.OFF);
+        }
 
         if (lastRtEnabled == null || lastRtEnabled != rtNow) {
             boolean first = lastRtEnabled == null;
             lastRtEnabled = rtNow;
             if (!first) {
                 // RT toggle only changes the execution policy; the target object is kept. Drop the RT binding and history.
-                VulkanRtExperimentEngine.getInstance().invalidateTargetBinding();
                 resetHistory = true;
                 logSkyIdentity("rt_toggle rt=" + rtNow);
             }
@@ -350,18 +421,20 @@ public final class WorldTargetManager {
 
         inWorldPhase = true;
         depthCopiedThisFrame = false;
-        handPassDeferred = handMustBeDeferred(inWorldPhase, TemporalUpscaler.isActive());
+        handPassDeferred = handMustBeDeferred(inWorldPhase, CameraJitterManager.temporalConsumerActive());
         if (lastLoggedHandDeferral == null || lastLoggedHandDeferral != handPassDeferred) {
             lastLoggedHandDeferral = handPassDeferred;
-            LOGGER.info("[VKB-AUTOTEST] hand_defer={} (temporal upscaler {})", handPassDeferred,
-                TemporalUpscaler.isActive() ? TemporalUpscaler.active() : "off");
+            LOGGER.info("[VKB-AUTOTEST] hand_defer={} temporal_consumer={}", handPassDeferred,
+                TemporalUpscaler.isActive() ? TemporalUpscaler.active()
+                    : CameraJitterManager.temporalConsumerActive() ? "dlss_rr" : "off");
         }
-        if (TemporalUpscaler.isActive()) {
+        if (CameraJitterManager.temporalConsumerActive()) {
             if (TemporalUpscaler.initEpoch() != lastXessEpoch) {
                 lastXessEpoch = TemporalUpscaler.initEpoch();
                 resetHistory = true;
             }
-            CameraJitterManager.advanceFrame(targetW, targetH, CameraJitterManager.phaseCountFor(TemporalUpscaler.scale()));
+            CameraJitterManager.advanceFrame(targetW, targetH,
+                CameraJitterManager.phaseCountFor(TemporalUpscaler.isActive() ? TemporalUpscaler.scale() : 1.0));
         }
 
         if (lastLogW != targetW || lastLogH != targetH || lastLogWinW != winW || lastLogWinH != winH) {
@@ -388,6 +461,7 @@ public final class WorldTargetManager {
         if (!inWorldPhase) {
             return;
         }
+        boolean reconstructedOutput = rrResolvesOutput();
         inWorldPhase = false;
 
         RenderTarget fullMain = savedMainRenderTarget;
@@ -407,12 +481,23 @@ public final class WorldTargetManager {
         if (worldTarget != null && fullMain != null) {
             boolean dispatched = false;
             try {
-                // 1. Hardware Ray Tracing: done by RtFrameRenderer at the head of render3dHud (MixinGameRenderer). The old PoC
-                // overlay (VulkanRtExperimentEngine.dispatchRayQuery) ran here only when the config flag was on and the gate
-                // was off, i.e. exactly when RT is blocked (XeSS/DLSS) or failed; it is not dispatched any more.
+                // 1. Hardware Ray Tracing: done by RtFrameRenderer at the head of render3dHud (MixinGameRenderer).
+                // The PoC overlay that used to run here (test geometry, rt_test) is deleted with the legacy renderer.
 
                 // 2. Temporal upscaler: XeSS (-Dvkbridge.xess) or DLSS (-Dvkbridge.dlss). STUB: FSR has no implementation.
-                if (TemporalUpscaler.isActive()) {
+                if (reconstructedOutput) {
+                    // RR already produced the world at output resolution, including the raw fallback of a skipped RR frame.
+                    // Post effects/UI have run on that image. Do not feed it through SR a second time.
+                    if (worldTarget.width != fullMain.width || worldTarget.height != fullMain.height) {
+                        throw new IllegalStateException("RR presentation extent differs from main: "
+                            + worldTarget.width + "x" + worldTarget.height + " vs "
+                            + fullMain.width + "x" + fullMain.height);
+                    }
+                    RenderSystem.getDevice().createCommandEncoder().copyTextureToTexture(
+                        worldTarget.getColorTexture(), fullMain.getColorTexture(), 0, 0, 0, 0, 0,
+                        fullMain.width, fullMain.height);
+                    dispatched = true;
+                } else if (TemporalUpscaler.isActive()) {
                     dispatched = runXessPass(fullMain);
                 } else if (FrameGenRuntime.usable()) {
                     runMotionVectorsOnly();
@@ -451,22 +536,29 @@ public final class WorldTargetManager {
     }
 
     private static void advanceFrameHistory() {
-        if (currProjMatrix != null) {
-            if (prevProjMatrix == null) {
-                prevProjMatrix = new Matrix4f(currProjMatrix);
-            } else {
-                prevProjMatrix.set(currProjMatrix);
+        // A skipped or degenerate frame must not become the previous frame: the next submitted temporal frame has to
+        // reproject against the last camera that actually produced motion vectors.
+        if (cameraMatricesValidThisFrame) {
+            if (currProjMatrix != null) {
+                if (prevProjMatrix == null) {
+                    prevProjMatrix = new Matrix4f(currProjMatrix);
+                } else {
+                    prevProjMatrix.set(currProjMatrix);
+                }
             }
-        }
-        if (currViewRotationMatrix != null) {
-            if (prevViewRotationMatrix == null) {
-                prevViewRotationMatrix = new Matrix4f(currViewRotationMatrix);
-            } else {
-                prevViewRotationMatrix.set(currViewRotationMatrix);
+            if (currViewRotationMatrix != null) {
+                if (prevViewRotationMatrix == null) {
+                    prevViewRotationMatrix = new Matrix4f(currViewRotationMatrix);
+                } else {
+                    prevViewRotationMatrix.set(currViewRotationMatrix);
+                }
             }
+            if (currCameraPos != null && isFinite(currCameraPos)) {
+                prevCameraPos = currCameraPos;
+            }
+            resetHistory = false;
         }
-        prevCameraPos = currCameraPos;
-        resetHistory = false;
+        cameraMatricesValidThisFrame = false;
     }
 
     /**
@@ -493,6 +585,7 @@ public final class WorldTargetManager {
             resetHistory = true;
             logSkyIdentity("create");
         } else if (worldTarget.width != w || worldTarget.height != h) {
+            drainBorrowedWorldTargetRecordings();
             final RenderTarget identityBefore = worldTarget;
             storageUsageFormat = TargetLifecyclePolicy.resolveStorageScope(true);
             try {
@@ -504,7 +597,6 @@ public final class WorldTargetManager {
                 || worldTarget.getColorTextureView() == null) {
                 throw new IllegalStateException("world target lost its colour view after in-place resize to " + w + "x" + h);
             }
-            VulkanRtExperimentEngine.getInstance().invalidateTargetBinding();
             resetHistory = true; // XeSS/DLSS history of the old resolution is invalid (FrameContext reset=true)
             logSkyIdentity("resize " + w + "x" + h);
         }
@@ -515,7 +607,8 @@ public final class WorldTargetManager {
             worldHud3d.resize(w, h);
         }
 
-        if (TemporalUpscaler.isActive() || FrameGenRuntime.usable()) {
+        if ((resolutionPlan == null || !resolutionPlan.rayReconstructionOutput())
+                && (TemporalUpscaler.isActive() || FrameGenRuntime.usable())) {
             ensureTemporalTargets(w, h);
         }
     }
@@ -525,6 +618,11 @@ public final class WorldTargetManager {
      * the XeSS path, both at render (input) resolution. The motion vector image gets STORAGE usage (compute writes it).
      */
     private static void ensureTemporalTargets(int w, int h) {
+        if ((depthCopy != null && (depthCopy.width != w || depthCopy.height != h))
+            || (motionVectorsTarget != null && (motionVectorsTarget.width != w || motionVectorsTarget.height != h))) {
+            FrameGenRuntime.drainProducerRecordings();
+            drainVelocityRecordings();
+        }
         if (depthCopy == null) {
             depthCopy = new TextureTarget("vkb_world_depth_copy", w, h, null, GpuFormat.D32_FLOAT);
             resetHistory = true;
@@ -552,6 +650,8 @@ public final class WorldTargetManager {
      * velocity pass need is copied here (engine copy, no render pass is open at this point).
      */
     public static void copyWorldDepth() {
+        // Output-grid raster depth is already available to UI; RR owns its input-grid motion/depth guides.
+        if (rrResolvesOutput()) return;
         if (!inWorldPhase || (!TemporalUpscaler.isActive() && !FrameGenRuntime.usable()) || worldTarget == null || depthCopy == null) {
             return;
         }
@@ -578,6 +678,7 @@ public final class WorldTargetManager {
         if (xessOutput != null && xessOutput.width == w && xessOutput.height == h) {
             return;
         }
+        if (xessOutput != null) drainSpatialRecordings();
         storageUsageFormat = GpuFormat.RGBA8_UNORM;
         try {
             if (xessOutput == null) {
@@ -665,11 +766,10 @@ public final class WorldTargetManager {
         }
         depthCopiedThisFrame = false;
         ensureXessOutput(fullMain.width, fullMain.height);
-        computeMatrices();
-        Vec3 camDelta = Vec3.ZERO;
-        if (currCameraPos != null && prevCameraPos != null && !resetHistory) {
-            camDelta = currCameraPos.subtract(prevCameraPos);
+        if (!computeMatrices()) {
+            return false; // degenerate camera: skip this temporal frame instead of failing the upscaler for the session
         }
+        final Vec3 camDelta = cameraDelta();
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             throw new IllegalStateException("XeSS: no Vulkan device");
@@ -700,9 +800,7 @@ public final class WorldTargetManager {
                 + " mvView=" + mvView + " colorView=" + colorView + " outView=" + outView + " color=" + colorImg
                 + " depth=" + rasterDepthImg + " mv=" + mvImg + " out=" + outImg + ")");
         }
-        if (velocityPipeline == null) {
-            velocityPipeline = new VelocityPipeline(vulkanDevice.vkDevice());
-        }
+        VelocityPipeline velocityPipeline = velocityRecordings.ensure(vulkanDevice);
 
         final int inW = worldTarget.width;
         final int inH = worldTarget.height;
@@ -713,46 +811,40 @@ public final class WorldTargetManager {
         final int fmtDepth = com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(GpuFormat.D32_FLOAT);
         final int fmtMv = com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(GpuFormat.RG16_FLOAT);
 
-        VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
-        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        VkBarriers.fullMemoryBarrier(cmd);
-        // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
-        velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
-        VkBarriers.fullMemoryBarrier(cmd);
-        if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
-            && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
-            io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
-                invViewProj, prevViewProj, camDelta, resetHistory,
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
-            VkBarriers.fullMemoryBarrier(cmd);
-        }
-        io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
-
         final boolean reset = resetHistory;
         // A denoiser-resolved image is already back on the pixel grid: it must reach DLSS-SR with zero jitter.
         final float srJitterX = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterX());
         final float srJitterY = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterY());
-        FrameContext ctx = new FrameContext(
-            cmd,
-            new FrameContext.ImageRef(colorImg, colorView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
-            new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, inW, inH),
-            new FrameContext.ImageRef(srMvImg, srMvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
-            new FrameContext.ImageRef(outImg, outView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, outW, outH),
-            srJitterX, srJitterY,
-            inW, inH, outW, outH,
-            (float) TemporalUpscaler.scale(),
-            TemporalUpscaler.modeName(),
-            1.0f,
-            reset);
-        boolean ok = backend.dispatch(ctx);
+        boolean ok = recordVelocityCommands(vulkanDevice, cmd -> {
+            VkBarriers.fullMemoryBarrier(cmd);
+            // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
+            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            VkBarriers.fullMemoryBarrier(cmd);
+            if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
+                && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
+                io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
+                    invViewProj, prevViewProj, camDelta, resetHistory,
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
+            io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
 
-        int endErr = VK10.vkEndCommandBuffer(cmd);
-        if (endErr != VK10.VK_SUCCESS) {
-            throw new IllegalStateException("XeSS: vkEndCommandBuffer failed: " + endErr);
-        }
-        encoder.execute(cmd);
+            FrameContext ctx = new FrameContext(
+                cmd,
+                new FrameContext.ImageRef(colorImg, colorView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
+                new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, inW, inH),
+                new FrameContext.ImageRef(srMvImg, srMvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
+                new FrameContext.ImageRef(outImg, outView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, outW, outH),
+                srJitterX, srJitterY,
+                inW, inH, outW, outH,
+                (float) TemporalUpscaler.scale(),
+                TemporalUpscaler.modeName(),
+                1.0f,
+                reset);
+            return backend.dispatch(ctx);
+        });
         if (!ok) {
             return false; // the backend's dispatch already logged stage=execute and disabled itself
         }
@@ -779,11 +871,10 @@ public final class WorldTargetManager {
         if (worldTarget == null || depthCopy == null || motionVectorsTarget == null) {
             return;
         }
-        computeMatrices();
-        Vec3 camDelta = Vec3.ZERO;
-        if (currCameraPos != null && prevCameraPos != null && !resetHistory) {
-            camDelta = currCameraPos.subtract(prevCameraPos);
+        if (!computeMatrices()) {
+            return;
         }
+        final Vec3 camDelta = cameraDelta();
         VulkanDevice vulkanDevice = VulkanCapabilityChecker.getVulkanDevice();
         if (vulkanDevice == null) {
             return;
@@ -796,34 +887,41 @@ public final class WorldTargetManager {
         if (rasterDepthView == 0L || mvView == 0L || rasterDepthImg == 0L || mvImg == 0L) {
             return;
         }
-        if (velocityPipeline == null) {
-            velocityPipeline = new VelocityPipeline(vulkanDevice.vkDevice());
-        }
+        VelocityPipeline velocityPipeline = velocityRecordings.ensure(vulkanDevice);
 
         final int inW = worldTarget.width;
         final int inH = worldTarget.height;
 
-        VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
-        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        VkBarriers.fullMemoryBarrier(cmd);
-        velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
-        VkBarriers.fullMemoryBarrier(cmd);
-        if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
-            && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
-            io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
-                invViewProj, prevViewProj, camDelta, resetHistory,
-                io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
+        recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
-        }
-        io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
+            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            VkBarriers.fullMemoryBarrier(cmd);
+            if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
+                && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
+                io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.record(cmd,
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory(),
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthImage(), mvImg, 0L, inW, inH,
+                    invViewProj, prevViewProj, camDelta, resetHistory,
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention() == VelocityPipeline.DEPTH_RAY_DISTANCE);
+                VkBarriers.fullMemoryBarrier(cmd);
+            }
+            io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
 
-        int endErr = VK10.vkEndCommandBuffer(cmd);
-        if (endErr != VK10.VK_SUCCESS) {
-            throw new IllegalStateException("FrameGen MV: vkEndCommandBuffer failed: " + endErr);
-        }
-        encoder.execute(cmd);
+            return true;
+        });
+    }
+
+    private static boolean recordVelocityCommands(VulkanDevice device, java.util.function.Function<VkCommandBuffer, Boolean> commands) {
+        return velocityRecordings.record(device, commands);
+    }
+
+    /** Completion proof for the velocity and temporal SDK commands recorded together. */
+    public static void drainTemporalRecordings(VulkanDevice expectedDevice) {
+        velocityRecordings.drain(expectedDevice);
+    }
+
+    private static void drainVelocityRecordings() {
+        velocityRecordings.drain();
     }
 
     /** Display-size RGBA8 STORAGE image between FSR 1 EASU and RCAS (created only when RCAS runs). */
@@ -844,6 +942,7 @@ public final class WorldTargetManager {
         ensureXessOutput(fullMain.width, fullMain.height);
         boolean needTmp = SpatialUpscaler.selected() == UpscalerBackend.FSR1 && VulkanRtxConfig.fsr1Sharpness > 0.0f;
         if (needTmp && (spatialTmp == null || spatialTmp.width != fullMain.width || spatialTmp.height != fullMain.height)) {
+            if (spatialTmp != null) drainSpatialRecordings();
             storageUsageFormat = GpuFormat.RGBA8_UNORM;
             try {
                 if (spatialTmp == null) {
@@ -861,20 +960,68 @@ public final class WorldTargetManager {
         if (inView == 0L || outView == 0L || (needTmp && tmpView == 0L)) {
             throw new IllegalStateException("spatial upscaler: missing image view (in=" + inView + " out=" + outView + " tmp=" + tmpView + ")");
         }
+        if (recordingSpatial || drainingSpatial) throw new IllegalStateException("recursive spatial recording/drain");
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-        boolean ok = SpatialUpscaler.record(vulkanDevice.vkDevice(), cmd, inView, worldTarget.width, worldTarget.height,
-            tmpView, outView, xessOutput.width, xessOutput.height);
-        int endErr = VK10.vkEndCommandBuffer(cmd);
-        if (endErr != VK10.VK_SUCCESS) {
-            throw new IllegalStateException("spatial upscaler: vkEndCommandBuffer failed: " + endErr);
-        }
-        encoder.execute(cmd);
-        if (!ok) {
-            return false;
+        var ticket = spatialCompletion.beginWithDiscard(cmd.address(), new Retirement(
+            () -> SpatialUpscaler.releaseRecording(cmd.address()), () -> SpatialUpscaler.discardRecording(cmd.address())));
+        boolean executeAttempted = false;
+        recordingSpatial = true;
+        try {
+            boolean ok = SpatialUpscaler.record(vulkanDevice.vkDevice(), cmd, inView, worldTarget.width, worldTarget.height,
+                tmpView, outView, xessOutput.width, xessOutput.height);
+            if (!ok) {
+                spatialCompletion.discard(ticket);
+                return false;
+            }
+            int status = VK10.vkEndCommandBuffer(cmd);
+            if (status != VK10.VK_SUCCESS) throw new IllegalStateException("spatial vkEndCommandBuffer failed: " + status);
+            spatialCompletion.submissionAttempted(ticket);
+            executeAttempted = true;
+            encoder.execute(cmd);
+            spatialCompletion.submitted(ticket, action -> encoder.queueForDestroy(action::run));
+        } catch (RuntimeException | Error failure) {
+            if (!executeAttempted) {
+                // The complete chain is abandoned, including a successful EASU before a failed RCAS.
+                try { spatialCompletion.discard(ticket); }
+                catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
+            }
+            throw failure;
+        } finally {
+            recordingSpatial = false;
         }
         copyXessOutputToMain(fullMain);
         return true;
+    }
+
+    private static void drainSpatialRecordings() {
+        if (spatialCompletion.pendingCount() == 0) return;
+        if (recordingSpatial || drainingSpatial) throw new IllegalStateException("spatial drain during an active recording");
+        VulkanDevice device = SpatialUpscaler.hostDevice();
+        if (device == null || VulkanCapabilityChecker.getVulkanDevice() != device)
+            throw new IllegalStateException("spatial host device unavailable or changed; resources retained");
+        drainingSpatial = true;
+        try {
+            VulkanCommandEncoder encoder = device.createCommandEncoder();
+            try (var completion = encoder.createFence()) {
+                encoder.submit();
+                if (!completion.awaitCompletion(5_000_000_000L))
+                    throw new IllegalStateException("spatial host submission completion timed out; resources retained");
+                spatialCompletion.afterHostDrain();
+            }
+            if (spatialCompletion.pendingCount() != 0)
+                throw new IllegalStateException("spatial recording proof unavailable; resources retained");
+        } finally {
+            drainingSpatial = false;
+        }
+    }
+
+    /** A target's Java identity survives resize; its borrowed Vulkan views do not. */
+    private static void drainBorrowedWorldTargetRecordings() {
+        io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.drainTargetRecordings();
+        FrameGenRuntime.drainProducerRecordings();
+        drainVelocityRecordings();
+        drainSpatialRecordings();
     }
 
     /** Engine-side 1:1 copy (vkCmdCopyImage) of the XeSS output into the full-size main target; no render pass may be open. */
@@ -976,6 +1123,7 @@ public final class WorldTargetManager {
 
     private static void releaseTargets() {
         RenderSystem.assertOnRenderThread();
+        drainBorrowedWorldTargetRecordings();
         TemporalUpscaler.cleanup();
         UpscalerBackend active = VulkanRtxConfig.activeBackend;
         if (active != null && active != UpscalerBackend.BILINEAR) {
@@ -984,6 +1132,7 @@ public final class WorldTargetManager {
                 backend.cleanup();
             }
         }
+        velocityRecordings.close();
         {
             VulkanDevice idleDevice = VulkanCapabilityChecker.getVulkanDevice();
             if (idleDevice != null) {
@@ -995,18 +1144,9 @@ public final class WorldTargetManager {
             spatialTmp.destroyBuffers();
             spatialTmp = null;
         }
-        if (velocityPipeline != null) {
-            try {
-                velocityPipeline.cleanup();
-            } catch (Throwable t) {
-                LOGGER.warn("[WorldTargetManager] Error cleaning up VelocityPipeline: {}", t.getMessage());
-            }
-            velocityPipeline = null;
-        }
         if (worldTarget != null) {
             worldTarget.destroyBuffers();
             worldTarget = null;
-            VulkanRtExperimentEngine.getInstance().invalidateTargetBinding();
         }
         if (worldHud3d != null) {
             worldHud3d.destroyBuffers();
@@ -1033,6 +1173,10 @@ public final class WorldTargetManager {
         levelProjection.identity();
         levelCameraOrigin.zero();
         resetHistory = true;
+        cameraMatricesValidThisFrame = false;
+        lastDegenerateCameraLogNanos = 0L;
+        invViewProj.identity();
+        prevViewProj.identity();
         currProjMatrix = null;
         prevProjMatrix = null;
         currViewRotationMatrix = null;
@@ -1133,7 +1277,7 @@ public final class WorldTargetManager {
     }
 
     public static VelocityPipeline getVelocityPipeline() {
-        return velocityPipeline;
+        return velocityRecordings.pipeline();
     }
 
     public static boolean isInWorldPhase() {

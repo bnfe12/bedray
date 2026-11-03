@@ -4,6 +4,8 @@ import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.Tag;
 
 import java.nio.ByteBuffer;
 
@@ -17,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 4. Night attenuation (deep dark blue / black fog at night, bright sky-tinted fog by day).
  * 5. Configuration parameters and bounds in RtSettings and RtFrameParams.
  */
+@Timeout(120)
 public class RtVolumetricFogTest {
 
     private static final float EPSILON = 1e-4f;
@@ -49,7 +52,6 @@ public class RtVolumetricFogTest {
         RtVolumetricFogTest test = new RtVolumetricFogTest();
         test.setUp();
         try {
-            test.testShaderCompilation();
             test.testTransmittanceMath();
             test.testSunInScattering();
             test.testNightAttenuation();
@@ -59,38 +61,6 @@ public class RtVolumetricFogTest {
         }
     }
 
-    @Test
-    public void testShaderCompilation() {
-        // Verify shader source presence of volumetric fog functions and flags
-        String commonSrc = RtWorldChecks.rtCommon();
-        assertTrue(commonSrc.contains("applyVolumetricAtmosphere"), "rt_common.glsl must declare applyVolumetricAtmosphere");
-        assertTrue(commonSrc.contains("FLAG_VOLUMETRIC_FOG"), "rt_common.glsl must define FLAG_VOLUMETRIC_FOG");
-        assertTrue(commonSrc.contains("phaseHenyeyGreenstein"), "rt_common.glsl must declare phaseHenyeyGreenstein");
-
-        String raysSrc = RtShaderCompiler.loadSource(RtPipeline.SHADER_PATH);
-        assertTrue(raysSrc.contains("applyVolumetricAtmosphere"), "rt_rays.comp must invoke applyVolumetricAtmosphere");
-
-        String pathSrc = RtShaderCompiler.loadSource(RtPipeline.PATH_SHADER_PATH);
-        assertTrue(pathSrc.contains("applyVolumetricAtmosphere"), "rt_path.comp must invoke applyVolumetricAtmosphere");
-
-        // Compile compute pipelines with Shaderc
-        ByteBuffer raysSpv = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
-        assertNotNull(raysSpv, "rt_rays.comp failed to compile");
-        assertTrue(raysSpv.remaining() > 1000 && raysSpv.getInt(0) == 0x07230203, "rt_rays.comp valid SPIR-V");
-
-        ByteBuffer raysGbSpv = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp+gbuffer", RtPipeline.GBUFFER_DEFINE);
-        assertNotNull(raysGbSpv, "rt_rays.comp+gbuffer failed to compile");
-        assertTrue(raysGbSpv.remaining() > 1000 && raysGbSpv.getInt(0) == 0x07230203, "rt_rays.comp+gbuffer valid SPIR-V");
-
-        ByteBuffer pathSpv = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp", RtPathTracerPass.ACCUM_DEFINE);
-        assertNotNull(pathSpv, "rt_path.comp failed to compile");
-        assertTrue(pathSpv.remaining() > 1000 && pathSpv.getInt(0) == 0x07230203, "rt_path.comp valid SPIR-V");
-
-        ByteBuffer pathGbSpv = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+gbuffer",
-            RtPipeline.GBUFFER_DEFINE + RtPathTracerPass.ACCUM_DEFINE);
-        assertNotNull(pathGbSpv, "rt_path.comp+gbuffer failed to compile");
-        assertTrue(pathGbSpv.remaining() > 1000 && pathGbSpv.getInt(0) == 0x07230203, "rt_path.comp+gbuffer valid SPIR-V");
-    }
 
     @Test
     public void testTransmittanceMath() {

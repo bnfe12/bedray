@@ -308,6 +308,41 @@ public final class SettingsCatalog {
                 p("nrd", "NRD", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.NRD),
                 p("dlss_rr", "DLSS Ray Reconstruction", () -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.DLSS_RR)),
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
+        putNoImage("path_restir_di", Tier.ADVANCED, "ReSTIR Direct Light",
+            "Reuses the light sample of a pixel over frames instead of drawing a new one every frame: light from torches, "
+                + "lanterns and glowing blocks settles in a few frames while you walk, instead of only while you stand still. "
+                + "Off redraws every light sample per frame, which is noisier but never reuses an old record.",
+            "FPS: none to very low - it replaces several light samples of a frame by one, at the cost of a per-pixel record "
+                + "in video memory (about a quarter of a gigabyte at 1080p).",
+            "Path Tracing only, and only where glowing blocks are traced.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_restir_spatial", Tier.ADVANCED, "ReSTIR Spatial Direct Light",
+            "A pixel also borrows light samples from neighbours on the same surface - same facing, same plane - so one "
+                + "torch lights a wall from fewer, better-chosen samples instead of from each pixel's own draws. It pools the "
+                + "records ReSTIR Direct Light writes, so it needs that switch on.",
+            "FPS: low (two full-screen passes over records that already exist; no rays are traced here).",
+            "Path Tracing with ReSTIR Direct Light on, and only where glowing blocks are traced. The pass is optional: a "
+                + "build without its compiled kernel runs temporal reuse alone and says so in the log.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_restir_pt_spatial", Tier.ADVANCED, "ReSTIR Spatial Path Reuse",
+            "Each pixel also borrows the bounced-light paths of four neighbours on the same surface - same facing, within a "
+                + "block - and keeps the better one for the next frame, so bounced light settles from more paths than one "
+                + "pixel draws. A neighbour's path is only taken if its first bounce is visible from this pixel.",
+            "FPS: low to medium (up to four visibility rays per pixel; no extra video memory).",
+            "Path Tracing with ReSTIR Path Reuse on, on the default (Java-recorded) backend. Shows up one frame after the "
+                + "pooling: the pooled path is drawn by the next frame's reuse.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames.");
+        putNoImage("path_restir_pt", Tier.ADVANCED, "ReSTIR Path Reuse (experimental)",
+            "Keeps the indirect light a pixel's first bounce brought back - light bounced off a nearby diffuse wall or floor - "
+                + "in a per-pixel path record and reuses it in the next frames, so bounced light settles faster while you move. "
+                + "Only rough, non-glowing surfaces seen through a diffuse bounce are reused; sky, glass, metal, water and "
+                + "glowing blocks keep the per-frame path. With an empty history the picture is exactly the one without it.",
+            "FPS: HIGH. Measured on an RTX 5060 Ti at 1485x835 (DLSS Balanced to 1440p), 1 path, 3 bounces: the trace "
+                + "takes about 3x longer (16 -> 45 ms in an open scene, 25 -> 41 ms indoors at night), plus a 6-8 ms spatial "
+                + "pass. About 0.6 GB of video memory at 1080p (two 144-byte records per pixel), only while the switch is on.",
+            "Path Tracing only, with ReSTIR Direct Light on.",
+            "A still cannot show reuse: the difference is the noise of a moving camera over several frames. Not yet confirmed "
+                + "in a live game frame.");
         putNoImage("adaptive_quality", Tier.ADVANCED, "Adaptive Quality",
             "Keeps Path Tracing inside a GPU frame budget: when the measured time of the traced rays and the denoiser is over it, rays per pixel drop first and then bounces, "
                 + "below the values you chose; when the frame has room again they come back. It never goes above your values. Off by default - turn it on if you want a steadier "
@@ -420,6 +455,19 @@ public final class SettingsCatalog {
             putNoImage(e[0], Tier.EXPERT, e[1], e[2], "", "Hidden mode: Ray Tracing (Fast) is in development.",
                 "The Ray Tracing (Fast) mode is not public yet, so it has no screenshots.");
         }
+        // The two ReSTIR stages of the ray pass, catalogued apart from the list above because each needs its own wording.
+        putNoImage("rays_restir_temporal", Tier.EXPERT, "ReSTIR Temporal Block Light",
+            "A pixel keeps the glowing-block sample it chose last frame and refines it, instead of drawing a new sample every "
+                + "frame. Off, block light is re-sampled per frame: noisier, and never carries an old record over.",
+            "FPS: none to low (it replaces per-frame light samples by one reservoir read and write).",
+            "Ray Tracing (Fast) with RT Block Light on.",
+            "A still cannot show reuse: the difference is the noise over several frames.");
+        putNoImage("rays_restir_spatial", Tier.EXPERT, "ReSTIR Spatial Block Light",
+            "A pixel also borrows samples from neighbours on the same surface (same normal, same plane), so one torch lights "
+                + "a wall from fewer, better-chosen samples. It merges the records the temporal stage writes, so it needs it on.",
+            "FPS: low (two full-screen merges of already computed reservoirs, no rays).",
+            "Ray Tracing (Fast) with RT Block Light and ReSTIR Temporal Block Light on.",
+            "A still cannot show reuse: the difference is the noise over several frames.");
         // A look option, not a cost option: the only added work is one short ray (at most half a cell) that checks the
         // shared origin still sees the fragment it replaces.
         putNoImage("rays_pixel_shadows", Tier.EXPERT, "RT Pixel Shadows",
@@ -431,15 +479,11 @@ public final class SettingsCatalog {
             "Needs ray tracing on; it applies to Path Tracing and to Ray Tracing (Fast).",
             "A look option with no preview screenshot yet.");
         for (String[] e : new String[][] {
-            {"rays_shadow_quality", "RT Shadow Rays", "Shadow rays per pixel."},
             {"rays_pixel_shadow_size", "RT Pixel Shadow Size", "Size of a pixelated shadow in texture pixels (1 = one pixel of a 16x16 block texture); larger means chunkier edges. Only used when RT Pixel Shadows is on."},
-            {"rays_reflection_quality", "RT Reflection Rays", "Reflection rays per pixel."},
             {"rays_reflection_distance", "RT Reflection Distance", "Longest reflection ray in blocks."},
-            {"rays_ao_quality", "RT AO Rays", "Occlusion rays per pixel."},
             {"rays_ao_radius", "RT AO Radius", "Occluders farther than this do not darken."},
             {"rays_emissive_quality", "RT Block Light Samples", "Light samples per pixel."},
             {"rays_emissive_distance", "RT Block Light Distance", "Glowing blocks farther than this do not light a surface."},
-            {"rays_gi_quality", "RT GI Rays", "Bounce rays per pixel."},
             {"rays_gi_distance", "RT GI Distance", "Longest bounce ray in blocks."}}) {
             putNoImage(e[0], Tier.EXPERT, e[1], e[2], "",
                 e[0].equals("rays_pixel_shadow_size")
@@ -473,7 +517,7 @@ public final class SettingsCatalog {
         putNoImage("rt_debug_view", Tier.EXPERT, "RT Debug Buffer", "Replaces the world with an internal buffer (normals, depth, albedo...). For diagnosis only.",
             "", "", "A diagnostic view, not a look.");
         putNoImage("voxel_quality_profile", Tier.ESSENTIAL, "Voxel Quality", "Fast lowers the memory budget and turns off the diffuse bounce and layered transparent optics. Beautiful enables them. Both follow Minecraft's distance; Custom unlocks those settings. The upscaler, frame generation and lighting stay editable in every profile.", "", "Experimental renderer.", "No voxel quality comparison has been captured.");
-        putNoImage("path_quality_profile", Tier.ESSENTIAL, "Path Tracing Quality", "Fast traces one path per pixel with 2 bounces over 256 blocks; Beautiful traces two paths with 4 bounces over 512 blocks. Custom unlocks the three values. The upscaler, frame generation and lighting stay editable in every profile; the denoiser choice is never changed by a profile.", "", "Hardware Path Tracing only.", "Existing previews show individual hardware settings, not these profiles.");
+        putNoImage("path_quality_profile", Tier.ESSENTIAL, "Path Tracing Quality", "Fast traces one path per pixel with 2 bounces over 256 blocks; Beautiful traces one path with 3 bounces over 512 blocks. Custom unlocks the three values. The upscaler, frame generation and lighting stay editable in every profile; the denoiser choice is never changed by a profile.", "", "Hardware Path Tracing only.", "Existing previews show individual hardware settings, not these profiles.");
         putNoImage("voxel_distance_auto", Tier.ADVANCED, "Voxel Distance: Follow Minecraft", "Request the game's render distance. Only loaded sections can become resident; actual coverage depends on the capture and memory budgets.", "", "Voxel renderer only.", "Coverage is reported by runtime statistics.");
         putNoImage("voxel_distance_chunks", Tier.ADVANCED, "Voxel Distance (chunks)", "Requested horizontal radius when Follow Minecraft is off. Increasing this value does not load or generate chunks.", "", "Voxel renderer only.", "Coverage is reported by runtime statistics.");
         putNoImage("voxel_memory_budget_mib", Tier.ADVANCED, "Voxel GPU Memory Budget", "Maximum GPU scene storage in MiB. The provider prioritizes nearby sections; memory pressure can reduce resident coverage below the requested distance.", "", "Voxel renderer only.", "Memory use is reported by runtime statistics.");

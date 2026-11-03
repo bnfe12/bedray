@@ -5,7 +5,7 @@ import java.util.Locale;
 /**
  * Automatic PBR values for vanilla block textures that have no LabPBR {@code _s} map ("auto-PBR"). Pure Java, unit-tested.
  * The rules match the sprite path (for example {@code block/glowstone}) in this order: emissive, metal, smooth dielectric,
- * default. Values are a hand-made table, not measured data; the full table is documented in docs/experiments/rt-modes.md.
+ * default. Values are a hand-made table, not measured data.
  * <ul>
  *   <li>{@link Emission#WHOLE}: the whole sprite glows (glowstone, sea lantern, lava, froglights, ...);</li>
  *   <li>{@link Emission#BRIGHT}: only the bright, saturated pixels glow (torch flames, lantern glass, furnace fire, ...),

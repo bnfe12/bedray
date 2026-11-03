@@ -135,7 +135,7 @@ typedef struct VkbNrdCreateInfo {
     uint32_t struct_size;
     uint32_t width, height;         /* resource size of the pools = max render rectangle */
     uint32_t mode_mask;             /* VKB_NRD_MODE_* */
-    uint32_t frames_in_flight;      /* descriptor pool ring size, 1..8 */
+    uint32_t frames_in_flight;      /* descriptor-pool and constant-buffer ring size, 1..8 */
     uint32_t flags;                 /* reserved, 0 */
 } VkbNrdCreateInfo;
 
@@ -195,6 +195,9 @@ typedef struct VkbNrdDispatchStats {
 VKB_NRD_API uint32_t    vkb_nrd_get_api_version(void);
 VKB_NRD_API const char* vkb_nrd_get_last_error_string(void);   /* thread-local, never NULL, UTF-8 */
 VKB_NRD_API uint32_t    vkb_nrd_get_required_features(void);   /* VKB_NRD_FEATURE_* mask */
+/* Additive semantic contract: 1 = selected primary lobes + missing-hitT reconstruction/pre-pass.
+ * Existing public struct layouts and API version remain unchanged. */
+VKB_NRD_API uint32_t    vkb_nrd_get_signal_contract_version(void);
 
 /* Loads NRD.dll (UTF-8 path), checks version/ABI, stores the Vulkan handles and loads the Vulkan entry points
  * through gipa / gdpa (PFN_vkGetInstanceProcAddr / PFN_vkGetDeviceProcAddr). Fills *out_info. */

@@ -10,7 +10,6 @@ import io.github.andrexarlay.vulkancompat.rtx.raytracing.RtDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrDeviceRequirements;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessDeviceRequirements;
-import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +35,7 @@ public final class RtxBootstrap {
     public static final String MOD_ID = "bedray";
     public static final String RT_PROVIDER_ID = "bedray.hardware_ray_tracing";
     public static final String OMM_PROVIDER_ID = "bedray.opacity_micromaps";
+    public static final String SLANG_PATH_PROVIDER_ID = "bedray.slang_path_tracing";
     public static final String XESS_PROVIDER_ID = "bedray.xess";
     public static final String DLSS_PROVIDER_ID = "bedray.dlss";
     public static final String NRD_PROVIDER_ID = "bedray.nrd";
@@ -101,6 +101,8 @@ public final class RtxBootstrap {
         registry.addLateProvider(RT_PROVIDER_ID, RtDeviceRequirements::register);
         // optional OMM group: dropped by the engine on non-RT/non-micromap devices; requires synchronization2
         registry.addLateProvider(OMM_PROVIDER_ID, RtDeviceRequirements::registerOmm);
+        // optional Slang path tracer group (shaderInt64): dropped alone on a GPU without it, ray tracing stays
+        registry.addLateProvider(SLANG_PATH_PROVIDER_ID, RtDeviceRequirements::registerSlangPath);
         registry.addLateProvider(XESS_PROVIDER_ID,
             r -> XessDeviceRequirements.register(r, () -> Platforms.get().gameDir().toAbsolutePath().normalize()));
         // DLSS: device group + instance extensions (VK_KHR_get_physical_device_properties2), only when DLSS was requested
@@ -109,7 +111,6 @@ public final class RtxBootstrap {
         registry.addLateProvider(FSR_PROVIDER_ID, FsrDeviceRequirements::register);
         // only adds the storage-image features when -Dvkrtx.denoiser=nrd* is set; a default run leaves the device unchanged
         registry.addLateProvider(NRD_PROVIDER_ID, NrdDeviceRequirements::register);
-        RtShaderCompiler.prewarmAsync();
         RtxAutotest.registerAll();
         // Shader hosts (Iris post, Dirt RT, custom RT stage): select before the device so their device groups can register.
         io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostStartup.run(Platforms.get().gameDir(), registry);

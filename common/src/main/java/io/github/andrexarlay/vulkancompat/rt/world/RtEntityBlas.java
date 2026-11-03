@@ -35,19 +35,17 @@ public final class RtEntityBlas {
     /**
      * A grow must not destroy the current BLAS where it stands: {@code blasAddress} is baked into the TLAS instance
      * buffers of frames that may still be in flight, and freeing an acceleration structure an in-flight submission
-     * reads is undefined (it shows up as {@code VK_ERROR_DEVICE_LOST}). Retired structures are queued and destroyed
-     * once the retirement window has passed.
+     * reads is undefined (it shows up as {@code VK_ERROR_DEVICE_LOST}). Retired structures stay queued until the next
+     * explicit host drain, before any new legacy recording is opened.
      */
-    private static final int RETIRE_BUILDS = 5;
     private final java.util.ArrayDeque<Pending> retired = new java.util.ArrayDeque<>();
-    private long buildCount;
 
-    private record Pending(long bornAt, long handle, RtMemory.Buf buf) {
+    private record Pending(long handle, RtMemory.Buf buf) {
     }
 
-    private void tickRetire() {
-        buildCount++;
-        while (!retired.isEmpty() && buildCount - retired.peekFirst().bornAt() > RETIRE_BUILDS) {
+    /** Host completion covers all prior TLAS references; called before the next legacy recording. */
+    void releaseRetiredAfterHostDrain() {
+        while (!retired.isEmpty()) {
             Pending p = retired.pollFirst();
             if (p.handle() != 0L) {
                 KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, p.handle(), null);
@@ -64,7 +62,6 @@ public final class RtEntityBlas {
     }
 
     public void build(VkCommandBuffer cb, io.github.andrexarlay.vulkancompat.rt.entity.EntityGpuFrame gpuFrame, RtMemory.Buf scratchBuf, long scratchBase) {
-        tickRetire();   // drains on EVERY frame, including a frame with no entity geometry: the queue would otherwise freeze
         if (gpuFrame == null || !gpuFrame.isValid()) {
             blasAddress = 0L;
             builtPrimitives = 0;
@@ -74,7 +71,6 @@ public final class RtEntityBlas {
     }
 
     public void build(VkCommandBuffer cb, RtEntityGeometryManager geometryManager, RtMemory.Buf scratchBuf, long scratchBase) {
-        tickRetire();   // ditto, before the empty-frame return: an entity-free area is exactly when the queue must still drain
         int triangleCount = geometryManager.frameTriangles();
         int vertexCount = geometryManager.frameVertices();
         long vertexAddress = geometryManager.framePosAddress();
@@ -141,7 +137,7 @@ public final class RtEntityBlas {
             }
 
             if (blasBuf == null || blasBuf.size < requiredSize) {
-                retired.addLast(new Pending(buildCount, blasHandle, blasBuf));
+                retired.addLast(new Pending(blasHandle, blasBuf));
                 blasHandle = 0L;
                 blasAddress = 0L;
                 blasBuf = mem.createBuffer("entity_blas", Math.max(requiredSize, 2L << 20),
@@ -267,15 +263,7 @@ public final class RtEntityBlas {
     }
 
     public void close() {
-        while (!retired.isEmpty()) {
-            Pending p = retired.pollFirst();
-            if (p.handle() != 0L) {
-                KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, p.handle(), null);
-            }
-            if (p.buf() != null) {
-                mem.destroy(p.buf());
-            }
-        }
+        releaseRetiredAfterHostDrain();
         if (blasHandle != 0L) {
             KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, blasHandle, null);
             blasHandle = 0L;

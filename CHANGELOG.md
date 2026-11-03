@@ -2,6 +2,228 @@
 
 ## Unreleased
 
+* Split the typed Radiance Cascades trace into modules with one owner each: `rc_trace_options.slang`
+  keeps the host policy, diagnostics and result; `rc_trace_shade.slang` owns the first-surface
+  emission/NEE sample; `rc_trace_walk.slang` owns segment finalization and the interval walk;
+  `rc_trace_dispatch.slang` owns the store/probe/dispatch entries; `rc_trace_history.slang` keeps the
+  explicitly provisional temporal blend; `rc_trace_ownership.slang` keeps the distance-band proposal.
+  `rc_trace.slang` is now a facade, so existing imports keep working while a reader can open the
+  600-line walk instead of a 1300-line file. The atlas addressing moved to `rc_atlas_layout.slang`,
+  which means the typed store no longer imports the legacy float4 store; the legacy implementation
+  moved to `legacy_float4_store.slang`, `radiance_cascades_store.slang` became a compatibility
+  facade, and the old resolve was renamed `rcLegacyProbeIrradiance`/`rcLegacyProbeComplete` so it
+  cannot be mistaken for the typed resolve. `bedray.slang` is now the curated typed root and
+  `bedray_legacy.slang` is the explicit opt-in for the 1:1 scaffold, `LegacySectionTraversal` and the
+  float4 atlas. Developer documentation lives in `shaders/slang/ARCHITECTURE.md` and
+  `radiance_cascades/RC_TRACE_API.md`. Evidence: `slangc` 2026.20 compiled all 17 `passes/*.slang`
+  and five harnesses (`verify_rc_typed`, `verify_rc_environment`, `verify_rc_trace_api`,
+  `verify_bedray_roots`, `verify_scene_tracer`) with exit 0; this is L1 compile evidence only, with
+  no GPU dispatch, reflected-stride check or live-frame result.
+
+* Gave a traced mob a motion vector, so walking things denoise instead of boiling: the reprojection the
+  accumulation batch introduced shifts every pixel by the *camera* delta, which is correct for terrain and wrong
+  for a part that moved on its own - a cow that walked three blocks is asked for the wall it passed, so its pixels
+  restart every frame and the running mean never converges on a moving subject (`накопление пикселей трассировки
+  только на статике работает`). The host was already uploading the answer: `RtEntityGeometryManager` keeps a
+  previous-position ring, written relative to *this* frame's camera and matched by entity type, vertex count and
+  nearest origin, so `previous - current` is the part's own displacement with camera motion cancelled - which is
+  why no new capture, no new push field and no device address were needed. `entityMotion` interpolates the two
+  halves of the *same* hit with the *same* barycentric weights and refuses a triangle the previous slice does not
+  cover, so the bound length stays the authority exactly as it does for the triangle count. The question was put
+  where it belongs - `ITraversal.surfaceMotion`, defaulting to zero, which is what a static reprojection already
+  assumes, so `restir_spatial` and `volumetric_march` are untouched and the section half of the instance answers
+  zero because it is static by construction - and the tracer asks it once, for the primary surface the accumulator
+  will look for next frame, recording it with the hit's own `kind` in the alpha lane rather than a guess from the
+  depth, and writing nothing for a pixel that hit nothing. Both consumers then *add* the term instead of inventing
+  a second convention: `path_display` reprojects `position + cameraDelta + surfaceMotion`, and ReSTIR DI temporal
+  reuse reprojects `receiver.position + receiver.motion`, where the receiver is the very surface the record belongs
+  to (`LightReceiver` gained the field, filled from the primary hit) - without it a mob part merged with whatever
+  light stood in its pixel a frame ago, a bias rather than noise. Evidence: `compileSlang` gives `path_trace` 18
+  bindings / 112-byte push / 420184 B SPIR-V (the previous ring at 25, the motion image at 5) and `path_display` 7
+  bindings (it reads the tracer's own image, not a copy that could disagree); `RtSlangEntityTest` is 12 tests, four
+  of them the motion path, and `SlangPassLibraryTest` + `RtSlangRestirDiTest` pin the manifest and the shared
+  reprojection. Thirteen mutations, each a mistake this port could really make, each failed exactly the guard that
+  owns it and every file came back byte-identical by sha256: the subtraction reversed; the previous-ring refusal
+  deleted; the previous count read from the current vertices; the previous binding filled with this frame's
+  positions in the pass and again in the host (both silently zero-motion); the slice bound at the buffer start
+  instead of the ring slot; `+ surfaceMotion` dropped from the accumulator; `+ receiver.motion` dropped from the DI
+  reprojection; the motion lane made to claim every primary hit; the traversal default made to answer a non-zero
+  lie; terrain let into the entity decoder; a miss allowed to keep writing motion; and the carrier field renamed.
+  `RtSlangPathPass` allocates `rt_path_motion` beside the radiance image, at the same size and the same lifetime.
+  No owner-verified frame yet: what to look for is a mob that stops sparkling once it stands still, and - while it
+  walks - a silhouette that stays lit instead of resolving from scratch each frame.
+
+* Taught the Slang path tracer to see living things: `passes/path_trace.slang` traversed with
+  `PATH_TRACE_INSTANCE_MASK_WORLD = 0x01`, so every mob, item, armour stand and the first-person body
+  were absent from the traced picture - no shadow, no reflection, nothing to bounce off - while the
+  legacy GLSL path traced all of them. Widening the mask was one line, and it was not enough: one TLAS
+  instance holds the whole ring, so a committed entity primitive has no section to index and the section
+  decoder had to be told to refuse an instance whose custom index carries the entity bit (`0x800000`)
+  rather than return a hole that hides the terrain behind it. `traversal/entity_geometry.slang` is a port
+  of `fetchEntitySurface` (`rt_common_surface.glsl`), not a re-derivation: the camera-relative positions,
+  the `uint4` per-vertex attributes, the atlas slot, the tint, the hurt mix at 65%, the three alpha bands
+  (hole under 0.1, thin pane up to 224/255, opaque emissive above it), the authored metal of a held tool
+  and the fullbright floor that raises a `light > 0.995` part to 0.4 emission all come from that function,
+  in its order. Records reach the shader the way every other per-frame list does - five `StructuredBuffer`
+  bindings (20-24) bound at the ring slot's *own* offset and *this frame's* length - so the index range's
+  bound length is the triangle count (`GetDimensions`), a frame with no capture reads one zeroed dummy
+  instead of a stale slot, and the device-address route through the pinned push block was rejected for a
+  16-byte `entityState` that names the atlas size and the first-person primitive range (push 96 → 112 B,
+  bindings 11 → 16). Two decisions carry the look: an entity surface reports `sectionId = SECTION_INDEX_NONE`
+  and its `worldPosition` is `hit + cameraAnchor` (the same vector as the legacy `camRel`, already carried as
+  `emitterCameraRelative.xyz`), because a wrapped neighbourhood proxy must never key a history or an emitter
+  identity; and the first-person body stays *in* the scene so water and glass reflect it - `ITraversal` gained
+  a primary-ray policy, `tracePrimary` skips the body's primitive range while shadow and bounce rays keep it,
+  which is what an `ITraversal.tracePrimary` default could not express before. Traversal stayed material-free:
+  cutout, tint and pane questions are answered by `decodeSurface` and the tracer's own cutout-advance loop,
+  exactly as for a block face, and the selection wireframe is a translucent pane with `transmission = 0` so it
+  shades its own colour at 0.35 without stopping a shadow. Evidence: `compileSlang` gives `path_trace` 16
+  bindings / 112-byte push / 414472 B SPIR-V (`restir_spatial` still 6, `volumetric_march` still 5 - it only
+  calls `traceVisibility`, so its entity reads are dead-code-eliminated and the pass needs no new host
+  descriptors); `RtSlangEntityTest` (8 tests) pins the scene mask, two-way instance-bit routing, the anchor
+  arithmetic and the missing identity, the primary-only self-avatar skip across all three ray kinds, the alpha
+  bands and the fullbright order against the legacy function, the ring-slot offsets and the bound-length
+  authority, and the frame wiring with `-Dvkbridge.rt.slangEntities` (default true; false is a terrain-only
+  A/B); `RtPathTraceSlangPassTest` + `SlangPassLibraryTest` pin the push layout and the generated manifest.
+  Each of nine mutations (the mask back to world-only, the anchor dropped from `worldPosition`, the section
+  decoder accepting an entity instance id, the self-avatar skip moved into `traceClosest`, the fullbright floor
+  zeroed, the index range bound at the buffer start instead of the ring slot, the triangle count taken from a
+  constant rather than `GetDimensions`, the atlas/range cross-check gutted, the frame switch forced off) failed
+  exactly the guard that owns it, and every mutated file came back byte-identical by sha256. Because "mobs are
+  still not in the picture" then splits into a capture that never filled the ring and a trace that ignores a ring
+  that is full, `RtSlangPathPass` logs one line per session naming the triangle and vertex counts read from the
+  same bound byte ranges the shader measures, the atlas size and the first-person range - or saying there is no
+  capture at all - and it is emitted before the dispatch that could fail. Five more mutations (the session gate
+  removed, either branch of the line deleted, the counts taken from raw bytes instead of the 12-byte strides, the
+  line moved after the dispatch) each failed `theFrameReportsWhatTheRingActuallyHolds`.
+  Not ported, and each one visible: the
+  **End Portal starfield**, the entity **Sobel auto-normal**, glowing parts as
+  **NEE candidates**. No
+  owner-verified frame yet. See `docs/SLANG_MIGRATION.md` ("Entity geometry in the traced scene").
+
+* Drew the sun and the moon into the path-traced sky: `light/sky.slang` had only `GradientSky`, a two-colour dome with no
+  disc, and it was the pass's sole environment sampler - so a camera ray or a mirror aimed at the sun showed a smooth
+  gradient while the body itself lit the scene through NEE. `celestialRadiance` now adds both bodies to the environment's
+  *evaluated* radiance, reading the exact fields `sun_light.slang`'s `SunMoonSampler` uses (`direction.w` for the angular
+  radius, `color` for radiance times intensity), so a disc can never disagree with the shadow that same body casts.
+  `SunMoonSky` composes the dome and the discs and `passes/path_trace.slang` builds it from `f.sun`, and the split between
+  the two environment entries is the estimator rule: `radiance()` is what an escaped ray pays, while `sample()` keeps the
+  dome alone because its returned radiance is divided by the cosine-dome `pdf()` - a delta-sized body in that draw would
+  be divided by a probability that never covers it. Two details carry the weight: the edge is compared in **sines**, not
+  cosines (the key radius is a few thousandths of a radian - `sun_size_tenths` defaults to 0.0044 - and only about fifty
+  float steps separate `cos(r)` from `cos(0.6r)` at that magnitude, so a cosine test turns the limb into dither that moves
+  with the frame's jitter), and a body whose centre has set is not drawn - the host keeps key
+  intensity at 1 through the night, so `celestialHorizonFactor`, ramping across the body's own diameter, is what stops a
+  phantom sun under the horizon. What is honestly not yet MIS: `tracePath` adds the NEE term and continues the path with the
+  same throughput, so a BSDF-sampled ray that lands on the disc counts the sun twice - the same double count every other
+  light in the list already has, bounded here by the `maxRadiance` firefly clamp. Clouds, stars and the sky texture remain
+  the unported `rt_sky.glsl` display model. Evidence: `compileSlang` unchanged at 11 bindings/96-byte push for
+  `path_trace` (SPIR-V 326000 → 329288 B); `RtSlangSkyDiscTest` (5 tests) pins the field provenance shared with the key
+  light, the sine-based edge with its normalization and hemisphere guard, the horizon gate on both bodies, the disc-free
+  sampled draw and the pass wiring. Each of seven mutations (cosine edge, hemisphere guard dropped, direction not
+  normalized, hardcoded radius, disc folded into `sample()`, the pass rebuilt on a bare dome, the sun no longer
+  horizon-gated) failed exactly the guard that owns it. No owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
+* Made a shadow ray that runs out of budget stop leaking light: `surface/visibility.slang` adds
+  `surfaceVisibilityProven`, the single definition of "this sight line was actually proved clear" — the walk's own
+  `result.visible` bit **and** `SURFACE_VISIBILITY_FLAG_OVERFLOW` unset. The walk sets that flag when it stops after
+  `SURFACE_VISIBILITY_MAX_LAYERS = 16` coloured filters, so previously an opaque blocker sitting behind sixteen panes of
+  glass reported "visible" and shipped full sunlight through it. Every consumer now asks for proof instead of reading the
+  bit: `traceFilteredOccluded`, the direct-light term in `pathtrace/path_tracer.slang`, the reused record in
+  `restir/restir_di.slang`'s `restirDiResolveVisibleFiltered`, and the segment NEE in
+  `radiance_cascades/rc_trace_segments.slang`. `radiance_cascades/rc_trace.slang` already carried the flag by hand and
+  keeps doing so. The choice recorded in the plan doc's "Visibility overflow is silent" follow-up is that overflow is
+  *not* proof of a clear line; raising the budget stays a tuning option, not a correctness one. Evidence:
+  `compileSlang` unchanged (15 passes; `path_trace` 11 bindings/96-byte push, `restir_spatial` 6/64);
+  `RtSlangVisibilityOverflowTest` (3 tests) pins the budget and flag value, the predicate's content and its
+  declaration-before-use ordering, and walks every `.slang` under the shader tree to assert that any file reading a
+  shadow `result.visible` either calls the predicate or handles the overflow flag itself. Each of five mutations —
+  path tracer, ReSTIR DI, `traceFilteredOccluded` and `rc_trace_segments` each widened back to the raw bit, plus a
+  predicate that ignores the flag — failed exactly the guard that owns it. No owner-verified frame yet.
+  See `docs/SLANG_MIGRATION.md`.
+
+* Split the two ways a traced path ends badly, so the accumulation history can tell them apart:
+  `pathtrace/path_tracer.slang` keeps `PATH_TRACE_FLAG_INVALID_SAMPLE` for arithmetic that cannot be trusted (a
+  non-finite primary ray, hit parameter, cutout advance, interval or throughput) and adds `PATH_TRACE_FLAG_TRUNCATED`
+  (bit 7) for a path that only stopped short — no lobe left to sample, an interval used up by cutout advances, a hit the
+  surface decoder cannot name, or the `maxRadiance` firefly guard. The distinction is the one
+  `radiance_cascades/rc_trace.slang` already drew, and it matters because a truncated path's radiance up to that point
+  is still a real sample: throwing it away would bias every short path in the image. `pathTraceSampleRejected` states
+  the rule once and `passes/path_trace.slang` publishes its answer in the alpha lane of the radiance image — free,
+  because that image has exactly one consumer — where `passes/path_display.slang` reads it as a weight of 0 or 1: a
+  rejected sample leaves both the running mean and its per-pixel count exactly as the history had them (so the next
+  accepted sample still divides by N+1 instead of N), and it does not overwrite `historyDepth` with the far plane a
+  rejected primary ray leaves behind, which would otherwise make the next frame's reprojection discard a history the
+  pixel still holds. The firefly clamp and the non-finite-to-zero guard stay, but a fabricated black now always
+  arrives tagged instead of posing as a measured one. Evidence: `compileSlang` still produces 11 bindings/96-byte push
+  for `path_trace` and 6/32 for `path_display`; `RtSlangSampleRejectionTest` (8 tests) pins the bit split, that every
+  rejection sits under a finiteness check, that the four short stops do not, the alpha-lane publication, the weighted
+  merge arithmetic, the depth-lane guard and the single consumer of the lane; each of five mutations (truncation site
+  flipped to invalid, verdict helper widened to truncated, alpha hardcoded to 1.0, weight hardcoded to 1.0, depth guard
+  removed) failed exactly the guard that owns it, and a sixth (a second `radianceView` consumer) failed the consumer
+  pin. No owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
+* Pool block-emitter reservoirs across neighbours in the Slang path tracer: `restir/spatial_block_emitters.slang` and its
+  entry `passes/restir_spatial.slang` (6 bindings, 64-byte push, two checker dispatches per frame) are the port of
+  `rt_restir_spatial.comp`, so a surface picks its direct light from its neighbourhood instead of from that pixel's own
+  draws and the next frame's temporal import starts from a better sample. The numbers are the legacy tuned ones — eight
+  draws from a plus/minus-seven-pixel square forced onto the opposite checker colour (which is what makes the in-place
+  update race-free without a second ring), normal dot 0.85, the same 5 % + 0.1-block plane gate, M cap 20 and spatial
+  ratio cap 5 through the same `mergeReservoirs` primitive — and the stage traces no rays, because visibility stays the
+  shading pass's job. Two contracts the reader cannot recompute are now stored for it: the receiver's own-emission bit
+  (`DI_RECEIVER_SELF_EMISSIVE`, so a wall of lamps does not light itself from its own quad after a neighbour's sample is
+  re-resolved at it) and the receiver normal's z sign; `restirDiTemporal`/`restirDiSpatial` take a `LightReceiver` instead
+  of assuming a non-emissive surface. A merged record keeps the writing pixel's receiver lanes and a non-finite winner is
+  dropped, since next frame reads that slot. `RtSpatialReuseSlangPass` binds the *trace pass's own* `FrameConstants`
+  upload and takes the extent from it — the push carries no size field, so a pooled record cannot be indexed against a
+  resolution the ring no longer has — orders its own two phases and ends with a trailing compute barrier (the legacy
+  stage does the same before its consumers run), and it is optional: a missing artifact or a manifest mismatch closes the
+  program, logs `spatial reuse off: …` once and leaves temporal reuse running. The player switch is `path_restir_spatial` (row
+  enabled only while `path_restir_di` is on, catalog entry, English/Russian text, packed as bit 8 of the per-frame reuse
+  diff so flipping it drops the histories it invalidates). Evidence: `compileSlang` now produces 15 passes including
+  `restir_spatial` (33 968-byte SPIR-V, 6 bindings, 64-byte push); `RtSlangRestirSpatialTest` pins the numbers against the
+  legacy kernel, the checker discipline, the push layout byte by byte (an unwritten offset fails as "offset 28 is never
+  written"), the binding set and the optional degrade; eight mutations (draws 8→4, the colour-forcing shift removed,
+  receiver lanes not preserved, a push lane unpadded, a binding name typoed, the `diFlags` gate dropped, the parity
+  inverted, the self-emission bit swapped) each failed exactly the guard meant to catch it, and all eight were reverted
+  byte-exactly under verified checksums. No owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
+* Offer each ReSTIR technique as its own player switch: `rays_restir_temporal`, `rays_restir_spatial` (Ray Tracing (Fast)) and
+  `path_restir_di` (Slang path tracer) are registered `RtSettings` booleans, so they persist under their section prefixes and
+  still obey a `-Dvkrtx.rt.<key>` session override. Every one is read where its work is decided, not where the pipeline is
+  built: the legacy ring is skipped by handing the shader a zero reservoir address (its own "off" test), the legacy spatial
+  pass is gated at the two checker dispatches, and `RtSlangPathPass` splits `diRequested()` (allocation, static) from
+  `diActive()` (per frame, the player's) so a flip never costs a `vkDeviceWaitIdle` mid-frame; `describe()` reports
+  `restir_di=off` for the switch, not only for the missing ring. `RtFrameRenderer` packs all three into the per-frame change
+  diff, so any reuse change drops the histories it invalidates and names them in the `resetHistory:` log. The Bedray screen
+  gets three rows (spatial only enabled while temporal is on, because it merges the records temporal writes) with catalog
+  entries and English/Russian text; presets leave them alone so a preset change does not silently re-enable reuse. Evidence:
+  `RtRestirSettingsTest` pins each switch to its consumer, and each of the three mutations (row renamed, getter bypassed,
+  dispatch ungated) failed the test that should catch it. No owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
+* Reuse block-emitter samples across frames in the Slang path tracer: `restir/di_block_emitters.slang` implements the
+  `IReuseSampler` contract over `restir/restir_di.slang`, `passes/path_trace.slang` binds a per-pixel reservoir ring
+  (binding 19, 96-byte push) and `RtSlangPathPass` owns `rt_path_restir` — two halves, parity advanced only by a dispatch
+  that wrote records, dropped when the light list or the render size changes. The merge numbers, the receiver gates and the
+  occlusion fade-out are the legacy ones (M cap 20, temporal ratio 8, decay 0.25, normal dot 0.8 static / 0.6 moving,
+  5 % + 0.1-block tolerance), pinned by `RtSlangRestirDiTest` against `rt_common_emitters.glsl`; a stored point is
+  re-resolved through `BlockEmitterSampler.evaluate`, so a reused light and a freshly drawn one cannot disagree about
+  `p^`, pdf or `Le`. Reprojection uses the same camera-delta convention as `path_display.slang`, so interior torches
+  accumulate while walking instead of resetting every frame. `RtFrameParams.emitterFingerprint` carries the list identity;
+  switch `-Dvkbridge.rt.restirDi` (default true) and `restir_di=temporal` in the mode log. Spatial reuse followed in the
+  entry above. Evidence: `compileSlang` produces the 11-binding/96-byte manifest and `:common:test` is green (627 tests); no
+  owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
+* Give the Slang path tracer block-emitter next-event estimation (`light/block_emitters.slang`, binding 18 over the records
+  `RtEmitters` already uploads): a torch-lit interior is no longer black in Path Tracing mode. The transport kernel, the eight
+  chromatic categories, the two-sided floor, the redstone bit test and the open-source shadow end bias are the legacy tuned
+  ones, pinned on both sides by `RtSlangBlockEmitterTest`; `RtSlangPathPass` samples the list under
+  `-Dvkbridge.rt.blockEmitters` with `-Dvkbridge.rt.emitterCandidates` and `-Dvkbridge.rt.emitterProbability`.
+  `ILightSampler` now takes a `LightReceiver` so a glowing face rejects its own quad instead of being lit twice, and
+  `MaterialSample` carries the scalar emission mask. Entity-atlas emitters and the pixelated cell shadow stay unported; at
+  this point each call still sampled the list on its own. Evidence: `:common:test` green (615 tests) and `compileSlang`
+  produces the 10-binding/64-byte manifest; no owner-verified frame yet. See `docs/SLANG_MIGRATION.md`.
+
 * Integrate the 15 later ReSTIR/barriers commits through `1ae6580`: finite temporal/denoiser inputs, entity buffer retirement,
   primitive entity capture, native exception containment, DLL/load-path checks, backend escape-hatch and teardown fixes,
   log-path redaction, rain/storm celestial suppression and narrower bloom/AO work. Preserve the optical-material changes.

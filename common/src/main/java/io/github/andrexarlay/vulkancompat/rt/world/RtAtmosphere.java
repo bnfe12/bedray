@@ -1,5 +1,8 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -8,9 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Owner of the atmosphere post passes of {@link RtFrameRenderer}: light shafts ({@link RtVolumetricPass}), then bloom and sun glare
- * ({@link RtBloomPass}), both on the final image after the denoiser, in this order (so the shafts bloom). Everything is switched by
- * {@link RtAtmosphereSettings}; a disabled effect costs nothing and its objects are only created when first needed.
+ * Minecraft settings/host-view adapter for native volumetric, bloom and sun glare passes.
+ * All passes consume the same camera-relative frame contract, including view bob.
  *
  * <p>Order of a frame: main pass (rt_rays / rt_path) -> denoiser (NRD / DLSS-RR G-buffer path) -> this -> copy to the engine target ->
  * the temporal upscaler / frame generation of the engine. The passes see the denoised image at render resolution; they write only
@@ -19,11 +21,16 @@ import org.slf4j.LoggerFactory;
  */
 final class RtAtmosphere {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
-    private static final int SPAN_GODRAYS = 0;
     private static final int SPAN_BLOOM = 1;
 
-    private RtVolumetricPass volumetric;
     private RtBloomPass bloom;
+    private RtSlangVolumetricPass volumetric;
+    /** The device's one native core, borrowed through a pool lease; {@code null} while it is unavailable. */
+    private SlangRuntime slangRuntime;
+    private SlangRuntimePool.Lease slangLease;
+    private boolean slangUnavailableLogged;
+    /** Set once the volumetric passes refuse to register, so the frame loop stops asking. */
+    private boolean shaftsUnavailable;
     private RtGpuTimer timer;
     private String lastLogged = "";
     /**
@@ -38,8 +45,9 @@ final class RtAtmosphere {
      * @param viewProj camera-relative view-projection of this frame (the same one the temporal reprojection uses)
      * @param bobX     camera origin offset of the frame (bob), camera-relative
      */
-    void record(VkCommandBuffer cmd, VkDevice device, RtMemory mem, RtFrameParams p, Matrix4f viewProj, RtPipeline.Views views,
-                int w, int h, float bobX, float bobY, float bobZ) {
+    void record(VkCommandBuffer cmd, VulkanDevice vulkanDevice, RtMemory mem, RtFrameParams p, Matrix4f viewProj,
+                RtFrameBindings.Views views, int w, int h, float bobX, float bobY, float bobZ) {
+        VkDevice device = vulkanDevice.vkDevice();
         if (p.mode != RtConfig.MODE_LIT || views.depth() == 0L) {
             return; // debug views show the raw buffer
         }
@@ -52,6 +60,10 @@ final class RtAtmosphere {
         if (!shafts && !glow && !glare) {
             return;
         }
+        SlangRuntime runtime = slangRuntime(vulkanDevice);
+        if (runtime == null) {
+            return;
+        }
         if (RtGpuTimer.ENABLED && timer == null) {
             try {
                 timer = new RtGpuTimer(device, "VKB-ATMO", "godrays", "bloom");
@@ -62,23 +74,22 @@ final class RtAtmosphere {
         if (timer != null) {
             timer.beginFrame(cmd);
         }
-        io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers.fullMemoryBarrier(cmd);   // the denoiser / main pass wrote the image
-        if (shafts) {
-            if (volumetric == null) {
-                volumetric = new RtVolumetricPass(device);
+        if (shafts && !shaftsUnavailable && volumetric == null) {
+            try {
+                volumetric = new RtSlangVolumetricPass(runtime);
+            } catch (RuntimeException e) {
+                shaftsUnavailable = true;
+                LOGGER.warn("[VKB-ATMO] light shafts unavailable: {}", e.getMessage());
             }
-            if (timer != null) {
-                timer.stamp(cmd, SPAN_GODRAYS, false);
-            }
-            volumetric.record(cmd, mem, p, views, w, h, RtAtmosphereSettings.godRaySteps(), RtAtmosphereSettings.godRayStrength(),
-                RtAtmosphereSettings.godRayRange());
-            if (timer != null) {
-                timer.stamp(cmd, SPAN_GODRAYS, true);
-            }
+        }
+        if (shafts && volumetric != null) {
+            if (timer != null) timer.stamp(cmd, 0, false);
+            volumetric.record(cmd, views, p, w, h);
+            if (timer != null) timer.stamp(cmd, 0, true);
         }
         if (glow || glare) {
             if (bloom == null) {
-                bloom = new RtBloomPass(device);
+                bloom = new RtBloomPass(runtime);
             }
             float[] dir = p.key.dir;
             boolean keyOn = Math.max(p.key.color[0], Math.max(p.key.color[1], p.key.color[2])) > 1.0e-3f;
@@ -103,7 +114,7 @@ final class RtAtmosphere {
             if (timer != null) {
                 timer.stamp(cmd, SPAN_BLOOM, false);
             }
-            bloom.record(cmd, mem, w, h, views.output(), views.depth(), bp, glow);
+            bloom.record(cmd, w, h, views.output(), views.depth(), bp, glow);
             if (timer != null) {
                 timer.stamp(cmd, SPAN_BLOOM, true);
             }
@@ -145,21 +156,70 @@ final class RtAtmosphere {
         return 0x100000001b3L * h + Float.floatToRawIntBits(RtAtmosphereSettings.chunkFadeSeconds());
     }
 
-    void resetHistory() {
-        if (volumetric != null) {
-            volumetric.resetHistory();
+    /**
+     * Borrows the device's only native core through {@link SlangRuntimePool}. Creating a second {@code BedrayCore} here
+     * used to be the shape of a crash the JVM cannot catch: the atmosphere's own core was created, reported ABI 2
+     * ready, and then faulted inside the driver on its very first Vulkan call (nvoglv64.dll, read at 0x4) while
+     * registering {@code volumetric_march}. One core per device also means one set of descriptor pools and pipeline
+     * caches; the lease is what keeps the core alive while the atmosphere still holds recordings, and the pool closes
+     * the core once the last holder releases it.
+     */
+    private SlangRuntime slangRuntime(VulkanDevice device) {
+        if (slangRuntime != null && slangRuntime.isClosed()) {
+            slangLease = null; // a world reload gave the device a new core
+            slangRuntime = null;
+        }
+        if (slangRuntime != null || slangUnavailableLogged) {
+            return slangRuntime;
+        }
+        try {
+            if (!SlangRuntime.hasCompiledPasses()) {
+                slangUnavailableLogged = true;
+                LOGGER.info("[VKB-ATMO] no AOT Slang passes in the jar; light shafts and bloom are unavailable");
+                return null;
+            }
+            // Bloom is feature-free; volumetric visibility needs the host's actually enabled RQ/BDA/Int64 features.
+            slangLease = SlangRuntimePool.acquire(device);
+            slangRuntime = slangLease.runtime();
+        } catch (RuntimeException | Error e) {
+            slangUnavailableLogged = true;
+            LOGGER.warn("[VKB-ATMO] native Slang runtime unavailable; light shafts and bloom are unavailable: {}",
+                e.getMessage());
+        }
+        return slangRuntime;
+    }
+
+    /** The exact host ticket proved completion and excluded resubmission. */
+    void releaseRecording(long commandBuffer) {
+        if (volumetric != null) volumetric.releaseRecording(commandBuffer);
+        if (bloom != null) {
+            bloom.releaseRecording(commandBuffer);
         }
     }
 
+    void discardRecording(long commandBuffer) {
+        resetHistory();
+        if (volumetric != null) volumetric.discardRecording(commandBuffer);
+        if (bloom != null) bloom.discardRecording(commandBuffer);
+    }
+
+    void resetHistory() {
+        if (volumetric != null) volumetric.resetHistory();
+    }
+
     void destroy() {
-        if (volumetric != null) {
-            volumetric.destroy();
-            volumetric = null;
-        }
+        if (volumetric != null) { volumetric.close(); volumetric = null; }
         if (bloom != null) {
-            bloom.destroy();
+            bloom.destroy(); // releases the remaining recordings before the runtime shuts down
             bloom = null;
         }
+        // Last, after both passes let go of their recordings: releasing the lease is what can close the core.
+        if (slangLease != null) {
+            slangLease.close();
+            slangLease = null;
+        }
+        slangRuntime = null;
+        slangUnavailableLogged = false;
         if (timer != null) {
             timer.destroy();
             timer = null;

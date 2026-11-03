@@ -358,6 +358,13 @@ class NativeLibrariesTest {
     }
 
     @Test
+    void descriptorAcceptsLinuxAndMacOsNativeNames() {
+        new LibraryDescriptor("so", "SO", "T", List.of("libbedray_core.so"), List.of(), "T", "u", Map.of(), null, 10);
+        new LibraryDescriptor("dylib", "Dylib", "T", List.of("libbedray_core.dylib"), List.of(), "T", "u", Map.of(), null, 10);
+        assertThrows(IllegalArgumentException.class, () -> new LibraryDescriptor("ver", "Ver", "T", List.of("libbedray_core.so.1"), List.of(), "T", "u", Map.of(), null, 10));
+    }
+
+    @Test
     void duplicateRegistrationIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> libs.register(LibraryDescriptor.XESS));
     }

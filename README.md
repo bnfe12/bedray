@@ -6,9 +6,11 @@
 > Tested only on an **NVIDIA GeForce RTX 5060 Ti (8 GB), Windows, NVIDIA driver 617.42**. Other graphics cards have not been checked.
 > **Looking for testers with AMD Radeon (RDNA 2 or newer) and Intel Arc GPUs.** See [Help us test](#help-us-test).
 
-> **Current `main`: unreleased 0.1.1-alpha.13 source integration (2026-10-26).** The development branches are consolidated here.
-> No build, shader compilation, tests, game session or FPS measurement was run for this integration, at the owner's request.
-> Earlier screenshots and release evidence describe earlier builds. See [the integration record](docs/DEVELOPMENT_BRANCHES.md).
+> **Current `main`: Slang AOT/native renderer integration.** The complete previous Java/GLSL project
+> (0.1.1-alpha.13) is preserved unchanged in [`legacy`](https://github.com/bnfe12/bedray/tree/legacy).
+> Build and CPU/native contract checks do not establish RTX visual quality or native 1080p/60 FPS.
+> Earlier screenshots and game evidence describe earlier builds. See [branch ownership](docs/BRANCH_LAYOUT.md)
+> and the [remaining implementation work](docs/STACK_IMPLEMENTATION_PLAN.md).
 
 Bedrock RTX-style ray tracing and path tracing for **Minecraft Java Edition**, running on the game's **native Vulkan backend**, as a
 Sodium add-on with a dedicated Bedray settings screen opened from Video Settings. It also adds temporal upscalers

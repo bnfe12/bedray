@@ -1,0 +1,518 @@
+// AOT compilation of Slang entry passes (Bedray 2.0).
+//
+// One file under src/main/resources/shaders/slang/passes is one compute or ray-generation entry
+// point named `main`. slangc compiles it to SPIR-V plus a small JSON manifest
+// that mirrors the descriptor contract the native core has to register with
+// Vulkan. Both land in build/generated/slang, which is a resource root: they are
+// packaged into the jar and never committed.
+//
+// slangc is not vendored. Point -Pslangc=, -PslangDir=, SLANGC or SLANG_DIR at
+// the SDK. The new renderer requires AOT output; a missing compiler fails the
+// shader task instead of silently packaging an incomplete renderer.
+//
+// The manifest is generated from Slang's reflection, not written by hand: the
+// shader is the single source of truth for binding numbers and push constant
+// size, and the Java side looks bindings up by name. A shader edit that moves a
+// binding therefore cannot silently desynchronise the host.
+//
+// -PslangPasses=<glob>[,<glob>...] compiles only the matching entry files
+// (default: all). This is a verification aid for work-in-progress passes, not a
+// release configuration: the generated index then lists only those passes, and
+// SlangPassLibrary reports the others as missing AOT artifacts instead of
+// loading a legacy shader in their place. Release builds keep the default
+// fail-closed filter.
+
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+
+def slangRoot = file('src/main/resources/shaders/slang')
+def passesDir = new File(slangRoot, 'passes')
+def generatedRoot = layout.buildDirectory.dir('generated/slang')
+def slangProfile = (project.findProperty('slangProfile') ?: 'cs_6_5').toString()
+def slangRaygenProfile = (project.findProperty('slangRaygenProfile') ?: 'lib_6_5').toString()
+def slangPasses = (project.findProperty('slangPasses') ?: '**/*.slang').toString()
+// The arguments shared by every pass. They are also a declared task input, so a
+// profile or include-path change invalidates cached SPIR-V even when no source
+// file moved.
+def slangArgs = ['-target', 'spirv', '-profile', slangProfile, '-entry', 'main',
+                 '-matrix-layout-column-major', '-I', slangRoot.absolutePath]
+
+// The SDK ships the compiler as bin/slangc.exe on Windows and bin/slangc
+// elsewhere. The explicit -Pslangc/SLANGC paths still win when set.
+def slangcBinary = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+    ? 'slangc.exe' : 'slangc'
+
+def findSlangc = {
+    List<File> candidates = []
+    if (project.hasProperty('slangc')) {
+        candidates << file(project.property('slangc'))
+    }
+    if (System.getenv('SLANGC')) {
+        candidates << file(System.getenv('SLANGC'))
+    }
+    if (project.hasProperty('slangDir')) {
+        candidates << new File(project.property('slangDir').toString(), "bin/$slangcBinary")
+    }
+    if (System.getenv('SLANG_DIR')) {
+        candidates << new File(System.getenv('SLANG_DIR'), "bin/$slangcBinary")
+    }
+    candidates.find { it.isFile() }
+}
+
+def slangc = findSlangc()
+
+/** VkDescriptorType names ABI v2 can register (native/bedray_core/include/bedray_core.h). */
+def descriptorTypeOf = { param ->
+    def type = param.type
+    if (type == null) {
+        return null
+    }
+    if (type.kind == 'samplerState') {
+        return null // a separate sampler needs VK_DESCRIPTOR_TYPE_SAMPLER, which ABI v2 does not register
+    }
+    if (type.kind == 'constantBuffer') {
+        return 'UNIFORM_BUFFER'
+    }
+    if (type.kind != 'resource') {
+        return null
+    }
+    def shape = type.baseShape
+    if (shape in ['texture1D', 'texture2D', 'texture3D', 'textureCube', 'texture2DArray', 'textureCubeArray']) {
+        if (type.combined) {
+            return 'COMBINED_IMAGE_SAMPLER'
+        }
+        return type.access == 'readWrite' ? 'STORAGE_IMAGE' : 'SAMPLED_IMAGE'
+    }
+    if (shape in ['structuredBuffer', 'byteAddressBuffer', 'buffer']) {
+        return 'STORAGE_BUFFER'
+    }
+    if (shape == 'accelerationStructure') {
+        return 'ACCELERATION_STRUCTURE_KHR'
+    }
+    return null
+}
+
+/** Size of one element for buffer bindings, 0 for images and acceleration structures. */
+def elementBytesOf = { param ->
+    def type = param.type
+    if (type == null) {
+        return 0
+    }
+    if (type.kind == 'constantBuffer') {
+        return type.elementType?.sizes?.find { it.kind == 'uniform' }?.value ?: 0
+    }
+    if (type.kind == 'resource' && type.baseShape in ['structuredBuffer', 'byteAddressBuffer', 'buffer']) {
+        return type.resultType?.sizes?.find { it.kind == 'uniform' }?.value ?: 0
+    }
+    return 0
+}
+
+// Structs whose memory layout is shared with Java or with the legacy RtWorld
+// table.  The manifest records the size, but a field reorder with the same size
+// would still desynchronise the host, so the offsets are pinned here as well.
+// Update this map together with the Java mirror when a contract really changes.
+def STRUCT_LAYOUTS = [
+    FgPreparePush: [size: 8, fields: [size: 0]],
+    SpatialEasuPush: [size: 80, fields: [con0: 0, con1: 16, con2: 32, con3: 48, outSize: 64]],
+    SpatialRcasPush: [size: 32, fields: [con: 0, size: 16]],
+    SpatialNisPush: [size: 112, fields: [kDetectRatio: 0, kDetectThres: 4, kMinContrastRatio: 8, kRatioNorm: 12,
+        kContrastBoost: 16, kEps: 20, kSharpStartY: 24, kSharpScaleY: 28,
+        kSharpStrengthMin: 32, kSharpStrengthScale: 36, kSharpLimitMin: 40, kSharpLimitScale: 44,
+        kScaleX: 48, kScaleY: 52, kDstNormX: 56, kDstNormY: 60, kSrcNormX: 64, kSrcNormY: 68,
+        kInputViewportOriginX: 72, kInputViewportOriginY: 76, kInputViewportWidth: 80, kInputViewportHeight: 84,
+        kOutputViewportOriginX: 88, kOutputViewportOriginY: 92, kOutputViewportWidth: 96, kOutputViewportHeight: 100,
+        reserved0: 104, reserved1: 108]],
+    DecodePush: [size: 32, fields: [rawAddress: 0, arenaAddress: 8, flagsAddress: 16, quadCount: 24, reserved: 28]],
+    LegacySection: [size: 64, fields: [posAddr: 0, uvAddr: 8, colAddr: 16, lightAddr: 24, quadStart: 32, origin: 48]],
+    FrameConstants: [size: 608, fields: [camera: 0, sun: 416, atmosphere: 480, exposure: 560, frame: 592]],
+    BlockMaterial: [size: 64, fields: [albedo: 0, surface: 16, optical: 32, meta: 48]],
+    // The ReSTIR DI record the Slang path tracer reads and writes; the Java host allocates the ring with this stride.
+    DIReservoir: [size: 64, fields: [sample: 0, stats: 16, source: 32, receiver: 48]],
+    // The ReSTIR PT record of experimental/restir_pt.slang, bound at 36; the Java host allocates two halves of it per pixel.
+    RestirPtReservoir: [size: 144, fields: [sample: 0, stats: 112, source: 128]],
+    // Shader-facing scene record owned by bedray_scene (native/bedray_scene/include/bedray_scene.h).
+    // The TLAS instanceCustomIndex is the table slot, so these offsets are an ABI, not a suggestion.
+    GeometrySection: [size: 64, fields: [origin: 0, meta: 16, vertexAddress: 32, ranges: 40]],
+    GeometryRange: [size: 8, fields: [firstQuad: 0, quadCountPass: 4]],
+    // Typed Radiance Cascades interval record.  The host allocates the atlas and
+    // routes RWStructuredBuffer<RCSegment> descriptors with this stride; a
+    // packed float3/float3 layout would not match the reflected record.
+    RCSegment: [size: 32, fields: [radiance: 0, confidence: 12, transmittance: 16, flags: 28]],
+    // Push block shared by passes/path_trace.slang and path_trace_scene.slang.  The manifest checks the total size;
+    // pinning the fields catches a same-size reorder that would otherwise reach the Java writer unnoticed.
+    PathTracePush: [size: 112, fields: [maxDepth: 0, maxSurfaceSteps: 4, sampleIndex: 8, materialCount: 12,
+        flags: 16, rayBias: 20, alphaCutoff: 24, maxDistance: 28, maxRadiance: 32, sunProbability: 36,
+        emitterCount: 40, emitterProbability: 44, emitterCameraRelative: 48, diCameraDelta: 64,
+        diState: 80, entityState: 96]],
+    // Push block of the typed Radiance Cascades probe pass.  The 8-byte gap before emitterCameraRelative is part
+    // of the ABI (float4 alignment), so it is pinned through the field offsets.
+    RCFieldConstants: [size: 288, fields: [header: 0, counts: 16, origins: 96, ranges: 176, tag: 256, history: 272]],
+    RCFieldBuildPush: [size: 80, fields: [level: 0, count: 4, frameIndex: 8, materialCount: 12,
+        rayBias: 16, alphaCutoff: 20, maxRadiance: 24, sunProbability: 28, emitterCount: 32,
+        maxDepth: 36, emitterProbability: 40, reserved: 44, emitterCameraRelative: 48, entityState: 64]],
+    RCProbeTracePush: [size: 112, fields: [rayBias: 0, alphaCutoff: 4, emissionScale: 8, maxRadiance: 12,
+        sunProbability: 16, emitterProbability: 20, nearDistance: 24, farDistance: 28,
+        worldBoundaryDistance: 32, rayCount: 36, segmentCapacity: 40, materialCount: 44,
+        environmentPolicy: 48, environmentCascade: 52, frameRotation: 56, frameIndex: 60,
+        maxDepth: 64, emitterCount: 68, rcStatusCapacity: 72, reserved: 76,
+        emitterCameraRelative: 80, entityState: 96]],
+    // Push block of passes/frame_stats.slang.  The one value the host really promises is the frame index that rotates
+    // the metered tiles; the padding is part of the block so the manifest size cannot drift from the Java writer.
+    FrameStatsPush: [size: 8, fields: [frameIndex: 0, reserved: 4]]
+]
+
+def validateStructLayout = { String relative, String bindingName, struct ->
+    // A named HLSL cbuffer reflects an anonymous element type. Its parameter name
+    // is the contract name, while ordinary struct-backed blocks keep their type name.
+    def spec = STRUCT_LAYOUTS[struct?.name] ?: STRUCT_LAYOUTS[bindingName]
+    if (spec == null) {
+        return
+    }
+    int size = struct.sizes?.find { it.kind == 'uniform' }?.value ?: 0
+    if (size != spec.size) {
+        throw new GradleException("[slang] ${relative}: '${bindingName}' uses ${struct.name} of ${size} B, " +
+            "the host contract is ${spec.size} B; update both sides deliberately")
+    }
+    spec.fields.each { String fieldName, int expected ->
+        def field = struct.fields?.find { it.name == fieldName }
+        if (field == null) {
+            throw new GradleException("[slang] ${relative}: ${struct.name} has no field '${fieldName}'")
+        }
+        int actual = field.binding?.offset
+        if (actual != expected) {
+            throw new GradleException("[slang] ${relative}: ${struct.name}.${fieldName} is at ${actual} B, " +
+                "the host contract is ${expected} B")
+        }
+    }
+}
+
+// SPIR-V capabilities that every Vulkan 1.1 compute device provides, and the
+// ones that must be negotiated with the host.  A pass may only use a capability
+// that maps to a BedrayCapability bit; anything else fails the build instead of
+// producing SPIR-V the native core cannot validate at registration.
+def CORE_SPIRV_CAPABILITIES = [0: 'Matrix', 1: 'Shader', 50: 'ImageQuery']
+def ABI_SPIRV_CAPABILITIES = [
+    11  : [name: 'Int64', abi: 1 << 9],                        // BEDRAY_CAP_SHADER_INT64
+    49  : [name: 'StorageImageExtendedFormats', abi: 1 << 10],
+    4472: [name: 'RayQueryKHR', abi: 1 << 0],                  // BEDRAY_CAP_RAY_QUERY
+    4479: [name: 'RayTracingKHR', abi: 1 << 11],               // BEDRAY_CAP_RAY_TRACING_PIPELINE
+    5347: [name: 'PhysicalStorageBufferAddresses', abi: 1 << 2], // BEDRAY_CAP_BUFFER_DEVICE_ADDRESS
+    5383: [name: 'ShaderInvocationReorderNV', abi: 1 << 12]    // BEDRAY_CAP_INVOCATION_REORDER_NV
+]
+
+/** Execution model of main. Slang's ray-generation reflection can omit its stage, so SPIR-V owns this contract. */
+def spirvStageOf = { File spv ->
+    byte[] bytes = spv.bytes
+    if (bytes.length < 20 || bytes.length % 4 != 0) {
+        throw new GradleException("[slang] ${spv.name}: invalid SPIR-V word stream")
+    }
+    def buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+    if (buffer.getInt(0) != 0x07230203) {
+        throw new GradleException("[slang] ${spv.name}: invalid SPIR-V magic")
+    }
+    String stage = null
+    for (int at = 5; at < bytes.length.intdiv(4);) {
+        int instruction = buffer.getInt(at * 4)
+        int count = instruction >>> 16
+        int opcode = instruction & 0xFFFF
+        if (count == 0 || count > bytes.length.intdiv(4) - at) {
+            throw new GradleException("[slang] ${spv.name}: invalid instruction at word ${at}")
+        }
+        if (opcode == 15) { // OpEntryPoint execution-model id name interfaces...
+            if (count < 4) throw new GradleException("[slang] ${spv.name}: truncated OpEntryPoint")
+            int start = (at + 3) * 4, end = start
+            while (end < (at + count) * 4 && bytes[end] != 0) ++end
+            if (end == (at + count) * 4) {
+                throw new GradleException("[slang] ${spv.name}: unterminated entry-point name")
+            }
+            String name = new String(bytes, start, end - start, java.nio.charset.StandardCharsets.UTF_8)
+            if (name == 'main') {
+                if (stage != null) throw new GradleException("[slang] ${spv.name}: duplicate main entry point")
+                int model = buffer.getInt((at + 1) * 4)
+                stage = [5: 'compute', 5313: 'raygeneration'][model]
+                if (stage == null) {
+                    throw new GradleException("[slang] ${spv.name}: unsupported main execution model ${model}")
+                }
+            }
+        }
+        at += count
+    }
+    if (stage == null) throw new GradleException("[slang] ${spv.name}: no main execution model")
+    stage
+}
+
+/** SPIR-V capabilities referenced by the module. */
+def spirvCapabilitiesOf = { File spv ->
+    byte[] bytes = spv.bytes
+    int count = bytes.length.intdiv(4)
+    int[] words = new int[count]
+    for (int i = 0; i < count; i++) {
+        words[i] = (bytes[i * 4] & 0xFF) | ((bytes[i * 4 + 1] & 0xFF) << 8) |
+            ((bytes[i * 4 + 2] & 0xFF) << 16) | ((bytes[i * 4 + 3] & 0xFF) << 24)
+    }
+    Set<Integer> capabilities = new LinkedHashSet<>()
+    int at = 5 // skip the 5-word SPIR-V header
+    while (at < words.length) {
+        int wordCount = words[at] >>> 16
+        int opcode = words[at] & 0xFFFF
+        if (wordCount <= 0) {
+            break
+        }
+        if (opcode == 17 && wordCount >= 2) { // OpCapability
+            capabilities << words[at + 1]
+        }
+        at += wordCount
+    }
+    capabilities
+}
+
+/** Descriptor sets referenced by the module; empty means "set 0 only" (the SPIR-V default). */
+def descriptorSetsOf = { File spv ->
+    byte[] bytes = spv.bytes
+    int count = bytes.length.intdiv(4)
+    int[] words = new int[count]
+    for (int i = 0; i < count; i++) {
+        words[i] = (bytes[i * 4] & 0xFF) | ((bytes[i * 4 + 1] & 0xFF) << 8) |
+            ((bytes[i * 4 + 2] & 0xFF) << 16) | ((bytes[i * 4 + 3] & 0xFF) << 24)
+    }
+    Set<Integer> sets = new LinkedHashSet<>()
+    int at = 5 // skip the 5-word SPIR-V header
+    while (at < words.length) {
+        int wordCount = words[at] >>> 16
+        int opcode = words[at] & 0xFFFF
+        if (wordCount <= 0) {
+            break
+        }
+        if (opcode == 71 && wordCount >= 4) { // OpDecorate target decoration ...
+            if (words[at + 2] == 34) {        // Decoration::DescriptorSet
+                sets << words[at + 3]
+            }
+        }
+        at += wordCount
+    }
+    sets
+}
+
+def compileSlang = tasks.register('compileSlang') {
+    group = 'build'
+    description = 'Compiles Slang entry passes to SPIR-V and reflection manifests'
+    inputs.dir(slangRoot).withPropertyName('slangSources')
+    inputs.dir(new File(slangRoot.parentFile, 'third_party')).withPropertyName('spatialVendorHeaders')
+    inputs.property('slangProfile', slangProfile)
+    inputs.property('slangRaygenProfile', slangRaygenProfile)
+    inputs.property('slangPasses', slangPasses)
+    inputs.property('slangArguments', slangArgs.join(' '))
+    // The binary participates by content hash, which covers its version and local
+    // rebuilds. The path property records "missing" as a distinct state, so
+    // removing the toolchain invalidates existing outputs and reruns the task
+    // (which then fails) instead of silently accepting an old jar.
+    inputs.property('slangCompilerPath', slangc?.absolutePath ?: '<missing>')
+    if (slangc != null) {
+        inputs.file(slangc).withPropertyName('slangCompiler')
+    }
+    outputs.dir(generatedRoot).withPropertyName('slangOutput')
+
+    doLast {
+        if (slangc == null) {
+            throw new GradleException('slangc was not found: pass -Pslangc=<exe>, -PslangDir=<sdk>, ' +
+                'or set SLANGC / SLANG_DIR (see docs/SLANG_MIGRATION.md)')
+        }
+        File outRoot = generatedRoot.get().asFile
+        File spvDir = new File(outRoot, 'shaders/slang/spv')
+        File manifestDir = new File(outRoot, 'shaders/slang/manifest')
+        File reflectionDir = new File(outRoot, 'reflection')
+        project.delete(outRoot)
+        spvDir.mkdirs()
+        manifestDir.mkdirs()
+        reflectionDir.mkdirs()
+
+        List<String> patterns = slangPasses.split(',').collect { it.trim() }.findAll { !it.isEmpty() }
+        if (patterns.isEmpty()) {
+            throw new GradleException('[slang] -PslangPasses is empty; refusing an empty renderer build')
+        }
+        List<File> passes = fileTree(passesDir) { patterns.each { pattern -> include pattern } }.files.sort { it.path }
+        if (passes.isEmpty()) {
+            throw new GradleException('[slang] no entry passes under ' + passesDir + ' matched ' + patterns +
+                '; refusing an empty renderer build')
+        }
+
+        List<String> index = []
+        passes.each { File pass ->
+            String relative = passesDir.toPath().relativize(pass.toPath()).toString().replace('\\', '/')
+            String name = relative.substring(0, relative.length() - '.slang'.length()).replace('/', '.')
+            File spv = new File(spvDir, name + '.spv')
+            File reflection = new File(reflectionDir, name + '.reflection.json')
+
+            boolean ser = relative.endsWith('.ser.slang')
+            boolean raygen = ser || relative.endsWith('.raygen.slang')
+            String passProfile = raygen ? slangRaygenProfile : slangProfile
+            List<String> passArgs = raygen
+                ? ['-target', 'spirv', '-profile', passProfile, '-entry', 'main', '-stage', 'raygeneration',
+                   '-matrix-layout-column-major', '-I', slangRoot.absolutePath, '-emit-spirv-directly']
+                : slangArgs
+            if (ser) passArgs += ['-capability', 'spvShaderInvocationReorderNV']
+            List<String> command = [slangc.absolutePath] + passArgs + [
+                '-o', spv.absolutePath,
+                '-reflection-json', reflection.absolutePath,
+                pass.absolutePath
+            ]
+            Process process = new ProcessBuilder(command).directory(project.projectDir).redirectErrorStream(true).start()
+            String output = process.inputStream.getText('UTF-8')
+            int code = process.waitFor()
+            if (code != 0 || !spv.isFile()) {
+                throw new GradleException("[slang] ${relative}: slangc exited ${code}\n${output}")
+            }
+            if (output.readLines().any { it.contains('warning') }) {
+                logger.warn("[slang] ${relative}:\n${output}")
+            }
+
+            Set<Integer> sets = descriptorSetsOf(spv)
+            if (!sets.isEmpty() && (sets.size() > 1 || !sets.contains(0))) {
+                throw new GradleException("[slang] ${relative}: ABI v2 has one descriptor set, but the module uses ${sets}; " +
+                    'use [[vk::binding(N, 0)]]')
+            }
+
+            def reflected = new JsonSlurper().parse(reflection)
+            def entryPoint = reflected.entryPoints?.find { it.name == 'main' }
+            if (entryPoint == null) {
+                throw new GradleException("[slang] ${relative}: no 'main' entry point in the reflection")
+            }
+            String stage = spirvStageOf(spv)
+            String expectedStage = raygen ? 'raygeneration' : 'compute'
+            if (stage != expectedStage) {
+                throw new GradleException("[slang] ${relative}: main execution model is ${stage}, expected ${expectedStage}")
+            }
+            // Only the bindings the entry point actually uses belong in its pipeline layout. A module may declare
+            // globals that another entry point needs; including them here would force the host to bind resources
+            // this program never reads.
+            Set<String> usedByEntry = entryPoint.bindings == null
+                ? null
+                : entryPoint.bindings.collect { it.name } as Set<String>
+
+            List<String> spirvCapabilities = []
+            int requiredCapabilities = 0
+            spirvCapabilitiesOf(spv).each { int capability ->
+                String coreName = CORE_SPIRV_CAPABILITIES[capability]
+                if (coreName != null) {
+                    spirvCapabilities << coreName
+                    return
+                }
+                if (capability == 55 || capability == 56) {
+                    List<String> storageImages = reflected.parameters.findAll { param ->
+                        param.type?.kind == 'resource' && param.type.baseShape?.startsWith('texture') &&
+                            param.type.access == 'readWrite' &&
+                            (usedByEntry == null || usedByEntry.contains(param.name))
+                    }.collect { it.name as String }
+                    String names = storageImages.isEmpty() ? '' :
+                        '; storage images in this entry: ' + storageImages.join(', ')
+                    throw new GradleException("[slang] ${relative}: a storage image without an explicit format needs " +
+                        (capability == 55 ? 'StorageImageReadWithoutFormat' : 'StorageImageWriteWithoutFormat') +
+                        ', which ABI v2 does not enable; annotate each RWTexture2D with ' +
+                        '[vk::image_format("...")] matching the bound view' + names)
+                }
+                def mapped = ABI_SPIRV_CAPABILITIES[capability]
+                if (mapped == null) {
+                    throw new GradleException("[slang] ${relative}: SPIR-V capability ${capability} has no ABI " +
+                        'mapping; add it to ABI_SPIRV_CAPABILITIES and bedray_core.h, or stop using it')
+                }
+                spirvCapabilities << (mapped.name as String)
+                requiredCapabilities |= mapped.abi as int
+            }
+
+            List<Map<String, Object>> bindings = []
+            int pushConstantBytes = 0
+            reflected.parameters.each { param ->
+                if (param.binding?.kind == 'pushConstantBuffer') {
+                    validateStructLayout(relative, param.name, param.type.elementType)
+                    def size = param.type?.elementType?.sizes?.find { it.kind == 'uniform' }?.value
+                    pushConstantBytes = size == null ? 0 : (size as int)
+                    return
+                }
+                if (param.binding?.kind != 'descriptorTableSlot') {
+                    return
+                }
+                if (usedByEntry != null && !usedByEntry.contains(param.name)) {
+                    return
+                }
+                String descriptorType = descriptorTypeOf(param)
+                if (descriptorType == null) {
+                    throw new GradleException("[slang] ${relative}: parameter '${param.name}' is a " +
+                        "${param.type?.kind}/${param.type?.baseShape} resource that ABI v2 cannot register; " +
+                        'use a combined sampler (Sampler2D) or a supported buffer')
+                }
+                if (param.type.kind == 'constantBuffer') {
+                    validateStructLayout(relative, param.name, param.type.elementType)
+                } else if (param.type.kind == 'resource' && param.type.baseShape == 'structuredBuffer') {
+                    validateStructLayout(relative, param.name, param.type.resultType)
+                }
+                int elementCount = 1
+                def sizes = param.type?.sizes
+                if (sizes instanceof List && !sizes.isEmpty()) {
+                    def value = sizes[0].value
+                    if (value instanceof Number) {
+                        elementCount = value as int
+                    }
+                }
+                bindings << [
+                    name          : param.name,
+                    binding       : param.binding.index as int,
+                    descriptorType: descriptorType,
+                    count         : elementCount,
+                    elementBytes  : elementBytesOf(param) as int
+                ]
+            }
+            bindings.sort { it.binding }
+            Set<Integer> seen = new LinkedHashSet<>()
+            bindings.each { b ->
+                if (!seen.add(b.binding as int)) {
+                    throw new GradleException("[slang] ${relative}: binding ${b.binding} is declared twice")
+                }
+            }
+            Set<String> reflectedNames = bindings.collect { it.name } as Set<String>
+            if (usedByEntry != null) {
+                entryPoint.bindings.each { b ->
+                    if (b.binding?.kind == 'descriptorTableSlot' && !reflectedNames.contains(b.name)) {
+                        throw new GradleException("[slang] ${relative}: entry point uses binding '${b.name}' " +
+                            'but it has no descriptor in the manifest')
+                    }
+                }
+            }
+            List<Integer> groupSize = stage == 'raygeneration' ? [1, 1, 1]
+                : (entryPoint.threadGroupSize ?: [1, 1, 1])*.asType(Integer)
+
+            byte[] source = pass.bytes
+            String sourceHash = MessageDigest.getInstance('SHA-256').digest(source).encodeHex().toString()
+
+            Map<String, Object> manifest = [
+                schema           : 1,
+                name             : name,
+                source           : 'passes/' + relative,
+                sourceSha256     : sourceHash,
+                entryPoint       : 'main',
+                stage            : stage,
+                profile          : passProfile,
+                descriptorSet    : 0,
+                threadGroupSize  : groupSize,
+                pushConstantBytes: pushConstantBytes,
+                spirvWordCount   : (spv.length().intdiv(4)) as int,
+                spirvCapabilities: spirvCapabilities,
+                requiredCapabilities: requiredCapabilities,
+                bindings         : bindings
+            ]
+            new File(manifestDir, name + '.json').setText(JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n', 'UTF-8')
+            index << name
+            logger.lifecycle("[slang] ${name}: ${spv.length()} B SPIR-V, ${bindings.size()} binding(s), " +
+                "${pushConstantBytes} B push constants, ${groupSize.join('x')} threads")
+        }
+
+        new File(manifestDir, 'index.json').setText(JsonOutput.prettyPrint(JsonOutput.toJson([
+            schema   : 1,
+            profile  : slangProfile,
+            passes   : index
+        ])) + '\n', 'UTF-8')
+    }
+}
+
+sourceSets.main.resources.srcDir(generatedRoot)
+tasks.named('processResources') { dependsOn(compileSlang) }

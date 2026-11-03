@@ -36,14 +36,26 @@ public final class RtMemory {
         /** Persistently mapped pointer for host-visible buffers, else 0. */
         public final long mapped;
         public final boolean hostVisible;
+        /**
+         * True when {@code bedray_scene} owns the buffer: its layout is the native
+         * {@code GeometrySection} table (not the legacy row), and it must never be
+         * destroyed through this class.
+         */
+        public final boolean sceneOwned;
 
         Buf(long handle, long memory, long size, long address, long mapped, boolean hostVisible) {
+            this(handle, memory, size, address, mapped, hostVisible, false);
+        }
+
+        Buf(long handle, long memory, long size, long address, long mapped, boolean hostVisible,
+            boolean sceneOwned) {
             this.handle = handle;
             this.memory = memory;
             this.size = size;
             this.address = address;
             this.mapped = mapped;
             this.hostVisible = hostVisible;
+            this.sceneOwned = sceneOwned;
         }
     }
 
@@ -76,23 +88,28 @@ public final class RtMemory {
     public RtMemory(VkDevice device) {
         this.device = device;
         this.memProps = VkPhysicalDeviceMemoryProperties.calloc();
-        VK10.vkGetPhysicalDeviceMemoryProperties(device.getPhysicalDevice(), memProps);
-        // Buffers/images (including Iris post) also run on graphics-only devices. Do not query
-        // acceleration-structure properties unless that extension was actually enabled.
-        if (!device.getCapabilities().VK_KHR_acceleration_structure) {
-            this.scratchAlignment = 1;
-            return;
-        }
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps =
-                VkPhysicalDeviceAccelerationStructurePropertiesKHR.calloc(stack).sType$Default();
-            VkPhysicalDeviceProperties2 props2 = VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(asProps.address());
-            VK11.vkGetPhysicalDeviceProperties2(device.getPhysicalDevice(), props2);
-            int align = asProps.minAccelerationStructureScratchOffsetAlignment();
-            if (align <= 0) {
-                throw new RtFailure("init", "minAccelerationStructureScratchOffsetAlignment=" + align);
+        try {
+            VK10.vkGetPhysicalDeviceMemoryProperties(device.getPhysicalDevice(), memProps);
+            // Buffers/images (including Iris post) also run on graphics-only devices. Do not query
+            // acceleration-structure properties unless that extension was actually enabled.
+            if (!device.getCapabilities().VK_KHR_acceleration_structure) {
+                this.scratchAlignment = 1;
+                return;
             }
-            this.scratchAlignment = align;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps =
+                    VkPhysicalDeviceAccelerationStructurePropertiesKHR.calloc(stack).sType$Default();
+                VkPhysicalDeviceProperties2 props2 = VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(asProps.address());
+                VK11.vkGetPhysicalDeviceProperties2(device.getPhysicalDevice(), props2);
+                int align = asProps.minAccelerationStructureScratchOffsetAlignment();
+                if (align <= 0) {
+                    throw new RtFailure("init", "minAccelerationStructureScratchOffsetAlignment=" + align);
+                }
+                this.scratchAlignment = align;
+            }
+        } catch (RuntimeException | Error failure) {
+            memProps.free();
+            throw failure;
         }
     }
 
@@ -161,6 +178,8 @@ public final class RtMemory {
                 VkBufferDeviceAddressInfo addr = VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer);
                 address = VK12.vkGetBufferDeviceAddress(device, addr);
                 if (address == 0L) {
+                    VK10.vkDestroyBuffer(device, buffer, null);
+                    VK10.vkFreeMemory(device, memory, null);
                     throw new RtFailure("buffer_device_address:" + what, "address=0");
                 }
             }
@@ -175,8 +194,17 @@ public final class RtMemory {
                 }
                 mapped = pData.get(0);
             }
+            Buf result;
+            try {
+                result = new Buf(buffer, memory, reqs.size(), address, mapped, hostVisible);
+            } catch (RuntimeException | Error failure) {
+                if (mapped != 0L) VK10.vkUnmapMemory(device, memory);
+                VK10.vkDestroyBuffer(device, buffer, null);
+                VK10.vkFreeMemory(device, memory, null);
+                throw failure;
+            }
             reservedBytes += reqs.size();
-            return new Buf(buffer, memory, reqs.size(), address, mapped, hostVisible);
+            return result;
         }
     }
 

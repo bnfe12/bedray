@@ -104,8 +104,10 @@ final class SettingsDraft {
             stage("voxel_diffuse_bounce", !fast);
             stage("voxel_translucent_optics", !fast);
         } else {
-            stage("path_spp", fast ? 1 : 2);
-            stage("path_bounces", fast ? 2 : 4);
+            // One path per pixel in both: the denoiser reconstructs from one sample, and a second path doubled the trace
+            // (autotest gpu_ms, 2026-11-02). Beautiful buys its quality with a third bounce and the longer reach.
+            stage("path_spp", 1);
+            stage("path_bounces", fast ? 2 : 3);
             stage("path_distance", fast ? 256 : 512);
         }
     }

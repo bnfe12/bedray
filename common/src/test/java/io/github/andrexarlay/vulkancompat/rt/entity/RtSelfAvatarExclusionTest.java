@@ -20,11 +20,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class RtSelfAvatarExclusionTest {
 
     private static final String CONFIG = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtConfig.java";
-    private static final String CORE = "src/main/resources/shaders/rt_common_core.glsl";
-    private static final String SURFACE = "src/main/resources/shaders/rt_common_surface.glsl";
-    private static final String WATER = "src/main/resources/shaders/rt_common_water.glsl";
-    private static final String PATH = "src/main/resources/shaders/rt_path.comp";
-    private static final String RAYS = "src/main/resources/shaders/rt_rays.comp";
+    private static final String SHADERS = "src/main/resources/shaders/slang";
+    private static final String TRAVERSAL = SHADERS + "/traversal/scene_traversal.slang";
+    private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
+    private static final String TRACER_CONTRACT = SHADERS + "/contracts/scene_tracer.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace.slang";
 
     @Test
     public void captureRecordsTheRangeInTheSharedEntityIndexBuffer() {
@@ -44,71 +44,70 @@ public class RtSelfAvatarExclusionTest {
     }
 
     @Test
-    public void rangeIsPublishedInTheStatsSlot() {
-        assertEquals(RtStatsLayout.RESERVOIR_AUX_ADDR + 12, RtStatsLayout.SELF_AVATAR_TRI_START,
-            "the trailing uints follow the reservoir stats block directly");
-        assertEquals(RtStatsLayout.RESERVOIR_AUX_ADDR + 16, RtStatsLayout.SELF_AVATAR_TRI_COUNT, "two separate uints, no uvec2 padding");
+    public void rangeIsPublishedInTheStatsSlotAndReadByTheTraversal() {
+        assertEquals(RtStatsLayout.SKY_DISPLAY_COLOR_B_DAY + 12, RtStatsLayout.SELF_AVATAR_TRI_START,
+            "the trailing uints retain their offsets after the private sky colour/day packet");
+        assertEquals(RtStatsLayout.SKY_DISPLAY_COLOR_B_DAY + 16, RtStatsLayout.SELF_AVATAR_TRI_COUNT, "two separate uints, no uvec2 padding");
         assertTrue(RtStatsLayout.SIZE <= RtStatsLayout.SLOT_STRIDE, "the slot ring must still fit the struct");
-        String core = read(CORE);
-        assertTrue(core.contains("uint selfAvatarTriStart;"), "the shader reads the first triangle of the capture");
-        assertTrue(core.contains("uint selfAvatarTriCount;"), "and its length");
         String renderer = readJava("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
         assertTrue(renderer.contains("memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_START, entOk ? capture.selfAvatarTriStart() : 0)"),
             "the slot the shader reads this frame is written by the renderer before the dispatch");
         assertTrue(renderer.contains("memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_COUNT, entOk ? capture.selfAvatarTriCount() : 0)"),
             "a frame without an entity BLAS must publish 0: the primitive index would not exist");
+        String pass = read(PASS);
+        assertTrue(pass.contains("traversal.selfAvatarTriStart = pc.entityState.y;"),
+            "the pass lifts the range out of the stats word the renderer just wrote");
+        assertTrue(pass.contains("traversal.selfAvatarTriCount = pc.entityState.z;"), "and its length");
+        String traversal = read(TRAVERSAL);
+        assertTrue(traversal.contains("uint selfAvatarTriStart;"), "the traversal state carries the range into the candidate loop");
+        assertTrue(traversal.contains("uint selfAvatarTriCount;"), "and its length");
     }
 
     @Test
     public void onlyPrimaryRaysSkipTheAvatar() {
-        String path = read(PATH);
-        assertTrue(path.contains("traceSurface(o, d, b == 0u ? 0.001 : 0.0, b == 0u ? 4096.0 : reach, false, b == 0u, s)"),
+        String tracer = read(TRACER);
+        assertTrue(tracer.contains("SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)")
+                && tracer.contains(": traversal.traceClosest(ray);"),
             "the path tracer must skip the avatar on the primary hit only: reflections of the player need it");
-        String rays = read(RAYS);
-        String walk = requireBlock(rays, "bool cameraWalk(inout CameraPath cp, vec3 origin, vec3 dir, inout uint seed,"
-            + " out Surface s, out bool bend) {");
-        assertTrue(walk.contains("if (isSelfAvatarPrim(slot, prim)) {\n            continue;"),
-            "the raster-like mode starts its camera ray inside the same body, and the camera walk owns the traversal now");
-        assertFalse(walk.contains("rayQueryConfirmIntersectionEXT"),
-            "the avatar has to be dropped before anything is committed: the walk never commits for that reason");
-        String water = read(WATER);
-        assertFalse(requireBlock(water, "bool traceThroughInterfacesM(").contains("isSelfAvatarPrim"),
-            "mirrors and GI keep the body: the exclusion belongs to the camera ray, not to the shared interface walk");
-        assertTrue(water.contains("traceWaterBoundary(o, vec3(0.0, 1.0, 0.0), 160.0, true, t, tint)"),
-            "under water the camera-medium probe looks straight up through the player's own head: it would read a blocker and "
-                + "lose the water body");
-        String refracted = requireBlock(water, "uint k = traceWaterBoundary(o, Lw, 200.0, ");
-        assertFalse(refracted.contains(", true,"),
-            "a sun ray refracted by the water surface must still be shaded by the player, or the body stops casting a shadow in water");
+        assertTrue(read(TRACER_CONTRACT).contains("SurfaceHit tracePrimary(Ray ray) {\n        return traceClosest(ray);"),
+            "a backend that has no first-person capture answers the primary ray with the full scene, so the hook cannot"
+                + " silently drop geometry somewhere else");
+        String traversal = read(TRAVERSAL);
+        int primary = traversal.indexOf("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, true);");
+        int closest = traversal.indexOf("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, false);");
+        assertTrue(primary >= 0, "the scene traversal opts into the exclusion on the eye ray only");
+        assertTrue(closest >= 0, "and keeps the body for every other closest query");
+        String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
+        assertFalse(visibility.contains("selfAvatar"),
+            "shadow and visibility rays keep the body: the exclusion belongs to the camera ray, not to the blocker test");
+        assertTrue(visibility.contains("RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH"),
+            "the shadow ray takes the first blocker, so the avatar shades the ground under the player");
     }
 
     @Test
-    public void traceSurfaceSkipsTheCandidateBeforeConfirming() {
-        String src = read(SURFACE);
-        String trace = requireBlock(src, "bool traceSurface(vec3 origin, vec3 dir, float tmin, float tmax, bool skipTranslucent, bool excludeSelfAvatar, out Surface s) {");
-        int skip = trace.indexOf("if (excludeSelfAvatar && isSelfAvatarPrim(");
-        int confirm = trace.indexOf("rayQueryConfirmIntersectionEXT(rq)");
+    public void theCandidateLoopSkipsBeforeItCommits() {
+        String trace = read(SHADERS + "/traversal/triangle_query.slang");
+        int skip = trace.indexOf("if (excludedSelfAvatar(excludeSelfAvatar, entityInstance(");
+        int commit = trace.indexOf("query.CommitNonOpaqueTriangleHit();");
         assertTrue(skip >= 0, "the candidate loop has to drop the avatar's triangles");
-        assertTrue(skip < confirm, "a confirmed candidate cannot be removed any more: the test must come first");
-        assertTrue(trace.substring(skip, confirm).contains("continue;"), "dropping means skipping the candidate, not confirming it");
-        assertTrue(trace.contains("rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)"),
+        assertTrue(commit >= 0, "the walk commits the terminal surface it really hits");
+        assertTrue(skip < commit, "a confirmed candidate cannot be removed any more: the test must come first");
+        assertTrue(trace.substring(skip, commit).contains("continue;"), "dropping means skipping the candidate, not confirming it");
+        assertTrue(trace.contains("query.CandidatePrimitiveIndex()"),
             "the range is compared against the candidate primitive, read before the commit");
-        assertTrue(src.contains("bool traceSurface(vec3 origin, vec3 dir, float tmin, float tmax, bool skipTranslucent, out Surface s) {\n"
-                + "    return traceSurface(origin, dir, tmin, tmax, skipTranslucent, false, s);"),
-            "shadow, sky and secondary queries keep the avatar: the default must forward to include it");
     }
 
     @Test
     public void helperOnlyMatchesEntityTrianglesOfThisFrame() {
-        String core = read(CORE);
-        String helper = requireBlock(core, "bool isSelfAvatarPrim(uint customIndex, uint prim) {");
-        assertTrue(helper.contains("isEntityHit(customIndex)"),
+        String helper = block(read(SHADERS + "/contracts/triangle_intersection.slang"),
+            "bool excludedSelfAvatar(bool primary, bool entity, uint primitive, uint start, uint count) {");
+        assertTrue(helper.contains("primary && entity"),
             "world sections use the same primitive numbering: the check must not match their triangles");
-        assertTrue(helper.contains("selfAvatarTriCount > 0u"),
+        assertTrue(helper.contains("count != 0u"),
             "third person and a disabled option publish 0: nothing may be skipped then");
-        assertTrue(helper.contains("prim < fb.selfAvatarTriStart + fb.selfAvatarTriCount"),
+        assertTrue(helper.contains("primitive >= start && primitive - start < count"),
             "half-open range: the triangle right after the body is the next entity");
-        assertFalse(helper.contains("rayQuery"), "the helper is a pure range test, called with the candidate's own indices");
+        assertFalse(helper.contains("RayQuery"), "the helper is a pure range test, called with the candidate's own indices");
         assertTrue(readJava(CONFIG).contains("System.getProperty(\"vkbridge.rt.selfAvatar\", \"true\")"),
             "the A/B switch stays on the capture, not on the skip");
     }
@@ -129,6 +128,10 @@ public class RtSelfAvatarExclusionTest {
             }
         }
         throw new AssertionError("unbalanced block: " + header);
+    }
+
+    private static String block(String source, String header) {
+        return requireBlock(source, header);
     }
 
     private static String read(String relative) {

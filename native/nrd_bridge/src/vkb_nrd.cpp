@@ -38,6 +38,7 @@
 
 #include "NRD.h"   // headers only: struct layouts. No NRD symbol is referenced, NRD.dll is loaded dynamically.
 #include "vkb_nrd.h"
+#include "primary_lobe_settings.h"
 
 #include <algorithm>
 #include <cstdarg>
@@ -408,12 +409,14 @@ static int createPipelinesAndSets(Denoiser* d) {
         d->samplerCount = s + 1;
     }
 
-    // constant buffer: dynamic uniform buffer with one slot per possible dispatch
+    // constant buffer: dynamic uniform buffer with one block per possible
+    // dispatch, multiplied by the frames-in-flight ring.  Frame N+1 must not
+    // overwrite a block that frame N's in-flight command buffer still reads.
     d->cbSlots = std::max<uint32_t>(id->descriptorPoolDesc.setsMaxNum, 1);
     d->cbStride = (VkDeviceSize(id->constantBufferMaxDataSize) + g.uboAlign - 1) / g.uboAlign * g.uboAlign;
     {
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bci.size = d->cbStride * d->cbSlots;
+        bci.size = d->cbStride * d->cbSlots * d->frames;
         bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         VKC(g.vk.CreateBuffer(g.device, &bci, nullptr, &d->cbBuffer));
@@ -537,6 +540,7 @@ static int createPipelinesAndSets(Denoiser* d) {
 extern "C" {
 
 VKB_NRD_API uint32_t vkb_nrd_get_api_version(void) { return VKB_NRD_API_VERSION; }
+VKB_NRD_API uint32_t vkb_nrd_get_signal_contract_version(void) { return 1u; }
 VKB_NRD_API const char* vkb_nrd_get_last_error_string(void) { return g_lastError; }
 VKB_NRD_API uint32_t vkb_nrd_get_required_features(void) {
     return VKB_NRD_FEATURE_STORAGE_IMAGE_READ_WITHOUT_FORMAT | VKB_NRD_FEATURE_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT |
@@ -680,6 +684,24 @@ VKB_NRD_API int32_t vkb_nrd_create_denoiser(const VkbNrdCreateInfo* info, uint64
         destroyDenoiser(d);
         return fail(VKB_NRD_ERR_NRD, "NRD CreateInstance failed: nrd::Result=%u (requested mode mask 0x%X)", unsigned(nr), info->mode_mask);
     }
+    if (d->modeMask & VKB_NRD_MODE_REBLUR_DIFFUSE_SPECULAR) {
+        nrd::ReblurSettings settings;
+        bedray::nrd_bridge::configure_primary_lobe_signals(settings);
+        nr = g.nrd.SetDenoiserSettings(*d->instance, nrd::Identifier(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR), &settings);
+        if (nr != nrd::Result::SUCCESS) {
+            destroyDenoiser(d);
+            return fail(VKB_NRD_ERR_NRD, "NRD primary-lobe settings(REBLUR) failed: nrd::Result=%u", unsigned(nr));
+        }
+    }
+    if (d->modeMask & VKB_NRD_MODE_RELAX_DIFFUSE_SPECULAR) {
+        nrd::RelaxSettings settings;
+        bedray::nrd_bridge::configure_primary_lobe_signals(settings);
+        nr = g.nrd.SetDenoiserSettings(*d->instance, nrd::Identifier(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR), &settings);
+        if (nr != nrd::Result::SUCCESS) {
+            destroyDenoiser(d);
+            return fail(VKB_NRD_ERR_NRD, "NRD primary-lobe settings(RELAX) failed: nrd::Result=%u", unsigned(nr));
+        }
+    }
     d->idesc = g.nrd.GetInstanceDesc(*d->instance);
     if (!d->idesc) { destroyDenoiser(d); return fail(VKB_NRD_ERR_NRD, "NRD GetInstanceDesc returned null"); }
 
@@ -781,6 +803,7 @@ VKB_NRD_API int32_t vkb_nrd_set_reblur_settings(uint64_t handle, const VkbNrdReb
     rs.specularPrepassBlurRadius = s->specular_prepass_blur_radius;
     rs.planeDistanceSensitivity = s->plane_distance_sensitivity;
     rs.enableAntiFirefly = s->enable_anti_firefly != 0;
+    bedray::nrd_bridge::configure_primary_lobe_signals(rs);
     nrd::Result nr = g.nrd.SetDenoiserSettings(*d->instance, nrd::Identifier(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR), &rs);
     if (nr != nrd::Result::SUCCESS) return fail(VKB_NRD_ERR_NRD, "NRD SetDenoiserSettings(REBLUR) failed: nrd::Result=%u", unsigned(nr));
     return VKB_NRD_OK;
@@ -907,6 +930,10 @@ VKB_NRD_API int32_t vkb_nrd_dispatch(uint64_t handle, uint64_t command_buffer, u
         if (any) {
             globalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                           VK_ACCESS_TRANSFER_WRITE_BIT);
+            // The descriptor pool and this constant block use the same ring
+            // index: frame N's blocks stay untouched until the ring returns to
+            // them `frames` dispatch calls later.
+            const uint64_t cbSlotBase = static_cast<uint64_t>(d->ring) * d->cbSlots;
             uint32_t lastOffset = 0, nextSlot = 0;
             std::vector<uint8_t> padded(d->idesc->constantBufferMaxDataSize + 4);
             for (uint32_t i = 0; i < dispatchN; ++i) {
@@ -925,7 +952,8 @@ VKB_NRD_API int32_t vkb_nrd_dispatch(uint64_t handle, uint64_t command_buffer, u
                     std::memcpy(padded.data(), dd.constantBufferData, dd.constantBufferDataSize);
                     src = padded.data();
                 }
-                lastOffset = static_cast<uint32_t>(d->cbStride * nextSlot++);
+                const uint64_t slot = cbSlotBase + nextSlot++;
+                lastOffset = static_cast<uint32_t>(d->cbStride * slot);
                 cbOffset[i] = lastOffset;
                 g.vk.CmdUpdateBuffer(cmd, d->cbBuffer, lastOffset, size4, src);
                 constantBytes += size4;

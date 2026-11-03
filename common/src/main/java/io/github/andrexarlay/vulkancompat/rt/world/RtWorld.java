@@ -39,14 +39,15 @@ import java.util.Map;
  * GPU side of the world ray tracing (step R1.2): own copies of the section geometry decoded by
  * {@link SectionGeometryRegistry}, one BLAS per section, and a TLAS rebuilt every frame.
  *
- * <p>Everything is recorded into the command buffer passed to {@link #update}; nothing is submitted here. Resources of
- * removed/replaced sections are released {@link #DEFER_FRAMES} frames later (the engine keeps up to 2 submissions in
- * flight). Render thread only.
+ * <p>Everything is recorded into the command buffer passed to {@link #update}; nothing is submitted here. Before each
+ * legacy update the host drains prior uses of the shared mapped inputs. Removed/replaced sections
+ * are reclaimed at the next host drain. The opt-in native scene retires generations through its exact recording
+ * completion/discard callbacks. Render thread only.
  *
  * <p>Per section a block of the geometry arena holds {@code [positions float3 x 4Q][uv float2 x 4Q]}; the BLAS has one
  * triangle geometry per non-empty pass (SOLID: OPAQUE, CUTOUT/TRANSLUCENT: non-opaque) reading a slice of the
  * positions with the shared quad index buffer. The shader finds the section through
- * {@code instanceCustomIndex = slot} in the section table (48 bytes per slot).
+ * {@code instanceCustomIndex = slot} in the section table (64 bytes per slot).
  */
 public final class RtWorld {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
@@ -74,7 +75,6 @@ public final class RtWorld {
     public static final int FOLIAGE_CARD = 1;
     public static final int FOLIAGE_CUBE = 2;
     static final int INSTANCE_BYTES = RtInstanceWriter.SIZEOF;
-    static final int DEFER_FRAMES = 3;
     static final long BLOCK_ALIGN = 256L;
     private static final double CPU_BUDGET_MS = 8.0;
 
@@ -129,9 +129,6 @@ public final class RtWorld {
         }
     }
 
-    private record Deferred(long frame, SectionGpu section) {
-    }
-
     /**
      * Block-state query that tags the cutout quads with {@link #VEGETATION_BIT} (and {@link #LEAF_CUBE_BIT} for a full
      * cube) while a section is staged. Called on the render thread, once per cutout quad of a section build. Returns one of
@@ -155,15 +152,26 @@ public final class RtWorld {
     private final RtMemory.Buf instances;
     private final RtMemory.Buf tlasBuf;
     private final long tlasHandle;
-    private final long tlasAddress;
     private final long scratchBase;
     private final RtEntityBlas entityBlas;
     private final OpacityMicromapCache omm;
+    /**
+     * Optional native GPU scene ({@code -Dvkbridge.rt.nativeScene=true}). It owns a
+     * section BLAS/TLAS and the 64-byte {@code GeometrySection} table; while
+     * it has a TLAS for this frame the facade below returns its handles and the
+     * Slang path dispatches {@code path_trace_scene}. Null keeps the legacy scene.
+     */
+    private final NativeSceneBridge nativeScene;
+    /** True when the handles published by the last {@link #update} belong to {@link #nativeScene}. */
+    private boolean nativeSceneFrameActive;
+    /** CPU captures accepted for the native scene; no parallel Java AS resources. */
+    private final NativeSectionCapture nativeCapture;
 
     private final Map<Long, SectionGpu> gpu = new HashMap<>();
-    /** Incremented whenever a section enters, leaves or is replaced in {@link #gpu} (emitter list rebuilds key off it). */
+    /** Changes with the active scene's section captures; emitter list rebuilds key off it. */
     private long structureVersion;
-    private final ArrayDeque<Deferred> deferred = new ArrayDeque<>();
+    private final ArrayDeque<SectionGpu> deferred = new ArrayDeque<>();
+    private final LegacySceneLifetime legacyLifetime = new LegacySceneLifetime();
     private final ArrayDeque<Integer> freeSlots = new ArrayDeque<>();
     private int nextSlot = 0;
     private List<DecodedSection> pending = new ArrayList<>();
@@ -189,70 +197,131 @@ public final class RtWorld {
     private long vegetationQuads;
     private long vegetationSections;
 
-    public RtWorld(VkDevice device) {
+    public RtWorld(VkDevice device, io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime runtime) {
         this.device = device;
         this.mem = new RtMemory(device);
-        this.geomArena = new RtArena(mem, "geom",
-            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | RtMemory.USAGE_AS_INPUT,
-            64L << 20);
-        this.blasArena = new RtArena(mem, "blas",
-            KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
-                | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            64L << 20);
-        this.indexBuf = mem.createBuffer("quad_index", 6L * 4L * MAX_QUADS_PER_SECTION,
-            VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | RtMemory.USAGE_AS_INPUT, false);
-        // The GPU dequantize dispatch reads these words through a buffer_reference, i.e. as a storage buffer, so the
-        // buffer carries STORAGE usage on top of the transfer / device-address bits (a buffer_reference read from a
-        // buffer created without it is undefined).
-        this.staging = mem.createBuffer("staging", STAGING_SEGMENT_BYTES * STAGING_SEGMENTS,
-            VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-                | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
-        this.table = mem.createBuffer("section_table", (long) MAX_SLOTS * TABLE_ENTRY_BYTES,
-            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
-        this.instances = mem.createBuffer("instances", (long) INSTANCE_BYTES * RtConfig.MAX_INSTANCES * STAGING_SEGMENTS,
-            RtMemory.USAGE_AS_INPUT, true);
-        this.entityBlas = new RtEntityBlas(device, mem);
-        this.omm = OpacityMicromapCache.create(mem);
-        this.dequantize = new io.github.andrexarlay.vulkancompat.rt.sodium.SodiumDequantize(device);
+        ArrayDeque<Runnable> rollback = new ArrayDeque<>();
+        rollback.push(mem::close);
+        try {
+            this.nativeScene = createNativeScene(runtime);
+            if (nativeScene != null) {
+                rollback.push(nativeScene::close);
+                nativeCapture = new NativeSectionCapture(SectionGeometryRegistry.INSTANCE, nativeScene, this::quadFlags);
+                // Native mode has one AS owner. Java keeps only CPU captures and the entity upload ring.
+                this.dequantize = null;
+                this.geomArena = null;
+                this.blasArena = null;
+                this.indexBuf = null;
+                this.staging = null;
+                this.scratch = null;
+                this.table = null;
+                this.instances = null;
+                this.tlasBuf = null;
+                this.tlasHandle = 0;
+                this.scratchBase = 0;
+                this.entityBlas = null;
+                this.omm = null;
+                rollback.clear();
+                return;
+            }
+            nativeCapture = null;
+            // Validate/register the AOT decoder before allocating scene resources.
+            this.dequantize = new io.github.andrexarlay.vulkancompat.rt.sodium.SodiumDequantize(runtime);
+            rollback.push(dequantize::destroy);
+            this.geomArena = new RtArena(mem, "geom",
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | RtMemory.USAGE_AS_INPUT,
+                64L << 20);
+            rollback.push(geomArena::destroy);
+            this.blasArena = new RtArena(mem, "blas",
+                KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
+                    | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                64L << 20);
+            rollback.push(blasArena::destroy);
+            this.indexBuf = mem.createBuffer("quad_index", 6L * 4L * MAX_QUADS_PER_SECTION,
+                VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT | RtMemory.USAGE_AS_INPUT, false);
+            rollback.push(() -> mem.destroy(indexBuf));
+            // The GPU dequantize dispatch reads these words through a buffer_reference, i.e. as a storage buffer, so the
+            // buffer carries STORAGE usage on top of the transfer / device-address bits (a buffer_reference read from a
+            // buffer created without it is undefined).
+            this.staging = mem.createBuffer("staging", STAGING_SEGMENT_BYTES * STAGING_SEGMENTS,
+                VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                    | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+            rollback.push(() -> mem.destroy(staging));
+            this.table = mem.createBuffer("section_table", (long) MAX_SLOTS * TABLE_ENTRY_BYTES,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            rollback.push(() -> mem.destroy(table));
+            this.instances = mem.createBuffer("instances", (long) INSTANCE_BYTES * RtConfig.MAX_INSTANCES * STAGING_SEGMENTS,
+                RtMemory.USAGE_AS_INPUT, true);
+            rollback.push(() -> mem.destroy(instances));
+            this.entityBlas = new RtEntityBlas(device, mem);
+            rollback.push(entityBlas::close);
+            this.omm = OpacityMicromapCache.create(mem);
+            if (omm != null) rollback.push(omm::destroy);
 
-        long tlasSize;
-        long tlasScratch;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkAccelerationStructureGeometryKHR.Buffer g = VkAccelerationStructureGeometryKHR.calloc(1, stack);
-            g.get(0).sType$Default().geometryType(KHRAccelerationStructure.VK_GEOMETRY_TYPE_INSTANCES_KHR);
-            g.get(0).geometry().instances().sType$Default().arrayOfPointers(false);
-            VkAccelerationStructureBuildGeometryInfoKHR info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(stack)
-                .sType$Default()
-                .type(KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
-                .flags(KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR)
-                .geometryCount(1).pGeometries(g);
-            VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
-            KHRAccelerationStructure.vkGetAccelerationStructureBuildSizesKHR(device,
-                KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, info,
-                new int[] {RtConfig.MAX_INSTANCES}, sizes);
-            tlasSize = sizes.accelerationStructureSize();
-            tlasScratch = sizes.buildScratchSize();
-        }
-        this.tlasBuf = mem.createBuffer("tlas", tlasSize,
-            KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
-                | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-        long scratchBytes = Math.max(SCRATCH_BYTES, FreeListAllocator.roundUp(tlasScratch, mem.scratchAlignment) + mem.scratchAlignment);
-        this.scratch = mem.createBuffer("scratch", scratchBytes,
-            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-        this.scratchBase = FreeListAllocator.roundUp(scratch.address, mem.scratchAlignment) - scratch.address;
+            long tlasSize;
+            long tlasScratch;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkAccelerationStructureGeometryKHR.Buffer g = VkAccelerationStructureGeometryKHR.calloc(1, stack);
+                g.get(0).sType$Default().geometryType(KHRAccelerationStructure.VK_GEOMETRY_TYPE_INSTANCES_KHR);
+                g.get(0).geometry().instances().sType$Default().arrayOfPointers(false);
+                VkAccelerationStructureBuildGeometryInfoKHR info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(stack)
+                    .sType$Default()
+                    .type(KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
+                    .flags(KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR)
+                    .geometryCount(1).pGeometries(g);
+                VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
+                KHRAccelerationStructure.vkGetAccelerationStructureBuildSizesKHR(device,
+                    KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, info,
+                    new int[] {RtConfig.MAX_INSTANCES}, sizes);
+                tlasSize = sizes.accelerationStructureSize();
+                tlasScratch = sizes.buildScratchSize();
+            }
+            this.tlasBuf = mem.createBuffer("tlas", tlasSize,
+                KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
+                    | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+            rollback.push(() -> mem.destroy(tlasBuf));
+            long scratchBytes = Math.max(SCRATCH_BYTES, FreeListAllocator.roundUp(tlasScratch, mem.scratchAlignment) + mem.scratchAlignment);
+            this.scratch = mem.createBuffer("scratch", scratchBytes,
+                VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+            rollback.push(() -> mem.destroy(scratch));
+            this.scratchBase = FreeListAllocator.roundUp(scratch.address, mem.scratchAlignment) - scratch.address;
 
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkAccelerationStructureCreateInfoKHR ci = VkAccelerationStructureCreateInfoKHR.calloc(stack).sType$Default()
-                .buffer(tlasBuf.handle).offset(0).size(tlasSize)
-                .type(KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
-            LongBuffer p = stack.mallocLong(1);
-            RtFailure.check(KHRAccelerationStructure.vkCreateAccelerationStructureKHR(device, ci, null, p), "create_tlas");
-            this.tlasHandle = p.get(0);
-            this.tlasAddress = asAddress(stack, tlasHandle);
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkAccelerationStructureCreateInfoKHR ci = VkAccelerationStructureCreateInfoKHR.calloc(stack).sType$Default()
+                    .buffer(tlasBuf.handle).offset(0).size(tlasSize)
+                    .type(KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
+                LongBuffer p = stack.mallocLong(1);
+                RtFailure.check(KHRAccelerationStructure.vkCreateAccelerationStructureKHR(device, ci, null, p), "create_tlas");
+                this.tlasHandle = p.get(0);
+                rollback.push(() -> KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, tlasHandle, null));
+            }
+            LOGGER.info("[VKB-RT] world_init tlas_bytes={} tlas_scratch_bytes={} scratch_bytes={} scratch_align={} max_instances={} radius_xz={} radius_y={} omm={}",
+                tlasSize, tlasScratch, scratchBytes, mem.scratchAlignment, RtConfig.MAX_INSTANCES, "dynamic", "dynamic",
+                omm != null ? "on" : "off");
+            rollback.clear();
+        } catch (RuntimeException | Error failure) {
+            while (!rollback.isEmpty()) {
+                try { rollback.pop().run(); }
+                catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
+            }
+            throw failure;
         }
-        LOGGER.info("[VKB-RT] world_init tlas_bytes={} tlas_scratch_bytes={} scratch_bytes={} scratch_align={} max_instances={} radius_xz={} radius_y={} omm={}",
-            tlasSize, tlasScratch, scratchBytes, mem.scratchAlignment, RtConfig.MAX_INSTANCES, "dynamic", "dynamic",
-            omm != null ? "on" : "off");
+    }
+
+    /** Loads the optional native scene; any failure is one log line, never a dead world. */
+    private static NativeSceneBridge createNativeScene(
+        io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime runtime) {
+        if (!RtConfig.SLANG_NATIVE_SCENE) {
+            return null;
+        }
+        try {
+            return NativeSceneBridge.create(runtime);
+        } catch (RuntimeException | LinkageError e) {
+            if (RtConfig.SLANG_RADIANCE_CASCADES)
+                throw new IllegalStateException("radianceCascades requires the native scene", e);
+            LOGGER.error("[VKB-RT] native scene unavailable: {}; keeping the Java scene", e.getMessage(), e);
+            return null;
+        }
     }
 
     private long asAddress(MemoryStack stack, long handle) {
@@ -267,11 +336,29 @@ public final class RtWorld {
         return address;
     }
 
+    /**
+     * The TLAS the path tracer must trace this frame: the native scene's while it
+     * published one, the legacy one otherwise. The native table and the legacy
+     * table have different layouts, so the two handles always move together.
+     */
     public long tlasHandle() {
-        return tlasHandle;
+        NativeSceneBridge scene = nativeScene;
+        return nativeSceneFrameActive && scene != null && scene.tlas() != 0L ? scene.tlas() : tlasHandle;
     }
 
+    /**
+     * The 64-byte section table of the scene {@link #tlasHandle()} names. The
+     * native table carries {@link RtMemory.Buf#sceneOwned}; the Slang path uses
+     * that flag to dispatch {@code path_trace_scene} instead of {@code path_trace}.
+     */
     public RtMemory.Buf sectionTable() {
+        NativeSceneBridge scene = nativeScene;
+        if (nativeSceneFrameActive && scene != null) {
+            RtMemory.Buf nativeTable = scene.sectionTable();
+            if (nativeTable != null) {
+                return nativeTable;
+            }
+        }
         return table;
     }
 
@@ -280,7 +367,8 @@ public final class RtWorld {
     }
 
     public int sectionCount() {
-        return gpu.size();
+        NativeSceneBridge scene = nativeScene;
+        return nativeSceneFrameActive && scene != null ? scene.sectionCount() : gpu.size();
     }
 
     // ------------------------------------------------------------------------------------------------------ frame
@@ -292,17 +380,18 @@ public final class RtWorld {
 
     /** As above with the RT radius of this frame in sections (RtConfig.radiusXz / radiusY); a change triggers a rescan. */
     public FrameStats update(VkCommandBuffer cmd, double camX, double camY, double camZ, int radiusXz, int radiusY) {
+        if (nativeScene == null) legacyLifetime.begin(cmd.address());
         boolean radiusChanged = radiusXz != this.radiusXz || radiusY != this.radiusY;
         this.radiusXz = radiusXz;
         this.radiusY = radiusY;
         long tUpdate = RtTimings.start();
         frameIndex++;
-        releaseDeferred(false);
+        if (nativeScene != null) return updateNative(cmd, camX, camY, camZ, tUpdate);
         stagingCursor = (frameIndex % STAGING_SEGMENTS) * STAGING_SEGMENT_BYTES;
         scratchCursor = scratchBase;
 
         // Build dynamic entity BLAS at the beginning of the frame update
-        RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ);
+        RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ, cmd.address());
         entityBlas.build(cmd, RtEntityGeometryManager.INSTANCE, scratch, scratchCursor);
 
         long t0 = System.nanoTime();
@@ -355,6 +444,31 @@ public final class RtWorld {
             (t1 - t0) / 1.0e6, (t2 - t1) / 1.0e6, mem.reservedBytes(), failedSections);
     }
 
+    private FrameStats updateNative(VkCommandBuffer cmd, double camX, double camY, double camZ, long tUpdate) {
+        nativeSceneFrameActive = false;
+        RtEntityGeometryManager.INSTANCE.uploadToGpu(mem, camX, camY, camZ, cmd.address());
+        nativeScene.updateEntities(frameIndex);
+        long started = System.nanoTime();
+        NativeSectionCapture.Result captures = nativeCapture.update(InstanceMath.sectionCoord(camX),
+            InstanceMath.sectionCoord(camY), InstanceMath.sectionCoord(camZ), radiusXz, radiusY,
+            RtConfig.BLAS_PER_FRAME, (long) (CPU_BUDGET_MS * 1e6));
+        if (captures.rescanned()) RtTimings.countRescan();
+        nearestBuiltSq = captures.nearestSq();
+        long prepared = System.nanoTime();
+        nativeScene.prepareFrame(cmd.address(), frameIndex, camX, camY, camZ);
+        nativeSceneFrameActive = nativeScene.activeThisFrame();
+        int instances = nativeScene.instanceCount();
+        lastEntityTelemetry = "[VK-ENTITY-AS] owner=native captured="
+            + RtEntityGeometryManager.INSTANCE.getCapturedEntityCount() + " triangles=" + nativeScene.entityTriangles()
+            + " instances=" + instances + " " + RtEntityGeometryManager.INSTANCE.uploadTelemetry();
+        RtTimings.countBlas(nativeScene.blasBuilds());
+        RtTimings.stop(RtTimings.Phase.UPDATE_TOTAL, tUpdate);
+        RtTimings.endFrame();
+        return new FrameStats(nativeScene.blasBuilds(), nativeScene.sectionCount(), captures.pending(),
+            instances, (prepared - started) / 1e6, (System.nanoTime() - prepared) / 1e6,
+            mem.reservedBytes() + nativeScene.residentBytes(), failedSections);
+    }
+
     /** Last [VK-ENTITY-AS] line (production counters of this frame), read by the autotest. */
     public static volatile String lastEntityTelemetry = "none";
     private static volatile boolean lastEntityInstanceWritten;
@@ -365,7 +479,7 @@ public final class RtWorld {
     private long identicalSkipped;
 
     public long identicalSkipped() {
-        return identicalSkipped;
+        return nativeCapture != null ? nativeCapture.identicalSkipped() : identicalSkipped;
     }
 
     /** Cutout quads tagged as vegetation since start (cumulative; a rebuild tags again). Zero means the classifier is dead. */
@@ -519,41 +633,26 @@ public final class RtWorld {
         return lightHash(d.light, flags, d.totalQuads() * 4);
     }
 
-    private static long lightHash(int[] words, int count) {
-        return lightHash(words, null, count);
-    }
-
     /** Hash of the words the GPU will stage: {@code light[i] | flags[i >> 2]} (flags null = untagged). */
     private static long lightHash(int[] words, int[] flags, int count) {
-        long h = 0xcbf29ce484222325L;
-        for (int i = 0; i < count; i++) {
-            int w = words[i] | (flags != null ? flags[i >> 2] : 0);
-            h = (h ^ (w & 0xFFFFFFFFL)) * 0x100000001b3L;
-        }
-        return h;
+        return SectionGeometryIdentity.lightHash(words, flags, count);
     }
 
     static boolean sameGeometry(DecodedSection a, DecodedSection b) {
-        if (a.totalQuads() != b.totalQuads()) {
-            return false;
-        }
-        for (int p = 0; p < DecodedSection.PASS_COUNT; p++) {
-            if (a.quadsInPass(p) != b.quadsInPass(p)) {
-                return false;
-            }
-        }
-        // Raw words carry the whole geometry identity (the section index byte is pre-masked in the capture): one
-        // array compare replaces the four decoded-array compares.
-        return java.util.Arrays.equals(a.rawWords, b.rawWords);
+        return SectionGeometryIdentity.same(a, b);
     }
 
     /** Version of the set of sections that have a BLAS (changes on build, replace and evict). */
     public long structureVersion() {
-        return structureVersion;
+        return nativeCapture != null ? nativeCapture.structureVersion() : structureVersion;
     }
 
     /** Visits the decoded geometry of every section that currently has a BLAS (render thread). */
     public void forEachBuiltSection(java.util.function.Consumer<DecodedSection> consumer) {
+        if (nativeScene != null) {
+            nativeCapture.forEach(consumer);
+            return;
+        }
         for (SectionGpu g : gpu.values()) {
             consumer.accept(g.src);
         }
@@ -577,7 +676,7 @@ public final class RtWorld {
             if (gone || far) {
                 it.remove();
                 structureVersion++;
-                deferred.add(new Deferred(frameIndex, g));
+                deferred.add(g);
             }
         }
         ArrayList<DecodedSection> list = new ArrayList<>();
@@ -908,8 +1007,8 @@ public final class RtWorld {
             if (ommIdx != null) {
                 MemoryUtil.memIntBuffer(staging.mapped + ommOffset, ommIdx.length).put(ommIdx);
             }
-            // The dispatch reads the raw words straight from the mapped staging via its device address (the segment is
-            // retired three frames later, the dispatch is recorded in this frame's command buffer) and writes the arena
+            // The dispatch reads the raw words straight from mapped staging via its device address. The next legacy
+            // update requires host completion before rewriting mapped inputs; this dispatch writes the arena
             // block; a compute-to-AS-build barrier in recordBlasBuilds orders it against the reads of the build.
             dequantize.dispatch(cmd, staging.address + stagingOffset, geomBlock.address(), flagsAddr, quads);
             if (ommIdx != null) {
@@ -970,7 +1069,7 @@ public final class RtWorld {
                 SectionGpu old = gpu.put(d.key, entry);
                 structureVersion++;
                 if (old != null) {
-                    deferred.add(new Deferred(frameIndex, old));
+                    deferred.add(old);
                 }
             }
             return item;
@@ -1117,11 +1216,12 @@ public final class RtWorld {
             KHRAccelerationStructure.vkCmdBuildAccelerationStructuresKHR(cmd, info, pp);
         }
         RtTimings.stop(RtTimings.Phase.TLAS_RECORD, tt);
-        // TLAS (and BLAS/transfer writes) -> ray queries in the compute shader.
+        // AS builds and geometry decoding -> ray queries and attribute loads in compute or ray generation.
         barrier(cmd, KHRAccelerationStructure.VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
-                | VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,
-            KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK10.VK_ACCESS_TRANSFER_WRITE_BIT,
-            VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                | VK10.VK_PIPELINE_STAGE_TRANSFER_BIT | VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK10.VK_ACCESS_TRANSFER_WRITE_BIT
+                | VK10.VK_ACCESS_SHADER_WRITE_BIT,
+            VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
             KHRAccelerationStructure.VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK10.VK_ACCESS_SHADER_READ_BIT);
         return n;
     }
@@ -1136,9 +1236,55 @@ public final class RtWorld {
 
     // --------------------------------------------------------------------------------------------- release
 
-    private void releaseDeferred(boolean all) {
-        while (!deferred.isEmpty() && (all || frameIndex - deferred.peekFirst().frame() >= DEFER_FRAMES)) {
-            SectionGpu g = deferred.pollFirst().section();
+    /** Actual scene ownership decides serialization, including native-scene startup fallback. */
+    public boolean requiresLegacyHostDrain() {
+        return nativeScene == null;
+    }
+
+    /** Called outside a local recording, after the host fence and all exact recording callbacks completed. */
+    public void prepareLegacyFrameAfterHostDrain() {
+        if (nativeScene != null) throw new IllegalStateException("native scene does not use legacy shared inputs");
+        legacyLifetime.prepareAfterHostDrain(() -> {
+            releaseDeferredAfterHostDrain();
+            entityBlas.releaseRetiredAfterHostDrain();
+            if (omm != null) omm.releaseRetiredAfterHostDrain();
+        });
+    }
+
+    /** Called only with host proof of completion or deliberate unsubmitted discard. */
+    public void releaseRecording(long commandBuffer) {
+        if (dequantize != null) dequantize.releaseRecording(commandBuffer);
+        if (nativeScene != null) nativeScene.releaseRecording(commandBuffer);
+        RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
+        legacyLifetime.release(commandBuffer);
+    }
+
+    public void discardRecording(long commandBuffer) {
+        if (nativeScene != null) {
+            nativeScene.discardRecording(commandBuffer);
+            nativeSceneFrameActive = false;
+        }
+        if (dequantize != null) dequantize.releaseRecording(commandBuffer);
+        RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
+        legacyLifetime.release(commandBuffer);
+    }
+
+    /** The caller has drained host submissions and excluded future resubmission. */
+    public void releaseComputeRecordingsAfterHostDrain() {
+        if (dequantize != null) dequantize.releaseRecordingsAfterHostDrain();
+        if (nativeScene != null) nativeScene.releaseAllFrames();
+    }
+
+    /** Close compute programs before the shared native runtime is closed. */
+    public void closeComputeAfterHostDrain() {
+        releaseComputeRecordingsAfterHostDrain();
+        if (dequantize != null) dequantize.destroy();
+        if (nativeScene != null) nativeScene.close();
+    }
+
+    private void releaseDeferredAfterHostDrain() {
+        while (!deferred.isEmpty()) {
+            SectionGpu g = deferred.peekFirst();
             KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, g.blasHandle, null);
             blasArena.free(g.blasBlock);
             geomArena.free(g.geom);
@@ -1146,18 +1292,27 @@ public final class RtWorld {
                 omm.releaseRef(g.ommObject);
             }
             freeSlots.push(g.slot);
+            deferred.removeFirst();
         }
     }
 
-    /** Waits for the GPU and releases everything. Safe to call once; the object is unusable afterwards. */
+    /** Releases resources after the caller drained host submissions and excluded resubmission. */
     public void destroy() {
+        if (nativeScene != null) {
+            nativeScene.close();
+            nativeSceneFrameActive = false;
+            nativeCapture.clear();
+            RtEntityGeometryManager.INSTANCE.closeAll(mem);
+            mem.close();
+            return;
+        }
+        legacyLifetime.requireReleased();
         dequantize.destroy();
-        VK10.vkDeviceWaitIdle(device);
         for (SectionGpu g : gpu.values()) {
-            deferred.add(new Deferred(frameIndex, g));
+            deferred.add(g);
         }
         gpu.clear();
-        releaseDeferred(true);
+        releaseDeferredAfterHostDrain();
         KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, tlasHandle, null);
         mem.destroy(tlasBuf);
         mem.destroy(scratch);
@@ -1177,6 +1332,10 @@ public final class RtWorld {
 
     public RtEntityBlas entityBlas() {
         return entityBlas;
+    }
+
+    public int entityPrimitiveCount() {
+        return nativeScene != null ? (nativeSceneFrameActive ? nativeScene.entityTriangles() : 0) : entityBlas.getPrimitiveCount();
     }
 
     /** Opacity micromap cache of this world (null when the session gate failed; also the material atlas sink). */

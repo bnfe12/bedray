@@ -28,16 +28,6 @@ class DlssRrTest {
     }
 
     @Test
-    void testDlssRrGeometricNormalsSettingAndPacking() {
-        assertDoesNotThrow(DlssRrChecks::geometricNormalsAndRoughnessPacking);
-    }
-
-    @Test
-    void testHorizonBendingAndReflectionContinuity() {
-        assertDoesNotThrow(DlssRrChecks::horizonBendingAndReflectionContinuity);
-    }
-
-    @Test
     void testVelocityMotionVectorIntegration() {
         assertDoesNotThrow(DlssRrChecks::velocityMotionVectorIntegration);
     }

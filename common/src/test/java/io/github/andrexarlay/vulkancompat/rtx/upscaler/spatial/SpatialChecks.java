@@ -9,8 +9,7 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessQuality;
 import java.nio.ByteBuffer;
 
 /**
- * Java-level checks (L2) of the built-in spatial upscalers: the GLSL sources (third-party headers + checked patches) compile
- * with Shaderc, and the constant ports match the SDK formulas. No GPU: NOT evidence that FSR 1 / NIS work in game.
+ * Java-level checks (L2) of the built-in spatial upscalers: the AOT sources include the checked-in third-party algorithms, and the constant ports match the SDK formulas. No GPU: NOT evidence that FSR 1 / NIS work in game.
  */
 public final class SpatialChecks {
     private SpatialChecks() {}
@@ -57,11 +56,11 @@ public final class SpatialChecks {
     }
 
     private static void shadersCompile() {
-        ByteBuffer easu = SpatialComputePass.compile(SpatialShaderSource.easuSource(), "fsr1_easu.comp");
-        ByteBuffer rcas = SpatialComputePass.compile(SpatialShaderSource.rcasSource(), "fsr1_rcas.comp");
-        ByteBuffer nis = SpatialComputePass.compile(SpatialShaderSource.nisSource(), "nis_scaler.comp");
-        check(easu.remaining() > 0 && rcas.remaining() > 0 && nis.remaining() > 0, "spatial shaders must compile to SPIR-V");
-        check(easu.getInt(0) == 0x07230203, "EASU SPIR-V magic");
+        for (String name : new String[]{"fsr1_easu", "fsr1_rcas", "nis_scaler"}) {
+            var pass = io.github.andrexarlay.vulkancompat.rt.slang.SlangPassLibrary.load(name).orElseThrow();
+            byte[] spirv = pass.spirv();
+            check(spirv.length > 20 && (spirv[0] & 255) == 3 && (spirv[1] & 255) == 2, name + " AOT SPIR-V is packaged");
+        }
     }
 
     private static void nisCoefficients() {

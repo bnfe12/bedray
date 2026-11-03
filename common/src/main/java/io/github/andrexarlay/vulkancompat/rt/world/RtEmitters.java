@@ -3,13 +3,9 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 import io.github.andrexarlay.vulkancompat.rt.material.MaterialAtlasBaker;
 import io.github.andrexarlay.vulkancompat.rt.material.LabPbr;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VK12;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.FloatBuffer;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -29,8 +25,8 @@ import java.util.Set;
  * </pre>
  * The origin is the camera block position at the time of the last rebuild; the shader gets the camera position relative to
  * it every frame (frame header, see RtFrameRenderer). The list is rebuilt when the set of built sections or the material atlas
- * changes, into the next of {@link #SEGMENTS} segments of a host-visible buffer (the engine keeps at most two frames in
- * flight, so a segment is never rewritten while a frame may read it). Per-section records are cached by DecodedSection identity.
+ * changes. Each publication has immutable host-visible storage retained by every recording that reads it;
+ * completion/discard proof releases those readers. Per-section records are cached by DecodedSection identity.
  */
 public final class RtEmitters {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
@@ -38,7 +34,6 @@ public final class RtEmitters {
     public static final int FLOATS = TINT_OFFSET + 4;
     public static final int BYTES = FLOATS * 4;
     public static final int MAX_EMITTERS = 65536;
-    public static final int SEGMENTS = 3;
     public static final float MIN_EMISSION = 0.005f;
     /** Texel scan of a quad: at most this many texels per axis (hi-res packs are sampled with a stride). */
     static final int MAX_SCAN = 32;
@@ -60,14 +55,11 @@ public final class RtEmitters {
      */
     static final float MAX_OPEN_AREA = 0.05f;
     private static final float[] EMPTY = new float[0];
-    private static final long FINGERPRINT_SEED = 0x9E3779B97F4A7C15L;
-    private static final long FINGERPRINT_PRIME = 0x100000001B3L;
 
     private record Entry(DecodedSection src, float[] records) {
     }
 
-    private final RtMemory memory;
-    private final RtMemory.Buf buffer;
+    private final EmitterCaptureBuffers buffers;
     private final Map<Long, Entry> cache = new HashMap<>();
     private final Set<Long> seen = new HashSet<>();
     private float[][] heap = new float[1024][FLOATS + 1];
@@ -79,23 +71,13 @@ public final class RtEmitters {
     private float curRange2;
     private MaterialAtlasBaker.Result currentMat;
     private long lastVersion = -1;
-    /**
-     * Hash of the published list's in-range block emitters in world space; ReSTIR history may only survive while it is
-     * unchanged. It is assigned when a pass publishes, not while it walks: the GPU still reads the previous list until then, so
-     * a hash of a half-built scan would reset the reservoirs (a full buffer fill) on every frame of the pass.
-     */
-    private long fingerprint = FINGERPRINT_SEED;
-    /** Fingerprint of the pass in progress, folded into {@link #fingerprint} when it publishes. */
-    private long scanFingerprint = FINGERPRINT_SEED;
     private Object lastMaterials;
-    private int segment = -1;
+    private int materialRevision;
     private int count;
     private int originX;
     private int originY;
     private int originZ;
-    private final int[] segOriginX = new int[SEGMENTS];
-    private final int[] segOriginY = new int[SEGMENTS];
-    private final int[] segOriginZ = new int[SEGMENTS];
+    private int publishedOriginX, publishedOriginY, publishedOriginZ;
     private double lastCamX = Double.NaN;
     private double lastCamY;
     private double lastCamZ;
@@ -143,12 +125,9 @@ public final class RtEmitters {
     private int staticHeapSize = -1;
     private int staticTotal;
     private int staticInRange;
-    private long staticFingerprint;
 
     public RtEmitters(RtMemory memory) {
-        this.memory = memory;
-        this.buffer = memory.createBuffer("rt_emitters", (long) MAX_EMITTERS * BYTES * SEGMENTS,
-            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+        this.buffers = new EmitterCaptureBuffers(memory);
         for (int i = 0; i < heap.length; i++) {
             heap[i] = new float[FLOATS + 1];
         }
@@ -261,24 +240,6 @@ public final class RtEmitters {
         sortHeapDescending(heap, heapSize);
     }
 
-    /**
-     * Mixes one emitter record into the light-list fingerprint. The position is hashed in world space (origin offset added),
-     * so a re-anchored list with the same lights hashes identically and its ReSTIR history can be kept.
-     */
-    static long mixEmitter(long h, float[] r, int o, float ox, float oy, float oz) {
-        h = mix(h, Float.floatToIntBits(r[o] + ox));
-        h = mix(h, Float.floatToIntBits(r[o + 1] + oy));
-        h = mix(h, Float.floatToIntBits(r[o + 2] + oz));
-        for (int i = 3; i <= 19; i++) {
-            h = mix(h, Float.floatToIntBits(r[o + i]));
-        }
-        return h;
-    }
-
-    private static long mix(long h, int v) {
-        return (h ^ v) * FINGERPRINT_PRIME;
-    }
-
     private void processSection(DecodedSection d) {
         seen.add(d.key);
         Entry e = cache.get(d.key);
@@ -302,7 +263,6 @@ public final class RtEmitters {
                 continue;
             }
             inRangeCounter++;
-            scanFingerprint = mixEmitter(scanFingerprint, r, o, dx + originX, dy + originY, dz + originZ);
             if (targetBudget <= 0) {
                 continue;
             }
@@ -318,30 +278,39 @@ public final class RtEmitters {
         return count;
     }
 
-    /**
-     * Hash of the block emitters within range of the last rebuild, in world space. Changes only when the lights themselves
-     * change (a torch placed or broken, a material or a section edit), not when a distant section streams in or the camera
-     * re-anchors the list: the ReSTIR reservoir reset keys off this instead of the world structure version.
-     */
+    /** Revision of the selected light content, independent of its importance order. Used only by cached PT suffixes. */
     public long fingerprint() {
-        return fingerprint;
+        var publication = buffers.publication();
+        return publication == null ? 0L : publication.revision();
     }
 
-    /** Device address of the current segment (valid when {@link #count()} > 0). */
+    /** Device address of the immutable published list, or zero for an empty list. */
     public long address() {
-        return buffer.address + (long) Math.max(segment, 0) * MAX_EMITTERS * BYTES;
+        var buffer = buffers.current();
+        return buffer == null ? 0L : buffer.address;
+    }
+
+    /** Buffer of the immutable published list, or zero for an empty list. */
+    public long handle() {
+        var buffer = buffers.current();
+        return buffer == null ? 0L : buffer.handle;
+    }
+
+    /** Publications occupy their own buffer, so descriptor bindings start at zero. */
+    public long segmentOffset() {
+        return 0L;
     }
 
     public int originX() {
-        return segment >= 0 ? segOriginX[segment] : originX;
+        return publishedOriginX;
     }
 
     public int originY() {
-        return segment >= 0 ? segOriginY[segment] : originY;
+        return publishedOriginY;
     }
 
     public int originZ() {
-        return segment >= 0 ? segOriginZ[segment] : originZ;
+        return publishedOriginZ;
     }
 
     /**
@@ -349,6 +318,7 @@ public final class RtEmitters {
      * within {@code range} blocks of the camera are kept, sorted by importance (emission * area / distance^2, descending)
      * and cut to {@code budget}: the shader samples the front of the list more often (index = n * u^2), so the nearest/brightest
      * lights get most of the samples. {@code mat} may be null (no emitters).
+     * Before recording GPU reads, call {@link #retainForRecording(long)} and release only after completion/discard.
      */
     public void update(RtWorld world, MaterialAtlasBaker.Result mat, double camX, double camY, double camZ, float range, int budget) {
         update(world, mat, camX, camY, camZ, range, budget, null, 0);
@@ -390,7 +360,7 @@ public final class RtEmitters {
                 curCz = (float) (camZ - originZ);
                 restoreStatic();
                 processEntities(entityQuads, entityCount);
-                writeSegment();
+                publishSelection();
                 return;
             }
         }
@@ -402,6 +372,7 @@ public final class RtEmitters {
                            int budget, long version) {
         if (mat != lastMaterials) {
             cache.clear();
+            materialRevision++;
         }
         lastVersion = version;
         lastMaterials = mat;
@@ -428,7 +399,6 @@ public final class RtEmitters {
         inRangeCounter = 0;
         entityInRange = 0;
         seen.clear();
-        scanFingerprint = FINGERPRINT_SEED;
         staticHeapSize = -1;
         scanStartNs = System.nanoTime();
         java.util.ArrayList<DecodedSection> list = new java.util.ArrayList<>();
@@ -518,7 +488,6 @@ public final class RtEmitters {
     }
 
     private void publish(float[] entityQuads, int entityCount) {
-        fingerprint = mix(scanFingerprint, inRangeCounter);
         cache.keySet().retainAll(seen);
         // snapshot the static selection: a frame where only entity lights changed skips the whole section scan
         ensureStaticHeapCapacity(Math.max(targetBudget, heapSize));
@@ -528,9 +497,8 @@ public final class RtEmitters {
         staticHeapSize = heapSize;
         staticTotal = totalCounter;
         staticInRange = inRangeCounter;
-        staticFingerprint = fingerprint;
         processEntities(entityQuads, entityCount);
-        writeSegment();
+        publishSelection();
     }
 
     private void processEntities(float[] entityQuads, int entityCount) {
@@ -565,21 +533,17 @@ public final class RtEmitters {
         }
         totalCounter = staticTotal;
         inRangeCounter = staticInRange;
-        fingerprint = staticFingerprint;
     }
 
-    private void writeSegment() {
+    private void publishSelection() {
         sortHeapDescending();
         int n = Math.min(heapSize, MAX_EMITTERS);
-        segment = (segment + 1) % SEGMENTS;
-        segOriginX[segment] = originX;
-        segOriginY[segment] = originY;
-        segOriginZ[segment] = originZ;
-        long base = buffer.mapped + (long) segment * MAX_EMITTERS * BYTES;
-        FloatBuffer out = MemoryUtil.memFloatBuffer(base, MAX_EMITTERS * FLOATS);
+        buffers.publish(heap, n, originX, originY, originZ, materialRevision);
+        publishedOriginX = originX;
+        publishedOriginY = originY;
+        publishedOriginZ = originZ;
         int entityUsedNow = 0;
         for (int k = 0; k < n; k++) {
-            out.put(k * FLOATS, heap[k], 0, FLOATS);
             if (heap[k][15] > 0.5f) {
                 entityUsedNow++;
             }
@@ -591,6 +555,10 @@ public final class RtEmitters {
         long now = System.nanoTime();
         if (now - lastLogNs > 5_000_000_000L) {
             lastLogNs = now;
+            var identity = buffers.publication();
+            LOGGER.info("[VKB-EMITTERS] table=BEM1 revision={} material_revision={} selected={} retained={} added={} removed={} bytes={} max_probe={}",
+                identity.revision(), materialRevision, n, identity.retained(), identity.added(), identity.removed(),
+                identity.data().remaining(), identity.maxProbe());
             LOGGER.info(String.format(java.util.Locale.ROOT,
                 "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b origin=(%d,%d,%d)",
                 count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), seen.size(),
@@ -907,10 +875,17 @@ public final class RtEmitters {
     }
 
     public void destroy() {
-        memory.destroy(buffer);
+        buffers.close();
+        count = inRange = totalEmitters = entityUsed = entityInRange = 0;
         cache.clear();
         seen.clear();
         currentMat = null;
         scan = null; // the snapshot would otherwise keep every decoded section of the pass alive
     }
+
+    /** Called before a pass records reads of the currently published list. */
+    public void retainForRecording(long commandBuffer) { buffers.retain(commandBuffer); }
+
+    /** Called only by this recording's completion/discard action. */
+    public void releaseRecording(long commandBuffer) { buffers.releaseRecording(commandBuffer); }
 }

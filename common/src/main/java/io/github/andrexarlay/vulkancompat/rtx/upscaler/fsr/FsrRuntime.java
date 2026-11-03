@@ -4,12 +4,13 @@ import com.mojang.renderpearl.api.device.DeviceInfo;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
+import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerContextRetirement;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerReconfigure;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerRequest;
 import net.minecraft.client.Minecraft;
-import org.lwjgl.vulkan.VK10;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,8 +20,8 @@ import java.util.Optional;
 /**
  * Lifecycle of the AMD FidelityFX (ffx-api, Vulkan backend) upscaler context. Same state machine as XessRuntime / DlssRuntime
  * (IDLE, READY, RECONFIGURE_PENDING, FAILED; {@link UpscalerReconfigure}): request-driven ({@link UpscalerRequest}), created on
- * the first world frame, retired {@link UpscalerReconfigure#RETIRE_DELAY_FRAMES} frame heads before destruction on a mode or
- * version change, re-created on a window resize. A failure is logged as {@code [VKB-FSR] fsr=FAILED stage=.. result=..} and
+ * the first world frame, retired after host submission and fence completion on a mode or version change, and re-created
+ * on a window resize. A failure is logged as {@code [VKB-FSR] fsr=FAILED stage=.. result=..} and
  * keeps the game running on the bilinear path; only a changed request leaves FAILED (no hidden retry).
  * <p>
  * Render thread only; {@link #onFrameBegin} runs at the HEAD of {@code GameRenderer.render()} (no render pass open).
@@ -34,6 +35,7 @@ public final class FsrRuntime {
     private static FfxNative nativeLib;
     private static List<FfxNative.ProviderVersion> versions = List.of();
     private static FfxNative.Context context;
+    private static VulkanDevice contextDevice;
     private static FsrRequest activeRequest;
     private static FfxNative.Size activeInput;
     private static String activeProvider;
@@ -44,7 +46,6 @@ public final class FsrRuntime {
     private static boolean pendingDestroy;
     private static long frameCounter;
     private static FfxNative.Context retiredContext;
-    private static long retireAtFrame;
     private static FsrRequest attempted;
     /** Custom render percent of the READY context / of the last attempt / of the context being created (0 = mode size). */
     private static int activeCustom;
@@ -150,7 +151,7 @@ public final class FsrRuntime {
         for (int guard = 0; guard < 4; guard++) {
             UpscalerReconfigure.Step step = UpscalerReconfigure.plan(UpscalerReconfigure.Phase.valueOf(state.name()),
                 UpscalerReconfigure.target(desired, desiredPct), UpscalerReconfigure.target(activeRequest, activeCustom),
-                UpscalerReconfigure.target(attempted, attemptedCustom), frameCounter, retireAtFrame);
+                UpscalerReconfigure.target(attempted, attemptedCustom));
             switch (step) {
                 case NONE -> {
                     return;
@@ -175,24 +176,19 @@ public final class FsrRuntime {
 
     private static void beginRetire(FsrRequest desired) {
         String from = UpscalerReconfigure.describe("FSR", activeRequest);
-        LOGGER.info("[VKB-AUTOTEST] upscaler_reconfigure from={} to={} reason=request phase=retire tech=fsr destroy_at_frame={} frame={}",
-            from, UpscalerReconfigure.describe("FSR", desired), frameCounter + UpscalerReconfigure.RETIRE_DELAY_FRAMES, frameCounter);
+        LOGGER.info("[VKB-AUTOTEST] upscaler_reconfigure from={} to={} reason=request phase=retire tech=fsr proof=host_fence_required frame={}",
+            from, UpscalerReconfigure.describe("FSR", desired), frameCounter);
         reconfigureFrom = from;
         retiredContext = context;
         context = null;
         activeRequest = null;
         activeInput = null;
         activeProvider = null;
-        retireAtFrame = frameCounter + UpscalerReconfigure.RETIRE_DELAY_FRAMES;
         state = State.RECONFIGURE_PENDING;
     }
 
     private static void destroyRetired() {
-        if (nativeLib != null && retiredContext != null) {
-            int r = nativeLib.destroyContext(retiredContext);
-            LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=context_destroyed result={} reason=reconfigure", r);
-        }
-        retiredContext = null;
+        retiredContext = releaseContext(retiredContext, "destroy_retired");
     }
 
     private static void createWhenPossible(FsrRequest request, int winW, int winH) {
@@ -220,6 +216,8 @@ public final class FsrRuntime {
     }
 
     private static void create(FsrRequest request, VulkanDevice device, int winW, int winH) {
+        if (context != null || retiredContext != null)
+            throw new IllegalStateException("provider=fsr stage=create retained_context=true");
         DeviceInfo info = device.getDeviceInfo();
         FsrLibrary.Library lib = FsrLibrary.library();
         LOGGER.info("[VKB-FSR] FSR requested: request={} gpu='{}' vendor='{}' driver='{}' dll={}",
@@ -304,6 +302,7 @@ public final class FsrRuntime {
             return;
         }
         context = created.context();
+        contextDevice = device;
         FfxNative.QueryResult<FfxNative.ProviderVersion> pv = nativeLib.providerVersion(context);
         activeProvider = pv.result() == FfxNative.RETURN_OK ? pv.value().name() : "unknown(result=" + pv.result() + ")";
         LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=context_created result=0 provider={} requested_version={} override=0x{} flags=0x{} max_render={} output={}x{} camera={} ms={}",
@@ -327,16 +326,16 @@ public final class FsrRuntime {
         }
     }
 
-    /** The window size changed: the context is bound to the output size; destroyed after the GPU is idle (rare). */
+    /** Window resize runs before CB recording; context destruction proves host completion first. */
     private static void resizeReinit(int winW, int winH) {
         LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=resize_reinit from={}x{} to={}x{}", outputWidth, outputHeight, winW, winH);
-        waitIdle("FSR re-init");
         cleanup();
     }
 
     /** ffxDispatch failed: FSR is disabled for this request; the context is destroyed at the next frame head. */
     public static synchronized void executeFailed(String result) {
-        LOGGER.error("[VKB-FSR] [VKB-AUTOTEST] fsr=FAILED stage=execute result={} (falling back to bilinear; FSR disabled until the request changes)", result);
+        LOGGER.error("[VKB-FSR] [VKB-AUTOTEST] provider=fsr stage=execute frame={} context=0x{} output={}x{} retained={} result={}",
+            frameCounter, context == null ? "0" : Long.toHexString(context.handle()), outputWidth, outputHeight, context != null, result);
         pendingDestroy = true;
         activeRequest = null;
         activeInput = null;
@@ -344,62 +343,64 @@ public final class FsrRuntime {
     }
 
     private static void destroyPendingContext() {
-        waitIdle("FSR destroy after failure");
-        destroyAfterFailure();
+        context = releaseContext(context, "destroy_after_execute_failure");
         pendingDestroy = false;
-    }
-
-    private static void waitIdle(String why) {
-        VulkanDevice device = VulkanCapabilityChecker.getVulkanDevice();
-        if (device != null) {
-            int idle = VK10.vkDeviceWaitIdle(device.vkDevice());
-            if (idle != VK10.VK_SUCCESS) {
-                LOGGER.error("vkDeviceWaitIdle before {} returned {}", why, idle);
-            }
-        }
     }
 
     private static void fail(String stage, String result) {
         LOGGER.error("[VKB-FSR] [VKB-AUTOTEST] fsr=FAILED stage={} result={}", stage, result);
-        destroyAfterFailure();
         activeRequest = null;
         activeInput = null;
         state = State.FAILED;
+        destroyAfterFailure();
     }
 
     /** Releases a context created before a failure; a problem here is logged, the original failure stays the reported one. */
     private static void destroyAfterFailure() {
-        if (nativeLib != null && context != null) {
-            try {
-                int r = nativeLib.destroyContext(context);
-                if (r != FfxNative.RETURN_OK) {
-                    LOGGER.warn("[VKB-FSR] ffxDestroyContext after failure returned {}", r);
-                }
-            } catch (RuntimeException e) {
-                LOGGER.error("[VKB-FSR] ffxDestroyContext after failure threw\n{}", LogPaths.stack(e));
-            }
+        try {
+            context = releaseContext(context, "destroy_after_setup_failure");
+        } catch (RuntimeException | Error failure) {
+            pendingDestroy = true;
+            LOGGER.error("[VKB-FSR] provider=fsr stage=setup_cleanup frame={} context=0x{} retained=true\n{}",
+                frameCounter, Long.toHexString(context.handle()), LogPaths.stack(failure));
         }
-        context = null;
+    }
+
+    private static FfxNative.Context releaseContext(FfxNative.Context owned, String stage) {
+        return UpscalerContextRetirement.release(owned, () -> {
+            try {
+                if (contextDevice == null) throw new IllegalStateException("FSR context lost its host device");
+                WorldTargetManager.drainTemporalRecordings(contextDevice);
+            } catch (RuntimeException | Error failure) {
+                LOGGER.error("[VKB-FSR] provider=fsr stage={} frame={} context=0x{} output={}x{} proof=FAILED retained=true\n{}",
+                    stage, frameCounter, Long.toHexString(owned.handle()), outputWidth, outputHeight, LogPaths.stack(failure));
+                throw failure;
+            }
+        }, handle -> {
+            long address = handle.handle();
+            try {
+                if (nativeLib == null) throw new IllegalStateException("FSR context lost its native library");
+                int result = nativeLib.destroyContext(handle);
+                if (result != FfxNative.RETURN_OK) throw new IllegalStateException("sdk_return=" + result);
+                LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=context_destroyed stage={} context=0x{} frame={}",
+                    stage, Long.toHexString(address), frameCounter);
+            } catch (RuntimeException | Error failure) {
+                LOGGER.error("[VKB-FSR] provider=fsr stage={} frame={} context=0x{} output={}x{} sdk=FAILED retained=true\n{}",
+                    stage, frameCounter, Long.toHexString(address), outputWidth, outputHeight, LogPaths.stack(failure));
+                throw failure;
+            }
+        });
     }
 
     /**
-     * Destroys the context now (teardown and resize paths; the caller guarantees no FSR work is in flight). The DLL stays
-     * loaded for the process lifetime.
+     * Proves host completion and releases all contexts, including FAILED state and pending execute failures.
+     * The DLL stays loaded for the process lifetime.
      */
     public static synchronized void cleanup() {
-        if (state == State.RECONFIGURE_PENDING) {
-            destroyRetired();
-            state = State.IDLE;
-            return;
-        }
-        if (state == State.IDLE || state == State.FAILED) {
-            return;
-        }
-        if (nativeLib != null && context != null) {
-            int r = nativeLib.destroyContext(context);
-            LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=context_destroyed result={}", r);
-        }
-        context = null;
+        destroyRetired();
+        context = releaseContext(context, "cleanup");
+        contextDevice = null;
+        pendingDestroy = false;
         activeRequest = null;
         activeInput = null;
         state = State.IDLE;

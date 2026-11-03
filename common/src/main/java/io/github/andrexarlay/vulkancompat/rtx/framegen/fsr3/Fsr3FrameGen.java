@@ -1,10 +1,11 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen.fsr3;
 
-import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGpu;
+import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenFailureCleanup;
+import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenHostCommands;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenProvider;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
@@ -21,7 +22,6 @@ import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.KHRSwapchain;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkPresentInfoKHR;
 import org.lwjgl.vulkan.VkQueue;
@@ -47,7 +47,8 @@ import java.nio.file.Paths;
  *     {@code ffxConfigure} (enable, hudless image, frame id) and {@code ffxDispatch(Prepare)} recorded into the same command buffer.
  *     The interpolation itself runs inside the replaced vkQueuePresentKHR (frame generation callback).</li>
  * </ul>
- * A failure is logged once as {@code [VKB-FG] fsr3=FAILED stage=..}; the swapchain then keeps presenting every frame unchanged.
+ * A failure stops Java production and attempts to disable SDK interpolation. Contexts and images remain owned when the SDK
+ * cannot acknowledge the disable; the failure log includes that state and every cleanup error.
  */
 public final class Fsr3FrameGen {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/Fsr3FrameGen");
@@ -69,6 +70,8 @@ public final class Fsr3FrameGen {
     private static FfxFgNative.Context fg;
     private static int fgW, fgH, fgFormat;
     private static FrameGenGpu gpu;
+    private static final FrameGenHostCommands producerCommands = new FrameGenHostCommands(
+        failure -> LOGGER.warn("[VKB-FG] fsr3 producer retirement failed; resources retained", failure));
 
     private static long frameId;
     private static long lastFrameNs;
@@ -267,6 +270,7 @@ public final class Fsr3FrameGen {
 
     /** Turns generation off, waits for the swapchain's presents and destroys the FG context (before a swapchain change / shutdown). */
     private static void shutdownFgContext(String reason) {
+        drainProducerRecordings();
         if (fg == null || nat == null) {
             return;
         }
@@ -274,11 +278,14 @@ public final class Fsr3FrameGen {
             // ffxConfigure uses the VkSwapchainKHR, not the ffxContext handle. The SDK's wait
             // dispatch dereferences fiSwapChain even after its replacement destroy has cleared it.
             Fsr3Teardown.releaseGeneration(sc == null ? 0L : scSwapchain,
-                swapchain -> nat.configureFg(fg, swapchain, false, FfxFgNative.Image.NONE, frameId),
-                () -> nat.waitForPresents(sc), () -> nat.destroy(fg));
+                swapchain -> check(nat.configureFg(fg, swapchain, false, FfxFgNative.Image.NONE, frameId), "FG disable"),
+                () -> check(nat.waitForPresents(sc), "FG consumer wait"), () -> check(nat.destroy(fg), "FG context destroy"));
             LOGGER.info("[VKB-FG] fsr3 fg context destroyed reason={}", reason);
         } catch (RuntimeException | Error e) {
-            LOGGER.error("[VKB-FG] fsr3 fg context destroy failed", e);
+            LOGGER.error("[VKB-FG] provider=amd stage=fg_context_destroy reason={} frame={} swapchain=0x{} "
+                + "mode_on={} vendor_context_retained={} output_owner_retained={}", reason, frameId,
+                Long.toHexString(scSwapchain), modeOn, fg != null, gpu != null, e);
+            throw e; // Keep the context and its vendor output-image lease for retry.
         }
         fg = null;
         modeOn = false;
@@ -286,11 +293,37 @@ public final class Fsr3FrameGen {
         ratioPresented0 = -1;
     }
 
+    private static void check(int result, String operation) {
+        if (result != 0) throw new IllegalStateException(operation + " returned " + result);
+    }
+
+    /** Graphics producers only; asynchronous interpolation consumers remain independently leased. */
+    public static void drainProducerRecordings() { producerCommands.drain(); }
+
     private static void fail(String stage, String detail) {
+        fail(stage, detail, null);
+    }
+
+    private static void fail(String stage, String detail, Throwable cause) {
         failed = true;
         failure = stage + ": " + detail;
+        Throwable report = cause != null ? cause : new IllegalStateException(failure);
+        FrameGenFailureCleanup.run(report, Fsr3FrameGen::disableGeneration);
+        LOGGER.error("[VKB-FG] provider=amd fsr3=FAILED stage={} frame={} slot={} output={}x{} render={}x{} "
+                + "swapchain=0x{} mode_on={} vendor_context_retained={} output_owner_retained={} "
+                + "producer_recordings_retained={} detail={}", stage, frameId, slot, winW, winH, renderW, renderH,
+            Long.toHexString(scSwapchain), modeOn, fg != null, gpu != null,
+            gpu != null && gpu.hasPendingRecordings(), detail, report);
+    }
+
+    /** The Java failure gate does not disable the SDK's present callback. Keep state conservative until it acknowledges off. */
+    private static void disableGeneration() {
+        if (fg == null || nat == null || scSwapchain == 0L) return;
+        check(nat.configureFg(fg, scSwapchain, false, FfxFgNative.Image.NONE, frameId), "FG disable");
+        configuredFrame = frameId;
         modeOn = false;
-        LOGGER.error("[VKB-FG] fsr3=FAILED stage={} {}", stage, detail);
+        genStreak = 0;
+        ratioPresented0 = -1;
     }
 
     private static boolean usable() {
@@ -378,9 +411,12 @@ public final class Fsr3FrameGen {
 
             FsrCamera cam = FsrCamera.fromProjection(pc);
             if (gpu == null) {
-                gpu = new FrameGenGpu(device.vkDevice());
+                gpu = new FrameGenGpu(device);
             }
-            gpu.ensure(fmt, winW, winH, renderW, renderH);
+            if (!gpu.matches(fmt, winW, winH, renderW, renderH)) {
+                shutdownFgContext("output_resize");
+                gpu.ensure(fmt, winW, winH, renderW, renderH);
+            }
             if (!ensureFg(device, winW, winH, fmt, cam)) {
                 return;
             }
@@ -400,18 +436,6 @@ public final class Fsr3FrameGen {
             FfxFgNative.Image mv = new FfxFgNative.Image(gpu.mv(slot).image(), FfxFgNative.FORMAT_R16G16_FLOAT, renderW, renderH,
                 FfxFgNative.USAGE_READ_ONLY, FfxFgNative.STATE_COMMON);
 
-            VulkanCommandEncoder encoder = device.createCommandEncoder();
-            VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
-            VkBarriers.fullMemoryBarrier(cmd);
-            gpu.recordInitialTransitions(cmd);
-            gpu.record(cmd, slot, mainImg, depthView, mvView);
-            VkBarriers.fullMemoryBarrier(cmd);
-
-            int r = nat.configureFg(fg, scSwapchain, want, hudless, frameId);
-            if (r != 0) {
-                throw new IllegalStateException("ffxConfigure(frame generation) returned " + r);
-            }
-            configuredFrame = frameId;
             // FsrCamera already reports finite planes: an infinite far plane is encoded as Float.MAX_VALUE. Handing FFX the
             // reversed pair made every interpolated frame reproject with near=1024 and far=0.05, i.e. inverted depth.
             float near = cam.near();
@@ -425,18 +449,18 @@ public final class Fsr3FrameGen {
             // ffx camera vectors: position (3), up (3), right (3), forward (3)
             float[] camVec = {vectors[0], vectors[1], vectors[2], vectors[3], vectors[4], vectors[5], vectors[6], vectors[7], vectors[8],
                 vectors[9], vectors[10], vectors[11]};
-            r = nat.dispatchPrepare(fg, new FfxFgNative.PrepareParams(cmd.address(), depth, mv, renderW, renderH,
-                CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), 1.0f, 1.0f, frameMs,
-                near, far, cam.fovY(), camVec, frameId));
-            if (r != 0) {
-                throw new IllegalStateException("ffxDispatch(frame generation prepare) returned " + r);
-            }
-            VkBarriers.fullMemoryBarrier(cmd);
-            int end = VK10.vkEndCommandBuffer(cmd);
-            if (end != VK10.VK_SUCCESS) {
-                throw new IllegalStateException("vkEndCommandBuffer failed: " + end);
-            }
-            encoder.execute(cmd);
+            FrameGenGpu owner = gpu;
+            producerCommands.record(device, owner, cmd -> {
+                owner.recordInitialTransitions(cmd);
+                // The native producer's exit barrier makes its outputs visible to vendor preparation.
+                owner.record(cmd, slot, mainImg, depthView, mvView);
+                check(nat.configureFg(fg, scSwapchain, want, hudless, frameId), "ffxConfigure(frame generation)");
+                configuredFrame = frameId;
+                check(nat.dispatchPrepare(fg, new FfxFgNative.PrepareParams(cmd.address(), depth, mv, renderW, renderH,
+                    CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), 1.0f, 1.0f, frameMs,
+                    near, far, cam.fovY(), camVec, frameId)), "ffxDispatch(frame generation prepare)");
+                VkBarriers.fullMemoryBarrier(cmd);
+            });
             worldReady = true;
             if (want != modeOn) {
                 LOGGER.info("[VKB-FG] fsr3 mode={} multiplier=2x (was {}) frame={} output={}x{} render={}x{} back_buffers={} focused={}",
@@ -446,8 +470,7 @@ public final class Fsr3FrameGen {
                 ratioPresented0 = -1;
             }
         } catch (Throwable t) {
-            LOGGER.error("[VKB-FG] fsr3 world_ready threw", t);
-            fail("world_ready", t.toString());
+            fail("world_ready", t.toString(), t);
         }
     }
 
@@ -461,17 +484,14 @@ public final class Fsr3FrameGen {
         }
         // no world this frame (menu, loading): generation off, nothing tagged
         try {
-            int r = scSwapchain == 0L ? 0 : nat.configureFg(fg, scSwapchain, false, FfxFgNative.Image.NONE, frameId);
-            configuredFrame = frameId;
+            boolean wasOn = modeOn;
+            disableGeneration();
             validFrames = 0;
-            if (modeOn) {
-                modeOn = false;
-                genStreak = 0;
-                ratioPresented0 = -1;
-                LOGGER.info("[VKB-FG] fsr3 mode=OFF reason={} frame={} configure_result={}", idleReason, frameId, r);
+            if (wasOn) {
+                LOGGER.info("[VKB-FG] fsr3 mode=OFF reason={} frame={} configure_result=0", idleReason, frameId);
             }
         } catch (Throwable t) {
-            fail("after_render", t.toString());
+            fail("after_render", t.toString(), t);
         }
     }
 
@@ -522,7 +542,7 @@ public final class Fsr3FrameGen {
                 windowPresented0 = pc;
             }
         } catch (Throwable t) {
-            fail("present_end", t.toString());
+            fail("present_end", t.toString(), t);
         }
     }
 
@@ -567,16 +587,23 @@ public final class Fsr3FrameGen {
             return;
         }
         shutdownFgContext("device_close");
+        if (gpu != null) {
+            gpu.close();
+            gpu = null;
+        }
         if (sc != null) {
             try {
                 // Surface destruction normally already destroyed the wrapped swapchain. Waiting
                 // again would pass the SDK's now-null fiSwapChain into ffxWaitForPresents.
-                Fsr3Teardown.releaseSwapchainContext(scSwapchain, () -> nat.waitForPresents(sc), () -> {
+                Fsr3Teardown.releaseSwapchainContext(scSwapchain, () -> check(nat.waitForPresents(sc), "swapchain consumer wait"), () -> {
                     int r = nat.destroy(sc);
+                    check(r, "swapchain context destroy");
                     LOGGER.info("[VKB-FG] teardown fsr3 swapchain context destroyed result={}", r);
                 });
             } catch (RuntimeException | Error e) {
-                LOGGER.error("[VKB-FG] fsr3 swapchain context destroy failed", e);
+                LOGGER.error("[VKB-FG] provider=amd stage=swapchain_context_destroy frame={} swapchain=0x{} "
+                    + "vendor_context_retained={}", frameId, Long.toHexString(scSwapchain), sc != null, e);
+                throw e;
             }
             sc = null;
             repl = null;
