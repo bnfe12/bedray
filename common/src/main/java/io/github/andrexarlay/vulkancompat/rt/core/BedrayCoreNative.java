@@ -192,6 +192,11 @@ public final class BedrayCoreNative implements AutoCloseable {
         return bind(Linker.nativeLinker(), symbols, name, descriptor);
     }
 
+    public boolean hasMemoryService() {
+        ensureOpen();
+        return symbols.find("bedray_core_memory_version").isPresent();
+    }
+
     static long nextResourceGeneration() {
         for (;;) {
             long value = RESOURCE_GENERATIONS.get();

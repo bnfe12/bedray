@@ -314,6 +314,11 @@ BedrayStatus release_every(Release&&... release) {
 } // namespace
 
 namespace bedray::core {
+MemoryAccess memory_access(BedrayCore* core) noexcept {
+    if (!core) return {};
+    return {&core->device_fns, core->instance, core->get_instance_proc_addr, core->get_device_proc_addr,
+        core->properties.limits.maxMemoryAllocationCount, core->programs.empty()};
+}
 
 bool program_contract(BedrayCore* core, uint64_t handle, ProgramContract& out) noexcept {
     out = {};
@@ -789,10 +794,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_query_capabilities(
     if (core == nullptr || out_capabilities == nullptr) {
         return BEDRAY_ERROR_INVALID_ARGUMENT;
     }
-    uint64_t device_memory = 0;
-    for (uint32_t i = 0; i < core->memory_properties.memoryHeapCount; ++i) {
-        device_memory += core->memory_properties.memoryHeaps[i].size;
-    }
+    const uint64_t device_memory = bedray::gpu::device_local_bytes(core->memory_properties);
     out_capabilities->abi_version = BEDRAY_CORE_ABI_VERSION;
     out_capabilities->flags = core->capabilities;
     out_capabilities->max_push_constants = core->properties.limits.maxPushConstantsSize;
@@ -1783,5 +1785,6 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_volumetric(BedrayCore* c
 } catch (...) {
     return BEDRAY_ERROR_INTERNAL;
 }
+
 
 } // extern "C"

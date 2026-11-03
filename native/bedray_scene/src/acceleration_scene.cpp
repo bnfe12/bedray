@@ -1,4 +1,5 @@
 #include "scene_internal.h"
+#include "bedray/gpu_buffers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -103,7 +104,23 @@ bool create_buffer_impl(
     }
 
     VkDeviceMemory memory = VK_NULL_HANDLE;
-    result = scene.fns.allocate_memory(scene.device, &allocate, nullptr, &memory);
+    bedray::gpu::MemoryAllocation pooled{};
+    if (scene.memory) {
+        const auto allocated = scene.memory->buffer(handle, static_cast<uint32_t>(memory_type),
+            (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0, host_visible, pooled, result);
+        if (allocated != bedray::gpu::Status::ok) {
+            scene.fns.destroy_buffer(scene.device, handle, nullptr);
+            const auto status = allocated == bedray::gpu::Status::device_lost ? BEDRAY_SCENE_ERROR_DEVICE_LOST
+                : allocated == bedray::gpu::Status::budget_exceeded ? BEDRAY_SCENE_ERROR_LIMIT
+                : allocated == bedray::gpu::Status::out_of_memory ? BEDRAY_SCENE_ERROR_OUT_OF_MEMORY : BEDRAY_SCENE_ERROR_VULKAN;
+            if (status == BEDRAY_SCENE_ERROR_DEVICE_LOST) mark_failed(scene, status, "shared allocator device lost");
+            const auto stats = scene.memory->stats();
+            return fail(error, status, "shared scene allocation failed: status=%u VkResult=%d request=%llu reserved=%llu limit=%llu",
+                static_cast<uint32_t>(allocated), static_cast<int>(result), static_cast<unsigned long long>(requirements.size),
+                static_cast<unsigned long long>(stats.reserved), static_cast<unsigned long long>(stats.limit)) == BEDRAY_SCENE_OK;
+        }
+        memory = pooled.memory;
+    } else result = scene.fns.allocate_memory(scene.device, &allocate, nullptr, &memory);
     if (result != VK_SUCCESS) {
         scene.fns.destroy_buffer(scene.device, handle, nullptr);
         const BedraySceneStatus status = vk_status(result);
@@ -113,10 +130,14 @@ bool create_buffer_impl(
         return fail(error, status, "vkAllocateMemory failed: VkResult=%d", static_cast<int>(result)) == BEDRAY_SCENE_OK;
     }
 
-    result = scene.fns.bind_buffer_memory(scene.device, handle, memory, 0);
+    auto release_memory = [&] {
+        if (pooled.serial) scene.memory->release(pooled);
+        else scene.fns.free_memory(scene.device, memory, nullptr);
+    };
+    result = scene.fns.bind_buffer_memory(scene.device, handle, memory, pooled.offset);
     if (result != VK_SUCCESS) {
-        scene.fns.free_memory(scene.device, memory, nullptr);
         scene.fns.destroy_buffer(scene.device, handle, nullptr);
+        release_memory();
         const BedraySceneStatus status = vk_status(result);
         if (status == BEDRAY_SCENE_ERROR_DEVICE_LOST) {
             mark_failed(scene, status, "vkBindBufferMemory failed with VK_ERROR_DEVICE_LOST");
@@ -127,6 +148,8 @@ bool create_buffer_impl(
     Buffer buffer{};
     buffer.handle = handle;
     buffer.memory = memory;
+    buffer.allocation = pooled;
+    buffer.mapped = pooled.mapped;
     buffer.size = size;
     buffer.host_visible = host_visible;
     buffer.coherent = true;
@@ -135,10 +158,10 @@ bool create_buffer_impl(
         scene.memory_properties.memoryTypes[memory_type].propertyFlags;
     if (host_visible) {
         buffer.coherent = (actual & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
-        result = scene.fns.map_memory(scene.device, memory, 0, VK_WHOLE_SIZE, 0, &buffer.mapped);
+        if (!pooled.serial) result = scene.fns.map_memory(scene.device, memory, 0, VK_WHOLE_SIZE, 0, &buffer.mapped);
         if (result != VK_SUCCESS) {
-            scene.fns.free_memory(scene.device, memory, nullptr);
             scene.fns.destroy_buffer(scene.device, handle, nullptr);
+            release_memory();
             const BedraySceneStatus status = vk_status(result);
             if (status == BEDRAY_SCENE_ERROR_DEVICE_LOST) {
                 mark_failed(scene, status, "vkMapMemory failed with VK_ERROR_DEVICE_LOST");
@@ -251,6 +274,22 @@ bool create_buffer(
     return create_buffer_impl(scene, size, usage, host_visible, out, error);
 }
 
+bool create_scratch_buffer(Scene& scene, uint64_t bytes, Buffer& out, BedraySceneError* error) {
+    if (!scene.scratch_alignment || bytes > UINT64_MAX - (scene.scratch_alignment - 1))
+        return fail(error, BEDRAY_SCENE_ERROR_LIMIT, "scratch size/alignment overflow") == BEDRAY_SCENE_OK;
+    Buffer buffer;
+    const auto usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    if (!create_buffer(scene, bytes + scene.scratch_alignment - 1, usage, false, buffer, error)) return false;
+    if (buffer.address > UINT64_MAX - (scene.scratch_alignment - 1)) {
+        destroy_buffer(scene, buffer);
+        return fail(error, BEDRAY_SCENE_ERROR_LIMIT, "scratch device address alignment overflow") == BEDRAY_SCENE_OK;
+    }
+    buffer.address = align_up(buffer.address, scene.scratch_alignment);
+    buffer.size = bytes; // capacity after rebasing, excluding the alignment padding
+    out = buffer;
+    return true;
+}
+
 bool flush_buffer(
     Scene& scene,
     Buffer& buffer,
@@ -259,6 +298,15 @@ bool flush_buffer(
     BedraySceneError* error) {
     if (buffer.memory == VK_NULL_HANDLE || buffer.coherent || size == 0) {
         return true;
+    }
+    if (buffer.allocation.serial) {
+        VkResult result = VK_SUCCESS;
+        const auto status = scene.memory->synchronize(buffer.allocation, offset, size, true, result);
+        if (status == bedray::gpu::Status::ok) return true;
+        if (status == bedray::gpu::Status::device_lost)
+            mark_failed(scene, BEDRAY_SCENE_ERROR_DEVICE_LOST, "shared mapped allocation flush lost device");
+        return fail(error, status == bedray::gpu::Status::device_lost ? BEDRAY_SCENE_ERROR_DEVICE_LOST : BEDRAY_SCENE_ERROR_VULKAN,
+            "shared scene flush failed: status=%u VkResult=%d", static_cast<uint32_t>(status), static_cast<int>(result)) == BEDRAY_SCENE_OK;
     }
     (void)offset;
     (void)size;
@@ -282,7 +330,7 @@ bool flush_buffer(
 }
 
 void destroy_buffer(Scene& scene, Buffer& buffer) {
-    if (buffer.mapped != nullptr && buffer.memory != VK_NULL_HANDLE) {
+    if (buffer.mapped != nullptr && buffer.memory != VK_NULL_HANDLE && !buffer.allocation.serial) {
         scene.fns.unmap_memory(scene.device, buffer.memory);
         buffer.mapped = nullptr;
     }
@@ -290,7 +338,8 @@ void destroy_buffer(Scene& scene, Buffer& buffer) {
         scene.fns.destroy_buffer(scene.device, buffer.handle, nullptr);
     }
     if (buffer.memory != VK_NULL_HANDLE) {
-        scene.fns.free_memory(scene.device, buffer.memory, nullptr);
+        if (buffer.allocation.serial) scene.memory->release(buffer.allocation);
+        else scene.fns.free_memory(scene.device, buffer.memory, nullptr);
         scene.resident_bytes -= buffer.allocation_bytes;
     }
     buffer = Buffer{};

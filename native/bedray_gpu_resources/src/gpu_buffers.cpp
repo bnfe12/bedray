@@ -17,6 +17,13 @@ Status result_status(VkResult result) noexcept {
 GpuBuffers::GpuBuffers(DeviceContext context, VkDeviceSize budget_bytes) noexcept
     : context_(context), budget_(budget_bytes) {}
 
+Status GpuBuffers::share_memory(std::shared_ptr<MemoryAllocator> memory) noexcept {
+    if (!memory || !memory->valid() || memory->device() != context_.device) return Status::invalid_argument;
+    if (!valid() || !buffers_.empty() || !uses_.empty()) return Status::in_use;
+    context_.memory = std::move(memory);
+    return Status::ok;
+}
+
 bool GpuBuffers::valid() const noexcept {
     const auto& f = context_.functions;
     return !lost_ && !closed_ && context_.device != VK_NULL_HANDLE && context_.generation != 0 &&
@@ -41,16 +48,17 @@ bool GpuBuffers::has_use(BufferId id) const noexcept {
 
 void GpuBuffers::destroy(Buffer& buffer) noexcept {
     const auto& f = context_.functions;
-    if (buffer.mapped) f.unmap_memory(context_.device, buffer.memory);
+    if (buffer.mapped && !buffer.allocation.serial) f.unmap_memory(context_.device, buffer.memory);
     if (buffer.buffer != VK_NULL_HANDLE) f.destroy_buffer(context_.device, buffer.buffer, nullptr);
-    if (buffer.memory != VK_NULL_HANDLE) f.free_memory(context_.device, buffer.memory, nullptr);
+    if (buffer.allocation.serial) context_.memory->release(buffer.allocation);
+    else if (buffer.memory != VK_NULL_HANDLE) f.free_memory(context_.device, buffer.memory, nullptr);
     resident_bytes_ -= buffer.allocation_size;
     buffer = {};
 }
 
 Status GpuBuffers::create(const BufferDesc& desc, BufferId& id, BufferView& view_out, VkResult& error) noexcept {
     error = VK_SUCCESS;
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     if (desc.size == 0 || desc.usage == 0 || budget_ == 0) return Status::invalid_argument;
     if ((desc.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0 &&
@@ -66,7 +74,7 @@ Status GpuBuffers::create(const BufferDesc& desc, BufferId& id, BufferView& view
     create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     VkBuffer handle = VK_NULL_HANDLE;
     error = context_.functions.create_buffer(context_.device, &create_info, nullptr, &handle);
-    if (error != VK_SUCCESS) { if (error == VK_ERROR_DEVICE_LOST) lost_ = true; return result_status(error); }
+    if (error != VK_SUCCESS) { if (error == VK_ERROR_DEVICE_LOST) device_lost(); return result_status(error); }
 
     VkMemoryRequirements requirements{};
     context_.functions.get_requirements(context_.device, handle, &requirements);
@@ -100,17 +108,33 @@ Status GpuBuffers::create(const BufferDesc& desc, BufferId& id, BufferView& view
     allocation.allocationSize = requirements.size;
     allocation.memoryTypeIndex = index;
     VkDeviceMemory memory = VK_NULL_HANDLE;
-    error = context_.functions.allocate_memory(context_.device, &allocation, nullptr, &memory);
+    MemoryAllocation pooled{};
+    void* mapped = nullptr;
+    if (context_.memory) {
+        const Status allocated = context_.memory->buffer(handle, index,
+            (desc.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0, desc.mapped, pooled, error);
+        if (allocated != Status::ok) {
+            context_.functions.destroy_buffer(context_.device, handle, nullptr);
+            if (allocated == Status::device_lost) device_lost();
+            return allocated;
+        }
+        memory = pooled.memory;
+        mapped = pooled.mapped;
+    } else error = context_.functions.allocate_memory(context_.device, &allocation, nullptr, &memory);
     if (error != VK_SUCCESS) {
         context_.functions.destroy_buffer(context_.device, handle, nullptr);
-        if (error == VK_ERROR_DEVICE_LOST) lost_ = true;
+        if (error == VK_ERROR_DEVICE_LOST) device_lost();
         return result_status(error);
     }
-    error = context_.functions.bind_buffer_memory(context_.device, handle, memory, 0);
+    auto release_memory = [&] {
+        if (pooled.serial) context_.memory->release(pooled);
+        else context_.functions.free_memory(context_.device, memory, nullptr);
+    };
+    error = context_.functions.bind_buffer_memory(context_.device, handle, memory, pooled.offset);
     if (error != VK_SUCCESS) {
         context_.functions.destroy_buffer(context_.device, handle, nullptr);
-        context_.functions.free_memory(context_.device, memory, nullptr);
-        if (error == VK_ERROR_DEVICE_LOST) lost_ = true;
+        release_memory();
+        if (error == VK_ERROR_DEVICE_LOST) device_lost();
         return result_status(error);
     }
     VkDeviceAddress device_address = 0;
@@ -121,24 +145,23 @@ Status GpuBuffers::create(const BufferDesc& desc, BufferId& id, BufferView& view
         device_address = context_.functions.get_buffer_device_address(context_.device, &address_info);
         if (device_address == 0) {
             context_.functions.destroy_buffer(context_.device, handle, nullptr);
-            context_.functions.free_memory(context_.device, memory, nullptr);
+            release_memory();
             return Status::vulkan_error;
         }
     }
-    void* mapped = nullptr;
-    if (desc.mapped) {
+    if (desc.mapped && !pooled.serial) {
         error = context_.functions.map_memory(context_.device, memory, 0, requirements.size, 0, &mapped);
         if (error != VK_SUCCESS || mapped == nullptr) {
             if (error == VK_SUCCESS) context_.functions.unmap_memory(context_.device, memory);
             context_.functions.destroy_buffer(context_.device, handle, nullptr);
             context_.functions.free_memory(context_.device, memory, nullptr);
-            if (error == VK_ERROR_DEVICE_LOST) lost_ = true;
+            if (error == VK_ERROR_DEVICE_LOST) device_lost();
             return error == VK_SUCCESS ? Status::vulkan_error : result_status(error);
         }
     }
     const BufferId new_id{context_.generation, next_buffer_++};
     const auto flags = context_.memory_properties.memoryTypes[index].propertyFlags;
-    buffers_.push_back(Buffer{new_id, handle, memory, desc.size, requirements.size, flags, device_address, mapped, false, desc.usage, false});
+    buffers_.push_back(Buffer{new_id, handle, memory, desc.size, requirements.size, flags, device_address, mapped, false, desc.usage, false, pooled});
     resident_bytes_ += requirements.size;
     id = new_id;
     view_out = BufferView{handle, desc.size, flags, device_address};
@@ -146,7 +169,7 @@ Status GpuBuffers::create(const BufferDesc& desc, BufferId& id, BufferView& view
 }
 
 Status GpuBuffers::view(BufferId id, BufferView& out) const noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     const Buffer* buffer = find(id);
     if (!buffer) return Status::unknown_buffer;
@@ -158,7 +181,7 @@ Status GpuBuffers::view(BufferId id, BufferView& out) const noexcept {
 Status GpuBuffers::mapped_transfer(BufferId id, VkDeviceSize offset, void* data,
                                    VkDeviceSize bytes, bool is_write, VkResult& error) noexcept {
     error = VK_SUCCESS;
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     Buffer* buffer = find(id);
     if (!buffer) return Status::unknown_buffer;
@@ -171,7 +194,12 @@ Status GpuBuffers::mapped_transfer(BufferId id, VkDeviceSize offset, void* data,
     if (has_use(id)) return Status::in_use;
     const bool coherent = (buffer->flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
     VkMappedMemoryRange range{};
-    if (!coherent) {
+    if (!coherent && buffer->allocation.serial) {
+        if (!is_write) {
+            const Status synchronized = context_.memory->synchronize(buffer->allocation, offset, bytes, false, error);
+            if (synchronized != Status::ok) { if (synchronized == Status::device_lost) device_lost(); return synchronized; }
+        }
+    } else if (!coherent) {
         const VkDeviceSize atom = context_.non_coherent_atom_size;
         const VkDeviceSize start = offset - offset % atom;
         const VkDeviceSize end = offset + bytes;
@@ -184,15 +212,18 @@ Status GpuBuffers::mapped_transfer(BufferId id, VkDeviceSize offset, void* data,
         range.size = aligned_end - start;
         if (!is_write) {
             error = context_.functions.invalidate(context_.device, 1, &range);
-            if (error != VK_SUCCESS) { if (error == VK_ERROR_DEVICE_LOST) lost_ = true; return result_status(error); }
+            if (error != VK_SUCCESS) { if (error == VK_ERROR_DEVICE_LOST) device_lost(); return result_status(error); }
         }
     }
     auto* mapped = static_cast<unsigned char*>(buffer->mapped) + static_cast<std::size_t>(offset);
     if (is_write) std::memcpy(mapped, data, static_cast<std::size_t>(bytes));
     else std::memcpy(data, mapped, static_cast<std::size_t>(bytes));
     if (!coherent && is_write) {
-        error = context_.functions.flush(context_.device, 1, &range);
-        if (error != VK_SUCCESS) { if (error == VK_ERROR_DEVICE_LOST) lost_ = true; return result_status(error); }
+        if (buffer->allocation.serial) {
+            const Status synchronized = context_.memory->synchronize(buffer->allocation, offset, bytes, true, error);
+            if (synchronized != Status::ok) { if (synchronized == Status::device_lost) device_lost(); return synchronized; }
+        } else error = context_.functions.flush(context_.device, 1, &range);
+        if (error != VK_SUCCESS) { if (error == VK_ERROR_DEVICE_LOST) device_lost(); return result_status(error); }
     }
     return Status::ok;
 }
@@ -205,7 +236,7 @@ Status GpuBuffers::read(BufferId id, VkDeviceSize offset, void* data, VkDeviceSi
 Status GpuBuffers::upload(VkBufferUsageFlags usage, const void* data, VkDeviceSize bytes,
                          BufferId& id, BufferView& out, UseId& use, VkResult& error) noexcept {
     error = VK_SUCCESS;
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     constexpr auto allowed = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -238,13 +269,13 @@ Status GpuBuffers::upload(VkBufferUsageFlags usage, const void* data, VkDeviceSi
     return Status::ok;
 }
 Status GpuBuffers::retire_uploads() noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     for (auto& buffer : buffers_) if (buffer.upload_slot) buffer.retired = true;
     return Status::ok;
 }
 Status GpuBuffers::begin_use(BufferId id, UseId& token) noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     const Buffer* buffer = find(id);
     if (!buffer) return Status::unknown_buffer;
@@ -257,7 +288,7 @@ Status GpuBuffers::begin_use(BufferId id, UseId& token) noexcept {
     return Status::ok;
 }
 Status GpuBuffers::complete_use(UseId token) noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     for (auto it = uses_.begin(); it != uses_.end(); ++it) {
         if (it->id == token) { uses_.erase(it); return Status::ok; }
@@ -265,7 +296,7 @@ Status GpuBuffers::complete_use(UseId token) noexcept {
     return Status::unknown_use;
 }
 Status GpuBuffers::retire(BufferId id) noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     Buffer* buffer = find(id);
     if (!buffer) return Status::unknown_buffer;
@@ -274,7 +305,7 @@ Status GpuBuffers::retire(BufferId id) noexcept {
     return Status::ok;
 }
 Status GpuBuffers::collect() noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     for (auto it = buffers_.begin(); it != buffers_.end();) {
         if (it->retired && !has_use(it->id)) { destroy(*it); it = buffers_.erase(it); }
@@ -283,7 +314,7 @@ Status GpuBuffers::collect() noexcept {
     return Status::ok;
 }
 Status GpuBuffers::device_idle() noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     uses_.clear();
     return Status::ok;
@@ -295,7 +326,7 @@ Status GpuBuffers::release_after_device_loss() noexcept {
     return Status::ok;
 }
 Status GpuBuffers::close() noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     if (!buffers_.empty() || !uses_.empty()) return Status::in_use;
     closed_ = true;

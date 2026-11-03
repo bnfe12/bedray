@@ -45,6 +45,12 @@ public final class BedrayGpuImagesNative implements AutoCloseable {
     private final Map<Long, ArrayList<Use>> recordings = new LinkedHashMap<>();
     private final Map<Long, Image> images = new LinkedHashMap<>();
     private long owner;
+    private BedrayMemoryNative memory;
+
+    void attachMemory(BedrayMemoryNative memory) {
+        memory.attach(1, pointer());
+        this.memory = memory;
+    }
 
     public BedrayGpuImagesNative(BedrayCoreNative library, VkPhysicalDevice physical, VkDevice device, long budgetBytes) {
         if (library == null || physical == null || device == null || budgetBytes <= 0) {
@@ -152,7 +158,11 @@ public final class BedrayGpuImagesNative implements AutoCloseable {
             MemorySegment vk = arena.allocate(JAVA_INT);
             int status = (int) createImage.invokeExact(pointer(), width, height, format, usage,
                 VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, out, vk);
-            if (status != OK) throw new IllegalStateException("native image create failed: status=" + status + " VkResult=" + vk.get(JAVA_INT, 0));
+            if (status != OK) {
+                if (memory != null) throw memory.allocationFailure("image_create width=" + width + " height=" + height + " format=" + format,
+                    -1, status, vk.get(JAVA_INT, 0));
+                throw new IllegalStateException("native image create failed: status=" + status + " VkResult=" + vk.get(JAVA_INT, 0));
+            }
             int[] at = imageLayout.offsets;
             long generation = out.get(JAVA_LONG, at[0]), serial = out.get(JAVA_LONG, at[1]);
             try {

@@ -41,6 +41,7 @@ public final class RtDeviceRequirements {
     }
 
     public static void register(DeviceFeatureRegistry registry) {
+        registry.register(MemoryBudgetDeviceRequirements.requirement());
         registry.register(requirement());
         RtRayPipelineDeviceRequirements.register(registry);
     }

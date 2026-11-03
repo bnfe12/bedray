@@ -35,6 +35,12 @@ public final class BedrayGpuBuffersNative implements AutoCloseable {
     private final Map<Long, Buffer> buffers = new LinkedHashMap<>();
     private final Map<Long, ArrayList<Use>> recordings = new LinkedHashMap<>();
     private long owner;
+    private BedrayMemoryNative memory;
+
+    void attachMemory(BedrayMemoryNative memory) {
+        memory.attach(0, pointer());
+        this.memory = memory;
+    }
 
     public BedrayGpuBuffersNative(BedrayCoreNative library, VkPhysicalDevice physical, VkDevice device, long budget) {
         if (library == null || physical == null || device == null || budget <= 0 || !device.getCapabilities().Vulkan11)
@@ -123,7 +129,10 @@ public final class BedrayGpuBuffersNative implements AutoCloseable {
             int required = mapped ? VK10.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT : VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
             int preferred = mapped ? VK10.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT : VK10.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
             int status = (int) create.invokeExact(pointer(), size, usage, required, preferred, mapped ? 1 : 0, out, vk);
-            if (status != 0) throw new IllegalStateException("native buffer create failed: status=" + status + " VkResult=" + vk.get(JAVA_INT, 0));
+            if (status != 0) {
+                if (memory != null) throw memory.allocationFailure("buffer_create", size, status, vk.get(JAVA_INT, 0));
+                throw new IllegalStateException("native buffer create failed: status=" + status + " VkResult=" + vk.get(JAVA_INT, 0));
+            }
             long generation = out.get(JAVA_LONG, 0), serial = out.get(JAVA_LONG, 8);
             try {
                 Buffer result = readBuffer(out);

@@ -9,6 +9,10 @@ targets still come from the host. The native graph/history registry does not
 yet drive this frame path. Mock-driver and actual-DLL FFM layout checks prove
 contracts, not GPU execution or in-game rendering.
 
+The integrated core now uses a [shared allocation service](../../docs/ai-agent-addenda/NATIVE_MEMORY_SERVICE.md)
+for native resources and scene. The following dedicated-allocation description
+applies to standalone/older unbound owners; both paths keep the same use proof.
+
 The host supplies an already-created device, enabled feature guarantees,
 physical memory properties, `nonCoherentAtomSize` and Vulkan device functions.
 It owns queue submissions, memory barriers, queue-family ownership and all

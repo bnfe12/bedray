@@ -157,7 +157,7 @@ struct State {
     uint64_t next_buffer = 0x100;
     uint64_t next_memory = 0x1000;
     uint64_t next_accel = 0x2000;
-    uint64_t next_buffer_address = 0x100000000ull;
+    uint64_t next_buffer_address = 0x100000010ull; // valid buffer address, deliberately not AS scratch-aligned
     uint64_t next_accel_address = 0x200000000ull;
     int fail_create_buffer_countdown = -1;
     bool zero_device_address = false;
@@ -463,6 +463,7 @@ static void VKAPI_CALL fakeCmdBuildAccelerationStructures(
         record.src = info.srcAccelerationStructure;
         record.dst = info.dstAccelerationStructure;
         record.scratch = info.scratchData.deviceAddress;
+        if (record.scratch % 256 != 0) fake::fault("AS scratch address is not aligned");
         record.geometry_count = info.geometryCount;
         for (uint32_t g = 0; g < info.geometryCount; ++g) {
             fake::BuildGeometryRecord geometry_record;

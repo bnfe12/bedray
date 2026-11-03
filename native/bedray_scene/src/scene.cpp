@@ -1,4 +1,5 @@
 #include "scene_internal.h"
+#include "bedray/memory_binding.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,13 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+bedray::gpu::Status bedray::gpu::attach_memory(BedrayScene* scene, std::shared_ptr<MemoryAllocator> memory) noexcept {
+    if (!scene || !memory || !memory->valid() || memory->device() != scene->impl.device) return Status::invalid_argument;
+    if (scene->impl.resident_bytes || scene->impl.failed) return Status::in_use;
+    scene->impl.memory = std::move(memory);
+    return Status::ok;
+}
 
 static_assert(sizeof(BedraySceneError) == 1028, "scene ABI: BedraySceneError must stay 1028 bytes");
 static_assert(sizeof(BedraySceneAbiInfo) == 48, "scene ABI: BedraySceneAbiInfo must stay 48 bytes");
@@ -98,6 +106,7 @@ BedraySceneStatus vk_status(VkResult result) {
 }
 
 void mark_failed(Scene& scene, BedraySceneStatus status, const char* message) {
+    if (status == BEDRAY_SCENE_ERROR_DEVICE_LOST && scene.memory) scene.memory->device_lost();
     if (!scene.failed) {
         scene.failed = true;
         scene.failure_status = status;
@@ -974,9 +983,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         scene.scratch_alignment);
     if (slot.tlas_scratch.handle == VK_NULL_HANDLE || slot.tlas_scratch_capacity < scratch_need) {
         plan.new_tlas_scratch = std::make_unique<Buffer>();
-        const VkBufferUsageFlags usage =
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-        if (!create_buffer(scene, scratch_need, usage, false, *plan.new_tlas_scratch, error)) {
+        if (!create_scratch_buffer(scene, scratch_need, *plan.new_tlas_scratch, error)) {
             return false;
         }
     }
@@ -1037,9 +1044,7 @@ bool plan_blas_scratch(Scene& scene, PreparePlan& plan, BedraySceneError* error)
     if (total == 0) {
         return true;
     }
-    const VkBufferUsageFlags usage =
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    if (!create_buffer(scene, total, usage, false, plan.blas_scratch, error)) {
+    if (!create_scratch_buffer(scene, total, plan.blas_scratch, error)) {
         return false;
     }
     plan.blas_scratch_present = true;

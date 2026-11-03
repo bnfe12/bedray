@@ -87,6 +87,7 @@ BedrayStatus VelocityPass::configure(BedrayCore* core, const DeviceFns& fns,
     gpu::DeviceContext context{};
     context.device = fns.device; context.functions = fns.buffer_functions;
     context.memory_properties = fns.memory_properties; context.non_coherent_atom_size = fns.non_coherent_atom_size;
+    context.memory = fns.memory;
     context.dedicated_allocation_enabled = true; context.generation = fns.generation;
     auto buffers = std::make_unique<gpu::GpuBuffers>(context, desc.buffer_budget_bytes ? desc.buffer_budget_bytes : 1ull << 20);
     if (!buffers->valid()) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "velocity buffer owner unavailable");

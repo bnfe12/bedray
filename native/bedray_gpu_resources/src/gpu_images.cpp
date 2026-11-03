@@ -20,6 +20,13 @@ bool colour_format(VkFormat format) noexcept {
 GpuImages::GpuImages(ImageDeviceContext context, VkDeviceSize budget) noexcept
     : context_(context), budget_(budget) {}
 
+Status GpuImages::share_memory(std::shared_ptr<MemoryAllocator> memory) noexcept {
+    if (!memory || !memory->valid() || memory->device() != context_.device) return Status::invalid_argument;
+    if (!valid() || !images_.empty() || !uses_.empty()) return Status::in_use;
+    context_.memory = std::move(memory);
+    return Status::ok;
+}
+
 bool GpuImages::valid() const noexcept {
     const auto& f = context_.functions;
     return !lost_ && !closed_ && context_.physical_device != VK_NULL_HANDLE &&
@@ -46,14 +53,15 @@ void GpuImages::destroy(Image& image) noexcept {
     const auto& f = context_.functions;
     f.destroy_view(context_.device, image.public_view.view, nullptr);
     f.destroy_image(context_.device, image.public_view.image, nullptr);
-    f.free_memory(context_.device, image.memory, nullptr);
+    if (image.allocation.serial) context_.memory->release(image.allocation);
+    else f.free_memory(context_.device, image.memory, nullptr);
     resident_bytes_ -= image.public_view.allocation_bytes;
     image = {};
 }
 
 Status GpuImages::create(const ImageDesc& desc, ImageId& id, ImageView& view_out, VkResult& error) noexcept {
     error = VK_SUCCESS;
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     constexpr VkImageUsageFlags view_usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     constexpr VkImageUsageFlags allowed_usage = view_usage |
@@ -66,7 +74,7 @@ Status GpuImages::create(const ImageDesc& desc, ImageId& id, ImageView& view_out
     error = f.image_format_properties(context_.physical_device, desc.format, VK_IMAGE_TYPE_2D,
         VK_IMAGE_TILING_OPTIMAL, desc.usage, 0, &properties);
     if (error != VK_SUCCESS) {
-        if (error == VK_ERROR_DEVICE_LOST) lost_ = true;
+        if (error == VK_ERROR_DEVICE_LOST) device_lost();
         return result_status(error);
     }
     if (desc.width > properties.maxExtent.width || desc.height > properties.maxExtent.height ||
@@ -86,7 +94,7 @@ Status GpuImages::create(const ImageDesc& desc, ImageId& id, ImageView& view_out
     VkImage handle = VK_NULL_HANDLE;
     error = f.create_image(context_.device, &create, nullptr, &handle);
     if (error != VK_SUCCESS) {
-        if (error == VK_ERROR_DEVICE_LOST) lost_ = true;
+        if (error == VK_ERROR_DEVICE_LOST) device_lost();
         return result_status(error);
     }
     if (handle == VK_NULL_HANDLE) return Status::vulkan_error;
@@ -118,16 +126,29 @@ Status GpuImages::create(const ImageDesc& desc, ImageId& id, ImageView& view_out
     allocate.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; allocate.pNext = &dedicated;
     allocate.allocationSize = requirements.size; allocate.memoryTypeIndex = memory_type;
     VkDeviceMemory memory = VK_NULL_HANDLE;
-    error = f.allocate_memory(context_.device, &allocate, nullptr, &memory);
+    MemoryAllocation pooled{};
+    if (context_.memory) {
+        const Status allocated = context_.memory->image(handle, memory_type, pooled, error);
+        if (allocated != Status::ok) {
+            f.destroy_image(context_.device, handle, nullptr);
+            if (allocated == Status::device_lost) device_lost();
+            return allocated;
+        }
+        memory = pooled.memory;
+    } else error = f.allocate_memory(context_.device, &allocate, nullptr, &memory);
     if (error != VK_SUCCESS || memory == VK_NULL_HANDLE) {
         f.destroy_image(context_.device, handle, nullptr);
-        if (error == VK_ERROR_DEVICE_LOST) lost_ = true;
+        if (error == VK_ERROR_DEVICE_LOST) device_lost();
         return error == VK_SUCCESS ? Status::vulkan_error : result_status(error);
     }
-    error = f.bind_image_memory(context_.device, handle, memory, 0);
+    auto release_memory = [&] {
+        if (pooled.serial) context_.memory->release(pooled);
+        else f.free_memory(context_.device, memory, nullptr);
+    };
+    error = f.bind_image_memory(context_.device, handle, memory, pooled.offset);
     if (error != VK_SUCCESS) {
-        f.destroy_image(context_.device, handle, nullptr); f.free_memory(context_.device, memory, nullptr);
-        if (error == VK_ERROR_DEVICE_LOST) lost_ = true;
+        f.destroy_image(context_.device, handle, nullptr); release_memory();
+        if (error == VK_ERROR_DEVICE_LOST) device_lost();
         return result_status(error);
     }
     VkImageViewCreateInfo view_info{};
@@ -137,20 +158,20 @@ Status GpuImages::create(const ImageDesc& desc, ImageId& id, ImageView& view_out
     VkImageView image_view = VK_NULL_HANDLE;
     error = f.create_view(context_.device, &view_info, nullptr, &image_view);
     if (error != VK_SUCCESS || image_view == VK_NULL_HANDLE) {
-        f.destroy_image(context_.device, handle, nullptr); f.free_memory(context_.device, memory, nullptr);
-        if (error == VK_ERROR_DEVICE_LOST) lost_ = true;
+        f.destroy_image(context_.device, handle, nullptr); release_memory();
+        if (error == VK_ERROR_DEVICE_LOST) device_lost();
         return error == VK_SUCCESS ? Status::vulkan_error : result_status(error);
     }
     const ImageId new_id{context_.generation, next_image_++};
     const ImageView public_view{handle, image_view, desc.format, desc.width, desc.height, requirements.size};
-    images_.push_back(Image{new_id, public_view, memory, false});
+    images_.push_back(Image{new_id, public_view, memory, false, pooled});
     resident_bytes_ += requirements.size;
     id = new_id; view_out = public_view;
     return Status::ok;
 }
 
 Status GpuImages::view(ImageId id, ImageView& out) const noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     const Image* image = find(id);
     if (!image) return Status::unknown_image;
@@ -159,7 +180,7 @@ Status GpuImages::view(ImageId id, ImageView& out) const noexcept {
     return Status::ok;
 }
 Status GpuImages::begin_use(ImageId id, UseId& token) noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     const Image* image = find(id);
     if (!image) return Status::unknown_image;
@@ -171,7 +192,7 @@ Status GpuImages::begin_use(ImageId id, UseId& token) noexcept {
     return Status::ok;
 }
 Status GpuImages::complete_use(UseId token) noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     for (auto it = uses_.begin(); it != uses_.end(); ++it) {
         if (it->id == token) { uses_.erase(it); return Status::ok; }
@@ -179,7 +200,7 @@ Status GpuImages::complete_use(UseId token) noexcept {
     return Status::unknown_use;
 }
 Status GpuImages::retire(ImageId id) noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     Image* image = find(id);
     if (!image) return Status::unknown_image;
@@ -188,7 +209,7 @@ Status GpuImages::retire(ImageId id) noexcept {
     return Status::ok;
 }
 Status GpuImages::collect() noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     for (auto it = images_.begin(); it != images_.end();) {
         if (it->retired && !has_use(it->id)) { destroy(*it); it = images_.erase(it); }
@@ -197,7 +218,7 @@ Status GpuImages::collect() noexcept {
     return Status::ok;
 }
 Status GpuImages::device_idle() noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     uses_.clear();
     return Status::ok;
@@ -209,7 +230,7 @@ Status GpuImages::release_after_device_loss() noexcept {
     return Status::ok;
 }
 Status GpuImages::close() noexcept {
-    if (lost_) return Status::device_lost;
+    if (lost_ || (context_.memory && context_.memory->lost())) return Status::device_lost;
     if (!valid()) return Status::unavailable;
     if (!images_.empty() || !uses_.empty()) return Status::in_use;
     closed_ = true;

@@ -28,6 +28,7 @@ struct ImageDeviceContext {
     VkPhysicalDeviceMemoryProperties memory_properties{};
     bool dedicated_allocation_enabled = false;
     std::uint64_t generation = 0;
+    std::shared_ptr<MemoryAllocator> memory;
 };
 
 // One mip, one layer, one sample, optimal 2D colour image. More general image
@@ -71,11 +72,12 @@ public:
     [[nodiscard]] Status collect() noexcept;
     // Same whole-device proof as GpuBuffers: idle AND no future resubmissions.
     [[nodiscard]] Status device_idle() noexcept;
-    void device_lost() noexcept { lost_ = true; }
+    void device_lost() noexcept { lost_ = true; if (context_.memory) context_.memory->device_lost(); }
     // Quiesced device-loss teardown, before the host destroys VkDevice.
     [[nodiscard]] Status release_after_device_loss() noexcept;
     [[nodiscard]] Status close() noexcept;
     [[nodiscard]] VkDeviceSize resident_bytes() const noexcept { return resident_bytes_; }
+    [[nodiscard]] Status share_memory(std::shared_ptr<MemoryAllocator> memory) noexcept;
 
 private:
     struct Image {
@@ -83,6 +85,7 @@ private:
         ImageView public_view{};
         VkDeviceMemory memory = VK_NULL_HANDLE;
         bool retired = false;
+        MemoryAllocation allocation{};
     };
     struct Use { UseId id; ImageId image; };
     [[nodiscard]] Image* find(ImageId) noexcept;

@@ -1,5 +1,6 @@
 #include "bedray/gpu_images_c.h"
 #include "bedray/gpu_images.hpp"
+#include "bedray/memory_binding.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -12,6 +13,10 @@ struct BedrayGpuImageOwner {
     bedray::gpu::GpuImages images;
     bool released = false;
 };
+
+bedray::gpu::Status bedray::gpu::attach_memory(BedrayGpuImageOwner* owner, std::shared_ptr<MemoryAllocator> memory) noexcept {
+    return owner && !owner->released ? owner->images.share_memory(std::move(memory)) : Status::invalid_argument;
+}
 
 namespace {
 using namespace bedray::gpu;

@@ -22,6 +22,7 @@ struct DeviceFns {
     std::uint64_t generation = 0;
     gpu::ImageFunctions image_functions{};
     gpu::BufferFunctions buffer_functions{};
+    std::shared_ptr<gpu::MemoryAllocator> memory;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
     PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
     VkPipelineStageFlags path_shader_stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
@@ -32,6 +33,16 @@ struct ProgramContract {
     std::uint32_t binding_count = 0;
     bool ray_generation = false;
 };
+
+struct MemoryAccess {
+    DeviceFns* functions = nullptr;
+    VkInstance instance = VK_NULL_HANDLE;
+    PFN_vkGetInstanceProcAddr get_instance_proc = nullptr;
+    PFN_vkGetDeviceProcAddr get_device_proc = nullptr;
+    std::uint32_t max_allocations = 0;
+    bool programs_empty = false;
+};
+MemoryAccess memory_access(BedrayCore*) noexcept;
 
 // Read-only queries over the core's registered programs. They do not retain or
 // retire anything; the caller must keep the handle valid for the whole call.
