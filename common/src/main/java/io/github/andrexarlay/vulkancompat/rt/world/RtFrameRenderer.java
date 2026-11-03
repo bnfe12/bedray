@@ -1220,7 +1220,7 @@ public final class RtFrameRenderer {
                         : 0.0f;
                     DlssRrDenoiser owner = dlssRrDenoiser;
                     frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
-                        params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY);
+                        params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY, camera.projectionMatrix);
                     rrColorResolved = frameColorTemporallyResolved;
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (Exception e) {

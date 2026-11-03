@@ -58,6 +58,13 @@ mode resets RR history. All paths of an RR pixel share the primary ray; their
 BSDF/light samples remain independent. Multiple SPP no longer averages unrelated
 primary surfaces into a single RR normal/depth/material/motion guide.
 
+RR receives a pure base projection and the actual model-view
+`inverse(baseProjection) * fullProjection * viewRotation`, including bob/hurt
+pose. Previously it received rotation-only view plus a projection containing
+the pose, which preserved the clip product but disagreed with the linear-depth
+view space. A CPU regression checks both the unchanged clip transform and the
+depth of a surface in the bobbed view. Legacy callers retain their overload.
+
 An RR recording exception can follow emitted commands. The entire unsubmitted
 command buffer is discarded, its exact retirement callbacks run, and the engine's
 raster frame remains available. RR falls back next frame. A failed discard cleanup

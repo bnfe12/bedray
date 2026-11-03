@@ -562,10 +562,19 @@ public final class DlssRrDenoiser {
      */
     public boolean record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
                        boolean tonemap, float exposure, long depthView, float jitterPixelsX, float jitterPixelsY) {
+        return record(cmd, projection, viewRotation, camX, camY, camZ, tonemap, exposure, depthView,
+            jitterPixelsX, jitterPixelsY, projection);
+    }
+
+    public boolean record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
+                          boolean tonemap, float exposure, long depthView, float jitterPixelsX, float jitterPixelsY,
+                          Matrix4f baseProjection) {
         boolean jitterMode = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
             && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive();
         if (jitterModeKnown && jitterMode != previousJitterMode) cameraHistory.reset();
         var cameraFrame = cameraHistory.prepare(projection, viewRotation, camX, camY, camZ);
+        Matrix4f modelView = RrCameraMatrices.modelView(baseProjection, projection, viewRotation);
+        if (modelView == null) { cameraHistory.reset(); cameraFrame = null; }
         if (cameraFrame == null) {
             if (!invalidCameraLogged) LOGGER.warn("[DLSS-RR] frame_skipped reason=invalid_camera {} position={},{},{}",
                 io.github.andrexarlay.vulkancompat.rtx.CameraMatrixGuard.describe(projection, viewRotation, null), camX, camY, camZ);
@@ -586,14 +595,12 @@ public final class DlssRrDenoiser {
         prevViewProjMat.set(cameraFrame.previous());
         Vec3 camDelta = cameraFrame.delta();
 
-        if (viewRotation != null) {
-            viewRotation.get(worldToViewMatrix);
-        }
-        if (projection != null) {
+        modelView.get(worldToViewMatrix);
+        if (baseProjection != null) {
             if (DenoiserConfig.PROJ_FLIP_Y) {
-                NrdCameraMath.negateClipY(projection, new Matrix4f()).get(viewToClipMatrix);
+                NrdCameraMath.negateClipY(baseProjection, new Matrix4f()).get(viewToClipMatrix);
             } else {
-                projection.get(viewToClipMatrix);
+                baseProjection.get(viewToClipMatrix);
             }
         }
 
