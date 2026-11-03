@@ -374,9 +374,14 @@ public final class RtSlangPathPass implements RtPass {
         // what is being traced) or a different light list makes a stored sample wrong. A removed torch would otherwise
         // keep glowing through history forever, while streaming sections and the accumulate switch leave it valid - and
         // filling hundreds of MB every frame would cost far more than the reuse saves.
-        if (forceReset || settingsHash != lastSettingsHash || params.emitterFingerprint != reservoirFingerprint) {
+        if (forceReset || settingsHash != lastSettingsHash) {
             diRequests.reset();
-            // A stored path's suffix carries the light of the list it was traced with, so the same rule drops it.
+            LOGGER.info("[VKB-RESTIR] di_reset reason={} light_revision={} stable_light_ids=true",
+                forceReset ? "explicit" : "settings", params.emitterFingerprint);
+        }
+        // DI resolves stable IDs in the current table and rejects only changed/disappeared lights.
+        // A PT suffix caches radiance, so a changed selected light set still invalidates that separate history.
+        if (forceReset || settingsHash != lastSettingsHash || params.emitterFingerprint != reservoirFingerprint) {
             ptResetRequested = true;
         }
         reservoirFingerprint = params.emitterFingerprint;

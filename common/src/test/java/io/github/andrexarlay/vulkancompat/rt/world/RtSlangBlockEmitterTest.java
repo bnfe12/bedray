@@ -28,7 +28,7 @@ class RtSlangBlockEmitterTest {
     @Test
     void theRecordIsTheBufferRtEmittersAlreadyUploads() {
         String slang = read(EMITTERS);
-        String record = block(slang, "struct BlockEmitterRecord {");
+        String record = block(read("src/main/resources/shaders/slang/light/emitter_table.slang"), "struct BlockEmitterRecord {");
         assertEquals(6, count(record, "float4 "), "six vec4: the same 96 bytes as RtEmitters.FLOATS");
         assertTrue(record.indexOf("corner;") < record.indexOf("edge1;"), "p0 then e1 then e2");
         assertTrue(record.indexOf("edge1;") < record.indexOf("edge2;"), "the two edges of the quad");
@@ -71,7 +71,7 @@ class RtSlangBlockEmitterTest {
         String indexProbability = block(slang, "float blockEmitterIndexProbability(uint index, uint count) {");
         assertTrue(indexProbability.contains("(sqrt(float(index + 1u)) - sqrt(float(index))) * rsqrt(float(count))"),
             "the list is importance-sorted, so u^2 picks it and P(i) = sqrt((i+1)/n) - sqrt(i/n)");
-        String batch = block(slang, "BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<BlockEmitterRecord> records,");
+        String batch = block(slang, "BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<uint4> records,");
         assertTrue(batch.contains("float2 r2shift = float2(rand01(seed), rand01(seed));"),
             "one per-call R2 shift stratifies the quads of one torch instead of flickering on them");
     }
@@ -101,7 +101,7 @@ class RtSlangBlockEmitterTest {
     @Test
     void aGlowingFaceIsNotLitByItsOwnQuad() {
         String slang = read(EMITTERS);
-        String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord> records,");
+        String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records,");
         assertTrue(candidate.contains("distance2 < (receiver.emission > 0.5 ? 0.25 : 1.0e-6)"),
             "the half-block self-rejection: without it a torch face samples its own quad at d -> 0, the d^-1.5"
                 + " kernel blows that candidate up and it wins the roulette on top of the emission term already added");
@@ -121,7 +121,7 @@ class RtSlangBlockEmitterTest {
     @Test
     void entityEmittersSampleTheirOwnAtlasEmissionAndTint() {
         String slang = read(EMITTERS);
-        String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord> records,");
+        String candidate = block(slang, "BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records,");
         assertFalse(candidate.contains("entity-atlas emitter: not evaluable"),
             "a glowing entity quad is a real NEE candidate, not a hole in the light list");
         assertTrue(candidate.contains("entityTexel(atlas.entities, slotPlus1 - 1u, point.uv)"),
@@ -177,7 +177,7 @@ class RtSlangBlockEmitterTest {
         String entry = read(ENTRY);
         assertTrue(entry.contains("lights.emitterProbability = pc.emitterCount > 0u ? clamp(pc.emitterProbability, 0.0, 1.0) : 0.0;"),
             "an empty list must not steal half of the draws for a light that is never there");
-        assertTrue(read(PASS).contains("[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;"),
+        assertTrue(read(PASS).contains("[[vk::binding(18, 0)]] StructuredBuffer<uint4> emitters;"),
             "the host promises exactly this binding number");
         assertTrue(entry.contains("uint emitterCandidates = uint(max(pc.emitterCameraRelative.w, 1.0));"),
             "the candidate count travels in the free component of the camera-relative vec4");

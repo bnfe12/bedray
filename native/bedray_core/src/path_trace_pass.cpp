@@ -1140,8 +1140,17 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
             "ReSTIR DI needs a complete two-parity reservoir range");
     }
-    if (desc.path.emitter_count > 0 && desc.scene.emitters.bytes < static_cast<std::uint64_t>(desc.path.emitter_count) * 96u)
-        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "emitter descriptor range is smaller than emitter_count");
+    if (desc.path.emitter_count > 65536u)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "BEM1 emitter count exceeds 65536");
+    if (desc.path.emitter_count > 0) {
+        std::uint32_t capacity = 2u;
+        while (capacity < desc.path.emitter_count * 2u) capacity *= 2u;
+        const std::uint64_t table_bytes = 16u + static_cast<std::uint64_t>(desc.path.emitter_count) * 112u
+            + static_cast<std::uint64_t>(capacity) * 16u;
+        if (desc.scene.emitters.bytes != table_bytes)
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "BEM1 emitter table range must be %llu bytes (header, records, ID index)",
+                static_cast<unsigned long long>(table_bytes));
+    }
     if (desc.path.material_count > 0 && (desc.scene.block_materials.handle == 0
         || desc.scene.block_materials.bytes < static_cast<std::uint64_t>(desc.path.material_count) * 64u))
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "material descriptor range is smaller than material_count");

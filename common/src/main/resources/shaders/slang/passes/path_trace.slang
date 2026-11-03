@@ -22,7 +22,7 @@
 //   12 outDepth         R32F storage image (first accepted surface distance, 1e6 on a miss)
 //   16 frame            ConstantBuffer<FrameConstants> (608 B)
 //   17 blockMaterials   StructuredBuffer<BlockMaterial> (dummy table until voxel materials exist)
-//   18 emitters         StructuredBuffer<BlockEmitterRecord> (the RtEmitters list of the legacy path, 96 B per record)
+//   18 emitters         StructuredBuffer<uint4> (versioned BEM1 table)
 //   19 reservoirs       RWStructuredBuffer<DIReservoir> (ReSTIR DI: two parity halves, 64 B per pixel)
 //   20 entityPositions  StructuredBuffer<uint>  - float3 per captured vertex, as float bits
 //   21 entityIndices    StructuredBuffer<uint>  - three per entity triangle
@@ -71,7 +71,7 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 [[vk::image_format("r32f")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;
 [[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;
 [[vk::binding(17, 0)]] StructuredBuffer<BlockMaterial> blockMaterials;
-[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;
+[[vk::binding(18, 0)]] StructuredBuffer<uint4> emitters;
 [[vk::binding(19, 0)]] RWStructuredBuffer<DIReservoir> reservoirs;
 [[vk::binding(20, 0)]] StructuredBuffer<uint> entityPositions;
 [[vk::binding(21, 0)]] StructuredBuffer<uint> entityIndices;

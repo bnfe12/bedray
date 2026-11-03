@@ -371,7 +371,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     RWStructuredBuffer<float4> outMotionBuffer,
     FrameConstants frame,
     StructuredBuffer<BlockMaterial> blockMaterials,
-    StructuredBuffer<BlockEmitterRecord> emitters,
+    StructuredBuffer<uint4> emitters,
     RWStructuredBuffer<DIReservoir> reservoirs,
     RWStructuredBuffer<RestirPtReservoir> ptReservoirs,
     RWStructuredBuffer<uint> outPathStats,
@@ -584,7 +584,7 @@ public void pathTraceEntry<T : ISceneTracer>(
     RWTexture2D<float4> outAlbedo, RWTexture2D<float4> outDirect,
     RWTexture2D<float4> outSpecAlbedo, RWStructuredBuffer<float4> outMotionBuffer,
     FrameConstants frame, StructuredBuffer<BlockMaterial> blockMaterials,
-    StructuredBuffer<BlockEmitterRecord> emitters, RWStructuredBuffer<DIReservoir> reservoirs,
+    StructuredBuffer<uint4> emitters, RWStructuredBuffer<DIReservoir> reservoirs,
     RWStructuredBuffer<RestirPtReservoir> ptReservoirs, RWStructuredBuffer<uint> outPathStats, PathTracePush pc) {
     NoPathDiffuseField field;
     pathTraceEntryWithField(traversal, entities, tid, outImage, albedoAtlas, outMotion,

@@ -249,7 +249,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
         RtPathTraceSlangPass.Emitters emitters = input.emitters();
         long emitterBuffer = emitters == null ? 0L : emitters.buffer();
         long emitterBytes = emitterBuffer == 0L ? 0L
-            : Math.max(1, emitters.count()) * (long) RtPathTraceSlangPass.EMITTER_BYTES;
+            : EmitterTable.bytes(emitters.count());
         putBuffer(desc, scene + BedrayCoreLayouts.PTS_EMITTERS, emitterBuffer,
             emitters == null ? 0L : emitters.offset(), emitterBytes);
 

@@ -3,7 +3,8 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
 import org.junit.jupiter.api.Test;
 
-import java.nio.FloatBuffer;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -11,18 +12,18 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class EmitterCaptureBuffersTest {
     private static final class Storage implements EmitterCaptureBuffers.Storage {
-        final Map<Long, float[]> alive = new HashMap<>();
+        final Map<Long, byte[]> alive = new HashMap<>();
         long next = 1;
         boolean failCreate, failWrite, failDestroy;
         public RtMemory.Buf create(long bytes) {
             if (failCreate) throw new IllegalStateException("allocation failed");
             var buffer = new RtMemory.Buf(next++, 0, bytes, 0, 0, true);
-            alive.put(buffer.handle, new float[Math.toIntExact(bytes / Float.BYTES)]);
+            alive.put(buffer.handle, new byte[Math.toIntExact(bytes)]);
             return buffer;
         }
-        public void write(RtMemory.Buf buffer, float[][] records, int count) {
+        public void write(RtMemory.Buf buffer, ByteBuffer data) {
             if (failWrite) throw new IllegalStateException("copy failed");
-            EmitterCaptureBuffers.pack(FloatBuffer.wrap(alive.get(buffer.handle)), records, count);
+            data.get(alive.get(buffer.handle));
         }
         public void destroy(RtMemory.Buf buffer) {
             if (failDestroy) {
@@ -45,7 +46,7 @@ class EmitterCaptureBuffersTest {
         float[][] data = records(1);
         buffers.publish(data, 1);
         var first = buffers.current();
-        assertEquals(RtEmitters.BYTES, first.size);
+        assertEquals(EmitterTable.bytes(1), first.size);
         buffers.retain(1);
         buffers.retain(2);
         for (int command = 3; command <= 10; command++) {
@@ -54,7 +55,7 @@ class EmitterCaptureBuffersTest {
             buffers.retain(command);
         }
         assertEquals(9, storage.alive.size());
-        assertEquals(1, storage.alive.get(first.handle)[0]);
+        assertEquals(1f, ByteBuffer.wrap(storage.alive.get(first.handle)).order(ByteOrder.nativeOrder()).getFloat(EmitterTable.HEADER_BYTES));
         buffers.releaseRecording(1);
         assertTrue(storage.alive.containsKey(first.handle));
         buffers.releaseRecording(2);
@@ -156,19 +157,20 @@ class EmitterCaptureBuffersTest {
         assertTrue(storage.alive.isEmpty());
     }
 
-    @Test void packingPreservesEveryRecordWordAndBothRangeGuards() {
-        float[][] data = records(10);
-        FloatBuffer target = FloatBuffer.allocate(RtEmitters.FLOATS + 2);
-        target.put(0, -1).put(target.capacity() - 1, -2);
-        target.position(1).limit(target.capacity() - 1);
-        EmitterCaptureBuffers.pack(target, data, 1);
-        assertEquals(target.limit(), target.position());
-        target.clear();
-        assertEquals(-1, target.get(0));
-        assertEquals(-2, target.get(target.capacity() - 1));
-        for (int i = 0; i < RtEmitters.FLOATS; i++) assertEquals(data[0][i], target.get(i + 1));
-        FloatBuffer shortRange = FloatBuffer.allocate(RtEmitters.FLOATS - 1);
-        assertThrows(IllegalArgumentException.class, () -> EmitterCaptureBuffers.pack(shortRange, data, 1));
-        assertEquals(0, shortRange.position());
+    @Test void failedPublicationDoesNotCommitIdentityChanges() {
+        Storage storage = new Storage();
+        var buffers = new EmitterCaptureBuffers(storage);
+        buffers.publish(records(1), 1);
+        long revision = buffers.publication().revision();
+        int id = buffers.publication().data().getInt(EmitterTable.HEADER_BYTES + RtEmitters.BYTES);
+        storage.failWrite = true;
+        assertThrows(IllegalStateException.class, () -> buffers.publish(records(2), 1));
+        assertEquals(revision, buffers.publication().revision());
+        storage.failWrite = false;
+        buffers.publish(records(1), 1);
+        assertEquals(id, buffers.publication().data().getInt(EmitterTable.HEADER_BYTES + RtEmitters.BYTES));
+        assertEquals(1, buffers.publication().retained());
+        assertEquals(revision, buffers.publication().revision());
+        buffers.close();
     }
 }

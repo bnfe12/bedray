@@ -119,7 +119,7 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
 // One pixel's direct-light reservoir: the batch it draws this frame, the history it reuses and the record the next frame
 // reads.  Implements IReuseSampler, so path_tracer.slang never names ReSTIR, the emitter list or a buffer.
 struct BlockEmitterDiSampler : IReuseSampler {
-    StructuredBuffer<BlockEmitterRecord> records;
+    StructuredBuffer<uint4> records;
     RWStructuredBuffer<DIReservoir> reservoirs;
     MaterialAtlas atlas;
     uint   candidates;

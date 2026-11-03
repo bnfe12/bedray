@@ -253,7 +253,7 @@ class RtSlangRestirSpatialTest {
         assertTrue(host.contains("if (manifest.bindings().size() != EXPECTED.size())"),
             "a binding the host forgot to fill fails at load, not as a null descriptor");
         for (String[] pair : new String[][] {
-            {"frame", "FRAME_CONSTANTS_BYTES"}, {"emitters", "EMITTER_BYTES"}, {"reservoirs", "RESERVOIR_BYTES"},
+            {"frame", "FRAME_CONSTANTS_BYTES"}, {"emitters", "EMITTER_TABLE_ELEMENT_BYTES"}, {"reservoirs", "RESERVOIR_BYTES"},
             {"entityRects", "ENTITY_VECTOR_BYTES"}, {"entityTexels", "ENTITY_SCALAR_BYTES"} }) {
             assertTrue(host.contains("requireElementBytes(manifest, \"" + pair[0] + "\", "
                 + "RtPathTraceSlangPass." + pair[1] + ")"),

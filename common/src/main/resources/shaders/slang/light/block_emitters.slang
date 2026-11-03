@@ -1,8 +1,7 @@
 // Block-emitter next-event estimation for the Slang path tracer.
 //
-// The record is the one RtEmitters already uploads for the legacy rt_path.comp: six vec4 per emitter, positions relative to
-// the block origin the list was rebuilt at. The host therefore binds the same buffer to both paths; the camera-relative
-// correction the legacy shader reads from StatsBuf arrives as a push constant here.
+// The BEM1 table retains the six-vec4 captured payload, positions relative to its published origin,
+// plus stable sample IDs and an ID-to-physical-slot index. Selection probability follows physical importance order.
 //
 // The transport kernel is the legacy one, not the physical inverse square: a d^-2 tail left a torch lighting a four-block
 // puddle while the rest of the room stayed black (owner report 2026-10-23), so the falloff is d^-1.5 up to two blocks and
@@ -18,30 +17,12 @@ import "light/sun.slang";
 import "sampling.slang";
 import "surface/surface.slang";
 import "traversal/entity_geometry.slang";
+__exported import "light/emitter_table.slang";
 
 static const float EMITTER_RADIUS = 24.0;
 static const float EMISSIVE_GAIN = 3.0;
 static const float EMISSIVE_FLUX_GAIN = 2.2;
 static const uint EMITTER_RECORD_FLOATS = 24u;
-
-struct BlockEmitterRecord {
-    float4 corner;    // xyz corner of the emissive quad, w area in blocks^2
-    float4 edge1;     // xyz p1 - p0, w power boost of a small source
-    float4 edge2;     // xyz p3 - p0, w 0.5 = two-sided / open source, 1.5 = redstone
-    float4 uvCorner;  // xy uv(p0), z mean texel emission, w entity atlas slot + 1 (0 = block atlas)
-    float4 uvEdges;   // xy uv(p1) - uv(p0), zw uv(p3) - uv(p0)
-    float4 tint;      // entity emitter tint multiplier; block emitters are white
-};
-
-// The number of records the host bound.  The emitter list is a descriptor range of exactly count * 96 bytes, so this is
-// the count and a stale quad behind a shortened selection can never be drawn.  Slang's GetDimensions also reports the
-// stride, which this module never needs.
-uint blockEmitterCount(StructuredBuffer<BlockEmitterRecord> records) {
-    uint count;
-    uint stride;
-    records.GetDimensions(count, stride);
-    return count;
-}
 
 // Falloff of a source: d^-1.5 up to 2 blocks, then d^-1.25, continuous at the 2-block seam (0.84090 = 2^1.25 / (2*sqrt(2))).
 // Written with rsqrt instead of pow: eight of these per NEE call sit in the hottest loop of the emissive pass.
@@ -268,13 +249,11 @@ BlockEmitterPoint blockEmitterPointFromRecord(BlockEmitterRecord emitter, uint i
 
 // The same bias for a position that came back from a reservoir: the record stores the emitter index, not the point's
 // private fields, so the two-sided flag is read from the list it was drawn from.
-float blockEmitterStoredEndBias(StructuredBuffer<BlockEmitterRecord> records, uint index, float distanceTo) {
-    if (index >= blockEmitterCount(records)) {
-        return clamp(0.02 * distanceTo, 0.002, 0.03);
-    }
-    return blockEmitterEndBias(blockEmitterPointFromRecord(records[index], index), distanceTo);
+float blockEmitterStoredEndBias(StructuredBuffer<uint4> records, uint id, float distanceTo) {
+    uint index = blockEmitterFind(records, id);
+    if (index >= blockEmitterCount(records)) return 0.002;
+    return blockEmitterEndBias(blockEmitterPointFromRecord(blockEmitterRecord(records, index), id), distanceTo);
 }
-
 
 bool blockEmitterCandidateValid(BlockEmitterCandidate candidate) {
     return candidate.phat > 0.0;
@@ -304,7 +283,7 @@ struct BlockEmitterWinner {
 // One stratified point of one record, evaluated for one receiver.  A point that cannot carry weight is rejected before the
 // atlas fetches: outside the light radius, inside the emitter's own body (the self-rejection of a glowing face), or a
 // texel that does not glow.
-BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord> records, MaterialAtlas atlas,
+BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records, MaterialAtlas atlas,
         uint index, float2 quad, LightReceiver receiver, float3 cameraRelative, float lightRadius) {
     BlockEmitterCandidate candidate = blockEmitterEmptyCandidate(index);
     BlockEmitterPoint point = candidate.point;
@@ -312,7 +291,8 @@ BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord>
         return candidate;
     }
 
-    BlockEmitterRecord emitter = records[index];
+    BlockEmitterRecord emitter = blockEmitterRecord(records, index);
+    point.recordIndex = blockEmitterId(records, index);
     point.position = emitter.corner.xyz - cameraRelative
         + emitter.edge1.xyz * quad.x + emitter.edge2.xyz * quad.y;
     point.uv = emitter.uvCorner.xy + emitter.uvEdges.xy * quad.x + emitter.uvEdges.zw * quad.y;
@@ -362,7 +342,7 @@ BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<BlockEmitterRecord>
     return candidate;
 }
 
-BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<BlockEmitterRecord> records, MaterialAtlas atlas,
+BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<uint4> records, MaterialAtlas atlas,
         LightReceiver receiver, float3 cameraRelative, float maxDistance, uint candidates, inout uint seed) {
     BlockEmitterWinner winner;
     winner.candidate = blockEmitterEmptyCandidate(0u);
@@ -470,7 +450,7 @@ BlockEmitterEstimate blockEmitterEstimateFromWinner(BlockEmitterWinner winner, M
 // Resampled importance sampling over the emitter list.  The host binds the list with a range of exactly count records, so
 // `blockEmitterCount` is the count: a stale quad behind a shortened selection can never be drawn.
 struct BlockEmitterSampler : ILightSampler {
-    StructuredBuffer<BlockEmitterRecord> records;
+    StructuredBuffer<uint4> records;
     MaterialAtlas atlas;
     uint candidates;
     float3 cameraRelative;    // camera position minus the origin the list was rebuilt at
@@ -499,17 +479,12 @@ struct BlockEmitterSampler : ILightSampler {
         if (count == 0u) {
             return result;
         }
-        uint index = sample.lightIndex >= count ? sample.lightIndex % count : sample.lightIndex;
-        BlockEmitterRecord emitter = records[index];
-        float3 local = emitter.corner.xyz - cameraRelative;
-        // The quads of RtEmitters are axis-aligned, so the two edges are orthogonal and the projection is exact.
-        float3 offset = sample.position - local;
-        float u = dot(offset, emitter.edge1.xyz) / max(dot(emitter.edge1.xyz, emitter.edge1.xyz), 1.0e-8);
-        float v = dot(offset, emitter.edge2.xyz) / max(dot(emitter.edge2.xyz, emitter.edge2.xyz), 1.0e-8);
-        if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) {
-            return result;   // the stored point is not on this quad: the list changed under the reservoir
-        }
-        BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, index, float2(u, v),
+        uint index = blockEmitterFind(records, sample.lightIndex);
+        if (index >= count) return result;
+        BlockEmitterRecord emitter = blockEmitterRecord(records, index);
+        float2 uv;
+        if (!blockEmitterCoordinates(sample.position, emitter, cameraRelative, uv)) return result;
+        BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, index, uv,
             receiver, cameraRelative, lightRadius);
         if (!blockEmitterCandidateValid(candidate)) {
             return result;

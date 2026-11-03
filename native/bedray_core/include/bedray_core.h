@@ -306,7 +306,7 @@ typedef struct BedrayPathTraceScene {
     uint64_t normal_view;                   /* VkImageView, GENERAL */
     uint64_t atlas_sampler;                 /* VkSampler */
     BedrayPathTraceBuffer block_materials;  /* BlockMaterial table, 64 B slots */
-    BedrayPathTraceBuffer emitters;         /* BlockEmitterRecord table */
+    BedrayPathTraceBuffer emitters;         /* private BEM1 table: uint4 header, 112-byte records, uint4 ID index */
     BedrayPathTraceBuffer reservoirs;       /* two DIReservoir parities */
     BedrayPathTraceRange entity_positions;
     BedrayPathTraceRange entity_indices;

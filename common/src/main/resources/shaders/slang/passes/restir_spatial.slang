@@ -13,7 +13,7 @@
 //   9  materialAtlas    combined image sampler (LabPBR _s)
 //  10  normalAtlas      combined image sampler (LabPBR _n)
 //  16  frame            ConstantBuffer<FrameConstants> (608 B) - only `camera.size` and `frame` are read
-//  18  emitters         StructuredBuffer<BlockEmitterRecord> (96 B per record)
+//  18  emitters         StructuredBuffer<uint4> (versioned BEM1 table)
 //  19  reservoirs       RWStructuredBuffer<DIReservoir> (two parity halves, 64 B per pixel)
 //  23  entityRects      StructuredBuffer<uint4> - the captured entity atlas slot table
 //  24  entityTexels     StructuredBuffer<uint>  - the captured entity atlas, packed bytes
@@ -55,7 +55,7 @@ struct RestirSpatialPush {
 [[vk::binding(9, 0)]] Sampler2D materialAtlas;
 [[vk::binding(10, 0)]] Sampler2D normalAtlas;
 [[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;
-[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;
+[[vk::binding(18, 0)]] StructuredBuffer<uint4> emitters;
 [[vk::binding(19, 0)]] RWStructuredBuffer<DIReservoir> reservoirs;
 [[vk::binding(23, 0)]] StructuredBuffer<uint4> entityRects;
 [[vk::binding(24, 0)]] StructuredBuffer<uint> entityTexels;

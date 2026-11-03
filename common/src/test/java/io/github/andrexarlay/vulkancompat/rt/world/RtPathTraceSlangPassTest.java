@@ -218,7 +218,7 @@ class RtPathTraceSlangPassTest {
             "FrameConstants");
         assertEquals(RtPathTraceSlangPass.BLOCK_MATERIAL_BYTES, manifest.binding("blockMaterials").elementBytes(),
             "BlockMaterial");
-        assertEquals(RtPathTraceSlangPass.EMITTER_BYTES, manifest.binding("emitters").elementBytes(),
+        assertEquals(RtPathTraceSlangPass.EMITTER_TABLE_ELEMENT_BYTES, manifest.binding("emitters").elementBytes(),
             "BlockEmitterRecord: the six vec4 RtEmitters writes, so one buffer serves both paths");
         assertEquals(RtPathTraceSlangPass.RESERVOIR_BYTES, manifest.binding("reservoirs").elementBytes(),
             "DIReservoir: sample, stats, source and receiver");
