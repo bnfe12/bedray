@@ -403,12 +403,10 @@ public class ShimTestRunner {
             "recordXess must not bypass the rule with the raw camera jitter");
 
         String renderer = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
-        int marks = 0;
-        for (int i = renderer.indexOf("frameColorTemporallyResolved = true;"); i >= 0;
-             i = renderer.indexOf("frameColorTemporallyResolved = true;", i + 1)) {
-            marks++;
-        }
-        assertTrue(marks >= 2, "both the NRD and the DLSS-RR record paths must mark the colour resolved (found " + marks + ")");
+        assertTrue(renderer.contains("frameColorTemporallyResolved = owner.record(cmd, frameProjection"),
+            "RR must use its actual success/skip result; an invalid camera cannot mark raw colour resolved");
+        assertTrue(renderer.contains("frameColorTemporallyResolved = true;"),
+            "NRD still marks colour resolved after its successful record call");
     }
 
     /** Reads a source file from either the repository root or the common module, whichever the working directory is. */
@@ -736,11 +734,22 @@ public class ShimTestRunner {
         assertEquals(3, io.github.andrexarlay.vulkanbridge.core.RequirementApplier.toFeatureSet(xessBase).features().size(), "XeSS base features");
         assertEquals(3, io.github.andrexarlay.vulkanbridge.core.RequirementApplier
             .toFeatureSet(io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessDeviceRequirements.perf(() -> Boolean.TRUE)).extensions().size(), "XeSS perf extensions");
-        // registering in a fresh (non-global) registry: both of our requirements are accepted by Bedray Core registry implementation
+        // Optional memory telemetry is independent of the optional hardware RT group.
         io.github.andrexarlay.vulkanbridge.core.DeviceFeatureRegistryImpl reg = new io.github.andrexarlay.vulkanbridge.core.DeviceFeatureRegistryImpl();
         io.github.andrexarlay.vulkancompat.rtx.raytracing.RtDeviceRequirements.register(reg);
-        assertEquals(1, reg.snapshot().size(), "RT requirement registered");
-        assertEquals(io.github.andrexarlay.vulkancompat.rtx.raytracing.RtDeviceRequirements.ID, reg.snapshot().get(0).id(), "RT requirement id");
+        assertDefaultDeviceRequirements(reg.snapshot());
+    }
+
+    private static void assertDefaultDeviceRequirements(java.util.List<io.github.andrexarlay.vulkanbridge.api.DeviceRequirement> requirements) {
+        var ids = requirements.stream().map(io.github.andrexarlay.vulkanbridge.api.DeviceRequirement::id)
+            .collect(java.util.stream.Collectors.toSet());
+        assertEquals(java.util.Set.of("Bedray Native Memory Budget", "Hardware Ray Tracing"), ids,
+            "default registration contains the independent memory and RT groups");
+        assertEquals(2, requirements.size(), "one registration per independent group");
+        var memory = requirements.stream().filter(r -> r.id().equals("Bedray Native Memory Budget")).findFirst().orElseThrow();
+        assertTrue(memory.optional(), "lack of memory-budget telemetry cannot reject a device");
+        assertTrue(memory.features().isEmpty(), "memory telemetry does not require RT features");
+        assertEquals(java.util.Set.of("VK_EXT_memory_budget"), memory.deviceExtensions(), "memory telemetry extension");
     }
 
     private static void testLateProvidersAndScenarios() {
@@ -752,9 +761,9 @@ public class ShimTestRunner {
         assertEquals(0, reg.snapshot().size(), "nothing registered before the providers run");
         reg.runLateProviders();
         if (io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessConfig.requestedQuality() == null) {
-            assertEquals(1, reg.snapshot().size(), "only RT is registered when XeSS was not requested");
+            assertDefaultDeviceRequirements(reg.snapshot());
         }
-        assertEquals("Hardware Ray Tracing", reg.snapshot().get(0).id(), "RT requirement id from late provider");
+        assertTrue(reg.snapshot().stream().anyMatch(r -> r.id().equals("Hardware Ray Tracing")), "RT requirement from late provider");
         // autotest scenarios of this mod: names are valid and not built in, registration works and a duplicate is rejected
         io.github.andrexarlay.vulkanbridge.autotest.AutotestScenarios.clearForTests();
         io.github.andrexarlay.vulkancompat.autotest.RtxAutotest.registerAll();

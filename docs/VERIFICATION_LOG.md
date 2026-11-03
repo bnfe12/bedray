@@ -4067,3 +4067,56 @@ was still running its 23:37 session when its jar was replaced in place; the proc
 from that session is evidence for `f107816` and the instance should be restarted before play. No live run of the
 fixed jar was made here, so this entry is L1/L2 only: the failure mechanism and the skip path are proven, the
 in-game absence of the failure is not.
+
+## 2026-11-03 — RTX reference audit, HDR exposure, RR guides and selection (PR #64)
+
+Production code `fb7d35c`, based on memory-service merge `caf9f73`. Official
+Minecraft RTX Remix/runtime revisions and BetterRTX 1.4.4 preset materials were
+downloaded outside the repository. Exact sources and findings:
+[`RTX_REFERENCE_AUDIT.md`](RTX_REFERENCE_AUDIT.md). Compiled BetterRTX materials
+do not expose its complete shader implementation; no reference code/binary is
+bundled into Bedray.
+
+The automatic exposure lower bound was wrongly the fixed exposure (1.1), so
+bright HDR interiors could never darken. Fixed/start exposure remains 1.1;
+auto exposure can reach 1/64, with bounded adaptation in elapsed seconds. RR
+now refuses singular/non-finite cameras before its recording, logs skip and
+recovery, commits camera history after successful evaluation/composition and
+does not continue with fabricated zero motion after velocity failure.
+
+RR's formerly absent specular distance now comes from the first accepted edge
+of an actual primary specular continuation, including skipped cutout/filter
+surfaces. It is independent of camera depth. Existing pack dispatch writes
+R32F binding 12; no extra ray or dispatch. Zero means unobserved/invalid,
+65504 a miss. Public ABI-v2 layouts stay unchanged; internal RR binding contract
+is validated at ten images. A mismatched old core fails the contract instead
+of binding the wrong format.
+
+Block selection uses the game's prepared line draws after RT/RR and Iris,
+with world depth and Minecraft-owned GPU buffers. The previous BLAS ribbon
+capture was removed. Layout and palette have separate modules; the settings
+screen now shows category/selection/pending state and EN/RU profile descriptions
+match the actual 1-sample/3-bounce Beautiful profile. System settings can record
+a 30-second current-workload profile; `run_bench.py --profile` accepts QHD/DLSS
+diagnostics and makes no native-1080p acceptance decision.
+
+Validation: `:common:test` 1145 tests, 1136 passed, 9 skipped, no failures/errors;
+all 35 AOT entries compiled. `:common:runShimTests` final 34 passed, 0 failed.
+Its first run found three stale checks: unconditional RR-success counting and
+two assumptions that RT was the only registered group. The checks now require
+conditional RR success and independent optional memory-budget registration.
+Python capture analysis: 14 tests passed, including QHD/DLSS versus strict native
+acceptance, missing GPU samples, mode changes and preserved hitches.
+
+Windows CI 41554823038 for `fb7d35c`: baseline job 125651028513 passed; candidate
+125651028905 passed 32 core + 1 scene + 1 lifetime + 1 NRD settings tests.
+Production Slang CPU execution includes 21 denoiser/mean/RR cases. The earlier
+`27a78cf` run 41554089439 also passed (candidate 125648578345, baseline
+125648577998). The workflow follow-up publishes only a successfully tested
+candidate core, with exact revision/SHA-256 and `gpu_validated=false` provenance.
+
+L1/L2 only. No RTX visual comparison, FPS target, new jar deployment or runtime
+capture is claimed here. The separate RR→SR chain, standalone RR jitter,
+multisample guide coherence, transparent traversal and receiver-local many-light
+proposals remain open. Existing local launcher instances do not match the five
+Bedray profiles named by older deployment entries; they were not modified.
