@@ -55,6 +55,8 @@ global distribution (fraction 1) in the same BEM2 layout. It preserves the old
 draw count/sequence. No resolution, SPP or visibility budget is changed.
 The bounded VKB-EMITTERS log includes fraction, table bytes, tree depth,
 topology reuse, identity changes and lookup probe length.
+It also reports current/max CPU selection-publication time over each log interval,
+including importance sorting, table/tree construction, allocation, copy and retirement.
 
 ## Checks and remaining acceptance
 
