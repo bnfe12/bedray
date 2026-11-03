@@ -68,7 +68,7 @@ class RtSlangBlockEmitterTest {
             + " float cosGeometry) {");
         assertTrue(pdf.contains("(probability / area) * distance2 / max(cosGeometry, 1.0e-5)"),
             "area sampling to solid angle: P(index) / area * d^2 / cos(emitter)");
-        String indexProbability = block(slang, "float blockEmitterIndexProbability(uint index, uint count) {");
+        String indexProbability = block(read("src/main/resources/shaders/slang/light/emitter_selection.slang"), "float blockEmitterIndexProbability(uint index, uint count) {");
         assertTrue(indexProbability.contains("(sqrt(float(index + 1u)) - sqrt(float(index))) * rsqrt(float(count))"),
             "the list is importance-sorted, so u^2 picks it and P(i) = sqrt((i+1)/n) - sqrt(i/n)");
         String batch = block(slang, "BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<uint4> records,");

@@ -1,8 +1,7 @@
 public module emitter_table;
 
-// Private table BEM1: uint4 header, seven uint4 per emitter (six captured payloads + stable ID),
-// then a power-of-two open-addressed ID -> physical-slot index. Zero is the empty ID.
-static const uint EMITTER_TABLE_MAGIC = 0x42454D31u;
+// BEM2: two uint4 headers, seven uint4 per emitter, ID index, then 48-byte spatial proposal nodes.
+static const uint EMITTER_TABLE_MAGIC = 0x42454D32u;
 static const uint EMITTER_TABLE_MAX_COUNT = 65536u;
 static const uint EMITTER_TABLE_RECORD_WORDS = 7u;
 
@@ -18,16 +17,20 @@ struct BlockEmitterRecord {
 uint blockEmitterCount(StructuredBuffer<uint4> table) {
     uint words, stride;
     table.GetDimensions(words, stride);
-    if (words < 1u) return 0u;
+    if (words < 2u) return 0u;
     uint4 header = table[0];
+    uint4 proposal = table[1];
+    float globalFraction = asfloat(proposal.z);
     if (header.x != EMITTER_TABLE_MAGIC || header.y == 0u || header.y > EMITTER_TABLE_MAX_COUNT
             || header.w != 112u || header.z < header.y * 2u || header.z > EMITTER_TABLE_MAX_COUNT * 2u
-            || (header.z & (header.z - 1u)) != 0u) return 0u;
-    return words >= 1u + header.y * EMITTER_TABLE_RECORD_WORDS + header.z ? header.y : 0u;
+            || (header.z & (header.z - 1u)) != 0u
+            || proposal.x != header.y * 2u - 1u || proposal.y != 48u
+            || !isfinite(globalFraction) || globalFraction < 0.125 || globalFraction > 1.0) return 0u;
+    return words == 2u + header.y * EMITTER_TABLE_RECORD_WORDS + header.z + proposal.x * 3u ? header.y : 0u;
 }
 
 BlockEmitterRecord blockEmitterRecord(StructuredBuffer<uint4> table, uint index) {
-    uint base = 1u + index * EMITTER_TABLE_RECORD_WORDS;
+    uint base = 2u + index * EMITTER_TABLE_RECORD_WORDS;
     BlockEmitterRecord record;
     record.corner = asfloat(table[base]);
     record.edge1 = asfloat(table[base + 1u]);
@@ -39,7 +42,7 @@ BlockEmitterRecord blockEmitterRecord(StructuredBuffer<uint4> table, uint index)
 }
 
 uint blockEmitterId(StructuredBuffer<uint4> table, uint index) {
-    return table[1u + index * EMITTER_TABLE_RECORD_WORDS + 6u].x;
+    return table[2u + index * EMITTER_TABLE_RECORD_WORDS + 6u].x;
 }
 
 uint blockEmitterFind(StructuredBuffer<uint4> table, uint id) {
@@ -47,7 +50,7 @@ uint blockEmitterFind(StructuredBuffer<uint4> table, uint id) {
     if (id == 0u || count == 0u) return 0xFFFFFFFFu;
     uint capacity = table[0].z;
     uint slot = (id * 0x9E3779B9u) & (capacity - 1u);
-    uint start = 1u + count * EMITTER_TABLE_RECORD_WORDS;
+    uint start = 2u + count * EMITTER_TABLE_RECORD_WORDS;
     for (uint probe = 0u; probe < capacity; ++probe) {
         uint2 entry = table[start + slot].xy;
         if (entry.x == 0u) break;

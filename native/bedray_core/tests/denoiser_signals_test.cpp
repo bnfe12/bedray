@@ -4,17 +4,37 @@
 #include <array>
 #include <cstdio>
 #include <type_traits>
+#include <cstring>
 
 int main() {
-    std::array<uint32_t, 32> verdicts{};
+    std::array<uint32_t, 41> verdicts{};
     GlobalParams_0 globals{};
     globals.sink_0 = {verdicts.data(), verdicts.size()};
     using TableWord = std::remove_const_t<std::remove_pointer_t<decltype(globals.emitterFixture_0.data)>>;
-    std::array<TableWord, 19> table{};
-    table[0] = {0x42454D31u, 2u, 4u, 112u};
-    table[7].x = 17u; table[14].x = 9u;
-    table[16] = {17u, 0u, 0u, 0u}; table[17] = {9u, 1u, 0u, 0u};
+    const auto bits = [](float f) { uint32_t u; std::memcpy(&u, &f, sizeof u); return u; };
+    constexpr uint32_t invalid = 0xFFFFFFFFu;
+    std::array<TableWord, 29> table{};
+    table[0] = {0x42454D32u, 2u, 4u, 112u};
+    table[1] = {3u, 48u, bits(0.125f), 0u};
+    table[8] = {17u, 1u, 0u, 0u}; table[15] = {9u, 2u, 0u, 0u};
+    table[17] = {17u, 0u, 0u, 0u}; table[18] = {9u, 1u, 0u, 0u};
+    table[20] = {0u, 0u, 0u, bits(2.f)}; table[21] = {bits(11.f), bits(1.f), bits(1.f), 0u};
+    table[22] = {1u, 2u, invalid, invalid};
+    table[23] = {0u, 0u, 0u, bits(1.f)}; table[24] = {bits(1.f), bits(1.f), bits(1.f), 0u};
+    table[25] = {invalid, invalid, 0u, 0u};
+    table[26] = {bits(10.f), 0u, 0u, bits(1.f)}; table[27] = {bits(11.f), bits(1.f), bits(1.f), 0u};
+    table[28] = {invalid, invalid, 0u, 1u};
     globals.emitterFixture_0 = {table.data(), table.size()};
+    auto globalTable = table; globalTable[1].z = bits(1.f);
+    globals.globalEmitterFixture_0 = {globalTable.data(), globalTable.size()};
+    std::array<TableWord, 2> empty{};
+    globals.emptyEmitterFixture_0 = {empty.data(), empty.size()};
+    std::array<TableWord, 14> single{};
+    single[0] = {0x42454D32u, 1u, 2u, 112u}; single[1] = {1u, 48u, bits(0.125f), 0u};
+    single[8] = {1u, 0u, 0u, 0u}; single[10] = {1u, 0u, 0u, 0u};
+    single[11] = {0u, 0u, 0u, bits(1.f)}; single[12] = {bits(1.f), bits(1.f), bits(1.f), 0u};
+    single[13] = {invalid, invalid, invalid, 0u};
+    globals.singleEmitterFixture_0 = {single.data(), single.size()};
     ComputeThreadVaryingInput thread{};
     main_0_Thread(&thread, nullptr, &globals);
     for (size_t i = 0; i < verdicts.size(); ++i) {
@@ -23,6 +43,6 @@ int main() {
             return 1;
         }
     }
-    std::puts("32 production Slang signal/mean/NRD/RR/output/emitter CPU cases passed (no GPU)");
+    std::puts("41 production Slang signal/mean/NRD/RR/output/emitter/local-proposal CPU cases passed (no GPU)");
     return 0;
 }

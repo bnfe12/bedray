@@ -95,6 +95,7 @@ public final class RtEmitters {
      */
     public static final double MOVE_REBUILD = 0.5;
     private long lastLogNs;
+    private long maxPublicationNanos;
     /** CPU budget of one frame of the light-list scan: a cold scan (pack switch, world change) spans several frames. */
     static final long SCAN_BUDGET_NS = 4_000_000L;
 
@@ -536,6 +537,7 @@ public final class RtEmitters {
     }
 
     private void publishSelection() {
+        long publicationStarted = System.nanoTime();
         sortHeapDescending();
         int n = Math.min(heapSize, MAX_EMITTERS);
         buffers.publish(heap, n, originX, originY, originZ, materialRevision);
@@ -553,12 +555,16 @@ public final class RtEmitters {
         inRange = inRangeCounter;
         totalEmitters = totalCounter;
         long now = System.nanoTime();
+        long publicationNanos = now - publicationStarted;
+        maxPublicationNanos = Math.max(maxPublicationNanos, publicationNanos);
         if (now - lastLogNs > 5_000_000_000L) {
             lastLogNs = now;
             var identity = buffers.publication();
-            LOGGER.info("[VKB-EMITTERS] table=BEM1 revision={} material_revision={} selected={} retained={} added={} removed={} bytes={} max_probe={}",
+            LOGGER.info("[VKB-EMITTERS] table=BEM2 revision={} material_revision={} selected={} retained={} added={} removed={} bytes={} max_probe={} global_fraction={} bvh_depth={} topology_reused={} selection_publish_ms={} selection_publish_max_ms={}",
                 identity.revision(), materialRevision, n, identity.retained(), identity.added(), identity.removed(),
-                identity.data().remaining(), identity.maxProbe());
+                identity.data().remaining(), identity.maxProbe(), identity.globalFraction(), identity.bvhDepth(), identity.topologyReused(),
+                publicationNanos / 1.0e6, maxPublicationNanos / 1.0e6);
+            maxPublicationNanos = 0;
             LOGGER.info(String.format(java.util.Locale.ROOT,
                 "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b origin=(%d,%d,%d)",
                 count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), seen.size(),

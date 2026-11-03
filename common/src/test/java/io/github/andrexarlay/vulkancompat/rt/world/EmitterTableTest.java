@@ -83,9 +83,9 @@ class EmitterTableTest {
         assertEquals(EmitterTable.MAGIC,data.getInt(0)); assertEquals(2,data.getInt(4));
         assertEquals(4,data.getInt(8)); assertEquals(112,data.getInt(12));
         for(int r=0;r<2;r++) for(int w=0;w<24;w++)
-            assertEquals(initial[r*8][w],data.getFloat(16+r*112+w*4));
+            assertEquals(initial[r*8][w],data.getFloat(EmitterTable.HEADER_BYTES+r*112+w*4));
         // IDs 1 and 9 collide at capacity 4. Both entries must exist with distinct current physical slots.
-        int start=16+2*112, found=0;
+        int start=EmitterTable.HEADER_BYTES+2*112, found=0;
         for(int s=0;s<4;s++) if(data.getInt(start+s*16)!=0) {
             int index=data.getInt(start+s*16+4);
             assertTrue(index>=0 && index<2); assertEquals(id(p,index),data.getInt(start+s*16)); found++;
@@ -98,7 +98,7 @@ class EmitterTableTest {
         assertThrows(IllegalArgumentException.class,()->EmitterTable.bytes(65537));
         float[] bad = light(0); bad[20] = Float.NaN;
         assertThrows(IllegalArgumentException.class,()->table.prepare(new float[][]{bad},1,0,0,0));
-        assertEquals(160,EmitterTable.bytes(1)); assertEquals(480,EmitterTable.bytes(3));
-        assertEquals(9*1024*1024+16,EmitterTable.bytes(65536));
+        assertEquals(224,EmitterTable.bytes(1)); assertEquals(736,EmitterTable.bytes(3));
+        assertEquals(15*1024*1024-16,EmitterTable.bytes(65536));
     }
 }

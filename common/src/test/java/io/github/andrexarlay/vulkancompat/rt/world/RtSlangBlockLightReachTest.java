@@ -145,7 +145,7 @@ class RtSlangBlockLightReachTest {
         String loop = block(source, source.indexOf("BlockEmitterWinner sampleBlockEmitterBatch("));
         int hoisted = loop.indexOf("float lightRadius = min(maxDistance, EMITTER_RADIUS);");
         int loopStart = loop.indexOf("for (uint k = 0u; k < candidates; ++k) {");
-        int batch = loop.indexOf("blockEmitterCandidate(records, atlas, index, quad, receiver,");
+        int batch = loop.indexOf("blockEmitterCandidate(records, atlas, selected.index, quad, receiver,");
         assertTrue(hoisted > 0 && hoisted < loopStart, "the reach is hoisted out of the candidate loop");
         assertTrue(batch > loopStart && loop.indexOf("blockEmitterCandidate(", batch + 1) == -1,
             "the loop evaluates each candidate through the one gated entry point");
@@ -153,7 +153,7 @@ class RtSlangBlockLightReachTest {
 
     @Test
     void theIndexProbabilityKeepsItsShape() throws IOException {
-        String source = read(EMITTERS);
+        String source = read("src/main/resources/shaders/slang/light/emitter_selection.slang");
         assertTrue(source.contains(
             "return (sqrt(float(index + 1u)) - sqrt(float(index))) * rsqrt(float(count));"),
             "P(i) is the sqrt ladder difference, written with one square root pair instead of two quotients");

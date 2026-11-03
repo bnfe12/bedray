@@ -17,7 +17,7 @@ import "light/sun.slang";
 import "sampling.slang";
 import "surface/surface.slang";
 import "traversal/entity_geometry.slang";
-__exported import "light/emitter_table.slang";
+__exported import "light/emitter_selection.slang";
 
 static const float EMITTER_RADIUS = 24.0;
 static const float EMISSIVE_GAIN = 3.0;
@@ -259,17 +259,6 @@ bool blockEmitterCandidateValid(BlockEmitterCandidate candidate) {
     return candidate.phat > 0.0;
 }
 
-// The list is sorted by importance (RtEmitters): index = n * u^2 favours its front, and the probability of the slot is the
-// difference of the sqrt ladder it sits on.
-uint blockEmitterPickIndex(uint count, inout uint seed) {
-    float u = rand01(seed);
-    return min(uint(u * u * float(count)), count - 1u);
-}
-
-float blockEmitterIndexProbability(uint index, uint count) {
-    return (sqrt(float(index + 1u)) - sqrt(float(index))) * rsqrt(float(count));
-}
-
 // The whole candidate batch of one receiver: K stratified points on K importance-sorted quads, resampled to one winner.
 // Shared by the plain RIS sampler and by the ReSTIR DI initial batch, so both draw the same random stream and weight the
 // same p^.
@@ -284,10 +273,10 @@ struct BlockEmitterWinner {
 // atlas fetches: outside the light radius, inside the emitter's own body (the self-rejection of a glowing face), or a
 // texel that does not glow.
 BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records, MaterialAtlas atlas,
-        uint index, float2 quad, LightReceiver receiver, float3 cameraRelative, float lightRadius) {
+        uint index, float2 quad, LightReceiver receiver, float3 cameraRelative, float lightRadius, float probability) {
     BlockEmitterCandidate candidate = blockEmitterEmptyCandidate(index);
     BlockEmitterPoint point = candidate.point;
-    if (index >= blockEmitterCount(records)) {
+    if (index >= blockEmitterCount(records) || probability <= 0.0) {
         return candidate;
     }
 
@@ -303,7 +292,7 @@ BlockEmitterCandidate blockEmitterCandidate(StructuredBuffer<uint4> records, Mat
     point.twoSided = emitter.edge2.w > 0.5;
     point.atlasSlotPlus1 = uint(emitter.uvCorner.w + 0.5);
     point.tint = emitter.tint;
-    point.indexProbability = blockEmitterIndexProbability(index, blockEmitterCount(records));
+    point.indexProbability = probability;
     candidate.point = point;
 
     float3 toPoint = point.position - receiver.position;
@@ -357,10 +346,10 @@ BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<uint4> records, Mate
     float2 r2shift = float2(rand01(seed), rand01(seed));
     uint count = blockEmitterCount(records);
     for (uint k = 0u; k < candidates; ++k) {
-        uint index = blockEmitterPickIndex(count, seed);
+        BlockEmitterSelection selected = blockEmitterSelect(records, receiver.position + cameraRelative, rand01(seed));
         float2 quad = frac(r2shift + float(k) * float2(0.7548776662, 0.5698402909));
-        BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, index, quad, receiver,
-            cameraRelative, lightRadius);
+        BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, selected.index, quad, receiver,
+            cameraRelative, lightRadius, selected.probability);
         winner.sampleCount += 1.0;
         if (!blockEmitterCandidateValid(candidate)) {
             continue;
@@ -485,7 +474,8 @@ struct BlockEmitterSampler : ILightSampler {
         float2 uv;
         if (!blockEmitterCoordinates(sample.position, emitter, cameraRelative, uv)) return result;
         BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, index, uv,
-            receiver, cameraRelative, lightRadius);
+            receiver, cameraRelative, lightRadius,
+            blockEmitterSelectionProbability(records, index, receiver.position + cameraRelative));
         if (!blockEmitterCandidateValid(candidate)) {
             return result;
         }

@@ -1,5 +1,9 @@
 # Emitter table identity — 2026-11-03
 
+BEM1 below records the initial identity layout. The live format is now BEM2;
+[receiver-local proposals](LOCAL_LIGHT_PROPOSALS.md) specify its additional
+header, leaf references, spatial tree, mixture PMF and memory bound.
+
 The previous reservoir stored the physical index of an importance-sorted light.
 The scan fingerprint did not describe the published selection/order, and entity
 lights were added after it. Re-evaluation wrapped a disappeared index modulo the
