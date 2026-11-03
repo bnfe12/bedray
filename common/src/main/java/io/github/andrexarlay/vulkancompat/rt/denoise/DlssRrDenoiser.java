@@ -576,8 +576,9 @@ public final class DlssRrDenoiser {
         Matrix4f modelView = RrCameraMatrices.modelView(baseProjection, projection, viewRotation);
         if (modelView == null) { cameraHistory.reset(); cameraFrame = null; }
         if (cameraFrame == null) {
-            if (!invalidCameraLogged) LOGGER.warn("[DLSS-RR] frame_skipped reason=invalid_camera {} position={},{},{}",
-                io.github.andrexarlay.vulkancompat.rtx.CameraMatrixGuard.describe(projection, viewRotation, null), camX, camY, camZ);
+            if (!invalidCameraLogged) LOGGER.warn("[DLSS-RR] frame_skipped reason=invalid_camera {} position={},{},{} base_projection_usable={}",
+                io.github.andrexarlay.vulkancompat.rtx.CameraMatrixGuard.describe(projection, viewRotation, null), camX, camY, camZ,
+                io.github.andrexarlay.vulkancompat.rtx.CameraMatrixGuard.isUsable(baseProjection));
             invalidCameraLogged = true;
             return false; // before RR recording: keep the raw RT image and recover next valid frame
         }
