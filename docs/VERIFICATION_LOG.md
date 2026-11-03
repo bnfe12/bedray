@@ -4164,3 +4164,52 @@ warning/failure-counter noise remains.
 L1/L2 only. No BedRay instance has run this jar/DLL pair, so absence of
 `camera_matrices=degenerate`, RR output correctness, memory diagnostics and
 visual parity are not claimed. L3–L5 require an owner run.
+
+## 2026-11-03 - RR direct-output push block was written through a null address (L1/L2; crash from L3 log, fix not yet live)
+
+The first owner run of `8863e17` ended in a JVM hard crash. `latest.log` of
+`Vulkan Experimental RT 26.3` stops at 23:36:47.334 right after
+`registered SlangProgram[nrd_pack_rr]`; there is no Java exception and no
+Minecraft crash report. `hs_err_pid18116.log` records
+`EXCEPTION_ACCESS_VIOLATION (0xc0000005)` writing address `0x10`, with the
+problematic frame `org.joml.MemUtil$MemUtilUnsafe.put(Vector4f,J)`. The stack
+slot maps to
+`RtOutputResolve.record(VkCommandBuffer, RtFrameParams, RtFrameResources, Z)`,
+and the same log reports `rr_output=true`, so the new direct RR-to-output path
+was active.
+
+Root cause: `RtOutputResolve.record` (commit `7556da0`) allocated its 80-byte
+push block with `ByteBuffer.allocate(80)`. In native byte order JOML writes a
+`Vector4f` through `Unsafe` after reading the buffer's address field; a heap
+buffer has address 0 there, so the first vector write faulted at 0x10. JOML's
+`Options.DEBUG` range check is disabled in the shipped jar, so the invalid
+buffer was not rejected before the write.
+
+Commit `4035f79041e8418967ddd6a27b127012b92850ec` makes the push block a direct
+`MemoryStack.malloc(80)` buffer and adds `RtOutputResolve.writePush`, which
+rejects a null, heap or short buffer before any JOML call. The dispatch copies
+the push bytes into the command buffer synchronously, so the stack lifetime
+covers the native call. `RtOutputResolveTest` covers the direct contents and
+both rejection cases; the targeted run passed 3/3. Full `:common:test` passed
+1,167 tests in 221 result files with zero failures and zero errors, 3 skipped;
+`:common:runShimTests` passed 34/34.
+
+Both combined jars were built from the clean commit with manifest
+`Git-Commit 4035f79041e8418967ddd6a27b127012b92850ec`, `Git-Dirty false`:
+Fabric 19,429,764 B SHA-256
+`F28A5DC3CD4F28BEA87B844D55F99605FA6762DDE758BC84AD85CDA66FD8E3F7`;
+NeoForge 19,436,985 B SHA-256
+`04BCC9FB5951C47413DD305B4574AE9C67C62FD6C07C1B49B6718B52E62B446E`.
+The jars were copied to the five BedRay instances with the old jars backed up
+in `bedray-deploy-20261103-234414`. The native DLLs did not change and remain
+the `8863e17` pair: `bedray_core.dll` 488,960 B SHA-256
+`04CB2B93CD4C8F4B8D56C7CDE404CD75165B33776BA621A15028ACCB37D73F6A`,
+`bedray_scene.dll` 238,592 B SHA-256
+`3B533ACC357C435466FD95BCFAC4AA3C8FB3BC38A0C51F061FAF9F704755B022`.
+No BedRay instance was running during the replacement and nothing was
+launched.
+
+L1/L2 only. The crash is explained and guarded in unit tests, but the fixed
+jar/DLL pair has not run. Absence of the crash, RR direct-output correctness,
+`camera_matrices=degenerate` and visual parity remain unverified; L3-L5 need
+an owner run.
