@@ -1,4 +1,4 @@
-"""Offline acceptance of schema-1 raw engine captures. Standard library only."""
+"""Raw gameplay profiling and strict native acceptance. Standard library only."""
 from __future__ import annotations
 
 import csv
@@ -53,6 +53,16 @@ def timing_stats(values: list[float]) -> dict[str, float]:
 
 
 def analyze(directory: Path, target_fps: float = 60) -> dict:
+    """Strict native-1080p acceptance; a gameplay profile cannot bypass its requirements."""
+    return _analyze(directory, target_fps, native=True)
+
+
+def profile(directory: Path) -> dict:
+    """Current-workload diagnostics, including QHD/DLSS. Makes no native acceptance decision."""
+    return _analyze(directory, 60, native=False)
+
+
+def _analyze(directory: Path, target_fps: float, *, native: bool) -> dict:
     number(target_fps, "target_fps", positive=True)
     with (directory / "manifest.json").open(encoding="utf-8") as stream:
         manifest = json.load(stream)
@@ -66,13 +76,14 @@ def analyze(directory: Path, target_fps: float = 60) -> dict:
         raise InvalidCapture("interval source is not raw application frame heads")
     if manifest.get("gpu_source") != "available_engine_timestamp_queries_correlated_by_application_frame":
         raise InvalidCapture("uncorrelated GPU timing source")
-    if number(manifest.get("requested_warmup_ns"), "warmup") < 10e9:
-        raise InvalidCapture("native acceptance requires at least 10 seconds warmup")
+    minimum_warmup = 10e9 if native else 5e9
+    if number(manifest.get("requested_warmup_ns"), "warmup") < minimum_warmup:
+        raise InvalidCapture(f"requires at least {minimum_warmup / 1e9:g} seconds warmup")
     duration = number(manifest.get("requested_duration_ns"), "duration", positive=True)
     if duration < 30e9:
         raise InvalidCapture("native acceptance requires at least 30 seconds collection")
     intervals, cpu, gpu, rt = [], [], [], []
-    previous, quality = None, None
+    previous, quality, rendering = None, None, None
     with (directory / "frames.csv").open(newline="", encoding="utf-8") as stream:
         reader = csv.DictReader(stream)
         required = {"frame", "interval_ms", "flags", "render_width", "render_height", "output_width", "output_height",
@@ -88,16 +99,23 @@ def analyze(directory: Path, target_fps: float = 60) -> dict:
             if frame < 0 or (previous is not None and frame != previous + 1):
                 raise InvalidCapture(f"{where}: noncontiguous application frames")
             previous = frame
-            if integer(row["flags"], where) & NATIVE_FLAGS != NATIVE_FLAGS:
-                raise InvalidCapture(f"{where}: native PT/world/focus/screen/upscaler/FG proof failed")
+            required_flags = NATIVE_FLAGS if native else 99  # world + actual PT + screen closed + focused
+            if integer(row["flags"], where) & required_flags != required_flags:
+                raise InvalidCapture(f"{where}: PT/world/focus/screen/upscaler/FG proof failed")
             dimensions = tuple(integer(row[key], where) for key in
                                ("render_width", "render_height", "output_width", "output_height"))
-            if dimensions != (1920, 1080, 1920, 1080):
+            if any(value <= 0 for value in dimensions):
+                raise InvalidCapture(f"{where}: invalid dimensions {dimensions}")
+            if native and dimensions != (1920, 1080, 1920, 1080):
                 raise InvalidCapture(f"{where}: effective dimensions {dimensions}, expected native 1080p")
             if (row["mode"] != "path" or row["program"] not in PROGRAMS
-                    or row["upscaler_request"] != "BILINEAR" or row["upscaler_active"] != "none"
-                    or row["framegen_state"] not in ("READY", "UNAVAILABLE")):
+                    or (native and (row["upscaler_request"] != "BILINEAR" or row["upscaler_active"] != "none"
+                                    or row["framegen_state"] not in ("READY", "UNAVAILABLE")))):
                 raise InvalidCapture(f"{where}: incompatible effective rendering mode")
+            current_rendering = dimensions + (row["upscaler_request"], row["upscaler_active"], row["framegen_state"])
+            if rendering is not None and current_rendering != rendering:
+                raise InvalidCapture(f"{where}: resolution/upscaler/FG changed during capture")
+            rendering = current_rendering
             spp, bounces = integer(row["spp"], where), integer(row["bounces"], where)
             if spp < 1 or bounces < 1:
                 raise InvalidCapture(f"{where}: invalid quality")
@@ -122,6 +140,16 @@ def analyze(directory: Path, target_fps: float = 60) -> dict:
         raise InvalidCapture("truncated or inconsistent frame intervals")
     stats = timing_stats(intervals)
     budget = 1000 / target_fps
+    if not native:
+        return {"schema": 1, "valid_gameplay_profile": True, "native_acceptance": False,
+                "frames": len(intervals), "duration_seconds": measured / 1e9, "frame_intervals": stats,
+                "mean_cpu_total_ms": fmean(cpu), "mean_gpu_total_ms": fmean(gpu), "mean_gpu_rt_ms": fmean(rt),
+                "quality": dict(zip(("program", "spp", "bounces", "ray_distance", "trace_flags", "denoiser_request"), quality)),
+                "rendering": dict(zip(("render_width", "render_height", "output_width", "output_height",
+                                       "upscaler_request", "upscaler_active", "framegen_state"), rendering)),
+                "context": manifest.get("context", {}),
+                "scope": "Actual application frames; includes all slow frames, excludes generated-frame FPS. "
+                         "GPU totals exclude submit/present. Not native-1080p acceptance or an FPS guarantee."}
     return {"schema": 1, "valid_native_capture": True, "frames": len(intervals), "duration_seconds": measured / 1e9,
             "target_fps": target_fps, "frame_budget_ms": budget,
             "criterion": "average_fps >= target and slowest_1_percent_mean_fps >= target",

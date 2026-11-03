@@ -50,6 +50,7 @@ public final class FrameBenchmark {
     }
 
     public static boolean active() { return capture != null; }
+    public static boolean busy() { return result != null && !result.isDone(); }
 
     static void begin(long frame, long now) {
         if (capture == null) return;

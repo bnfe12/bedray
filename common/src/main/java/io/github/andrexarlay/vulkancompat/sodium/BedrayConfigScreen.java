@@ -35,7 +35,7 @@ public final class BedrayConfigScreen extends Screen {
     private final List<Button> popupButtons = new ArrayList<>();
     private int popupX, popupY, popupWidth, popupHeight, popupScroll, popupFocus;
     private SettingsDraft.Entry selected;
-    private Button applyButton, revertButton;
+    private Button applyButton, revertButton, captureButton;
     private Component runtime = Component.empty();
     private int statusTicks;
     private SettingsLayout layout;
@@ -95,6 +95,7 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     void rebuildRows() {
+        captureButton = null;
         // Evaluate dependent option state and construct all controls before publishing either list.
         // A failed predicate must not leave entries without matching widgets for tick/render.
         List<SettingsDraft.Entry> nextRows = new ArrayList<>();
@@ -155,6 +156,10 @@ public final class BedrayConfigScreen extends Screen {
         if (filter.isEmpty() && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile())
             addAction(tr("bedray.settings.customize", "Customize current quality"), () -> { draft.customize(); rebuildRows(); });
         if (filter.isEmpty() && category == SettingsDraft.Category.SYSTEM) {
+            captureButton = addAction(tr("bedray.settings.capture_profile", "Record 30 s gameplay profile"),
+                io.github.andrexarlay.vulkancompat.rtx.debug.GameplayCapture::start);
+            captureButton.setTooltip(Tooltip.create(tr("bedray.settings.capture_profile_hint",
+                "Apply or revert changes first. Requires a world with active Path Tracing. Returns to play, waits 5 seconds and records 30 seconds at your current settings. Saves raw CPU/GPU timings and actual dimensions to bedray/profiles. No settings are changed.")));
             addAction(tr("bedray.settings.libraries", "Runtime libraries..."), () -> minecraft.gui.setScreen(new NativesManagerScreen(this)));
             addAction(tr("bedray.settings.report", "Copy diagnostics report"), () -> io.github.andrexarlay.vulkancompat.rtx.debug.Diagnostics.generateAndNotify());
             addAction(tr("bedray.settings.reset", "Reset editable settings (pending)"), () -> { draft.reset(); rebuildRows(); });
@@ -168,8 +173,10 @@ public final class BedrayConfigScreen extends Screen {
             .withColor(value == category && query.isBlank() ? SettingsChrome.ACCENT : SettingsChrome.TEXT)));
     }
 
-    private void addAction(Component name, Runnable action) {
-        rowWidgets.add(addRenderableWidget(Button.builder(name, b -> action.run()).bounds(contentX, 0, contentWidth - 6, 20).build()));
+    private Button addAction(Component name, Runnable action) {
+        Button button = addRenderableWidget(Button.builder(name, b -> action.run()).bounds(contentX, 0, contentWidth - 6, 20).build());
+        rowWidgets.add(button);
+        return button;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -220,12 +227,17 @@ public final class BedrayConfigScreen extends Screen {
             w.setY(y); w.visible = y >= listTop && y + 20 <= listBottom;
         }
     }
-    private void updateButtons() { if (applyButton != null) applyButton.active = draft.changed(); if (revertButton != null) revertButton.active = draft.changed(); }
+    private void updateButtons() {
+        boolean changed = draft.changed();
+        if (applyButton != null) applyButton.active = changed;
+        if (revertButton != null) revertButton.active = changed;
+        if (captureButton != null) captureButton.active = !changed && io.github.andrexarlay.vulkancompat.rtx.debug.GameplayCapture.canStart();
+    }
     private void apply() { draft.apply(); draft = new SettingsDraft(); rebuildRows(); updateRuntime(); }
     @Override public void tick() {
         super.tick();
         for (int i = 0; i < rows.size(); i++) if (rowWidgets.get(i).isFocused()) select(rows.get(i));
-        if (++statusTicks >= 20) { statusTicks = 0; updateRuntime(); }
+        if (++statusTicks >= 20) { statusTicks = 0; updateRuntime(); updateButtons(); }
     }
     private void updateRuntime() {
         if (selected != null) PreviewPanel.setRuntimeStatus(draft.status(selected).text());

@@ -140,6 +140,7 @@ public final class PerfMonitor {
         java.util.Arrays.fill(cpuWritten, false);
         frameOpen = true;
         slot = (int) (frameIndex % RING);
+        GameplayCapture.tick(now);
         FrameBenchmark.begin(frameIndex, now);
         if (ensurePool()) {
             harvest(slot);

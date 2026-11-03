@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from capture_analysis import InvalidCapture, analyze, timing_stats
+from capture_analysis import InvalidCapture, analyze, profile, timing_stats
 
 
 class CaptureAnalysisTest(unittest.TestCase):
@@ -46,6 +46,46 @@ class CaptureAnalysisTest(unittest.TestCase):
         self.assertEqual(2000, report["frames"])
         self.assertEqual(30, report["duration_seconds"])
         self.assertAlmostEqual(1000 / 15, report["frame_intervals"]["one_percent_low_fps"])
+
+    def gameplay(self):
+        self.manifest["requested_warmup_ns"] = 5_000_000_000
+        for row in self.rows:
+            row.update(flags=99, render_width=1485, render_height=835, output_width=2560,
+                       output_height=1440, upscaler_request="DLSS", upscaler_active="DLSS", denoiser="DLSS_RR")
+        self.write()
+
+    def test_qhd_dlss_profile_is_diagnostic_and_cannot_pass_native_acceptance(self):
+        self.gameplay()
+        report = profile(self.directory)
+        self.assertTrue(report["valid_gameplay_profile"])
+        self.assertFalse(report["native_acceptance"])
+        self.assertNotIn("target_met_in_capture", report)
+        self.assertEqual(2560, report["rendering"]["output_width"])
+        self.assertEqual("DLSS", report["rendering"]["upscaler_active"])
+        with self.assertRaises(InvalidCapture):
+            analyze(self.directory)
+
+    def test_profile_keeps_hitches_and_rejects_mid_capture_mode_changes(self):
+        self.gameplay()
+        self.rows[-1]["interval_ms"] = 1000
+        self.manifest["measured_interval_ns"] += 985_000_000
+        self.write()
+        report = profile(self.directory)
+        self.assertEqual(1000, report["frame_intervals"]["max_ms"])
+        self.rows[-1]["upscaler_active"] = "none"
+        self.write()
+        with self.assertRaisesRegex(InvalidCapture, "resolution/upscaler/FG changed"):
+            profile(self.directory)
+
+    def test_profile_still_requires_complete_gpu_queries_world_and_focus(self):
+        self.gameplay()
+        for field, value in (("gpu_rt_ms", ""), ("gpu_resolved", 0), ("flags", 35)):
+            original = self.rows[-1][field]
+            self.rows[-1][field] = value
+            self.write()
+            with self.assertRaises(InvalidCapture):
+                profile(self.directory)
+            self.rows[-1][field] = original
 
     def test_lows_use_tail_mean_including_fractional_sample_counts(self):
         self.assertEqual(5, timing_stats([10] * 99 + [200])["one_percent_low_fps"])

@@ -37,14 +37,18 @@ in Bedray. No local RTX visual comparison has been run on this Intel-only host.
   line width and shape. The current replay precedes the ordinary upscale stage;
   output-resolution overlay composition remains part of the combined-RR work.
 * **Temporal input:** RR needs the same camera validation as SR. Skip an invalid
-  camera before native recording, reset on recovery, and promote camera history
+  camera before RR recording, reset on recovery, and promote camera history
   only after successful evaluation/composition. A failed velocity pass must not
   manufacture zero motion for a moving scene. Log skip and recovery boundaries.
 * **Reflection data:** Bedray passed no specular motion or hit-distance guide.
   The [official RR integration guide](https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuideDLSS_RR.md)
   describes the primary reflection-to-hit distance/matrices path. Camera depth
-  is not a substitute. Supply actual continuation geometry, including explicit
-  no-hit/no-reflection handling, without tracing a second path for the guide.
+  is not a substitute. The existing pack now writes an R32F guide from actual
+  specular continuation geometry, without another ray or dispatch. Zero means
+  no observed reflection, 65504 an escaped ray. A primary ray starting inside a
+  medium does not arm this opaque-surface guide. Later medium/RC changes do not
+  discard an already measured edge. At multiple SPP the minimum nonzero edge is used. This
+  stochastic guide does not add an unsampled deterministic reflection ray.
 * **One temporal reconstruction:** the same guide says RR replaces SR. Bedray
   currently evaluates RR at render resolution and can then run DLSS SR. A
   combined render-to-output RR owner must preserve hand, world-post, depth and
@@ -77,3 +81,20 @@ CI covers recording/lifetime contracts. Remaining visual acceptance needs actual
 RTX runs: camera motion, edited chunks, many-light interiors, glass, water,
 foliage, selection occlusion and a native 1080p capture with all slow frames kept.
 Keep requested and actually active reconstruction settings in the capture.
+
+## Capture the reported workload
+
+Settings → System & Diagnostics → **Record 30 s gameplay profile**. Apply or
+revert pending settings first. This returns to the world, warms for 5 seconds
+and records 30 seconds with the current resolution, quality, reconstruction and
+frame-generation settings. It never forces native 1080p or changes those values.
+The destination is `bedray/profiles/capture-<uuid>` inside that game instance;
+completion/failure is logged and shown in a toast. A 90-second timeout prevents
+an indefinite wait if the world/RT disappears. Raw recording remains bounded.
+
+Analyze with `python tools/automation/run_bench.py <capture-directory> --profile`.
+This reports actual application-frame intervals, tails and CPU/GPU times and
+rejects missing GPU samples or a changed mode/resolution during the capture.
+Generated frames are not counted as application FPS. This command makes no
+native-1080p acceptance decision. The existing command without `--profile`
+retains the stricter native contract and its 10-second warmup requirement.

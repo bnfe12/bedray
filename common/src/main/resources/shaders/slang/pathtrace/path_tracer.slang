@@ -1093,9 +1093,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             (result.flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_WATER_MEDIUM
                 | PATH_TRACE_FLAG_RC_FINITE_WINDOW)) != 0u);
     else if (wantDenoiserGeometry)
+        // Later medium/RC radiance changes do not invalidate an already measured reflected edge.
         result.denoiser.specularHitDistance = pathDenoiserReflectionDistance(denoiserContinuation,
-            (result.flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_WATER_MEDIUM
-                | PATH_TRACE_FLAG_RC_FINITE_WINDOW)) != 0u);
+            (result.flags & PATH_TRACE_FLAG_INVALID_SAMPLE) != 0u);
     return result;
 }
 
