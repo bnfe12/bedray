@@ -102,6 +102,9 @@ def elementBytesOf = { param ->
     if (type.kind == 'constantBuffer') {
         return type.elementType?.sizes?.find { it.kind == 'uniform' }?.value ?: 0
     }
+    if (type.kind == 'resource' && type.baseShape == 'byteAddressBuffer') {
+        return 1 // Untyped byte-address unit, not a reflected structured-record stride.
+    }
     if (type.kind == 'resource' && type.baseShape in ['structuredBuffer', 'byteAddressBuffer', 'buffer']) {
         return type.resultType?.sizes?.find { it.kind == 'uniform' }?.value ?: 0
     }
@@ -113,6 +116,10 @@ def elementBytesOf = { param ->
 // would still desynchronise the host, so the offsets are pinned here as well.
 // Update this map together with the Java mirror when a contract really changes.
 def STRUCT_LAYOUTS = [
+    NoRtPush: [size: 112, fields: [inverseViewProjection: 0, cameraOrigin: 64, control: 80, rayOriginOffset: 96]],
+    NoRtEnvironment: [size: 4304, fields: [values: 0, previousViewProjection: 96, previousCamera: 160,
+        previousEye: 176, info: 192, emitters: 208]],
+    CubeFace: [size: 32, fields: [originDu: 0, dv: 16, tint: 24, flags: 28]],
     FgPreparePush: [size: 8, fields: [size: 0]],
     SpatialEasuPush: [size: 80, fields: [con0: 0, con1: 16, con2: 32, con3: 48, outSize: 64]],
     SpatialRcasPush: [size: 32, fields: [con: 0, size: 16]],

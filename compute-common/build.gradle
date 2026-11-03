@@ -5,12 +5,14 @@ sourceSets.test.java.srcDir(rootProject.file('tools/tests'))
 dependencies {
     compileOnly project(':renderer-api')
     testImplementation project(':renderer-api')
+    testImplementation project(':common')
+    testImplementation 'com.google.code.gson:gson:2.11.0'
+    testImplementation "org.slf4j:slf4j-api:${rootProject.slf4j_version}"
     testImplementation "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"
     testImplementation "org.lwjgl:lwjgl-vulkan:${rootProject.lwjgl_version}"
-    testImplementation "org.lwjgl:lwjgl-shaderc:${rootProject.lwjgl_version}"
     testRuntimeOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}:natives-windows"
-    testRuntimeOnly "org.lwjgl:lwjgl-shaderc:${rootProject.lwjgl_version}:natives-windows"
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
 }
 test {
@@ -34,12 +36,13 @@ tasks.register('worldSnapshotContracts', JavaExec) {
 }
 tasks.register('vulkanProbe', Test) {
     group = 'verification'
-    description = 'Offscreen Vulkan 1.0 voxel dispatch with zero enabled device extensions (not in-game validation)'
+    description = 'Offscreen Vulkan 1.1 native AOT voxel dispatch with zero optional features/extensions (not in-game validation)'
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
     useJUnitPlatform()
     filter { includeTestsMatching '*VulkanComputeProbeTest' }
     systemProperty 'bedray.compute.vulkanProbe', 'true'
+    if (project.hasProperty('bedrayCorePath')) systemProperty 'bedray.compute.corePath', project.property('bedrayCorePath')
     // LWJGL 3.3.x enumerates driver extensions on its native stack; current drivers exceed 64 KiB.
     systemProperty 'org.lwjgl.system.stackSize', '256'
     jvmArgs '--enable-native-access=ALL-UNNAMED'

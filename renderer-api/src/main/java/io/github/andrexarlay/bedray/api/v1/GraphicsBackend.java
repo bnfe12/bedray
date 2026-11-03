@@ -54,7 +54,10 @@ public interface GraphicsBackend extends AutoCloseable {
      */
     boolean render(ComputeFrameContext frame);
 
-    /** Releases owned GPU objects. The host flushes pending commands first. Must permit later reuse. */
+    /** API minor 7: host native execution. Existing providers retain their original entry point. */
+    default boolean render(ComputeFrameContext frame, AotComputeExecutor executor) { return render(frame); }
+
+    /** Releases owned GPU objects. The host proves completion of pending commands first. Must permit later reuse. */
     @Override
     void close();
 }

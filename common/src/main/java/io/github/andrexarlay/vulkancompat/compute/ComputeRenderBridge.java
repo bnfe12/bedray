@@ -30,6 +30,7 @@ public final class ComputeRenderBridge {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/Compute");
     private static GraphicsBackend resourceOwner;
     private static VulkanDevice resourceDevice;
+    private static ComputeAotRuntime aotRuntime;
     private static long frameIndex;
     private static GraphicsBackendRegistry.SceneRequest appliedRequest = GraphicsBackendRegistry.request();
     private static boolean enabled() { return appliedRequest.mode() != GraphicsBackendRegistry.SceneMode.OFF; }
@@ -291,22 +292,40 @@ public final class ComputeRenderBridge {
         resourceTarget = target;
         resourceColorView = colorView;
         resourceDepthView = depthView;
-        VulkanCommandEncoder encoder = device.createCommandEncoder();
-        VkCommandBuffer commandBuffer = encoder.allocateAndBeginTransientCommandBuffer();
         boolean recorded = false;
+        long commandAddress = 0;
+        ComputeRecording recording = null;
         try {
-            VkBarriers.fullMemoryBarrier(commandBuffer);
-            recorded = backend.render(new ComputeFrameContext(device.vkDevice(), commandBuffer, image,
-                format, target.width, target.height, frameIndex, appliedRequest.mode(), atlas, currentLighting, raster));
-        } catch (RuntimeException | LinkageError error) {
+            if (aotRuntime == null) aotRuntime = new ComputeAotRuntime(device,
+                error -> fail("NoRT native recording retirement failed; resources retained", error));
+            VulkanCommandEncoder encoder = device.createCommandEncoder();
+            VkCommandBuffer commandBuffer = encoder.allocateAndBeginTransientCommandBuffer();
+            commandAddress = commandBuffer.address();
+            recording = aotRuntime.begin(commandAddress);
+            recorded = recording.record(() -> {
+                VkBarriers.fullMemoryBarrier(commandBuffer);
+                return backend.render(new ComputeFrameContext(device.vkDevice(), commandBuffer, image,
+                    format, target.width, target.height, frameIndex, appliedRequest.mode(), atlas, currentLighting, raster), aotRuntime);
+            }, () -> {
+                VkBarriers.fullMemoryBarrier(commandBuffer);
+                int result = VK10.vkEndCommandBuffer(commandBuffer);
+                if (result != VK10.VK_SUCCESS)
+                    throw new IllegalStateException("Compute command buffer end failed: " + result);
+            }, () -> encoder.execute(commandBuffer), action -> encoder.queueForDestroy(action::run));
+        } catch (RuntimeException | Error error) {
+            recorded = false;
+            LOGGER.error("[BEDRAY-COMPUTE] recording_failed backend={} frame={} revision={} command=0x{} submission={} recovery=drain_and_recapture",
+                backend.id(), frameIndex, appliedRequest.revision(), Long.toHexString(commandAddress),
+                recording == null ? ComputeRecording.Submission.NEVER_EXECUTED : recording.submission(), error);
             fail(error.getClass().getSimpleName() + ": " + error.getMessage(), error);
         } finally {
-            VkBarriers.fullMemoryBarrier(commandBuffer);
-            int result = VK10.vkEndCommandBuffer(commandBuffer);
-            if (result != VK10.VK_SUCCESS) {
-                throw new IllegalStateException("Compute command buffer end failed: " + result);
-            }
-            encoder.execute(commandBuffer);
+            if (aotRuntime != null) aotRuntime.endRecording();
+        }
+        if (!recorded) {
+            // Recorded uploads/history bookkeeping cannot survive an abandoned or unknown recording.
+            if (!releaseResources()) return false;
+            backend.clearWorldSnapshot();
+            cameraPending = live;
         }
         if (recorded) {
             if (pendingFrameReason != null) {
@@ -390,17 +409,22 @@ public final class ComputeRenderBridge {
     private static boolean releaseResources() {
         GraphicsBackend owner = resourceOwner;
         VulkanDevice device = resourceDevice;
-        resourceOwner = null;
-        resourceDevice = null;
-        resourceWidth = resourceHeight = resourceFormat = 0;
-        resourceAtlasGeneration = 0;
-        resourceTarget = null;
-        resourceColorView = resourceDepthView = 0;
         if (owner == null) return true;
         try {
-            // execute() queues transient buffers in the host encoder. Flush those before provider.close() waits idle.
+            // Host proof only, on generation retirement. Steady-state NoRT frames never wait.
             device.createCommandEncoder().submit();
+            int result = VK10.vkDeviceWaitIdle(device.vkDevice());
+            if (result != VK10.VK_SUCCESS) throw new IllegalStateException("NoRT host drain failed: " + result);
+            if (aotRuntime != null) aotRuntime.afterHostDrain();
             owner.close();
+            if (aotRuntime != null) aotRuntime.close();
+            aotRuntime = null;
+            resourceOwner = null;
+            resourceDevice = null;
+            resourceWidth = resourceHeight = resourceFormat = 0;
+            resourceAtlasGeneration = 0;
+            resourceTarget = null;
+            resourceColorView = resourceDepthView = 0;
             // close() releases provider residency on resize, atlas retirement and budget changes as well
             // as world exit. Forget CPU delivery markers so the next frame republishes the loaded scene.
             worldCapture.clear();
@@ -411,7 +435,7 @@ public final class ComputeRenderBridge {
             return true;
         } catch (RuntimeException | LinkageError error) {
             // A failed submit may leave unsubmitted references. Never reuse the provider's old device handles.
-            // The Vulkan device teardown owns their final reclamation; this provider is retired until restart.
+            // Keep strong native/provider references until device teardown; never destroy still-borrowed handles.
             cleanupBroken = true;
             fail("Cleanup failed; restart the client before retrying: " + error.getMessage(), error);
             return false;

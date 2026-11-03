@@ -1,6 +1,8 @@
 package io.github.andrexarlay.bedray.compute;
 
 import io.github.andrexarlay.bedray.api.v1.ComputeFrameContext;
+import io.github.andrexarlay.bedray.api.v1.AotComputeExecutor;
+import io.github.andrexarlay.bedray.api.v1.AotComputeExecutor.Resource;
 import io.github.andrexarlay.bedray.api.v1.VoxelVolume;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelEmitters;
 import io.github.andrexarlay.bedray.compute.voxel.VoxelWorldUpload;
@@ -18,10 +20,8 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
-import java.nio.charset.StandardCharsets;
 
 import static org.lwjgl.vulkan.VK10.*;
 
@@ -37,7 +37,8 @@ public final class VoxelComputePipeline implements AutoCloseable {
     private long gridBuffer, gridMemory, image, imageMemory, view;
     private long paletteBuffer, paletteMemory, sampler;
     private long modelBuffer, modelMemory, lightingBuffer, lightingMemory;
-    private long shader, setLayout, pipelineLayout, pipeline, pool, descriptorSet;
+    private AotComputeExecutor.Program program;
+    private List<Resource> resources;
     private final long[] historyImage = new long[2], historyMemory = new long[2], historyView = new long[2];
     private boolean initialized;
     private ByteBuffer tileScratch;
@@ -51,21 +52,21 @@ public final class VoxelComputePipeline implements AutoCloseable {
     /** History texel: half rgb radiance + sample count, hit distance, octahedral normal. */
     static final int HISTORY_FORMAT = VK_FORMAT_R32G32B32A32_UINT;
 
-    public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelVolume grid) {
-        this(device, width, height, targetFormat, grid, null);
+    public VoxelComputePipeline(AotComputeExecutor executor, VkDevice device, int width, int height, int targetFormat, VoxelVolume grid) {
+        this(executor, device, width, height, targetFormat, grid, null);
     }
 
-    public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelVolume grid,
+    public VoxelComputePipeline(AotComputeExecutor executor, VkDevice device, int width, int height, int targetFormat, VoxelVolume grid,
                                 AtlasFrame atlas) {
-        this(device,width,height,targetFormat,grid,atlas,null);
+        this(executor, device,width,height,targetFormat,grid,atlas,null);
     }
 
-    public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelVolume grid,
+    public VoxelComputePipeline(AotComputeExecutor executor, VkDevice device, int width, int height, int targetFormat, VoxelVolume grid,
                                 AtlasFrame atlas, RasterFrame raster) {
-        this(device,width,height,targetFormat,grid,atlas,raster,null);
+        this(executor, device,width,height,targetFormat,grid,atlas,raster,null);
     }
 
-    public VoxelComputePipeline(VkDevice device, int width, int height, int targetFormat, VoxelVolume grid,
+    public VoxelComputePipeline(AotComputeExecutor executor, VkDevice device, int width, int height, int targetFormat, VoxelVolume grid,
                                 AtlasFrame atlas, RasterFrame raster, StreamedVoxelScene streamed) {
         this.device = device;
         this.width = width;
@@ -84,6 +85,10 @@ public final class VoxelComputePipeline implements AutoCloseable {
                     || raster.width() != width || raster.height() != height || raster.depthFormat() != VK_FORMAT_D32_SFLOAT
                     || !colorFormat(raster.colorFormat())))
                 throw new IllegalArgumentException("Raster preservation requires matching sampled color and reverse-Z D32 depth");
+            String pass = streamed != null ? (raster == null ? "nort_streamed_textured" : "nort_streamed_raster")
+                : atlas == null ? "nort_synthetic" : raster == null ? "nort_dense_textured" : "nort_dense_raster";
+            program = java.util.Objects.requireNonNull(executor, "Host AOT compute service")
+                .prepare(pass, 112, 8, 8);
             create(grid);
         } catch (RuntimeException | Error failure) {
             destroy();
@@ -102,15 +107,6 @@ public final class VoxelComputePipeline implements AutoCloseable {
     private static boolean colorFormat(int format) {
         return format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM
             || format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_B8G8R8A8_SRGB;
-    }
-
-    public static String shaderSource() {
-        try (var stream = VoxelComputePipeline.class.getResourceAsStream("/assets/bedray_compute/shaders/voxel.comp")) {
-            if (stream == null) throw new IllegalStateException("Missing voxel.comp");
-            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException failure) {
-            throw new IllegalStateException("Cannot read voxel.comp", failure);
-        }
     }
 
     private void create(VoxelVolume grid) {
@@ -232,89 +228,24 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 historyView[i] = handle.get(0);
             }
 
-            String source = shaderSource();
-            if (atlas != null) source = source.replace("#version 450", "#version 450\n#define TEXTURED_CUBES 1");
-            if (streamed != null) source = source.replace("#version 450", "#version 450\n#define STREAMED_WORLD 1");
-            if (raster != null) source = source.replace("#version 450", "#version 450\n#define RASTER_INPUTS 1");
-            ByteBuffer spirv = ComputeShaderCompiler.compile(source, "bedray_compute/voxel.comp");
-            check(vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(spirv), null, handle), "create shader");
-            shader = handle.get(0);
-            int bindingCount = atlas == null ? 2 : raster == null ? 6 : 10;
-            VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(bindingCount, stack);
-            bindings.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-            bindings.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
+            var bindings = new java.util.ArrayList<Resource>();
+            bindings.add(Resource.storageImage("outputImage", view));
+            bindings.add(Resource.storageBuffer("gridData", gridBuffer, gridBytes));
             if (atlas != null) {
-                bindings.get(2).binding(2).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-                bindings.get(3).binding(3).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-                bindings.get(4).binding(4).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-                bindings.get(5).binding(5).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-                if (raster != null) for (int binding = 6; binding < 8; binding++)
-                    bindings.get(binding).binding(binding).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-                if (raster != null) for (int binding = 8; binding < 10; binding++)
-                    bindings.get(binding).binding(binding).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
-            }
-            check(vkCreateDescriptorSetLayout(device, VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings), null, handle), "create descriptor layout");
-            setLayout = handle.get(0);
-            VkPushConstantRange.Buffer push = VkPushConstantRange.calloc(1, stack);
-            push.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(112);
-            check(vkCreatePipelineLayout(device, VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
-                    .pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(push), null, handle), "create pipeline layout");
-            pipelineLayout = handle.get(0);
-            VkComputePipelineCreateInfo.Buffer pipelines = VkComputePipelineCreateInfo.calloc(1, stack);
-            pipelines.get(0).sType$Default().layout(pipelineLayout);
-            pipelines.get(0).stage().sType$Default().stage(VK_SHADER_STAGE_COMPUTE_BIT).module(shader).pName(stack.UTF8("main"));
-            check(vkCreateComputePipelines(device, VK_NULL_HANDLE, pipelines, null, handle), "create compute pipeline");
-            pipeline = handle.get(0);
-            VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(atlas == null ? 2 : 3, stack);
-            sizes.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(raster == null ? 1 : 3);
-            sizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(atlas == null ? 1 : 4);
-            if (atlas != null) sizes.get(2).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(raster == null ? 1 : 3);
-            check(vkCreateDescriptorPool(device, VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(sizes), null, handle), "create descriptor pool");
-            pool = handle.get(0);
-            check(vkAllocateDescriptorSets(device, VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(pool).pSetLayouts(stack.longs(setLayout)), handle), "allocate descriptors");
-            descriptorSet = handle.get(0);
-            VkDescriptorImageInfo.Buffer imageInfo = VkDescriptorImageInfo.calloc(1, stack);
-            imageInfo.get(0).imageView(view).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-            VkDescriptorBufferInfo.Buffer bufferInfo = VkDescriptorBufferInfo.calloc(1, stack);
-            bufferInfo.get(0).buffer(gridBuffer).offset(0).range(gridBytes);
-            VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(bindingCount, stack);
-            writes.get(0).sType$Default().dstSet(descriptorSet).dstBinding(0).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(imageInfo);
-            writes.get(1).sType$Default().dstSet(descriptorSet).dstBinding(1).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(bufferInfo);
-            if (atlas != null) {
-                VkDescriptorBufferInfo.Buffer paletteInfo = VkDescriptorBufferInfo.calloc(1, stack);
-                paletteInfo.get(0).buffer(paletteBuffer).offset(0).range(streamed != null ? streamed.paletteBytes() : VoxelWorldUpload.PALETTE_BYTES);
-                writes.get(2).sType$Default().dstSet(descriptorSet).dstBinding(2).descriptorCount(1)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(paletteInfo);
-                VkDescriptorImageInfo.Buffer atlasInfo = VkDescriptorImageInfo.calloc(1, stack);
-                atlasInfo.get(0).sampler(sampler).imageView(atlas.imageView()).imageLayout(atlas.imageLayout());
-                writes.get(3).sType$Default().dstSet(descriptorSet).dstBinding(3).descriptorCount(1)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(atlasInfo);
-                VkDescriptorBufferInfo.Buffer modelsInfo = VkDescriptorBufferInfo.calloc(1,stack);
-                modelsInfo.get(0).buffer(modelBuffer).offset(0).range(streamed != null ? streamed.modelBytes() : VoxelWorldUpload.MODEL_BUFFER_BYTES);
-                writes.get(4).sType$Default().dstSet(descriptorSet).dstBinding(4).descriptorCount(1)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(modelsInfo);
-                VkDescriptorBufferInfo.Buffer lightInfo = VkDescriptorBufferInfo.calloc(1,stack);
-                lightInfo.get(0).buffer(lightingBuffer).offset(0).range(FRAME_BYTES);
-                writes.get(5).sType$Default().dstSet(descriptorSet).dstBinding(5).descriptorCount(1)
-                    .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(lightInfo);
+                bindings.add(Resource.storageBuffer("palette", paletteBuffer,
+                    streamed != null ? streamed.paletteBytes() : VoxelWorldUpload.PALETTE_BYTES));
+                bindings.add(Resource.sampled("blockAtlas", atlas.imageView(), sampler, atlas.imageLayout()));
+                bindings.add(Resource.storageBuffer("modelData", modelBuffer,
+                    streamed != null ? streamed.modelBytes() : VoxelWorldUpload.MODEL_BUFFER_BYTES));
+                bindings.add(Resource.storageBuffer("environment", lightingBuffer, FRAME_BYTES));
                 if (raster != null) {
-                    VkDescriptorImageInfo.Buffer colorInfo = VkDescriptorImageInfo.calloc(1,stack);
-                    colorInfo.get(0).sampler(sampler).imageView(raster.colorView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-                    writes.get(6).sType$Default().dstSet(descriptorSet).dstBinding(6).descriptorCount(1)
-                        .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(colorInfo);
-                    VkDescriptorImageInfo.Buffer depthInfo = VkDescriptorImageInfo.calloc(1,stack);
-                    depthInfo.get(0).sampler(sampler).imageView(raster.depthView()).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-                    writes.get(7).sType$Default().dstSet(descriptorSet).dstBinding(7).descriptorCount(1)
-                        .descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(depthInfo);
-                    for (int i = 0; i < 2; i++) {
-                        VkDescriptorImageInfo.Buffer historyInfo = VkDescriptorImageInfo.calloc(1,stack);
-                        historyInfo.get(0).imageView(historyView[i]).imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-                        writes.get(8+i).sType$Default().dstSet(descriptorSet).dstBinding(8+i).descriptorCount(1)
-                            .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(historyInfo);
-                    }
+                    bindings.add(Resource.sampled("rasterColor", raster.colorView(), sampler, VK_IMAGE_LAYOUT_GENERAL));
+                    bindings.add(Resource.sampled("rasterDepth", raster.depthView(), sampler, VK_IMAGE_LAYOUT_GENERAL));
+                    bindings.add(Resource.storageImage("historyA", historyView[0]));
+                    bindings.add(Resource.storageImage("historyB", historyView[1]));
                 }
             }
-            vkUpdateDescriptorSets(device, writes, null);
+            resources = List.copyOf(bindings);
         }
     }
 
@@ -542,8 +473,6 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 vkCmdPipelineBarrier(command, initialized ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, null, null, historyBarrier);
             }
-            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
             ByteBuffer push = stack.calloc(112).order(ByteOrder.LITTLE_ENDIAN);
             if (camera != null) {
                 camera.writePushConstants(push,originX(origin),originY(origin),originZ(origin));
@@ -556,8 +485,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
                 | (raster != null && history.parity() ? 32 : 0));
             push.putInt(84,io.github.andrexarlay.bedray.api.v1.GraphicsBackendRegistry.debugView().ordinal());
             push.putInt(88,(int) history.frameCounter());
-            vkCmdPushConstants(command, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
-            vkCmdDispatch(command, (width + 7) / 8, (height + 7) / 8, 1);
+            program.dispatch(command.address(), (width + 7) / 8, (height + 7) / 8, 1, resources, push);
             b.oldLayout(VK_IMAGE_LAYOUT_GENERAL).srcAccessMask(VK_ACCESS_SHADER_WRITE_BIT).dstAccessMask(VK_ACCESS_TRANSFER_READ_BIT);
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, barrier);
             VkImageMemoryBarrier.Buffer targetBarrier = VkImageMemoryBarrier.calloc(1, stack);
@@ -590,18 +518,12 @@ public final class VoxelComputePipeline implements AutoCloseable {
     public String historyStatus() { return raster == null ? "off (no raster inputs)" : history.status(); }
 
     @Override public void close() {
-        // Only resize, mode changes and teardown wait; steady-state frames never wait for the CPU.
-        check(vkDeviceWaitIdle(device), "wait before compute resource retirement");
+        // The host has proved completion before retiring this generation.
         destroy();
     }
 
     private void destroy() {
-        if (pool != 0) vkDestroyDescriptorPool(device, pool, null);
         if (sampler != 0) vkDestroySampler(device, sampler, null);
-        if (pipeline != 0) vkDestroyPipeline(device, pipeline, null);
-        if (pipelineLayout != 0) vkDestroyPipelineLayout(device, pipelineLayout, null);
-        if (setLayout != 0) vkDestroyDescriptorSetLayout(device, setLayout, null);
-        if (shader != 0) vkDestroyShaderModule(device, shader, null);
         if (view != 0) vkDestroyImageView(device, view, null);
         if (image != 0) vkDestroyImage(device, image, null);
         if (imageMemory != 0) vkFreeMemory(device, imageMemory, null);
@@ -620,7 +542,7 @@ public final class VoxelComputePipeline implements AutoCloseable {
             historyView[i] = historyImage[i] = historyMemory[i] = 0;
         }
         if (tileScratch != null) { MemoryUtil.memFree(tileScratch); tileScratch = null; }
-        pool = pipeline = pipelineLayout = setLayout = shader = view = image = imageMemory = gridBuffer = gridMemory = 0;
+        view = image = imageMemory = gridBuffer = gridMemory = 0;
         sampler = paletteBuffer = paletteMemory = 0;
         modelBuffer = modelMemory = lightingBuffer = lightingMemory = 0;
     }
