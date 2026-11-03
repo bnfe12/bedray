@@ -26,7 +26,7 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 [[vk::image_format("r32f")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;
 [[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;
 [[vk::binding(17, 0)]] StructuredBuffer<BlockMaterial> blockMaterials;
-[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;
+[[vk::binding(18, 0)]] StructuredBuffer<uint4> emitters;
 [[vk::binding(19, 0)]] RWStructuredBuffer<DIReservoir> reservoirs;
 [[vk::binding(20, 0)]] StructuredBuffer<uint> entityPositions;
 [[vk::binding(21, 0)]] StructuredBuffer<uint> entityIndices;

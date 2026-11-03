@@ -139,12 +139,12 @@ public final class RtFrameParams {
     /** The camera stands in water ({@code FogType.WATER}), so a primary ray starts inside the medium. */
     public boolean cameraInWater;
     // ---- emitter list of this frame, for the Slang path tracer's block-emitter NEE (StatsBuf mirrors these) ----
-    /** VkBuffer of the {@link RtEmitters} ring; {@link #emitterOffset} selects the segment in use. */
+    /** VkBuffer of the immutable BEM1 table published by {@link RtEmitters}. */
     public long emitterHandle;
     public long emitterOffset;
     public int emitterCount;
-    /** Identity of the emitter list ({@link RtEmitters#fingerprint()}). A reused reservoir record only stays valid while
-     * the lights themselves are unchanged; copied every frame, not only when the ray pass allocates its own ring. */
+    /** Selected light-content revision ({@link RtEmitters#fingerprint()}); invalidates cached PT suffixes.
+     * DI uses per-light stable IDs instead of clearing its whole ring on list changes. */
     public long emitterFingerprint;
     /** Camera position minus the block origin the list was rebuilt at: the shader subtracts it from every stored corner. */
     public float emitterCamRelX;

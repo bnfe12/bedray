@@ -7,8 +7,10 @@ import "denoise/nrd_pack.slang";
 import "denoise/material_factors.slang";
 import "shading/bsdf.slang";
 import "post/output_resolve.slang";
+import "light/emitter_table.slang";
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> sink;
+[[vk::binding(1, 0)]] StructuredBuffer<uint4> emitterFixture;
 
 bool near3(float3 actual, float3 expected) { return all(abs(actual - expected) < 1.0e-5); }
 
@@ -155,4 +157,20 @@ void main() {
     sink[24] = all(pathTracePrimaryJitter(frame, int2(1,2), 0u, 4u, PATH_TRACE_OPTION_GBUFFER) == frame.camera.jitter.xy)
         && all(pathTracePrimaryJitter(frame, int2(1,2), 3u, 4u, PATH_TRACE_OPTION_GBUFFER) == frame.camera.jitter.xy);
     sink[25] = resolvedRayDistance(asfloat(0x7fc00000u), float2(0.0), float2(0.0), forward, right, up) == 1.0e6;
+    sink[26] = blockEmitterCount(emitterFixture) == 2u
+        && blockEmitterId(emitterFixture, 0u) == 17u && blockEmitterId(emitterFixture, 1u) == 9u;
+    sink[27] = blockEmitterFind(emitterFixture, 17u) == 0u && blockEmitterFind(emitterFixture, 9u) == 1u
+        && blockEmitterFind(emitterFixture, 8u) == 0xFFFFFFFFu && blockEmitterFind(emitterFixture, 0u) == 0xFFFFFFFFu;
+    BlockEmitterRecord quad = {};
+    quad.edge1 = float4(2.0,0.0,0.0,0.0); quad.edge2 = float4(0.0,2.0,0.0,0.0);
+    float2 uv;
+    sink[28] = blockEmitterCoordinates(float3(0.5,1.5,0.0), quad, float3(0.0), uv)
+        && all(abs(uv - float2(0.25,0.75)) < 1.0e-5);
+    sink[29] = !blockEmitterCoordinates(float3(0.5,1.5,1.0), quad, float3(0.0), uv)
+        && !blockEmitterCoordinates(float3(2.1,1.5,0.0), quad, float3(0.0), uv);
+    quad.edge2 = float4(1.0,2.0,0.0,0.0);
+    sink[30] = blockEmitterCoordinates(float3(1.25,1.5,0.0), quad, float3(0.0), uv)
+        && all(abs(uv - float2(0.25,0.75)) < 1.0e-5);
+    quad.edge2 = quad.edge1;
+    sink[31] = !blockEmitterCoordinates(float3(0.5,0.0,0.0), quad, float3(0.0), uv);
 }

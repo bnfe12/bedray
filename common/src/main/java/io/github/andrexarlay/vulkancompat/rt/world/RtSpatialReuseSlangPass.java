@@ -145,7 +145,7 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
             }
         }
         requireElementBytes(manifest, "frame", RtPathTraceSlangPass.FRAME_CONSTANTS_BYTES);
-        requireElementBytes(manifest, "emitters", RtPathTraceSlangPass.EMITTER_BYTES);
+        requireElementBytes(manifest, "emitters", RtPathTraceSlangPass.EMITTER_TABLE_ELEMENT_BYTES);
         requireElementBytes(manifest, "reservoirs", RtPathTraceSlangPass.RESERVOIR_BYTES);
         requireElementBytes(manifest, "entityRects", RtPathTraceSlangPass.ENTITY_VECTOR_BYTES);
         requireElementBytes(manifest, "entityTexels", RtPathTraceSlangPass.ENTITY_SCALAR_BYTES);
@@ -235,7 +235,7 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
             SlangProgram.Resource.sampled("normalAtlas", atlases.normalView(), atlases.sampler()),
             frame,
             SlangProgram.Resource.storageBuffer("emitters", emitters.buffer(), emitters.offset(),
-                Math.max(1, emitters.count()) * (long) RtPathTraceSlangPass.EMITTER_BYTES),
+                EmitterTable.bytes(emitters.count())),
             SlangProgram.Resource.storageBuffer("reservoirs", reservoirs.buffer(), 0L, reservoirs.bytes()),
             SlangProgram.Resource.storageBuffer("entityRects", entityRects.buffer(), entityRects.offset(),
                 entityRects.bytes()),

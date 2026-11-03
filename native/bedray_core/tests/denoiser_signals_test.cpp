@@ -3,11 +3,18 @@
 #include "denoiser_signals.generated.cpp"
 #include <array>
 #include <cstdio>
+#include <type_traits>
 
 int main() {
-    std::array<uint32_t, 26> verdicts{};
+    std::array<uint32_t, 32> verdicts{};
     GlobalParams_0 globals{};
     globals.sink_0 = {verdicts.data(), verdicts.size()};
+    using TableWord = std::remove_const_t<std::remove_pointer_t<decltype(globals.emitterFixture_0.data)>>;
+    std::array<TableWord, 19> table{};
+    table[0] = {0x42454D31u, 2u, 4u, 112u};
+    table[7].x = 17u; table[14].x = 9u;
+    table[16] = {17u, 0u, 0u, 0u}; table[17] = {9u, 1u, 0u, 0u};
+    globals.emitterFixture_0 = {table.data(), table.size()};
     ComputeThreadVaryingInput thread{};
     main_0_Thread(&thread, nullptr, &globals);
     for (size_t i = 0; i < verdicts.size(); ++i) {
@@ -16,6 +23,6 @@ int main() {
             return 1;
         }
     }
-    std::puts("26 production Slang signal/mean/NRD/RR/output CPU cases passed (no GPU)");
+    std::puts("32 production Slang signal/mean/NRD/RR/output/emitter CPU cases passed (no GPU)");
     return 0;
 }

@@ -80,27 +80,19 @@ public class RtEmittersStabilityTest {
     @Test
     public void testFingerprintIgnoresReanchoringButSeesLightChanges() {
         float[] record = {1f, 2f, 3f, 0.5f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 0f, 1f, 1f, 1f, 1f};
-        long seed = 12345L;
+        var table = new EmitterTable();
+        var a = table.prepare(new float[][]{record}, 1, 0, 0, 0);
+        table.commit(a);
+        float[] anchored = record.clone();
+        anchored[0] -= 10; anchored[1] += 4; anchored[2] -= 32;
+        var b = table.prepare(new float[][]{anchored}, 1, 10, -4, 32);
+        assertEquals(a.revision(), b.revision());
+        assertEquals(1, b.retained());
+        float[] brighter = record.clone(); brighter[14] *= 2;
+        assertNotEquals(a.revision(), table.prepare(new float[][]{brighter}, 1, 0, 0, 0).revision());
+        float[] moved = record.clone(); moved[0] += 1;
+        assertNotEquals(a.revision(), table.prepare(new float[][]{moved}, 1, 0, 0, 0).revision());
 
-        // The same record anchored to a different origin must hash to the same lights in world space.
-        long a = RtEmitters.mixEmitter(seed, record, 0, 0f, 0f, 0f);
-        long b = RtEmitters.mixEmitter(seed, record, 0, 10f, -4f, 32f);
-        float[] moved = record.clone();
-        moved[0] += 10f;
-        moved[1] += -4f;
-        moved[2] += 32f;
-        long c = RtEmitters.mixEmitter(seed, moved, 0, 0f, 0f, 0f);
-        assertEquals(b, c, "a re-anchored list of the same lights must keep its ReSTIR history");
-
-        float[] brighter = record.clone();
-        brighter[14] *= 2f;
-        assertNotEquals(a, RtEmitters.mixEmitter(seed, brighter, 0, 0f, 0f, 0f),
-            "a changed emission must invalidate the stored samples");
-
-        float[] movedLight = record.clone();
-        movedLight[0] += 1f;
-        assertNotEquals(a, RtEmitters.mixEmitter(seed, movedLight, 0, 0f, 0f, 0f),
-            "a light that moved must invalidate the stored samples");
     }
 
     @Test

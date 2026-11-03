@@ -27,7 +27,7 @@ struct RCFieldBuildPush {
 [[vk::binding(10,0)]] Sampler2D normalAtlas;
 [[vk::binding(16,0)]] ConstantBuffer<FrameConstants> frame;
 [[vk::binding(17,0)]] StructuredBuffer<BlockMaterial> blockMaterials;
-[[vk::binding(18,0)]] StructuredBuffer<BlockEmitterRecord> emitters;
+[[vk::binding(18,0)]] StructuredBuffer<uint4> emitters;
 [[vk::binding(20,0)]] StructuredBuffer<uint> entityPositions;
 [[vk::binding(21,0)]] StructuredBuffer<uint> entityIndices;
 [[vk::binding(22,0)]] StructuredBuffer<uint4> entityAttrs;

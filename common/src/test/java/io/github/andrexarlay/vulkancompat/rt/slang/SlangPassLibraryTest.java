@@ -160,7 +160,7 @@ class SlangPassLibraryTest {
         assertBinding(manifest, "blockMaterials", 17, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
         assertEquals(64, manifest.binding("blockMaterials").elementBytes(), "BlockMaterial stays 64 bytes");
         assertBinding(manifest, "emitters", 18, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        assertEquals(96, manifest.binding("emitters").elementBytes(),
+        assertEquals(16, manifest.binding("emitters").elementBytes(),
             "BlockEmitterRecord is the 96-byte RtEmitters record, so one upload serves both paths");
         assertBinding(manifest, "reservoirs", 19, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
         assertEquals(64, manifest.binding("reservoirs").elementBytes(),

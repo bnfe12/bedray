@@ -85,13 +85,13 @@ class RtSlangLayoutAbiTest {
 
     @Test
     void blockEmitterRecordIsSixVec4() throws IOException {
-        String emitters = read(SLANG + "light/block_emitters.slang");
+        String emitters = read(SLANG + "light/emitter_table.slang");
         Layout record = parseLayout(emitters, "BlockEmitterRecord");
         assertEquals(RtPathTraceSlangPass.EMITTER_BYTES, record.size);
         assertEquals(RtEmitters.BYTES, record.size, "the Java record writer and the shader agree on the stride");
         assertEquals(6, record.fields.size(), "six vec4 per emitter");
         assertEquals(record.size / Float.BYTES, RtEmitters.FLOATS);
-        assertTrue(emitters.contains("static const uint EMITTER_RECORD_FLOATS = 24u;"),
+        assertTrue(read(SLANG + "light/block_emitters.slang").contains("static const uint EMITTER_RECORD_FLOATS = 24u;"),
             "the module names the same stride in floats");
         assertEquals(24, record.size / Float.BYTES);
     }
@@ -170,7 +170,7 @@ class RtSlangLayoutAbiTest {
         var pathTrace = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
         assertEquals(RtPathTraceSlangPass.PUSH_BYTES, pathTrace.pushConstantBytes());
         assertEquals(RtPathTraceSlangPass.FRAME_CONSTANTS_BYTES, pathTrace.binding("frame").elementBytes());
-        assertEquals(RtPathTraceSlangPass.EMITTER_BYTES, pathTrace.binding("emitters").elementBytes());
+        assertEquals(RtPathTraceSlangPass.EMITTER_TABLE_ELEMENT_BYTES, pathTrace.binding("emitters").elementBytes());
         assertEquals(RtPathTraceSlangPass.RESERVOIR_BYTES, pathTrace.binding("reservoirs").elementBytes());
 
         Assumptions.assumeTrue(SlangPassLibrary.available("frame_stats"), "frame_stats AOT entry was not compiled");

@@ -59,7 +59,7 @@ int2 blockEmitterSpatialOffset(inout uint seed, int radius) {
 }
 
 struct BlockEmitterSpatialReuse {
-    StructuredBuffer<BlockEmitterRecord> records;
+    StructuredBuffer<uint4> records;
     RWStructuredBuffer<DIReservoir> reservoirs;
     MaterialAtlas atlas;
     uint   enabled;

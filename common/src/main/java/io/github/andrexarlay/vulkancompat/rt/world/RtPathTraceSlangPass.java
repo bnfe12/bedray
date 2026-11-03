@@ -64,6 +64,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final int BLOCK_MATERIAL_BYTES = 64;
     /** {@code light/block_emitters.slang}: the RtEmitters record, six vec4. */
     static final int EMITTER_BYTES = 96;
+    static final int EMITTER_TABLE_ELEMENT_BYTES = 16;
     /** {@code restir/restir_di.slang}: one ReSTIR DI reservoir per pixel, pinned by {@code gradle/slang.gradle}. */
     static final int RESERVOIR_BYTES = 64;
     /**
@@ -555,7 +556,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         requireElementBytes(manifest, "sections", SECTION_BYTES);
         requireElementBytes(manifest, "frame", FRAME_CONSTANTS_BYTES);
         requireElementBytes(manifest, "blockMaterials", BLOCK_MATERIAL_BYTES);
-        requireElementBytes(manifest, "emitters", EMITTER_BYTES);
+        requireElementBytes(manifest, "emitters", EMITTER_TABLE_ELEMENT_BYTES);
         requireElementBytes(manifest, "reservoirs", RESERVOIR_BYTES);
         requireElementBytes(manifest, "entityPositions", ENTITY_SCALAR_BYTES);
         requireElementBytes(manifest, "entityIndices", ENTITY_SCALAR_BYTES);
@@ -1007,7 +1008,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         long emitterBuffer = emitters != null && emitters.buffer() != 0L ? emitters.buffer() : blockMaterials.handle();
         long emitterOffset = emitterBuffer == blockMaterials.handle() ? 0L : emitters.offset();
         long emitterBytes = emitterBuffer == blockMaterials.handle() ? BLOCK_MATERIAL_BYTES
-            : Math.max(1, emitters.count()) * (long) EMITTER_BYTES;
+            : EmitterTable.bytes(emitters.count());
         // The ReSTIR DI ring, or the one-record dummy when reuse is switched off: the shader reads the bound length, so
         // it can never address past what the host handed it.
         long reservoirBuffer = reservoirs != null && reservoirs.buffer() != 0L

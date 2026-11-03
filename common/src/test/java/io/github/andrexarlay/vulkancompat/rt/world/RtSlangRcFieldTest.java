@@ -216,7 +216,7 @@ class RtSlangRcFieldTest {
         return List.of(binding("tlas",0,BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,0),
             binding("sections",2,storage,64), binding("albedoAtlas",3,image,0), binding("materialAtlas",9,image,0),
             binding("normalAtlas",10,image,0), binding("frame",16,uniform,608), binding("blockMaterials",17,storage,64),
-            binding("emitters",18,storage,96), binding("entityPositions",20,storage,4), binding("entityIndices",21,storage,4),
+            binding("emitters",18,storage,16), binding("entityPositions",20,storage,4), binding("entityIndices",21,storage,4),
             binding("entityAttrs",22,storage,16), binding("entityRects",23,storage,16), binding("entityTexels",24,storage,4),
             binding("entityPrevious",25,storage,4), binding("rcField",34,uniform,288), binding("rcTails",35,storage,32),
             binding("rcHistory",38,storage,32));

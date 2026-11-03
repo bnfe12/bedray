@@ -18,7 +18,7 @@
 //   12 outDepth         R32F storage image (first accepted surface distance, 1e6 on a miss)
 //   16 frame            ConstantBuffer<FrameConstants> (608 B)
 //   17 blockMaterials   StructuredBuffer<BlockMaterial>
-//   18 emitters         StructuredBuffer<BlockEmitterRecord>
+//   18 emitters         StructuredBuffer<uint4>
 //   19 reservoirs       RWStructuredBuffer<DIReservoir>
 //   20 entityPositions  StructuredBuffer<uint>
 //   21 entityIndices    StructuredBuffer<uint>
@@ -65,7 +65,7 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 [[vk::image_format("r32f")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;
 [[vk::binding(16, 0)]] ConstantBuffer<FrameConstants> frame;
 [[vk::binding(17, 0)]] StructuredBuffer<BlockMaterial> blockMaterials;
-[[vk::binding(18, 0)]] StructuredBuffer<BlockEmitterRecord> emitters;
+[[vk::binding(18, 0)]] StructuredBuffer<uint4> emitters;
 [[vk::binding(19, 0)]] RWStructuredBuffer<DIReservoir> reservoirs;
 [[vk::binding(20, 0)]] StructuredBuffer<uint> entityPositions;
 [[vk::binding(21, 0)]] StructuredBuffer<uint> entityIndices;
