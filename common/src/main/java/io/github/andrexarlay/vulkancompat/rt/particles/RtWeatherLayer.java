@@ -8,6 +8,7 @@ import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.api.textures.GpuSampler;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.texture.AbstractTexture;
@@ -129,7 +130,7 @@ public final class RtWeatherLayer {
     public static void captureFailed(Throwable e) {
         failed = true;
         columns = null;
-        LOGGER.error("[VKB-RT] weather capture FAILED (rain and snow stay raster-only, the setting is untouched): {}", e.toString(), e);
+        LOGGER.error("[VKB-RT] weather capture FAILED (rain and snow stay raster-only, the setting is untouched)\n{}", LogPaths.stack(e));
     }
 
     /**
@@ -170,8 +171,8 @@ public final class RtWeatherLayer {
         } catch (RuntimeException | LinkageError e) {
             failed = true;
             drawsLastFrame = 0;
-            LOGGER.error("[VKB-RT] weather layer FAILED (rain and snow are not drawn while RT is displayed; setting stays on): {}",
-                e.toString(), e);
+            LOGGER.error("[VKB-RT] weather layer FAILED (rain and snow are not drawn while RT is displayed; setting stays on)\n{}",
+                LogPaths.stack(e));
         }
     }
 

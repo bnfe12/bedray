@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import com.mojang.blaze3d.platform.NativeImage;
 import io.github.andrexarlay.vulkancompat.resources.ResourceReloadEpoch;
 import net.minecraft.client.Minecraft;
@@ -113,8 +114,8 @@ public final class RtSkyTextures {
                 catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
             }
             int requestedWords = data != null ? data.wordCount() : 0;
-            LOGGER.error("[VKB-SKY] atlas prepare failed stage={} epoch={} loaded_epoch={} words={} previous_address=0x{} rollback_retained={}",
-                stage, requestedEpoch, loadedEpoch, requestedWords, Long.toUnsignedString(previousAddress, 16), abandoned != null, failure);
+            LOGGER.error("[VKB-SKY] atlas prepare failed stage={} epoch={} loaded_epoch={} words={} previous_address=0x{} rollback_retained={}\n{}",
+                stage, requestedEpoch, loadedEpoch, requestedWords, Long.toUnsignedString(previousAddress, 16), abandoned != null, LogPaths.stack(failure));
             throw new RtFailure("sky_atlas_" + stage,
                 "epoch=" + requestedEpoch + " loadedEpoch=" + loadedEpoch + " words=" + requestedWords
                     + " previousAddress=0x" + Long.toUnsignedString(previousAddress, 16)
@@ -200,7 +201,7 @@ public final class RtSkyTextures {
                 slot, id, texture.width(), texture.height(), resource.get().sourcePackId());
             return texture;
         } catch (Exception failure) {
-            LOGGER.error("[VKB-SKY] texture load failed slot={} id={} pack={}", slot, id, resource.get().sourcePackId(), failure);
+            LOGGER.error("[VKB-SKY] texture load failed slot={} id={} pack={}\n{}", slot, id, resource.get().sourcePackId(), LogPaths.stack(failure));
             return null;
         }
     }

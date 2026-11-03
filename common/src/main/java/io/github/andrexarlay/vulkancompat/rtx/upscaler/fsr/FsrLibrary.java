@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr;
 import io.github.andrexarlay.vulkanbridge.api.LibraryResolution;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,7 +87,7 @@ public final class FsrLibrary {
             r = resolver.get();
         } catch (IllegalStateException e) {
             // VulkanBridge.libraries() throws outside the game (no game directory): reported, never treated as present.
-            return Library.unusable(MANAGER_UNAVAILABLE + e.getMessage());
+            return Library.unusable(MANAGER_UNAVAILABLE + LogPaths.show(e.getMessage()));
         }
         if (!r.usable()) {
             return Library.unusable("fsr library " + r.status().state() + ": " + r.status().detail());
@@ -99,7 +100,7 @@ public final class FsrLibrary {
         try {
             sha = sha256(dll);
         } catch (IOException e) {
-            return Library.unusable("cannot read " + dll + ": " + e.getMessage());
+            return Library.unusable(LogPaths.show("cannot read " + dll + ": " + e.getMessage()));
         }
         String version = r.versions().get(DLL);
         String release = OFFICIAL_SHA256.get(sha);

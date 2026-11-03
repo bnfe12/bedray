@@ -101,7 +101,7 @@ public final class UpscalerLibraryLoader {
             }
             ensureReadme(nativesDir);
         } catch (IOException e) {
-            LOGGER.warn("Failed to create natives directory {}: {}", LogPaths.show(nativesDir), e.getMessage());
+            LOGGER.warn("Failed to create natives directory {}: {}", LogPaths.show(nativesDir), LogPaths.show(e.getMessage()));
         }
         return nativesDir;
     }
@@ -210,7 +210,7 @@ public final class UpscalerLibraryLoader {
                 }
             }
         } catch (IOException e) {
-            LOGGER.warn("[UpscalerLibraryLoader] Cannot list {}: {}", LogPaths.show(dir), e.getMessage());
+            LOGGER.warn("[UpscalerLibraryLoader] Cannot list {}: {}", LogPaths.show(dir), LogPaths.show(e.getMessage()));
         }
         return false;
     }
@@ -320,10 +320,10 @@ public final class UpscalerLibraryLoader {
             LOGGER.info("[UpscalerLibraryLoader] Successfully loaded native library: {}", dllPath.getFileName());
             return true;
         } catch (UnsatisfiedLinkError e) {
-            LOGGER.info("[UpscalerLibraryLoader] Native library '{}' could not be linked: {}", dllPath.getFileName(), e.getMessage());
+            LOGGER.info("[UpscalerLibraryLoader] Native library '{}' could not be linked: {}", dllPath.getFileName(), LogPaths.show(e.getMessage()));
             return false;
         } catch (Throwable t) {
-            LOGGER.info("[UpscalerLibraryLoader] Failed to load native library '{}': {}", dllPath.getFileName(), t.getMessage());
+            LOGGER.info("[UpscalerLibraryLoader] Failed to load native library '{}': {}", dllPath.getFileName(), LogPaths.show(t.getMessage()));
             return false;
         }
     }
@@ -340,7 +340,7 @@ public final class UpscalerLibraryLoader {
                 }
             }
         } catch (IOException e) {
-            LOGGER.warn("[UpscalerLibraryLoader] Cannot list {}: {}", LogPaths.show(dir), e.getMessage());
+            LOGGER.warn("[UpscalerLibraryLoader] Cannot list {}: {}", LogPaths.show(dir), LogPaths.show(e.getMessage()));
         }
         return false;
     }

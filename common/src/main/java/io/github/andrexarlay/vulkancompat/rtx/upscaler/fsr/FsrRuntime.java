@@ -124,7 +124,7 @@ public final class FsrRuntime {
             try {
                 nativeLib = FfxNative.load(lib.dll());
             } catch (FsrException e) {
-                LOGGER.error("[VKB-FSR] fsr=FAILED stage=load result={}", e.getMessage(), e);
+                LOGGER.error("[VKB-FSR] fsr=FAILED stage=load result={}\n{}", LogPaths.show(e.getMessage()), LogPaths.stack(e));
                 return List.of();
             }
         }
@@ -206,7 +206,7 @@ public final class FsrRuntime {
             create(request, device, winW, winH);
         } catch (FsrException e) {
             LOGGER.error("FSR setup failed\n{}", LogPaths.stack(e));
-            fail(e.stage(), e.getMessage());
+            fail(e.stage(), LogPaths.show(e.getMessage()));
         } catch (RuntimeException | Error e) {
             // The game keeps running without FSR; the reason is logged with the full stack (not swallowed).
             // Redacted stack: the FFM load failure carries the absolute DLL path inside its own message.
@@ -248,7 +248,7 @@ public final class FsrRuntime {
         }
         List<FfxNative.ProviderVersion> available = availableVersions();
         if (nativeLib == null || available.isEmpty()) {
-            fail("versions", "no upscaler provider reported by " + lib.dll());
+            fail("versions", "no upscaler provider reported by " + LogPaths.show(lib.dll()));
             return;
         }
         Optional<FfxNative.ProviderVersion> picked = request.version().pick(available);
@@ -361,8 +361,8 @@ public final class FsrRuntime {
             context = releaseContext(context, "destroy_after_setup_failure");
         } catch (RuntimeException | Error failure) {
             pendingDestroy = true;
-            LOGGER.error("[VKB-FSR] provider=fsr stage=setup_cleanup frame={} context=0x{} retained=true",
-                frameCounter, Long.toHexString(context.handle()), failure);
+            LOGGER.error("[VKB-FSR] provider=fsr stage=setup_cleanup frame={} context=0x{} retained=true\n{}",
+                frameCounter, Long.toHexString(context.handle()), LogPaths.stack(failure));
         }
     }
 
@@ -372,8 +372,8 @@ public final class FsrRuntime {
                 if (contextDevice == null) throw new IllegalStateException("FSR context lost its host device");
                 WorldTargetManager.drainTemporalRecordings(contextDevice);
             } catch (RuntimeException | Error failure) {
-                LOGGER.error("[VKB-FSR] provider=fsr stage={} frame={} context=0x{} output={}x{} proof=FAILED retained=true",
-                    stage, frameCounter, Long.toHexString(owned.handle()), outputWidth, outputHeight, failure);
+                LOGGER.error("[VKB-FSR] provider=fsr stage={} frame={} context=0x{} output={}x{} proof=FAILED retained=true\n{}",
+                    stage, frameCounter, Long.toHexString(owned.handle()), outputWidth, outputHeight, LogPaths.stack(failure));
                 throw failure;
             }
         }, handle -> {
@@ -385,8 +385,8 @@ public final class FsrRuntime {
                 LOGGER.info("[VKB-FSR] [VKB-AUTOTEST] fsr=context_destroyed stage={} context=0x{} frame={}",
                     stage, Long.toHexString(address), frameCounter);
             } catch (RuntimeException | Error failure) {
-                LOGGER.error("[VKB-FSR] provider=fsr stage={} frame={} context=0x{} output={}x{} sdk=FAILED retained=true",
-                    stage, frameCounter, Long.toHexString(address), outputWidth, outputHeight, failure);
+                LOGGER.error("[VKB-FSR] provider=fsr stage={} frame={} context=0x{} output={}x{} sdk=FAILED retained=true\n{}",
+                    stage, frameCounter, Long.toHexString(address), outputWidth, outputHeight, LogPaths.stack(failure));
                 throw failure;
             }
         });

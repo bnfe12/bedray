@@ -77,7 +77,7 @@ public final class Diagnostics {
                 mc.keyboardHandler.setClipboard(r.text());
             }
         } catch (RuntimeException | LinkageError e) {
-            LOGGER.error("[VKB-DIAG] clipboard copy failed", e);
+            LOGGER.error("[VKB-DIAG] clipboard copy failed\n{}", LogPaths.stack(e));
             note = (note == null ? "" : note + "; ") + "clipboard: " + e.getClass().getSimpleName();
         }
         return new Result(r.file(), r.text(), note);
@@ -129,7 +129,7 @@ public final class Diagnostics {
                     Component.translatableWithFallback("bedray.diag.toast", "Bedray diagnostics report"),
                     Component.literal(shown));
             } catch (RuntimeException e) {
-                LOGGER.error("[VKB-DIAG] cannot show the confirmation", e);
+                LOGGER.error("[VKB-DIAG] cannot show the confirmation\n{}", LogPaths.stack(e));
             }
         }
     }
@@ -145,7 +145,7 @@ public final class Diagnostics {
         try {
             lines = new ArrayList<>(body.lines());
         } catch (Exception | LinkageError e) {
-            LOGGER.warn("[VKB-DIAG] section '{}' failed", title, e);
+            LOGGER.warn("[VKB-DIAG] section '{}' failed\n{}", title, LogPaths.stack(e));
             lines = new ArrayList<>();
             lines.add("(unavailable: " + e.getClass().getSimpleName() + ")");
         }
@@ -173,7 +173,7 @@ public final class Diagnostics {
             nick = user.getName();
             uuid = String.valueOf(user.getProfileId());
         } catch (RuntimeException | LinkageError e) {
-            LOGGER.debug("[VKB-DIAG] no user for the scrubber", e);
+            LOGGER.debug("[VKB-DIAG] no user for the scrubber\n{}", LogPaths.stack(e));
         }
         String host = firstNonBlank(System.getenv("COMPUTERNAME"), System.getenv("HOSTNAME"));
         String account = firstNonBlank(System.getProperty("user.name"), System.getenv("USERNAME"), System.getenv("USER"));
@@ -251,7 +251,7 @@ public final class Diagnostics {
                 }
             }
         } catch (IOException | InterruptedException | RuntimeException e) {
-            LOGGER.debug("[VKB-DIAG] cpu model not read", e);
+            LOGGER.debug("[VKB-DIAG] cpu model not read\n{}", LogPaths.stack(e));
         }
         String id = System.getenv("PROCESSOR_IDENTIFIER");
         return id == null ? "unknown" : id;
@@ -306,7 +306,7 @@ public final class Diagnostics {
                             enabled.add(f.getName());
                         }
                     } catch (IllegalAccessException e) {
-                        LOGGER.debug("[VKB-DIAG] capability {} unreadable", f.getName(), e);
+                        LOGGER.debug("[VKB-DIAG] capability {} unreadable\n{}", f.getName(), LogPaths.stack(e));
                     }
                 }
             }

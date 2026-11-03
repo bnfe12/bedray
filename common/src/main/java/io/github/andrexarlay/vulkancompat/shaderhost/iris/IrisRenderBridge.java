@@ -4,6 +4,7 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanConst;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings;
@@ -226,7 +227,7 @@ public final class IrisRenderBridge {
             );
             return true;
         } catch (Throwable t) {
-            LOGGER.error("[IrisRenderBridge] Exception during IrisPostExecutor.record: {}", t.getMessage(), t);
+            LOGGER.error("[IrisRenderBridge] Exception during IrisPostExecutor.record\n{}", LogPaths.stack(t));
             return false;
         }
     }
@@ -308,7 +309,7 @@ public final class IrisRenderBridge {
             return renderFrame(WorldFrameCapture.capture(device, target, camera, renderer), target);
         }
         catch (IllegalArgumentException | IllegalStateException error) {
-            runtimeStatus = "World frame unavailable: " + error.getMessage(); return false;
+            runtimeStatus = LogPaths.show("World frame unavailable: " + error.getMessage()); return false;
         }
         finally {
             pendingWorld = null;
@@ -342,7 +343,7 @@ public final class IrisRenderBridge {
             runtimeStatus = "Iris needs native GL-oriented color and guides"; return false;
         }
         try { WorldFrames.publish(frame); }
-        catch (IllegalArgumentException | IllegalStateException error) { runtimeStatus = "Iris frame publication: " + error.getMessage(); return false; }
+        catch (IllegalArgumentException | IllegalStateException error) { runtimeStatus = LogPaths.show("Iris frame publication: " + error.getMessage()); return false; }
         var camera = frame.camera();
         var previousCamera = WorldFrames.previousCamera(frame);
         boolean readsDepth = graph.passes().stream().anyMatch(pass -> pass.allSamplerBindings().contains(
@@ -436,8 +437,8 @@ public final class IrisRenderBridge {
                 if(convertsDepth)depthConverter=new IrisDepthConverter(device.vkDevice(),width,height,depthView);
             }
         } catch (RuntimeException | LinkageError error) {
-            failed=true;runtimeStatus="Iris preparation failed: "+error.getMessage();
-            LOGGER.error("[IrisRenderBridge] {}",runtimeStatus,error);
+            failed=true;runtimeStatus=LogPaths.show("Iris preparation failed: "+error.getMessage());
+            LOGGER.error("[IrisRenderBridge] {}\n{}",runtimeStatus,LogPaths.stack(error));
             ShaderHosts.noteIrisFailure(runtimeStatus);retire();return false;
         }
         updateTiming();
@@ -467,8 +468,8 @@ public final class IrisRenderBridge {
             }
             recorded=true;
         } catch (RuntimeException | LinkageError error) {
-            failed=true;runtimeStatus="Iris recording failed: "+error.getMessage();
-            LOGGER.error("[IrisRenderBridge] {}",runtimeStatus,error);
+            failed=true;runtimeStatus=LogPaths.show("Iris recording failed: "+error.getMessage());
+            LOGGER.error("[IrisRenderBridge] {}\n{}",runtimeStatus,LogPaths.stack(error));
         } finally {
             VkBarriers.fullMemoryBarrier(command);
             int result=VK10.vkEndCommandBuffer(command);
@@ -515,7 +516,7 @@ public final class IrisRenderBridge {
             return true;
         } catch (RuntimeException | LinkageError error) {
             cleanupBroken=true;failed=true;runtimeStatus="Iris cleanup failed; restart required";
-            LOGGER.error("[IrisRenderBridge] {}",runtimeStatus,error);return false;
+            LOGGER.error("[IrisRenderBridge] {}\n{}",runtimeStatus,LogPaths.stack(error));return false;
         }
     }
 

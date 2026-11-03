@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rt.entity;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rt.world.RtEmitters;
 import io.github.andrexarlay.vulkancompat.rt.world.RtEntityGeometryManager;
 import net.minecraft.client.model.Model;
@@ -258,7 +259,7 @@ public final class EntityCaptureManager {
         } catch (RuntimeException e) {
             // counted and logged (first one with stack trace); the entity is missing from the RT scene, the raster image is unaffected
             if (captureFailures.getAndIncrement() == 0) {
-                LOGGER.error("[VK-ENTITY-CAPTURE] model capture failed type={} model={}", curEntityType, model.getClass().getName(), e);
+                LOGGER.error("[VK-ENTITY-CAPTURE] model capture failed type={} model={}\n{}", curEntityType, model.getClass().getName(), LogPaths.stack(e));
             }
         } finally {
             // Atlas-layer skips and capture failures must not leak the implicit entity into the next submission.
@@ -508,7 +509,7 @@ public final class EntityCaptureManager {
                 new PoseStack(), RtCaptureCollector.INSTANCE);
         } catch (RuntimeException e) {
             if (selfAvatarFailures.getAndIncrement() == 0) {
-                LOGGER.error("[VK-RT] self avatar capture failed", e);
+                LOGGER.error("[VK-RT] self avatar capture failed\n{}", LogPaths.stack(e));
             }
             endEntity();
         }
@@ -682,7 +683,7 @@ public final class EntityCaptureManager {
                         }
                     }
                 } catch (Exception e) {
-                    LOGGER.warn("[VK-ENTITY-CAPTURE] could not read Minecraft bitmap font providers; non-ASCII RT text is unavailable", e);
+                    LOGGER.warn("[VK-ENTITY-CAPTURE] could not read Minecraft bitmap font providers; non-ASCII RT text is unavailable\n{}", LogPaths.stack(e));
                 }
             }
             nonAsciiGlyphs = java.util.Map.copyOf(glyphs);
@@ -797,7 +798,7 @@ public final class EntityCaptureManager {
             }
         } catch (RuntimeException e) {
             if (loggedParticleCaptureFailure.compareAndSet(false, true)) {
-                LOGGER.warn("[VK-ENTITY-CAPTURE] emissive particle capture failed; vanilla particle rendering remains active", e);
+                LOGGER.warn("[VK-ENTITY-CAPTURE] emissive particle capture failed; vanilla particle rendering remains active\n{}", LogPaths.stack(e));
             }
         }
     }
@@ -1138,7 +1139,7 @@ public final class EntityCaptureManager {
             }
         } catch (RuntimeException e) {
             if (captureFailures.getAndIncrement() == 0) {
-                LOGGER.warn("[VK-ENTITY-CAPTURE] custom geometry capture failed renderType={}", renderType, e);
+                LOGGER.warn("[VK-ENTITY-CAPTURE] custom geometry capture failed renderType={}\n{}", renderType, LogPaths.stack(e));
             }
         } finally {
             frameConsumer.setFlags(savedFlags);

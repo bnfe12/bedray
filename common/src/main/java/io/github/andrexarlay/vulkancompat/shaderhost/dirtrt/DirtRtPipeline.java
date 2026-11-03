@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.BindingInfo;
 import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.DescriptorType;
@@ -267,7 +268,7 @@ public final class DirtRtPipeline implements AutoCloseable {
             entityLayoutStatus,
             currentTraceCalls,
             currentFramesRendered,
-            lastError
+            LogPaths.show(lastError)
         );
     }
 
@@ -290,7 +291,7 @@ public final class DirtRtPipeline implements AutoCloseable {
     public static void setEntityLayoutStatus(String status) { entityLayoutStatus = status; }
     public static long getFramesRendered() { return currentFramesRendered; }
     public static long getTraceCalls() { return currentTraceCalls; }
-    public static String getLastError() { return lastError; }
+    public static String getLastError() { return LogPaths.show(lastError); }
     public static TlasBinding getCurrentTlasBinding() { return currentTlasBinding; }
     public static void setNativeRtFallbackPipeline(long handle) { nativeRtFallbackPipeline = handle; }
     public static long getNativeRtFallbackPipeline() { return nativeRtFallbackPipeline; }

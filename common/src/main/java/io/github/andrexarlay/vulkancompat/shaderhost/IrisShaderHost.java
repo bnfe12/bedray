@@ -175,7 +175,7 @@ public final class IrisShaderHost implements ShaderHost {
                     built.put(folder, result.graph());
                 } else if (folder.equals(primary)) {
                     // The overworld folder is the pack's main program set; without it the host stays native.
-                    return result.status();
+                    return status(result.status().state(), result.status().detail());
                 } else {
                     otherFailures.add(folderLabel(folder) + ": " + result.status().detail());
                 }
@@ -192,7 +192,7 @@ public final class IrisShaderHost implements ShaderHost {
         graphs = Map.copyOf(built);
         activeFolder = primary;
         IrisPassGraph graph = built.get(primary);
-        return ShaderHostStatus.of(ShaderHostKind.IRIS, ShaderHostState.READY,
+        return status(ShaderHostState.READY,
             "pack " + report.name() + " (" + graph.passCount() + " passes in " + folderLabel(primary) + ", folders "
                 + built.keySet().stream().map(IrisShaderHost::folderLabel).toList() + ", "
                 + graph.options().changedOptions() + " changed options, profile="
@@ -213,6 +213,7 @@ public final class IrisShaderHost implements ShaderHost {
     }
 
     private static ShaderHostStatus status(ShaderHostState state, String detail) {
-        return ShaderHostStatus.of(ShaderHostKind.IRIS, state, detail);
+        // One boundary for every detail string: these reach the log and the F3 lines, where a user profile directory must not appear.
+        return ShaderHostStatus.of(ShaderHostKind.IRIS, state, io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(detail));
     }
 }

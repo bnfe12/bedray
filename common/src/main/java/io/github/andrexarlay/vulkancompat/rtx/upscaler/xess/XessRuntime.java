@@ -229,7 +229,7 @@ public final class XessRuntime {
             try {
                 nativeLib = XessNative.load(dll);
             } catch (XessNativeException e) {
-                LOGGER.error("XeSS library load failed", e);
+                LOGGER.error("XeSS library load failed\n{}", LogPaths.stack(e));
                 fail("load", "load_error");
                 return;
             }
@@ -465,8 +465,8 @@ public final class XessRuntime {
             context = releaseContext(context, "destroy_after_setup_failure");
         } catch (RuntimeException | Error failure) {
             pendingDestroy = true;
-            LOGGER.error("[VKB-AUTOTEST] provider=xess stage=setup_cleanup frame={} context=0x{} retained=true",
-                frameCounter, Long.toHexString(context.address()), failure);
+            LOGGER.error("[VKB-AUTOTEST] provider=xess stage=setup_cleanup frame={} context=0x{} retained=true\n{}",
+                frameCounter, Long.toHexString(context.address()), LogPaths.stack(failure));
         }
     }
 
@@ -476,8 +476,8 @@ public final class XessRuntime {
                 if (contextDevice == null) throw new IllegalStateException("XeSS context lost its host device");
                 WorldTargetManager.drainTemporalRecordings(contextDevice);
             } catch (RuntimeException | Error failure) {
-                LOGGER.error("[VKB-AUTOTEST] provider=xess stage={} frame={} context=0x{} output={}x{} proof=FAILED retained=true",
-                    stage, frameCounter, Long.toHexString(owned.address()), outputWidth, outputHeight, failure);
+                LOGGER.error("[VKB-AUTOTEST] provider=xess stage={} frame={} context=0x{} output={}x{} proof=FAILED retained=true\n{}",
+                    stage, frameCounter, Long.toHexString(owned.address()), outputWidth, outputHeight, LogPaths.stack(failure));
                 throw failure;
             }
         }, handle -> {
@@ -488,8 +488,8 @@ public final class XessRuntime {
                 LOGGER.info("[VKB-AUTOTEST] xess=context_destroyed stage={} context=0x{} frame={}",
                     stage, Long.toHexString(handle.address()), frameCounter);
             } catch (RuntimeException | Error failure) {
-                LOGGER.error("[VKB-AUTOTEST] provider=xess stage={} frame={} context=0x{} output={}x{} sdk=FAILED retained=true",
-                    stage, frameCounter, Long.toHexString(handle.address()), outputWidth, outputHeight, failure);
+                LOGGER.error("[VKB-AUTOTEST] provider=xess stage={} frame={} context=0x{} output={}x{} sdk=FAILED retained=true\n{}",
+                    stage, frameCounter, Long.toHexString(handle.address()), outputWidth, outputHeight, LogPaths.stack(failure));
                 throw failure;
             }
         });

@@ -86,7 +86,7 @@ public final class IrisCompat {
             Files.createDirectories(shaderpacks);
         } catch (IOException e) {
             // Same handling as Iris.onEarlyInitialize: the screen still opens, the list is just empty.
-            LOGGER.warn("{} event=shaderpacks_dir_failed path={}", TAG, LogPaths.show(shaderpacks), e);
+            LOGGER.warn("{} event=shaderpacks_dir_failed path={}\n{}", TAG, LogPaths.show(shaderpacks), LogPaths.stack(e));
         }
 
         if (Iris.getIrisConfig() == null) {
@@ -96,7 +96,7 @@ public final class IrisCompat {
                 config.initialize();
             } catch (IOException e) {
                 // Same handling as Iris.onEarlyInitialize ("default values will be used instead").
-                LOGGER.error("{} event=iris_config_init_failed defaults=true", TAG, e);
+                LOGGER.error("{} event=iris_config_init_failed defaults=true\n{}", TAG, LogPaths.stack(e));
             }
             IrisAccessor.vkb$setIrisConfig(config);
         }

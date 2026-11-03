@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rt.entity;
 
 import com.mojang.blaze3d.platform.NativeImage;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
@@ -117,7 +118,7 @@ public final class EntityTextureAtlas {
             glowingFontSlots.put(texture, slot);
             return slot;
         } catch (Exception e) {
-            LOGGER.warn("[VK-ENTITY-ATLAS] glowing font texture load failed texture={}", texture, e);
+            LOGGER.warn("[VK-ENTITY-ATLAS] glowing font texture load failed texture={}\n{}", texture, LogPaths.stack(e));
             return fail(texture, "font_texture_read_error");
         }
     }
@@ -186,7 +187,7 @@ public final class EntityTextureAtlas {
         try (InputStream in = res.get().open(); NativeImage img = NativeImage.read(in)) {
             return pack(tex, img, frameW, frameH, "resource", null);
         } catch (Exception e) {
-            LOGGER.error("[VK-ENTITY-ATLAS] load failed texture={}", tex, e);
+            LOGGER.error("[VK-ENTITY-ATLAS] load failed texture={}\n{}", tex, LogPaths.stack(e));
             return fail(tex, "read_error");
         }
     }
@@ -234,7 +235,7 @@ public final class EntityTextureAtlas {
             LOGGER.info("[VK-ENTITY-ATLAS] stitched atlas {} {}x{} sprites={} missing_images={}", tex, aw, ah, sprites, missing);
             return pack(tex, img, 0, 0, "atlas", mask);
         } catch (Exception e) {
-            LOGGER.error("[VK-ENTITY-ATLAS] atlas stitch failed texture={}", tex, e);
+            LOGGER.error("[VK-ENTITY-ATLAS] atlas stitch failed texture={}\n{}", tex, LogPaths.stack(e));
             return fail(tex, "atlas_error");
         }
     }
@@ -278,7 +279,7 @@ public final class EntityTextureAtlas {
                 rects[slot * 4], rects[slot * 4 + 1], emissive, pbr);
             return slot;
         } catch (RuntimeException e) {
-            LOGGER.error("[VK-ENTITY-ATLAS] pack failed texture={}", tex, e);
+            LOGGER.error("[VK-ENTITY-ATLAS] pack failed texture={}\n{}", tex, LogPaths.stack(e));
             return fail(tex, "pack_error");
         }
     }

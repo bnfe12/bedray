@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkanbridge.platform.Platforms;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.PointerBuffer;
@@ -67,7 +68,7 @@ public final class RtVulkanPipelineCache {
                 VK10.vkDestroyPipelineCache(device, handle, null);
             });
         } catch (RuntimeException | Error failure) {
-            LOGGER.error("[VKB-PIPELINE-CACHE] stage=close device=0x{} retained=true", Long.toHexString(device.address()), failure);
+            LOGGER.error("[VKB-PIPELINE-CACHE] stage=close device=0x{} retained=true\n{}", Long.toHexString(device.address()), LogPaths.stack(failure));
             throw failure;
         }
     }
@@ -94,7 +95,7 @@ public final class RtVulkanPipelineCache {
             if (result == VK10.VK_ERROR_DEVICE_LOST)
                 throw new RtFailure("pipeline_cache_create", "device lost; device=0x" + Long.toHexString(device.address()));
             if (result != VK10.VK_SUCCESS && initial != null) {
-                LOGGER.warn("[VKB-PIPELINE-CACHE] stage=create source={} VkResult={} retry=empty", file, result);
+                LOGGER.warn("[VKB-PIPELINE-CACHE] stage=create source={} VkResult={} retry=empty", LogPaths.show(file), result);
                 info = VkPipelineCacheCreateInfo.calloc(stack).sType$Default();
                 out.put(0, VK10.VK_NULL_HANDLE);
                 result = VK10.vkCreatePipelineCache(device, info, null, out);
@@ -107,7 +108,7 @@ public final class RtVulkanPipelineCache {
                 LOGGER.warn("[VKB-PIPELINE-CACHE] stage=create VkResult={} mode=uncached device=0x{}", result, Long.toHexString(device.address()));
             else
                 LOGGER.info("[VKB-PIPELINE-CACHE] stage=create source={} file={} device=0x{}",
-                    loaded ? "disk" : "empty", file != null ? file : "memory-only", Long.toHexString(device.address()));
+                    loaded ? "disk" : "empty", file != null ? LogPaths.show(file) : "memory-only", Long.toHexString(device.address()));
         }
     }
 
@@ -115,7 +116,7 @@ public final class RtVulkanPipelineCache {
         try {
             return Platforms.get().configDir().resolve("bedray").resolve("cache").resolve("vulkan").resolve(identity.filename());
         } catch (RuntimeException failure) {
-            LOGGER.warn("[VKB-PIPELINE-CACHE] stage=locate mode=memory-only", failure);
+            LOGGER.warn("[VKB-PIPELINE-CACHE] stage=locate mode=memory-only\n{}", LogPaths.stack(failure));
             return null;
         }
     }
@@ -125,13 +126,13 @@ public final class RtVulkanPipelineCache {
             long size = Files.size(file);
             if (size < PipelineCacheData.ENVELOPE_BYTES + PipelineCacheIdentity.HEADER_BYTES
                 || size > (long) PipelineCacheIdentity.MAX_BYTES + PipelineCacheData.ENVELOPE_BYTES) {
-                LOGGER.warn("[VKB-PIPELINE-CACHE] stage=load file={} reason=envelope_size bytes={}", file, size);
+                LOGGER.warn("[VKB-PIPELINE-CACHE] stage=load file={} reason=envelope_size bytes={}", LogPaths.show(file), size);
                 return null;
             }
             byte[] bytes;
             try (var input = Files.newInputStream(file)) { bytes = input.readNBytes((int) size + 1); }
             if (bytes.length != size) {
-                LOGGER.warn("[VKB-PIPELINE-CACHE] stage=load file={} reason=changed_size", file);
+                LOGGER.warn("[VKB-PIPELINE-CACHE] stage=load file={} reason=changed_size", LogPaths.show(file));
                 return null;
             }
             ByteBuffer payload = PipelineCacheData.decode(bytes, identity);
@@ -141,7 +142,7 @@ public final class RtVulkanPipelineCache {
         } catch (java.nio.file.NoSuchFileException absent) {
             return null;
         } catch (IOException | RuntimeException failure) {
-            LOGGER.warn("[VKB-PIPELINE-CACHE] stage=load file={} mode=empty reason={}", file, failure.getMessage(), failure);
+            LOGGER.warn("[VKB-PIPELINE-CACHE] stage=load file={} mode=empty reason={}\n{}", LogPaths.show(file), LogPaths.show(failure.getMessage()), LogPaths.stack(failure));
             return null;
         }
     }
@@ -170,14 +171,14 @@ public final class RtVulkanPipelineCache {
                 }
                 data.limit((int) written);
                 if (writeAtomically(file, data))
-                    LOGGER.info("[VKB-PIPELINE-CACHE] stage=save file={} bytes={}", file, written);
+                    LOGGER.info("[VKB-PIPELINE-CACHE] stage=save file={} bytes={}", LogPaths.show(file), written);
                 return;
             }
             if (capacity > 0) {
                 LOGGER.warn("[Bedray] Vulkan pipeline cache did not fit the serialization limit; skipped saving");
             }
         } catch (RuntimeException e) {
-            LOGGER.warn("[Bedray] could not save Vulkan pipeline cache: {}", e.toString());
+            LOGGER.warn("[Bedray] could not save Vulkan pipeline cache: {}", LogPaths.show(e.toString()));
         }
     }
 
@@ -195,7 +196,7 @@ public final class RtVulkanPipelineCache {
             }
             return true;
         } catch (IOException | RuntimeException e) {
-            LOGGER.warn("[VKB-PIPELINE-CACHE] stage=save file={} retained=previous_file", target, e);
+            LOGGER.warn("[VKB-PIPELINE-CACHE] stage=save file={} retained=previous_file\n{}", target, LogPaths.stack(e));
             return false;
         } finally {
             if (temporary != null) {

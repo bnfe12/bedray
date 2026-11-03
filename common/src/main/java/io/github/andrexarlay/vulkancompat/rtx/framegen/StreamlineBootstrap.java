@@ -80,7 +80,7 @@ public final class StreamlineBootstrap {
         try {
             Files.createDirectories(logDir);
         } catch (java.io.IOException e) {
-            LOGGER.warn("[VKB-FG] cannot create {}: {}", LogPaths.show(logDir), e.toString());
+            LOGGER.warn("[VKB-FG] cannot create {}: {}", LogPaths.show(logDir), LogPaths.show(e));
         }
         int r = n.init(dir.toString(), logDir.toString(), false);
         pumpLog(n);
@@ -103,7 +103,7 @@ public final class StreamlineBootstrap {
             }
         } catch (RuntimeException | LinkageError e) {
             fail("lwjgl_vk_reload", LogPaths.show(e.toString()));
-            LOGGER.error("[VKB-FG] VK.create(interposer) failed", e);
+            LOGGER.error("[VKB-FG] VK.create(interposer) failed\n{}", LogPaths.stack(e));
             return;
         }
         nativeLib = n;
@@ -152,7 +152,7 @@ public final class StreamlineBootstrap {
                 }
                 nativeAddrs = new long[] {a, b};
             } catch (RuntimeException e) {
-                LOGGER.error("[VKB-FG] cannot load vulkan-1.dll for NGX", e);
+                LOGGER.error("[VKB-FG] cannot load vulkan-1.dll for NGX\n{}", LogPaths.stack(e));
                 return null;
             }
         }
@@ -166,16 +166,17 @@ public final class StreamlineBootstrap {
             return;
         }
         for (String line : s.split("\n")) {
+            String safe = LogPaths.show(line);
             if (line.startsWith("[E]")) {
-                LOGGER.error("[VKB-FG] sl: {}", line);
+                LOGGER.error("[VKB-FG] sl: {}", safe);
             } else {
-                LOGGER.info("[VKB-FG] sl: {}", line);
+                LOGGER.info("[VKB-FG] sl: {}", safe);
             }
         }
     }
 
     private static void fail(String stage, String detail) {
-        failure = stage + ": " + detail;
-        LOGGER.error("[VKB-FG] sl=FAILED stage={} {}", stage, detail);
+        failure = LogPaths.show(stage + ": " + detail);
+        LOGGER.error("[VKB-FG] sl=FAILED stage={} {}", stage, LogPaths.show(detail));
     }
 }

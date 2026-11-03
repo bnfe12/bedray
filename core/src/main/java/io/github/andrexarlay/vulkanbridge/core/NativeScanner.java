@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -70,7 +72,7 @@ public final class NativeScanner {
             try {
                 found = NativeFiles.find(dirs.get(i), s.file());
             } catch (IOException e) {
-                return new SlotState(s, State.INVALID, "cannot list " + dirs.get(i) + ": " + e, 0, null, i > 0, null);
+                return new SlotState(s, State.INVALID, LogPaths.show("cannot list " + dirs.get(i) + ": " + e), 0, null, i > 0, null);
             }
             if (found == null) {
                 continue;
@@ -85,11 +87,11 @@ public final class NativeScanner {
                 try {
                     same = s.bundledSha256().equals(cachedSha(found));
                 } catch (IOException e) {
-                    return new SlotState(s, State.INVALID, "cannot read: " + e, sizeOrZero(found), null, legacy, null);
+                    return new SlotState(s, State.INVALID, "cannot read: " + LogPaths.show(e.toString()), sizeOrZero(found), null, legacy, null);
                 }
             }
-            return new SlotState(s, State.FOUND, legacy ? "legacy folder " + dirs.get(i) : dirs.get(i).toString(), sizeOrZero(found),
-                NativeFiles.version(found), legacy, same);
+            return new SlotState(s, State.FOUND, LogPaths.show(legacy ? "legacy folder " + dirs.get(i) : dirs.get(i).toString()),
+                sizeOrZero(found), NativeFiles.version(found), legacy, same);
         }
         return new SlotState(s, State.MISSING, "", 0, null, false, null);
     }

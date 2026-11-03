@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.shaderhost.customrt;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
@@ -186,7 +187,7 @@ public final class CustomRtStage {
             executor.prepare(device, frame, tlas, depth);
         } catch (RuntimeException | LinkageError e) {
             broken = true;
-            LOGGER.error("[VKB-CUSTOMRT] preparation failed", e);
+            LOGGER.error("[VKB-CUSTOMRT] preparation failed\n{}", LogPaths.stack(e));
             fail("preparation failed: " + flat(String.valueOf(e.getMessage())));
             return;
         }
@@ -199,7 +200,7 @@ public final class CustomRtStage {
             recorded = true;
         } catch (RuntimeException | LinkageError e) {
             broken = true;
-            LOGGER.error("[VKB-CUSTOMRT] recording failed", e);
+            LOGGER.error("[VKB-CUSTOMRT] recording failed\n{}", LogPaths.stack(e));
             fail("recording failed: " + flat(String.valueOf(e.getMessage())));
         } finally {
             VkBarriers.fullMemoryBarrier(command);
@@ -240,14 +241,14 @@ public final class CustomRtStage {
     private static void waiting(String why) {
         if (state != State.FAILED) {
             state = State.WAITING;
-            detail = why;
+            detail = LogPaths.show(why);
         }
     }
 
     private static void fail(String why) {
         state = State.FAILED;
-        detail = why;
-        LOGGER.warn("[VKB-CUSTOMRT] pack=\"{}\" {}", pack, why);
+        detail = LogPaths.show(why);
+        LOGGER.warn("[VKB-CUSTOMRT] pack=\"{}\" {}", pack, detail);
     }
 
     private static String bindingNames(List<SpirvReflection.Binding> bindings) {

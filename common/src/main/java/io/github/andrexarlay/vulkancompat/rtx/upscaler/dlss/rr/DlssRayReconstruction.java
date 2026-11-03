@@ -247,7 +247,7 @@ public final class DlssRayReconstruction implements AutoCloseable {
             }
             return outSupported.get(JAVA_INT, 0) != 0;
         } catch (Throwable t) {
-            LOGGER.error("[DLSS-RR] is_supported invocation failed", t);
+            LOGGER.error("[DLSS-RR] is_supported invocation failed\n{}", LogPaths.stack(t));
             return false;
         }
     }

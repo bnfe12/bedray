@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.shaderhost.IrisPackChoice;
@@ -89,11 +90,11 @@ public final class DirtRtRuntime {
             program = DirtRtPackProgram.load(pack, report);
         } catch (SpirvCompiler.SpirvCompileException e) {
             DirtRtPipeline.onFailure("compile failed: " + oneLine(e.errorLog()), 0L);
-            LOGGER.error("[VKB-DIRTRT] {} compile failed: {}", report.name(), e.errorLog());
+            LOGGER.error("[VKB-DIRTRT] {} compile failed: {}", report.name(), LogPaths.show(e.errorLog()));
             return;
         } catch (Exception | LinkageError e) {
             DirtRtPipeline.onFailure("load failed: " + oneLine(String.valueOf(e.getMessage())), 0L);
-            LOGGER.error("[VKB-DIRTRT] {} load failed", report.name(), e);
+            LOGGER.error("[VKB-DIRTRT] {} load failed\n{}", report.name(), LogPaths.stack(e));
             return;
         }
         bindingSummary = program.missing().stream().map(b -> b.binding().set() + "." + b.binding().binding())
@@ -162,7 +163,7 @@ public final class DirtRtRuntime {
             DirtRtPipeline.updateState(State.READY, null, blocked);
             LOGGER.info("[VKB-DIRTRT] {} (runtime array capacity {})", blocked, capacity);
         } catch (RuntimeException | LinkageError e) {
-            LOGGER.error("[VKB-DIRTRT] pipeline creation failed", e);
+            LOGGER.error("[VKB-DIRTRT] pipeline creation failed\n{}", LogPaths.stack(e));
             release();
             DirtRtPipeline.onFailure("pipeline creation failed: " + oneLine(String.valueOf(e.getMessage())), 0L);
         }

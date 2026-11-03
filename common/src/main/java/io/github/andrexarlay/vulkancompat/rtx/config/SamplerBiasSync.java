@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rtx.config;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,7 +50,7 @@ public final class SamplerBiasSync {
             appliedPointSharpness = wantPoint;
         } catch (RuntimeException e) {
             // keep `applied` so the next frame retries; the failure is logged, not swallowed
-            LOGGER.error("[VKB-AUTOTEST] lod_bias=FAILED want={} message={}", want, e.toString());
+            LOGGER.error("[VKB-AUTOTEST] lod_bias=FAILED want={} message={}", want, LogPaths.show(e));
         }
     }
 }

@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.sodium;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.VulkanRtxManager;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessRuntime;
@@ -54,7 +55,7 @@ public final class PresetStore {
             s.map(p -> p.getFileName().toString()).filter(n -> n.endsWith(".toml"))
                 .map(n -> n.substring(0, n.length() - 5)).sorted(String.CASE_INSENSITIVE_ORDER).forEach(out::add);
         } catch (IOException e) {
-            LOGGER.warn("cannot list presets: {}", e.getMessage());
+            LOGGER.warn("cannot list presets: {}", LogPaths.show(e.getMessage()));
         }
         return out;
     }
@@ -96,7 +97,7 @@ public final class PresetStore {
             LOGGER.info("[VKB-AUTOTEST] ui_preset saved name={} bytes={}", n, text.length());
             return true;
         } catch (IOException e) {
-            LOGGER.warn("cannot save preset {}: {}", n, e.getMessage());
+            LOGGER.warn("cannot save preset {}: {}", n, LogPaths.show(e.getMessage()));
             return false;
         }
     }

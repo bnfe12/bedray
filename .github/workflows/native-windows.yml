@@ -2,8 +2,10 @@ name: Native Windows contracts
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
-    branches: [codex/native-ci-abi-exceptions, 'codex/migration-*']
+    branches: [main, codex/native-ci-abi-exceptions, 'codex/migration-*']
 
 permissions:
   contents: read

@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.framegen;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
@@ -287,7 +288,7 @@ public final class FrameGenRuntime {
             return Fsr3FrameGen.statusLine();
         }
         if (amd() && availability() == Availability.NO_BINARIES) {
-            String why = Fsr3FrameGen.failed() ? Fsr3FrameGen.failure() : Fsr3FrameGen.dllNote();
+            String why = LogPaths.show(Fsr3FrameGen.failed() ? Fsr3FrameGen.failure() : Fsr3FrameGen.dllNote());
             return "Unavailable (AMD FSR 3): " + why;
         }
         if (!amd() && availability() == Availability.NEEDS_RESTART && FrameGenSettings.provider() == FrameGenSettings.Provider.AMD) {
@@ -296,7 +297,7 @@ public final class FrameGenRuntime {
         Snapshot sn = snapshot();
         Status st = sn.status();
         return switch (availability()) {
-            case NO_BINARIES -> "Unavailable: missing " + FrameGenEarly.missingFiles() + " in " + FrameGenEarly.slDir();
+            case NO_BINARIES -> LogPaths.show("Unavailable: missing " + FrameGenEarly.missingFiles() + " in " + FrameGenEarly.slDir());
             case NEEDS_RESTART -> FrameGenSettings.mode() == FrameGenSettings.Mode.OFF
                 ? "Off (Select 2x and restart to activate Streamline)"
                 : "Restart required to activate Streamline (" + FrameGenSettings.mode().label() + ")";
@@ -343,7 +344,7 @@ public final class FrameGenRuntime {
 
     private static void fail(String stage, String detail, Throwable t) {
         failed = true;
-        failure = stage + ": " + detail;
+        failure = LogPaths.show(stage + ": " + detail);
         Throwable cause = t != null ? t : new IllegalStateException(failure);
         if (StreamlineBootstrap.isReady()) {
             // Present interception survives Java's failed flag. Stop the actual vendor consumer too.
@@ -353,9 +354,9 @@ public final class FrameGenRuntime {
         }
         LOGGER.error("[VKB-FG] provider=nvidia fg=FAILED stage={} frame={} slot={} output={}x{} render={}x{} "
                 + "mode_on={} vendor_mode_unknown={} vendor_tags_retained={} output_owner_retained={} "
-                + "producer_recordings_retained={} detail={}",
+                + "producer_recordings_retained={} detail={}\n{}",
             stage, frameIndex, slot, winW, winH, renderW, renderH, modeOn, generationStateUnknown, resourceTags.isActive(), gpu != null,
-            gpu != null && gpu.hasPendingRecordings(), detail, cause);
+            gpu != null && gpu.hasPendingRecordings(), LogPaths.show(detail), LogPaths.stack(cause));
     }
 
     private static void check(int r, String what) {
@@ -393,7 +394,7 @@ public final class FrameGenRuntime {
                 StreamlineBootstrap.pumpLog(sl);
             }
         } catch (Throwable t) {
-            fail("frame_head", t.toString(), t);
+            fail("frame_head", LogPaths.show(t.toString()), t);
         }
     }
 
@@ -406,7 +407,7 @@ public final class FrameGenRuntime {
             check(sl.marker(1), "slPCLSetMarker(SimulationEnd)");
             check(sl.marker(2), "slPCLSetMarker(RenderSubmitStart)");
         } catch (Throwable t) {
-            fail("before_render", t.toString(), t);
+            fail("before_render", LogPaths.show(t.toString()), t);
         }
     }
 
@@ -473,7 +474,7 @@ public final class FrameGenRuntime {
             });
             worldReady = true;
         } catch (Throwable t) {
-            fail("world_ready", t.toString(), t);
+            fail("world_ready", LogPaths.show(t.toString()), t);
         }
     }
 
@@ -538,7 +539,7 @@ public final class FrameGenRuntime {
                 StreamlineBootstrap.pumpLog(sl);
             }
         } catch (Throwable t) {
-            fail("after_render", t.toString(), t);
+            fail("after_render", LogPaths.show(t.toString()), t);
         }
     }
 
@@ -551,7 +552,7 @@ public final class FrameGenRuntime {
             check(sl.marker(3), "slPCLSetMarker(RenderSubmitEnd)");
             check(sl.marker(4), "slPCLSetMarker(PresentStart)");
         } catch (Throwable t) {
-            fail("present_start", t.toString(), t);
+            fail("present_start", LogPaths.show(t.toString()), t);
         }
     }
 
@@ -625,7 +626,7 @@ public final class FrameGenRuntime {
                 StreamlineBootstrap.pumpLog(sl);
             }
         } catch (Throwable t) {
-            fail("present_end", t.toString(), t);
+            fail("present_end", LogPaths.show(t.toString()), t);
         }
     }
 
@@ -705,7 +706,7 @@ public final class FrameGenRuntime {
             }
             LOGGER.info("[VKB-FG] dlssg mode=OFF reason=swapchain_reconfigure");
         } catch (Throwable t) {
-            fail("reconfigure", t.toString(), t);
+            fail("reconfigure", LogPaths.show(t.toString()), t);
             throw new IllegalStateException("FG resources retained after failed reconfiguration drain", t);
         }
     }
@@ -731,7 +732,7 @@ public final class FrameGenRuntime {
             LOGGER.info("[VKB-FG] teardown surface_close rendered_total={} presented_total={} doubled_frames={}", renderedTotal, presentedTotal, doubledFrames);
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
-            fail("surface_close", t.toString(), t);
+            fail("surface_close", LogPaths.show(t.toString()), t);
             throw new IllegalStateException("FG resources retained after failed surface-close drain", t);
         }
     }
@@ -753,8 +754,8 @@ public final class FrameGenRuntime {
             StreamlineBootstrap.pumpLog(sl);
         } catch (Throwable t) {
             LOGGER.error("[VKB-FG] provider=nvidia stage=device_close_sl_shutdown frame={} mode_on={} "
-                + "vendor_mode_unknown={} vendor_tags_retained={} output_owner_retained={}", frameIndex, modeOn,
-                generationStateUnknown, resourceTags.isActive(), gpu != null, t);
+                + "vendor_mode_unknown={} vendor_tags_retained={} output_owner_retained={}\n{}", frameIndex, modeOn,
+                generationStateUnknown, resourceTags.isActive(), gpu != null, LogPaths.stack(t));
         }
     }
 
@@ -821,7 +822,7 @@ public final class FrameGenRuntime {
             sendConstants(StreamlineBootstrap.sl());
             constantsFrame = frameIndex;
         } catch (Throwable t) {
-            fail("constants", t.toString(), t);
+            fail("constants", LogPaths.show(t.toString()), t);
         }
     }
 

@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
@@ -109,7 +110,7 @@ public final class RtFrameRenderer {
     private static final RtAtmosphere atmosphere = new RtAtmosphere();
     private static final RecordingCompletion recordingCompletion =
         new RecordingCompletion(
-            failure -> LOGGER.error("[VKB-RT] native recording release failed; retaining it for host drain", failure));
+            failure -> LOGGER.error("[VKB-RT] native recording release failed; retaining it for host drain\n{}", LogPaths.stack(failure)));
     /**
      * This renderer's handle on the device's one native core, leased from {@link SlangRuntimePool}. Created with the
      * feature mask the logical device really enabled, because path_trace uses ray queries, buffer device addresses and
@@ -480,7 +481,7 @@ public final class RtFrameRenderer {
         } catch (RtFailure f) {
             fail(f.stage(), f.result(), f.getCause() != null ? f.getCause() : f);
         } catch (RuntimeException | LinkageError e) {
-            fail("frame", e.getClass().getSimpleName() + ": " + e.getMessage(), e);
+            fail("frame", e.getClass().getSimpleName() + ": " + LogPaths.show(e.getMessage()), e);
         }
     }
 
@@ -507,7 +508,7 @@ public final class RtFrameRenderer {
                     RtGpuTimer.active = gpuTimer;
                 } catch (RuntimeException e) {
                     // A device without timestamp queries must lose the timings, not the whole RT frame.
-                    LOGGER.warn("[VKB-RT] gpu timers unavailable: {}", e.getMessage());
+                    LOGGER.warn("[VKB-RT] gpu timers unavailable: {}", LogPaths.show(e.getMessage()));
                 }
             }
             selectDenoiser();
@@ -530,7 +531,7 @@ public final class RtFrameRenderer {
             try {
                 denoiseAvailability = BridgeNrdLocator.locate(VulkanBridge.libraries());
             } catch (Throwable t) {
-                denoiseAvailability = NrdAvailability.unavailable("Bedray NativeLibraries not available: " + t.getMessage());
+                denoiseAvailability = NrdAvailability.unavailable("Bedray NativeLibraries not available: " + LogPaths.show(t.getMessage()));
             }
         }
 
@@ -899,7 +900,7 @@ public final class RtFrameRenderer {
         try {
             lightmapView = WorldTargetManager.extractVkImageView(Minecraft.getInstance().gameRenderer.lightmap());
         } catch (RuntimeException | LinkageError e) {
-            LOGGER.debug("[VKB-RT] lightmap view unavailable: {}", e.toString());
+            LOGGER.debug("[VKB-RT] lightmap view unavailable: {}", LogPaths.show(e.toString()));
         }
         if (denoiseMode == DenoiserMode.DLSS_RR && dlssRrDenoiser != null) {
             DlssRrDenoiser owner = dlssRrDenoiser;
@@ -1226,9 +1227,9 @@ public final class RtFrameRenderer {
                 } catch (Exception e) {
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
                         throw nativeFailure; // partial coarse recording requires whole-command discard
-                    denoiserRuntimeFailure = "dlss_rr_record: " + String.valueOf(e.getMessage());
-                    LOGGER.error("[DLSS-RR] FAILED record: {} (whole recording discarded; denoiser fallback next frame)",
-                        e.getMessage(), e);
+                    denoiserRuntimeFailure = "dlss_rr_record: " + LogPaths.show(e.getMessage());
+                    LOGGER.error("[DLSS-RR] FAILED record: {} (whole recording discarded; denoiser fallback next frame)\n{}",
+                        LogPaths.show(e.getMessage()), LogPaths.stack(e));
                     dropDlssRrDenoiserNext = true;
                     dropDlssRrByError = true;
                     throw new RtDenoiserFrameDiscard("DLSS-RR recording failed before submission", e);
@@ -1255,11 +1256,11 @@ public final class RtFrameRenderer {
                     frameColorTemporallyResolved = true;
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (NrdException e) {
-                    denoiserRuntimeFailure = "nrd_record " + e.stage() + ": " + String.valueOf(e.getMessage());
+                    denoiserRuntimeFailure = "nrd_record " + e.stage() + ": " + LogPaths.show(e.getMessage());
                     // The command buffer stays valid (vkb_nrd validates before recording); the raw image is shown this frame and the
                     // denoiser is dropped at the start of the next one.
-                    LOGGER.error("[VKB-NRD] FAILED stage={} {} (denoiser disabled for this session, raw RT image is shown)",
-                        e.stage(), e.getMessage(), e);
+                    LOGGER.error("[VKB-NRD] FAILED stage={} {} (denoiser disabled for this session, raw RT image is shown)\n{}",
+                        e.stage(), LogPaths.show(e.getMessage()), LogPaths.stack(e));
                     dropDenoiserNext = true;
                     dropDenoiserByError = true;
                 }
@@ -1322,7 +1323,7 @@ public final class RtFrameRenderer {
         try {
             denoiseAvailability = BridgeNrdLocator.locate(VulkanBridge.libraries());
         } catch (Throwable e) {
-            denoiseAvailability = NrdAvailability.unavailable("Bedray NativeLibraries not available: " + e.getMessage());
+            denoiseAvailability = NrdAvailability.unavailable("Bedray NativeLibraries not available: " + LogPaths.show(e.getMessage()));
         }
         nrdPathOnly = false;
         lastDenoiserLog = "";
@@ -1380,9 +1381,9 @@ public final class RtFrameRenderer {
             dlssRrDenoiser = new DlssRrDenoiser(device, world.memory(), w, h, rrOutput(),
                 pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
         } catch (Exception e) {
-            denoiserRuntimeFailure = "dlss_rr_init: " + String.valueOf(e.getMessage());
-            LOGGER.error("[DLSS-RR] status=disabled stage=init profile=dlss_rr extent={}x{} outputView=0x{} reason={} (falling back to NRD if available)",
-                w, h, Long.toUnsignedString(frameOutput() != null ? frameOutput().view : 0L, 16), e.getMessage(), e);
+            denoiserRuntimeFailure = "dlss_rr_init: " + LogPaths.show(e.getMessage());
+            LOGGER.error("[DLSS-RR] status=disabled stage=init profile=dlss_rr extent={}x{} outputView=0x{} reason={} (falling back to NRD if available)\n{}",
+                w, h, Long.toUnsignedString(frameOutput() != null ? frameOutput().view : 0L, 16), LogPaths.show(e.getMessage()), LogPaths.stack(e));
             dlssRrFailed = true;
             if (!nrdFailed && denoiseAvailability != null && denoiseAvailability.usable()) {
                 LOGGER.warn("[DLSS-RR] Falling back to NRD_REBLUR (keeping G-Buffer pipeline)");
@@ -1421,9 +1422,9 @@ public final class RtFrameRenderer {
             denoiser = new NrdDenoiser(device, world.memory(), denoiseMode, denoiseAvailability, w, h, frameOutput().view,
                 pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
         } catch (NrdException | RtFailure e) {
-            denoiserRuntimeFailure = "nrd_init: " + String.valueOf(e.getMessage());
-            LOGGER.error("[VKB-NRD] status=disabled stage=init profile={} extent={}x{} outputView=0x{} reason={} (off for this session, setting kept)",
-                denoiseMode.logName(), w, h, Long.toUnsignedString(frameOutput() != null ? frameOutput().view : 0L, 16), e.getMessage(), e);
+            denoiserRuntimeFailure = "nrd_init: " + LogPaths.show(e.getMessage());
+            LOGGER.error("[VKB-NRD] status=disabled stage=init profile={} extent={}x{} outputView=0x{} reason={} (off for this session, setting kept)\n{}",
+                denoiseMode.logName(), w, h, Long.toUnsignedString(frameOutput() != null ? frameOutput().view : 0L, 16), LogPaths.show(e.getMessage()), LogPaths.stack(e));
             nrdFailed = true;
             denoiseMode = DenoiserMode.OFF;
             rebuildPlainPipeline(device);
@@ -1528,7 +1529,7 @@ public final class RtFrameRenderer {
             pathSlangUnavailableReason = failure.result();
             throw failure;
         } catch (RuntimeException e) {
-            String reason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String reason = LogPaths.show(e.getMessage()) == null ? e.getClass().getSimpleName() : LogPaths.show(e.getMessage());
             pathSlangUnavailableReason = reason;
             throw new RtFailure(rayMode ? "slang_ray" : "slang_path", reason, e);
         }
@@ -1550,7 +1551,7 @@ public final class RtFrameRenderer {
             return runtime;
         } catch (RuntimeException e) {
             pathSlangUnavailable = true;
-            pathSlangUnavailableReason = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            pathSlangUnavailableReason = LogPaths.show(e.getMessage()) == null ? e.getClass().getSimpleName() : LogPaths.show(e.getMessage());
             throw e;
         }
     }
@@ -1758,11 +1759,12 @@ public final class RtFrameRenderer {
     }
 
     private static void fail(String stage, String result, Throwable cause) {
-        RtGeometryGate.markFailed(stage, result);
+        String safeResult = LogPaths.show(result);
+        RtGeometryGate.markFailed(stage, safeResult);
         if (cause != null) {
-            LOGGER.error("[VKB-RT] FAILED stage={} result={} (RT disabled for this session)", stage, result, cause);
+            LOGGER.error("[VKB-RT] FAILED stage={} result={} (RT disabled for this session)\n{}", stage, safeResult, LogPaths.stack(cause));
         } else {
-            LOGGER.error("[VKB-RT] FAILED stage={} result={} (RT disabled for this session)", stage, result);
+            LOGGER.error("[VKB-RT] FAILED stage={} result={} (RT disabled for this session)", stage, safeResult);
         }
         shutdown("failed");
     }
@@ -1814,8 +1816,8 @@ public final class RtFrameRenderer {
             } catch (RuntimeException | LinkageError e) {
                 // Keep strong references for an explicit later shutdown. A
                 // failed flush/idle is not permission to free pending resources.
-                RtGeometryGate.markFailed("shutdown_drain", String.valueOf(e.getMessage()));
-                LOGGER.error("[VKB-RT] shutdown drain refused; retaining renderer resources reason={}", reason, e);
+                RtGeometryGate.markFailed("shutdown_drain", LogPaths.show(e.getMessage()));
+                LOGGER.error("[VKB-RT] shutdown drain refused; retaining renderer resources reason={}\n{}", reason, LogPaths.stack(e));
                 return;
             }
         }
@@ -1841,7 +1843,7 @@ public final class RtFrameRenderer {
                 teardownPending = false;
             } catch (RuntimeException | LinkageError e) {
                 teardownPending = true;
-                LOGGER.error("[VKB-RT] runtime cleanup failed before world publication", e);
+                LOGGER.error("[VKB-RT] runtime cleanup failed before world publication\n{}", LogPaths.stack(e));
             }
             return;
         }
@@ -1911,8 +1913,8 @@ public final class RtFrameRenderer {
             world = null;
             LOGGER.info("[VKB-RT] world_destroyed reason={}", reason);
         } catch (RuntimeException | LinkageError e) {
-            LOGGER.error("[VKB-RT] FAILED stage=destroy result={} reason={}", e.getMessage(), reason, e);
-            RtGeometryGate.markFailed("destroy", String.valueOf(e.getMessage()));
+            LOGGER.error("[VKB-RT] FAILED stage=destroy result={} reason={}\n{}", LogPaths.show(e.getMessage()), reason, LogPaths.stack(e));
+            RtGeometryGate.markFailed("destroy", LogPaths.show(e.getMessage()));
             return;
         }
         teardownPending = false;

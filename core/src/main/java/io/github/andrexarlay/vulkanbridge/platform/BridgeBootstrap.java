@@ -38,9 +38,10 @@ public final class BridgeBootstrap {
         java.nio.file.Path dir = io.github.andrexarlay.vulkanbridge.api.VulkanBridge.libraries().nativesDirectory();
         try {
             var r = io.github.andrexarlay.vulkanbridge.core.NativeFolders.ensureLayout(dir);
-            LOGGER.info("[VKB-NATIVES] layout dir={} created={} readme_written={}", LogPaths.show(dir), r.createdDirs(), r.readmeWritten());
+            LOGGER.info("[VKB-NATIVES] layout dir={} created={} readme_written={}", LogPaths.show(dir), LogPaths.show(r.createdDirs()),
+                    r.readmeWritten());
         } catch (java.io.IOException e) {
-            LOGGER.warn("[VKB-NATIVES] cannot prepare the natives folders under {}", LogPaths.show(dir), e);
+            LOGGER.warn("[VKB-NATIVES] cannot prepare the natives folders under {}\n{}", LogPaths.show(dir), LogPaths.stack(e));
         }
         io.github.andrexarlay.vulkanbridge.core.NativeBundle.extractAll(dir);
     }

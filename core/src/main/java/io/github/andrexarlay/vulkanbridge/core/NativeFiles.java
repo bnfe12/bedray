@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
+import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.DirectoryStream;
@@ -50,7 +52,7 @@ public final class NativeFiles {
         } catch (PeInspector.PeFormatException e) {
             return e.getMessage();
         } catch (IOException e) {
-            return "cannot be read: " + e;
+            return "cannot be read: " + LogPaths.show(e.toString());
         }
     }
 
