@@ -172,6 +172,14 @@ public final class RtFrameRenderer {
     private static boolean dropDenoiserByError = false; // true = NrdException, false = user toggled OFF
     // [DLSS-RR] DLSS Ray Reconstruction denoiser (experimental)
     private static DlssRrDenoiser dlssRrDenoiser;
+    private static RtOutputResolve outputResolve;
+
+    /** A live RR instance can own output reconstruction next frame. FG keeps its existing producer path. */
+    public static boolean rrOutputReady() {
+        return RtGeometryGate.enabled() && RtConfig.displayed() && RtConfig.effectiveMode() == RtConfig.MODE_LIT
+            && RtConfig.mode() == RtMode.PATH_TRACED && RtSettings.denoiser() == RtSettings.PathDenoiser.DLSS_RR
+            && dlssRrDenoiser != null && !dropDlssRrDenoiserNext && !dlssRrFailed;
+    }
     private static boolean dropDlssRrDenoiserNext = false;
     private static boolean dropDlssRrByError = false;
     // A denoiser that failed to create or record is off for the rest of the session. The user's setting
@@ -360,7 +368,7 @@ public final class RtFrameRenderer {
 
     /** RT primary-ray distance image (R32F, GENERAL, 1e6 = no hit) of the frame RT displayed into {@code target}, or null. */
     public static RtMemory.Img rayDistance(RenderTarget target) {
-        return displayedThisFrame(target) ? frameDepth() : null;
+        return displayedThisFrame(target) && frameResources != null ? frameResources.displayDepth() : null;
     }
     private static final boolean BOB_PROJECTION = io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.bobProjectionEnabled();
 
@@ -466,6 +474,9 @@ public final class RtFrameRenderer {
         }
         try {
             frame(camera, target, levelState);
+        } catch (RtDenoiserFrameDiscard discarded) {
+            if (discarded.getSuppressed().length != 0) fail("rr_discard", "retirement_failed", discarded);
+            else LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded next_frame=denoiser_fallback");
         } catch (RtFailure f) {
             fail(f.stage(), f.result(), f.getCause() != null ? f.getCause() : f);
         } catch (RuntimeException | LinkageError e) {
@@ -607,7 +618,7 @@ public final class RtFrameRenderer {
         }
         if (target != null && target.width > 0 && target.height > 0
             && camera.projectionMatrix != null && camera.viewRotationMatrix != null) {
-            prepareFrameResources(device, target.width, target.height);
+            prepareFrameResources(device, WorldTargetManager.traceWidth(target.width), WorldTargetManager.traceHeight(target.height));
         }
         long frameStart = System.nanoTime();
         if (emitters == null) emitters = new RtEmitters(world.memory());
@@ -620,11 +631,15 @@ public final class RtFrameRenderer {
         RtWorld recordingWorld = world;
         RtFrameResources recordingResources = frameResources;
         RtPass recordingPass = pass;
+        RtOutputResolve recordingOutputResolve = outputResolve;
         Runnable[] particleRelease = {() -> {}};
         Retirement[] denoiserProof = {new Retirement(() -> {}, () -> {})};
         RecordingCompletion.Ticket recording;
         try {
             recording = recordingCompletion.beginWithDiscard(cmd.address(),
+            new Retirement(
+                () -> { if (recordingOutputResolve != null) recordingOutputResolve.release(cmd.address(), false); },
+                () -> { if (recordingOutputResolve != null) recordingOutputResolve.release(cmd.address(), true); }),
             new Retirement(() -> statsOwner.completed(statsLease), () -> statsOwner.discarded(statsLease)),
             new Retirement(
                 () -> atmosphere.releaseRecording(cmd.address()), () -> atmosphere.discardRecording(cmd.address())),
@@ -788,6 +803,7 @@ public final class RtFrameRenderer {
     private static RtMemory.Img frameOutput() { return frameResources != null ? frameResources.output() : null; }
     private static RtMemory.Img frameDepth() { return frameResources != null ? frameResources.depth() : null; }
     private static RtMemory.Img frameComposite() { return frameResources != null ? frameResources.composite() : null; }
+    private static RtMemory.Img rrOutput() { return WorldTargetManager.rrResolvesOutput() ? frameComposite() : frameOutput(); }
     private static RtMemory.Buf frameMotion() { return frameResources != null ? frameResources.motion() : null; }
 
     /** Resource replacement happens before any command buffer can capture the previous generation. */
@@ -796,22 +812,27 @@ public final class RtFrameRenderer {
         int previousWidth = frameOutput() != null ? frameOutput().width : 0;
         int previousHeight = frameOutput() != null ? frameOutput().height : 0;
         DenoiserMode previousMode = denoiseMode;
-        boolean outputChanged = frameResources.needsOutput(w, h);
-        long outputView = frameOutput() != null ? frameOutput().view : 0L;
-        long outputImage = frameOutput() != null ? frameOutput().image : 0L;
+        boolean combinedRr = WorldTargetManager.rrResolvesOutput();
+        int outW = WorldTargetManager.presentationWidth(w), outH = WorldTargetManager.presentationHeight(h);
+        boolean outputChanged = combinedRr ? frameResources.needsOutput(w, h, outW, outH) : frameResources.needsOutput(w, h);
+        long outputView = rrOutput() != null ? rrOutput().view : 0L;
+        long outputImage = rrOutput() != null ? rrOutput().image : 0L;
         boolean denoiserChanged = denoiser != null && denoiser.needsEnsure(w, h, outputView);
-        boolean rrChanged = dlssRrDenoiser != null && dlssRrDenoiser.needsEnsure(w, h, outputImage, outputView);
+        boolean rrChanged = dlssRrDenoiser != null && dlssRrDenoiser.needsEnsure(w, h, outW, outH, outputImage, outputView);
         boolean motionChanged = wantsEntityMotion() && frameResources.needsMotion(w, h);
         String stage = "drain";
         try {
             if (frameResources.initializationPending() || (outputChanged && frameOutput() != null) || denoiserChanged || rrChanged || motionChanged)
                 drainHostSubmissions(device, "frame_resources_drain");
             stage = "output_replace";
-            if (outputChanged) frameResources.ensureOutput(w, h);
+            if (outputChanged) {
+                if (combinedRr) frameResources.ensureOutput(w, h, outW, outH); else frameResources.ensureOutput(w, h);
+            }
+            if (combinedRr && outputResolve == null) outputResolve = new RtOutputResolve(pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
             if (denoiseMode == DenoiserMode.DLSS_RR) {
                 stage = "dlss_rr_ensure";
                 if (pass.usesGbuffer() && dlssRrDenoiser == null) createDlssRrDenoiser(device, w, h);
-                if (dlssRrDenoiser != null) dlssRrDenoiser.ensure(w, h, frameOutput());
+                if (dlssRrDenoiser != null) dlssRrDenoiser.ensure(w, h, rrOutput());
             }
             if (denoiseMode.isNrd()) {
                 stage = "nrd_ensure";
@@ -854,8 +875,8 @@ public final class RtFrameRenderer {
             LOGGER.info("[VKB-RT] bob_projection max_abs_diff={} m11={} cam_m11={} m21={} m20={} yRot={} xRot={}", String.format(Locale.ROOT, "%.5f", md),
                 frameProjection.m11(), camera.projectionMatrix.m11(), frameProjection.m21(), frameProjection.m20(), camera.yRot, camera.xRot);
         }
-        int w = target.width;
-        int h = target.height;
+        int w = WorldTargetManager.traceWidth(target.width);
+        int h = WorldTargetManager.traceHeight(target.height);
         if (frameOutput() == null || frameOutput().width != w || frameOutput().height != h)
             throw new RtFailure("frame_resources", "output generation was not prepared before recording");
         if (statsBuf == null) {
@@ -1176,6 +1197,7 @@ public final class RtFrameRenderer {
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_DENOISE, false);
         }
+        boolean rrColorResolved = false;
         if (useDenoiser) {
             if (dlssRrDenoiser != null) {
                 // [DLSS-RR] Record DLSS Ray Reconstruction
@@ -1198,16 +1220,18 @@ public final class RtFrameRenderer {
                         : 0.0f;
                     DlssRrDenoiser owner = dlssRrDenoiser;
                     frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
-                        params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY);
+                        params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY, camera.projectionMatrix);
+                    rrColorResolved = frameColorTemporallyResolved;
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (Exception e) {
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
                         throw nativeFailure; // partial coarse recording requires whole-command discard
                     denoiserRuntimeFailure = "dlss_rr_record: " + String.valueOf(e.getMessage());
-                    LOGGER.error("[DLSS-RR] FAILED record: {} (denoiser disabled for this session, raw RT image is shown)",
+                    LOGGER.error("[DLSS-RR] FAILED record: {} (whole recording discarded; denoiser fallback next frame)",
                         e.getMessage(), e);
                     dropDlssRrDenoiserNext = true;
                     dropDlssRrByError = true;
+                    throw new RtDenoiserFrameDiscard("DLSS-RR recording failed before submission", e);
                 }
             } else if (denoiser != null) {
                 try {
@@ -1245,22 +1269,32 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_DENOISE, true);
         }
 
-        // particles of the game (drawn into their own layer by RtParticleLayer.replay) over the denoised image, before bloom / god rays
-        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, pathSlangRuntime(vulkanDevice), frameOutput().view, w, h);
+        RtMemory.Img presented = frameOutput(), presentedDepth = frameDepth();
+        if (WorldTargetManager.rrResolvesOutput()) {
+            outputResolve.record(cmd, params, frameResources, rrColorResolved);
+            VkBarriers.fullMemoryBarrier(cmd);
+            presented = frameComposite();
+            presentedDepth = frameResources.displayDepth();
+        }
+        // Raster particles/weather and world depth match the presentation grid and stay outside RR.
+        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, pathSlangRuntime(vulkanDevice),
+            presented.view, presented.width, presented.height);
 
         // god rays + bloom + sun glare on the denoised final image (reads the ray distance, writes only rt_output)
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_ATMO, false);
         }
         atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
-            new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), frameOutput().view, atlasView, materials.materialView(),
-                materials.normalView(), 0L, null, frameDepth().view, lightmapView),
-            w, h, bobOrigin.x, bobOrigin.y, bobOrigin.z);
+            new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), presented.view, atlasView, materials.materialView(),
+                materials.normalView(), 0L, null, presentedDepth.view, lightmapView),
+            presented.width, presented.height, bobOrigin.x, bobOrigin.y, bobOrigin.z);
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_ATMO, true);
         }
 
         if (RtConfig.displayed()) {
+            if (presented.width != target.width || presented.height != target.height)
+                throw new RtFailure("copy_to_target", "presentation extent does not match the engine target");
             long dst = WorldTargetManager.extractVkImage(target);
             if (dst == 0L) {
                 throw new RtFailure("copy_to_target", "engine VkImage of the main/world target is 0");
@@ -1269,8 +1303,8 @@ public final class RtFrameRenderer {
                 VkImageCopy.Buffer region = VkImageCopy.calloc(1, stack);
                 region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
                 region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-                region.get(0).extent().width(w).height(h).depth(1);
-                VK10.vkCmdCopyImage(cmd, frameOutput().image, VK10.VK_IMAGE_LAYOUT_GENERAL, dst, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
+                region.get(0).extent().width(presented.width).height(presented.height).depth(1);
+                VK10.vkCmdCopyImage(cmd, presented.image, VK10.VK_IMAGE_LAYOUT_GENERAL, dst, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
             }
             pendingDisplayedTarget = target;
         }
@@ -1343,7 +1377,7 @@ public final class RtFrameRenderer {
     // [DLSS-RR] Creates the DLSS-RR denoiser
     private static void createDlssRrDenoiser(VkDevice device, int w, int h) {
         try {
-            dlssRrDenoiser = new DlssRrDenoiser(device, world.memory(), w, h, frameOutput(),
+            dlssRrDenoiser = new DlssRrDenoiser(device, world.memory(), w, h, rrOutput(),
                 pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
         } catch (Exception e) {
             denoiserRuntimeFailure = "dlss_rr_init: " + String.valueOf(e.getMessage());
@@ -1734,6 +1768,14 @@ public final class RtFrameRenderer {
     }
 
     private static boolean drainingHostSubmissions;
+    /** The engine target is borrowed by native copies too; prove those uses before host resize/destruction. */
+    public static void drainTargetRecordings() {
+        if (world != null) {
+            var host = VulkanCapabilityChecker.getVulkanDevice();
+            if (host == null) throw new IllegalStateException("cannot retire an RT target without its host device");
+            drainHostSubmissions(host.vkDevice(), "world_target_retirement");
+        }
+    }
     private static boolean rebuildPassNext;
     private static boolean teardownPending;
 
@@ -1821,6 +1863,7 @@ public final class RtFrameRenderer {
             // Before the lease below: the atmosphere's passes hold recordings on this same core, and releasing the
             // last lease closes the core, which refuses while a recording is still pinned.
             atmosphere.destroy();
+            if (outputResolve != null) { outputResolve.afterHostDrain(); outputResolve = null; }
             if (pathSlangRuntime != null) {
                 w.closeComputeAfterHostDrain();
                 pathSlangLease.close();

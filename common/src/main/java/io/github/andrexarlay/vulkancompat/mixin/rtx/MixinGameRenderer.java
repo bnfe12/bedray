@@ -126,7 +126,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
             io.github.andrexarlay.vulkancompat.rtx.config.SamplerBiasSync.onFrameBegin();
             var wt = WorldTargetManager.getWorldTarget();
             boolean phase = WorldTargetManager.isInWorldPhase() && wt != null;
-            DebugInfo.noteWorldPhase(phase, phase ? wt.width : winW, phase ? wt.height : winH, winW, winH);
+            DebugInfo.noteWorldPhase(phase, phase ? WorldTargetManager.traceWidth(wt.width) : winW,
+                phase ? WorldTargetManager.traceHeight(wt.height) : winH, winW, winH);
             PerfMonitor.mark(PerfMonitor.Mark.WORLD_BEGIN);
         }
     }
@@ -156,7 +157,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
                 // the hand (hud3d) projection that follows in the same frame must not replace the full bobbed world projection.
                 WorldTargetManager.setCurrentProjectionMatrix(WorldTargetManager.levelProjectionOr(projMatrix));
             }
-            return CameraJitterManager.applyJitter(projMatrix);
+            return WorldTargetManager.rrResolvesOutput() ? projMatrix : CameraJitterManager.applyJitter(projMatrix);
         }
         return projMatrix;
     }

@@ -6,6 +6,7 @@ import "pathtrace/denoiser_signal.slang";
 import "denoise/nrd_pack.slang";
 import "denoise/material_factors.slang";
 import "shading/bsdf.slang";
+import "post/output_resolve.slang";
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> sink;
 
@@ -145,4 +146,13 @@ void main() {
     input.viewZ = 1.0e6;
     NrdPackedSample ignoredRr = nrdPackSample(input, pc);
     sink[20] = ignoredRr.reflectionHitDistance == 0.0;
+    float4 forward = float4(0.0,0.0,1.0,1.0), right = float4(1.0,0.0,0.0,1.0), up = float4(0.0,1.0,0.0,0.0);
+    sink[21] = abs(resolvedRayDistance(5.0, float2(0.0), float2(1.0,0.0), forward, right, up) - 5.0 * sqrt(2.0)) < 1.0e-5;
+    sink[22] = abs(resolvedRayDistance(5.0, float2(1.0,0.0), float2(0.0), forward, right, up) - 5.0 / sqrt(2.0)) < 1.0e-5;
+    sink[23] = resolvedRayDistance(1.0e6, float2(1.0), float2(0.0), forward, right, up) == 1.0e6;
+    FrameConstants frame = {};
+    frame.camera.jitter = float4(0.125, -0.375, 1.0/8.0, 1.0/4.0);
+    sink[24] = all(pathTracePrimaryJitter(frame, int2(1,2), 0u, 4u, PATH_TRACE_OPTION_GBUFFER) == frame.camera.jitter.xy)
+        && all(pathTracePrimaryJitter(frame, int2(1,2), 3u, 4u, PATH_TRACE_OPTION_GBUFFER) == frame.camera.jitter.xy);
+    sink[25] = resolvedRayDistance(asfloat(0x7fc00000u), float2(0.0), float2(0.0), forward, right, up) == 1.0e6;
 }

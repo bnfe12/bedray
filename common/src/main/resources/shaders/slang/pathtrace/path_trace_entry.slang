@@ -109,6 +109,13 @@ float2 pathTracePixelJitter(FrameConstants f, int2 pixel, uint s, uint n) {
     return (stratum + noise2D(pixel, f.frame.x, s, n, 7u)) / float(n) - 0.5;
 }
 
+float2 pathTracePrimaryJitter(FrameConstants f, int2 pixel, uint s, uint n, uint flags) {
+    // RR consumes one depth/normal/material/motion surface per pixel. Multiple paths must share that primary ray;
+    // their independent BSDF/light samples remain intact. RR's frame jitter supplies temporal edge coverage.
+    bool rrGuides = (flags & PATH_TRACE_OPTION_GBUFFER) != 0u && (flags & PATH_TRACE_OPTION_NRD_MOTION) == 0u;
+    return rrGuides ? f.camera.jitter.xy : pathTracePixelJitter(f, pixel, s, n);
+}
+
 // Guide channels for the NRD / DLSS-RR input pack, laid out as rt_path.comp writes them: the pack, the denoiser and the
 // compose are unchanged, so the Slang path can be denoised by the same chain as the legacy one.  A sky pixel gets the
 // legacy pattern (view depth 1e6, a flat normal, zero signal, albedo 0) so the pack skips it and the denoiser keeps its
@@ -502,7 +509,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
         // Each ray gets its own point in the pixel and its own path. With one ray per pixel both are exactly what the
         // host prepared - the frame's own jitter, the host's own sample index - so the cheapest setting traces the very
         // paths it traced before this loop existed.
-        Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance, pathTracePixelJitter(f, p, s, sampleCount));
+        Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance, pathTracePrimaryJitter(f, p, s, sampleCount, pc.flags));
         // One word identifies the sample across the whole frame: the path seed and the world-locked sun rotation of a
         // pixel-shadow cell both hash it, so the strata a cell shares are the strata every pixel of the frame drew.
         uint sampleWord = pc.sampleIndex * sampleCount + s;
