@@ -4185,7 +4185,7 @@ created; ZIP paths match all 904 files in the original Git tree. Archive
 SHA-256: 27a35a984713ef65fba87e401c7dd39f286d50591cfb640fbef56b138ab627a5.
 Ignored build dependencies were supplied locally; no legacy source was edited.
 
-Legacy validation: core 121 passed; common 588 total, 575 passed, 10 failures,
+Legacy validation: core 120 passed; common 588 total, 575 passed, 10 failures,
 3 skipped. Failures include GLSL compilation of reserved identifier filter and
 source-shape assertions. A separate build of Fabric/NeoForge combined jars
 succeeded. Preservation therefore does not assert that the old renderer's

@@ -15,7 +15,7 @@ and zero Slang files. It is not a subset extracted from the Slang branch.
 Local ignored dependencies remain outside Git, under the existing licensing rules.
 
 Preservation is not a new acceptance claim for the old renderer. The untouched
-legacy snapshot passes its 121 core tests, but its common suite reports 588
+legacy snapshot passes its 120 core tests, but its common suite reports 588
 tests with 10 failures and 3 skips, including the reserved GLSL identifier
 `filter` and old source-shape assertions. Both loader jars compile. These
 existing failures were recorded without editing the preserved legacy source.
