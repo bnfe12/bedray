@@ -119,6 +119,14 @@ public final class WorldTargetManager {
     private static int lastLogWinH = -1;
 
     private WorldTargetManager() {}
+    private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan resolutionPlan;
+
+    public static boolean rrResolvesOutput() { return inWorldPhase && resolutionPlan != null && resolutionPlan.rayReconstructionOutput(); }
+    public static int traceWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceWidth() : fallback; }
+    public static int traceHeight(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceHeight() : fallback; }
+    public static int presentationWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.worldWidth() : fallback; }
+    public static int presentationHeight(int fallback) { return rrResolvesOutput() ? resolutionPlan.worldHeight() : fallback; }
+    private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan lastLoggedResolutionPlan;
 
     /**
      * Checks whether 3D resolution scaling or hardware ray tracing isolation is active.
@@ -354,6 +362,7 @@ public final class WorldTargetManager {
      * low-res {@code worldTarget} and {@code worldHud3d}, and advances the sub-pixel jitter frame.
      */
     public static void beginWorldPhase(GameRenderer renderer, int winW, int winH) {
+        resolutionPlan = null;
         // Always start from "unresolved": only this frame's denoiser record may claim the colour is already resolved.
         io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.resetFrameColorTemporallyResolved();
         if (!isScalingActive()) {
@@ -377,7 +386,23 @@ public final class WorldTargetManager {
             return;
         }
 
-        ensureTargets(targetW, targetH);
+        resolutionPlan = io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan.choose(
+            targetW, targetH, winW, winH,
+            io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady()
+                && !Boolean.getBoolean("bedray.rt.disableRrOutput"),
+            TemporalUpscaler.active() == UpscalerBackend.DLSS,
+            io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.mode()
+                == io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.Mode.OFF);
+        ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
+        if (!resolutionPlan.equals(lastLoggedResolutionPlan)) {
+            lastLoggedResolutionPlan = resolutionPlan;
+            resetHistory = true;
+            LOGGER.info("[VKB-RESOLVE] rr_output={} trace={}x{} raster={}x{} output={}x{} framegen_off={}",
+                resolutionPlan.rayReconstructionOutput(), targetW, targetH, resolutionPlan.worldWidth(),
+                resolutionPlan.worldHeight(), winW, winH,
+                io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.mode()
+                    == io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.Mode.OFF);
+        }
 
         if (lastRtEnabled == null || lastRtEnabled != rtNow) {
             boolean first = lastRtEnabled == null;
@@ -396,18 +421,20 @@ public final class WorldTargetManager {
 
         inWorldPhase = true;
         depthCopiedThisFrame = false;
-        handPassDeferred = handMustBeDeferred(inWorldPhase, TemporalUpscaler.isActive());
+        handPassDeferred = handMustBeDeferred(inWorldPhase, CameraJitterManager.temporalConsumerActive());
         if (lastLoggedHandDeferral == null || lastLoggedHandDeferral != handPassDeferred) {
             lastLoggedHandDeferral = handPassDeferred;
-            LOGGER.info("[VKB-AUTOTEST] hand_defer={} (temporal upscaler {})", handPassDeferred,
-                TemporalUpscaler.isActive() ? TemporalUpscaler.active() : "off");
+            LOGGER.info("[VKB-AUTOTEST] hand_defer={} temporal_consumer={}", handPassDeferred,
+                TemporalUpscaler.isActive() ? TemporalUpscaler.active()
+                    : CameraJitterManager.temporalConsumerActive() ? "dlss_rr" : "off");
         }
-        if (TemporalUpscaler.isActive()) {
+        if (CameraJitterManager.temporalConsumerActive()) {
             if (TemporalUpscaler.initEpoch() != lastXessEpoch) {
                 lastXessEpoch = TemporalUpscaler.initEpoch();
                 resetHistory = true;
             }
-            CameraJitterManager.advanceFrame(targetW, targetH, CameraJitterManager.phaseCountFor(TemporalUpscaler.scale()));
+            CameraJitterManager.advanceFrame(targetW, targetH,
+                CameraJitterManager.phaseCountFor(TemporalUpscaler.isActive() ? TemporalUpscaler.scale() : 1.0));
         }
 
         if (lastLogW != targetW || lastLogH != targetH || lastLogWinW != winW || lastLogWinH != winH) {
@@ -434,6 +461,7 @@ public final class WorldTargetManager {
         if (!inWorldPhase) {
             return;
         }
+        boolean reconstructedOutput = rrResolvesOutput();
         inWorldPhase = false;
 
         RenderTarget fullMain = savedMainRenderTarget;
@@ -457,7 +485,12 @@ public final class WorldTargetManager {
                 // The PoC overlay that used to run here (test geometry, rt_test) is deleted with the legacy renderer.
 
                 // 2. Temporal upscaler: XeSS (-Dvkbridge.xess) or DLSS (-Dvkbridge.dlss). STUB: FSR has no implementation.
-                if (TemporalUpscaler.isActive()) {
+                if (reconstructedOutput) {
+                    // RR already produced the world at output resolution, including the raw fallback of a skipped RR frame.
+                    // Post effects/UI have run on that image. Do not feed it through SR a second time.
+                    upscaleWorld(worldTarget, fullMain);
+                    dispatched = true;
+                } else if (TemporalUpscaler.isActive()) {
                     dispatched = runXessPass(fullMain);
                 } else if (FrameGenRuntime.usable()) {
                     runMotionVectorsOnly();
@@ -975,6 +1008,7 @@ public final class WorldTargetManager {
 
     /** A target's Java identity survives resize; its borrowed Vulkan views do not. */
     private static void drainBorrowedWorldTargetRecordings() {
+        io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.drainTargetRecordings();
         FrameGenRuntime.drainProducerRecordings();
         drainVelocityRecordings();
         drainSpatialRecordings();

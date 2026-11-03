@@ -42,7 +42,7 @@ public final class CameraJitterManager {
 
     /**
      * Checks whether camera jittering is enabled and required by the active upscaler backend.
-     * Jitter is strictly disabled for {@link UpscalerBackend#BILINEAR} and when scaling is off.
+     * A temporal upscaler or an initialized native-resolution RR consumer requires jitter.
      */
     public static boolean isJitterActive() {
         return temporalConsumerActive() && isScalingActive() && WorldTargetManager.isInWorldPhase();
@@ -58,11 +58,10 @@ public final class CameraJitterManager {
     }
 
     /**
-     * True when a real temporal upscaler consumes jitter and motion vectors: an initialised Intel XeSS, NVIDIA DLSS or
-     * AMD FSR context ({@link TemporalUpscaler#isActive()}).
+     * True for an initialized temporal upscaler or live RR, including native-resolution RR without an upscaler.
      */
     public static boolean temporalConsumerActive() {
-        return TemporalUpscaler.isActive();
+        return TemporalUpscaler.isActive() || io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady();
     }
 
     /** Minimum Halton length for a super-resolution scale (XeSS guide: 8 * scale^2), never below {@link #PHASE_COUNT}. */

@@ -18,8 +18,8 @@ final class RtFrameResources implements AutoCloseable {
 
     private final Allocator allocator;
     private final Set<Long> recordings = new LinkedHashSet<>();
-    private final RtMemory.Img[] abandoned = new RtMemory.Img[3];
-    private RtMemory.Img output, depth, composite;
+    private final RtMemory.Img[] abandoned = new RtMemory.Img[4];
+    private RtMemory.Img output, depth, composite, resolvedDepth;
     private RtMemory.Buf motion;
     private RtMemory.Buf abandonedMotion;
     private boolean initialized;
@@ -43,24 +43,43 @@ final class RtFrameResources implements AutoCloseable {
     RtMemory.Img output() { return output; }
     RtMemory.Img depth() { return depth; }
     RtMemory.Img composite() { return composite; }
+    RtMemory.Img displayDepth() { return resolvedDepth != null ? resolvedDepth : depth; }
     RtMemory.Buf motion() { return motion; }
     boolean initializationPending() { return initializer != 0; }
-    boolean needsOutput(int w, int h) { return output == null || output.width != w || output.height != h; }
+    boolean needsOutput(int w, int h) { return needsOutput(w, h, w, h, false); }
+    boolean needsOutput(int w, int h, int displayW, int displayH) {
+        return needsOutput(w, h, displayW, displayH, true);
+    }
+    private boolean needsOutput(int w, int h, int displayW, int displayH, boolean resolveDepth) {
+        return output == null || output.width != w || output.height != h || composite == null
+            || composite.width != displayW || composite.height != displayH || (resolvedDepth != null) != resolveDepth;
+    }
     boolean needsMotion(int w, int h) { return motion == null || motion.size < motionBytes(w, h); }
 
     void ensureOutput(int w, int h) {
+        ensureOutput(w, h, w, h, false);
+    }
+
+    void ensureOutput(int w, int h, int displayW, int displayH) {
+        ensureOutput(w, h, displayW, displayH, true);
+    }
+
+    private void ensureOutput(int w, int h, int displayW, int displayH, boolean resolveDepth) {
         requireExtent(w, h);
-        if (!needsOutput(w, h)) return;
+        requireExtent(displayW, displayH);
+        if (!needsOutput(w, h, displayW, displayH, resolveDepth)) return;
         requireUnreferenced("replace_output");
         collectAbandoned();
-        RtMemory.Img[] next = new RtMemory.Img[3];
+        RtMemory.Img[] next = new RtMemory.Img[4];
         try {
             next[0] = allocator.image("rt_output", w, h, VK10.VK_FORMAT_R8G8B8A8_UNORM,
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
             next[1] = allocator.image("rt_depth", w, h, VK10.VK_FORMAT_R32_SFLOAT,
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
-            next[2] = allocator.image("rt_composite", w, h, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+            next[2] = allocator.image("rt_composite", displayW, displayH, VK10.VK_FORMAT_R8G8B8A8_UNORM,
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+            if (resolveDepth) next[3] = allocator.image("rt_display_depth", displayW, displayH,
+                VK10.VK_FORMAT_R32_SFLOAT, VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
             destroyOutputs();
         } catch (RuntimeException | Error failure) {
             // Reserve every rollback owner before cleanup can itself fail or allocate an exception.
@@ -72,7 +91,7 @@ final class RtFrameResources implements AutoCloseable {
             }
             throw failure;
         }
-        output = next[0]; depth = next[1]; composite = next[2];
+        output = next[0]; depth = next[1]; composite = next[2]; resolvedDepth = next[3];
         initialized = false;
         initializer = 0;
         generation++;
@@ -110,6 +129,7 @@ final class RtFrameResources implements AutoCloseable {
             transition.accept(output);
             transition.accept(depth);
             transition.accept(composite);
+            if (resolvedDepth != null) transition.accept(resolvedDepth);
             initialized = true;
         }
     }
@@ -159,6 +179,7 @@ final class RtFrameResources implements AutoCloseable {
         if (output != null) { allocator.destroy(output); output = null; }
         if (depth != null) { allocator.destroy(depth); depth = null; }
         if (composite != null) { allocator.destroy(composite); composite = null; }
+        if (resolvedDepth != null) { allocator.destroy(resolvedDepth); resolvedDepth = null; }
         initialized = false;
         initializer = 0;
     }

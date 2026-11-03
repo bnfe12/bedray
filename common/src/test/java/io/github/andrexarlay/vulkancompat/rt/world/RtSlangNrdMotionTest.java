@@ -160,7 +160,7 @@ class RtSlangNrdMotionTest {
         String preflight = block(renderer, "private static void prepareFrameResources(");
         assertTrue(preflight.contains("frameResources.ensureMotion(w, h);"));
         String frame = block(renderer, "private static void frame(");
-        int prepare = frame.indexOf("prepareFrameResources(device, target.width, target.height)");
+        int prepare = frame.indexOf("prepareFrameResources(device, WorldTargetManager.traceWidth");
         int allocateCommand = frame.indexOf("encoder.allocateAndBeginTransientCommandBuffer()");
         assertTrue(prepare >= 0 && allocateCommand > prepare,
             "motion allocation and any required drain happen before a new recording captures the previous generation");

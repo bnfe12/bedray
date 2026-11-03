@@ -7,6 +7,38 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RtFrameResourcesTest {
+    @Test void outputSizedGenerationHasIndependentDepthAndCannotRetireUntilItsExactProof() {
+        var allocator = new Allocator();
+        var resources = new RtFrameResources(allocator);
+        resources.ensureOutput(8, 4, 16, 8);
+        assertEquals(8, resources.output().width);
+        assertEquals(16, resources.composite().width);
+        assertEquals(16, resources.displayDepth().width);
+        assertNotSame(resources.depth(), resources.displayDepth());
+        assertEquals(4, allocator.images.size());
+        var transitions = new AtomicInteger();
+        resources.prepare(31, image -> transitions.incrementAndGet());
+        assertEquals(4, transitions.get());
+        assertThrows(IllegalStateException.class, () -> resources.ensureOutput(8, 4));
+        resources.releaseRecording(31);
+        resources.ensureOutput(8, 4);
+        assertSame(resources.depth(), resources.displayDepth());
+        assertEquals(3, allocator.images.size());
+        resources.close();
+        assertTrue(allocator.images.isEmpty());
+    }
+
+    @Test void failureOfTheFourthAllocationKeepsTheOldCompleteGeneration() {
+        var allocator = new Allocator();
+        var resources = new RtFrameResources(allocator);
+        resources.ensureOutput(8, 4);
+        var before = resources.output();
+        allocator.failImageCall = allocator.imageCalls + 4;
+        assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(8, 4, 16, 8));
+        assertSame(before, resources.output());
+        assertEquals(3, allocator.images.size());
+        resources.close();
+    }
     static final class Allocator implements RtFrameResources.Allocator {
         long serial;
         int imageCalls, motionCalls, failImageCall;

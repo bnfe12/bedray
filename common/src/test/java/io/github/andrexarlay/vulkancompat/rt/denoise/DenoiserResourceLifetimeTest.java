@@ -8,6 +8,15 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DenoiserResourceLifetimeTest {
+    @Test void rrFailureDiscardsTheWholeRecordingAndHostResizeWaitsForNativeTargetCopies() throws Exception {
+        String renderer = source("world/RtFrameRenderer.java");
+        String record = body(renderer, "private static void recordPrimaryRays(");
+        assertTrue(body(record, "catch (Exception e)").contains("throw new RtDenoiserFrameDiscard("));
+        String frame = body(renderer, "private static void frame(");
+        assertTrue(body(frame, "if (!executeAttempted)").contains("recordingCompletion.discard(recording)"));
+        String world = Files.readString(Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rtx/WorldTargetManager.java"));
+        assertTrue(body(world, "private static void drainBorrowedWorldTargetRecordings()").contains("RtFrameRenderer.drainTargetRecordings()"));
+    }
     @Test void preparationAlonePinsImagesBeforePackHasAnyDescriptors() {
         var pins = new DenoiserRecordingPins();
         pins.retain(17);
@@ -50,12 +59,13 @@ class DenoiserResourceLifetimeTest {
     @Test void frameResourcesDrainBeforeReplacementAndBeforeAllocatingTheNextCommand() throws Exception {
         String renderer = source("world/RtFrameRenderer.java");
         String frame = body(renderer, "private static void frame(");
-        assertTrue(frame.indexOf("prepareFrameResources(device, target.width, target.height)")
+        assertTrue(frame.indexOf("prepareFrameResources(device, WorldTargetManager.traceWidth") >= 0);
+        assertTrue(frame.indexOf("prepareFrameResources(device, WorldTargetManager.traceWidth")
             < frame.indexOf("encoder.allocateAndBeginTransientCommandBuffer()"));
         String preflight = body(renderer, "private static void prepareFrameResources(");
         int drain = preflight.indexOf("drainHostSubmissions(device, \"frame_resources_drain\")");
         assertTrue(drain >= 0 && drain < preflight.indexOf("frameResources.ensureOutput(w, h)"));
-        assertTrue(drain < preflight.indexOf("dlssRrDenoiser.ensure(w, h, frameOutput())"));
+        assertTrue(drain < preflight.indexOf("dlssRrDenoiser.ensure(w, h, rrOutput())"));
         assertTrue(drain < preflight.indexOf("denoiser.ensure(w, h, frameOutput().view)"));
         assertTrue(drain < preflight.indexOf("frameResources.ensureMotion(w, h)"));
         assertTrue(preflight.contains("wantsEntityMotion() && frameResources.needsMotion(w, h)"),
@@ -66,7 +76,7 @@ class DenoiserResourceLifetimeTest {
         assertFalse(record.contains("frameResources.ensureMotion("));
         assertTrue(record.contains("frameResources.requireMotion(w, h)"));
         String resources = source("world/RtFrameResources.java");
-        String replace = body(resources, "void ensureOutput(");
+        String replace = body(resources, "private void ensureOutput(");
         assertTrue(replace.indexOf("next[2] = allocator.image") < replace.indexOf("destroyOutputs()"));
         assertTrue(replace.indexOf("throw failure;") < replace.indexOf("output = next[0]"),
             "allocation failure must not publish a partial replacement");
@@ -79,7 +89,7 @@ class DenoiserResourceLifetimeTest {
             assertTrue(prepare.indexOf("recordingPins.retain(cmd.address())") < prepare.indexOf("initImages(cmd)"));
             String ensure = body(denoiser, file.startsWith("Nrd")
                 ? "public void ensure(int w, int h, long outputView)"
-                : "public void ensure(int w, int h, long outputImage, long outputView)");
+                : "public void ensure(int w, int h, int outW, int outH, long outputImage, long outputView)");
             assertTrue(ensure.indexOf("recordingPins.requireUnreferenced(") < ensure.indexOf("destroyImages()"));
             String destroy = body(denoiser, "public void destroy()");
             assertTrue(destroy.indexOf("recordingPins.requireUnreferenced(")
@@ -101,7 +111,7 @@ class DenoiserResourceLifetimeTest {
             assertTrue(preflight.contains(context), context);
         assertTrue(preflight.contains("failure);"));
         assertFalse(preflight.contains("LOGGER."), "the existing frame failure boundary logs the contextual cause once");
-        assertTrue(body(source("world/RtFrameResources.java"), "void ensureOutput(").contains("failure.addSuppressed(cleanup)"));
+        assertTrue(body(source("world/RtFrameResources.java"), "private void ensureOutput(").contains("failure.addSuppressed(cleanup)"));
         for (String file : new String[]{"NrdDenoiser.java", "DlssRrDenoiser.java"}) {
             String denoiser = source("denoise/" + file);
             String context = body(denoiser, "private String resourceContext(");

@@ -12,7 +12,15 @@ import "denoise/nrd_pack.slang";
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     uint2 pixel = tid.xy;
-    if (any(pixel >= pc.size) || nrdIgnored(gbViewZ[pixel], pc)) return;
+    if (any(pixel >= pc.size)) return;
+    // RR's colour can be output-sized while all geometry guides remain input-sized.
+    // Its complete radiance includes sky: never index input guides on this output grid.
+    if (pc.denoiser == 2u) {
+        rtOutput[pixel] = float4(nrdComposeColor(nrdOutDiffuse[pixel].rgb, float3(0.0), float3(0.0),
+            float4(0.0), float4(0.0), pc), 1.0);
+        return;
+    }
+    if (nrdIgnored(gbViewZ[pixel], pc)) return;
     if ((pc.flags & 2u) != 0u && pixel.x < pc.size.x / 2u) return;
     float3 specular = float3(0.0), albedo = float3(0.0);
     float4 direct = float4(0.0);
