@@ -600,7 +600,8 @@ public final class WorldTargetManager {
             worldHud3d.resize(w, h);
         }
 
-        if (TemporalUpscaler.isActive() || FrameGenRuntime.usable()) {
+        if ((resolutionPlan == null || !resolutionPlan.rayReconstructionOutput())
+                && (TemporalUpscaler.isActive() || FrameGenRuntime.usable())) {
             ensureTemporalTargets(w, h);
         }
     }
@@ -642,6 +643,8 @@ public final class WorldTargetManager {
      * velocity pass need is copied here (engine copy, no render pass is open at this point).
      */
     public static void copyWorldDepth() {
+        // Output-grid raster depth is already available to UI; RR owns its input-grid motion/depth guides.
+        if (rrResolvesOutput()) return;
         if (!inWorldPhase || (!TemporalUpscaler.isActive() && !FrameGenRuntime.usable()) || worldTarget == null || depthCopy == null) {
             return;
         }

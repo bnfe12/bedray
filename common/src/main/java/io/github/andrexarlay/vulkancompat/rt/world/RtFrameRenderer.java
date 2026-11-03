@@ -1770,7 +1770,7 @@ public final class RtFrameRenderer {
     private static boolean drainingHostSubmissions;
     /** The engine target is borrowed by native copies too; prove those uses before host resize/destruction. */
     public static void drainTargetRecordings() {
-        if (world != null && recordingCompletion.pendingCount() != 0) {
+        if (world != null) {
             var host = VulkanCapabilityChecker.getVulkanDevice();
             if (host == null) throw new IllegalStateException("cannot retire an RT target without its host device");
             drainHostSubmissions(host.vkDevice(), "world_target_retirement");

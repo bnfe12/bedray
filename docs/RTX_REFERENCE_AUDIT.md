@@ -49,10 +49,11 @@ in Bedray. No local RTX visual comparison has been run on this Intel-only host.
   medium does not arm this opaque-surface guide. Later medium/RC changes do not
   discard an already measured edge. At multiple SPP the minimum nonzero edge is used. This
   stochastic guide does not add an unsampled deterministic reflection ray.
-* **One temporal reconstruction:** the same guide says RR replaces SR. Bedray
-  currently evaluates RR at render resolution and can then run DLSS SR. A
-  combined render-to-output RR owner must preserve hand, world-post, depth and
-  exact resource lifetime contracts; simply skipping SR would lose scaling.
+* **One temporal reconstruction:** the same guide says RR replaces SR. The new
+  output route evaluates RR directly to window extent when FG is OFF, with
+  separate input/presentation resources and full-size raster UI/depth. Bootstrap,
+  FG-enabled and other-backend routes remain separate. See
+  [implementation and acceptance limits](ai-agent-addenda/RR_OUTPUT_RECONSTRUCTION.md).
 * **Transparent traversal:** glass/filter/cutout chains restart closest-hit
   queries. Opaque and non-opaque geometry should stay separated; investigate
   bounded candidate gathering rather than repeated full traversal. Preserve
