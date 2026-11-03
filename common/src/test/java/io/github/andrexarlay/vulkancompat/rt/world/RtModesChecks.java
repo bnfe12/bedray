@@ -135,7 +135,7 @@ final class RtModesChecks {
 
     private static void exposureAndEmitters() {
         RtExposure e = new RtExposure();
-        near(RtExposure.MIN, e.value(), 0f, "starts at the ray-mode exposure");
+        near(RtExposure.FIXED, e.value(), 0f, "starts at the ray-mode exposure");
         // dark image: mean luminance 2^-6 -> target 0.22 * 64 = 14 -> moves up
         long dark = (long) ((-6 + 16) * 64) * 100;
         for (int i = 0; i < 900; i++) {
@@ -146,7 +146,7 @@ final class RtModesChecks {
         for (int i = 0; i < 600; i++) {
             e.observe(bright, 100);
         }
-        near(RtExposure.MIN, e.value(), 0.1f, "bright image clamps at MIN (within the dead band)");
+        near(0.1754f, e.value(), 0.025f, "a bright room meters below fixed exposure instead of clipping");
         // frame-rate independence: 1 s of 30 fps and 1 s of 120 fps move the exposure by (almost) the same amount
         RtExposure slow = new RtExposure();
         RtExposure fast = new RtExposure();
@@ -176,7 +176,7 @@ final class RtModesChecks {
         safeExp.observe(Long.MAX_VALUE, 100);
         check(!Float.isNaN(safeExp.value()) && !Float.isInfinite(safeExp.value()), "exposure never becomes NaN/Inf on extreme input");
         safeExp.reset();
-        check(safeExp.value() == RtExposure.MIN, "reset returns value to MIN");
+        check(safeExp.value() == RtExposure.FIXED, "reset returns the fixed startup exposure");
 
         float[] extreme = RtTonemap.apply(100000f, 100000f, 100000f);
         check(extreme[0] >= 0.99f && extreme[0] <= 1.0f && !Float.isNaN(extreme[0]), "tonemap handles extreme radiance smoothly <= 1.0");

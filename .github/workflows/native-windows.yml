@@ -78,3 +78,29 @@ jobs:
             evidence/**/*.log
             evidence/**/*.xml
             evidence/**/CMakeConfigureLog.yaml
+      - name: Prepare tested renderer core
+        if: success() && matrix.revision == 'candidate'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = Resolve-Path 'evidence/build/bedray_core/Release/bedray_core.dll'
+          New-Item -ItemType Directory -Force evidence/runtime | Out-Null
+          Copy-Item -LiteralPath $binary -Destination 'evidence/runtime/bedray_core.dll'
+          [ordered]@{
+            schema = 1
+            revision = '${{ github.sha }}'
+            artifact = 'bedray_core.dll'
+            platform = 'windows-x64-release'
+            abi_version = 2
+            sha256 = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+            native_contracts = 'passed'
+            gpu_validated = $false
+          } | ConvertTo-Json | Set-Content -LiteralPath 'evidence/runtime/manifest.json' -Encoding utf8NoBOM
+      - name: Publish tested renderer core
+        if: success() && matrix.revision == 'candidate'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: renderer-core-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: evidence/runtime/*

@@ -61,6 +61,14 @@ void pathDenoiserMiss(inout PathDenoiserContinuation continuation) {
     continuation.pending = false;
 }
 
+// RR needs geometry even though it consumes total HDR rather than NRD's split radiance.
+// Zero means no observed reflection: diffuse/transmission, a stopped path, or an invalid sample.
+// The distance starts at the primary surface, never at the camera or the bias-shifted ray origin.
+float pathDenoiserReflectionDistance(PathDenoiserContinuation continuation, bool invalidSample) {
+    if (invalidSample || continuation.pending || continuation.lobe != BSDF_LOBE_SPECULAR) return 0.0;
+    return isfinite(continuation.hitDistance) ? clamp(continuation.hitDistance, 0.0, PATH_SIGNAL_MISS_DISTANCE) : 0.0;
+}
+
 PathDenoiserSignal pathDenoiserResolve(PathDenoiserContinuation continuation,
         float3 radianceBeforeClamp, float3 radiance, bool bypass) {
     if (bypass || continuation.lobe == BSDF_LOBE_TRANSMISSION) return bypassedPathDenoiserSignal();

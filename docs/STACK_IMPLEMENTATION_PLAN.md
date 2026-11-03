@@ -43,10 +43,10 @@ implemented through a valid architecture rather than copied literally.
 | Frame graph / history | One live opaque path-trace group, graph/scheduler libraries and exact recording proof; private pass history remains authoritative | Whole-frame resource boundaries, dependency/subresource declarations and migration of remaining effect groups. No second history authority over the same images |
 | GPU scheduling | Ordinary compute dispatch and host-owned completion | GPU worklists/indirect dispatch first where useful; optional DGC and timeline integration with the actual host submission authority |
 | Hardware geometry | Ordinary mesh AS, Java OMM attachment; native scene lacks that attachment | Native OMM generations, optional PTLAS/CLAS backends and matching resource/descriptor contracts |
-| Pipeline creation | AOT plus persistent cache used by some Java builders; native core bypasses it | Shared synchronous cache borrow, safe persistence/lifetime; then optional pipeline-binary strategy if enabled and supported |
+| Pipeline creation | AOT and shared persistent cache borrowed by the native/Java pipelines, with synchronized access and exact lifetime | GPU creation-time measurement; optional supported pipeline-binary strategy |
 | Numerical/storage optimizations | Some typed utilities and existing transport | Measured packing/FP16/subgroup variants with separate feature contracts, range/error tests and unchanged baseline results |
-| Denoising / post | NRD/RR/FG/upscaler integrations and bloom | Correct primary-lobe signal split and indirect hit distances; exposure parity; declared tone-map modes and bounded firefly policy |
-| Developer tools | AOT, existing F3 diagnostics, GPU timestamps and autotest hooks | Transactional Slang hot reload, actual heatmap outputs, bounded GPU calibration and profiler integration |
+| Denoising / post | Primary-lobe NRD signals, RR reflection-distance guide and camera recovery, HDR auto-exposure range, FG/upscaler integrations and bloom | Single RR render-to-output reconstruction authority, native RR jitter/coherent multisample guides, live quality/calibration, declared tone-map modes and bounded firefly policy |
+| Developer tools | AOT, F3 diagnostics, GPU timestamps, bounded raw native/gameplay captures and offline tail analysis | Transactional Slang hot reload, actual heatmap outputs, bounded GPU calibration and profiler integration |
 | Other platforms | Windows is the validated build target; non-Windows native configure is an explicit unsupported opt-in | Actual platform dependency/build/packaging checks. A direct Metal backend requires host resource/command integration, not just an MSL compiler flag |
 
 ## Remaining requirement ledger

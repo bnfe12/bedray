@@ -87,6 +87,7 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
             // after resetPhase: the XeSS/DLSS runtimes have applied the current request (the RT block reads their state)
             RtCaptureControl.onFrameBegin();
             io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.beginFrame();
+            io.github.andrexarlay.vulkancompat.rt.overlay.RtBlockOutline.beginFrame();
             // entity/block-entity/item submits of renderLevel() are captured for the RT scene only while RT is gated on;
             // RtFrameRenderer.render (head of render3dHud, before the hand) publishes and closes the capture
             io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().beginFrame(
@@ -216,6 +217,8 @@ public abstract class MixinGameRenderer implements GameRendererTargetAccessor {
                     : io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.RASTER;
             io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.renderFrame(
                 this.mainRenderTarget, this.gameRenderState.levelRenderState.cameraRenderState, producer);
+            io.github.andrexarlay.vulkancompat.rt.overlay.RtBlockOutline.replay(this.mainRenderTarget,
+                producer == io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Renderer.HARDWARE_RT);
             PerfMonitor.mark(PerfMonitor.Mark.RT_END);
             WorldTargetManager.copyWorldDepth();
         }

@@ -38,6 +38,8 @@
     "rt.MixinRenderTypeAccessor",
     "rt.MixinParticleGroupAccessor",
     "rt.MixinQuadParticleFeatureRenderer",
+    "rt.MixinOutlineGroupAccessor",
+    "rt.MixinOutlineFeatureRenderer",
     "rt.MixinWeatherEffectRenderer",
     "rt.MixinRenderSetupAccessor",
     "rt.MixinTextureBindingAccessor",

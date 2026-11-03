@@ -19,7 +19,7 @@ final class NrdPackPipeline {
     static final int BINDINGS = BedrayNrdPackNative.VIEW_COUNT;
     static final int PUSH_BYTES = BedrayNrdPackNative.PUSH_BYTES;
     private static final int[] PACK_BINDINGS = {0,1,2,3,4,5,6,9,10,12,13};
-    private static final int[] RR_BINDINGS = {0,1,2,4,5,6,9,10,13};
+    private static final int[] RR_BINDINGS = {0,1,2,4,5,6,9,10,12,13};
     private static final int[] COMPOSE_BINDINGS = {0,3,4,7,8,11,13};
     private final SlangRuntime runtime;
     private final BedrayNrdPackNative nativePass;

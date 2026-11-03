@@ -13,7 +13,8 @@ __exported import "denoise/nrd_pack.slang";
 
 // RR's motion target is RG16F. Keep it entirely outside this entry's resource
 // contract rather than depending on an untaken RGBA16F write branch.
-void nrdPackRrPixel(uint2 pixel, NrdPackPush pc, RWTexture2D<float4> normalOutput) {
+void nrdPackRrPixel(uint2 pixel, NrdPackPush pc, RWTexture2D<float4> normalOutput,
+        RWTexture2D<float> reflectionDistanceOutput) {
     if (any(pixel >= pc.size)) return;
     NrdPackInput input = {};
     input.viewZ = gbViewZ[pixel];
@@ -30,4 +31,5 @@ void nrdPackRrPixel(uint2 pixel, NrdPackPush pc, RWTexture2D<float4> normalOutpu
     normalOutput[pixel] = sample.normalRoughness;
     nrdInDiffuse[pixel] = sample.diffuse;
     nrdInSpecular[pixel] = sample.specular;
+    reflectionDistanceOutput[pixel] = sample.reflectionHitDistance;
 }
