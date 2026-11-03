@@ -4120,3 +4120,80 @@ capture is claimed here. The separate RR→SR chain, standalone RR jitter,
 multisample guide coherence, transparent traversal and receiver-local many-light
 proposals remain open. Existing local launcher instances do not match the five
 Bedray profiles named by older deployment entries; they were not modified.
+
+## 2026-11-03 — Memory service, lighting stability, RR direct output and emitter identity (PRs #63–#66; L1/L2, no live run)
+
+`refactor/slang-pipeline` was fast-forwarded from `1d6716c` to
+`8863e17ec4d2c5a2822359628a3143f08e5a7a9c`, 17 commits covering the native
+memory service (#63), lighting stability and selection capture (#64), direct RR
+reconstruction output (#65) and emitter identity across light-table
+publications (#66).
+
+Both native trees changed, so `bedray_core.dll` and `bedray_scene.dll` were
+rebuilt from this checkout rather than reusing the previous binaries. The jar
+does not embed them; the game loads them from `<instance>/minecraft/bedray/natives`.
+Built artifacts: `bedray_core.dll` 488,960 B SHA-256
+`04CB2B93CD4C8F4B8D56C7CDE404CD75165B33776BA621A15028ACCB37D73F6A`;
+`bedray_scene.dll` 238,592 B SHA-256
+`3B533ACC357C435466FD95BCFAC4AA3C8FB3BC38A0C51F061FAF9F704755B022`.
+
+Validation: `:common:test` 1,164 tests with zero failures and zero errors,
+3 skipped (220 result files); `:common:runShimTests` 34 passed, 0 failed; native
+CTest 29/29 passed, including the new `bedray_memory_allocator` test. Both
+combined jars were built from a clean tree with manifest
+`Git-Commit 8863e17ec4d2c5a2822359628a3143f08e5a7a9c`, `Git-Dirty false`:
+Fabric 19,429,318 B SHA-256
+`81C8896E477655F95ABD72167CBF6B2434D18227E727BADB026595771450E991`;
+NeoForge 19,436,535 B SHA-256
+`31854C80BF52A3297BD078A356717AA79395A5B67F49C794A68FAAB96393BAE3`.
+
+The jars and both DLLs were copied to the five BedRay instances; the replaced
+files are in backup `bedray-deploy-20261103-202056`. No BedRay instance was
+running during the replacement (the only running game was `Fabulously
+Optimized(3)`), and nothing was launched or stopped.
+
+This revision includes the first-frame `CameraMatrixGuard`, so a degenerate
+first camera no longer disables DLSS. New and not yet exercised live: the
+`WorldResolutionPlan` direct RR-to-output path, native-resolution RR jitter,
+native memory policy/diagnostics and emitter identity. The
+`minecraft:paletted/atlas_0` warning in the previous log is the GPU-only
+`PalettedTextureManager` atlas used by the `armor_trim` layer; `captureModel`
+skips that layer, so no white trim geometry is emitted and only the
+warning/failure-counter noise remains.
+
+L1/L2 only. No BedRay instance has run this jar/DLL pair, so absence of
+`camera_matrices=degenerate`, RR output correctness, memory diagnostics and
+visual parity are not claimed. L3–L5 require an owner run.
+
+## 2026-11-03 — Slang main and complete Java/GLSL legacy preservation
+
+The owner requested main to carry Slang and the second permanent branch to
+preserve the complete previous Java/GLSL project. PR #67 merged both histories
+as main 23c6bc9b888c0502f6928a79743856cd92ac273f. Its tested candidate d98d5ae
+includes all three previous-main log-privacy commits while retaining current
+Slang lifetime, cache, RR-discard and FG-cleanup behavior.
+
+Candidate validation: core 121 passed; common 1164 total, 1155 passed,
+9 skipped, zero failures/errors; shim 34/34; both combined loader jars built.
+Windows push run 41710742186 and PR run 41710954301 passed baseline/candidate
+jobs. The initial main merge has exactly the candidate's Git tree.
+
+The preserved legacy branch is 9c985fa4c56894e9370e7ef8d6120d63b345ad26,
+version 0.1.1-alpha.13: 904 tracked files, 671 Java files, 36 GLSL files and
+zero Slang files. A separate complete local worktree and a source ZIP were
+created; ZIP paths match all 904 files in the original Git tree. Archive
+SHA-256: 27a35a984713ef65fba87e401c7dd39f286d50591cfb640fbef56b138ab627a5.
+Ignored build dependencies were supplied locally; no legacy source was edited.
+
+Legacy validation: core 120 passed; common 588 total, 575 passed, 10 failures,
+3 skipped. Failures include GLSL compilation of reserved identifier filter and
+source-shape assertions. A separate build of Fabric/NeoForge combined jars
+succeeded. Preservation therefore does not assert that the old renderer's
+test suite or live rendering is correct; the original code and evidence remain.
+
+A final commit arrived on refactor/slang-pipeline during promotion: 3cdec33
+records the preceding build/deployment. The ancestry check stopped branch
+retirement. This follow-up merges that documentation before removing the old
+reference, preserving every refactor commit in main. Its production code is
+unchanged from the validated PR #67 candidate. Native checks remain CPU/recording
+evidence; no new game deployment, RTX visual run or FPS claim is made here.
