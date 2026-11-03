@@ -9,9 +9,12 @@ public record WorldResolutionPlan(int traceWidth, int traceHeight, int worldWidt
     }
 
     public static WorldResolutionPlan choose(int inputWidth, int inputHeight, int outputWidth, int outputHeight,
-                                             boolean rrReady, boolean dlssActive, boolean framegenOff) {
-        boolean combined = rrReady && dlssActive && framegenOff;
-        // Full-size raster depth/UI stays with the full-size reconstructed image. Rays still use DLSS's input extent.
+                                             boolean rrReady, UpscalerBackend backend, boolean spatialSelected,
+                                             boolean framegenOff) {
+        boolean nativeWithoutUpscaler = (backend == null || backend == UpscalerBackend.BILINEAR)
+            && !spatialSelected && inputWidth == outputWidth && inputHeight == outputHeight;
+        boolean combined = rrReady && framegenOff && (backend == UpscalerBackend.DLSS || nativeWithoutUpscaler);
+        // Raster depth/UI stays on RR's unjittered output grid; rays retain their requested input extent.
         return new WorldResolutionPlan(inputWidth, inputHeight, combined ? outputWidth : inputWidth,
             combined ? outputHeight : inputHeight, combined);
     }

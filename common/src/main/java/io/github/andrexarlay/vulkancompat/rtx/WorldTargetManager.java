@@ -390,7 +390,7 @@ public final class WorldTargetManager {
             targetW, targetH, winW, winH,
             io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady()
                 && !Boolean.getBoolean("bedray.rt.disableRrOutput"),
-            TemporalUpscaler.active() == UpscalerBackend.DLSS,
+            TemporalUpscaler.active(), SpatialUpscaler.isSelected(),
             io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.mode()
                 == io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.Mode.OFF);
         ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
@@ -488,7 +488,14 @@ public final class WorldTargetManager {
                 if (reconstructedOutput) {
                     // RR already produced the world at output resolution, including the raw fallback of a skipped RR frame.
                     // Post effects/UI have run on that image. Do not feed it through SR a second time.
-                    upscaleWorld(worldTarget, fullMain);
+                    if (worldTarget.width != fullMain.width || worldTarget.height != fullMain.height) {
+                        throw new IllegalStateException("RR presentation extent differs from main: "
+                            + worldTarget.width + "x" + worldTarget.height + " vs "
+                            + fullMain.width + "x" + fullMain.height);
+                    }
+                    RenderSystem.getDevice().createCommandEncoder().copyTextureToTexture(
+                        worldTarget.getColorTexture(), fullMain.getColorTexture(), 0, 0, 0, 0, 0,
+                        fullMain.width, fullMain.height);
                     dispatched = true;
                 } else if (TemporalUpscaler.isActive()) {
                     dispatched = runXessPass(fullMain);

@@ -3,13 +3,15 @@
 The previous chain ran RR at input resolution and then DLSS SR over the result.
 NVIDIA's [RR integration guide](https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuideDLSS_RR.md)
 describes RR as the output reconstruction replacing SR. This change implements
-that route for hardware Path Tracing + DLSS + initialized RR + frame generation
-setting **OFF**. It does not establish a measured FPS/quality improvement.
+that route for hardware Path Tracing + initialized RR + frame generation setting
+**OFF**, with either DLSS or native resolution without an upscaler. It does not
+establish a measured FPS/quality improvement.
 
 ## One plan before world recording
 
 `WorldResolutionPlan` freezes the trace and world/presentation extents. Rays and
-all RR input guides use the initialized DLSS provider's input extent; RR outputs
+all RR input guides use the requested input extent (the initialized DLSS provider's
+extent when DLSS is active); RR outputs
 directly at window extent using the matching quality and low-resolution motion
 flag. The same-size feature uses DLAA. No resolution setting is rewritten.
 
@@ -46,7 +48,7 @@ ray is introduced. Native-size RR also gets an independent depth target.
 
 Particles/weather composite, bloom and volumetrics then use matching output-sized
 color/depth. The engine receives a complete image before world post and selection.
-End-of-world presentation copies it to main and does not dispatch SR. Unused SR
+End-of-world presentation copies it 1:1 to main and does not dispatch SR. Unused SR
 motion/depth targets are not resized and its raster-depth copy is skipped on this
 route. First-person hands remain deferred and are replayed at full resolution.
 
