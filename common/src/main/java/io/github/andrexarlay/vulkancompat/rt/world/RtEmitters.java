@@ -556,9 +556,9 @@ public final class RtEmitters {
         if (now - lastLogNs > 5_000_000_000L) {
             lastLogNs = now;
             var identity = buffers.publication();
-            LOGGER.info("[VKB-EMITTERS] table=BEM1 revision={} material_revision={} selected={} retained={} added={} removed={} bytes={} max_probe={}",
+            LOGGER.info("[VKB-EMITTERS] table=BEM2 revision={} material_revision={} selected={} retained={} added={} removed={} bytes={} max_probe={} global_fraction={} bvh_depth={} topology_reused={}",
                 identity.revision(), materialRevision, n, identity.retained(), identity.added(), identity.removed(),
-                identity.data().remaining(), identity.maxProbe());
+                identity.data().remaining(), identity.maxProbe(), identity.globalFraction(), identity.bvhDepth(), identity.topologyReused());
             LOGGER.info(String.format(java.util.Locale.ROOT,
                 "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b origin=(%d,%d,%d)",
                 count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), seen.size(),

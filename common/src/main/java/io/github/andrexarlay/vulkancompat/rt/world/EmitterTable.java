@@ -11,13 +11,18 @@ import java.util.Map;
 /** Private GPU table: a versioned header, captured payloads with stable IDs, and an ID-to-slot index.
  * IDs are never reused during this owner's lifetime. Only a successful publication commits its identity state. */
 final class EmitterTable {
-    static final int MAGIC = 0x42454D31;
-    static final int HEADER_BYTES = 16;
+    static final int MAGIC = 0x42454D32;
+    static final int HEADER_BYTES = 32;
     static final int RECORD_BYTES = 112;
     private Map<Key, List<Integer>> identities = Map.of();
     private long nextId = 1;
     private long revision;
     private int count;
+    private int[] spatialOrder = new int[0];
+    private final float globalFraction;
+
+    EmitterTable() { this(!Boolean.getBoolean("bedray.rt.disableLocalLightSampling")); }
+    EmitterTable(boolean localSampling) { globalFraction = localSampling ? 0.125f : 1f; }
 
     static int capacity(int count) {
         if (count < 0 || count > RtEmitters.MAX_EMITTERS) throw new IllegalArgumentException("invalid emitter count: " + count);
@@ -25,11 +30,15 @@ final class EmitterTable {
     }
 
     static int bytes(int count) {
-        return count == 0 ? 0 : HEADER_BYTES + Math.multiplyExact(count, RECORD_BYTES) + capacity(count) * 16;
+        return count == 0 ? 0 : HEADER_BYTES + Math.multiplyExact(count, RECORD_BYTES) + capacity(count) * 16
+            + Math.multiplyExact(2 * count - 1, EmitterLightBvh.NODE_BYTES);
     }
 
     record Publication(ByteBuffer data, Map<Key, List<Integer>> identities, long nextId,
-                       long revision, int count, int retained, int added, int removed, int maxProbe) {}
+                       long revision, int count, int retained, int added, int removed, int maxProbe,
+                       int[] spatialOrder, int bvhDepth, boolean topologyReused) {
+        float globalFraction() { return count == 0 ? 1 : data.getFloat(24); }
+    }
 
     Publication prepare(float[][] records, int count, int originX, int originY, int originZ) {
         return prepare(records, count, originX, originY, originZ, 0);
@@ -70,9 +79,26 @@ final class EmitterTable {
             maxProbe = Math.max(maxProbe, probes);
         }
         int added = count - retained, removed = this.count - retained;
+        boolean reuseTopology = count > 0 && retained == count && this.count == count;
+        int[] order = reuseTopology ? new int[count] : null;
+        if (reuseTopology) for (int i = 0; i < count; i++) {
+            int id = spatialOrder[i], slot = (id * 0x9E3779B9) & (capacity - 1);
+            while (data.getInt(lookup + slot * 16) != id) {
+                if (data.getInt(lookup + slot * 16) == 0) throw new IllegalStateException("retained light missing from BVH index");
+                slot = (slot + 1) & (capacity - 1);
+            }
+            order[i] = data.getInt(lookup + slot * 16 + 4);
+        }
+        var tree = EmitterLightBvh.write(records, count, order, data, lookup + capacity * 16);
+        int[] orderedIds = new int[count];
+        if (count > 0) data.putInt(16, 2 * count - 1).putInt(20, EmitterLightBvh.NODE_BYTES).putFloat(24, globalFraction);
+        for (int i = 0; i < count; i++) {
+            data.putInt(HEADER_BYTES + i * RECORD_BYTES + RtEmitters.BYTES + 4, tree.leafNodes()[i]);
+            orderedIds[i] = data.getInt(HEADER_BYTES + tree.order()[i] * RECORD_BYTES + RtEmitters.BYTES);
+        }
         long version = revision + (added != 0 || removed != 0 ? 1 : 0);
         return new Publication(data.asReadOnlyBuffer().order(ByteOrder.nativeOrder()), selected, next,
-            version, count, retained, added, removed, maxProbe);
+            version, count, retained, added, removed, maxProbe, orderedIds, tree.depth(), reuseTopology);
     }
 
     void commit(Publication publication) {
@@ -80,9 +106,10 @@ final class EmitterTable {
         nextId = publication.nextId();
         revision = publication.revision();
         count = publication.count();
+        spatialOrder = publication.spatialOrder();
     }
 
-    void clear() { identities = Map.of(); count = 0; }
+    void clear() { identities = Map.of(); count = 0; spatialOrder = new int[0]; }
 
     /** Exact captured content; world-space double corners avoid losing block identity at large world coordinates. */
     private static final class Key {

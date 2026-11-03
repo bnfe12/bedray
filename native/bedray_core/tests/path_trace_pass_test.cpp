@@ -855,7 +855,7 @@ void test_spatial_stage() {
         frame.path.emitter_count = 3;
         frame.path.emitter_probability = 0.5f;
         frame.scene.emitters.handle = 0x5001;
-        frame.scene.emitters.bytes = 480;
+        frame.scene.emitters.bytes = 736;
         frame.scene.reservoirs.handle = 0x5002;
         frame.scene.reservoirs.bytes = 64 * 64 * 128;
 
@@ -916,7 +916,7 @@ void test_spatial_stage() {
         spatial.path.di_state[1] = 1;
         spatial.path.emitter_count = 1;
         spatial.scene.emitters.handle = 0x5007;
-        spatial.scene.emitters.bytes = 160;
+        spatial.scene.emitters.bytes = 224;
         spatial.scene.reservoirs.handle = 0x5008;
         spatial.scene.reservoirs.bytes = 64 * 64 * 128;
         CHECK_STATUS(plain.render(spatial), BEDRAY_OK);
@@ -933,7 +933,7 @@ void test_native_reservoir_owner() {
     frame.path.di_state[0] = BEDRAY_PATH_TRACE_DI_ENABLED | BEDRAY_PATH_TRACE_DI_HISTORY;
     frame.path.emitter_count = 1;
     frame.scene.emitters.handle = 0x7001;
-    frame.scene.emitters.bytes = 160;
+    frame.scene.emitters.bytes = 224;
     auto invalid = frame;
     invalid.path.di_state[1] = 1;
     expect_invalid_frame(fixture, invalid);
@@ -941,9 +941,9 @@ void test_native_reservoir_owner() {
     invalid.scene.reservoirs.handle = 0x7002;
     expect_invalid_frame(fixture, invalid);
     invalid = frame;
-    invalid.scene.emitters.bytes = 159;
+    invalid.scene.emitters.bytes = 223;
     expect_invalid_frame(fixture, invalid);
-    invalid.scene.emitters.bytes = 161; // A paired shader/core table must have its exact declared extent.
+    invalid.scene.emitters.bytes = 225; // A paired shader/core table must have its exact declared extent.
     expect_invalid_frame(fixture, invalid);
     invalid = frame;
     invalid.path.emitter_count = 65537;
@@ -1098,7 +1098,7 @@ void test_failure_after_dispatch_keeps_pins() {
     phase_failure.path.di_state[1] = 1;
     phase_failure.path.emitter_count = 1;
     phase_failure.scene.emitters.handle = 0x6001;
-    phase_failure.scene.emitters.bytes = 160;
+    phase_failure.scene.emitters.bytes = 224;
     phase_failure.scene.reservoirs.handle = 0x6002;
     phase_failure.scene.reservoirs.bytes = 64 * 64 * 128;
     CHECK_STATUS(fixture.render(phase_failure), BEDRAY_ERROR_VULKAN);
