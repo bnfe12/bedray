@@ -48,7 +48,9 @@ coverage includes pooling/free holes, dedicated/BDA separation, mapped
 atom isolation, external pressure, exact retention, rollback and device loss.
 The first native iteration exposed white-box linkage coupling; the ABI bridge
 was moved out of core.cpp into core_memory.cpp and CI passed afterwards.
-Final padding-capacity follow-up requires its own final CI result in the PR.
+The final padding-capacity follow-up (`4641e0a`) also passed Windows CI
+41549142471: candidate 125631999481 and baseline 125631999385. PR #63 merged
+as `caf9f73`; its final source still has no live GPU/FPS measurement.
 
 No GPU measurement, VRAM reduction percentage or FPS improvement is claimed.
 Transient aliasing, host allocation migration and AS compaction are separate work.

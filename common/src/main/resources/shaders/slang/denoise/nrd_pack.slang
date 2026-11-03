@@ -85,6 +85,7 @@ struct NrdPackedSample {
     float4 diffuse;
     float4 specular;
     float4 motion;
+    float reflectionHitDistance;
 };
 
 NrdPackedSample nrdPackSample(NrdPackInput input, NrdPackPush pc) {
@@ -93,6 +94,7 @@ NrdPackedSample nrdPackSample(NrdPackInput input, NrdPackPush pc) {
     result.diffuse = float4(0.0);
     result.specular = float4(0.0);
     result.motion = float4(0.0);
+    result.reflectionHitDistance = 0.0;
     if (nrdIgnored(input.viewZ, pc)) {
         // DLSS-RR filters across silhouettes, so it gets the sky colour; NRD keeps the zero it skips.
         if (pc.denoiser == 2u && !nrdInvalid3(input.diffuse.rgb))
@@ -113,6 +115,7 @@ NrdPackedSample nrdPackSample(NrdPackInput input, NrdPackPush pc) {
         float3 direct = nrdInvalid3(input.direct) ? float3(0.0) : input.direct;
         result.diffuse = float4(clamp(radiance + specular + direct, float3(0.0), float3(NRD_FP16_MAX)), 1.0);
         result.specular = float4(clamp(input.specularAlbedo, float3(0.0), float3(1.0)), 1.0);
+        result.reflectionHitDistance = min(specularDistance, NRD_FP16_MAX);
         return result;
     }
     if (input.motion.w > 0.5 && !nrdInvalid3(input.motion.xyz) && !(input.motion.x > 1.0e29))

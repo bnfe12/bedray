@@ -91,10 +91,18 @@ int main() {
         check(resource.handle == frame.views[resource.binding] && resource.image_layout == VK_IMAGE_LAYOUT_GENERAL);
         check(resource.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE && !resource.sampler);
     }
-    frame.views[0] = 100; frame.normal_encoding = 0; frame.denoiser = 2; contract.binding_count = 9;
-    check(render(frame) == BEDRAY_OK && records.back().resources.size() == 9 && !records.back().push.motion);
-    for (const auto& resource : records.back().resources) check(resource.binding != 12 && resource.binding != 3);
+    frame.views[0] = 100; frame.normal_encoding = 0; frame.denoiser = 2; contract.binding_count = 10;
+    check(render(frame) == BEDRAY_OK && records.back().resources.size() == 10 && !records.back().push.motion);
+    bool has_distance = false;
+    for (const auto& resource : records.back().resources) {
+        check(resource.binding != 3);
+        if (resource.binding == 12) { has_distance = true; check(resource.handle == frame.views[12]); }
+    }
+    check(has_distance);
     check(records.front().resources.front().handle == 21); // copied identities, no mutable descriptor table
+    events.clear(); records.clear();
+    bad([](auto& f) { f.views[12] = 0; });
+    bad([](auto& f) { f.views[12] = f.views[9]; }); // output must not overwrite the traced guide
     frame.phase = BEDRAY_NRD_COMPOSE; contract.binding_count = 7;
     frame.views[11] = frame.views[7]; // RR's duplicate read view is legal
     check(render(frame) == BEDRAY_OK && records.back().resources.size() == 7);

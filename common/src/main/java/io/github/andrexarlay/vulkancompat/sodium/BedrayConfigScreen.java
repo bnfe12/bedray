@@ -24,7 +24,7 @@ import java.util.Locale;
 /** The single Bedray settings interface. Only Apply commits its private option state. */
 public final class BedrayConfigScreen extends Screen {
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("VKB-SETTINGS");
-    private static final int ROW_HEIGHT = 30;
+    private static final int ROW_HEIGHT = SettingsLayout.ROW_HEIGHT;
     private final Screen parent;
     private SettingsDraft draft;
     private SettingsDraft.Category category = SettingsDraft.Category.OVERVIEW;
@@ -38,6 +38,8 @@ public final class BedrayConfigScreen extends Screen {
     private Button applyButton, revertButton;
     private Component runtime = Component.empty();
     private int statusTicks;
+    private SettingsLayout layout;
+    private final java.util.Map<SettingsDraft.Category, Button> navigation = new java.util.EnumMap<>(SettingsDraft.Category.class);
 
     public BedrayConfigScreen(Screen parent) {
         super(tr("bedray.settings.title", "Bedray Settings"));
@@ -53,24 +55,28 @@ public final class BedrayConfigScreen extends Screen {
         if (draft == null) draft = new SettingsDraft();
         PreviewPanel.clearSelection();
         clearWidgets(); rowWidgets.clear(); rows.clear(); popupButtons.clear();
-        boolean sidebar = width >= 440;
-        detailsWidth = width >= 760 ? Math.min(320, width / 3) : 0;
-        detailsX = width - detailsWidth - 8;
-        contentX = sidebar ? 132 : 8;
-        contentWidth = Math.max(120, width - contentX - 8 - (detailsWidth > 0 ? detailsWidth + 8 : 0));
-        listTop = sidebar ? 54 : 78;
-        listBottom = height - 50;
-        EditBox search = new EditBox(font, 8, 27, width - 16, 20, tr("bedray.settings.search", "Search settings"));
+        layout = SettingsLayout.measure(width, height);
+        detailsWidth = layout.detailsWidth();
+        detailsX = layout.detailsX();
+        contentX = layout.contentX();
+        contentWidth = layout.contentWidth();
+        listTop = layout.listTop();
+        listBottom = layout.listBottom();
+        EditBox search = new EditBox(font, 12, SettingsLayout.SEARCH_Y, width - 24, 20, tr("bedray.settings.search", "Search settings"));
         search.setHint(tr("bedray.settings.search", "Search settings")); search.setMaxLength(80); search.setValue(query);
         search.setResponder(text -> { query = text; scroll = 0; rebuildRows(); }); addRenderableWidget(search);
-        if (sidebar) {
+        navigation.clear();
+        if (layout.sidebar()) {
             int index = 0;
-            for (SettingsDraft.Category value : SettingsDraft.Category.values()) addRenderableWidget(Button.builder(value.title(), b -> selectCategory(value))
-                .bounds(8, listTop + index++ * 23, 116, 20).build());
+            for (SettingsDraft.Category value : SettingsDraft.Category.values()) {
+                Button button = addRenderableWidget(Button.builder(value.title(), b -> selectCategory(value))
+                    .bounds(16, 78 + index++ * 27, 128, 22).build());
+                navigation.put(value, button);
+            }
         } else addRenderableWidget(Button.builder(category.title(), b -> {
             var values = SettingsDraft.Category.values();
-            openChoices(java.util.Arrays.stream(values).map(SettingsDraft.Category::title).toList(), i -> selectCategory(values[i]), 8, 52, width - 16);
-        }).bounds(8, 52, width - 16, 20).build());
+            openChoices(java.util.Arrays.stream(values).map(SettingsDraft.Category::title).toList(), i -> selectCategory(values[i]), 12, SettingsLayout.CATEGORY_Y, width - 24);
+        }).bounds(12, SettingsLayout.CATEGORY_Y, width - 24, 20).build());
         int gap = 4, buttonWidth = (width - 16 - 3 * gap) / 4, footerY = height - 26;
         addRenderableWidget(Button.builder(tr("bedray.settings.details", "Details"), b -> { if (selected != null) PreviewPanel.openModal(selected.option()); })
             .bounds(8, footerY, buttonWidth, 20).build());
@@ -85,7 +91,7 @@ public final class BedrayConfigScreen extends Screen {
 
     private void selectCategory(SettingsDraft.Category value) {
         category = value; scroll = 0;
-        if (width < 440) rebuildWidgets(); else rebuildRows();
+        if (!layout.sidebar()) rebuildWidgets(); else rebuildRows();
     }
 
     void rebuildRows() {
@@ -158,6 +164,8 @@ public final class BedrayConfigScreen extends Screen {
         PreviewPanel.clearSelection();
         if (selected != null) { PreviewPanel.select(selected.option()); PreviewPanel.setRuntimeStatus(draft.status(selected).text()); }
         updateButtons();
+        navigation.forEach((value, button) -> button.setMessage(value.title().copy()
+            .withColor(value == category && query.isBlank() ? SettingsChrome.ACCENT : SettingsChrome.TEXT)));
     }
 
     private void addAction(Component name, Runnable action) {
@@ -301,17 +309,33 @@ public final class BedrayConfigScreen extends Screen {
     }
 
     @Override public void extractRenderState(GuiGraphicsExtractor g, int mx, int my, float delta) {
+        for (int i = 0; i < rows.size(); i++) {
+            if (rowWidgets.get(i).visible) SettingsChrome.row(g, contentX, rowWidgets.get(i).getY(), contentWidth,
+                selected == rows.get(i), rows.get(i).option().hasChanged());
+        }
         super.extractRenderState(g, mx, my, delta);
-        g.text(font, title, 8, 9, 0xFFFFFFFF);
+        g.text(font, title, 23, 15, SettingsChrome.TEXT);
+        Component commitHint = tr(draft.changed() ? "bedray.settings.staged_hint" : "bedray.settings.saved_hint",
+            draft.changed() ? "Changes pending · Apply to save" : "Saved settings");
+        if (font.width(title) + font.width(commitHint) + 52 <= width) {
+            g.text(font, commitHint, width - font.width(commitHint) - 12, 15,
+                draft.changed() ? SettingsChrome.PENDING : SettingsChrome.MUTED);
+        }
+        Component section = query.isBlank() ? category.title() : tr("bedray.settings.results", "Search results");
+        g.text(font, section, contentX + 2, listTop - 16, SettingsChrome.ACCENT);
+        String count = Integer.toString(rows.size());
+        g.text(font, count, contentX + contentWidth - font.width(count) - 8, listTop - 16, SettingsChrome.MUTED);
         int labelWidth = Math.max(30, contentWidth - Math.max(70, Math.min(160, contentWidth / 2)) - 14);
         for (int i = 0; i < rows.size(); i++) {
             if (!rowWidgets.get(i).visible) continue;
             SettingsDraft.Entry row = rows.get(i); int y = rowWidgets.get(i).getY();
             g.text(font, font.plainSubstrByWidth(row.option().getName().getString(), labelWidth), contentX + 2, y + 1,
                 rowWidgets.get(i).active ? 0xFFFFFFFF : 0xFF909090);
-            String subtitle = query.isBlank() ? row.option().hasChanged() ? tr("bedray.settings.pending", "Pending").getString() : ""
+            String subtitle = query.isBlank() ? row.option().hasChanged() ? tr("bedray.settings.pending", "Pending").getString()
+                    : Component.translatableWithFallback("bedray.opt." + row.path() + ".desc", row.info().desc()).getString()
                 : row.category().title().getString();
-            g.text(font, font.plainSubstrByWidth(subtitle, labelWidth), contentX + 2, y + 12, 0xFF8ABCD8);
+            g.text(font, font.plainSubstrByWidth(subtitle, labelWidth), contentX + 5, y + 12,
+                row.option().hasChanged() ? SettingsChrome.PENDING : SettingsChrome.MUTED);
         }
         if (rows.isEmpty() && category != SettingsDraft.Category.PRESETS && category != SettingsDraft.Category.SYSTEM) {
             Component empty = draft.voxel() && query.isBlank() ? tr("bedray.settings.voxel_unrelated", "These settings belong to the hardware renderer. Choose another category.")
@@ -335,6 +359,10 @@ public final class BedrayConfigScreen extends Screen {
             g.outline(popupX, popupY, popupWidth, popupHeight, 0xFF79A6BE);
             for (Button b : popupButtons) b.extractRenderState(g, mx, my, delta);
         }
+    }
+    @Override public void extractBackground(GuiGraphicsExtractor g, int mx, int my, float delta) {
+        super.extractBackground(g, mx, my, delta);
+        if (layout != null) SettingsChrome.background(g, layout, width, height);
     }
     @Override public void onClose() { PreviewPanel.clearSelection(); minecraft.gui.setScreen(parent); }
 }

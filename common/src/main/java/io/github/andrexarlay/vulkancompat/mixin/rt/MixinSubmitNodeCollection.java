@@ -131,10 +131,4 @@ public class MixinSubmitNodeCollection {
         EntityCaptureManager.getInstance().captureCustomGeometry(poseStack, renderType, renderer);
     }
 
-    /** Block selection wireframe outline intercepted so targeted blocks highlight cleanly in RT mode. */
-    @Inject(method = "submitShapeOutline", at = @At("HEAD"))
-    private void onShapeOutlineSubmitted(PoseStack poseStack, net.minecraft.world.phys.shapes.VoxelShape shape,
-                                         RenderType renderType, int color, float width, boolean isTranslucent, CallbackInfo ci) {
-        EntityCaptureManager.getInstance().captureShapeOutline(poseStack, shape, color, width);
-    }
 }

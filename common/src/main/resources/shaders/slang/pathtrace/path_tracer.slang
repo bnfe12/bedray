@@ -586,8 +586,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // The diffuse continuation of the primary vertex is in flight and its first vertex is not recorded yet.
     bool ptArmed = false;
     PathDenoiserContinuation denoiserContinuation = emptyPathDenoiserContinuation();
-    // RR consumes total HDR. Only NRD needs selected-lobe bookkeeping; keep this state out of the ordinary path.
+    // RR consumes total HDR but still needs the first reflected edge for reconstruction.
+    // Reuse the real continuation; no extra query/ray is traced for the guide.
     bool wantDenoiserSignals = (options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u;
+    bool wantDenoiserGeometry = (options.flags & (PATH_TRACE_OPTION_GBUFFER | PATH_TRACE_OPTION_NRD_MOTION)) != 0u;
 
     // The water body the current ray runs in and the ray coordinate where its
     // current segment began.  A hole advance moves the origin, so the same
@@ -642,7 +644,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)
                                                   : traversal.traceClosest(ray);
         if (!hit.hit) {
-            if (wantDenoiserSignals) pathDenoiserMiss(denoiserContinuation);
+            if (wantDenoiserGeometry) pathDenoiserMiss(denoiserContinuation);
             // A ray inside the body that finds no surface still crossed water:
             // the tail is absorbed like every other segment (the legacy bound
             // of 48 blocks keeps an open ray from going black at the far plane).
@@ -745,7 +747,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
 
         // Only accepted, decoded surfaces end the primary continuation's guide edge.
         // Measuring endpoints includes cutout/pane advances without adding camera depth or later bounces.
-        if (wantDenoiserSignals) pathDenoiserHit(denoiserContinuation, hit.position);
+        if (wantDenoiserGeometry) pathDenoiserHit(denoiserContinuation, hit.position);
         if (ambientOnlyPending) {
             // An ambient-only bounce that found geometry collects nothing: the sky it would have seen is occluded.
             break;
@@ -1046,9 +1048,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             result.pt.continuationWeight = throughput;
             result.pt.radianceBefore = result.radiance;
         }
-        if (wantDenoiserSignals && receiver.primary && !medium.inside) {
+        if (wantDenoiserGeometry && receiver.primary && !medium.inside) {
             // Arm only once a real continuation launches. Transmission and RC have no opaque in-lobe guide.
-            pathDenoiserBegin(denoiserContinuation, bsdf.lobe, result.radiance, hit.position);
+            pathDenoiserBegin(denoiserContinuation, bsdf.lobe,
+                wantDenoiserSignals ? result.radiance : float3(0.0), hit.position);
         }
         ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
         ambientOnlyPending = continuationAmbientOnly;
@@ -1087,6 +1090,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     result.radiance = clampRadiance(result.radiance, options.maxRadiance);
     if (wantDenoiserSignals)
         result.denoiser = pathDenoiserResolve(denoiserContinuation, radianceBeforeClamp, result.radiance,
+            (result.flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_WATER_MEDIUM
+                | PATH_TRACE_FLAG_RC_FINITE_WINDOW)) != 0u);
+    else if (wantDenoiserGeometry)
+        result.denoiser.specularHitDistance = pathDenoiserReflectionDistance(denoiserContinuation,
             (result.flags & (PATH_TRACE_FLAG_INVALID_SAMPLE | PATH_TRACE_FLAG_WATER_MEDIUM
                 | PATH_TRACE_FLAG_RC_FINITE_WINDOW)) != 0u);
     return result;

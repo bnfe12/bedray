@@ -3,13 +3,14 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 /**
  * Auto exposure of the path tracer (pure Java, unit-tested). The shader adds {@code (log2(L) + 16) * 64} of every 16th pixel
  * (L = linear luminance before tone mapping) to the frame slot; two frames later the CPU reads the sum, computes the
- * log-average luminance and moves the exposure towards {@code KEY / average} by {@link #ADAPT} per frame in log2 space,
- * clamped to [{@link #MIN}, {@link #MAX}]. {@link #MIN} is the fixed exposure of the ray mode (RtLighting.EXPOSURE), so the
- * path tracer is never darker than the ray mode.
+ * log-average luminance and moves the exposure towards {@code pow(KEY / average, STRENGTH)} in log2 space,
+ * clamped to [{@link #MIN}, {@link #MAX}]. Bright HDR rooms must be allowed below the fixed exposure;
+ * otherwise adding lights can only clip the image, regardless of the luminance meter.
  */
 public final class RtExposure {
     public static final float KEY = 0.22f;
-    public static final float MIN = 1.1f;
+    public static final float FIXED = 1.1f;
+    public static final float MIN = 1.0f / 64.0f;
     /**
      * Brightest auto exposure (4 = +2 EV over the fixed one). It was 16: a torch-lit room or a cave has a log-average luminance
      * far below KEY, so the old range lifted every dim scene by up to +4 EV, washing orange / red light over the walls and
@@ -22,7 +23,7 @@ public final class RtExposure {
     public static final float TAU_METER = 0.45f;
     /** Slew limit of the exposure in EV per second (brighter / darker): no pumping when a bright sky enters the view. */
     public static final float SLEW_UP_EV = 0.5f;
-    public static final float SLEW_DOWN_EV = 1.0f;
+    public static final float SLEW_DOWN_EV = 3.0f;
     /** Legacy per-frame step of {@link #observe(long, int)} at 60 fps: now only the time constants below matter. */
     public static final float ADAPT = 0.08f;
     /** Adaptation time constants in seconds (exponential, log2 space): slow towards a brighter exposure (dark scene), faster the other way. */
@@ -31,7 +32,7 @@ public final class RtExposure {
     /** Differences below this many EV are ignored (no creeping pulse from the noise of the luminance sum). */
     public static final float DEADBAND_EV = 0.15f;
 
-    private float value = MIN;
+    private float value = FIXED;
     /** Upper clamp of this frame (RtSkyState.maxExposure: lower at night, so the night is not brightened to daylight). */
     private float max = MAX;
     private double targetAnchor = Double.NaN;
@@ -47,7 +48,7 @@ public final class RtExposure {
 
     public float value() {
         if (Float.isNaN(value) || Float.isInfinite(value) || value < MIN) {
-            return MIN;
+            return FIXED;
         }
         return value;
     }
@@ -68,7 +69,7 @@ public final class RtExposure {
             return; // nothing measured this frame: a zero sum is not a pitch-dark scene
         }
         if (Float.isNaN(value) || Float.isInfinite(value) || value < MIN) {
-            value = MIN;
+            value = FIXED;
             targetAnchor = Double.NaN;
         }
         double avgLog2 = lumLogSum / 64.0 / samples - 16.0;
@@ -88,7 +89,7 @@ public final class RtExposure {
         }
         double target = Math.pow(KEY / denom, STRENGTH);
         if (Double.isNaN(target) || Double.isInfinite(target)) {
-            target = MIN;
+            target = FIXED;
         } else {
             target = Math.max(MIN, Math.min(max, target));
         }
@@ -98,7 +99,7 @@ public final class RtExposure {
         }
         double cur = Math.log(value) / Math.log(2.0);
         if (Double.isNaN(cur) || Double.isInfinite(cur)) {
-            cur = Math.log(MIN) / Math.log(2.0);
+            cur = Math.log(FIXED) / Math.log(2.0);
         }
         double diff = targetAnchor - cur;
         if (Math.abs(diff) < 1.0e-5) {
@@ -113,7 +114,7 @@ public final class RtExposure {
         cur += step;
         double nextVal = Math.pow(2.0, cur);
         if (Double.isNaN(nextVal) || Double.isInfinite(nextVal)) {
-            value = MIN;
+            value = FIXED;
             targetAnchor = Double.NaN;
         } else {
             value = (float) Math.max(MIN, Math.min(max, nextVal));
@@ -130,12 +131,12 @@ public final class RtExposure {
      * what goes to the GPU, the sky conversion and the compose pass, so every consumer sees the same number.
      */
     public float applied(boolean auto, int evTenths) {
-        return (auto ? value() : MIN) * evScale(evTenths);
+        return (auto ? value() : FIXED) * evScale(evTenths);
     }
 
     public void reset() {
         meterLog2 = Double.NaN;
-        value = MIN;
+        value = FIXED;
         targetAnchor = Double.NaN;
     }
 }

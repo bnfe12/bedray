@@ -5,7 +5,7 @@
 #include <cstdio>
 
 int main() {
-    std::array<uint32_t, 16> verdicts{};
+    std::array<uint32_t, 21> verdicts{};
     GlobalParams_0 globals{};
     globals.sink_0 = {verdicts.data(), verdicts.size()};
     ComputeThreadVaryingInput thread{};
@@ -16,6 +16,6 @@ int main() {
             return 1;
         }
     }
-    std::puts("16 production Slang signal/mean/NRD/RR CPU cases passed (no GPU)");
+    std::puts("21 production Slang signal/mean/NRD/RR CPU cases passed (no GPU)");
     return 0;
 }

@@ -130,4 +130,19 @@ void main() {
     MaterialSample metal = {};
     metal.metallic = 1.0;
     sink[15] = near3(bsdfReflectionAlbedo(metal), float3(0.0));
+
+    // RR geometry is independent of NRD radiance demodulation and camera depth (900 above).
+    sink[16] = pathDenoiserReflectionDistance(specular, false) == 3.0
+        && pathDenoiserReflectionDistance(diffuse, false) == 0.0
+        && pathDenoiserReflectionDistance(transmission, false) == 0.0;
+    sink[17] = pathDenoiserReflectionDistance(escaped, false) == 65504.0
+        && pathDenoiserReflectionDistance(specular, true) == 0.0;
+    PathDenoiserContinuation stopped = emptyPathDenoiserContinuation();
+    pathDenoiserBegin(stopped, BSDF_LOBE_SPECULAR, float3(0.0), float3(1.0));
+    sink[18] = pathDenoiserReflectionDistance(stopped, false) == 0.0;
+    sink[19] = rr.reflectionHitDistance == 8.0 && near3(rr.diffuse.rgb, float3(0.6));
+    pc.denoiser = 2u;
+    input.viewZ = 1.0e6;
+    NrdPackedSample ignoredRr = nrdPackSample(input, pc);
+    sink[20] = ignoredRr.reflectionHitDistance == 0.0;
 }

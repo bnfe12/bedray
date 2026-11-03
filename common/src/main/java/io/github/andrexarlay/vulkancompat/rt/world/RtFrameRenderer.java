@@ -1197,9 +1197,8 @@ public final class RtFrameRenderer {
                             * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignY()
                         : 0.0f;
                     DlssRrDenoiser owner = dlssRrDenoiser;
-                    owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
+                    frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY);
-                    frameColorTemporallyResolved = true;
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (Exception e) {
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)

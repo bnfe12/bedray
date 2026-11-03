@@ -51,7 +51,6 @@ public final class DlssRrDenoiser {
     private static final int FMT_RGBA16F = VK10.VK_FORMAT_R16G16B16A16_SFLOAT;
     private static final int FMT_RGBA8 = VK10.VK_FORMAT_R8G8B8A8_UNORM;
     private static final int USAGE_STORAGE_SAMPLED = VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT;
-    private static final double TELEPORT_BLOCKS = 32.0;
     /**
      * NGX sharpness of the RR output (0 = off, the default). Sharpening is left to the upscale pass, which runs at display
      * resolution and would otherwise compound with this one. {@code -Dvkrtx.dlssrr.sharpness} enables it for A/B runs.
@@ -84,6 +83,7 @@ public final class DlssRrDenoiser {
     private RtMemory.Img inDiffuse;
     private RtMemory.Img inMotion;
     private RtMemory.Img inSpecular;
+    private RtMemory.Img inSpecularHitDistance;
     private RtMemory.Img outDiffuse;
     /** Disocclusion mask (R32F, 1 = no valid history), NGX pInDisocclusionMask (nvsdk_ngx_helpers_dlssd_vk.h:125). */
     private RtMemory.Img inDisocc;
@@ -98,13 +98,8 @@ public final class DlssRrDenoiser {
 
     private boolean imagesReady;
     private long imageInitRecording;
-    private boolean restartNext = true;
-    private boolean havePrev;
-    private double prevX;
-    private double prevY;
-    private double prevZ;
-    private final Matrix4f prevProjection = new Matrix4f();
-    private final Matrix4f prevViewRotation = new Matrix4f();
+    private final RrCameraHistory cameraHistory = new RrCameraHistory();
+    private boolean invalidCameraLogged;
     private final Matrix4f invViewProj = new Matrix4f();
     private final Matrix4f prevViewProjMat = new Matrix4f();
 
@@ -161,7 +156,8 @@ public final class DlssRrDenoiser {
             rr.close();
             throw e;
         }
-        LOGGER.info("[DLSS-RR] denoiser_ready size={}x{} wrapper={}", width, height, io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(wrapperDll));
+        LOGGER.info("[DLSS-RR] denoiser_ready size={}x{} reflection_guide=primary_specular_hit_distance format=R32F wrapper={}",
+            width, height, io.github.andrexarlay.vulkanbridge.platform.LogPaths.show(wrapperDll));
     }
 
     /**
@@ -275,6 +271,7 @@ public final class DlssRrDenoiser {
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         inSpecular = memory.createImage("dlss_rr_in_spec_albedo", w, h, FMT_RGBA16F,
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        inSpecularHitDistance = memory.createImage("dlss_rr_in_spec_hit_distance", w, h, FMT_R32F, USAGE_STORAGE_SAMPLED);
         outDiffuse = memory.createImage("dlss_rr_out_diffuse", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         inDisocc = memory.createImage("dlss_rr_in_disocc", w, h, FMT_R32F,
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
@@ -293,30 +290,30 @@ public final class DlssRrDenoiser {
         imagesReady = false;
         imageInitRecording = 0;
         guideGeneration++;
-        restartNext = true;
-        havePrev = false;
+        cameraHistory.clear();
     }
 
     /** Reset ray-reconstruction history on the next recorded frame after a transport/settings change. */
     public void resetHistory() {
-        restartNext = true;
+        cameraHistory.reset();
     }
 
     void writeSet(long outputView) {
         this.boundOutputView = outputView;
         if (packPipeline != null && boundOutputView != 0L) {
-            // RR never reads bindings 11/12 (compose reads the RR result from 7, motion comes from the velocity pass).
+            // RR compose reads 7, not 11. Pack writes scalar reflection distance at 12;
+            // RG16F motion is produced separately by the velocity pass.
             packPipeline.writeViews(new long[] {
                 gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view,
                 inNormalRough.view, inDiffuse.view, outDiffuse.view, boundOutputView,
-                gbSpecular.view, inSpecular.view, outDiffuse.view, inMotion.view, gbSpecAlbedo.view
+                gbSpecular.view, inSpecular.view, outDiffuse.view, inSpecularHitDistance.view, gbSpecAlbedo.view
             });
         }
     }
 
     private void initImages(VkCommandBuffer cmd) {
         RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
-            inDiffuse, inMotion, inSpecular, outDiffuse, inDisocc};
+            inDiffuse, inMotion, inSpecular, inSpecularHitDistance, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
             VkBarriers.transition(cmd, i.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
                 VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
@@ -498,62 +495,50 @@ public final class DlssRrDenoiser {
         LOGGER.info("[DLSS-RR] resized size={}x{} (history restarted)", w, h);
     }
 
-    public void record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
+    public boolean record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
                        boolean tonemap) {
-        record(cmd, projection, viewRotation, camX, camY, camZ, tonemap, 1.1f, 0L);
+        return record(cmd, projection, viewRotation, camX, camY, camZ, tonemap, 1.1f, 0L);
     }
 
-    public void record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
+    public boolean record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
                        boolean tonemap, float exposure) {
-        record(cmd, projection, viewRotation, camX, camY, camZ, tonemap, exposure, 0L);
+        return record(cmd, projection, viewRotation, camX, camY, camZ, tonemap, exposure, 0L);
     }
 
     /** Per-pixel entity motion buffer of rt_path (device address, 0 = none); set by RtFrameRenderer before {@link #record}. */
     public long entityMotionAddress;
 
-    public void record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
+    public boolean record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
                        boolean tonemap, float exposure, long depthView) {
-        record(cmd, projection, viewRotation, camX, camY, camZ, tonemap, exposure, depthView, 0.0f, 0.0f);
+        return record(cmd, projection, viewRotation, camX, camY, camZ, tonemap, exposure, depthView, 0.0f, 0.0f);
     }
 
     /**
      * Records DLSS-RR with the sub-pixel offset that was applied to this frame's primary rays.
      * NGX jitter uses the same sign convention as the selected DLSS upscaler mode.
      */
-    public void record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
+    public boolean record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
                        boolean tonemap, float exposure, long depthView, float jitterPixelsX, float jitterPixelsY) {
+        var cameraFrame = cameraHistory.prepare(projection, viewRotation, camX, camY, camZ);
+        if (cameraFrame == null) {
+            if (!invalidCameraLogged) LOGGER.warn("[DLSS-RR] frame_skipped reason=invalid_camera {} position={},{},{}",
+                io.github.andrexarlay.vulkancompat.rtx.CameraMatrixGuard.describe(projection, viewRotation, null), camX, camY, camZ);
+            invalidCameraLogged = true;
+            return false; // before RR recording: keep the raw RT image and recover next valid frame
+        }
+        if (invalidCameraLogged) LOGGER.info("[DLSS-RR] camera_recovered history_reset=true");
+        invalidCameraLogged = false;
+        projection = cameraFrame.projection();
+        viewRotation = cameraFrame.rotation();
         prepare(cmd);
         ensureFeature(cmd);
         MotionProbe.tick();
         float frameDeltaMs = frameDeltaMs();
 
-        boolean teleport = havePrev && Math.hypot(camX - prevX, Math.hypot(camY - prevY, camZ - prevZ)) > TELEPORT_BLOCKS;
-        boolean reset = restartNext || teleport;
-        restartNext = false;
-
-        Matrix4f currViewProj = new Matrix4f(projection != null ? projection : new Matrix4f())
-            .mul(viewRotation != null ? viewRotation : new Matrix4f());
-        currViewProj.invert(invViewProj);
-
-        if (havePrev && !reset) {
-            prevProjection.mul(prevViewRotation, prevViewProjMat);
-        } else {
-            prevViewProjMat.set(currViewProj);
-        }
-        Vec3 camDelta = (havePrev && !reset)
-            ? new Vec3(camX - prevX, camY - prevY, camZ - prevZ)
-            : Vec3.ZERO;
-
-        if (projection != null) {
-            prevProjection.set(projection);
-        }
-        if (viewRotation != null) {
-            prevViewRotation.set(viewRotation);
-        }
-        prevX = camX;
-        prevY = camY;
-        prevZ = camZ;
-        havePrev = true;
+        boolean reset = cameraFrame.reset();
+        invViewProj.set(cameraFrame.inverse());
+        prevViewProjMat.set(cameraFrame.previous());
+        Vec3 camDelta = cameraFrame.delta();
 
         if (viewRotation != null) {
             viewRotation.get(worldToViewMatrix);
@@ -606,14 +591,9 @@ public final class DlssRrDenoiser {
                 // A native recording failure may follow emitted commands. It
                 // requires whole-command discard, not a cleared-motion retry.
                 if (t instanceof BedrayCoreException failure) throw failure;
-                LOGGER.warn("[DLSS-RR] VelocityPipeline dispatch failed: {}", t.getMessage());
-                try (MemoryStack stack = MemoryStack.stackPush()) {
-                    VkClearColorValue zero = VkClearColorValue.calloc(stack);
-                    VkImageSubresourceRange.Buffer range = VkImageSubresourceRange.calloc(1, stack);
-                    range.get(0).aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-                    VK10.vkCmdClearColorImage(cmd, inMotion.image, VK10.VK_IMAGE_LAYOUT_GENERAL, zero, range);
-                }
-                VkBarriers.fullMemoryBarrier(cmd);
+                if (t instanceof Error fatal) throw fatal;
+                cameraHistory.reset();
+                throw new IllegalStateException("[DLSS-RR] velocity failed; refusing reconstruction with fabricated zero motion", t);
             }
         } else if (reset) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -639,7 +619,8 @@ public final class DlssRrDenoiser {
             VkBarriers.fullMemoryBarrier(cmd);
         }
 
-        RtMemory.Img[] gbuffers = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inDiffuse, inMotion, inSpecular, inDisocc};
+        RtMemory.Img[] gbuffers = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inDiffuse, inMotion, inSpecular,
+            inSpecularHitDistance, inDisocc};
 
         // 1. Transition G-buffer textures from GENERAL to SHADER_READ_ONLY_OPTIMAL, and output to GENERAL
         VkBarriers.fullMemoryBarrier(cmd);
@@ -672,12 +653,15 @@ public final class DlssRrDenoiser {
         // Roughness is linear material roughness in [0, 1] packed into the alpha channel (ROUGHNESS_PACKED).
         DlssRrParams.Image normals = new DlssRrParams.Image(
             gbNormalRough.image, gbNormalRough.view, FMT_RGBA16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
+        DlssRrParams.Image reflectionDistance = new DlssRrParams.Image(
+            inSpecularHitDistance.image, inSpecularHitDistance.view, FMT_R32F, width, height,
+            VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
 
         DlssRrParams.EvalInfo eval = new DlssRrParams.EvalInfo(
             reset,
             color, out, depth, mv, DlssRrParams.Image.NONE,
             diffAlbedo, specAlbedo, normals, DlssRrParams.Image.NONE,
-            DlssRrParams.Image.NONE, DlssRrParams.Image.NONE, DlssRrParams.Image.NONE,
+            DlssRrParams.Image.NONE, reflectionDistance, DlssRrParams.Image.NONE,
             DlssRrParams.Image.NONE,
             DISOCC_OFF ? DlssRrParams.Image.NONE
                 : new DlssRrParams.Image(inDisocc.image, inDisocc.view, FMT_R32F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false),
@@ -733,18 +717,20 @@ public final class DlssRrDenoiser {
             }
             VkBarriers.fullMemoryBarrier(cmd);
         }
+        cameraHistory.commit(cameraFrame);
+        return true;
     }
 
     private void destroyImages() {
         RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
-            inDiffuse, inMotion, inSpecular, outDiffuse, inDisocc};
+            inDiffuse, inMotion, inSpecular, inSpecularHitDistance, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
             if (i != null) {
                 memory.destroy(i);
             }
         }
         gbViewZ = gbNormalRough = gbDiffuse = gbAlbedo = gbDirect = gbSpecular = gbSpecAlbedo = inNormalRough = inDiffuse =
-            inMotion = inSpecular = outDiffuse = inDisocc = null;
+            inMotion = inSpecular = inSpecularHitDistance = outDiffuse = inDisocc = null;
         if (disoccBuf != null) {
             memory.destroy(disoccBuf);
             disoccBuf = null;
@@ -776,8 +762,7 @@ public final class DlssRrDenoiser {
                 imageInitRecording = 0;
                 imagesReady = false;
             }
-            restartNext = true;
-            havePrev = false;
+            cameraHistory.clear();
             prevViewZValid = false;
             recordingPins.release(command);
         } catch (RuntimeException | Error failure) {
