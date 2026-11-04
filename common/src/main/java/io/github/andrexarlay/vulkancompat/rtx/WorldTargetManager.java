@@ -1034,11 +1034,6 @@ public final class WorldTargetManager {
             .copyTextureToTexture(xessOutput.getColorTexture(), fullMain.getColorTexture(), 0, 0, 0, 0, 0, w, h);
     }
 
-    /**
-     * Safety reset hook at HEAD of {@link GameRenderer#render()}.
-     * Restores original targets if a previous frame was interrupted by an exception between
-     * beginWorldPhase and endWorldPhase.
-     */
     private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan chooseResolutionPlan(
             int targetW, int targetH, int winW, int winH) {
         return io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan.choose(
@@ -1048,6 +1043,11 @@ public final class WorldTargetManager {
             TemporalUpscaler.active(), SpatialUpscaler.isSelected());
     }
 
+    /**
+     * Safety reset hook at HEAD of {@link GameRenderer#render()}.
+     * Restores original targets if a previous frame was interrupted by an exception between
+     * beginWorldPhase and endWorldPhase.
+     */
     public static void resetPhase(GameRenderer renderer) {
         // Experimental XeSS / DLSS contexts (request-only via -Dvkbridge.xess / -Dvkbridge.dlss; no-op otherwise). Here no render pass is open.
         net.minecraft.client.Minecraft mcForXess = net.minecraft.client.Minecraft.getInstance();

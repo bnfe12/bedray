@@ -178,7 +178,7 @@ public final class DlssRuntime {
             }
         } catch (RuntimeException failure) {
             LOGGER.warn("[VKB-DLSS] retirement_deferred stage=frame_preflight frame={} state={} feature=0x{} retained=true reason={}",
-                frameCounter, state, Long.toHexString(feature.handle()), failure.toString());
+                frameCounter, state, Long.toHexString(feature.handle()), LogPaths.show(failure.toString()));
             return;
         }
         if (state == State.READY && winW > 0 && winH > 0 && (winW != outputWidth || winH != outputHeight)) {
@@ -570,7 +570,7 @@ public final class DlssRuntime {
             releaseFeature();
         } catch (RuntimeException failure) {
             LOGGER.warn("[VKB-DLSS] retirement_deferred stage=rr_suspend frame={} feature=0x{} retained=true ready_preserved=true reason={}",
-                frameCounter, Long.toHexString(feature.handle()), failure.toString());
+                frameCounter, Long.toHexString(feature.handle()), LogPaths.show(failure.toString()));
             return;
         }
         LOGGER.info("[VKB-DLSS] sr_suspended reason=rr_output frame={} input={} output={}x{} epoch={} ngx_retained=true",

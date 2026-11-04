@@ -11,6 +11,7 @@ import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuides;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssFeatureOwner;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNative;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssQuality;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.rr.DlssRayReconstruction;
@@ -69,8 +70,7 @@ public final class DlssRrDenoiser {
     private VelocityPipeline velocityPipeline;
     private final boolean ownsVelocityPipeline;
 
-    private final io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssFeatureOwner feature =
-        new io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssFeatureOwner();
+    private final DlssFeatureOwner feature = new DlssFeatureOwner();
     private boolean qualityFallback;
     private long guideGeneration;
     private int width;

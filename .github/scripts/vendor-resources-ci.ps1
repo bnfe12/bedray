@@ -48,7 +48,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot identify source revision' }
 Invoke-Checked 'cmake' @('-S', (Join-Path $SourceRoot 'native/vendor_resource_tests'), '-B', $BuildRoot,
     '-G', 'Visual Studio 17 2022', '-A', 'x64', "-DVKB_NGX_SDK=$ngx", "-DVKB_SL_SDK=$sl", "-DBEDRAY_VULKAN_HEADERS=$Headers")
 Invoke-Checked 'cmake' @('--build', $BuildRoot, '--config', 'Release', '--parallel', '2')
-Invoke-Checked 'ctest' @('--test-dir', $BuildRoot, '-C', 'Release', '--output-on-failure', '--no-tests=error',
+Invoke-Checked 'ctest' @('--test-dir', $BuildRoot, '-C', 'Release', '--verbose', '--output-on-failure', '--no-tests=error',
     '--output-junit', (Join-Path $BuildRoot 'ctest.xml'))
 $runtime = Join-Path $BuildRoot 'runtime'
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
@@ -63,6 +63,22 @@ $files = foreach ($artifact in $artifacts) {
     Copy-Item -LiteralPath $inputFile -Destination (Join-Path $runtime $artifact.name)
     [ordered]@{ name=$artifact.name; kind=$artifact.kind; sha256=(Get-FileHash -LiteralPath $inputFile -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
+$files += foreach ($notice in @(
+    @{source=(Join-Path $ngx 'LICENSE.txt'); name='DLSS-LICENSE.txt'},
+    @{source=(Join-Path $sl 'license.txt'); name='Streamline-LICENSE.txt'},
+    @{source=(Join-Path $sl '3rd-party-licenses.md'); name='Streamline-3rd-party-licenses.md'}
+)) {
+    Copy-Item -LiteralPath $notice.source -Destination (Join-Path $runtime $notice.name)
+    [ordered]@{name=$notice.name; kind='sdk-license-notice'; sha256=(Get-FileHash -LiteralPath $notice.source -Algorithm SHA256).Hash.ToLowerInvariant()}
+}
+@'
+Bedray DLSS wrappers: deploy vkb_dlss.dll and vkb_sl.dll with the matching Bedray JAR.
+Retain your NVIDIA runtime plugin/model files. These wrappers do not replace nvngx_dlss.dll,
+nvngx_dlssd.dll, sl.interposer.dll or other NVIDIA runtime dependencies.
+Never deploy vendor_ngx_fault.dll or vendor_sl_fault.dll: those are CPU test fixtures.
+Manifest entries identify production and test binaries separately, with source revision and hashes.
+GPU rendering, visual quality, VRAM savings and FPS require an RTX live run.
+'@ | Set-Content -LiteralPath (Join-Path $runtime 'INSTALL.txt') -Encoding utf8NoBOM
 [ordered]@{
     schema=1; revision=$sourceRevision; platform='windows-x64-release'; resource_contract_version=1
     ngx_sdk_revision=$ngxRevision; streamline_sdk_revision=$slRevision

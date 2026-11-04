@@ -30,7 +30,7 @@ script sparse-checks out these official immutable SDK revisions:
 
 After both real DLL builds and both CTest contracts pass, `BuildRoot/runtime`
 contains the two production DLLs, two clearly named fault DLLs, and a SHA256
-manifest. SDK files are neither committed nor published. The fault DLLs are only
+manifest. SDK headers/libraries/runtime binaries are neither committed nor published; required license notices accompany our wrappers. The fault DLLs are only
 for CPU/Java FFM probes; never deploy them into a game.
 
 `fault_control.h` documents the additional test exports. Java FFM probes can call
@@ -38,26 +38,14 @@ for CPU/Java FFM probes; never deploy them into a game.
 `vkb_dlss_shutdown_checked()` successfully before `vendor_test_reset()`; reset
 changes injection/counters and deliberately refuses to erase live SDK ownership.
 
-## Candidate-only workflow step
+## Continuous integration
 
-Use the existing pinned Vulkan-Headers checkout. SDK checkouts and build evidence
-stay outside the source checkout. Add these steps to the candidate matrix route:
+The standalone `vendor-resources` job in `native-windows.yml` builds these
+wrappers and runs both contract executables. It then compiles the actual Java
+FFM binding subset with pinned Temurin 25 and invokes all four production/fault
+DLL probes through `dlss-ffm-ci.ps1`. This avoids Minecraft/launcher dependencies
+while exercising the production Java marshalling and C entrypoints.
 
-```yaml
-- name: Build vendor wrappers and fault contracts
-  if: matrix.revision == 'candidate'
-  shell: pwsh
-  run: |
-    ./driver/.github/scripts/vendor-resources-ci.ps1 -SourceRoot source -Headers deps/Vulkan-Headers/include -BuildRoot evidence/vendor -DependencyRoot "${{ runner.temp }}/bedray-vendor-sdk"
-- name: Publish tested vendor wrappers and fault DLLs
-  if: success() && matrix.revision == 'candidate'
-  uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-  with:
-    name: vendor-wrappers-${{ github.sha }}
-    if-no-files-found: error
-    retention-days: 14
-    path: evidence/vendor/runtime/*
-```
-
-The existing text-evidence artifact glob captures `commands.log`, `ctest.xml`,
-and CMake configuration diagnostics in `evidence/vendor` even on failure.
+The evidence artifact contains command logs, CTest XML and FFM output even on
+failure. The wrapper artifact contains hashes, SDK license notices and installation
+instructions. Only `vkb_dlss.dll` and `vkb_sl.dll` belong in the game.
