@@ -484,7 +484,7 @@ public final class RtFrameRenderer {
             frame(camera, target, levelState);
         } catch (RtDenoiserFrameDiscard discarded) {
             if (discarded.getSuppressed().length != 0) fail("rr_discard", "retirement_failed", discarded);
-            else LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded next_frame=denoiser_fallback");
+            else LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded recovery=next_frame_preflight");
         } catch (RtFailure f) {
             fail(f.stage(), f.result(), f.getCause() != null ? f.getCause() : f);
         } catch (RuntimeException | LinkageError e) {
@@ -1236,6 +1236,10 @@ public final class RtFrameRenderer {
                 } catch (Exception e) {
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
                         throw nativeFailure; // partial coarse recording requires whole-command discard
+                    if (e instanceof io.github.andrexarlay.vulkancompat.rt.denoise.RrFeatureCreationRetry) {
+                        LOGGER.warn("[DLSS-RR] creation_retry whole_recording=discarded next_frame=quality_fallback reason={}", e.getMessage());
+                        throw new RtDenoiserFrameDiscard("DLSS-RR creation retry requires a fresh recording", e);
+                    }
                     denoiserRuntimeFailure = "dlss_rr_record: " + LogPaths.show(e.getMessage());
                     LOGGER.error("[DLSS-RR] FAILED record: {} (whole recording discarded; denoiser fallback next frame)\n{}",
                         LogPaths.show(e.getMessage()), LogPaths.stack(e));
@@ -1407,12 +1411,12 @@ public final class RtFrameRenderer {
 
     // [DLSS-RR] Drops the DLSS-RR denoiser
     private static void dropDlssRrDenoiser(VkDevice device) {
-        dropDlssRrDenoiserNext = false;
         if (dlssRrDenoiser != null) {
             drainHostSubmissions(device, "drop_rr_drain");
             dlssRrDenoiser.destroy();
             dlssRrDenoiser = null;
         }
+        dropDlssRrDenoiserNext = false;
         if (dropDlssRrByError) {
             dlssRrFailed = true;
         }

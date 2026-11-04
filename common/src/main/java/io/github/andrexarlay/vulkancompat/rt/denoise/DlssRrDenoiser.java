@@ -11,6 +11,7 @@ import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuides;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssFeatureOwner;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNative;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssQuality;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.rr.DlssRayReconstruction;
@@ -69,7 +70,8 @@ public final class DlssRrDenoiser {
     private VelocityPipeline velocityPipeline;
     private final boolean ownsVelocityPipeline;
 
-    private long feature;
+    private final DlssFeatureOwner feature = new DlssFeatureOwner();
+    private boolean qualityFallback;
     private long guideGeneration;
     private int width;
     private int height;
@@ -409,26 +411,44 @@ public final class DlssRrDenoiser {
     }
 
     private void ensureFeature(VkCommandBuffer cmd) {
-        if (feature != 0L) {
-            return;
-        }
+        if (feature.usable()) return;
+        if (feature.retiring()) throw new IllegalStateException("RR creation requires preflight retirement");
         ensureNgx();
-        DlssQuality quality = desiredQuality(width, height, outputWidth, outputHeight);
-        requestedFeatureQuality = quality;
-        boolean scaled = width != outputWidth || height != outputHeight;
-        DlssRrParams.CreateInfo ci = hardwareFeatureInfo(width, height, outputWidth, outputHeight, quality, false);
-        long[] outFeat = new long[1];
-        DlssNative.Status st = rr.createFeature(cmd.address(), ci, outFeat);
-        if (!st.ok() && !scaled) {
-            ci = hardwareFeatureInfo(width, height, outputWidth, outputHeight, DlssQuality.QUALITY, true);
-            st = rr.createFeature(cmd.address(), ci, outFeat);
+        DlssQuality requested = desiredQuality(width, height, outputWidth, outputHeight);
+        requestedFeatureQuality = requested;
+        boolean fallback = qualityFallback && requested == DlssQuality.DLAA;
+        DlssRrParams.CreateInfo ci = hardwareFeatureInfo(width, height, outputWidth, outputHeight,
+            fallback ? DlssQuality.QUALITY : requested, fallback);
+        long[] out = new long[1];
+        DlssNative.Status status = rr.createFeature(cmd.address(), ci, out);
+        feature.adopt(out[0], status.ok());
+        if (!status.ok()) {
+            if (requested == DlssQuality.DLAA && !fallback) {
+                qualityFallback = true;
+                throw new RrFeatureCreationRetry("DLAA create failed: " + status
+                    + "; discard this recording, retire partial owner, then retry QUALITY next frame");
+            }
+            throw new IllegalStateException("[DLSS-RR] Failed to create Ray Reconstruction feature: " + status);
         }
-        if (!st.ok()) {
-            throw new IllegalStateException("[DLSS-RR] Failed to create Ray Reconstruction feature: " + st);
-        }
-        feature = outFeat[0];
         LOGGER.info("[DLSS-RR] feature_created handle=0x{} input={}x{} output={}x{} requested_quality={} actual_quality={}",
-            Long.toHexString(feature), width, height, outputWidth, outputHeight, requestedFeatureQuality, ci.quality());
+            Long.toHexString(feature.handle()), width, height, outputWidth, outputHeight, requested, ci.quality());
+    }
+
+    private void releaseFeature(String stage) {
+        try {
+            feature.retire(() -> {
+                recordingPins.requireUnreferenced(resourceContext(stage, width, height, boundOutputView, 0));
+                frameGenReads.requireUnreferenced();
+            }, handle -> {
+                DlssNative.Status status = rr.releaseFeature(handle);
+                if (!status.ok()) throw new IllegalStateException("sdk_return=" + status);
+                LOGGER.info("[DLSS-RR] feature_destroyed stage={} feature=0x{}", stage, Long.toHexString(handle));
+            });
+        } catch (RuntimeException | Error failure) {
+            LOGGER.error("[DLSS-RR] release_failed stage={} feature=0x{} generation={} retained=true",
+                stage, Long.toHexString(feature.handle()), guideGeneration, failure);
+            throw failure;
+        }
     }
 
     /**
@@ -465,7 +485,7 @@ public final class DlssRrDenoiser {
 
     public int width() { return width; }
     public int height() { return height; }
-    public long feature() { return feature; }
+    public long feature() { return feature.usable() ? feature.handle() : 0; }
     public boolean isImagesReady() { return imagesReady; }
 
     /**
@@ -486,9 +506,9 @@ public final class DlssRrDenoiser {
     }
 
     public boolean needsEnsure(int w, int h, int outW, int outH, long image, long view) {
-        return w != width || h != height || outW != outputWidth || outH != outputHeight
+        return feature.retiring() || w != width || h != height || outW != outputWidth || outH != outputHeight
             || image != boundOutputImage || view != boundOutputView
-            || (feature != 0 && requestedFeatureQuality != desiredQuality(w, h, outW, outH));
+            || (!feature.empty() && requestedFeatureQuality != desiredQuality(w, h, outW, outH));
     }
 
     private static DlssQuality desiredQuality(int w, int h, int outW, int outH) {
@@ -529,9 +549,10 @@ public final class DlssRrDenoiser {
         if (!needsEnsure(w, h, outW, outH, outputImage, outputView)) return;
         recordingPins.requireUnreferenced(resourceContext("ensure", w, h, outputView, 0));
         frameGenReads.requireUnreferenced();
-        if (feature != 0 && requestedFeatureQuality != desiredQuality(w, h, outW, outH)) {
-            rr.releaseFeature(feature);
-            feature = 0;
+        if (feature.retiring()) releaseFeature("retry_preflight");
+        if (!feature.empty() && requestedFeatureQuality != desiredQuality(w, h, outW, outH)) {
+            releaseFeature("quality_change");
+            qualityFallback = false;
             cameraHistory.reset();
         }
         if (w == width && h == height && outW == outputWidth && outH == outputHeight) {
@@ -541,10 +562,8 @@ public final class DlssRrDenoiser {
             }
             return;
         }
-        if (feature != 0L) {
-            rr.releaseFeature(feature);
-            feature = 0L;
-        }
+        releaseFeature("resize");
+        qualityFallback = false;
         destroyImages();
         createAll(w, h, outW, outH, outputImage, outputView);
         LOGGER.info("[DLSS-RR] resized input={}x{} output={}x{} history_reset=true", w, h, outW, outH);
@@ -761,7 +780,7 @@ public final class DlssRrDenoiser {
                 io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureRrConstants(
                     sdkCamera, width, height, outW, outH);
             }
-            DlssNative.Status st = rr.evaluate(cmd.address(), feature, eval);
+            DlssNative.Status st = rr.evaluate(cmd.address(), feature.handle(), eval);
             if (!st.ok()) {
                 throw new IllegalStateException("[DLSS-RR] evaluate failed: " + st);
             }
@@ -875,10 +894,8 @@ public final class DlssRrDenoiser {
     public void destroy() {
         frameGenReads.requireUnreferenced();
         recordingPins.requireUnreferenced(resourceContext("destroy", width, height, boundOutputView, 0));
-        if (feature != 0L) {
-            rr.releaseFeature(feature);
-            feature = 0L;
-        }
+        releaseFeature("destroy");
+        qualityFallback = false;
         destroyImages();
         if (packPipeline != null) {
             packPipeline.destroy();

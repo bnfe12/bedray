@@ -139,6 +139,9 @@ VKB_DLSS_API int32_t vkb_dlss_init(
 VKB_DLSS_API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps);
 
 VKB_DLSS_API void vkb_dlss_shutdown(void);  /* releases all features + NGX; GPU must be idle */
+/* Additive resource contract v1: failures retain release-only owners for retry after host completion. */
+VKB_DLSS_API uint32_t vkb_dlss_resource_contract_version(void);
+VKB_DLSS_API int32_t vkb_dlss_shutdown_checked(void);
 
 /* ---- optimal settings ----------------------------------------------------------------------- */
 typedef struct VkbDlssOptimalSettings {

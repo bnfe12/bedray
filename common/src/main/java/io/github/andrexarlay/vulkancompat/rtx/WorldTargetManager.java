@@ -393,11 +393,7 @@ public final class WorldTargetManager {
             return;
         }
 
-        resolutionPlan = io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan.choose(
-            targetW, targetH, winW, winH,
-            io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady()
-                && !Boolean.getBoolean("bedray.rt.disableRrOutput"),
-            TemporalUpscaler.active(), SpatialUpscaler.isSelected());
+        resolutionPlan = chooseResolutionPlan(targetW, targetH, winW, winH);
         resolutionStamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
         ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
         if (!resolutionPlan.equals(lastLoggedResolutionPlan)) {
@@ -1038,6 +1034,15 @@ public final class WorldTargetManager {
             .copyTextureToTexture(xessOutput.getColorTexture(), fullMain.getColorTexture(), 0, 0, 0, 0, 0, w, h);
     }
 
+    private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan chooseResolutionPlan(
+            int targetW, int targetH, int winW, int winH) {
+        return io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan.choose(
+            targetW, targetH, winW, winH,
+            io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady()
+                && !Boolean.getBoolean("bedray.rt.disableRrOutput"),
+            TemporalUpscaler.active(), SpatialUpscaler.isSelected());
+    }
+
     /**
      * Safety reset hook at HEAD of {@link GameRenderer#render()}.
      * Restores original targets if a previous frame was interrupted by an exception between
@@ -1050,6 +1055,13 @@ public final class WorldTargetManager {
             TemporalUpscaler.onFrameBegin(
                 mcForXess.getWindow().getWidth(), mcForXess.getWindow().getHeight());
             io.github.andrexarlay.vulkancompat.rtx.config.SamplerBiasSync.onFrameBegin();
+            int winW = mcForXess.getWindow().getWidth();
+            int winH = mcForXess.getWindow().getHeight();
+            int targetW = getTargetWidth(winW), targetH = getTargetHeight(winH);
+            if (winW > 0 && winH > 0 && targetW > 0 && targetH > 0
+                && chooseResolutionPlan(targetW, targetH, winW, winH).rayReconstructionOutput()) {
+                io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime.suspendSrFeatureForRr();
+            }
         }
         if (inWorldPhase) {
             LOGGER.warn("World phase was not properly ended in previous frame; resetting render targets");

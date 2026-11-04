@@ -54,6 +54,7 @@ const unsigned long long kDiscoveryApplicationId = 0x564B42ULL;  // "VKB": custo
 struct Feature {
     NVSDK_NGX_Handle* handle = nullptr;
     NVSDK_NGX_Parameter* params = nullptr;
+    bool usable = false; // Failed creation and retirement are release-only.
     bool is_rr = false;
     uint32_t roughness_mode = 0;
 };
@@ -61,8 +62,10 @@ struct Feature {
 struct State {
     std::recursive_mutex mutex;
     bool initialised = false;
+    bool shuttingDown = false;
     VkDevice device = VK_NULL_HANDLE;
     NVSDK_NGX_Parameter* capParams = nullptr;
+    bool capabilitiesReady = false;
     // NGX may keep pointers into these after Init, so they live as long as the state.
     std::wstring featurePath;
     std::wstring dataPath;
@@ -81,6 +84,14 @@ State& st() {
     return s;
 }
 
+Feature* registerFeature(State& s, uint64_t* outFeature) {
+    auto owner = std::make_unique<Feature>();
+    s.features.insert(owner.get()); // May throw, but no SDK resources exist yet.
+    Feature* raw = owner.release();
+    *outFeature = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(raw));
+    return raw;
+}
+
 thread_local std::string g_lastError;
 thread_local uint32_t g_lastNgx = 0;
 
@@ -88,8 +99,9 @@ std::string wideToUtf8(const wchar_t* w) {
     if (!w) return std::string();
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
     if (n <= 1) return std::string();
-    std::string out(static_cast<size_t>(n - 1), '\0');
+    std::string out(static_cast<size_t>(n), '\0');
     WideCharToMultiByte(CP_UTF8, 0, w, -1, out.data(), n, nullptr, nullptr);
+    out.resize(static_cast<size_t>(n - 1));
     return out;
 }
 
@@ -295,16 +307,17 @@ VKB_DLSS_API int32_t vkb_dlss_get_required_device_extensions(
 }
 
 bool refreshCapabilityParameters(State& s) {
-    NVSDK_NGX_Parameter* fresh = nullptr;
-    NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&fresh);
-    if (NVSDK_NGX_SUCCEED(r) && fresh) {
-        if (s.capParams) {
-            NVSDK_NGX_VULKAN_DestroyParameters(s.capParams);
-        }
-        s.capParams = fresh;
-        return true;
+    s.capabilitiesReady = false;
+    // Never acquire a second owner while cleanup of the first one is unacknowledged.
+    if (s.capParams) {
+        auto r = NVSDK_NGX_VULKAN_DestroyParameters(s.capParams);
+        if (NVSDK_NGX_FAILED(r)) { failNgx("DestroyParameters(capabilities refresh)", r); return false; }
+        s.capParams = nullptr;
     }
-    return false;
+    auto r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&s.capParams);
+    if (NVSDK_NGX_FAILED(r)) { failNgx("GetCapabilityParameters(refresh)", r); return false; }
+    s.capabilitiesReady = s.capParams != nullptr;
+    return s.capabilitiesReady;
 }
 
 // ============================================================================================
@@ -316,7 +329,9 @@ VKB_DLSS_API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps) {
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null outCaps or wrong struct_size");
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
-    if (!s.initialised || !s.capParams) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "vkb_dlss_init not done");
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
+    const bool refreshedOnEntry = !s.capabilitiesReady;
+    if (refreshedOnEntry && !refreshCapabilityParameters(s)) return VKB_DLSS_ERR_NGX;
 
     int avail = 0, needsDrv = 0;
     unsigned minMaj = 0, minMin = 0, initRes = 0;
@@ -328,7 +343,7 @@ VKB_DLSS_API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps) {
     if (NVSDK_NGX_FAILED(ra)) avail = 0;
 
     // If still not available, refresh capability parameters in case NGX service finished model loading
-    if (!avail) {
+    if (!avail && !refreshedOnEntry) {
         if (refreshCapabilityParameters(s)) {
             NVSDK_NGX_Parameter_GetI(s.capParams, NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver, &needsDrv);
             NVSDK_NGX_Parameter_GetUI(s.capParams, NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMajor, &minMaj);
@@ -371,6 +386,7 @@ VKB_DLSS_API int32_t vkb_dlss_init(
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null handle/outCaps or wrong VkbDlssCaps.struct_size");
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
+    if (s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX shutdown pending; retry checked shutdown first");
     if (s.initialised) {
         VkDevice vkDev = reinterpret_cast<VkDevice>(static_cast<uintptr_t>(device));
         if (s.device == vkDev) {
@@ -415,13 +431,13 @@ VKB_DLSS_API int32_t vkb_dlss_init(
     s.initialised = true;
 
     r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&s.capParams);
-    if (NVSDK_NGX_FAILED(r)) {
+    if (NVSDK_NGX_FAILED(r) || !s.capParams) {
         int32_t rc = failNgx("NVSDK_NGX_VULKAN_GetCapabilityParameters", r);
-        NVSDK_NGX_VULKAN_Shutdown1(s.device);
-        s.initialised = false;
-        s.device = VK_NULL_HANDLE;
+        // Init succeeded: keep device/path/capability ownership until checked shutdown acknowledges cleanup.
+        s.shuttingDown = true;
         return rc;
     }
+    s.capabilitiesReady = true;
 
     int avail = 0, needsDrv = 0;
     unsigned minMaj = 0, minMin = 0, initRes = 0;
@@ -453,25 +469,36 @@ VKB_DLSS_API int32_t vkb_dlss_init(
     API_CATCH()
 }
 
-VKB_DLSS_API void vkb_dlss_shutdown(void) {
+VKB_DLSS_API uint32_t vkb_dlss_resource_contract_version(void) { return 1; }
+
+VKB_DLSS_API int32_t vkb_dlss_shutdown_checked(void) {
     API_TRY
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
-    if (!s.initialised) return;
-    for (Feature* f : s.features) {
-        if (f->handle) NVSDK_NGX_VULKAN_ReleaseFeature(f->handle);
-        if (f->params) NVSDK_NGX_VULKAN_DestroyParameters(f->params);
-        delete f;
+    if (!s.initialised) return VKB_DLSS_OK;
+    s.shuttingDown = true;
+    while (!s.features.empty()) {
+        auto r = vkb_dlss_release_feature(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(*s.features.begin())));
+        if (r != VKB_DLSS_OK) return r;
     }
-    s.features.clear();
     if (s.capParams) {
-        NVSDK_NGX_VULKAN_DestroyParameters(s.capParams);
+        auto r = NVSDK_NGX_VULKAN_DestroyParameters(s.capParams);
+        if (NVSDK_NGX_FAILED(r)) return failNgx("DestroyParameters(capabilities shutdown)", r);
         s.capParams = nullptr;
+        s.capabilitiesReady = false;
     }
-    NVSDK_NGX_VULKAN_Shutdown1(s.device);
+    auto r = NVSDK_NGX_VULKAN_Shutdown1(s.device);
+    if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_Shutdown1", r);
     s.device = VK_NULL_HANDLE;
     s.initialised = false;
-    API_CATCH_VOID()
+    s.shuttingDown = false;
+    return VKB_DLSS_OK;
+    API_CATCH()
+}
+
+VKB_DLSS_API void vkb_dlss_shutdown(void) {
+    // Legacy ABI: retain failures and expose diagnostics through last_error; checked callers can retry.
+    (void)vkb_dlss_shutdown_checked();
 }
 
 // ============================================================================================
@@ -486,11 +513,13 @@ VKB_DLSS_API int32_t vkb_dlss_query_optimal_settings(int32_t mode, uint32_t w, u
     if (!toPerfQuality(mode, pq)) return fail(VKB_DLSS_ERR_INVALID_ARG, "bad quality mode");
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
-    if (!s.initialised || !s.capParams) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "vkb_dlss_init not done");
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
+    const bool refreshedOnEntry = !s.capabilitiesReady;
+    if (refreshedOnEntry && !refreshCapabilityParameters(s)) return VKB_DLSS_ERR_NGX;
     unsigned rw = 0, rh = 0, maxw = 0, maxh = 0, minw = 0, minh = 0;
     float sharp = 0.0f;
     NVSDK_NGX_Result r = NGX_DLSS_GET_OPTIMAL_SETTINGS(s.capParams, w, h, pq, &rw, &rh, &maxw, &maxh, &minw, &minh, &sharp);
-    if (NVSDK_NGX_FAILED(r) || rw == 0 || rh == 0) {
+    if (!refreshedOnEntry && (NVSDK_NGX_FAILED(r) || rw == 0 || rh == 0)) {
         if (refreshCapabilityParameters(s)) {
             r = NGX_DLSS_GET_OPTIMAL_SETTINGS(s.capParams, w, h, pq, &rw, &rh, &maxw, &maxh, &minw, &minh, &sharp);
         }
@@ -518,13 +547,14 @@ VKB_DLSS_API int32_t vkb_dlss_query_optimal_settings(int32_t mode, uint32_t w, u
 // ============================================================================================
 VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t cmd, const VkbDlssCreateInfo* info, uint64_t* outFeature) {
     API_TRY
+    if (outFeature) *outFeature = 0;
     if (!cmd || !info || !outFeature || info->struct_size != sizeof(VkbDlssCreateInfo))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null cmd/info/outFeature or wrong struct_size");
     NVSDK_NGX_PerfQuality_Value pq;
     if (!toPerfQuality(info->quality_mode, pq)) return fail(VKB_DLSS_ERR_INVALID_ARG, "bad quality mode");
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
-    if (!s.initialised) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "vkb_dlss_init not done");
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
 
     int flags = 0;
     if (info->flags & VKB_DLSS_FLAG_MV_LOW_RES) flags |= NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
@@ -544,18 +574,17 @@ VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t cmd, const VkbDlssCreateIn
     cp.InFeatureCreateFlags = flags;
     cp.InEnableOutputSubrects = info->enable_output_subrects != 0;
 
-    std::unique_ptr<Feature> f(new Feature());
+    Feature* f = registerFeature(s, outFeature);
     NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_AllocateParameters(&f->params);
     if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_AllocateParameters", r);
+    if (!f->params) return fail(VKB_DLSS_ERR_NGX, "AllocateParameters returned null");
     r = NGX_VULKAN_CREATE_DLSS_EXT1(s.device, reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(cmd)), 1, 1,
                                     &f->handle, f->params, &cp);
     if (NVSDK_NGX_FAILED(r)) {
-        NVSDK_NGX_VULKAN_DestroyParameters(f->params);
         return failNgx("NGX_VULKAN_CREATE_DLSS_EXT1", r);
     }
-    Feature* raw = f.release();
-    s.features.insert(raw);
-    *outFeature = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(raw));
+    if (!f->handle || !f->params) return fail(VKB_DLSS_ERR_NGX, "NGX create returned an empty allocation");
+    f->usable = true;
     return VKB_DLSS_OK;
     API_CATCH()
 }
@@ -568,9 +597,10 @@ VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const Vkb
         return fail(VKB_DLSS_ERR_INVALID_ARG, "color/output/depth/motion_vectors view must be non-null");
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
-    if (!s.initialised) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "vkb_dlss_init not done");
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
     Feature* f = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
     if (s.features.find(f) == s.features.end()) return fail(VKB_DLSS_ERR_INVALID_ARG, "unknown feature handle");
+    if (!f->usable) return fail(VKB_DLSS_ERR_INVALID_ARG, "feature is release-only");
     if (f->is_rr) return fail(VKB_DLSS_ERR_INVALID_ARG, "feature handle belongs to DLSS-RR, use vkb_dlss_rr_evaluate");
 
     NVSDK_NGX_Resource_VK color = toResource(info->color);
@@ -612,11 +642,19 @@ VKB_DLSS_API int32_t vkb_dlss_release_feature(uint64_t feature) {
     Feature* f = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
     auto it = s.features.find(f);
     if (!feature || it == s.features.end()) return fail(VKB_DLSS_ERR_INVALID_ARG, "unknown feature handle");
+    f->usable = false;
+    if (f->handle) {
+        auto r = NVSDK_NGX_VULKAN_ReleaseFeature(f->handle);
+        if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_ReleaseFeature(retained)", r);
+        f->handle = nullptr;
+    }
+    if (f->params) {
+        auto r = NVSDK_NGX_VULKAN_DestroyParameters(f->params);
+        if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_DestroyParameters(feature retained)", r);
+        f->params = nullptr;
+    }
     s.features.erase(it);
-    NVSDK_NGX_Result r = f->handle ? NVSDK_NGX_VULKAN_ReleaseFeature(f->handle) : NVSDK_NGX_Result_Success;
-    if (f->params) NVSDK_NGX_VULKAN_DestroyParameters(f->params);
     delete f;
-    if (NVSDK_NGX_FAILED(r)) return failNgx("NVSDK_NGX_VULKAN_ReleaseFeature", r);
     return VKB_DLSS_OK;
     API_CATCH()
 }
@@ -630,7 +668,8 @@ VKB_DLSS_API int32_t vkb_dlss_rr_is_supported(uint32_t* outSupported) {
     *outSupported = 0;
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
-    if (!s.initialised || !s.capParams) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "[DLSS-RR] vkb_dlss_init not done");
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "RR capabilities unavailable or retiring");
+    if (!s.capabilitiesReady && !refreshCapabilityParameters(s)) return VKB_DLSS_ERR_NGX;
     int avail = 0;
     NVSDK_NGX_Result r = NVSDK_NGX_Parameter_GetI(s.capParams, NVSDK_NGX_Parameter_SuperSamplingDenoising_Available, &avail);
     if (NVSDK_NGX_FAILED(r)) avail = 0;
@@ -659,6 +698,7 @@ VKB_DLSS_API int32_t vkb_dlss_rr_is_supported(uint32_t* outSupported) {
 
 VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t cmd, const VkbDlssRrCreateInfo* info, uint64_t* outFeature) {
     API_TRY
+    if (outFeature) *outFeature = 0;
     if (!cmd || !info || !outFeature || info->struct_size != sizeof(VkbDlssRrCreateInfo))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] null cmd/info/outFeature or wrong struct_size");
     if (info->render_width == 0 || info->render_height == 0 || info->output_width == 0 || info->output_height == 0)
@@ -667,7 +707,7 @@ VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t cmd, const VkbDlssRrCre
     if (!toPerfQuality(info->quality_mode, pq)) return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] bad quality mode");
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
-    if (!s.initialised) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "[DLSS-RR] vkb_dlss_init not done");
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX RR unavailable or retiring");
 
     int flags = 0;
     if (info->flags & VKB_DLSS_FLAG_MV_LOW_RES) flags |= NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
@@ -690,20 +730,19 @@ VKB_DLSS_API int32_t vkb_dlss_rr_create_feature(uint64_t cmd, const VkbDlssRrCre
     cp.InFeatureCreateFlags = flags;
     cp.InEnableOutputSubrects = info->enable_output_subrects != 0;
 
-    std::unique_ptr<Feature> f(new Feature());
+    Feature* f = registerFeature(s, outFeature);
     f->is_rr = true;
     f->roughness_mode = info->roughness_mode;
     NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_AllocateParameters(&f->params);
     if (NVSDK_NGX_FAILED(r)) return failNgx("[DLSS-RR] NVSDK_NGX_VULKAN_AllocateParameters", r);
+    if (!f->params) return fail(VKB_DLSS_ERR_NGX, "RR AllocateParameters returned null");
     r = NGX_VULKAN_CREATE_DLSSD_EXT1(s.device, reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(cmd)), 1, 1,
                                      &f->handle, f->params, &cp);
     if (NVSDK_NGX_FAILED(r)) {
-        NVSDK_NGX_VULKAN_DestroyParameters(f->params);
         return failNgx("[DLSS-RR] NGX_VULKAN_CREATE_DLSSD_EXT1", r);
     }
-    Feature* raw = f.release();
-    s.features.insert(raw);
-    *outFeature = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(raw));
+    if (!f->handle || !f->params) return fail(VKB_DLSS_ERR_NGX, "NGX create returned an empty allocation");
+    f->usable = true;
     return VKB_DLSS_OK;
     API_CATCH()
 }
@@ -720,9 +759,10 @@ VKB_DLSS_API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const 
         return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] diffuse_albedo/specular_albedo/normals view must be non-null");
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
-    if (!s.initialised) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "[DLSS-RR] vkb_dlss_init not done");
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX RR unavailable or retiring");
     Feature* f = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
     if (s.features.find(f) == s.features.end()) return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] unknown feature handle");
+    if (!f->usable) return fail(VKB_DLSS_ERR_INVALID_ARG, "RR feature is release-only");
     if (!f->is_rr) return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] feature handle belongs to DLSS-SR, use vkb_dlss_evaluate");
     if (f->roughness_mode == 0 && !info->roughness.view)
         return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-RR] roughness view must be non-null when created with roughness_mode=0 (unpacked)");

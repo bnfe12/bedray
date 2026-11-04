@@ -89,6 +89,8 @@ public final class DlssNative implements AutoCloseable {
     private final MethodHandle getRequiredDeviceExtensions;
     private final MethodHandle init;
     private final MethodHandle shutdown;
+    private final MethodHandle shutdownChecked;
+    private final MethodHandle resourceContractVersion;
     private final MethodHandle queryOptimalSettings;
     private final MethodHandle createFeature;
     private final MethodHandle evaluate;
@@ -122,6 +124,10 @@ public final class DlssNative implements AutoCloseable {
             init = bind(linker, lookup, "vkb_dlss_init", FunctionDescriptor.of(JAVA_INT,
                 JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             shutdown = bind(linker, lookup, "vkb_dlss_shutdown", FunctionDescriptor.ofVoid());
+            shutdownChecked = lookup.find("vkb_dlss_shutdown_checked")
+                .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT))).orElse(null);
+            resourceContractVersion = lookup.find("vkb_dlss_resource_contract_version")
+                .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT))).orElse(null);
             // int32_t (int32_t qualityMode, uint32_t outWidth, uint32_t outHeight, VkbDlssOptimalSettings*)
             queryOptimalSettings = bind(linker, lookup, "vkb_dlss_query_optimal_settings",
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS));
@@ -255,10 +261,20 @@ public final class DlssNative implements AutoCloseable {
     /** Releases all features and the process-level NGX runtime; the GPU must be idle and NGX must not be shared with Streamline. */
     public void shutdown() {
         try {
-            shutdown.invokeExact();
+            if (shutdownChecked != null) {
+                int status = (int) shutdownChecked.invokeExact();
+                if (status != OK) throw new DlssNativeException("NGX shutdown retained resources: " + lastStatus(status), null);
+            } else shutdown.invokeExact();
         } catch (Throwable t) {
             throw new DlssNativeException("vkb_dlss_shutdown failed", t);
         }
+    }
+
+    /** Old wrappers cannot safely suspend only SR after a vendor release failure. */
+    public boolean supportsSafeResourceRetirement() {
+        if (resourceContractVersion == null) return false;
+        try { return (int) resourceContractVersion.invokeExact() >= 1; }
+        catch (Throwable t) { throw new DlssNativeException("DLSS resource contract probe failed", t); }
     }
 
     /** NGX optimal render resolution for a mode and output size (never hard-coded ratios). */
@@ -290,9 +306,8 @@ public final class DlssNative implements AutoCloseable {
             info.set(JAVA_INT, 28, 0);
             MemorySegment handle = a.allocate(JAVA_LONG);
             int r = invokeInt(createFeature, commandBuffer, info, handle);
-            if (r == OK) {
-                outFeature[0] = handle.get(JAVA_LONG, 0);
-            }
+            // A failed SDK create can still return an owner which must survive CB discard.
+            outFeature[0] = handle.get(JAVA_LONG, 0);
             return lastStatus(r);
         }
     }

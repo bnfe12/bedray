@@ -54,7 +54,9 @@ class RrFrameGenerationWiringTest {
             < renderer.indexOf("encoder.submit()", drain));
         String rr = source("rt/denoise/DlssRrDenoiser");
         int destroy = rr.indexOf("public void destroy()");
-        assertTrue(rr.indexOf("frameGenReads.requireUnreferenced()", destroy) < rr.indexOf("rr.releaseFeature(", destroy));
+        assertTrue(rr.indexOf("frameGenReads.requireUnreferenced()", destroy) < rr.indexOf("releaseFeature(\"destroy\")", destroy));
+        int release = rr.indexOf("private void releaseFeature(String stage)");
+        assertTrue(rr.indexOf("frameGenReads.requireUnreferenced()", release) < rr.indexOf("rr.releaseFeature(", release));
         String host = source("rtx/framegen/FrameGenHostCommands");
         assertTrue(host.indexOf("retirements(owner, source, handle)") < host.indexOf("source.retain(handle)"));
     }
