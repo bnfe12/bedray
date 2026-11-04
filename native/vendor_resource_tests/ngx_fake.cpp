@@ -67,7 +67,7 @@ NVSDK_NGX_Result NVSDK_CONV optimal(NVSDK_NGX_Parameter* p) {
     p->Set(NVSDK_NGX_Parameter_Sharpness, 0.0f); return ok;
 }
 }
-TEST_API void vendor_test_reset() { if (!parameters.empty() || !handles.empty()) throw std::logic_error("reset with live SDK ownership"); fault::reset(); caps_available = true; }
+TEST_API void vendor_test_reset() { if (!parameters.empty() || !handles.empty()) fault::violation("reset with live SDK ownership"); fault::reset(); caps_available = true; }
 TEST_API void vendor_test_fail(int operation, int count, int partial) { fault::remaining.at(operation) = count; fault::partial.at(operation) = partial; }
 TEST_API int vendor_test_count(int operation, int kind) { auto& row = fault::calls.at(operation); return kind == KindAny ? row[0] + row[1] + row[2] : row.at(kind + 1); }
 TEST_API int vendor_test_live_features(int kind) { int result = 0; for (auto& handle : handles) if (kind == KindAny || handle.second == kind) ++result; return result; }
@@ -85,7 +85,7 @@ NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_Init_with_ProjectID(const char*, NV
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_AllocateParameters(NVSDK_NGX_Parameter** out) { return allocate(out, false); }
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_GetCapabilityParameters(NVSDK_NGX_Parameter** out) { return allocate(out, true); }
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_DestroyParameters(NVSDK_NGX_Parameter* value) {
-    if (parameters.count(value) == 0) throw std::logic_error("double/unknown parameter destruction");
+    if (parameters.count(value) == 0) fault::violation("double/unknown parameter destruction");
     if (fault::hit(OpDestroyParameters)) return bad;
     parameters.erase(value); delete static_cast<Parameters*>(value); return ok;
 }
@@ -97,17 +97,20 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_CreateFeature1(VkDevi
 }
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_CreateFeature(VkCommandBuffer command, NVSDK_NGX_Feature feature, NVSDK_NGX_Parameter* params, NVSDK_NGX_Handle** out) { return NVSDK_NGX_VULKAN_CreateFeature1(nullptr, command, feature, params, out); }
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer, const NVSDK_NGX_Handle* handle, const NVSDK_NGX_Parameter*, PFN_NVSDK_NGX_ProgressCallback) {
-    auto it = handles.find(handle); if (it == handles.end()) throw std::logic_error("evaluate after SDK release");
+    auto it = handles.find(handle); if (it == handles.end()) fault::violation("evaluate after SDK release");
     return fault::hit(OpEvaluate, it->second) ? bad : ok;
 }
+NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_EvaluateFeature_C(VkCommandBuffer command, const NVSDK_NGX_Handle* handle, const NVSDK_NGX_Parameter* params, PFN_NVSDK_NGX_ProgressCallback_C) {
+    return NVSDK_NGX_VULKAN_EvaluateFeature(command, handle, params, nullptr);
+}
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_ReleaseFeature(NVSDK_NGX_Handle* handle) {
-    auto it = handles.find(handle); if (it == handles.end()) throw std::logic_error("double/unknown SDK feature release");
+    auto it = handles.find(handle); if (it == handles.end()) fault::violation("double/unknown SDK feature release");
     if (fault::hit(OpRelease, it->second)) return bad;
     handles.erase(it); return ok;
 }
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_Shutdown1(VkDevice) {
     if (fault::hit(OpShutdown)) return bad;
-    if (!handles.empty() || !parameters.empty()) throw std::logic_error("SDK shutdown with live resources"); return ok;
+    if (!handles.empty() || !parameters.empty()) fault::violation("SDK shutdown with live resources"); return ok;
 }
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(const NVSDK_NGX_FeatureDiscoveryInfo*, uint32_t* count, VkExtensionProperties** properties) { *count = 0; *properties = nullptr; return ok; }
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(VkInstance, VkPhysicalDevice, const NVSDK_NGX_FeatureDiscoveryInfo*, uint32_t* count, VkExtensionProperties** properties) { *count = 0; *properties = nullptr; return ok; }

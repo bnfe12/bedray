@@ -11,14 +11,14 @@ std::set<int> resources;
 int kind_of(sl::Feature feature) {
     if (feature == sl::kFeatureDLSS) return KindSr;
     if (feature == sl::kFeatureDLSS_RR) return KindRr;
-    throw std::logic_error("wrapper touched another feature, including FG");
+    fault::violation("wrapper touched another feature, including FG");
 }
 sl::Result sr_options(const sl::ViewportHandle& viewport, const sl::DLSSOptions&) {
-    if (static_cast<uint32_t>(viewport) != 0) throw std::logic_error("unexpected SR viewport");
+    if (static_cast<uint32_t>(viewport) != 0) fault::violation("unexpected SR viewport");
     return fault::hit(OpOptions, KindSr) ? sl::Result::eErrorNGXFailed : sl::Result::eOk;
 }
 sl::Result rr_options(const sl::ViewportHandle& viewport, const sl::DLSSDOptions&) {
-    if (static_cast<uint32_t>(viewport) != 0) throw std::logic_error("unexpected RR viewport");
+    if (static_cast<uint32_t>(viewport) != 0) fault::violation("unexpected RR viewport");
     return fault::hit(OpOptions, KindRr) ? sl::Result::eErrorNGXFailed : sl::Result::eOk;
 }
 sl::Result optimal(const sl::DLSSOptions& options, sl::DLSSOptimalSettings& settings) {
@@ -38,7 +38,7 @@ sl::Result resolve(sl::Feature feature, const char* name, void*& output) {
 sl::Result loaded(sl::Feature, bool& result) { result = true; return sl::Result::eOk; }
 sl::Result supported(sl::Feature, const sl::AdapterInfo&) { return sl::Result::eOk; }
 sl::Result tag(const sl::FrameToken&, const sl::ViewportHandle& viewport, const sl::ResourceTag*, uint32_t, sl::CommandBuffer*) {
-    if (static_cast<uint32_t>(viewport) != 0) throw std::logic_error("unexpected tag viewport");
+    if (static_cast<uint32_t>(viewport) != 0) fault::violation("unexpected tag viewport");
     return fault::hit(OpTag) ? sl::Result::eErrorNGXFailed : sl::Result::eOk;
 }
 sl::Result evaluate(sl::Feature feature, const sl::FrameToken&, const sl::BaseStructure**, uint32_t, sl::CommandBuffer*) {
@@ -49,7 +49,7 @@ sl::Result evaluate(sl::Feature feature, const sl::FrameToken&, const sl::BaseSt
 sl::Result free_resources(sl::Feature feature, const sl::ViewportHandle& viewport) {
     int kind = kind_of(feature); fault::last_feature = static_cast<int>(feature);
     fault::last_viewport = static_cast<int>(static_cast<uint32_t>(viewport));
-    if (fault::last_viewport != 0) throw std::logic_error("unexpected free viewport");
+    if (fault::last_viewport != 0) fault::violation("unexpected free viewport");
     if (fault::hit(OpRelease, kind)) return sl::Result::eErrorNGXFailed;
     if (resources.erase(kind) == 0) return sl::Result::eErrorInvalidParameter;
     return sl::Result::eOk;
@@ -64,7 +64,7 @@ PFun_slIsFeatureSupported* p_slIsFeatureSupported = &supported;
 PFun_slIsFeatureLoaded* p_slIsFeatureLoaded = &loaded;
 PFun_slEvaluateFeature* p_slEvaluateFeature = &evaluate;
 PFun_slFreeResources* p_slFreeResources = &free_resources;
-TEST_API void vendor_test_reset() { if (!resources.empty()) throw std::logic_error("reset with live SL resources"); fault::reset(); g_inited = true; }
+TEST_API void vendor_test_reset() { if (!resources.empty()) fault::violation("reset with live SL resources"); fault::reset(); g_inited = true; }
 TEST_API void vendor_test_fail(int operation, int count, int partial) { fault::remaining.at(operation) = count; fault::partial.at(operation) = partial; }
 TEST_API int vendor_test_count(int operation, int kind) { auto& row = fault::calls.at(operation); return kind == KindAny ? row[0] + row[1] + row[2] : row.at(kind + 1); }
 TEST_API int vendor_test_live_features(int kind) { return kind == KindAny ? static_cast<int>(resources.size()) : static_cast<int>(resources.count(kind)); }
