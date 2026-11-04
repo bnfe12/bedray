@@ -170,10 +170,16 @@ public final class DlssRuntime {
      */
     public static synchronized void onFrameBegin(int winW, int winH) {
         frameCounter++;
-        if (pendingDestroy) {
-            destroyPending();
-        } else if (feature.retiring()) {
-            releaseFeature(); // Retry a failed suspension before a route change can evaluate SR.
+        try {
+            if (pendingDestroy) {
+                destroyPending();
+            } else if (feature.retiring()) {
+                releaseFeature(); // Retry before a route change can evaluate SR.
+            }
+        } catch (RuntimeException failure) {
+            LOGGER.warn("[VKB-DLSS] retirement_deferred stage=frame_preflight frame={} state={} feature=0x{} retained=true reason={}",
+                frameCounter, state, Long.toHexString(feature.handle()), failure.toString());
+            return;
         }
         if (state == State.READY && winW > 0 && winH > 0 && (winW != outputWidth || winH != outputHeight)) {
             resize(winW, winH);
@@ -560,13 +566,20 @@ public final class DlssRuntime {
     public static synchronized void suspendSrFeatureForRr() {
         if (state != State.READY || (feature.empty() && !feature.retiring())) return;
         if (nativeLib == null || !nativeLib.supportsSafeResourceRetirement()) return;
-        releaseFeature();
+        try {
+            releaseFeature();
+        } catch (RuntimeException failure) {
+            LOGGER.warn("[VKB-DLSS] retirement_deferred stage=rr_suspend frame={} feature=0x{} retained=true ready_preserved=true reason={}",
+                frameCounter, Long.toHexString(feature.handle()), failure.toString());
+            return;
+        }
         LOGGER.info("[VKB-DLSS] sr_suspended reason=rr_output frame={} input={} output={}x{} epoch={} ngx_retained=true",
             frameCounter, activeInput, outputWidth, outputHeight, initEpoch);
     }
 
     /** Makes sure a feature exists for the active size; records its creation into {@code commandBuffer}. */
     public static synchronized boolean ensureFeature(long commandBuffer) {
+        if (feature.retiring()) return false; // Retry only at frame head, preserving READY metadata for RR.
         if (feature.usable() && featureEpoch == initEpoch) {
             return true;
         }

@@ -330,7 +330,8 @@ VKB_DLSS_API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps) {
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
     if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
-    if (!s.capabilitiesReady && !refreshCapabilityParameters(s)) return VKB_DLSS_ERR_NGX;
+    const bool refreshedOnEntry = !s.capabilitiesReady;
+    if (refreshedOnEntry && !refreshCapabilityParameters(s)) return VKB_DLSS_ERR_NGX;
 
     int avail = 0, needsDrv = 0;
     unsigned minMaj = 0, minMin = 0, initRes = 0;
@@ -342,7 +343,7 @@ VKB_DLSS_API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps) {
     if (NVSDK_NGX_FAILED(ra)) avail = 0;
 
     // If still not available, refresh capability parameters in case NGX service finished model loading
-    if (!avail) {
+    if (!avail && !refreshedOnEntry) {
         if (refreshCapabilityParameters(s)) {
             NVSDK_NGX_Parameter_GetI(s.capParams, NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver, &needsDrv);
             NVSDK_NGX_Parameter_GetUI(s.capParams, NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMajor, &minMaj);
@@ -513,11 +514,12 @@ VKB_DLSS_API int32_t vkb_dlss_query_optimal_settings(int32_t mode, uint32_t w, u
     State& s = st();
     std::lock_guard<std::recursive_mutex> lk(s.mutex);
     if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
-    if (!s.capabilitiesReady && !refreshCapabilityParameters(s)) return VKB_DLSS_ERR_NGX;
+    const bool refreshedOnEntry = !s.capabilitiesReady;
+    if (refreshedOnEntry && !refreshCapabilityParameters(s)) return VKB_DLSS_ERR_NGX;
     unsigned rw = 0, rh = 0, maxw = 0, maxh = 0, minw = 0, minh = 0;
     float sharp = 0.0f;
     NVSDK_NGX_Result r = NGX_DLSS_GET_OPTIMAL_SETTINGS(s.capParams, w, h, pq, &rw, &rh, &maxw, &maxh, &minw, &minh, &sharp);
-    if (NVSDK_NGX_FAILED(r) || rw == 0 || rh == 0) {
+    if (!refreshedOnEntry && (NVSDK_NGX_FAILED(r) || rw == 0 || rh == 0)) {
         if (refreshCapabilityParameters(s)) {
             r = NGX_DLSS_GET_OPTIMAL_SETTINGS(s.capParams, w, h, pq, &rw, &rh, &maxw, &maxh, &minw, &minh, &sharp);
         }
