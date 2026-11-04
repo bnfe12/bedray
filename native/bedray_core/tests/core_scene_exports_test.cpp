@@ -10,7 +10,7 @@ int wmain(int argc, wchar_t** argv) {
     const char* exports[] = {
         "bedray_core_discard_recording",
         "bedray_core_memory_version", "bedray_core_memory_configure", "bedray_core_memory_attach", "bedray_core_memory_stats",
-        "bedray_scene_abi_version", "bedray_scene_abi_info", "bedray_scene_create",
+        "bedray_scene_abi_version", "bedray_scene_features", "bedray_scene_abi_info", "bedray_scene_create",
         "bedray_scene_update", "bedray_scene_update_table", "bedray_scene_set_view",
         "bedray_scene_prepare_frame", "bedray_scene_release_frame", "bedray_scene_discard_frame",
         "bedray_scene_query_resources", "bedray_scene_resident_bytes", "bedray_scene_destroy"
@@ -24,6 +24,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     const auto version = reinterpret_cast<decltype(&bedray_scene_abi_version)>(
         GetProcAddress(library, "bedray_scene_abi_version"));
+    const auto features = reinterpret_cast<decltype(&bedray_scene_features)>(
+        GetProcAddress(library, "bedray_scene_features"));
     const auto info = reinterpret_cast<decltype(&bedray_scene_abi_info)>(
         GetProcAddress(library, "bedray_scene_abi_info"));
     BedraySceneAbiInfo abi{};
@@ -33,7 +35,7 @@ int wmain(int argc, wchar_t** argv) {
     const auto configure_memory = reinterpret_cast<decltype(&bedray_core_memory_configure)>(
         GetProcAddress(library, "bedray_core_memory_configure"));
     BedrayError memory_error{};
-    const bool valid = memory_version() == 1 && sizeof(BedrayMemoryStats) == 72
+    const bool valid = (features() & BEDRAY_SCENE_FEATURE_SAFE_AS_UPDATE) != 0 && memory_version() == 1 && sizeof(BedrayMemoryStats) == 72
         && configure_memory(nullptr, 0, 0, 0, &memory_error) == BEDRAY_ERROR_INVALID_ARGUMENT
         && memory_error.message[0] != 0 && version() == BEDRAY_SCENE_ABI_VERSION
         && abi.sizeof_section_record == sizeof(BedraySceneSectionRecord)

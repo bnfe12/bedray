@@ -42,6 +42,7 @@ public final class BedraySceneNative implements AutoCloseable {
     private final Path libraryPath;
     private final Set<Long> liveScenes = ConcurrentHashMap.newKeySet();
     private final MethodHandle abiVersionHandle;
+    private final MethodHandle featuresHandle;
     private final MethodHandle abiInfoHandle;
     private final MethodHandle createHandle;
     private final MethodHandle updateHandle;
@@ -138,6 +139,8 @@ public final class BedraySceneNative implements AutoCloseable {
         try {
             abiVersionHandle = bind(linker, lookup, "bedray_scene_abi_version",
                 FunctionDescriptor.of(JAVA_INT));
+            featuresHandle = lookup.find("bedray_scene_features")
+                .map(symbol -> linker.downcallHandle(symbol, FunctionDescriptor.of(JAVA_INT))).orElse(null);
             abiInfoHandle = bind(linker, lookup, "bedray_scene_abi_info",
                 FunctionDescriptor.ofVoid(ADDRESS));
             createHandle = bind(linker, lookup, "bedray_scene_create",
@@ -222,6 +225,14 @@ public final class BedraySceneNative implements AutoCloseable {
 
     public Path libraryPath() {
         return libraryPath;
+    }
+
+    /** Older ABI-v2 cores keep their rebuild path; safe update semantics require the additive feature query. */
+    public int features() {
+        ensureOpen();
+        if (featuresHandle == null) return 0;
+        try { return (int) featuresHandle.invokeExact(); }
+        catch (Throwable failure) { throw rethrow("features", failure); }
     }
 
     public AbiInfo abiInfo() {
