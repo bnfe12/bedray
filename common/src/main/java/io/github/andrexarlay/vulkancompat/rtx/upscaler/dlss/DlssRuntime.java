@@ -146,6 +146,12 @@ public final class DlssRuntime {
         return activeInput;
     }
 
+    public static synchronized DlssFeatureSettings activeFeatureSettings() {
+        DlssQuality effective = featureMode != null ? featureMode : activeMode;
+        if (state != State.READY || activeInput == null || effective == null) return null;
+        return new DlssFeatureSettings(activeInput.x(), activeInput.y(), outputWidth, outputHeight, effective, initEpoch);
+    }
+
     /** output / render width as reported by NGX for the active mode. */
     public static synchronized double scale() {
         return activeInput == null || activeInput.x() <= 0 ? 1.0 : (double) outputWidth / activeInput.x();

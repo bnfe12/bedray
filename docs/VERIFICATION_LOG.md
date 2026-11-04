@@ -4342,3 +4342,28 @@ Local :common:test passed 1,214 tests with 9 skipped, zero failures/errors;
 paired clean jars/DLL and actual old/new-core FFM probes remain to be completed
 before merge. There is no MSVC toolchain or RTX live measurement here.
 Details: docs/ai-agent-addenda/AS_UPDATE_POLICY.md.
+
+
+## 2026-11-04 — AS acceptance checkpoint and live RR quality (L1/L2)
+
+AS candidate f144cda passed Windows baseline/candidate native contracts and the
+70 production Slang CPU cases (push run 41880491924, PR run 41880696712).
+Native COW/TLAS source-lifetime and bounded pipeline regressions passed. Clean
+host/companion pairs and CI core ZIP digest were verified. Real Java FFM loading
+of the older ABI-v2 core reports features=0 and the new core reports features=1;
+old/new paths passed (as-update-feature-probe.log). PR #73 merged at c22bc0c.
+There is no RTX quality/FPS result.
+
+RR quality previously came from cached startup config while current trace extent
+followed the live runtime request. It now uses an immutable READY SDK snapshot
+with actual input/output dimensions, effective quality (including CUSTOM's mode)
+and init epoch. Native DLAA/non-DLSS fallback remain; mismatched active-DLSS
+metadata is rejected before creating a feature with a misleading mode. Existing
+ensure logic recreates/reset RR on effective mode changes even at equal extents.
+
+Local :common:test passed 1,225 tests with 9 skipped, zero failures/errors;
+:common:runShimTests passed 34/34 (rr-quality-verification.log). Source review
+checked bootstrap, resize and CUSTOM extent provenance. Vendor image/FPS and live
+UI acceptance remain open. The separate SR/native-release ownership findings are
+recorded in docs/ai-agent-addenda/SR_RELEASE_OWNERSHIP_AUDIT.md; no release or
+residency repair is claimed by this commit.
