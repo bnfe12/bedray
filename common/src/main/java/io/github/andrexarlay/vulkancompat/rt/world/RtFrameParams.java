@@ -133,6 +133,8 @@ public final class RtFrameParams {
      * whenever it is active so the denoiser reprojects each sample to where it was traced.
      */
     public boolean upscalerJittered;
+    /** RR owns coherent primary samples, positive linear depth and independent reflection geometry. CPU only. */
+    public boolean rrGuides;
     public float upscalerJitterX;
     public float upscalerJitterY;
     public boolean sceneChanged;

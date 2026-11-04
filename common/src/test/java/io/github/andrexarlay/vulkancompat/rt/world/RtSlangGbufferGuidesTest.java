@@ -58,8 +58,8 @@ class RtSlangGbufferGuidesTest {
             "diffuse albedo and the NRD metal/nonmetal material ID");
         assertTrue(guides.contains("outNormalRough[p] = float4(n, clamp(result.primary.roughness, 0.0, 1.0));"),
             "normal + roughness");
-        assertTrue(guides.contains("float viewZ = -dot(toSurface, f.camera.forward.xyz);"),
-            "NRD's view depth is backwards along the view axis, as in rt_path.comp");
+        assertTrue(guides.contains("float viewZ = pathTraceGuideDepth(toSurface, f.camera.forward.xyz, rrGuides);"),
+            "the explicit RR contract selects positive linear depth while NRD keeps its view-axis convention");
         assertTrue(guides.contains("clamp(result.primary.specularReflectance, float3(0.0), float3(1.0))"),
             "all roughnesses have GGX reflectance; a roughness threshold must not remove the RR guide");
     }

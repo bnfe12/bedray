@@ -36,6 +36,7 @@ import java.util.Objects;
  */
 public final class RtSlangPathPass implements RtPass {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
+    private int loggedGuideFlags = Integer.MIN_VALUE;
 
     static final String DISPLAY_PASS = "path_display";
     static final int DISPLAY_PUSH_BYTES = 32;
@@ -329,6 +330,13 @@ public final class RtSlangPathPass implements RtPass {
         }
     }
 
+    static int guideOptionFlags(boolean guides, boolean motion, boolean rr) {
+        if (!guides) return 0;
+        return RtPathTraceSlangPass.OPTION_GBUFFER
+            | (motion ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)
+            | (rr ? RtPathTraceSlangPass.OPTION_RR_GUIDES : 0);
+    }
+
     @Override
     public void configure(RtFrameParams params, boolean denoising) {
         params.mode = RtConfig.effectiveMode();
@@ -458,8 +466,14 @@ public final class RtSlangPathPass implements RtPass {
         // flag and the bindings then agree, which is what the record validates. NRD additionally reads a per-pixel vec4
         // motion buffer, bound only for that layout, so its push bit follows the buffer the frame actually carries.
         RtPathTraceSlangPass.Guides guides = RtPathTraceSlangPass.Guides.of(views.gbuffer());
-        int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)
-            | (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)
+        int guideFlags = guideOptionFlags(guides != null, views.motion() != 0L, params.rrGuides);
+        if (guideFlags != loggedGuideFlags) {
+            LOGGER.info("[VKB-RR-GUIDES] enabled={} rr={} coherent_primary={} depth={} world_motion_writer={} motion_bytes={} reflection=primary_edge",
+                guides != null, params.rrGuides, params.rrGuides, params.rrGuides ? "positive_linear" : "nrd_view_z",
+                views.motion() != 0L, views.motion() != 0L ? (long) width * height * RtPathTraceSlangPass.MOTION_ELEMENT_BYTES : 0L);
+            loggedGuideFlags = guideFlags;
+        }
+        int optionFlags = guideFlags
             | rayEffectFlags()
             | pixelShadowFlags()
             // The distant block-light handover belongs to the emitter feature: a frame that traced no emitters has no

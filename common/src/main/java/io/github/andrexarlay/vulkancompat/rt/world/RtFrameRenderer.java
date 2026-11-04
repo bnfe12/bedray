@@ -918,7 +918,7 @@ public final class RtFrameRenderer {
         // NRD reads this frame's per-pixel world motion through its own binding, so the buffer has to exist before the
         // pass binds its views: the handle travels with them, and the pass writes exactly that range.
         long motionHandle = 0L;
-        if (useDenoiser && denoiseMode.isNrd() && wantsEntityMotion()) {
+        if (useDenoiser && wantsEntityMotion()) {
             frameResources.requireMotion(w, h);
             motionHandle = frameMotion().handle;
         }
@@ -1057,6 +1057,7 @@ public final class RtFrameRenderer {
         if (!io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.indirectTranslucentShadows()) params.flags |= RtFrameParams.FLAG_SKIP_INDIRECT_TRANSLUCENT;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.transparencyStats()) params.flags |= RtFrameParams.FLAG_TRANSPARENCY_STATS;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials()) params.flags |= RtFrameParams.FLAG_OPTICAL_MATERIALS;
+        params.rrGuides = useDenoiser && denoiseMode == DenoiserMode.DLSS_RR;
         pass.configure(params, useDenoiser);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.GI_DIST, params.giDistance);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.EMIS_DIST, params.emissiveDistance);
@@ -1118,17 +1119,10 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_PREV_ADDR, entOk ? eg.framePrevAddress() : 0L);
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_ATLAS_ADDR, eg.atlasAddress());
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_RECT_ADDR, eg.rectAddress());
-        long motionAddr = 0L;
-        if (useDenoiser && wantsEntityMotion()) {
-            frameResources.requireMotion(w, h);
-            motionAddr = frameMotion().address;
-            if (dlssRrDenoiser != null) {
-                dlssRrDenoiser.entityMotionAddress = motionAddr;
-            }
-            if (denoiser != null) {
-                denoiser.entityMotionAddress = motionAddr;
-            }
-        }
+        // The consumer receives exactly the allocation bound for this frame's producer, including zero on disable.
+        long motionAddr = motionHandle != 0L ? frameMotion().address : 0L;
+        if (dlssRrDenoiser != null) dlssRrDenoiser.entityMotionAddress = motionAddr;
+        if (denoiser != null) denoiser.entityMotionAddress = motionAddr;
         MemoryUtil.memPutLong(hdr + RtStatsLayout.MOTION_ADDR, motionAddr);
         MemoryUtil.memPutInt(hdr + RtStatsLayout.ENT_ATLAS_SIZE, eg.atlasAddress() != 0L ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0);
         float jitterPxX = 0.0f;
@@ -1506,9 +1500,10 @@ public final class RtFrameRenderer {
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
             String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
-            if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && denoiseMode.isNrd()
+            if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && wantsEntityMotion()
+                && (denoiseMode.isNrd() || denoiseMode == DenoiserMode.DLSS_RR)
                 && !runtime.library().hasNativeMotion()) {
-                problem = "native NRD requires a matching core with NRD_MOTION";
+                problem = "native denoiser motion requires a matching core with NRD_MOTION";
             }
             if (problem != null) {
                 pathSlangUnavailableReason = problem;

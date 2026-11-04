@@ -1851,7 +1851,7 @@ void test_rc_device_loss_after_build_retains_fields_until_all_recordings_are_pro
 } // namespace
 
 // NATIVE_PT: the core owns the ReSTIR PT ring the way NATIVE_DI owns the DI ring. It allocates two 144-byte records per
-// pixel, clears them once, derives PT_HISTORY and PT_PARITY itself, runs the lent spatial stage between the trace and
+// pixel, derives PT_HISTORY without a whole-ring fill, and PT_PARITY itself, runs the lent spatial stage between the trace and
 // the display, and drops the ring on a frame without PT. render_path_trace_ext lends the host's StatsBuf slot at 37.
 constexpr std::uint64_t kPtSpatialProgram = 0x1008;
 constexpr std::uint64_t kBadPtSpatialPush = 0x200B;
@@ -1888,7 +1888,7 @@ void test_native_pt_owner() {
 
     auto frame = valid_frame(0xE001);
     frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT | BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL;
-    frame.path.flags |= kPtOption | kPtStaticBit;
+    frame.path.flags |= kPtOption | kPtStaticBit | (1u << 22u);
     auto invalid = frame;
     invalid.path.flags |= kPtHistoryBit;                       // the core owns history
     CHECK_STATUS(pass.render(invalid, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
@@ -1902,10 +1902,11 @@ void test_native_pt_owner() {
 
     const std::uint64_t ring_bytes = 64ull * 64ull * 2ull * 144ull;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
-    CHECK(fake::fills == 1);
+    CHECK(fake::fills == 0);
     CHECK(fake::render_calls.size() == 3);
     const auto& first = fake::render_calls[0];
     const auto ring = resource_handle(first.resources, 36);
+    CHECK((push_u32(first.push, 16) & (1u << 22u)) != 0); // RR contract survives PT flag rewriting
     CHECK(resource_range(first.resources, 36) == ring_bytes);
     CHECK((push_u32(first.push, 16) & (kPtOption | kPtStaticBit)) == (kPtOption | kPtStaticBit));
     CHECK((push_u32(first.push, 16) & (kPtHistoryBit | kPtParityBit)) == 0);
@@ -1920,7 +1921,7 @@ void test_native_pt_owner() {
     // Trace and spatial stage both moved the parity: the next frame writes the trace's half again, with history.
     frame.command_buffer = 0xE002;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
-    CHECK(fake::fills == 1);
+    CHECK(fake::fills == 0);
     CHECK(resource_handle(fake::render_calls[3].resources, 36) == ring);
     CHECK((push_u32(fake::render_calls[3].push, 16) & kPtHistoryBit) != 0);
     CHECK((push_u32(fake::render_calls[3].push, 16) & kPtParityBit) == 0);
@@ -1933,18 +1934,18 @@ void test_native_pt_owner() {
     frame.command_buffer = 0xE004;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
     CHECK((push_u32(fake::render_calls[8].push, 16) & kPtParityBit) != 0);
-    // A reset clears the ring again and withholds history.
+    // A reset withholds history without touching the full ring.
     frame.command_buffer = 0xE005;
     frame.flags |= BEDRAY_PATH_TRACE_FRAME_RESET_PT;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
-    CHECK(fake::fills == 2);
+    CHECK(fake::fills == 0);
     CHECK((push_u32(fake::render_calls[10].push, 16) & kPtHistoryBit) == 0);
     // A discarded recording never ran: nothing it would have published may be read.
     pass.discard_recording(0xE005);
     frame.command_buffer = 0xE006;
     frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT;
     CHECK_STATUS(pass.render(frame, &g_error), BEDRAY_OK);
-    CHECK(fake::fills == 3);
+    CHECK(fake::fills == 0);
     CHECK((push_u32(fake::render_calls[12].push, 16) & (kPtHistoryBit | kPtParityBit)) == 0);
 
     // A frame without PT binds the stand-in, clears the bits and lets the ring go once its recordings are proven.

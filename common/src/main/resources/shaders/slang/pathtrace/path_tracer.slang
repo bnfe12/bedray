@@ -91,6 +91,11 @@ static const uint PATH_TRACE_FLAG_VISIBILITY_OVERFLOW = 1u << 13u;
 // entry pass reads them.
 static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;  // fill PathTraceResult.primary for the denoiser guides
 static const uint PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;  // also write the primary hit's world motion for NRD's IN_MV
+static const uint PATH_TRACE_OPTION_RR_GUIDES      = 1u << 22u; // coherent RR primaries and positive linear view depth
+
+bool pathTraceNeedsDenoiserSignals(uint flags) {
+    return (flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u && (flags & PATH_TRACE_OPTION_RR_GUIDES) == 0u;
+}
 // The effect set of the ray profile (Ray Tracing mode).  Absent bits are the full transport the path profile runs, so a
 // host that sets none of them - Path Tracing, the RC probe pass - traces exactly what it always traced.
 static const uint PATH_TRACE_OPTION_NO_SPECULAR_BOUNCE  = 1u << 2u;  // a specular continuation ends the path
@@ -588,7 +593,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     PathDenoiserContinuation denoiserContinuation = emptyPathDenoiserContinuation();
     // RR consumes total HDR but still needs the first reflected edge for reconstruction.
     // Reuse the real continuation; no extra query/ray is traced for the guide.
-    bool wantDenoiserSignals = (options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u;
+    bool wantDenoiserSignals = pathTraceNeedsDenoiserSignals(options.flags);
     bool wantDenoiserGeometry = (options.flags & (PATH_TRACE_OPTION_GBUFFER | PATH_TRACE_OPTION_NRD_MOTION)) != 0u;
 
     // The water body the current ray runs in and the ray coordinate where its

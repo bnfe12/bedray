@@ -929,7 +929,7 @@ BedrayStatus PathTracePass::ensure_pt_ring(std::uint64_t bytes, BedrayError* err
     owned_pt_view_ = view;
     owned_pt_parity_ = 0;
     owned_pt_history_ = false;
-    owned_pt_needs_clear_ = true;
+    owned_pt_reset_pending_ = true;
     static_cast<void>(buffers_->collect());
     return BEDRAY_OK;
 }
@@ -940,7 +940,7 @@ void PathTracePass::retire_pt_ring() noexcept {
     owned_pt_id_ = {};
     owned_pt_view_ = {};
     owned_pt_parity_ = 0;
-    owned_pt_needs_clear_ = true;
+    owned_pt_reset_pending_ = true;
     static_cast<void>(buffers_->collect());
 }
 
@@ -1222,9 +1222,9 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     if (native_pt_active) {
         status = ensure_pt_ring(pt_bytes, error);
         if (status != BEDRAY_OK) return status;
-        if ((desc.flags & BEDRAY_PATH_TRACE_FRAME_RESET_PT) != 0) owned_pt_needs_clear_ = true;
+        if ((desc.flags & BEDRAY_PATH_TRACE_FRAME_RESET_PT) != 0) owned_pt_reset_pending_ = true;
         pt_flags = kPathOptionRestirPt | (desc.path.flags & kPtCameraBits)
-            | (owned_pt_history_ && !owned_pt_needs_clear_ ? kPtHistory : 0u)
+            | (owned_pt_history_ && !owned_pt_reset_pending_ ? kPtHistory : 0u)
             | (owned_pt_parity_ == 1u ? kPtParity : 0u);
     } else {
         // A frame without PT drops the ring, as the Java owner does: 2 x 144 bytes per pixel is too much to hold idle.
@@ -1378,10 +1378,9 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
         owned_di_history_ = false;
         owned_di_needs_clear_ = true;
     }
-    const bool clear_pt = native_pt_active && owned_pt_needs_clear_;
     if (native_pt_active) {
         owned_pt_history_ = false;
-        owned_pt_needs_clear_ = true;
+        owned_pt_reset_pending_ = true;
     }
 
     if (!images_initialized_) {
@@ -1400,8 +1399,8 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     }
     if (clear_di)
         fns_.cmd_fill_buffer(command, owned_reservoirs_view_.buffer, 0, owned_reservoirs_view_.size, 0);
-    if (clear_pt)
-        fns_.cmd_fill_buffer(command, owned_pt_view_.buffer, 0, owned_pt_view_.size, 0);
+    // PT writes every current record (including misses/rejects) before any spatial read.
+    // A reset withholds HISTORY instead of clearing both 144-byte-per-pixel halves.
     entry_barrier(fns_, command);
 
     std::array<BedrayResource, 30> trace_resources{};
@@ -1652,7 +1651,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     }
     if (native_pt_active) {
         owned_pt_history_ = true;
-        owned_pt_needs_clear_ = false;
+        owned_pt_reset_pending_ = false;
         owned_pt_parity_ ^= 1u;                   // the trace wrote its half
         if (pt_spatial) owned_pt_parity_ ^= 1u;   // and the spatial stage published the other one
     }
@@ -1759,7 +1758,7 @@ void PathTracePass::discard_recording(std::uint64_t command_buffer) noexcept {
     owned_di_needs_clear_ = true;
     owned_di_parity_ = 0;
     owned_pt_history_ = false;
-    owned_pt_needs_clear_ = true;
+    owned_pt_reset_pending_ = true;
     owned_pt_parity_ = 0;
 }
 
@@ -1898,7 +1897,7 @@ void PathTracePass::reset_state() noexcept {
     owned_pt_view_ = {};
     owned_pt_parity_ = 0;
     owned_pt_history_ = false;
-    owned_pt_needs_clear_ = false;
+    owned_pt_reset_pending_ = false;
     entity_scalar_id_ = {};
     entity_vector_id_ = {};
     block_materials_view_ = {};
