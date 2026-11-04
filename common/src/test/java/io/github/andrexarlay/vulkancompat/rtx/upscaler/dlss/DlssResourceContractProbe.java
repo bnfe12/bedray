@@ -29,7 +29,7 @@ public final class DlssResourceContractProbe {
                 FunctionDescriptor.ofVoid(JAVA_INT, JAVA_INT, JAVA_INT));
             sr.shutdown(); reset.invokeExact();
             var caps = new DlssNative.Caps[1];
-            require(sr.init(1, 2, 3, 0, 0, null, null, null, null, caps).ok(), "fake init");
+            require(sr.init(1, 2, 3, 0, 0, Path.of("."), Path.of("."), null, null, caps).ok(), "fake init");
             boolean ngx = args[1].equals("ngx");
             int createOperation = ngx ? 2 : 8;
             fault.invokeExact(createOperation, 1, 1);
