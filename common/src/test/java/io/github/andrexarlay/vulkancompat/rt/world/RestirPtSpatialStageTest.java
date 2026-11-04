@@ -203,7 +203,7 @@ class RestirPtSpatialStageTest {
             "no ring, no temporal stage, no spatial stage: it only ever pools what this frame's trace wrote");
         assertTrue(backend.contains("trace.recordPtSpatial(cmd, scene, atlases, ptRange, capturedEntities, frame, dispatch);"),
             "the same atlases, ring, entities, frame block and push word the trace dispatch used");
-        int after = backend.indexOf("pt.afterDispatch(ptFlags != 0);");
+        int after = backend.indexOf("pt.afterFullOverwrite(ptFlags != 0);");
         int published = backend.indexOf("if (ptSpatialRan) pt.spatialPublished();");
         assertTrue(after >= 0 && published > after, "the spatial publish is counted after the trace write");
         assertTrue(backend.contains("return pt.mode(true, ptReservoirs != null, ptSpatialLast);"),

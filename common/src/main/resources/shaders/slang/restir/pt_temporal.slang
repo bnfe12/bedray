@@ -56,6 +56,7 @@ static const float PT_HISTORY_MAX_AGE = 32.0;
 struct PtTemporalState {
     uint   enabled;            // PATH_TRACE_OPTION_RESTIR_PT for this dispatch
     uint   historyValid;       // PATH_TRACE_PT_HISTORY
+    uint   decorrelateForRr;   // independent uniform mixture of full initial/resampled estimates
     uint   cameraStatic;
     uint   flipY;
     uint   parity;
@@ -116,6 +117,13 @@ RestirPtReservoir ptAnchorReceiver(RestirPtReservoir reservoir, float3 position,
 // One pixel's temporal stage.  Returns the first path's radiance with the reservoir's share swapped in, and publishes the
 // record the next frame reads.  `seedBase` is the path's own seed; the stage draws from a decorrelated stream so turning
 // it on never changes the random numbers the path itself used.
+// RTXDI PT Uniform decorrelation: choose between complete estimates with constant probability.
+// No energy/age-conditioned probability, extra reservoir or reciprocal-probability multiplier.
+float3 ptRrDecorrelation(float3 initial, float3 resampled, int2 pixel, uint frameIndex) {
+    uint coin = pcgHash(uint(pixel.x) ^ pcgHash(uint(pixel.y)) ^ pcgHash(frameIndex) ^ 0x51ed270bu);
+    return (coin & 1u) == 0u ? initial : resampled;
+}
+
 float3 ptTemporalStage<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         MaterialSamplingOptions materialOptions, float rayBias, PathTraceResult path, PtTemporalState state,
         RWStructuredBuffer<RestirPtReservoir> reservoirs, uint seedBase) {
@@ -219,5 +227,6 @@ float3 ptTemporalStage<T : ISceneTracer>(T traversal, MaterialAtlas atlas, Block
     }
     current = ptAnchorReceiver(current, record.anchorPosition, record.anchorNormal);
     reservoirs[slot] = current;
-    return radiance;
+    return state.decorrelateForRr != 0u
+        ? ptRrDecorrelation(path.radiance, radiance, state.pixel, state.frameIndex) : radiance;
 }

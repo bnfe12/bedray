@@ -121,6 +121,12 @@ final class RestirDiState {
         }
     }
 
+    /** PT overwrites every current record before publishing history, so it needs no whole-ring clear. */
+    void afterFullOverwrite(boolean wrote) {
+        afterDispatch(wrote);
+        if (wrote) resetPending = false;
+    }
+
     /**
      * A second dispatch of the same frame published its records into the other half (the ReSTIR PT spatial stage). That
      * half is now the newest one, so it counts as a write: the next frame writes the half the trace wrote and imports the

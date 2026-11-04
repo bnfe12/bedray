@@ -233,11 +233,8 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         RtPathTraceSlangPass.Reservoirs ptRange = RtPathTraceSlangPass.Reservoirs.NONE;
         if (ptWanted && ptReservoirs != null) {
             nativeBuffers.retain(cmd.address(), ptReservoirs);
-            if (pt.resetPending()) {
-                VK10.vkCmdFillBuffer(cmd, ptReservoirs.handle(), 0L, ptReservoirs.size(), 0);
-                VkBarriers.fullMemoryBarrier(cmd);
-                pt.ringCleared();
-            }
+            // Every current record is overwritten by the first sample, including misses/rejects.
+            // PT_HISTORY stays clear after reset; no read can observe the uninitialized opposite half.
             ptFlags = RtPathTraceSlangPass.OPTION_RESTIR_PT
                 | (requestedPt & (RtPathTraceSlangPass.PT_STATIC | RtPathTraceSlangPass.PT_FLIP_Y))
                 | (pt.historyWritten() ? RtPathTraceSlangPass.PT_HISTORY : 0)
@@ -316,7 +313,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         }
         historyParity ^= 1;
         di.afterDispatch(diFlags != 0);
-        pt.afterDispatch(ptFlags != 0);
+        pt.afterFullOverwrite(ptFlags != 0);
         if (ptSpatialRan) pt.spatialPublished();
         ptSpatialLast = ptSpatialRan;
         VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read by the composite, bloom and upscalers next

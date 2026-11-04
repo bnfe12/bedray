@@ -8,12 +8,50 @@ import "denoise/material_factors.slang";
 import "shading/bsdf.slang";
 import "post/output_resolve.slang";
 import "light/emitter_selection.slang";
+import "restir/pt_spatial.slang";
+import "denoise/rr_depth.slang";
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> sink;
 [[vk::binding(1, 0)]] StructuredBuffer<uint4> emitterFixture;
 [[vk::binding(2, 0)]] StructuredBuffer<uint4> globalEmitterFixture;
 [[vk::binding(3, 0)]] StructuredBuffer<uint4> emptyEmitterFixture;
 [[vk::binding(4, 0)]] StructuredBuffer<uint4> singleEmitterFixture;
+[[vk::binding(5, 0)]] RWStructuredBuffer<RestirPtReservoir> ptFixture;
+[[vk::binding(6, 0)]] StructuredBuffer<uint> ptDummyWords;
+[[vk::binding(7, 0)]] Sampler2D ptDummyAtlas;
+[[vk::binding(8, 0)]] StructuredBuffer<BlockMaterial> ptDummyMaterials;
+
+struct EmptyPtTracer : ISceneTracer {
+    SurfaceHit traceClosest(Ray ray) { return missHit(ray.tMax); }
+    VisibilityResult traceVisibility(Ray ray) { return visibleResult(ray.tMax); }
+    float traceDistance(Ray ray) { return ray.tMax; }
+}
+
+bool finitePtFixture(RestirPtReservoir r) {
+    return all(isfinite(r.stats)) && all(isfinite(r.sample.anchorPosition))
+        && all(isfinite(r.sample.anchorNormal)) && all(isfinite(r.sample.first.position))
+        && all(isfinite(r.sample.first.normal)) && all(isfinite(r.sample.first.throughput))
+        && isfinite(r.sample.first.pdf) && isfinite(r.sample.first.bsdfPdf);
+}
+
+PathTraceResult ptFixturePath(uint kind) {
+    PathTraceResult p = emptyPathTraceResult();
+    p.radiance = float3(10.0);
+    p.pt.status = kind == 0u ? PATH_PT_RECORD_NONE : kind == 1u ? PATH_PT_RECORD_ATTEMPT : PATH_PT_RECORD_VERTEX;
+    p.pt.anchorPosition = float3(float(kind)*3.0,0.0,1.0);
+    p.pt.anchorNormal = float3(0,0,1);
+    p.pt.vertexPosition = p.pt.anchorPosition + float3(0,0,2);
+    p.pt.vertexNormal = float3(0,0,-1);
+    p.pt.direction = float3(0,0,1);
+    p.pt.sourcePdf = kind == 4u ? 0.0 : 1.0;
+    p.pt.reversePdf = 1.0;
+    p.pt.vertexFlags = kind == 2u ? 0u : PATH_PT_VERTEX_CERTIFIED;
+    p.pt.diffuseReflectance = float3(1.0);
+    p.pt.suffix = float3(2.0);
+    p.pt.suffixContribution = float3(2.0*INV_PI);
+    if (kind == 3u) p.flags = PATH_TRACE_FLAG_INVALID_SAMPLE;
+    return p;
+}
 
 bool near3(float3 actual, float3 expected) { return all(abs(actual - expected) < 1.0e-5); }
 
@@ -157,8 +195,9 @@ void main() {
     sink[23] = resolvedRayDistance(1.0e6, float2(1.0), float2(0.0), forward, right, up) == 1.0e6;
     FrameConstants frame = {};
     frame.camera.jitter = float4(0.125, -0.375, 1.0/8.0, 1.0/4.0);
-    sink[24] = all(pathTracePrimaryJitter(frame, int2(1,2), 0u, 4u, PATH_TRACE_OPTION_GBUFFER) == frame.camera.jitter.xy)
-        && all(pathTracePrimaryJitter(frame, int2(1,2), 3u, 4u, PATH_TRACE_OPTION_GBUFFER) == frame.camera.jitter.xy);
+    uint rrFlags = PATH_TRACE_OPTION_GBUFFER | PATH_TRACE_OPTION_RR_GUIDES;
+    sink[24] = all(pathTracePrimaryJitter(frame, int2(1,2), 0u, 4u, rrFlags) == frame.camera.jitter.xy)
+        && all(pathTracePrimaryJitter(frame, int2(1,2), 3u, 4u, rrFlags) == frame.camera.jitter.xy);
     sink[25] = resolvedRayDistance(asfloat(0x7fc00000u), float2(0.0), float2(0.0), forward, right, up) == 1.0e6;
     sink[26] = blockEmitterCount(emitterFixture) == 2u
         && blockEmitterId(emitterFixture, 0u) == 17u && blockEmitterId(emitterFixture, 1u) == 9u;
@@ -212,4 +251,86 @@ void main() {
     BlockEmitterSelection one = blockEmitterSelect(singleEmitterFixture,nearLeft,0.75);
     sink[40] = one.index == 0u && one.probability == 1.0
         && blockEmitterSelectionProbability(singleEmitterFixture,0u,nearRight) == 1.0;
+
+    bool coherent = true;
+    for (uint n=1u; n<=8u; n*=2u) for (uint s=0u; s<n; s++) {
+        coherent = coherent && all(pathTracePrimaryJitter(frame,int2(1,2),s,n,rrFlags) == frame.camera.jitter.xy)
+            && all(pathTracePrimaryJitter(frame,int2(1,2),s,n,rrFlags|PATH_TRACE_OPTION_NRD_MOTION) == frame.camera.jitter.xy);
+    }
+    sink[41] = coherent;
+    sink[42] = any(pathTracePrimaryJitter(frame,int2(1,2),0u,4u,
+        PATH_TRACE_OPTION_GBUFFER|PATH_TRACE_OPTION_NRD_MOTION) != pathTracePrimaryJitter(frame,int2(1,2),3u,4u,
+        PATH_TRACE_OPTION_GBUFFER|PATH_TRACE_OPTION_NRD_MOTION));
+    PathDenoiserSignal bypassReflection = bypassedPathDenoiserSignal(8.0);
+    sink[43] = bypassReflection.bypass && bypassReflection.specularHitDistance == 8.0
+        && near3(bypassReflection.diffuse+bypassReflection.specular,float3(0.0));
+    PathTraceMean mixed = emptyPathTraceMean();
+    accumulatePathTraceSample(mixed,sampleWithSignal(float3(4.0),bypassReflection));
+    PathDenoiserSignal closeReflection = emptyPathDenoiserSignal(); closeReflection.specularHitDistance=3.0;
+    accumulatePathTraceSample(mixed,sampleWithSignal(float3(6.0),closeReflection));
+    PathTraceResult mixedResult = pathTraceMeanResult(mixed,trusted);
+    sink[44] = trusted && mixedResult.denoiser.bypass && mixedResult.denoiser.specularHitDistance == 3.0
+        && near3(mixedResult.radiance,float3(5.0));
+    float rrNear = pathTraceGuideDepth(float3(0,0,1),float3(0,0,1),true);
+    float rrFar = pathTraceGuideDepth(float3(0,0,100),float3(0,0,1),true);
+    sink[45] = rrNear > 0.0 && rrNear < rrFar && rrFar < 1.0e6
+        && pathTraceGuideDepth(float3(0,0,100),float3(0,0,1),false) == -100.0;
+    sink[46] = !pathTraceNeedsDenoiserSignals(rrFlags|PATH_TRACE_OPTION_NRD_MOTION)
+        && pathTraceNeedsDenoiserSignals(PATH_TRACE_OPTION_GBUFFER|PATH_TRACE_OPTION_NRD_MOTION);
+    PathTraceResult moving = sampleWithSignal(float3(1),emptyPathDenoiserSignal());
+    sink[47] = all(pathTraceNrdMotion(moving,true) == float4(0));
+    moving.primaryMotion=float4(1,2,3,1);
+    sink[48] = all(pathTraceNrdMotion(moving,true) == float4(1,2,3,1));
+    moving.primary.valid=false;
+    sink[49] = all(pathTraceNrdMotion(moving,true) == float4(0));
+    moving.primary.valid=true;
+    sink[50] = all(pathTraceNrdMotion(moving,false) == float4(0));
+
+    EmptyPtTracer tracer;
+    MaterialAtlas noAtlas = MaterialAtlas(ptDummyAtlas,ptDummyAtlas,ptDummyAtlas,
+        EntityAtlas(emitterFixture,ptDummyWords,0u));
+    BlockMaterialTable noMaterials = BlockMaterialTable(ptDummyMaterials,0u);
+    MaterialSamplingOptions materialOptions = defaultMaterialSamplingOptions();
+    PtTemporalState state = {};
+    state.enabled=1u; state.size=uint2(6,1); state.historyValid=0u;
+    for(uint i=0u; i<6u; i++) {
+        state.pixel=int2(i,0);
+        float3 color=ptTemporalStage(tracer,noAtlas,noMaterials,materialOptions,0.01,ptFixturePath(i),state,ptFixture,17u);
+        sink[51u+i]=all(isfinite(color)) && finitePtFixture(ptFixture[i]);
+    }
+    for(uint i=0u; i<6u; i++)
+        ptSpatialStage(tracer,noAtlas,noMaterials,materialOptions,0.01,ptFixture,int2(i,0),state.size,0u,0u);
+    for(uint i=0u; i<6u; i++) sink[57u+i]=finitePtFixture(ptFixture[6u+i]);
+    // Re-layout/reset with the opposite parity still never reads stale/poisoned history.
+    state.size=uint2(3,2); state.parity=1u;
+    bool resetComplete=true;
+    for(uint i=0u; i<6u; i++) {
+        state.pixel=int2(i%3u,i/3u);
+        ptTemporalStage(tracer,noAtlas,noMaterials,materialOptions,0.01,ptFixturePath(i),state,ptFixture,29u);
+        resetComplete=resetComplete && finitePtFixture(ptFixture[6u+i]);
+    }
+    sink[63]=resetComplete;
+    RrDepthPush depthPc = {};
+    depthPc.forward=float4(0,0,1,1); depthPc.right=float4(1,0,0,1); depthPc.up=float4(0,1,0,0);
+    depthPc.jitter=float4(0.125,-0.375,1.0/8.0,1.0/4.0); depthPc.size=uint2(8,4);
+    depthPc.clipZ=float4(0,0,-0.0001,0.1); depthPc.clipW=float4(0,0,1,0);
+    float nearHw=rrHardwareDepth(1.0,float2(0,0),depthPc), farHw=rrHardwareDepth(100.0,float2(7,3),depthPc);
+    sink[64]=nearHw > farHw && farHw > 0.0 && abs(nearHw-0.0999) < 1.0e-6;
+    sink[65]=rrHardwareDepth(1.0e6,float2(0),depthPc)==0.0
+        && rrHardwareDepth(asfloat(0x7fc00000u),float2(0),depthPc)==0.0;
+    sink[66]=abs(rrHardwareDepth(10.0,float2(0,0),depthPc)-rrHardwareDepth(10.0,float2(7,3),depthPc)) < 1.0e-6;
+    float3 axis=normalize(float3(1,0,1));
+    depthPc.forward.xyz=axis; depthPc.right.xyz=normalize(float3(1,0,-1));
+    depthPc.up.y=-1.0; depthPc.origin=float4(0.2,-0.3,0.4,0);
+    depthPc.clipZ=float4(axis*(-0.0001),0.1+0.0001*dot(axis,depthPc.origin.xyz));
+    depthPc.clipW=float4(axis,-dot(axis,depthPc.origin.xyz));
+    sink[67]=abs(rrHardwareDepth(10.0,float2(3,2),depthPc)-0.0099) < 1.0e-6;
+    float sumMix=0.0; uint initialDraws=0u;
+    for(uint i=0u;i<65536u;i++) {
+        float3 selected=ptRrDecorrelation(float3(2),float3(6),int2(i&255u,i>>8u),19u);
+        sumMix+=selected.x;
+        initialDraws+=selected.x==2.0?1u:0u;
+    }
+    sink[68]=abs(sumMix/65536.0-4.0)<0.03 && abs(float(initialDraws)/65536.0-0.5)<0.01;
+    sink[69]=near3(ptRrDecorrelation(float3(2),float3(2),int2(7,9),1u),float3(2));
 }

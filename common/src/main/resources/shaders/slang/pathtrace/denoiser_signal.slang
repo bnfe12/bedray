@@ -19,9 +19,12 @@ PathDenoiserSignal emptyPathDenoiserSignal() {
     return signal;
 }
 
-PathDenoiserSignal bypassedPathDenoiserSignal() {
+PathDenoiserSignal bypassedPathDenoiserSignal(float reflectionDistance = 0.0) {
     PathDenoiserSignal signal = emptyPathDenoiserSignal();
     signal.bypass = true;
+    // Bypassing an uncertified NRD radiance estimator does not erase independently measured RR geometry.
+    signal.specularHitDistance = isfinite(reflectionDistance)
+        ? clamp(reflectionDistance, 0.0, PATH_SIGNAL_MISS_DISTANCE) : 0.0;
     return signal;
 }
 

@@ -130,7 +130,7 @@ class RtSlangNrdMotionTest {
     @Test
     void theFrameTurnsTheBitOnOnlyWhenTheViewsCarryTheBuffer() {
         String frame = read(HOST_FRAME);
-        assertTrue(frame.contains("| (views.motion() != 0L && guides != null ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)"),
+        assertTrue(frame.contains("guideOptionFlags(guides != null, views.motion() != 0L, params.rrGuides)"),
             "the push follows the bound views, never a setting");
         assertTrue(frame.contains("| rayEffectFlags()\n"
                 + "            | pixelShadowFlags()\n"),
@@ -150,8 +150,10 @@ class RtSlangNrdMotionTest {
     @Test
     void theMotionBufferIsTheDenoisersOwnVec4PixelBuffer() {
         String renderer = read(RENDERER);
-        assertTrue(renderer.contains("if (useDenoiser && denoiseMode.isNrd() && wantsEntityMotion()) {"),
-            "only the NRD layout reads this buffer from the trace; RR keeps its velocity pass");
+        assertTrue(renderer.contains("if (useDenoiser && wantsEntityMotion()) {"),
+            "both NRD and RR velocity consume the world-motion producer; neither may read an unwritten allocation");
+        assertTrue(renderer.contains("long motionAddr = motionHandle != 0L ? frameMotion().address : 0L;"),
+            "consumer addresses follow the actual producer, including zero when disabled");
         assertTrue(renderer.contains("motionHandle = frameMotion().handle;"),
             "the pass receives the handle of the buffer the pack reads by address");
         assertTrue(renderer.contains("lightmapView, motionHandle));"), "the handle rides with the frame's views");

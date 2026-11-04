@@ -87,7 +87,7 @@ public class DlssBackend implements IUpscalerBackend {
             if (featureOk) {
                 if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.dlssViaStreamline()) {
                     io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureConstants(
-                        ctx.renderWidth(), ctx.renderHeight(), ctx.targetWidth(), ctx.targetHeight());
+                        ctx.renderWidth(), ctx.renderHeight(), ctx.targetWidth(), ctx.targetHeight(), ctx.resetHistory());
                 }
                 DlssNative.EvalInfo info = new DlssNative.EvalInfo(
                     ctx.resetHistory(),

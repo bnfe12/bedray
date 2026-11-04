@@ -179,7 +179,7 @@ private:
     gpu::BufferView owned_pt_view_{};
     std::uint32_t owned_pt_parity_ = 0;
     bool owned_pt_history_ = false;
-    bool owned_pt_needs_clear_ = false;
+    bool owned_pt_reset_pending_ = false;
 
     std::uint32_t history_parity_ = 0;
     bool history_written_ = false;

@@ -7,7 +7,7 @@
 #include <cstring>
 
 int main() {
-    std::array<uint32_t, 41> verdicts{};
+    std::array<uint32_t, 70> verdicts{};
     GlobalParams_0 globals{};
     globals.sink_0 = {verdicts.data(), verdicts.size()};
     using TableWord = std::remove_const_t<std::remove_pointer_t<decltype(globals.emitterFixture_0.data)>>;
@@ -35,6 +35,10 @@ int main() {
     single[11] = {0u, 0u, 0u, bits(1.f)}; single[12] = {bits(1.f), bits(1.f), bits(1.f), 0u};
     single[13] = {invalid, invalid, invalid, 0u};
     globals.singleEmitterFixture_0 = {single.data(), single.size()};
+    using PtRecord = std::remove_const_t<std::remove_pointer_t<decltype(globals.ptFixture_0.data)>>;
+    std::array<PtRecord, 12> poisoned_ring;
+    std::memset(poisoned_ring.data(), 0xff, sizeof poisoned_ring);
+    globals.ptFixture_0 = {poisoned_ring.data(), poisoned_ring.size()};
     ComputeThreadVaryingInput thread{};
     main_0_Thread(&thread, nullptr, &globals);
     for (size_t i = 0; i < verdicts.size(); ++i) {
@@ -43,6 +47,6 @@ int main() {
             return 1;
         }
     }
-    std::puts("41 production Slang signal/mean/NRD/RR/output/emitter/local-proposal CPU cases passed (no GPU)");
+    std::puts("70 production Slang signal/mean/NRD/RR/output/emitter/PT-initialization/depth/decorrelation CPU cases passed (no GPU)");
     return 0;
 }

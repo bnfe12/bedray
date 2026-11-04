@@ -75,6 +75,8 @@ public final class DlssRrDenoiser {
     private long boundOutputView;
 
     private RtMemory.Img gbViewZ;
+    private RtMemory.Img hardwareDepth;
+    private long hardwareDepthRecording;
     private RtMemory.Img gbNormalRough;
     private RtMemory.Img gbDiffuse;
     private RtMemory.Img gbAlbedo;
@@ -287,6 +289,7 @@ public final class DlssRrDenoiser {
         inSpecular = memory.createImage("dlss_rr_in_spec_albedo", w, h, FMT_RGBA16F,
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         inSpecularHitDistance = memory.createImage("dlss_rr_in_spec_hit_distance", w, h, FMT_R32F, USAGE_STORAGE_SAMPLED);
+        hardwareDepth = memory.createImage("dlss_rr_hw_depth", w, h, FMT_R32F, USAGE_STORAGE_SAMPLED);
         outDiffuse = memory.createImage("dlss_rr_out_diffuse", outW, outH, FMT_RGBA16F,
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         inDisocc = memory.createImage("dlss_rr_in_disocc", w, h, FMT_R32F,
@@ -330,7 +333,7 @@ public final class DlssRrDenoiser {
 
     private void initImages(VkCommandBuffer cmd) {
         RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
-            inDiffuse, inMotion, inSpecular, inSpecularHitDistance, outDiffuse, inDisocc};
+            inDiffuse, inMotion, inSpecular, inSpecularHitDistance, hardwareDepth, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
             VkBarriers.transition(cmd, i.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
                 VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL);
@@ -405,25 +408,11 @@ public final class DlssRrDenoiser {
         DlssQuality quality = desiredQuality(width, height, outputWidth, outputHeight);
         requestedFeatureQuality = quality;
         boolean scaled = width != outputWidth || height != outputHeight;
-        int flags = DlssRrParams.FLAG_IS_HDR | DlssRrParams.FLAG_AUTO_EXPOSURE
-            | (scaled ? DlssRrParams.FLAG_MV_LOW_RES : 0);
-        DlssRrParams.CreateInfo ci = new DlssRrParams.CreateInfo(
-            width, height, outputWidth, outputHeight, quality,
-            flags,
-            false,
-            DlssRrParams.ROUGHNESS_PACKED,
-            DlssRrParams.DEPTH_LINEAR
-        );
+        DlssRrParams.CreateInfo ci = hardwareFeatureInfo(width, height, outputWidth, outputHeight, quality, false);
         long[] outFeat = new long[1];
         DlssNative.Status st = rr.createFeature(cmd.address(), ci, outFeat);
         if (!st.ok() && !scaled) {
-            ci = new DlssRrParams.CreateInfo(
-                width, height, outputWidth, outputHeight, DlssQuality.QUALITY,
-                flags | DlssRrParams.FLAG_MV_LOW_RES,
-                false,
-                DlssRrParams.ROUGHNESS_PACKED,
-                DlssRrParams.DEPTH_LINEAR
-            );
+            ci = hardwareFeatureInfo(width, height, outputWidth, outputHeight, DlssQuality.QUALITY, true);
             st = rr.createFeature(cmd.address(), ci, outFeat);
         }
         if (!st.ok()) {
@@ -444,7 +433,20 @@ public final class DlssRrDenoiser {
             gbSpecular.view, gbSpecAlbedo.view};
     }
 
+    static DlssRrParams.CreateInfo hardwareFeatureInfo(int w, int h, int outW, int outH, DlssQuality quality, boolean fallback) {
+        int flags = DlssRrParams.FLAG_IS_HDR | DlssRrParams.FLAG_AUTO_EXPOSURE | DlssRrParams.FLAG_DEPTH_INVERTED
+            | (fallback || w != outW || h != outH ? DlssRrParams.FLAG_MV_LOW_RES : 0);
+        return new DlssRrParams.CreateInfo(w, h, outW, outH, quality, flags, false,
+            DlssRrParams.ROUGHNESS_PACKED, DlssRrParams.DEPTH_HW);
+    }
+
     public RtMemory.Img gbViewZ() { return gbViewZ; }
+    public RtMemory.Img hardwareDepth() { return hardwareDepth; }
+    /** The matching trace producer encoded this generation in the same command buffer. */
+    public void hardwareDepthRecorded(long command) {
+        if (command == 0L) throw new IllegalArgumentException("RR depth publication needs its recording");
+        hardwareDepthRecording = command;
+    }
     public RtMemory.Img gbNormalRough() { return gbNormalRough; }
     public RtMemory.Img gbDiffuse() { return gbDiffuse; }
     public RtMemory.Img gbAlbedo() { return gbAlbedo; }
@@ -587,6 +589,8 @@ public final class DlssRrDenoiser {
         projection = cameraFrame.projection();
         viewRotation = cameraFrame.rotation();
         prepare(cmd);
+        if (device != null && hardwareDepthRecording != cmd.address())
+            throw new IllegalStateException(resourceContext("hardware_depth_not_recorded", width, height, boundOutputView, cmd.address()));
         ensureFeature(cmd);
         MotionProbe.tick();
         float frameDeltaMs = frameDeltaMs();
@@ -617,7 +621,7 @@ public final class DlssRrDenoiser {
         if (velocityPipeline != null && depthView != 0L) {
             try {
                 if (gbViewZ != null && depthView == gbViewZ.view) {
-                    // the RT G-buffer view Z is linear (negative in front of the camera), not an NDC depth
+                    // RR's RT guide is positive linear view depth; the velocity path accepts its magnitude.
                     velocityPipeline.dispatchLinearViewZ(cmd, depthView, inMotion.view, width, height, invViewProj, prevViewProjMat, camDelta,
                         reset ? 0L : entityMotionAddress, DISOCC_OFF ? 0L : disoccBuf.address,
                         (DEPTH_OCC_OFF || reset || !prevViewZValid) ? 0L : prevViewZBuf.address);
@@ -674,7 +678,7 @@ public final class DlssRrDenoiser {
         }
 
         RtMemory.Img[] gbuffers = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inDiffuse, inMotion, inSpecular,
-            inSpecularHitDistance, inDisocc};
+            inSpecularHitDistance, hardwareDepth, inDisocc};
 
         // 1. Transition G-buffer textures from GENERAL to SHADER_READ_ONLY_OPTIMAL, and output to GENERAL
         VkBarriers.fullMemoryBarrier(cmd);
@@ -695,7 +699,7 @@ public final class DlssRrDenoiser {
         DlssRrParams.Image out = new DlssRrParams.Image(
             outDiffuse.image, outDiffuse.view, FMT_RGBA16F, outputWidth, outputHeight, VK10.VK_IMAGE_ASPECT_COLOR_BIT, true);
         DlssRrParams.Image depth = new DlssRrParams.Image(
-            gbViewZ.image, gbViewZ.view, FMT_R32F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
+            hardwareDepth.image, hardwareDepth.view, FMT_R32F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
         DlssRrParams.Image mv = new DlssRrParams.Image(
             inMotion.image, inMotion.view, FMT_RG16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
         DlssRrParams.Image diffAlbedo = new DlssRrParams.Image(
@@ -731,15 +735,17 @@ public final class DlssRrDenoiser {
         // 3. Evaluate and restore layouts to GENERAL
         try {
             if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.dlssViaStreamline()) {
-                // The constants of a frame are sent by the FIRST feature that needs them, and the ray traced frame is
-                // recorded before the upscale, so this call owns them. Passing the render size as the window made frame
-                // generation and the upscaler run the whole frame against a viewport that does not exist (window !=
-                // render size whenever a quality preset below 100% is used); the real output size is the upscaler's.
+                // SL combines this projection with RR's worldToView. Reusing the raster's bobbed projection here
+                // would apply bob twice. Preserve the exact SDK projection (including its clip-Y convention).
                 int outW = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
                     ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputWidth() : width;
                 int outH = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
                     ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputHeight() : height;
-                io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureConstants(width, height, outW, outH);
+                var sdkCamera = new io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera(
+                    new Matrix4f().set(viewToClipMatrix), modelView, camX, camY, camZ,
+                    jitterPixelsX, jitterPixelsY, reset);
+                io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureRrConstants(
+                    sdkCamera, width, height, outW, outH);
             }
             DlssNative.Status st = rr.evaluate(cmd.address(), feature, eval);
             if (!st.ok()) {
@@ -779,14 +785,14 @@ public final class DlssRrDenoiser {
 
     private void destroyImages() {
         RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
-            inDiffuse, inMotion, inSpecular, inSpecularHitDistance, outDiffuse, inDisocc};
+            inDiffuse, inMotion, inSpecular, inSpecularHitDistance, hardwareDepth, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
             if (i != null) {
                 memory.destroy(i);
             }
         }
         gbViewZ = gbNormalRough = gbDiffuse = gbAlbedo = gbDirect = gbSpecular = gbSpecAlbedo = inNormalRough = inDiffuse =
-            inMotion = inSpecular = inSpecularHitDistance = outDiffuse = inDisocc = null;
+            inMotion = inSpecular = inSpecularHitDistance = hardwareDepth = outDiffuse = inDisocc = null;
         if (disoccBuf != null) {
             memory.destroy(disoccBuf);
             disoccBuf = null;
@@ -796,6 +802,7 @@ public final class DlssRrDenoiser {
             prevViewZBuf = null;
         }
         imagesReady = false;
+        hardwareDepthRecording = 0L;
     }
 
     /** Exact host proof for the shared-core pack/compose recording. */
@@ -804,6 +811,7 @@ public final class DlssRrDenoiser {
             if (packPipeline != null) packPipeline.releaseRecording(command);
             if (velocityPipeline != null) velocityPipeline.releaseRecording(command);
             if (imageInitRecording == command) imageInitRecording = 0;
+            if (hardwareDepthRecording == command) hardwareDepthRecording = 0;
             recordingPins.release(command);
         } catch (RuntimeException | Error failure) {
             throw new IllegalStateException(resourceContext("guide_complete", width, height, boundOutputView, command), failure);
@@ -819,6 +827,7 @@ public final class DlssRrDenoiser {
                 imagesReady = false;
             }
             cameraHistory.clear();
+            if (hardwareDepthRecording == command) hardwareDepthRecording = 0;
             prevViewZValid = false;
             recordingPins.release(command);
         } catch (RuntimeException | Error failure) {
@@ -830,6 +839,7 @@ public final class DlssRrDenoiser {
         if (packPipeline != null) packPipeline.releaseRecordingsAfterHostDrain();
         if (velocityPipeline != null) velocityPipeline.releaseRecordingsAfterHostDrain();
         imageInitRecording = 0;
+        hardwareDepthRecording = 0;
         recordingPins.clearAfterHostDrain();
     }
 

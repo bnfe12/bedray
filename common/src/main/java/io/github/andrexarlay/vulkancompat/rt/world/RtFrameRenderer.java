@@ -174,6 +174,7 @@ public final class RtFrameRenderer {
     // [DLSS-RR] DLSS Ray Reconstruction denoiser (experimental)
     private static DlssRrDenoiser dlssRrDenoiser;
     private static RtOutputResolve outputResolve;
+    private static RrHardwareDepth rrHardwareDepth;
 
     /** A live RR instance can own output reconstruction next frame. FG keeps its existing producer path. */
     public static boolean rrOutputReady() {
@@ -633,11 +634,15 @@ public final class RtFrameRenderer {
         RtFrameResources recordingResources = frameResources;
         RtPass recordingPass = pass;
         RtOutputResolve recordingOutputResolve = outputResolve;
+        RrHardwareDepth recordingRrDepth = rrHardwareDepth;
         Runnable[] particleRelease = {() -> {}};
         Retirement[] denoiserProof = {new Retirement(() -> {}, () -> {})};
         RecordingCompletion.Ticket recording;
         try {
             recording = recordingCompletion.beginWithDiscard(cmd.address(),
+            new Retirement(
+                () -> { if (recordingRrDepth != null) recordingRrDepth.release(cmd.address(), false); },
+                () -> { if (recordingRrDepth != null) recordingRrDepth.release(cmd.address(), true); }),
             new Retirement(
                 () -> { if (recordingOutputResolve != null) recordingOutputResolve.release(cmd.address(), false); },
                 () -> { if (recordingOutputResolve != null) recordingOutputResolve.release(cmd.address(), true); }),
@@ -834,6 +839,8 @@ public final class RtFrameRenderer {
                 stage = "dlss_rr_ensure";
                 if (pass.usesGbuffer() && dlssRrDenoiser == null) createDlssRrDenoiser(device, w, h);
                 if (dlssRrDenoiser != null) dlssRrDenoiser.ensure(w, h, rrOutput());
+                if (dlssRrDenoiser != null && rrHardwareDepth == null)
+                    rrHardwareDepth = new RrHardwareDepth(pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
             }
             if (denoiseMode.isNrd()) {
                 stage = "nrd_ensure";
@@ -918,7 +925,7 @@ public final class RtFrameRenderer {
         // NRD reads this frame's per-pixel world motion through its own binding, so the buffer has to exist before the
         // pass binds its views: the handle travels with them, and the pass writes exactly that range.
         long motionHandle = 0L;
-        if (useDenoiser && denoiseMode.isNrd() && wantsEntityMotion()) {
+        if (useDenoiser && wantsEntityMotion()) {
             frameResources.requireMotion(w, h);
             motionHandle = frameMotion().handle;
         }
@@ -1057,6 +1064,7 @@ public final class RtFrameRenderer {
         if (!io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.indirectTranslucentShadows()) params.flags |= RtFrameParams.FLAG_SKIP_INDIRECT_TRANSLUCENT;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.transparencyStats()) params.flags |= RtFrameParams.FLAG_TRANSPARENCY_STATS;
         if (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials()) params.flags |= RtFrameParams.FLAG_OPTICAL_MATERIALS;
+        params.rrGuides = useDenoiser && denoiseMode == DenoiserMode.DLSS_RR;
         pass.configure(params, useDenoiser);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.GI_DIST, params.giDistance);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.EMIS_DIST, params.emissiveDistance);
@@ -1118,17 +1126,10 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_PREV_ADDR, entOk ? eg.framePrevAddress() : 0L);
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_ATLAS_ADDR, eg.atlasAddress());
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_RECT_ADDR, eg.rectAddress());
-        long motionAddr = 0L;
-        if (useDenoiser && wantsEntityMotion()) {
-            frameResources.requireMotion(w, h);
-            motionAddr = frameMotion().address;
-            if (dlssRrDenoiser != null) {
-                dlssRrDenoiser.entityMotionAddress = motionAddr;
-            }
-            if (denoiser != null) {
-                denoiser.entityMotionAddress = motionAddr;
-            }
-        }
+        // The consumer receives exactly the allocation bound for this frame's producer, including zero on disable.
+        long motionAddr = motionHandle != 0L ? frameMotion().address : 0L;
+        if (dlssRrDenoiser != null) dlssRrDenoiser.entityMotionAddress = motionAddr;
+        if (denoiser != null) denoiser.entityMotionAddress = motionAddr;
         MemoryUtil.memPutLong(hdr + RtStatsLayout.MOTION_ADDR, motionAddr);
         MemoryUtil.memPutInt(hdr + RtStatsLayout.ENT_ATLAS_SIZE, eg.atlasAddress() != 0L ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0);
         float jitterPxX = 0.0f;
@@ -1220,6 +1221,11 @@ public final class RtFrameRenderer {
                             * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignY()
                         : 0.0f;
                     DlssRrDenoiser owner = dlssRrDenoiser;
+                    if (!(pass instanceof RtSlangPathPass slang) || rrHardwareDepth == null)
+                        throw new IllegalStateException("RR hardware depth requires the current Slang primary producer");
+                    rrHardwareDepth.record(cmd, slang.guideFrame(), owner.gbViewZ(), owner.hardwareDepth());
+                    owner.hardwareDepthRecorded(cmd.address());
+                    VkBarriers.fullMemoryBarrier(cmd);
                     frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY, camera.projectionMatrix);
                     rrColorResolved = frameColorTemporallyResolved;
@@ -1506,9 +1512,10 @@ public final class RtFrameRenderer {
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
             String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
-            if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && denoiseMode.isNrd()
+            if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && wantsEntityMotion()
+                && (denoiseMode.isNrd() || denoiseMode == DenoiserMode.DLSS_RR)
                 && !runtime.library().hasNativeMotion()) {
-                problem = "native NRD requires a matching core with NRD_MOTION";
+                problem = "native denoiser motion requires a matching core with NRD_MOTION";
             }
             if (problem != null) {
                 pathSlangUnavailableReason = problem;
@@ -1866,6 +1873,7 @@ public final class RtFrameRenderer {
             // last lease closes the core, which refuses while a recording is still pinned.
             atmosphere.destroy();
             if (outputResolve != null) { outputResolve.afterHostDrain(); outputResolve = null; }
+            if (rrHardwareDepth != null) { rrHardwareDepth.afterHostDrain(); rrHardwareDepth = null; }
             if (pathSlangRuntime != null) {
                 w.closeComputeAfterHostDrain();
                 pathSlangLease.close();

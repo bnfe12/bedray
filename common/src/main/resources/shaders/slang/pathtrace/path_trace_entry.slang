@@ -112,7 +112,8 @@ float2 pathTracePixelJitter(FrameConstants f, int2 pixel, uint s, uint n) {
 float2 pathTracePrimaryJitter(FrameConstants f, int2 pixel, uint s, uint n, uint flags) {
     // RR consumes one depth/normal/material/motion surface per pixel. Multiple paths must share that primary ray;
     // their independent BSDF/light samples remain intact. RR's frame jitter supplies temporal edge coverage.
-    bool rrGuides = (flags & PATH_TRACE_OPTION_GBUFFER) != 0u && (flags & PATH_TRACE_OPTION_NRD_MOTION) == 0u;
+    bool rrGuides = (flags & (PATH_TRACE_OPTION_GBUFFER | PATH_TRACE_OPTION_RR_GUIDES))
+        == (PATH_TRACE_OPTION_GBUFFER | PATH_TRACE_OPTION_RR_GUIDES);
     return rrGuides ? f.camera.jitter.xy : pathTracePixelJitter(f, pixel, s, n);
 }
 
@@ -120,6 +121,11 @@ float2 pathTracePrimaryJitter(FrameConstants f, int2 pixel, uint s, uint n, uint
 // compose are unchanged, so the Slang path can be denoised by the same chain as the legacy one.  A sky pixel gets the
 // legacy pattern (view depth 1e6, a flat normal, zero signal, albedo 0) so the pack skips it and the denoiser keeps its
 // range finite.
+float pathTraceGuideDepth(float3 toSurface, float3 forward, bool rrGuides) {
+    float forwardDepth = dot(toSurface, forward);
+    return rrGuides ? max(forwardDepth, 0.0) : -forwardDepth;
+}
+
 void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result, bool sampleTrusted,
         RWTexture2D<float> outViewZ,
         RWTexture2D<float4> outNormalRough,
@@ -127,7 +133,7 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result, bool
         RWTexture2D<float4> outDiffuse,
         RWTexture2D<float4> outAlbedo,
         RWTexture2D<float4> outDirect,
-        RWTexture2D<float4> outSpecAlbedo) {
+        RWTexture2D<float4> outSpecAlbedo, bool rrGuides = false) {
     // A sample the tracer rejected carries no geometry the denoiser may consume: `sampleTrusted` is
     // false for PATH_TRACE_FLAG_INVALID_SAMPLE and PATH_TRACE_FLAG_RC_UNRESOLVED, and the neutral set
     // below is the same one a miss gets, so the guides never disagree with the zero weight in the
@@ -149,7 +155,7 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result, bool
     }
     // NRD's view depth is measured backwards from the eye along the view axis, as in rt_path.comp.
     float3 toSurface = result.primary.position - f.camera.origin.xyz;
-    float viewZ = -dot(toSurface, f.camera.forward.xyz);
+    float viewZ = pathTraceGuideDepth(toSurface, f.camera.forward.xyz, rrGuides);
     float3 n = result.primary.normal;
     n = length(n) > 1.0e-4 ? normalize(n) : float3(0.0, 0.0, 1.0);
     outViewZ[p] = viewZ;
@@ -293,7 +299,8 @@ PathTraceResult pathTraceMeanResult(PathTraceMean mean, out bool sampleTrusted) 
     result.denoiser.specularHitDistance = mean.denoiser.specularHitDistance;
     // One unsupported subsample makes this pixel's guide estimator unsupported. Keep its exact raw mean,
     // rather than allowing NRD to reconstruct neighbors on top of a partial cached/medium/transmission bypass.
-    if (mean.denoiser.bypass) result.denoiser = bypassedPathDenoiserSignal();
+    if (mean.denoiser.bypass)
+        result.denoiser = bypassedPathDenoiserSignal(mean.denoiser.specularHitDistance);
     sampleTrusted = true;
     if (mean.hits == 0u) {
         // Carry only a proven trusted-sky classification; mean.flags also contains refused samples.
@@ -492,6 +499,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // is only written while DI runs.  A host without a ring binds one record, which ptTemporalActive refuses.
     PtTemporalState ptState;
     ptState.enabled = (pc.flags & PATH_TRACE_OPTION_RESTIR_PT) != 0u ? 1u : 0u;
+    ptState.decorrelateForRr = (pc.flags & PATH_TRACE_OPTION_RR_PT_DECORRELATE) != 0u ? 1u : 0u;
     ptState.historyValid = (pc.flags & PATH_TRACE_PT_HISTORY) != 0u ? 1u : 0u;
     ptState.cameraStatic = (pc.flags & PATH_TRACE_PT_STATIC) != 0u ? 1u : 0u;
     ptState.flipY = (pc.flags & PATH_TRACE_PT_FLIP_Y) != 0u ? 1u : 0u;
@@ -537,7 +545,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
             // The PT reservoir replaced a suffix using RIS, not the independent in-lobe guide sample.
             // Until it exports a certified guide estimator, keep this sample's complete signal in the bypass.
             if (traced.pt.status != PATH_PT_RECORD_NONE && ptTemporalActive(ptState, ptReservoirs)) {
-                traced.denoiser = bypassedPathDenoiserSignal();
+                traced.denoiser = bypassedPathDenoiserSignal(traced.denoiser.specularHitDistance);
             }
         }
         accumulatePathTraceSample(total, traced);
@@ -568,7 +576,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
         ? result.primaryMotion : float4(0.0);
     if ((options.flags & PATH_TRACE_OPTION_GBUFFER) != 0u) {
         pathTraceWriteGuides(p, f, result, sampleTrusted, outViewZ, outNormalRough, outSpecular, outDiffuse,
-            outAlbedo, outDirect, outSpecAlbedo);
+            outAlbedo, outDirect, outSpecAlbedo, (pc.flags & PATH_TRACE_OPTION_RR_GUIDES) != 0u);
     }
     if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {
         outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result, sampleTrusted);

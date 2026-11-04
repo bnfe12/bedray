@@ -133,6 +133,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     static final int PT_PARITY = 1 << 19;
     static final int PT_STATIC = 1 << 20;
     static final int PT_FLIP_Y = 1 << 21;
+    /** Explicit RR guide contract, independent of whether world-motion output is enabled. */
+    static final int OPTION_RR_GUIDES = 1 << 22;
+    static final int OPTION_RR_PT_DECORRELATE = 1 << 23;
     static final int PT_STATE_MASK = OPTION_RESTIR_PT | PT_HISTORY | PT_PARITY | PT_STATIC | PT_FLIP_Y;
 
     /** The seven denoiser guide images, in the order {@code gbufferViews()} hands them over. */
