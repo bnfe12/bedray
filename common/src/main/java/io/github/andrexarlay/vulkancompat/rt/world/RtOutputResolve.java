@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangProgram;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -27,16 +28,29 @@ final class RtOutputResolve {
         var raw = images.output();
         var output = images.composite();
         RtSlangFrameData.fill(frame, params, raw.width, raw.height, params.frame, 0);
-        var push = ByteBuffer.allocate(80).order(ByteOrder.nativeOrder());
+        // JOML's native-order ByteBuffer writes go through Unsafe and read the buffer's address field; a heap buffer
+        // has address 0 there and the write faults. The push block must be direct.
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
+            writePush(push, frame, output.width, output.height, colorReady);
+            recordings.add(command.address()); // retain even when native recording fails partway
+            program.dispatch(command.address(), (output.width + 7) / 8, (output.height + 7) / 8, 1,
+                List.of(SlangProgram.Resource.storageImage("rawColor", raw.view),
+                    SlangProgram.Resource.storageImage("rayDepth", images.depth().view),
+                    SlangProgram.Resource.storageImage("outputColor", output.view),
+                    SlangProgram.Resource.storageImage("outputDepth", images.displayDepth().view)), push);
+        }
+    }
+
+    static final int PUSH_BYTES = 80;
+
+    /** JOML writes through Unsafe for native-order buffers, so a heap buffer (address 0) would fault. */
+    static void writePush(ByteBuffer push, RtPathTraceSlangPass.Frame frame, int width, int height, boolean colorReady) {
+        if (push == null || !push.isDirect() || push.capacity() < PUSH_BYTES)
+            throw new IllegalArgumentException("output resolve push needs a direct " + PUSH_BYTES + "-byte buffer");
         frame.forward.get(0, push); frame.right.get(16, push); frame.up.get(32, push);
         push.putFloat(48, frame.jitter.x).putFloat(52, frame.jitter.y);
-        push.putInt(56, output.width).putInt(60, output.height).putInt(64, colorReady ? 1 : 0);
-        recordings.add(command.address()); // retain even when native recording fails partway
-        program.dispatch(command.address(), (output.width + 7) / 8, (output.height + 7) / 8, 1,
-            List.of(SlangProgram.Resource.storageImage("rawColor", raw.view),
-                SlangProgram.Resource.storageImage("rayDepth", images.depth().view),
-                SlangProgram.Resource.storageImage("outputColor", output.view),
-                SlangProgram.Resource.storageImage("outputDepth", images.displayDepth().view)), push);
+        push.putInt(56, width).putInt(60, height).putInt(64, colorReady ? 1 : 0);
     }
 
     void release(long command, boolean discarded) {
