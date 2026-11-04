@@ -29,7 +29,7 @@ class SlangDeadCodeTest {
     private static final Path SHADERS = Path.of("src/main/resources/shaders/slang");
     private static final Path TEST_SHADERS = Path.of("src/test/resources/shaders/slang");
     private static final Path TEST_SOURCES = Path.of("src/test/java");
-    private static final List<Path> HOSTS = List.of(Path.of("src/main/java"),
+    private static final List<Path> HOSTS = List.of(Path.of("src/main/java"), Path.of("../compute-common/src/main/java"),
         Path.of("../native/bedray_core/src"), Path.of("../native/bedray_core/include"));
     private static final Pattern IMPORT =
         Pattern.compile("^\\s*(?:__exported\\s+)?import\\s+(?:\"([^\"]+)\"|([\\w.]+))\\s*;", Pattern.MULTILINE);

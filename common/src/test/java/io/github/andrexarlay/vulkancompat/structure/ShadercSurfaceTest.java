@@ -26,6 +26,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ShadercSurfaceTest {
 
+    @Test
+    void companionRendererAlsoUsesAotAndShipsNoGlsl() throws IOException {
+        Path companion = Path.of("..", "compute-common", "src", "main");
+        assertTrue(Files.isDirectory(companion));
+        try (Stream<Path> files = Files.walk(companion)) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                String name = file.getFileName().toString();
+                assertFalse(name.matches(".*\\.(comp|frag|vert|glsl)$"), "first-party GLSL: " + file);
+                if (name.endsWith(".java")) assertFalse(Files.readString(file).contains("org.lwjgl.util.shaderc"),
+                    "NoRT must use the host AOT service: " + file);
+            }
+        }
+        try (Stream<Path> files = Files.walk(Path.of("src/main/resources/shaders/slang/nort"))) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                String source = Files.readString(file);
+                assertFalse(source.contains("#include") || source.contains("#ifdef"),
+                    "NoRT specializes typed modules, not preprocessor variants: " + file);
+            }
+        }
+    }
+
     private static final Path SOURCES = Path.of("src", "main", "java");
     private static final Path SLANG_PATH =
         SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt/slang");

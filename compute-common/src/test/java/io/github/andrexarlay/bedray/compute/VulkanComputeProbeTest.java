@@ -47,7 +47,7 @@ class VulkanComputeProbeTest {
     @Test void computeTraversalMatchesCpuWithoutEnabledExtensions() throws Exception {
         VoxelGrid grid = VoxelDemoScene.create();
         try (Probe probe = new Probe();
-             VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.device, WIDTH, HEIGHT,
+             VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.executor, probe.device, WIDTH, HEIGHT,
                      VK_FORMAT_R8G8B8A8_UNORM, grid)) {
             byte[] ids = probe.render(pipeline, true);
             int mismatches = 0;
@@ -74,7 +74,7 @@ class VulkanComputeProbeTest {
                     }
                 }
             }
-            System.out.printf("[BEDRAY-COMPUTE-PROBE] GPU=%s Vulkan=1.0 enabledInstanceExtensions=0 "
+            System.out.printf("[BEDRAY-COMPUTE-PROBE] GPU=%s Vulkan=1.1 nativeAot=true enabledInstanceExtensions=0 "
                             + "enabledDeviceExtensions=0 enabledOptionalFeatures=0 pixels=%d cpuHits=%d gpuHits=%d "
                             + "mismatches=%d unexplained=%d%n",
                     probe.deviceName, WIDTH * HEIGHT, cpuHits, gpuHits, mismatches, unexplained);
@@ -94,7 +94,7 @@ class VulkanComputeProbeTest {
         GraphicsBackendRegistry.setDebugView(GraphicsBackendRegistry.DebugView.SHADED);
         try {
             try (Probe probe = new Probe();
-                 VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.device, WIDTH, HEIGHT,
+                 VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.executor, probe.device, WIDTH, HEIGHT,
                          VK_FORMAT_R8G8B8A8_UNORM, VoxelGrid.builder(WORLD_SIZE, WORLD_SIZE, WORLD_SIZE).build())) {
                 VoxelWorldUpload uploads = new VoxelWorldUpload();
                 List<VoxelWorldUpload.Tile> firstUpdates = uploads.update(firstScene.snapshot());
@@ -203,7 +203,7 @@ class VulkanComputeProbeTest {
                 io.github.andrexarlay.bedray.api.v1.AtlasFrame.ColorEncoding.SRGB_IN_UNORM);
             var raster = new io.github.andrexarlay.bedray.api.v1.RasterFrame(probe.device.address(), inputs.colorView,
                 inputs.depthView, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_D32_SFLOAT, WIDTH, HEIGHT);
-            try (VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.device, WIDTH, HEIGHT,
+            try (VoxelComputePipeline pipeline = new VoxelComputePipeline(probe.executor, probe.device, WIDTH, HEIGHT,
                     VK_FORMAT_R8G8B8A8_UNORM, VoxelGrid.builder(48, 48, 48).build(), atlas, raster)) {
                 CameraSnapshot camera = new CameraSnapshot(camX, camY, camZ, inverseProjection, identity);
                 WorldSnapshot snapshot = new WorldSnapshot(1, 1, camera, scene.sections());
@@ -258,6 +258,66 @@ class VulkanComputeProbeTest {
     private record LitScene(List<SectionSnapshot> sections, VoxelGrid occupancy) {}
 
     /** World origin 0: floor y=20 (tinted tops), sunken water pool, back wall, emitter cube, emitting unsupported cell. */
+    @Test void streamedBackendUsesNativeAotAndResetsWorldAtLargeCoordinates() throws Exception {
+        var oldView = GraphicsBackendRegistry.debugView();
+        GraphicsBackendRegistry.setDebugView(GraphicsBackendRegistry.DebugView.OCCUPANCY);
+        float[] identity = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+        int offsetX = Math.floorDiv(WORLD_X, 16), offsetZ = Math.floorDiv(WORLD_Z, 16);
+        var camera = new CameraSnapshot(WORLD_X + 24.5, 27.5, WORLD_Z + 2.5, identity, identity);
+        var scene = litScene();
+        List<SectionSnapshot> translated = new ArrayList<>();
+        for (var section : scene.sections()) {
+            byte[] cells = new byte[4096];
+            for (int i = 0; i < cells.length; i++) cells[i] = section.cell(i & 15, i >> 4 & 15, i >> 8);
+            translated.add(new SectionSnapshot(offsetX + section.x(), section.y(), offsetZ + section.z(),
+                1, cells, section.materials(), section.models(), section.lighting(), section.tints()));
+        }
+        var bounds = new io.github.andrexarlay.bedray.api.v1.WorldCoverageBounds(offsetX + 1, offsetZ + 1,
+            1, 1, 0, 2, 32L * 1024 * 1024, 2 * 1024 * 1024);
+        try (Probe probe = new Probe(); LitInputs inputs = new LitInputs(probe, new float[WIDTH * HEIGHT]);
+             VoxelComputeBackend backend = new VoxelComputeBackend()) {
+            var atlas = new io.github.andrexarlay.bedray.api.v1.AtlasFrame(1, probe.device.address(), inputs.atlasView,
+                VK_IMAGE_LAYOUT_GENERAL, VK_FORMAT_R8G8B8A8_UNORM, 16, 16,
+                io.github.andrexarlay.bedray.api.v1.AtlasFrame.ColorEncoding.SRGB_IN_UNORM);
+            var raster = new io.github.andrexarlay.bedray.api.v1.RasterFrame(probe.device.address(), inputs.colorView,
+                inputs.depthView, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_D32_SFLOAT, WIDTH, HEIGHT);
+            var light = new io.github.andrexarlay.bedray.api.v1.LightingFrame(new float[24]);
+            backend.acceptWorldUpdate(new io.github.andrexarlay.bedray.api.v1.WorldUpdate(88, 1, camera, 1,
+                bounds, translated, List.of(), true, 27, 0, 0));
+            long[] frame = {0};
+            java.util.function.BooleanSupplier record = () -> backend.render(
+                new io.github.andrexarlay.bedray.api.v1.ComputeFrameContext(probe.device, probe.command, probe.target,
+                    VK_FORMAT_R8G8B8A8_UNORM, WIDTH, HEIGHT, frame[0]++, GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE,
+                    atlas, light, raster), probe.executor);
+            byte[] pixels = null;
+            for (int i = 0; i < 8; i++) pixels = probe.render(record);
+            assertEquals(27, backend.streamingStatus().residentSections());
+            assertEquals(0, backend.streamingStatus().queuedSections());
+            int visible = 0, white = 0;
+            for (int i = 0; i < WIDTH * HEIGHT; i++) {
+                if ((pixels[i * 4] | pixels[i * 4 + 1] | pixels[i * 4 + 2]) != 0) visible++;
+                if (Byte.toUnsignedInt(pixels[i * 4]) == 255 && Byte.toUnsignedInt(pixels[i * 4 + 1]) == 255
+                    && Byte.toUnsignedInt(pixels[i * 4 + 2]) == 255) white++;
+            }
+            assertTrue(white > WIDTH * HEIGHT / 10, "Streamed native traversal must see the captured full cubes");
+            List<SectionSnapshot> empty = translated.stream().map(s -> new SectionSnapshot(
+                s.x(), s.y(), s.z(), 2, new byte[4096])).toList();
+            backend.acceptWorldUpdate(new io.github.andrexarlay.bedray.api.v1.WorldUpdate(89, 2, camera, 1,
+                bounds, empty, List.of(), true, 27, 27, 0));
+            for (int i = 0; i < 3; i++) pixels = probe.render(record);
+            for (int i = 0; i < WIDTH * HEIGHT; i++)
+                assertEquals(0, pixels[i * 4] | pixels[i * 4 + 1] | pixels[i * 4 + 2], "Old world geometry survived reset");
+            GraphicsBackendRegistry.setDebugView(GraphicsBackendRegistry.DebugView.SHADED);
+            pixels = probe.render(record);
+            for (int i = 0; i < WIDTH * HEIGHT; i++) {
+                assertEquals(0, pixels[i * 4]); assertEquals(0, pixels[i * 4 + 1]);
+                assertEquals(255, Byte.toUnsignedInt(pixels[i * 4 + 2]), "Unknown/missing surface must keep raster");
+            }
+            System.out.printf("[BEDRAY-COMPUTE-PROBE] nativeStreamed=true resident=27 visible=%d white=%d "
+                + "largeCoordinates=true worldReset=true rasterPreserved=true%n", visible, white);
+        } finally { GraphicsBackendRegistry.setDebugView(oldView); }
+    }
+
     private static LitScene litScene() {
         VoxelGridBuilder occupancy = VoxelGrid.builder(48, 48, 48);
         var face = new io.github.andrexarlay.bedray.api.v1.CubeFaceMaterial(0, 0, 1, 0, 0, 1, 0xFFFFFFFF, false);
@@ -557,6 +617,8 @@ class VulkanComputeProbeTest {
         VkInstance instance;
         VkDevice device;
         VkQueue queue;
+        int queueFamily;
+        NativeComputeProbeExecutor executor;
         VkCommandBuffer command;
         String deviceName;
         long commandPool;
@@ -570,6 +632,7 @@ class VulkanComputeProbeTest {
         Probe() {
             try {
                 create();
+                executor = new NativeComputeProbeExecutor(device, queue, queueFamily);
             } catch (RuntimeException | Error failure) {
                 close();
                 throw failure;
@@ -582,11 +645,11 @@ class VulkanComputeProbeTest {
                 VkApplicationInfo application = VkApplicationInfo.calloc(stack).sType$Default()
                         .pApplicationName(stack.UTF8("Bedray Compute offscreen probe"))
                         .applicationVersion(1).pEngineName(stack.UTF8("Bedray Compute"))
-                        .engineVersion(1).apiVersion(VK_API_VERSION_1_0);
+                        .engineVersion(1).apiVersion(VK11.VK_API_VERSION_1_1);
                 // calloc leaves enabledLayerCount and enabledExtensionCount at zero.
                 VkInstanceCreateInfo info = VkInstanceCreateInfo.calloc(stack).sType$Default().pApplicationInfo(application);
                 assertEquals(0, info.enabledExtensionCount());
-                check(vkCreateInstance(info, null, pointer), "Create Vulkan 1.0 instance");
+                check(vkCreateInstance(info, null, pointer), "Create Vulkan 1.1 instance");
                 instance = new VkInstance(pointer.get(0), info);
                 IntBuffer count = stack.ints(0);
                 check(vkEnumeratePhysicalDevices(instance, count, null), "Count physical devices");
@@ -624,6 +687,7 @@ class VulkanComputeProbeTest {
                 device = new VkDevice(pointer.get(0), physical, deviceInfo);
                 vkGetDeviceQueue(device, family, 0, pointer);
                 queue = new VkQueue(pointer.get(0), device);
+                queueFamily = family;
                 LongBuffer handle = stack.mallocLong(1);
                 check(vkCreateCommandPool(device, VkCommandPoolCreateInfo.calloc(stack).sType$Default()
                         .queueFamilyIndex(family).flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT), null, handle), "Create command pool");
@@ -679,6 +743,15 @@ class VulkanComputeProbeTest {
 
         private byte[] render(VoxelComputePipeline pipeline, boolean hitIds, CameraSnapshot camera,
                               VoxelWorldUpload uploads, List<VoxelWorldUpload.Tile> updates) {
+            return render(() -> {
+                if (camera == null) pipeline.record(command, target, hitIds);
+                else if (lighting != null) pipeline.recordWorld(command, target, camera, uploads, updates, lighting);
+                else pipeline.recordWorld(command, target, hitIds, camera, uploads, updates);
+                return true;
+            });
+        }
+
+        byte[] render(java.util.function.BooleanSupplier record) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 check(vkResetCommandBuffer(command, 0), "Reset command buffer");
                 check(vkBeginCommandBuffer(command, VkCommandBufferBeginInfo.calloc(stack).sType$Default()
@@ -692,9 +765,7 @@ class VulkanComputeProbeTest {
                     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                             0, null, null, transition);
                 }
-                if (camera == null) pipeline.record(command, target, hitIds);
-                else if (lighting != null) pipeline.recordWorld(command, target, camera, uploads, updates, lighting);
-                else pipeline.recordWorld(command, target, hitIds, camera, uploads, updates);
+                assertTrue(record.getAsBoolean(), "The actual backend must record a complete frame");
                 VkImageMemoryBarrier.Buffer ready = VkImageMemoryBarrier.calloc(1, stack);
                 ready.get(0).sType$Default().image(target).srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).oldLayout(VK_IMAGE_LAYOUT_GENERAL)
@@ -718,6 +789,7 @@ class VulkanComputeProbeTest {
                 submit.get(0).sType$Default().pCommandBuffers(stack.pointers(command.address()));
                 check(vkQueueSubmit(queue, submit, VK_NULL_HANDLE), "Submit compute probe");
                 check(vkQueueWaitIdle(queue), "Wait for compute probe");
+                executor.completed(command.address());
                 targetInitialized = true;
                 PointerBuffer mapped = stack.mallocPointer(1);
                 check(vkMapMemory(device, readbackMemory, 0, PIXEL_BYTES, 0, mapped), "Map probe readback");
@@ -735,6 +807,10 @@ class VulkanComputeProbeTest {
         @Override public void close() {
             if (device != null) {
                 vkDeviceWaitIdle(device);
+                if (executor != null) {
+                    executor.discarded(command.address());
+                    executor.close(); executor = null;
+                }
                 if (readback != 0) vkDestroyBuffer(device, readback, null);
                 if (readbackMemory != 0) vkFreeMemory(device, readbackMemory, null);
                 if (target != 0) vkDestroyImage(device, target, null);

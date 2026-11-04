@@ -14,8 +14,8 @@ import io.github.andrexarlay.bedray.compute.voxel.StreamedVoxelScene;
 /** Opt-in synthetic or bounded live model traversal on the host Vulkan device. */
 public final class VoxelComputeBackend implements GraphicsBackend {
     public VoxelComputeBackend() {
-        if (GraphicsBackendRegistry.apiMinorVersion() < 6)
-            throw new IllegalStateException("Bedray Compute requires renderer API 1.6 or newer");
+        if (GraphicsBackendRegistry.apiMinorVersion() < 7)
+            throw new IllegalStateException("Bedray Compute requires renderer API 1.7 or newer");
     }
     private VoxelComputePipeline pipeline;
     private String detail = "Waiting for a world snapshot";
@@ -109,13 +109,18 @@ public final class VoxelComputeBackend implements GraphicsBackend {
     @Override public String id() { return "bedray_compute:voxels"; }
 
     @Override public boolean render(ComputeFrameContext frame) {
+        throw new IllegalStateException("Bedray Compute requires the host API 1.7 AOT executor");
+    }
+
+    @Override public boolean render(ComputeFrameContext frame,
+            io.github.andrexarlay.bedray.api.v1.AotComputeExecutor executor) {
         if (frame.sceneMode() == GraphicsBackendRegistry.SceneMode.OFF) return false;
         if (frame.width() <= 0 || frame.height() <= 0 || frame.targetImage() == 0) return false;
         boolean live = frame.sceneMode() == GraphicsBackendRegistry.SceneMode.LIVE_OPAQUE;
         if(live&&streamed.ready()) {
             if(frame.atlas()==null||streamed.atlasGeneration()!=frame.atlas().generation())return false;
             if(pipeline!=null&&!pipeline.matches(frame))throw new IllegalStateException("Host must release compute resources before resize/device change");
-            if(pipeline==null)pipeline=new VoxelComputePipeline(frame.device(),frame.width(),frame.height(),frame.targetFormat(),
+            if(pipeline==null)pipeline=new VoxelComputePipeline(executor, frame.device(),frame.width(),frame.height(),frame.targetFormat(),
                 VoxelGrid.builder(1,1,1).build(),frame.atlas(),frame.raster(),streamed);
             pipeline.recordStreamedWorld(frame.commandBuffer(),frame.targetImage(),frame.lighting());
             return true;
@@ -126,7 +131,7 @@ public final class VoxelComputeBackend implements GraphicsBackend {
         if (pipeline != null && !pipeline.matches(frame))
             throw new IllegalStateException("Host must release compute resources before resize/device change");
         if (pipeline == null) {
-            pipeline = new VoxelComputePipeline(frame.device(), frame.width(), frame.height(),
+            pipeline = new VoxelComputePipeline(executor, frame.device(), frame.width(), frame.height(),
                     frame.targetFormat(), live ? VoxelGrid.builder(48,48,48).build() : VoxelDemoScene.create(),
                     live ? frame.atlas() : null,live ? frame.raster() : null);
         }
