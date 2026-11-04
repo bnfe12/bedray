@@ -4367,3 +4367,43 @@ checked bootstrap, resize and CUSTOM extent provenance. Vendor image/FPS and liv
 UI acceptance remain open. The separate SR/native-release ownership findings are
 recorded in docs/ai-agent-addenda/SR_RELEASE_OWNERSHIP_AUDIT.md; no release or
 residency repair is claimed by this commit.
+
+## 2026-11-04 - Main promotion, local lights, NORT and RR stability (L1/L2; no live run)
+
+`origin/main` advanced to `1c59ba49ee078e689500153e8c936802cca9d5b9`,
+the merge of PR #74. This includes the earlier PRs #67-#74: the Slang
+promotion with the previous main privacy fixes, the local-light BVH, typed
+NORT AOT voxel passes, RR camera/history and guide fixes, safe acceleration
+structure updates with entity topology, and live DLSS SDK quality/extents.
+The `refactor/slang-pipeline` branch was deleted after the promotion; local
+work now tracks `main`.
+
+Both native DLLs were rebuilt from this checkout. `bedray_core.dll` 488,960 B
+SHA-256 `299C11F5D274CF746CD483A69C8D67CF202C08EB5BF1476298FEFDF84D412338`;
+`bedray_scene.dll` 248,832 B SHA-256
+`BC5069B997C1D957549D5AFE32199C7CFCEDA785175BDCD5878C31534FA82E58`.
+Core CTest passed 29/29. The standalone scene CTest first ran a stale test
+executable left by the previous build and reported 14 contract failures; after
+`cmake --build build/bedray-native-scene/windows-x64 --config Release` rebuilt
+the test target, `bedray_scene_contract` passed 1/1. The failures were a stale
+binary, not a source result.
+
+Java validation: `:core:test` 121 tests, zero failures/errors; `:common:test`
+1,234 tests, zero failures/errors, 3 skipped; `:common:runShimTests` 34/34.
+
+Both combined jars were built from the clean commit with manifest
+`Git-Commit 1c59ba49ee078e689500153e8c936802cca9d5b9`, `Git-Dirty false`:
+Fabric 20,503,985 B SHA-256
+`3B634914ABBB6A3C23257D0D4AFC5AD2FD4EC60D5D1EC21764E8107724E2F5D7`;
+NeoForge 20,511,222 B SHA-256
+`F886BF7AF8BF17B1D2467DF63640BA2AE3127AE6DC039C0BBB9C5C93B7A3CADD`.
+The Fabric jar still contains the `RtOutputResolve` direct-buffer fix from
+`4035f79` and the new NORT Slang passes.
+
+The jars and both DLLs were copied to the five BedRay instances; the replaced
+files are in backup `bedray-deploy-20261104-191715`. No BedRay instance was
+running during the replacement and nothing was launched.
+
+L1/L2 only. The promoted main, the rebuilt native pair and the RR/AS/NORT
+changes have not run on a GPU. L3-L5, visual parity and the absence of the
+earlier `RtOutputResolve` crash still require an owner run.
