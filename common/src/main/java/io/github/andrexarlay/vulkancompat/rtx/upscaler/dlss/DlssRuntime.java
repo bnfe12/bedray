@@ -6,7 +6,6 @@ import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerContextRetirement;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerReconfigure;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerRequest;
 import net.minecraft.client.Minecraft;
@@ -76,14 +75,14 @@ public final class DlssRuntime {
     private static int outputHeight;
     /** Incremented whenever the render/output size or mode changes: temporal history must be reset. */
     private static int initEpoch;
-    private static long feature;
+    private static DlssFeatureOwner feature = new DlssFeatureOwner();
     private static int featureEpoch = -1;
     private static boolean pendingDestroy;
     private static String unsupportedReason;
     /** Frame heads seen so far (incremented in {@link #onFrameBegin}). */
     private static long frameCounter;
     /** Feature taken out of use by a reconfiguration, retained until host completion and SDK acknowledgement. */
-    private static long retiredFeature;
+    private static DlssFeatureOwner retiredFeature = new DlssFeatureOwner();
     /** Mode of the setup made last: a FAILED state belongs to this request. */
     private static DlssQuality attempted;
     /** Custom render percent of the READY setup / of the last attempt / of the setup being created (0 = NGX's size of the mode). */
@@ -173,6 +172,8 @@ public final class DlssRuntime {
         frameCounter++;
         if (pendingDestroy) {
             destroyPending();
+        } else if (feature.retiring()) {
+            releaseFeature(); // Retry a failed suspension before a route change can evaluate SR.
         }
         if (state == State.READY && winW > 0 && winH > 0 && (winW != outputWidth || winH != outputHeight)) {
             resize(winW, winH);
@@ -221,8 +222,8 @@ public final class DlssRuntime {
         LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] upscaler_reconfigure from={} to={} reason=request phase=retire tech=dlss proof=host_fence_required frame={}",
             from, UpscalerReconfigure.describe("DLSS", desired), frameCounter);
         reconfigureFrom = from;
-        retiredFeature = feature; // 0 when no evaluate happened yet
-        feature = 0L;
+        releaseRetired();
+        feature.transferTo(retiredFeature);
         featureEpoch = -1;
         activeMode = null;
         activeInput = null;
@@ -231,7 +232,7 @@ public final class DlssRuntime {
 
     /** Releases the feature retired by {@link #beginRetire}, preserving its handle if either proof or SDK release fails. */
     private static void releaseRetired() {
-        retiredFeature = releaseFeature(retiredFeature, "release_retired");
+        releaseFeature(retiredFeature, "release_retired");
     }
 
     private static void createWhenPossible(DlssQuality mode, int winW, int winH) {
@@ -555,27 +556,35 @@ public final class DlssRuntime {
         LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] dlss=resized render={} output={}x{}", activeInput, winW, winH);
     }
 
+    /** Pre-recording only. RR resolves the final output, so its dormant SR feature can be retired. */
+    public static synchronized void suspendSrFeatureForRr() {
+        if (state != State.READY || (feature.empty() && !feature.retiring())) return;
+        if (nativeLib == null || !nativeLib.supportsSafeResourceRetirement()) return;
+        releaseFeature();
+        LOGGER.info("[VKB-DLSS] sr_suspended reason=rr_output frame={} input={} output={}x{} epoch={} ngx_retained=true",
+            frameCounter, activeInput, outputWidth, outputHeight, initEpoch);
+    }
+
     /** Makes sure a feature exists for the active size; records its creation into {@code commandBuffer}. */
     public static synchronized boolean ensureFeature(long commandBuffer) {
-        if (feature != 0L && featureEpoch == initEpoch) {
+        if (feature.usable() && featureEpoch == initEpoch) {
             return true;
         }
-        if (feature != 0L) {
+        if (!feature.empty() || feature.retiring()) {
             // This method runs inside an open CB; destruction belongs to the next frame's preflight.
-            executeFailed("stale_feature:handle=0x" + Long.toHexString(feature) + ",cmd=0x" + Long.toHexString(commandBuffer));
+            executeFailed("stale_feature:handle=0x" + Long.toHexString(feature.handle()) + ",cmd=0x" + Long.toHexString(commandBuffer));
             return false;
         }
         long[] out = new long[1];
         long t0 = System.nanoTime();
         DlssNative.Status st = nativeLib.createFeature(commandBuffer, activeInput.x(), activeInput.y(), outputWidth, outputHeight,
             featureMode != null ? featureMode : activeMode, FEATURE_FLAGS, out);
+        feature.adopt(out[0], st.ok());
         if (!st.ok()) {
             // Preserve an SDK-returned partial feature for retirement after this CB is discarded or fenced.
-            feature = out[0];
             executeFailed("create_feature:" + st);
             return false;
         }
-        feature = out[0];
         featureEpoch = initEpoch;
         LOGGER.info("[VKB-DLSS] [VKB-AUTOTEST] dlss=feature_created mode={} render={} output={}x{} flags=0x{} ms={}",
             activeMode, activeInput, outputWidth, outputHeight, Integer.toHexString(FEATURE_FLAGS), (System.nanoTime() - t0) / 1_000_000L);
@@ -583,7 +592,7 @@ public final class DlssRuntime {
     }
 
     public static synchronized long feature() {
-        return feature;
+        return feature.usable() ? feature.handle() : 0;
     }
 
     public static synchronized DlssNative nativeLib() {
@@ -598,7 +607,7 @@ public final class DlssRuntime {
      */
     public static synchronized void executeFailed(String result) {
         LOGGER.error("[VKB-DLSS] [VKB-AUTOTEST] provider=dlss stage=execute frame={} feature=0x{} output={}x{} retained={} result={}",
-            frameCounter, Long.toHexString(feature), outputWidth, outputHeight, feature != 0, result);
+            frameCounter, Long.toHexString(feature.handle()), outputWidth, outputHeight, !feature.empty(), result);
         lastFailure = "stage=execute result=" + result;
         pendingDestroy = true;
         activeMode = null;
@@ -612,13 +621,12 @@ public final class DlssRuntime {
     }
 
     private static void releaseFeature() {
-        feature = releaseFeature(feature, "release_feature");
+        releaseFeature(feature, "release_feature");
         featureEpoch = -1;
     }
 
-    private static long releaseFeature(long ownedFeature, String stage) {
-        return UpscalerContextRetirement.release(ownedFeature,
-            () -> proveCompletion(stage, ownedFeature), handle -> {
+    private static void releaseFeature(DlssFeatureOwner owner, String stage) {
+        owner.retire(() -> proveCompletion(stage, owner.handle()), handle -> {
                 try {
                     if (nativeLib == null) throw new IllegalStateException("DLSS feature lost its native library");
                     DlssNative.Status status = nativeLib.releaseFeature(handle);
@@ -674,12 +682,12 @@ public final class DlssRuntime {
         outputWidth = 0;
         outputHeight = 0;
         initEpoch = 0;
-        feature = 0L;
+        feature = new DlssFeatureOwner();
         featureEpoch = -1;
         pendingDestroy = false;
         unsupportedReason = null;
         frameCounter = 0L;
-        retiredFeature = 0L;
+        retiredFeature = new DlssFeatureOwner();
         attempted = null;
         reconfigureFrom = null;
         initializingStartNanos = 0L;

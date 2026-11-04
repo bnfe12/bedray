@@ -1,4 +1,9 @@
-# SR residency and native release audit — open work
+# SR residency and native release audit — original findings
+
+The implementation of these findings is described in
+[DLSS_RESOURCE_LIFETIME.md](DLSS_RESOURCE_LIFETIME.md). The observations below are
+the pre-fix audit, preserved as rationale; RTX live allocation/FPS verification
+remains open.
 
 These are source findings. This document does not claim a measured allocation
 size, an observed SDK failure in the owner's run, or an implemented release fix.

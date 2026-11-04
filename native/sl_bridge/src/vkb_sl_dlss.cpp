@@ -10,8 +10,8 @@
  * SL session").
  *
  * The exports have exactly the names and structs of native/dlss_bridge/include/vkb_dlss.h so the Java side (DlssNative,
- * DlssRayReconstruction) only needs another library path. Single viewport 0 for every feature (constants, tags and options of
- * one frame must share the viewport, ProgrammingGuideDLSS_RR.md "frameToken and myViewport must match across all API calls").
+ * DlssRayReconstruction) only needs another library path. SR/RR use viewport 0; FG uses viewport 1. Constants, tags and options of
+ * each evaluation share its viewport (ProgrammingGuideDLSS_RR.md).
  * Recording: slSetTagForFrame + slEvaluateFeature on the caller's VkCommandBuffer (ProgrammingGuideDLSS.md section "Evaluate").
  */
 #define NOMINMAX
@@ -82,8 +82,29 @@ sl::DLSSMode toSlMode(int32_t m) {
     }
 }
 
-struct SrState { sl::DLSSOptions opts; bool valid = false; } g_sr;
-struct RrState { sl::DLSSDOptions opts; bool valid = false; } g_rr;
+struct FeatureResources {
+    bool valid = false;
+    bool resourcesMayExist = false;
+    bool retiring = false;
+
+    int32_t release(sl::Feature feature) {
+        retiring = true;
+        if (resourcesMayExist) {
+            if (!g_inited || !p_slFreeResources) {
+                t_err = "slFreeResources unavailable; owner retained for retry";
+                return VKB_DLSS_ERR_NOT_INITIALIZED;
+            }
+            auto r = p_slFreeResources(feature, sl::ViewportHandle(0u));
+            if (r != sl::Result::eOk) { fail("slFreeResources(retained)", r); return VKB_DLSS_ERR_NGX; }
+        }
+        resourcesMayExist = false;
+        valid = false;
+        retiring = false;
+        return VKB_DLSS_OK;
+    }
+};
+struct SrState : FeatureResources { sl::DLSSOptions opts; } g_sr;
+struct RrState : FeatureResources { sl::DLSSDOptions opts; } g_rr;
 
 uint32_t usageFor(const VkbDlssImage& i) {
     uint32_t u = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -204,7 +225,20 @@ API int32_t vkb_dlss_query_caps(VkbDlssCaps* outCaps) {
     SLDL_CATCH()
 }
 
-API void vkb_dlss_shutdown(void) { g_sr.valid = false; g_rr.valid = false; }
+API uint32_t vkb_dlss_resource_contract_version(void) { return 1; }
+
+API int32_t vkb_dlss_shutdown_checked(void) {
+    SLDL_TRY
+    if (g_sr.valid) {
+        auto r = g_sr.release(sl::kFeatureDLSS);
+        if (r != VKB_DLSS_OK) return r;
+    }
+    if (g_rr.valid) return g_rr.release(sl::kFeatureDLSS_RR);
+    return VKB_DLSS_OK; // Streamline session and FG ownership belong to vkb_sl.cpp.
+    SLDL_CATCH()
+}
+
+API void vkb_dlss_shutdown(void) { (void)vkb_dlss_shutdown_checked(); }
 
 API int32_t vkb_dlss_query_optimal_settings(int32_t qualityMode, uint32_t outWidth, uint32_t outHeight, VkbDlssOptimalSettings* out) {
     SLDL_TRY
@@ -231,17 +265,23 @@ API int32_t vkb_dlss_query_optimal_settings(int32_t qualityMode, uint32_t outWid
 
 API int32_t vkb_dlss_create_feature(uint64_t, const VkbDlssCreateInfo* info, uint64_t* outFeature) {
     SLDL_TRY
+    if (outFeature) *outFeature = 0;
     if (!info || !outFeature) return VKB_DLSS_ERR_INVALID_ARG;
+    if (!g_inited) { t_err = "Streamline is not initialised"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     if (!resolve()) { t_err = "sl.dlss functions not available"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
+    if (g_sr.valid) { t_err = "SR owner already exists"; return VKB_DLSS_ERR_INVALID_ARG; }
     sl::DLSSOptions o{};
     o.mode = toSlMode(info->quality_mode);
     o.outputWidth = info->output_width;
     o.outputHeight = info->output_height;
     o.colorBuffersHDR = (info->flags & VKB_DLSS_FLAG_IS_HDR) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     o.useAutoExposure = (info->flags & VKB_DLSS_FLAG_AUTO_EXPOSURE) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    g_sr.valid = true;
+    g_sr.retiring = true;
+    *outFeature = 1; // Retain even a partially applied options call.
     sl::Result r = p_srSetOptions(sl::ViewportHandle(0u), o);
     if (r != sl::Result::eOk) { fail("slDLSSSetOptions", r); return VKB_DLSS_ERR_NGX; }
-    g_sr.opts = o; g_sr.valid = true;
+    g_sr.opts = o; g_sr.retiring = false;
     *outFeature = 1;
     return VKB_DLSS_OK;
     SLDL_CATCH()
@@ -249,7 +289,7 @@ API int32_t vkb_dlss_create_feature(uint64_t, const VkbDlssCreateInfo* info, uin
 
 API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalInfo* info) {
     SLDL_TRY
-    if (!info || feature != 1 || !g_sr.valid) return VKB_DLSS_ERR_INVALID_ARG;
+    if (!info || feature != 1 || !g_sr.valid || g_sr.retiring) return VKB_DLSS_ERR_INVALID_ARG;
     if (!g_token) { t_err = "no frame token (frame head hook did not run)"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     TagBuilder tb;
     std::vector<sl::BufferType> types;
@@ -268,6 +308,7 @@ API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalI
     sl::Result r = p_slSetTagForFrame(*g_token, vp, tb.tags.data(), static_cast<uint32_t>(tb.tags.size()), reinterpret_cast<sl::CommandBuffer*>(cmd));
     if (r != sl::Result::eOk) { fail("slSetTagForFrame(DLSS)", r); return VKB_DLSS_ERR_NGX; }
     const sl::BaseStructure* inputs[] = {&vp};
+    g_sr.resourcesMayExist = true; // A failed evaluate may already have allocated GPU state.
     r = p_slEvaluateFeature(sl::kFeatureDLSS, *g_token, inputs, 1, reinterpret_cast<sl::CommandBuffer*>(cmd));
     if (r != sl::Result::eOk) { fail("slEvaluateFeature(DLSS)", r); return VKB_DLSS_ERR_NGX; }
     return VKB_DLSS_OK;
@@ -276,10 +317,8 @@ API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalI
 
 API int32_t vkb_dlss_release_feature(uint64_t feature) {
     SLDL_TRY
-    if (feature != 1) return VKB_DLSS_ERR_INVALID_ARG;
-    g_sr.valid = false;
-    if (g_inited && p_slFreeResources) p_slFreeResources(sl::kFeatureDLSS, sl::ViewportHandle(0u));
-    return VKB_DLSS_OK;
+    if (feature != 1 || !g_sr.valid) return VKB_DLSS_ERR_INVALID_ARG;
+    return g_sr.release(sl::kFeatureDLSS);
     SLDL_CATCH()
 }
 
@@ -303,9 +342,12 @@ API int32_t vkb_dlss_rr_is_supported(uint32_t* outSupported) {
 
 API int32_t vkb_dlss_rr_create_feature(uint64_t, const VkbDlssRrCreateInfo* info, uint64_t* outFeature) {
     SLDL_TRY
+    if (outFeature) *outFeature = 0;
     if (!info || !outFeature) return VKB_DLSS_ERR_INVALID_ARG;
+    if (!g_inited) { t_err = "Streamline is not initialised"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     resolve();
     if (!p_rrSetOptions) { t_err = "sl.dlss_d functions not available (sl.dlss_d.dll / nvngx_dlssd.dll missing?)"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
+    if (g_rr.valid) { t_err = "RR owner already exists"; return VKB_DLSS_ERR_INVALID_ARG; }
     sl::DLSSDOptions o{};
     o.mode = toSlMode(info->quality_mode);
     o.outputWidth = info->output_width;
@@ -316,9 +358,12 @@ API int32_t vkb_dlss_rr_create_feature(uint64_t, const VkbDlssRrCreateInfo* info
         o.worldToCameraView.row[r] = sl::float4(r == 0, r == 1, r == 2, r == 3);
         o.cameraViewToWorld.row[r] = sl::float4(r == 0, r == 1, r == 2, r == 3);
     }
+    g_rr.valid = true;
+    g_rr.retiring = true;
+    *outFeature = 2; // Retain even a partially applied options call.
     sl::Result r = p_rrSetOptions(sl::ViewportHandle(0u), o);
     if (r != sl::Result::eOk) { fail("slDLSSDSetOptions", r); return VKB_DLSS_ERR_NGX; }
-    g_rr.opts = o; g_rr.valid = true;
+    g_rr.opts = o; g_rr.retiring = false;
     // the depth convention of the create info decides the tag type at evaluate time: remember it in the (unused) preset field? keep a global
     g_rrDepthLinear = info->depth_type == 0 ? 1 : 0;
     *outFeature = 2;
@@ -328,7 +373,7 @@ API int32_t vkb_dlss_rr_create_feature(uint64_t, const VkbDlssRrCreateInfo* info
 
 API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssRrEvalInfo* info) {
     SLDL_TRY
-    if (!info || feature != 2 || !g_rr.valid) return VKB_DLSS_ERR_INVALID_ARG;
+    if (!info || feature != 2 || !g_rr.valid || g_rr.retiring) return VKB_DLSS_ERR_INVALID_ARG;
     if (!g_token) { t_err = "no frame token (frame head hook did not run)"; return VKB_DLSS_ERR_NOT_INITIALIZED; }
     // matrices change every frame (ProgrammingGuideDLSS_RR.md: DLSSDOptions::worldToCameraView / cameraViewToWorld)
     sl::DLSSDOptions o = g_rr.opts;
@@ -395,6 +440,7 @@ API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssRr
     r = p_slSetTagForFrame(*g_token, vp, tb.tags.data(), static_cast<uint32_t>(tb.tags.size()), reinterpret_cast<sl::CommandBuffer*>(cmd));
     if (r != sl::Result::eOk) { fail("slSetTagForFrame(DLSS-RR)", r); return VKB_DLSS_ERR_NGX; }
     const sl::BaseStructure* inputs[] = {&vp};
+    g_rr.resourcesMayExist = true; // A failed evaluate may already have allocated GPU state.
     r = p_slEvaluateFeature(sl::kFeatureDLSS_RR, *g_token, inputs, 1, reinterpret_cast<sl::CommandBuffer*>(cmd));
     if (r != sl::Result::eOk) { fail("slEvaluateFeature(DLSS-RR)", r); return VKB_DLSS_ERR_NGX; }
     return VKB_DLSS_OK;
@@ -403,10 +449,8 @@ API int32_t vkb_dlss_rr_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssRr
 
 API int32_t vkb_dlss_rr_release_feature(uint64_t feature) {
     SLDL_TRY
-    if (feature != 2) return VKB_DLSS_ERR_INVALID_ARG;
-    g_rr.valid = false;
-    if (g_inited && p_slFreeResources) p_slFreeResources(sl::kFeatureDLSS_RR, sl::ViewportHandle(0u));
-    return VKB_DLSS_OK;
+    if (feature != 2 || !g_rr.valid) return VKB_DLSS_ERR_INVALID_ARG;
+    return g_rr.release(sl::kFeatureDLSS_RR);
     SLDL_CATCH()
 }
 

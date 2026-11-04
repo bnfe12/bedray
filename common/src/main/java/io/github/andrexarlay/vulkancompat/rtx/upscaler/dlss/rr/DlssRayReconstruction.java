@@ -290,9 +290,8 @@ public final class DlssRayReconstruction implements AutoCloseable {
 
             MemorySegment handleSeg = a.allocate(JAVA_LONG);
             int rc = (int) createFeatureHandle.invokeExact(commandBuffer, info, handleSeg);
-            if (rc == DlssNative.OK) {
-                outFeature[0] = handleSeg.get(JAVA_LONG, 0);
-            }
+            // Partial creation is owned even when the SDK reports failure.
+            outFeature[0] = handleSeg.get(JAVA_LONG, 0);
             return lastStatus(rc);
         } catch (Throwable t) {
             throw new DlssNativeException("[DLSS-RR] createFeature failed", t);

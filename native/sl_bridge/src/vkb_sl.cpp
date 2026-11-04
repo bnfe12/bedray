@@ -435,10 +435,16 @@ VKB_API int vkb_sl_dlssg_state(uint32_t* out, uint64_t* vram, uint32_t viewport)
     SL_CATCH(-1)
 }
 
+extern "C" int32_t vkb_dlss_shutdown_checked(void);
+
 VKB_API int vkb_sl_shutdown() {
     SL_TRY
     if (!g_inited) return 0;
-    g_inited = false;
-    return static_cast<int>(p_slShutdown());
+    // Preserve both wrapper and session ownership until every vendor release acknowledges success.
+    int32_t cleanup = vkb_dlss_shutdown_checked();
+    if (cleanup != 0) return cleanup;
+    auto r = p_slShutdown();
+    if (r == sl::Result::eOk) g_inited = false;
+    return static_cast<int>(r);
     SL_CATCH(-1)
 }

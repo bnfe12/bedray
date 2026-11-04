@@ -83,14 +83,15 @@ public class DlssBackend implements IUpscalerBackend {
         DlssNative.Status status = null;
         boolean featureOk;
         try {
+            boolean creating = DlssRuntime.feature() == 0;
             featureOk = DlssRuntime.ensureFeature(cmd.address());
             if (featureOk) {
                 if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.dlssViaStreamline()) {
                     io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureConstants(
-                        ctx.renderWidth(), ctx.renderHeight(), ctx.targetWidth(), ctx.targetHeight(), ctx.resetHistory());
+                        ctx.renderWidth(), ctx.renderHeight(), ctx.targetWidth(), ctx.targetHeight(), ctx.resetHistory() || creating);
                 }
                 DlssNative.EvalInfo info = new DlssNative.EvalInfo(
-                    ctx.resetHistory(),
+                    ctx.resetHistory() || creating,
                     image(color, false), image(out, true), image(depth, false), image(mv, false), DlssNative.Image.NONE,
                     ctx.jitterPixelsX() * DlssConfig.jitterSignX(), ctx.jitterPixelsY() * DlssConfig.jitterSignY(),
                     1.0f, 1.0f, srSharpness(ctx), 1.0f, ctx.exposureScale(),

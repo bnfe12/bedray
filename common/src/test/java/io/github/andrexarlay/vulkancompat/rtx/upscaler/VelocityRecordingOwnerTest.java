@@ -32,7 +32,10 @@ class VelocityRecordingOwnerTest {
         assertTrue(owner.indexOf("fence.awaitCompletion(") < owner.indexOf("completion.afterHostDrain()"));
         for (String name : new String[]{"dlss/DlssRuntime", "fsr/FsrRuntime", "xess/XessRuntime"}) {
             String runtime = source("upscaler/" + name + ".java");
-            assertTrue(runtime.contains("UpscalerContextRetirement.release("), name);
+            if (name.equals("dlss/DlssRuntime")) {
+                assertTrue(runtime.contains("owner.retire(() -> proveCompletion("), name);
+                assertTrue(source("upscaler/dlss/DlssFeatureOwner.java").contains("UpscalerContextRetirement.release("));
+            } else assertTrue(runtime.contains("UpscalerContextRetirement.release("), name);
             assertTrue(runtime.contains("drainTemporalRecordings("), name);
             assertFalse(runtime.contains("vkDeviceWaitIdle"), name);
         }

@@ -11,6 +11,46 @@ permissions:
   contents: read
 
 jobs:
+  vendor-resources:
+    name: DLSS resource contracts (no GPU)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: source
+          persist-credentials: false
+      - name: Checkout pinned Vulkan-Headers
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: 2cd90f9d20df57eac214c148f3aed885372ddcfe
+          path: deps/Vulkan-Headers
+          persist-credentials: false
+      - name: Build production wrappers and exercise actual entrypoints with SDK failures
+        shell: pwsh
+        run: |
+          ./source/.github/scripts/vendor-resources-ci.ps1 -SourceRoot source -Headers deps/Vulkan-Headers/include -BuildRoot evidence/vendor -DependencyRoot deps/vendor
+      - name: Publish resource test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dlss-resource-evidence-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            evidence/vendor/**/*.log
+            evidence/vendor/**/*.xml
+            evidence/vendor/**/CMakeConfigureLog.yaml
+      - name: Publish tested wrappers and CPU fault fixtures
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dlss-wrappers-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: evidence/vendor/runtime/*
   native:
     name: Native ${{ matrix.revision }} (no GPU)
     runs-on: windows-2022
