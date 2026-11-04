@@ -117,8 +117,12 @@ enum {
     BEDRAY_SCENE_FRAME_BLAS_REFIT = 1u << 3,
     BEDRAY_SCENE_FRAME_UPLOADED = 1u << 4,
     BEDRAY_SCENE_FRAME_TABLES_UPLOADED = 1u << 5,
-    BEDRAY_SCENE_FRAME_IDLE = 1u << 6
+    BEDRAY_SCENE_FRAME_IDLE = 1u << 6,
+    /* An eligible entity refit rebuilt a separate BLAS because an older frame still references it. */
+    BEDRAY_SCENE_FRAME_BLAS_COPY_ON_WRITE = 1u << 7
 };
+
+enum { BEDRAY_SCENE_FEATURE_SAFE_AS_UPDATE = 1u << 0 };
 
 typedef struct BedraySceneError {
     BedraySceneStatus status;
@@ -324,6 +328,8 @@ typedef struct BedraySceneSectionRecord {
 } BedraySceneSectionRecord;
 
 BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_abi_version(void);
+/* Additive ABI-v2 query. Older libraries lack this export and must keep host AS updates disabled. */
+BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_features(void);
 BEDRAY_SCENE_API void BEDRAY_SCENE_CALL bedray_scene_abi_info(BedraySceneAbiInfo* out_info);
 
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_create(

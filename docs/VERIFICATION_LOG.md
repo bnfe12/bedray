@@ -4318,3 +4318,27 @@ physical-vs-SDK jitter and SPP coherent-primary propagation. Public native ABI-v
 and producer formats stay unchanged. RTX vendor execution, images and frame times
 have not been measured here. Native 1080p/60 real FPS remains unproven.
 Details: docs/ai-agent-addenda/RR_FRAME_GENERATION.md.
+
+
+## 2026-11-04 — Exact entity topology and safe native AS updates (L1/L2 Java; native CI pending)
+
+Entity topology no longer advances just because a new frame/ring allocation was
+captured: counts/stride/index format and exact index bytes own that identity.
+The new host enables AS_UPDATE only when the additive ABI-v2 feature query proves
+safe update support; older cores retain the build path. Pinned entity refits use
+COW instead of publishing stale BLAS against current shading attributes. Static
+section builds do not request update storage. Non-finite current/previous vertex
+positions force full builds to preserve active/inactive update restrictions.
+
+Same-count TLAS updates accept new instance definitions/BLAS addresses/masks.
+Cached source TLAS references and in-flight old/new bindings now hold retired BLAS
+until their last use; the removed fingerprint is no longer hashed each frame.
+Logs aggregate BLAS/TLAS work, COW and deferred counts over the report interval.
+Native regressions include live source/current references and a 20-frame bounded
+pipelined case. Public ABI-v2 POD layouts and shader contracts are unchanged.
+
+Local :common:test passed 1,214 tests with 9 skipped, zero failures/errors;
+:common:runShimTests passed 34/34 (as-update-verification.log). Windows native CI,
+paired clean jars/DLL and actual old/new-core FFM probes remain to be completed
+before merge. There is no MSVC toolchain or RTX live measurement here.
+Details: docs/ai-agent-addenda/AS_UPDATE_POLICY.md.

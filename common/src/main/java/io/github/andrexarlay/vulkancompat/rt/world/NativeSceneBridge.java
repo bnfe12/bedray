@@ -76,6 +76,8 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     private final Map<Long, Long> removals = new LinkedHashMap<>();
     /** Tracking is reserved before native preparation can accept a frame. */
     private final SceneFrameRecordings recordings;
+    private final EntityTopologyIdentity entityTopology = new EntityTopologyIdentity();
+    private final SceneBuildTelemetry buildTelemetry = new SceneBuildTelemetry();
     private long nextSectionId = 1;
     private long nextRevision = 1;
     private boolean entityPresent;
@@ -116,15 +118,17 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         long scene = 0;
         try {
             library = BedraySceneNative.load(runtime.library().libraryPath());
-            int capabilities = BedraySceneLayouts.CAP_ACCELERATION_STRUCTURE | BedraySceneLayouts.CAP_DEVICE_ADDRESS;
+            int features = library.features();
+            int capabilities = sceneCapabilities(features, Boolean.getBoolean("bedray.rt.disableAsUpdates"));
             scene = library.create(runtime.instance().address(), runtime.physicalDevice().address(),
                 runtime.device().address(), runtime.apiVersion(), runtime.getInstanceProcAddr(),
                 runtime.getDeviceProcAddr(), capabilities, FRAMES_IN_FLIGHT, RtConfig.MAX_INSTANCES,
                 MAX_ENTITIES, RtConfig.MAX_INSTANCES, TABLE_BYTES, MAX_GEOMETRY_BYTES);
             runtime.attachSceneMemory(scene);
-            LOGGER.info("[VKB-RT] native scene ready: dll={} abi={} frames={} max_sections={} max_geometry_mb={}",
+            LOGGER.info("[VKB-RT] native scene ready: dll={} abi={} frames={} max_sections={} max_geometry_mb={} features=0x{} as_updates={}",
                 library.libraryPath().getFileName(), BedraySceneLayouts.ABI_VERSION, FRAMES_IN_FLIGHT,
-                RtConfig.MAX_INSTANCES, MAX_GEOMETRY_BYTES >> 20);
+                RtConfig.MAX_INSTANCES, MAX_GEOMETRY_BYTES >> 20, Integer.toHexString(features),
+                (capabilities & BedraySceneLayouts.CAP_AS_UPDATE) != 0);
             return new NativeSceneBridge(library, scene);
         } catch (RuntimeException e) {
             LOGGER.error("[VKB-RT] native scene unavailable: {}; keeping the Java scene", e.getMessage(), e);
@@ -143,6 +147,12 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
                 && nativeFailure.status() == io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts.STATUS_DEVICE_LOST) throw e;
             return null;
         }
+    }
+
+    static int sceneCapabilities(int features, boolean disabled) {
+        int required = BedraySceneLayouts.CAP_ACCELERATION_STRUCTURE | BedraySceneLayouts.CAP_DEVICE_ADDRESS;
+        return required | (!disabled && (features & BedraySceneLayouts.FEATURE_SAFE_AS_UPDATE) != 0
+            ? BedraySceneLayouts.CAP_AS_UPDATE : 0);
     }
 
     /** True while the native scene owns the TLAS and the table the path tracer binds. */
@@ -197,8 +207,8 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
 
     /**
      * Feeds this frame's captured models as one entity.  The ring is host-visible
-     * and rebuilt every frame, so both revisions advance with the frame index and
-     * the scene rebuilds the entity BLAS exactly as the legacy path does.
+     * and rebuilt every frame. Geometry follows that frame; topology changes only
+     * when the shape/index bytes change. Native owns safe refit/COW selection.
      */
     void updateEntities(long frameIndex) {
         RtEntityGeometryManager manager = RtEntityGeometryManager.INSTANCE;
@@ -216,8 +226,9 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
             return;
         }
         MemorySegment vertexStream = MemorySegment.ofAddress(positions.buffer().mapped + positions.offset());
-        MemorySegment indexStream = MemorySegment.ofAddress(indices.buffer().mapped + indices.offset());
-        BedraySceneNative.Entity entity = new BedraySceneNative.Entity(ENTITY_ID, frameIndex, frameIndex,
+        MemorySegment indexStream = MemorySegment.ofAddress(indices.buffer().mapped + indices.offset()).reinterpret(indices.bytes());
+        long topologyRevision = entityTopology.update(vertexCount, indexCount, 12, BedraySceneLayouts.INDEX_UINT32, indexStream);
+        BedraySceneNative.Entity entity = new BedraySceneNative.Entity(ENTITY_ID, frameIndex, topologyRevision,
             vertexStream, vertexCount, indexStream, indexCount, 12, BedraySceneLayouts.INDEX_UINT32,
             ENTITY_INSTANCE_MASK, IDENTITY_TRANSFORM);
         library.update(scene, null, null, List.of(entity), null);
@@ -226,6 +237,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     }
 
     private void removeEntity() {
+        entityTopology.clear();
         if (!entityPresent) {
             return;
         }
@@ -269,6 +281,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
             lastViewZ = camZ;
             lastInstances = info.instanceCount();
             lastBlasBuilds = Math.toIntExact(info.blasBuilds());
+            buildTelemetry.add(info.flags(), info.blasBuilds(), info.blasRefits(), info.deferredUpdates());
             logActivePeriodically();
         });
     }
@@ -286,9 +299,14 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
             return;
         }
         lastLogNanos = now;
-        LOGGER.info("[VKB-RT] native_scene active sections={} instances={} tlas=0x{} table={}B view=({}, {}, {})",
+        var work = buildTelemetry.drain();
+        LOGGER.info("[VKB-RT] native_scene active sections={} instances={} tlas=0x{} table={}B view=({}, {}, {}) "
+                + "window_frames={} blas_builds={} blas_refits={} tlas_builds={} tlas_updates={} "
+                + "cow_frames={} deferred_updates={} entity_topology={} entity_triangles={}",
             sectionCount, lastInstances, Long.toHexString(tlas), table == null ? 0L : table.size,
-            lastViewX, lastViewY, lastViewZ);
+            lastViewX, lastViewY, lastViewZ, work.frames(), work.blasBuilds(), work.blasRefits(),
+            work.tlasBuilds(), work.tlasUpdates(), work.copyOnWriteFrames(), work.deferredUpdates(),
+            entityTopology.revision(), entityTriangles);
     }
 
     /**

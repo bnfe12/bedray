@@ -91,6 +91,7 @@ struct AsState {
     VkAccelerationStructureTypeKHR type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
     uint64_t buffer = 0;
     uint64_t address = 0;
+    std::vector<uint64_t> blas_references;
 };
 
 struct BuildGeometryRecord {
@@ -496,6 +497,33 @@ static void VKAPI_CALL fakeCmdBuildAccelerationStructures(
             record.index_address = record.geometries[0].index_address;
             record.index_type = record.geometries[0].index_type;
             record.instance_buffer_address = record.geometries[0].instance_address;
+        }
+        if (info.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR) {
+            auto alive = [](uint64_t address) {
+                for (const auto& entry : fake::g.accels)
+                    if (entry.second.address == address) return true;
+                return false;
+            };
+            if (info.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR) {
+                auto* source = fake::find_accel(info.srcAccelerationStructure);
+                CHECK(source != nullptr);
+                if (source != nullptr) for (uint64_t address : source->blas_references)
+                    CHECK(alive(address)); // Old cached TLAS dependencies must survive through its UPDATE.
+            }
+            std::vector<uint64_t> references;
+            auto* bytes = fake::bytes_at_address(record.instance_buffer_address);
+            CHECK(bytes != nullptr && bytes->size() >= record.primitive_count * 64ull);
+            if (bytes != nullptr && bytes->size() >= record.primitive_count * 64ull) {
+                for (uint32_t instance = 0; instance < record.primitive_count; ++instance) {
+                    uint64_t address = 0;
+                    std::memcpy(&address, bytes->data() + instance * 64ull + 56, sizeof(address));
+                    CHECK(address != 0 && alive(address));
+                    references.push_back(address);
+                }
+            }
+            auto* destination = fake::find_accel(info.dstAccelerationStructure);
+            CHECK(destination != nullptr);
+            if (destination != nullptr) destination->blas_references = std::move(references);
         }
         fake::g.builds.push_back(record);
     }
@@ -1061,6 +1089,8 @@ static void test_first_frame_records_full_pipeline() {
         const fake::BuildRecord& section_build = fake::g.builds[0];
         const fake::BuildRecord& entity_build = fake::g.builds[1];
         const fake::BuildRecord& tlas_build = fake::g.builds[2];
+        CHECK((section_build.flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR) == 0);
+        CHECK((entity_build.flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR) != 0);
         CHECK(section_build.type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
         CHECK(section_build.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR);
         CHECK(section_build.primitive_count == 2);
@@ -1253,12 +1283,11 @@ static void test_transform_update_touches_only_tlas() {
     }
     fixture.release(2);
 
-    /* A mask change alters the instance fingerprint, so the conservative
-       policy rebuilds the TLAS; the BLAS must still be untouched. */
+    /* Instance mask definitions can update without touching the BLAS. */
     CHECK_STATUS(fixture.add_entity(entity_input(2, 1, 1, mesh, 1.0f, 2.0f, 3.0f, 0x40)),
         BEDRAY_SCENE_OK);
     const BedraySceneFrameInfo masked = fixture.prepare(3, 0x302);
-    CHECK((masked.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
+    CHECK((masked.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
     CHECK(masked.blas_builds == 0);
     CHECK(masked.blas_refits == 0);
     fixture.release(3);
@@ -1368,53 +1397,105 @@ static void test_section_instances_follow_view() {
     fixture.release(4);
 }
 
-static void test_refit_defers_while_in_flight_then_updates() {
+static void test_refit_copies_pinned_geometry_and_updates_after_completion() {
     Fixture fixture(2);
     const Mesh mesh = triangle_mesh(0.0f, 0.0f, 0.0f);
     CHECK_STATUS(fixture.add_entity(entity_input(9, 1, 1, mesh)), BEDRAY_SCENE_OK);
     fixture.prepare(1, 0x400);
     CHECK(fake::g.builds.size() == 2);
     const fake::BuildRecord initial = fake::g.builds[0];
-    const fake::AsState initial_as = *fake::find_accel(initial.dst);
-    fake::BufferState* initial_vertex = fake::find_buffer_by_address(initial.vertex_address);
-    CHECK(initial_vertex != nullptr);
-    const uint64_t initial_vertex_id = initial_vertex == nullptr ? 0 : initial_vertex->address;
+    const uint64_t initial_vertex = initial.vertex_address;
 
     const Mesh moved = triangle_mesh(0.5f, 0.0f, 0.0f);
     CHECK_STATUS(fixture.add_entity(entity_input(9, 2, 1, moved)), BEDRAY_SCENE_OK);
-
-    const BedraySceneFrameInfo deferred = fixture.prepare(2, 0x401);
-    CHECK(deferred.deferred_updates == 1);
-    CHECK(deferred.blas_refits == 0);
-    CHECK(deferred.blas_builds == 0);
-    CHECK(fake::g.accels.find(fake::accel_id(initial.dst)) != fake::g.accels.end());
-    CHECK(fake::find_buffer_by_address(initial_vertex_id) != nullptr);
+    const BedraySceneFrameInfo copied = fixture.prepare(2, 0x401);
+    CHECK(copied.deferred_updates == 0);
+    CHECK(copied.blas_refits == 0);
+    CHECK(copied.blas_builds == 1);
+    CHECK((copied.flags & BEDRAY_SCENE_FRAME_BLAS_COPY_ON_WRITE) != 0);
+    CHECK(fake::g.builds.size() == 4);
+    const fake::BuildRecord replacement = fake::g.builds[2];
+    CHECK(replacement.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR);
+    CHECK(replacement.dst != initial.dst);
+    CHECK(fake::find_copy(moved.vertex_bytes()) >= 0);
+    CHECK(fake::accel_is_alive(initial.dst));
+    CHECK(fake::find_buffer_by_address(initial_vertex) != nullptr);
+    uint64_t reference = 0;
+    auto* instances = fake::bytes_at_address(fixture.resources().instance_buffer_address);
+    CHECK(instances != nullptr);
+    if (instances != nullptr) std::memcpy(&reference, instances->data() + 56, sizeof(reference));
+    CHECK(reference == fake::find_accel(replacement.dst)->address);
 
     fixture.release(1);
     fixture.release(2);
+    CHECK(fake::find_buffer_by_address(initial_vertex) == nullptr);
+    CHECK(fake::accel_is_alive(initial.dst)); // cached slot 0 remains a valid TLAS UPDATE source.
 
+    const Mesh latest = triangle_mesh(1.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_entity(entity_input(9, 3, 1, latest)), BEDRAY_SCENE_OK);
     const BedraySceneFrameInfo refit = fixture.prepare(3, 0x402);
     CHECK(refit.blas_refits == 1);
     CHECK(refit.blas_builds == 0);
     CHECK(refit.deferred_updates == 0);
-    CHECK((refit.flags & BEDRAY_SCENE_FRAME_BLAS_REFIT) != 0);
     CHECK((refit.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
-    CHECK(fake::g.builds.size() >= 2);
-    if (fake::g.builds.size() >= 2) {
-        const fake::BuildRecord& blas = fake::g.builds[fake::g.builds.size() - 2];
-        CHECK(blas.type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
-        CHECK(blas.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR);
-        CHECK(blas.src == blas.dst);
-        CHECK(fake::accel_id(blas.dst) == fake::accel_id(initial.dst));
-        const fake::BuildRecord& tlas = fake::g.builds.back();
-        CHECK(tlas.type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
-        CHECK(tlas.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR);
-    }
+    CHECK(fake::g.builds.size() == 6);
+    CHECK(fake::g.builds[4].mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR);
+    CHECK(fake::g.builds[4].src == replacement.dst && fake::g.builds[4].dst == replacement.dst);
+    CHECK(fake::g.builds[5].mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR);
+    CHECK(fake::accel_is_alive(initial.dst)); // still read by frame 3's TLAS source.
     fixture.release(3);
-    CHECK(fake::find_buffer_by_address(initial_vertex_id) == nullptr);
-    CHECK(fake::g.accels.find(fake::accel_id(initial.dst)) != fake::g.accels.end());
-    const fake::AsState* refit_as = fake::find_accel(initial.dst);
-    CHECK(refit_as == nullptr || refit_as->address == initial_as.address);
+    CHECK(!fake::accel_is_alive(initial.dst));
+    CHECK(fake::accel_is_alive(replacement.dst));
+}
+
+static void test_nonfinite_activation_changes_rebuild_instead_of_refitting() {
+    Fixture fixture(1);
+    const Mesh mesh = triangle_mesh(0.0f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_entity(entity_input(8, 1, 1, mesh)), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x410); fixture.release(1);
+    Mesh inactive = mesh;
+    inactive.vertices[0] = std::nanf("");
+    CHECK_STATUS(fixture.add_entity(entity_input(8, 2, 1, inactive)), BEDRAY_SCENE_OK);
+    CHECK(fixture.prepare(2, 0x411).blas_builds == 1); fixture.release(2);
+    CHECK_STATUS(fixture.add_entity(entity_input(8, 3, 1, mesh)), BEDRAY_SCENE_OK);
+    CHECK(fixture.prepare(3, 0x412).blas_builds == 1); fixture.release(3);
+    const Mesh moved = triangle_mesh(0.5f, 0.0f, 0.0f);
+    CHECK_STATUS(fixture.add_entity(entity_input(8, 4, 1, moved)), BEDRAY_SCENE_OK);
+    CHECK(fixture.prepare(4, 0x413).blas_refits == 1); fixture.release(4);
+}
+
+static void test_replacement_blas_relinks_a_live_cached_tlas_without_a_build() {
+    Fixture fixture(1);
+    const Mesh first = triangle_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_entity(entity_input(3, 1, 1, first)), BEDRAY_SCENE_OK);
+    const auto initial_frame = fixture.prepare(1, 0x420);
+    const auto initial_blas = fake::g.builds.front().dst;
+    fixture.release(1);
+    const Mesh replacement = quad_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_entity(entity_input(3, 2, 2, replacement)), BEDRAY_SCENE_OK);
+    const auto relinked = fixture.prepare(2, 0x421);
+    CHECK(relinked.blas_builds == 1 && relinked.blas_refits == 0);
+    CHECK((relinked.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+    CHECK(relinked.tlas == initial_frame.tlas);
+    CHECK(fake::accel_is_alive(initial_blas));
+    fixture.release(2);
+    CHECK(!fake::accel_is_alive(initial_blas));
+}
+
+static void test_pipelined_cow_tlas_updates_keep_dependencies_bounded() {
+    Fixture fixture(2);
+    for (uint64_t frame = 1; frame <= 20; ++frame) {
+        if (frame > 2) fixture.release(frame - 2);
+        const Mesh moved = triangle_mesh(static_cast<float>(frame), 0, 0);
+        CHECK_STATUS(fixture.add_entity(entity_input(9, frame, 1, moved)), BEDRAY_SCENE_OK);
+        const auto info = fixture.prepare(frame, 0x430 + frame);
+        CHECK(info.blas_builds == 1 && info.blas_refits == 0 && info.deferred_updates == 0);
+        if (frame > 1) CHECK((info.flags & BEDRAY_SCENE_FRAME_BLAS_COPY_ON_WRITE) != 0);
+        if (frame > 2) CHECK((info.flags & BEDRAY_SCENE_FRAME_TLAS_UPDATED) != 0);
+        CHECK(fake::g.accels.size() <= 6); // Two cached TLAS, two current BLAS, two in-flight source BLAS.
+    }
+    fixture.release(19); fixture.release(20);
+    CHECK(fake::g.accels.size() == 4); // Only the two reusable, valid TLAS/BLAS pairs remain.
 }
 
 static void test_rebuild_without_update_capability_retires_after_frame() {
@@ -1596,7 +1677,7 @@ static void test_remove_entity_clears_tlas_and_retires_now() {
     update.removed_entity_count = 1;
     g_error = BedraySceneError{};
     CHECK_STATUS(bedray_scene_update(fixture.scene, &update, &g_error), BEDRAY_SCENE_OK);
-    CHECK(!fake::accel_is_alive(blas));
+    CHECK(fake::accel_is_alive(blas));
     CHECK(fake::find_buffer_by_address(vertex_address) == nullptr);
 
     const BedraySceneFrameInfo cleared = fixture.prepare(2, 0x901);
@@ -1605,6 +1686,7 @@ static void test_remove_entity_clears_tlas_and_retires_now() {
     CHECK((cleared.flags & BEDRAY_SCENE_FRAME_TLAS_REBUILT) != 0);
     CHECK(first.tlas != 0);
     fixture.release(2);
+    CHECK(!fake::accel_is_alive(blas));
 }
 
 static void test_device_loss_poisons_scene() {
@@ -1955,7 +2037,10 @@ int main() {
     test_update_copies_inputs_and_coalesces_pending();
     test_transform_update_touches_only_tlas();
     test_section_instances_follow_view();
-    test_refit_defers_while_in_flight_then_updates();
+    test_refit_copies_pinned_geometry_and_updates_after_completion();
+    test_pipelined_cow_tlas_updates_keep_dependencies_bounded();
+    test_nonfinite_activation_changes_rebuild_instead_of_refitting();
+    test_replacement_blas_relinks_a_live_cached_tlas_without_a_build();
     test_rebuild_without_update_capability_retires_after_frame();
     test_table_coalescing_and_clear();
     test_stale_in_use_and_destroy();

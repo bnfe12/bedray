@@ -49,6 +49,7 @@ public final class BedraySceneLayouts {
     public static final int CAP_ACCELERATION_STRUCTURE = 1 << 0;
     public static final int CAP_DEVICE_ADDRESS = 1 << 1;
     public static final int CAP_AS_UPDATE = 1 << 2;
+    public static final int FEATURE_SAFE_AS_UPDATE = 1 << 0;
 
     /** {@code BedraySceneTableKind}. */
     public static final int TABLE_MATERIAL = 0;
@@ -70,6 +71,7 @@ public final class BedraySceneLayouts {
     public static final int FRAME_UPLOADED = 1 << 4;
     public static final int FRAME_TABLES_UPLOADED = 1 << 5;
     public static final int FRAME_IDLE = 1 << 6;
+    public static final int FRAME_BLAS_COPY_ON_WRITE = 1 << 7;
 
     static final StructLayout ERROR = MemoryLayout.structLayout(
         ValueLayout.JAVA_INT.withName("status"),

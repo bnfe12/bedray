@@ -130,6 +130,7 @@ struct GeometryJob {
     const PendingMesh* mesh = nullptr;
     GeometryResource* previous = nullptr;
     bool refit = false;
+    bool finite_positions = false;
     std::unique_ptr<GeometryResource> created;
     uint64_t build_scratch = 0;
     uint64_t update_scratch = 0;
@@ -178,6 +179,7 @@ struct PreparePlan {
     uint64_t blas_rebuilds = 0;
     uint64_t blas_refits = 0;
     uint64_t deferred_updates = 0;
+    bool blas_copy_on_write = false;
     bool tlas_action = false;
     bool tlas_update = false;
     bool tlas_clear = false;
@@ -185,7 +187,6 @@ struct PreparePlan {
     bool tables_uploaded = false;
     bool section_table_uploaded = false;
     uint64_t target_version = 0;
-    uint64_t fingerprint = 0;
     uint32_t instance_count = 0;
     bool committed = false;
 };
@@ -205,6 +206,15 @@ bool blas_referenced_by_outstanding(const Scene& scene, VkAccelerationStructureK
                 return true;
             }
         }
+    }
+    return false;
+}
+
+bool blas_referenced_by_cached_tlas(const Scene& scene, VkAccelerationStructureKHR handle) {
+    if ((scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) == 0) return false;
+    for (const FrameSlot& slot : scene.slots) {
+        if (slot.tlas_valid && std::find(slot.cached_blas_refs.begin(), slot.cached_blas_refs.end(), handle)
+                != slot.cached_blas_refs.end()) return true;
     }
     return false;
 }
@@ -258,7 +268,9 @@ void collect_garbage(Scene& scene) {
         }
     }
     for (auto it = scene.retired_accelerations.begin(); it != scene.retired_accelerations.end();) {
-        if (can_collect(scene, it->after_frame)) {
+        if (can_collect(scene, it->after_frame)
+                && !blas_referenced_by_outstanding(scene, it->acceleration.handle)
+                && !blas_referenced_by_cached_tlas(scene, it->acceleration.handle)) {
             destroy_acceleration(scene, it->acceleration);
             it = scene.retired_accelerations.erase(it);
         } else {
@@ -510,6 +522,7 @@ BlasView blas_view(const PendingMesh& mesh, const Buffer& buffer, uint64_t index
     view.vertex_stride = mesh.vertex_stride;
     view.index_type = mesh.index_type;
     view.quad_stream = quad_stream;
+    view.allow_update = !quad_stream; // Static sections always rebuild; only entity BLAS needs update storage.
     view.geometry_count = mesh.geometry_count;
     view.quad_start = mesh.quad_start;
     view.pass_bits = mesh.pass_bits;
@@ -529,22 +542,13 @@ uint32_t section_identity(uint64_t id) {
     return static_cast<uint32_t>(value);
 }
 
-uint64_t instance_fingerprint(const std::vector<InstanceEntry>& instances) {
-    uint64_t hash = 1469598103934665603ull;
-    auto mix = [&hash](uint64_t value) {
-        for (int byte = 0; byte < 8; ++byte) {
-            hash ^= (value >> (byte * 8)) & 0xFFu;
-            hash *= 1099511628211ull;
-        }
-    };
-    mix(instances.size());
-    for (const InstanceEntry& instance : instances) {
-        mix(reinterpret_cast<uintptr_t>(instance.blas_handle));
-        mix(instance.blas_address);
-        mix(instance.custom_index);
-        mix(instance.mask);
+bool finite_positions(const PendingMesh& mesh) {
+    for (uint64_t vertex = 0; vertex < mesh.vertex_count; ++vertex) {
+        float position[3];
+        std::memcpy(position, mesh.vertices.data() + vertex * mesh.vertex_stride, sizeof(position));
+        if (!std::isfinite(position[0]) || !std::isfinite(position[1]) || !std::isfinite(position[2])) return false;
     }
-    return hash;
+    return true;
 }
 
 bool build_job_resource(Scene& scene, GeometryJob& job, BedraySceneError* error) {
@@ -660,27 +664,21 @@ bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
             && entity.vertex_stride == mesh.vertex_stride
             && entity.index_type == mesh.index_type;
 
-        if (job.previous == nullptr || topology_changed || !can_refit || !same_shape) {
-            job.refit = false;
-            if (!build_job_resource(scene, job, error)) {
-                return false;
-            }
-            plan.blas_rebuilds++;
-            tlas_changed = true;
-        } else {
-            if (blas_referenced_by_outstanding(scene, job.previous->blas.handle)) {
-                plan.deferred_updates++;
-                continue;
-            }
-            job.refit = true;
-            if (!build_job_resource(scene, job, error)) {
-                return false;
-            }
+        job.finite_positions = finite_positions(mesh);
+        // UPDATE cannot change active/inactive primitives. Non-finite inputs keep the full-build path.
+        const bool refit_eligible = job.previous != nullptr && !topology_changed && can_refit && same_shape
+            && entity.finite_positions && job.finite_positions;
+        const bool pinned_refit = refit_eligible && blas_referenced_by_outstanding(scene, job.previous->blas.handle);
+        job.refit = refit_eligible && !pinned_refit;
+        if (!build_job_resource(scene, job, error)) return false;
+        if (job.refit) {
             plan.blas_refits++;
-            /* A refit rewrites the BLAS in place, so every TLAS that references
-               it must be rebuilt or updated before it is traced again. */
-            tlas_changed = true;
+        } else {
+            plan.blas_rebuilds++;
+            plan.blas_copy_on_write |= pinned_refit;
         }
+        // Never shade current host attributes with an older, deferred BLAS. A pinned refit becomes a COW build.
+        tlas_changed = true;
         plan.jobs.push_back(std::move(job));
     }
 
@@ -945,11 +943,9 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
         return true;
     }
 
-    plan.fingerprint = instance_fingerprint(plan.instances);
-    /* A view change rewrites every section transform, but the instance
-       fingerprint (BLAS, custom index, mask) is unchanged, so the slot takes
-       the same TLAS work path as a transform-only scene change and can update
-       in place. */
+    /* Every published instance has a nonzero BLAS reference. For a released slot,
+       UPDATE may replace instance definitions (including BLAS/mask/custom index)
+       while the instance count and active state remain unchanged. */
     const bool need = !slot.tlas_valid
         || slot.built_version != plan.target_version
         || slot.instance_count != plan.instance_count
@@ -960,8 +956,7 @@ bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_chang
 
     plan.tlas_update = slot.tlas_valid
         && (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
-        && slot.instance_count == plan.instance_count
-        && slot.fingerprint == plan.fingerprint;
+        && slot.instance_count == plan.instance_count;
 
     uint64_t storage_size = 0;
     uint64_t build_scratch = 0;
@@ -1206,7 +1201,8 @@ void commit_plan(
     scene.retired_accelerations.reserve(scene.retired_accelerations.size() + plan.jobs.size());
     slot.transient.clear();
     slot.transient.reserve(2);
-    slot.blas_in_use.reserve(plan.instances.size());
+    slot.blas_in_use.reserve(plan.instances.size() + (plan.tlas_update ? slot.cached_blas_refs.size() : 0));
+    slot.cached_blas_refs.reserve(plan.instances.size());
 
     for (GeometryJob& job : plan.jobs) {
         if (job.is_section) {
@@ -1257,6 +1253,7 @@ void commit_plan(
             entity.index_count = job.mesh->index_count;
             entity.vertex_stride = job.mesh->vertex_stride;
             entity.index_type = job.mesh->index_type;
+            entity.finite_positions = job.finite_positions;
             entity.has_pending = false;
             entity.pending = PendingMesh{};
         }
@@ -1327,13 +1324,19 @@ void commit_plan(
 
     slot.tlas_valid = !plan.instances.empty();
     slot.built_version = plan.target_version;
-    slot.fingerprint = plan.fingerprint;
     slot.instance_count = plan.instance_count;
     slot.view = scene.view;
     slot.view_valid = scene.view_set;
     slot.blas_in_use.clear();
+    if (plan.tlas_update) {
+        // The update reads the old source bindings until this recording completes.
+        for (VkAccelerationStructureKHR handle : slot.cached_blas_refs) slot.blas_in_use.push_back(handle);
+    }
+    slot.cached_blas_refs.clear();
     for (const InstanceEntry& instance : plan.instances) {
         slot.blas_in_use.push_back(instance.blas_handle);
+        if ((scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0)
+            slot.cached_blas_refs.push_back(instance.blas_handle);
     }
 
     if (plan.staging_present) {
@@ -1685,6 +1688,10 @@ BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_abi_version(void) try {
     return BEDRAY_SCENE_ABI_VERSION;
 } catch (...) {
     return 0;
+}
+
+BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_features(void) {
+    return BEDRAY_SCENE_FEATURE_SAFE_AS_UPDATE;
 }
 
 BEDRAY_SCENE_API void BEDRAY_SCENE_CALL bedray_scene_abi_info(BedraySceneAbiInfo* out_info) try {
@@ -2085,6 +2092,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
     if (plan.blas_rebuilds > 0) {
         out_info->flags |= BEDRAY_SCENE_FRAME_BLAS_REBUILT;
     }
+    if (plan.blas_copy_on_write) out_info->flags |= BEDRAY_SCENE_FRAME_BLAS_COPY_ON_WRITE;
     if (plan.blas_refits > 0) {
         out_info->flags |= BEDRAY_SCENE_FRAME_BLAS_REFIT;
     }

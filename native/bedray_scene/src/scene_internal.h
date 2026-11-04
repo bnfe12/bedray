@@ -122,6 +122,7 @@ struct Entity {
     uint64_t index_count = 0;
     uint32_t vertex_stride = 0;
     uint32_t index_type = BEDRAY_SCENE_INDEX_NONE;
+    bool finite_positions = false;
     std::array<float, 12> transform{};
     uint32_t instance_mask = 0xFF;
     std::unique_ptr<GeometryResource> geometry;
@@ -159,16 +160,17 @@ struct FrameSlot {
     Buffer instance_buffer;
     Buffer tlas_scratch;
     uint64_t tlas_scratch_capacity = 0;
-    uint64_t fingerprint = 0;
     uint32_t instance_count = 0;
     bool tlas_valid = false;
     uint64_t built_version = 0;
     /* The view this slot last prepared its instance buffer and TLAS with. A
        differing scene view forces the slot to rewrite instances and take the
-       TLAS work path even when the scene version and fingerprint match. */
+       TLAS work path even when the scene version matches. */
     std::array<double, 3> view{};
     bool view_valid = false;
     std::vector<VkAccelerationStructureKHR> blas_in_use;
+    /* Valid cached TLAS references, even after its last trace completed. An UPDATE still reads that source TLAS. */
+    std::vector<VkAccelerationStructureKHR> cached_blas_refs;
 };
 
 struct Scene {
@@ -226,6 +228,7 @@ struct BlasView {
     /* Section streams are one BLAS geometry per non-empty pass range; entities
        leave quad_stream false and are one triangle geometry. */
     bool quad_stream = false;
+    bool allow_update = false;
     uint32_t geometry_count = 1;
     std::array<uint32_t, BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> quad_start{};
     uint32_t pass_bits = 0;

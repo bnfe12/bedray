@@ -502,7 +502,7 @@ bool query_blas_sizes(
     VkAccelerationStructureBuildGeometryInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    info.flags = (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
+    info.flags = view.allow_update && (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
         ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR
         : 0;
     info.geometryCount = geometry_count;
@@ -676,7 +676,7 @@ void record_blas_build(
     VkAccelerationStructureBuildGeometryInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    info.flags = (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
+    info.flags = view.allow_update && (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
         ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR
         : 0;
     info.mode = update
