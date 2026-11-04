@@ -4,6 +4,10 @@ import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
+import io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera;
+import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
+import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuideReads;
+import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuides;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
@@ -99,6 +103,9 @@ public final class DlssRrDenoiser {
     static final boolean DISOCC_OFF = Boolean.getBoolean("vkrtx.dlssrr.disocc.off");
     private NrdPackPipeline packPipeline;
     private final DenoiserRecordingPins recordingPins = new DenoiserRecordingPins();
+    private final FrameGenGuideReads frameGenReads = new FrameGenGuideReads();
+    private ReconstructionCamera successfulCamera;
+    private float previousPrimaryJitterX, previousPrimaryJitterY;
 
     private boolean imagesReady;
     private long imageInitRecording;
@@ -309,6 +316,7 @@ public final class DlssRrDenoiser {
         imagesReady = false;
         imageInitRecording = 0;
         guideGeneration++;
+        frameGenReads.replace(guideGeneration);
         cameraHistory.clear();
         jitterModeKnown = false;
     }
@@ -519,6 +527,7 @@ public final class DlssRrDenoiser {
     public void ensure(int w, int h, int outW, int outH, long outputImage, long outputView) {
         if (!needsEnsure(w, h, outW, outH, outputImage, outputView)) return;
         recordingPins.requireUnreferenced(resourceContext("ensure", w, h, outputView, 0));
+        frameGenReads.requireUnreferenced();
         if (feature != 0 && requestedFeatureQuality != desiredQuality(w, h, outW, outH)) {
             rr.releaseFeature(feature);
             feature = 0;
@@ -571,6 +580,7 @@ public final class DlssRrDenoiser {
     public boolean record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
                           boolean tonemap, float exposure, long depthView, float jitterPixelsX, float jitterPixelsY,
                           Matrix4f baseProjection) {
+        successfulCamera = null;
         boolean jitterMode = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
             && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive();
         if (jitterModeKnown && jitterMode != previousJitterMode) cameraHistory.reset();
@@ -624,7 +634,9 @@ public final class DlssRrDenoiser {
                     // RR's RT guide is positive linear view depth; the velocity path accepts its magnitude.
                     velocityPipeline.dispatchLinearViewZ(cmd, depthView, inMotion.view, width, height, invViewProj, prevViewProjMat, camDelta,
                         reset ? 0L : entityMotionAddress, DISOCC_OFF ? 0L : disoccBuf.address,
-                        (DEPTH_OCC_OFF || reset || !prevViewZValid) ? 0L : prevViewZBuf.address);
+                        (DEPTH_OCC_OFF || reset || !prevViewZValid) ? 0L : prevViewZBuf.address,
+                        new VelocityPipeline.Jitter(jitterPixelsX, jitterPixelsY,
+                            reset ? jitterPixelsX : previousPrimaryJitterX, reset ? jitterPixelsY : previousPrimaryJitterY));
                     if (!DISOCC_OFF) {
                         VkBarriers.fullMemoryBarrier(cmd);
                         try (MemoryStack st = MemoryStack.stackPush()) {
@@ -715,6 +727,8 @@ public final class DlssRrDenoiser {
             inSpecularHitDistance.image, inSpecularHitDistance.view, FMT_R32F, width, height,
             VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
 
+        float sdkJitterX = jitterPixelsX * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignX();
+        float sdkJitterY = jitterPixelsY * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignY();
         DlssRrParams.EvalInfo eval = new DlssRrParams.EvalInfo(
             reset,
             color, out, depth, mv, DlssRrParams.Image.NONE,
@@ -723,7 +737,7 @@ public final class DlssRrDenoiser {
             DlssRrParams.Image.NONE,
             DISOCC_OFF ? DlssRrParams.Image.NONE
                 : new DlssRrParams.Image(inDisocc.image, inDisocc.view, FMT_R32F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false),
-            jitterPixelsX, jitterPixelsY,
+            sdkJitterX, sdkJitterY,
             1.0f, 1.0f,
             SHARPNESS,
             1.0f, exposure,
@@ -732,6 +746,8 @@ public final class DlssRrDenoiser {
             worldToViewMatrix, viewToClipMatrix
         );
 
+        var sdkCamera = new ReconstructionCamera(new Matrix4f().set(viewToClipMatrix), modelView,
+            camX, camY, camZ, sdkJitterX, sdkJitterY, reset);
         // 3. Evaluate and restore layouts to GENERAL
         try {
             if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.dlssViaStreamline()) {
@@ -741,9 +757,6 @@ public final class DlssRrDenoiser {
                     ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputWidth() : width;
                 int outH = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
                     ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputHeight() : height;
-                var sdkCamera = new io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera(
-                    new Matrix4f().set(viewToClipMatrix), modelView, camX, camY, camZ,
-                    jitterPixelsX, jitterPixelsY, reset);
                 io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureRrConstants(
                     sdkCamera, width, height, outW, outH);
             }
@@ -777,13 +790,26 @@ public final class DlssRrDenoiser {
             }
             VkBarriers.fullMemoryBarrier(cmd);
         }
+        successfulCamera = sdkCamera;
+        previousPrimaryJitterX = jitterPixelsX;
+        previousPrimaryJitterY = jitterPixelsY;
         cameraHistory.commit(cameraFrame);
         previousJitterMode = jitterMode;
         jitterModeKnown = true;
         return true;
     }
 
+    public FrameGenGuides frameGenGuides(WorldFrame.Stamp stamp, Object hostDevice, float primaryJitterX, float primaryJitterY) {
+        if (successfulCamera == null || stamp == null) return null;
+        return new FrameGenGuides(stamp, hostDevice, guideGeneration,
+            new WorldFrame.Image(hardwareDepth.image, hardwareDepth.view, width, height, FMT_R32F, WorldFrame.Origin.BOTTOM_LEFT),
+            new WorldFrame.Image(inMotion.image, inMotion.view, width, height, FMT_RG16F, WorldFrame.Origin.BOTTOM_LEFT),
+            outputWidth, outputHeight, successfulCamera, primaryJitterX, primaryJitterY, frameGenReads.source());
+    }
+
     private void destroyImages() {
+        frameGenReads.invalidate();
+        successfulCamera = null;
         RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
             inDiffuse, inMotion, inSpecular, inSpecularHitDistance, hardwareDepth, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
@@ -819,6 +845,7 @@ public final class DlssRrDenoiser {
     }
 
     public void discardRecording(long command) {
+        successfulCamera = null;
         try {
             if (packPipeline != null) packPipeline.discardRecording(command);
             if (velocityPipeline != null) velocityPipeline.discardRecording(command);
@@ -845,6 +872,7 @@ public final class DlssRrDenoiser {
 
     /** Caller closes/discards open recordings and drains host submissions first. */
     public void destroy() {
+        frameGenReads.requireUnreferenced();
         recordingPins.requireUnreferenced(resourceContext("destroy", width, height, boundOutputView, 0));
         if (feature != 0L) {
             rr.releaseFeature(feature);

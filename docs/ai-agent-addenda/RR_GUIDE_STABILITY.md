@@ -63,7 +63,8 @@ It decorrelates the PT replacement; the initial estimate can still contain
 ReSTIR DI. `-Dbedray.rt.disableRrPtDecorrelation=true` provides an A/B mode.
 
 The concurrent direct-native-memory output push repair (4035f79) and its crash
-evidence are preserved in this branch's ancestry. RR+frame-generation's older
-two-reconstruction route and DI temporal-noise correlation remain separate
-investigations; upstream documents the PT integration in
+evidence are preserved in main's ancestry. The subsequent
+[single RR + FG integration](RR_FRAME_GENERATION.md) replaces the older second-SR
+route with current RR guides and separate consumer-camera contracts. RTX live
+acceptance and DI temporal-noise correlation remain open; upstream documents the PT integration in
 [RTXDI's RR decorrelation guidance](https://github.com/NVIDIA-RTX/RTXDI/blob/main/Doc/RestirPT.md#decorrelation-for-dlss-ray-reconstruction).

@@ -38,7 +38,8 @@ import org.slf4j.LoggerFactory;
 public final class FrameGenRuntime {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/FrameGen");
 
-    private static final int VIEWPORT = 0;
+    private static final int VIEWPORT = 1; // FG's prepared buffers have a different clip-Y orientation.
+    private static final int RECONSTRUCTION_VIEWPORT = 0; // Native RR/SR bridge evaluates viewport 0.
     private static final int LAYOUT_GENERAL = VK10.VK_IMAGE_LAYOUT_GENERAL;
     // sl_core_types.h BufferType values
     private static final int BT_DEPTH = 0;
@@ -49,7 +50,6 @@ public final class FrameGenRuntime {
     private static final int MODE_OFF = 0;
     private static final int MODE_ON = 1;
     private static final int FLAG_RETAIN_RESOURCES_WHEN_OFF = 1 << 3;
-    private static final int FLAG_DYNAMIC_RESOLUTION = 1 << 1;
     private static final int WARMUP_FRAMES = 3;
     private static final long REPORT_NS = 5_000_000_000L;
 
@@ -70,6 +70,9 @@ public final class FrameGenRuntime {
     private static final FrameGenResourceTags resourceTags = new FrameGenResourceTags();
 
     private static final StreamlineCameraHistory commonCameras = new StreamlineCameraHistory();
+    private static final StreamlineCameraHistory fgCameras = new StreamlineCameraHistory();
+    private static ReconstructionCamera frameGenCamera;
+    private static long lastRrGuideGeneration = -1;
     private static int validFrames;
     private static boolean modeOn;
     /** A failed options call can leave the vendor enabled even before modeOn is published. */
@@ -100,7 +103,6 @@ public final class FrameGenRuntime {
     /** numFramesToGenerateMax of the adapter (slDLSSGGetState): 1 = 2x only, up to 5 = 6x on RTX 50. */
     private static int framesMax = 1;
     private static int appliedGenerate;
-    private static boolean appliedDynRes;
     private static int appliedReflex = -1;
     private static int appliedLimitUs = -1;
     private static double fpsRendered, fpsPresented;
@@ -377,6 +379,7 @@ public final class FrameGenRuntime {
             SlNative sl = StreamlineBootstrap.sl();
             frameIndex++;
             worldReady = false;
+            frameGenCamera = null;
             worldFail = null;
             if (KEEP_FOCUS && frameIndex % 90 == 0) {
                 sl.focusGameWindow();
@@ -423,7 +426,10 @@ public final class FrameGenRuntime {
             var depthCopy = WorldTargetManager.getDepthCopy();
             var mvTarget = WorldTargetManager.getMotionVectorsTarget();
             var main = renderer.mainRenderTarget();
-            if (world == null || depthCopy == null || mvTarget == null || main == null) {
+            boolean rrFrame = WorldTargetManager.rrOutputThisFrame();
+            FrameGenGuides guides = rrFrame ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.frameGenGuides() : null;
+            if (rrFrame && guides == null) { worldFail = "rr_guides_missing_current_frame"; return; }
+            if (world == null || (!rrFrame && (depthCopy == null || mvTarget == null)) || main == null) {
                 worldFail = "missing_targets";
                 if (!unsupportedLogged) {
                     unsupportedLogged = true;
@@ -434,8 +440,8 @@ public final class FrameGenRuntime {
             }
             winW = main.width;
             winH = main.height;
-            renderW = depthCopy.width;
-            renderH = depthCopy.height;
+            renderW = rrFrame ? guides.depth().width() : depthCopy.width;
+            renderH = rrFrame ? guides.depth().height() : depthCopy.height;
             int fmt = FrameGenSurfaceInfo.format();
             if (fmt == 0 || FrameGenSurfaceInfo.width() != winW || FrameGenSurfaceInfo.height() != winH) {
                 worldFail = "swapchain_reconfiguring";
@@ -445,6 +451,10 @@ public final class FrameGenRuntime {
             if (device == null) {
                 return;
             }
+            if (guides != null) guides.requireMatches(
+                io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull(), device, winW, winH);
+            frameGenCamera = guides != null ? guides.preparedCamera() : rasterCamera(false);
+            if (frameGenCamera.reset()) validFrames = 0;
             if (gpu == null) {
                 gpu = new FrameGenGpu(device);
             }
@@ -457,19 +467,24 @@ public final class FrameGenRuntime {
                 gpu.ensure(fmt, winW, winH, renderW, renderH);
             }
             long mainImg = WorldTargetManager.extractVkImage(main);
-            long depthView = WorldTargetManager.extractVkImageView(depthCopy.getDepthTextureView());
-            long mvView = WorldTargetManager.extractVkImageView(mvTarget.getColorTextureView());
+            long depthView = guides != null ? guides.depth().view() : WorldTargetManager.extractVkImageView(depthCopy.getDepthTextureView());
+            long mvView = guides != null ? guides.motion().view() : WorldTargetManager.extractVkImageView(mvTarget.getColorTextureView());
             if (mainImg == 0L || depthView == 0L || mvView == 0L) {
                 throw new IllegalStateException("missing Vulkan handle main=" + mainImg + " depthView=" + depthView + " mvView=" + mvView);
             }
             slot = (int) (frameIndex % FrameGenGpu.SETS);
             FrameGenGpu owner = gpu;
-            producerCommands.record(device, owner, cmd -> {
+            producerCommands.record(device, owner, guides != null ? guides.reads().read() : null, cmd -> {
                 owner.recordInitialTransitions(cmd);
                 // The native producer owns its entry/exit dependencies.
                 owner.record(cmd, slot, mainImg, depthView, mvView);
             });
             worldReady = true;
+            if (guides != null && lastRrGuideGeneration != guides.generation()) {
+                lastRrGuideGeneration = guides.generation();
+                LOGGER.info("[VKB-FG] provider=nvidia guides=rr generation={} stamp={} trace={}x{} output={}x{} viewport={} origin_flip=once camera=prepared",
+                    guides.generation(), guides.stamp(), renderW, renderH, winW, winH, VIEWPORT);
+            }
         } catch (Throwable t) {
             fail("world_ready", LogPaths.show(t.toString()), t);
         }
@@ -495,7 +510,7 @@ public final class FrameGenRuntime {
             boolean allowed = userEnabled && windowFocused && Boolean.TRUE.equals(supported) && wanted != FrameGenSettings.Mode.OFF;
             if (worldReady && !surfaceChanged) {
                 validFrames++;
-                if (!commonCameras.published(frameIndex)) sendConstants(sl, false);
+                sendFrameGenConstants(sl);
                 tag(sl);
                 want = allowed && validFrames > WARMUP_FRAMES;
             } else {
@@ -508,13 +523,13 @@ public final class FrameGenRuntime {
                 LOGGER.warn("[VKB-FG] requested {} but the adapter supports at most {}x (numFramesToGenerateMax={}), using {}x",
                     wanted.label(), framesMax + 1, framesMax, generate + 1);
             }
-            boolean dyn = worldReady && (renderW != winW || renderH != winH);
-            if (want != modeOn || (want && (!ranOnce || generate != appliedGenerate || dyn != appliedDynRes))) {
+            // A fixed input/output scale is not dynamic resolution. The renderer currently has no DRS producer.
+            if (want != modeOn || (want && (!ranOnce || generate != appliedGenerate))) {
                 int mode = want ? MODE_ON : MODE_OFF;
-                int flags = FLAG_RETAIN_RESOURCES_WHEN_OFF | (dyn ? FLAG_DYNAMIC_RESOLUTION : 0);
+                int flags = FLAG_RETAIN_RESOURCES_WHEN_OFF;
                 generationStateUnknown = true;
                 check(sl.dlssgOptions(mode, generate, flags, winW, winH, FrameGenSurfaceInfo.imageCount(), false, VIEWPORT,
-                    dyn ? renderW : 0, dyn ? renderH : 0), "slDLSSGSetOptions(mode=" + mode + ")");
+                    0, 0), "slDLSSGSetOptions(mode=" + mode + ")");
                 generationStateUnknown = false;
                 boolean was = modeOn;
                 modeOn = want;
@@ -524,10 +539,9 @@ public final class FrameGenRuntime {
                 ranOnce = true;
                 if (want) {
                     appliedGenerate = generate;
-                    appliedDynRes = dyn;
                 }
-                LOGGER.info("[VKB-FG] dlssg mode={} multiplier={}x (was {}) frame={} output={}x{} render={}x{} dynamic_res={} back_buffers={} focused={}",
-                    want ? "ON" : "OFF", generate + 1, was ? "ON" : "OFF", frameIndex, winW, winH, renderW, renderH, dyn,
+                LOGGER.info("[VKB-FG] dlssg mode={} multiplier={}x (was {}) frame={} output={}x{} render={}x{} dynamic_res=false back_buffers={} focused={}",
+                    want ? "ON" : "OFF", generate + 1, was ? "ON" : "OFF", frameIndex, winW, winH, renderW, renderH,
                     FrameGenSurfaceInfo.imageCount(), windowFocused);
                 StreamlineBootstrap.pumpLog(sl);
             }
@@ -707,6 +721,8 @@ public final class FrameGenRuntime {
     /** Head of VulkanGpuSurface.close(): generation off and our GPU objects released while the device is still alive. */
     public static void onSurfaceClose() {
         commonCameras.clear();
+        fgCameras.clear();
+        frameGenCamera = null;
         if (amd()) {
             Fsr3FrameGen.onSurfaceClose();
             return;
@@ -835,21 +851,33 @@ public final class FrameGenRuntime {
     }
 
     private static void sendConstants(SlNative sl, boolean reset) {
+        sendConstants(sl, rasterCamera(reset));
+    }
+
+    private static ReconstructionCamera rasterCamera(boolean reset) {
         Matrix4f projection = WorldTargetManager.getCurrProjMatrix();
         Matrix4f view = WorldTargetManager.getCurrViewRotationMatrix();
         Vec3 anchor = WorldTargetManager.getCurrCameraPos();
         if (projection == null || view == null || anchor == null)
             throw new IllegalStateException("camera state of the world pass is missing (proj=" + (projection != null)
                 + " view=" + (view != null) + " pos=" + (anchor != null) + ")");
-        sendConstants(sl, new ReconstructionCamera(projection, view, anchor.x, anchor.y, anchor.z,
-            CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), reset));
+        return new ReconstructionCamera(projection, view, anchor.x, anchor.y, anchor.z,
+            CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), reset);
     }
 
     private static void sendConstants(SlNative sl, ReconstructionCamera camera) {
         var stamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
         commonCameras.publish(frameIndex, stamp != null ? stamp.worldEpoch() : 0, camera,
             new StreamlineCameraHistory.Extent(renderW, renderH, winW, winH),
-            packed -> check(sl.setConstants(packed.matrices(), packed.values(), packed.flags(), VIEWPORT), "slSetConstants"));
+            packed -> check(sl.setConstants(packed.matrices(), packed.values(), packed.flags(), RECONSTRUCTION_VIEWPORT), "slSetConstants(reconstruction)"));
+    }
+
+    private static void sendFrameGenConstants(SlNative sl) {
+        if (frameGenCamera == null) throw new IllegalStateException("FG camera of current producer is missing");
+        var stamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
+        fgCameras.publish(frameIndex, stamp != null ? stamp.worldEpoch() : 0, frameGenCamera,
+            new StreamlineCameraHistory.Extent(renderW, renderH, winW, winH),
+            packed -> check(sl.setConstants(packed.matrices(), packed.values(), packed.flags(), VIEWPORT), "slSetConstants(frame_generation)"));
     }
 
     /** For the log at shutdown / failure queries. */

@@ -77,6 +77,7 @@ public final class Fsr3FrameGen {
     private static long lastFrameNs;
     private static float frameMs = 16.6f;
     private static boolean worldReady;
+    private static long lastRrGuideGeneration = -1;
     private static String worldFail;
     private static int slot;
     private static int validFrames;
@@ -356,14 +357,17 @@ public final class Fsr3FrameGen {
             var depthCopy = WorldTargetManager.getDepthCopy();
             var mvTarget = WorldTargetManager.getMotionVectorsTarget();
             var main = renderer.mainRenderTarget();
-            if (world == null || depthCopy == null || mvTarget == null || main == null) {
+            boolean rrFrame = WorldTargetManager.rrOutputThisFrame();
+            var guides = rrFrame ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.frameGenGuides() : null;
+            if (rrFrame && guides == null) { worldFail = "rr_guides_missing_current_frame"; return; }
+            if (world == null || (!rrFrame && (depthCopy == null || mvTarget == null)) || main == null) {
                 worldFail = "missing_targets";
                 return;
             }
             winW = main.width;
             winH = main.height;
-            renderW = depthCopy.width;
-            renderH = depthCopy.height;
+            renderW = rrFrame ? guides.depth().width() : depthCopy.width;
+            renderH = rrFrame ? guides.depth().height() : depthCopy.height;
             int fmt = FrameGenSurfaceInfo.format();
             if (fmt == 0 || FrameGenSurfaceInfo.width() != winW || FrameGenSurfaceInfo.height() != winH) {
                 worldFail = "swapchain_reconfiguring";
@@ -373,13 +377,18 @@ public final class Fsr3FrameGen {
             if (device == null) {
                 return;
             }
+            if (guides != null) guides.requireMatches(
+                io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull(), device, winW, winH);
             Matrix4f pc = WorldTargetManager.getCurrProjMatrix();
             Matrix4f rc = WorldTargetManager.getCurrViewRotationMatrix();
             Vec3 cc = WorldTargetManager.getCurrCameraPos();
-            if (pc == null || rc == null || cc == null) {
+            if (guides == null && (pc == null || rc == null || cc == null)) {
                 worldFail = "no_camera";
                 return;
             }
+            var camera = guides != null ? guides.preparedCamera()
+                : new io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera(pc, rc, cc.x, cc.y, cc.z,
+                    CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), false);
             windowFocused = Minecraft.getInstance().getWindow().isFocused();
             FrameGenSettings.Mode wanted = FrameGenSettings.mode();
             boolean allowed = userEnabled && wanted != FrameGenSettings.Mode.OFF;
@@ -406,10 +415,11 @@ public final class Fsr3FrameGen {
             long surfaceGen = FrameGenSurfaceInfo.generation();
             boolean surfaceChanged = surfaceGen != lastSurfaceGeneration;
             lastSurfaceGeneration = surfaceGen;
-            validFrames = surfaceChanged ? 0 : validFrames + 1;
+            validFrames = surfaceChanged || camera.reset() ? 0 : validFrames + 1;
+            if (camera.reset()) shutdownFgContext("rr_camera_reset");
             boolean want = validFrames > WARMUP_FRAMES;
 
-            FsrCamera cam = FsrCamera.fromProjection(pc);
+            FsrCamera cam = FsrCamera.fromProjection(camera.projection());
             if (gpu == null) {
                 gpu = new FrameGenGpu(device);
             }
@@ -421,8 +431,8 @@ public final class Fsr3FrameGen {
                 return;
             }
             long mainImg = WorldTargetManager.extractVkImage(main);
-            long depthView = WorldTargetManager.extractVkImageView(depthCopy.getDepthTextureView());
-            long mvView = WorldTargetManager.extractVkImageView(mvTarget.getColorTextureView());
+            long depthView = guides != null ? guides.depth().view() : WorldTargetManager.extractVkImageView(depthCopy.getDepthTextureView());
+            long mvView = guides != null ? guides.motion().view() : WorldTargetManager.extractVkImageView(mvTarget.getColorTextureView());
             if (mainImg == 0L || depthView == 0L || mvView == 0L) {
                 throw new IllegalStateException("missing Vulkan handle main=" + mainImg + " depthView=" + depthView + " mvView=" + mvView);
             }
@@ -440,28 +450,30 @@ public final class Fsr3FrameGen {
             // reversed pair made every interpolated frame reproject with near=1024 and far=0.05, i.e. inverted depth.
             float near = cam.near();
             float far = cam.far();
-            float[] vectors = {
-                (float) cc.x, (float) cc.y, (float) cc.z,
-                rc.m01(), rc.m11(), rc.m21(),
-                rc.m00(), rc.m10(), rc.m20(),
-                -rc.m02(), -rc.m12(), -rc.m22()
-            };
-            // ffx camera vectors: position (3), up (3), right (3), forward (3)
-            float[] camVec = {vectors[0], vectors[1], vectors[2], vectors[3], vectors[4], vectors[5], vectors[6], vectors[7], vectors[8],
-                vectors[9], vectors[10], vectors[11]};
+            var eye = camera.eye(); var up = camera.up(); var right = camera.right(); var forward = camera.forward();
+            float[] camVec = {(float) eye.x, (float) eye.y, (float) eye.z,
+                up.x, up.y, up.z, right.x, right.y, right.z, forward.x, forward.y, forward.z};
+            // FFX samples (pixel+.5-jitter), independently of SL's SDK-sign overrides.
+            float prepareJitterX = guides != null ? guides.ffxJitterX() : CameraJitterManager.getCurrentPixelJitterX();
+            float prepareJitterY = guides != null ? guides.ffxJitterY() : CameraJitterManager.getCurrentPixelJitterY();
             FrameGenGpu owner = gpu;
-            producerCommands.record(device, owner, cmd -> {
+            producerCommands.record(device, owner, guides != null ? guides.reads().read() : null, cmd -> {
                 owner.recordInitialTransitions(cmd);
                 // The native producer's exit barrier makes its outputs visible to vendor preparation.
                 owner.record(cmd, slot, mainImg, depthView, mvView);
                 check(nat.configureFg(fg, scSwapchain, want, hudless, frameId), "ffxConfigure(frame generation)");
                 configuredFrame = frameId;
                 check(nat.dispatchPrepare(fg, new FfxFgNative.PrepareParams(cmd.address(), depth, mv, renderW, renderH,
-                    CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), 1.0f, 1.0f, frameMs,
+                    prepareJitterX, prepareJitterY, 1.0f, 1.0f, frameMs,
                     near, far, cam.fovY(), camVec, frameId)), "ffxDispatch(frame generation prepare)");
                 VkBarriers.fullMemoryBarrier(cmd);
             });
             worldReady = true;
+            if (guides != null && lastRrGuideGeneration != guides.generation()) {
+                lastRrGuideGeneration = guides.generation();
+                LOGGER.info("[VKB-FG] provider=amd guides=rr generation={} stamp={} trace={}x{} output={}x{} origin_flip=once jitter=physical_primary_converted",
+                    guides.generation(), guides.stamp(), renderW, renderH, winW, winH);
+            }
             if (want != modeOn) {
                 LOGGER.info("[VKB-FG] fsr3 mode={} multiplier=2x (was {}) frame={} output={}x{} render={}x{} back_buffers={} focused={}",
                     want ? "ON" : "OFF", modeOn ? "ON" : "OFF", frameId, winW, winH, renderW, renderH, FrameGenSurfaceInfo.imageCount(), windowFocused);

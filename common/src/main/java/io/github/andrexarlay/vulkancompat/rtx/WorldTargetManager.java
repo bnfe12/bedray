@@ -121,6 +121,12 @@ public final class WorldTargetManager {
     private WorldTargetManager() {}
     private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan resolutionPlan;
 
+    private static io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Stamp resolutionStamp;
+    public static boolean rrOutputThisFrame() {
+        return resolutionStamp != null && io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.isCurrent(resolutionStamp)
+            && resolutionPlan != null && resolutionPlan.rayReconstructionOutput();
+    }
+
     public static boolean rrResolvesOutput() { return inWorldPhase && resolutionPlan != null && resolutionPlan.rayReconstructionOutput(); }
     public static int traceWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceWidth() : fallback; }
     public static int traceHeight(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceHeight() : fallback; }
@@ -363,6 +369,7 @@ public final class WorldTargetManager {
      */
     public static void beginWorldPhase(GameRenderer renderer, int winW, int winH) {
         resolutionPlan = null;
+        resolutionStamp = null;
         // Always start from "unresolved": only this frame's denoiser record may claim the colour is already resolved.
         io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.resetFrameColorTemporallyResolved();
         if (!isScalingActive()) {
@@ -390,9 +397,8 @@ public final class WorldTargetManager {
             targetW, targetH, winW, winH,
             io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.rrOutputReady()
                 && !Boolean.getBoolean("bedray.rt.disableRrOutput"),
-            TemporalUpscaler.active(), SpatialUpscaler.isSelected(),
-            io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.mode()
-                == io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenSettings.Mode.OFF);
+            TemporalUpscaler.active(), SpatialUpscaler.isSelected());
+        resolutionStamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
         ensureTargets(resolutionPlan.worldWidth(), resolutionPlan.worldHeight());
         if (!resolutionPlan.equals(lastLoggedResolutionPlan)) {
             lastLoggedResolutionPlan = resolutionPlan;

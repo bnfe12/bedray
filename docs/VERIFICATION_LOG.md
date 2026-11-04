@@ -4288,3 +4288,33 @@ No RTX live image/FPS measurement was performed here. RR+FG's older second-SR
 route, DI correlation and broader acceleration-structure performance work remain
 open; native 1080p/60 acceptance is not established. Details and A/B switches:
 docs/ai-agent-addenda/RR_GUIDE_STABILITY.md.
+
+
+## 2026-11-04 — Single RR output with NVIDIA/AMD FG guides (L1/L2)
+
+WorldResolutionPlan no longer selects the second-SR path merely because frame
+generation is enabled. A successfully displayed RR frame publishes immutable
+engine-stamp/device/generation metadata, trace-sized reverse-Z R32 depth and
+RG16F motion, output extent, exact SDK camera and physical primary jitter.
+Missing or stale RR guides skip FG for that frame instead of borrowing old raster
+inputs. FrameGenGuideReads pins the source generation through FG copy completion;
+independent source/output retirements preserve resources on unknown execution
+and let each cleanup retry separately. RR host drains include both FG producers
+before guide replacement or destruction. Vendor output leases remain separate.
+
+The existing native FG row flip is applied once. NVIDIA uses prepared camera
+Pfg=Y*Prr and signed jitter (jx,-jy), with FG viewport1 and an independent common
+history; RR/SR retain viewport0. FFX uses physical jitter (-x,+y), independently
+of DLSS jitter-sign overrides, according to pinned SDK v1.1.4 sampling. RR velocity
+and depth now share the actual Slang primary jitter rather than assuming that
+global upscaler state always describes it. Cuts reset NVIDIA history and rebuild
+the AMD FG context; fixed low-resolution guides no longer enable DLSS-G DRS.
+
+Verification: 1,211 common tests, 1,202 passed and 9 skipped, zero failures/errors;
+34/34 shim checks; all 42 AOT entries compiled; both loader host and companion
+jars built (rr-fg-verification.log). Two read-only parallel audits found no
+confirmed source lifetime/ownership defect and verified viewport, Y conjugation,
+physical-vs-SDK jitter and SPP coherent-primary propagation. Public native ABI-v2
+and producer formats stay unchanged. RTX vendor execution, images and frame times
+have not been measured here. Native 1080p/60 real FPS remains unproven.
+Details: docs/ai-agent-addenda/RR_FRAME_GENERATION.md.

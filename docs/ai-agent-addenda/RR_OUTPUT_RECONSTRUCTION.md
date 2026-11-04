@@ -3,8 +3,9 @@
 The previous chain ran RR at input resolution and then DLSS SR over the result.
 NVIDIA's [RR integration guide](https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuideDLSS_RR.md)
 describes RR as the output reconstruction replacing SR. This change implements
-that route for hardware Path Tracing + initialized RR + frame generation setting
-**OFF**, with either DLSS or native resolution without an upscaler. It does not
+that route for hardware Path Tracing + initialized RR, with either DLSS or native
+resolution without an upscaler. The subsequent [FG integration](RR_FRAME_GENERATION.md)
+also supplies current RR guides and a matching prepared camera to both FG providers. It does not
 establish a measured FPS/quality improvement.
 
 ## One plan before world recording
@@ -24,7 +25,7 @@ The existing DLSS context still supplies resolution policy; a separate RR-only
 optimal-size query and removal of unused SR feature residency remain future work.
 
 The first RR initialization frame retains the existing route. Other temporal
-backends, debug views and FG-enabled configurations also keep it. The next frame
+backends and debug views also keep it. The next frame
 after successful initialization can use single RR output. A diagnostic switch,
 `-Dbedray.rt.disableRrOutput=true`, retains the previous output route for A/B.
 
@@ -90,6 +91,7 @@ passed 1151 Java tests (1142 passed, 9 skipped), 34 shim checks and Windows CI
 GPU acceptance is still required for native RR, DLAA/Balanced/Quality, SPP 1/2/4,
 resize, camera cuts, particles/weather, selection occlusion, moving entities,
 glass/water/foliage and every enabled post effect. The new route has no local RTX
-visual/FPS result. Single RR output with FG remains open: its producer guides and
-constants must be migrated together before this guard is removed. Glass traversal,
+visual/FPS result. Single RR output with FG now has explicit current producer
+guides, read lifetimes and per-consumer camera conventions; RTX live acceptance
+remains open. Glass traversal,
 many-light proposals and the other stack obligations are not completed by this PR.
