@@ -1888,7 +1888,7 @@ void test_native_pt_owner() {
 
     auto frame = valid_frame(0xE001);
     frame.flags = BEDRAY_PATH_TRACE_FRAME_NATIVE_PT | BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL;
-    frame.path.flags |= kPtOption | kPtStaticBit | (1u << 22u);
+    frame.path.flags |= kPtOption | kPtStaticBit | (1u << 22u) | (1u << 23u);
     auto invalid = frame;
     invalid.path.flags |= kPtHistoryBit;                       // the core owns history
     CHECK_STATUS(pass.render(invalid, &g_error), BEDRAY_ERROR_INVALID_ARGUMENT);
@@ -1906,7 +1906,7 @@ void test_native_pt_owner() {
     CHECK(fake::render_calls.size() == 3);
     const auto& first = fake::render_calls[0];
     const auto ring = resource_handle(first.resources, 36);
-    CHECK((push_u32(first.push, 16) & (1u << 22u)) != 0); // RR contract survives PT flag rewriting
+    CHECK((push_u32(first.push, 16) & ((1u << 22u) | (1u << 23u))) == ((1u << 22u) | (1u << 23u)));
     CHECK(resource_range(first.resources, 36) == ring_bytes);
     CHECK((push_u32(first.push, 16) & (kPtOption | kPtStaticBit)) == (kPtOption | kPtStaticBit));
     CHECK((push_u32(first.push, 16) & (kPtHistoryBit | kPtParityBit)) == 0);

@@ -499,6 +499,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // is only written while DI runs.  A host without a ring binds one record, which ptTemporalActive refuses.
     PtTemporalState ptState;
     ptState.enabled = (pc.flags & PATH_TRACE_OPTION_RESTIR_PT) != 0u ? 1u : 0u;
+    ptState.decorrelateForRr = (pc.flags & PATH_TRACE_OPTION_RR_PT_DECORRELATE) != 0u ? 1u : 0u;
     ptState.historyValid = (pc.flags & PATH_TRACE_PT_HISTORY) != 0u ? 1u : 0u;
     ptState.cameraStatic = (pc.flags & PATH_TRACE_PT_STATIC) != 0u ? 1u : 0u;
     ptState.flipY = (pc.flags & PATH_TRACE_PT_FLIP_Y) != 0u ? 1u : 0u;

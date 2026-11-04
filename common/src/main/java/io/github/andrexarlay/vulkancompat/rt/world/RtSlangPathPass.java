@@ -37,6 +37,7 @@ import java.util.Objects;
 public final class RtSlangPathPass implements RtPass {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     private int loggedGuideFlags = Integer.MIN_VALUE;
+    private static final boolean RR_PT_DECORRELATE = !Boolean.getBoolean("bedray.rt.disableRrPtDecorrelation");
 
     static final String DISPLAY_PASS = "path_display";
     static final int DISPLAY_PUSH_BYTES = 32;
@@ -337,6 +338,9 @@ public final class RtSlangPathPass implements RtPass {
             | (rr ? RtPathTraceSlangPass.OPTION_RR_GUIDES : 0);
     }
 
+    /** Borrowed CPU metadata, consumed immediately in the same recording after dispatch. */
+    RtPathTraceSlangPass.Frame guideFrame() { return frame; }
+
     @Override
     public void configure(RtFrameParams params, boolean denoising) {
         params.mode = RtConfig.effectiveMode();
@@ -467,13 +471,17 @@ public final class RtSlangPathPass implements RtPass {
         // motion buffer, bound only for that layout, so its push bit follows the buffer the frame actually carries.
         RtPathTraceSlangPass.Guides guides = RtPathTraceSlangPass.Guides.of(views.gbuffer());
         int guideFlags = guideOptionFlags(guides != null, views.motion() != 0L, params.rrGuides);
-        if (guideFlags != loggedGuideFlags) {
-            LOGGER.info("[VKB-RR-GUIDES] enabled={} rr={} coherent_primary={} depth={} world_motion_writer={} motion_bytes={} reflection=primary_edge",
+        boolean rrPtDecorrelation = params.rrGuides && ptActive() && RR_PT_DECORRELATE;
+        int diagnosticFlags = guideFlags | (rrPtDecorrelation ? RtPathTraceSlangPass.OPTION_RR_PT_DECORRELATE : 0);
+        if (diagnosticFlags != loggedGuideFlags) {
+            LOGGER.info("[VKB-RR-GUIDES] enabled={} rr={} coherent_primary={} trace_depth={} world_motion_writer={} motion_bytes={} reflection=primary_edge rr_sdk_depth=reverse_z_hardware rr_pt_decorrelate={}",
                 guides != null, params.rrGuides, params.rrGuides, params.rrGuides ? "positive_linear" : "nrd_view_z",
-                views.motion() != 0L, views.motion() != 0L ? (long) width * height * RtPathTraceSlangPass.MOTION_ELEMENT_BYTES : 0L);
-            loggedGuideFlags = guideFlags;
+                views.motion() != 0L, views.motion() != 0L ? (long) width * height * RtPathTraceSlangPass.MOTION_ELEMENT_BYTES : 0L,
+                rrPtDecorrelation);
+            loggedGuideFlags = diagnosticFlags;
         }
         int optionFlags = guideFlags
+            | (rrPtDecorrelation ? RtPathTraceSlangPass.OPTION_RR_PT_DECORRELATE : 0)
             | rayEffectFlags()
             | pixelShadowFlags()
             // The distant block-light handover belongs to the emitter feature: a frame that traced no emitters has no

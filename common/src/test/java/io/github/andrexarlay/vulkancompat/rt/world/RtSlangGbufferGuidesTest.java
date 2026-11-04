@@ -92,7 +92,7 @@ class RtSlangGbufferGuidesTest {
         assertTrue(source.contains("pathTraceWriteGuides(p, f, result, "), "one write site");
         // The option word is the push's fifth field, which the host leaves zero unless it binds the images.
         String host = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");
-        assertTrue(host.contains("int optionFlags = (guides != null ? RtPathTraceSlangPass.OPTION_GBUFFER : 0)"),
+        assertTrue(host.contains("int guideFlags = guideOptionFlags(guides != null, views.motion() != 0L, params.rrGuides);"),
             "the push flag follows the bound guides, never a setting");
         String record = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java");
         assertTrue(record.contains("static final int OPTION_GBUFFER = 1;"), "the Java mirror of the shader option bit");
@@ -153,7 +153,7 @@ class RtSlangGbufferGuidesTest {
         String backend = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/NativePathTraceBackend.java");
         assertTrue(backend.contains("guides && !runtime.library().hasNativeGuideOutputs()"),
             "a guide request needs the additive native feature and export");
-        assertTrue(renderer.contains("native NRD requires a matching core with NRD_MOTION"),
+        assertTrue(renderer.contains("native denoiser motion requires a matching core with NRD_MOTION"),
             "a denoiser the native core cannot feed is refused by name, not silently moved onto unproven guides");
         assertTrue(renderer.contains(
                 "throw new RtFailure(rayMode ? \"slang_ray\" : \"slang_path\", pathSlangUnavailableReason);"),

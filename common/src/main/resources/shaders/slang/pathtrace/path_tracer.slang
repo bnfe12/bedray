@@ -92,6 +92,7 @@ static const uint PATH_TRACE_FLAG_VISIBILITY_OVERFLOW = 1u << 13u;
 static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;  // fill PathTraceResult.primary for the denoiser guides
 static const uint PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;  // also write the primary hit's world motion for NRD's IN_MV
 static const uint PATH_TRACE_OPTION_RR_GUIDES      = 1u << 22u; // coherent RR primaries and positive linear view depth
+static const uint PATH_TRACE_OPTION_RR_PT_DECORRELATE = 1u << 23u;
 
 bool pathTraceNeedsDenoiserSignals(uint flags) {
     return (flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u && (flags & PATH_TRACE_OPTION_RR_GUIDES) == 0u;

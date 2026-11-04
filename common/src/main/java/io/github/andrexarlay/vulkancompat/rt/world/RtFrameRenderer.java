@@ -174,6 +174,7 @@ public final class RtFrameRenderer {
     // [DLSS-RR] DLSS Ray Reconstruction denoiser (experimental)
     private static DlssRrDenoiser dlssRrDenoiser;
     private static RtOutputResolve outputResolve;
+    private static RrHardwareDepth rrHardwareDepth;
 
     /** A live RR instance can own output reconstruction next frame. FG keeps its existing producer path. */
     public static boolean rrOutputReady() {
@@ -633,11 +634,15 @@ public final class RtFrameRenderer {
         RtFrameResources recordingResources = frameResources;
         RtPass recordingPass = pass;
         RtOutputResolve recordingOutputResolve = outputResolve;
+        RrHardwareDepth recordingRrDepth = rrHardwareDepth;
         Runnable[] particleRelease = {() -> {}};
         Retirement[] denoiserProof = {new Retirement(() -> {}, () -> {})};
         RecordingCompletion.Ticket recording;
         try {
             recording = recordingCompletion.beginWithDiscard(cmd.address(),
+            new Retirement(
+                () -> { if (recordingRrDepth != null) recordingRrDepth.release(cmd.address(), false); },
+                () -> { if (recordingRrDepth != null) recordingRrDepth.release(cmd.address(), true); }),
             new Retirement(
                 () -> { if (recordingOutputResolve != null) recordingOutputResolve.release(cmd.address(), false); },
                 () -> { if (recordingOutputResolve != null) recordingOutputResolve.release(cmd.address(), true); }),
@@ -834,6 +839,8 @@ public final class RtFrameRenderer {
                 stage = "dlss_rr_ensure";
                 if (pass.usesGbuffer() && dlssRrDenoiser == null) createDlssRrDenoiser(device, w, h);
                 if (dlssRrDenoiser != null) dlssRrDenoiser.ensure(w, h, rrOutput());
+                if (dlssRrDenoiser != null && rrHardwareDepth == null)
+                    rrHardwareDepth = new RrHardwareDepth(pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
             }
             if (denoiseMode.isNrd()) {
                 stage = "nrd_ensure";
@@ -1214,6 +1221,11 @@ public final class RtFrameRenderer {
                             * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignY()
                         : 0.0f;
                     DlssRrDenoiser owner = dlssRrDenoiser;
+                    if (!(pass instanceof RtSlangPathPass slang) || rrHardwareDepth == null)
+                        throw new IllegalStateException("RR hardware depth requires the current Slang primary producer");
+                    rrHardwareDepth.record(cmd, slang.guideFrame(), owner.gbViewZ(), owner.hardwareDepth());
+                    owner.hardwareDepthRecorded(cmd.address());
+                    VkBarriers.fullMemoryBarrier(cmd);
                     frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY, camera.projectionMatrix);
                     rrColorResolved = frameColorTemporallyResolved;
@@ -1861,6 +1873,7 @@ public final class RtFrameRenderer {
             // last lease closes the core, which refuses while a recording is still pinned.
             atmosphere.destroy();
             if (outputResolve != null) { outputResolve.afterHostDrain(); outputResolve = null; }
+            if (rrHardwareDepth != null) { rrHardwareDepth.afterHostDrain(); rrHardwareDepth = null; }
             if (pathSlangRuntime != null) {
                 w.closeComputeAfterHostDrain();
                 pathSlangLease.close();

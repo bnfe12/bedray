@@ -9,6 +9,7 @@ import "shading/bsdf.slang";
 import "post/output_resolve.slang";
 import "light/emitter_selection.slang";
 import "restir/pt_spatial.slang";
+import "denoise/rr_depth.slang";
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> sink;
 [[vk::binding(1, 0)]] StructuredBuffer<uint4> emitterFixture;
@@ -309,4 +310,27 @@ void main() {
         resetComplete=resetComplete && finitePtFixture(ptFixture[6u+i]);
     }
     sink[63]=resetComplete;
+    RrDepthPush depthPc = {};
+    depthPc.forward=float4(0,0,1,1); depthPc.right=float4(1,0,0,1); depthPc.up=float4(0,1,0,0);
+    depthPc.jitter=float4(0.125,-0.375,1.0/8.0,1.0/4.0); depthPc.size=uint2(8,4);
+    depthPc.clipZ=float4(0,0,-0.0001,0.1); depthPc.clipW=float4(0,0,1,0);
+    float nearHw=rrHardwareDepth(1.0,float2(0,0),depthPc), farHw=rrHardwareDepth(100.0,float2(7,3),depthPc);
+    sink[64]=nearHw > farHw && farHw > 0.0 && abs(nearHw-0.0999) < 1.0e-6;
+    sink[65]=rrHardwareDepth(1.0e6,float2(0),depthPc)==0.0
+        && rrHardwareDepth(asfloat(0x7fc00000u),float2(0),depthPc)==0.0;
+    sink[66]=abs(rrHardwareDepth(10.0,float2(0,0),depthPc)-rrHardwareDepth(10.0,float2(7,3),depthPc)) < 1.0e-6;
+    float3 axis=normalize(float3(1,0,1));
+    depthPc.forward.xyz=axis; depthPc.right.xyz=normalize(float3(1,0,-1));
+    depthPc.up.y=-1.0; depthPc.origin=float4(0.2,-0.3,0.4,0);
+    depthPc.clipZ=float4(axis*(-0.0001),0.1+0.0001*dot(axis,depthPc.origin.xyz));
+    depthPc.clipW=float4(axis,-dot(axis,depthPc.origin.xyz));
+    sink[67]=abs(rrHardwareDepth(10.0,float2(3,2),depthPc)-0.0099) < 1.0e-6;
+    float sumMix=0.0; uint initialDraws=0u;
+    for(uint i=0u;i<65536u;i++) {
+        float3 selected=ptRrDecorrelation(float3(2),float3(6),int2(i&255u,i>>8u),19u);
+        sumMix+=selected.x;
+        initialDraws+=selected.x==2.0?1u:0u;
+    }
+    sink[68]=abs(sumMix/65536.0-4.0)<0.03 && abs(float(initialDraws)/65536.0-0.5)<0.01;
+    sink[69]=near3(ptRrDecorrelation(float3(2),float3(2),int2(7,9),1u),float3(2));
 }

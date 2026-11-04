@@ -14,7 +14,12 @@ does not change public native ABI-v2 layouts. NRD's lobe estimator remains
 separate from RR's independent reflection geometry.
 
 RR's supplied linear surface depth was negative while sky depth was positive.
-RR now receives positive forward linear depth, with sky remaining far away.
+The trace now writes positive forward linear depth, with sky remaining far away.
+A separate AOT pass reconstructs that same primary sample from its actual
+producer basis, origin, jitter and VP rows, then writes reverse-Z hardware depth
+for RR. Both direct NGX and Streamline declare hardware depth with inversion;
+this preserves Streamline's shared reverse-Z constants with frame generation.
+The linear image stays available for velocity and disocclusion history.
 NRD retains its existing signed convention. This follows the
 [NVIDIA integration depth contract](https://github.com/nvpro-samples/vk_denoise_dlssrr#depth-values).
 ReSTIR PT's unsupported NRD-signal bypass also erased an independently measured
@@ -36,8 +41,16 @@ and native packet tests preserve history/parity and explicit RR flags.
 `[VKB-RR-GUIDES]` logs guide mode, depth convention, coherent-primary choice and
 the world-motion writer/range when that contract changes.
 
+RR's PT shading uses the upstream Uniform mixture of complete initial and
+resampled estimates, selected independently with constant probability 0.5 after
+publishing the resampled ring. There is no extra reservoir, visibility ray,
+energy/age heuristic or reciprocal-probability gain. This introduces no extra
+selection bias, while retaining the PT estimator's existing approximation bias.
+It decorrelates the PT replacement; the initial estimate can still contain
+ReSTIR DI. `-Dbedray.rt.disableRrPtDecorrelation=true` provides an A/B mode.
+
 The concurrent direct-native-memory output push repair (4035f79) and its crash
 evidence are preserved in this branch's ancestry. RR+frame-generation's older
-two-reconstruction route and ReSTIR temporal-noise correlation remain separate
-investigations; upstream documents the latter in
+two-reconstruction route and DI temporal-noise correlation remain separate
+investigations; upstream documents the PT integration in
 [RTXDI's RR decorrelation guidance](https://github.com/NVIDIA-RTX/RTXDI/blob/main/Doc/RestirPT.md#decorrelation-for-dlss-ray-reconstruction).

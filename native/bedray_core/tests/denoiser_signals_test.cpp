@@ -7,7 +7,7 @@
 #include <cstring>
 
 int main() {
-    std::array<uint32_t, 64> verdicts{};
+    std::array<uint32_t, 70> verdicts{};
     GlobalParams_0 globals{};
     globals.sink_0 = {verdicts.data(), verdicts.size()};
     using TableWord = std::remove_const_t<std::remove_pointer_t<decltype(globals.emitterFixture_0.data)>>;
@@ -47,6 +47,6 @@ int main() {
             return 1;
         }
     }
-    std::puts("64 production Slang signal/mean/NRD/RR/output/emitter/PT-initialization CPU cases passed (no GPU)");
+    std::puts("70 production Slang signal/mean/NRD/RR/output/emitter/PT-initialization/depth/decorrelation CPU cases passed (no GPU)");
     return 0;
 }
