@@ -5,6 +5,19 @@ Beautiful with DLSS Ray Reconstruction and all features enabled. This audit foun
 three concrete RR producer defects and an avoidable PT reset bandwidth cost.
 These source repairs are not a claim of measured RTX visual/FPS acceptance.
 
+Streamline RR also combined the raster's already-bobbed projection with RR's
+effective view, applying camera bob twice. It now receives the exact pure SDK
+projection (including its existing clip-Y conversion) and effective view used by
+direct NGX. An immutable reconstruction-camera snapshot carries those matrices,
+the raw double-precision anchor, effective eye/axes, jitter and reset. Reprojection
+uses the full current/previous clip transforms and raw-anchor delta, so bob
+motion is retained exactly once. Common-camera publication/history is separate
+from FG target readiness and warmup: missing FG targets or a resized FG output
+cannot erase an RR camera already accepted by Streamline. Gaps in accepted
+camera frames, world changes, viewport changes, explicit reset and teleports
+invalidate that history. Conflicting RR constants in one frame are rejected
+before evaluation; failed SDK publication cannot advance accepted history.
+
 RR consumed the per-pixel world-motion allocation while only NRD enabled its
 writer. The host now binds the writer before either denoiser consumes the same
 allocation, and clears consumer addresses when motion is disabled. An explicit

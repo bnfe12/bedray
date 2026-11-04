@@ -6,7 +6,7 @@ import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrCamera;
+import io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.fsr3.Fsr3FrameGen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
@@ -69,9 +69,7 @@ public final class FrameGenRuntime {
     private static int renderW, renderH, winW, winH;
     private static final FrameGenResourceTags resourceTags = new FrameGenResourceTags();
 
-    // temporal history for the constants (WorldTargetManager advances its own history before our hook)
-    private static Matrix4f prevProj, prevView;
-    private static Vec3 prevCam;
+    private static final StreamlineCameraHistory commonCameras = new StreamlineCameraHistory();
     private static int validFrames;
     private static boolean modeOn;
     /** A failed options call can leave the vendor enabled even before modeOn is published. */
@@ -456,7 +454,6 @@ public final class FrameGenRuntime {
                 stopGeneration(sl, FLAG_RETAIN_RESOURCES_WHEN_OFF);
                 clearTags(sl);
                 validFrames = 0;
-                prevProj = null;
                 gpu.ensure(fmt, winW, winH, renderW, renderH);
             }
             long mainImg = WorldTargetManager.extractVkImage(main);
@@ -498,15 +495,11 @@ public final class FrameGenRuntime {
             boolean allowed = userEnabled && windowFocused && Boolean.TRUE.equals(supported) && wanted != FrameGenSettings.Mode.OFF;
             if (worldReady && !surfaceChanged) {
                 validFrames++;
-                if (constantsFrame != frameIndex) {
-                    sendConstants(sl);
-                    constantsFrame = frameIndex;
-                }
+                if (!commonCameras.published(frameIndex)) sendConstants(sl, false);
                 tag(sl);
                 want = allowed && validFrames > WARMUP_FRAMES;
             } else {
                 validFrames = 0;
-                prevProj = null;
                 clearTags(sl);
             }
             int generate = Math.max(1, Math.min(wanted.generated(), framesMax));
@@ -713,6 +706,7 @@ public final class FrameGenRuntime {
 
     /** Head of VulkanGpuSurface.close(): generation off and our GPU objects released while the device is still alive. */
     public static void onSurfaceClose() {
+        commonCameras.clear();
         if (amd()) {
             Fsr3FrameGen.onSurfaceClose();
             return;
@@ -803,15 +797,14 @@ public final class FrameGenRuntime {
      * so {@code Matrix4f.get} is passed as is. Depth: reverse-Z hardware depth; motion vectors: pixels, previous minus current,
      * camera + object motion, no jitter, already flipped to the back buffer orientation by fg_prepare.comp.
      */
-    private static long constantsFrame = -1;
 
     /**
      * Common constants of the current frame for the Streamline DLSS plugins: slEvaluateFeature of DLSS SR / Ray Reconstruction happens in
      * the world pass, before the frame generation hook of the same frame, and every feature needs the constants of that frame
      * (ProgrammingGuide.md "frameToken and viewport must match across all API calls"). Constants are sent once per frame; this is the first caller.
      */
-    public static void ensureConstants(int rw, int rh, int ow, int oh) {
-        if (!usable() || constantsFrame == frameIndex) {
+    public static void ensureConstants(int rw, int rh, int ow, int oh, boolean reset) {
+        if (!usable() || commonCameras.published(frameIndex)) {
             return;
         }
         try {
@@ -819,71 +812,44 @@ public final class FrameGenRuntime {
             renderH = rh;
             winW = ow;
             winH = oh;
-            sendConstants(StreamlineBootstrap.sl());
-            constantsFrame = frameIndex;
+            sendConstants(StreamlineBootstrap.sl(), reset);
         } catch (Throwable t) {
             fail("constants", LogPaths.show(t.toString()), t);
         }
     }
 
-    private static void sendConstants(SlNative sl) {
-        Matrix4f pc = WorldTargetManager.getCurrProjMatrix();
-        Matrix4f rc = WorldTargetManager.getCurrViewRotationMatrix();
-        Vec3 cc = WorldTargetManager.getCurrCameraPos();
-        if (pc == null || rc == null || cc == null) {
-            throw new IllegalStateException("camera state of the world pass is missing (proj=" + (pc != null) + " view=" + (rc != null) + " pos=" + (cc != null) + ")");
+    /** RR owns the common projection/view pair before SL evaluates its reflection reconstruction. */
+    public static void ensureRrConstants(ReconstructionCamera camera, int rw, int rh, int ow, int oh) {
+        if (!usable() || frameIndex <= 0)
+            throw new IllegalStateException("RR Streamline constants require an active frame token");
+        try {
+            renderW = rw;
+            renderH = rh;
+            winW = ow;
+            winH = oh;
+            sendConstants(StreamlineBootstrap.sl(), camera);
+        } catch (RuntimeException | Error t) {
+            fail("rr_constants", LogPaths.show(t.toString()), t);
+            throw t; // Never evaluate RR with missing or incompatible common constants.
         }
-        boolean havePrev = prevProj != null && prevView != null && prevCam != null;
-        boolean reset = !havePrev || cc.distanceToSqr(prevCam) > 64.0 * 64.0;
-        Matrix4f pp = havePrev ? prevProj : pc;
-        Matrix4f rp = havePrev ? prevView : rc;
-        Vec3 cp = havePrev ? prevCam : cc;
+    }
 
-        Matrix4f pcInv = new Matrix4f(pc).invert();
-        // view_prev = Rp * (Rc^-1 * view_cur + (Cc - Cp))
-        Matrix4f viewToViewPrev = new Matrix4f(rp)
-            .translate((float) (cc.x - cp.x), (float) (cc.y - cp.y), (float) (cc.z - cp.z))
-            .mul(new Matrix4f(rc).invert());
-        // NOTE: JOML translate() post-multiplies, so Rp.translate(d).mul(Rc^-1) = Rp * T(d) * Rc^-1 as required.
-        Matrix4f clipToPrevClip = new Matrix4f(pp).mul(viewToViewPrev).mul(pcInv);
-        Matrix4f prevClipToClip = new Matrix4f(clipToPrevClip).invert();
+    private static void sendConstants(SlNative sl, boolean reset) {
+        Matrix4f projection = WorldTargetManager.getCurrProjMatrix();
+        Matrix4f view = WorldTargetManager.getCurrViewRotationMatrix();
+        Vec3 anchor = WorldTargetManager.getCurrCameraPos();
+        if (projection == null || view == null || anchor == null)
+            throw new IllegalStateException("camera state of the world pass is missing (proj=" + (projection != null)
+                + " view=" + (view != null) + " pos=" + (anchor != null) + ")");
+        sendConstants(sl, new ReconstructionCamera(projection, view, anchor.x, anchor.y, anchor.z,
+            CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), reset));
+    }
 
-        float[] m = new float[64];
-        pc.get(m, 0);
-        pcInv.get(m, 16);
-        clipToPrevClip.get(m, 32);
-        prevClipToClip.get(m, 48);
-
-        FsrCamera cam = FsrCamera.fromProjection(pc);
-        float[] v = new float[21];
-        v[0] = CameraJitterManager.getCurrentPixelJitterX();
-        v[1] = CameraJitterManager.getCurrentPixelJitterY();
-        v[2] = 1.0f / renderW;
-        v[3] = 1.0f / renderH;
-        v[4] = (float) cc.x;
-        v[5] = (float) cc.y;
-        v[6] = (float) cc.z;
-        // rotation rows of the world -> view matrix: right, up, backward
-        v[7] = rc.m01();
-        v[8] = rc.m11();
-        v[9] = rc.m21();
-        v[10] = rc.m00();
-        v[11] = rc.m10();
-        v[12] = rc.m20();
-        v[13] = -rc.m02();
-        v[14] = -rc.m12();
-        v[15] = -rc.m22();
-        v[16] = cam.near();
-        v[17] = cam.far();
-        v[18] = cam.fovY();
-        v[19] = (float) winW / (float) winH;
-        v[20] = Float.MAX_VALUE; // sl::INVALID_FLOAT, only used when cameraMotionIncluded is false
-        int[] i = {1 /*depthInverted*/, 1 /*cameraMotionIncluded*/, 0 /*mvec 3D*/, reset ? 1 : 0, 0 /*mvec jittered*/, 0 /*dilated*/};
-        check(sl.setConstants(m, v, i, VIEWPORT), "slSetConstants");
-
-        prevProj = new Matrix4f(pc);
-        prevView = new Matrix4f(rc);
-        prevCam = cc;
+    private static void sendConstants(SlNative sl, ReconstructionCamera camera) {
+        var stamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
+        commonCameras.publish(frameIndex, stamp != null ? stamp.worldEpoch() : 0, camera,
+            new StreamlineCameraHistory.Extent(renderW, renderH, winW, winH),
+            packed -> check(sl.setConstants(packed.matrices(), packed.values(), packed.flags(), VIEWPORT), "slSetConstants"));
     }
 
     /** For the log at shutdown / failure queries. */

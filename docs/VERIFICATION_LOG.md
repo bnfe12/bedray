@@ -4245,3 +4245,46 @@ L1/L2 only. The crash is explained and guarded in unit tests, but the fixed
 jar/DLL pair has not run. Absence of the crash, RR direct-output correctness,
 `camera_matrices=degenerate` and visual parity remain unverified; L3-L5 need
 an owner run.
+
+
+## 2026-11-04 — RR guide/depth/camera stability and PT reset bandwidth (L1/L2)
+
+PR #71 preserves the concurrent 4035f79 output-push native-memory crash fix and
+6c98b26 crash evidence. RR now binds the actual world-motion writer before use;
+its guide flag is independent of motion enablement. PT's NRD-signal bypass keeps
+RR's measured reflection geometry. A separate 128-byte AOT encoder converts the
+primary producer's positive view depth to canonical reverse-Z hardware depth,
+including its actual ray basis, jitter and VP rows. RR declares hardware depth
+with inversion in initial creation and fallback feature creation.
+
+PT resets still invalidate history on light fingerprint changes, but do not fill
+both 144-byte records per pixel: all current pixels fully overwrite their record
+before any allowed read. This removes 597,196,800 bytes per reset at native 1080p;
+it is not a GPU timing result. RR PT shading uses a constant independent Uniform
+mixture of complete initial/resampled estimates after publishing the resampled
+ring. It adds no rays or buffer and retains the existing PT approximation bias.
+
+Streamline used the already-bobbed raster projection with RR's effective view,
+applying bob twice. An immutable ReconstructionCamera now supplies the exact
+RR SDK projection/effective-view pair, effective eye/axes and complete clip
+reprojection with double-precision raw anchors. StreamlineCameraConstants packs
+the SDK contract; StreamlineCameraHistory owns accepted constants independently
+of FG target readiness, resizing and warmup. A missing FG target can no longer
+force RR history reset each frame. Publication commits only after SDK success;
+conflicting RR consumers in one frame are rejected. Generic SL-SR also now
+forwards its explicit history-reset flag into common constants.
+
+Verification: 1,197 common tests, 1,188 passed and 9 skipped, zero failures/errors
+(rr-camera-verification.log). The preceding full candidate build passed all
+121 core tests, 34 shim checks, 42 Slang AOT entries and both combined host jars
+(rr-guide-stability-full-verification.log). Native Windows CI at fd4e549 passed
+both baseline and candidate jobs, including 70 production Slang CPU cases:
+https://github.com/bnfe12/bedray/actions/runs/41760031468 . The subsequent camera
+changes are Java-only and retain ABI-v2. CPU camera tests cover bob once, SDK
+clip-Y, moving-anchor reprojection, effective eye/axes, immutable snapshots,
+accepted-frame continuity, explicit resets and failed publication.
+
+No RTX live image/FPS measurement was performed here. RR+FG's older second-SR
+route, DI correlation and broader acceleration-structure performance work remain
+open; native 1080p/60 acceptance is not established. Details and A/B switches:
+docs/ai-agent-addenda/RR_GUIDE_STABILITY.md.

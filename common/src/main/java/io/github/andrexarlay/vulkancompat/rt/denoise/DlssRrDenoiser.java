@@ -735,15 +735,17 @@ public final class DlssRrDenoiser {
         // 3. Evaluate and restore layouts to GENERAL
         try {
             if (io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.dlssViaStreamline()) {
-                // The constants of a frame are sent by the FIRST feature that needs them, and the ray traced frame is
-                // recorded before the upscale, so this call owns them. Passing the render size as the window made frame
-                // generation and the upscaler run the whole frame against a viewport that does not exist (window !=
-                // render size whenever a quality preset below 100% is used); the real output size is the upscaler's.
+                // SL combines this projection with RR's worldToView. Reusing the raster's bobbed projection here
+                // would apply bob twice. Preserve the exact SDK projection (including its clip-Y convention).
                 int outW = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
                     ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputWidth() : width;
                 int outH = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive()
                     ? io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.outputHeight() : height;
-                io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureConstants(width, height, outW, outH);
+                var sdkCamera = new io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera(
+                    new Matrix4f().set(viewToClipMatrix), modelView, camX, camY, camZ,
+                    jitterPixelsX, jitterPixelsY, reset);
+                io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.ensureRrConstants(
+                    sdkCamera, width, height, outW, outH);
             }
             DlssNative.Status st = rr.evaluate(cmd.address(), feature, eval);
             if (!st.ok()) {
