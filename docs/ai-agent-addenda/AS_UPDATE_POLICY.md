@@ -47,9 +47,11 @@ regressions cover pinned COW publication, later unpinned refit, replacement BLAS
 relinking, mask changes, non-finite activation changes, static-section flags and
 20 pipelined frames with bounded retained dependencies. The fake Vulkan recorder
 checks that both current and source-TLAS BLAS references remain live. Windows CI
-is required to execute those native cases; there is no local MSVC toolchain.
+executed those cases successfully in [PR #73](https://github.com/bnfe12/bedray/pull/73);
+there is no local MSVC toolchain.
 `BedraySceneFeaturesProbe` exercises actual FFM loading/querying of old/new DLLs
 without a Vulkan device.
+The actual old/new core probe returned ABI 2 with features 0/1 respectively.
 
 `native_scene active` logs interval frame counts, BLAS builds/refits, TLAS
 builds/updates, copy-on-write frames, deferred updates and entity topology revision.

@@ -492,9 +492,10 @@ public final class DlssRrDenoiser {
     }
 
     private static DlssQuality desiredQuality(int w, int h, int outW, int outH) {
-        if (w == outW && h == outH) return DlssQuality.DLAA;
-        var requested = io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.requestedQuality();
-        return requested != null ? requested : DlssQuality.QUALITY;
+        boolean dlssActive = io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.active()
+            == io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.DLSS;
+        return RrQualityPolicy.select(w, h, outW, outH, dlssActive, dlssActive
+            ? io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime.activeFeatureSettings() : null);
     }
 
     /** Pins the guide generation before initialization or primary writes can reference it. */
