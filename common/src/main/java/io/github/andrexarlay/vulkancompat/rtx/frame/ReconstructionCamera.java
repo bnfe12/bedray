@@ -38,6 +38,11 @@ public final class ReconstructionCamera {
     public float jitterY() { return jitterY; }
     public boolean reset() { return reset; }
 
+    public ReconstructionCamera flipClipY() {
+        return new ReconstructionCamera(new Matrix4f().scaling(1, -1, 1).mul(projection), view,
+            x, y, z, jitterX, -jitterY, reset);
+    }
+
     /** Bob/hurt translations move the effective eye relative to the engine's raw anchor. */
     public Vector3d eye() {
         Vector3f offset = inverseView.transformPosition(new Vector3f());

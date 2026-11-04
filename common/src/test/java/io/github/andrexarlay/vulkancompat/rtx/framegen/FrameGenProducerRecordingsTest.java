@@ -37,6 +37,48 @@ class FrameGenProducerRecordingsTest {
         return new FrameGenProducerRecordings(failure -> { throw new AssertionError(failure); });
     }
 
+    @Test void unknownExecutionRetainsBothOutputAndBorrowedGuidesUntilHostProof() {
+        var records = recordings(); var submission = new Submission(); var output = new Owner();
+        var reads = new FrameGenGuideReads(); reads.replace(1); var source = reads.source().read();
+        submission.failExecute = true;
+        assertThrows(IllegalStateException.class, () -> records.record(submission,
+            new RecordingCompletion.Retirement[]{output.retirement(), source.retirement()},
+            () -> source.retain(submission.commandBuffer())));
+        assertThrows(IllegalStateException.class, reads::invalidate);
+        assertEquals(0, output.discarded);
+        records.drain(() -> {});
+        assertEquals(1, output.discarded);
+        assertDoesNotThrow(reads::invalidate);
+    }
+
+    @Test void partialRecordingDiscardsSourceAndOutputBeforeAnySubmission() {
+        var records = recordings(); var submission = new Submission(); var output = new Owner();
+        var reads = new FrameGenGuideReads(); reads.replace(1); var source = reads.source().read();
+        assertThrows(IllegalStateException.class, () -> records.record(submission,
+            new RecordingCompletion.Retirement[]{output.retirement(), source.retirement()}, () -> {
+                source.retain(submission.commandBuffer());
+                throw new IllegalStateException("copy failed after recording commands");
+            }));
+        assertEquals(0, submission.executions);
+        assertEquals(1, output.discarded);
+        assertDoesNotThrow(reads::invalidate);
+    }
+
+    @Test void failedOutputRetirementDoesNotPreventIndependentSourceRetirement() {
+        var records = new FrameGenProducerRecordings(failure -> {}); var submission = new Submission();
+        var reads = new FrameGenGuideReads(); reads.replace(1); var source = reads.source().read();
+        boolean[] fail = {true};
+        Runnable release = () -> { if (fail[0]) throw new IllegalStateException("output release"); };
+        records.record(submission, new RecordingCompletion.Retirement[]{
+            new RecordingCompletion.Retirement(release, release), source.retirement()},
+            () -> source.retain(submission.commandBuffer()));
+        submission.callbacks.getFirst().run();
+        assertDoesNotThrow(reads::invalidate);
+        assertEquals(1, records.pendingCount());
+        fail[0] = false; records.drain(() -> {});
+        assertEquals(0, records.pendingCount());
+    }
+
     @Test void completionCallbackReleasesTheCapturedOwnerOnlyAfterTheHostProof() {
         var records = recordings(); var submission = new Submission(); var owner = new Owner();
         records.record(submission, owner.retirement(), () -> owner.initialized = true);

@@ -17,6 +17,11 @@ public final class FrameGenHostCommands {
     }
 
     public void record(VulkanDevice host, FrameGenGpu owner, Consumer<VkCommandBuffer> commands) {
+        record(host, owner, null, commands);
+    }
+
+    public void record(VulkanDevice host, FrameGenGpu owner, FrameGenGuideReads.Read source,
+                       Consumer<VkCommandBuffer> commands) {
         if (host == null || owner == null || owner.hostDevice() != host)
             throw new IllegalArgumentException("FG producer owner belongs to another host device");
         if (device != null && device != host && recordings.pendingCount() != 0)
@@ -33,8 +38,16 @@ public final class FrameGenHostCommands {
             }
             @Override public void execute() { encoder.execute(command); }
             @Override public void afterCompletion(Runnable action) { encoder.queueForDestroy(action::run); }
-        }, new RecordingCompletion.Retirement(() -> owner.releaseRecording(handle), () -> owner.discardRecording(handle)),
-            () -> commands.accept(command));
+        }, retirements(owner, source, handle), () -> {
+            if (source != null) source.retain(handle);
+            commands.accept(command);
+        });
+    }
+
+    private static RecordingCompletion.Retirement[] retirements(FrameGenGpu owner, FrameGenGuideReads.Read source, long handle) {
+        var output = new RecordingCompletion.Retirement(() -> owner.releaseRecording(handle), () -> owner.discardRecording(handle));
+        return source == null ? new RecordingCompletion.Retirement[]{output}
+            : new RecordingCompletion.Retirement[]{output, source.retirement()};
     }
 
     /** May run before source-target resizing without ending the vendor output-image lease. */

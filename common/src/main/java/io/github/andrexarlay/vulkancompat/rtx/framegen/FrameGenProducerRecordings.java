@@ -23,10 +23,14 @@ public final class FrameGenProducerRecordings {
 
     /** Captures the output owner before the first transition or vendor prepare command. */
     public void record(Submission submission, RecordingCompletion.Retirement owner, Runnable commands) {
+        record(submission, new RecordingCompletion.Retirement[]{owner}, commands);
+    }
+
+    public void record(Submission submission, RecordingCompletion.Retirement[] owners, Runnable commands) {
         Objects.requireNonNull(submission);
         Objects.requireNonNull(commands);
         if (recording || draining) throw new IllegalStateException("nested FG producer recording/drain");
-        var ticket = completion.beginWithDiscard(submission.commandBuffer(), owner);
+        var ticket = completion.beginWithDiscard(submission.commandBuffer(), owners);
         boolean executeAttempted = false;
         String stage = "commands";
         recording = true;

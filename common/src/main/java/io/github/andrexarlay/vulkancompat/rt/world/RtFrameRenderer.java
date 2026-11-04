@@ -343,6 +343,11 @@ public final class RtFrameRenderer {
     private static io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Stamp displayedStamp;
     private static RenderTarget displayedTarget, pendingDisplayedTarget;
     private static org.joml.Matrix4f displayedProjection;
+    private static io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuides pendingFgGuides, displayedFgGuides;
+
+    public static io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuides frameGenGuides() {
+        return displayedThisFrame() ? displayedFgGuides : null;
+    }
 
     /** Current-frame color provenance; old output allocations are not evidence that RT replaced this frame. */
     public static boolean displayedThisFrame(RenderTarget target) {
@@ -442,6 +447,7 @@ public final class RtFrameRenderer {
             return;
         }
         displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
+        displayedFgGuides = pendingFgGuides = null;
         // publish this frame's captured entity geometry (also closes the capture: the hand pass that follows is not world geometry)
         if (io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().isOpen()) {
             io.github.andrexarlay.vulkancompat.rt.entity.OffscreenBlockEntities.captureMissing(camera);
@@ -715,6 +721,7 @@ public final class RtFrameRenderer {
         if (pendingDisplayedTarget == target && frameProjection != null) {
             displayedStamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
             displayedTarget = target;
+            displayedFgGuides = pendingFgGuides;
             displayedProjection = RtConfig.FLIP_Y
                 ? new org.joml.Matrix4f().scaling(1, -1, 1).mul(frameProjection) : new org.joml.Matrix4f(frameProjection);
         }
@@ -1209,26 +1216,22 @@ public final class RtFrameRenderer {
                     long depthView = (dlssRrDenoiser != null && dlssRrDenoiser.gbViewZ() != null)
                         ? dlssRrDenoiser.gbViewZ().view
                         : (target != null ? WorldTargetManager.extractVkImageView(target.getDepthTextureView()) : 0L);
-                    boolean jittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
-                        && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive()
-                        && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isScalingActive();
-                    float rrJitterX = jittered
-                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterX()
-                            * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignX()
-                        : 0.0f;
-                    float rrJitterY = jittered
-                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterY()
-                            * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.jitterSignY()
-                        : 0.0f;
                     DlssRrDenoiser owner = dlssRrDenoiser;
                     if (!(pass instanceof RtSlangPathPass slang) || rrHardwareDepth == null)
                         throw new IllegalStateException("RR hardware depth requires the current Slang primary producer");
+                    // The published primary sample is authoritative, including non-upscaler fallback sequences.
+                    float rrJitterX = slang.guideFrame().jitter.x;
+                    float rrJitterY = slang.guideFrame().jitter.y;
                     rrHardwareDepth.record(cmd, slang.guideFrame(), owner.gbViewZ(), owner.hardwareDepth());
                     owner.hardwareDepthRecorded(cmd.address());
                     VkBarriers.fullMemoryBarrier(cmd);
                     frameColorTemporallyResolved = owner.record(cmd, frameProjection, camera.viewRotationMatrix, camera.pos.x, camera.pos.y, camera.pos.z,
                         params.tonemap, composeExposure, depthView, rrJitterX, rrJitterY, camera.projectionMatrix);
                     rrColorResolved = frameColorTemporallyResolved;
+                    if (rrColorResolved && WorldTargetManager.rrResolvesOutput())
+                        pendingFgGuides = owner.frameGenGuides(
+                            io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull(), vulkanDevice,
+                            slang.guideFrame().jitter.x, slang.guideFrame().jitter.y);
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (Exception e) {
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
@@ -1801,6 +1804,7 @@ public final class RtFrameRenderer {
         drainingHostSubmissions = true;
         VulkanCommandEncoder encoder = host.createCommandEncoder();
         try (var completion = encoder.createFence()) {
+            io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.drainProducerRecordings();
             encoder.submit();
             if (!completion.awaitCompletion(5_000_000_000L)) {
                 throw new RtFailure(stage, "host graphics submission completion timed out; resources retained");
@@ -1814,6 +1818,7 @@ public final class RtFrameRenderer {
     private static void shutdown(String reason) {
         if (drainingHostSubmissions) return;
         displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
+        displayedFgGuides = pendingFgGuides = null;
         RtPass pl = pass;
         RtWorld w = world;
         if (w != null) {

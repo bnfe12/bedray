@@ -34,6 +34,9 @@ public final class VelocityPipeline implements AutoCloseable {
     private final Set<Long> recordings = new LinkedHashSet<>();
     private boolean closed;
 
+    /** Exact physical primary-sample offsets, independent of vendor SDK sign conventions. */
+    public record Jitter(float x, float y, float previousX, float previousY) {}
+
     public VelocityPipeline(SlangRuntime runtime) {
         this.runtime = Objects.requireNonNull(runtime, "shared SlangRuntime is required");
         var program = runtime.program(PROGRAM_NAME).orElseThrow(() -> new IllegalStateException("velocity AOT program missing"));
@@ -98,16 +101,36 @@ public final class VelocityPipeline implements AutoCloseable {
         record(cmd, depthView, mvView, width, height, invViewProj, prevViewProj, camDelta, null, null, 0, false,
             DEPTH_LINEAR_VIEW_Z, entityMotionAddress, maskAddress, prevDepthAddress);
     }
+    public void dispatchLinearViewZ(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
+                                    Matrix4f invViewProj, Matrix4f prevViewProj, Vec3 camDelta, long entityMotionAddress,
+                                    long maskAddress, long prevDepthAddress, Jitter jitter) {
+        record(cmd, depthView, mvView, width, height, invViewProj, prevViewProj, camDelta, null, null, 0, false,
+            DEPTH_LINEAR_VIEW_Z, entityMotionAddress, maskAddress, prevDepthAddress, Objects.requireNonNull(jitter));
+    }
+
     public void dispatchRayDistance(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
                                     Matrix4f invViewProj, Matrix4f prevViewProj, Vec3 camDelta) {
         record(cmd, depthView, mvView, width, height, invViewProj, prevViewProj, camDelta, null, null, 0, false,
             DEPTH_RAY_DISTANCE, 0, 0, 0);
     }
 
-    private synchronized void record(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
+    private void record(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
                                     Matrix4f invViewProj, Matrix4f prevViewProj, Vec3 camDelta,
                                     Matrix4f entityCurrTransform, Matrix4f entityPrevTransform, int entityCustomIndex, boolean historyReset,
                                     int convention, long entityMotion, long mask, long previousDepth) {
+        boolean active = CameraJitterManager.isActive();
+        record(cmd, depthView, mvView, width, height, invViewProj, prevViewProj, camDelta,
+            entityCurrTransform, entityPrevTransform, entityCustomIndex, historyReset, convention, entityMotion, mask, previousDepth,
+            new Jitter(active ? CameraJitterManager.getCurrentPixelJitterX() : 0f,
+                active ? CameraJitterManager.getCurrentPixelJitterY() : 0f,
+                active ? CameraJitterManager.getPrevPixelJitterX() : 0f,
+                active ? CameraJitterManager.getPrevPixelJitterY() : 0f));
+    }
+
+    private synchronized void record(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
+                                    Matrix4f invViewProj, Matrix4f prevViewProj, Vec3 camDelta,
+                                    Matrix4f entityCurrTransform, Matrix4f entityPrevTransform, int entityCustomIndex, boolean historyReset,
+                                    int convention, long entityMotion, long mask, long previousDepth, Jitter jitter) {
         if (closed) throw new IllegalStateException("velocity pass is closed");
         Objects.requireNonNull(cmd, "command buffer is required");
         if (depthView == 0 || mvView == 0 || depthView == mvView || width <= 0 || height <= 0)
@@ -116,14 +139,10 @@ public final class VelocityPipeline implements AutoCloseable {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer uniforms = stack.calloc(BedrayVelocityNative.UNIFORM_BYTES);
             Vector3f bobOrigin = io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.levelCameraOriginOr(null);
-            boolean jittered = CameraJitterManager.isActive();
             fillUniforms(uniforms, invViewProj, prevViewProj, camDelta, bobOrigin, width, height,
                 entityCurrTransform, entityPrevTransform, entityCustomIndex, historyReset, convention,
                 entityMotion, mask, previousDepth,
-                jittered ? CameraJitterManager.getCurrentPixelJitterX() : 0f,
-                jittered ? CameraJitterManager.getCurrentPixelJitterY() : 0f,
-                jittered ? CameraJitterManager.getPrevPixelJitterX() : 0f,
-                jittered ? CameraJitterManager.getPrevPixelJitterY() : 0f);
+                jitter.x(), jitter.y(), jitter.previousX(), jitter.previousY());
             pass.record(cmd.address(), depthView, mvView, width, height, uniforms);
         }
     }
