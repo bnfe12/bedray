@@ -1,0 +1,29 @@
+[2026-11-05 00:22:24] [tid:30492][util::setLogFilename:284] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss//nvngx_dlss_310_9_16.log) enabled successfully
+[2026-11-05 00:22:24] [tid:30492][NGXInitLog:208] App logging hooks successfully initialized
+[2026-11-05 00:22:24] [tid:30492][NGXInitLog:214] Build v310.9.16 CL 38955375
+[2026-11-05 00:22:24] [tid:30492][NGXInitLog:216] Built with APP_NAME = nvapp_override
+[2026-11-05 00:22:24] [tid:30492][NGXInitLog:226] Loaded from path "C:\ProgramData\NVIDIA\NGX\models\dlss\versions\20318480\files/160_E658700.bin" by javaw.exe
+[2026-11-05 00:22:24] [tid:30492][NGXCubinVulkan::Init:204] Enabling texmode_raw
+[2026-11-05 00:22:24] [tid:30492][NGXCubinKernelMap::InitCubins:42] Loading NGXCubin kernels
+[2026-11-05 00:22:24] [tid:30492][NGXCubinGeneric::SetGPUArch:413] SetGPUArch:: Gpu count = 1, luid: 0xf00d
+[2026-11-05 00:22:24] [tid:30492][NGXCubinGeneric::SetGPUArch:473] m_gpuArch = 0x1b0
+[2026-11-05 00:22:24] [tid:30492][NGXCubinGeneric::genericPostInit:164] Fast UAV clear: supported
+[2026-11-05 00:22:24] [tid:30492][DLSSCubinKernelMap::InitCubins:303] Setting DLAA Cubins
+[2026-11-05 00:22:24] [tid:30492][DLSSCubinKernelMap::InitCubins:303] Setting DLSS Debug Cubins
+[2026-11-05 00:22:24] [tid:30492][DLSSCubinKernelMap::InitCubins:303] Setting DLTSS Engine Cubins
+[2026-11-05 00:22:24] [tid:30492][DLSSCubinKernelMap::InitCubins:303] Setting DLTSS NW Cubins
+[2026-11-05 00:22:24] [tid:30492][DLSSCubinKernelMap::InitCubins:303] Setting DLTSS NW E5M3_SKIP Cubins
+[2026-11-05 00:22:24] [tid:30492][DLSSCubinKernelMap::InitCubins:303] Setting DLTSS NW Cubins
+[2026-11-05 00:22:24] [tid:30492][DldnCubinKernelMap::InitCubins:138] Setting DLDN Engine Pre / Post Cubins
+[2026-11-05 00:22:25] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_5bd36971463f469fd81574f74f368df1>::operator ():1733] Info: (DLAA) Using Default Overriden Preset Preset_D
+[2026-11-05 00:22:25] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_5bd36971463f469fd81574f74f368df1>::operator ():1733] Info: (Quality) Using Default Overriden Preset Preset_D
+[2026-11-05 00:22:25] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_5bd36971463f469fd81574f74f368df1>::operator ():1733] Info: (Balanced) Using Default Overriden Preset Preset_D
+[2026-11-05 00:22:25] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_5bd36971463f469fd81574f74f368df1>::operator ():1733] Info: (Perf) Using Default Overriden Preset Preset_D
+[2026-11-05 00:22:25] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_5bd36971463f469fd81574f74f368df1>::operator ():1733] Info: (UltraPerf) Using Default Overriden Preset Preset_D
+[2026-11-05 00:22:25] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_5bd36971463f469fd81574f74f368df1>::operator ():1733] Info: (UltraQuality) Using Default Overriden Preset Preset_D
+[2026-11-05 00:22:25] [tid:30492][NgxDltss::FillCreationParams::<lambda_cef418e50ae0bb979313c68b3f92b7fd>::operator ():2745] Info: (DLAA) Using DRS Overridden Preset K
+[2026-11-05 00:22:25] [tid:30492][NgxDltss::FillCreationParams::<lambda_cef418e50ae0bb979313c68b3f92b7fd>::operator ():2745] Info: (Quality) Using DRS Overridden Preset K
+[2026-11-05 00:22:25] [tid:30492][NgxDltss::FillCreationParams::<lambda_cef418e50ae0bb979313c68b3f92b7fd>::operator ():2745] Info: (Balanced) Using DRS Overridden Preset K
+[2026-11-05 00:22:25] [tid:30492][NgxDltss::FillCreationParams::<lambda_cef418e50ae0bb979313c68b3f92b7fd>::operator ():2745] Info: (Perf) Using DRS Overridden Preset M
+[2026-11-05 00:22:25] [tid:30492][NgxDltss::FillCreationParams::<lambda_cef418e50ae0bb979313c68b3f92b7fd>::operator ():2745] Info: (UltraPerf) Using DRS Overridden Preset L
+[2026-11-05 00:22:25] [tid:30492][NgxDltss::FillCreationParams::<lambda_cef418e50ae0bb979313c68b3f92b7fd>::operator ():2745] Info: (UltraQuality) Using DRS Overridden Preset K

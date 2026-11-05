@@ -1,0 +1,2 @@
+[2026-11-05 00:22:22] [util::setLogFilename:284] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss/nvsdk_ngx.log) enabled successfully
+[2026-11-05 00:22:22] [NGXSafeInitializeLog:150] App logging hooks successfully initialized

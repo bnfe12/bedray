@@ -1,0 +1,19 @@
+[2026-11-05 00:22:25] [tid:30492][util::setLogFilename:284] Logging to requested file (%USERPROFILE%\AppData\Roaming\FreesmLauncher\instances\Vulkan Experimental RT 26.3\minecraft\logs\vkb_dlss//nvngx_dlssd_310_9_16.log) enabled successfully
+[2026-11-05 00:22:25] [tid:30492][NGXInitLog:208] App logging hooks successfully initialized
+[2026-11-05 00:22:25] [tid:30492][NGXInitLog:214] Build v310.9.16 CL 39061540
+[2026-11-05 00:22:25] [tid:30492][NGXInitLog:216] Built with APP_NAME = app_dlssd_nvapp_override
+[2026-11-05 00:22:25] [tid:30492][NGXInitLog:226] Loaded from path "C:\ProgramData\NVIDIA\NGX\models\dlssd\versions\20318480\files/160_E658700.bin" by javaw.exe
+[2026-11-05 00:22:25] [tid:30492][NGXCubinVulkan::Init:204] Enabling texmode_raw
+[2026-11-05 00:22:25] [tid:30492][NGXCubinKernelMap::InitCubins:42] Loading NGXCubin kernels
+[2026-11-05 00:22:25] [tid:30492][NGXCubinGeneric::SetGPUArch:413] SetGPUArch:: Gpu count = 1, luid: 0xf00d
+[2026-11-05 00:22:25] [tid:30492][NGXCubinGeneric::SetGPUArch:473] m_gpuArch = 0x1b0
+[2026-11-05 00:22:25] [tid:30492][NGXCubinGeneric::genericPostInit:164] Fast UAV clear: supported
+[2026-11-05 00:22:25] [tid:30492][DLSSCubinKernelMap::InitCubins:208] Setting DLSS Base Cubins for standalone RR
+[2026-11-05 00:22:25] [tid:30492][DldnCubinKernelMap::InitCubins:156] Setting DLDN Engine Pre / Post Cubins
+[2026-11-05 00:22:25] [tid:30492][DldnCubinKernelMap::InitCubins:188] Setting DLDN Engine Pre / Post Cubins
+[2026-11-05 00:22:28] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_b0895ca935aef9108dfb8dd26596eee7>::operator ():1803] Info: (DLAA) Using DRS Overridden Preset Preset_F
+[2026-11-05 00:22:28] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_b0895ca935aef9108dfb8dd26596eee7>::operator ():1803] Info: (Quality) Using DRS Overridden Preset Preset_F
+[2026-11-05 00:22:28] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_b0895ca935aef9108dfb8dd26596eee7>::operator ():1803] Info: (Balanced) Using DRS Overridden Preset Preset_F
+[2026-11-05 00:22:28] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_b0895ca935aef9108dfb8dd26596eee7>::operator ():1803] Info: (Perf) Using DRS Overridden Preset Preset_F
+[2026-11-05 00:22:28] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_b0895ca935aef9108dfb8dd26596eee7>::operator ():1803] Info: (UltraPerf) Using DRS Overridden Preset Preset_F
+[2026-11-05 00:22:28] [tid:30492][NgxRayReconstruction::FillCreationParams::<lambda_b0895ca935aef9108dfb8dd26596eee7>::operator ():1803] Info: (UltraQuality) Using DRS Overridden Preset Preset_F
