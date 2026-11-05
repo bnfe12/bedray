@@ -4407,3 +4407,50 @@ running during the replacement and nothing was launched.
 L1/L2 only. The promoted main, the rebuilt native pair and the RR/AS/NORT
 changes have not run on a GPU. L3-L5, visual parity and the absence of the
 earlier `RtOutputResolve` crash still require an owner run.
+
+## 2026-11-05 - DLSS vendor resource ownership promotion (L1/L2; no live run)
+
+`origin/main` advanced to `73f450a76feff457f39f2547e77328e307ecc173`,
+the merge of PR #75 "retry-safe vendor resource ownership and dormant SR
+retirement". The Java-side changes retain DLSS resource owners through vendor
+failures, bound capability-refresh retries and suspend dormant SR retirement;
+the native DLSS bridge gained the additive v1 resource contract.
+
+Both core native DLLs were rebuilt from this checkout and are byte-identical to
+the previous promotion because PR #75 does not touch their sources:
+`bedray_core.dll` 488,960 B SHA-256
+`299C11F5D274CF746CD483A69C8D67CF202C08EB5BF1476298FEFDF84D412338`;
+`bedray_scene.dll` 248,832 B SHA-256
+`BC5069B997C1D957549D5AFE32199C7CFCEDA785175BDCD5878C31534FA82E58`.
+
+The vendor bridges were rebuilt because their sources changed in PR #75:
+`vkb_dlss.dll` 973,824 B SHA-256
+`0D249463B650921E15B9E9122846DEC25FCB9CC3FCF4A0AD804FBB59473943AE`,
+`vkb_sl.dll` 222,208 B SHA-256
+`8856DA23348C7A523A6FA00609EDFE1BC56F4D33F068D34C575ACE18C51ECAC2`.
+`dumpbin /exports` confirms both binaries export
+`vkb_dlss_resource_contract_version` and `vkb_dlss_shutdown_checked`; the SL
+shim carries the vkb_dlss_* surface used by the Streamline path.
+
+Java validation: `:core:test` 121 tests, zero failures/errors; `:common:test`
+1,242 tests, zero failures/errors, 3 skipped; `:common:runShimTests` 34/34.
+Native validation: core CTest 29/29 and standalone scene CTest 1/1.
+
+Both combined jars were built from clean `73f450a` with manifest
+`Git-Commit 73f450a76feff457f39f2547e77328e307ecc173`, `Git-Dirty false`:
+Fabric 20,508,038 B SHA-256
+`1B421422E3BE2C282DC24E45AE09B17D3DA48E923D32922A3A2DD6D223110CEB`;
+NeoForge 20,515,272 B SHA-256
+`E3A16C1635F14828F9B6BF264F3432BCD92ACC526A5ADF7FE62183ECE8BD21A2`.
+The jar binds the two new optional exports and fails back to the old behaviour
+when an older bridge is present, but the promoted resource-retention path needs
+these rebuilt bridges.
+
+The jars, both core/scene DLLs, `vkb_dlss.dll` and the streamline
+`vkb_sl.dll` were copied to the five BedRay instances. Replaced files are in
+backup `bedray-deploy-20261105-001758`. No BedRay instance was running during
+the replacement and nothing was launched.
+
+L1/L2 only. The promoted DLSS resource ownership, dormant SR retirement and the
+rebuilt vendor bridges have not run on a GPU. L3-L5 and visual parity still
+require an owner run.
