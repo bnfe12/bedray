@@ -63,6 +63,14 @@ class RtEmitterHysteresisTest {
     }
 
     @Test
+    void twoEmitterCandidatesByDefault() throws java.io.IOException {
+        String config = java.nio.file.Files.readString(java.nio.file.Path.of(
+            "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtConfig.java"));
+        assertTrue(config.contains("Integer.getInteger(\"vkbridge.rt.emitterCandidates\", 2)"),
+            "8 candidates cost 41.6 ms of trace in the torch room at 2560x1440, 2 cost 24.0 ms with no more flicker");
+    }
+
+    @Test
     void bothSelectionPathsUseTheStickyScore() throws java.io.IOException {
         String source = java.nio.file.Files.readString(java.nio.file.Path.of(
             "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtEmitters.java"));

@@ -23,6 +23,15 @@ public final class DlssConfig {
     /** Jitter sign experiment switches (verifier tunes them on a static scene): {@code -Dvkbridge.dlss.jitterSignX/Y=1|-1}. */
     public static final String JITTER_SIGN_X_PROPERTY = "vkbridge.dlss.jitterSignX";
     public static final String JITTER_SIGN_Y_PROPERTY = "vkbridge.dlss.jitterSignY";
+    /**
+     * Jitter sign of DLSS Ray Reconstruction, measured separately from DLSS-SR ({@code -Dvkbridge.dlss.rr.jitterSignX/Y}).
+     * Static torch room at 2560x1440, 10 consecutive shots (2026-11-07): with (+1,+1) the whole RR output wobbled in a
+     * repeating cycle of up to 2 px, mostly vertical (owner: "lights and shadows jerk in a circle"); (+1,-1) gave 0.004 px
+     * of shift, frame-to-frame difference 3.01 -> 0.31 (edges 9.95 -> 0.71) and a slightly sharper image. The RR guides are
+     * written y-down while NGX expects the jitter y the other way.
+     */
+    public static final String RR_JITTER_SIGN_X_PROPERTY = "vkbridge.dlss.rr.jitterSignX";
+    public static final String RR_JITTER_SIGN_Y_PROPERTY = "vkbridge.dlss.rr.jitterSignY";
     /** Same relative path as VulkanRtxConfig (the launcher starts the game in the instance directory). */
     private static final Path CONFIG_FILE = io.github.andrexarlay.vulkancompat.rtx.config.ConfigFiles.resolve(Path.of("config", "bedray.toml"));
 
@@ -73,6 +82,16 @@ public final class DlssConfig {
 
     public static float jitterSignY() {
         return signProperty(JITTER_SIGN_Y_PROPERTY, 1.0f);
+    }
+
+    /** Ray Reconstruction jitter sign X (measured: +1). */
+    public static float rrJitterSignX() {
+        return signProperty(RR_JITTER_SIGN_X_PROPERTY, 1.0f);
+    }
+
+    /** Ray Reconstruction jitter sign Y (measured: -1, see RR_JITTER_SIGN_X_PROPERTY). */
+    public static float rrJitterSignY() {
+        return signProperty(RR_JITTER_SIGN_Y_PROPERTY, -1.0f);
     }
 
     private static float signProperty(String name, float def) {
