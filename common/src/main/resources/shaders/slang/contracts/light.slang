@@ -90,6 +90,14 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
 interface ILightSampler {
     LightSample sample(LightReceiver receiver, inout uint seed);
     LightEvaluation evaluate(LightReceiver receiver, LightSample sample);
+
+    // Reuse that only reweights a stored sample (spatial ReSTIR) needs the target
+    // density p^, not the density the sample was drawn with.  A sampler whose
+    // source density is expensive overrides this and leaves sourcePdf at 0:
+    // callers of evaluateTarget must not read it.
+    LightEvaluation evaluateTarget(LightReceiver receiver, LightSample sample) {
+        return evaluate(receiver, sample);
+    }
 };
 
 // Cross-frame reuse of one direct-light sample.  The record lives in screen

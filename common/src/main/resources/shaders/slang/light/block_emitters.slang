@@ -489,6 +489,42 @@ struct BlockEmitterSampler : ILightSampler {
         result.sourcePdf = solidAnglePdf;
         return result;
     }
+
+    // p^ only.  The selection probability is a leaf-to-root walk of the light
+    // tree (emitterLocalProbability, up to 17 levels and ~6 dependent loads per
+    // level); spatial reuse ran it for each of its 8 neighbours and threw the
+    // result away, which took di_spatial from 2.0 to 6.5 ms (2026-11-07).  p^
+    // does not depend on it (blockEmitterCandidate), so it is skipped here.
+    override LightEvaluation evaluateTarget(LightReceiver receiver, LightSample sample) {
+        LightEvaluation result = invalidLightEvaluation();
+        if (sample.kind != LightKind.Emitter) {
+            return result;
+        }
+        float lightRadius = min(maxDistance, EMITTER_RADIUS);
+        uint count = blockEmitterCount(records);
+        if (count == 0u) {
+            return result;
+        }
+        uint index = blockEmitterFind(records, sample.lightIndex);
+        if (index >= count) return result;
+        BlockEmitterRecord emitter = blockEmitterRecord(records, index);
+        float2 uv;
+        if (!blockEmitterCoordinates(sample.position, emitter, cameraRelative, uv)) return result;
+        BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, index, uv,
+            receiver, cameraRelative, lightRadius, 1.0);
+        // Same acceptance as evaluate(): its solidAnglePdf test can never fail
+        // (both factors are clamped positive), so validity is the candidate's own.
+        // The one difference: a malformed light tree (probability -1) no longer
+        // rejects the neighbour here; sampling still rejects it on every draw.
+        if (!blockEmitterCandidateValid(candidate)) {
+            return result;
+        }
+        result.valid = true;
+        result.radiance = blockEmitterRadiance(candidate.point, atlas) / max(candidate.point.texelEmission, 1.0e-4);
+        result.targetPdf = candidate.phat;
+        result.sourcePdf = 0.0;
+        return result;
+    }
 };
 
 // One branch of the key light, one of the emitters: the selection probability belongs to the composite because the
@@ -536,5 +572,12 @@ struct SunAndBlockEmitterSampler : ILightSampler {
             return emitters.evaluate(receiver, sample);
         }
         return keyLight.evaluate(receiver, sample);
+    }
+
+    override LightEvaluation evaluateTarget(LightReceiver receiver, LightSample sample) {
+        if (sample.kind == LightKind.Emitter) {
+            return emitters.evaluateTarget(receiver, sample);
+        }
+        return keyLight.evaluateTarget(receiver, sample);
     }
 };
