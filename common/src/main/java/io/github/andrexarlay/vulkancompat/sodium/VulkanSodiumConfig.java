@@ -942,7 +942,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             Mark.RT, OptionImpact.MEDIUM, true, st));
         ex.addOption(intOpt(builder, "rt_vram_budget_mb", 2048, 256, 16384, 256, unit(" MB"), v -> RtSettings.vramBudgetMb = v,
             () -> RtSettings.vramBudgetMb, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
-        ex.addOption(intOpt(builder, "rt_light_budget", 512, 16, 8192, 16, unit(""), v -> RtSettings.lightBudget = v,
+        ex.addOption(intOpt(builder, "rt_light_budget", 2048, 16, 8192, 16, unit(""), v -> RtSettings.lightBudget = v,
             () -> RtSettings.lightBudget, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         ex.addOption(intOpt(builder, "sun_size_tenths", 5, 1, 50, 1, unit(""), v -> RtSettings.sunSizeTenths = v,
             () -> RtSettings.sunSizeTenths, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));

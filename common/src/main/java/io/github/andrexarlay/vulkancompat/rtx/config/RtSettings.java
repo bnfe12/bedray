@@ -118,7 +118,9 @@ public final class RtSettings {
      */
     public static int bakedLightFillPct = 0;
     /** Most important emissive quads (emission * area / distance^2 around the camera) kept in the light list. */
-    public static int lightBudget = 512;
+    // 2048, not 512: the light BVH samples in O(log n), and at 512 a room with 531 emissive faces in range swapped 365 of
+    // them per publish (testbed 2026-11-07), dropping their NEE and DI history - light near them jumped.
+    public static int lightBudget = 2048;
     /** Settings page layout: show the advanced / expert RT controls. */
     public static boolean showAdvanced = false;
     public static boolean showExpert = false;

@@ -58,7 +58,7 @@ class RtEmitterIdentityStabilityTest {
         assertTrue(source.contains("processEntities(entityQuads, entityCount,\n"
                 + "            entityOffset(camX, originX), entityOffset(camY, originY), entityOffset(camZ, originZ));"),
             "a scan that finishes frames later publishes entity lights with the current camera, not the scan's first one");
-        assertTrue(source.contains("addCandidate(entityQuads, o, ex, ey, ez, importance);"),
+        assertTrue(source.contains("addCandidate(entityQuads, o, ex, ey, ez, score);"),
             "processEntities uses the offset it is given");
         assertTrue(source.contains("entityInRange = 0; // restoreStatic restores only the static counters"),
             "the entity-only path resets its counter (the log read entity_quads=47/3948)");

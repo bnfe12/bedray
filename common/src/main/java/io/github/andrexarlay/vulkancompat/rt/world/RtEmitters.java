@@ -66,6 +66,53 @@ public final class RtEmitters {
     static float snapCorner(float v) {
         return Math.round(v * CORNER_GRID) / CORNER_GRID;
     }
+
+    /**
+     * Membership bonus of a light that was in the last published list, in 1/8-octave importance buckets (4 = x1.41): a
+     * newcomer must beat it by more than that to evict it. The hard top-K swapped lights of nearly equal importance at the
+     * budget edge on every rescan (testbed 2026-11-07: 97 of 512 per publish); each swapped-out light lost its NEE and its
+     * DI reservoirs at once, so the light near it jumped. -Dbedray.rt.disableEmitterHysteresis=true sets 0 (A/B check).
+     */
+    static final int STICKY_BUCKETS = Boolean.getBoolean("bedray.rt.disableEmitterHysteresis") ? 0 : 4;
+    /** Sorted stick keys of the last published list (see stickKey). */
+    private long[] publishedKeys = new long[0];
+
+    /**
+     * Quantized, totally ordered selection score: the 1/8-octave log2 bucket of the importance (float exponent and top
+     * three mantissa bits, monotonic), plus the sticky bonus, plus 12 key bits as a deterministic tie-break. The value stays
+     * below 2048, where a float is exact to 1/4096, so equal inputs always order the same way.
+     */
+    static float selectionScore(float importance, long key, boolean sticky) {
+        int bucket = (Float.floatToRawIntBits(Math.max(importance, Float.MIN_NORMAL)) >>> 20) + (sticky ? STICKY_BUCKETS : 0);
+        return bucket + (key >>> 52) * (1f / 4096f);
+    }
+
+    private static final int[] STICK_WORDS = {4, 5, 6, 8, 9, 10, 11, 12, 13, 15};
+
+    /**
+     * World-space identity of a record: its snapped corner in world coordinates plus edges, uv corner, sidedness and slot.
+     * It depends neither on the emitter origin nor on the emission, so a re-anchored or flickering light stays sticky.
+     */
+    static long stickKey(float lx, float ly, float lz, float[] r, int o, int ox, int oy, int oz) {
+        long h = 0x9E3779B97F4A7C15L;
+        h = mix64(h ^ Math.round(((double) ox + lx) * CORNER_GRID));
+        h = mix64(h ^ Math.round(((double) oy + ly) * CORNER_GRID));
+        h = mix64(h ^ Math.round(((double) oz + lz) * CORNER_GRID));
+        for (int w : STICK_WORDS) {
+            h = mix64(h ^ Float.floatToIntBits(r[o + w] + 0f));
+        }
+        return h;
+    }
+
+    private static long mix64(long z) {
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+
+    private boolean wasPublished(long key) {
+        return java.util.Arrays.binarySearch(publishedKeys, key) >= 0;
+    }
     private static final float[] EMPTY = new float[0];
 
     private record Entry(DecodedSection src, float[] records) {
@@ -280,10 +327,16 @@ public final class RtEmitters {
                 continue;
             }
             float importance = r[o + 14] * r[o + 7] * r[o + 3] / Math.max(d2, 1f);
-            if (heapSize >= targetBudget && importance <= heap[0][FLOATS]) {
+            // cheap reject first: the best score this light could reach (sticky, highest tie-break) cannot enter the heap
+            if (heapSize >= targetBudget && selectionScore(importance, -1L, true) <= heap[0][FLOATS]) {
                 continue;
             }
-            addCandidate(r, o, dx, dy, dz, importance);
+            long key = stickKey(r[o] + dx, r[o + 1] + dy, r[o + 2] + dz, r, o, originX, originY, originZ); // == rec[0..2]
+            float score = selectionScore(importance, key, wasPublished(key));
+            if (heapSize >= targetBudget && score <= heap[0][FLOATS]) {
+                continue;
+            }
+            addCandidate(r, o, dx, dy, dz, score);
         }
     }
 
@@ -542,10 +595,16 @@ public final class RtEmitters {
                 continue;
             }
             float importance = entityQuads[o + 14] * entityQuads[o + 7] * entityQuads[o + 3] / Math.max(d2, 1f);
-            if (heapSize >= targetBudget && importance <= heap[0][FLOATS]) {
+            if (heapSize >= targetBudget && selectionScore(importance, -1L, true) <= heap[0][FLOATS]) {
                 continue;
             }
-            addCandidate(entityQuads, o, ex, ey, ez, importance);
+            long key = stickKey(entityQuads[o] + ex, entityQuads[o + 1] + ey, entityQuads[o + 2] + ez, entityQuads, o,
+                originX, originY, originZ);
+            float score = selectionScore(importance, key, wasPublished(key));
+            if (heapSize >= targetBudget && score <= heap[0][FLOATS]) {
+                continue;
+            }
+            addCandidate(entityQuads, o, ex, ey, ez, score);
         }
     }
 
@@ -563,6 +622,12 @@ public final class RtEmitters {
         sortHeapDescending();
         int n = Math.min(heapSize, MAX_EMITTERS);
         buffers.publish(heap, n, originX, originY, originZ, materialRevision);
+        long[] keys = new long[n];
+        for (int k = 0; k < n; k++) {
+            keys[k] = stickKey(heap[k][0], heap[k][1], heap[k][2], heap[k], 0, originX, originY, originZ);
+        }
+        java.util.Arrays.sort(keys);
+        publishedKeys = keys; // only after a successful publish (buffers.publish throws otherwise)
         publishedOriginX = originX;
         publishedOriginY = originY;
         publishedOriginZ = originZ;

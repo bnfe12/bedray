@@ -502,7 +502,7 @@ public final class SettingsCatalog {
         putNoImage("rt_vram_budget_mb", Tier.EXPERT, "RT Memory Budget", "GPU memory for chunk geometry; the farthest chunks are left out when it is full.",
             "", "", "A memory limit has no look of its own.");
         putNoImage("rt_light_budget", Tier.EXPERT, "RT Light Budget", "Most important glowing block faces that cast traced light.",
-            "", "", "A budget has no look of its own; too small drops far lamps.");
+            "", "", "A budget has no look of its own; too small drops far lamps, and light next to the cut flickers as lamps swap in and out.");
         putNoImage("sun_size_tenths", Tier.EXPERT, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
             "", "", "Visible only as shadow softness at a moment of day; not captured.");
         putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
