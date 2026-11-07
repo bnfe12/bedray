@@ -5,7 +5,7 @@ import "contracts/hit.slang";
 import "traversal/entity_geometry.slang";
 
 TriangleIntersection traceTriangleIntersection(RaytracingAccelerationStructure tlas, Ray ray,
-        uint instanceMask, uint selfStart, uint selfCount, bool excludeSelfAvatar) {
+        uint instanceMask, uint selfStart, uint selfCount, uint selfShadowMode) {
     TriangleIntersection result = missIntersection(ray.tMax);
     if (ray.tMax <= ray.tMin) return result;
     RayDesc desc;
@@ -18,8 +18,8 @@ TriangleIntersection traceTriangleIntersection(RaytracingAccelerationStructure t
     while (query.Proceed()) {
         if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
         uint primitive = query.CandidatePrimitiveIndex();
-        if (excludedSelfAvatar(excludeSelfAvatar, entityInstance(query.CandidateInstanceID()),
-            primitive, selfStart, selfCount)) continue;
+        if (selfOccluderSkipped(selfShadowMode, entityInstance(query.CandidateInstanceID()),
+            primitive, selfStart, selfCount, ray.origin)) continue;
         query.CommitNonOpaqueTriangleHit();
     }
     if (query.CommittedStatus() == COMMITTED_NOTHING) return result;

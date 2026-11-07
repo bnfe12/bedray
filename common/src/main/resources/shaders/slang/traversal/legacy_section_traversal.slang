@@ -183,6 +183,8 @@ struct LegacySectionTraversal : ITriangleTracer {
     // count of 0 means there is no capture (third person, or the option off).
     uint selfAvatarTriStart;
     uint selfAvatarTriCount;
+    // SELF_SHADOW_* for shadow, visibility and diffuse rays (setting self_shadow).
+    uint selfShadowMode;
 
     // One committed hit named: the instance bit says whether the triangle came
     // out of the entity ring or out of a section, and nothing else distinguishes
@@ -200,12 +202,16 @@ struct LegacySectionTraversal : ITriangleTracer {
     // entity ring is the only geometry that has such primitives.  Cutout texels
     // are not filtered here - they are a material question, and the surface
     // layer answers it.
-    SurfaceHit traceNearest(Ray ray, bool excludeSelfAvatar) {
-        return decodeIntersection(ray, traceIntersection(ray, excludeSelfAvatar));
+    uint secondarySelfShadowMode() {
+        return selfShadowMode;
     }
 
-    TriangleIntersection traceIntersection(Ray ray, bool excludeSelfAvatar) {
-        return traceTriangleIntersection(tlas, ray, instanceMask, selfAvatarTriStart, selfAvatarTriCount, excludeSelfAvatar);
+    SurfaceHit traceNearest(Ray ray, uint selfMode) {
+        return decodeIntersection(ray, traceIntersection(ray, selfMode));
+    }
+
+    TriangleIntersection traceIntersection(Ray ray, uint selfMode) {
+        return traceTriangleIntersection(tlas, ray, instanceMask, selfAvatarTriStart, selfAvatarTriCount, selfMode);
     }
 
     SurfaceHit decodeIntersection(Ray ray, TriangleIntersection hit) {
@@ -214,15 +220,15 @@ struct LegacySectionTraversal : ITriangleTracer {
     }
 
     SurfaceHit traceClosest(Ray ray) {
-        return traceNearest(ray, true);
+        return traceNearest(ray, selfShadowMode);
     }
 
     override SurfaceHit tracePrimary(Ray ray) {
-        return traceNearest(ray, true);
+        return traceNearest(ray, SELF_SHADOW_OFF);
     }
 
     override SurfaceHit traceMirror(Ray ray) {
-        return traceNearest(ray, false);
+        return traceNearest(ray, SELF_SHADOW_FULL);
     }
 
     // A section cannot move: its geometry is uploaded once and the world around a
@@ -242,15 +248,14 @@ struct LegacySectionTraversal : ITriangleTracer {
         desc.TMin = ray.tMin;
         desc.TMax = ray.tMax;
 
-        // The first-person body surrounds the camera: a shadow ray that kept it
-        // darkened the floor under the player into a black blot, so it is
-        // skipped here exactly as the primary ray skips it.
+        // The first-person body casts its shadow per the self_shadow setting;
+        // by default not onto the floor patch its own feet cover.
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
         while (query.Proceed()) {
             if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
-            if (excludedSelfAvatar(true, entityInstance(query.CandidateInstanceID()),
-                query.CandidatePrimitiveIndex(), selfAvatarTriStart, selfAvatarTriCount)) continue;
+            if (selfOccluderSkipped(selfShadowMode, entityInstance(query.CandidateInstanceID()),
+                query.CandidatePrimitiveIndex(), selfAvatarTriStart, selfAvatarTriCount, ray.origin)) continue;
             query.CommitNonOpaqueTriangleHit();
         }
 

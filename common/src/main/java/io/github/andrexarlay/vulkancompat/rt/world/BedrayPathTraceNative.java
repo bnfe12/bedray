@@ -323,7 +323,8 @@ final class BedrayPathTraceNative implements AutoCloseable {
         int state = Math.toIntExact(BedrayCoreLayouts.PTP_ENTITY_STATE);
         packet.putInt(state, entities.atlasSize());
         packet.putInt(state + 4, entities.selfAvatarTriStart());
-        packet.putInt(state + 8, entities.selfAvatarTriCount());
+        packet.putInt(state + 8, io.github.andrexarlay.vulkancompat.rt.entity.SelfAvatarGate.packCountAndShadow(
+            entities.selfAvatarTriCount(), io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.selfShadow));
     }
 
     /** Borrowed host targets in shader binding order (different from the denoiser's array order). */

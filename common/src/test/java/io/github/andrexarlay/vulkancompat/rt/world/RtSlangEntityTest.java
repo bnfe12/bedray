@@ -97,11 +97,11 @@ class RtSlangEntityTest {
     @Test
     void theSelfAvatarIsSkippedByPrimaryRaysOnly() {
         String traversal = read(TRAVERSAL);
-        assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, true);"),
+        assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_OFF);"),
             "the primary ray looks past the body");
-        assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, true);"),
-            "a diffuse bounce looks past it too: the camera stands inside the body");
-        assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, false);"),
+        assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, selfShadowMode);"),
+            "a diffuse bounce follows the self_shadow setting");
+        assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_FULL);"),
             "only a mirror ray sees it, so water and glass reflect the player");
         String skip = read(SHADERS + "/contracts/triangle_intersection.slang");
         assertTrue(skip.contains("primary && entity && count != 0u"),
@@ -109,7 +109,7 @@ class RtSlangEntityTest {
 
         String pass = read(PASS);
         assertTrue(pass.contains("traversal.selfAvatarTriStart = pc.entityState.y;"), "the range comes from the push");
-        assertTrue(pass.contains("traversal.selfAvatarTriCount = pc.entityState.z;"));
+        assertTrue(pass.contains("traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;"));
     }
 
     /**

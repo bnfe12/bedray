@@ -138,7 +138,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // The first-person body sits around the eye, so only the camera ray looks
     // past it; every other ray of the path crosses it like any other geometry.
     traversal.selfAvatarTriStart = pc.entityState.y;
-    traversal.selfAvatarTriCount = pc.entityState.z;
+    traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;
+    traversal.selfShadowMode = pc.entityState.z >> 30u;
 #ifdef BEDRAY_NVSER
     ReorderingTraversal<LegacySectionTraversal> reorderedTraversal;
     reorderedTraversal.base = traversal;

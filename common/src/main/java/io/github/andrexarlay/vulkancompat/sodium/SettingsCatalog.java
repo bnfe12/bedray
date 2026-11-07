@@ -221,6 +221,10 @@ public final class SettingsCatalog {
                 p("vanilla", "Vanilla", () -> RtSettings.waterStyle = RtSettings.WATER_STYLE_VANILLA),
                 p("realistic", "Realistic", () -> RtSettings.waterStyle = RtSettings.WATER_STYLE_REALISTIC)),
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
+        putNoImage("self_shadow", Tier.ESSENTIAL, "Player Shadow (first person)",
+            "Full: your body casts its shadow everywhere, also the dark patch right under your feet. No blot underfoot: the shadow stays, but the floor your unseen feet cover is lit. Off: your body casts no shadow. Water and glass reflect you in every mode.",
+            "No measurable cost difference; the same rays are traced.", "Ray tracing on, first person.",
+            "No comparison image captured yet.");
         put("atm_godrays", Tier.ESSENTIAL, "Light Shafts",
             "Visible beams of sun and moon light through leaves, windows and cave openings; strongest at sunrise and sunset.",
             "", "Needs ray tracing on.", Scene.SUNSET, 0.5f, 0.45f, "godrays", List.of(

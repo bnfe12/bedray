@@ -129,6 +129,16 @@ public final class RtSettings {
     /** Strength of the generated normal maps in percent (100 = AutoNormals.BASE_STRENGTH). */
     public static int autoNormalStrength = 100;
 
+    // ---- First-person body shadow ----
+    /** The body casts its shadow like any other geometry, also onto the floor patch its own (unseen) feet cover. */
+    public static final int SELF_SHADOW_FULL = 0;
+    /** The body casts its shadow, but rays leaving the floor inside its own column ignore it (no black blot underfoot). */
+    public static final int SELF_SHADOW_NO_FOOTPRINT = 1;
+    /** The body never occludes light; only mirror rays still see it. */
+    public static final int SELF_SHADOW_OFF = 2;
+    /** First-person body shadow ({@code self_shadow}); third person always uses the full model. */
+    public static int selfShadow = SELF_SHADOW_NO_FOOTPRINT;
+
     // ---- Water & Liquids ----
     public static final int WATER_STYLE_VANILLA = 0;
     public static final int WATER_STYLE_REALISTIC = 1;
@@ -294,6 +304,7 @@ public final class RtSettings {
         bool("rt_show_expert", () -> showExpert, v -> showExpert = v);
         integer("auto_normal_strength", () -> autoNormalStrength, v -> autoNormalStrength = v, 0, 400);
         integer("water_style", () -> waterStyle, v -> waterStyle = v, 0, 1);
+        integer("self_shadow", () -> selfShadow, v -> selfShadow = v, SELF_SHADOW_FULL, SELF_SHADOW_OFF);
         bool("waving_foliage", () -> wavingFoliage, v -> wavingFoliage = v);
         integer("waving_foliage_strength", () -> wavingFoliageStrength, v -> wavingFoliageStrength = v, 0, 200);
         bool("rt_fog", () -> volumetricFogEnabled, v -> { volumetricFogEnabled = v; rtFog = v; });

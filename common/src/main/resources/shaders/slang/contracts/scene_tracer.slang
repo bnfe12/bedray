@@ -24,10 +24,9 @@ interface ISceneTracer {
     // less geometry than a bounce: a first-person capture puts the local
     // player's own body around the camera, and the centimetres of inner face
     // between the eye and that body would otherwise fill the screen.  Shadow,
-    // visibility and diffuse rays skip it as well (traceClosest and
-    // traceVisibility): the camera stands inside that body, so every ray leaving
-    // the floor under the player found it and painted a black blot there
-    // (2026-11-07, testbed screenshot).  Only a mirror ray still sees it.
+    // visibility and diffuse rays (traceClosest, traceVisibility) follow the
+    // self_shadow setting: by default the body casts its shadow everywhere except
+    // onto the floor it stands on, which the eye cannot see the feet covering.
     SurfaceHit tracePrimary(Ray ray) {
         return traceClosest(ray);
     }

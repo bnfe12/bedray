@@ -76,6 +76,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/SodiumPage");
 
     public enum WaterStyle { VANILLA, REALISTIC }
+    /** Ordinals match {@code RtSettings.SELF_SHADOW_*}. */
+    public enum SelfShadow { FULL, NO_FOOTPRINT, OFF }
     public enum RendererStatus { STATUS }
     public enum QualityProfile { FAST, BEAUTIFUL, CUSTOM }
 
@@ -401,6 +403,19 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
                 () -> RtSettings.waterStyle == RtSettings.WATER_STYLE_VANILLA ? WaterStyle.VANILLA : WaterStyle.REALISTIC)
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         rt.addOption(track("water_style", water));
+        EnumOptionBuilder<SelfShadow> selfShadow = builder.createEnumOption(id("self_shadow"), SelfShadow.class);
+        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.NO_FOOTPRINT)
+            .setAllowedValues(EnumSet.allOf(SelfShadow.class))
+            .setElementNameProvider(v -> switch (v) {
+                case FULL -> tr("bedray.self_shadow.full", "Full");
+                case NO_FOOTPRINT -> tr("bedray.self_shadow.no_footprint", "No blot underfoot");
+                case OFF -> tr("bedray.self_shadow.off", "Off");
+            })
+            .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> RtSettings.selfShadow = v.ordinal(),
+                () -> SelfShadow.values()[Math.max(0, Math.min(2, RtSettings.selfShadow))])
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        rt.addOption(track("self_shadow", selfShadow));
         rt.addOption(boolOpt(builder, "rays_optical_materials", true, v -> RtSettings.opticalMaterials = v,
             () -> RtSettings.opticalMaterials, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
         rt.addOption(boolOpt(builder, "rays_direct_translucent_shadows", true, v -> RtSettings.directTranslucentShadows = v,

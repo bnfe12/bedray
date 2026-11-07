@@ -57,16 +57,17 @@ public class RtSelfAvatarExclusionTest {
         String pass = read(PASS);
         assertTrue(pass.contains("traversal.selfAvatarTriStart = pc.entityState.y;"),
             "the pass lifts the range out of the stats word the renderer just wrote");
-        assertTrue(pass.contains("traversal.selfAvatarTriCount = pc.entityState.z;"), "and its length");
+        assertTrue(pass.contains("traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;"), "and its length (low 30 bits)");
         String traversal = read(TRAVERSAL);
         assertTrue(traversal.contains("uint selfAvatarTriStart;"), "the traversal state carries the range into the candidate loop");
         assertTrue(traversal.contains("uint selfAvatarTriCount;"), "and its length");
     }
 
     @Test
-    public void onlyMirrorRaysSeeTheAvatar() {
-        // 2026-11-07: with the body kept for shadow and diffuse rays, the floor under a first-person player rendered as
-        // a black blot - the camera stands inside that body, so every ray leaving the floor found it.
+    public void selfShadowFollowsTheSettingAndMirrorsAlwaysSeeTheBody() {
+        // 2026-11-07: with the body a full occluder, the floor under a first-person player rendered as a black blot - the
+        // eye cannot see the feet that cover it. Removing the body shadow altogether was wrong (owner: the shadow stays);
+        // the default mode skips the body only for rays that leave the floor inside its own column.
         String tracer = read(TRACER);
         assertTrue(tracer.contains("SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)")
                 && tracer.contains(": glossyEscape ? traversal.traceMirror(ray) : traversal.traceClosest(ray);"),
@@ -77,21 +78,34 @@ public class RtSelfAvatarExclusionTest {
             "a backend that has no first-person capture answers both hooks with the full scene");
         for (String path : new String[] {TRAVERSAL, SHADERS + "/traversal/legacy_section_traversal.slang"}) {
             String traversal = read(path);
-            assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, true);"),
+            assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_OFF);"),
                 path + ": the eye ray skips the body");
-            assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, true);"),
-                path + ": a diffuse bounce skips it too");
-            assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, false);"),
-                path + ": a mirror ray keeps it");
+            assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, selfShadowMode);"),
+                path + ": a diffuse bounce follows the self_shadow setting");
+            assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_FULL);"),
+                path + ": a mirror ray always keeps it");
             String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
-            int skip = visibility.indexOf("excludedSelfAvatar(true, entityInstance(query.CandidateInstanceID())");
+            int skip = visibility.indexOf("selfOccluderSkipped(selfShadowMode, entityInstance(query.CandidateInstanceID())");
             int commit = visibility.indexOf("query.CommitNonOpaqueTriangleHit();");
-            assertTrue(skip >= 0 && commit > skip, path + ": a shadow ray drops the body before it commits a blocker");
+            assertTrue(skip >= 0 && commit > skip, path + ": a shadow ray applies the setting before it commits a blocker");
         }
         String ser = read(SHADERS + "/traversal/reordering_traversal.slang");
-        assertTrue(ser.contains("SurfaceHit traceClosest(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, true);")
-                && ser.contains("override SurfaceHit traceMirror(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, false);"),
-            "the SER wrapper keeps the same split, or SER-capable GPUs would bring the blot back");
+        assertTrue(ser.contains("SurfaceHit traceClosest(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, base.secondarySelfShadowMode());")
+                && ser.contains("override SurfaceHit traceMirror(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, SELF_SHADOW_FULL);"),
+            "the SER wrapper keeps the same split, or SER-capable GPUs would trace a different shadow");
+        String helper = block(read(SHADERS + "/contracts/triangle_intersection.slang"),
+            "bool selfOccluderSkipped(uint mode, bool entity, uint primitive, uint start, uint count, float3 origin) {");
+        assertTrue(helper.contains("if (mode == SELF_SHADOW_FULL) return false;")
+                && helper.contains("if (mode == SELF_SHADOW_OFF) return true;")
+                && helper.contains("return dot(origin.xz, origin.xz) < SELF_SHADOW_FOOTPRINT_RADIUS * SELF_SHADOW_FOOTPRINT_RADIUS;"),
+            "the default mode skips the body only for rays that start inside its column (camera-relative xz = 0)");
+        for (String pass : new String[] {"path_trace", "path_trace_scene", "rc_path_trace_scene", "restir_pt_spatial",
+                "restir_pt_spatial_scene", "rc_field_build_scene"}) {
+            String source = read(SHADERS + "/passes/" + pass + ".slang");
+            assertTrue(source.contains("traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;")
+                    && source.contains("traversal.selfShadowMode = pc.entityState.z >> 30u;"),
+                pass + " unpacks the count and the mode the host packed into entityState.z");
+        }
         assertTrue(read(SHADERS + "/traversal/hybrid_traversal.slang").contains("hardware.traceMirror(ray)"),
             "the hybrid backend forwards mirror rays to the half that holds the body");
     }
@@ -99,7 +113,7 @@ public class RtSelfAvatarExclusionTest {
     @Test
     public void theCandidateLoopSkipsBeforeItCommits() {
         String trace = read(SHADERS + "/traversal/triangle_query.slang");
-        int skip = trace.indexOf("if (excludedSelfAvatar(excludeSelfAvatar, entityInstance(");
+        int skip = trace.indexOf("if (selfOccluderSkipped(selfShadowMode, entityInstance(");
         int commit = trace.indexOf("query.CommitNonOpaqueTriangleHit();");
         assertTrue(skip >= 0, "the candidate loop has to drop the avatar's triangles");
         assertTrue(commit >= 0, "the walk commits the terminal surface it really hits");

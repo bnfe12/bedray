@@ -61,7 +61,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     SceneTraversal traversal;
     traversal.tlas = tlas; traversal.geometry = geometry; traversal.instanceMask = 0x03u;
     traversal.entities = entities; traversal.cameraAnchor = pc.emitterCameraRelative.xyz;
-    traversal.selfAvatarTriStart = pc.entityState.y; traversal.selfAvatarTriCount = pc.entityState.z;
+    traversal.selfAvatarTriStart = pc.entityState.y; traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;
+    traversal.selfShadowMode = pc.entityState.z >> 30u;
     MaterialAtlas atlas;
     atlas.albedo = albedoAtlas; atlas.material = materialAtlas; atlas.normal = normalAtlas;
     atlas.entities = entityAtlas;
