@@ -103,7 +103,7 @@ public final class LookScenario implements AutotestScenario {
             for (int i = 1; i < parts.length; i++) {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.matches("[tbfvsd]\\d+") || m.matches("c[xyz]=-?\\d+(\\.\\d+)?") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("refl")
-                    || m.equals("gi") || m.equals("ao") || m.equals("perf") || m.matches("water=(vanilla|realistic)") || m.matches("self=(full|nofoot|off)") || m.equals("noaccum") || m.equals("noglass") || m.equals("glass"))) {
+                    || m.equals("gi") || m.equals("ao") || m.equals("perf") || m.matches("water=(vanilla|realistic)") || m.matches("self=(full|nofoot|off)") || m.equals("dn=rr") || m.equals("noaccum") || m.equals("noglass") || m.equals("glass"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 mods.add(m);
@@ -457,6 +457,8 @@ public final class LookScenario implements AutotestScenario {
                 RtSettings.raysAo = true;
             } else if (m.equals("water=vanilla")) {
                 RtSettings.waterStyle = RtSettings.WATER_STYLE_VANILLA;
+            } else if (m.equals("dn=rr")) {
+                RtSettings.pathDenoiser = RtSettings.PathDenoiser.DLSS_RR; // the owner's mode: RR owns the output
             } else if (m.startsWith("self=")) {
                 RtSettings.selfShadow = switch (m) {
                     case "self=full" -> RtSettings.SELF_SHADOW_FULL;

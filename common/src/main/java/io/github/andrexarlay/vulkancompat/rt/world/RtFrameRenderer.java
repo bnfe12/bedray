@@ -176,11 +176,28 @@ public final class RtFrameRenderer {
     private static RtOutputResolve outputResolve;
     private static RrHardwareDepth rrHardwareDepth;
 
-    /** A live RR instance can own output reconstruction next frame. FG keeps its existing producer path. */
+    /**
+     * RR owns output reconstruction this frame. Decided from intent (setting, library, session failure), not from whether
+     * the RR object exists yet: the plan is frozen in beginWorldPhase, before prepareFrameResources creates RR, so the old
+     * `dlssRrDenoiser != null` test made the first world frame, and every frame after a drop or creation retry, take the
+     * two-stage chain - RR denoising at render size, then DLSS-SR stretching that resolved image again with zero jitter,
+     * the blur the owner saw - and each flip resized the targets and reset RR's history. A frame on the combined plan
+     * whose RR did not record presents the raw trace through RtOutputResolve instead. A permanent failure
+     * (dlssRrFailed) switches the plan back to the upscaler once.
+     */
     public static boolean rrOutputReady() {
         return RtGeometryGate.enabled() && RtConfig.displayed() && RtConfig.effectiveMode() == RtConfig.MODE_LIT
-            && RtConfig.mode() == RtMode.PATH_TRACED && RtSettings.denoiser() == RtSettings.PathDenoiser.DLSS_RR
-            && dlssRrDenoiser != null && !dropDlssRrDenoiserNext && !dlssRrFailed;
+            && RtConfig.mode() == RtMode.PATH_TRACED && rrIntended();
+    }
+
+    /** DLSS-RR will be the denoiser: same conditions as DenoiserResolution's DLSS_RR branch, without side effects. */
+    static boolean rrIntended() {
+        if (RtSettings.denoiser() != RtSettings.PathDenoiser.DLSS_RR || dlssRrFailed) return false;
+        DlssAvailability.Library lib = DlssAvailability.library();
+        if (lib == null || !lib.usable()) return false;
+        boolean frameGenOwnsNgx = io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.isReady()
+            && !io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.rrViaStreamline();
+        return !frameGenOwnsNgx;
     }
     private static boolean dropDlssRrDenoiserNext = false;
     private static boolean dropDlssRrByError = false;
