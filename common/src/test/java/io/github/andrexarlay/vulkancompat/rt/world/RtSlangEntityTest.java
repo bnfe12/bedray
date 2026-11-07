@@ -99,11 +99,10 @@ class RtSlangEntityTest {
         String traversal = read(TRAVERSAL);
         assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, true);"),
             "the primary ray looks past the body");
-        assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, false);"),
-            "a bounce ray does not: the avatar is geometry the light crosses");
-        String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
-        assertTrue(!visibility.contains("selfAvatarPrimitive"),
-            "and neither does a shadow ray - an emitters-only skip would light the body through itself");
+        assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, true);"),
+            "a diffuse bounce looks past it too: the camera stands inside the body");
+        assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, false);"),
+            "only a mirror ray sees it, so water and glass reflect the player");
         String skip = read(SHADERS + "/contracts/triangle_intersection.slang");
         assertTrue(skip.contains("primary && entity && count != 0u"),
             "a count of 0 (third person, or the option off) skips nothing at all");

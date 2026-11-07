@@ -51,6 +51,17 @@ struct HybridTraversal<V : ISceneTracer, H : ISceneTracer> : ISceneTracer {
             ? voxelHit : hardwareHit;
     }
 
+    override SurfaceHit traceMirror(Ray ray) {
+        if (!(ray.tMax > ray.tMin)) return missHit(ray.tMax);
+        Ray voxelRay = ray;
+        voxelRay.tMax = min(ray.tMax, voxelDistance);
+        SurfaceHit voxelHit = missHit(ray.tMax);
+        if (voxelRay.tMax > voxelRay.tMin) voxelHit = voxel.traceMirror(voxelRay);
+        SurfaceHit hardwareHit = hardware.traceMirror(ray);
+        return voxelHit.hit && (!hardwareHit.hit || voxelHit.t <= hardwareHit.t)
+            ? voxelHit : hardwareHit;
+    }
+
     override float3 surfaceMotion(SurfaceHit hit) {
         if (!hit.hit) return float3(0.0);
         // This composite combines voxel-world geometry with hardware meshes.

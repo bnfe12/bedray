@@ -647,8 +647,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // through the body's own skin keeps looking past it, and only the first
         // accepted surface starts the bounces that must see the body - it is
         // geometry a light has to cross.
+        // After the first surface only a mirror ray (glossy or transmission
+        // lobe) may see the first-person body; diffuse bounces skip it.
         SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)
-                                                  : traversal.traceClosest(ray);
+                         : glossyEscape ? traversal.traceMirror(ray) : traversal.traceClosest(ray);
         if (!hit.hit) {
             if (wantDenoiserGeometry) pathDenoiserMiss(denoiserContinuation);
             // A ray inside the body that finds no surface still crossed water:

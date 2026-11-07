@@ -13,13 +13,19 @@ struct ReorderingTraversal<T : ITriangleTracer> : ISceneTracer {
     T base;
 
     SurfaceHit traceClosest(Ray ray) {
-        TriangleIntersection hit = base.traceIntersection(ray, false);
+        TriangleIntersection hit = base.traceIntersection(ray, true);
         ReorderThread(intersectionCoherenceHint(hit), 2u);
         return base.decodeIntersection(ray, hit);
     }
 
     override SurfaceHit tracePrimary(Ray ray) {
         TriangleIntersection hit = base.traceIntersection(ray, true);
+        ReorderThread(intersectionCoherenceHint(hit), 2u);
+        return base.decodeIntersection(ray, hit);
+    }
+
+    override SurfaceHit traceMirror(Ray ray) {
+        TriangleIntersection hit = base.traceIntersection(ray, false);
         ReorderThread(intersectionCoherenceHint(hit), 2u);
         return base.decodeIntersection(ray, hit);
     }

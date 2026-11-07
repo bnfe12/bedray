@@ -75,11 +75,15 @@ struct SceneTraversal : ITriangleTracer {
     }
 
     SurfaceHit traceClosest(Ray ray) {
-        return traceNearest(ray, false);
+        return traceNearest(ray, true);
     }
 
     override SurfaceHit tracePrimary(Ray ray) {
         return traceNearest(ray, true);
+    }
+
+    override SurfaceHit traceMirror(Ray ray) {
+        return traceNearest(ray, false);
     }
 
     // A section cannot move: its geometry is uploaded once and the world around
@@ -99,14 +103,16 @@ struct SceneTraversal : ITriangleTracer {
         desc.TMin = ray.tMin;
         desc.TMax = ray.tMax;
 
-        // The body of the local player is geometry a light has to cross, so a
-        // shadow ray keeps it: only the primary ray may look past it.
+        // The first-person body surrounds the camera: a shadow ray that kept it
+        // darkened the floor under the player into a black blot, so it is
+        // skipped here exactly as the primary ray skips it.
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
         while (query.Proceed()) {
-            if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
-                query.CommitNonOpaqueTriangleHit();
-            }
+            if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+            if (excludedSelfAvatar(true, entityInstance(query.CandidateInstanceID()),
+                query.CandidatePrimitiveIndex(), selfAvatarTriStart, selfAvatarTriCount)) continue;
+            query.CommitNonOpaqueTriangleHit();
         }
 
         if (query.CommittedStatus() == COMMITTED_NOTHING) return visibleResult(ray.tMax);

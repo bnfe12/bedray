@@ -64,24 +64,36 @@ public class RtSelfAvatarExclusionTest {
     }
 
     @Test
-    public void onlyPrimaryRaysSkipTheAvatar() {
+    public void onlyMirrorRaysSeeTheAvatar() {
+        // 2026-11-07: with the body kept for shadow and diffuse rays, the floor under a first-person player rendered as
+        // a black blot - the camera stands inside that body, so every ray leaving the floor found it.
         String tracer = read(TRACER);
         assertTrue(tracer.contains("SurfaceHit hit = result.surfaceHits == 0u ? traversal.tracePrimary(ray)")
-                && tracer.contains(": traversal.traceClosest(ray);"),
-            "the path tracer must skip the avatar on the primary hit only: reflections of the player need it");
-        assertTrue(read(TRACER_CONTRACT).contains("SurfaceHit tracePrimary(Ray ray) {\n        return traceClosest(ray);"),
-            "a backend that has no first-person capture answers the primary ray with the full scene, so the hook cannot"
-                + " silently drop geometry somewhere else");
-        String traversal = read(TRAVERSAL);
-        int primary = traversal.indexOf("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, true);");
-        int closest = traversal.indexOf("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, false);");
-        assertTrue(primary >= 0, "the scene traversal opts into the exclusion on the eye ray only");
-        assertTrue(closest >= 0, "and keeps the body for every other closest query");
-        String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
-        assertFalse(visibility.contains("selfAvatar"),
-            "shadow and visibility rays keep the body: the exclusion belongs to the camera ray, not to the blocker test");
-        assertTrue(visibility.contains("RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH"),
-            "the shadow ray takes the first blocker, so the avatar shades the ground under the player");
+                && tracer.contains(": glossyEscape ? traversal.traceMirror(ray) : traversal.traceClosest(ray);"),
+            "after the eye ray only a glossy or transmission ray may see the body: reflections of the player need it");
+        String contract = read(TRACER_CONTRACT);
+        assertTrue(contract.contains("SurfaceHit tracePrimary(Ray ray) {\n        return traceClosest(ray);")
+                && contract.contains("SurfaceHit traceMirror(Ray ray) {\n        return traceClosest(ray);"),
+            "a backend that has no first-person capture answers both hooks with the full scene");
+        for (String path : new String[] {TRAVERSAL, SHADERS + "/traversal/legacy_section_traversal.slang"}) {
+            String traversal = read(path);
+            assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, true);"),
+                path + ": the eye ray skips the body");
+            assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, true);"),
+                path + ": a diffuse bounce skips it too");
+            assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, false);"),
+                path + ": a mirror ray keeps it");
+            String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
+            int skip = visibility.indexOf("excludedSelfAvatar(true, entityInstance(query.CandidateInstanceID())");
+            int commit = visibility.indexOf("query.CommitNonOpaqueTriangleHit();");
+            assertTrue(skip >= 0 && commit > skip, path + ": a shadow ray drops the body before it commits a blocker");
+        }
+        String ser = read(SHADERS + "/traversal/reordering_traversal.slang");
+        assertTrue(ser.contains("SurfaceHit traceClosest(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, true);")
+                && ser.contains("override SurfaceHit traceMirror(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, false);"),
+            "the SER wrapper keeps the same split, or SER-capable GPUs would bring the blot back");
+        assertTrue(read(SHADERS + "/traversal/hybrid_traversal.slang").contains("hardware.traceMirror(ray)"),
+            "the hybrid backend forwards mirror rays to the half that holds the body");
     }
 
     @Test

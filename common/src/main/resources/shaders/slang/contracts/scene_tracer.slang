@@ -23,10 +23,18 @@ interface ISceneTracer {
     // The ray that leaves the eye.  It is the one ray a backend may answer with
     // less geometry than a bounce: a first-person capture puts the local
     // player's own body around the camera, and the centimetres of inner face
-    // between the eye and that body would otherwise fill the screen.  Shadow and
-    // visibility rays keep calling traceClosest, so the body still casts its
-    // shadow and still blocks a light.
+    // between the eye and that body would otherwise fill the screen.  Shadow,
+    // visibility and diffuse rays skip it as well (traceClosest and
+    // traceVisibility): the camera stands inside that body, so every ray leaving
+    // the floor under the player found it and painted a black blot there
+    // (2026-11-07, testbed screenshot).  Only a mirror ray still sees it.
     SurfaceHit tracePrimary(Ray ray) {
+        return traceClosest(ray);
+    }
+
+    // A glossy reflection or a transmission: the one secondary ray that may see
+    // the first-person body, so water and glass still reflect the player.
+    SurfaceHit traceMirror(Ray ray) {
         return traceClosest(ray);
     }
 
