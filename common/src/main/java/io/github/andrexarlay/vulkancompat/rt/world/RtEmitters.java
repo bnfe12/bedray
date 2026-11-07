@@ -54,6 +54,18 @@ public final class RtEmitters {
      * shrinks to the spot, but the quad is still an opaque face and light must not leave its back side.
      */
     static final float MAX_OPEN_AREA = 0.05f;
+
+    /**
+     * Emitter corners on a 1/8192-block grid (at most 6.1e-5 block of shift). A corner on this grid plus the integer offset
+     * section*16 - origin is exact in float while |x| < 2048, so the identity key of EmitterTable (origin + record) is the
+     * same for every origin. Off the grid, spot-shrunk corners rounded differently per origin, and every rescan that moved
+     * the origin gave about 17% of them a new ID: their DI reservoirs failed and the table revision churned.
+     */
+    static final float CORNER_GRID = 8192f;
+
+    static float snapCorner(float v) {
+        return Math.round(v * CORNER_GRID) / CORNER_GRID;
+    }
     private static final float[] EMPTY = new float[0];
 
     private record Entry(DecodedSection src, float[] records) {
@@ -340,7 +352,7 @@ public final class RtEmitters {
             // nothing (owner report 2026-10-24). The pass keeps its progress, publishes its slightly stale result, and the
             // next update starts a fresh pass because the version moved on.
             scan.noteVersion(version);
-            continueScan(entityQuads, entityCount);
+            continueScan(entityQuads, entityCount, camX, camY, camZ);
             return; // the previous light list stays on the GPU until the scan finishes
         }
         scan = null; // no pass in flight, or the camera left the frame its distance selection was computed in (teleport)
@@ -360,13 +372,14 @@ public final class RtEmitters {
                 curCy = (float) (camY - originY);
                 curCz = (float) (camZ - originZ);
                 restoreStatic();
-                processEntities(entityQuads, entityCount);
+                entityInRange = 0; // restoreStatic restores only the static counters; this one counted up forever (47/3948)
+                processEntities(entityQuads, entityCount, curCx, curCy, curCz);
                 publishSelection();
                 return;
             }
         }
         startScan(world, mat, camX, camY, camZ, range, budget, version);
-        continueScan(entityQuads, entityCount);
+        continueScan(entityQuads, entityCount, camX, camY, camZ);
     }
 
     private void startScan(RtWorld world, MaterialAtlasBaker.Result mat, double camX, double camY, double camZ, float range,
@@ -416,7 +429,7 @@ public final class RtEmitters {
         return dx * dx + dy * dy + dz * dz;
     }
 
-    private void continueScan(float[] entityQuads, int entityCount) {
+    private void continueScan(float[] entityQuads, int entityCount, double camX, double camY, double camZ) {
         if (!scan.advance(System.nanoTime() + SCAN_BUDGET_NS, scanStep)) {
             return;
         }
@@ -424,7 +437,7 @@ public final class RtEmitters {
         scanMs = (System.nanoTime() - scanStartNs) / 1.0e6;
         scan = null;
         lastEntityCount = entityCount;
-        publish(entityQuads, entityCount);
+        publish(entityQuads, entityCount, camX, camY, camZ);
     }
 
     /**
@@ -488,7 +501,7 @@ public final class RtEmitters {
         }
     }
 
-    private void publish(float[] entityQuads, int entityCount) {
+    private void publish(float[] entityQuads, int entityCount, double camX, double camY, double camZ) {
         cache.keySet().retainAll(seen);
         // snapshot the static selection: a frame where only entity lights changed skips the whole section scan
         ensureStaticHeapCapacity(Math.max(targetBudget, heapSize));
@@ -498,11 +511,20 @@ public final class RtEmitters {
         staticHeapSize = heapSize;
         staticTotal = totalCounter;
         staticInRange = inRangeCounter;
-        processEntities(entityQuads, entityCount);
+        // Entity quads are relative to THIS frame's camera. curC* is the camera of the scan's first frame (the static
+        // distance selection needs it), and a scan can span seconds: a held torch was published displaced by the whole
+        // walk since the scan started. The origin stays the scan's, which is the one publishSelection publishes.
+        processEntities(entityQuads, entityCount,
+            entityOffset(camX, originX), entityOffset(camY, originY), entityOffset(camZ, originZ));
         publishSelection();
     }
 
-    private void processEntities(float[] entityQuads, int entityCount) {
+    /** Camera-relative entity corner + this offset = the emitter-origin frame the table is published in. */
+    static float entityOffset(double cam, long origin) {
+        return (float) (cam - origin);
+    }
+
+    private void processEntities(float[] entityQuads, int entityCount, float ex, float ey, float ez) {
         for (int i = 0; i < entityCount; i++) {
             int o = i * FLOATS;
             totalCounter++;
@@ -523,7 +545,7 @@ public final class RtEmitters {
             if (heapSize >= targetBudget && importance <= heap[0][FLOATS]) {
                 continue;
             }
-            addCandidate(entityQuads, o, curCx, curCy, curCz, importance);
+            addCandidate(entityQuads, o, ex, ey, ez, importance);
         }
     }
 
@@ -827,9 +849,9 @@ public final class RtEmitters {
         float area = areaFull * da * db;
         float boost = redstoneSource ? 1f : powerBoost(area, mean, best);
         float pyOffset = (twoSidedSource && Math.abs(e1y) < 0.02f && Math.abs(e2y) < 0.02f) ? 0.08f : 0.0f;
-        dst[o] = px + e1x * aMin + e2x * bMin;
-        dst[o + 1] = py + e1y * aMin + e2y * bMin + pyOffset;
-        dst[o + 2] = pz + e1z * aMin + e2z * bMin;
+        dst[o] = snapCorner(px + e1x * aMin + e2x * bMin);
+        dst[o + 1] = snapCorner(py + e1y * aMin + e2y * bMin + pyOffset);
+        dst[o + 2] = snapCorner(pz + e1z * aMin + e2z * bMin);
         dst[o + 3] = area;
         dst[o + 4] = e1x * da;
         dst[o + 5] = e1y * da;
