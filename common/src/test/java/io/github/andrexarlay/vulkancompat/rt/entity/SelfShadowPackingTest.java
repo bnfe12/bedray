@@ -43,6 +43,13 @@ class SelfShadowPackingTest {
     }
 
     @Test
+    void switchingTheModeResetsAccumulatedHistory() throws IOException {
+        String renderer = Files.readString(Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java"));
+        assertTrue(renderer.contains("| ((RtSettings.selfShadow & 3) << 3);"),
+            "self_shadow is part of the shadow-ray policy word whose change resets history (in game the Off shot kept the old shadow)");
+    }
+
+    @Test
     void bothHostWritersPackTheMode() throws IOException {
         String base = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/";
         for (String file : new String[] {"RtPathTraceSlangPass.java", "BedrayPathTraceNative.java"}) {

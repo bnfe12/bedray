@@ -550,9 +550,12 @@ public final class RtFrameRenderer {
         int curBounces = RtSettings.bounces();
         int curSpp = RtSettings.spp();
         boolean curAutoExposure = RtSettings.autoExposure();
+        // What a shadow ray sees: transparent filters, and (bits 3-4) whether the first-person body occludes. Switching
+        // self_shadow without a reset blended the old shadow into the new mode for the whole accumulation window.
         int curTransparencyPolicy = (RtSettings.opticalMaterials() ? 1 : 0)
             | (RtSettings.directTranslucentShadows() ? 2 : 0)
-            | (RtSettings.indirectTranslucentShadows() ? 4 : 0);
+            | (RtSettings.indirectTranslucentShadows() ? 4 : 0)
+            | ((RtSettings.selfShadow & 3) << 3);
         // ReSTIR is a per-technique switch, and every one of them changes what a stored record means: turning reuse on or
         // off, or pooling neighbours on top of it, must not continue an accumulation that was built without it.
         int curReusePolicy = (RtSettings.restirTemporal() ? 1 : 0) | (RtSettings.restirSpatial() ? 2 : 0)
