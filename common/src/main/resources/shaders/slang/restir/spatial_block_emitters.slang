@@ -34,8 +34,11 @@ import "surface/surface.slang";
 static const int SPATIAL_OFFSET_RADIUS = 7;
 static const uint SPATIAL_DRAWS = 8u;
 static const float SPATIAL_NORMAL_DOT_MIN = 0.85;
-static const float SPATIAL_PLANE_TOLERANCE_RELATIVE = 0.05;
-static const float SPATIAL_PLANE_TOLERANCE_ABSOLUTE = 0.1;
+static const float SPATIAL_PLANE_TOLERANCE_RELATIVE = 0.002;
+static const float SPATIAL_PLANE_TOLERANCE_ABSOLUTE = 0.02;
+// Two parallel faces one step apart are exactly the step height apart, whatever the distance: the old 5% + 0.1 block
+// let a block top and the floor below pool their lights from ~18 blocks on (a slab from ~8), so edges crawled.
+static const float SPATIAL_PLANE_TOLERANCE_MAX = 0.2;
 
 // Same hash as the legacy kernel, so a side-by-side frame can be compared sample for sample.
 uint blockEmitterSpatialSeed(int2 pixel, uint frameIndex) {
@@ -97,6 +100,7 @@ struct BlockEmitterSpatialReuse {
 
     bool neighbourUsable(DIReservoir neighbour) {
         return min(neighbour.stats.x, RESTIR_DI_M_CAP) > 0.0
+            && neighbour.stats.y > 0.0   // a record zeroed by its own shadow ray must not spread
             && neighbour.source.z == uint(LightKind.Emitter)
             && isFinite(neighbour.sample.xyz) && isFinite(neighbour.receiver.xyz);
     }
@@ -121,8 +125,8 @@ struct BlockEmitterSpatialReuse {
         receiver.primary = true;
         // The plane gate is a surface test, not a distance test: two cells of the same wall share a plane however far
         // the wall is, and the legacy tolerance grows with the camera distance because a distant wall is denser in pixels.
-        float planeTolerance = SPATIAL_PLANE_TOLERANCE_RELATIVE * max(length(position), 1.0)
-            + SPATIAL_PLANE_TOLERANCE_ABSOLUTE;
+        float planeTolerance = min(SPATIAL_PLANE_TOLERANCE_RELATIVE * max(length(position), 1.0)
+            + SPATIAL_PLANE_TOLERANCE_ABSOLUTE, SPATIAL_PLANE_TOLERANCE_MAX);
 
         uint seed = blockEmitterSpatialSeed(pixel, frameIndex);
         DIReservoir merged = own;

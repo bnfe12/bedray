@@ -43,12 +43,15 @@ class RtSlangRestirSpatialTest {
             "plus or minus seven per axis, which is where the 2 * 7 of the square comes from");
         assertTrue(slang.contains("static const float SPATIAL_NORMAL_DOT_MIN = 0.85;"),
             "the same normal rejection: walls must not import each other's light");
-        assertTrue(slang.contains("SPATIAL_PLANE_TOLERANCE_RELATIVE * max(length(position), 1.0)\n"
-                + "            + SPATIAL_PLANE_TOLERANCE_ABSOLUTE;"),
-            "the same plane gate - five percent of the camera distance plus a tenth of a block");
-        assertTrue(slang.contains("static const float SPATIAL_PLANE_TOLERANCE_RELATIVE = 0.05;")
-            && slang.contains("static const float SPATIAL_PLANE_TOLERANCE_ABSOLUTE = 0.1;"),
-            "and both halves of that tolerance are named constants of this module");
+        assertTrue(slang.contains("float planeTolerance = min(SPATIAL_PLANE_TOLERANCE_RELATIVE * max(length(position), 1.0)\n"
+                + "            + SPATIAL_PLANE_TOLERANCE_ABSOLUTE, SPATIAL_PLANE_TOLERANCE_MAX);"),
+            "the plane gate is capped below a slab step at any distance (2026-11-07: 5% + 0.1 pooled steps from 18 blocks)");
+        assertTrue(slang.contains("static const float SPATIAL_PLANE_TOLERANCE_RELATIVE = 0.002;")
+            && slang.contains("static const float SPATIAL_PLANE_TOLERANCE_ABSOLUTE = 0.02;")
+            && slang.contains("static const float SPATIAL_PLANE_TOLERANCE_MAX = 0.2;"),
+            "and every part of that tolerance is a named constant of this module");
+        assertTrue(slang.contains("&& neighbour.stats.y > 0.0"),
+            "a record zeroed by its own shadow ray is never imported by a neighbour");
         assertTrue(slang.contains("pcgHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frameIndex * 26699u + 7u)"),
             "the same seed hash, including its +7 stream offset, so a side-by-side frame can be compared per sample");
     }

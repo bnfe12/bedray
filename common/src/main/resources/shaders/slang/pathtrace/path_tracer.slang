@@ -863,9 +863,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,
                 reused, options, materialOptions, medium, receiver.primary, reusedTraced, reusedOccluded, result.flags)
                 * (1.0 - emitterFar);
-            // A sample this receiver could not even shade has not been proven visible either: decaying it lets a record
-            // that lost its light fade out instead of sitting at full weight until the surface changes.
-            reuse.reuseConfirm(!reusedTraced || reusedOccluded);
+            // Only a traced and blocked shadow ray proves occlusion.  A sample this receiver could not shade (back
+            // facing after a normal map, BSDF zero) is not occluded; a record whose light is gone already fails the
+            // next re-evaluation and falls back to the fresh batch.
+            reuse.reuseConfirm(reusedTraced && reusedOccluded);
             bool keyTraced;
             bool keyOccluded;
             direct += pathTraceDirectTerm(traversal, atlas, blockMaterials, surface, view, normal, hit.position,

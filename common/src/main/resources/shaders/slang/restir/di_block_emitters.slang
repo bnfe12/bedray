@@ -29,6 +29,9 @@ import "surface/surface.slang";
 // 5% + 0.1 blocks and whose normal turned by up to ~53 degrees; a moving camera has to prove the match, so both tighten.
 static const float DI_DISTANCE_TOLERANCE_RELATIVE = 0.05;
 static const float DI_DISTANCE_TOLERANCE_ABSOLUTE = 0.1;
+static const float DI_PLANE_TOLERANCE_RELATIVE = 0.003;
+static const float DI_PLANE_TOLERANCE_ABSOLUTE = 0.03;
+static const float DI_PLANE_TOLERANCE_MAX = 0.25;
 static const float DI_NORMAL_DOT_STATIC = 0.8;
 static const float DI_NORMAL_DOT_MOVING = 0.6;
 
@@ -105,6 +108,13 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
         return false;
     }
     if (length(stored.receiver.xyz - previousReceiver) > tolerance) {
+        return false;
+    }
+    // The tests above are isotropic and grow with distance (1.1 blocks at 20), so a jittered edge pixel that lands on
+    // the face one step below passed them.  Parallel faces differ along the normal by the step height at any distance.
+    float planeTolerance = min(DI_PLANE_TOLERANCE_RELATIVE * max(previousDistance, 1.0) + DI_PLANE_TOLERANCE_ABSOLUTE,
+        DI_PLANE_TOLERANCE_MAX);
+    if (abs(dot(stored.receiver.xyz - previousReceiver, receiverNormal)) > planeTolerance) {
         return false;
     }
     float normalDot = dot(reservoirReceiverNormal(stored), receiverNormal);
@@ -234,15 +244,19 @@ struct BlockEmitterDiSampler : IReuseSampler {
         return blockEmitterEstimateSample(estimate, current.stats.y, current.stats.x, receiver);
     }
 
-    // The legacy occlusion feedback: a reservoir behind a new occluder keeps its sample and decays its weight, so it
-    // fades out over a few frames instead of glowing through the wall or switching off in one.
+    // Visibility reuse: a sample whose shadow ray was traced and blocked loses its whole weight.  The legacy feedback
+    // multiplied the weight by 0.25 but kept M (up to 20), so the next merges read about 46% of the true light and
+    // recovered over ~4 frames, and the spatial pass spread that diluted record to its neighbours: pixels near lights
+    // and in penumbrae pulsed (2026-11-07 instability audit).  A zero-weight record is skipped whole, M included, by
+    // mergeReservoirs, so it neither dilutes later merges nor glows through the wall; the next frame starts from the
+    // fresh batch.  The sample and its target pdf stay untouched (a zero target pdf would hit the ratio cap).
     void reuseConfirm(bool occluded) {
         if (!occluded || !reuseActive()) {
             return;
         }
         uint ownSlot = reservoirSlot();
         DIReservoir record = reservoirs[ownSlot];
-        record.stats.y *= RESTIR_DI_OCCLUSION_DECAY;
+        record.stats.y = 0.0;
         reservoirs[ownSlot] = record;
     }
 

@@ -155,18 +155,20 @@ class RtSlangRestirDiTest {
      * afterwards. Splitting the two is what keeps the record alive behind a new occluder.
      */
     @Test
-    void anOccludedFrameFadesItsRecordInsteadOfDroppingIt() {
+    void aProvenOccludedSampleLosesItsWeightButNotItsSlot() {
         String di = read(DI);
         String confirm = block(di, "void reuseConfirm(bool occluded) {");
         assertTrue(confirm.contains("if (!occluded || !reuseActive())"),
             "a visible sample leaves the published weight alone");
         assertTrue(confirm.contains("DIReservoir record = reservoirs[ownSlot];"),
             "and the feedback re-reads the slot, because nothing may be carried between the two calls");
-        assertTrue(confirm.contains("record.stats.y *= RESTIR_DI_OCCLUSION_DECAY;"),
-            "the weight sum decays, the sample stays: a four-frame fade-out");
+        // 2026-11-07: the old 0.25 decay kept M, so the next merges read ~46% of the light and the pixel pulsed.
+        assertTrue(confirm.contains("record.stats.y = 0.0;"),
+            "visibility reuse: a blocked sample loses its whole weight, and mergeReservoirs then skips the record whole");
+        assertFalse(confirm.contains("RESTIR_DI_OCCLUSION_DECAY"), "no partial decay that keeps M");
         String tracer = read(TRACER);
-        assertTrue(tracer.contains("reuse.reuseConfirm(!reusedTraced || reusedOccluded);"),
-            "a sample that could not even be traced is treated as occluded, so a record that lost its light fades too");
+        assertTrue(tracer.contains("reuse.reuseConfirm(reusedTraced && reusedOccluded);"),
+            "only a traced and blocked shadow ray proves occlusion; an unshadeable sample is not occluded");
         assertFalse(di.contains("Traversal"),
             "the adapter must not trace: the shadow ray belongs to the path tracer");
     }
