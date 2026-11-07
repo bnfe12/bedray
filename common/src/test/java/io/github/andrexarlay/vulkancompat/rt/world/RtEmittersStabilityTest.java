@@ -70,10 +70,14 @@ public class RtEmittersStabilityTest {
         // A zero threshold rescanned every section on every moving frame. The records are stored relative to the emitter
         // origin and the shader subtracts cam - origin each frame, so positions stay exact between rebuilds; the threshold
         // only throttles the distance-based re-selection, which is why it may be non-zero.
-        assertTrue(RtEmitters.MOVE_REBUILD > 0.0,
-            "MOVE_REBUILD must be > 0 so a moving camera does not rescan every section each frame");
-        assertTrue(RtEmitters.MOVE_REBUILD <= 0.5,
-            "MOVE_REBUILD must stay sub-block so the distance-based light selection tracks the camera");
+        // 2026-11-07: a half-block threshold republished the table about once a second while walking even when every
+        // light in range was already selected, and each publish reshuffled the sampling; lit areas shimmered.
+        assertTrue(RtEmitters.moveRebuild(128f, false) >= 4.0,
+            "with every light in range selected, only lights crossing the range sphere change: rescan rarely");
+        assertTrue(RtEmitters.moveRebuild(128f, true) > 0.0 && RtEmitters.moveRebuild(128f, true) <= 2.0,
+            "a budget-limited list follows the camera closely; the hysteresis keeps its membership steady");
+        assertTrue(RtEmitters.COLD_SCAN_BUDGET_NS > RtEmitters.SCAN_BUDGET_NS,
+            "a cold scan (no list, or a teleport) finishes faster than a warm one: the room rendered black for seconds");
         runCameraInvarianceChecks();
     }
 

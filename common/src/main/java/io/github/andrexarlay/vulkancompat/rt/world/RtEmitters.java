@@ -147,12 +147,26 @@ public final class RtEmitters {
     private int entityUsed;
     private int inRange;
     private int totalEmitters;
+
     /**
-     * Camera movement (blocks) that triggers a re-selection of the light list. Records are stored relative to the emitter
-     * origin and the shader receives the camera position relative to that same origin every frame, so positions stay exact
-     * between rebuilds; the threshold only delays the distance-based re-selection, which does not need sub-block precision.
+     * Movement that re-selects the list once it is published. With every light in range already selected (in_range <=
+     * budget, the usual case at budget 2048) a move only changes the lights that cross the range sphere, so a full rescan
+     * every half block (the former MOVE_REBUILD = 0.5) republished the table about once a second while walking for nothing: each publish
+     * rebuilds the light tree and shifts the sampling pdfs, so lit areas shimmered while moving (owner 2026-11-07). A
+     * budget-limited list keeps a short threshold: the cut follows the camera, and the hysteresis keeps it steady.
      */
-    public static final double MOVE_REBUILD = 0.5;
+    static double moveRebuild(float range, boolean budgetLimited) {
+        return budgetLimited ? 2.0 : Math.max(4.0, range / 16.0);
+    }
+
+    /**
+     * CPU budget per frame of a cold scan: no list yet, or the camera jumped past passAbortDistance (teleport, respawn).
+     * The 4 ms warm budget spread a 3000-section cold scan over seconds of unlit frames (testbed: 2.5-7.5 s after a
+     * teleport into a torch-lit room, which rendered black until the list arrived).
+     */
+    static final long COLD_SCAN_BUDGET_NS = 16_000_000L;
+    /** True while the pass in flight is a cold scan (see COLD_SCAN_BUDGET_NS). */
+    private boolean coldScan;
     private long lastLogNs;
     private long maxPublicationNanos;
     /** CPU budget of one frame of the light-list scan: a cold scan (pack switch, world change) spans several frames. */
@@ -411,7 +425,9 @@ public final class RtEmitters {
         scan = null; // no pass in flight, or the camera left the frame its distance selection was computed in (teleport)
         double moved = Double.isNaN(lastCamX) ? Double.MAX_VALUE
             : Math.max(Math.abs(camX - lastCamX), Math.max(Math.abs(camY - lastCamY), Math.abs(camZ - lastCamZ)));
-        if (version == lastVersion && mat == lastMaterials && moved <= MOVE_REBUILD && range == lastRange && budget == lastBudget) {
+        boolean budgetLimited = staticInRange > targetBudget;
+        if (version == lastVersion && mat == lastMaterials && moved <= moveRebuild(range, budgetLimited)
+            && range == lastRange && budget == lastBudget) {
             if (entityCount == 0 && lastEntityCount == 0) {
                 return;
             }
@@ -431,6 +447,7 @@ public final class RtEmitters {
                 return;
             }
         }
+        coldScan = staticHeapSize < 0 && publishedKeys.length == 0 || moved > passAbortDistance(range);
         startScan(world, mat, camX, camY, camZ, range, budget, version);
         continueScan(entityQuads, entityCount, camX, camY, camZ);
     }
@@ -483,7 +500,7 @@ public final class RtEmitters {
     }
 
     private void continueScan(float[] entityQuads, int entityCount, double camX, double camY, double camZ) {
-        if (!scan.advance(System.nanoTime() + SCAN_BUDGET_NS, scanStep)) {
+        if (!scan.advance(System.nanoTime() + (coldScan ? COLD_SCAN_BUDGET_NS : SCAN_BUDGET_NS), scanStep)) {
             return;
         }
         scanStale = scan.stale();
@@ -653,9 +670,9 @@ public final class RtEmitters {
                 publicationNanos / 1.0e6, maxPublicationNanos / 1.0e6);
             maxPublicationNanos = 0;
             LOGGER.info(String.format(java.util.Locale.ROOT,
-                "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b origin=(%d,%d,%d)",
+                "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b cold=%b origin=(%d,%d,%d)",
                 count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), seen.size(),
-                scanMs, scanStale, originX, originY, originZ));
+                scanMs, scanStale, coldScan, originX, originY, originZ));
         }
     }
 
