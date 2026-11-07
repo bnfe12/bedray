@@ -491,6 +491,9 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     // waves focus the beam that got through.  The style switch is the surface decoder's wave mix below, because a
     // style changes how much the face tilts and never what the medium does to the light.
     options.waterCaustics = frameWaterCaustics(f);
+    // Scene-referred ceiling of the indirect sum (path_tracer.slang): a shader constant, not an exposure-driven value,
+    // because the 112-byte push block has no free lane.
+    options.indirectMaxLuminance = PATH_TRACE_INDIRECT_MAX_LUMINANCE;
 
     MaterialSamplingOptions materialOptions = pathTraceMaterialOptions(f, pc);
 

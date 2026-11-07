@@ -60,6 +60,15 @@ static const uint PATH_TRACE_FLAG_SURFACE_LIMIT    = 1u << 4u;
 static const float PATH_TRACE_HOLE_STEP_MIN = 1.0e-4;
 static const float PATH_TRACE_HOLE_STEP_PER_BLOCK = 2.0e-6;
 
+// Scene-referred luminance ceiling of what a path gathers after its first non-delta surface (that surface's own emission
+// and next-event term are never capped).  Bounce vertices draw plain RIS with white-noise seeds, so a diffuse bounce
+// that lands next to a torch returned tens of times display white and DLSS-RR smeared it into crawling blotches; the
+// 64x per-component clamp at the tail let those through.  The cap scales the whole indirect sum by one factor, so its
+// hue survives.  Fixed in scene units, never tied to exposure: a cap that followed exposure would change the integrand
+// from frame to frame.  Basis: emitter peak 6.6 / d2 floor 0.25 * 0.8/pi is ~6.7 radiance on a wall touching a torch,
+// so real one-bounce torch light passes and the 20-60x outliers do not.
+static const float PATH_TRACE_INDIRECT_MAX_LUMINANCE = 10.0;
+
 float pathTraceHoleStep(float distance) {
     return PATH_TRACE_HOLE_STEP_MIN + abs(distance) * PATH_TRACE_HOLE_STEP_PER_BLOCK;
 }
@@ -223,6 +232,9 @@ struct PathTraceOptions {
     // reach of the camera, so past `emitterListRange - EMITTER_RADIUS` it is no longer complete for a receiver and the
     // distant handover starts.  0 is an older host and keeps the whole ray far plane.
     float emitterListRange;
+    // Luminance ceiling of the contribution gathered after the first non-delta continuation (0 = off).  The entry sets
+    // PATH_TRACE_INDIRECT_MAX_LUMINANCE; the RC field and any other default-option caller keep the old transport.
+    float indirectMaxLuminance;
 };
 
 PathTraceOptions defaultPathTraceOptions() {
@@ -244,6 +256,7 @@ PathTraceOptions defaultPathTraceOptions() {
     options.frameIndex = 0u;
     options.sampleWord = 0u;
     options.emitterListRange = 0.0;
+    options.indirectMaxLuminance = 0.0;
     return options;
 }
 
@@ -631,6 +644,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // A glossy reflection or a transmission sees the visible dome (minus the discs, which its NEE sampled); only a
     // diffuse bounce receives the sky light. Without this, rippled water reflected the dim sky light and went black.
     bool glossyEscape = false;
+    // The indirect window: opened by the first non-delta continuation (or the RC field's incoming term).  Everything
+    // added before it - camera water, sky, the first non-delta surface's emission and NEE, and anything seen through
+    // delta glass/water/mirrors on the way there - is camera-like and never capped.
+    bool indirectStarted = false;
+    float3 radianceAtFirstBounce = float3(0.0);
     for (; step < options.maxSurfaceSteps; ++step) {
         // A non-finite interval cannot be traced at all; an empty one is a path cut short by the cutout advances.
         if (!isFinite(ray.tMax)) {
@@ -955,6 +973,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 break;
             }
             if (incoming.status == DIFFUSE_FIELD_VALID) {
+                // The field's incoming term is this vertex's indirect light: it opens the window like a traced bounce.
+                if (!indirectStarted) {
+                    indirectStarted = true;
+                    radianceAtFirstBounce = result.radiance;
+                }
                 result.radiance += throughput * bsdf.weight * incoming.cosineMean;
                 result.flags |= PATH_TRACE_FLAG_RC_FINITE_WINDOW;
                 if (incoming.terminalKnown) result.flags |= PATH_TRACE_FLAG_RC_TERMINAL;
@@ -1048,6 +1071,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         float3 bounceNormal = safeNormalize(surface.hit.geometricNormal, normal);
         float3 origin = hit.position
             + bounceNormal * (dot(bsdf.direction, bounceNormal) >= 0.0 ? options.rayBias : -options.rayBias);
+        // The first non-delta continuation leaves now: from here on the path gathers indirect light.  Taken before the
+        // ReSTIR PT and denoiser snapshots below, so on the primary diffuse launch all three hold the same radiance.
+        if (!indirectStarted && !bsdf.delta) {
+            indirectStarted = true;
+            radianceAtFirstBounce = result.radiance;
+        }
         if (result.pt.status == PATH_PT_RECORD_ATTEMPT && result.surfaceHits == 1u
                 && bsdf.lobe == BSDF_LOBE_DIFFUSE && !continuationAmbientOnly && !medium.inside) {
             // The continuation the reservoir may own leaves now.  Everything the path adds from here on is its suffix.
@@ -1079,6 +1108,16 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         reuse.reuseClear();
     }
 
+    // Hue-preserving cap of the indirect sum.  Before the NaN guard, the ReSTIR PT suffix and radianceBeforeClamp, so
+    // the reservoir, the denoiser split and the 64x clamp all see the capped value and diffuse + specular + bypass stays
+    // equal to radiance.  A non-finite sum is left to the guard below, which zeroes and tags it as before.
+    if (indirectStarted && options.indirectMaxLuminance > 0.0 && isFinite(result.radiance)) {
+        float3 indirect = max(result.radiance - radianceAtFirstBounce, float3(0.0));
+        float indirectLuminance = luminance(indirect);
+        if (indirectLuminance > options.indirectMaxLuminance) {
+            result.radiance = radianceAtFirstBounce + indirect * (options.indirectMaxLuminance / indirectLuminance);
+        }
+    }
     result.throughput = throughput;
     if (!isFinite(result.radiance)) {
         result.radiance = float3(0.0);
