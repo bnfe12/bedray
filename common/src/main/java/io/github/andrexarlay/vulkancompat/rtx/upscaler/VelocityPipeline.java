@@ -110,8 +110,14 @@ public final class VelocityPipeline implements AutoCloseable {
 
     public void dispatchRayDistance(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
                                     Matrix4f invViewProj, Matrix4f prevViewProj, Vec3 camDelta) {
+        dispatchRayDistance(cmd, depthView, mvView, width, height, invViewProj, prevViewProj, camDelta, 0L);
+    }
+
+    /** Ray-distance depth (the RT pass's own) plus the per-pixel entity motion it wrote (float4 per pixel, BDA). */
+    public void dispatchRayDistance(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
+                                    Matrix4f invViewProj, Matrix4f prevViewProj, Vec3 camDelta, long entityMotionAddress) {
         record(cmd, depthView, mvView, width, height, invViewProj, prevViewProj, camDelta, null, null, 0, false,
-            DEPTH_RAY_DISTANCE, 0, 0, 0);
+            DEPTH_RAY_DISTANCE, entityMotionAddress, 0, 0);
     }
 
     private void record(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,

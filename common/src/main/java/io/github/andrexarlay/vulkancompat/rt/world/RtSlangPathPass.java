@@ -331,11 +331,12 @@ public final class RtSlangPathPass implements RtPass {
         }
     }
 
+    // The per-pixel entity motion is wanted without denoiser guides too: a temporal upscaler on its own (DLSS-SR, XeSS,
+    // FSR) needs it, or every moving entity reaches it with camera-only motion and smears (2026-11-08 item audit).
     static int guideOptionFlags(boolean guides, boolean motion, boolean rr) {
-        if (!guides) return 0;
-        return RtPathTraceSlangPass.OPTION_GBUFFER
-            | (motion ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0)
-            | (rr ? RtPathTraceSlangPass.OPTION_RR_GUIDES : 0);
+        int flags = motion ? RtPathTraceSlangPass.OPTION_NRD_MOTION : 0;
+        if (!guides) return flags;
+        return flags | RtPathTraceSlangPass.OPTION_GBUFFER | (rr ? RtPathTraceSlangPass.OPTION_RR_GUIDES : 0);
     }
 
     /** Borrowed CPU metadata, consumed immediately in the same recording after dispatch. */

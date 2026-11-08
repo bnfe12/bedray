@@ -150,8 +150,10 @@ class RtSlangNrdMotionTest {
     @Test
     void theMotionBufferIsTheDenoisersOwnVec4PixelBuffer() {
         String renderer = read(RENDERER);
-        assertTrue(renderer.contains("if (useDenoiser && wantsEntityMotion()) {"),
-            "both NRD and RR velocity consume the world-motion producer; neither may read an unwritten allocation");
+        // Since 2026-11-08 a lone temporal upscaler is a consumer too (wantsEntityMotion includes it).
+        String normalized = renderer.replace("\r\n", "\n");
+        assertTrue(normalized.contains("if (wantsEntityMotion()) {\n            frameResources.requireMotion(w, h);"),
+            "NRD, RR and the lone upscaler consume the world-motion producer; none may read an unwritten allocation");
         assertTrue(renderer.contains("long motionAddr = motionHandle != 0L ? frameMotion().address : 0L;"),
             "consumer addresses follow the actual producer, including zero when disabled");
         assertTrue(renderer.contains("motionHandle = frameMotion().handle;"),

@@ -259,8 +259,10 @@ public class MotionVectorStabilityTest {
         assertTrue(world.contains("new FrameContext.ImageRef(srMvImg, srMvView, fmtMv,"),
             "FrameContext must be built from the resolved-or-raster pair");
         int ctx = world.indexOf("FrameContext ctx = new FrameContext");
-        assertTrue(world.indexOf("velocityPipeline.dispatch(cmd, rasterDepthView, mvView", 0) < ctx,
-            "the raster pass still feeds frame generation and must run before the upscaler");
+        // Since 2026-11-08 the velocity pass goes through recordUpscalerMotion (raster camera or RT entity motion).
+        int velocity = world.indexOf("recordUpscalerMotion(velocityPipeline, cmd, rasterDepthView, rtDepth, mvView", 0);
+        assertTrue(velocity >= 0 && velocity < ctx,
+            "the velocity pass still feeds frame generation and must run before the upscaler");
     }
 
     /**

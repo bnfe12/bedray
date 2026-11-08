@@ -821,8 +821,8 @@ public final class WorldTargetManager {
         final float srJitterY = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterY());
         boolean ok = recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
-            // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
-            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            recordUpscalerMotion(velocityPipeline, cmd, rasterDepthView, rtDepth, mvView, inW, inH, invViewProj, prevViewProj,
+                camDelta, colorResolved);
             VkBarriers.fullMemoryBarrier(cmd);
             if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
                 && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
@@ -911,7 +911,8 @@ public final class WorldTargetManager {
 
         recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
-            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            recordUpscalerMotion(velocityPipeline, cmd, rasterDepthView, rtDepth, mvView, inW, inH, invViewProj, prevViewProj,
+                camDelta, false);
             VkBarriers.fullMemoryBarrier(cmd);
             if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
                 && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
@@ -1335,6 +1336,40 @@ public final class WorldTargetManager {
      * sub-pixel history into a render-resolution image sitting on the pixel grid, so passing the camera jitter on to a
      * following DLSS-SR pass would offset it a second time and make the whole frame crawl.
      */
+    /** Where the upscaler's motion vectors come from this frame. */
+    enum UpscalerMotionSource { RASTER_CAMERA, RT_ENTITY }
+
+    /**
+     * RT entity motion when no denoiser resolved the image and the RT pass wrote its per-pixel entity motion together with a
+     * ray-distance depth; camera-only motion from the raster depth otherwise (a denoiser-resolved frame uses the denoiser's
+     * vectors upstream).
+     */
+    static UpscalerMotionSource upscalerMotionSource(boolean colorResolved, long rtDepth, long entityMotion, int depthConvention) {
+        return !colorResolved && rtDepth != 0L && entityMotion != 0L && depthConvention == VelocityPipeline.DEPTH_RAY_DISTANCE
+            ? UpscalerMotionSource.RT_ENTITY : UpscalerMotionSource.RASTER_CAMERA;
+    }
+
+    private static UpscalerMotionSource lastUpscalerMotionSource;
+
+    private static void recordUpscalerMotion(VelocityPipeline velocityPipeline, org.lwjgl.vulkan.VkCommandBuffer cmd,
+                                             long rasterDepthView, long rtDepth, long mvView, int inW, int inH,
+                                             org.joml.Matrix4f invViewProj, org.joml.Matrix4f prevViewProj,
+                                             net.minecraft.world.phys.Vec3 camDelta, boolean colorResolved) {
+        long entityMotion = io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeEntityMotionAddress();
+        UpscalerMotionSource source = upscalerMotionSource(colorResolved, rtDepth, entityMotion,
+            io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeDepthConvention());
+        if (source != lastUpscalerMotionSource) {
+            lastUpscalerMotionSource = source;
+            LOGGER.info("[VKB-RESOLVE] upscaler_mv_source={}", source.name().toLowerCase(java.util.Locale.ROOT));
+        }
+        if (source == UpscalerMotionSource.RT_ENTITY) {
+            velocityPipeline.dispatchRayDistance(cmd, rtDepth, mvView, inW, inH, invViewProj, prevViewProj, camDelta, entityMotion);
+        } else {
+            // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
+            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+        }
+    }
+
     public static float upscalerJitterComponent(boolean colorTemporallyResolved, float cameraJitter) {
         return colorTemporallyResolved ? 0.0f : cameraJitter;
     }

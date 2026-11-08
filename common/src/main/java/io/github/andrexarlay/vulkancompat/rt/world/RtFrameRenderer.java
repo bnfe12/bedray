@@ -875,7 +875,7 @@ public final class RtFrameRenderer {
                 if (denoiser != null) denoiser.ensure(w, h, frameOutput().view);
             }
             stage = "entity_motion_ensure";
-            if (pass.usesGbuffer() && wantsEntityMotion()) frameResources.ensureMotion(w, h);
+            if (wantsEntityMotion()) frameResources.ensureMotion(w, h);
             stage = "sky_atlas_prepare";
             if (skyTextures == null) skyTextures = new RtSkyTextures(world.memory());
             skyTextures.prepare(() -> drainHostSubmissions(device, "sky_atlas_reload_drain"));
@@ -952,7 +952,7 @@ public final class RtFrameRenderer {
         // NRD reads this frame's per-pixel world motion through its own binding, so the buffer has to exist before the
         // pass binds its views: the handle travels with them, and the pass writes exactly that range.
         long motionHandle = 0L;
-        if (useDenoiser && wantsEntityMotion()) {
+        if (wantsEntityMotion()) {
             frameResources.requireMotion(w, h);
             motionHandle = frameMotion().handle;
         }
@@ -1155,6 +1155,7 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_RECT_ADDR, eg.rectAddress());
         // The consumer receives exactly the allocation bound for this frame's producer, including zero on disable.
         long motionAddr = motionHandle != 0L ? frameMotion().address : 0L;
+        lastEntityMotionAddress = motionAddr;
         if (dlssRrDenoiser != null) dlssRrDenoiser.entityMotionAddress = motionAddr;
         if (denoiser != null) denoiser.entityMotionAddress = motionAddr;
         MemoryUtil.memPutLong(hdr + RtStatsLayout.MOTION_ADDR, motionAddr);
@@ -1344,9 +1345,26 @@ public final class RtFrameRenderer {
         }
     }
 
-    /** True when this frame's denoiser layout consumes {@code entity_motion_px}; both of them read it as IN_MV input. */
+    /**
+     * True when someone consumes this frame's {@code entity_motion_px}: either denoiser (as IN_MV) or, with no denoiser, the
+     * temporal upscaler's velocity pass. Without it a spinning dropped item reached DLSS-SR with camera-only motion and
+     * smeared into a dark oval (testbed 2026-11-08). The native core requires full guides with its motion channel, so
+     * there the upscaler keeps the camera-only vectors.
+     */
     private static boolean wantsEntityMotion() {
-        return (denoiser != null || dlssRrDenoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off");
+        return (denoiser != null || dlssRrDenoiser != null || upscalerWantsEntityMotion())
+            && !Boolean.getBoolean("vkrtx.entityMotion.off");
+    }
+
+    static boolean upscalerWantsEntityMotion() {
+        return io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler.isActive() && !RtConfig.SLANG_PATH_TRACE_CPP;
+    }
+
+    /** Device address of this frame's per-pixel entity motion (vec4 per traced pixel), 0 when none was written. */
+    private static volatile long lastEntityMotionAddress;
+
+    public static long activeEntityMotionAddress() {
+        return lastEntityMotionAddress;
     }
 
     /** Once per world: locates the NRD natives and logs the denoiser that will be used. */

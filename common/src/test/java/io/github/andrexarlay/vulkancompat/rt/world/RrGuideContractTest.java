@@ -11,7 +11,9 @@ class RrGuideContractTest {
         assertEquals(guides | rr | motion, RtSlangPathPass.guideOptionFlags(true, true, true));
         assertEquals(guides | rr, RtSlangPathPass.guideOptionFlags(true, false, true));
         assertEquals(guides | motion, RtSlangPathPass.guideOptionFlags(true, true, false));
-        assertEquals(0, RtSlangPathPass.guideOptionFlags(false, true, true));
+        // Without guides the motion channel still travels (a lone temporal upscaler needs it); RR guides do not.
+        assertEquals(motion, RtSlangPathPass.guideOptionFlags(false, true, true));
+        assertEquals(0, RtSlangPathPass.guideOptionFlags(false, false, true));
         assertEquals(rr | motion, ((rr | motion | RtPathTraceSlangPass.PT_STATE_MASK)
             & ~RtPathTraceSlangPass.PT_STATE_MASK), "PT history rewriting must preserve the RR/motion contract");
     }
