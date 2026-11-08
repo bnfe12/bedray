@@ -194,11 +194,14 @@ class RtSlangRestirDiTest {
     @Test
     void aReusedSampleIsEstimatedExactlyLikeAFreshDraw() {
         String reuse = block(read(DI), "LightSample reuseSample(LightReceiver receiver, inout uint seed) {");
-        assertTrue(reuse.contains("LightEvaluation evaluation = emitters().evaluate(receiver, historySample);"),
-            "the stored point is re-resolved through the plain sampler, so p-hat, pdf and Le are one code path");
-        assertTrue(reuse.contains("if (evaluation.valid && evaluation.targetPdf > 0.0 && evaluation.sourcePdf > 0.0)"),
+        // evaluateTarget shares blockEmitterCandidate with evaluate (same p-hat and Le); only the cancelling source pdf is dropped.
+        assertTrue(reuse.contains("LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);"),
+            "the stored point is re-resolved through the plain sampler's candidate path, so p-hat and Le are one code path");
+        // A vanished quad fails blockEmitterFind inside evaluateTarget and comes back invalid (no source pdf any more).
+        assertTrue(reuse.contains("if (evaluation.valid && evaluation.targetPdf > 0.0) {"),
             "a record whose quad vanished from the list is dropped instead of being weighted by zero");
-        assertTrue(reuse.contains("imported.solidAnglePdf = evaluation.sourcePdf;"),
+        // The import's solid-angle pdf multiplies the estimate and is divided out by the direct term, so a constant serves.
+        assertTrue(reuse.contains("imported.solidAnglePdf = DI_IMPORT_SOLID_ANGLE_PDF;"),
             "the import fills the same estimate struct a winner fills");
         assertTrue(reuse.contains("estimate = blockEmitterEstimateFromWinner(winner, atlas);"),
             "and the fresh path fills it from the batch winner");

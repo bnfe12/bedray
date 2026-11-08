@@ -830,6 +830,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
 
         // ---- Next-event estimation ----
         LightReceiver receiver = lightReceiver(hit.position, normal, surface.material.emissionMask);
+        receiver.skyLight = hit.light.y;
         // Only the pixel's own first surface owns the screen-space record; a deeper vertex would write someone else's
         // receiver into it and drag that light across the screen.
         receiver.primary = result.surfaceHits == 1u;

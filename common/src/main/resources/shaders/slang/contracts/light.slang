@@ -70,6 +70,10 @@ struct LightReceiver {
     // sampler must then draw nothing for it - the field already carries that term - while a key-light sampler keeps
     // serving it exactly as before.  False everywhere else, including every non-primary vertex.
     bool   bakedBlockLight;
+    // Vanilla sky light at the receiver, 0..1 (1 = open sky).  Only a selection hint: a sampler may draw the key light
+    // less often where it is ~0 and divide by that probability, so a closed room stops tracing a sun ray that always ends
+    // on the ceiling, while a ray that does reach the sun still counts.  1 for every caller that does not know it.
+    float  skyLight;
 };
 
 LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
@@ -84,6 +88,7 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
     receiver.stableSun = false;
     receiver.sunSeed = 0u;
     receiver.bakedBlockLight = false;
+    receiver.skyLight = 1.0;
     return receiver;
 }
 

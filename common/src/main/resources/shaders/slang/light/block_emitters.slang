@@ -537,6 +537,25 @@ struct SunAndBlockEmitterSampler : ILightSampler {
     SunMoonSampler keyLight;
     BlockEmitterSampler emitters;
     float emitterProbability;
+    // Probability of drawing the key light at a receiver the vanilla sky light calls indoor (sky light 0).  In a closed
+    // room every key-light ray ends on the ceiling; at the primary vertex (where the reservoir owns the emitters and the
+    // key light had the whole density) that was a full shadow walk per pixel for nothing - 2026-11-08 torch-room audit.
+    // The sample is divided by this probability, so a sun ray through an opening far away still counts.
+    static const float INDOOR_KEY_LIGHT_PROBABILITY = 0.125;
+    static const float INDOOR_SKY_LIGHT = 0.5 / 15.0;
+
+    LightSample sampleKeyLightIndoorAware(LightReceiver receiver, inout uint seed) {
+        float keyProbability = receiver.skyLight < INDOOR_SKY_LIGHT ? INDOOR_KEY_LIGHT_PROBABILITY : 1.0;
+        if (keyProbability < 1.0 && rand01(seed) >= keyProbability) {
+            return invalidLightSample();
+        }
+        LightSample keySample = keyLight.sample(receiver, seed);
+        if (keySample.valid) {
+            keySample.sourcePdf *= keyProbability;
+        }
+        return keySample;
+    }
+
     // Set when the caller lights the primary vertex from a ReSTIR reservoir: that branch is evaluated every frame (the
     // record has to be read and written whether or not it wins a draw), so the composite must not also draw emitters for
     // it.  Path vertices deeper in the path keep the plain RIS branch.
@@ -555,7 +574,7 @@ struct SunAndBlockEmitterSampler : ILightSampler {
             if (hasEmitters && sunIntensity <= 0.0) {
                 return emitters.sample(receiver, seed);
             }
-            return keyLight.sample(receiver, seed);
+            return sampleKeyLightIndoorAware(receiver, seed);
         }
         if (rand01(seed) < emitterProbability) {
             LightSample emitterSample = emitters.sample(receiver, seed);

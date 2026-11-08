@@ -56,7 +56,9 @@ class RtDiSpatialTargetOnlyTest {
             "the full evaluation keeps the real selection probability for the temporal import");
         assertTrue(emitters.contains("return emitters.evaluateTarget(receiver, sample);"),
             "the sun-and-emitters composite forwards the cheap path too");
-        assertTrue(read("restir/di_block_emitters.slang").contains("LightEvaluation evaluation = emitters().evaluate(receiver, historySample);"),
-            "temporal import stores solidAnglePdf, so it keeps evaluate()");
+        // 2026-11-08: the temporal import's source pdf cancels between the estimate and the direct term, so it now uses
+        // the target-only path too.
+        assertTrue(read("restir/di_block_emitters.slang").contains("LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);"),
+            "the temporal import uses the target-only evaluation as well");
     }
 }

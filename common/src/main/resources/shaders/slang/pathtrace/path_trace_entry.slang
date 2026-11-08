@@ -22,6 +22,9 @@ import "surface/water.slang";
 __exported import "traversal/entity_geometry.slang";
 import "traversal/traversal.slang";
 
+// Depth from which the screen pass plays Russian roulette (the defaults keep 3 for the other callers).
+static const uint PATH_TRACE_ENTRY_MIN_RUSSIAN_DEPTH = 2u;
+
 // Bits of PathTracePush.diState.x.  The reservoir branch is one code path gated by a flag, not a second shader: the host
 // can A/B ReSTIR DI against plain per-frame RIS in the same frame graph.
 static const uint PATH_TRACE_DI_ENABLED      = 1u << 0u;
@@ -465,6 +468,10 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
 
     PathTraceOptions options = defaultPathTraceOptions();
     options.maxDepth = max(pc.maxDepth, 1u);
+    // Roulette from depth 2: with the default 3 bounces a start at 3 never ran (the depth limit breaks first).  Paths
+    // that already lost most of their throughput after two diffuse bounces stop early; survivors are divided by the
+    // survival probability, so the estimate stays unbiased.
+    options.minRussianDepth = PATH_TRACE_ENTRY_MIN_RUSSIAN_DEPTH;
     options.maxSurfaceSteps = max(pc.maxSurfaceSteps, 1u);
     options.rayBias = max(pc.rayBias, 0.0);
     options.alphaCutoff = pc.alphaCutoff;
