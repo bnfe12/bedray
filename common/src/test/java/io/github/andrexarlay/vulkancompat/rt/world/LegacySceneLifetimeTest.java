@@ -10,85 +10,118 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * Exact ownership of the legacy scene's shared inputs. Since 2026-11-08 a legacy update no longer drains the host
+ * queue every frame (the GPU idled ~3 ms per frame waiting for the CPU to record the next one): a recording owns its
+ * staging/instance segment and everything retired while it was the newest recording, and only that recording's exact
+ * completion, deliberate discard or a host drain releases them. Frame age never releases anything.
+ */
 class LegacySceneLifetimeTest {
-    @Test void completionPermitsOneUpdateAndFrameAgeNeverPermitsAnother() {
-        var lifetime = new LegacySceneLifetime();
-        int[] collections = {0};
-        assertThrows(IllegalStateException.class, () -> lifetime.begin(17));
-        lifetime.prepareAfterHostDrain(() -> collections[0]++);
-        lifetime.begin(17);
-        for (int frame = 0; frame < 100; frame++) {
-            assertThrows(IllegalStateException.class, () -> lifetime.begin(18));
-            assertThrows(IllegalStateException.class, () -> lifetime.prepareAfterHostDrain(() -> collections[0]++));
-        }
-        lifetime.release(18);
+    private static final int SEGMENTS = 3;
+
+    @Test void consecutiveUpdatesNeedNoDrainUntilTheirSegmentIsStillOwned() {
+        var lifetime = new LegacySceneLifetime(SEGMENTS);
+        assertFalse(lifetime.segmentBusy(1));
+        lifetime.begin(101, 1);
+        assertFalse(lifetime.segmentBusy(2));
+        lifetime.begin(102, 2);
+        assertFalse(lifetime.segmentBusy(3));
+        lifetime.begin(103, 3);
+        assertTrue(lifetime.segmentBusy(4), "frame 4 writes segment 1, still owned by the frame-1 recording");
+        assertThrows(IllegalStateException.class, () -> lifetime.begin(104, 4), "an owned segment is never rewritten");
+        for (int age = 0; age < 100; age++) assertTrue(lifetime.segmentBusy(4), "frame age never frees a segment");
+        lifetime.release(101);
+        assertFalse(lifetime.segmentBusy(4));
+        lifetime.begin(104, 4);
+        assertEquals(3, lifetime.owned());
+    }
+
+    @Test void retiredObjectsWaitForTheNewestRecordingThatCouldReferenceThem() {
+        var lifetime = new LegacySceneLifetime(SEGMENTS);
+        List<String> freed = new ArrayList<>();
+        lifetime.retire(() -> freed.add("idle"));
+        assertEquals(List.of("idle"), freed, "with no recording in flight nothing can reference it");
+        lifetime.begin(101, 1);
+        lifetime.retire(() -> freed.add("a"));
+        lifetime.begin(102, 2);
+        lifetime.retire(() -> freed.add("b"));
+        lifetime.release(102);
+        assertEquals(List.of("idle", "b"), freed);
+        lifetime.release(101);
+        assertEquals(List.of("idle", "b", "a"), freed);
+        lifetime.release(101);
+        assertEquals(3, freed.size(), "a release is exact and happens once");
+    }
+
+    @Test void aDiscardedRecordingHandsItsRetiredObjectsToTheRecordingsBeforeIt() {
+        var lifetime = new LegacySceneLifetime(SEGMENTS);
+        List<String> freed = new ArrayList<>();
+        lifetime.begin(101, 1);
+        lifetime.begin(102, 2);
+        lifetime.retire(() -> freed.add("removed-in-2"));
+        lifetime.discard(102);
+        assertTrue(freed.isEmpty(), "the frame-1 TLAS may still reference what frame 2 removed");
+        assertFalse(lifetime.segmentBusy(2), "the discarded recording never executed, its segment is free");
+        lifetime.release(101);
+        assertEquals(List.of("removed-in-2"), freed);
+        lifetime.begin(103, 3);
+        lifetime.retire(() -> freed.add("last"));
+        lifetime.discard(103);
+        assertEquals(List.of("removed-in-2", "last"), freed, "nothing older is in flight");
+    }
+
+    @Test void invalidHandlesAndDoubleOwnershipAreRejected() {
+        var lifetime = new LegacySceneLifetime(SEGMENTS);
+        assertThrows(IllegalArgumentException.class, () -> new LegacySceneLifetime(1));
+        assertThrows(IllegalStateException.class, () -> lifetime.begin(0, 1));
+        lifetime.begin(101, 1);
+        assertThrows(IllegalStateException.class, () -> lifetime.begin(101, 2), "a handle owns one recording at a time");
         assertThrows(IllegalStateException.class, lifetime::requireReleased);
-        assertEquals(1, collections[0]);
-        lifetime.release(17);
+        lifetime.release(101);
         assertDoesNotThrow(lifetime::requireReleased);
-        assertThrows(IllegalStateException.class, () -> lifetime.begin(18), "completion alone does not replace the next host drain");
-        lifetime.prepareAfterHostDrain(() -> collections[0]++);
-        lifetime.begin(18);
-        assertEquals(2, collections[0]);
     }
 
-    @Test void failedCollectionAndInvalidHandlesNeverPermitMappedWrites() {
-        var lifetime = new LegacySceneLifetime();
-        lifetime.prepareAfterHostDrain(() -> {});
-        assertThrows(IllegalStateException.class, () -> lifetime.prepareAfterHostDrain(() -> {
-            throw new IllegalStateException("retirement failed");
-        }));
-        assertThrows(IllegalStateException.class, () -> lifetime.begin(17));
-        lifetime.prepareAfterHostDrain(() -> {});
-        assertThrows(IllegalStateException.class, () -> lifetime.begin(0));
-        lifetime.begin(17);
-        assertThrows(IllegalStateException.class, lifetime::requireReleased);
-    }
-
-    @Test void exactHostTicketsProtectOpenUnknownAndReusedCommandBuffers() {
-        var lifetime = new LegacySceneLifetime();
+    @Test void exactHostTicketsDecideReleaseIncludingUnknownExecuteOutcomes() {
+        var lifetime = new LegacySceneLifetime(SEGMENTS);
         var completion = new RecordingCompletion(failure -> fail(failure));
         List<Runnable> callbacks = new ArrayList<>();
-        lifetime.prepareAfterHostDrain(() -> {});
+        List<String> freed = new ArrayList<>();
         var first = completion.begin(17, () -> lifetime.release(17));
-        lifetime.begin(17);
-        completion.afterHostDrain(); // An open CB was never executed or deliberately abandoned.
-        assertThrows(IllegalStateException.class, () -> lifetime.prepareAfterHostDrain(() -> {}));
+        lifetime.begin(17, 1);
+        lifetime.retire(() -> freed.add("first"));
         completion.submissionAttempted(first);
         completion.submitted(first, callbacks::add);
-        completion.afterHostDrain();
-        lifetime.prepareAfterHostDrain(() -> {});
-        var second = completion.begin(17, () -> lifetime.release(17));
-        lifetime.begin(17);
-        callbacks.getFirst().run(); // A late old callback cannot release the new handle generation.
-        assertThrows(IllegalStateException.class, () -> lifetime.prepareAfterHostDrain(() -> {}));
+        var second = completion.begin(18, () -> lifetime.release(18));
+        lifetime.begin(18, 2);
         completion.submissionAttempted(second); // Unknown execute outcome stays pinned until host proof.
-        assertThrows(IllegalStateException.class, () -> lifetime.prepareAfterHostDrain(() -> {}));
+        callbacks.getFirst().run();
+        assertEquals(List.of("first"), freed);
+        assertTrue(lifetime.segmentBusy(5), "frame 5 reuses the unknown recording's segment");
         completion.afterHostDrain();
-        lifetime.prepareAfterHostDrain(() -> {});
-        var abandoned = completion.begin(18, () -> lifetime.release(18));
-        lifetime.begin(18);
-        completion.discard(abandoned);
         assertDoesNotThrow(lifetime::requireReleased);
-        assertThrows(IllegalStateException.class, () -> lifetime.begin(19));
     }
 
-    @Test void rendererDrainsActualLegacyOwnerBeforeOpeningAnyLocalRecording() throws Exception {
+    @Test void rendererDrainsOnlyForAnOwnedSegmentOrMicromaps() throws Exception {
         String renderer = source("RtFrameRenderer.java");
         int gate = renderer.indexOf("if (world.requiresLegacyHostDrain())");
         int drain = renderer.indexOf("drainHostSubmissions(device, \"legacy_world_inputs_drain\")", gate);
         int prepare = renderer.indexOf("world.prepareLegacyFrameAfterHostDrain()", drain);
         int allocate = renderer.indexOf("encoder.allocateAndBeginTransientCommandBuffer()", prepare);
         int ticket = renderer.indexOf("recordingCompletion.beginWithDiscard", allocate);
+        int barrier = renderer.indexOf("VkBarriers.fullMemoryBarrier(cmd);", ticket);
         int update = renderer.indexOf("recordingWorld.update(cmd", ticket);
-        assertTrue(gate >= 0 && drain > gate && prepare > drain && allocate > prepare && ticket > allocate && update > ticket);
+        assertTrue(gate >= 0 && drain > gate && prepare > drain && allocate > prepare && ticket > allocate
+            && barrier > ticket && update > barrier,
+            "the full barrier orders this frame's AS builds and scratch after earlier frames on the queue");
         String world = source("RtWorld.java");
-        assertTrue(world.contains("public boolean requiresLegacyHostDrain() {\n        return nativeScene == null;"));
-        int guard = world.indexOf("if (nativeScene == null) legacyLifetime.begin(cmd.address());");
+        assertTrue(world.contains("return nativeScene == null && (omm != null || legacyLifetime.segmentBusy(frameIndex + 1));"),
+            "micromap payloads are rewritten in place, so they keep the per-frame drain");
+        int guard = world.indexOf("if (nativeScene == null) legacyLifetime.begin(cmd.address(), frameIndex + 1);");
         assertTrue(guard >= 0 && guard < world.indexOf("frameIndex++;"));
-        assertTrue(world.contains("legacyLifetime.prepareAfterHostDrain(() -> {\n            releaseDeferredAfterHostDrain();\n            entityBlas.releaseRetiredAfterHostDrain();\n            if (omm != null) omm.releaseRetiredAfterHostDrain();"));
-        assertEquals(2, world.split("legacyLifetime.release\\(commandBuffer\\);", -1).length - 1,
-            "both completed and deliberately discarded recordings release their exact input owner");
+        assertTrue(world.contains("legacyLifetime.release(commandBuffer);"));
+        assertTrue(world.contains("legacyLifetime.discard(commandBuffer);"));
+        assertFalse(world.contains("deferred.add("), "removed sections are retired to their exact owner");
+        assertTrue(source("RtEntityBlas.java").contains("retire.accept("), "a grown entity BLAS is retired to its exact owner");
     }
 
     @Test void retirementHasNoFrameWindowAndScratchGrowthPinsThePreviousBuffer() throws Exception {
@@ -101,7 +134,8 @@ class LegacySceneLifetimeTest {
         assertFalse(omm.contains("vkDeviceWaitIdle"));
         assertTrue(omm.contains("if (!refs.containsKey(r.handle))"), "live BLAS references still keep retired micromaps");
         assertTrue(omm.contains("if (mmScratch != null) retiredBufs.add(mmScratch);"));
-        assertTrue(world.contains("frameIndex % STAGING_SEGMENTS"), "ring layout remains a capacity choice");
+        assertTrue(world.contains("frameIndex % STAGING_SEGMENTS"), "ring layout");
+        assertTrue(world.contains("new LegacySceneLifetime(STAGING_SEGMENTS)"), "ownership is per staging segment");
     }
 
     private static String source(String file) throws Exception {

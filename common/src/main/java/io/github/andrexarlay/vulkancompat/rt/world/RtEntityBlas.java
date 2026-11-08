@@ -35,30 +35,24 @@ public final class RtEntityBlas {
     /**
      * A grow must not destroy the current BLAS where it stands: {@code blasAddress} is baked into the TLAS instance
      * buffers of frames that may still be in flight, and freeing an acceleration structure an in-flight submission
-     * reads is undefined (it shows up as {@code VK_ERROR_DEVICE_LOST}). Retired structures stay queued until the next
-     * explicit host drain, before any new legacy recording is opened.
+     * reads is undefined (it shows up as {@code VK_ERROR_DEVICE_LOST}). A grown structure is handed to {@code retire},
+     * which releases it after the exact completion of every recording that could reference it.
      */
-    private final java.util.ArrayDeque<Pending> retired = new java.util.ArrayDeque<>();
+    private final java.util.function.Consumer<Runnable> retire;
 
-    private record Pending(long handle, RtMemory.Buf buf) {
-    }
-
-    /** Host completion covers all prior TLAS references; called before the next legacy recording. */
-    void releaseRetiredAfterHostDrain() {
-        while (!retired.isEmpty()) {
-            Pending p = retired.pollFirst();
-            if (p.handle() != 0L) {
-                KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, p.handle(), null);
-            }
-            if (p.buf() != null) {
-                mem.destroy(p.buf());
-            }
-        }
-    }
-
-    public RtEntityBlas(VkDevice device, RtMemory mem) {
+    public RtEntityBlas(VkDevice device, RtMemory mem, java.util.function.Consumer<Runnable> retire) {
         this.device = device;
         this.mem = mem;
+        this.retire = java.util.Objects.requireNonNull(retire, "retire");
+    }
+
+    private void destroyStructure(long handle, RtMemory.Buf buf) {
+        if (handle != 0L) {
+            KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, handle, null);
+        }
+        if (buf != null) {
+            mem.destroy(buf);
+        }
     }
 
     public void build(VkCommandBuffer cb, io.github.andrexarlay.vulkancompat.rt.entity.EntityGpuFrame gpuFrame, RtMemory.Buf scratchBuf, long scratchBase) {
@@ -137,7 +131,9 @@ public final class RtEntityBlas {
             }
 
             if (blasBuf == null || blasBuf.size < requiredSize) {
-                retired.addLast(new Pending(blasHandle, blasBuf));
+                long grownHandle = blasHandle;
+                RtMemory.Buf grownBuf = blasBuf;
+                retire.accept(() -> destroyStructure(grownHandle, grownBuf));
                 blasHandle = 0L;
                 blasAddress = 0L;
                 blasBuf = mem.createBuffer("entity_blas", Math.max(requiredSize, 2L << 20),
@@ -263,7 +259,6 @@ public final class RtEntityBlas {
     }
 
     public void close() {
-        releaseRetiredAfterHostDrain();
         if (blasHandle != 0L) {
             KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, blasHandle, null);
             blasHandle = 0L;

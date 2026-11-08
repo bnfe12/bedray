@@ -40,9 +40,10 @@ import java.util.Map;
  * {@link SectionGeometryRegistry}, one BLAS per section, and a TLAS rebuilt every frame.
  *
  * <p>Everything is recorded into the command buffer passed to {@link #update}; nothing is submitted here. Before each
- * legacy update the host drains prior uses of the shared mapped inputs. Removed/replaced sections
- * are reclaimed at the next host drain. The opt-in native scene retires generations through its exact recording
- * completion/discard callbacks. Render thread only.
+ * legacy update owns one staging/instance segment through {@link LegacySceneLifetime}; removed/replaced sections and
+ * grown entity BLAS are released by the exact completion of the newest recording that could reference them, and the
+ * host drains only when the segment about to be written is still owned. The opt-in native scene retires generations
+ * through its exact recording completion/discard callbacks. Render thread only.
  *
  * <p>Per section a block of the geometry arena holds {@code [positions float3 x 4Q][uv float2 x 4Q]}; the BLAS has one
  * triangle geometry per non-empty pass (SOLID: OPAQUE, CUTOUT/TRANSLUCENT: non-opaque) reading a slice of the
@@ -170,8 +171,7 @@ public final class RtWorld {
     private final Map<Long, SectionGpu> gpu = new HashMap<>();
     /** Changes with the active scene's section captures; emitter list rebuilds key off it. */
     private long structureVersion;
-    private final ArrayDeque<SectionGpu> deferred = new ArrayDeque<>();
-    private final LegacySceneLifetime legacyLifetime = new LegacySceneLifetime();
+    private final LegacySceneLifetime legacyLifetime = new LegacySceneLifetime(STAGING_SEGMENTS);
     private final ArrayDeque<Integer> freeSlots = new ArrayDeque<>();
     private int nextSlot = 0;
     private List<DecodedSection> pending = new ArrayList<>();
@@ -253,7 +253,7 @@ public final class RtWorld {
             this.instances = mem.createBuffer("instances", (long) INSTANCE_BYTES * RtConfig.MAX_INSTANCES * STAGING_SEGMENTS,
                 RtMemory.USAGE_AS_INPUT, true);
             rollback.push(() -> mem.destroy(instances));
-            this.entityBlas = new RtEntityBlas(device, mem);
+            this.entityBlas = new RtEntityBlas(device, mem, legacyLifetime::retire);
             rollback.push(entityBlas::close);
             this.omm = OpacityMicromapCache.create(mem);
             if (omm != null) rollback.push(omm::destroy);
@@ -380,7 +380,7 @@ public final class RtWorld {
 
     /** As above with the RT radius of this frame in sections (RtConfig.radiusXz / radiusY); a change triggers a rescan. */
     public FrameStats update(VkCommandBuffer cmd, double camX, double camY, double camZ, int radiusXz, int radiusY) {
-        if (nativeScene == null) legacyLifetime.begin(cmd.address());
+        if (nativeScene == null) legacyLifetime.begin(cmd.address(), frameIndex + 1);
         boolean radiusChanged = radiusXz != this.radiusXz || radiusY != this.radiusY;
         this.radiusXz = radiusXz;
         this.radiusY = radiusY;
@@ -676,7 +676,7 @@ public final class RtWorld {
             if (gone || far) {
                 it.remove();
                 structureVersion++;
-                deferred.add(g);
+                retireSection(g);
             }
         }
         ArrayList<DecodedSection> list = new ArrayList<>();
@@ -1069,7 +1069,7 @@ public final class RtWorld {
                 SectionGpu old = gpu.put(d.key, entry);
                 structureVersion++;
                 if (old != null) {
-                    deferred.add(old);
+                    retireSection(old);
                 }
             }
             return item;
@@ -1236,19 +1236,20 @@ public final class RtWorld {
 
     // --------------------------------------------------------------------------------------------- release
 
-    /** Actual scene ownership decides serialization, including native-scene startup fallback. */
+    /**
+     * Actual scene ownership decides serialization, including native-scene startup fallback. A legacy update drains only
+     * when the segment it writes is still owned by an earlier recording, or when opacity micromaps are on: their build
+     * payload is rewritten in place and keeps the per-frame host proof.
+     */
     public boolean requiresLegacyHostDrain() {
-        return nativeScene == null;
+        return nativeScene == null && (omm != null || legacyLifetime.segmentBusy(frameIndex + 1));
     }
 
     /** Called outside a local recording, after the host fence and all exact recording callbacks completed. */
     public void prepareLegacyFrameAfterHostDrain() {
         if (nativeScene != null) throw new IllegalStateException("native scene does not use legacy shared inputs");
-        legacyLifetime.prepareAfterHostDrain(() -> {
-            releaseDeferredAfterHostDrain();
-            entityBlas.releaseRetiredAfterHostDrain();
-            if (omm != null) omm.releaseRetiredAfterHostDrain();
-        });
+        legacyLifetime.requireReleased(); // the drain completed every ticket, which released what each one retired
+        if (omm != null) omm.releaseRetiredAfterHostDrain();
     }
 
     /** Called only with host proof of completion or deliberate unsubmitted discard. */
@@ -1266,7 +1267,7 @@ public final class RtWorld {
         }
         if (dequantize != null) dequantize.releaseRecording(commandBuffer);
         RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
-        legacyLifetime.release(commandBuffer);
+        legacyLifetime.discard(commandBuffer);
     }
 
     /** The caller has drained host submissions and excluded future resubmission. */
@@ -1282,18 +1283,19 @@ public final class RtWorld {
         if (nativeScene != null) nativeScene.close();
     }
 
-    private void releaseDeferredAfterHostDrain() {
-        while (!deferred.isEmpty()) {
-            SectionGpu g = deferred.peekFirst();
-            KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, g.blasHandle, null);
-            blasArena.free(g.blasBlock);
-            geomArena.free(g.geom);
-            if (omm != null) {
-                omm.releaseRef(g.ommObject);
-            }
-            freeSlots.push(g.slot);
-            deferred.removeFirst();
+    /** The section left the scene; its BLAS, arena blocks and slot outlive every recording whose TLAS references it. */
+    private void retireSection(SectionGpu g) {
+        legacyLifetime.retire(() -> releaseSection(g));
+    }
+
+    private void releaseSection(SectionGpu g) {
+        KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, g.blasHandle, null);
+        blasArena.free(g.blasBlock);
+        geomArena.free(g.geom);
+        if (omm != null) {
+            omm.releaseRef(g.ommObject);
         }
+        freeSlots.push(g.slot);
     }
 
     /** Releases resources after the caller drained host submissions and excluded resubmission. */
@@ -1309,10 +1311,9 @@ public final class RtWorld {
         legacyLifetime.requireReleased();
         dequantize.destroy();
         for (SectionGpu g : gpu.values()) {
-            deferred.add(g);
+            retireSection(g); // nothing is in flight here, so this releases at once
         }
         gpu.clear();
-        releaseDeferredAfterHostDrain();
         KHRAccelerationStructure.vkDestroyAccelerationStructureKHR(device, tlasHandle, null);
         mem.destroy(tlasBuf);
         mem.destroy(scratch);
