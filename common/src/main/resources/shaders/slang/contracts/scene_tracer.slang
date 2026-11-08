@@ -41,6 +41,12 @@ interface ISceneTracer {
     // material stage; a backend only reports geometric blockers.
     VisibilityResult traceVisibility(Ray ray);
 
+    // First-hit shadow probe: stops at the first opaque triangle instead of searching for the nearest hit.  A backend
+    // without hardware ray queries answers UNDECIDED and the material walk runs as before.
+    ShadowProbe traceShadowProbe(Ray ray) {
+        return undecidedShadowProbe(ray.tMax);
+    }
+
     // Distance to the nearest blocker, or ray.tMax on a miss.  This is the
     // cheap form used by AO and short-range GI.
     float traceDistance(Ray ray);

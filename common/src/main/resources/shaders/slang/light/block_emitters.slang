@@ -544,8 +544,12 @@ struct SunAndBlockEmitterSampler : ILightSampler {
     static const float INDOOR_KEY_LIGHT_PROBABILITY = 0.125;
     static const float INDOOR_SKY_LIGHT = 0.5 / 15.0;
 
+    float indoorKeyLightProbability(LightReceiver receiver) {
+        return receiver.skyLight < INDOOR_SKY_LIGHT ? INDOOR_KEY_LIGHT_PROBABILITY : 1.0;
+    }
+
     LightSample sampleKeyLightIndoorAware(LightReceiver receiver, inout uint seed) {
-        float keyProbability = receiver.skyLight < INDOOR_SKY_LIGHT ? INDOOR_KEY_LIGHT_PROBABILITY : 1.0;
+        float keyProbability = indoorKeyLightProbability(receiver);
         if (keyProbability < 1.0 && rand01(seed) >= keyProbability) {
             return invalidLightSample();
         }
@@ -576,16 +580,20 @@ struct SunAndBlockEmitterSampler : ILightSampler {
             }
             return sampleKeyLightIndoorAware(receiver, seed);
         }
-        if (rand01(seed) < emitterProbability) {
+        // Indoors (vanilla sky light 0) the key-light share shrinks the same way as in the single-branch draw, and the
+        // emitters get the rest; each branch divides by its own probability, so the sum stays unbiased.
+        float keyShare = (1.0 - emitterProbability) * indoorKeyLightProbability(receiver);
+        float emitterShare = 1.0 - keyShare;
+        if (rand01(seed) < emitterShare) {
             LightSample emitterSample = emitters.sample(receiver, seed);
             if (emitterSample.valid) {
-                emitterSample.sourcePdf *= emitterProbability;
+                emitterSample.sourcePdf *= emitterShare;
             }
             return emitterSample;
         }
         LightSample sunSample = keyLight.sample(receiver, seed);
         if (sunSample.valid) {
-            sunSample.sourcePdf *= 1.0 - emitterProbability;
+            sunSample.sourcePdf *= keyShare;
         }
         return sunSample;
     }

@@ -31,6 +31,7 @@ struct ReorderingTraversal<T : ITriangleTracer> : ISceneTracer {
     }
 
     VisibilityResult traceVisibility(Ray ray) { return base.traceVisibility(ray); }
+    override ShadowProbe traceShadowProbe(Ray ray) { return base.traceShadowProbe(ray); }
     float traceDistance(Ray ray) { return base.traceDistance(ray); }
     override float3 surfaceMotion(SurfaceHit hit) { return base.surfaceMotion(hit); }
 };

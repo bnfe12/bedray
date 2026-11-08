@@ -62,6 +62,18 @@ SurfaceVisibility traceFilteredVisibility<T : ISceneTracer>(T traversal,
     float3 transmittance = float3(1.0);
     Ray current = ray;
 
+    // One first-hit probe settles most shadow rays: a fully clear segment, or an opaque section triangle that can only
+    // block.  Anything else (a cutout or translucent candidate, an entity, a leaf or OMM texel) takes the material walk.
+    ShadowProbe probe = traversal.traceShadowProbe(ray);
+    if (probe.state == SHADOW_PROBE_CLEAR) {
+        visibility.result = visibleResult(ray.tMax);
+        return visibility;
+    }
+    if (probe.state == SHADOW_PROBE_OPAQUE_HIT && visibilityOpaqueSectionBlocker(probe.blocker)) {
+        visibility.result = blockedResult(probe.blocker, float3(0.0));
+        return visibility;
+    }
+
     for (uint layer = 0u; layer < SURFACE_VISIBILITY_MAX_LAYERS; ++layer) {
         if (current.tMax <= current.tMin) break;
 
