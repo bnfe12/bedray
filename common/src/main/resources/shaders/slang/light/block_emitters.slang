@@ -346,7 +346,11 @@ BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<uint4> records, Mate
     float2 r2shift = float2(rand01(seed), rand01(seed));
     uint count = blockEmitterCount(records);
     for (uint k = 0u; k < candidates; ++k) {
-        BlockEmitterSelection selected = blockEmitterSelect(records, receiver.position + cameraRelative, rand01(seed));
+        // The primary vertex keeps the light tree: it is what the eye sees and what ReSTIR DI stores and re-evaluates
+        // with the mixture PMF.  Bounce vertices are never stored, so they take the cheap global branch.
+        BlockEmitterSelection selected = receiver.primary
+            ? blockEmitterSelect(records, receiver.position + cameraRelative, rand01(seed))
+            : blockEmitterSelectGlobal(records, rand01(seed));
         float2 quad = frac(r2shift + float(k) * float2(0.7548776662, 0.5698402909));
         BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, selected.index, quad, receiver,
             cameraRelative, lightRadius, selected.probability);

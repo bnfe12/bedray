@@ -57,6 +57,20 @@ float blockEmitterSelectionProbability(StructuredBuffer<uint4> table, uint index
 
 struct BlockEmitterSelection { uint index; float probability; };
 
+// The global branch alone: index = floor(u^2 * count) over the importance-sorted list, with its exact PMF and no light
+// tree walk.  Used at bounce vertices: in a torch room with 674 lights the tree (root-to-leaf to select, leaf-to-root for
+// the mixture PMF) cost ~12 of 29 ms of trace at 2560x1440 (2026-11-08), and indirect light is soft enough that the
+// coarser choice does not show.  The PMF is the one the RIS weight divides by, so the estimate stays unbiased.
+BlockEmitterSelection blockEmitterSelectGlobal(StructuredBuffer<uint4> table, float draw) {
+    BlockEmitterSelection selected = {0xFFFFFFFFu, 0.0};
+    uint count = blockEmitterCount(table);
+    if (count == 0u) return selected;
+    float u = clamp(draw, 0.0, 0.99999994);
+    selected.index = min(uint(u * u * float(count)), count - 1u);
+    selected.probability = blockEmitterIndexProbability(selected.index, count);
+    return selected;
+}
+
 // One uniform draw samples the complete mixture. The returned PMF includes both ways of selecting the same light.
 BlockEmitterSelection blockEmitterSelect(StructuredBuffer<uint4> table, float3 receiver, float draw) {
     BlockEmitterSelection selected = {0xFFFFFFFFu, 0.0};
