@@ -739,12 +739,19 @@ public final class RtEmitters {
                 return LabPbr.hasSourceFlag(m, LabPbr.SOURCE_REDSTONE);
             }
         };
+        // Most quads of a section do not glow: reject them in O(1) from the atlas index before the texel scan.
+        EmissiveTexelIndex candidates = EmissiveTexelIndex.of(material, atlasW, atlasH);
+        int[] rect = new int[4];
         for (int q = 0; q < quads; q++) {
+            int uvOffset = q * 8;
+            EmissiveTexelIndex.texelRect(uvs, uvOffset, atlasW, atlasH, rect);
+            if (!candidates.anyCandidate(rect[0], rect[1], rect[2], rect[3])) {
+                continue;
+            }
             if (tmp == null) {
                 tmp = new float[quads * FLOATS];
             }
             // cutout pass quads (torches, lanterns, campfires, fire) are open sources: they radiate to both sides
-            int uvOffset = q * 8;
             float redstoneSignal = quadRedstoneSignal(colors, q * 4);
             if (buildQuadRecord(tmp, n * FLOATS, positions, q * 12, uvs, uvOffset, tex, q >= solidQuads, redstoneSignal)) {
                 n++;
