@@ -58,12 +58,39 @@ class EmissiveTexelIndexTest {
     }
 
     @Test
+    void anAtlasFilledInPlaceIsReindexedWhenItsContentVersionMoves() {
+        // 2026-11-08 regression: the live material mirror is filled in place while sprites bake. An index cached by array
+        // identity was built over the empty atlas and the game ran with 0 emitters instead of 1313.
+        int w = 32, h = 16;
+        int[] material = new int[w * h];
+        Arrays.fill(material, NO_FLAGS);
+        EmissiveTexelIndex empty = EmissiveTexelIndex.of(material, w, h, 1L);
+        assertFalse(empty.anyCandidate(0, 0, w, h));
+        material[2 * w + 9] = emissive(180);  // a sprite lands in the same array
+        assertTrue(EmissiveTexelIndex.of(material, w, h, 2L).anyCandidate(0, 0, w, h),
+            "a new content version must rebuild the index");
+        assertTrue(EmissiveTexelIndex.of(material, w, h, 2L) == EmissiveTexelIndex.of(material, w, h, 2L),
+            "the same version reuses the cached index");
+    }
+
+    @Test
+    void theLiveExtractionKeysOnTheAtlasContentVersion() throws java.io.IOException {
+        String emitters = java.nio.file.Files.readString(java.nio.file.Path.of(
+            "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtEmitters.java"));
+        assertTrue(emitters.contains("RtMaterialAtlas.cpuMaterialVersion());"), "extract() passes the mirror's content version");
+        String atlas = java.nio.file.Files.readString(java.nio.file.Path.of(
+            "src/main/java/io/github/andrexarlay/vulkancompat/rt/material/RtMaterialAtlas.java"));
+        int bumps = atlas.split("CPU_MATERIAL_VERSION\\.incrementAndGet\\(\\);", -1).length - 1;
+        assertTrue(bumps >= 3, "allocation, re-allocation and every mirrored sprite batch bump the version: " + bumps);
+    }
+
+    @Test
     void rectangleQueriesCountCandidatesExactly() {
         int w = 16, h = 8;
         int[] material = new int[w * h];
         Arrays.fill(material, NO_FLAGS);
         material[3 * w + 4] = emissive(200);
-        EmissiveTexelIndex index = EmissiveTexelIndex.of(material, w, h);
+        EmissiveTexelIndex index = EmissiveTexelIndex.build(material, w, h);
         assertTrue(index.anyCandidate(4, 3, 5, 4));
         assertTrue(index.anyCandidate(0, 0, w, h));
         assertFalse(index.anyCandidate(5, 3, w, h));

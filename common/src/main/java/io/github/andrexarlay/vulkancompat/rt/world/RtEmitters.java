@@ -699,8 +699,10 @@ public final class RtEmitters {
      * Emitter records of one section, positions section-local (pure, unit-tested through {@link #extractQuads}).
      */
     static float[] extract(DecodedSection d, int[] material, int atlasW, int atlasH) {
+        EmissiveTexelIndex candidates = EmissiveTexelIndex.of(material, atlasW, atlasH,
+            io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas.cpuMaterialVersion());
         return extractQuads(d.positions, d.uvs, d.colors, d.totalQuads(), material, atlasW, atlasH,
-            d.passQuadStart(DecodedSection.PASS_CUTOUT));
+            d.passQuadStart(DecodedSection.PASS_CUTOUT), candidates);
     }
 
     /** {@code positions}: 12 floats per quad, {@code uvs}: 8 floats per quad (DecodedSection layout). */
@@ -715,6 +717,12 @@ public final class RtEmitters {
     /** Extracts emitter quads with vertex colors so vertex-tinted redstone uses its actual signal strength. */
     public static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int quads, int[] material, int atlasW, int atlasH,
                                        int solidQuads) {
+        return extractQuads(positions, uvs, colors, quads, material, atlasW, atlasH, solidQuads,
+            EmissiveTexelIndex.build(material, atlasW, atlasH));
+    }
+
+    private static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int quads, int[] material, int atlasW,
+                                        int atlasH, int solidQuads, EmissiveTexelIndex candidates) {
         float[] tmp = null;
         int n = 0;
         TexelEmission tex = new TexelEmission() {
@@ -740,7 +748,6 @@ public final class RtEmitters {
             }
         };
         // Most quads of a section do not glow: reject them in O(1) from the atlas index before the texel scan.
-        EmissiveTexelIndex candidates = EmissiveTexelIndex.of(material, atlasW, atlasH);
         int[] rect = new int[4];
         for (int q = 0; q < quads; q++) {
             int uvOffset = q * 8;

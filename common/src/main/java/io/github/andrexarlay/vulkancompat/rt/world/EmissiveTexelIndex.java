@@ -70,15 +70,27 @@ final class EmissiveTexelIndex {
         out[3] = Math.max(y0 + 1, Math.min(h, (int) Math.ceil(vMax * h)));
     }
 
+    private long version;
     private static volatile EmissiveTexelIndex last;
 
-    /** The index of this material atlas, built once per atlas array (the baker replaces the array on a pack switch). */
-    static EmissiveTexelIndex of(int[] material, int width, int height) {
+    /** A fresh index of this atlas array (pure callers and tests). */
+    static EmissiveTexelIndex build(int[] material, int width, int height) {
+        return new EmissiveTexelIndex(material, width, height);
+    }
+
+    /**
+     * The index of the live material mirror at {@code contentVersion} (RtMaterialAtlas.cpuMaterialVersion). The mirror is
+     * filled in place while sprites bake, so the array identity alone is not a key: keyed on it, the first index was built
+     * over the still-empty atlas and rejected every emitter for good (testbed 2026-11-08: 0 lights instead of 1313).
+     */
+    static EmissiveTexelIndex of(int[] material, int width, int height, long contentVersion) {
         EmissiveTexelIndex cached = last;
-        if (cached != null && cached.material == material && cached.width == width && cached.height == height) {
+        if (cached != null && cached.material == material && cached.width == width && cached.height == height
+                && cached.version == contentVersion) {
             return cached;
         }
         EmissiveTexelIndex built = new EmissiveTexelIndex(material, width, height);
+        built.version = contentVersion;
         last = built;
         return built;
     }
