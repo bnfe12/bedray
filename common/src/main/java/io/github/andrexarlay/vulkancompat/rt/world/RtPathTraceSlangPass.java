@@ -846,9 +846,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             throw new IllegalArgumentException("the NRD motion range holds " + boundMotion.bytes()
                 + " B, the frame needs " + motionBytes + " B (one vec4 per pixel)");
         }
-        if (wantsMotion && boundGuides == null) {
-            throw new IllegalArgumentException("NRD consumes the guide images too: motion without guides is unusable");
-        }
+        // Motion without guides is valid since 2026-11-08: a lone temporal upscaler (no denoiser) consumes the per-pixel
+        // entity motion through its velocity pass. The shader writes it independently of PATH_TRACE_OPTION_GBUFFER, and a
+        // denoiser always binds its guides (the denoiser-guide contract above).
         if (dispatch.emitterCount() > 0 && (emitters == null || emitters.buffer() == 0L)) {
             throw new IllegalArgumentException("the push promises " + dispatch.emitterCount()
                 + " emitter(s) but no emitter buffer is bound");

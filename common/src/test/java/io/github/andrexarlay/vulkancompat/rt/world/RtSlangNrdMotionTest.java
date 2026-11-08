@@ -118,8 +118,10 @@ class RtSlangNrdMotionTest {
             "the shader writes exactly one record per pixel");
         assertTrue(record.contains("if (boundMotion.buffer() != 0L && boundMotion.bytes() < motionBytes) {"),
             "a short range is a host bug, and the missing-buffer case is not a size failure");
-        assertTrue(record.contains("if (wantsMotion && boundGuides == null) {"),
-            "NRD also consumes the guides, so motion without a G-buffer is refused");
+        // 2026-11-08: a lone temporal upscaler consumes motion without guides (DLSS-SR smeared spinning items otherwise),
+        // so the host no longer refuses motion without a G-buffer; the buffer/flag/size contract above still holds.
+        assertFalse(record.contains("if (wantsMotion && boundGuides == null) {"),
+            "motion without guides is valid for the upscaler-only path");
         String resources = block(record, "private List<SlangProgram.Resource> resources(");
         assertTrue(resources.contains("motionBuffer(nrdMotion, motionDummy),"), "the binding is always supplied");
         String helper = block(record, "private static SlangProgram.Resource motionBuffer(");
