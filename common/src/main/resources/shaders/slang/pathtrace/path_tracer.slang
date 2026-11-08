@@ -237,6 +237,12 @@ struct PathTraceOptions {
     float indirectMaxLuminance;
 };
 
+// Whether a hit adds its own emission: the eye's first surface, or a surface reached through a non-diffuse lobe.  A
+// diffuse bounce reaches emitters through next-event estimation instead (the emitter list and the key light).
+bool pathSeesEmission(uint surfaceHits, bool previousLobeNotDiffuse) {
+    return surfaceHits == 1u || previousLobeNotDiffuse;
+}
+
 PathTraceOptions defaultPathTraceOptions() {
     PathTraceOptions options;
     options.maxDepth = 8u;
@@ -814,7 +820,13 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
 
         // The face of a glowing block is seen as its own emission, and the light it casts on other surfaces comes from
         // NEE; a sampler that reads the emitter list rejects the receiver's own quad through LightReceiver.emission.
-        result.radiance += throughput * surface.material.emission;
+        // So the glow is added only where the eye sees the face: the first surface, or through a mirror, glass or water
+        // (glossyEscape: the lobe that produced this ray was not diffuse).  After a diffuse bounce the same light has
+        // already arrived through NEE at the previous vertex; adding the face again counted it twice and made the small,
+        // bright faces of torches a firefly source next to every light (2026-11-08 audit).
+        if (pathSeesEmission(result.surfaceHits, glossyEscape)) {
+            result.radiance += throughput * surface.material.emission;
+        }
 
         // ---- Next-event estimation ----
         LightReceiver receiver = lightReceiver(hit.position, normal, surface.material.emissionMask);
