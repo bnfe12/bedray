@@ -1,6 +1,6 @@
 // ReSTIR DI spatial-reuse entry for Bedray 2.0.
 //
-// One thread per render pixel, two dispatches per frame (one per checker colour): it pools the reservoirs the path
+// One thread per render pixel of the active colour, two dispatches per frame (one per checker colour): it pools the reservoirs the path
 // trace pass just wrote, so the direct light of a surface is chosen from its neighbourhood and not from that pixel's
 // own eight draws.  The math, the gates and the numbers live in `restir/spatial_block_emitters.slang`.
 //
@@ -69,8 +69,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (f.camera.size.x == 0u || f.camera.size.y == 0u) {
         return;   // an uninitialised frame block is a host bug; a zero ring index would be a device-side fault
     }
-    int2 p = int2(tid.xy);
+    // The host dispatches ceil(width / 2) columns per phase (RtSpatialReuseSlangPass.checkerColumns), and thread
+    // (tx, ty) owns the pixel of this phase's colour in row ty: 2 tx plus the row's colour offset.  Decision 2026-11-08:
+    // this replaced a full-width launch where half the lanes only failed blockEmitterSpatialWriter; that test stays in
+    // run() as the assertion that the mapping never leaves its colour.  The seed and the reservoir slot derive from p,
+    // so the image is the one the full-width launch produced.
+    uint phase = pc.state.z;
+    int2 p = int2(int(2u * tid.x + ((tid.y + phase) & 1u)), int(tid.y));
     uint2 size = f.camera.size.xy;
+    // Still needed: on an odd width the last thread of every other row lands one past the edge.
     if (p.x >= int(size.x) || p.y >= int(size.y)) {
         return;
     }

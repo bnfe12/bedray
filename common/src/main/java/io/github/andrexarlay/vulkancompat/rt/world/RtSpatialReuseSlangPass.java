@@ -209,9 +209,24 @@ final class RtSpatialReuseSlangPass implements AutoCloseable {
             ByteBuffer push = stack.malloc(PUSH_BYTES);
             spatial.writeTo(push);
             recordings.add(cmd.address());
-            program.dispatchPhases(cmd.address(), program.groups(width, 0), program.groups(height, 1), 1,
+            program.dispatchPhases(cmd.address(), program.groups(checkerColumns(width), 0), program.groups(height, 1), 1,
                 resources(atlases, emitters, reservoirs, rects, texels, frame), push, 8, PHASES);
         }
+    }
+
+    /**
+     * Thread columns one checker phase needs across a {@code width}-pixel row: every thread owns exactly one pixel of the
+     * phase's colour, so a row needs ceil(width / 2).  The ceiling is what keeps an odd width whole - at 1707 the last
+     * column belongs to phase 0 on even rows and phase 1 on odd ones, and a floor would drop it for both.
+     * Decision 2026-11-08: the colour is folded into the shader's thread-to-pixel mapping instead of launching the full
+     * row and exiting half the lanes, which cost a whole wasted wave per phase.  Both phases go through the one native
+     * phased dispatch, so this width applies to each of them.
+     */
+    static int checkerColumns(int width) {
+        if (width <= 0) {
+            throw new IllegalArgumentException("checker dispatch needs a positive width, got " + width);
+        }
+        return (int) (((long) width + 1L) / 2L);
     }
 
     /** The frame's captured atlas slice, or the trace pass's one-element stand-in when nothing was captured. */
