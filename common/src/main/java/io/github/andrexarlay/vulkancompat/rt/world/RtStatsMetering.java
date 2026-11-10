@@ -37,6 +37,15 @@ final class RtStatsMetering {
     record Breakdown(double invalidPct, double truncatedPct, double overflowPct) {
     }
 
+    /** Hits as a share of trusted metered pixels, or unavailable when the completed counter slot is inconsistent. */
+    static double hitPct(int width, int height, int frameIndex, int hits, int samples) {
+        long metered = meteredPixels(width, height, frameIndex);
+        long trusted = Integer.toUnsignedLong(samples);
+        long countedHits = Integer.toUnsignedLong(hits);
+        if (metered == 0L || trusted == 0L || trusted > metered || countedHits > trusted) return -1.0;
+        return 100.0 * countedHits / trusted;
+    }
+
     /**
      * The trace pass's own block ({@link RtStatsLayout#PATH_REJECTS}), or null when it holds no measurement this host can
      * vouch for: a metered word of 0 (the native core's stand-in, or an unwritten slot), a metered word that is not this

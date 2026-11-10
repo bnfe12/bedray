@@ -131,6 +131,9 @@ public final class RtFrameRenderer {
     private static long lastStatsSequence = -1;
     private static long dispatchCounter = 0;
     private static long passFrames = 0;
+    private static RtTraceTelemetry lastTraceTelemetry;
+    private static StatsMetadata lastStatsMetadata;
+    private static long lastStatsTrustedPixels;
     private static double lastHitPct = -1.0;
     /** Share of the metered pixels the tracer refused; -1 until a counter slot carries a measurement. */
     private static double lastRejectedPct = -1.0;
@@ -729,6 +732,10 @@ public final class RtFrameRenderer {
             long tracedNs = System.nanoTime();
             double dtMs = lastTracedNs == 0L ? 0.0 : (tracedNs - lastTracedNs) / 1.0e6;
             lastTracedNs = tracedNs;
+            RtMemory.Img tracedOutput = frameOutput();
+            lastTraceTelemetry = new RtTraceTelemetry(tracedOutput.width, tracedOutput.height, target.width, target.height,
+                pass.mode() == RtMode.PATH_TRACED ? params.spp : 1,
+                pass.mode() == RtMode.PATH_TRACED ? params.bounces : 0);
             passFrames++;
             passFramesInWindow++;
             passMsInWindow += (tracedNs - frameStart) / 1.0e6;
@@ -751,6 +758,9 @@ public final class RtFrameRenderer {
                 long base = statsBuf.mapped + (long) lease.slot() * STATS_STRIDE;
                 int hits = MemoryUtil.memGetInt(base + RtStatsLayout.HITS);
                 int samples = MemoryUtil.memGetInt(base + RtStatsLayout.SAMPLES);
+                lastStatsMetadata = metadata;
+                lastStatsTrustedPixels = Integer.toUnsignedLong(samples);
+                lastHitPct = RtStatsMetering.hitPct(metadata.width(), metadata.height(), metadata.frameIndex(), hits, samples);
                 // The counter pass only adds the samples it trusts, so this slot's own extent and rotation say how
                 // many pixels it weighed: the difference is the share the tracer refused, which no other word carries.
                 lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(), metadata.height(),
@@ -771,7 +781,9 @@ public final class RtFrameRenderer {
                     Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_DIRECT_SHADOWS)),
                     Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.TRANS_INDIRECT_SHADOWS)))
                     : "[RT-TRANSPARENCY] counters=WAITING";
-                if (hits > 0) {
+                lastHistPct = -1.0;
+                lastLeafPct = -1.0;
+                if (lastHitPct >= 0.0 && hits > 0) {
                     // Without the accumulating variant histAccepted is never incremented, and the share used to print as a
                     // plausible 0% ("history rejected every pixel") in exactly the sessions that have no history at all.
                     lastHistPct = RtAccumulation.acceptedPct(MemoryUtil.memGetInt(base + RtStatsLayout.HIST_ACCEPTED), hits,
@@ -781,10 +793,9 @@ public final class RtFrameRenderer {
                     // so a zero here is the absence of a measurement, not a share of 0%: -1 is what the F3 line prints
                     // as n/a.
                     int leafBacklit = MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT);
-                    lastLeafPct = leafBacklit > 0 ? 100.0 * leafBacklit / hits : -1.0;
+                    lastLeafPct = leafBacklit > 0 && leafBacklit <= hits ? 100.0 * leafBacklit / hits : -1.0;
                 }
                 if (samples > 0) {
-                    lastHitPct = 100.0 * hits / samples;
                     exposure.setMax(RtSkyState.maxExposure(metadata.day()));
                     long expNow = metadata.recordedNanos();
                     exposure.observe(Integer.toUnsignedLong(MemoryUtil.memGetInt(base + RtStatsLayout.LUM_LOG_SUM)), samples,
@@ -1735,9 +1746,17 @@ public final class RtFrameRenderer {
             int userSpp = RtSettings.spp();
             int userBounces = RtSettings.bounces();
             double budget = RtSettings.adaptiveBudgetMs();
+            RtTraceTelemetry submitted = lastTraceTelemetry;
+            StatsMetadata metered = lastStatsMetadata;
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d rays=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
-                passFrames, target != null ? (long) target.width * target.height : 0L,
+                "[VKB-RT] rt_pass ok frames=%d trace=%s output=%s trace_pixels=%d output_pixels=%d primary_samples=%d stats_trace=%s stats_sequence=%d stats_frame=%d stats_metered_pixels=%d stats_trusted_pixels=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f record_wall_ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
+                passFrames, submitted == null ? "n/a" : submitted.traceExtent(), submitted == null ? "n/a" : submitted.outputExtent(),
+                submitted == null ? 0L : submitted.tracePixels(), submitted == null ? 0L : submitted.outputPixels(),
+                submitted == null ? 0L : submitted.primarySamples(),
+                metered == null ? "n/a" : metered.width() + "x" + metered.height(),
+                metered == null ? -1L : metered.sequence(), metered == null ? -1 : metered.frameIndex(),
+                metered == null ? 0L : RtStatsMetering.meteredPixels(metered.width(), metered.height(), metered.frameIndex()),
+                lastStatsTrustedPixels,
                 lastHitPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHitPct),
                 lastRejectedPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectedPct),
                 lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.invalidPct()),
@@ -1746,7 +1765,8 @@ public final class RtFrameRenderer {
                 lastHistPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHistPct),
                 lastLeafPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastLeafPct),
                 passMsInWindow / passFramesInWindow,
-                RtAdaptiveQuality.spp(userSpp), RtAdaptiveQuality.bounces(userSpp, userBounces),
+                passMsInWindow / passFramesInWindow, // ms is retained for existing log consumers; both are recording wall time.
+                submitted == null ? 0 : submitted.spp(), submitted == null ? 0 : submitted.bounces(),
                 // work_ms: the rays and the denoiser, i.e. what the governor compares with the budget; pass_ms: the whole RT
                 // command buffer (chunk build, atmosphere, the copy), i.e. what the frame actually pays for ray tracing
                 msOrNa(gpuTimer == null ? -1.0 : gpuTimer.recentMs(SPAN_RAYS, SPAN_DENOISE)),
@@ -1944,6 +1964,9 @@ public final class RtFrameRenderer {
         dropDenoiserNext = false;
         statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
         lastStatsSequence = -1;
+        lastTraceTelemetry = null;
+        lastStatsMetadata = null;
+        lastStatsTrustedPixels = 0L;
         lastTransparency = "[RT-TRANSPARENCY] counters=WAITING";
 
     }
