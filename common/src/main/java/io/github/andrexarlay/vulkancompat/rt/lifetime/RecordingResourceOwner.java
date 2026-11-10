@@ -145,7 +145,8 @@ public final class RecordingResourceOwner<T> implements AutoCloseable {
         closed = true;
     }
 
-    private void requireOpen() {
+    /** Also protects cached-resource paths that can skip creation of a new generation. */
+    public void requireOpen() {
         if (closing || closed) throw new IllegalStateException("resource owner is closing/closed");
     }
     private void requireRecording(Recording<T> recording) {

@@ -167,6 +167,8 @@ public final class RtEmitters {
     private boolean coldScan;
     private long lastLogNs;
     private long maxPublicationNanos;
+    private int publicationsInWindow;
+    private int reusesInWindow;
     /** CPU budget of one frame of the light-list scan: a cold scan (pack switch, world change) spans several frames. */
     static final long SCAN_BUDGET_NS = 4_000_000L;
 
@@ -598,8 +600,13 @@ public final class RtEmitters {
         var frame = frameSelection.compose(staticHeap, Math.max(0, staticHeapSize), staticOriginX, staticOriginY, staticOriginZ,
             camX, camY, camZ, range, budget, entityQuads, entityCount);
         int n = frame.count();
-        buffers.publish(frame.records(), n, frame.originX(), frame.originY(), frame.originZ(), materialRevision);
-        frameSelection.recordPublished(frame);
+        boolean published = buffers.publish(frame.records(), n, frame.originX(), frame.originY(), frame.originZ(), materialRevision);
+        if (published) {
+            frameSelection.recordPublished(frame);
+            publicationsInWindow++;
+        } else {
+            reusesInWindow++;
+        }
         publishedOriginX = frame.originX();
         publishedOriginY = frame.originY();
         publishedOriginZ = frame.originZ();
@@ -621,11 +628,14 @@ public final class RtEmitters {
         if (now - lastLogNs > 5_000_000_000L) {
             lastLogNs = now;
             var identity = buffers.publication();
-            LOGGER.info("[VKB-EMITTERS] table=BEM2 revision={} material_revision={} selected={} retained={} added={} removed={} bytes={} max_probe={} global_fraction={} bvh_depth={} topology_reused={} selection_publish_ms={} selection_publish_max_ms={}",
-                identity.revision(), materialRevision, n, identity.retained(), identity.added(), identity.removed(),
-                identity.data().remaining(), identity.maxProbe(), identity.globalFraction(), identity.bvhDepth(), identity.topologyReused(),
+            LOGGER.info("[VKB-EMITTERS] table=BEM2 revision={} material_revision={} selected={} retained={} added={} removed={} bytes={} max_probe={} global_fraction={} bvh_depth={} topology_reused={} table_reused={} publications={} reuses={} selection_publish_ms={} selection_publish_max_ms={}",
+                identity.revision(), materialRevision, n, published ? identity.retained() : n,
+                published ? identity.added() : 0, published ? identity.removed() : 0,
+                identity.data().remaining(), identity.maxProbe(), identity.globalFraction(), identity.bvhDepth(),
+                !published || identity.topologyReused(), !published, publicationsInWindow, reusesInWindow,
                 publicationNanos / 1.0e6, maxPublicationNanos / 1.0e6);
             maxPublicationNanos = 0;
+            publicationsInWindow = reusesInWindow = 0;
             LOGGER.info(String.format(java.util.Locale.ROOT,
                 "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b cold=%b origin=(%d,%d,%d) scan_pending=%b scan_processed=%d scan_total=%d scan_age_ms=%.2f",
                 count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), staticSections,
