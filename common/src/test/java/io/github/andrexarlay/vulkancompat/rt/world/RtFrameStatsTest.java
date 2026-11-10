@@ -394,8 +394,8 @@ class RtFrameStatsTest {
     @Test
     void aCounterWithNoWriterIsNotReportedAsZero() throws IOException {
         String renderer = read(RENDERER);
-        assertTrue(renderer.contains("lastLeafPct = leafBacklit > 0 ? 100.0 * leafBacklit / hits : -1.0;"),
-            "-1 is the value the F3 line prints as n/a");
+        assertTrue(renderer.contains("lastLeafPct = leafBacklit > 0 && leafBacklit <= hits ? 100.0 * leafBacklit / hits : -1.0;"),
+            "missing or inconsistent leaf counters are displayed as n/a");
         assertFalse(renderer.contains("lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT)"),
             "an unwritten counter is not a measurement of zero");
     }
