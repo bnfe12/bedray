@@ -669,11 +669,11 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     if (status == BEDRAY_OK) {
         status = create_dummy(16u, entity_vector_id_, entity_vector_view_, error);
     }
-    if (status == BEDRAY_OK && (trace_guides || scene_guides)) status = create_guide_dummies(error);
-    if (status == BEDRAY_OK && (trace_motion || scene_motion)) {
+    if (status == BEDRAY_OK && guides) status = create_guide_dummies(error);
+    if (status == BEDRAY_OK && motion) {
         status = create_dummy(16u, motion_dummy_id_, motion_dummy_view_, error);
     }
-    if (status == BEDRAY_OK && (trace_pt || scene_pt)) {
+    if (status == BEDRAY_OK && pt_ring) {
         status = create_dummy(kRestirPtReservoirBytes, pt_dummy_id_, pt_dummy_view_, error);
     }
     if (status != BEDRAY_OK) {
