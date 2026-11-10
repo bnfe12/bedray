@@ -766,9 +766,12 @@ public final class BedrayCoreNative implements AutoCloseable {
             throw new IllegalArgumentException("a native BedrayPathTraceFrameDesc is required");
         try (Arena arena = Arena.ofConfined()) {
             var error = arena.allocate(BedrayCoreLayouts.ERROR);
+            // invokeExact uses the call-site types. Give the optional addresses their concrete type.
+            MemorySegment guideAddress = guides == null ? MemorySegment.NULL : guides;
+            MemorySegment motionAddress = motion == null ? MemorySegment.NULL : motion;
+            MemorySegment statsAddress = statsSlot == null ? MemorySegment.NULL : statsSlot;
             check("render_path_trace_ext", (int) renderPathTraceExtHandle.invokeExact(handle(core), frame,
-                guides == null ? MemorySegment.NULL : guides, motion == null ? MemorySegment.NULL : motion,
-                statsSlot == null ? MemorySegment.NULL : statsSlot, error), error);
+                guideAddress, motionAddress, statsAddress, error), error);
         } catch (Throwable failure) { throw rethrow("render_path_trace_ext", failure); }
     }
 

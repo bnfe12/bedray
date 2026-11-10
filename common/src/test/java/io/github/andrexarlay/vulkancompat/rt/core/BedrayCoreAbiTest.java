@@ -3,6 +3,7 @@ package io.github.andrexarlay.vulkancompat.rt.core;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
+import java.lang.foreign.Arena;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -52,6 +53,20 @@ class BedrayCoreAbiTest {
             assertEquals(BedrayCoreLayouts.STATUS_INVALID_ARGUMENT, error.status());
             assertTrue(error.getMessage().contains("vkGetInstanceProcAddr"),
                 () -> "message should name the missing function pointers: " + error.getMessage());
+        }
+    }
+
+    @Test
+    void extendedTraceDowncallAcceptsAbsentOptionalOutputs() {
+        Path dll = dll().toAbsolutePath().normalize();
+        Assumptions.assumeTrue(Files.isRegularFile(dll), "bedray_core.dll is not built at " + dll);
+
+        try (BedrayCoreNative core = BedrayCoreNative.load(dll); Arena arena = Arena.ofConfined()) {
+            var invalidFrame = arena.allocate(BedrayCoreLayouts.PT_FRAME_DESC);
+            // ABI version is zero. The native entry rejects it before it can access the dummy core.
+            BedrayCoreException error = assertThrows(BedrayCoreException.class,
+                () -> core.renderPathTraceExt(1, invalidFrame, null, null, null));
+            assertEquals(BedrayCoreLayouts.STATUS_ABI_MISMATCH, error.status());
         }
     }
 

@@ -755,7 +755,7 @@ void plan_instances(Scene& scene, PreparePlan& plan) {
         instance.blas_address = geometry.blas_address;
         instance.blas_handle = geometry.blas_handle;
         instance.custom_index = slot->second;
-        instance.mask = 0xFF;
+        instance.mask = BEDRAY_SCENE_TERRAIN_INSTANCE_MASK;
         plan.instances.push_back(instance);
     }
 
