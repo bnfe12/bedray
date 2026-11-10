@@ -7,7 +7,6 @@
 #include "ray_generation_pipeline.h"
 #include "bloom_pass.h"
 #include "particles_pass.h"
-#include "sodium_pass.h"
 #include "velocity_pass.h"
 #include "nrd_pack_pass.h"
 #include "fg_prepare_pass.h"
@@ -1694,23 +1693,6 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_fg_prepare(
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate FG producer recording");
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording FG producer");
-}
-
-BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_decode_sodium(
-    BedrayCore* core, const BedraySodiumDecodeDesc* desc, BedrayError* error) try {
-    clear_error(error);
-    if (!core || !desc) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "core/Sodium decode desc is null");
-    if (desc->abi_version != BEDRAY_CORE_ABI_VERSION || desc->struct_size != sizeof(*desc))
-        return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "Sodium decode ABI/size mismatch");
-    constexpr auto required = BEDRAY_CAP_BUFFER_DEVICE_ADDRESS | BEDRAY_CAP_SHADER_INT64;
-    if ((core->capabilities & required) != required)
-        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "Sodium decode requires enabled BDA/Int64");
-    return bedray::core::record_sodium(core, core->cmd_pipeline_barrier,
-        core->properties.limits.maxComputeWorkGroupCount[0], *desc, error);
-} catch (const std::bad_alloc&) {
-    return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate Sodium decode recording");
-} catch (...) {
-    return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception recording Sodium decode");
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_bloom(
