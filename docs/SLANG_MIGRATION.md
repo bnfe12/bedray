@@ -600,7 +600,7 @@ to refuse a sample it cannot trust: `tracePath` separates a non-finite fault
 (`PATH_TRACE_FLAG_INVALID_SAMPLE`) from a path that merely stopped short
 (`PATH_TRACE_FLAG_TRUNCATED` — no lobe left, an interval used up by cutout
 advances, an unnamed hit, the firefly guard), `pathTraceSampleRejected` states the
-rule once, `passes/path_trace.slang` publishes the answer in the alpha lane of the
+rule once, `pathtrace/path_trace_entry.slang` publishes the answer in the alpha lane of the
 radiance image (its only consumer is the display pass), and the display pass folds
 that lane into a weight of 0 or 1, so a rejected sample changes neither the mean nor
 its count and does not overwrite `historyDepth` with the far plane a rejected
@@ -627,7 +627,7 @@ through the `path_trace` entry point with `slangc` (`cs_6_5`, the same
 arguments as `compileSlang`), but this was a manual SPIR-V compile, not a Gradle
 build, and no GPU frame or image comparison exists yet.
 
-`passes/path_trace.slang` now copies the pushed alpha cutoff into
+`pathtrace/path_trace_entry.slang` copies the pushed alpha cutoff into
 `MaterialSamplingOptions` before tracing.  The primary path already used the
 pushed 0.1, while material decoding and the filtered shadow walk used the 0.5
 default, so a texel with alpha between them could be visible to the camera but
@@ -788,7 +788,7 @@ is not ported. Switches: `-Dvkbridge.rt.blockEmitters` (default true, the whole 
 ### ReSTIR DI temporal and spatial reuse
 
 `restir/di_block_emitters.slang` is the block-emitter adapter over the reservoir
-math of `restir/restir_di.slang`, and `passes/path_trace.slang` binds it at
+math of `restir/restir_di.slang`, and `passes/path_trace_scene.slang` binds it at
 binding 19.  One `DIReservoir` per pixel and per frame half holds the light
 point, `p^`, `M`, the weight sum, the record index, the age, the receiver
 position and the packed receiver normal — 64 bytes, pinned in
@@ -1240,8 +1240,8 @@ nothing about the port, so each one was either re-aimed at the Slang source it
 is supposed to protect or removed.  The first group is closed:
 
 * the self-avatar exclusion now reads `traversal/scene_traversal.slang`
-  (`selfAvatarPrimitive`, `tracePrimary`) and `passes/path_trace.slang`;
-* the vegetation hit bits now read `traversal/legacy_section_traversal.slang`;
+  (`selfAvatarPrimitive`, `tracePrimary`) and `passes/path_trace_scene.slang`;
+* the native traversal reads vegetation hit bits in `traversal/scene_traversal.slang`;
 * the ReSTIR DI and spatial pool numbers are pinned literally against
   `restir/*.slang` instead of by comparison with `rt_restir_spatial.comp`;
 * the live velocity reprojection body is pinned inside
@@ -1501,8 +1501,7 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    `-Dvkbridge.rt.rcBaseAxis` (8/16/32). Temporal field reuse is implemented
    (2026-10-31, `RC_RECONSTRUCTION_PLAN.md` "Temporal reuse": the previous consecutive
    field blended at weight 0.8 through builder binding 38). Remaining: an owner-verified
-   frame that proves the field in a real scene. The v1 typed atlas remains a
-   host-agnostic producer example.
+   frame that proves the field in a real scene.
 6. **More entry passes** — denoise/composite follow the same one-file-per-entry
    pattern and the same ABI; no second pipeline path.
 7. **Live game check** — only after the above and an explicit request.  A

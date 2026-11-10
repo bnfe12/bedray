@@ -210,16 +210,11 @@ proves that the modules, re-exports and generic constraints are coherent; it
 does not prove a GPU dispatch, a reflected layout or a visual result.
 
 ```powershell
-$slangc = "path\to\slangc.exe"
+.\gradlew.bat :common:compileSlang
 $root = "common/src/main/resources/shaders/slang"
-Get-ChildItem "$root/passes" -Filter *.slang | ForEach-Object {
-    & $slangc -target spirv -profile cs_6_5 -entry main `
-        -matrix-layout-column-major -I $root -o "$env:TEMP\$($_.BaseName).spv" $_.FullName
-}
-Get-ChildItem "common/src/test/resources/shaders/slang" -Filter *.slang | ForEach-Object {
-    & $slangc -target spirv -profile cs_6_5 -entry main `
-        -matrix-layout-column-major -I $root -o "$env:TEMP\$($_.BaseName).spv" $_.FullName
-}
+& "$env:SLANG_DIR/bin/slangc.exe" -target spirv -profile cs_6_5 -entry main `
+    -matrix-layout-column-major -I $root -o "$env:TEMP/verify_bedray_roots.spv" `
+    common/src/test/resources/shaders/slang/verify_bedray_roots.slang
 ```
 
 Current harnesses:
