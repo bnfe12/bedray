@@ -60,6 +60,7 @@ public final class RtEmitters {
     }
 
     private final EmitterCaptureBuffers buffers;
+    private final EmitterFrameSelection frameSelection = new EmitterFrameSelection();
     private final Map<Long, Entry> cache = new HashMap<>();
     private final Set<Long> seen = new HashSet<>();
     private float[][] heap = new float[1024][FLOATS + 1];
@@ -126,6 +127,8 @@ public final class RtEmitters {
     private int staticHeapSize = -1;
     private int staticTotal;
     private int staticInRange;
+    private int staticOriginX, staticOriginY, staticOriginZ;
+    private int staticSections;
 
     public RtEmitters(RtMemory memory) {
         this.buffers = new EmitterCaptureBuffers(memory);
@@ -237,10 +240,6 @@ public final class RtEmitters {
         siftDown(heap, index, size);
     }
 
-    private void sortHeapDescending() {
-        sortHeapDescending(heap, heapSize);
-    }
-
     private void processSection(DecodedSection d) {
         seen.add(d.key);
         Entry e = cache.get(d.key);
@@ -328,20 +327,20 @@ public final class RtEmitters {
     /**
      * As above, plus the quad emitters of entities (dropped items, items of entities, the item in the hand): {@code entityQuads}
      * holds {@code entityCount} records of {@link #FLOATS} floats whose positions are relative to the CAMERA (as the entity
-     * geometry); they are moved into the frame of the emitter origin here. They change every frame, so a frame with entity
-     * emitters always rebuilds the list.
+     * geometry); they are moved into the publication's origin here. They are merged every frame with the last completed
+     * static selection, including while a new section scan is in progress.
      */
     public void update(RtWorld world, MaterialAtlasBaker.Result mat, double camX, double camY, double camZ, float range, int budget,
                        float[] entityQuads, int entityCount) {
         long version = world.structureVersion();
-        if (scan != null && scan.usableFor(camX, camY, camZ)) {
+        if (scan != null && scan.usableFor(camX, camY, camZ, mat, range, budget)) {
             // Sections streaming in must not restart the pass: a restart publishes nothing, and while chunks load the version
             // changes every frame, so the list would stay at its pre-cave content and a freshly placed torch would light
             // nothing (owner report 2026-10-24). The pass keeps its progress, publishes its slightly stale result, and the
             // next update starts a fresh pass because the version moved on.
             scan.noteVersion(version);
-            continueScan(entityQuads, entityCount);
-            return; // the previous light list stays on the GPU until the scan finishes
+            continueScan(camX, camY, camZ, range, budget, entityQuads, entityCount);
+            return;
         }
         scan = null; // no pass in flight, or the camera left the frame its distance selection was computed in (teleport)
         double moved = Double.isNaN(lastCamX) ? Double.MAX_VALUE
@@ -351,22 +350,13 @@ public final class RtEmitters {
                 return;
             }
             if (staticHeapSize >= 0) {
-                // only the entity lights can have changed: restore the static selection and merge them again
-                lastCamX = camX;
-                lastCamY = camY;
-                lastCamZ = camZ;
-                lastEntityCount = entityCount;
-                curCx = (float) (camX - originX);
-                curCy = (float) (camY - originY);
-                curCz = (float) (camZ - originZ);
-                restoreStatic();
-                processEntities(entityQuads, entityCount);
-                publishSelection();
+                // Keep the selection camera fixed: repeated sub-threshold moves must eventually trigger a new scan.
+                publishSelection(camX, camY, camZ, range, budget, entityQuads, entityCount);
                 return;
             }
         }
         startScan(world, mat, camX, camY, camZ, range, budget, version);
-        continueScan(entityQuads, entityCount);
+        continueScan(camX, camY, camZ, range, budget, entityQuads, entityCount);
     }
 
     private void startScan(RtWorld world, MaterialAtlasBaker.Result mat, double camX, double camY, double camZ, float range,
@@ -374,6 +364,8 @@ public final class RtEmitters {
         if (mat != lastMaterials) {
             cache.clear();
             materialRevision++;
+            // Old UVs cannot be evaluated against a newly installed atlas while its section scan is still incomplete.
+            staticHeapSize = staticTotal = staticInRange = staticSections = 0;
         }
         lastVersion = version;
         lastMaterials = mat;
@@ -400,13 +392,13 @@ public final class RtEmitters {
         inRangeCounter = 0;
         entityInRange = 0;
         seen.clear();
-        staticHeapSize = -1;
         scanStartNs = System.nanoTime();
         java.util.ArrayList<DecodedSection> list = new java.util.ArrayList<>();
         world.forEachBuiltSection(list::add);
         // nearest first: after a cold invalidate (pack switch, world change) the world lights up from the camera outwards
         list.sort(java.util.Comparator.comparingLong(this::sectionDistance2));
-        scan = new ScanPass<>(list, version, camX, camY, camZ, passAbortDistance(range));
+        scan = new ScanPass<>(list, version, camX, camY, camZ, passAbortDistance(range),
+            new EmitterScanConfiguration(mat, range, budget));
     }
 
     private long sectionDistance2(DecodedSection d) {
@@ -416,15 +408,16 @@ public final class RtEmitters {
         return dx * dx + dy * dy + dz * dz;
     }
 
-    private void continueScan(float[] entityQuads, int entityCount) {
-        if (!scan.advance(System.nanoTime() + SCAN_BUDGET_NS, scanStep)) {
-            return;
+    private void continueScan(double camX, double camY, double camZ, float range, int budget,
+                              float[] entityQuads, int entityCount) {
+        if (scan.advance(System.nanoTime() + SCAN_BUDGET_NS, scanStep)) {
+            scanStale = scan.stale();
+            scanMs = (System.nanoTime() - scanStartNs) / 1.0e6;
+            scan = null;
+            completeStaticSelection();
         }
-        scanStale = scan.stale();
-        scanMs = (System.nanoTime() - scanStartNs) / 1.0e6;
-        scan = null;
-        lastEntityCount = entityCount;
-        publish(entityQuads, entityCount);
+        // A slow cold section scan must not freeze moving entity lights or use its old camera for new entity records.
+        publishSelection(camX, camY, camZ, range, budget, entityQuads, entityCount);
     }
 
     /**
@@ -440,16 +433,23 @@ public final class RtEmitters {
         private final double camY;
         private final double camZ;
         private final double abortDistance;
+        private final EmitterScanConfiguration configuration;
         private int cursor;
         private boolean stale;
 
         ScanPass(java.util.List<T> items, long version, double camX, double camY, double camZ, double abortDistance) {
+            this(items, version, camX, camY, camZ, abortDistance, null);
+        }
+
+        ScanPass(java.util.List<T> items, long version, double camX, double camY, double camZ, double abortDistance,
+                 EmitterScanConfiguration configuration) {
             this.items = items;
             this.version = version;
             this.camX = camX;
             this.camY = camY;
             this.camZ = camZ;
             this.abortDistance = abortDistance;
+            this.configuration = configuration;
         }
 
         /** World version of this frame: a different one marks the pass stale without throwing its progress away. */
@@ -472,6 +472,10 @@ public final class RtEmitters {
             return Math.max(Math.abs(x - camX), Math.max(Math.abs(y - camY), Math.abs(z - camZ))) <= abortDistance;
         }
 
+        boolean usableFor(double x, double y, double z, Object materials, float range, int budget) {
+            return configuration != null && configuration.matches(materials, range, budget) && usableFor(x, y, z);
+        }
+
         /**
          * Processes items until the snapshot is exhausted (true) or the deadline passes (false). A frame always processes at
          * least one item, so a snapshot larger than the whole budget cannot stall the pass.
@@ -488,7 +492,7 @@ public final class RtEmitters {
         }
     }
 
-    private void publish(float[] entityQuads, int entityCount) {
+    private void completeStaticSelection() {
         cache.keySet().retainAll(seen);
         // snapshot the static selection: a frame where only entity lights changed skips the whole section scan
         ensureStaticHeapCapacity(Math.max(targetBudget, heapSize));
@@ -498,62 +502,34 @@ public final class RtEmitters {
         staticHeapSize = heapSize;
         staticTotal = totalCounter;
         staticInRange = inRangeCounter;
-        processEntities(entityQuads, entityCount);
-        publishSelection();
+        staticOriginX = originX;
+        staticOriginY = originY;
+        staticOriginZ = originZ;
+        staticSections = seen.size();
     }
 
-    private void processEntities(float[] entityQuads, int entityCount) {
-        for (int i = 0; i < entityCount; i++) {
-            int o = i * FLOATS;
-            totalCounter++;
-            // camera-relative corner + (camera - origin) = emitter-origin frame; distance from the camera uses the quad centre
-            float cx = entityQuads[o] + 0.5f * (entityQuads[o + 4] + entityQuads[o + 8]);
-            float cy = entityQuads[o + 1] + 0.5f * (entityQuads[o + 5] + entityQuads[o + 9]);
-            float cz = entityQuads[o + 2] + 0.5f * (entityQuads[o + 6] + entityQuads[o + 10]);
-            float d2 = cx * cx + cy * cy + cz * cz;
-            if (d2 > curRange2) {
-                continue;
-            }
-            inRangeCounter++;
-            entityInRange++;
-            if (targetBudget <= 0) {
-                continue;
-            }
-            float importance = entityQuads[o + 14] * entityQuads[o + 7] * entityQuads[o + 3] / Math.max(d2, 1f);
-            if (heapSize >= targetBudget && importance <= heap[0][FLOATS]) {
-                continue;
-            }
-            addCandidate(entityQuads, o, curCx, curCy, curCz, importance);
-        }
-    }
-
-    private void restoreStatic() {
-        heapSize = staticHeapSize;
-        for (int i = 0; i < heapSize; i++) {
-            System.arraycopy(staticHeap[i], 0, heap[i], 0, FLOATS + 1);
-        }
-        totalCounter = staticTotal;
-        inRangeCounter = staticInRange;
-    }
-
-    private void publishSelection() {
+    private void publishSelection(double camX, double camY, double camZ, float range, int budget,
+                                  float[] entityQuads, int entityCount) {
         long publicationStarted = System.nanoTime();
-        sortHeapDescending();
-        int n = Math.min(heapSize, MAX_EMITTERS);
-        buffers.publish(heap, n, originX, originY, originZ, materialRevision);
-        publishedOriginX = originX;
-        publishedOriginY = originY;
-        publishedOriginZ = originZ;
+        var frame = frameSelection.compose(staticHeap, Math.max(0, staticHeapSize), staticOriginX, staticOriginY, staticOriginZ,
+            camX, camY, camZ, range, budget, entityQuads, entityCount);
+        int n = frame.count();
+        buffers.publish(frame.records(), n, frame.originX(), frame.originY(), frame.originZ(), materialRevision);
+        publishedOriginX = frame.originX();
+        publishedOriginY = frame.originY();
+        publishedOriginZ = frame.originZ();
         int entityUsedNow = 0;
         for (int k = 0; k < n; k++) {
-            if (heap[k][15] > 0.5f) {
+            if (frame.records()[k][15] > 0.5f) {
                 entityUsedNow++;
             }
         }
         entityUsed = entityUsedNow;
+        entityInRange = frame.entityInRange();
+        lastEntityCount = entityCount;
         count = n;
-        inRange = inRangeCounter;
-        totalEmitters = totalCounter;
+        inRange = staticInRange + entityInRange;
+        totalEmitters = staticTotal + entityCount;
         long now = System.nanoTime();
         long publicationNanos = now - publicationStarted;
         maxPublicationNanos = Math.max(maxPublicationNanos, publicationNanos);
@@ -566,9 +542,11 @@ public final class RtEmitters {
                 publicationNanos / 1.0e6, maxPublicationNanos / 1.0e6);
             maxPublicationNanos = 0;
             LOGGER.info(String.format(java.util.Locale.ROOT,
-                "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b origin=(%d,%d,%d)",
-                count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), seen.size(),
-                scanMs, scanStale, originX, originY, originZ));
+                "[VKB-RT] emitters used=%d in_range=%d total=%d entity_quads=%d/%d budget=%d range=%.0f sections=%d rebuild_ms=%.2f stale=%b origin=(%d,%d,%d) scan_pending=%b scan_processed=%d scan_total=%d scan_age_ms=%.2f",
+                count, inRange, totalEmitters, entityUsed, entityInRange, targetBudget, Math.sqrt((double) curRange2), staticSections,
+                scanMs, scanStale, publishedOriginX, publishedOriginY, publishedOriginZ, scan != null,
+                scan == null ? 0 : scan.cursor, scan == null ? 0 : scan.items.size(),
+                scan == null ? 0.0 : (now - scanStartNs) / 1.0e6));
         }
     }
 
