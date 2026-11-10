@@ -645,16 +645,9 @@ float3 surfaceTransmittance(SurfaceSample surface, float3 direction) {
             surface.hit.geometricNormal) * 0.85, float3(0.001), float3(1.0));
         return (1.0 - fresnel) * tint;
     }
-    float3 absorption = pow(clamp(material.albedo, float3(0.001), float3(1.0)),
-        float3(max(slabLength * material.transmission, 0.0)));
-
-    if (material.alphaMode != AlphaMode.Optical) {
-        // Thin pane: alpha is the authored optical thickness, not a physical
-        // slab, so the grazing path length must not darken it to black.
-        float thinPower = max(material.alpha, 0.0) * max(material.transmission, 0.0);
-        absorption = pow(clamp(material.albedo, float3(0.001), float3(1.0)),
-            float3(thinPower));
-    }
+    // A glass block is filtered face by face like a pane, by the hue rule the camera path uses (materialGlassTint):
+    // the slab rule raised the dark sprite colour to the whole thickness on every face, twice per block.
+    float3 absorption = materialGlassTint(material.albedo, material.alpha, material.transmission);
 
     return (1.0 - fresnel) * absorption;
 }

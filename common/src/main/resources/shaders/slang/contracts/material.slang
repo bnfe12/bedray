@@ -70,6 +70,18 @@ bool materialIsCutout(MaterialSample material) {
            (material.flags & MATERIAL_FLAG_CUTOUT) != 0u;
 }
 
+// Colour filter of one glass face: the hue of the texel, raised to its alpha (the authored optical thickness).
+// The texel colour itself is not a transmittance - a stained-glass sprite is a dark, saturated paint (blue is about
+// 0.2, 0.3, 0.7), and using it directly left 4 % of the red and half of the blue after the two faces of one block:
+// stained glass cast near-black shadows and everything seen through it rendered black (rt_look G, 2026-11-10,
+// diagnostic run e1-glass-marker).  Dividing by the strongest channel keeps the colour and passes that channel
+// whole, so stained glass throws coloured light instead of darkness; a clear texel (alpha 0) passes untouched.
+float3 materialGlassTint(float3 albedo, float alpha, float transmission) {
+    float3 colour = clamp(albedo, float3(0.001), float3(1.0));
+    float3 hue = colour / max(colour.r, max(colour.g, colour.b));
+    return pow(hue, float3(max(alpha, 0.0) * max(transmission, 0.0)));
+}
+
 bool materialIsTranslucent(MaterialSample material) {
     return material.alphaMode == AlphaMode.Translucent ||
            material.alphaMode == AlphaMode.Optical ||

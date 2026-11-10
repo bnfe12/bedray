@@ -49,8 +49,18 @@ public final class RtRayPipelineDeviceRequirements {
         return new DeviceRequirement(SER_ID, extensions, features, 0, true, null);
     }
 
+    /**
+     * The ray-generation pipeline is the default scheduling of the path trace: on the RTX 5060 Ti, native 1080p, the same
+     * integrator cost 15.4 / 16.9 ms as a raygen stage against 21.1 / 24.5 ms as a compute stage (glass and torch-room
+     * views, 2026-11-10 A/B). {@code -Dbedray.rt.raygen=false} keeps the compute stage; a device without the pipeline
+     * feature falls back to it on its own because the requirement is optional.
+     */
+    public static boolean raygenRequested() {
+        return !"false".equalsIgnoreCase(System.getProperty(RAYGEN_PROPERTY, "true"));
+    }
+
     public static void register(DeviceFeatureRegistry registry) {
-        register(registry, Boolean.getBoolean(RAYGEN_PROPERTY), Boolean.getBoolean(SER_PROPERTY));
+        register(registry, raygenRequested(), Boolean.getBoolean(SER_PROPERTY));
     }
 
     static void register(DeviceFeatureRegistry registry, boolean raygenRequested, boolean serRequested) {

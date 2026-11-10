@@ -234,12 +234,25 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float inciden
 
         result.valid = true;
         result.delta = true;
+        result.pdf = 1.0;
+        result.lobe = BSDF_LOBE_TRANSMISSION;
+        if ((material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u) {
+            // A glass block is a closed slab whose inside the path does not track: every face was treated as an entry,
+            // so each one bent the ray again and scaled the radiance by eta^2 (0.44 at 1.5) with no exit to undo it -
+            // one block passed 0.2 of the light and five layers rendered black where the raster picture shows the
+            // backdrop (rt_look G, 2026-11-10).  The entry and the exit of a parallel slab cancel both the bend and the
+            // eta^2, so the face passes the ray straight on; the Fresnel loss of the face stays.
+            result.direction = -V;
+            // The tint is the rule the shadow filter uses, so the camera and the light see the same glass.
+            float3 tint = materialGlassTint(material.albedo, material.alpha, material.transmission);
+            result.weight = tint * (float3(1.0) - fresnel) / transmissionProbability;
+            result.eta = 1.0;
+            return result;
+        }
         result.direction = safeNormalize(refracted, -N);
         result.weight = material.albedo * material.transmission *
             (float3(1.0) - fresnel) * (eta * eta) / transmissionProbability;
-        result.pdf = 1.0;
         result.eta = eta;
-        result.lobe = BSDF_LOBE_TRANSMISSION;
         return result;
     }
 
@@ -250,8 +263,7 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float inciden
     float transmission = thinPane ? clamp(material.transmission, 0.0, 1.0) : 0.0;
     bool transmit = thinPane && (transmission >= 1.0 || rand01(seed) < transmission);
     if (transmit) {
-        float3 tint = pow(clamp(material.albedo, float3(0.001), float3(1.0)),
-            float3(max(material.alpha, 0.0) * transmission));
+        float3 tint = materialGlassTint(material.albedo, material.alpha, transmission);
         float3 fresnelPass = fresnelSchlick(NdotV, bsdfF0(material));
         float passProbability = transmissionProbability * (transmission >= 1.0 ? 1.0 : transmission);
         result.valid = true;

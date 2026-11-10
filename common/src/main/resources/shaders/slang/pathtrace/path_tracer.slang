@@ -1045,7 +1045,13 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         throughput *= bsdf.weight;
         bodiesVisible = bsdf.delta;
         glossyEscape = bsdf.lobe != BSDF_LOBE_DIFFUSE;
-        result.depth++;
+        // A delta transmission (the face of a glass block, a water sheet) is the same sight line bent, not a scattering
+        // event: charged as a bounce, the two faces of every glass block used up a 3-bounce path before it reached what
+        // stands behind, and a stack of glass rendered black where the raster picture shows the backdrop (rt_look G,
+        // 2026-11-10).  The walk stays bounded: every interface is one of the maxSurfaceSteps candidates.
+        if (!(bsdf.delta && bsdf.lobe == BSDF_LOBE_TRANSMISSION)) {
+            result.depth++;
+        }
 
         if (pathMaxComponent(throughput) <= 0.0) {
             break;

@@ -17,7 +17,7 @@ public final class SlangTracePrograms {
 
     public static Optional<SlangProgram> select(SlangRuntime runtime, String base) {
         boolean ser = Boolean.getBoolean(RtRayPipelineDeviceRequirements.SER_PROPERTY);
-        boolean raygen = Boolean.getBoolean(RtRayPipelineDeviceRequirements.RAYGEN_PROPERTY);
+        boolean raygen = RtRayPipelineDeviceRequirements.raygenRequested();
         boolean reorder = ser && runtime.supportsInvocationReordering();
         int enabled = runtime.capabilities().flags();
         for (String name : candidates(base, enabled, raygen, ser, reorder)) {
