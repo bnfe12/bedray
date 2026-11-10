@@ -52,7 +52,7 @@ a textured sheet. The current main integration has not been built or exercised i
 
 ## Hotkeys
 
-O toggles ray tracing, I switches Off / Path Tracing, U cycles the denoiser, Y toggles voxel sharpness, K toggles the debug overlay.
+O toggles ray tracing, I switches Off / Path Tracing, U cycles the denoiser, and K toggles the debug overlay.
 They can be changed under Controls, Key Binds.
 
 ## Problems

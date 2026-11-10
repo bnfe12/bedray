@@ -34,9 +34,6 @@ public final class VulkanRtxKeyBinds {
     public static final KeyMapping KEY_CYCLE_DENOISER =
         new KeyMapping("key.bedray.cycle_denoiser", InputConstants.KEY_U, CATEGORY);
 
-    public static final KeyMapping KEY_TOGGLE_VOXEL_SHARPNESS =
-        new KeyMapping("key.bedray.toggle_voxel_sharpness", InputConstants.KEY_Y, CATEGORY);
-
     public static final KeyMapping KEY_TOGGLE_DEBUG_OVERLAY =
         new KeyMapping("key.bedray.toggle_debug_overlay", InputConstants.KEY_K, CATEGORY);
 
@@ -44,7 +41,6 @@ public final class VulkanRtxKeyBinds {
         KEY_TOGGLE_RT,
         KEY_CYCLE_MODE,
         KEY_CYCLE_DENOISER,
-        KEY_TOGGLE_VOXEL_SHARPNESS,
         KEY_TOGGLE_DEBUG_OVERLAY
     };
 
@@ -79,9 +75,6 @@ public final class VulkanRtxKeyBinds {
         }
         while (KEY_CYCLE_DENOISER.consumeClick()) {
             cycleDenoiser();
-        }
-        while (KEY_TOGGLE_VOXEL_SHARPNESS.consumeClick()) {
-            toggleVoxelSharpness();
         }
         while (KEY_TOGGLE_DEBUG_OVERLAY.consumeClick()) {
             toggleDebugOverlay();
@@ -179,15 +172,6 @@ public final class VulkanRtxKeyBinds {
         showOverlayMessage(Component.translatableWithFallback(
             "bedray.msg.denoiser", "[Bedray] Denoiser: " + name, name));
         LOGGER.info("[VKB-RT] hotkey cycle_denoiser denoiser={}", next);
-    }
-
-    public static void toggleVoxelSharpness() {
-        RtSettings.dlssRrGeometricNormals = !RtSettings.dlssRrGeometricNormals;
-        VulkanRtxConfig.save();
-        String state = RtSettings.dlssRrGeometricNormals ? "ON (Geometric Normals)" : "OFF (Smooth Normals)";
-        showOverlayMessage(Component.translatableWithFallback(
-            "bedray.msg.voxel_sharpness", "[Bedray] Voxel Sharpness: " + state, state));
-        LOGGER.info("[VKB-RT] hotkey toggle_voxel_sharpness geometricNormals={}", RtSettings.dlssRrGeometricNormals);
     }
 
     public static void toggleDebugOverlay() {

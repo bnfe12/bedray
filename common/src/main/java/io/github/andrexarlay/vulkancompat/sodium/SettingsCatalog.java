@@ -358,10 +358,6 @@ public final class SettingsCatalog {
             "Sunlight focused by the water surface into moving bright patterns on the ground under water.",
             "", "Path Tracing only.", Scene.WATER, 0.5f, 0.75f, "path_caustics", List.of(
                 onOff(false, () -> RtSettings.caustics = false), onOff(true, () -> RtSettings.caustics = true)), null);
-        putNoImage("dlss_rr_geometric_normals", Tier.ADVANCED, "Sharp Block Edges (Ray Reconstruction)",
-            "Gives DLSS Ray Reconstruction the flat block-face directions, which keeps block edges crisp. Off feeds smoothed directions.",
-            "", "Only with Path Tracing and DLSS Ray Reconstruction.",
-            "Needs the DLSS Ray Reconstruction library; it is not available on every machine, so no screenshot is shipped.");
         putNoImage("path_exposure_ev", Tier.ADVANCED, "Exposure Compensation",
             "Manual brightness offset in EV (-4.0 to +4.0). Shifts Auto Exposure when it is on, or sets the fixed brightness when Auto Exposure is off.",
             "", "Needs ray tracing on.",

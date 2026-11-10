@@ -691,11 +691,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         pt.addOption(track("adaptive_quality", aq));
         pt.addOption(boolOpt(builder, "path_caustics", true, v -> RtSettings.caustics = v, () -> RtSettings.caustics,
             pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
-        Identifier denId = id("path_denoiser");
-        pt.addOption(boolOpt(builder, "dlss_rr_geometric_normals", true, v -> RtSettings.dlssRrGeometricNormals = v,
-            () -> RtSettings.dlssRrGeometricNormals,
-            s -> anyRt.apply(s) && s.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR,
-            rtDependencies(modeId, denId), Mark.NONE, OptionImpact.LOW, true, st));
         endGroup(builder, page, pt, "adv_pt");
 
         // ---- Light and atmosphere
@@ -1121,7 +1116,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         RtSettings.fogInScattering = 1.0f;
         RtSettings.rtFogInScattering = 100;
         RtSettings.fogDistanceScale = 1.0f;
-        RtSettings.dlssRrGeometricNormals = true;
         RtConfig.setDebugView("");
         for (RtAtmosphereSettings.Option o : RtAtmosphereSettings.options()) {
             RtAtmosphereSettings.set(o.key(), o.def());
