@@ -630,11 +630,6 @@ float3 surfaceTransmittance(SurfaceSample surface, float3 direction) {
 
     MaterialSample material = surface.material;
     float cosine = clamp(abs(dot(surface.hit.geometricNormal, direction)), 0.05, 1.0);
-    float ior = max(material.ior, 1.0);
-    float sinSquared = max(1.0 - cosine * cosine, 0.0);
-    float insideCosine = sqrt(max(1.0 - sinSquared / (ior * ior), 0.0));
-    float slabLength = max(material.thickness, 0.0001) / max(insideCosine, 0.05);
-
     float f0 = clamp(luminance(material.f0), 0.0, 1.0);
     float fresnel = f0 + (1.0 - f0) * pow5(1.0 - cosine);
     if ((material.sourceFlags & MATERIAL_SOURCE_FLUID) != 0u) {
@@ -645,17 +640,19 @@ float3 surfaceTransmittance(SurfaceSample surface, float3 direction) {
             surface.hit.geometricNormal) * 0.85, float3(0.001), float3(1.0));
         return (1.0 - fresnel) * tint;
     }
-    float3 absorption = pow(clamp(material.albedo, float3(0.001), float3(1.0)),
-        float3(max(slabLength * material.transmission, 0.0)));
-
-    if (material.alphaMode != AlphaMode.Optical) {
+    float opticalDepth;
+    if (material.alphaMode == AlphaMode.Optical) {
+        float ior = max(material.ior, 1.0);
+        float sinSquared = max(1.0 - cosine * cosine, 0.0);
+        float insideCosine = sqrt(max(1.0 - sinSquared / (ior * ior), 0.0));
+        float slabLength = max(material.thickness, 0.0001) / max(insideCosine, 0.05);
+        opticalDepth = max(slabLength * material.transmission, 0.0);
+    } else {
         // Thin pane: alpha is the authored optical thickness, not a physical
         // slab, so the grazing path length must not darken it to black.
-        float thinPower = max(material.alpha, 0.0) * max(material.transmission, 0.0);
-        absorption = pow(clamp(material.albedo, float3(0.001), float3(1.0)),
-            float3(thinPower));
+        opticalDepth = max(material.alpha, 0.0) * max(material.transmission, 0.0);
     }
-
+    float3 absorption = pow(clamp(material.albedo, float3(0.001), float3(1.0)), float3(opticalDepth));
     return (1.0 - fresnel) * absorption;
 }
 

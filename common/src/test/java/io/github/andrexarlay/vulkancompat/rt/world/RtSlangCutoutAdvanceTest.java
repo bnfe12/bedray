@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * describing the surface the denoiser is being fed: the origin, the remaining interval and the accumulated primary
  * displacement.
  *
- * <p>Ways this silently breaks: {@code primaryAdvance} accumulated on a bounce instead of only on the eye ray, so a
+ * <p>Ways this silently breaks: {@code segmentAdvance} survives a new bounce instead of starting at zero, so a
  * hole behind a mirror adds metres to a depth that never crossed one; {@code ray.tMax} left alone after an advance, so
  * the walk reaches one bias past the distance the caller bounded; {@code tMin} set to another bias after an origin
  * that is already one bias past the candidate, which is the double-offset defect at a hole instead of at a surface;
@@ -62,16 +62,16 @@ class RtSlangCutoutAdvanceTest {
     void thePrimaryDistanceIsMeasuredFromTheCameraAndOnlyFromTheCameraRay() {
         String tracer = read(TRACER);
         String hole = holeBranch();
-        assertEquals(1, count(hole, "primaryAdvance += advance;"), "one accumulation site");
-        assertTrue(hole.contains("if (!firstSurfaceAccepted) primaryAdvance += advance;"),
-            "guarded by the primary ray: a hole past a bounce is not the eye ray's displacement");
+        assertEquals(1, count(hole, "segmentAdvance += advance;"), "one accumulation site");
+        assertTrue(tracer.contains("ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);\n        segmentAdvance = 0.0;"),
+            "a new bounce starts its own segment distance");
         int accepted = tracer.indexOf("if (!firstSurfaceAccepted) {");
         assertTrue(accepted >= 0);
         String firstSurface = block(tracer, accepted);
-        assertTrue(firstSurface.contains("result.firstHitDistance = primaryAdvance + hit.t;"),
+        assertTrue(firstSurface.contains("result.firstHitDistance = segmentAdvance + hit.t;"),
             "the surface distance is the camera-to-origin displacement plus the segment still to travel");
         assertTrue(firstSurface.indexOf("result.firstHitDistance") > firstSurface.indexOf(
-            "if (!isFinite(primaryAdvance + hit.t))"),
+            "if (!isFinite(segmentAdvance + hit.t))"),
             "the sum is proven finite before it is published as depth");
     }
 
