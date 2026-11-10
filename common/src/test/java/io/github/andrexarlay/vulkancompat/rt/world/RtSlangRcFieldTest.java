@@ -96,9 +96,10 @@ class RtSlangRcFieldTest {
         assertTrue(levels.indexOf("bedray_core_render_frame(") < levels.lastIndexOf("barrier(fns_,cmd)"));
         assertTrue(levels.contains("if (status != BEDRAY_OK)"));
         String path = body(source("../native/bedray_core/src/path_trace_pass.cpp"), "BedrayStatus PathTracePass::render(");
-        assertTrue(path.indexOf("rc_field_->record(") < path.indexOf("bedray_core_render_frame(core_, &trace_desc"));
+        int build = path.indexOf("rc_field_->record(");
+        assertTrue(build >= 0 && build < path.indexOf("bedray_core_render_frame(core_, &trace_desc"));
         assertTrue(path.contains("field_bindings && !rc_field_"));
-        assertTrue(path.contains("rc_field_ && !native_scene"));
+        assertTrue(path.contains("if ((desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE) == 0)"));
         assertTrue(path.contains("trace_resources[26] = field_resources[0]"));
         assertTrue(path.contains("trace_resources[27] = field_resources[1]"));
     }

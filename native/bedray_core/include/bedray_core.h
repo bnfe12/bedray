@@ -199,10 +199,9 @@ typedef struct BedrayFrameDesc {
  *   - the core owns radiance, motion, the two accumulation images, the two
  *     history-depth images, FrameConstants uploads and one-element dummies;
  *   - with NATIVE_DI the core also owns the DI ring, reset and parity;
- *   - the host owns the TLAS, section table, atlases, emitters, external reservoirs,
- *     entity rings, output view, depth view and the StatsBuf range the statistics
- *     call borrows, and keeps them alive and in the declared layouts until
- *     bedray_core_release_recording for the command buffer;
+ *   - bedray_scene owns the TLAS and section table. The host retains the scene
+ *     recording and the borrowed atlases, emitters, external reservoirs, entity
+ *     rings, output, depth and StatsBuf through recording completion or discard;
  *   - the host must call bedray_core_release_recording after proven GPU
  *     completion or proven discard, exactly as for every other core recording.
  */
@@ -212,9 +211,8 @@ typedef struct BedrayFrameDesc {
 #define BEDRAY_PATH_TRACE_FRAME_CAMERA_STATIC (1u << 2)
 #define BEDRAY_PATH_TRACE_FRAME_FLIP_Y        (1u << 3)
 #define BEDRAY_PATH_TRACE_FRAME_SPATIAL       (1u << 4)
-/* scene.sections is the 64-byte GeometrySection table of bedray_scene and the
- * pass traces with program_trace_scene (path_trace_scene.slang). The flag is
- * host-only: it never reaches the shader push block. */
+/* Required on every path-trace frame. scene.sections is the 64-byte
+ * GeometrySection table of bedray_scene. The flag is host-only. */
 #define BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE  (1u << 5)
 /* Optional host-only extension. With NATIVE_DI, scene.reservoirs and input
  * di_state.y must be zero. C++ owns the ring, clear, history bit and parity.
