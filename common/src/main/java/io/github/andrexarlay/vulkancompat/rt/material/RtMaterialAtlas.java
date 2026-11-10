@@ -76,6 +76,17 @@ public final class RtMaterialAtlas {
 
     /** CPU-side atlas: the source of truth for uploads; the live arrays are shared with the emitters via {@link #last}. */
     private int[] cpuMaterial;
+    /**
+     * Bumped by every write into the CPU material mirror (allocation, default fill, each landed sprite batch). The mirror is
+     * filled in place while a bake runs, so a reader that caches anything derived from it (the emitter extraction's
+     * {@code EmissiveTexelIndex}) must key on this version, not on the array identity.
+     */
+    private static final java.util.concurrent.atomic.AtomicLong CPU_MATERIAL_VERSION = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Version of the CPU material mirror's contents (see {@code CPU_MATERIAL_VERSION}). */
+    public static long cpuMaterialVersion() {
+        return CPU_MATERIAL_VERSION.get();
+    }
     private int[] cpuNormal;
 
     private record Completed(MaterialAtlasBaker.SpriteBake bake, Epoch owner) {
@@ -189,6 +200,7 @@ public final class RtMaterialAtlas {
             VK10.VK_IMAGE_LAYOUT_GENERAL);
         cpuMaterial = new int[width * height];
         Arrays.fill(cpuMaterial, LabPbr.materialFromAuto(AutoPbr.DEFAULT, 0f));
+        CPU_MATERIAL_VERSION.incrementAndGet();
         cpuNormal = new int[width * height];
         Arrays.fill(cpuNormal, LabPbr.FLAT_NORMAL);
         bakedAtlas = null;
@@ -215,6 +227,7 @@ public final class RtMaterialAtlas {
         if (cpuMaterial == null || cpuMaterial.length != width * height) {
             cpuMaterial = new int[width * height];
             Arrays.fill(cpuMaterial, LabPbr.materialFromAuto(AutoPbr.DEFAULT, 0f));
+            CPU_MATERIAL_VERSION.incrementAndGet();
             cpuNormal = new int[width * height];
             Arrays.fill(cpuNormal, LabPbr.FLAT_NORMAL);
         }
@@ -349,6 +362,7 @@ public final class RtMaterialAtlas {
         for (MaterialAtlasBaker.SpriteBake b : batch) {
             mirrorSprite(cpuMaterial, atlasW, b);
         }
+        CPU_MATERIAL_VERSION.incrementAndGet();
     }
 
     static void mirrorSprite(int[] cpuMaterial, int atlasW, MaterialAtlasBaker.SpriteBake b) {

@@ -30,6 +30,13 @@ static const uint SURFACE_VISIBILITY_FLAG_ABSORBED = 1u << 2u;
 // the sky along the air one - rather than as one straight ray.
 static const uint SURFACE_VISIBILITY_FLAG_REFRACTED = 1u << 3u;
 
+// A section triangle from the opaque pass: the surface layer can only call it opaque with zero transmission (cutout,
+// translucent and foliage geometry carry their pass flags; entities and voxels have their own hit kinds).
+bool visibilityOpaqueSectionBlocker(SurfaceHit hit) {
+    return hit.kind == HitKind.Triangle
+        && (hit.flags & (HIT_FLAG_CUTOUT | HIT_FLAG_TRANSLUCENT | HIT_FLAG_FOLIAGE)) == 0u;
+}
+
 struct SurfaceVisibility {
     VisibilityResult result;
     uint             layers;
@@ -55,6 +62,18 @@ SurfaceVisibility traceFilteredVisibility<T : ISceneTracer>(T traversal,
     float3 transmittance = float3(1.0);
     Ray current = ray;
 
+    // One first-hit probe settles most shadow rays: a fully clear segment, or an opaque section triangle that can only
+    // block.  Anything else (a cutout or translucent candidate, an entity, a leaf or OMM texel) takes the material walk.
+    ShadowProbe probe = traversal.traceShadowProbe(ray);
+    if (probe.state == SHADOW_PROBE_CLEAR) {
+        visibility.result = visibleResult(ray.tMax);
+        return visibility;
+    }
+    if (probe.state == SHADOW_PROBE_OPAQUE_HIT && visibilityOpaqueSectionBlocker(probe.blocker)) {
+        visibility.result = blockedResult(probe.blocker, float3(0.0));
+        return visibility;
+    }
+
     for (uint layer = 0u; layer < SURFACE_VISIBILITY_MAX_LAYERS; ++layer) {
         if (current.tMax <= current.tMin) break;
 
@@ -64,6 +83,13 @@ SurfaceVisibility traceFilteredVisibility<T : ISceneTracer>(T traversal,
             visibility.result.distance = ray.tMax;
             visibility.result.transmittance = transmittance;
             visibility.result.blocker = missHit(ray.tMax);
+            return visibility;
+        }
+
+        // An opaque section triangle (no cutout, translucent or foliage pass flag) always blocks: decodeSurface would
+        // return an opaque material with no transmission, so the walk ends here without the vertex decode's atlas reads.
+        if (visibilityOpaqueSectionBlocker(hit)) {
+            visibility.result = blockedResult(hit, float3(0.0));
             return visibility;
         }
 
@@ -173,6 +199,13 @@ SurfaceVisibility traceFilteredVisibilityMedium<T : ISceneTracer>(T traversal,
             transmittance *= waterSegmentTransmittance(medium, max(hit.t - lastT, 0.0));
         }
         lastT = hit.t;
+
+        // An opaque section triangle (no cutout, translucent or foliage pass flag) always blocks: decodeSurface would
+        // return an opaque material with no transmission, so the walk ends here without the vertex decode's atlas reads.
+        if (visibilityOpaqueSectionBlocker(hit)) {
+            visibility.result = blockedResult(hit, float3(0.0));
+            return visibility;
+        }
 
         SurfaceSample surface = decodeSurface(atlas, blockMaterials, hit, options, current.direction, false);
         if (!surface.valid) {

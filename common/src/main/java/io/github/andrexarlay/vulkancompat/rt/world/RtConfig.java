@@ -63,7 +63,10 @@ public final class RtConfig {
      * sun-and-moon only, which is what a torch-lit room looked like before the port. The number of resampled quads per
      * bounce and the share of the NEE draw given to the emitter list follow the same switch family. */
     public static final boolean SLANG_BLOCK_EMITTERS = Boolean.parseBoolean(System.getProperty("vkbridge.rt.blockEmitters", "true"));
-    public static final int SLANG_EMITTER_CANDIDATES = Math.max(1, Math.min(32, Integer.getInteger("vkbridge.rt.emitterCandidates", 8)));
+    // 2, not 8: each candidate walks the light tree; in the torch room at 2560x1440 (DLSS-RR) the trace pass went
+    // 41.6 -> 24.0 ms with 2, and the frame-to-frame difference in the lit area did not grow (2.33 -> 2.17), because
+    // ReSTIR DI temporal/spatial reuse already pools the candidates (2026-11-07).
+    public static final int SLANG_EMITTER_CANDIDATES = Math.max(1, Math.min(32, Integer.getInteger("vkbridge.rt.emitterCandidates", 2)));
     public static final float SLANG_EMITTER_PROBABILITY = Math.min(1.0f,
         Math.max(0.0f, Float.parseFloat(System.getProperty("vkbridge.rt.emitterProbability", "0.5"))));
 

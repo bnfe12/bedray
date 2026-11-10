@@ -284,7 +284,7 @@ set(BEDRAY_SLANGC "" CACHE FILEPATH "Slang compiler for CPU shader contract test
 if(BEDRAY_SLANGC)
     get_filename_component(shader_root "${CMAKE_CURRENT_LIST_DIR}/../../common/src/main/resources/shaders/slang" ABSOLUTE)
     file(GLOB_RECURSE signal_dependencies CONFIGURE_DEPENDS "${shader_root}/*.slang")
-    foreach(contract IN ITEMS denoiser_signals triangle_intersection)
+    foreach(contract IN ITEMS denoiser_signals triangle_intersection restir_di)
         set(shader_test "${CMAKE_CURRENT_LIST_DIR}/../../common/src/test/resources/shaders/slang/verify_${contract}.slang")
         set(generated_signals "${CMAKE_CURRENT_BINARY_DIR}/${contract}.generated.cpp")
         add_custom_command(OUTPUT "${generated_signals}"

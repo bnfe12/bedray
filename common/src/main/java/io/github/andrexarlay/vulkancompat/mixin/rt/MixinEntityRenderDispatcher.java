@@ -29,7 +29,9 @@ public class MixinEntityRenderDispatcher {
         }
         int entityId = System.identityHashCode(renderState);
         String type = renderState.entityType != null ? renderState.entityType.toString() : "minecraft:unknown";
-        Matrix4f transform = poseStack != null ? poseStack.last().pose() : new Matrix4f().identity();
+        // The entity's own translation runs after HEAD (javap 26.3: pushPose@46, translate@57); see EntitySubmitTransform.
+        Matrix4f transform = io.github.andrexarlay.vulkancompat.rt.entity.EntitySubmitTransform.of(
+            poseStack != null ? poseStack.last().pose() : null, x, y, z);
         int flags = 0;
         if (renderState instanceof net.minecraft.client.renderer.entity.state.LivingEntityRenderState living) {
             flags |= io.github.andrexarlay.vulkancompat.rt.entity.EntityGeometryFrame.CapturedEntity.FLAG_LIVING;

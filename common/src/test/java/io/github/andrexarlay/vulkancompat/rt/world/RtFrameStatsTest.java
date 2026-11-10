@@ -235,6 +235,27 @@ class RtFrameStatsTest {
         assertEquals(-1.0, RtStatsMetering.rejectedPct(0, 128, 0, 1));
     }
 
+    @Test
+    void hitSharesUseTrustedTracePixelsAndZeroHitsReplaceThePreviousShare() {
+        assertEquals(50.0, RtStatsMetering.hitPct(256, 128, 0, 64, 128), 1.0e-12);
+        assertEquals(0.0, RtStatsMetering.hitPct(256, 128, 0, 0, 128), 1.0e-12);
+        assertEquals(-1.0, RtStatsMetering.hitPct(256, 128, 0, 0, 0));
+        assertEquals(-1.0, RtStatsMetering.hitPct(256, 128, 0, 129, 128));
+        assertEquals(-1.0, RtStatsMetering.hitPct(256, 128, 0, 0, 2049));
+        assertEquals(-1.0, RtStatsMetering.hitPct(256, 128, 0, -1, 128));
+        assertEquals(-1.0, RtStatsMetering.hitPct(256, 128, 0, 1, -1));
+    }
+
+    @Test
+    void oddTraceExtentUsesTheProducingRotationRatherThanAnUpscaledOutput() {
+        int traceWidth = 5, traceHeight = 5, frameIndex = 1;
+        long metered = RtStatsMetering.meteredPixels(traceWidth, traceHeight, frameIndex);
+        // This rotation measures no tile in the small trace, even though an output-sized mask could have samples.
+        assertEquals(0, metered);
+        assertEquals(-1.0, RtStatsMetering.hitPct(traceWidth, traceHeight, frameIndex, 1, 1));
+        assertEquals(-1.0, RtStatsMetering.rejectedPct(traceWidth, traceHeight, frameIndex, 1));
+    }
+
     /**
      * The share reaches the operator's line with the slot's own extent and rotation: a guessed frame index would
      * weigh the tiles of a frame that was never traced.
@@ -373,8 +394,8 @@ class RtFrameStatsTest {
     @Test
     void aCounterWithNoWriterIsNotReportedAsZero() throws IOException {
         String renderer = read(RENDERER);
-        assertTrue(renderer.contains("lastLeafPct = leafBacklit > 0 ? 100.0 * leafBacklit / hits : -1.0;"),
-            "-1 is the value the F3 line prints as n/a");
+        assertTrue(renderer.contains("lastLeafPct = leafBacklit > 0 && leafBacklit <= hits ? 100.0 * leafBacklit / hits : -1.0;"),
+            "missing or inconsistent leaf counters are displayed as n/a");
         assertFalse(renderer.contains("lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT)"),
             "an unwritten counter is not a measurement of zero");
     }

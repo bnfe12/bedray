@@ -189,8 +189,10 @@ class RtSlangDistantBlockLightTest {
         String composite = block(emitters, emitters.indexOf("struct SunAndBlockEmitterSampler : ILightSampler"));
         assertTrue(composite.contains("&& !receiver.bakedBlockLight;"),
             "the composite must not draw the emitter branch for a receiver the baked field carries");
-        assertTrue(composite.contains("return keyLight.sample(receiver, seed);"),
-            "with the emitter branch gone the key light keeps the whole density instead of being renormalised");
+        // With the emitter branch gone the key light keeps the whole density; since 2026-11-08 an indoor receiver (vanilla
+        // sky light 0) draws it with a selection probability that is divided out (sampleKeyLightIndoorAware).
+        assertTrue(composite.contains("return sampleKeyLightIndoorAware(receiver, seed);"),
+            "with the emitter branch gone the key light is drawn by the indoor-aware single-branch sampler");
         String contract = read(LIGHT_CONTRACT);
         assertTrue(contract.contains("bool   bakedBlockLight;"),
             "the verdict travels on the receiver: a sampler cannot infer it from position or normal");

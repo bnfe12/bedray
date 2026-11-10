@@ -183,6 +183,8 @@ struct LegacySectionTraversal : ITriangleTracer {
     // count of 0 means there is no capture (third person, or the option off).
     uint selfAvatarTriStart;
     uint selfAvatarTriCount;
+    // SELF_SHADOW_* for shadow, visibility and diffuse rays (setting self_shadow).
+    uint selfShadowMode;
 
     // One committed hit named: the instance bit says whether the triangle came
     // out of the entity ring or out of a section, and nothing else distinguishes
@@ -200,12 +202,16 @@ struct LegacySectionTraversal : ITriangleTracer {
     // entity ring is the only geometry that has such primitives.  Cutout texels
     // are not filtered here - they are a material question, and the surface
     // layer answers it.
-    SurfaceHit traceNearest(Ray ray, bool excludeSelfAvatar) {
-        return decodeIntersection(ray, traceIntersection(ray, excludeSelfAvatar));
+    uint secondarySelfShadowMode() {
+        return selfShadowMode;
     }
 
-    TriangleIntersection traceIntersection(Ray ray, bool excludeSelfAvatar) {
-        return traceTriangleIntersection(tlas, ray, instanceMask, selfAvatarTriStart, selfAvatarTriCount, excludeSelfAvatar);
+    SurfaceHit traceNearest(Ray ray, uint selfMode) {
+        return decodeIntersection(ray, traceIntersection(ray, selfMode));
+    }
+
+    TriangleIntersection traceIntersection(Ray ray, uint selfMode) {
+        return traceTriangleIntersection(tlas, ray, instanceMask, selfAvatarTriStart, selfAvatarTriCount, selfMode);
     }
 
     SurfaceHit decodeIntersection(Ray ray, TriangleIntersection hit) {
@@ -214,11 +220,15 @@ struct LegacySectionTraversal : ITriangleTracer {
     }
 
     SurfaceHit traceClosest(Ray ray) {
-        return traceNearest(ray, false);
+        return traceNearest(ray, selfShadowMode);
     }
 
     override SurfaceHit tracePrimary(Ray ray) {
-        return traceNearest(ray, true);
+        return traceNearest(ray, SELF_SHADOW_OFF);
+    }
+
+    override SurfaceHit traceMirror(Ray ray) {
+        return traceNearest(ray, SELF_SHADOW_FULL);
     }
 
     // A section cannot move: its geometry is uploaded once and the world around a
@@ -227,6 +237,37 @@ struct LegacySectionTraversal : ITriangleTracer {
     override float3 surfaceMotion(SurfaceHit hit) {
         if (!hit.hit || hit.kind != HitKind.Entity) return float3(0.0);
         return entityMotion(entities, hit.primitiveId, hit.barycentrics);
+    }
+
+
+    // First opaque triangle on the segment, without the nearest-hit search or any non-opaque candidate handling.
+    // Opaque triangles commit themselves; a non-opaque candidate (cutout, translucent, entity, OMM-unknown texel) is
+    // only noted, because the material walk must decide it.
+    override ShadowProbe traceShadowProbe(Ray ray) {
+        ShadowProbe probe = undecidedShadowProbe(ray.tMax);
+        if (ray.tMax <= ray.tMin) {
+            probe.state = SHADOW_PROBE_CLEAR;
+            return probe;
+        }
+        RayDesc desc;
+        desc.Origin = ray.origin;
+        desc.Direction = ray.direction;
+        desc.TMin = ray.tMin;
+        desc.TMax = ray.tMax;
+        RayQuery<RAY_FLAG_NONE> query;
+        query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
+        bool sawNonOpaque = false;
+        while (query.Proceed()) {
+            if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) sawNonOpaque = true;
+        }
+        if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+            probe.state = SHADOW_PROBE_OPAQUE_HIT;
+            probe.blocker = decodeHit(ray, query.CommittedInstanceID(), query.CommittedGeometryIndex(),
+                query.CommittedPrimitiveIndex(), query.CommittedTriangleBarycentrics(), query.CommittedRayT());
+        } else if (!sawNonOpaque) {
+            probe.state = SHADOW_PROBE_CLEAR;
+        }
+        return probe;
     }
 
     VisibilityResult traceVisibility(Ray ray) {
@@ -238,14 +279,15 @@ struct LegacySectionTraversal : ITriangleTracer {
         desc.TMin = ray.tMin;
         desc.TMax = ray.tMax;
 
-        // The body of the local player is geometry a light has to cross, so a
-        // shadow ray keeps it: only the primary ray may look past it.
+        // The first-person body casts its shadow per the self_shadow setting;
+        // by default not onto the floor patch its own feet cover.
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
         while (query.Proceed()) {
-            if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
-                query.CommitNonOpaqueTriangleHit();
-            }
+            if (query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) continue;
+            if (selfOccluderSkipped(selfShadowMode, entityInstance(query.CandidateInstanceID()),
+                query.CandidatePrimitiveIndex(), selfAvatarTriStart, selfAvatarTriCount, ray.origin)) continue;
+            query.CommitNonOpaqueTriangleHit();
         }
 
         if (query.CommittedStatus() == COMMITTED_NOTHING) return visibleResult(ray.tMax);
@@ -311,6 +353,37 @@ struct LegacySectionWorldTraversal : ISceneTracer {
     // A section cannot move: its geometry is uploaded once and the world around a
     // player is static within a frame, so the interface default (zero motion) is
     // exactly the right answer here and is never overridden.
+
+
+    // First opaque triangle on the segment, without the nearest-hit search or any non-opaque candidate handling.
+    // Opaque triangles commit themselves; a non-opaque candidate (cutout, translucent, entity, OMM-unknown texel) is
+    // only noted, because the material walk must decide it.
+    override ShadowProbe traceShadowProbe(Ray ray) {
+        ShadowProbe probe = undecidedShadowProbe(ray.tMax);
+        if (ray.tMax <= ray.tMin) {
+            probe.state = SHADOW_PROBE_CLEAR;
+            return probe;
+        }
+        RayDesc desc;
+        desc.Origin = ray.origin;
+        desc.Direction = ray.direction;
+        desc.TMin = ray.tMin;
+        desc.TMax = ray.tMax;
+        RayQuery<RAY_FLAG_NONE> query;
+        query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);
+        bool sawNonOpaque = false;
+        while (query.Proceed()) {
+            if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) sawNonOpaque = true;
+        }
+        if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+            probe.state = SHADOW_PROBE_OPAQUE_HIT;
+            probe.blocker = decodeHit(ray, query.CommittedInstanceID(), query.CommittedGeometryIndex(),
+                query.CommittedPrimitiveIndex(), query.CommittedTriangleBarycentrics(), query.CommittedRayT());
+        } else if (!sawNonOpaque) {
+            probe.state = SHADOW_PROBE_CLEAR;
+        }
+        return probe;
+    }
 
     VisibilityResult traceVisibility(Ray ray) {
         if (ray.tMax <= ray.tMin) return visibleResult(ray.tMax);

@@ -125,6 +125,25 @@ struct VisibilityResult {
     SurfaceHit blocker;
 };
 
+// Outcome of a first-hit shadow probe (ISceneTracer.traceShadowProbe).  UNDECIDED: the caller runs its full material
+// walk.  CLEAR: the segment met no triangle at all, so nothing can block or tint it.  OPAQUE_HIT: an opaque triangle lies
+// on the segment; `blocker` is that hit, and the caller decides whether its surface can transmit (foliage, OMM leaves).
+static const uint SHADOW_PROBE_UNDECIDED  = 0u;
+static const uint SHADOW_PROBE_CLEAR      = 1u;
+static const uint SHADOW_PROBE_OPAQUE_HIT = 2u;
+
+struct ShadowProbe {
+    uint       state;
+    SurfaceHit blocker;
+};
+
+ShadowProbe undecidedShadowProbe(float tMax) {
+    ShadowProbe probe;
+    probe.state = SHADOW_PROBE_UNDECIDED;
+    probe.blocker = missHit(tMax);
+    return probe;
+}
+
 VisibilityResult visibleResult(float distance) {
     VisibilityResult result;
     result.visible = true;

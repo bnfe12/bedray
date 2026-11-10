@@ -133,6 +133,8 @@ public final class WorldTargetManager {
     public static int presentationWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.worldWidth() : fallback; }
     public static int presentationHeight(int fallback) { return rrResolvesOutput() ? resolutionPlan.worldHeight() : fallback; }
     private static io.github.andrexarlay.vulkancompat.rtx.upscaler.WorldResolutionPlan lastLoggedResolutionPlan;
+    /** Change-triggered log state: the upscaler last ran on a DLSS-RR-resolved image (the blurry two-stage chain). */
+    private static boolean lastTwoStageRr;
 
     /**
      * Checks whether 3D resolution scaling or hardware ray tracing isolation is active.
@@ -851,6 +853,19 @@ public final class WorldTargetManager {
             return false; // the backend's dispatch already logged stage=execute and disabled itself
         }
         copyXessOutputToMain(fullMain);
+        boolean twoStageRr = colorResolved
+            && io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.denoiser()
+                == io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.PathDenoiser.DLSS_RR;
+        if (twoStageRr != lastTwoStageRr) {
+            lastTwoStageRr = twoStageRr;
+            if (twoStageRr) {
+                // RR already resolved this image at render size; the upscaler can only stretch it (zero jitter): blur.
+                LOGGER.warn("[VKB-RESOLVE] two_stage_rr=true upscaler={} input={}x{} output={}x{} (RR did not own the output this frame)",
+                    kind, inW, inH, outW, outH);
+            } else {
+                LOGGER.info("[VKB-RESOLVE] two_stage_rr=false");
+            }
+        }
         if (xessFrames == 0 || xessFrames % 120 == 0) {
             LOGGER.info("{}[VKB-AUTOTEST] {}=dispatch ok frames={} result=0 input={}x{} output={}x{} jitter=({},{}) jitter_source={} reset={} phase={}",
                 kind == UpscalerBackend.FSR ? "[VKB-FSR] " : "", kind.name().toLowerCase(java.util.Locale.ROOT), xessFrames + 1, inW, inH, outW, outH,

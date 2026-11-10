@@ -1,0 +1,187 @@
+---- Minecraft Crash Report ----
+// My bad.
+
+Time: 2026-10-25 14:48:23
+Description: Unexpected error
+
+java.lang.IndexOutOfBoundsException: Index 0 out of bounds for length 0
+	at java.base/jdk.internal.util.Preconditions.outOfBounds(Preconditions.java:100) ~[?:?] {}
+	at java.base/jdk.internal.util.Preconditions.outOfBoundsCheckIndex(Preconditions.java:106) ~[?:?] {}
+	at java.base/jdk.internal.util.Preconditions.checkIndex(Preconditions.java:302) ~[?:?] {}
+	at java.base/java.util.Objects.checkIndex(Objects.java:365) ~[?:?] {}
+	at java.base/java.util.ArrayList.get(ArrayList.java:428) ~[?:?] {}
+	at TRANSFORMER/bedray@0.1.1-alpha.13/io.github.andrexarlay.vulkancompat.sodium.BedrayConfigScreen.tick(BedrayConfigScreen.java:189) ~[bedray-neoforge-mc26.3.0-0.1.1-alpha.13.jar:?] {}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.gui.Gui.tick(Gui.java:121) ~[minecraft-client-patched-26.3.0.76.jar:?] {}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.Minecraft.tick(Minecraft.java:1864) [minecraft-client-patched-26.3.0.76.jar:?] {neoforge:access_transformer,neoforge:access_transformer,neoforge:mixin[APP:sodium-common.mixins.json:core.MinecraftMixin from mod sodium,APP:sodium-common.mixins.json:features.gui.hooks.debug.MinecraftRenderFrameMixin from mod sodium,APP:sodium-neoforge.mixins.json:platform.neoforge.EntrypointMixin from mod sodium,APP:mixins.bedray_core.json:MixinMinecraftHooks from mod bedray,APP:mixins.bedray_core.json:MixinMinecraftBackendGuard from mod bedray,APP:mixins.bedray.json:rtx.MixinMinecraft from mod bedray,APP:mixins.bedray.json:compute.MixinComputeResources from mod bedray,APP:mixins.bedray.json:debug.MixinMinecraftFrameTiming from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftFrameGen from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftDxgiPresent from mod bedray,APP:mixins.iris.json:VKOnly_InitKeys from mod iris]}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.Minecraft.runTick(Minecraft.java:1215) [minecraft-client-patched-26.3.0.76.jar:?] {neoforge:access_transformer,neoforge:access_transformer,neoforge:mixin[APP:sodium-common.mixins.json:core.MinecraftMixin from mod sodium,APP:sodium-common.mixins.json:features.gui.hooks.debug.MinecraftRenderFrameMixin from mod sodium,APP:sodium-neoforge.mixins.json:platform.neoforge.EntrypointMixin from mod sodium,APP:mixins.bedray_core.json:MixinMinecraftHooks from mod bedray,APP:mixins.bedray_core.json:MixinMinecraftBackendGuard from mod bedray,APP:mixins.bedray.json:rtx.MixinMinecraft from mod bedray,APP:mixins.bedray.json:compute.MixinComputeResources from mod bedray,APP:mixins.bedray.json:debug.MixinMinecraftFrameTiming from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftFrameGen from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftDxgiPresent from mod bedray,APP:mixins.iris.json:VKOnly_InitKeys from mod iris]}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.Minecraft.run(Minecraft.java:938) [minecraft-client-patched-26.3.0.76.jar:?] {neoforge:access_transformer,neoforge:access_transformer,neoforge:mixin[APP:sodium-common.mixins.json:core.MinecraftMixin from mod sodium,APP:sodium-common.mixins.json:features.gui.hooks.debug.MinecraftRenderFrameMixin from mod sodium,APP:sodium-neoforge.mixins.json:platform.neoforge.EntrypointMixin from mod sodium,APP:mixins.bedray_core.json:MixinMinecraftHooks from mod bedray,APP:mixins.bedray_core.json:MixinMinecraftBackendGuard from mod bedray,APP:mixins.bedray.json:rtx.MixinMinecraft from mod bedray,APP:mixins.bedray.json:compute.MixinComputeResources from mod bedray,APP:mixins.bedray.json:debug.MixinMinecraftFrameTiming from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftFrameGen from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftDxgiPresent from mod bedray,APP:mixins.iris.json:VKOnly_InitKeys from mod iris]}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.main.Main.main(Main.java:294) [minecraft-client-patched-26.3.0.76.jar:?] {}
+	at net.neoforged.fml.startup.Client.main(Client.java:19) [loader-12.0.12.jar:12.0] {}
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104) ~[?:?] {}
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565) ~[?:?] {}
+	at io.github.zekerzhayard.forgewrapper.installer.Main.main(Main.java:67) [ForgeWrapper-prism-2026-08-01.jar:prism-2026-08-01] {}
+	at org.prismlauncher.launcher.impl.StandardLauncher.launch(StandardLauncher.java:115) [NewLaunch.jar:?] {}
+	at org.prismlauncher.EntryPoint.listen(EntryPoint.java:129) [NewLaunch.jar:?] {}
+	at org.prismlauncher.EntryPoint.main(EntryPoint.java:70) [NewLaunch.jar:?] {}
+
+
+A detailed walkthrough of the error, its code path and all known details is as follows:
+---------------------------------------------------------------------------------------
+
+-- Head --
+Thread: Render thread
+Stacktrace:
+	at java.base/jdk.internal.util.Preconditions.outOfBounds(Preconditions.java:100) ~[?:?] {}
+	at java.base/jdk.internal.util.Preconditions.outOfBoundsCheckIndex(Preconditions.java:106) ~[?:?] {}
+	at java.base/jdk.internal.util.Preconditions.checkIndex(Preconditions.java:302) ~[?:?] {}
+	at java.base/java.util.Objects.checkIndex(Objects.java:365) ~[?:?] {}
+	at java.base/java.util.ArrayList.get(ArrayList.java:428) ~[?:?] {}
+	at TRANSFORMER/bedray@0.1.1-alpha.13/io.github.andrexarlay.vulkancompat.sodium.BedrayConfigScreen.tick(BedrayConfigScreen.java:189) ~[bedray-neoforge-mc26.3.0-0.1.1-alpha.13.jar:?] {}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.gui.Gui.tick(Gui.java:121) ~[minecraft-client-patched-26.3.0.76.jar:?] {}
+-- Uptime --
+Details:
+	JVM uptime: 330.050s
+	Wall uptime: 322.726s
+	High-res time: 328.730s
+	Client ticks: 6411 ticks / 320.550s
+Stacktrace:
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.Minecraft.fillReport(Minecraft.java:2496) [minecraft-client-patched-26.3.0.76.jar:?] {neoforge:access_transformer,neoforge:access_transformer,neoforge:mixin[APP:sodium-common.mixins.json:core.MinecraftMixin from mod sodium,APP:sodium-common.mixins.json:features.gui.hooks.debug.MinecraftRenderFrameMixin from mod sodium,APP:sodium-neoforge.mixins.json:platform.neoforge.EntrypointMixin from mod sodium,APP:mixins.bedray_core.json:MixinMinecraftHooks from mod bedray,APP:mixins.bedray_core.json:MixinMinecraftBackendGuard from mod bedray,APP:mixins.bedray.json:rtx.MixinMinecraft from mod bedray,APP:mixins.bedray.json:compute.MixinComputeResources from mod bedray,APP:mixins.bedray.json:debug.MixinMinecraftFrameTiming from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftFrameGen from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftDxgiPresent from mod bedray,APP:mixins.iris.json:VKOnly_InitKeys from mod iris]}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.Minecraft.emergencySaveAndCrash(Minecraft.java:980) [minecraft-client-patched-26.3.0.76.jar:?] {neoforge:access_transformer,neoforge:access_transformer,neoforge:mixin[APP:sodium-common.mixins.json:core.MinecraftMixin from mod sodium,APP:sodium-common.mixins.json:features.gui.hooks.debug.MinecraftRenderFrameMixin from mod sodium,APP:sodium-neoforge.mixins.json:platform.neoforge.EntrypointMixin from mod sodium,APP:mixins.bedray_core.json:MixinMinecraftHooks from mod bedray,APP:mixins.bedray_core.json:MixinMinecraftBackendGuard from mod bedray,APP:mixins.bedray.json:rtx.MixinMinecraft from mod bedray,APP:mixins.bedray.json:compute.MixinComputeResources from mod bedray,APP:mixins.bedray.json:debug.MixinMinecraftFrameTiming from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftFrameGen from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftDxgiPresent from mod bedray,APP:mixins.iris.json:VKOnly_InitKeys from mod iris]}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.Minecraft.run(Minecraft.java:961) [minecraft-client-patched-26.3.0.76.jar:?] {neoforge:access_transformer,neoforge:access_transformer,neoforge:mixin[APP:sodium-common.mixins.json:core.MinecraftMixin from mod sodium,APP:sodium-common.mixins.json:features.gui.hooks.debug.MinecraftRenderFrameMixin from mod sodium,APP:sodium-neoforge.mixins.json:platform.neoforge.EntrypointMixin from mod sodium,APP:mixins.bedray_core.json:MixinMinecraftHooks from mod bedray,APP:mixins.bedray_core.json:MixinMinecraftBackendGuard from mod bedray,APP:mixins.bedray.json:rtx.MixinMinecraft from mod bedray,APP:mixins.bedray.json:compute.MixinComputeResources from mod bedray,APP:mixins.bedray.json:debug.MixinMinecraftFrameTiming from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftFrameGen from mod bedray,APP:mixins.bedray.json:framegen.MixinMinecraftDxgiPresent from mod bedray,APP:mixins.iris.json:VKOnly_InitKeys from mod iris]}
+	at TRANSFORMER/minecraft@26.3/net.minecraft.client.main.Main.main(Main.java:294) [minecraft-client-patched-26.3.0.76.jar:?] {}
+	at net.neoforged.fml.startup.Client.main(Client.java:19) [loader-12.0.12.jar:12.0] {}
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104) ~[?:?] {}
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565) ~[?:?] {}
+	at io.github.zekerzhayard.forgewrapper.installer.Main.main(Main.java:67) [ForgeWrapper-prism-2026-08-01.jar:prism-2026-08-01] {}
+	at org.prismlauncher.launcher.impl.StandardLauncher.launch(StandardLauncher.java:115) [NewLaunch.jar:?] {}
+	at org.prismlauncher.EntryPoint.listen(EntryPoint.java:129) [NewLaunch.jar:?] {}
+	at org.prismlauncher.EntryPoint.main(EntryPoint.java:70) [NewLaunch.jar:?] {}
+
+
+-- Window --
+Details:
+	Error section: Pre render
+
+-- Last reload --
+Details:
+	Reload number: 1
+	Reload reason: initial
+	Finished: Yes
+	Packs: vanilla, vanilla, mod_resources, mod/sodium, mod/bedray, mod/iris, mod/bedray_compute, mod/neoforge
+
+-- System Details --
+Details:
+	Minecraft Version: 26.3
+	Minecraft Version ID: 26.3
+	Operating System: Windows 11 (amd64) version 10.0
+	Java Version: 25.0.1, Microsoft
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode), Microsoft
+	Memory: 158343888 bytes (151 MiB) / 1073741824 bytes (1024 MiB) up to 4294967296 bytes (4096 MiB)
+	Memory (heap): init: 1024MiB, used: 871MiB, committed: 1024MiB, max: 4096MiB
+	Memory (non-heap): init: 007MiB, used: 214MiB, committed: 218MiB, max: 000MiB
+	CPUs: 12
+	Processor Vendor: AuthenticAMD
+	Processor Name: AMD Ryzen 5 5600XT 6-Core Processor            
+	Identifier: AuthenticAMD Family 25 Model 33 Stepping 2
+	Microarchitecture: Zen 3
+	Frequency (GHz): 3.70
+	Number of physical packages: 1
+	Number of physical CPUs: 6
+	Number of logical CPUs: 12
+	Graphics card #0 name: NVIDIA GeForce RTX 5060 Ti
+	Graphics card #0 vendor: NVIDIA
+	Graphics card #0 VRAM (MiB): 8151.00
+	Graphics card #0 deviceId: VideoController1
+	Graphics card #0 versionInfo: 32.0.16.1742
+	Memory slot #0 capacity (MiB): 8192.00
+	Memory slot #0 clockSpeed (GHz): 3.20
+	Memory slot #0 type: DDR4
+	Memory slot #1 capacity (MiB): 8192.00
+	Memory slot #1 clockSpeed (GHz): 3.20
+	Memory slot #1 type: DDR4
+	Virtual memory max (MiB): 44200.62
+	Virtual memory used (MiB): 24179.87
+	Swap memory total (MiB): 27890.58
+	Swap memory used (MiB): 1547.66
+	Space in storage for jna.tmpdir (MiB): <path not set>
+	Space in storage for org.lwjgl.system.SharedLibraryExtractPath (MiB): <path not set>
+	Space in storage for io.netty.native.workdir (MiB): <path not set>
+	Space in storage for java.io.tmpdir (MiB): available: 96779.52, total: 475823.00
+	Space in storage for workdir (MiB): available: 96779.52, total: 475823.00
+	Operating System Version: Microsoft Windows 11 build 26300
+	Process Elevated: false
+	Process Loads: Uptime: 330s, user: 56s (16.89%), kernel: 11s (3.23%), total: 66s (20.12%)
+	Process Virtual Size (MiB): 1198.36
+	Process Resident Size (MiB): 1633.77
+	JVM Flags: 4 total; -XX:StackShadowPages=32 -XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump -Xms1024m -Xmx4096m
+	Debug Flags: 0 total; 
+	Launched Version: 26.3
+	Launcher name: FreesmLauncher
+	Backend library: LWJGL version 3.4.3+4
+	Window size: 1280x720
+	Surface Info: IMMEDIATE, 1280 x 720
+	SDL Platform: Windows
+	Graphics Device: NVIDIA GeForce RTX 5060 Ti
+	Graphics Backend: Vulkan
+	Graphics Vendor: NVIDIA
+	Graphics Drivers: 1.4.351 NVIDIA 617.42
+	Graphics Device Extensions: VK_KHR_dedicated_allocation (D), VK_EXT_opacity_micromap (D), VK_KHR_dynamic_rendering (D), VK_EXT_calibrated_timestamps (D), VK_KHR_deferred_host_operations (D), VK_EXT_scalar_block_layout (D), VK_KHR_shader_float16_int8 (D), VK_KHR_get_memory_requirements2 (D), VK_KHR_get_physical_device_properties2 (I), VK_NVX_binary_import (D), VK_KHR_shader_integer_dot_product (D), VK_EXT_mutable_descriptor_type (D), VK_NVX_image_view_handle (D), VK_KHR_ray_query (D), VK_KHR_synchronization2 (D), VK_EXT_multi_draw (D), VK_AMD_buffer_marker (D), VK_EXT_vertex_attribute_divisor (D), VK_KHR_win32_surface (I), VK_KHR_swapchain (D), VK_KHR_surface (I), VK_KHR_push_descriptor (D), VK_KHR_acceleration_structure (D), VK_EXT_debug_utils (I), VK_KHR_buffer_device_address (D)
+	Graphics Device Type: DISCRETE
+	Graphics Device Features: DeviceFeatures[wireframeFillMode=true, shaderDrawParameters=true, multiDrawDirectInterleaved=true, multiDrawDirectSeparate=false, multiDrawIndirect=true, drawIndirect=true, nonZeroFirstInstance=true, persistentMapping=true]
+	GL debug messages: 
+	Is Modded: Definitely; Client brand changed to 'neoforge'
+	Universe: 400921fb54442d18
+	Type: Client
+	Transparency: shader
+	Render Distance: 8/8 chunks
+	Narrator config: OFF
+	Narrator status: true
+	Resource Packs: vanilla, mod_resources, mod/sodium, mod/bedray, mod/iris, mod/bedray_compute, mod/neoforge (incompatible)
+	Sound Cache: 0 bytes in 0 buffers
+	Current Language: en_us
+	Locale: en_RU
+	System encoding: Cp1251
+	File encoding: UTF-8
+	CPU: 12x AMD Ryzen 5 5600XT 6-Core Processor 
+	Class Processors: 
+		04.78%: neoforge:access_transformer
+		00.00%: neoforge:mixin_frame_context
+		00.00%: neoforge:computing_frames (marker)
+		00.00%: neoforge:runtime_enum_extender
+		01.40%: neoforge:mixin
+		00.00%: neoforge:simple_processors_default (marker)
+		00.01%: neoforge.coremods:field_to_getter.net.minecraft.world.level.biome.biome
+		00.01%: neoforge.coremods:field_to_getter.net.minecraft.world.level.block.flowerpotblock
+		00.01%: neoforge.coremods:field_to_getter.net.minecraft.world.level.levelgen.structure.structure
+		00.21%: neoforge.coremods:method_redirector
+	Mod List: 
+		bedray-neoforge-mc26.3.0-0.1.1-alpha.13.jar       |Bedray                        |bedray                        |0.1.1-alpha.13      |Manifest: 171b1540cd687b92b4fb0795e6e6545bea5841d4254c7ccac51e4714c57f6944
+		bedray-compute-neoforge-mc26.3.0-0.1.1-alpha.13.ja|Bedray Compute                |bedray_compute                |0.1.1-alpha.13      |Manifest: efe87c701b33bbf404a50a6b1abe048d052ee4d790f0a6ec31c2a1cfb9df14f8
+		iris-neoforge-1.11.7+mc26.3.jar                   |Iris                          |iris                          |1.11.7+mc26.3       |Manifest: 2260506334a17ac566ea30169ab491201208f55c1c7212bb987bc0c7c59a8d93
+		minecraft-client-patched-26.3.0.76.jar            |Minecraft                     |minecraft                     |26.3                |Manifest: 054cf4377de420a198390ff13351871a5d1dcd2d0a7135939e0d7a0158978d8e
+		neoforge-26.3.0.76-universal.jar                  |NeoForge                      |neoforge                      |26.3.0.76           |Manifest: 02620022710df8f62038839b1743ef32033579762831b8b0bb84caee5b3b99de
+		net.caffeinemc.sodium-neoforge-0.9.2+mc26.3-mod.ja|Sodium                        |sodium                        |0.9.2+mc26.3        |Manifest: f847f359b15652ea1b00aa600f4da320a946f2e1438d1cb8da92f46322f8e255
+	Crash Report UUID: 5a118ac3-7e7e-4140-a172-73a9ca9a16c0
+	FML: 12.0.12
+	NeoForge: 26.3.0.76
+	Class Processors: 
+		04.78%: neoforge:access_transformer
+		00.00%: neoforge:mixin_frame_context
+		00.00%: neoforge:computing_frames (marker)
+		00.00%: neoforge:runtime_enum_extender
+		01.40%: neoforge:mixin
+		00.00%: neoforge:simple_processors_default (marker)
+		00.01%: neoforge.coremods:field_to_getter.net.minecraft.world.level.biome.biome
+		00.01%: neoforge.coremods:field_to_getter.net.minecraft.world.level.block.flowerpotblock
+		00.01%: neoforge.coremods:field_to_getter.net.minecraft.world.level.levelgen.structure.structure
+		00.21%: neoforge.coremods:method_redirector
+	Mod List: 
+		bedray-neoforge-mc26.3.0-0.1.1-alpha.13.jar       |Bedray                        |bedray                        |0.1.1-alpha.13      |Manifest: 171b1540cd687b92b4fb0795e6e6545bea5841d4254c7ccac51e4714c57f6944
+		bedray-compute-neoforge-mc26.3.0-0.1.1-alpha.13.ja|Bedray Compute                |bedray_compute                |0.1.1-alpha.13      |Manifest: efe87c701b33bbf404a50a6b1abe048d052ee4d790f0a6ec31c2a1cfb9df14f8
+		iris-neoforge-1.11.7+mc26.3.jar                   |Iris                          |iris                          |1.11.7+mc26.3       |Manifest: 2260506334a17ac566ea30169ab491201208f55c1c7212bb987bc0c7c59a8d93
+		minecraft-client-patched-26.3.0.76.jar            |Minecraft                     |minecraft                     |26.3                |Manifest: 054cf4377de420a198390ff13351871a5d1dcd2d0a7135939e0d7a0158978d8e
+		neoforge-26.3.0.76-universal.jar                  |NeoForge                      |neoforge                      |26.3.0.76           |Manifest: 02620022710df8f62038839b1743ef32033579762831b8b0bb84caee5b3b99de
+		net.caffeinemc.sodium-neoforge-0.9.2+mc26.3-mod.ja|Sodium                        |sodium                        |0.9.2+mc26.3        |Manifest: f847f359b15652ea1b00aa600f4da320a946f2e1438d1cb8da92f46322f8e255
+	Crash Report UUID: 07562c44-d868-4f44-8f86-49beca71cfdb
+	FML: 12.0.12
+	NeoForge: 26.3.0.76
