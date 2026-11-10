@@ -3,7 +3,6 @@ public module nrd_pack_entry;
 __exported import "denoise/nrd_pack.slang";
 
 [[vk::image_format("r32f")]] [[vk::binding(0, 0)]] RWTexture2D<float> gbViewZ;
-[[vk::image_format("rgba16f")]] [[vk::binding(1, 0)]] RWTexture2D<float4> gbNormalRough;
 [[vk::image_format("rgba16f")]] [[vk::binding(2, 0)]] RWTexture2D<float4> gbDiffuse;
 [[vk::image_format("rgba16f")]] [[vk::binding(4, 0)]] RWTexture2D<float4> gbDirect;
 [[vk::image_format("rgba16f")]] [[vk::binding(6, 0)]] RWTexture2D<float4> nrdInDiffuse;
