@@ -373,6 +373,11 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
     BedraySceneFrameInfo* out_info,
     BedraySceneError* error);
 
+/* The producer has completed, but another submitted recording can still read this generation.
+ * Frees the producer command identity for reuse while all resources stay pinned by frame_index. */
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_retire_producer(
+    BedrayScene* scene, uint64_t frame_index, BedraySceneError* error);
+
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
     BedrayScene* scene,
     uint64_t frame_index,

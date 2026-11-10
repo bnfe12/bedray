@@ -362,6 +362,7 @@ public final class RtFrameRenderer {
     private static org.joml.Matrix4f frameProjection;
     private static io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Stamp displayedStamp;
     private static RenderTarget displayedTarget, pendingDisplayedTarget;
+    private static long displayedSceneCommand;
     private static org.joml.Matrix4f displayedProjection;
     private static io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuides pendingFgGuides, displayedFgGuides;
 
@@ -391,6 +392,11 @@ public final class RtFrameRenderer {
      */
     public static long sceneTlas(RenderTarget target) {
         return displayedThisFrame(target) && world != null ? world.tlasHandle() : 0L;
+    }
+
+    /** Pins the displayed TLAS until the consumer's recording completes or is discarded. */
+    public static Runnable retainSceneRead(RenderTarget target) {
+        return displayedThisFrame(target) && world != null ? world.retainSceneRead(displayedSceneCommand) : null;
     }
 
     /** RT primary-ray distance image (R32F, GENERAL, 1e6 = no hit) of the frame RT displayed into {@code target}, or null. */
@@ -744,6 +750,7 @@ public final class RtFrameRenderer {
         if (pendingDisplayedTarget == target && frameProjection != null) {
             displayedStamp = io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.stampOrNull();
             displayedTarget = target;
+            displayedSceneCommand = cmd.address();
             displayedFgGuides = pendingFgGuides;
             displayedProjection = RtConfig.FLIP_Y
                 ? new org.joml.Matrix4f().scaling(1, -1, 1).mul(frameProjection) : new org.joml.Matrix4f(frameProjection);

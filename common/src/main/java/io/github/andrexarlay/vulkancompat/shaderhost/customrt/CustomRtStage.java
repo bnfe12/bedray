@@ -176,48 +176,49 @@ public final class CustomRtStage {
             fail("device changed without cleanup; restart required");
             return;
         }
+        // prepare may submit the producer and run its retirement callback before this consumer is recorded.
+        Runnable releaseScene = RtFrameRenderer.retainSceneRead(target);
+        if (releaseScene == null) {
+            waiting("scene generation already retired");
+            return;
+        }
+        boolean executeAttempted = false;
         try {
             if (executor == null) {
                 owner = device;
                 executor = new CustomRtExecutor(device.vkDevice(), compiled);
             }
-            // After any frame without a dispatch the TLAS/depth objects may have been recreated under the same handle
-            // values, so the set is rewritten. Changes happen here, outside an open command buffer (they may wait).
             if (state != State.ACTIVE) executor.invalidate();
             executor.prepare(device, frame, tlas, depth);
-        } catch (RuntimeException | LinkageError e) {
-            broken = true;
-            LOGGER.error("[VKB-CUSTOMRT] preparation failed\n{}", LogPaths.stack(e));
-            fail("preparation failed: " + flat(String.valueOf(e.getMessage())));
-            return;
-        }
-        var encoder = device.createCommandEncoder();
-        var command = encoder.allocateAndBeginTransientCommandBuffer();
-        boolean recorded = false;
-        try {
+            var encoder = device.createCommandEncoder();
+            var command = encoder.allocateAndBeginTransientCommandBuffer();
             VkBarriers.fullMemoryBarrier(command);
             executor.record(command, frame);
-            recorded = true;
+            VkBarriers.fullMemoryBarrier(command);
+            int result = VK10.vkEndCommandBuffer(command);
+            if (result != VK10.VK_SUCCESS) throw new IllegalStateException("command finalization failed (VkResult " + result + ")");
+            executeAttempted = true;
+            encoder.execute(command);
+            encoder.queueForDestroy(() -> releaseSceneRead(releaseScene));
+            dispatches++;
+            state = State.ACTIVE;
+            detail = "dispatch recorded " + frame.color().width() + "x" + frame.color().height()
+                + (depth != null ? ", depth bound" : ", no depth guide") + " (unverified in-game)";
         } catch (RuntimeException | LinkageError e) {
             broken = true;
             LOGGER.error("[VKB-CUSTOMRT] recording failed\n{}", LogPaths.stack(e));
             fail("recording failed: " + flat(String.valueOf(e.getMessage())));
         } finally {
-            VkBarriers.fullMemoryBarrier(command);
-            int result = VK10.vkEndCommandBuffer(command);
-            if (result == VK10.VK_SUCCESS) {
-                encoder.execute(command);
-            } else {
-                broken = true;
-                recorded = false;
-                fail("command finalization failed (VkResult " + result + "); restart required");
-            }
+            // An exception during execute/enqueue leaves the generation pinned until the host drains.
+            if (!executeAttempted) releaseSceneRead(releaseScene);
         }
-        if (recorded) {
-            dispatches++;
-            state = State.ACTIVE;
-            detail = "dispatch recorded " + frame.color().width() + "x" + frame.color().height()
-                + (depth != null ? ", depth bound" : ", no depth guide") + " (unverified in-game)";
+    }
+
+    private static void releaseSceneRead(Runnable release) {
+        try {
+            release.run();
+        } catch (RuntimeException | LinkageError e) {
+            LOGGER.error("[VKB-CUSTOMRT] scene read retirement failed; retained for host drain\n{}", LogPaths.stack(e));
         }
     }
 

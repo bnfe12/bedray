@@ -2120,6 +2120,18 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
     return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception preparing scene frame");
 }
 
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_retire_producer(
+    BedrayScene* scene, uint64_t frame_index, BedraySceneError* error) try {
+    clear_error(error);
+    FrameSlot* slot = scene == nullptr ? nullptr : find_slot(scene->impl, frame_index);
+    if (slot == nullptr)
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "producer frame is not outstanding");
+    slot->command_buffer = 0;
+    return BEDRAY_SCENE_OK;
+} catch (...) {
+    return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception retiring scene producer");
+}
+
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_release_frame(
     BedrayScene* scene,
     uint64_t frame_index,

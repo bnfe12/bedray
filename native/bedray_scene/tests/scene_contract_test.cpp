@@ -2006,6 +2006,21 @@ static void test_zero_device_address_is_rejected() {
     CHECK(fake::g.builds.empty());
 }
 
+static void test_producer_command_can_be_reused_while_its_generation_is_pinned() {
+    Fixture fixture(2);
+    const Mesh mesh = quad_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    const auto first = fixture.prepare(1, 0xDA01);
+    CHECK_STATUS(fixture.prepare_status(2, 0xDA01), BEDRAY_SCENE_ERROR_IN_USE);
+    CHECK_STATUS(bedray_scene_retire_producer(fixture.scene, 1, &g_error), BEDRAY_SCENE_OK);
+    CHECK_STATUS(bedray_scene_destroy(fixture.scene), BEDRAY_SCENE_ERROR_IN_USE);
+    const auto second = fixture.prepare(2, 0xDA01);
+    CHECK(first.tlas != 0 && second.tlas != 0 && first.tlas != second.tlas);
+    fixture.release(1);
+    CHECK_STATUS(bedray_scene_destroy(fixture.scene), BEDRAY_SCENE_ERROR_IN_USE);
+    fixture.release(2);
+}
+
 static void test_discarded_writes_cannot_be_reused() {
     Fixture fixture(2);
     const Mesh mesh = quad_mesh(0, 0, 0);
@@ -2024,6 +2039,7 @@ static void test_discarded_writes_cannot_be_reused() {
 }
 
 int main() {
+    test_producer_command_can_be_reused_while_its_generation_is_pinned();
     test_discarded_writes_cannot_be_reused();
     test_zero_device_address_is_rejected();
     test_abi_layout();

@@ -49,6 +49,7 @@ public final class BedraySceneNative implements AutoCloseable {
     private final MethodHandle updateTableHandle;
     private final MethodHandle setViewHandle;
     private final MethodHandle prepareFrameHandle;
+    private final MethodHandle retireProducerHandle;
     private final MethodHandle releaseFrameHandle;
     private final MethodHandle discardFrameHandle;
     private final MethodHandle queryResourcesHandle;
@@ -153,6 +154,8 @@ public final class BedraySceneNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS));
             prepareFrameHandle = bind(linker, lookup, "bedray_scene_prepare_frame",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+            retireProducerHandle = bind(linker, lookup, "bedray_scene_retire_producer",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
             releaseFrameHandle = bind(linker, lookup, "bedray_scene_release_frame",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
             discardFrameHandle = bind(linker, lookup, "bedray_scene_discard_frame",
@@ -507,6 +510,20 @@ public final class BedraySceneNative implements AutoCloseable {
             check("release_frame", status, error);
         } catch (Throwable t) {
             throw rethrow("release_frame", t);
+        }
+    }
+
+    public void retireProducer(long scene, SceneFrameRecordings.Frame recording) {
+        ensureOpen();
+        requireHandle(scene, "scene");
+        requireRecording(scene, recording);
+        long frameIndex = recording.index();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment error = arena.allocate(BedraySceneLayouts.ERROR);
+            int status = (int) retireProducerHandle.invokeExact(handle(scene), frameIndex, error);
+            check("retire_producer", status, error);
+        } catch (Throwable t) {
+            throw rethrow("retire_producer", t);
         }
     }
 

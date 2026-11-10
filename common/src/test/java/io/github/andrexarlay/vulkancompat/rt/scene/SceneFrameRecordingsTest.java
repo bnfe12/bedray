@@ -116,6 +116,27 @@ class SceneFrameRecordingsTest {
         assertEquals(0, recordings.pendingCount());
     }
 
+    @Test void producerCompletionKeepsTheGenerationUntilItsSeparateConsumerCompletes() {
+        var recordings = new SceneFrameRecordings(1);
+        recordings.prepare(19, 1, SceneFrameRecordings.Frame::markPrepared);
+        List<Long> released = new ArrayList<>();
+        var read = recordings.retainRead(19, frame -> {
+            released.add(frame.index());
+            frame.markReleased();
+        });
+        assertNotNull(read);
+        recordings.completeProducer(19, frame -> assertEquals(1, frame.index()),
+            frame -> fail("the custom RT submission still reads the scene"));
+        assertEquals(1, recordings.pendingCount());
+        recordings.prepare(19, 2, SceneFrameRecordings.Frame::markPrepared);
+        assertEquals(2, recordings.pendingCount());
+        read.run();
+        assertEquals(List.of(1L), released);
+        read.run();
+        assertEquals(1, recordings.pendingCount(), "a stale callback cannot retire the reused handle");
+        recordings.releaseAll(SceneFrameRecordings.Frame::markReleased);
+    }
+
     @Test void ffmAcknowledgesNativeSuccessBeforeResultAllocationOrArenaCleanup() throws Exception {
         Path sourceRoot = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt");
         String ffm = Files.readString(sourceRoot.resolve("scene/BedraySceneNative.java"));

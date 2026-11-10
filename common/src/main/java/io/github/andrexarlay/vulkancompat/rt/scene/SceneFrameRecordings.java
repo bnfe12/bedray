@@ -1,6 +1,9 @@
 package io.github.andrexarlay.vulkancompat.rt.scene;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -13,6 +16,8 @@ public final class SceneFrameRecordings {
         private final Long command;
         private boolean prepared;
         private boolean released;
+        private boolean producerCompleted;
+        private int readers;
 
         private Frame(long scene, long index, long command) {
             this.scene = scene;
@@ -32,6 +37,7 @@ public final class SceneFrameRecordings {
 
     private final long scene;
     private final Map<Long, Frame> recordings = new LinkedHashMap<>();
+    private final Set<Frame> consumerFrames = new LinkedHashSet<>();
 
     public SceneFrameRecordings(long scene) {
         if (scene == 0) throw new IllegalArgumentException("scene handle must be nonzero");
@@ -58,6 +64,51 @@ public final class SceneFrameRecordings {
         }
     }
 
+    /** Holds the prepared generation across a second submission that reads its scene. */
+    public Runnable retainRead(long command, Consumer<Frame> releaseNative) {
+        Objects.requireNonNull(releaseNative);
+        Frame frame = recordings.get(command);
+        if (frame == null || !frame.prepared || frame.released || frame.producerCompleted) return null;
+        Runnable release = new Runnable() {
+            private boolean returned;
+
+            @Override
+            public void run() {
+                if (returned || frame.released) return;
+                if (frame.readers == 1 && frame.producerCompleted) {
+                    try {
+                        releaseNative(frame, releaseNative);
+                        consumerFrames.remove(frame);
+                    } catch (RuntimeException | Error failure) {
+                        throw failed("release_scene_read", frame, failure);
+                    }
+                }
+                frame.readers--;
+                returned = true;
+            }
+        };
+        frame.readers++;
+        return release;
+    }
+
+    public void completeProducer(long command, Consumer<Frame> retireProducerNative, Consumer<Frame> releaseNative) {
+        Frame frame = recordings.get(command);
+        if (frame == null) return;
+        if (frame.readers == 0) {
+            release("release_frame", command, releaseNative);
+            return;
+        }
+        consumerFrames.add(frame);
+        try {
+            retireProducerNative.accept(frame);
+        } catch (RuntimeException | Error failure) {
+            consumerFrames.remove(frame);
+            throw failed("retire_producer", frame, failure);
+        }
+        frame.producerCompleted = true;
+        recordings.remove(frame.command);
+    }
+
     /** Exact completion/discard proof; native cleanup failure preserves the accepted token for retry. */
     public boolean release(String operation, long command, Consumer<Frame> releaseNative) {
         Objects.requireNonNull(releaseNative);
@@ -76,21 +127,23 @@ public final class SceneFrameRecordings {
     public void releaseAll(Consumer<Frame> releaseNative) {
         Objects.requireNonNull(releaseNative);
         IllegalStateException failures = null;
-        for (var it = recordings.values().iterator(); it.hasNext();) {
-            Frame frame = it.next();
-            try {
-                releaseNative(frame, releaseNative);
-                it.remove();
-            } catch (RuntimeException | Error failure) {
-                IllegalStateException contextual = failed("release_frame_after_host_drain", frame, failure);
-                if (failures == null) failures = contextual;
-                else failures.addSuppressed(contextual);
+        for (var frames : List.of(recordings.values(), consumerFrames)) {
+            for (var it = frames.iterator(); it.hasNext();) {
+                Frame frame = it.next();
+                try {
+                    releaseNative(frame, releaseNative);
+                    it.remove();
+                } catch (RuntimeException | Error failure) {
+                    IllegalStateException contextual = failed("release_frame_after_host_drain", frame, failure);
+                    if (failures == null) failures = contextual;
+                    else failures.addSuppressed(contextual);
+                }
             }
         }
         if (failures != null) throw failures;
     }
 
-    public int pendingCount() { return recordings.size(); }
+    public int pendingCount() { return recordings.size() + consumerFrames.size(); }
 
     private static void releaseNative(Frame frame, Consumer<Frame> release) {
         if (!frame.released) {

@@ -316,7 +316,12 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
      * close can retry it.
      */
     void releaseRecording(long commandBuffer) {
-        recordings.release("release_frame", commandBuffer, frame -> library.releaseFrame(scene, frame));
+        recordings.completeProducer(commandBuffer, frame -> library.retireProducer(scene, frame),
+            frame -> library.releaseFrame(scene, frame));
+    }
+
+    Runnable retainRead(long commandBuffer) {
+        return recordings.retainRead(commandBuffer, frame -> library.releaseFrame(scene, frame));
     }
 
     void discardRecording(long commandBuffer) {

@@ -1259,6 +1259,11 @@ public final class RtWorld {
         legacyLifetime.release(commandBuffer);
     }
 
+    Runnable retainSceneRead(long commandBuffer) {
+        // Legacy scene resources are covered by the next frame's host drain.
+        return nativeScene == null ? () -> {} : nativeScene.retainRead(commandBuffer);
+    }
+
     public void discardRecording(long commandBuffer) {
         if (nativeScene != null) {
             nativeScene.discardRecording(commandBuffer);
