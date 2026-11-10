@@ -84,7 +84,7 @@ final class NativeSectionCapture {
                 continue;
             }
             int[] flags = tagger.apply(section);
-            long hash = SectionGeometryIdentity.lightHash(section.light, flags, section.totalQuads() * 4);
+            long hash = SectionGeometryIdentity.tagHash(flags, section.totalQuads());
             Capture previous = accepted.get(section.key);
             if (previous != null && previous.tagHash() == hash
                     && SectionGeometryIdentity.same(previous.section(), section)) {

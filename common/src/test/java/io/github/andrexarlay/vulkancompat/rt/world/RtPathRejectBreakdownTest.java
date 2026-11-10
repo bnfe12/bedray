@@ -96,14 +96,14 @@ class RtPathRejectBreakdownTest {
 
     @Test
     void everyTraceRootDeclaresTheSlotAtThirtySeven() throws IOException {
-        for (String root : new String[] {"passes/path_trace.slang", "passes/path_trace_scene.slang",
+        for (String root : new String[] {"passes/path_trace_scene.slang",
                 "passes/rc_path_trace_scene.slang"}) {
             assertTrue(read(SHADERS.resolve(root)).contains(
                     "[[vk::binding(37, 0)]] RWStructuredBuffer<uint> outPathStats;"),
                 root + " shares the entry body, so it declares the stats slot (or the native stand-in) too");
         }
-        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
-        SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene.slang was not compiled");
+        SlangPassManifest manifest = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
         SlangPassManifest.Binding binding = manifest.binding("outPathStats");
         assertNotNull(binding);
         assertEquals(37, binding.binding());

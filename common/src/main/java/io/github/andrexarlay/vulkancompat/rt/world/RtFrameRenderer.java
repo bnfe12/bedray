@@ -525,7 +525,8 @@ public final class RtFrameRenderer {
         }
         if (world == null) {
             requireRayTracingDevice(device);
-            world = new RtWorld(device, pathSlangRuntime(vulkanDevice));
+            SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
+            world = new RtWorld(device, runtime);
             // The leaf transmission is a plant property, not a render-pass one: tag the cutout quads while they are staged.
             world.setBlockLookup(VegetationBlocks::foliageKindAt);
             if (RtGpuTimer.ENABLED) {
@@ -643,10 +644,6 @@ public final class RtFrameRenderer {
             consumeCompletedStats();
             if (!statsReadbacks.hasFreeSlot()) throw new RtFailure("stats_slots", "completion proof unavailable; stats slots retained");
         }
-        if (world.requiresLegacyHostDrain()) {
-            drainHostSubmissions(device, "legacy_world_inputs_drain");
-            world.prepareLegacyFrameAfterHostDrain();
-        }
         if (target != null && target.width > 0 && target.height > 0
             && camera.projectionMatrix != null && camera.viewRotationMatrix != null) {
             prepareFrameResources(device, WorldTargetManager.traceWidth(target.width), WorldTargetManager.traceHeight(target.height));
@@ -716,7 +713,8 @@ public final class RtFrameRenderer {
             }
             lastStats = stats;
             blasBuiltTotal += stats.builtThisFrame();
-            if (stats.instances() > 0 && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
+            if (recordingWorld.tlasHandle() != 0L && camera.projectionMatrix != null
+                && camera.viewRotationMatrix != null && target != null) {
                 recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
                     world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ, statsLease, denoiserProof);
                 traced = true;
@@ -969,11 +967,6 @@ public final class RtFrameRenderer {
         }
         if (materials == null) {
             materials = new RtMaterialAtlas(world.memory());
-            // Without this the atlas keeps no texel states, intern() returns ST_RETRY forever and the micromaps are
-            // inert: the feature reports "enabled" while every BLAS triangle stays fully unknown.
-            if (world.ommCache() != null) {
-                materials.setMicromapSink(world.ommCache());
-            }
         }
         materials.ensure(cmd, (TextureAtlas) atlasTexture, atlasW, atlasH, Minecraft.getInstance().getResourceManager());
         pass.prepare(cmd, world.memory(), w, h);
@@ -1039,7 +1032,6 @@ public final class RtFrameRenderer {
         // invViewProj must stay strictly unjittered so forward, viewZ, and motion vectors are jitter-free.
         InstanceMath.inverseViewProjection(frameProjection, camera.viewRotationMatrix, params.invViewProjStable);
         params.invViewProj.set(params.invViewProjStable);
-        params.statsAddress = statsBuf.address + writeOffset;
         // The same slot as a descriptor, for the pass that fills its counters: a device address reaches only the
         // shaders that take one, and the statistics pass binds the sixteen-byte head like any other buffer.
         params.statsBuffer = statsBuf.handle;
@@ -1749,17 +1741,17 @@ public final class RtFrameRenderer {
             lastStatusNs = now;
             // F3-style status line (one line, every 5 s)
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] status mode=%s lights=%d sun=(%.2f,%.2f,%.2f)x%.2f day=%.2f key=%s radius=%d/%d sections=%d blas_mb=%d budget_mb=%d sun_size_deg=%.2f",
+                "[VKB-RT] status mode=%s lights=%d sun=(%.2f,%.2f,%.2f)x%.2f day=%.2f key=%s radius=%d/%d sections=%d scene_vram_mb=%d sun_size_deg=%.2f",
                 RtConfig.mode().logName(), emitters != null ? emitters.count() : 0, params.key.dir[0], params.key.dir[1],
                 params.key.dir[2], params.key.color[0], params.key.day, params.key.isMoon ? "moon" : "sun", lastRadiusXz, lastRadiusY,
-                s.instances(), s.vramBytes() >> 20, RtConfig.vramBudgetBytes() >> 20,
+                s.totalSections(), s.vramBytes() >> 20,
                 io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.sunSizeTenths / 10.0));
         }
         if (changed) {
             LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] blas built=%d total=%d build_ms=%.2f tlas instances=%d tlas_ms=%.2f vram_mb=%d pending=%d failed=%d identical_skipped=%d veg_sections=%d veg_quads=%d",
+                "[VKB-RT] blas built=%d total=%d build_ms=%.2f tlas instances=%d tlas_ms=%.2f vram_mb=%d pending=%d identical_skipped=%d veg_sections=%d veg_quads=%d",
                 builtInWindow, s.totalSections(), buildMsInWindow, s.instances(), s.tlasMs(), s.vramBytes() >> 20,
-                s.pending(), s.failedSections(), world != null ? world.identicalSkipped() : 0L,
+                s.pending(), world != null ? world.identicalSkipped() : 0L,
                 world != null ? world.vegetationSections() : 0L, world != null ? world.vegetationQuads() : 0L));
         }
         if (passFramesInWindow > 0) {
@@ -1796,12 +1788,6 @@ public final class RtFrameRenderer {
                 RtConfig.displayed(), RtConfig.effectiveModeName()));
         } else if (s.instances() == 0 && s.pending() > 0) {
             LOGGER.info("[VKB-RT] rt_pass waiting instances=0 pending={}", s.pending());
-        }
-        if (world != null) {
-            OpacityMicromapCache omm = world.ommCache();
-            if (omm != null) {
-                omm.logStatsIfDue(now);
-            }
         }
         passMsInWindow = 0.0;
         passFramesInWindow = 0;

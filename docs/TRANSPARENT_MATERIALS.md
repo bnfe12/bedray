@@ -59,8 +59,7 @@ Realistic water keeps its explicit Snell boundary/medium path. Custom IOR is use
 refracted sun beam. Reference RGB absorption is added to the water's existing extinction; vanilla water uses a tinted sheet.
 Analytic caustics and straight secondary filter segments retain their existing approximations. This is not full physical transport.
 
-Opacity micromaps leave optical sprites unresolved, including alpha-zero glass centres. Otherwise fixed-function alpha
-culling could remove a dielectric interface before the shader can reflect or filter it.
+The native scene preserves optical candidates, including alpha-zero glass centres, for the Slang material test.
 
 ## Settings
 
@@ -78,10 +77,8 @@ Turning off a transparent-shadow filter passes light without that filter. Opaque
 transparency and surface reflections remain controlled by their own paths. The direct/secondary state is scoped across
 reflection/GI shading calls so a secondary call does not change the next primary shadow ray's policy.
 Changing either shadow policy or the optical master resets accumulation, ReSTIR reservoirs and native NRD/DLSS-RR history.
-The optical-material master switch also changes the frame's tracing flags. It disables palette reads and restores legacy
-shader optics without editing sidecars. Material baking and conservative CPU culling have separate lifetimes/settings;
-tagged optical sprites continue to stay unresolved by opacity micromaps while the switch is off, so re-enabling optics
-cannot expose a stale fixed-alpha classification. This switch restores shader optics, not the complete old micromap workload.
+The optical-material master switch also changes the frame's tracing flags. It disables palette reads and restores the
+base shader optics while preserving the sidecars. Material baking and conservative CPU culling have separate lifetimes and settings.
 
 ## Shared glass boundaries
 
@@ -93,7 +90,7 @@ can opt out with `cullSharedFaces: false`.
 
 Filtering is section-local and affects newly decoded geometry. Reload the world to rebuild all geometry after changing the
 setting. Existing Sodium culling or missing conservative proof can leave the additional removed-face count at zero. The filter
-compacts both decoded arrays and raw GPU-dequantization words, preserving pass ranges and vertex/triangle indexing.
+compacts both decoded arrays and captured Sodium words, preserving pass ranges and vertex/triangle indexing.
 
 ## Counters
 

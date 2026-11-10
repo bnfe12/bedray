@@ -31,10 +31,8 @@ public final class MaterialAtlasBaker {
                          int emissiveSprites, int metalSprites, int errors, double ms) {
     }
 
-    /** One sprite baked into tight row-major arrays (row stride {@code w}). Produced off the render thread.
-     * {@code alpha} (when {@code wantAlpha} was set) holds the albedo alpha per texel for the opacity micromap
-     * classification; {@code animated} marks sprites the game reports as animated (their content changes per frame). */
-    public record SpriteBake(int x0, int y0, int w, int h, int[] material, int[] normal, byte[] alpha, boolean animated,
+    /** One sprite baked off the render thread into tight row-major arrays (row stride {@code w}). */
+    public record SpriteBake(int x0, int y0, int w, int h, int[] material, int[] normal,
                              boolean labS, boolean labN, boolean metal, int emissive, boolean autoNormal) {
     }
 
@@ -46,16 +44,10 @@ public final class MaterialAtlasBaker {
 
     /**
      * Bakes one sprite off the render thread: LabPBR {@code _s}/{@code _n} maps when present, else auto-PBR. Returns null
-     * when the sprite rect does not fit the atlas (logged, counted as an error by the caller). With {@code wantAlpha}
-     * (opacity micromaps enabled) the albedo alpha is extracted per texel and animated sprites are flagged.
+     * when the sprite rect does not fit the atlas (logged, counted as an error by the caller).
      */
     public static SpriteBake bakeSprite(TextureAtlasSprite sprite, int atlasW, int atlasH, ResourceProvider resources,
-                                        boolean wantAlpha) {
-        return bakeSprite(sprite, atlasW, atlasH, resources, wantAlpha, null);
-    }
-
-    public static SpriteBake bakeSprite(TextureAtlasSprite sprite, int atlasW, int atlasH, ResourceProvider resources,
-                                        boolean wantAlpha, OpticalMaterials optics) {
+                                        OpticalMaterials optics) {
         Identifier name = sprite.contents().name();
         int w = sprite.contents().width();
         int h = sprite.contents().height();
@@ -68,9 +60,6 @@ public final class MaterialAtlasBaker {
             }
             return null;
         }
-        // The game's own flag: 26.3 puts mipmap_strategy into .png.mcmeta (oak_leaves, glass), so the presence of the
-        // file says nothing about animation and marked every leaf sprite unclassifiable.
-        boolean animated = wantAlpha && sprite.isAnimated();
         AutoPbr.Material auto = AutoPbr.classify(name.getPath());
         MaterialRegion.Image spec = null;
         MaterialRegion.Image nrm = null;
@@ -78,23 +67,14 @@ public final class MaterialAtlasBaker {
         try {
             spec = read(resources, texture(name, "_s"));
             nrm = read(resources, texture(name, "_n"));
-            // albedo: for auto-PBR per-pixel materials (mixed blocks, ores, roughness, bright emission), auto-normals,
-            // and the opacity micromap classification (alpha channel)
-            if (spec == null || nrm == null || wantAlpha) {
+            // Albedo feeds per-pixel auto-PBR materials and generated normals.
+            if (spec == null || nrm == null) {
                 albedo = read(resources, texture(name, ""));
             }
         } catch (IOException | RuntimeException e) {
             // A broken PNG of a resource pack: this sprite keeps auto-PBR values; counted and logged (not silent).
             if (LOGGED_ERRORS.incrementAndGet() <= MAX_LOGGED_ERRORS) {
                 LOGGER.warn("[VKB-RT] materials read_failed sprite={} {}", name, LogPaths.show(e));
-            }
-        }
-        byte[] alpha = null;
-        if (wantAlpha && albedo != null) {
-            alpha = new byte[w * h];
-            int[] argb = albedo.argb();
-            for (int i = 0; i < w * h; i++) {
-                alpha[i] = (byte) (argb[i] >>> 24);
             }
         }
         int[] material = new int[w * h];
@@ -106,7 +86,7 @@ public final class MaterialAtlasBaker {
             AutoNormals.fill(normal, w, 0, 0, w, h, albedo);
             autoNormals = true;
         }
-        return new SpriteBake(x0, y0, w, h, material, normal, alpha, animated, spec != null, nrm != null,
+        return new SpriteBake(x0, y0, w, h, material, normal, spec != null, nrm != null,
             spec == null && auto.metal(), emissive, autoNormals);
     }
 

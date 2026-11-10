@@ -9,20 +9,20 @@ class SlangTraceProgramsTest {
     private static final int RAY = BedrayCoreLayouts.CAP_RAY_TRACING_PIPELINE;
     private static final int SER = BedrayCoreLayouts.CAP_INVOCATION_REORDER_NV;
     @Test void noFeatureIsSelectedMerelyBecauseTheDeviceSupportsIt() {
-        assertEquals(List.of("path_trace"), SlangTracePrograms.candidates("path_trace", RAY | SER, false, false, true));
+        assertEquals(List.of("path_trace_scene"), SlangTracePrograms.candidates("path_trace_scene", RAY | SER, false, false, true));
     }
     @Test void serRequestIncludesFallbacksInOrder() {
-        assertEquals(List.of("path_trace.ser", "path_trace.raygen", "path_trace"),
-            SlangTracePrograms.candidates("path_trace", RAY | SER, false, true, true));
+        assertEquals(List.of("path_trace_scene.ser", "path_trace_scene.raygen", "path_trace_scene"),
+            SlangTracePrograms.candidates("path_trace_scene", RAY | SER, false, true, true));
     }
     @Test void noopHintUsesOrdinaryRaygenRatherThanClaimingReordering() {
-        assertEquals(List.of("path_trace.raygen", "path_trace"),
-            SlangTracePrograms.candidates("path_trace", RAY | SER, false, true, false));
+        assertEquals(List.of("path_trace_scene.raygen", "path_trace_scene"),
+            SlangTracePrograms.candidates("path_trace_scene", RAY | SER, false, true, false));
     }
     @Test void unavailableSerKeepsRaygenWhileUnavailableRaygenKeepsCompute() {
-        assertEquals(List.of("path_trace.raygen", "path_trace"),
-            SlangTracePrograms.candidates("path_trace", RAY, false, true, true));
-        assertEquals(List.of("path_trace"), SlangTracePrograms.candidates("path_trace", SER, false, true, true));
+        assertEquals(List.of("path_trace_scene.raygen", "path_trace_scene"),
+            SlangTracePrograms.candidates("path_trace_scene", RAY, false, true, true));
+        assertEquals(List.of("path_trace_scene"), SlangTracePrograms.candidates("path_trace_scene", SER, false, true, true));
     }
     @Test void sceneAndFieldVariantsUseTheSameBackendPolicy() {
         for (String base : List.of("path_trace_scene", "rc_path_trace_scene"))

@@ -1,10 +1,7 @@
-﻿// Shared body of the path-tracing entry points.
+// Shared body of the path-tracing entry points.
 //
-// `path_trace_pass` (LegacySection table) and `path_trace_scene_pass`
-// (native GeometrySection table) differ only in binding 2 and in the traversal
-// backend; the integration, material decode, ReSTIR and output contract are
-// identical.  Keeping the body here means a fix cannot land in one entry and
-// silently miss the other.
+// Native-scene path tracing and Radiance Cascades share the integrator,
+// material decode, ReSTIR stages and output contract.
 public module path_trace_entry;
 
 __exported import "contracts/contracts.slang";

@@ -70,7 +70,7 @@ class RestirPtTemporalStageTest {
 
     @Test
     void everyRootBindsTheReservoirRingAtThirtySix() throws IOException {
-        for (String root : new String[] {"passes/path_trace.slang", "passes/path_trace_scene.slang",
+        for (String root : new String[] {"passes/path_trace_scene.slang",
                 "passes/rc_path_trace_scene.slang"}) {
             assertTrue(read(SHADERS.resolve(root)).contains(
                     "[[vk::binding(36, 0)]] RWStructuredBuffer<RestirPtReservoir> ptReservoirs;"),
@@ -275,9 +275,9 @@ class RestirPtTemporalStageTest {
      */
     @Test
     void theRecordLayoutIsTheMeasuredStd430One() throws IOException {
-        Path reflection = Path.of("build/generated/slang/reflection/path_trace.reflection.json");
+        Path reflection = Path.of("build/generated/slang/reflection/path_trace_scene.reflection.json");
         org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(reflection),
-            "path_trace.slang was not compiled into this build");
+            "path_trace_scene.slang was not compiled into this build");
         com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(
             Files.readString(reflection, StandardCharsets.UTF_8)).getAsJsonObject();
         com.google.gson.JsonObject reservoir = null;
@@ -287,7 +287,7 @@ class RestirPtTemporalStageTest {
                 reservoir = object.getAsJsonObject("type").getAsJsonObject("resultType");
             }
         }
-        assertTrue(reservoir != null, "path_trace declares ptReservoirs");
+        assertTrue(reservoir != null, "path_trace_scene declares ptReservoirs");
         assertEquals(144, size(reservoir), "RestirPtReservoir");
         assertEquals(0, offset(reservoir, "sample"));
         assertEquals(112, offset(reservoir, "stats"));

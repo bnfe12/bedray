@@ -57,7 +57,7 @@ class ShadercSurfaceTest {
         SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt/world");
 
     @Test
-    void runtimeCompilationRemainsLimitedToUserPacksAndTheExtensionProbe() throws IOException {
+    void runtimeCompilationRemainsLimitedToUserPacks() throws IOException {
         TreeSet<String> actual = new TreeSet<>();
         try (Stream<Path> files = Files.walk(SOURCES)) {
             for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
@@ -67,7 +67,6 @@ class ShadercSurfaceTest {
             }
         }
         assertEquals(new TreeSet<>(List.of(
-            "io/github/andrexarlay/vulkancompat/rt/world/RtExtensionProbe.java",
             "io/github/andrexarlay/vulkancompat/shaderhost/glsl/IrisSourcePreprocessor.java",
             "io/github/andrexarlay/vulkancompat/shaderhost/glsl/SpirvCompiler.java",
             "io/github/andrexarlay/vulkancompat/shaderhost/glsl/VulkanGlslPackCompiler.java")), actual,
@@ -128,9 +127,9 @@ class ShadercSurfaceTest {
             "the ray-tracing proof of concept is gone with them");
     }
 
-    /** The one Shaderc user inside the RT package is a capability probe, and it must stay the only one. */
+    /** Renderer code loads precompiled Slang programs. */
     @Test
-    void theOnlyShadercUserInTheRtPackageIsTheProbe() throws IOException {
+    void theRtPackageDoesNotUseShaderc() throws IOException {
         TreeSet<String> users = new TreeSet<>();
         try (Stream<Path> files = Files.walk(SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt"))) {
             for (Path file : (Iterable<Path>) files.filter(path -> path.toString().endsWith(".java"))::iterator) {
@@ -139,7 +138,6 @@ class ShadercSurfaceTest {
                 }
             }
         }
-        assertEquals(new TreeSet<>(List.of("RtExtensionProbe.java")), users,
-            "the opacity-micromap probe may compile GLSL at runtime; a renderer pass may not");
+        assertTrue(users.isEmpty(), "renderer code does not compile GLSL at runtime: " + users);
     }
 }

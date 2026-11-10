@@ -90,7 +90,7 @@ class NativeSectionCaptureTest {
         List<DecodedSection> accepted = new ArrayList<>();
         capture.forEach(accepted::add);
         assertSame(replacement, accepted.getFirst());
-        flags[0] = RtWorld.VEGETATION_BIT;
+        flags[0] = BedraySceneGeometry.VERTEX_FLAG_VEGETATION;
         source.put(section(1, 0, 0));
         assertEquals(1, capture.update(0, 0, 0, 2, 2, 4, 1_000).queued());
         assertEquals(2, capture.structureVersion());

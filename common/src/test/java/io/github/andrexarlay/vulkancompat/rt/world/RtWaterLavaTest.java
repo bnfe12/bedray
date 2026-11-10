@@ -223,8 +223,6 @@ public class RtWaterLavaTest {
 
     @Test
     public void testPassFlagsIntegration() {
-        RtFrameParams params = new RtFrameParams();
-
         // When waterStyle == 1 (Realistic)
         RtSettings.waterStyle = RtSettings.WATER_STYLE_REALISTIC;
         int flagsRealistic = RtFrameParams.FLAG_MATERIALS
@@ -238,14 +236,6 @@ public class RtWaterLavaTest {
             | (RtSettings.waterStyle() == 1 ? RtFrameParams.FLAG_WATER_REALISTIC : 0);
         assertEquals(0, flagsVanilla & RtFrameParams.FLAG_WATER_REALISTIC,
             "Flags must not contain FLAG_WATER_REALISTIC when waterStyle is 0");
-
-        // Verify packing into push constants ByteBuffer (offset 108)
-        params.flags = flagsRealistic;
-        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocateDirect(RtFrameParams.BYTES)
-            .order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        params.write(buf);
-        assertEquals(flagsRealistic, buf.getInt(108), "flags with FLAG_WATER_REALISTIC must be written to offset 108");
-        assertTrue((buf.getInt(108) & RtFrameParams.FLAG_WATER_REALISTIC) != 0);
     }
 
     // ---- Helper math replicating GLSL routines ----

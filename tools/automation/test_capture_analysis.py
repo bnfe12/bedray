@@ -24,7 +24,7 @@ class CaptureAnalysisTest(unittest.TestCase):
         }
         self.rows = [dict(frame=100 + index, interval_ms=15, flags=127, render_width=1920,
                           render_height=1080, output_width=1920, output_height=1080, mode="path",
-                          program="path_trace.ser", spp=1, bounces=3, ray_distance=72, trace_flags=16,
+                          program="path_trace_scene.ser", spp=1, bounces=3, ray_distance=72, trace_flags=16,
                           upscaler_request="BILINEAR", upscaler_active="none", framegen_state="UNAVAILABLE",
                           denoiser="OFF", gpu_resolved=1, cpu_total_ms=3, gpu_total_ms=12, gpu_rt_ms=10)
                      for index in range(2000)]

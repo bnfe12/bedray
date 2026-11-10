@@ -25,7 +25,7 @@ class RtSlangSampleRejectionTest {
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
     private static final String BSDF = "src/main/resources/shaders/slang/shading/bsdf.slang";
-    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace_scene.slang";
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
     private static final String STATS = "src/main/resources/shaders/slang/passes/frame_stats.slang";

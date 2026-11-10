@@ -5,8 +5,8 @@ current-frame estimator of reflected direct light for a primary diffuse
 continuation. It does not alias the v1 two-segment atlas or its direction set.
 The user explicitly authorized implementing RC shader mathematics on 2026-10-29.
 
-Enable explicitly with `vkbridge.rt.nativePathTrace=true`,
-`vkbridge.rt.nativeScene=true`, and `vkbridge.rt.radianceCascades=true`.
+Enable explicitly with `vkbridge.rt.nativePathTrace=true` and
+`vkbridge.rt.radianceCascades=true`. Use the matching renderer distribution for the native scene ABI.
 Select `bedray.pathTracer=slang` when a denoiser is enabled; its AUTO gate remains.
 `vkbridge.rt.rcBaseAxis` accepts 8 (default), 16 or 32. Missing native ownership,
 AOT contracts, enabled capabilities or matching exports fail explicitly. The

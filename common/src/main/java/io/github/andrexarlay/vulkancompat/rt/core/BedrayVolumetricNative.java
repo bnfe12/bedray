@@ -16,7 +16,7 @@ public final class BedrayVolumetricNative implements AutoCloseable {
     private final MethodHandle render, destroy;
     private boolean closed;
 
-    public BedrayVolumetricNative(BedrayCoreNative library, long core, long legacyMarch, long sceneMarch,
+    public BedrayVolumetricNative(BedrayCoreNative library, long core, long sceneMarch,
                                   long apply, long imageBudget, long bufferBudget) {
         if (core == 0) throw new IllegalArgumentException("core is required");
         this.library = library; this.core = core;
@@ -25,18 +25,18 @@ public final class BedrayVolumetricNative implements AutoCloseable {
         render = library.resourceFunction("bedray_core_render_volumetric", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
         destroy = library.resourceFunction("bedray_core_destroy_volumetric", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         try (Arena arena = Arena.ofConfined()) {
-            var desc = configuration(arena, legacyMarch, sceneMarch, apply, imageBudget, bufferBudget);
+            var desc = configuration(arena, sceneMarch, apply, imageBudget, bufferBudget);
             var error = arena.allocate(BedrayCoreLayouts.ERROR);
             check("configure_volumetric", (int) configure.invokeExact(MemorySegment.ofAddress(core), desc, error), error);
         } catch (Throwable failure) { throw failure("configure_volumetric", failure); }
     }
 
-    static MemorySegment configuration(Arena arena, long legacy, long scene, long apply, long images, long buffers) {
-        if ((legacy == 0 && scene == 0) || apply == 0 || images <= 0 || buffers <= 0)
+    static MemorySegment configuration(Arena arena, long scene, long apply, long images, long buffers) {
+        if (scene == 0 || apply == 0 || images <= 0 || buffers <= 0)
             throw new IllegalArgumentException("march/apply programs and positive budgets are required");
         var desc = arena.allocate(48, 8);
         desc.set(JAVA_INT, 0, BedrayCoreLayouts.ABI_VERSION); desc.set(JAVA_INT, 4, 48);
-        desc.set(JAVA_LONG, 8, legacy); desc.set(JAVA_LONG, 16, scene); desc.set(JAVA_LONG, 24, apply);
+        desc.set(JAVA_LONG, 16, scene); desc.set(JAVA_LONG, 24, apply);
         desc.set(JAVA_LONG, 32, images); desc.set(JAVA_LONG, 40, buffers);
         return desc;
     }
@@ -46,7 +46,7 @@ public final class BedrayVolumetricNative implements AutoCloseable {
                                ByteBuffer constants, ByteBuffer march, ByteBuffer apply) {
         if (command == 0 || output == 0 || depth == 0 || tlas == 0 || sections == 0 || output == depth
             || sectionOffset < 0 || sectionBytes <= 0 || sectionBytes % 64 != 0 || width <= 0 || height <= 0
-            || (flags & ~(NATIVE_SCENE | RESET_HISTORY)) != 0)
+            || (flags & NATIVE_SCENE) == 0 || (flags & ~(NATIVE_SCENE | RESET_HISTORY)) != 0)
             throw new IllegalArgumentException("invalid volumetric frame inputs");
         var constantsMemory = payload(constants, FRAME_CONSTANTS_BYTES);
         var marchMemory = payload(march, MARCH_BYTES);

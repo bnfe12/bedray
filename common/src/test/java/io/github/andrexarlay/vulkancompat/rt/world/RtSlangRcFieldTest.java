@@ -74,14 +74,12 @@ class RtSlangRcFieldTest {
         }
     }
 
-    @Test void featureSelectionRequiresBothAotEntriesAndActualNativeSceneOwnership() throws Exception {
+    @Test void fieldSelectionRequiresBothAotEntries() throws Exception {
         String backend = source(WORLD + "NativePathTraceBackend.java");
-        assertTrue(backend.contains("RtConfig.SLANG_RADIANCE_CASCADES && (!RtConfig.SLANG_NATIVE_SCENE"));
         assertTrue(backend.contains("SlangPassLibrary.available(RtRadianceCascadesContract.BUILD)"));
         assertTrue(backend.contains("SlangPassLibrary.available(RtRadianceCascadesContract.TRACE)"));
         assertTrue(backend.contains("RtRadianceCascadesContract.requireBuilder(builder.manifest())"));
         String host = source(WORLD + "BedrayPathTraceNative.java");
-        assertTrue(host.contains("rc != null && (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE) == 0"));
         assertTrue(host.indexOf("library.configurePathTrace(") < host.indexOf("if (rc != null) rc.configure()"));
         assertFalse(backend.contains("new SlangProgram.Resource"));
         assertFalse(backend.contains("vkCmdDispatch"));

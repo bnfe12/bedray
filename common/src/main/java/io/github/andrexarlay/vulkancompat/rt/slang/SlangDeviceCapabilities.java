@@ -24,7 +24,6 @@ public final class SlangDeviceCapabilities {
         "synchronization2", BedrayCoreLayouts.CAP_SYNCHRONIZATION2,
         "timelineSemaphore", BedrayCoreLayouts.CAP_TIMELINE_SEMAPHORE,
         "dynamicRendering", BedrayCoreLayouts.CAP_DYNAMIC_RENDERING,
-        "micromap", BedrayCoreLayouts.CAP_OPACITY_MICROMAP,
         "shaderInt64", BedrayCoreLayouts.CAP_SHADER_INT64,
         "shaderStorageImageExtendedFormats", BedrayCoreLayouts.CAP_STORAGE_IMAGE_EXTENDED_FORMATS);
 

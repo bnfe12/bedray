@@ -355,13 +355,12 @@ under std430 because a nested struct with a `float3` rounds to 16 B. The ring is
 
 `restir/pt_spatial.slang` runs as its own pass after the trace, on a frame whose
 trace ran the temporal stage and with `path_restir_pt_spatial` on (default on,
-a child row of `path_restir_pt`). Two roots carry it, one per traversal backend
-like the trace: `passes/restir_pt_spatial.slang` (legacy section table) and
-`passes/restir_pt_spatial_scene.slang` (native scene table). Both declare the
+a child row of `path_restir_pt`). `passes/restir_pt_spatial_scene.slang` uses the
+native scene table. It declares the
 trace pass's own bindings by number - the TLAS, the section table, the three
 atlases, the frame block, the block-material table, the six entity buffers and
 the ring at 36, fourteen in all - and its own 112-byte push block, so the host
-records them from the views and push bytes it used for the trace
+records the pass from the views and push bytes it used for the trace
 (`RtPathTraceSlangPass.recordPtSpatial`).
 
 **Halves.** Each pixel reads its own record and four neighbours' records from the

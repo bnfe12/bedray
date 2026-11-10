@@ -17,7 +17,7 @@ namespace bedray::core {
 
 // Internal owner of the wired path-tracing frame:
 //
-//   path_trace.slang  ->  restir_spatial.slang (optional)  ->  path_display.slang
+//   path_trace_scene.slang  ->  restir_spatial.slang (optional)  ->  path_display.slang
 //     ->  frame_stats.slang (additive call, only when the host lends the program)
 //
 // The pass owns the radiance/motion/accumulation/history images and the
@@ -47,7 +47,7 @@ public:
         const BedrayPathTraceBuffer* stats_slot = nullptr);
 
     // The ReSTIR PT spatial stage per section table; 0 leaves that table without it.
-    BedrayStatus configure_pt(std::uint64_t program_pt_spatial, std::uint64_t program_pt_spatial_scene,
+    BedrayStatus configure_pt(std::uint64_t retired_program, std::uint64_t program_pt_spatial_scene,
         BedrayError* error);
 
     // Statistics stage of a recording the render call above just made: one
@@ -76,9 +76,9 @@ public:
     // with a dangling handle.
     [[nodiscard]] bool uses_program(std::uint64_t program) const noexcept {
         return program != 0
-            && (program == program_trace_ || program == program_trace_scene_
+            && (program == program_trace_scene_
                 || program == program_spatial_ || program == program_display_
-                || program == program_stats_ || program == program_pt_spatial_
+                || program == program_stats_
                 || program == program_pt_spatial_scene_
                 || (rc_field_ && rc_field_->uses_program(program)));
     }
@@ -116,12 +116,10 @@ private:
 
     BedrayCore* core_ = nullptr;
     DeviceFns fns_{};
-    std::uint64_t program_trace_ = 0;
     std::uint64_t program_trace_scene_ = 0;
     std::uint64_t program_spatial_ = 0;
     std::uint64_t program_display_ = 0;
     std::uint64_t program_stats_ = 0;
-    std::uint64_t program_pt_spatial_ = 0;
     std::uint64_t program_pt_spatial_scene_ = 0;
     std::uint32_t spatial_push_bytes_ = 0;
 
@@ -139,13 +137,13 @@ private:
     gpu::ImageView history_depth_view_[2]{};
     bool images_ready_ = false;
     bool images_initialized_ = false;
-    bool trace_guide_bindings_ = false, scene_guide_bindings_ = false;
-    bool trace_motion_bindings_ = false, scene_motion_bindings_ = false;
+    bool scene_guide_bindings_ = false;
+    bool scene_motion_bindings_ = false;
     bool scene_field_bindings_ = false;
     // The program declares the ReSTIR PT ring at binding 36; the core binds pt_dummy_ and clears the PT push bits.
-    bool trace_pt_binding_ = false, scene_pt_binding_ = false;
+    bool scene_pt_binding_ = false;
     // The program declares the stats slot at binding 37; the core binds the one-word entity scalar stand-in.
-    bool trace_stats_binding_ = false, scene_stats_binding_ = false;
+    bool scene_stats_binding_ = false;
     bool guide_dummies_initialized_ = false;
     std::array<gpu::ImageId, 3> guide_dummy_ids_{};
     std::array<gpu::ImageView, 3> guide_dummy_views_{};

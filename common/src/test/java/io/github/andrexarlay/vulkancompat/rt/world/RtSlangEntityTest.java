@@ -23,12 +23,12 @@ class RtSlangEntityTest {
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String ENTITY = SHADERS + "/traversal/entity_geometry.slang";
-    private static final String TRAVERSAL = SHADERS + "/traversal/legacy_section_traversal.slang";
+    private static final String TRAVERSAL = SHADERS + "/traversal/scene_traversal.slang";
     private static final String CONTRACT_TRAVERSAL = SHADERS + "/contracts/scene_tracer.slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
     private static final String DISPLAY = SHADERS + "/passes/path_display.slang";
     private static final String SURFACE = SHADERS + "/surface/surface.slang";
-    private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
     private static final String ENTRY = SHADERS + "/pathtrace/path_trace_entry.slang";
     private static final String HOST_PASS =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java";
@@ -66,10 +66,12 @@ class RtSlangEntityTest {
         assertTrue(decode.contains("if (entityInstance(instanceId)) {"), "the entity ring is decoded before the section table");
         assertTrue(decode.contains("return entityHitToSurface(entities, cameraAnchor, ray, instanceId, primitiveId, bary, t);"),
             "through the entity decoder, which never indexes a section");
-        String sectionDecode = block(traversal,
-            "SurfaceHit legacyHitToSurface(StructuredBuffer<LegacySection> sections, Ray ray,");
-        assertTrue(sectionDecode.contains("if (entityInstance(instanceId)) return result;"),
-            "and the section decoder refuses an entity id, so a routing bug reads a freed table entry instead of writing one");
+        String sectionDecode = block(read(SHADERS + "/traversal/hardware_traversal.slang"),
+            "SurfaceHit hardwareHitToSurface(GeometryProvider geometry, Ray ray,");
+        assertTrue(sectionDecode.indexOf("if (instanceId >= sectionCount) return result;") >= 0
+                && sectionDecode.indexOf("if (instanceId >= sectionCount) return result;")
+                    < sectionDecode.indexOf("geometry.sections[instanceId]"),
+            "the section decoder checks the bound table before indexing it");
     }
 
     /**

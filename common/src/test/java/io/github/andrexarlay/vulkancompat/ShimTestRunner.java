@@ -284,24 +284,6 @@ public class ShimTestRunner {
         io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideForTesting(true);
         assertTrue(io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isHardwareRayTracingSupported(), "Override true must enable support");
 
-        // 5. Opacity micromap probe: extension gate is headless-testable; device feature path must not throw without a device
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.reset();
-        io.github.andrexarlay.vulkanbridge.core.VulkanBackendDetector.setVulkanActive(true);
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setCachedDeviceExtensionsForTesting(java.util.Set.of(
-            "VK_KHR_acceleration_structure", "VK_KHR_ray_query", "VK_KHR_buffer_device_address", "VK_KHR_deferred_host_operations"
-        ));
-        assertTrue(!io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isOpacityMicromapSupported(), "OMM probe must be false when the extension is absent");
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setCachedDeviceExtensionsForTesting(java.util.Set.of(
-            "VK_KHR_acceleration_structure", "VK_KHR_ray_query", "VK_KHR_buffer_device_address", "VK_KHR_deferred_host_operations",
-            io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.EXT_OPACITY_MICROMAP
-        ));
-        assertTrue(!io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isOpacityMicromapSupported(), "OMM probe must be false headless (no physical device resolvable)");
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideOpacityMicromapForTesting(true);
-        assertTrue(io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isOpacityMicromapSupported(), "OMM override true must win");
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideOpacityMicromapForTesting(false);
-        assertTrue(!io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.isOpacityMicromapSupported(), "OMM override false must win");
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideOpacityMicromapForTesting(null);
-
         io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.reset();
     }
 

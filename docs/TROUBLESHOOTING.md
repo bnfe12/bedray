@@ -17,7 +17,7 @@ First: reproduce on a clean instance with only Sodium and Bedray. Keep `logs/lat
 | DLSS is listed as "GPU not supported" | DLSS needs an NVIDIA RTX GPU and a current driver. |
 | Frame generation unavailable | See the table in [FRAME_GENERATION.md](FRAME_GENERATION.md). |
 | Path Tracing looks grainy | Normal while moving. Install NRD or use DLSS Ray Reconstruction (NVIDIA), or keep accumulation on and stand still. |
-| Out of memory, stutter, device lost | Lower the render distance and "RT Memory Budget", use a lower RT Quality, render the world smaller with an upscaler. |
+| Out of memory, stutter, device lost | Lower the render distance or RT Quality. |
 | Very low FPS | Use a lower RT Quality or Off; ray and path tracing are expensive. Check the F3 Bedray block for the render resolution and the active upscaler. |
 | Image flipped, offset or wrong size after changing the upscaler | Restart; report with a screenshot and log. |
 | Black or white screen in Path Tracing | Report with the "RT Debug Buffer" screenshots (Page 3) and the log. |

@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Host-side contract of {@code passes/path_trace.slang}. These tests run without a Vulkan device: they pin the two
+ * Host-side contract of {@code passes/path_trace_scene.slang}. These tests run without a Vulkan device: they pin the two
  * packed blocks the host fills, and check the host's expectations against the generated manifest. They do not prove a
  * dispatch works on a GPU.
  */
@@ -203,7 +203,7 @@ class RtPathTraceSlangPassTest {
     @Test
     void hostExpectationsMatchTheGeneratedManifest() {
         Assumptions.assumeTrue(SlangPassLibrary.available(RtPathTraceSlangPass.PASS_NAME),
-            "path_trace.slang was not compiled into this build");
+            "path_trace_scene.slang was not compiled into this build");
         SlangPassManifest manifest = SlangPassLibrary.load(RtPathTraceSlangPass.PASS_NAME).orElseThrow().manifest();
 
         assertEquals(RtPathTraceSlangPass.PUSH_BYTES, manifest.pushConstantBytes(), "push block");

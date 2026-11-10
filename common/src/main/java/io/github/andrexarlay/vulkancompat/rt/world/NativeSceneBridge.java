@@ -24,10 +24,10 @@ import java.util.Map;
  * <p>The scene never creates a device, submits or waits.  It records uploads,
  * BLAS/TLAS builds and barriers into the command buffer {@link RtWorld} already
  * has, and publishes the TLAS plus the section-table buffer this class hands to
- * the path trace pass as a borrowed {@link RtMemory.Buf}.
+ * the path trace pass as a borrowed {@link RtFrameBindings.SectionTable}.
  *
  * <p>Java paces CPU captures and serializes POD input. C++ is the sole owner of
- * AS builds and scene GPU resources in native mode. Update failures remain queued
+ * AS builds and scene GPU resources. Update failures remain queued
  * and propagate to the host; geometry is never silently omitted.
  *
  * <p>Lifetime: every prepared frame is queued on the host encoder's destruction
@@ -43,7 +43,7 @@ import java.util.Map;
 final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sink {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
 
-    /** AOT program that decodes the native record; the bridge is pointless without it. */
+    /** AOT program that decodes the native scene record. */
     static final String SCENE_PASS = "path_trace_scene";
 
     /**
@@ -58,7 +58,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     private static final long MAX_GEOMETRY_BYTES = 48L << 20;
     private static final long ENTITY_ID = 1L;
     private static final long LOG_ACTIVE_NANOS = 2_000_000_000L;
-    /** {@code HARDWARE_INSTANCE_MASK_ENTITIES}: the same bit the legacy entity TLAS instance carries. */
+    /** {@code HARDWARE_INSTANCE_MASK_ENTITIES}. */
     private static final int ENTITY_INSTANCE_MASK = 0x02;
     private static final float[] IDENTITY_TRANSFORM = {
         1f, 0f, 0f, 0f,
@@ -82,9 +82,8 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     private long nextRevision = 1;
     private boolean entityPresent;
     private long tlas;
-    private RtMemory.Buf table;
+    private RtFrameBindings.SectionTable table;
     private int sectionCount;
-    private boolean activeThisFrame;
     private long lastLogNanos;
     private long lastInstances;
     private int lastBlasBuilds;
@@ -92,6 +91,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     private double lastViewX;
     private double lastViewY;
     private double lastViewZ;
+    private boolean sceneDestroyed;
     private boolean closed;
 
     private NativeSceneBridge(BedraySceneNative library, long scene) {
@@ -100,19 +100,16 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         this.recordings = new SceneFrameRecordings(scene);
     }
 
-    /**
-     * Loads the optional scene exports from the already validated core DLL.
-     * Returns null (with one log line) when the feature is unavailable; the caller
-     * keeps the legacy scene in that case.
-     */
+    /** Loads the required scene exports from the selected core DLL. */
     static NativeSceneBridge create(SlangRuntime runtime) {
         if (runtime == null) {
-            return null;
+            throw new RtFailure("scene_init", "Slang runtime is unavailable");
         }
         if (!SlangPassLibrary.available(SCENE_PASS)) {
-            LOGGER.warn("[VKB-RT] vkbridge.rt.nativeScene=true but AOT pass {} is missing from the jar;"
-                + " keeping the Java scene", SCENE_PASS);
-            return null;
+            throw new RtFailure("scene_init", "required AOT pass " + SCENE_PASS + " is missing from the JAR");
+        }
+        if (!runtime.library().hasNativeSceneOnlyPathTrace()) {
+            throw new RtFailure("scene_init", "replace bedray_core.dll with the version bundled for this Bedray build");
         }
         BedraySceneNative library = null;
         long scene = 0;
@@ -130,22 +127,19 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
                 RtConfig.MAX_INSTANCES, MAX_GEOMETRY_BYTES >> 20, Integer.toHexString(features),
                 (capabilities & BedraySceneLayouts.CAP_AS_UPDATE) != 0);
             return new NativeSceneBridge(library, scene);
-        } catch (RuntimeException e) {
-            LOGGER.error("[VKB-RT] native scene unavailable: {}; keeping the Java scene", e.getMessage(), e);
+        } catch (RuntimeException | LinkageError e) {
             if (library != null) {
                 if (scene != 0) {
                     try { library.destroy(scene); }
-                    catch (RuntimeException cleanup) { e.addSuppressed(cleanup); }
+                    catch (RuntimeException | LinkageError cleanup) { e.addSuppressed(cleanup); }
                 }
                 try {
                     library.close();
-                } catch (RuntimeException closeFailure) {
+                } catch (RuntimeException | LinkageError closeFailure) {
                     e.addSuppressed(closeFailure);
                 }
             }
-            if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure
-                && nativeFailure.status() == io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts.STATUS_DEVICE_LOST) throw e;
-            return null;
+            throw new RtFailure("scene_init", e.getMessage(), e);
         }
     }
 
@@ -157,14 +151,14 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
 
     /** True while the native scene owns the TLAS and the table the path tracer binds. */
     boolean activeThisFrame() {
-        return activeThisFrame;
+        return tlas != 0L;
     }
 
     long tlas() {
         return tlas;
     }
 
-    RtMemory.Buf sectionTable() {
+    RtFrameBindings.SectionTable sectionTable() {
         return table;
     }
 
@@ -250,10 +244,8 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
      * Applies the queued section updates, records this frame's native builds into
      * {@code commandBuffer} and republishes the TLAS/table handles.
      *
-     * <p>{@code camX/Y/Z} is the raw camera position the legacy TLAS anchors on.
-     * The renderer traces camera-relative rays, so the scene has to place every
-     * static section at {@code origin - camera}; a frame that skips this call
-     * piles all section-local geometry at the origin instead.
+     * <p>The renderer traces camera-relative rays. The native scene places each
+     * static section at its world origin minus the raw camera position.
      */
     void prepareFrame(long commandBuffer, long frameIndex, double camX, double camY, double camZ) {
         recordings.prepare(commandBuffer, frameIndex, recording -> {
@@ -263,19 +255,20 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
             // RtFrameRenderer attaches one completion callback AFTER execute accepts
             // this command buffer. Scene and compute resources share that proof.
             BedraySceneNative.Resources resources = library.queryResources(scene);
-            tlas = resources.tlas();
-            sectionCount = resources.sectionCount();
             long handle = resources.sectionTableBuffer();
             long bytes = resources.sectionTableBytes();
-            if (handle == 0L || bytes <= 0L) {
-                table = null;
-            } else if (table == null || table.handle != handle || table.size != bytes) {
-                // Borrowed: the scene retires the buffer only after referencing frames
-                // complete or are discarded; the host must not destroy it through RtMemory. The
-                // flag is also what tells the Slang path which program to dispatch.
-                table = new RtMemory.Buf(handle, 0L, bytes, resources.sectionTableAddress(), 0L, false, true);
+            if (info.tlas() != resources.tlas() || (info.tlas() != 0L && (handle == 0L || bytes <= 0L))) {
+                throw new RtFailure("scene_prepare", "native TLAS and section table do not describe the same frame");
             }
-            activeThisFrame = info.tlas() != 0L;
+            if (info.tlas() == 0L) {
+                table = null;
+            } else if (table == null || table.handle() != handle || table.bytes() != bytes) {
+                // Borrowed: the scene retires the buffer only after referencing frames
+                // complete or are discarded.
+                table = new RtFrameBindings.SectionTable(handle, bytes);
+            }
+            tlas = info.tlas();
+            sectionCount = resources.sectionCount();
             lastViewX = camX;
             lastViewY = camY;
             lastViewZ = camZ;
@@ -287,11 +280,10 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     }
 
     /**
-     * One line every couple of seconds while the scene owns the frame, so a run
-     * log shows the native TLAS carrying sections rather than the Java fallback.
+     * One line every couple of seconds while the scene has a TLAS.
      */
     private void logActivePeriodically() {
-        if (!activeThisFrame) {
+        if (!activeThisFrame()) {
             return;
         }
         long now = System.nanoTime();
@@ -303,7 +295,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         LOGGER.info("[VKB-RT] native_scene active sections={} instances={} tlas=0x{} table={}B view=({}, {}, {}) "
                 + "window_frames={} blas_builds={} blas_refits={} tlas_builds={} tlas_updates={} "
                 + "cow_frames={} deferred_updates={} entity_topology={} entity_triangles={}",
-            sectionCount, lastInstances, Long.toHexString(tlas), table == null ? 0L : table.size,
+            sectionCount, lastInstances, Long.toHexString(tlas), table == null ? 0L : table.bytes(),
             lastViewX, lastViewY, lastViewZ, work.frames(), work.blasBuilds(), work.blasRefits(),
             work.tlasBuilds(), work.tlasUpdates(), work.copyOnWriteFrames(), work.deferredUpdates(),
             entityTopology.revision(), entityTriangles);
@@ -321,7 +313,6 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
 
     void discardRecording(long commandBuffer) {
         if (!recordings.release("discard_frame", commandBuffer, frame -> library.discardFrame(scene, frame))) return;
-        activeThisFrame = false;
         tlas = 0;
         table = null;
     }
@@ -359,19 +350,21 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         if (closed) {
             return;
         }
-        releaseAllFrames();
-        library.destroy(scene);
+        if (!sceneDestroyed) {
+            releaseAllFrames();
+            library.destroy(scene);
+            sceneDestroyed = true;
+            tlas = 0L;
+            table = null;
+            sectionCount = 0;
+        }
         library.close();
         closed = true;
-        tlas = 0L;
-        table = null;
-        sectionCount = 0;
-        activeThisFrame = false;
     }
 
     @Override
     public String toString() {
         return "NativeSceneBridge[sections=" + sectionIds.size() + ", frames=" + recordings.pendingCount()
-            + (activeThisFrame ? ", active" : ", idle") + "]";
+            + (activeThisFrame() ? ", active" : ", idle") + "]";
     }
 }

@@ -24,7 +24,7 @@ class BedraySceneGeometryTest {
             new ByteBuffer[]{solid, null, translucent});
         try (Arena arena = Arena.ofConfined()) {
             var section = BedraySceneGeometry.build(decoded,
-                new int[]{RtWorld.VEGETATION_BIT, 0, RtWorld.VEGETATION_BIT | RtWorld.LEAF_CUBE_BIT}, arena, 7, 11);
+                new int[]{BedraySceneGeometry.VERTEX_FLAG_VEGETATION, 0, BedraySceneGeometry.VERTEX_FLAG_VEGETATION | BedraySceneGeometry.VERTEX_FLAG_LEAF_CUBE}, arena, 7, 11);
             assertEquals(12, section.vertexCount());
             assertEquals(18, section.indexCount());
             assertEquals(2, section.geometryCount());

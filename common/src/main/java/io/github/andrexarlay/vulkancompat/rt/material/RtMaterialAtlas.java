@@ -54,26 +54,6 @@ public final class RtMaterialAtlas {
     private int bakedH = -1;
     private MaterialAtlasBaker.Result last;
 
-    /**
-     * Render-thread observer of the bake for the opacity micromap cache: epoch boundaries and every finished sprite
-     * (with its albedo alpha and animated flag) so cutout texels can be classified. All methods run on the render
-     * thread, never on the bake worker.
-     */
-    public interface MicromapSink {
-        void onEpochStart();
-
-        void onSpriteBaked(int x0, int y0, int w, int h, int[] material, byte[] alpha, boolean animated,
-                           int atlasWidth, int atlasHeight);
-
-        void onEpochFinished();
-    }
-
-    private volatile MicromapSink micromapSink;
-
-    public void setMicromapSink(MicromapSink sink) {
-        this.micromapSink = sink;
-    }
-
     /** CPU-side atlas: the source of truth for uploads; the live arrays are shared with the emitters via {@link #last}. */
     private int[] cpuMaterial;
     /**
@@ -239,9 +219,6 @@ public final class RtMaterialAtlas {
         // a live Result from the first epoch frame: the emitters read the same arrays and refresh once at the end
         last = new MaterialAtlasBaker.Result(width, height, cpuMaterial, cpuNormal, sprites.size(), 0, 0, 0, 0, 0, 0.0);
         pendingEpoch = e;
-        if (micromapSink != null) {
-            micromapSink.onEpochStart();
-        }
         if (worker == null) {
             worker = new Thread(this::workerLoop, "VKB-RT-MaterialBake");
             worker.setDaemon(true);
@@ -258,10 +235,9 @@ public final class RtMaterialAtlas {
                 continue;
             }
             pendingEpoch = null;
-            boolean wantAlpha = micromapSink != null;
             TextureAtlasSprite s;
             while (!e.cancelled && !shutdown && (s = e.queue.poll()) != null) {
-                MaterialAtlasBaker.SpriteBake b = MaterialAtlasBaker.bakeSprite(s, e.width, e.height, e.resources, wantAlpha, e.optics);
+                MaterialAtlasBaker.SpriteBake b = MaterialAtlasBaker.bakeSprite(s, e.width, e.height, e.resources, e.optics);
                 if (b == null) {
                     e.errors++;
                     continue;
@@ -327,12 +303,6 @@ public final class RtMaterialAtlas {
             int id = OpticalMaterials.profileId(lookup[y * e.width + x]);
             return palette.cullsGlass(id) ? id : 0;
         });
-        if (micromapSink != null) {
-            for (MaterialAtlasBaker.SpriteBake b : batch) {
-                micromapSink.onSpriteBaked(b.x0(), b.y0(), b.w(), b.h(), b.material(), b.alpha(), b.animated(),
-                    e.width, e.height);
-            }
-        }
         uploadSprites(cmd, batch);
         return true;
     }
@@ -345,9 +315,6 @@ public final class RtMaterialAtlas {
         bakedW = e.width;
         bakedH = e.height;
         epoch = null;
-        if (micromapSink != null) {
-            micromapSink.onEpochFinished();
-        }
         LOGGER.info(String.format(Locale.ROOT,
             "[VKB-RT] materials baked atlas=%dx%d sprites=%d labpbr_s=%d labpbr_n=%d auto_normals=%d emissive_sprites=%d metal_sprites=%d errors=%d ms=%.1f (progressive)",
             e.width, e.height, last.sprites(), e.labS, e.labN, e.autoN, e.emissive, e.metal, e.errors, ms));

@@ -20,15 +20,11 @@ Existing-feature transfers in the current working tree:
   Frame age is no longer used as temporal SDK completion evidence. Four unused
   pre-integration upscaler/CPU velocity stubs are deleted.
 
-* Sodium compact-vertex decoding now uses `passes/sodium_dequantize.slang` AOT
-  and a core-owned pipeline instead of Shaderc/Java pipeline creation. It keeps
-  the planar arena contract and the compute-to-AS/attribute-read dependencies.
-  It requires the enabled BDA and shaderInt64 features of the current RT path.
-  Descriptor-free dispatches retain one program use per command buffer until
-  host-proven completion/discard. Opt-in native scene mode owns scene allocation
-  and BLAS/TLAS builds; the Java scene remains the reference/default. World
-  construction rolls back allocated resources on
-  failure before publishing the world.
+* The native scene owns GPU scene allocations, BLAS/TLAS builds and the scene
+  table. The Java host decodes Sodium section meshes, captures entities and
+  supplies copied geometry to the scene ABI embedded in `bedray_core.dll`.
+  Each recording retains its native scene generation until host-proven
+  completion or discard. World construction rolls back allocations on failure.
 * Spatial ReSTIR's existing two checker phases are recorded through one native
   `bedray_core_render_phases` call. C++ owns the phase-word updates and barriers;
   Java supplies scene resources and the initial parameters. The native coarse
@@ -107,19 +103,8 @@ intervals are skipped. The shader harness in
 `common/src/test/resources/shaders/slang/verify_scene_tracer.slang` checks generic
 code generation only; it does not execute a GPU dispatch or prove visual output.
 
-The typed Radiance Cascades atlas has the same kind of harness in
-`common/src/test/resources/shaders/slang/verify_rc_typed.slang`. It instantiates
-the typed store API against both `RWStructuredBuffer<RCSegment>` and
-`StructuredBuffer<RCSegment>`; it is a compile check, not a stride, layout or
-runtime test. The legacy float4 atlas is a different record format and is not
-imported there. `verify_rc_environment.slang` keeps the opt-in environment
-policy reachable: the default is `Disabled`, a zero boundary is rejected, a
-short window cannot add sky, and a positive boundary that `tFar` reaches can.
-`verify_rc_trace_api.slang` instantiates every public typed trace entry with
-mock backends, including the provisional history and ownership proposal.
-`verify_bedray_roots.slang` compiles the curated `bedray.slang` and the opt-in
-`bedray_legacy.slang` together so the typed and legacy resolve names cannot
-silently converge. `verify_water.slang` compiles `surface/water.slang` on its own
+`verify_bedray_roots.slang` checks the curated `bedray.slang` import and typed RC transport.
+`verify_water.slang` compiles `surface/water.slang` on its own
 and reads every public entry the surface decoder and the path tracer use: both
 slope overloads, the wave normal on the top, underside and vertical faces, the
 biome tint, the fluid classification predicate, and the medium (extinction per
@@ -178,9 +163,8 @@ re-captured live before a jar ships. A compile or a test is not a frame.
    reintroduce a runtime GLSL compile in the renderer (see
    `ShadercSurfaceTest`).  No first-party GLSL ships any more: the Iris depth
    converter reads the AOT `iris_depth` pass through `SlangPass`, and
-   `shaders/glsl/` is empty.  What survives Shaderc is not the renderer: the
-   Iris pack host (user-supplied GLSL), plus the one-shot opacity-micromap probe
-   in `RtExtensionProbe`. FSR1/NIS use AOT Slang; their historical GLSL hosts
+   `shaders/glsl/` is empty. The Iris pack host uses shaderc for user-supplied GLSL.
+   FSR1/NIS use AOT Slang; their historical GLSL hosts
    exist only under test resources.
 6. **No binaries in git.**  SDKs, generated SPIR-V, DLLs and JARs stay out of
    the repository.  `*.spv`, `*.exe`, `*.dll` and `*.jar` are already ignored.
@@ -251,7 +235,6 @@ directory are gitignored; `BedrayCoreLocator` finds the installed DLL through
 ```
 common/src/main/resources/shaders/slang/
 ├── bedray.slang                       root: curated typed public surface
-├── bedray_legacy.slang                opt-in legacy compatibility root
 ├── contracts/
 │   ├── contracts.slang                aggregate import
 │   ├── frame.slang                    FrameConstants, CameraState, SunState
@@ -265,7 +248,7 @@ common/src/main/resources/shaders/slang/
 │   ├── traversal.slang                ISceneTracer
 │   ├── voxel_traversal.slang          BitmaskVoxelTraversal + VoxelWorld
 │   ├── hardware_traversal.slang       HardwareTraversal (VK_KHR_ray_query)
-│   ├── legacy_section_traversal.slang LegacySectionTraversal (RtWorld 64-byte table + device-address arena)
+│   ├── scene_traversal.slang          SceneTraversal (native scene TLAS and 64-byte GeometrySection table)
 │   ├── entity_geometry.slang          the captured entity ring: triangle decode, atlas texels, part flags, motion
 │   └── hybrid_traversal.slang         HybridTraversal<V, H>
 ├── voxel/
@@ -291,23 +274,14 @@ common/src/main/resources/shaders/slang/
 ├── radiance_cascades/
 │   ├── rc_atlas_layout.slang          shared atlas addressing (record-format neutral)
 │   ├── interval_transport.slang       RCSegment, validity flags, front-to-back composition
-│   ├── segment_record.slang           typed whole-record read/write and ray composition
-│   ├── probe_resolve.slang            typed probe radiance and completeness
-│   ├── segment_store.slang            facade over segment_record + probe_resolve
 │   ├── rc_trace_options.slang         trace options, events, result, entry status, environment policy
 │   ├── rc_trace_shade.slang           first-surface emission + NEE
 │   ├── rc_trace_walk.slang            segment finalization + interval walk
-│   ├── rc_trace_dispatch.slang        store, probe and dispatch entries
-│   ├── rc_trace_history.slang         provisional temporal history (opt-in)
-│   ├── rc_trace_ownership.slang       distance-band proposal (opt-in)
-│   ├── rc_trace.slang                 public facade over the six rc_trace_* modules
-│   ├── legacy_float4_store.slang      legacy float4 record + confidence-weighted resolve
-│   ├── radiance_cascades_store.slang  legacy compatibility facade
-│   └── rc_trace_segments.slang        obsolete experiment, not exported, not compiled by default
+│   ├── field_mapping.slang            finite-window cubemap layout
+│   ├── field_transport.slang          trace, reconstruct and blend field records
+│   └── field_gather.slang             diffuse continuation gather
 ├── radiance_cascades.slang            cascade/probe/ray addressing (existing)
-├── types.slang, bindings.slang        legacy 1:1 scaffold, kept as reference
-├── sampling.slang, brdf.slang         pure math, still used by the new modules
-├── tonemap.slang, ray_backend.slang   legacy scaffold, kept as reference
+├── sampling.slang                    random sampling math
 ├── tonemap_curve.slang                peak-channel tone curve shared by bloom apply
 ├── bloom/
 │   └── bloom.slang                    bloom + sun-glare behaviour, no stage switch
@@ -322,13 +296,12 @@ common/src/main/resources/shaders/slang/
     ├── velocity_reproject.slang       G-buffer reprojection for that mean
     ├── ssr.slang                      screen-space reflections
     ├── particles_composite.slang      particle layer over the composite
-    ├── volumetric_march.slang         volumetric radiance cascades
+    ├── volumetric_march_scene.slang   volumetric radiance cascades over the native scene
     ├── volumetric_apply.slang
-    ├── path_trace.slang               first path-trace entry over LegacySectionTraversal
+    ├── path_trace_scene.slang         path-trace entry over SceneTraversal
     ├── path_display.slang             exposure, tone map, accumulation of the path radiance
-    ├── restir_spatial.slang           neighbour pooling over the reservoirs path_trace wrote
-    ├── restir_pt_spatial.slang        ReSTIR PT neighbour pooling into the half the next frame imports
-    └── restir_pt_spatial_scene.slang  the same over the native scene table
+    ├── restir_spatial.slang           neighbour pooling over the DI reservoirs
+    └── restir_pt_spatial_scene.slang  ReSTIR PT neighbour pooling into the half the next frame imports
 ```
 
 `passes/` is the AOT entry-point root: `compileSlang` compiles every
@@ -386,8 +359,8 @@ hardware paths agree on foliage and glass.
 |---|---|---|---|
 | Bloom + sun glare | `bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` -> coarse native `BloomPass` | C++ owns mip images, descriptor/push packing, dispatch/barriers and exact retirement; programs/samplers remain runtime-owned. L1/L2, no live validation. |
 | Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `restir_pt_spatial`, `restir_pt_spatial_scene`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
-| Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
+| Path tracing | `path_trace_scene`, `restir_spatial`, `restir_pt_spatial_scene`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Both backends use the native scene and immutable host capture. The native path-trace group owns its images, uploads, DI history and graph scheduling. Seven DLSS-RR guides and the NRD motion buffer are forwarded when the matching native exports are available. |
+| Volumetric shafts | `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history, uploads, dispatches and barriers. Visibility traces the world instance mask. The pass requires a zero bob origin. |
 | Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
 
 The host addresses bindings by Slang parameter name (`srcTex`, `dstImg`,
@@ -406,7 +379,7 @@ before the first dispatch.
 |---|---|---|
 | `tlas` | 0 | the frame TLAS (`ACCELERATION_STRUCTURE_KHR`) |
 | `outImage` | 1 | **new** RGBA16F storage image (`STORAGE_BIT \| SAMPLED_BIT`), linear radiance — not the legacy RGBA8 display target |
-| `sections` | 2 | the existing 64-byte-per-slot `RtWorld` section table |
+| `sections` | 2 | 64-byte `GeometrySection` records published by the native scene |
 | `albedoAtlas` | 3 | block atlas sampler (legacy binding 3) |
 | `outMotion` | 5 | RGBA16F storage image the tracer owns, sized with the radiance: rgb is the primary surface's own displacement from last frame, `a` marks it as a moving entity part; `path_display` binds the same image as `motion` |
 | `materialAtlas` | 9 | LabPBR `_s` sampler (legacy binding 9) |
@@ -414,7 +387,7 @@ before the first dispatch.
 | `outDepth` | 12 | R32F storage image; ray distance from the eye (`camera.origin`) to the first hit, `1e6` on a miss - not view depth (see the `outDepth` contract) |
 | `frame` | 16 | 608-byte `FrameConstants` uniform buffer, one upload per frame |
 | `blockMaterials` | 17 | dummy `BlockMaterial` table until voxel materials exist: allocate at least one 64-byte element and push `materialCount = 0` |
-| `emitters` | 18 | the `RtEmitters` ring buffer bound at the current segment offset — the same 96-byte records the legacy `rt_path.comp` reads, so one upload serves both paths; a dummy element when the list is empty |
+| `emitters` | 18 | the immutable `RtEmitters` publication for this recording, including emitter records and its sampling tables |
 | `reservoirs` | 19 | the ReSTIR DI ring of `RtSlangPathPass`: two halves of one 64-byte `DIReservoir` per pixel (`2 * width * height * 64`), zeroed when the light list or the render size changes; a one-record dummy when the branch is off |
 | `entityPositions` | 20 | this frame's ring slot of captured vertex positions, 12 bytes per vertex (a `float3` as three float bit-patterns), bound for `frameVertices` elements |
 | `entityIndices` | 21 | this frame's ring slot of triangle indices, three `uint` per primitive; the bound length is the triangle count the decoder reads |
@@ -486,14 +459,10 @@ session — until they are.  The Slang volumetric passes are connected:
 is selected with fog on, and a march that refuses to register sets
 `shaftsUnavailable` (one warning, no shafts) instead of failing the frame.
 
-`volumetric_march` binding 2 reads `LegacySection` through `LegacySectionTraversal`,
-while the native scene publishes a different `GeometrySection` record although both
-are 64 bytes.  That is answered by its own reviewed entry:
-`volumetric_march_scene.slang` binds the native table as `StructuredBuffer<GeometrySection>`
-and traces the world-only instance mask, and `RtSlangVolumetricPass` hands both
-march programs to the core, which selects one from
-`BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE`.  Record size is never by itself a reason to
-rebind one table to the other's descriptor.
+`volumetric_march_scene.slang` binds the native table as
+`StructuredBuffer<GeometrySection>` and traces the world-only instance mask.
+`RtSlangVolumetricPass` supplies the march and apply programs to the core.
+The frame uses `BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE` to identify the scene table contract.
 
 #### Native C++ path-trace pass (opt-in)
 
@@ -549,8 +518,8 @@ Selection: `-Dvkbridge.rt.nativePathTrace=true`
 (`RtConfig.SLANG_PATH_TRACE_CPP`) uses the native pass only when the loaded DLL
 exports the coarse pass and NATIVE_DI support. An explicitly requested native
 path reports a mismatched DLL as unsupported. The switch is off by default
-until owner live evidence exists. The embedded native scene is connected and
-selects `path_trace_scene` through the native-scene frame flag.
+until owner live evidence exists. Both recording backends use `path_trace_scene`
+and the native scene embedded in the renderer core.
 
 Depth keeps the legacy sentinel: bloom treats `depth >= 1e5` as sky
 (`BLOOM_SKY_DISTANCE`), and the path-trace entry writes `1e6` whenever the
@@ -1157,11 +1126,11 @@ candidates, not a validated or active runtime.
 
 | Algorithm | Module | State |
 |---|---|---|
-| ReSTIR DI | `restir/restir_di.slang` | reservoir storage, initial sample, temporal/spatial merge, occlusion feedback, raw and material-filtered visibility resolve; both stages now run as AOT passes (`path_trace.slang` temporal, `restir_spatial.slang` pooling) |
-| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/field_mapping.slang`, `field_gather.slang`, `field_transport.slang`, `passes/rc_field_build_scene.slang`, `passes/rc_path_trace_scene.slang` | v2 finite-window field integrated into the native path-trace group: `rc_field_build_scene` builds five haloed cubemap levels (terminal trace, then reconstruct 3→0 with compose-before-average bridges) and `rc_path_trace_scene` gathers reflected direct light for a primary diffuse continuation; the core records five dependent dispatches, a 288-byte metadata UBO and the 32-byte-per-cell tails (bindings 34/35) under a 192 MiB default budget. Switch `-Dvkbridge.rt.radianceCascades=true`, which requires `nativePathTrace` + `nativeScene` and both AOT entries; the axis is `-Dvkbridge.rt.rcBaseAxis` (8/16/32). Temporal field reuse: each cell blended with the previous consecutive field (builder binding 38, weight 0.8, 288-byte metadata). The v1 typed atlas (`rc_probe_trace.slang`) is host-agnostic source, not the field the renderer dispatches, and its legacy float4 resolve must not be wired to the typed atlas. Evidence is the native contract plus `RtSlangRcFieldTest`; no owner-verified frame yet. |
-| ReSTIR PT | `experimental/restir_pt.slang`, `restir/pt_temporal.slang`, `restir/pt_spatial.slang`, `restir_pt_spatial(_scene)` | Temporal and optional spatial stages are integrated in the Java reference backend and the native core. Native owns the two-half 144-byte reservoir ring through NATIVE_PT and `configure_path_trace_pt`; the feature is default off and budgeted. Primary diffuse eligibility, change of measure, attempt accounting and first-frame invariants have CPU/source tests. Runtime/GPU acceptance and exit from experimental status remain open; see MIGRATION_STATUS.md and RESTIR_GI_DERIVATION.md. |
-| Path tracing | `path_trace`, `path_trace_scene`, `restir_spatial`, `restir_pt_spatial`, `restir_pt_spatial_scene`, `path_display` | Controller -> ReferencePathTraceBackend or opt-in NativePathTraceBackend | Native scene/AS and immutable host capture are integrated. Native mode owns private images/uploads, DI/history/parity, opaque graph scheduling and exact completion/discard. Seven DLSS-RR guides and the NRD motion buffer are forwarded by additive calls when the matching native features/exports are available. Unsupported states are reported explicitly; there is no GLSL fallback. L1/L2, no live validation. |
-| Volumetric shafts | `volumetric_march`, `volumetric_march_scene`, `volumetric_apply` | `RtSlangVolumetricPass` -> coarse native `VolumetricPass` | C++ owns history/uploads, two dispatches and barriers. Native/legacy scene tables remain distinct; visibility is world-only and nonzero bob origin is explicitly unsupported. L1/L2, no live validation. |
+| ReSTIR DI | `restir/restir_di.slang` | Reservoir storage, initial sampling, temporal merge in `path_trace_scene.slang`, and spatial pooling in `restir_spatial.slang`. |
+| Radiance Cascades | `radiance_cascades.slang`, `radiance_cascades/field_mapping.slang`, `field_gather.slang`, `field_transport.slang`, `passes/rc_field_build_scene.slang`, `passes/rc_path_trace_scene.slang` | The native path-trace group builds five haloed cubemap levels and gathers reflected direct light for a primary diffuse continuation. Enable `-Dvkbridge.rt.radianceCascades=true` with `nativePathTrace` and both RC AOT entries. Set `-Dvkbridge.rt.rcBaseAxis` to 8, 16 or 32. The field blends with its previous consecutive version at weight 0.8 and uses a default 192 MiB budget. See [RC reconstruction](RC_RECONSTRUCTION_PLAN.md). |
+| ReSTIR PT | `experimental/restir_pt.slang`, `restir/pt_temporal.slang`, `restir/pt_spatial.slang`, `restir_pt_spatial_scene` | Temporal and optional spatial stages are integrated in the Java reference backend and the native core. Native owns the two-half 144-byte reservoir ring through NATIVE_PT and `configure_path_trace_pt`; the feature is default off and budgeted. Primary diffuse eligibility, change of measure, attempt accounting and first-frame invariants have CPU/source tests. Runtime/GPU acceptance and exit from experimental status remain open; see MIGRATION_STATUS.md and RESTIR_GI_DERIVATION.md. |
+| Path tracing | `path_trace_scene`, `restir_spatial`, `restir_pt_spatial_scene`, `path_display` | Both path-trace backends use the native GPU scene. The opt-in native pass also owns its images, uploads, DI history and graph scheduling. |
+| Volumetric shafts | `volumetric_march_scene`, `volumetric_apply` | The native pass owns history, uploads, dispatches and barriers. Visibility traces the world instance mask and the pass requires a zero bob origin. |
 | Particle/weather composite | `particles_composite` | `RtParticleComposite` -> stateless native recorder | C++ packs descriptors/push and records barriers; host retains game-layer views through exact proof. L1/L2, no live validation. |
 
 Surface decoding lives in `surface/surface.slang`; the filtered shadow walk lives
@@ -1204,7 +1173,7 @@ $env:SLANG_DIR = 'C:\Temp\bedray-slang-2026.20'
 
 # While another workstream has an incomplete pass in passes/, scope the build
 # to the finished ones. The index then lists only what was compiled.
-.\gradlew.bat :common:compileSlang "-PslangPasses=bloom_*.slang,composite.slang,path_trace.slang"
+.\gradlew.bat :common:compileSlang "-PslangPasses=bloom_*.slang,composite.slang,path_trace_scene.slang"
 
 cmake -S native/bedray_core -B native/bedray_core/build -G "Visual Studio 17 2022" -A x64 `
       -DBEDRAY_VULKAN_HEADERS=C:/Dev/Sky/tools/sdk/Vulkan-Headers/include
@@ -1225,10 +1194,10 @@ The task is also the build-time guard on the host contract:
   fails with the names of the offending `RWTexture2D` parameters, and the
   annotation has to match the view the host binds;
 * each buffer binding records `elementBytes` from reflection (64 for
-  `LegacySection`, 608 for `FrameConstants`, 64 for `BlockMaterial`), so a
+  `GeometrySection`, 608 for `FrameConstants`, 64 for `BlockMaterial`), so a
   struct growth is visible in the manifest rather than at dispatch time;
 * `STRUCT_LAYOUTS` pins the size **and the field offsets** of the structs that
-  are shared with Java or with the legacy `RtWorld` table, so a same-size field
+  are shared with the Java host or native scene ABI, so a same-size field
   reorder still fails the build.
 
 For the older revisions that the agent actually checked, the reported tests
@@ -1472,7 +1441,7 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    its additive feature/export; it no longer inherently lacks the reject split.
 3. **ReSTIR PT** — the temporal stage is live behind `path_restir_pt` (default off;
    `restir/pt_temporal.slang`, binding 36, Java reference and native backends; derivation §11).
-   The spatial stage is live too (`restir_pt_spatial` / `restir_pt_spatial_scene`, child row
+   The spatial stage is live too (`restir_pt_spatial_scene`, child row
    `path_restir_pt_spatial`; derivation §12): it pools neighbours with `ptSpatialReuse` into the
    other half, and the next frame's temporal stage resolves the pooled winner with
    `ptResolveFiltered`. Remaining: a GPU smoke run with both switches on and an owner-verified frame. Earlier notes:
@@ -1528,12 +1497,12 @@ lose coverage: `RtSlangSkyDiscTest` already guards `light/sky.slang`.
    levels (terminal trace, then reconstruct 3→0 with compose-before-average bridges)
    and `rc_path_trace_scene` gathers reflected direct light for a primary diffuse
    continuation. Enable with `-Dvkbridge.rt.radianceCascades=true` (which needs
-   `nativePathTrace` + `nativeScene` and both AOT entries) and pick the axis with
+   `nativePathTrace` and both AOT entries) and pick the axis with
    `-Dvkbridge.rt.rcBaseAxis` (8/16/32). Temporal field reuse is implemented
    (2026-10-31, `RC_RECONSTRUCTION_PLAN.md` "Temporal reuse": the previous consecutive
    field blended at weight 0.8 through builder binding 38). Remaining: an owner-verified
-   frame that proves the field in a real scene. The v1 typed atlas is
-   host-agnostic source; do not wire the legacy float4 resolve to the typed atlas.
+   frame that proves the field in a real scene. The v1 typed atlas remains a
+   host-agnostic producer example.
 6. **More entry passes** — denoise/composite follow the same one-file-per-entry
    pattern and the same ABI; no second pipeline path.
 7. **Live game check** — only after the above and an explicit request.  A

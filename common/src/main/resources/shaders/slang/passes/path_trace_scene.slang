@@ -1,12 +1,8 @@
 // Path-tracing entry over the native bedray_scene section table.
 //
-// This is the native-scene twin of path_trace.slang: the algorithm, bindings,
-// push block and outputs are identical, but binding 2 is the 64-byte
-// GeometrySection record owned by bedray_scene and the traversal decodes the
-// GeometryVertex stream through its device address.  The host selects this
-// program only when it can supply a native scene table; the legacy entry stays
-// available for the current Java scene.  The shared integration body lives in
-// pathtrace/path_trace_entry.slang, so the two entries cannot drift apart.
+// Binding 2 is the 64-byte GeometrySection table owned by bedray_scene.
+// Traversal decodes each GeometryVertex stream through its device address.
+// Path tracing and Radiance Cascades share pathtrace/path_trace_entry.slang.
 //
 //   0  tlas             acceleration structure
 //   1  outImage         RGBA16F storage image (scene-referred linear radiance)

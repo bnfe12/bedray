@@ -65,6 +65,7 @@ static_assert(sizeof(BedrayPathTraceDesc) == 80, "path-trace ABI: configure desc
  * layout and every neighbour offset below are unchanged; the Java host mirrors
  * these four numbers. */
 static_assert(offsetof(BedrayPathTraceDesc, program_stats) == 56, "path-trace ABI: desc.program_stats offset");
+static_assert(offsetof(BedrayPathTraceDesc, retired_trace_slot) == 8, "path-trace ABI: retired slot offset");
 static_assert(offsetof(BedrayPathTraceDesc, program_trace_scene) == 64, "path-trace ABI: desc.program_trace_scene offset");
 static_assert(offsetof(BedrayPathTraceDesc, reserved) == 72, "path-trace ABI: desc.reserved offset");
 static_assert(offsetof(BedrayPathTraceFrameDesc, frame_index) == 1032, "path-trace ABI: frame.frame_index offset");
@@ -362,7 +363,7 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
     return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS | BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS | BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION
         | BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER | BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL
         | BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS | BEDRAY_PATH_TRACE_FEATURE_NATIVE_PT
-        | BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT;
+        | BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT | BEDRAY_PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY;
 } catch (...) {
     return 0;
 }
@@ -1475,7 +1476,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_ext(
 }
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(
-    BedrayCore* core, uint64_t program_pt_spatial, uint64_t program_pt_spatial_scene, BedrayError* error) try {
+    BedrayCore* core, uint64_t retired_program, uint64_t program_pt_spatial_scene, BedrayError* error) try {
     clear_error(error);
     if (core == nullptr || !core->path_trace)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "ReSTIR PT needs a configured path-trace pass");
@@ -1483,7 +1484,7 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(
     if (core->frame_graph && core->frame_graph->has_recordings())
         return fail(error, BEDRAY_ERROR_IN_USE, "native graph recordings must be released before reconfiguration");
 #endif
-    return core->path_trace->configure_pt(program_pt_spatial, program_pt_spatial_scene, error);
+    return core->path_trace->configure_pt(retired_program, program_pt_spatial_scene, error);
 } catch (...) {
     return fail(error, BEDRAY_ERROR_INTERNAL, "unexpected exception configuring ReSTIR PT");
 }

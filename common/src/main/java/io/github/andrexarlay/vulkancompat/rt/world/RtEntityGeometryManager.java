@@ -138,10 +138,6 @@ public final class RtEntityGeometryManager {
     }
 
     @Deprecated(forRemoval = true)
-    public synchronized void uploadToGpu(RtMemory mem, RtArena ignored) {
-        requireRecordingAwareUpload(mem);
-    }
-
     private static void requireRecordingAwareUpload(RtMemory mem) {
         if (mem != null) throw new IllegalStateException(
             "entity GPU upload requires uploadToGpu(memory, camX, camY, camZ, commandBuffer) and completion/discard release");

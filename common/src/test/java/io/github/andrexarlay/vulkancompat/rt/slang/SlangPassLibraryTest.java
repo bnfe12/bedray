@@ -135,20 +135,18 @@ class SlangPassLibraryTest {
     }
 
     /**
-     * The path-trace entry is the first pass that reads the legacy section table. Its manifest is the host contract:
-     * the device-address reads must keep requiring Int64 + buffer-device-address, and the geometry adapter must stay
-     * bound to the table RtWorld writes.
+     * The path-trace manifest pins the native GeometrySection descriptor and capability requirements.
      */
     @Test
-    void pathTracePassKeepsTheLegacyGeometryContract() {
-        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
+    void pathTracePassKeepsTheNativeGeometryContract() {
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene.slang was not compiled");
 
-        SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        assertEquals(28, manifest.bindings().size(), "path_trace: binding count (26 + the ReSTIR PT ring at 36 + the stats slot at 37)");
+        SlangPassManifest manifest = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
+        assertEquals(28, manifest.bindings().size(), "path_trace_scene: binding count (26 + the ReSTIR PT ring at 36 + the stats slot at 37)");
         assertBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
         assertBinding(manifest, "outImage", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        assertEquals(64, manifest.binding("sections").elementBytes(), "LegacySection is the 64-byte RtWorld table entry");
+        assertEquals(64, manifest.binding("sections").elementBytes(), "GeometrySection is the 64-byte bedray_scene table entry");
         assertBinding(manifest, "albedoAtlas", 3, BedrayCoreLayouts.DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
         // The primary surface's own displacement, which is the only way a moved mob can be found again next frame.
         assertBinding(manifest, "outMotion", 5, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
@@ -195,43 +193,21 @@ class SlangPassLibraryTest {
         assertEquals(16, manifest.binding("outMotionBuffer").elementBytes(),
             "one vec4 (motion xyz + entity flag) per render pixel, as in rt_pack_nrd.comp's Vec4Buf");
         assertEquals(112, manifest.pushConstantBytes(),
-            "path_trace: the 96-byte DI block plus the 16-byte entity state of this frame");
+            "path_trace_scene: the 96-byte DI block plus the 16-byte entity state of this frame");
         assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS
             | BedrayCoreLayouts.CAP_SHADER_INT64, manifest.requiredCapabilities(),
-            "path_trace: ray query + device addresses + 64-bit integers");
-        assertEquals(8, manifest.threadGroupSize()[0], "path_trace: group x");
-        assertEquals(8, manifest.threadGroupSize()[1], "path_trace: group y");
-        assertEquals(1, manifest.threadGroupSize()[2], "path_trace: group z");
+            "path_trace_scene: ray query + device addresses + 64-bit integers");
+        assertEquals(8, manifest.threadGroupSize()[0], "path_trace_scene: group x");
+        assertEquals(8, manifest.threadGroupSize()[1], "path_trace_scene: group y");
+        assertEquals(1, manifest.threadGroupSize()[2], "path_trace_scene: group z");
     }
 
-    /**
-     * The native-scene entry is the same program with a different binding 2 and traversal backend. Both manifests must
-     * agree on every descriptor, the push block, the capability bits and the workgroup, otherwise the host would need a
-     * second contract and the two entries could silently drift apart.
-     */
     @Test
-    void pathTraceScenePassKeepsTheSameHostContractAsTheLegacyEntry() {
-        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
-        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene.slang was not compiled");
-
-        SlangPassManifest legacy = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        SlangPassManifest scene = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
-
-        assertEquals(legacy.bindings().size(), scene.bindings().size(), "path_trace_scene: binding count");
-        for (SlangPassManifest.Binding want : legacy.bindings()) {
-            SlangPassManifest.Binding actual = scene.binding(want.name());
-            assertTrue(actual != null, () -> "path_trace_scene has no binding '" + want.name() + "'");
-            assertEquals(want.binding(), actual.binding(), "path_trace_scene: binding of " + want.name());
-            assertEquals(want.descriptorType(), actual.descriptorType(), "path_trace_scene: type of " + want.name());
-            assertEquals(want.count(), actual.count(), "path_trace_scene: count of " + want.name());
-            assertEquals(want.elementBytes(), actual.elementBytes(), "path_trace_scene: element of " + want.name());
+    void javaScenePassesAreAbsentFromTheAotIndex() {
+        for (String name : List.of("path_trace", "path_trace.raygen", "path_trace.ser",
+                "restir_pt_spatial", "volumetric_march", "sodium_dequantize")) {
+            assertFalse(SlangPassLibrary.names().contains(name), name);
         }
-        assertEquals(legacy.pushConstantBytes(), scene.pushConstantBytes(), "path_trace_scene: push block");
-        assertEquals(legacy.requiredCapabilities(), scene.requiredCapabilities(),
-            "path_trace_scene: capability bits must match the shared body");
-        assertEquals(legacy.threadGroupSize()[0], scene.threadGroupSize()[0], "path_trace_scene: group x");
-        assertEquals(legacy.threadGroupSize()[1], scene.threadGroupSize()[1], "path_trace_scene: group y");
-        assertEquals(legacy.threadGroupSize()[2], scene.threadGroupSize()[2], "path_trace_scene: group z");
     }
 
     private static void assertBinding(SlangPassManifest manifest, String name, int binding, int type) {        SlangPassManifest.Binding actual = manifest.binding(name);

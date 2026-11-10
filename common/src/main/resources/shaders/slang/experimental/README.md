@@ -1,14 +1,14 @@
 # Experimental Slang modules
 
 `compileSlang` only compiles `passes/**/*.slang`. One module here is now reached by those passes:
-`restir_pt.slang` is imported through `restir/pt_temporal.slang` by `path_trace`, `path_trace_scene` and
+`restir_pt.slang` is imported through `restir/pt_temporal.slang` by `path_trace_scene` and
 `rc_path_trace_scene`, behind the default-off `path_restir_pt` switch, and through `restir/pt_spatial.slang` by
-`restir_pt_spatial` and `restir_pt_spatial_scene` (child switch `path_restir_pt_spatial`). It stays in this directory until its GPU
+`restir_pt_spatial_scene` (child switch `path_restir_pt_spatial`). It stays in this directory until its GPU
 smoke gate closes.
 
 ## `restir_pt.slang`
 
-ReSTIR path-reuse prototype. It is kept for reference, not as an enabled technique:
+ReSTIR path-reuse development:
 
 - v3 restricts reuse to a certified diffuse first vertex and implements the change of measure for the
   fixed-first-vertex shift: `q_new = q_old * G_old / G_new`, folded into the merge as `G_new / G_old`.
@@ -27,7 +27,7 @@ ReSTIR path-reuse prototype. It is kept for reference, not as an enabled techniq
   drops a corrupt accumulator (`ptReservoirIsAccumulator`), and history is keyed on
   `RestirPtReceiver.historyPosition` instead of the 1024-wrapped `SurfaceHit.worldPosition`. The record layout was
   measured: 144 B per pixel (std430), not the 112 B earlier versions claimed. Derivation §11.
-- The host (`ReferencePathTraceBackend`, binding 36), the manifest pins and the contract tests exist; the native core
-  binds a stand-in. There is no GPU smoke run and no spatial stage yet.
+- The Java reference backend and native path-trace group bind the reservoir ring at 36 and support spatial reuse.
+  The GPU smoke run is pending.
 
 Before this file can move back to `restir/`, it needs at least one GPU smoke run with `path_restir_pt` on.
