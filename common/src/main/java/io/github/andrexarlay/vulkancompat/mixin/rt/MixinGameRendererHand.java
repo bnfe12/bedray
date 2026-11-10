@@ -5,6 +5,7 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager;
+import io.github.andrexarlay.vulkancompat.rt.hand.HandRtLight;
 import io.github.andrexarlay.vulkancompat.rtx.GameRendererHandAccessor;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import net.minecraft.client.renderer.GameRenderer;
@@ -20,6 +21,7 @@ import org.spongepowered.asm.mixin.gen.Invoker;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Marks the first-person hand pass ({@code GameRenderer.renderItemInHand(CameraRenderState, PlayerRenderState, GpuTextureView)},
@@ -53,6 +55,8 @@ public abstract class MixinGameRendererHand implements GameRendererHandAccessor 
 
     private CameraRenderState vkb$deferredCameraState;
     private PlayerRenderState vkb$deferredPlayerState;
+    /** True while vkb$replayDeferredHand runs the hand pass (for the hand_light path log only). */
+    private boolean vkb$replaying;
 
     @Invoker("renderItemInHand")
     protected abstract void vkb$invokeRenderItemInHand(CameraRenderState cameraState, PlayerRenderState playerState,
@@ -70,12 +74,44 @@ public abstract class MixinGameRendererHand implements GameRendererHandAccessor 
         this.vkb$deferredCameraState = null;
         this.vkb$deferredPlayerState = null;
         EntityCaptureManager.getInstance().beginHandPass(cameraState.viewRotationMatrix);
+        HandRtLight.beginPass(this.vkb$replaying);
     }
 
     @Inject(method = "renderItemInHand", at = @At("RETURN"))
     private void vkb$handPassEnd(CameraRenderState cameraState, PlayerRenderState playerState, GpuTextureView depthTextureView,
                                  CallbackInfo ci) {
         EntityCaptureManager.getInstance().endHandPass();
+        HandRtLight.endPass();
+    }
+
+    // Every hand RenderType reads Sampler2 through GameRenderer.lightmap() inside prepareFrame (RenderType.prepare via
+    // RenderTypeFeatureRenderer$Group.getOrAddDraw, and FeatureFrameContext; javap 26.3: renderItemInHand calls
+    // submitHandsWithItems at 175 and prepareFrame at 186). The override is limited to that call so nothing else can see it.
+    @Inject(method = "renderItemInHand", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher;prepareFrame(Lnet/minecraft/client/renderer/SubmitNodeStorage;)Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;"))
+    private void vkb$handPrepareBegin(CameraRenderState cameraState, PlayerRenderState playerState, GpuTextureView depthTextureView,
+                                      CallbackInfo ci) {
+        HandRtLight.beginPrepare();
+    }
+
+    @Inject(method = "renderItemInHand", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher;prepareFrame(Lnet/minecraft/client/renderer/SubmitNodeStorage;)Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;",
+        shift = At.Shift.AFTER))
+    private void vkb$handPrepareEnd(CameraRenderState cameraState, PlayerRenderState playerState, GpuTextureView depthTextureView,
+                                    CallbackInfo ci) {
+        HandRtLight.endPrepare();
+    }
+
+    @Inject(method = "lightmap", at = @At("HEAD"), cancellable = true)
+    private void vkb$handLightmap(CallbackInfoReturnable<GpuTextureView> cir) {
+        if (HandRtLight.overriding()) {
+            cir.setReturnValue(HandRtLight.view());
+        }
+    }
+
+    @Inject(method = "close", at = @At("HEAD"))
+    private void vkb$closeHandLight(CallbackInfo ci) {
+        HandRtLight.close();
     }
 
     @Override
@@ -93,6 +129,14 @@ public abstract class MixinGameRendererHand implements GameRendererHandAccessor 
         this.hudProjection.setupPerspective(0.05f, cameraState.depthFar, cameraState.hudFov, (float) width, (float) height);
         RenderSystem.setProjectionMatrix(this.hud3dProjectionMatrixBuffer.getBuffer(this.hudProjection), ProjectionType.PERSPECTIVE);
         RenderSystem.getDevice().createCommandEncoder().clearDepthTexture(this.hud3DTarget.getDepthTexture(), 0.0);
-        this.vkb$invokeRenderItemInHand(cameraState, playerState, this.hud3DTarget.getDepthTextureView());
+        this.vkb$replaying = true;
+        try {
+            this.vkb$invokeRenderItemInHand(cameraState, playerState, this.hud3DTarget.getDepthTextureView());
+        } finally {
+            // An exception still propagates to WorldTargetManager; only the hand-light state must not leak into the GUI
+            // and the next frame's lightmap() reads.
+            this.vkb$replaying = false;
+            HandRtLight.endPass();
+        }
     }
 }

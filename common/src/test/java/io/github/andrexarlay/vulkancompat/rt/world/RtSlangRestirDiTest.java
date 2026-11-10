@@ -155,18 +155,20 @@ class RtSlangRestirDiTest {
      * afterwards. Splitting the two is what keeps the record alive behind a new occluder.
      */
     @Test
-    void anOccludedFrameFadesItsRecordInsteadOfDroppingIt() {
+    void aProvenOccludedSampleLosesItsWeightButNotItsSlot() {
         String di = read(DI);
         String confirm = block(di, "void reuseConfirm(bool occluded) {");
         assertTrue(confirm.contains("if (!occluded || !reuseActive())"),
             "a visible sample leaves the published weight alone");
         assertTrue(confirm.contains("DIReservoir record = reservoirs[ownSlot];"),
             "and the feedback re-reads the slot, because nothing may be carried between the two calls");
-        assertTrue(confirm.contains("record.stats.y *= RESTIR_DI_OCCLUSION_DECAY;"),
-            "the weight sum decays, the sample stays: a four-frame fade-out");
+        // 2026-11-07: the old 0.25 decay kept M, so the next merges read ~46% of the light and the pixel pulsed.
+        assertTrue(confirm.contains("record.stats.y = 0.0;"),
+            "visibility reuse: a blocked sample loses its whole weight, and mergeReservoirs then skips the record whole");
+        assertFalse(confirm.contains("RESTIR_DI_OCCLUSION_DECAY"), "no partial decay that keeps M");
         String tracer = read(TRACER);
-        assertTrue(tracer.contains("reuse.reuseConfirm(!reusedTraced || reusedOccluded);"),
-            "a sample that could not even be traced is treated as occluded, so a record that lost its light fades too");
+        assertTrue(tracer.contains("reuse.reuseConfirm(reusedTraced && reusedOccluded);"),
+            "only a traced and blocked shadow ray proves occlusion; an unshadeable sample is not occluded");
         assertFalse(di.contains("Traversal"),
             "the adapter must not trace: the shadow ray belongs to the path tracer");
     }
@@ -192,11 +194,14 @@ class RtSlangRestirDiTest {
     @Test
     void aReusedSampleIsEstimatedExactlyLikeAFreshDraw() {
         String reuse = block(read(DI), "LightSample reuseSample(LightReceiver receiver, inout uint seed) {");
-        assertTrue(reuse.contains("LightEvaluation evaluation = emitters().evaluate(receiver, historySample);"),
-            "the stored point is re-resolved through the plain sampler, so p-hat, pdf and Le are one code path");
-        assertTrue(reuse.contains("if (evaluation.valid && evaluation.targetPdf > 0.0 && evaluation.sourcePdf > 0.0)"),
+        // evaluateTarget shares blockEmitterCandidate with evaluate (same p-hat and Le); only the cancelling source pdf is dropped.
+        assertTrue(reuse.contains("LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);"),
+            "the stored point is re-resolved through the plain sampler's candidate path, so p-hat and Le are one code path");
+        // A vanished quad fails blockEmitterFind inside evaluateTarget and comes back invalid (no source pdf any more).
+        assertTrue(reuse.contains("if (evaluation.valid && evaluation.targetPdf > 0.0) {"),
             "a record whose quad vanished from the list is dropped instead of being weighted by zero");
-        assertTrue(reuse.contains("imported.solidAnglePdf = evaluation.sourcePdf;"),
+        // The import's solid-angle pdf multiplies the estimate and is divided out by the direct term, so a constant serves.
+        assertTrue(reuse.contains("imported.solidAnglePdf = DI_IMPORT_SOLID_ANGLE_PDF;"),
             "the import fills the same estimate struct a winner fills");
         assertTrue(reuse.contains("estimate = blockEmitterEstimateFromWinner(winner, atlas);"),
             "and the fresh path fills it from the batch winner");

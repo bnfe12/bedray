@@ -346,7 +346,11 @@ BlockEmitterWinner sampleBlockEmitterBatch(StructuredBuffer<uint4> records, Mate
     float2 r2shift = float2(rand01(seed), rand01(seed));
     uint count = blockEmitterCount(records);
     for (uint k = 0u; k < candidates; ++k) {
-        BlockEmitterSelection selected = blockEmitterSelect(records, receiver.position + cameraRelative, rand01(seed));
+        // The primary vertex keeps the light tree: it is what the eye sees and what ReSTIR DI stores and re-evaluates
+        // with the mixture PMF.  Bounce vertices are never stored, so they take the cheap global branch.
+        BlockEmitterSelection selected = receiver.primary
+            ? blockEmitterSelect(records, receiver.position + cameraRelative, rand01(seed))
+            : blockEmitterSelectGlobal(records, rand01(seed));
         float2 quad = frac(r2shift + float(k) * float2(0.7548776662, 0.5698402909));
         BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, selected.index, quad, receiver,
             cameraRelative, lightRadius, selected.probability);
@@ -489,6 +493,42 @@ struct BlockEmitterSampler : ILightSampler {
         result.sourcePdf = solidAnglePdf;
         return result;
     }
+
+    // p^ only.  The selection probability is a leaf-to-root walk of the light
+    // tree (emitterLocalProbability, up to 17 levels and ~6 dependent loads per
+    // level); spatial reuse ran it for each of its 8 neighbours and threw the
+    // result away, which took di_spatial from 2.0 to 6.5 ms (2026-11-07).  p^
+    // does not depend on it (blockEmitterCandidate), so it is skipped here.
+    override LightEvaluation evaluateTarget(LightReceiver receiver, LightSample sample) {
+        LightEvaluation result = invalidLightEvaluation();
+        if (sample.kind != LightKind.Emitter) {
+            return result;
+        }
+        float lightRadius = min(maxDistance, EMITTER_RADIUS);
+        uint count = blockEmitterCount(records);
+        if (count == 0u) {
+            return result;
+        }
+        uint index = blockEmitterFind(records, sample.lightIndex);
+        if (index >= count) return result;
+        BlockEmitterRecord emitter = blockEmitterRecord(records, index);
+        float2 uv;
+        if (!blockEmitterCoordinates(sample.position, emitter, cameraRelative, uv)) return result;
+        BlockEmitterCandidate candidate = blockEmitterCandidate(records, atlas, index, uv,
+            receiver, cameraRelative, lightRadius, 1.0);
+        // Same acceptance as evaluate(): its solidAnglePdf test can never fail
+        // (both factors are clamped positive), so validity is the candidate's own.
+        // The one difference: a malformed light tree (probability -1) no longer
+        // rejects the neighbour here; sampling still rejects it on every draw.
+        if (!blockEmitterCandidateValid(candidate)) {
+            return result;
+        }
+        result.valid = true;
+        result.radiance = blockEmitterRadiance(candidate.point, atlas) / max(candidate.point.texelEmission, 1.0e-4);
+        result.targetPdf = candidate.phat;
+        result.sourcePdf = 0.0;
+        return result;
+    }
 };
 
 // One branch of the key light, one of the emitters: the selection probability belongs to the composite because the
@@ -497,6 +537,29 @@ struct SunAndBlockEmitterSampler : ILightSampler {
     SunMoonSampler keyLight;
     BlockEmitterSampler emitters;
     float emitterProbability;
+    // Probability of drawing the key light at a receiver the vanilla sky light calls indoor (sky light 0).  In a closed
+    // room every key-light ray ends on the ceiling; at the primary vertex (where the reservoir owns the emitters and the
+    // key light had the whole density) that was a full shadow walk per pixel for nothing - 2026-11-08 torch-room audit.
+    // The sample is divided by this probability, so a sun ray through an opening far away still counts.
+    static const float INDOOR_KEY_LIGHT_PROBABILITY = 0.125;
+    static const float INDOOR_SKY_LIGHT = 0.5 / 15.0;
+
+    float indoorKeyLightProbability(LightReceiver receiver) {
+        return receiver.skyLight < INDOOR_SKY_LIGHT ? INDOOR_KEY_LIGHT_PROBABILITY : 1.0;
+    }
+
+    LightSample sampleKeyLightIndoorAware(LightReceiver receiver, inout uint seed) {
+        float keyProbability = indoorKeyLightProbability(receiver);
+        if (keyProbability < 1.0 && rand01(seed) >= keyProbability) {
+            return invalidLightSample();
+        }
+        LightSample keySample = keyLight.sample(receiver, seed);
+        if (keySample.valid) {
+            keySample.sourcePdf *= keyProbability;
+        }
+        return keySample;
+    }
+
     // Set when the caller lights the primary vertex from a ReSTIR reservoir: that branch is evaluated every frame (the
     // record has to be read and written whether or not it wins a draw), so the composite must not also draw emitters for
     // it.  Path vertices deeper in the path keep the plain RIS branch.
@@ -515,18 +578,22 @@ struct SunAndBlockEmitterSampler : ILightSampler {
             if (hasEmitters && sunIntensity <= 0.0) {
                 return emitters.sample(receiver, seed);
             }
-            return keyLight.sample(receiver, seed);
+            return sampleKeyLightIndoorAware(receiver, seed);
         }
-        if (rand01(seed) < emitterProbability) {
+        // Indoors (vanilla sky light 0) the key-light share shrinks the same way as in the single-branch draw, and the
+        // emitters get the rest; each branch divides by its own probability, so the sum stays unbiased.
+        float keyShare = (1.0 - emitterProbability) * indoorKeyLightProbability(receiver);
+        float emitterShare = 1.0 - keyShare;
+        if (rand01(seed) < emitterShare) {
             LightSample emitterSample = emitters.sample(receiver, seed);
             if (emitterSample.valid) {
-                emitterSample.sourcePdf *= emitterProbability;
+                emitterSample.sourcePdf *= emitterShare;
             }
             return emitterSample;
         }
         LightSample sunSample = keyLight.sample(receiver, seed);
         if (sunSample.valid) {
-            sunSample.sourcePdf *= 1.0 - emitterProbability;
+            sunSample.sourcePdf *= keyShare;
         }
         return sunSample;
     }
@@ -536,5 +603,12 @@ struct SunAndBlockEmitterSampler : ILightSampler {
             return emitters.evaluate(receiver, sample);
         }
         return keyLight.evaluate(receiver, sample);
+    }
+
+    override LightEvaluation evaluateTarget(LightReceiver receiver, LightSample sample) {
+        if (sample.kind == LightKind.Emitter) {
+            return emitters.evaluateTarget(receiver, sample);
+        }
+        return keyLight.evaluateTarget(receiver, sample);
     }
 };

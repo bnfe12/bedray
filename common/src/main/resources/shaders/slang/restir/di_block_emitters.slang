@@ -29,6 +29,12 @@ import "surface/surface.slang";
 // 5% + 0.1 blocks and whose normal turned by up to ~53 degrees; a moving camera has to prove the match, so both tighten.
 static const float DI_DISTANCE_TOLERANCE_RELATIVE = 0.05;
 static const float DI_DISTANCE_TOLERANCE_ABSOLUTE = 0.1;
+static const float DI_PLANE_TOLERANCE_RELATIVE = 0.003;
+static const float DI_PLANE_TOLERANCE_ABSOLUTE = 0.03;
+static const float DI_PLANE_TOLERANCE_MAX = 0.25;
+// Source pdf stored with an imported history sample: any positive value, because it multiplies the estimate and is
+// divided out again by the direct term (see the temporal import).
+static const float DI_IMPORT_SOLID_ANGLE_PDF = 1.0;
 static const float DI_NORMAL_DOT_STATIC = 0.8;
 static const float DI_NORMAL_DOT_MOVING = 0.6;
 
@@ -92,7 +98,7 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
         return false;
     }
     DIReservoir stored = reservoirs[slot];
-    if (!(min(stored.stats.x, RESTIR_DI_M_CAP) > 0.0) || !isFinite(stored.sample.xyz)
+    if (!(min(stored.stats.x, RESTIR_DI_M_CAP) > 0.0) || !(stored.stats.y > 0.0) || !isFinite(stored.sample.xyz)
         || !isFinite(stored.receiver.xyz)) {
         return false;
     }
@@ -107,6 +113,13 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
     if (length(stored.receiver.xyz - previousReceiver) > tolerance) {
         return false;
     }
+    // The tests above are isotropic and grow with distance (1.1 blocks at 20), so a jittered edge pixel that lands on
+    // the face one step below passed them.  Parallel faces differ along the normal by the step height at any distance.
+    float planeTolerance = min(DI_PLANE_TOLERANCE_RELATIVE * max(previousDistance, 1.0) + DI_PLANE_TOLERANCE_ABSOLUTE,
+        DI_PLANE_TOLERANCE_MAX);
+    if (abs(dot(stored.receiver.xyz - previousReceiver, receiverNormal)) > planeTolerance) {
+        return false;
+    }
     float normalDot = dot(reservoirReceiverNormal(stored), receiverNormal);
     if (normalDot < (cameraStatic ? DI_NORMAL_DOT_STATIC : DI_NORMAL_DOT_MOVING)) {
         return false;
@@ -114,6 +127,18 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
     stored.sample.xyz -= cameraDelta;
     history = stored;
     return true;
+}
+
+// Every fresh proposal belongs to M, even when the entire batch has zero contribution.
+DIReservoir blockEmitterDiInitialReservoir(BlockEmitterWinner winner) {
+    DIReservoir current = emptyReservoir();
+    current.stats.x = winner.sampleCount;
+    if (winner.hasWinner) {
+        current.sample = float4(winner.candidate.point.position, winner.candidate.phat);
+        current.stats.yz = float2(winner.weightSum, 1.0);
+        current.source = uint4(winner.candidate.point.recordIndex, 0u, uint(LightKind.Emitter), 0u);
+    }
+    return current;
 }
 
 // One pixel's direct-light reservoir: the batch it draws this frame, the history it reuses and the record the next frame
@@ -169,12 +194,7 @@ struct BlockEmitterDiSampler : IReuseSampler {
 
         BlockEmitterWinner winner = sampleBlockEmitterBatch(records, atlas, receiver, cameraRelative,
             maxDistance, candidates, seed);
-        DIReservoir current = emptyReservoir();
-        if (winner.hasWinner) {
-            current.sample = float4(winner.candidate.point.position, winner.candidate.phat);
-            current.stats = float4(winner.sampleCount, winner.weightSum, 1.0, 0.0);
-            current.source = uint4(winner.candidate.point.recordIndex, 0u, uint(LightKind.Emitter), 0u);
-        }
+        DIReservoir current = blockEmitterDiInitialReservoir(winner);
 
         // An imported sample needs the pair (p-hat, pdf) of this receiver before the merge can rescale its weight, and
         // the same pair to shade with afterwards, so one evaluation serves both.
@@ -190,8 +210,10 @@ struct BlockEmitterDiSampler : IReuseSampler {
             if (onScreen && diLoadHistory(reservoirs, historyPixel, size, parity, previousReceiver, previousDistance,
                     normalize(receiver.normal), cameraStatic != 0u, cameraDelta, history)) {
                 LightSample historySample = reservoirLightSample(history, receiver.position);
-                LightEvaluation evaluation = emitters().evaluate(receiver, historySample);
-                if (evaluation.valid && evaluation.targetPdf > 0.0 && evaluation.sourcePdf > 0.0) {
+                // Target-only: the import's source pdf multiplies the radiance in blockEmitterEstimateSample and divides
+                // it again in pathTraceDirectTerm, so the light-tree walk that computed it cancelled out exactly.
+                LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);
+                if (evaluation.valid && evaluation.targetPdf > 0.0) {
                     current = mergeReservoirs(current, history, evaluation.targetPdf,
                         RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed);
                     // Age even when the roulette kept the batch winner: the lane counts the frames this pixel's
@@ -200,7 +222,7 @@ struct BlockEmitterDiSampler : IReuseSampler {
                     imported.position = historySample.position;
                     imported.radiancePerEmission = evaluation.radiance;
                     imported.phat = evaluation.targetPdf;
-                    imported.solidAnglePdf = evaluation.sourcePdf;
+                    imported.solidAnglePdf = DI_IMPORT_SOLID_ANGLE_PDF;
                     imported.endBias = blockEmitterStoredEndBias(records, historySample.lightIndex,
                         historySample.distance);
                     imported.recordIndex = historySample.lightIndex;
@@ -220,7 +242,7 @@ struct BlockEmitterDiSampler : IReuseSampler {
         reservoirs[reservoirSlot()] = current;
 
         if (!(current.stats.x > 0.0) || !(current.stats.y > 0.0)) {
-            return result;   // nothing won: the record just published is empty and the next frame starts over
+            return result;   // No contribution this frame. The spatial pass can still use this receiver and its fresh M.
         }
         BlockEmitterEstimate estimate;
         if (winner.hasWinner && diSamePosition(current.sample.xyz, winner.candidate.point.position)) {
@@ -234,15 +256,19 @@ struct BlockEmitterDiSampler : IReuseSampler {
         return blockEmitterEstimateSample(estimate, current.stats.y, current.stats.x, receiver);
     }
 
-    // The legacy occlusion feedback: a reservoir behind a new occluder keeps its sample and decays its weight, so it
-    // fades out over a few frames instead of glowing through the wall or switching off in one.
+    // Visibility reuse: a sample whose shadow ray was traced and blocked loses its whole weight.  The legacy feedback
+    // multiplied the weight by 0.25 but kept M (up to 20), so the next merges read about 46% of the true light and
+    // recovered over ~4 frames, and the spatial pass spread that diluted record to its neighbours: pixels near lights
+    // and in penumbrae pulsed (2026-11-07 instability audit).  A zero-weight record is skipped whole, M included, by
+    // mergeReservoirs, so it neither dilutes later merges nor glows through the wall; the next frame starts from the
+    // fresh batch.  The sample and its target pdf stay untouched (a zero target pdf would hit the ratio cap).
     void reuseConfirm(bool occluded) {
         if (!occluded || !reuseActive()) {
             return;
         }
         uint ownSlot = reservoirSlot();
         DIReservoir record = reservoirs[ownSlot];
-        record.stats.y *= RESTIR_DI_OCCLUSION_DECAY;
+        record.stats.y = 0.0;
         reservoirs[ownSlot] = record;
     }
 

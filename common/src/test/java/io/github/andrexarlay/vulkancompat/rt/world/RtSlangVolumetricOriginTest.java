@@ -38,7 +38,9 @@ class RtSlangVolumetricOriginTest {
             .replace("float3 p = origin + dir * t;", "float3 p = dir * t;");
         String fingerprint = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
             .digest(body.replaceAll("\\s+", "").getBytes(StandardCharsets.UTF_8)));
-        assertEquals("365fb9582f155c0cf3341c09782abd883c57ca6bdbdc5c4eeb69e970f20db63b", fingerprint,
+        // 2026-11-08: the step count follows the ray length (volumetricStepCount); dt = tEnd / n is unchanged in form,
+        // so the integration weights stay the same per step. The fingerprint moved with that one line.
+        assertEquals("6015467ba3cde143b1518831b4fc2a602c61946b01eff5185956850fe1eaf7d1", fingerprint,
             "only the coordinate origin may change; dt, density, transmittance, phase and normalization remain pinned");
     }
 

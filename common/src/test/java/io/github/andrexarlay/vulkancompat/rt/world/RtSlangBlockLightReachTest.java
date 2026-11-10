@@ -91,8 +91,9 @@ class RtSlangBlockLightReachTest {
         assertTrue(source.contains(
             "float window = clamp(1.0 - d2 / (lightRadius * lightRadius), 0.0, 1.0);"));
         assertTrue(source.contains("return window * window;"));
-        // Both batch entry points hoist the reach once, from the declared radius and the camera list's own range.
-        assertEquals(2, count(source, "float lightRadius = min(maxDistance, EMITTER_RADIUS);"),
+        // Every entry point (sample, evaluate, evaluateTarget) hoists the reach once, from the declared radius and the
+        // camera list's own range.
+        assertEquals(3, count(source, "float lightRadius = min(maxDistance, EMITTER_RADIUS);"),
             "each batch hoists the reach once, never inside its candidate loop");
         assertTrue(source.contains("min(maxDistance, EMITTER_RADIUS)"),
             "the host's collection range may shrink the reach but never widen it past the radius");

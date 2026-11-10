@@ -100,7 +100,9 @@ class RtPathTraceSlangPassTest {
         assertEquals(128f, out.getFloat(92), "diState.w carries the specular bounce far plane");
         assertEquals(2048, out.getInt(96), "entityState.x (atlas texels per side) at 96");
         assertEquals(120, out.getInt(100), "entityState.y (first self-avatar triangle) at 100");
-        assertEquals(24, out.getInt(104), "entityState.z (self-avatar triangle count) at 104");
+        assertEquals(24, out.getInt(104) & 0x3FFFFFFF, "entityState.z (self-avatar triangle count, low 30 bits) at 104");
+        assertEquals(io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.selfShadow, out.getInt(104) >>> 30,
+            "entityState.z top two bits: self_shadow mode");
         assertEquals(1.75f, out.getFloat(108), "entityState.w carries auto-normal strength as float bits");
         assertEquals(RtPathTraceSlangPass.PUSH_BYTES, out.capacity());
         assertEquals(112, RtPathTraceSlangPass.PUSH_BYTES, "the 96 B DI block plus the entity state of this frame");

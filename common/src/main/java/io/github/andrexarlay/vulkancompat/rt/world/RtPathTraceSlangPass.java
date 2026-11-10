@@ -508,7 +508,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             out.putFloat(base + 92, specularDistance);
             out.putInt(base + 96, entityAtlasSize);
             out.putInt(base + 100, selfAvatarTriStart);
-            out.putInt(base + 104, selfAvatarTriCount);
+            out.putInt(base + 104, io.github.andrexarlay.vulkancompat.rt.entity.SelfAvatarGate.packCountAndShadow(
+                selfAvatarTriCount, io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.selfShadow));
             out.putFloat(base + 108, autoNormalStrength);
         }
     }

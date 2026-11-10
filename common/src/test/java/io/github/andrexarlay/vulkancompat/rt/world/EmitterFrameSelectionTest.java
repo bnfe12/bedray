@@ -130,4 +130,30 @@ class EmitterFrameSelectionTest {
         assertSame(first.records(), second.records());
         assertEquals(52.25, second.originX() + (double) entity(second)[0]);
     }
+
+    @Test void finalSelectionKeepsPublishedLightsUntilANewcomerWinsClearly() {
+        var selection = new EmitterFrameSelection();
+        float[][] statics = {record(0, 0, 0, false)};
+        float[] newcomer = record(0.25f, 0, 0, true);
+        newcomer[14] = 1.3f;
+        var unpublished = selection.compose(statics, 1, 0, 0, 0, 0, 0, 0, 128, 1, null, 0);
+        assertEquals(0, unpublished.records()[0][15]);
+        assertEquals(0, selection.publishedKeysSnapshot().length);
+        var withoutMembership = selection.compose(statics, 1, 0, 0, 0, 0, 0, 0, 128, 1, newcomer, 1);
+        assertEquals(1, withoutMembership.records()[0][15], "composing a frame does not commit membership");
+
+        var initial = selection.compose(statics, 1, 0, 0, 0, 0, 0, 0, 128, 1, null, 0);
+        selection.recordPublished(initial);
+        long[] scanMembership = selection.publishedKeysSnapshot();
+        var nearTie = selection.compose(statics, 1, 0, 0, 0, 0, 0, 0, 128, 1, newcomer, 1);
+        assertEquals(0, nearTie.records()[0][15], "an almost equally important entity must not evict a static light");
+
+        newcomer[14] = 2f;
+        var clearWinner = selection.compose(statics, 1, 0, 0, 0, 0, 0, 0, 128, 1, newcomer, 1);
+        assertEquals(1, clearWinner.records()[0][15]);
+        selection.recordPublished(clearWinner);
+        assertNotEquals(scanMembership[0], selection.publishedKeysSnapshot()[0]);
+        assertEquals(RtEmitters.stickKey(0, 0, 0, statics[0], 0, 0, 0, 0), scanMembership[0],
+            "a later publication must not change the membership held by an in-flight scan");
+    }
 }

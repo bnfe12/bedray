@@ -198,10 +198,17 @@ public final class RtSkyState {
         MemoryUtil.memPutFloat(slot + RtStatsLayout.SKY_TILT, RtSky.tiltRad);   // StatsBuf.skyTilt
     }
 
-    /** Longest auto exposure of the path tracer for this day factor: night stays dark (no eye adaptation to daylight). */
+    /**
+     * Longest auto exposure of the path tracer for this day factor: night stays dark (no eye adaptation to daylight), and
+     * may rise to twice the fixed exposure. It was derived from RtExposure.MIN; when 27a78cf lowered MIN to 1/64 so bright
+     * HDR rooms can darken, the night ceiling fell with it from 2.2 to 0.03 and torch-lit rooms at night rendered black
+     * (autotest rt_look I scene, exposure=0.03, 2026-11-06).
+     */
+    static final float NIGHT_MAX_EXPOSURE = 2.0f * RtExposure.FIXED;
+
     public static float maxExposure(float day) {
         float d = clamp01(day);
-        return RtExposure.MIN * 2.0f + (RtExposure.MAX - RtExposure.MIN * 2.0f) * d * d;
+        return NIGHT_MAX_EXPOSURE + (RtExposure.MAX - NIGHT_MAX_EXPOSURE) * d * d;
     }
 
     /** One log line on the first frame and every 10 s: time, sun / moon, brightness, colours, clouds. */

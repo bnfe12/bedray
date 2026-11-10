@@ -221,6 +221,10 @@ public final class SettingsCatalog {
                 p("vanilla", "Vanilla", () -> RtSettings.waterStyle = RtSettings.WATER_STYLE_VANILLA),
                 p("realistic", "Realistic", () -> RtSettings.waterStyle = RtSettings.WATER_STYLE_REALISTIC)),
             v -> v instanceof Enum<?> e ? e.name().toLowerCase(Locale.ROOT) : String.valueOf(v));
+        putNoImage("self_shadow", Tier.ESSENTIAL, "Player Shadow (first person)",
+            "Full: your body casts its shadow everywhere, also the dark patch right under your feet. No blot underfoot: the shadow stays, but the floor your unseen feet cover is lit. Off: your body casts no shadow. Water and glass reflect you in every mode.",
+            "No measurable cost difference; the same rays are traced.", "Ray tracing on, first person.",
+            "No comparison image captured yet.");
         put("atm_godrays", Tier.ESSENTIAL, "Light Shafts",
             "Visible beams of sun and moon light through leaves, windows and cave openings; strongest at sunrise and sunset.",
             "", "Needs ray tracing on.", Scene.SUNSET, 0.5f, 0.45f, "godrays", List.of(
@@ -498,7 +502,7 @@ public final class SettingsCatalog {
         putNoImage("rt_vram_budget_mb", Tier.EXPERT, "RT Memory Budget", "GPU memory for chunk geometry; the farthest chunks are left out when it is full.",
             "", "", "A memory limit has no look of its own.");
         putNoImage("rt_light_budget", Tier.EXPERT, "RT Light Budget", "Most important glowing block faces that cast traced light.",
-            "", "", "A budget has no look of its own; too small drops far lamps.");
+            "", "", "A budget has no look of its own; too small drops far lamps, and light next to the cut flickers as lamps swap in and out.");
         putNoImage("sun_size_tenths", Tier.EXPERT, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
             "", "", "Visible only as shadow softness at a moment of day; not captured.");
         putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",

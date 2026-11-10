@@ -13,18 +13,25 @@ struct ReorderingTraversal<T : ITriangleTracer> : ISceneTracer {
     T base;
 
     SurfaceHit traceClosest(Ray ray) {
-        TriangleIntersection hit = base.traceIntersection(ray, false);
+        TriangleIntersection hit = base.traceIntersection(ray, base.secondarySelfShadowMode());
         ReorderThread(intersectionCoherenceHint(hit), 2u);
         return base.decodeIntersection(ray, hit);
     }
 
     override SurfaceHit tracePrimary(Ray ray) {
-        TriangleIntersection hit = base.traceIntersection(ray, true);
+        TriangleIntersection hit = base.traceIntersection(ray, SELF_SHADOW_OFF);
+        ReorderThread(intersectionCoherenceHint(hit), 2u);
+        return base.decodeIntersection(ray, hit);
+    }
+
+    override SurfaceHit traceMirror(Ray ray) {
+        TriangleIntersection hit = base.traceIntersection(ray, SELF_SHADOW_FULL);
         ReorderThread(intersectionCoherenceHint(hit), 2u);
         return base.decodeIntersection(ray, hit);
     }
 
     VisibilityResult traceVisibility(Ray ray) { return base.traceVisibility(ray); }
+    override ShadowProbe traceShadowProbe(Ray ray) { return base.traceShadowProbe(ray); }
     float traceDistance(Ray ray) { return base.traceDistance(ray); }
     override float3 surfaceMotion(SurfaceHit hit) { return base.surfaceMotion(hit); }
 };
