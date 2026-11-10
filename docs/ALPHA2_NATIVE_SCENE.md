@@ -3,7 +3,8 @@
 Built-in Rays and Path Traced use one C++ scene and one native recorder. AOT Slang
 programs can use compute, ray generation or SER with the same scene layout.
 The old scene and recorder JVM switches have no effect. Radiance Cascades,
-ReSTIR PT and SER remain independent features. A missing or incompatible native
+ReSTIR PT and SER remain independent features. Cutout surfaces use Slang alpha
+sampling. The removed Java opacity micromap experiment is no longer registered. A missing or incompatible native
 library disables built-in hardware RT for the session and logs the cause. A
 frame without ready terrain is left to the raster path without advancing trace
 history.

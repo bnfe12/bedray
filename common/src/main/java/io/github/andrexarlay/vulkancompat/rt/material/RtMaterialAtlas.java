@@ -216,10 +216,9 @@ public final class RtMaterialAtlas {
                 continue;
             }
             pendingEpoch = null;
-            boolean wantAlpha = false;
             TextureAtlasSprite s;
             while (!e.cancelled && !shutdown && (s = e.queue.poll()) != null) {
-                MaterialAtlasBaker.SpriteBake b = MaterialAtlasBaker.bakeSprite(s, e.width, e.height, e.resources, wantAlpha, e.optics);
+                MaterialAtlasBaker.SpriteBake b = MaterialAtlasBaker.bakeSprite(s, e.width, e.height, e.resources, e.optics);
                 if (b == null) {
                     e.errors++;
                     continue;

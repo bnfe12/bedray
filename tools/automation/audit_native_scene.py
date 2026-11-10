@@ -20,7 +20,7 @@ REQUIRED = (
     "restir_spatial", "restir_pt_spatial_scene", "volumetric_march_scene",
 )
 BRIDGES = ("NativeSceneBridge", "NativePathTraceBackend", "BedraySceneNative")
-OLD_FLAGS = (b"vkbridge.rt.nativeScene", b"vkbridge.rt.nativePathTrace")
+OLD_FLAGS = (b"vkbridge.rt.nativeScene", b"vkbridge.rt.nativePathTrace", b"vkbridge.rt.opacityMicromaps")
 
 
 def sha(path: Path) -> str:
