@@ -14,6 +14,7 @@ class EmitterCaptureBuffersTest {
     private static final class Storage implements EmitterCaptureBuffers.Storage {
         final Map<Long, byte[]> alive = new HashMap<>();
         long next = 1;
+        int writes;
         boolean failCreate, failWrite, failDestroy;
         public RtMemory.Buf create(long bytes) {
             if (failCreate) throw new IllegalStateException("allocation failed");
@@ -24,6 +25,7 @@ class EmitterCaptureBuffersTest {
         public void write(RtMemory.Buf buffer, ByteBuffer data) {
             if (failWrite) throw new IllegalStateException("copy failed");
             data.get(alive.get(buffer.handle));
+            writes++;
         }
         public void destroy(RtMemory.Buf buffer) {
             if (failDestroy) {
@@ -38,6 +40,50 @@ class EmitterCaptureBuffersTest {
         float[][] data = {new float[RtEmitters.FLOATS + 1]};
         for (int i = 0; i < data[0].length; i++) data[0][i] = first + i;
         return data;
+    }
+
+    @Test void identicalPayloadReusesThePinnedGenerationWithoutAnAllocationOrWrite() {
+        Storage storage = new Storage();
+        var buffers = new EmitterCaptureBuffers(storage);
+        float[][] firstRecords = records(1);
+        assertTrue(buffers.publish(firstRecords, 1, 1, 2, 3, 4));
+        var first = buffers.current();
+        var published = buffers.publication();
+        buffers.retain(1);
+
+        float[][] recomposed = records(1);
+        recomposed[0][RtEmitters.FLOATS] = 0.5f; // Selection score is outside the GPU payload.
+        for (int command = 2; command <= 10; command++) {
+            assertFalse(buffers.publish(recomposed, 1, 1, 2, 3, 4));
+            assertSame(first, buffers.current());
+            assertSame(published, buffers.publication());
+            buffers.retain(command);
+        }
+        assertEquals(2L, storage.next);
+        assertEquals(1, storage.writes);
+
+        recomposed[0][0] = 2;
+        assertTrue(buffers.publish(recomposed, 1, 1, 2, 3, 4));
+        for (int command = 2; command <= 10; command++) buffers.releaseRecording(command);
+        assertTrue(storage.alive.containsKey(first.handle));
+        buffers.releaseRecording(1);
+        assertFalse(storage.alive.containsKey(first.handle));
+        buffers.close();
+    }
+
+    @Test void reorderingOrChangingOriginOrMaterialVersionPublishesAgain() {
+        Storage storage = new Storage();
+        var buffers = new EmitterCaptureBuffers(storage);
+        float[] a = records(1)[0];
+        float[] b = records(2)[0];
+        assertTrue(buffers.publish(new float[][]{a, b}, 2, 1, 2, 3, 4));
+        assertTrue(buffers.publish(new float[][]{b, a}, 2, 1, 2, 3, 4));
+        assertTrue(buffers.publish(new float[][]{b, a}, 2, 2, 2, 3, 4));
+        assertTrue(buffers.publish(new float[][]{b, a}, 2, 2, 2, 3, 5));
+        assertFalse(buffers.publish(new float[][]{b, a}, 2, 2, 2, 3, 5));
+        assertEquals(5L, storage.next);
+        assertEquals(4, storage.writes);
+        buffers.close();
     }
 
     @Test void sharedAndRepeatedPublicationsRemainImmutableUntilEveryReaderReleases() {
@@ -121,6 +167,17 @@ class EmitterCaptureBuffersTest {
         assertTrue(storage.alive.isEmpty());
     }
 
+    @Test void identicalPayloadCannotBypassAnIncompleteClose() {
+        Storage storage = new Storage();
+        var buffers = new EmitterCaptureBuffers(storage);
+        buffers.publish(records(1), 1);
+        storage.failDestroy = true;
+        assertThrows(IllegalStateException.class, buffers::close);
+        assertThrows(IllegalStateException.class, () -> buffers.publish(records(1), 1));
+        buffers.close();
+        assertTrue(storage.alive.isEmpty());
+    }
+
     @Test void invalidRecordsAreRejectedBeforeAllocation() {
         Storage storage = new Storage();
         var buffers = new EmitterCaptureBuffers(storage);
@@ -161,16 +218,19 @@ class EmitterCaptureBuffersTest {
         Storage storage = new Storage();
         var buffers = new EmitterCaptureBuffers(storage);
         buffers.publish(records(1), 1);
-        long revision = buffers.publication().revision();
-        int id = buffers.publication().data().getInt(EmitterTable.HEADER_BYTES + RtEmitters.BYTES);
+        var published = buffers.publication();
+        long revision = published.revision();
         storage.failWrite = true;
         assertThrows(IllegalStateException.class, () -> buffers.publish(records(2), 1));
-        assertEquals(revision, buffers.publication().revision());
+        assertFalse(buffers.publish(records(1), 1, 0, 0, 0, 0));
+        assertSame(published, buffers.publication());
+        assertEquals(1, storage.writes);
+
         storage.failWrite = false;
-        buffers.publish(records(1), 1);
-        assertEquals(id, buffers.publication().data().getInt(EmitterTable.HEADER_BYTES + RtEmitters.BYTES));
-        assertEquals(1, buffers.publication().retained());
-        assertEquals(revision, buffers.publication().revision());
+        assertTrue(buffers.publish(records(2), 1, 0, 0, 0, 0));
+        assertEquals(revision + 1, buffers.publication().revision());
+        assertEquals(published.nextId(), buffers.publication().data().getInt(EmitterTable.HEADER_BYTES + RtEmitters.BYTES));
+        assertEquals(2, storage.writes);
         buffers.close();
     }
 }

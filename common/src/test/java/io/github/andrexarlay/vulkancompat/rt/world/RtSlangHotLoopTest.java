@@ -49,7 +49,7 @@ class RtSlangHotLoopTest {
         String tracer = read(TRACER);
         String body = block(tracer, tracer.indexOf("PathTraceResult tracePathWithField<"));
         String first = block(body, body.indexOf("if (!firstSurfaceAccepted) {"));
-        assertTrue(first.contains("result.firstHitDistance = primaryAdvance + hit.t;"),
+        assertTrue(first.contains("result.firstHitDistance = segmentAdvance + hit.t;"),
             "the primary distance is captured at the hit, not reconstructed after the walk");
         assertTrue(first.contains("result.primaryMotion = float4(traversal.surfaceMotion(hit),"),
             "entity motion is read from the same accepted surface");

@@ -55,7 +55,12 @@ final class EmitterCaptureBuffers implements AutoCloseable {
         publish(records, count, originX, originY, originZ, 0);
     }
 
-    void publish(float[][] records, int count, int originX, int originY, int originZ, int materialRevision) {
+    /** Returns false when the committed GPU table already has this exact ordered payload and origin. */
+    boolean publish(float[][] records, int count, int originX, int originY, int originZ, int materialRevision) {
+        owner.requireOpen();
+        if (publication != null && publication.matchesPayload(records, count, originX, originY, originZ, materialRevision)) {
+            return false;
+        }
         var prepared = table.prepare(records, count, originX, originY, originZ, materialRevision);
         // Register before allocation, preserving ownership even when copy and cleanup both fail.
         var next = owner.create(new RtMemory.Buf[1], 0);
@@ -74,6 +79,7 @@ final class EmitterCaptureBuffers implements AutoCloseable {
         table.commit(prepared);
         publication = prepared;
         if (old != null) owner.retire(old);
+        return true;
     }
 
     void retain(long command) {

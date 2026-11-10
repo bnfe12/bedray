@@ -242,6 +242,13 @@ bool pathSeesEmission(uint surfaceHits, bool previousLobeNotDiffuse, bool emitte
     return surfaceHits == 1u || previousLobeNotDiffuse || !emitterNeeAvailable;
 }
 
+// Allow for the launch bias and the source quad offset (0.08 blocks for two-sided horizontal emitters).
+bool pathEmitterOutsideNeeRadius(PathTraceOptions options, float distanceFromLaunch, float3 direction) {
+    float listRange = options.emitterListRange > 0.0 ? options.emitterListRange : options.maxDistance;
+    float bound = min(listRange, EMITTER_RADIUS) + abs(options.rayBias) + 0.1;
+    return distanceFromLaunch * distanceFromLaunch * dot(direction, direction) > bound * bound;
+}
+
 PathTraceOptions defaultPathTraceOptions() {
     PathTraceOptions options;
     options.maxDepth = 8u;
@@ -604,9 +611,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // The previous continuation was an ambient-only (AO) bounce: the next opaque surface it reaches blocks the sky
     // light this ray carries, so the path ends there without shading that surface.
     bool ambientOnlyPending = false;
-    // Cutout holes move the origin along the current ray. Keep the displacement
-    // of the primary ray only, so a later hit is measured from the camera.
-    float primaryAdvance = 0.0;
+    // Keep the displacement within this segment when cutouts and panes advance its ray origin.
+    float segmentAdvance = 0.0;
     uint step = 0u;
     // The diffuse continuation of the primary vertex is in flight and its first vertex is not recorded yet.
     bool ptArmed = false;
@@ -757,12 +763,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             // the candidate without spending a scattering event.
             float holeStep = pathTraceHoleStep(hit.t);
             float advance = hit.t + holeStep;
-            if (!isFinite(advance) || advance <= 0.0 ||
-                (!firstSurfaceAccepted && !isFinite(primaryAdvance + advance))) {
+            if (!isFinite(advance) || advance <= 0.0 || !isFinite(segmentAdvance + advance)) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
                 break;
             }
-            if (!firstSurfaceAccepted) primaryAdvance += advance;
+            segmentAdvance += advance;
             float3 advancedOrigin = ray.origin + ray.direction * advance;
             if (!isFinite(advancedOrigin)) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
@@ -786,12 +791,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         }
 
         if (!firstSurfaceAccepted) {
-            if (!isFinite(primaryAdvance + hit.t)) {
+            if (!isFinite(segmentAdvance + hit.t)) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
                 break;
             }
             firstSurfaceAccepted = true;
-            result.firstHitDistance = primaryAdvance + hit.t;
+            result.firstHitDistance = segmentAdvance + hit.t;
             // What the accumulator needs is not this frame's surface but the same
             // surface as the previous frame saw it, so the question goes to the
             // backend that owns the geometry and stops here for every other ray.
@@ -821,8 +826,10 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // The face of a glowing block is seen as its own emission, and the light it casts on other surfaces comes from
         // NEE; a sampler that reads the emitter list rejects the receiver's own quad through LightReceiver.emission.
         // With an emitter proposal, use NEE for diffuse emitter transport and keep BSDF emission along the eye and
-        // non-diffuse paths. Without one, BSDF hits are the only source of this emission.
-        if (pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)) {
+        // non-diffuse paths. A BSDF hit beyond the proposal's reach is also the only source of that emission.
+        if (pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)
+            || (any(surface.material.emission > 0.0)
+                && pathEmitterOutsideNeeRadius(options, segmentAdvance + hit.t, ray.direction))) {
             result.radiance += throughput * surface.material.emission;
         }
 
@@ -1103,6 +1110,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 wantDenoiserSignals ? result.radiance : float3(0.0), hit.position);
         }
         ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
+        segmentAdvance = 0.0;
         ambientOnlyPending = continuationAmbientOnly;
         // The new origin sits one bias off the interaction along the face; the segment starts there (the legacy path
         // ignored this offset too).

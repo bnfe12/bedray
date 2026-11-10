@@ -9,6 +9,10 @@ int main() {
         "enumerated same-receiver estimator has its original mean",
         "visibility-rejected history is excluded from the merge",
         "diffuse hits contribute emission when there are no emitter proposals",
+        "diffuse emission outside the local light radius survives pane and cutout advances",
+        "a smaller emitter list range bounds the local proposal support",
+        "thin panes keep authored tint and angle-dependent Fresnel",
+        "optical slabs retain thickness-based absorption",
     };
     std::array<uint32_t, labels.size()> verdicts{};
     GlobalParams_0 globals{};
