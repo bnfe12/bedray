@@ -161,11 +161,12 @@ public final class RtWorld {
      * it has a TLAS for this frame the facade below returns its handles and the
      * Slang path dispatches {@code path_trace_scene}. Null keeps the legacy scene.
      */
-    private final NativeSceneBridge nativeScene;
+    private NativeSceneBridge nativeScene;
+    private boolean nativeSceneDiscarded;
     /** True when the handles published by the last {@link #update} belong to {@link #nativeScene}. */
     private boolean nativeSceneFrameActive;
     /** CPU captures accepted for the native scene; no parallel Java AS resources. */
-    private final NativeSectionCapture nativeCapture;
+    private NativeSectionCapture nativeCapture;
 
     private final Map<Long, SectionGpu> gpu = new HashMap<>();
     /** Changes with the active scene's section captures; emitter list rebuilds key off it. */
@@ -308,20 +309,9 @@ public final class RtWorld {
         }
     }
 
-    /** Loads the optional native scene; any failure is one log line, never a dead world. */
     private static NativeSceneBridge createNativeScene(
         io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime runtime) {
-        if (!RtConfig.SLANG_NATIVE_SCENE) {
-            return null;
-        }
-        try {
-            return NativeSceneBridge.create(runtime);
-        } catch (RuntimeException | LinkageError e) {
-            if (RtConfig.SLANG_RADIANCE_CASCADES)
-                throw new IllegalStateException("radianceCascades requires the native scene", e);
-            LOGGER.error("[VKB-RT] native scene unavailable: {}; keeping the Java scene", e.getMessage(), e);
-            return null;
-        }
+        return RtConfig.SLANG_NATIVE_SCENE ? NativeSceneBridge.create(runtime) : null;
     }
 
     private long asAddress(MemoryStack stack, long handle) {
@@ -1265,13 +1255,27 @@ public final class RtWorld {
     }
 
     public void discardRecording(long commandBuffer) {
-        if (nativeScene != null) {
-            nativeScene.discardRecording(commandBuffer);
+        if (nativeScene != null && nativeScene.discardRecording(commandBuffer)) {
+            nativeSceneDiscarded = true;
             nativeSceneFrameActive = false;
         }
         if (dequantize != null) dequantize.releaseRecording(commandBuffer);
         RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
         legacyLifetime.release(commandBuffer);
+    }
+
+    boolean needsNativeSceneRebuild() {
+        return nativeSceneDiscarded;
+    }
+
+    /** Replays the live Sodium capture into a fresh C++ scene after all consumers have retired. */
+    void rebuildNativeSceneAfterHostDrain(io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime runtime) {
+        if (!nativeSceneDiscarded) return;
+        nativeScene.close();
+        nativeCapture.clear();
+        nativeScene = NativeSceneBridge.create(runtime);
+        nativeCapture = new NativeSectionCapture(SectionGeometryRegistry.INSTANCE, nativeScene, this::quadFlags);
+        nativeSceneDiscarded = false;
     }
 
     /** The caller has drained host submissions and excluded future resubmission. */

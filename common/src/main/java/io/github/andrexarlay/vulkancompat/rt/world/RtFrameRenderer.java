@@ -93,6 +93,8 @@ public final class RtFrameRenderer {
     private static double prevCamY;
     private static double prevCamZ;
     private static boolean havePrevCamera;
+    private static boolean autotestDiscardPending = "rt_modes".equals(System.getProperty("vkbridge.autotest"))
+        && Boolean.getBoolean("bedray.autotest.discardNativeScene");
     private static int lastRadiusY;
     private static final RtExposure exposure = new RtExposure();
     private static long lastExposureNanos;
@@ -509,12 +511,34 @@ public final class RtFrameRenderer {
         try {
             frame(camera, target, levelState);
         } catch (RtDenoiserFrameDiscard discarded) {
-            if (discarded.getSuppressed().length != 0) fail("rr_discard", "retirement_failed", discarded);
-            else LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded recovery=next_frame_preflight");
+            recoverDiscardedDenoiserFrame(discarded);
         } catch (RtFailure f) {
             fail(f.stage(), f.result(), f.getCause() != null ? f.getCause() : f);
         } catch (RuntimeException | LinkageError e) {
             fail("frame", e.getClass().getSimpleName() + ": " + LogPaths.show(e.getMessage()), e);
+        }
+    }
+
+    private static void recoverDiscardedDenoiserFrame(RtDenoiserFrameDiscard discarded) {
+        if (discarded.getSuppressed().length != 0) {
+            fail("rr_discard", "retirement_failed", discarded);
+            return;
+        }
+        try {
+            if (world != null && world.needsNativeSceneRebuild()) {
+                drainHostSubmissions(world.memory().device(), "scene_discard_recovery_drain");
+                world.rebuildNativeSceneAfterHostDrain(pathSlangRuntime);
+                if (emitters != null) {
+                    emitters.destroy();
+                    emitters = null;
+                }
+                LOGGER.info("[VKB-RT] native_scene_recreated reason=discarded_recording");
+            }
+            havePrevCamera = false;
+            resetHistory();
+            LOGGER.warn("[VKB-RT] frame_skipped reason=rr_recording_discarded recovery=next_frame_preflight");
+        } catch (RuntimeException | LinkageError recovery) {
+            fail("scene_discard_recovery", recovery.getMessage(), recovery);
         }
     }
 
@@ -726,6 +750,11 @@ public final class RtFrameRenderer {
                 recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
                     world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ, statsLease, denoiserProof);
                 traced = true;
+                if (autotestDiscardPending && RtConfig.SLANG_NATIVE_SCENE && stats.totalSections() > 0) {
+                    autotestDiscardPending = false;
+                    LOGGER.info("[VKB-AUTOTEST] event=discard_native_scene_recording sections={}", stats.totalSections());
+                    throw new RtDenoiserFrameDiscard("autotest: discard after tracing before submission", null);
+                }
             }
             VkBarriers.fullMemoryBarrier(cmd);
             if (traced) recordStatsHostVisibility(cmd, statsLease.slot());

@@ -201,6 +201,10 @@ public final class CustomRtStage {
             encoder.execute(command);
             encoder.queueForDestroy(() -> releaseSceneRead(releaseScene));
             dispatches++;
+            if (state != State.ACTIVE) {
+                LOGGER.info("[VKB-CUSTOMRT] pack={} recording=accepted extent={}x{} depth={}",
+                    pack, frame.color().width(), frame.color().height(), depth != null);
+            }
             state = State.ACTIVE;
             detail = "dispatch recorded " + frame.color().width() + "x" + frame.color().height()
                 + (depth != null ? ", depth bound" : ", no depth guide") + " (unverified in-game)";

@@ -100,19 +100,13 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         this.recordings = new SceneFrameRecordings(scene);
     }
 
-    /**
-     * Loads the optional scene exports from the already validated core DLL.
-     * Returns null (with one log line) when the feature is unavailable; the caller
-     * keeps the legacy scene in that case.
-     */
+    /** Loads the scene exports from the already validated core DLL. */
     static NativeSceneBridge create(SlangRuntime runtime) {
         if (runtime == null) {
-            return null;
+            throw new IllegalStateException("the native scene requires an initialized Slang runtime");
         }
         if (!SlangPassLibrary.available(SCENE_PASS)) {
-            LOGGER.warn("[VKB-RT] vkbridge.rt.nativeScene=true but AOT pass {} is missing from the jar;"
-                + " keeping the Java scene", SCENE_PASS);
-            return null;
+            throw new IllegalStateException("the native scene requires the AOT pass " + SCENE_PASS);
         }
         BedraySceneNative library = null;
         long scene = 0;
@@ -130,8 +124,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
                 RtConfig.MAX_INSTANCES, MAX_GEOMETRY_BYTES >> 20, Integer.toHexString(features),
                 (capabilities & BedraySceneLayouts.CAP_AS_UPDATE) != 0);
             return new NativeSceneBridge(library, scene);
-        } catch (RuntimeException e) {
-            LOGGER.error("[VKB-RT] native scene unavailable: {}; keeping the Java scene", e.getMessage(), e);
+        } catch (RuntimeException | Error e) {
             if (library != null) {
                 if (scene != 0) {
                     try { library.destroy(scene); }
@@ -143,9 +136,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
                     e.addSuppressed(closeFailure);
                 }
             }
-            if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure
-                && nativeFailure.status() == io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreLayouts.STATUS_DEVICE_LOST) throw e;
-            return null;
+            throw e;
         }
     }
 
@@ -324,11 +315,12 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         return recordings.retainRead(commandBuffer, frame -> library.releaseFrame(scene, frame));
     }
 
-    void discardRecording(long commandBuffer) {
-        if (!recordings.release("discard_frame", commandBuffer, frame -> library.discardFrame(scene, frame))) return;
+    boolean discardRecording(long commandBuffer) {
+        if (!recordings.release("discard_frame", commandBuffer, frame -> library.discardFrame(scene, frame))) return false;
         activeThisFrame = false;
         tlas = 0;
         table = null;
+        return true;
     }
 
     private void flushUpdates() {
