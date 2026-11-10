@@ -65,7 +65,7 @@ typedef enum BedrayCapability {
     BEDRAY_CAP_OPACITY_MICROMAP = 1u << 7,
     BEDRAY_CAP_DESCRIPTOR_BUFFER = 1u << 8,
     /* Needed by SPIR-V that does 64-bit integer work, including physical-storage-buffer
-       addressing (the legacy section table stores device addresses). */
+       addressing (section records store device addresses). */
     BEDRAY_CAP_SHADER_INT64 = 1u << 9,
     BEDRAY_CAP_STORAGE_IMAGE_EXTENDED_FORMATS = 1u << 10,
     BEDRAY_CAP_RAY_TRACING_PIPELINE = 1u << 11,
@@ -300,7 +300,7 @@ typedef struct BedrayPathTraceRange {
  * one-element dummy where the shader has a corresponding inactive binding. */
 typedef struct BedrayPathTraceScene {
     uint64_t tlas;                          /* VkAccelerationStructureKHR */
-    BedrayPathTraceBuffer sections;         /* LegacySection table, 64 B slots */
+    BedrayPathTraceBuffer sections;         /* GeometrySection table, 64 B slots */
     uint64_t albedo_view;                   /* VkImageView, GENERAL */
     uint64_t material_view;                 /* VkImageView, GENERAL */
     uint64_t normal_view;                   /* VkImageView, GENERAL */
@@ -400,7 +400,7 @@ typedef struct BedrayPathTraceFrameDesc {
 typedef struct BedrayPathTraceDesc {
     uint32_t abi_version;
     uint32_t flags;
-    uint64_t program_trace;         /* handle from bedray_core_register_program */
+    uint64_t program_trace;         /* reserved, must be zero */
     uint64_t program_spatial;       /* 0 disables the spatial stage */
     uint64_t program_display;
     uint64_t image_budget_bytes;    /* 0 selects 512 MiB */
@@ -412,8 +412,7 @@ typedef struct BedrayPathTraceDesc {
      * reserved0/reserved1 pair, so the struct size is unchanged. 0 means the
      * host lends no statistics program, and the call then refuses. */
     uint64_t program_stats;
-    /* path_trace_scene.slang; 0 keeps the legacy table for every frame. The
-     * field occupies the former reserved[0], so the struct size is unchanged. */
+    /* Required scene program from bedray_core_register_program. */
     uint64_t program_trace_scene;
     uint64_t reserved;
 } BedrayPathTraceDesc;
@@ -465,9 +464,8 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_record_path_trace_stats(
     uint64_t stats_offset, uint64_t stats_bytes, uint32_t frame_index,
     BedrayError* error);
 
-/* Lends the ReSTIR PT spatial stage (restir_pt_spatial.slang for the legacy section table, restir_pt_spatial_scene.slang
- * for NATIVE_SCENE; either may be 0 when that table never asks for it). Call after bedray_core_configure_path_trace,
- * which forgets them; refused while a recording remains. Programs stay host-owned. */
+/* Lends the scene's ReSTIR PT spatial stage (zero disables it). The first program slot is
+ * reserved and must be zero. Call after configure_path_trace and before recording. */
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_path_trace_pt(
     BedrayCore* core, uint64_t program_pt_spatial, uint64_t program_pt_spatial_scene, BedrayError* error);
 

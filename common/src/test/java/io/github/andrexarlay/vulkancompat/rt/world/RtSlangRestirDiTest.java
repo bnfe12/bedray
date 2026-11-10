@@ -18,11 +18,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtSlangRestirDiTest {
 
-    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String DI = "src/main/resources/shaders/slang/restir/di_block_emitters.slang";
     private static final String RESERVOIR = "src/main/resources/shaders/slang/restir/restir_di.slang";
     private static final String TRACER = "src/main/resources/shaders/slang/pathtrace/path_tracer.slang";
-    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace_scene.slang";
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
     private static final String DISPLAY = "src/main/resources/shaders/slang/passes/path_display.slang";
     private static final String CONTRACT = "src/main/resources/shaders/slang/contracts/light.slang";
@@ -73,25 +72,6 @@ class RtSlangRestirDiTest {
      * Two halves, so the dispatch writing frame N never touches the records of frame N-1 that the same dispatch reads -
      * the writes of a compute dispatch are unordered across threads.
      */
-    @Test
-    void theRingNeverReadsTheHalfItWrites() {
-        String di = read(DI);
-        assertTrue(di.contains("return parity * size.x * size.y + uint(pixel.y) * size.x + uint(pixel.x);"),
-            "the ring is parity-major, so one multiplication moves the whole frame");
-        assertTrue(di.contains("uint slot = diReservoirSlot(historyPixel, size, parity ^ 1u);"),
-            "history comes from the other half");
-        assertTrue(di.contains("reservoirs[reservoirSlot()] = current;"),
-            "the record of this frame goes to this frame's half");
-        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
-        assertTrue(game.contains("long need = pixels * 2L * RtPathTraceSlangPass.RESERVOIR_BYTES;"),
-            "the host reserves both halves");
-        assertTrue(game.contains("int diParity = di.parity();"), "the host alternates the half");
-        assertTrue(game.contains("di.afterDispatch(diFlags != 0);"),
-            "and only advances it after a dispatch that really wrote records");
-        assertTrue(game.contains("nativeBuffers.createDeviceLocal(need,"),
-            "the Slang ring is its own buffer: the GLSL records have a different layout and a mode switch must not"
-                + " cross-feed them");
-    }
 
     /**
      * A reused sample must belong to the surface now shading this pixel. Every gate that keeps a wrong surface out has to survive
@@ -224,15 +204,11 @@ class RtSlangRestirDiTest {
             "the shader names the bit the host promises to set");
         assertTrue(entry.contains("directReuse.enabled = (pc.diState.x & PATH_TRACE_DI_ENABLED) != 0u ? 1u : 0u;"),
             "and the sampler is built either way");
-        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
+        String game = read(GAME_PASS);
         assertEquals(RtSlangPathPass.DI_FLAG_ENABLED, flag(entry, "PATH_TRACE_DI_ENABLED"), "enabled bit");
         assertEquals(RtSlangPathPass.DI_FLAG_HISTORY, flag(entry, "PATH_TRACE_DI_HISTORY"), "history bit");
         assertEquals(RtSlangPathPass.DI_FLAG_STATIC, flag(entry, "PATH_TRACE_DI_STATIC"), "static bit");
         assertEquals(RtSlangPathPass.DI_FLAG_FLIP_Y, flag(entry, "PATH_TRACE_DI_FLIP_Y"), "flipY bit");
-        assertTrue(game.contains("diFlags = di.flags("),
-            "the host never claims a history it did not write");
-        assertTrue(game.contains("if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null)"),
-            "reuse needs the ring, the player's switch and a list to reuse: without emitters there is nothing to carry over");
         assertTrue(read(CONFIG).contains("\"vkbridge.rt.restirDi\", \"true\""),
             "the A/B switch is there for the owner, on by default");
         assertTrue(game.contains("return RtConfig.SLANG_BLOCK_EMITTERS && RtConfig.SLANG_RESTIR_DI;"),
@@ -240,24 +216,6 @@ class RtSlangRestirDiTest {
     }
 
     /** The host has to refuse a push that enables the branch without a ring, and bind a dummy when it does not. */
-    @Test
-    void theHostGuardsTheBindingItPromises() {
-        String host = read(HOST_PASS);
-        assertTrue(host.contains("the push enables ReSTIR DI but no reservoir ring is bound"),
-            "a flag without a buffer fails at record time, not as a device-side out-of-bounds read");
-        assertTrue(host.contains("new Expected(\"reservoirs\", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER)"),
-            "the manifest is checked for the binding the host fills");
-        assertTrue(host.contains("reservoirDummy = zeroedBuffer(RESERVOIR_BYTES);"),
-            "with the branch off a one-record zeroed buffer still satisfies the descriptor");
-        String game = read(GAME_PASS) + "\n" + read(REFERENCE_BACKEND);
-        assertTrue(game.contains("RtPathTraceSlangPass.Reservoirs reservoirRange ="
-            + " RtPathTraceSlangPass.Reservoirs.NONE;"),
-            "and the game pass starts from that empty range every frame");
-        assertTrue(game.contains("VK10.vkCmdFillBuffer(cmd, reservoirs.handle(), 0L, reservoirs.size(), 0)"),
-            "a reset zeroes both halves, which is the only way to drop history a change of lights invalidates");
-        assertTrue(read(FRAME_PARAMS).contains("public long emitterFingerprint;"),
-            "the frame carries the identity of the light list the ring is keyed on");
-    }
 
     /**
      * The normal of a record travels in one float lane, so two mistakes are silent and total: packing with a numeric

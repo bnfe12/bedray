@@ -178,15 +178,17 @@ public class RtVegetationTagTest {
         assertEquals(0x01000000, RtWorld.VEGETATION_BIT, "bit 24 of the light word");
         assertEquals(0x02000000, RtWorld.LEAF_CUBE_BIT, "bit 25 of the light word");
         String traversal = java.nio.file.Files.readString(
-            java.nio.file.Path.of("src/main/resources/shaders/slang/traversal/legacy_section_traversal.slang"),
+            java.nio.file.Path.of("src/main/resources/shaders/slang/traversal/hardware_traversal.slang"),
             java.nio.charset.StandardCharsets.UTF_8).replace("\r\n", "\n");
-        assertTrue(traversal.contains("static const uint LEGACY_VERT_FLAG_VEGETATION   = 0x01000000u;"),
+        String geometry = java.nio.file.Files.readString(java.nio.file.Path.of(
+            "src/main/resources/shaders/slang/contracts/geometry.slang"));
+        assertTrue(geometry.contains("static const uint GEOMETRY_VERTEX_FLAG_VEGETATION = 1u << 0u;"),
             "the shader constant must equal RtWorld.VEGETATION_BIT");
-        assertTrue(traversal.contains("static const uint LEGACY_VERT_FLAG_LEAF_CUBE    = 0x02000000u;"),
+        assertTrue(geometry.contains("static const uint GEOMETRY_VERTEX_FLAG_LEAF_CUBE  = 1u << 1u;"),
             "the shader constant must equal RtWorld.LEAF_CUBE_BIT");
-        assertTrue(traversal.contains("(light0 & LEGACY_VERT_FLAG_VEGETATION) != 0u) result.flags |= HIT_FLAG_FOLIAGE;"),
+        assertTrue(traversal.contains("(vertexFlags & GEOMETRY_VERTEX_FLAG_VEGETATION) != 0u) result.flags |= HIT_FLAG_FOLIAGE;"),
             "foliage is the per-quad tag, not the cutout pass: bars, panes, ladders and rails must not glow warm when back-lit");
-        assertTrue(traversal.contains("(light0 & LEGACY_VERT_FLAG_LEAF_CUBE) != 0u) result.flags |= HIT_FLAG_LEAF_CUBE;"),
+        assertTrue(traversal.contains("(vertexFlags & GEOMETRY_VERTEX_FLAG_LEAF_CUBE) != 0u) result.flags |= HIT_FLAG_LEAF_CUBE;"),
             "the one-block shadow caster step belongs to full leaf cubes only");
     }
 

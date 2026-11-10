@@ -145,7 +145,7 @@ class RtSlangLayoutAbiTest {
             }
         }
         importers.sort(String::compareTo);
-        assertEquals(List.of("backend_query.slang", "bedray_legacy.slang"), importers,
+        assertEquals(List.of("backend_query.slang"), importers,
             "only modules that read none of the dead declarations import bindings.slang");
         assertTrue(read(BINDINGS).contains("uint64_t statsAddr;"),
             "the declarations still exist on the module surface; they are just not an ABI of any pass");
@@ -166,8 +166,8 @@ class RtSlangLayoutAbiTest {
 
     @Test
     void theCompiledManifestsAgreeWithTheHostStrides() {
-        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace AOT entry was not compiled");
-        var pathTrace = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene AOT entry was not compiled");
+        var pathTrace = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
         assertEquals(RtPathTraceSlangPass.PUSH_BYTES, pathTrace.pushConstantBytes());
         assertEquals(RtPathTraceSlangPass.FRAME_CONSTANTS_BYTES, pathTrace.binding("frame").elementBytes());
         assertEquals(RtPathTraceSlangPass.EMITTER_TABLE_ELEMENT_BYTES, pathTrace.binding("emitters").elementBytes());

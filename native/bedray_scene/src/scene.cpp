@@ -28,12 +28,12 @@ static_assert(sizeof(BedraySceneError) == 1028, "scene ABI: BedraySceneError mus
 static_assert(sizeof(BedraySceneAbiInfo) == 48, "scene ABI: BedraySceneAbiInfo must stay 48 bytes");
 static_assert(sizeof(BedraySceneDesc) == 88, "scene ABI: BedraySceneDesc must stay 88 bytes");
 static_assert(sizeof(BedraySceneSectionInput) == 96, "scene ABI: section input must stay 96 bytes");
-static_assert(sizeof(BedraySceneEntityInput) == 120, "scene ABI: entity input must stay 120 bytes");
+static_assert(sizeof(BedraySceneEntityInput) == 136, "scene ABI: entity input must be 136 bytes");
 static_assert(sizeof(BedraySceneUpdate) == 56, "scene ABI: update must stay 56 bytes");
 static_assert(sizeof(BedraySceneTableDesc) == 40, "scene ABI: table desc must stay 40 bytes");
 static_assert(sizeof(BedraySceneFrameDesc) == 24, "scene ABI: frame desc must stay 24 bytes");
 static_assert(sizeof(BedraySceneFrameInfo) == 80, "scene ABI: frame info must stay 80 bytes");
-static_assert(sizeof(BedraySceneResources) == 112, "scene ABI: resources must stay 112 bytes");
+static_assert(sizeof(BedraySceneResources) == 200, "scene ABI: resources must be 200 bytes");
 static_assert(sizeof(BedraySceneSectionRange) == 8, "scene ABI: section range must stay 8 bytes");
 static_assert(sizeof(BedraySceneSectionRecord) == 64, "scene ABI: section record must stay 64 bytes");
 static_assert(sizeof(BedraySceneStatus) == 4, "scene ABI: status enum must stay 4 bytes");
@@ -137,6 +137,8 @@ struct GeometryJob {
     uint64_t scratch_offset = 0;
     uint64_t vertex_upload_offset = 0;
     uint64_t index_upload_offset = 0;
+    uint64_t previous_upload_offset = 0;
+    uint64_t attributes_upload_offset = 0;
 };
 
 struct PlannedCopy {
@@ -258,7 +260,26 @@ bool can_collect(const Scene& scene, uint64_t after_frame) {
     return true;
 }
 
+void retire_atlas(Scene& scene, const MaterialAtlas& atlas) {
+    for (auto id : atlas.ids) {
+        if (id.serial) (void) scene.material_images->retire(id);
+    }
+    (void) scene.material_images->collect();
+}
+
+uint64_t resident_bytes(const Scene& scene) {
+    return scene.resident_bytes + (scene.material_images ? scene.material_images->resident_bytes() : 0);
+}
+
 void collect_garbage(Scene& scene) {
+    for (auto it = scene.retired_atlases.begin(); it != scene.retired_atlases.end();) {
+        if (can_collect(scene, it->after_frame)) {
+            retire_atlas(scene, it->atlas);
+            it = scene.retired_atlases.erase(it);
+        } else {
+            ++it;
+        }
+    }
     for (auto it = scene.retired_buffers.begin(); it != scene.retired_buffers.end();) {
         if (can_collect(scene, it->after_frame)) {
             destroy_buffer(scene, it->buffer);
@@ -268,9 +289,21 @@ void collect_garbage(Scene& scene) {
         }
     }
     for (auto it = scene.retired_accelerations.begin(); it != scene.retired_accelerations.end();) {
+        auto handle = it->acceleration.handle;
+        if (it->acceleration.storage.terrain_geometry) {
+            // A completed TLAS can be rebuilt next time instead of pinning evicted chunk BLAS.
+            for (auto& slot : scene.slots) {
+                if (slot.free && slot.tlas_valid &&
+                    std::find(slot.cached_blas_refs.begin(), slot.cached_blas_refs.end(), handle) != slot.cached_blas_refs.end()) {
+                    destroy_acceleration(scene, slot.tlas);
+                    slot.tlas_valid = false;
+                    slot.cached_blas_refs.clear();
+                }
+            }
+        }
         if (can_collect(scene, it->after_frame)
-                && !blas_referenced_by_outstanding(scene, it->acceleration.handle)
-                && !blas_referenced_by_cached_tlas(scene, it->acceleration.handle)) {
+                && !blas_referenced_by_outstanding(scene, handle)
+                && !blas_referenced_by_cached_tlas(scene, handle)) {
             destroy_acceleration(scene, it->acceleration);
             it = scene.retired_accelerations.erase(it);
         } else {
@@ -555,7 +588,8 @@ bool build_job_resource(Scene& scene, GeometryJob& job, BedraySceneError* error)
     const PendingMesh& mesh = *job.mesh;
     auto created = std::make_unique<GeometryResource>();
     uint64_t index_offset = 0;
-    if (!create_geometry_buffer(scene, mesh, created->gpu, index_offset, error)) {
+    if (!create_geometry_buffer(scene, mesh, created->gpu, index_offset, created->previous_offset,
+            created->attributes_offset, error)) {
         return false;
     }
     created->vertex_address = created->gpu.address;
@@ -573,6 +607,12 @@ bool build_job_resource(Scene& scene, GeometryJob& job, BedraySceneError* error)
             destroy_buffer(scene, created->gpu);
             return false;
         }
+    }
+    if (job.is_section) {
+        // Carry the accounting through retirement so an in-flight BLAS still consumes the budget.
+        created->gpu.terrain_geometry = true;
+        created->blas.storage.terrain_geometry = true;
+        scene.terrain_bytes += created->gpu.allocation_bytes + created->blas.storage.allocation_bytes;
     }
     job.created = std::move(created);
     return true;
@@ -845,6 +885,10 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
         if (!mesh.indices.empty()) {
             job.index_upload_offset = reserve_bytes(mesh.indices.size());
         }
+        if (!mesh.previous.empty()) {
+            job.previous_upload_offset = reserve_bytes(mesh.previous.size());
+            job.attributes_upload_offset = reserve_bytes(mesh.attributes.size());
+        }
     }
 
     for (uint32_t kind = 0; kind < BEDRAY_SCENE_TABLE_COUNT; ++kind) {
@@ -912,6 +956,12 @@ bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
             std::memcpy(base + job.index_upload_offset, mesh.indices.data(), mesh.indices.size());
             const uint64_t index_offset = static_cast<uint64_t>(job.created->index_address - job.created->gpu.address);
             plan.copies.push_back({ job.index_upload_offset, &job.created->gpu, index_offset, mesh.indices.size() });
+        }
+        if (!mesh.previous.empty()) {
+            std::memcpy(base + job.previous_upload_offset, mesh.previous.data(), mesh.previous.size());
+            std::memcpy(base + job.attributes_upload_offset, mesh.attributes.data(), mesh.attributes.size());
+            plan.copies.push_back({ job.previous_upload_offset, &job.created->gpu, job.created->previous_offset, mesh.previous.size() });
+            plan.copies.push_back({ job.attributes_upload_offset, &job.created->gpu, job.created->attributes_offset, mesh.attributes.size() });
         }
     }
     for (uint32_t kind = 0; kind < BEDRAY_SCENE_TABLE_COUNT; ++kind) {
@@ -1221,6 +1271,7 @@ void commit_plan(
                 section.geometry = std::move(job.created);
             }
             section.revision = job.mesh->geometry_revision;
+            ++scene.section_epoch;
             section.vertex_count = job.mesh->vertex_count;
             section.index_count = job.mesh->index_count;
             section.vertex_stride = job.mesh->vertex_stride;
@@ -1239,6 +1290,8 @@ void commit_plan(
                 entity.geometry->gpu = job.created->gpu;
                 entity.geometry->vertex_address = job.created->vertex_address;
                 entity.geometry->index_address = job.created->index_address;
+                entity.geometry->previous_offset = job.created->previous_offset;
+                entity.geometry->attributes_offset = job.created->attributes_offset;
                 job.created->gpu = Buffer{};
             } else {
                 if (entity.geometry) {
@@ -1376,6 +1429,25 @@ void commit_plan(
     resources.light_table_buffer = reinterpret_cast<uint64_t>(scene.tables[BEDRAY_SCENE_TABLE_LIGHT].gpu.handle);
     resources.light_table_address = scene.tables[BEDRAY_SCENE_TABLE_LIGHT].gpu.address;
     resources.light_table_bytes = scene.tables[BEDRAY_SCENE_TABLE_LIGHT].gpu.size;
+    if (scene.entities.size() == 1) {
+        const auto& entity = scene.entities.begin()->second;
+        const auto* mesh = entity.geometry.get();
+        if (mesh && mesh->previous_offset != 0) {
+            resources.entity_buffer = reinterpret_cast<uint64_t>(mesh->gpu.handle);
+            resources.entity_positions_bytes = entity.vertex_count * 12u;
+            resources.entity_indices_offset = mesh->index_address - mesh->gpu.address;
+            resources.entity_indices_bytes = entity.index_count * 4u;
+            resources.entity_previous_offset = mesh->previous_offset;
+            resources.entity_attributes_offset = mesh->attributes_offset;
+        }
+    }
+    const auto& rects = scene.tables[BEDRAY_SCENE_TABLE_ENTITY_RECTS].gpu;
+    const auto& texels = scene.tables[BEDRAY_SCENE_TABLE_ENTITY_TEXELS].gpu;
+    resources.entity_rect_buffer = reinterpret_cast<uint64_t>(rects.handle);
+    resources.entity_rect_bytes = rects.size;
+    resources.entity_texel_buffer = reinterpret_cast<uint64_t>(texels.handle);
+    resources.entity_texel_bytes = texels.size;
+    resources.section_epoch = scene.section_epoch;
     scene.last_resources = resources;
     scene.has_last_resources = true;
 }
@@ -1510,6 +1582,7 @@ void apply_sections(
             scene.retired_accelerations.push_back({ it->second.geometry->blas, retire_after });
         }
         scene.sections.erase(it);
+        ++scene.section_epoch;
         scene.membership_changed = true;
         scene.section_table_dirty = true;
     }
@@ -1618,6 +1691,20 @@ BedraySceneStatus prepare_entities(
                 input.indices, input.index_count, input.index_type, vertex_bytes, index_bytes);
             entry.mesh.geometry_revision = input.geometry_revision;
             entry.mesh.topology_revision = input.topology_revision;
+            if (input.previous_positions || input.attributes) {
+                if (!input.previous_positions || !input.attributes || input.vertex_stride != 12
+                    || input.index_type != BEDRAY_SCENE_INDEX_UINT32 || input.index_count == 0) {
+                    return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT,
+                        "render entity requires complete float3 positions, uint32 indices and attributes");
+                }
+                const uint64_t attribute_bytes = input.vertex_count * 16u;
+                if (vertex_bytes + index_bytes + vertex_bytes + attribute_bytes > scene.desc.max_geometry_bytes)
+                    return fail(error, BEDRAY_SCENE_ERROR_LIMIT, "render entity exceeds max_geometry_bytes");
+                entry.mesh.previous.resize(static_cast<size_t>(vertex_bytes));
+                entry.mesh.attributes.resize(static_cast<size_t>(attribute_bytes));
+                std::memcpy(entry.mesh.previous.data(), input.previous_positions, entry.mesh.previous.size());
+                std::memcpy(entry.mesh.attributes.data(), input.attributes, entry.mesh.attributes.size());
+            }
         }
 
         if (it != scene.entities.end()) {
@@ -1963,6 +2050,294 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_update_table(
     return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception updating scene table");
 }
 
+static_assert(sizeof(BedraySceneFrameTable) == 56);
+
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_publish_frame_table(
+    BedrayScene* scene, BedraySceneFrameTable* desc, BedraySceneError* error) try {
+    BedraySceneError local{};
+    auto* err = error ? error : &local;
+    clear_error(err);
+    if (!scene || !desc || desc->reserved || !desc->revision || desc->revision == kNoRevision
+        || (desc->size && !desc->data)
+        || (desc->table_kind > BEDRAY_SCENE_TABLE_LIGHT && desc->table_kind != BEDRAY_SCENE_TABLE_SKY))
+        return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "invalid frame table");
+    auto& impl = scene->impl;
+    if (impl.failed) return failed_status(impl, err);
+    const auto* slot = find_slot(impl, desc->frame_index);
+    if (!slot || !slot->command_buffer || desc->frame_index != impl.last_frame_index)
+        return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "frame table requires the current producer frame");
+    // Keep the entity atlas staging cap independent of high-resolution sky resource packs.
+    const uint64_t limit = desc->table_kind == BEDRAY_SCENE_TABLE_SKY ? 256ull << 20 : impl.desc.max_table_bytes;
+    if (desc->size > limit)
+        return fail(err, BEDRAY_SCENE_ERROR_LIMIT, "frame table exceeds its size limit");
+
+    auto& table = impl.tables[desc->table_kind];
+    if (table.has_pending)
+        return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "frame table also has a pending update");
+    if (table.revision != desc->revision) {
+        // Reserve before allocating; an allocation failure leaves the old publication intact.
+        if (table.gpu.handle) impl.retired_buffers.reserve(impl.retired_buffers.size() + 1);
+        Buffer next{};
+        if (desc->size) {
+            constexpr auto usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            if (!create_buffer(impl, desc->size, usage, true, next, err)) return err->status;
+            std::memcpy(next.mapped, desc->data, static_cast<size_t>(desc->size));
+            if (!flush_buffer(impl, next, 0, desc->size, err)) {
+                destroy_buffer(impl, next);
+                return err->status;
+            }
+        }
+        if (table.gpu.handle) impl.retired_buffers.push_back({table.gpu, impl.last_frame_index});
+        table.gpu = next;
+        table.revision = desc->revision;
+    }
+    desc->buffer = reinterpret_cast<uint64_t>(table.gpu.handle);
+    desc->address = table.gpu.address;
+    return BEDRAY_SCENE_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_SCENE_ERROR_OUT_OF_MEMORY, "cannot publish frame table");
+} catch (...) {
+    return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception publishing frame table");
+}
+
+static_assert(sizeof(BedraySceneMaterialRegion) == 24);
+static_assert(sizeof(BedraySceneMaterialUpload) == 64);
+
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_upload_materials(
+    BedrayScene* scene, BedraySceneMaterialUpload* upload, BedraySceneError* error) try {
+    BedraySceneError local{};
+    auto* err = error ? error : &local;
+    clear_error(err);
+    if (!scene || !upload || upload->reserved || !upload->width || !upload->height
+        || upload->width > 8192 || upload->height > 8192 || !upload->count || upload->count > 32768
+        || !upload->data || !upload->regions || !upload->plane_bytes || (upload->plane_bytes & 3)
+        || upload->plane_bytes > uint64_t(upload->width) * upload->height * 4)
+        return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "invalid material atlas upload");
+    auto& impl = scene->impl;
+    if (impl.failed) return failed_status(impl, err);
+    auto* slot = find_slot(impl, upload->frame_index);
+    if (!slot || !slot->command_buffer || upload->frame_index != impl.last_frame_index)
+        return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "material upload requires the current producer frame");
+    auto& atlas = impl.material_atlas;
+    const bool replace = atlas.width != upload->width || atlas.height != upload->height;
+    if (replace) {
+        const auto& first = upload->regions[0];
+        if (upload->count != 1 || first.x || first.y || first.width != upload->width || first.height != upload->height)
+            return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "new material atlas requires a full upload");
+        if (atlas.width) impl.retired_atlases.reserve(impl.retired_atlases.size() + 1);
+    }
+
+    std::array<std::vector<VkBufferImageCopy>, 2> copies;
+    for (unsigned i = 0; i < copies.size(); ++i) {
+        copies[i].resize(upload->count);
+        for (uint32_t j = 0; j < upload->count; ++j) {
+            const auto& region = upload->regions[j];
+            if (!region.width || !region.height || region.x >= upload->width || region.y >= upload->height
+                || region.width > upload->width - region.x || region.height > upload->height - region.y
+                || region.offset >= upload->plane_bytes || (region.offset & 3)
+                || uint64_t(region.width) * region.height * 4 > upload->plane_bytes - region.offset)
+                return fail(err, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "material upload region outside atlas or staging");
+            auto& copy = copies[i][j];
+            copy.bufferOffset = i * upload->plane_bytes + region.offset;
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageOffset = {int32_t(region.x), int32_t(region.y), 0};
+            copy.imageExtent = {region.width, region.height, 1};
+        }
+    }
+    if (!load_material_images(impl, err)) return err->status;
+    slot->transient.reserve(slot->transient.size() + 1);
+    Buffer staging{};
+    const uint64_t bytes = upload->plane_bytes * 2;
+    if (!create_buffer(impl, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, staging, err)) return err->status;
+    std::memcpy(staging.mapped, upload->data, static_cast<size_t>(bytes));
+    if (!flush_buffer(impl, staging, 0, bytes, err)) {
+        destroy_buffer(impl, staging);
+        return err->status;
+    }
+
+    if (replace) {
+        MaterialAtlas next{};
+        next.width = upload->width;
+        next.height = upload->height;
+        const bedray::gpu::ImageDesc desc{next.width, next.height, VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
+        for (unsigned i = 0; i < next.ids.size(); ++i) {
+            VkResult result;
+            const auto status = impl.material_images->create(desc, next.ids[i], next.views[i], result);
+            if (status != bedray::gpu::Status::ok) {
+                retire_atlas(impl, next);
+                destroy_buffer(impl, staging);
+                if (status == bedray::gpu::Status::device_lost)
+                    mark_failed(impl, BEDRAY_SCENE_ERROR_DEVICE_LOST, "material image allocation lost device");
+                return fail(err, status == bedray::gpu::Status::device_lost ? BEDRAY_SCENE_ERROR_DEVICE_LOST
+                    : status == bedray::gpu::Status::budget_exceeded ? BEDRAY_SCENE_ERROR_LIMIT
+                    : status == bedray::gpu::Status::out_of_memory ? BEDRAY_SCENE_ERROR_OUT_OF_MEMORY : BEDRAY_SCENE_ERROR_VULKAN,
+                    "cannot create material image: status=%u VkResult=%d", unsigned(status), int(result));
+            }
+        }
+        if (atlas.width) impl.retired_atlases.push_back({atlas, impl.last_frame_index});
+        atlas = next;
+    }
+    slot->transient.push_back(staging);
+
+    auto cmd = reinterpret_cast<VkCommandBuffer>(slot->command_buffer);
+    std::array<VkImageMemoryBarrier, 2> barriers{};
+    for (unsigned i = 0; i < barriers.size(); ++i) {
+        auto& b = barriers[i];
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcAccessMask = replace ? 0 : VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.oldLayout = replace ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = atlas.views[i].image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    impl.fns.cmd_pipeline_barrier(cmd, replace ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, uint32_t(barriers.size()), barriers.data());
+    for (unsigned i = 0; i < copies.size(); ++i) {
+        impl.fns.cmd_copy_buffer_to_image(cmd, staging.handle, atlas.views[i].image,
+            VK_IMAGE_LAYOUT_GENERAL, upload->count, copies[i].data());
+        auto& b = barriers[i];
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    impl.fns.cmd_pipeline_barrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0, 0, nullptr, 0, nullptr, uint32_t(barriers.size()), barriers.data());
+    upload->material_view = reinterpret_cast<uint64_t>(atlas.views[0].view);
+    upload->normal_view = reinterpret_cast<uint64_t>(atlas.views[1].view);
+    return BEDRAY_SCENE_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_SCENE_ERROR_OUT_OF_MEMORY, "cannot record material atlas upload");
+} catch (...) {
+    return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception recording material atlas");
+}
+
+static_assert(sizeof(BedraySceneCandidate) == 32);
+static_assert(sizeof(BedraySceneSelection) == 72);
+
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_select_sections(
+    BedrayScene* scene, BedraySceneSelection* selection, BedraySceneError* error) try {
+    if (!scene || !selection || selection->abi_version != BEDRAY_SCENE_ABI_VERSION
+        || selection->refresh > 1 || (!selection->refresh && selection->count)
+        || (selection->count && !selection->candidates) || (selection->quota && !selection->requests)
+        || selection->radius_xz > 512 || selection->radius_y > 512 || selection->margin > 32)
+        return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "invalid section selection");
+
+    auto& impl = scene->impl;
+    if (impl.failed) return failed_status(impl, error);
+    if (selection->refresh) {
+        std::map<uint64_t, BedraySceneCandidate> next;
+        for (uint32_t i = 0; i < selection->count; ++i) {
+            const auto& c = selection->candidates[i];
+            if (!c.id || !c.revision || !c.quads || !next.emplace(c.id, c).second)
+                return fail(error, BEDRAY_SCENE_ERROR_INVALID_ARGUMENT, "invalid or duplicate section candidate");
+        }
+        impl.candidates.swap(next);
+    }
+    const auto distance = [&](const BedraySceneCandidate& c, uint32_t margin) -> uint64_t {
+        const int64_t dx = int64_t(c.x) - selection->x;
+        const int64_t dy = int64_t(c.y) - selection->y;
+        const int64_t dz = int64_t(c.z) - selection->z;
+        if (std::abs(dx) > selection->radius_xz + margin || std::abs(dz) > selection->radius_xz + margin
+            || std::abs(dy) > selection->radius_y + margin) return UINT64_MAX;
+        return uint64_t(dx * dx + 4 * dy * dy + dz * dz);
+    };
+    std::vector<uint64_t> removed;
+    uint64_t far_id = 0, far_distance = 0;
+    for (const auto& [id, section] : impl.sections) {
+        const auto found = impl.candidates.find(id);
+        const auto d = found == impl.candidates.end() ? UINT64_MAX : distance(found->second, selection->margin);
+        if (d == UINT64_MAX) removed.push_back(id);
+        else if (!far_id || d > far_distance) { far_distance = d; far_id = id; }
+    }
+
+    using Request = std::pair<uint64_t, const BedraySceneCandidate*>;
+    std::vector<Request> queue;
+    for (const auto& [id, candidate] : impl.candidates) {
+        const uint64_t d = distance(candidate, 0);
+        if (d == UINT64_MAX) continue;
+        const auto found = impl.sections.find(id);
+        if (found == impl.sections.end() || (found->second.has_pending
+            ? found->second.pending.geometry_revision : found->second.revision) != candidate.revision)
+            queue.emplace_back(d, &candidate);
+    }
+    selection->pending = static_cast<uint32_t>(queue.size());
+    selection->requested = 0;
+    const size_t take = std::min<size_t>(queue.size(), selection->quota);
+    std::partial_sort(queue.begin(), queue.begin() + take, queue.end(), [](const Request& a, const Request& b) {
+        return a.first != b.first ? a.first < b.first : a.second->id < b.second->id;
+    });
+
+    // Reserve the entity capacity even when the captured aggregate is absent.
+    const size_t capacity = std::min(impl.desc.max_sections, impl.desc.max_instances - impl.desc.max_entities);
+    // The configured chunk budget applies to chunk geometry, including pending retirement.
+    // Atlas, entity and per-frame allocations still contribute to reported scene memory.
+    const auto budget = selection->budget_bytes;
+    const auto available_bytes = [&] {
+        return budget ? budget - std::min(budget, impl.terrain_bytes) : UINT64_MAX;
+    };
+    const auto estimate_bytes = [](const BedraySceneCandidate& candidate) {
+        // Allowance for vertex/index storage and BLAS; actual allocation can differ.
+        return uint64_t(candidate.quads) * 640u;
+    };
+    const bool over_budget = budget && impl.terrain_bytes > budget;
+    if (far_id && removed.empty() && can_collect(impl, impl.pressure_retire_after)) {
+        bool make_room = false;
+        if (take != 0) {
+            const auto& [near_distance, candidate] = queue.front();
+            const bool closer = candidate->id != far_id && near_distance + 4 < far_distance;
+            const bool no_slot = !impl.sections.contains(candidate->id) && impl.sections.size() >= capacity;
+            const auto bytes = estimate_bytes(*candidate);
+            const bool no_bytes = budget && bytes <= budget && bytes > available_bytes();
+            make_room = closer && (no_slot || no_bytes);
+        }
+        if (over_budget || make_room) removed.push_back(far_id);
+    }
+    if (!removed.empty()) {
+        BedraySceneUpdate update{};
+        update.abi_version = BEDRAY_SCENE_ABI_VERSION;
+        update.removed_section_count = static_cast<uint32_t>(removed.size());
+        update.removed_sections = removed.data();
+        const auto status = bedray_scene_update(scene, &update, error);
+        if (status != BEDRAY_SCENE_OK) return status;
+        impl.pressure_retire_after = impl.last_frame_index;
+    }
+
+    size_t projected = impl.sections.size();
+    uint64_t headroom = available_bytes();
+    for (size_t i = 0; i < take; ++i) {
+        const auto& candidate = *queue[i].second;
+        const bool added = !impl.sections.contains(candidate.id);
+        const uint64_t estimate = estimate_bytes(candidate);
+        if ((added && projected >= capacity) || estimate > headroom) continue;
+        if (added) ++projected;
+        headroom -= estimate;
+        selection->requests[selection->requested++] = candidate.id;
+    }
+    return BEDRAY_SCENE_OK;
+} catch (const std::bad_alloc&) {
+    return fail(error, BEDRAY_SCENE_ERROR_OUT_OF_MEMORY, "cannot plan terrain residency");
+} catch (...) {
+    return fail(error, BEDRAY_SCENE_ERROR_INTERNAL, "unexpected exception planning terrain residency");
+}
+
+BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_section_ids(
+    BedrayScene* scene, uint64_t* pairs, uint32_t capacity) {
+    if (!scene || !pairs) return 0;
+    uint32_t count = 0;
+    for (const auto& [id, section] : scene->impl.sections) {
+        if (count == capacity) break;
+        if (section.geometry) {
+            pairs[count * 2u] = id;
+            pairs[count * 2u + 1u] = section.revision;
+            ++count;
+        }
+    }
+    return count;
+}
+
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_set_view(
     BedrayScene* scene,
     double eye_x,
@@ -2202,7 +2577,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_query_resource
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_resident_bytes(
     BedrayScene* scene, uint64_t* out_bytes) try {
     if (scene == nullptr || out_bytes == nullptr) return BEDRAY_SCENE_ERROR_INVALID_ARGUMENT;
-    *out_bytes = scene->impl.resident_bytes;
+    *out_bytes = resident_bytes(scene->impl);
     return BEDRAY_SCENE_OK;
 } catch (...) {
     return BEDRAY_SCENE_ERROR_INTERNAL;
@@ -2216,6 +2591,17 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_destroy(Bedray
         Scene& impl = scene->impl;
         if (impl.outstanding > 0) {
             return BEDRAY_SCENE_ERROR_IN_USE;
+        }
+        if (impl.material_images) {
+            auto& images = *impl.material_images;
+            if (impl.failure_status == BEDRAY_SCENE_ERROR_DEVICE_LOST || (impl.memory && impl.memory->lost())) {
+                images.device_lost();
+                if (images.release_after_device_loss() != bedray::gpu::Status::ok) return BEDRAY_SCENE_ERROR_INTERNAL;
+            } else {
+                retire_atlas(impl, impl.material_atlas);
+                for (const auto& atlas : impl.retired_atlases) retire_atlas(impl, atlas.atlas);
+                if (images.close() != bedray::gpu::Status::ok) return BEDRAY_SCENE_ERROR_INTERNAL;
+            }
         }
         for (auto& [id, section] : impl.sections) {
             if (section.geometry) {

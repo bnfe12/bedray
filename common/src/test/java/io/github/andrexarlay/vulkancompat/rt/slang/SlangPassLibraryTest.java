@@ -141,10 +141,10 @@ class SlangPassLibraryTest {
      */
     @Test
     void pathTracePassKeepsTheLegacyGeometryContract() {
-        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene.slang was not compiled");
 
-        SlangPassManifest manifest = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
-        assertEquals(28, manifest.bindings().size(), "path_trace: binding count (26 + the ReSTIR PT ring at 36 + the stats slot at 37)");
+        SlangPassManifest manifest = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
+        assertEquals(28, manifest.bindings().size(), "path_trace_scene: binding count (26 + the ReSTIR PT ring at 36 + the stats slot at 37)");
         assertBinding(manifest, "tlas", 0, BedrayCoreLayouts.DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
         assertBinding(manifest, "outImage", 1, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_IMAGE);
         assertBinding(manifest, "sections", 2, BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -195,13 +195,13 @@ class SlangPassLibraryTest {
         assertEquals(16, manifest.binding("outMotionBuffer").elementBytes(),
             "one vec4 (motion xyz + entity flag) per render pixel, as in rt_pack_nrd.comp's Vec4Buf");
         assertEquals(112, manifest.pushConstantBytes(),
-            "path_trace: the 96-byte DI block plus the 16-byte entity state of this frame");
+            "path_trace_scene: the 96-byte DI block plus the 16-byte entity state of this frame");
         assertEquals(BedrayCoreLayouts.CAP_RAY_QUERY | BedrayCoreLayouts.CAP_BUFFER_DEVICE_ADDRESS
             | BedrayCoreLayouts.CAP_SHADER_INT64, manifest.requiredCapabilities(),
-            "path_trace: ray query + device addresses + 64-bit integers");
-        assertEquals(8, manifest.threadGroupSize()[0], "path_trace: group x");
-        assertEquals(8, manifest.threadGroupSize()[1], "path_trace: group y");
-        assertEquals(1, manifest.threadGroupSize()[2], "path_trace: group z");
+            "path_trace_scene: ray query + device addresses + 64-bit integers");
+        assertEquals(8, manifest.threadGroupSize()[0], "path_trace_scene: group x");
+        assertEquals(8, manifest.threadGroupSize()[1], "path_trace_scene: group y");
+        assertEquals(1, manifest.threadGroupSize()[2], "path_trace_scene: group z");
     }
 
     /**
@@ -211,10 +211,10 @@ class SlangPassLibraryTest {
      */
     @Test
     void pathTraceScenePassKeepsTheSameHostContractAsTheLegacyEntry() {
-        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace"), "path_trace.slang was not compiled");
+        Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene.slang was not compiled");
         Assumptions.assumeTrue(SlangPassLibrary.available("path_trace_scene"), "path_trace_scene.slang was not compiled");
 
-        SlangPassManifest legacy = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
+        SlangPassManifest legacy = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
         SlangPassManifest scene = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
 
         assertEquals(legacy.bindings().size(), scene.bindings().size(), "path_trace_scene: binding count");

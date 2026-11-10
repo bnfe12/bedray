@@ -21,7 +21,7 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Java 25 FFM binding of {@code native/bedray_scene/include/bedray_scene.h} (ABI v2).
+ * Java 25 FFM binding of {@code native/bedray_scene/include/bedray_scene.h} (ABI v3).
  *
  * <p>The host owns {@code VkInstance}, {@code VkPhysicalDevice}, {@code VkDevice},
  * the queue and the command buffer. This class passes their addresses to the
@@ -47,7 +47,10 @@ public final class BedraySceneNative implements AutoCloseable {
     private final MethodHandle createHandle;
     private final MethodHandle updateHandle;
     private final MethodHandle updateTableHandle;
+    private final MethodHandle publishFrameTableHandle;
+    private final MethodHandle uploadMaterialsHandle;
     private final MethodHandle setViewHandle;
+    private final MethodHandle selectSectionsHandle, sectionIdsHandle;
     private final MethodHandle prepareFrameHandle;
     private final MethodHandle retireProducerHandle;
     private final MethodHandle releaseFrameHandle;
@@ -74,7 +77,11 @@ public final class BedraySceneNative implements AutoCloseable {
                             long instanceBuffer, long instanceBufferAddress,
                             long sectionTableBuffer, long sectionTableAddress, long sectionTableBytes,
                             long materialTableBuffer, long materialTableAddress, long materialTableBytes,
-                            long lightTableBuffer, long lightTableAddress, long lightTableBytes) {
+                            long lightTableBuffer, long lightTableAddress, long lightTableBytes,
+                            long entityBuffer, long entityPositionsBytes, long entityIndicesOffset,
+                            long entityIndicesBytes, long entityPreviousOffset, long entityAttributesOffset,
+                            long entityRectBuffer, long entityRectBytes, long entityTexelBuffer,
+                            long entityTexelBytes, long sectionEpoch) {
     }
 
     /**
@@ -110,7 +117,8 @@ public final class BedraySceneNative implements AutoCloseable {
     /** One entity update; {@code transform} is the row-major 3x4 matrix {@code VkTransformMatrixKHR} takes. */
     public record Entity(long id, long geometryRevision, long topologyRevision, MemorySegment vertices,
                          long vertexCount, MemorySegment indices, long indexCount, int vertexStride,
-                         int indexType, int instanceMask, float[] transform) {
+                         int indexType, int instanceMask, float[] transform,
+                         MemorySegment previousPositions, MemorySegment attributes) {
         public Entity {
             if (vertices == null || vertices.equals(MemorySegment.NULL)) {
                 throw new IllegalArgumentException("an entity needs a vertex stream");
@@ -140,6 +148,11 @@ public final class BedraySceneNative implements AutoCloseable {
         try {
             abiVersionHandle = bind(linker, lookup, "bedray_scene_abi_version",
                 FunctionDescriptor.of(JAVA_INT));
+            int version = (int) abiVersionHandle.invokeExact();
+            if (version != BedraySceneLayouts.ABI_VERSION) {
+                throw new BedraySceneException("load", BedraySceneLayouts.STATUS_ABI_MISMATCH,
+                    "DLL ABI " + version + " != Java ABI " + BedraySceneLayouts.ABI_VERSION, null);
+            }
             featuresHandle = lookup.find("bedray_scene_features")
                 .map(symbol -> linker.downcallHandle(symbol, FunctionDescriptor.of(JAVA_INT))).orElse(null);
             abiInfoHandle = bind(linker, lookup, "bedray_scene_abi_info",
@@ -150,6 +163,14 @@ public final class BedraySceneNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
             updateTableHandle = bind(linker, lookup, "bedray_scene_update_table",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            publishFrameTableHandle = bind(linker, lookup, "bedray_scene_publish_frame_table",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            uploadMaterialsHandle = bind(linker, lookup, "bedray_scene_upload_materials",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            selectSectionsHandle = bind(linker, lookup, "bedray_scene_select_sections",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+            sectionIdsHandle = bind(linker, lookup, "bedray_scene_section_ids",
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
             setViewHandle = bind(linker, lookup, "bedray_scene_set_view",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, ADDRESS));
             prepareFrameHandle = bind(linker, lookup, "bedray_scene_prepare_frame",
@@ -166,17 +187,12 @@ public final class BedraySceneNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
             destroyHandle = bind(linker, lookup, "bedray_scene_destroy",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS));
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable t) {
             arena.close();
-            throw e;
+            throw rethrow("load", t);
         }
 
         try {
-            int version = (int) abiVersionHandle.invokeExact();
-            if (version != BedraySceneLayouts.ABI_VERSION) {
-                throw new BedraySceneException("load", BedraySceneLayouts.STATUS_ABI_MISMATCH,
-                    "DLL ABI " + version + " != Java ABI " + BedraySceneLayouts.ABI_VERSION, null);
-            }
             verifyReportedAbi(abiInfo());
         } catch (Throwable t) {
             arena.close();
@@ -209,12 +225,12 @@ public final class BedraySceneNative implements AutoCloseable {
     private static void verifyReportedAbi(AbiInfo info) {
         require("sizeof_desc", info.sizeofDesc(), 88);
         require("sizeof_section_input", info.sizeofSectionInput(), 96);
-        require("sizeof_entity_input", info.sizeofEntityInput(), 120);
+        require("sizeof_entity_input", info.sizeofEntityInput(), Math.toIntExact(BedraySceneLayouts.ENTITY_INPUT.byteSize()));
         require("sizeof_update", info.sizeofUpdate(), 56);
         require("sizeof_table_desc", info.sizeofTableDesc(), 40);
         require("sizeof_frame_desc", info.sizeofFrameDesc(), 24);
         require("sizeof_frame_info", info.sizeofFrameInfo(), 80);
-        require("sizeof_resources", info.sizeofResources(), 112);
+        require("sizeof_resources", info.sizeofResources(), Math.toIntExact(BedraySceneLayouts.RESOURCES.byteSize()));
         require("sizeof_section_record", info.sizeofSectionRecord(), 64);
         require("sizeof_error", info.sizeofError(), 1028);
     }
@@ -377,6 +393,57 @@ public final class BedraySceneNative implements AutoCloseable {
      * Uploads one side table (material or light words) or clears it with
      * {@code size == 0}. The scene copies the bytes during the call.
      */
+    public record TableView(long buffer, long address) {
+        public static final TableView EMPTY = new TableView(0, 0);
+    }
+
+    /** Input is CPU memory only. The views are borrowed from this native frame. */
+    public TableView publishFrameTable(long scene, long frame, int kind, long revision, java.nio.ByteBuffer bytes) {
+        ensureOpen();
+        try (Arena a = Arena.ofConfined()) {
+            var input = a.allocate(56, 8);
+            long length = bytes == null ? 0 : bytes.remaining();
+            var data = length == 0 ? MemorySegment.NULL : a.allocate(length, 8);
+            if (length != 0) data.copyFrom(MemorySegment.ofBuffer(bytes));
+            input.set(JAVA_LONG, 0, frame);
+            input.set(JAVA_INT, 8, kind);
+            input.set(JAVA_LONG, 16, revision);
+            input.set(ADDRESS, 24, data);
+            input.set(JAVA_LONG, 32, length);
+            var error = a.allocate(BedraySceneLayouts.ERROR);
+            int status = (int) publishFrameTableHandle.invokeExact(handle(scene), input, error);
+            check("publish_frame_table", status, error);
+            return new TableView(input.get(JAVA_LONG, 40), input.get(JAVA_LONG, 48));
+        } catch (Throwable t) {
+            throw rethrow("publish_frame_table", t);
+        }
+    }
+
+    public record MaterialViews(long material, long normal) {}
+
+    public MaterialViews uploadMaterials(long scene, long frame, int width, int height, int count,
+                                         MemorySegment regions, MemorySegment data, long planeBytes) {
+        ensureOpen();
+        if (count < 1 || regions.byteSize() != count * 24L || data.byteSize() != planeBytes * 2L)
+            throw new IllegalArgumentException("invalid material atlas input");
+        try (Arena a = Arena.ofConfined()) {
+            var input = a.allocate(64, 8);
+            input.set(JAVA_LONG, 0, frame);
+            input.set(JAVA_INT, 8, width);
+            input.set(JAVA_INT, 12, height);
+            input.set(JAVA_INT, 16, count);
+            input.set(ADDRESS, 24, regions);
+            input.set(ADDRESS, 32, data);
+            input.set(JAVA_LONG, 40, planeBytes);
+            var error = a.allocate(BedraySceneLayouts.ERROR);
+            int status = (int) uploadMaterialsHandle.invokeExact(handle(scene), input, error);
+            check("upload_materials", status, error);
+            return new MaterialViews(input.get(JAVA_LONG, 48), input.get(JAVA_LONG, 56));
+        } catch (Throwable t) {
+            throw rethrow("upload_materials", t);
+        }
+    }
+
     public void updateTable(long scene, int tableKind, long revision, MemorySegment data, long size) {
         ensureOpen();
         requireHandle(scene, "scene");
@@ -550,7 +617,18 @@ public final class BedraySceneNative implements AutoCloseable {
                 resources.get(JAVA_LONG, BedraySceneLayouts.R_MATERIAL_TABLE_BYTES),
                 resources.get(JAVA_LONG, BedraySceneLayouts.R_LIGHT_TABLE_BUFFER),
                 resources.get(JAVA_LONG, BedraySceneLayouts.R_LIGHT_TABLE_ADDRESS),
-                resources.get(JAVA_LONG, BedraySceneLayouts.R_LIGHT_TABLE_BYTES));
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_LIGHT_TABLE_BYTES),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_BUFFER),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_POSITIONS_BYTES),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_INDICES_OFFSET),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_INDICES_BYTES),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_PREVIOUS_OFFSET),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_ATTRIBUTES_OFFSET),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_RECT_BUFFER),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_RECT_BYTES),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_TEXEL_BUFFER),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_ENTITY_TEXEL_BYTES),
+                resources.get(JAVA_LONG, BedraySceneLayouts.R_SECTION_EPOCH));
         } catch (Throwable t) {
             throw rethrow("query_resources", t);
         }
@@ -625,8 +703,66 @@ public final class BedraySceneNative implements AutoCloseable {
         array.set(JAVA_INT, base + BedraySceneLayouts.EI_INDEX_TYPE, entity.indexType());
         array.set(JAVA_INT, base + BedraySceneLayouts.EI_INSTANCE_MASK, entity.instanceMask());
         array.set(JAVA_INT, base + BedraySceneLayouts.EI_INSTANCE_MASK + 4, 0);
+        array.set(ADDRESS, base + BedraySceneLayouts.EI_PREVIOUS, entity.previousPositions());
+        array.set(ADDRESS, base + BedraySceneLayouts.EI_ATTRIBUTES, entity.attributes());
         for (int i = 0; i < 12; ++i) {
             array.set(JAVA_FLOAT, base + BedraySceneLayouts.EI_TRANSFORM + i * 4L, entity.transform()[i]);
+        }
+    }
+
+    public record Candidate(long id, long revision, int x, int y, int z, int quads) {}
+    public record Selection(long[] requests, int pending) {}
+
+    /** Null candidates keeps the previous capture metadata; an empty list removes all candidates. */
+    public Selection selectSections(long scene, List<Candidate> candidates, int x, int y, int z,
+                                    int radiusXz, int radiusY, int margin, int quota, long budgetBytes) {
+        try (Arena arena = Arena.ofConfined()) {
+            int count = candidates == null ? 0 : candidates.size();
+            MemorySegment input = count == 0 ? MemorySegment.NULL : arena.allocate(32L * count, 8);
+            for (int i = 0; i < count; i++) {
+                var c = candidates.get(i);
+                long off = 32L * i;
+                input.set(JAVA_LONG, off, c.id());
+                input.set(JAVA_LONG, off + 8, c.revision());
+                input.set(JAVA_INT, off + 16, c.x());
+                input.set(JAVA_INT, off + 20, c.y());
+                input.set(JAVA_INT, off + 24, c.z());
+                input.set(JAVA_INT, off + 28, c.quads());
+            }
+            MemorySegment requestIds = quota == 0 ? MemorySegment.NULL : arena.allocate(JAVA_LONG, quota);
+            MemorySegment packet = arena.allocate(72, 8);
+            packet.set(JAVA_INT, 0, BedraySceneLayouts.ABI_VERSION);
+            packet.set(JAVA_INT, 4, candidates == null ? 0 : 1);
+            packet.set(ADDRESS, 8, input);
+            packet.set(JAVA_INT, 16, count);
+            packet.set(JAVA_INT, 20, x);
+            packet.set(JAVA_INT, 24, y);
+            packet.set(JAVA_INT, 28, z);
+            packet.set(JAVA_INT, 32, radiusXz);
+            packet.set(JAVA_INT, 36, radiusY);
+            packet.set(JAVA_INT, 40, margin);
+            packet.set(JAVA_INT, 44, quota);
+            packet.set(JAVA_LONG, 48, budgetBytes);
+            packet.set(ADDRESS, 56, requestIds);
+            MemorySegment error = arena.allocate(BedraySceneLayouts.ERROR);
+            int status = (int) selectSectionsHandle.invokeExact(handle(scene), packet, error);
+            check("select_sections", status, error);
+            int requested = packet.get(JAVA_INT, 64);
+            return new Selection(requested == 0 ? new long[0] : requestIds.asSlice(0, requested * 8L).toArray(JAVA_LONG),
+                packet.get(JAVA_INT, 68));
+        } catch (Throwable t) {
+            throw rethrow("select_sections", t);
+        }
+    }
+
+    public long[] sectionRevisions(long scene, int max) {
+        if (max <= 0) return new long[0];
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment ids = arena.allocate(JAVA_LONG, max * 2L);
+            int size = (int) sectionIdsHandle.invokeExact(handle(scene), ids, max);
+            return ids.asSlice(0, size * 16L).toArray(JAVA_LONG);
+        } catch (Throwable t) {
+            throw rethrow("section_ids", t);
         }
     }
 

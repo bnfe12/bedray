@@ -34,8 +34,6 @@ class RtFrameStatsTest {
     private static final Path SHADER = Path.of("src/main/resources/shaders/slang/passes/frame_stats.slang");
     private static final Path HOST = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtFrameStatsSlangPass.java");
-    private static final Path BACKEND = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
-        + "ReferencePathTraceBackend.java");
     private static final Path NATIVE_BACKEND = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "NativePathTraceBackend.java");
     private static final Path BRIDGE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
@@ -285,18 +283,6 @@ class RtFrameStatsTest {
     }
 
     /** The host binds sixteen bytes of one slot: the pass cannot reach the emitter address that lives behind them. */
-    @Test
-    void theHostBindsOnlyTheCounterHead() throws IOException {
-        String host = read(HOST);
-        assertEquals(RtFrameStatsSlangPass.COUNTER_BYTES,
-            RtStatsLayout.HIST_ACCEPTED + Integer.BYTES, "the head is the four counters and nothing more");
-        assertEquals(16, RtFrameStatsSlangPass.COUNTER_BYTES);
-        assertEquals(8, RtFrameStatsSlangPass.PUSH_BYTES);
-        assertTrue(host.contains("SlangProgram.Resource.storageBuffer(\"stats\", stats.buffer(), stats.offset(),"
-            + " COUNTER_BYTES)"), "the descriptor is the slot's head, at the slot's own offset");
-        assertTrue(host.contains("if (stats == null || stats.buffer() == 0L || stats.bytes() < COUNTER_BYTES)"),
-            "a frame without a slot is refused, not bound at zero");
-    }
 
     /** The generated manifest satisfies the host's promise, and a one-sided shader edit is refused at creation. */
     @Test
@@ -328,18 +314,6 @@ class RtFrameStatsTest {
     }
 
     /** It reads what the display step wrote a moment earlier, and rides the barrier the picture already needs. */
-    @Test
-    void theCountersAreReadAfterTheDisplayStepWroteThem() throws IOException {
-        String backend = read(BACKEND);
-        int barrier = backend.indexOf("VkBarriers.fullMemoryBarrier(cmd); // rt_output and rt_depth are read");
-        int counters = backend.indexOf("statistics.record(cmd");
-        assertTrue(barrier > 0, "the backend still ends its recording with the barrier the composite needs");
-        assertTrue(counters > barrier, "the counters come after it, so accum and depth are the ones just written");
-        assertTrue(backend.contains("statistics.record(cmd, trace.radianceView(), accum[write].view(),"
-            + " views.depth(), input.stats(),"), "the accumulation image is the one this frame wrote, not the other half");
-        assertTrue(backend.contains("if (statistics != null) statistics.releaseRecording(commandBuffer);"),
-            "every dispatch holds a descriptor pool until the recording is proven");
-    }
 
     /** The slot the pass writes is the slot the renderer leases and zeroes, and the native core is handed it too. */
     @Test

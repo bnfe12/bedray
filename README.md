@@ -30,6 +30,10 @@ Bedray is **unofficial**. It is not affiliated with, endorsed by or sponsored by
 
 *Early alpha captures from one NVIDIA GeForce RTX 5060 Ti 8 GB system; they are not a quality or performance guarantee.* More images, modes and caveats: [docs/GALLERY.md](docs/GALLERY.md).
 
+Built-in hardware rays and path tracing use the C++ scene and AOT Slang.
+Install the loader JAR and its matching first-party `bedray_core.dll` together.
+See [installation](docs/INSTALL.md) and [Alpha 2 migration evidence](docs/ALPHA2_NATIVE_SCENE.md).
+
 ## What it does
 
 * **Path Tracing:** global illumination with several bounces, accumulation, auto exposure and a denoiser
@@ -67,7 +71,7 @@ multi-GPU performance and fresh live-game acceptance remain pending. See [COMPUT
 | Driver | Vulkan 1.3 or 1.4 |
 | Game | Minecraft 26.3 with the Vulkan graphics backend |
 | Loader | NeoForge 26.3.0.x, or Fabric (fabric-loader 0.19.5 or newer). Fabric has less testing than NeoForge. |
-| Required mods | Sodium 0.9.x (tested with 0.9.2). Bedray is a single jar; nothing else is needed |
+| Required mods | Sodium 0.9.x (tested with 0.9.2). One Bedray JAR per loader; hardware RT/PT also needs the matching `bedray_core.dll` |
 | Java | 25 |
 
 Bedray is client-side only and switches the game to the Vulkan backend in `options.txt`.

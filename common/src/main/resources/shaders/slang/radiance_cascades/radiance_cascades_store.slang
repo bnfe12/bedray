@@ -13,7 +13,7 @@
 // unqualified rcResolveProbe / rcProbeComplete names in probe_resolve.slang.
 //
 // The default bedray.slang root does not export this module.  A host that
-// deliberately keeps the old atlas imports bedray_legacy.slang or this path.
+// deliberately keeps the old atlas imports this module directly.
 
 public module radiance_cascades_store;
 

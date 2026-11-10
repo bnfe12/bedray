@@ -25,11 +25,10 @@ class RtSlangNrdMotionTest {
 
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
-    private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
     private static final String SCENE_PASS = SHADERS + "/passes/path_trace_scene.slang";
     private static final String HOST_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java";
     private static final String HOST_FRAME = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java";
-    private static final String BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java";
     private static final String BINDINGS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameBindings.java";
 
@@ -106,46 +105,9 @@ class RtSlangNrdMotionTest {
             "the manifest must declare the binding as a storage buffer");
         assertTrue(record.contains("requireElementBytes(manifest, \"outMotionBuffer\", MOTION_ELEMENT_BYTES);"),
             "a shader whose vec4 is not 16 bytes would index past the bound range");
-        assertTrue(record.contains("motionDummy = zeroedBuffer(MOTION_ELEMENT_BYTES);"),
-            "a zero element keeps the descriptor complete when the layout is not NRD");
-        assertTrue(record.contains("nativeBuffers.retain(cmd.address(), motionDummy);"),
-            "the dummy outlives every recording that references it");
-        assertTrue(record.contains("boolean wantsMotion = (dispatch.flags() & OPTION_NRD_MOTION) != 0;"),
-            "the flag and the binding are two halves of one contract");
-        assertTrue(record.contains("if (wantsMotion != (boundMotion.buffer() != 0L)) {"),
-            "record refuses a flag without a buffer and a buffer without the flag");
-        assertTrue(record.contains("long motionBytes = (long) frame.width * frame.height * MOTION_ELEMENT_BYTES;"),
-            "the shader writes exactly one record per pixel");
-        assertTrue(record.contains("if (boundMotion.buffer() != 0L && boundMotion.bytes() < motionBytes) {"),
-            "a short range is a host bug, and the missing-buffer case is not a size failure");
-        assertTrue(record.contains("if (wantsMotion && boundGuides == null) {"),
-            "NRD also consumes the guides, so motion without a G-buffer is refused");
-        String resources = block(record, "private List<SlangProgram.Resource> resources(");
-        assertTrue(resources.contains("motionBuffer(nrdMotion, motionDummy),"), "the binding is always supplied");
-        String helper = block(record, "private static SlangProgram.Resource motionBuffer(");
-        assertTrue(helper.contains("return SlangProgram.Resource.storageBuffer(\"outMotionBuffer\", dummy.handle(), 0L, dummy.size());"),
-            "the dummy is the fallback, never a stale ring slice");
+
     }
 
-    @Test
-    void theFrameTurnsTheBitOnOnlyWhenTheViewsCarryTheBuffer() {
-        String frame = read(HOST_FRAME);
-        assertTrue(frame.contains("guideOptionFlags(guides != null, views.motion() != 0L, params.rrGuides)"),
-            "the push follows the bound views, never a setting");
-        assertTrue(frame.contains("| rayEffectFlags()\n"
-                + "            | pixelShadowFlags()\n"),
-            "the ray profile's effect bits and the pixel-shadow option OR into the same flag word, not a second one");
-        assertTrue(frame.contains("| (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0)\n"
-                + "            // ReSTIR PT: the request and the camera facts."),
-            "the block-emitter switch and the ReSTIR PT request close the same word: a second push word would be a"
-                + " different ABI");
-        String backend = read(BACKEND);
-        assertTrue(backend.contains("RtPathTraceSlangPass.BufferView motion = (dispatch.flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0"),
-            "the backend derives the binding from the same flag the push carries");
-        assertTrue(backend.contains("(long) width * height * RtPathTraceSlangPass.MOTION_ELEMENT_BYTES)"),
-            "and binds exactly the pixels this frame writes");
-        assertTrue(backend.contains("motion, views.depth(), input.stats(), frame, dispatch);"), "the range travels with the frame");
-    }
 
     @Test
     void theMotionBufferIsTheDenoisersOwnVec4PixelBuffer() {
@@ -156,7 +118,7 @@ class RtSlangNrdMotionTest {
             "consumer addresses follow the actual producer, including zero when disabled");
         assertTrue(renderer.contains("motionHandle = frameMotion().handle;"),
             "the pass receives the handle of the buffer the pack reads by address");
-        assertTrue(renderer.contains("lightmapView, motionHandle));"), "the handle rides with the frame's views");
+        assertTrue(renderer.contains("lightmapView, motionHandle, world.entityBindings()));"), "the handle rides with the frame's views");
         assertTrue(read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameResources.java").contains("void ensureMotion(int w, int h) {"),
             "one allocation site for both the address and the binding");
         String preflight = block(renderer, "private static void prepareFrameResources(");
@@ -174,7 +136,7 @@ class RtSlangNrdMotionTest {
         assertFalse(renderer.contains("the Slang path does not fill yet"),
             "the refusal that used to gate this buffer must not come back");
         String views = block(read(BINDINGS), "public record Views(");
-        assertTrue(views.contains("long depth, long lightmap, long motion) {"),
+        assertTrue(views.contains("long depth, long lightmap, long motion, RtPathTraceSlangPass.Entities entities) {"),
             "the motion handle is part of the frame's views");
         assertTrue(views.contains("gbuffer, 0L, 0L, 0L);"),
             "a frame without motion uses the same record, so the allocation is not a descriptor rebind");

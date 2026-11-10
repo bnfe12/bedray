@@ -1,16 +1,16 @@
 package io.github.andrexarlay.vulkancompat.rt.material;
 
-import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
-import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
+import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneNative.MaterialViews;
+import io.github.andrexarlay.vulkancompat.resources.ResourceReloadEpoch;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceProvider;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VkBufferImageCopy;
-import org.lwjgl.vulkan.VkCommandBuffer;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,56 +23,47 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * GPU side of the RT materials: two RGBA8 images with the layout of the block atlas (material: roughness / f0-or-metal /
- * emission / source; normal: LabPBR {@code _n} texel), sampled by rt_rays.comp and rt_path.comp (bindings 9 and 10).
- * <p>
- * Baking is progressive: a daemon worker thread bakes sprites off the render thread, and every frame the render thread
- * uploads only the sprite rects finished since the last frame (tight-packed staging, one {@link VkBufferImageCopy} per
- * sprite per image). A resource pack switch therefore spreads over a few frames instead of freezing one frame on a full
- * atlas bake + full re-upload + {@code vkDeviceWaitIdle}; until a sprite is baked it keeps the previous content or the
- * matte default. Only an atlas size change recreates the images (with a single waitIdle, as the old images may still be
- * sampled by frames in flight). The retired staging buffers are freed {@link #STAGING_LIFETIME} frames later (the engine
- * keeps at most two frames in flight).
+ * Captures and bakes Minecraft material sprites. C++ owns both atlas images and the
+ * staging for their uploads; the frame holds only their borrowed image views.
  */
 public final class RtMaterialAtlas {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
-    private static final int STAGING_LIFETIME = 4;
     /** Upload at most this many texels per frame (a single sprite always goes through, however large). */
     private static final long UPLOAD_TEXEL_BUDGET = 1L << 19;
 
-    private final RtMemory memory;
-    private RtMemory.Img material;
-    private RtMemory.Img normal;
-    private RtMemory.Buf opticalBuffer;
-    private OpticalMaterials optics = new OpticalMaterials();
-    private int uploadedOpticalProfiles;
+    @FunctionalInterface
+    public interface Uploader {
+        MaterialViews upload(int width, int height, int count, MemorySegment regions, MemorySegment data, long planeBytes);
+    }
 
-    public long opticalAddress() { return opticalBuffer == null ? 0L : opticalBuffer.address; }
+    private long materialView, normalView;
+    private int width, height;
+    private long captureEpoch;
+    private OpticalMaterials optics = new OpticalMaterials();
+    private static final java.util.concurrent.atomic.AtomicLong OPTICAL_REVISIONS = new java.util.concurrent.atomic.AtomicLong();
+    private int publishedOpticalCount;
+    private long opticalRevision;
+    private java.nio.ByteBuffer opticalBytes;
+
+    public long opticalRevision() { return opticalRevision; }
+    public java.nio.ByteBuffer opticalBytes() { return opticalBytes; }
+
+    private void refreshOpticalPalette() {
+        var profiles = optics.snapshot();
+        if (profiles.size() == publishedOpticalCount) return;
+        var bytes = java.nio.ByteBuffer.allocate(OpticalMaterials.BYTES).order(java.nio.ByteOrder.nativeOrder());
+        for (int i = 1; i < profiles.size(); i++) {
+            bytes.asFloatBuffer().position(i * OpticalMaterials.FLOATS).put(profiles.get(i).data());
+        }
+        opticalBytes = bytes.asReadOnlyBuffer();
+        opticalRevision = OPTICAL_REVISIONS.incrementAndGet();
+        publishedOpticalCount = profiles.size();
+    }
     public int opticalProfileCount() { return optics.snapshot().size() - 1; }
     private Object bakedAtlas;
     private int bakedW = -1;
     private int bakedH = -1;
     private MaterialAtlasBaker.Result last;
-
-    /**
-     * Render-thread observer of the bake for the opacity micromap cache: epoch boundaries and every finished sprite
-     * (with its albedo alpha and animated flag) so cutout texels can be classified. All methods run on the render
-     * thread, never on the bake worker.
-     */
-    public interface MicromapSink {
-        void onEpochStart();
-
-        void onSpriteBaked(int x0, int y0, int w, int h, int[] material, byte[] alpha, boolean animated,
-                           int atlasWidth, int atlasHeight);
-
-        void onEpochFinished();
-    }
-
-    private volatile MicromapSink micromapSink;
-
-    public void setMicromapSink(MicromapSink sink) {
-        this.micromapSink = sink;
-    }
 
     /** CPU-side atlas: the source of truth for uploads; the live arrays are shared with the emitters via {@link #last}. */
     private int[] cpuMaterial;
@@ -90,9 +81,6 @@ public final class RtMaterialAtlas {
     private int[] cpuNormal;
 
     private record Completed(MaterialAtlasBaker.SpriteBake bake, Epoch owner) {
-    }
-
-    private record Retired(RtMemory.Buf buf, int frames) {
     }
 
     private static final class Epoch {
@@ -127,41 +115,31 @@ public final class RtMaterialAtlas {
     private volatile boolean shutdown;
     private Thread worker;
     private final ConcurrentLinkedQueue<Completed> completed = new ConcurrentLinkedQueue<>();
-    private final ArrayList<Retired> retired = new ArrayList<>();
-
-    public RtMaterialAtlas(RtMemory memory) {
-        this.memory = memory;
-    }
-
-    public long materialView() {
-        return material.view;
-    }
-
-    public long normalView() {
-        return normal.view;
-    }
+    public long materialView() { return materialView; }
+    public long normalView() { return normalView; }
 
     public MaterialAtlasBaker.Result lastBake() {
         return last;
     }
 
     /**
-     * Makes the images match {@code atlas}: starts a progressive bake when the atlas changed and records the uploads of
-     * the sprites finished since the last frame into {@code cmd}. Must be called outside a render pass, before the RT
-     * dispatch of the frame. Returns true when an upload was recorded.
+     * Starts a new bake after a resource reload, and gives the native frame its finished sprite regions before tracing.
      */
-    public boolean ensure(VkCommandBuffer cmd, TextureAtlas atlas, int width, int height, ResourceProvider resources) {
-        for (int i = retired.size() - 1; i >= 0; i--) {
-            Retired r = retired.get(i);
-            if (r.frames() - 1 <= 0) {
-                memory.destroy(r.buf());
-                retired.remove(i);
-            } else {
-                retired.set(i, new Retired(r.buf(), r.frames() - 1));
-            }
+    public boolean ensure(Uploader uploader, TextureAtlas atlas, int width, int height, ResourceProvider resources) {
+        long revision = ResourceReloadEpoch.current();
+        if (captureEpoch != revision) {
+            if (epoch != null) epoch.cancelled = true;
+            epoch = null;
+            bakedAtlas = null;
+            // The atlas dimensions can stay fixed while every sprite moves or changes.
+            // Reinitialize both planes together before sampling any rect of the new game atlas.
         }
-        if (material == null || material.width != width || material.height != height) {
-            recreateImages(cmd, width, height);
+        if (materialView == 0 || this.width != width || this.height != height || captureEpoch != revision) {
+            if (epoch != null) epoch.cancelled = true;
+            epoch = null;
+            last = null;
+            initialize(uploader, width, height);
+            captureEpoch = revision;
         }
         if (epoch == null) {
             if (atlas == bakedAtlas && width == bakedW && height == bakedH) {
@@ -172,50 +150,33 @@ public final class RtMaterialAtlas {
             epoch.cancelled = true;
             startEpoch(atlas, width, height, resources);
         }
-        return drainAndUpload(cmd);
+        return drainAndUpload(uploader);
     }
 
-    private void recreateImages(VkCommandBuffer cmd, int width, int height) {
+    private void initialize(Uploader uploader, int width, int height) {
         io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setLookup(null);
-        if (material != null) {
-            VK10.vkDeviceWaitIdle(memory.device); // in-flight frames may still sample the old images
-            memory.destroy(material);
-            memory.destroy(normal);
-            if (opticalBuffer != null) memory.destroy(opticalBuffer);
-            material = null;
-            normal = null;
-            opticalBuffer = null;
-        }
         optics = new OpticalMaterials();
-        opticalBuffer = memory.createBuffer("rt_optical_profiles", OpticalMaterials.BYTES,
-            VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
-        MemoryUtil.memSet(opticalBuffer.mapped, 0, OpticalMaterials.BYTES);
-        uploadedOpticalProfiles = 1; // slot zero stays empty; publish reserved built-ins before referencing sprite rects
-        int usage = VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        material = memory.createImage("rt_material_atlas", width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, usage);
-        normal = memory.createImage("rt_normal_atlas", width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, usage);
-        VkBarriers.transition(cmd, material.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT, VK10.VK_IMAGE_LAYOUT_UNDEFINED,
-            VK10.VK_IMAGE_LAYOUT_GENERAL);
-        VkBarriers.transition(cmd, normal.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT, VK10.VK_IMAGE_LAYOUT_UNDEFINED,
-            VK10.VK_IMAGE_LAYOUT_GENERAL);
-        cpuMaterial = new int[width * height];
+        publishedOpticalCount = 0;
+        refreshOpticalPalette();
+        cpuMaterial = new int[Math.multiplyExact(width, height)];
         Arrays.fill(cpuMaterial, LabPbr.materialFromAuto(AutoPbr.DEFAULT, 0f));
         CPU_MATERIAL_VERSION.incrementAndGet();
-        cpuNormal = new int[width * height];
+        cpuNormal = new int[cpuMaterial.length];
         Arrays.fill(cpuNormal, LabPbr.FLAT_NORMAL);
         bakedAtlas = null;
         bakedW = width;
         bakedH = height;
-        // fill every texel with the default material so no region is ever undefined while the bake progresses
-        long bytes = (long) width * height * 4L;
-        RtMemory.Buf st = memory.createBuffer("rt_material_staging", bytes * 2, VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
-        MemoryUtil.memIntBuffer(st.mapped, width * height).put(cpuMaterial);
-        MemoryUtil.memIntBuffer(st.mapped + bytes, width * height).put(cpuNormal);
-        VkBarriers.fullMemoryBarrier(cmd);
-        copyFull(cmd, st.handle, 0L, material.image, width, height);
-        copyFull(cmd, st.handle, bytes, normal.image, width, height);
-        VkBarriers.fullMemoryBarrier(cmd);
-        retired.add(new Retired(st, STAGING_LIFETIME));
+        try (Arena arena = Arena.ofConfined()) {
+            long planeBytes = (long) cpuMaterial.length * Integer.BYTES;
+            var regions = arena.allocate(24, 8);
+            setRegion(regions, 0, 0, 0, 0, width, height);
+            var pixels = arena.allocate(planeBytes * 2, 4);
+            MemorySegment.copy(cpuMaterial, 0, pixels, JAVA_INT, 0, cpuMaterial.length);
+            MemorySegment.copy(cpuNormal, 0, pixels, JAVA_INT, planeBytes, cpuNormal.length);
+            setViews(uploader.upload(width, height, 1, regions, pixels, planeBytes));
+        }
+        this.width = width;
+        this.height = height;
     }
 
     private void startEpoch(TextureAtlas atlas, int width, int height, ResourceProvider resources) {
@@ -239,9 +200,6 @@ public final class RtMaterialAtlas {
         // a live Result from the first epoch frame: the emitters read the same arrays and refresh once at the end
         last = new MaterialAtlasBaker.Result(width, height, cpuMaterial, cpuNormal, sprites.size(), 0, 0, 0, 0, 0, 0.0);
         pendingEpoch = e;
-        if (micromapSink != null) {
-            micromapSink.onEpochStart();
-        }
         if (worker == null) {
             worker = new Thread(this::workerLoop, "VKB-RT-MaterialBake");
             worker.setDaemon(true);
@@ -258,7 +216,7 @@ public final class RtMaterialAtlas {
                 continue;
             }
             pendingEpoch = null;
-            boolean wantAlpha = micromapSink != null;
+            boolean wantAlpha = false;
             TextureAtlasSprite s;
             while (!e.cancelled && !shutdown && (s = e.queue.poll()) != null) {
                 MaterialAtlasBaker.SpriteBake b = MaterialAtlasBaker.bakeSprite(s, e.width, e.height, e.resources, wantAlpha, e.optics);
@@ -287,7 +245,7 @@ public final class RtMaterialAtlas {
         }
     }
 
-    private boolean drainAndUpload(VkCommandBuffer cmd) {
+    private boolean drainAndUpload(Uploader uploader) {
         Epoch e = epoch;
         if (e == null) {
             return false;
@@ -312,12 +270,7 @@ public final class RtMaterialAtlas {
             return false;
         }
         mirrorToCpu(batch, e.width, e.height);
-        var opticalProfiles = optics.snapshot();
-        for (int i = uploadedOpticalProfiles; i < opticalProfiles.size(); i++) {
-            MemoryUtil.memFloatBuffer(opticalBuffer.mapped + (long) i * OpticalMaterials.FLOATS * Float.BYTES,
-                OpticalMaterials.FLOATS).put(opticalProfiles.get(i).data());
-        }
-        uploadedOpticalProfiles = opticalProfiles.size();
+        refreshOpticalPalette();
         int[] lookup = cpuMaterial;
         OpticalMaterials palette = optics;
         io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setLookup((u, v) -> {
@@ -327,13 +280,7 @@ public final class RtMaterialAtlas {
             int id = OpticalMaterials.profileId(lookup[y * e.width + x]);
             return palette.cullsGlass(id) ? id : 0;
         });
-        if (micromapSink != null) {
-            for (MaterialAtlasBaker.SpriteBake b : batch) {
-                micromapSink.onSpriteBaked(b.x0(), b.y0(), b.w(), b.h(), b.material(), b.alpha(), b.animated(),
-                    e.width, e.height);
-            }
-        }
-        uploadSprites(cmd, batch);
+        uploadSprites(uploader, batch);
         return true;
     }
 
@@ -345,9 +292,6 @@ public final class RtMaterialAtlas {
         bakedW = e.width;
         bakedH = e.height;
         epoch = null;
-        if (micromapSink != null) {
-            micromapSink.onEpochFinished();
-        }
         LOGGER.info(String.format(Locale.ROOT,
             "[VKB-RT] materials baked atlas=%dx%d sprites=%d labpbr_s=%d labpbr_n=%d auto_normals=%d emissive_sprites=%d metal_sprites=%d errors=%d ms=%.1f (progressive)",
             e.width, e.height, last.sprites(), e.labS, e.labN, e.autoN, e.emissive, e.metal, e.errors, ms));
@@ -372,74 +316,41 @@ public final class RtMaterialAtlas {
         }
     }
 
-    private void uploadSprites(VkCommandBuffer cmd, ArrayList<MaterialAtlasBaker.SpriteBake> batch) {
-        long texels = 0;
-        for (MaterialAtlasBaker.SpriteBake b : batch) {
-            texels += (long) b.w() * b.h();
-        }
-        long bytes = texels * 4L;
-        RtMemory.Buf st = memory.createBuffer("rt_material_staging", bytes * 2, VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
-        VkBufferImageCopy.Buffer matRegions = regions(batch.size());
-        VkBufferImageCopy.Buffer norRegions = regions(batch.size());
-        try {
-            long off = 0;
+    private void uploadSprites(Uploader uploader, ArrayList<MaterialAtlasBaker.SpriteBake> batch) {
+        long planeBytes = 0;
+        for (var sprite : batch) planeBytes += (long) sprite.w() * sprite.h() * Integer.BYTES;
+        try (Arena arena = Arena.ofConfined()) {
+            var regions = arena.allocate(24L * batch.size(), 8);
+            var pixels = arena.allocate(planeBytes * 2, 4);
+            long offset = 0;
             for (int i = 0; i < batch.size(); i++) {
-                MaterialAtlasBaker.SpriteBake b = batch.get(i);
-                int wh = b.w() * b.h();
-                MemoryUtil.memIntBuffer(st.mapped + off, wh).put(b.material());
-                fillRegion(matRegions.get(i), off, b);
-                off += (long) wh * 4L;
+                var sprite = batch.get(i);
+                int texels = Math.multiplyExact(sprite.w(), sprite.h());
+                setRegion(regions, i, offset, sprite.x0(), sprite.y0(), sprite.w(), sprite.h());
+                MemorySegment.copy(sprite.material(), 0, pixels, JAVA_INT, offset, texels);
+                MemorySegment.copy(sprite.normal(), 0, pixels, JAVA_INT, planeBytes + offset, texels);
+                offset += (long) texels * Integer.BYTES;
             }
-            for (int i = 0; i < batch.size(); i++) {
-                MaterialAtlasBaker.SpriteBake b = batch.get(i);
-                int wh = b.w() * b.h();
-                MemoryUtil.memIntBuffer(st.mapped + off, wh).put(b.normal());
-                fillRegion(norRegions.get(i), off, b);
-                off += (long) wh * 4L;
-            }
-            VkBarriers.fullMemoryBarrier(cmd);
-            // GENERAL is a valid layout for transfer destinations (VUID-vkCmdCopyBufferToImage-dstImageLayout-01396)
-            VK10.vkCmdCopyBufferToImage(cmd, st.handle, material.image, VK10.VK_IMAGE_LAYOUT_GENERAL, matRegions);
-            VK10.vkCmdCopyBufferToImage(cmd, st.handle, normal.image, VK10.VK_IMAGE_LAYOUT_GENERAL, norRegions);
-            VkBarriers.fullMemoryBarrier(cmd);
-        } finally {
-            matRegions.free();
-            norRegions.free();
-        }
-        retired.add(new Retired(st, STAGING_LIFETIME));
-    }
-
-    /**
-     * The region arrays are sized by the batch, and the batch is data-driven: a frame that follows a long stall drains
-     * the whole atlas at once (1313 sprites of a 2048x2048 atlas). One such array is 71 KiB, past the 64 KiB
-     * thread-local LWJGL stack that {@link MemoryStack} hands out, so the arrays go off-heap and are freed by the
-     * caller — the same arena every other data-sized struct array of the renderer uses.
-     */
-    static VkBufferImageCopy.Buffer regions(int count) {
-        return VkBufferImageCopy.calloc(count);
-    }
-
-    private static void fillRegion(VkBufferImageCopy r, long bufferOffset, MaterialAtlasBaker.SpriteBake b) {
-        r.bufferOffset(bufferOffset).bufferRowLength(0).bufferImageHeight(0);
-        r.imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-        r.imageOffset().x(b.x0()).y(b.y0()).z(0);
-        r.imageExtent().width(b.w()).height(b.h()).depth(1);
-    }
-
-    private static void copyFull(VkCommandBuffer cmd, long buffer, long offset, long image, int w, int h) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
-            region.get(0).bufferOffset(offset).bufferRowLength(0).bufferImageHeight(0);
-            region.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
-            region.get(0).imageExtent().width(w).height(h).depth(1);
-            // GENERAL is a valid layout for transfer destinations (VUID-vkCmdCopyBufferToImage-dstImageLayout-01396)
-            VK10.vkCmdCopyBufferToImage(cmd, buffer, image, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
+            setViews(uploader.upload(width, height, batch.size(), regions, pixels, planeBytes));
         }
     }
 
-    public void destroy() {
+    private void setViews(MaterialViews views) {
+        materialView = views.material();
+        normalView = views.normal();
+    }
+
+    private static void setRegion(MemorySegment regions, int i, long offset, int x, int y, int width, int height) {
+        long base = 24L * i;
+        regions.set(JAVA_LONG, base, offset);
+        regions.set(JAVA_INT, base + 8, x);
+        regions.set(JAVA_INT, base + 12, y);
+        regions.set(JAVA_INT, base + 16, width);
+        regions.set(JAVA_INT, base + 20, height);
+    }
+
+    public synchronized void destroy() {
         io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setLookup(null);
-        if (opticalBuffer != null) { memory.destroy(opticalBuffer); opticalBuffer = null; }
         shutdown = true;
         if (epoch != null) {
             epoch.cancelled = true;
@@ -448,16 +359,7 @@ public final class RtMaterialAtlas {
             LockSupport.unpark(worker);
         }
         completed.clear();
-        for (Retired r : retired) {
-            memory.destroy(r.buf());
-        }
-        retired.clear();
-        if (material != null) {
-            memory.destroy(material);
-            memory.destroy(normal);
-            material = null;
-            normal = null;
-        }
+        materialView = normalView = 0;
         cpuMaterial = null;
         cpuNormal = null;
         bakedAtlas = null;

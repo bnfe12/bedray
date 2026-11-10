@@ -38,10 +38,9 @@ class RtSlangVolumetricSceneTest {
         assertFalse(read(KERNEL).contains("HardwareTraversal"));
     }
 
-    @Test void onlyTheSectionProviderChangesAtTheTwoBindingBoundaries() {
-        String legacy = read("passes/volumetric_march.slang");
+    @Test void onlyTheNativeSectionProviderCanFeedTheMarch() {
         String scene = read("passes/volumetric_march_scene.slang");
-        for (String entry : new String[]{legacy, scene}) {
+        for (String entry : new String[]{scene}) {
             assertEquals(5, entry.split("\\[\\[vk::binding\\(", -1).length - 1);
             assertTrue(entry.contains("[[vk::binding(0, 0)]] RaytracingAccelerationStructure tlas;"));
             assertTrue(entry.contains("[[vk::image_format(\"r32f\")]] [[vk::binding(12, 0)]] RWTexture2D<float> outDepth;"));
@@ -52,16 +51,6 @@ class RtSlangVolumetricSceneTest {
             assertTrue(entry.contains("volumetricMarchEntry(traversal, dispatchThreadID, outDepth, accumImage, frame, pc);"));
             assertFalse(entry.contains("marchLightShaft("), "march/store arithmetic must not be duplicated");
         }
-        assertTrue(legacy.contains("[[vk::binding(2, 0)]] StructuredBuffer<LegacySection> sections;"));
-        assertTrue(legacy.contains("traversal.sections = sections;"));
-        assertTrue(legacy.contains("traversal.instanceMask = pc.instanceMask;"));
-        // The march has no entity binding, so it must not name the traversal that
-        // carries an EntityGeometry field: Slang lowers the unassigned handle to an
-        // OpUndef descriptor pointer and the NVIDIA driver faults on it.
-        assertTrue(legacy.contains("LegacySectionWorldTraversal traversal;"),
-            "volumetric_march must take the world-only traversal");
-        assertFalse(legacy.contains("LegacySectionTraversal traversal;"));
-        assertFalse(legacy.contains("entities"));
         assertTrue(scene.contains("[[vk::binding(2, 0)]] StructuredBuffer<GeometrySection> sections;"));
         assertTrue(scene.contains("GeometryProvider geometry;"));
         assertTrue(scene.contains("geometry.sections = sections;"));
@@ -76,10 +65,6 @@ class RtSlangVolumetricSceneTest {
         String nativeSection = withoutComments(block(read("contracts/geometry.slang"), "struct GeometrySection {"))
             .replaceAll("\\s+", "");
         assertEquals("{int4origin;uint4meta;uint64_tvertexAddress;GeometryRangeranges[MAX_SECTION_GEOMETRIES];}", nativeSection);
-        String legacySection = withoutComments(block(read("traversal/legacy_section_traversal.slang"), "struct LegacySection {"))
-            .replaceAll("\\s+", "");
-        assertEquals("{uint64_tposAddr;uint64_tuvAddr;uint64_tcolAddr;uint64_tlightAddr;uint4quadStart;int4origin;}", legacySection);
-        assertNotEquals(nativeSection, legacySection, "both are 64 B but their addresses/origin/identity are incompatible");
         String hardware = read("traversal/hardware_traversal.slang");
         assertTrue(hardware.contains("static const uint HARDWARE_INSTANCE_MASK_WORLD    = 0x01u;"));
         assertTrue(hardware.contains("geometry.sections[instanceId]"));
@@ -96,9 +81,8 @@ class RtSlangVolumetricSceneTest {
     }
 
     @Test void compiledMarchManifestsKeepTheSamePushResourceAndCapabilityContract() {
-        Assumptions.assumeTrue(SlangPassLibrary.available("volumetric_march")
-            && SlangPassLibrary.available("volumetric_march_scene"), "both volumetric entries were not selected for this build");
-        for (String name : new String[]{"volumetric_march", "volumetric_march_scene"}) {
+        Assumptions.assumeTrue(SlangPassLibrary.available("volumetric_march_scene"), "native volumetric entry was not selected for this build");
+        for (String name : new String[]{"volumetric_march_scene"}) {
             var manifest = SlangPassLibrary.load(name).orElseThrow().manifest();
             assertEquals(96, manifest.pushConstantBytes());
             assertArrayEquals(new int[]{8, 8, 1}, manifest.threadGroupSize());

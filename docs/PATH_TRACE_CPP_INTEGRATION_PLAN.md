@@ -1,5 +1,10 @@
 # Path tracing C++ pass — integration plan
 
+> **Historical design notes (before 2026-11-10).** The Java scene and Java
+> recorder described below were removed for Alpha 2. Commands enabling the
+> previous native opt-ins are obsolete. See [Alpha 2 scene](ALPHA2_NATIVE_SCENE.md)
+> for the current contract, build, evidence and open gates.
+
 Status: the C++ pass, its additive ABI and the Java opt-in adapters are built,
 unit-tested and deployed, and both opt-ins (`-Dvkbridge.rt.nativePathTrace`,
 `-Dvkbridge.rt.nativeScene`) have passed live world autotests. What is missing is

@@ -2,8 +2,7 @@
 //
 // Each pixel merges four neighbours' records into its own through the module's ptSpatialReuse (same-surface test,
 // first-edge visibility through the filtered walk, the fixed-first-vertex shift Jacobian, the spatial ratio cap) and
-// publishes the result into the OTHER half of the ring.  The host then keeps the parity, so the next frame's temporal
-// import reads exactly this half (ReferencePathTraceBackend, RestirDiState.spatialPublished).  Reading one half and
+// publishes the result into the other half of the C++ ring. The next frame imports that half. Reading one half and
 // writing the other is what lets one dispatch run without a checker: no thread ever reads a slot another thread writes.
 //
 // The stage shades nothing.  A spatial winner reaches the image one frame later, through the temporal stage, which

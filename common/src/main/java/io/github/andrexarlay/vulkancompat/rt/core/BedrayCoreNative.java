@@ -526,28 +526,16 @@ public final class BedrayCoreNative implements AutoCloseable {
     }
 
     /**
-     * Legacy-signature overload: keeps existing callers on the legacy section
-     * table until they explicitly pass {@code program_trace_scene}. The native
-     * descriptor still carries the new field at offset 64; zero selects the
-     * legacy path in the C++ pass.
-     */
-    public void configurePathTrace(long core, long programTrace, long programSpatial, long programDisplay,
-                                   long imageBudgetBytes, long bufferBudgetBytes, int width, int height) {
-        configurePathTrace(core, programTrace, 0L, programSpatial, programDisplay, 0L,
-            imageBudgetBytes, bufferBudgetBytes, width, height);
-    }
-
-    /**
-     * Configures the native pass with registered program handles. Scene/spatial/stats programs may be zero.
+     * Configures the native pass with registered program handles. Spatial and stats programs may be zero.
      * The pass owns private images, uploads and dummies and only records into host command buffers.
      */
-    public void configurePathTrace(long core, long programTrace, long programTraceScene, long programSpatial,
+    public void configurePathTrace(long core, long programTraceScene, long programSpatial,
                                    long programDisplay, long programStats, long imageBudgetBytes,
                                    long bufferBudgetBytes, int width, int height) {
         ensureOpen();
         requireHandle(core, "core");
         requirePathTrace();
-        requireHandle(programTrace, "programTrace");
+        requireHandle(programTraceScene, "programTraceScene");
         requireHandle(programDisplay, "programDisplay");
         if (imageBudgetBytes < 0 || bufferBudgetBytes < 0) {
             throw new IllegalArgumentException("path-trace budgets must not be negative");
@@ -558,14 +546,13 @@ public final class BedrayCoreNative implements AutoCloseable {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment desc = a.allocate(BedrayCoreLayouts.PT_DESC);
             desc.set(JAVA_INT, BedrayCoreLayouts.PTD_ABI_VERSION, BedrayCoreLayouts.ABI_VERSION);
-            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_TRACE, programTrace);
+            desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_TRACE, 0L);
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_SPATIAL, programSpatial);
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_DISPLAY, programDisplay);
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_IMAGE_BUDGET_BYTES, imageBudgetBytes);
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_BUFFER_BUDGET_BYTES, bufferBudgetBytes);
             desc.set(JAVA_INT, BedrayCoreLayouts.PTD_WIDTH, width);
             desc.set(JAVA_INT, BedrayCoreLayouts.PTD_HEIGHT, height);
-            // Zero keeps every frame on the legacy section table.
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_TRACE_SCENE, programTraceScene);
             // Zero leaves the pass without a counter writer; the host then reports the counters as unmeasured.
             desc.set(JAVA_LONG, BedrayCoreLayouts.PTD_PROGRAM_STATS, programStats);
@@ -741,15 +728,15 @@ public final class BedrayCoreNative implements AutoCloseable {
         return renderPathTraceExtHandle != null && hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_STATS_SLOT);
     }
 
-    /** Lends the ReSTIR PT spatial stage per section table; 0 leaves that table without it. */
-    public void configurePathTracePt(long core, long programPtSpatial, long programPtSpatialScene) {
+    /** Lends the ReSTIR PT spatial stage for the native scene; zero disables spatial reuse. */
+    public void configurePathTracePt(long core, long programPtSpatialScene) {
         ensureOpen(); requireHandle(core, "core");
         if (!hasNativePt()) throw new BedrayCoreException("configure_path_trace_pt", BedrayCoreLayouts.STATUS_UNSUPPORTED,
             "the loaded bedray_core owns no ReSTIR PT ring", null);
         try (Arena arena = Arena.ofConfined()) {
             var error = arena.allocate(BedrayCoreLayouts.ERROR);
             check("configure_path_trace_pt", (int) configurePathTracePtHandle.invokeExact(handle(core),
-                programPtSpatial, programPtSpatialScene, error), error);
+                0L, programPtSpatialScene, error), error);
         } catch (Throwable failure) { throw rethrow("configure_path_trace_pt", failure); }
     }
 

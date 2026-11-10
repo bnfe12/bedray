@@ -49,7 +49,7 @@ BedrayResource buffer(std::uint32_t binding, std::uint32_t type,
 VolumetricPass::~VolumetricPass() { (void)destroy(); }
 
 bool VolumetricPass::uses_program(std::uint64_t program) const noexcept {
-    return program && (program == desc_.program_march_legacy || program == desc_.program_march_scene || program == desc_.program_apply);
+    return program && (program == desc_.program_march_scene || program == desc_.program_apply);
 }
 
 BedrayStatus VolumetricPass::gpu_status(gpu::Status status, VkResult vk, BedrayError* error) noexcept {
@@ -73,8 +73,8 @@ BedrayStatus VolumetricPass::configure(BedrayCore* core, const DeviceFns& fns,
     if (has_recordings()) return fail(error, BEDRAY_ERROR_IN_USE, "volumetric recordings pending");
     if (desc.abi_version != BEDRAY_CORE_ABI_VERSION || desc.struct_size != sizeof(desc))
         return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "volumetric ABI/size mismatch");
-    if (!core || !fns.cmd_pipeline_barrier || (!desc.program_march_legacy && !desc.program_march_scene) || !desc.program_apply)
-        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "volumetric programs/barrier missing");
+    if (!core || !fns.cmd_pipeline_barrier || (desc.program_march_legacy || !desc.program_march_scene) || !desc.program_apply)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "native-scene volumetric programs and barriers required; reserved march slot must be zero");
     auto validate = [&](std::uint64_t program, bool march) {
         ProgramContract contract{};
         if (!program_contract(core, program, contract) || contract.push_constant_bytes != (march ? march_bytes : apply_bytes)
@@ -86,8 +86,7 @@ BedrayStatus VolumetricPass::configure(BedrayCore* core, const DeviceFns& fns,
             && program_has_binding(core, program, 12, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
             && program_has_binding(core, program, 16, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
     };
-    if ((desc.program_march_legacy && !validate(desc.program_march_legacy, true))
-        || (desc.program_march_scene && !validate(desc.program_march_scene, true)) || !validate(desc.program_apply, false))
+    if (!validate(desc.program_march_scene, true) || !validate(desc.program_apply, false))
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "volumetric program contract mismatch");
     gpu::ImageDeviceContext image_context{};
     image_context.physical_device = fns.physical_device; image_context.device = fns.device;
@@ -140,9 +139,9 @@ BedrayStatus VolumetricPass::render(const BedrayVolumetricFrameDesc& frame, Bedr
         || !frame.frame_constants || frame.frame_constants_bytes != frame_bytes
         || !frame.march_push || frame.march_push_bytes != march_bytes || !frame.apply_push || frame.apply_push_bytes != apply_bytes)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid volumetric frame");
-    const bool native_scene = (frame.flags & BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE) != 0;
-    const auto march_program = native_scene ? desc_.program_march_scene : desc_.program_march_legacy;
-    if (!march_program) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "volumetric section layout has no matching march program");
+    if ((frame.flags & BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE) == 0)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "volumetrics require a native scene frame");
+    const auto march_program = desc_.program_march_scene;
     if (recordings_.contains(frame.command_buffer)) return fail(error, BEDRAY_ERROR_IN_USE, "volumetric command pending");
     std::array<unsigned char, frame_bytes> constants{};
     std::array<unsigned char, march_bytes> march{};

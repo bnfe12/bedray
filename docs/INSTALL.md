@@ -12,11 +12,12 @@ Use a **clean test instance**, not your main world or a large modpack.
 ## 2. Install the mods
 
 Create an instance with **Minecraft 26.3** and **NeoForge 26.3.0.x** or **Fabric** (fabric-loader 0.19.5 or newer). Put these jars into the
-instance's `mods` folder. Bedray is **one self-contained jar**; no other library mod is needed:
+instance's `mods` folder. Use **one Bedray JAR** for your loader. Hardware RT/PT also requires the matching first-party DLL:
 
 1. **Sodium 0.9.x** for your loader (tested with 0.9.2). Download it from Modrinth or CurseForge.
 2. The **Bedray jar** for your loader: `bedray-neoforge-mc26.3.0-<version>.jar` or `bedray-fabric-mc26.3-<version>.jar`.
-   Check the SHA-256 given in the release description (PowerShell: `Get-FileHash <file> -Algorithm SHA256`).
+3. For hardware RT/PT, copy the distribution's **`bedray_core.dll`** to `bedray/natives/` in the game folder.
+   Pair it with the JAR from the same distribution. Check both SHA-256 values (PowerShell: `Get-FileHash <file> -Algorithm SHA256`).
 
 Development alpha.13 includes Bedray Compute inside that Bedray JAR. Remove an older external
 `bedray-compute-*.jar` when updating to this distribution; the loader discovers the included provider
@@ -27,8 +28,9 @@ shows the pages **Bedray ALPHA: Upscaling, Ray Tracing, Advanced and Experimenta
 The first start creates `config/bedray.toml`. If you used a pre-release build, your old `config/vulkan_rtx.toml` is copied once
 (the old file is left in place).
 
-At this point the **built-in upscalers (Bilinear, FSR 1, NIS)** and ray / path tracing with accumulation already work. Everything
-below is optional.
+The C++ scene and AOT Slang passes are the built-in hardware ray / path tracing route.
+If the DLL is absent or incompatible, Bedray logs the cause and leaves raster rendering active.
+Vendor libraries below are optional.
 
 ## 3. Included and optional native libraries
 

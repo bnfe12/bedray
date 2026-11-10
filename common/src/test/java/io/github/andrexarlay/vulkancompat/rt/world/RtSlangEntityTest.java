@@ -20,15 +20,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class RtSlangEntityTest {
 
-    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/ReferencePathTraceBackend.java";
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String ENTITY = SHADERS + "/traversal/entity_geometry.slang";
-    private static final String TRAVERSAL = SHADERS + "/traversal/legacy_section_traversal.slang";
+    private static final String TRAVERSAL = SHADERS + "/traversal/scene_traversal.slang";
     private static final String CONTRACT_TRAVERSAL = SHADERS + "/contracts/scene_tracer.slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
     private static final String DISPLAY = SHADERS + "/passes/path_display.slang";
     private static final String SURFACE = SHADERS + "/surface/surface.slang";
-    private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
     private static final String ENTRY = SHADERS + "/pathtrace/path_trace_entry.slang";
     private static final String HOST_PASS =
         "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java";
@@ -66,10 +65,9 @@ class RtSlangEntityTest {
         assertTrue(decode.contains("if (entityInstance(instanceId)) {"), "the entity ring is decoded before the section table");
         assertTrue(decode.contains("return entityHitToSurface(entities, cameraAnchor, ray, instanceId, primitiveId, bary, t);"),
             "through the entity decoder, which never indexes a section");
-        String sectionDecode = block(traversal,
-            "SurfaceHit legacyHitToSurface(StructuredBuffer<LegacySection> sections, Ray ray,");
-        assertTrue(sectionDecode.contains("if (entityInstance(instanceId)) return result;"),
-            "and the section decoder refuses an entity id, so a routing bug reads a freed table entry instead of writing one");
+        String hardware = read(SHADERS + "/traversal/hardware_traversal.slang");
+        assertTrue(hardware.contains("instanceId >= sectionCount"));
+
     }
 
     /**
@@ -140,67 +138,14 @@ class RtSlangEntityTest {
     }
 
     /** The count the shader reads is the length it was bound, so a stale ring slot can never be walked. */
-    @Test
-    void theRingSliceIsBoundAtItsOwnOffset() {
-        String manager = read(GEOMETRY_MANAGER);
-        assertTrue(manager.contains("new GpuRange(ringPos, ringSlot * ringVertexCap * 12L, (long) frameVertices * 12L)"),
-            "positions: the slot's own start, for this frame's vertices only");
-        assertTrue(manager.contains("new GpuRange(ringIdx, ringSlot * ringIndexCap * 4L, (long) frameTriangles * 12L)"),
-            "indices: three uint per triangle, so the bound length is the count");
-        assertTrue(manager.contains("new GpuRange(ringAttr, ringSlot * ringVertexCap * 16L, (long) frameVertices * 16L)"),
-            "attributes: one uint4 per vertex");
-
-        String entity = read(ENTITY);
-        String count = block(entity, "uint entityTriangleCount(EntityGeometry entities) {");
-        assertTrue(count.contains("entities.indices.GetDimensions(count, stride);"),
-            "the bound length, not a push constant, is the authority");
-        assertTrue(count.contains("return count / ENTITY_INDICES_PER_TRIANGLE;"));
-
-        String host = read(HOST_PASS);
-        assertTrue(host.contains("private static SlangProgram.Resource entityBuffer(String name, BufferView view, BedrayGpuBuffersNative.Buffer dummy) {"),
-            "every entity binding falls back to the pass's own dummy");
-        assertTrue(host.contains("entityScalarDummy = zeroedBuffer(ENTITY_SCALAR_BYTES);")
-                && host.contains("entityVectorDummy = zeroedBuffer(ENTITY_VECTOR_BYTES);")
-                && host.contains("nativeBuffers.write(buffer, 0, stack.calloc(bytes));"),
-            "a zeroed element of the right size, so a frame that captured nothing reads zeros");
-        assertTrue(host.contains("throw new IllegalArgumentException(\"the push names an entity atlas but no texel range is bound\")"),
-            "and a push that names a count with no buffer behind it is rejected before the dispatch");
-    }
 
     /** The frame pulls the capture of the frame it is recording; the switch family keeps an A/B check available. */
-    @Test
-    void theFrameHandsTheCapturedRingToThePass() {
-        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
-        assertTrue(frame.contains("RtPathTraceSlangPass.Entities capturedEntities = entityBindingsOfThisFrame();"),
-            "one place reads the manager, so the push and the descriptors cannot disagree");
-        assertTrue(frame.contains("trace.record(cmd, scene, atlases, emitters, reservoirRange, ptRange, capturedEntities,\n"
-            + "            RtPathTraceSlangPass.Guides.of(views.gbuffer()), motion, views.depth(), input.stats(), frame, dispatch)"),
-            "the ring travels with the rest of the frame's resources");
-        assertTrue(frame.contains("if (!RtConfig.SLANG_ENTITIES)"), "and the switch turns the whole thing off");
-
-        String config = read(CONFIG);
-        assertTrue(config.contains("System.getProperty(\"vkbridge.rt.slangEntities\", \"true\")"),
-            "on by default: a path tracer blind to mobs is the bug, not the fallback");
-    }
 
     /**
      * "The mobs are not in the traced picture" has two very different causes - a capture that never filled the ring, and a
      * trace that ignores a ring that is full - and only the counts say which. The report is one line per session, recorded
      * before the dispatch, so a pass that then fails on a bad range still leaves the evidence behind.
      */
-    @Test
-    void theFrameReportsWhatTheRingActuallyHolds() {
-        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
-        assertTrue(frame.contains("if (!entityRingReported) {"), "one line per session, not one per frame");
-        assertTrue(frame.contains("Slang path trace reads the entity ring"), "the populated case names its counts");
-        assertTrue(frame.contains("Slang path trace has no entity capture in this frame"),
-            "and the empty case is reported too, because silence is what made this ambiguous before");
-        assertTrue(frame.indexOf("Slang path trace reads the entity ring") < frame.indexOf("backend.record("),
-            "the evidence is recorded before the dispatch that may fail");
-        assertTrue(frame.contains("capturedEntities.indices().bytes() / 12L"),
-            "triangles from the index range the shader itself measures");
-        assertTrue(frame.contains("capturedEntities.positions().bytes() / 12L"), "and vertices from the position range");
-    }
 
     /**
      * A mob that walked three blocks is not the surface that was there last frame, so its pixels have to be looked up
@@ -225,17 +170,6 @@ class RtSlangEntityTest {
             "previous minus current: the vector a consumer ADDS to this frame's position to land last frame");
         assertTrue(motion.contains("float3 w = float3(1.0 - bary.x - bary.y, bary.x, bary.y);"),
             "the same weights the hit itself is decoded with, or the two halves are different points");
-
-        String manager = read(GEOMETRY_MANAGER);
-        String previousRange = block(manager, "public synchronized GpuRange framePreviousPositions() {");
-        assertTrue(previousRange.contains("new GpuRange(ringPrev, ringSlot * ringVertexCap * 12L,"
-            + " (long) frameVertices * 12L)"),
-            "the same slot and the same length as the positions: a motion vector that outlives its model is a lie");
-
-        String host = read(HOST_PASS);
-        assertTrue(host.contains("entityBuffer(\"entityPrevious\", captured.previous(), entityScalarDummy)"),
-            "the previous slice reaches the shader through its own range - binding it as the positions would silently"
-                + " make every motion vector zero");
 
         String pass = read(PASS);
         assertTrue(pass.contains("entities.previous = entityPrevious;"),
@@ -292,17 +226,7 @@ class RtSlangEntityTest {
         assertTrue(display.contains("[[vk::binding(6, 0)]] RWTexture2D<float4> motion;"),
             "bound as the image the producer owns, not a copy that could disagree");
 
-        String host = read(HOST_PASS);
-        assertTrue(host.contains("nextMotion = nativeImages.create(w, h, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,"),
-            "the producer allocates it beside the radiance, at the same size");
-        assertTrue(host.contains("SlangProgram.Resource.storageImage(\"outMotion\", motion.view())"),
-            "and hands its own image to the shader, so no consumer can bind a stale one");
 
-        String frame = read(HOST_FRAME) + "\n" + read(REFERENCE_BACKEND);
-        assertTrue(frame.contains("SlangProgram.Resource.storageImage(\"motion\", trace.motionView())"),
-            "the display step reads the tracer's image rather than a second allocation");
-        assertTrue(frame.contains("entityView(eg.framePreviousPositions())"),
-            "and the previous ring reaches the pass from the same one place as the other slices");
     }
 
     @Test

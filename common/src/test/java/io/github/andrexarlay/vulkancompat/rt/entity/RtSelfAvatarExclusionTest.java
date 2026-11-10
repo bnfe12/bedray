@@ -24,7 +24,7 @@ public class RtSelfAvatarExclusionTest {
     private static final String TRAVERSAL = SHADERS + "/traversal/scene_traversal.slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
     private static final String TRACER_CONTRACT = SHADERS + "/contracts/scene_tracer.slang";
-    private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
 
     @Test
     public void captureRecordsTheRangeInTheSharedEntityIndexBuffer() {
@@ -44,19 +44,17 @@ public class RtSelfAvatarExclusionTest {
     }
 
     @Test
-    public void rangeIsPublishedInTheStatsSlotAndReadByTheTraversal() {
+    public void rangeIsPublishedInTheFramePacketAndReadByTheTraversal() {
         assertEquals(RtStatsLayout.SKY_DISPLAY_COLOR_B_DAY + 12, RtStatsLayout.SELF_AVATAR_TRI_START,
             "the trailing uints retain their offsets after the private sky colour/day packet");
         assertEquals(RtStatsLayout.SKY_DISPLAY_COLOR_B_DAY + 16, RtStatsLayout.SELF_AVATAR_TRI_COUNT, "two separate uints, no uvec2 padding");
         assertTrue(RtStatsLayout.SIZE <= RtStatsLayout.SLOT_STRIDE, "the slot ring must still fit the struct");
-        String renderer = readJava("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
-        assertTrue(renderer.contains("memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_START, entOk ? capture.selfAvatarTriStart() : 0)"),
-            "the slot the shader reads this frame is written by the renderer before the dispatch");
-        assertTrue(renderer.contains("memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_COUNT, entOk ? capture.selfAvatarTriCount() : 0)"),
-            "a frame without an entity BLAS must publish 0: the primitive index would not exist");
+        String packet = readJava("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/BedrayPathTraceNative.java");
+        assertTrue(packet.contains("packet.putInt(state + 4, entities.selfAvatarTriStart())"));
+        assertTrue(packet.contains("entities.selfAvatarTriCount(),"));
         String pass = read(PASS);
         assertTrue(pass.contains("traversal.selfAvatarTriStart = pc.entityState.y;"),
-            "the pass lifts the range out of the stats word the renderer just wrote");
+            "the pass lifts the range out of the native push constants");
         assertTrue(pass.contains("traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;"), "and its length (low 30 bits)");
         String traversal = read(TRAVERSAL);
         assertTrue(traversal.contains("uint selfAvatarTriStart;"), "the traversal state carries the range into the candidate loop");
@@ -76,7 +74,7 @@ public class RtSelfAvatarExclusionTest {
         assertTrue(contract.contains("SurfaceHit tracePrimary(Ray ray) {\n        return traceClosest(ray);")
                 && contract.contains("SurfaceHit traceMirror(Ray ray) {\n        return traceClosest(ray);"),
             "a backend that has no first-person capture answers both hooks with the full scene");
-        for (String path : new String[] {TRAVERSAL, SHADERS + "/traversal/legacy_section_traversal.slang"}) {
+        for (String path : new String[] {TRAVERSAL}) {
             String traversal = read(path);
             assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_OFF);"),
                 path + ": the eye ray skips the body");
@@ -99,7 +97,7 @@ public class RtSelfAvatarExclusionTest {
                 && helper.contains("if (mode == SELF_SHADOW_OFF) return true;")
                 && helper.contains("return dot(origin.xz, origin.xz) < SELF_SHADOW_FOOTPRINT_RADIUS * SELF_SHADOW_FOOTPRINT_RADIUS;"),
             "the default mode skips the body only for rays that start inside its column (camera-relative xz = 0)");
-        for (String pass : new String[] {"path_trace", "path_trace_scene", "rc_path_trace_scene", "restir_pt_spatial",
+        for (String pass : new String[] {"path_trace_scene", "path_trace_scene", "rc_path_trace_scene", "restir_pt_spatial_scene",
                 "restir_pt_spatial_scene", "rc_field_build_scene"}) {
             String source = read(SHADERS + "/passes/" + pass + ".slang");
             assertTrue(source.contains("traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;")

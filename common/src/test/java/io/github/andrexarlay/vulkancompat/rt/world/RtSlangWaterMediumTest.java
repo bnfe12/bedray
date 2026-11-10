@@ -190,7 +190,7 @@ class RtSlangWaterMediumTest {
 
         String entry = read(SHADERS + "/pathtrace/path_trace_entry.slang");
         assertTrue(entry.contains("options.primaryInWater = frameCameraInWater(f);"),
-            "both path_trace entries share this file, so a fix here cannot miss the native-scene pass");
+            "both path_trace_scene entries share this file, so a fix here cannot miss the native-scene pass");
     }
 
     /**

@@ -40,7 +40,7 @@ import java.util.Map;
  * drained submissions. The scene refuses destruction while a frame is
  * unreleased.
  */
-final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sink {
+final class NativeSceneBridge implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
 
     /** AOT program that decodes the native record; the bridge is pointless without it. */
@@ -54,7 +54,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
      */
     private static final int FRAMES_IN_FLIGHT = BedraySceneLayouts.MAX_FRAMES_IN_FLIGHT;
     private static final int MAX_ENTITIES = 1;
-    private static final int TABLE_BYTES = 4096;
+    private static final int TABLE_BYTES = 16 << 20;
     private static final long MAX_GEOMETRY_BYTES = 48L << 20;
     private static final long ENTITY_ID = 1L;
     private static final long LOG_ACTIVE_NANOS = 2_000_000_000L;
@@ -66,25 +66,24 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         0f, 0f, 1f, 0f
     };
 
-    private record PendingSection(DecodedSection section, int[] tagged) {
-    }
-
     private final BedraySceneNative library;
     private final long scene;
-    private final Map<Long, Long> sectionIds = new LinkedHashMap<>();
-    private final Map<Long, PendingSection> updates = new LinkedHashMap<>();
-    private final Map<Long, Long> removals = new LinkedHashMap<>();
+    private long sectionEpoch;
+
     /** Tracking is reserved before native preparation can accept a frame. */
     private final SceneFrameRecordings recordings;
     private final EntityTopologyIdentity entityTopology = new EntityTopologyIdentity();
     private final SceneBuildTelemetry buildTelemetry = new SceneBuildTelemetry();
-    private long nextSectionId = 1;
-    private long nextRevision = 1;
     private boolean entityPresent;
+    private long entityAtlasVersion = -1L;
+    private RtPathTraceSlangPass.Entities entityBindings = RtPathTraceSlangPass.Entities.NONE;
     private long tlas;
     private RtMemory.Buf table;
     private int sectionCount;
     private boolean activeThisFrame;
+    private long preparedFrame;
+    private final long[] frameTableRevisions = new long[BedraySceneLayouts.TABLE_SKY + 1];
+    private final BedraySceneNative.TableView[] frameTables = new BedraySceneNative.TableView[frameTableRevisions.length];
     private long lastLogNanos;
     private long lastInstances;
     private int lastBlasBuilds;
@@ -168,63 +167,72 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
     int entityTriangles() { return entityTriangles; }
     long residentBytes() { return library.residentBytes(scene); }
 
-    /**
-     * Queues a paced CPU section capture. The bridge keeps the same
-     * id for the section across rebuilds, so the native record's identity (and
-     * therefore the path tracer's history) survives a re-mesh.
-     */
-    @Override public void sectionBuilt(DecodedSection section, int[] tagged) {
-        Long removed = removals.remove(section.key);
-        if (removed != null) {
-            sectionIds.put(section.key, removed);
-        } else if (!sectionIds.containsKey(section.key)) {
-            sectionIds.put(section.key, nextSectionId++);
-        }
-        // RtWorld reuses one per-quad scratch array for every section of the frame,
-        // so the queue has to keep its own copy until the scene copies it.
-        int[] flags = tagged == null ? null : Arrays.copyOf(tagged, section.totalQuads());
-        updates.put(section.key, new PendingSection(section, flags));
+    BedraySceneNative.Selection selectSections(List<BedraySceneNative.Candidate> candidates,
+                                               int x, int y, int z, int radiusXz, int radiusY, int limit) {
+        return library.selectSections(scene, candidates, x, y, z, radiusXz, radiusY, RtConfig.EVICT_MARGIN,
+            limit, RtConfig.vramBudgetBytes());
     }
 
-    /** Queues the removal of a section the rescan evicted or that Sodium dropped. */
-    @Override public void sectionRemoved(long key) {
-        Long id = sectionIds.remove(key);
-        if (id == null) {
-            return;
+    void submitSection(long id, long revision, DecodedSection section, int[] tags) {
+        try (Arena arena = Arena.ofConfined()) {
+            var input = BedraySceneGeometry.build(section, tags, arena, id, revision);
+            library.update(scene, List.of(input), null, null, null);
         }
-        updates.remove(key);
-        removals.put(key, id);
     }
 
-    /**
-     * Feeds this frame's captured models as one entity.  The ring is host-visible
-     * and rebuilt every frame. Geometry follows that frame; topology changes only
-     * when the shape/index bytes change. Native owns safe refit/COW selection.
-     */
-    void updateEntities(long frameIndex) {
-        RtEntityGeometryManager manager = RtEntityGeometryManager.INSTANCE;
-        RtEntityGeometryManager.GpuRange positions = manager.framePositions();
-        RtEntityGeometryManager.GpuRange indices = manager.frameIndices();
-        if (!positions.present() || !indices.present()
-            || positions.buffer().mapped == 0L || indices.buffer().mapped == 0L) {
-            removeEntity();
-            return;
+    long sectionEpoch() { return sectionEpoch; }
+
+    long[] sectionRevisions() { return library.sectionRevisions(scene, sectionCount); }
+
+    /** Copies this frame's CPU capture into the scene before recording. */
+    void updateEntities(long frameIndex, double camX, double camY, double camZ) {
+        if (!RtConfig.SLANG_ENTITIES) return;
+        try (Arena arena = Arena.ofConfined()) {
+            var packed = RtEntityGeometryManager.INSTANCE.pack(arena, camX, camY, camZ);
+            if (packed == null) {
+                removeEntity();
+                return;
+            }
+            long topologyRevision = entityTopology.update(packed.vertices(), packed.indexCount(), 12,
+                BedraySceneLayouts.INDEX_UINT32, packed.indices());
+            BedraySceneNative.Entity entity = new BedraySceneNative.Entity(ENTITY_ID, frameIndex, topologyRevision,
+                packed.positions(), packed.vertices(), packed.indices(), packed.indexCount(), 12, BedraySceneLayouts.INDEX_UINT32,
+                ENTITY_INSTANCE_MASK, IDENTITY_TRANSFORM, packed.previous(), packed.attributes());
+            library.update(scene, null, null, List.of(entity), null);
+            entityPresent = true;
+            entityTriangles = packed.indexCount() / 3;
+            var atlas = io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.INSTANCE;
+            // Atlas texels and UV rectangles must come from the same capture revision.
+            synchronized (atlas) {
+                long version = atlas.version();
+                if (version != entityAtlasVersion) {
+                    var texels = arena.allocate(TABLE_BYTES, 4);
+                    var rects = arena.allocate(io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.MAX_SLOTS * 16L, 4);
+                    atlas.copyTo(texels.address(), rects.address());
+                    library.updateTable(scene, BedraySceneLayouts.TABLE_ENTITY_RECTS, version, rects, rects.byteSize());
+                    library.updateTable(scene, BedraySceneLayouts.TABLE_ENTITY_TEXELS, version, texels, texels.byteSize());
+                    entityAtlasVersion = version;
+                }
+            }
         }
-        long vertexCount = positions.bytes() / 12L;
-        long indexCount = indices.bytes() / 4L;
-        if (vertexCount <= 0L || indexCount <= 0L) {
-            removeEntity();
-            return;
-        }
-        MemorySegment vertexStream = MemorySegment.ofAddress(positions.buffer().mapped + positions.offset());
-        MemorySegment indexStream = MemorySegment.ofAddress(indices.buffer().mapped + indices.offset()).reinterpret(indices.bytes());
-        long topologyRevision = entityTopology.update(vertexCount, indexCount, 12, BedraySceneLayouts.INDEX_UINT32, indexStream);
-        BedraySceneNative.Entity entity = new BedraySceneNative.Entity(ENTITY_ID, frameIndex, topologyRevision,
-            vertexStream, vertexCount, indexStream, indexCount, 12, BedraySceneLayouts.INDEX_UINT32,
-            ENTITY_INSTANCE_MASK, IDENTITY_TRANSFORM);
-        library.update(scene, null, null, List.of(entity), null);
-        entityPresent = true;
-        entityTriangles = Math.toIntExact(indexCount / 3);
+    }
+
+    RtPathTraceSlangPass.Entities entityBindings() { return entityBindings; }
+
+    private static RtPathTraceSlangPass.Entities entityBindings(BedraySceneNative.Resources resources) {
+        long buffer = resources.entityBuffer();
+        if (buffer == 0) return RtPathTraceSlangPass.Entities.NONE;
+        long pos = resources.entityPositionsBytes();
+        var capture = io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance();
+        return new RtPathTraceSlangPass.Entities(
+            new RtPathTraceSlangPass.BufferView(buffer, 0L, pos),
+            new RtPathTraceSlangPass.BufferView(buffer, resources.entityPreviousOffset(), pos),
+            new RtPathTraceSlangPass.BufferView(buffer, resources.entityIndicesOffset(), resources.entityIndicesBytes()),
+            new RtPathTraceSlangPass.BufferView(buffer, resources.entityAttributesOffset(), pos / 12L * 16L),
+            new RtPathTraceSlangPass.BufferView(resources.entityRectBuffer(), 0, resources.entityRectBytes()),
+            new RtPathTraceSlangPass.BufferView(resources.entityTexelBuffer(), 0, resources.entityTexelBytes()),
+            resources.entityTexelBuffer() == 0 ? 0 : io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE,
+            capture.selfAvatarTriStart(), capture.selfAvatarTriCount());
     }
 
     private void removeEntity() {
@@ -246,16 +254,32 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
      * static section at {@code origin - camera}; a frame that skips this call
      * piles all section-local geometry at the origin instead.
      */
+    BedraySceneNative.TableView frameTable(int kind, long revision, java.nio.ByteBuffer bytes) {
+        if (!activeThisFrame) throw new IllegalStateException("no current native RT scene");
+        if (revision != 0 && frameTableRevisions[kind] != revision) {
+            frameTables[kind] = library.publishFrameTable(scene, preparedFrame, kind, revision, bytes);
+            frameTableRevisions[kind] = revision;
+        }
+        return frameTables[kind] == null ? BedraySceneNative.TableView.EMPTY : frameTables[kind];
+    }
+
+    BedraySceneNative.MaterialViews uploadMaterials(int width, int height, int count,
+        java.lang.foreign.MemorySegment regions, java.lang.foreign.MemorySegment bytes, long planeBytes) {
+        if (!activeThisFrame) throw new IllegalStateException("no current native RT scene");
+        return library.uploadMaterials(scene, preparedFrame, width, height, count, regions, bytes, planeBytes);
+    }
+
     void prepareFrame(long commandBuffer, long frameIndex, double camX, double camY, double camZ) {
         recordings.prepare(commandBuffer, frameIndex, recording -> {
             library.setView(scene, camX, camY, camZ);
-            flushUpdates();
             BedraySceneNative.FrameInfo info = library.prepareFrame(scene, recording);
             // RtFrameRenderer attaches one completion callback AFTER execute accepts
             // this command buffer. Scene and compute resources share that proof.
             BedraySceneNative.Resources resources = library.queryResources(scene);
+            entityBindings = entityBindings(resources);
             tlas = resources.tlas();
             sectionCount = resources.sectionCount();
+            sectionEpoch = resources.sectionEpoch();
             long handle = resources.sectionTableBuffer();
             long bytes = resources.sectionTableBytes();
             if (handle == 0L || bytes <= 0L) {
@@ -267,6 +291,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
                 table = new RtMemory.Buf(handle, 0L, bytes, resources.sectionTableAddress(), 0L, false, true);
             }
             activeThisFrame = info.tlas() != 0L;
+            preparedFrame = frameIndex;
             lastViewX = camX;
             lastViewY = camY;
             lastViewZ = camZ;
@@ -323,29 +348,6 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         return true;
     }
 
-    private void flushUpdates() {
-        for (Iterator<Map.Entry<Long, Long>> it = removals.entrySet().iterator(); it.hasNext();) {
-            Map.Entry<Long, Long> removal = it.next();
-            library.update(scene, null, new long[] {removal.getValue()}, null, null);
-            it.remove();
-        }
-        for (Iterator<Map.Entry<Long, PendingSection>> it = updates.entrySet().iterator(); it.hasNext();) {
-            Map.Entry<Long, PendingSection> update = it.next();
-            Long id = sectionIds.get(update.getKey());
-            if (id == null) {
-                it.remove();
-                continue;
-            }
-            PendingSection pending = update.getValue();
-            try (Arena arena = Arena.ofConfined()) {
-                BedraySceneNative.Section section = BedraySceneGeometry.build(pending.section(), pending.tagged(),
-                    arena, id, nextRevision++);
-                library.update(scene, List.of(section), null, null, null);
-            }
-            it.remove();
-        }
-    }
-
     /** Releases every prepared frame after the host proved completion or discard. */
     void releaseAllFrames() {
         recordings.releaseAll(frame -> library.releaseFrame(scene, frame));
@@ -368,7 +370,7 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
 
     @Override
     public String toString() {
-        return "NativeSceneBridge[sections=" + sectionIds.size() + ", frames=" + recordings.pendingCount()
+        return "NativeSceneBridge[sections=" + sectionCount + ", frames=" + recordings.pendingCount()
             + (activeThisFrame ? ", active" : ", idle") + "]";
     }
 }

@@ -11,7 +11,8 @@ int wmain(int argc, wchar_t** argv) {
         "bedray_core_discard_recording",
         "bedray_core_memory_version", "bedray_core_memory_configure", "bedray_core_memory_attach", "bedray_core_memory_stats",
         "bedray_scene_abi_version", "bedray_scene_features", "bedray_scene_abi_info", "bedray_scene_create",
-        "bedray_scene_update", "bedray_scene_update_table", "bedray_scene_set_view",
+        "bedray_scene_update", "bedray_scene_update_table", "bedray_scene_publish_frame_table", "bedray_scene_upload_materials", "bedray_scene_set_view",
+        "bedray_scene_select_sections", "bedray_scene_section_ids",
         "bedray_scene_prepare_frame", "bedray_scene_retire_producer",
         "bedray_scene_release_frame", "bedray_scene_discard_frame",
         "bedray_scene_query_resources", "bedray_scene_resident_bytes", "bedray_scene_destroy"

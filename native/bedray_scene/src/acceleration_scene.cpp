@@ -290,6 +290,33 @@ bool create_scratch_buffer(Scene& scene, uint64_t bytes, Buffer& out, BedrayScen
     return true;
 }
 
+bool load_material_images(Scene& scene, BedraySceneError* error) {
+    if (scene.material_images) return true;
+    bedray::gpu::ImageDeviceContext context{};
+    context.physical_device = scene.physical_device;
+    context.device = scene.device;
+    context.memory_properties = scene.memory_properties;
+    context.memory = scene.memory;
+    context.generation = 1;
+    context.dedicated_allocation_enabled = true;
+    auto& f = context.functions;
+    f.allocate_memory = scene.fns.allocate_memory;
+    f.free_memory = scene.fns.free_memory;
+    if (!load_device(scene, f.create_image, "vkCreateImage")
+        || !load_device(scene, f.destroy_image, "vkDestroyImage")
+        || !load_device(scene, f.get_requirements, "vkGetImageMemoryRequirements")
+        || !load_device(scene, f.bind_image_memory, "vkBindImageMemory")
+        || !load_device(scene, f.create_view, "vkCreateImageView")
+        || !load_device(scene, f.destroy_view, "vkDestroyImageView")
+        || !load_instance(scene, f.image_format_properties, "vkGetPhysicalDeviceImageFormatProperties")
+        || !load_device(scene, scene.fns.cmd_copy_buffer_to_image, "vkCmdCopyBufferToImage")) {
+        fail(error, BEDRAY_SCENE_ERROR_UNSUPPORTED, "material image Vulkan entrypoint unavailable");
+        return false;
+    }
+    scene.material_images = std::make_unique<bedray::gpu::GpuImages>(context, uint64_t(1) << 30);
+    return true;
+}
+
 bool flush_buffer(
     Scene& scene,
     Buffer& buffer,
@@ -341,6 +368,7 @@ void destroy_buffer(Scene& scene, Buffer& buffer) {
         if (buffer.allocation.serial) scene.memory->release(buffer.allocation);
         else scene.fns.free_memory(scene.device, buffer.memory, nullptr);
         scene.resident_bytes -= buffer.allocation_bytes;
+        if (buffer.terrain_geometry) scene.terrain_bytes -= buffer.allocation_bytes;
     }
     buffer = Buffer{};
 }
@@ -402,12 +430,17 @@ bool create_geometry_buffer(
     Scene& scene,
     const PendingMesh& mesh,
     Buffer& out,
-    uint64_t& index_offset,
+    uint64_t& index_offset, uint64_t& previous_offset, uint64_t& attributes_offset,
     BedraySceneError* error) {
     const uint64_t vertex_bytes = mesh.vertex_count * mesh.vertex_stride;
     const uint64_t index_bytes = mesh_index_bytes(mesh.index_type, mesh.index_count);
     index_offset = index_bytes > 0 ? align_up(vertex_bytes, kBufferAlignment) : 0;
-    const uint64_t total = vertex_bytes + index_bytes + (index_bytes > 0 ? index_offset - vertex_bytes : 0);
+    uint64_t total = index_bytes > 0 ? index_offset + index_bytes : vertex_bytes;
+    if (!mesh.previous.empty()) {
+        previous_offset = align_up(total, kBufferAlignment);
+        attributes_offset = align_up(previous_offset + mesh.previous.size(), kBufferAlignment);
+        total = attributes_offset + mesh.attributes.size();
+    }
 
     const VkBufferUsageFlags usage =
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT

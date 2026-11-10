@@ -23,8 +23,7 @@ import java.nio.LongBuffer;
 /**
  * Raw Vulkan memory helper of the world ray tracing path (own buffers on the engine's VkDevice, no VMA: the engine's
  * and Sodium's buffers move/defragment and lack the device-address usage bits, see the Sodium geometry notes).
- * Every buffer is one VkBuffer + one VkDeviceMemory; callers sub-allocate with {@link RtArena}, so the number of
- * vkAllocateMemory calls stays far below maxMemoryAllocationCount.
+ * Java-side allocations serve host rendering, integration and readbacks. Scene storage is native.
  */
 public final class RtMemory {
     /** One buffer with its memory; {@code address} is non-zero only with the device-address usage bit. */

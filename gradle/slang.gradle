@@ -19,7 +19,7 @@
 // (default: all). This is a verification aid for work-in-progress passes, not a
 // release configuration: the generated index then lists only those passes, and
 // SlangPassLibrary reports the others as missing AOT artifacts instead of
-// loading a legacy shader in their place. Release builds keep the default
+// loading another shader in their place. Release builds keep the default
 // fail-closed filter.
 
 import groovy.json.JsonOutput
@@ -111,7 +111,7 @@ def elementBytesOf = { param ->
     return 0
 }
 
-// Structs whose memory layout is shared with Java or with the legacy RtWorld
+// Structs whose memory layout is shared with Java or with the native scene
 // table.  The manifest records the size, but a field reorder with the same size
 // would still desynchronise the host, so the offsets are pinned here as well.
 // Update this map together with the Java mirror when a contract really changes.
@@ -133,7 +133,6 @@ def STRUCT_LAYOUTS = [
         kOutputViewportOriginX: 88, kOutputViewportOriginY: 92, kOutputViewportWidth: 96, kOutputViewportHeight: 100,
         reserved0: 104, reserved1: 108]],
     DecodePush: [size: 32, fields: [rawAddress: 0, arenaAddress: 8, flagsAddress: 16, quadCount: 24, reserved: 28]],
-    LegacySection: [size: 64, fields: [posAddr: 0, uvAddr: 8, colAddr: 16, lightAddr: 24, quadStart: 32, origin: 48]],
     FrameConstants: [size: 608, fields: [camera: 0, sun: 416, atmosphere: 480, exposure: 560, frame: 592]],
     BlockMaterial: [size: 64, fields: [albedo: 0, surface: 16, optical: 32, meta: 48]],
     // The ReSTIR DI record the Slang path tracer reads and writes; the Java host allocates the ring with this stride.

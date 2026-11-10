@@ -34,7 +34,6 @@ class RtSlangHistoryAnchorTest {
     private static final List<String> WRITERS = List.of(
         "contracts/hit.slang",
         "traversal/hardware_traversal.slang",
-        "traversal/legacy_section_traversal.slang",
         "traversal/voxel_traversal.slang",
         "traversal/entity_geometry.slang");
 

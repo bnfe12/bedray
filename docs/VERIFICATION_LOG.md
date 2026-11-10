@@ -1,5 +1,10 @@
 # Migration verification log
 
+> **Historical design notes (before 2026-11-10).** The Java scene and Java
+> recorder described below were removed for Alpha 2. Commands enabling the
+> previous native opt-ins are obsolete. See [Alpha 2 scene](ALPHA2_NATIVE_SCENE.md)
+> for the current contract, build, evidence and open gates.
+
 Evidence levels follow [FEATURE_MATRIX.md](FEATURE_MATRIX.md): L0 source,
 L1 build, L2 no-GPU unit tests, L3 game startup, L4 visible effect, L5 owner
 confirmation. Historical results do not validate a different source revision.

@@ -6,6 +6,7 @@
 
 #include "bedray_scene.h"
 #include "bedray/memory_allocator.hpp"
+#include "bedray/gpu_images.hpp"
 
 #include <array>
 #include <cstdint>
@@ -49,6 +50,7 @@ struct VulkanFns {
     PFN_vkDestroyAccelerationStructureKHR destroy_as = nullptr;
     PFN_vkGetAccelerationStructureDeviceAddressKHR get_as_address = nullptr;
     PFN_vkCmdBuildAccelerationStructuresKHR cmd_build_as = nullptr;
+    PFN_vkCmdCopyBufferToImage cmd_copy_buffer_to_image = nullptr;
     PFN_vkCmdCopyBuffer cmd_copy_buffer = nullptr;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
 };
@@ -62,6 +64,7 @@ struct Buffer {
     void* mapped = nullptr;
     bool coherent = true;
     bool host_visible = false;
+    bool terrain_geometry = false;
     bedray::gpu::MemoryAllocation allocation{};
 };
 
@@ -77,11 +80,15 @@ struct GeometryResource {
     uint64_t vertex_address = 0;
     uint64_t index_address = 0;
     Acceleration blas;
+    uint64_t previous_offset = 0;
+    uint64_t attributes_offset = 0;
 };
 
 struct PendingMesh {
     std::vector<uint8_t> vertices;
     std::vector<uint8_t> indices;
+    std::vector<uint8_t> previous;
+    std::vector<uint8_t> attributes;
     uint64_t vertex_count = 0;
     uint64_t index_count = 0;
     uint32_t vertex_stride = 0;
@@ -173,6 +180,17 @@ struct FrameSlot {
     std::vector<VkAccelerationStructureKHR> cached_blas_refs;
 };
 
+struct MaterialAtlas {
+    uint32_t width = 0, height = 0;
+    std::array<bedray::gpu::ImageId, 2> ids{};
+    std::array<bedray::gpu::ImageView, 2> views{};
+};
+
+struct RetiredMaterialAtlas {
+    MaterialAtlas atlas;
+    uint64_t after_frame;
+};
+
 struct Scene {
     BedraySceneDesc desc{};
     VulkanFns fns;
@@ -183,6 +201,7 @@ struct Scene {
     uint64_t scratch_alignment = kDefaultScratchAlignment;
     uint32_t capabilities = 0;
     uint64_t resident_bytes = 0;
+    uint64_t terrain_bytes = 0;
     std::shared_ptr<bedray::gpu::MemoryAllocator> memory;
 
     bool failed = false;
@@ -190,6 +209,8 @@ struct Scene {
     char failure_message[192] = {};
 
     std::map<uint64_t, Section> sections;
+    std::map<uint64_t, BedraySceneCandidate> candidates;
+    uint64_t section_epoch = 0;
     std::map<uint64_t, Entity> entities;
     std::array<Table, BEDRAY_SCENE_TABLE_COUNT> tables;
 
@@ -205,6 +226,10 @@ struct Scene {
     std::vector<RetiredBuffer> retired_buffers;
     std::vector<RetiredAcceleration> retired_accelerations;
 
+    std::unique_ptr<bedray::gpu::GpuImages> material_images;
+    MaterialAtlas material_atlas;
+    std::vector<RetiredMaterialAtlas> retired_atlases;
+
     Buffer section_table;
     uint64_t section_table_bytes = 0;
     bool section_table_dirty = true;
@@ -212,6 +237,7 @@ struct Scene {
     bool membership_changed = false;
     uint64_t version = 0;
     uint64_t last_frame_index = 0;
+    uint64_t pressure_retire_after = 0;
     uint32_t outstanding = 0;
 
     BedraySceneResources last_resources{};
@@ -254,6 +280,7 @@ BedraySceneStatus failed_status(Scene& scene, BedraySceneError* error);
 
 /* acceleration_scene.cpp */
 bool load_vulkan(Scene& scene, BedraySceneError* error);
+bool load_material_images(Scene& scene, BedraySceneError* error);
 bool create_buffer(
     Scene& scene,
     uint64_t size,
@@ -280,7 +307,7 @@ bool create_geometry_buffer(
     Scene& scene,
     const PendingMesh& mesh,
     Buffer& out,
-    uint64_t& index_offset,
+    uint64_t& index_offset, uint64_t& previous_offset, uint64_t& attributes_offset,
     BedraySceneError* error);
 bool query_blas_sizes(
     Scene& scene,

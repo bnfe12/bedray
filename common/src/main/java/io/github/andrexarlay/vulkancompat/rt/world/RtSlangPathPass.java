@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Both hardware tracing modes on the AOT Slang programs: {@code passes/path_trace.slang} traces one path per pixel into
+ * Both hardware tracing modes on the AOT Slang programs: {@code passes/path_trace_scene.slang} traces one path per pixel into
  * linear HDR radiance ({@link RtPathTraceSlangPass}), then {@code passes/path_display.slang} folds it into a running mean
  * and writes exposure + tone curve into the renderer's RGBA8 {@code rt_output}. Depth goes straight into
  * {@code rt_depth}, so the composite, bloom, particles and upscalers downstream are unchanged.
@@ -187,8 +187,6 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     static String supportProblem(SlangRuntime runtime, boolean guides) {
-        if (RtConfig.SLANG_RADIANCE_CASCADES && !RtConfig.SLANG_PATH_TRACE_CPP)
-            return "radianceCascades requires nativePathTrace=true";
         if (runtime == null) {
             return "no Slang runtime";
         }
@@ -202,7 +200,7 @@ public final class RtSlangPathPass implements RtPass {
         if (!SlangPassLibrary.available(DISPLAY_PASS)) {
             return "AOT pass " + DISPLAY_PASS + " is missing from the jar";
         }
-        return RtConfig.SLANG_PATH_TRACE_CPP ? NativePathTraceBackend.supportProblem(runtime, guides) : null;
+        return NativePathTraceBackend.supportProblem(runtime, guides);
     }
 
     /** Scattering events the ray mode traces: the surface the camera sees plus one indirect one. */
@@ -253,7 +251,7 @@ public final class RtSlangPathPass implements RtPass {
 
     /** {@code rayMode}: Ray Tracing mode instead of Path Tracing; see {@link #rayMode}. */
     RtSlangPathPass(VkDevice device, SlangRuntime runtime, boolean requestedGbuffer, boolean rayMode) {
-        this(createBackend(device, runtime), requestedGbuffer, rayMode);
+        this(createBackend(runtime), requestedGbuffer, rayMode);
     }
 
     RtSlangPathPass(PathTraceBackend backend, boolean requestedGbuffer) {
@@ -269,10 +267,9 @@ public final class RtSlangPathPass implements RtPass {
             backend.spatialAvailable(), requestedGbuffer ? "dlss_rr guides" : "off");
     }
 
-    private static PathTraceBackend createBackend(VkDevice device, SlangRuntime runtime) {
+    private static PathTraceBackend createBackend(SlangRuntime runtime) {
         if (runtime == null) throw new IllegalArgumentException("path trace needs a SlangRuntime");
-        return RtConfig.SLANG_PATH_TRACE_CPP ? new NativePathTraceBackend(runtime)
-            : new ReferencePathTraceBackend(device, runtime);
+        return new NativePathTraceBackend(runtime);
     }
 
     static void requireDisplayManifest(SlangProgram program) {
@@ -450,7 +447,7 @@ public final class RtSlangPathPass implements RtPass {
             | (params.cameraStatic ? DI_FLAG_STATIC : 0) | (params.flipY ? DI_FLAG_FLIP_Y : 0) : 0;
         // The models of this frame: the ring slice the entity BLAS was built from, so a committed primitive index names a
         // triangle of these buffers and of nothing else. Turning the capture off leaves the terrain alone in the trace.
-        RtPathTraceSlangPass.Entities capturedEntities = entityBindingsOfThisFrame();
+        RtPathTraceSlangPass.Entities capturedEntities = views.entities();
         if (!entityRingReported) {
             entityRingReported = true;
             // One line for the whole session, before the dispatch: "mobs are not in the picture" splits into a capture
@@ -499,16 +496,16 @@ public final class RtSlangPathPass implements RtPass {
             capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount(),
             RtSettings.autoNormalsOn() ? RtSettings.autoNormalStrengthPercent() / 100f : 0f,
             emitterBounceDistance(params), diffuseBounceDistance(), specularBounceDistance());
-        boolean nativeScene = views.table() != null && views.table().sceneOwned;
+        if (views.table() == null || !views.table().sceneOwned)
+            throw new IllegalStateException("path tracing requires the native section table");
         int flags = (historyWritten ? 0 : BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY)
             | (accumulateRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_ACCUMULATE : 0)
             | (params.cameraStatic ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_STATIC : 0)
             | (params.flipY ? BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y : 0)
             | (spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0)
-            | (nativeScene ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE : 0)
+            | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE
             | (diRequests.resetPending() ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0)
-            // The native backend builds its own FrameConstants, so the eye's medium travels as a host bit and the core
-            // puts it in the frame word the shader reads; the Slang backend already wrote that word itself.
+            // C++ writes the frame constants, including the eye's medium.
             | (params.cameraInWater ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_IN_WATER : 0)
             // The player's water switches travel the same way: the core has no settings screen to read, and a frame
             // that says nothing about them traces water as a flat sheet with unbent light.
@@ -522,36 +519,10 @@ public final class RtSlangPathPass implements RtPass {
         ptResetRequested = false;
         if (io.github.andrexarlay.vulkancompat.rtx.debug.FrameBenchmark.active())
             io.github.andrexarlay.vulkancompat.rtx.debug.FrameBenchmark.traceRecorded(
-                mode().logName(), backend.traceProgramName(nativeScene), width, height,
+                mode().logName(), backend.traceProgramName(), width, height,
                 params.spp, params.bounces, params.rayDistance, optionFlags);
         historyWritten = true;
         diRequests.afterDispatch(diFlags != 0);
-    }
-
-    /**
-     * This frame's captured models as the descriptor ranges the trace pass binds, read from the same manager whose
-     * statistics buffer the legacy path reaches them through. An empty ring reports no range at all, which is what makes
-     * the pass substitute its one-element dummy rather than a stale slice.
-     */
-    private static RtPathTraceSlangPass.Entities entityBindingsOfThisFrame() {
-        if (!RtConfig.SLANG_ENTITIES) {
-            return RtPathTraceSlangPass.Entities.NONE;
-        }
-        RtEntityGeometryManager eg = RtEntityGeometryManager.INSTANCE;
-        RtEntityGeometryManager.GpuRange indices = eg.frameIndices();
-        io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager capture =
-            io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance();
-        return new RtPathTraceSlangPass.Entities(entityView(eg.framePositions()),
-            entityView(eg.framePreviousPositions()), entityView(indices),
-            entityView(eg.frameAttributes()), entityView(eg.atlasRects()), entityView(eg.atlasTexels()),
-            eg.atlasTexelsPerSide(), indices.present() ? capture.selfAvatarTriStart() : 0,
-            indices.present() ? capture.selfAvatarTriCount() : 0);
-    }
-
-    private static RtPathTraceSlangPass.BufferView entityView(RtEntityGeometryManager.GpuRange range) {
-        return range.present()
-            ? new RtPathTraceSlangPass.BufferView(range.buffer().handle, range.offset(), range.bytes())
-            : RtPathTraceSlangPass.BufferView.NONE;
     }
 
     /**

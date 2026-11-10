@@ -1,5 +1,5 @@
 // Native-scene binding adapter for the shared volumetric march/store.
-// Binding 2 is bedray_scene's GeometrySection table, not LegacySection.
+// Binding 2 is the GeometrySection table owned by bedray_scene.
 // This entry traces world geometry only (mask 0x01); it never reads unbound
 // entity streams. The host must supply a world-only request. No alpha/material
 // filtering is added: visibility retains the existing binary blocker contract.

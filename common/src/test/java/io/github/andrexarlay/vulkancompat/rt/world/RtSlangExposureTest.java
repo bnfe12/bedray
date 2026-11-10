@@ -23,8 +23,6 @@ class RtSlangExposureTest {
         + "RtSlangFrameData.java");
     private static final Path VOLUMETRIC = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangVolumetricPass.java");
-    private static final Path REFERENCE_BACKEND = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
-        + "ReferencePathTraceBackend.java");
     private static final Path NATIVE_BRIDGE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "BedrayPathTraceNative.java");
     private static final Path DISPLAY = Path.of("src/main/resources/shaders/slang/passes/path_display.slang");
@@ -82,7 +80,7 @@ class RtSlangExposureTest {
 
     /** The frame word is the carrier for both backends, and nothing pins it to one. */
     @Test
-    void oneLaneFeedsBothBackends() throws IOException {
+    void frameExposureReachesTheNativeRecorder() throws IOException {
         RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
         RtFrameParams params = new RtFrameParams();
         params.exposure = 2.5f;
@@ -94,10 +92,7 @@ class RtSlangExposureTest {
         String nativeBridge = read(NATIVE_BRIDGE);
         assertTrue(nativeBridge.contains("PTL_EXPOSURE, frame.exposure.x)"),
             "the native core takes its descriptor's exposure from the same lane");
-        String reference = read(REFERENCE_BACKEND);
-        assertTrue(reference.contains(".putFloat(8, frame.exposure.x)"),
-            "the Java display dispatch takes the same lane, at the offset the shader calls pc.exposure");
-        assertFalse(reference.contains(".putFloat(8, 1.0f)"), "the display push must not pin the multiplier");
+
     }
 
     /** The shafts are composited onto the tone-mapped picture, so they are scaled by that picture's exposure. */

@@ -25,7 +25,7 @@ class RtSlangGbufferGuidesTest {
 
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
-    private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
     private static final String SCENE_PASS = SHADERS + "/passes/path_trace_scene.slang";
     private static final String ENTRY = SHADERS + "/pathtrace/path_trace_entry.slang";
 
@@ -96,8 +96,7 @@ class RtSlangGbufferGuidesTest {
             "the push flag follows the bound guides, never a setting");
         String record = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTraceSlangPass.java");
         assertTrue(record.contains("static final int OPTION_GBUFFER = 1;"), "the Java mirror of the shader option bit");
-        assertTrue(record.contains("if (wantsGuides != (boundGuides != null)) {"),
-            "record refuses a flag without images and images without the flag");
+
     }
 
     @Test

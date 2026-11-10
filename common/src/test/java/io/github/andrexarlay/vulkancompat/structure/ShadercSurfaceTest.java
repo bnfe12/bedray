@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * P1-11: the migration target is AOT Slang, but runtime GLSL -> SPIR-V through Shaderc is still load-bearing in
- * code that is not the Slang renderer (the Iris pack host and an extension probe). The inventory is frozen here
+ * code that is not the Slang renderer (the user shader pack host). The inventory is frozen here
  * instead of being re-guessed every audit; the FrameGen producer left it when `passes/fg_prepare.slang` landed and
  * the Iris depth converter left it when `passes/iris_depth.slang` replaced `iris_depth.comp`, so the resource tree
  * now ships no first-party GLSL at all.
@@ -57,7 +57,7 @@ class ShadercSurfaceTest {
         SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt/world");
 
     @Test
-    void runtimeCompilationRemainsLimitedToUserPacksAndTheExtensionProbe() throws IOException {
+    void runtimeCompilationRemainsLimitedToUserPacks() throws IOException {
         TreeSet<String> actual = new TreeSet<>();
         try (Stream<Path> files = Files.walk(SOURCES)) {
             for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
@@ -67,7 +67,6 @@ class ShadercSurfaceTest {
             }
         }
         assertEquals(new TreeSet<>(List.of(
-            "io/github/andrexarlay/vulkancompat/rt/world/RtExtensionProbe.java",
             "io/github/andrexarlay/vulkancompat/shaderhost/glsl/IrisSourcePreprocessor.java",
             "io/github/andrexarlay/vulkancompat/shaderhost/glsl/SpirvCompiler.java",
             "io/github/andrexarlay/vulkancompat/shaderhost/glsl/VulkanGlslPackCompiler.java")), actual,
@@ -128,9 +127,9 @@ class ShadercSurfaceTest {
             "the ray-tracing proof of concept is gone with them");
     }
 
-    /** The one Shaderc user inside the RT package is a capability probe, and it must stay the only one. */
+    /** Built-in RT must not require a runtime GLSL compiler. */
     @Test
-    void theOnlyShadercUserInTheRtPackageIsTheProbe() throws IOException {
+    void noShadercInTheRtPackage() throws IOException {
         TreeSet<String> users = new TreeSet<>();
         try (Stream<Path> files = Files.walk(SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt"))) {
             for (Path file : (Iterable<Path>) files.filter(path -> path.toString().endsWith(".java"))::iterator) {
@@ -139,7 +138,6 @@ class ShadercSurfaceTest {
                 }
             }
         }
-        assertEquals(new TreeSet<>(List.of("RtExtensionProbe.java")), users,
-            "the opacity-micromap probe may compile GLSL at runtime; a renderer pass may not");
+        assertTrue(users.isEmpty(), "built-in RT must use AOT Slang: " + users);
     }
 }

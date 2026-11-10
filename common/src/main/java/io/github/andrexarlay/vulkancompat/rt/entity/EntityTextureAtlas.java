@@ -2,6 +2,7 @@ package io.github.andrexarlay.vulkancompat.rt.entity;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
+import io.github.andrexarlay.vulkancompat.resources.ResourceReloadEpoch;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
@@ -50,7 +51,7 @@ public final class EntityTextureAtlas {
     private int shelfH;
     private long version;
     private int failures;
-    private int packsHash = Integer.MIN_VALUE;
+    private long captureEpoch;
 
     private EntityTextureAtlas() {
         clear();
@@ -74,22 +75,15 @@ public final class EntityTextureAtlas {
         version++;
     }
 
-    /** Re-bake trigger: the selected resource packs changed (texture contents of every slot may differ). Render thread. */
+    /** Texture contents can change even when the selected pack IDs stay the same. Render thread. */
     public synchronized void checkReload() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null || mc.getResourcePackRepository() == null) {
-            return;
+        long epoch = ResourceReloadEpoch.current();
+        if (epoch == captureEpoch) return;
+        if (captureEpoch != 0) {
+            LOGGER.info("[VK-ENTITY-ATLAS] resource reload epoch={} slots_dropped={}", epoch, slotCount - 1);
         }
-        // selected ids (user choice) and the pack list of the live ResourceManager (swapped when the async reload finishes)
-        int h = mc.getResourcePackRepository().getSelectedIds().hashCode() * 31
-            + mc.getResourceManager().listPacks().map(net.minecraft.server.packs.PackResources::packId).toList().hashCode();
-        if (h != packsHash) {
-            if (packsHash != Integer.MIN_VALUE) {
-                LOGGER.info("[VK-ENTITY-ATLAS] resource packs changed -> atlas rebaked (slots dropped={})", slotCount - 1);
-            }
-            packsHash = h;
-            clear();
-        }
+        captureEpoch = epoch;
+        clear();
     }
 
     /** Slot of a texture file ({@code ns:textures/....png}); frameW/H > 0 crop to the first frame (animated sprites). */

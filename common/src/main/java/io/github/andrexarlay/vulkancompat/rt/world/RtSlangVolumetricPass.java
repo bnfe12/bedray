@@ -21,12 +21,11 @@ final class RtSlangVolumetricPass implements AutoCloseable {
 
     RtSlangVolumetricPass(SlangRuntime runtime) {
         this.runtime = runtime;
-        var legacy = runtime.program("volumetric_march").orElseThrow();
         var scene = runtime.program("volumetric_march_scene").orElseThrow();
         var apply = runtime.program("volumetric_apply").orElseThrow();
-        require(legacy, true); require(scene, true); require(apply, false);
+        require(scene, true); require(apply, false);
         long bytes = runtime.capabilities().deviceMemoryBytes();
-        pass = new BedrayVolumetricNative(runtime.library(), runtime.core(), legacy.nativeHandle(), scene.nativeHandle(),
+        pass = new BedrayVolumetricNative(runtime.library(), runtime.core(), scene.nativeHandle(),
             apply.nativeHandle(), bytes > 0 ? Math.min(256L << 20, bytes / 8) : 128L << 20, 16L << 20);
     }
 

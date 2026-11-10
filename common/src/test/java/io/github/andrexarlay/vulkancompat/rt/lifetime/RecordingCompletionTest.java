@@ -25,6 +25,22 @@ class RecordingCompletionTest {
     }
 
     @Test
+    void deviceLossDropsOutputAndLateCompletionCannotPublishIt() {
+        var afterCompletion = new ArrayList<Runnable>();
+        var events = new ArrayList<String>();
+        var completion = new RecordingCompletion(failure -> { throw new AssertionError(failure); });
+        var action = new RecordingCompletion.Retirement(() -> events.add("complete"), () -> events.add("discard"));
+        var submitted = completion.beginWithDiscard(42, action);
+        completion.submissionAttempted(submitted);
+        completion.submitted(submitted, afterCompletion::add);
+        completion.beginWithDiscard(43, action);
+        completion.afterEncoderClose(true);
+        afterCompletion.getFirst().run();
+        assertEquals(List.of("discard", "discard"), events);
+        assertEquals(0, completion.pendingCount());
+    }
+
+    @Test
     void hostProofRetiresOnlyTheMatchingRecordingGeneration() {
         RecordingCompletionChecks.main(new String[0]);
     }

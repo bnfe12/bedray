@@ -76,7 +76,7 @@ public class RtEntityHermeticityTest {
         assertTrue(scene.contains("query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);"),
             "and so does the first-hit visibility walk: one mask for both, no per-call literal");
 
-        String path = read("src/main/resources/shaders/slang/passes/path_trace.slang");
+        String path = read("src/main/resources/shaders/slang/passes/path_trace_scene.slang");
         assertTrue(path.contains("static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;")
                 && path.contains("traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_SCENE;"),
             "the path trace sets the scene mask before any ray leaves, so entities cannot be missed by a shadow ray");

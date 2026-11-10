@@ -25,8 +25,6 @@ class RtRestirSettingsTest {
         + "RtFrameRenderer.java";
     private static final String SLANG_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
-    private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
-        + "ReferencePathTraceBackend.java";
     private static final String NATIVE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "NativePathTraceBackend.java";
     private static final String UI = "src/main/java/io/github/andrexarlay/vulkancompat/sodium/VulkanSodiumConfig.java";
@@ -75,21 +73,11 @@ class RtRestirSettingsTest {
             "the controller hands the chosen backend the current per-frame reuse decision");
         assertTrue(pass.contains("String restir = diActive() ? backend.reservoirState() : \"off\";"),
             "the mode log reports the selected backend's actual ring state");
-        String reference = read(REFERENCE_BACKEND);
-        assertTrue(reference.contains("if ((dispatch.diFlags() & DI_FLAG_ENABLED) != 0 && emitterCount > 0 && reservoirs != null)"),
-            "reference dispatch requires the controller's request and a real ring");
-        assertTrue(reference.contains("return di.mode(true, reservoirs != null, false);"),
-            "the reference backend separates a fresh ring from a reused one");
         String nativeBackend = read(NATIVE_BACKEND);
         assertTrue(nativeBackend.contains("hasNativeReservoirs()")
                 && nativeBackend.contains("frame.flags() | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_DI"),
             "the native backend requires native DI and delegates its ownership through the coarse frame flag");
-        String prepare = block(reference, "private void prepareReservoirs(");
-        int staticBranch = prepare.indexOf("if (!diRequested()) {");
-        assertTrue(staticBranch >= 0 && prepare.indexOf("nativeBuffers.retire(reservoirs)", staticBranch) > staticBranch,
-            "allocation follows the static switch only: a settings flip must not free the ring inside a recorded frame");
-        assertTrue(!prepare.contains("vkDeviceWaitIdle"),
-            "and the retired ring waits for the native owner to drain its uses, never for the whole device");
+
     }
 
     /** The ray profile reads the ray switches, each at the place where its own work is decided. */

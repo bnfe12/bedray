@@ -49,12 +49,6 @@ public final class RtConfig {
     /** Session override of the BLAS memory budget ({@code -Dvkbridge.rt.vramBudgetMb}), 0 = from the settings. */
     public static final long VRAM_BUDGET_OVERRIDE_MB = Math.max(0L, Long.getLong("vkbridge.rt.vramBudgetMb", 0L));
     public static final int MAX_INSTANCES = Math.max(256, Integer.getInteger("vkbridge.rt.maxInstances", 16384));
-    /** Opacity micromaps on CUTOUT geometry (VK_EXT_opacity_micromap). Off by default: a state is only safe when the
-     * whole footprint the shader's cutout test averages resolves to it, and that margin leaves no micro-triangle of a
-     * real 16x16 cutout sprite classifiable (measured, see {@link OpacityMicromapCache}).
-     * {@code -Dvkbridge.rt.opacityMicromaps=true} re-enables the experiment. */
-    public static final boolean OPACITY_MICROMAPS = Boolean.parseBoolean(System.getProperty("vkbridge.rt.opacityMicromaps", "false"));
-
     /** The local player's own model in first person, so water and glass reflect their body ({@code -Dvkbridge.rt.selfAvatar=false}
      * turns it off for an A/B check). */
     public static final boolean SELF_AVATAR = Boolean.parseBoolean(System.getProperty("vkbridge.rt.selfAvatar", "true"));
@@ -80,19 +74,6 @@ public final class RtConfig {
      * torch-lit wall converge while the camera moves; {@code -Dvkbridge.rt.restirDi=false} falls back to plain per-frame
      * RIS sampling of the same emitter list. */
     public static final boolean SLANG_RESTIR_DI = Boolean.parseBoolean(System.getProperty("vkbridge.rt.restirDi", "true"));
-
-    /** Record the whole path-trace frame (radiance, motion, accumulation, history depth, ReSTIR spatial and the
-     * display step) inside {@code bedray_core} instead of this Java host. The ABI is additive: a DLL without the
-     * exports keeps the Java path, and the switch exists so the two can be compared on the same frame.
-     * {@code -Dvkbridge.rt.nativePathTrace=true} opts in. */
-    public static final boolean SLANG_PATH_TRACE_CPP =
-        Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativePathTrace", "false"));
-
-    /** {@code bedray_scene.dll} owns the section BLAS, the TLAS and the 64-byte section table; the path tracer then
-     * dispatches {@code path_trace_scene}. {@code -Dvkbridge.rt.nativeScene=true} opts in. The scene is optional: a
-     * missing DLL, ABI mismatch or missing {@code path_trace_scene} artifact keeps the Java scene and logs why. */
-    public static final boolean SLANG_NATIVE_SCENE =
-        Boolean.parseBoolean(System.getProperty("vkbridge.rt.nativeScene", "false"));
 
     /** Experimental finite-window RC diffuse continuation; requires both native owners. */
     public static final boolean SLANG_RADIANCE_CASCADES =

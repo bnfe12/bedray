@@ -1,9 +1,7 @@
 // Native scene traversal: the TLAS and the 64-byte section records owned by
 // bedray_scene, decoded through the shader-facing GeometryVertex stream.
 //
-// This is the replacement for LegacySectionTraversal once the host binds the
-// native scene table.  It keeps the same ISceneTracer contract and the same
-// entity handling as the legacy adapter:
+// Instance decoding follows the ISceneTracer contract:
 //
 //   * a world instance's instanceCustomIndex is the section table slot;
 //   * an entity instance is routed to traversal/entity_geometry.slang by the
@@ -12,7 +10,7 @@
 //
 // The section record carries a device address of its GeometryVertex stream
 // (64 B stride), so this module needs Int64/PhysicalStorageBufferAddresses in
-// addition to RayQueryKHR, exactly like the legacy table did.
+// addition to RayQueryKHR.
 
 public module scene_traversal;
 

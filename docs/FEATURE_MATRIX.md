@@ -1,5 +1,8 @@
 # Feature matrix: current source and historical release evidence
 
+Built-in hardware rays and path tracing share the [Alpha 2 C++ scene and AOT Slang recorder](ALPHA2_NATIVE_SCENE.md).
+A matching `bedray_core.dll` is required. This requirement does not apply to the independent NoRT/Compute route.
+
 ## Current main integration (2026-10-26)
 
 The 0.1.1-alpha.13 source combines the development branches listed in [DEVELOPMENT_BRANCHES](DEVELOPMENT_BRANCHES.md).

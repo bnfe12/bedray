@@ -115,7 +115,9 @@ public final class RtEmitters {
     private record Entry(DecodedSection src, float[] records) {
     }
 
-    private final EmitterCaptureBuffers buffers;
+    private final EmitterTable table = new EmitterTable();
+    private EmitterTable.Publication publication;
+    private long publicationSerial;
     private final EmitterFrameSelection frameSelection = new EmitterFrameSelection();
     private final Map<Long, Entry> cache = new HashMap<>();
     private final Set<Long> seen = new HashSet<>();
@@ -200,8 +202,7 @@ public final class RtEmitters {
     private int staticOriginX, staticOriginY, staticOriginZ;
     private int staticSections;
 
-    public RtEmitters(RtMemory memory) {
-        this.buffers = new EmitterCaptureBuffers(memory);
+    public RtEmitters() {
         for (int i = 0; i < heap.length; i++) {
             heap[i] = new float[FLOATS + 1];
         }
@@ -357,26 +358,11 @@ public final class RtEmitters {
 
     /** Revision of the selected light content, independent of its importance order. Used only by cached PT suffixes. */
     public long fingerprint() {
-        var publication = buffers.publication();
         return publication == null ? 0L : publication.revision();
     }
 
-    /** Device address of the immutable published list, or zero for an empty list. */
-    public long address() {
-        var buffer = buffers.current();
-        return buffer == null ? 0L : buffer.address;
-    }
-
-    /** Buffer of the immutable published list, or zero for an empty list. */
-    public long handle() {
-        var buffer = buffers.current();
-        return buffer == null ? 0L : buffer.handle;
-    }
-
-    /** Publications occupy their own buffer, so descriptor bindings start at zero. */
-    public long segmentOffset() {
-        return 0L;
-    }
+    java.nio.ByteBuffer publicationBytes() { return publication == null || count == 0 ? null : publication.data(); }
+    long publicationSerial() { return publicationSerial; }
 
     public int originX() {
         return publishedOriginX;
@@ -598,7 +584,9 @@ public final class RtEmitters {
         var frame = frameSelection.compose(staticHeap, Math.max(0, staticHeapSize), staticOriginX, staticOriginY, staticOriginZ,
             camX, camY, camZ, range, budget, entityQuads, entityCount);
         int n = frame.count();
-        buffers.publish(frame.records(), n, frame.originX(), frame.originY(), frame.originZ(), materialRevision);
+        publication = table.prepare(frame.records(), n, frame.originX(), frame.originY(), frame.originZ(), materialRevision);
+        table.commit(publication);
+        publicationSerial++;
         frameSelection.recordPublished(frame);
         publishedOriginX = frame.originX();
         publishedOriginY = frame.originY();
@@ -620,7 +608,7 @@ public final class RtEmitters {
         maxPublicationNanos = Math.max(maxPublicationNanos, publicationNanos);
         if (now - lastLogNs > 5_000_000_000L) {
             lastLogNs = now;
-            var identity = buffers.publication();
+            var identity = publication;
             LOGGER.info("[VKB-EMITTERS] table=BEM2 revision={} material_revision={} selected={} retained={} added={} removed={} bytes={} max_probe={} global_fraction={} bvh_depth={} topology_reused={} selection_publish_ms={} selection_publish_max_ms={}",
                 identity.revision(), materialRevision, n, identity.retained(), identity.added(), identity.removed(),
                 identity.data().remaining(), identity.maxProbe(), identity.globalFraction(), identity.bvhDepth(), identity.topologyReused(),
@@ -958,7 +946,8 @@ public final class RtEmitters {
     }
 
     public void destroy() {
-        buffers.close();
+        table.clear();
+        publication = null;
         count = inRange = totalEmitters = entityUsed = entityInRange = 0;
         cache.clear();
         seen.clear();
@@ -966,9 +955,4 @@ public final class RtEmitters {
         scan = null; // the snapshot would otherwise keep every decoded section of the pass alive
     }
 
-    /** Called before a pass records reads of the currently published list. */
-    public void retainForRecording(long commandBuffer) { buffers.retain(commandBuffer); }
-
-    /** Called only by this recording's completion/discard action. */
-    public void releaseRecording(long commandBuffer) { buffers.releaseRecording(commandBuffer); }
 }

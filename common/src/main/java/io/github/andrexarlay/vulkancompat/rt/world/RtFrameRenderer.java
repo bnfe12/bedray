@@ -19,6 +19,7 @@ import io.github.andrexarlay.vulkancompat.rt.denoise.NrdException;
 import io.github.andrexarlay.vulkancompat.rt.material.MaterialAtlasBaker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability;
 import io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas;
+import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneLayouts;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangDeviceCapabilities;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntimePool;
@@ -32,7 +33,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.client.renderer.state.level.SkyRenderState;
-import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.world.level.dimension.DimensionType;
 import org.lwjgl.system.MemoryStack;
@@ -466,6 +466,15 @@ public final class RtFrameRenderer {
         }
     }
 
+    /** Called before the game installs the new level in Sodium and the level extractor. */
+    public static void onClientLevelChanged() {
+        io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry.INSTANCE.clear();
+        RtEntityGeometryManager.INSTANCE.resetFrame();
+        RtEntityGeometryManager.INSTANCE.resetHistory();
+        havePrevCamera = false;
+        if (world != null) shutdown("client_level_changed");
+    }
+
     public static void render(CameraRenderState camera, RenderTarget target, LevelRenderState levelState) {
         if (drainingHostSubmissions) return;
         if (teardownPending) {
@@ -531,6 +540,11 @@ public final class RtFrameRenderer {
                 if (emitters != null) {
                     emitters.destroy();
                     emitters = null;
+                }
+                if (materials != null) {
+                    // The discarded command may have contained the initial layout transition or a sprite upload.
+                    materials.destroy();
+                    materials = null;
                 }
                 LOGGER.info("[VKB-RT] native_scene_recreated reason=discarded_recording");
             }
@@ -673,17 +687,17 @@ public final class RtFrameRenderer {
             consumeCompletedStats();
             if (!statsReadbacks.hasFreeSlot()) throw new RtFailure("stats_slots", "completion proof unavailable; stats slots retained");
         }
-        if (world.requiresLegacyHostDrain()) {
-            drainHostSubmissions(device, "legacy_world_inputs_drain");
-            world.prepareLegacyFrameAfterHostDrain();
-        }
         if (target != null && target.width > 0 && target.height > 0
             && camera.projectionMatrix != null && camera.viewRotationMatrix != null) {
             prepareFrameResources(device, WorldTargetManager.traceWidth(target.width), WorldTargetManager.traceHeight(target.height));
         }
+        TextureAtlas atlas = Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS)
+            instanceof TextureAtlas textureAtlas ? textureAtlas : null;
+        int atlasW = atlas == null ? 0 : atlas.getTexture().getWidth(0);
+        int atlasH = atlas == null ? 0 : atlas.getTexture().getHeight(0);
+        if (materials == null) materials = new RtMaterialAtlas();
         long frameStart = System.nanoTime();
-        if (emitters == null) emitters = new RtEmitters(world.memory());
-        RtEmitters recordingEmitters = emitters;
+        if (emitters == null) emitters = new RtEmitters();
         VulkanCommandEncoder encoder = vulkanDevice.createCommandEncoder();
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
         var statsOwner = statsReadbacks;
@@ -716,8 +730,6 @@ public final class RtFrameRenderer {
             new Retirement(
                 () -> recordingWorld.releaseRecording(cmd.address()), () -> recordingWorld.discardRecording(cmd.address())),
             new Retirement(
-                () -> recordingEmitters.releaseRecording(cmd.address()), () -> recordingEmitters.releaseRecording(cmd.address())),
-            new Retirement(
                 () -> particleRelease[0].run(), () -> particleRelease[0].run()),
             new Retirement(
                 () -> denoiserProof[0].completed().run(), () -> denoiserProof[0].discarded().run()));
@@ -746,11 +758,12 @@ public final class RtFrameRenderer {
             }
             lastStats = stats;
             blasBuiltTotal += stats.builtThisFrame();
-            if (stats.instances() > 0 && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
+            if (stats.totalSections() > 0 && stats.instances() > 0 && atlas != null
+                && camera.projectionMatrix != null && camera.viewRotationMatrix != null && target != null) {
                 recordPrimaryRays(cmd, vulkanDevice, camera, target, levelState,
-                    world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ, statsLease, denoiserProof);
+                    world.nearestBuiltSq() <= SCENE_CHANGE_RADIUS_SQ, atlas, atlasW, atlasH, statsLease, denoiserProof);
                 traced = true;
-                if (autotestDiscardPending && RtConfig.SLANG_NATIVE_SCENE && stats.totalSections() > 0) {
+                if (autotestDiscardPending && stats.totalSections() > 0) {
                     autotestDiscardPending = false;
                     LOGGER.info("[VKB-AUTOTEST] event=discard_native_scene_recording sections={}", stats.totalSections());
                     throw new RtDenoiserFrameDiscard("autotest: discard after tracing before submission", null);
@@ -924,8 +937,8 @@ public final class RtFrameRenderer {
             stage = "entity_motion_ensure";
             if (pass.usesGbuffer() && wantsEntityMotion()) frameResources.ensureMotion(w, h);
             stage = "sky_atlas_prepare";
-            if (skyTextures == null) skyTextures = new RtSkyTextures(world.memory());
-            skyTextures.prepare(() -> drainHostSubmissions(device, "sky_atlas_reload_drain"));
+            if (skyTextures == null) skyTextures = new RtSkyTextures();
+            skyTextures.prepare();
         } catch (RuntimeException | Error failure) {
             throw new RtFailure("frame_resources_" + stage,
                 "profile=" + previousMode.logName() + " previousExtent=" + previousWidth + "x" + previousHeight
@@ -940,6 +953,7 @@ public final class RtFrameRenderer {
     /** Output image, dispatch and (debug view only) the copy into the engine colour image, inside the open command buffer. */
     private static void recordPrimaryRays(VkCommandBuffer cmd, VulkanDevice vulkanDevice, CameraRenderState camera,
                                          RenderTarget target, LevelRenderState levelState, boolean sceneChanged,
+                                         TextureAtlas atlasTexture, int atlasW, int atlasH,
                                          RecordingReadbackSlots.Lease<StatsMetadata> statsLease, Retirement[] denoiserProof) {
         VkDevice device = vulkanDevice.vkDevice();
         SkyRenderState sky = levelState.skyRenderState;
@@ -968,13 +982,10 @@ public final class RtFrameRenderer {
         }
         frameResources.prepare(cmd.address(), image -> VkBarriers.transition(cmd, image.image,
             VK10.VK_IMAGE_ASPECT_COLOR_BIT, VK10.VK_IMAGE_LAYOUT_UNDEFINED, VK10.VK_IMAGE_LAYOUT_GENERAL));
-        AbstractTexture atlasTexture = Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
-        long atlasView = atlasTexture != null ? WorldTargetManager.extractVkImageView(atlasTexture.getTextureView()) : 0L;
+        long atlasView = WorldTargetManager.extractVkImageView(atlasTexture.getTextureView());
         if (atlasView == 0L) {
             throw new RtFailure("atlas", "block atlas VkImageView unavailable");
         }
-        int atlasW = atlasTexture.getTexture().getWidth(0);
-        int atlasH = atlasTexture.getTexture().getHeight(0);
         // The vanilla lightmap (16x16, block light x sky light) colours the baked light fill and the vanilla water sheet
         // with the real tint of the pack, dimension and effects; 0 binds the atlas as a benign fallback.
         long lightmapView = 0L;
@@ -1003,15 +1014,7 @@ public final class RtFrameRenderer {
             frameResources.requireMotion(w, h);
             motionHandle = frameMotion().handle;
         }
-        if (materials == null) {
-            materials = new RtMaterialAtlas(world.memory());
-            // Without this the atlas keeps no texel states, intern() returns ST_RETRY forever and the micromaps are
-            // inert: the feature reports "enabled" while every BLAS triangle stays fully unknown.
-            if (world.ommCache() != null) {
-                materials.setMicromapSink(world.ommCache());
-            }
-        }
-        materials.ensure(cmd, (TextureAtlas) atlasTexture, atlasW, atlasH, Minecraft.getInstance().getResourceManager());
+        materials.ensure(world::uploadMaterials, atlasTexture, atlasW, atlasH, Minecraft.getInstance().getResourceManager());
         pass.prepare(cmd, world.memory(), w, h);
         long[] gbViews = null;
         if (useDenoiser) {
@@ -1022,7 +1025,7 @@ public final class RtFrameRenderer {
             }
         }
         pass.bind(new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), frameOutput().view, atlasView, materials.materialView(),
-            materials.normalView(), 0L, gbViews, frameDepth() != null ? frameDepth().view : 0L, lightmapView, motionHandle));
+            materials.normalView(), 0L, gbViews, frameDepth() != null ? frameDepth().view : 0L, lightmapView, motionHandle, world.entityBindings()));
 
         int writeSlot = statsLease.slot();
         long writeOffset = (long) writeSlot * STATS_STRIDE;
@@ -1044,10 +1047,11 @@ public final class RtFrameRenderer {
         emitters.update(world, materials.lastBake(), camera.pos.x, camera.pos.y, camera.pos.z, lightRange,
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.lightBudget(), entityEmitters,
             entityEmitters.length / RtEmitters.FLOATS);
-        emitters.retainForRecording(cmd.address());
+        var emitterTable = world.frameTable(BedraySceneLayouts.TABLE_LIGHT, emitters.publicationSerial(), emitters.publicationBytes());
+        long opticalAddress = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials()
+            ? world.frameTable(BedraySceneLayouts.TABLE_MATERIAL, materials.opticalRevision(), materials.opticalBytes()).address() : 0L;
         long hdr = statsBuf.mapped + writeOffset;
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.OPTICAL_ADDR,
-            io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.opticalMaterials() ? materials.opticalAddress() : 0L);
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.OPTICAL_ADDR, opticalAddress);
         io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.setEnabled(
             io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.cullSharedGlass());
         MemoryUtil.memPutInt(hdr + RtStatsLayout.EMITTER_COUNT, emitters.count());
@@ -1060,9 +1064,9 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL, (float) (camera.pos.x - emitters.originX()));
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 4, (float) (camera.pos.y - emitters.originY()));
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.CAM_REL + 8, (float) (camera.pos.z - emitters.originZ()));
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.EMITTER_ADDR, emitters.address());
-        params.emitterHandle = emitters.handle();
-        params.emitterOffset = emitters.segmentOffset();
+        MemoryUtil.memPutLong(hdr + RtStatsLayout.EMITTER_ADDR, emitterTable.address());
+        params.emitterHandle = emitterTable.buffer();
+        params.emitterOffset = 0L;
         params.emitterCount = emitters.count();
         params.emitterFingerprint = emitters.fingerprint();
         params.emitterCamRelX = MemoryUtil.memGetFloat(hdr + RtStatsLayout.CAM_REL);
@@ -1093,13 +1097,15 @@ public final class RtFrameRenderer {
         params.sceneChanged = sceneChanged;
         lastSunAngle = sky.sunAngle;
         boolean hasSky = sky.skybox == DimensionType.Skybox.OVERWORLD;
-        if (skyTextures == null || skyTextures.address() == 0)
+        long skyAddress = skyTextures == null ? 0L
+            : world.frameTable(BedraySceneLayouts.TABLE_SKY, skyTextures.epoch(), skyTextures.bytes()).address();
+        if (skyAddress == 0)
             throw new RtFailure("sky_atlas", "atlas was not prepared before command recording");
         skyState.collect(levelState, camera.pos.x + bobOrigin.x, camera.pos.y + bobOrigin.y, camera.pos.z + bobOrigin.z, RtConfig.SUN_FLIP_X,
             skyTextures.cloudWidth(), skyTextures.cloudHeight());
         RtSky.keyLight(sky.sunAngle, sky.moonAngle, RtConfig.SUN_FLIP_X, hasSky, skyState.moonLight, skyState.rainBrightness,
             skyState.thunder, params.key);
-        skyState.write(hdr, skyTextures.address(), RtConfig.SUN_FLIP_X);
+        skyState.write(hdr, skyAddress, RtConfig.SUN_FLIP_X);
         // vanilla fog of the game (render distance edge, biome / weather / water) + aerial perspective: rt_common.glsl fogTransmittanceHit
         fogState.collect(Minecraft.getInstance(), levelState.worldPartialTicks, lastRadiusXz, skyState.rainBrightness);
         fogState.write(hdr, RtAtmosphereSettings.fogVanilla(), RtAtmosphereSettings.fogAerial(), RtAtmosphereSettings.chunkFadeSeconds());
@@ -1184,28 +1190,11 @@ public final class RtFrameRenderer {
         MemoryUtil.memPutInt(hdr + RtStatsLayout.FOG_MODE, params.volumetricFogEnabled
             ? (RtAtmosphereSettings.godRays() == RtAtmosphereSettings.GodRays.INLINE ? 2 : 1) : 0);
         MemoryUtil.memPutFloat(hdr + RtStatsLayout.FOG_DISTANCE_SCALE, params.fogDistanceScale);
-        // entity geometry of this frame (RtEntityGeometryManager ring slice; the same slice the entity BLAS was built from)
-        RtEntityGeometryManager eg = RtEntityGeometryManager.INSTANCE;
-        boolean entOk = world.entityPrimitiveCount() > 0;
-        MemoryUtil.memPutInt(hdr + RtStatsLayout.ENTITY_TRIS, entOk ? eg.frameTriangles() : 0);
-        // Triangle range of the local player's body captured for this frame: the primary rays skip it (an inside face of the
-        // avatar at 0.001 from the eye is what the first-person screen would otherwise show).
-        io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager capture =
-            io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance();
-        MemoryUtil.memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_START, entOk ? capture.selfAvatarTriStart() : 0);
-        MemoryUtil.memPutInt(hdr + RtStatsLayout.SELF_AVATAR_TRI_COUNT, entOk ? capture.selfAvatarTriCount() : 0);
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_POS_ADDR, entOk ? eg.framePosAddress() : 0L);
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_IDX_ADDR, entOk ? eg.frameIndexAddress() : 0L);
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_ATTR_ADDR, entOk ? eg.frameAttrAddress() : 0L);
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_PREV_ADDR, entOk ? eg.framePrevAddress() : 0L);
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_ATLAS_ADDR, eg.atlasAddress());
-        MemoryUtil.memPutLong(hdr + RtStatsLayout.ENT_RECT_ADDR, eg.rectAddress());
         // The consumer receives exactly the allocation bound for this frame's producer, including zero on disable.
         long motionAddr = motionHandle != 0L ? frameMotion().address : 0L;
         if (dlssRrDenoiser != null) dlssRrDenoiser.entityMotionAddress = motionAddr;
         if (denoiser != null) denoiser.entityMotionAddress = motionAddr;
         MemoryUtil.memPutLong(hdr + RtStatsLayout.MOTION_ADDR, motionAddr);
-        MemoryUtil.memPutInt(hdr + RtStatsLayout.ENT_ATLAS_SIZE, eg.atlasAddress() != 0L ? io.github.andrexarlay.vulkancompat.rt.entity.EntityTextureAtlas.SIZE : 0);
         float jitterPxX = 0.0f;
         float jitterPxY = 0.0f;
         boolean upscalerJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
@@ -1586,7 +1575,7 @@ public final class RtFrameRenderer {
         try {
             SlangRuntime runtime = pathSlangRuntime(vulkanDevice);
             String problem = RtSlangPathPass.supportProblem(runtime, gbuffer);
-            if (problem == null && RtConfig.SLANG_PATH_TRACE_CPP && gbuffer && wantsEntityMotion()
+            if (problem == null && gbuffer && wantsEntityMotion()
                 && (denoiseMode.isNrd() || denoiseMode == DenoiserMode.DLSS_RR)
                 && !runtime.library().hasNativeMotion()) {
                 problem = "native denoiser motion requires a matching core with NRD_MOTION";
@@ -1834,10 +1823,6 @@ public final class RtFrameRenderer {
             LOGGER.info("[VKB-RT] rt_pass waiting instances=0 pending={}", s.pending());
         }
         if (world != null) {
-            OpacityMicromapCache omm = world.ommCache();
-            if (omm != null) {
-                omm.logStatsIfDue(now);
-            }
         }
         passMsInWindow = 0.0;
         passFramesInWindow = 0;
@@ -1895,7 +1880,36 @@ public final class RtFrameRenderer {
         }
     }
 
+    private static boolean ownsDevice(VkDevice device) {
+        var active = world != null ? world.memory().device() : pathSlangRuntime != null ? pathSlangRuntime.device() : null;
+        return active != null && active.address() == device.address();
+    }
+
+    /** Normal retirement while the encoder can still submit and deliver fence proof. */
+    public static void onDeviceClose(VulkanDevice host) {
+        if (ownsDevice(host.vkDevice())) shutdown("host_device_close");
+    }
+
+    /** The host closed its encoder and cannot resubmit any abandoned recording. */
+    public static void afterHostEncoderClose(VulkanDevice host) {
+        VkDevice device = host.vkDevice();
+        if (!teardownPending || !ownsDevice(device)) return;
+        int result = VK10.vkDeviceWaitIdle(device);
+        boolean lost = result == VK10.VK_ERROR_DEVICE_LOST;
+        if (result != VK10.VK_SUCCESS && !lost) return;
+        try {
+            recordingCompletion.afterEncoderClose(lost);
+            shutdown(lost ? "host_device_lost" : "host_encoder_closed", true);
+        } catch (RuntimeException | LinkageError e) {
+            LOGGER.error("[VKB-RT] retirement after encoder close failed\n{}", LogPaths.stack(e));
+        }
+    }
+
     private static void shutdown(String reason) {
+        shutdown(reason, false);
+    }
+
+    private static void shutdown(String reason, boolean encoderClosedProof) {
         if (drainingHostSubmissions) return;
         displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
         displayedFgGuides = pendingFgGuides = null;
@@ -1904,7 +1918,7 @@ public final class RtFrameRenderer {
         if (w != null) {
             teardownPending = true;
             try {
-                drainHostSubmissions(w.memory().device(), "shutdown_drain");
+                if (!encoderClosedProof) drainHostSubmissions(w.memory().device(), "shutdown_drain");
             } catch (RuntimeException | LinkageError e) {
                 // Keep strong references for an explicit later shutdown. A
                 // failed flush/idle is not permission to free pending resources.
@@ -1923,7 +1937,7 @@ public final class RtFrameRenderer {
                         teardownPending = true;
                         return;
                     }
-                    drainHostSubmissions(host.vkDevice(), "particle_startup_failure_drain");
+                    if (!encoderClosedProof) drainHostSubmissions(host.vkDevice(), "particle_startup_failure_drain");
                     io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.collectAfterHostDrain(true);
                 }
                 atmosphere.destroy(); // same reason as below: its recordings live on this core
@@ -1998,10 +2012,7 @@ public final class RtFrameRenderer {
                 w.memory().destroy(statsBuf);
                 statsBuf = null;
             }
-            if (skyTextures != null) {
-                skyTextures.destroy();
-                skyTextures = null;
-            }
+            skyTextures = null;
             w.destroy();
             world = null;
             LOGGER.info("[VKB-RT] world_destroyed reason={}", reason);

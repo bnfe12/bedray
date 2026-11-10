@@ -18,8 +18,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * not fit is left out with a log line instead of taking the whole renderer down.
  */
 class RtReservoirBudgetTest {
-    private static final Path BACKEND = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
-        + "ReferencePathTraceBackend.java");
     private static final long MIB = 1024L * 1024L;
     private static final long GIB = 1024L * MIB;
 
@@ -29,32 +27,22 @@ class RtReservoirBudgetTest {
 
     @Test
     void theBudgetIsAQuarterOfDeviceMemory() {
-        assertEquals(4L * GIB, ReferencePathTraceBackend.bufferBudget(16L * GIB), "RTX 5060 Ti 16 GB");
-        assertEquals(2L * GIB, ReferencePathTraceBackend.bufferBudget(8L * GIB));
-        assertEquals(512L * MIB, ReferencePathTraceBackend.bufferBudget(0L), "unknown device memory");
+        assertEquals(4L * GIB, BedrayPathTraceNative.bufferBudget(16L * GIB), "RTX 5060 Ti 16 GB");
+        assertEquals(2L * GIB, BedrayPathTraceNative.bufferBudget(8L * GIB));
+        assertEquals(512L * MIB, BedrayPathTraceNative.bufferBudget(0L), "unknown device memory");
     }
 
     @Test
     void bothRingsFitAt1440pAndEvenAt4kOnSixteenGigabytes() {
-        long budget = ReferencePathTraceBackend.bufferBudget(16L * GIB);
+        long budget = BedrayPathTraceNative.bufferBudget(16L * GIB);
         for (int[] extent : new int[][] {{2560, 1370}, {2560, 1440}, {3840, 2160}}) {
             long pt = RtPathTraceSlangPass.ptReservoirBytes(extent[0], extent[1]);
             long di = diBytes(extent[0], extent[1]);
-            assertTrue(ReferencePathTraceBackend.ptRingFits(pt, di, budget), extent[0] + "x" + extent[1]);
+            assertTrue(pt + di <= budget, extent[0] + "x" + extent[1]);
         }
         long pt = RtPathTraceSlangPass.ptReservoirBytes(2560, 1370);
-        assertFalse(ReferencePathTraceBackend.ptRingFits(pt, diBytes(2560, 1370), GIB), "the old 1 GiB cap");
+        assertFalse(pt + diBytes(2560, 1370) <= GIB, "the old 1 GiB cap");
     }
 
-    @Test
-    void aRingThatDoesNotFitIsLoggedAndLeftOut() throws IOException {
-        String backend = Files.readString(BACKEND).replace("\r\n", "\n");
-        assertFalse(backend.contains("Math.min(1L << 30, bytes / 4)"), "no 1 GiB cap on the buffer owner");
-        assertTrue(backend.contains("runtime.createBufferOwner(bufferBudget(bytes))"));
-        int prepare = backend.indexOf("private void preparePathReservoirs(");
-        int fits = backend.indexOf("if (!ptRingFits(need, diBytes, bufferBudget)) {", prepare);
-        int create = backend.indexOf("nativeBuffers.createDeviceLocal(need,", prepare);
-        assertTrue(prepare > 0 && fits > prepare && fits < create, "checked before the allocation that would fail");
-        assertTrue(backend.contains("[VKB-RT] restir_pt=off reason=budget"), "the player's log says why PT is off");
-    }
+
 }

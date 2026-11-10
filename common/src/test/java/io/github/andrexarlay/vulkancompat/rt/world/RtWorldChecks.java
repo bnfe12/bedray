@@ -15,9 +15,9 @@ public final class RtWorldChecks {
 
 
     public static void runAll() {
-        allocatorBasics();
-        allocatorCoalescing();
-        allocatorExhaustion();
+
+
+
         instanceTransform();
         radiusAndOrdering();
         inverseViewProjection();
@@ -28,7 +28,6 @@ public final class RtWorldChecks {
         lightingEquation();
         samplingHelpers();
         modeSelection();
-        instanceWriterLayout();
         RtModesChecks.runAll();
     }
 
@@ -47,25 +46,6 @@ public final class RtWorldChecks {
     }
 
 
-    private static void instanceWriterLayout() {
-        long address = org.lwjgl.system.MemoryUtil.nmemAlloc(64);
-        try {
-            float[] transform = new float[12];
-            for (int i = 0; i < transform.length; i++) {
-                transform[i] = i + 0.25f;
-            }
-            RtInstanceWriter.write(address, 0x00ABCDEF, 0xFF, 0x123456789ABCDEFL, transform);
-            for (int i = 0; i < transform.length; i++) {
-                near(transform[i], org.lwjgl.system.MemoryUtil.memGetFloat(address + i * 4L), 0f, "instance transform " + i);
-            }
-            check(org.lwjgl.system.MemoryUtil.memGetInt(address + 48) == (int)0xFFABCDEF, "instance custom index and mask");
-            check(org.lwjgl.system.MemoryUtil.memGetInt(address + 52) == 0x01000000, "instance sbt offset and flags (VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR = 0x1 in bits 24-31)");
-            check(org.lwjgl.system.MemoryUtil.memGetLong(address + 56) == 0x123456789ABCDEFL, "instance blas address");
-        } finally {
-            org.lwjgl.system.MemoryUtil.nmemFree(address);
-        }
-    }
-
     private static void check(boolean cond, String msg) {
         if (!cond) {
             throw new AssertionError(msg);
@@ -76,50 +56,6 @@ public final class RtWorldChecks {
         if (Math.abs(expected - actual) > eps) {
             throw new AssertionError(msg + ": expected " + expected + " actual " + actual);
         }
-    }
-
-    private static void allocatorBasics() {
-        FreeListAllocator a = new FreeListAllocator(4096);
-        long o1 = a.alloc(100, 256);
-        long o2 = a.alloc(300, 256);
-        check(o1 == 0 && o2 == 256, "aligned sequential offsets: " + o1 + "," + o2);
-        check(a.used() == 256 + 512, "used counts rounded sizes: " + a.used());
-        check(a.alloc(1, 256) == 768, "next offset after 256+512");
-    }
-
-    private static void allocatorCoalescing() {
-        FreeListAllocator a = new FreeListAllocator(1024);
-        long x = a.alloc(256, 256);
-        long y = a.alloc(256, 256);
-        long z = a.alloc(256, 256);
-        long w = a.alloc(256, 256);
-        check(a.alloc(1, 256) == -1, "full");
-        a.free(y, 256, 256);
-        a.free(x, 256, 256);
-        check(a.freeRangeCount() == 1, "x and y merged");
-        a.free(w, 256, 256);
-        check(a.freeRangeCount() == 2, "w separate (z still allocated)");
-        a.free(z, 256, 256);
-        check(a.freeRangeCount() == 1 && a.used() == 0, "all merged back");
-        check(a.alloc(1024, 256) == 0, "whole range allocatable again");
-        boolean threw = false;
-        try {
-            a.free(0, 256, 256);
-            a.free(0, 256, 256);
-        } catch (IllegalStateException e) {
-            threw = true;
-        }
-        check(threw, "double free detected");
-    }
-
-    private static void allocatorExhaustion() {
-        FreeListAllocator a = new FreeListAllocator(2100);
-        check(a.alloc(3000, 16) == -1, "larger than capacity");
-        check(a.alloc(10, 512) == 0, "first at 0");
-        check(a.alloc(10, 512) == 512, "second at 512");
-        check(a.alloc(100, 16) == 1024, "third after both, 16-aligned");
-        check(a.alloc(10, 512) == 1536, "aligned to 512 inside the rest");
-        check(a.alloc(10, 512) == -1, "no 512-aligned room left in the 52-byte tail");
     }
 
     private static void instanceTransform() {

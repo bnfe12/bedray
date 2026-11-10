@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SlangRayGenerationTest {
     @Test void variantsKeepTheActualComputeResourceContractAndAddOnlyRequiredSchedulingFeatures() {
-        for (String base : List.of("path_trace", "path_trace_scene", "rc_path_trace_scene")) {
+        for (String base : List.of("path_trace_scene", "path_trace_scene", "rc_path_trace_scene")) {
             SlangPass compute = SlangPassLibrary.load(base).orElseThrow();
             assertEquals(0, countOpcode(compute.spirv(), 5280)); // OpReorderThreadWithHintNV
             for (boolean ser : List.of(false, true)) {

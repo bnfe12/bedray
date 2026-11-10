@@ -42,7 +42,7 @@ class RtSlangRayModeTest {
 
     private static RtSlangPathPass pass(Backend backend, boolean rayMode) {
         RtSlangPathPass pass = new RtSlangPathPass(backend, false, rayMode);
-        pass.bind(new RtFrameBindings.Views(1, null, 2, 3, 4, 5, 0, null, 6));
+        pass.bind(new RtFrameBindings.Views(1, new RtMemory.Buf(9, 0, 64, 10, 0, false, true), 2, 3, 4, 5, 0, null, 6));
         pass.prepare(null, null, 16, 8);
         return pass;
     }

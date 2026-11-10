@@ -1,17 +1,6 @@
 // bedray.slang - curated public shader surface.
 //
 // Import this file when a pass wants the current, typed Bedray 2.0 API.
-// Legacy compatibility is deliberately not exported here:
-//
-//   types.slang / bindings.slang / ray_backend.slang / backend_query.slang
-//                                 legacy 1:1 scaffold and global bindings
-//   LegacySectionTraversal        traversal/legacy_section_traversal.slang
-//   float4 Radiance Cascades      radiance_cascades/radiance_cascades_store.slang
-//
-// A host that still needs a legacy path imports bedray_legacy.slang explicitly,
-// or imports the concrete module.  This keeps a new pass from accidentally
-// binding a legacy record or a global descriptor to a typed pass.
-//
 // Module responsibilities and dependency direction: ARCHITECTURE.md.
 // Typed RC trace host contract: radiance_cascades/RC_TRACE_API.md.
 

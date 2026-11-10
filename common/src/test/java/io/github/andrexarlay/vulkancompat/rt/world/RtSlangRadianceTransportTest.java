@@ -78,8 +78,7 @@ class RtSlangRadianceTransportTest {
         assertFalse(read(ROOT).contains("import \"radiance_cascades/radiance_cascades_store.slang\"")
                 || read(ROOT).contains("import \"radiance_cascades/legacy_float4_store.slang\""),
             "the default root exports the typed modules only; the averaging resolve stays behind bedray_legacy");
-        assertTrue(read(LEGACY_ROOT).contains("__exported import \"radiance_cascades/radiance_cascades_store.slang\""),
-            "the legacy root is the deliberate door to it");
+        assertFalse(Files.exists(Path.of(LEGACY_ROOT)), "the removed root must not return");
         assertTrue(read(STORE).contains("__exported import \"radiance_cascades/legacy_float4_store.slang\""),
             "and the facade is the only thing that re-exports it");
         assertEquals(List.of(), legacyAtlasWriters(),

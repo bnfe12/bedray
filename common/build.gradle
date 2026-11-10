@@ -77,6 +77,9 @@ test {
         logger.warn('[bedray] project path contains non-ASCII characters; Gradle test workers may fail to load test '
             + 'classes. Run tests from an ASCII path/worktree (see docs/BUILDING.md).')
     }
+    if (project.hasProperty('bedrayPreviousCoreLibrary')) {
+        systemProperty 'bedray.scene.previousLibrary', project.property('bedrayPreviousCoreLibrary')
+    }
     if (project.hasProperty('bedrayCoreLibrary')) {
         systemProperty 'bedray.core.library', project.property('bedrayCoreLibrary')
         outputs.upToDateWhen { false }

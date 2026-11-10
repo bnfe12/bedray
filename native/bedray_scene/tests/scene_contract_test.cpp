@@ -49,12 +49,12 @@ static_assert(sizeof(BedraySceneError) == 1028, "error layout");
 static_assert(sizeof(BedraySceneAbiInfo) == 48, "abi info layout");
 static_assert(sizeof(BedraySceneDesc) == 88, "desc layout");
 static_assert(sizeof(BedraySceneSectionInput) == 96, "section input layout");
-static_assert(sizeof(BedraySceneEntityInput) == 120, "entity input layout");
+static_assert(sizeof(BedraySceneEntityInput) == 136, "entity input layout");
 static_assert(sizeof(BedraySceneUpdate) == 56, "update layout");
 static_assert(sizeof(BedraySceneTableDesc) == 40, "table desc layout");
 static_assert(sizeof(BedraySceneFrameDesc) == 24, "frame desc layout");
 static_assert(sizeof(BedraySceneFrameInfo) == 80, "frame info layout");
-static_assert(sizeof(BedraySceneResources) == 112, "resources layout");
+static_assert(sizeof(BedraySceneResources) == 200, "resources layout");
 static_assert(sizeof(BedraySceneSectionRange) == 8, "section range layout");
 static_assert(sizeof(BedraySceneSectionRecord) == 64, "section record layout");
 
@@ -144,12 +144,17 @@ struct BarrierRecord {
     bool has_memory = false;
     VkMemoryBarrier memory{};
     std::vector<VkBufferMemoryBarrier> buffers;
+    std::vector<VkImageMemoryBarrier> images;
 };
 
 struct State {
     std::map<uint64_t, BufferState> buffers;
     std::map<uint64_t, MemoryState> memories;
     std::map<uint64_t, AsState> accels;
+    std::map<VkImage, VkExtent3D> images;
+    std::map<VkImageView, VkImage> views;
+    std::vector<VkBuffer> image_copies;
+    uint64_t next_image = 0x3000;
     std::vector<BuildRecord> builds;
     std::vector<SizeQueryRecord> size_queries;
     std::vector<CopyRecord> copies;
@@ -161,6 +166,7 @@ struct State {
     uint64_t next_buffer_address = 0x100000010ull; // valid buffer address, deliberately not AS scratch-aligned
     uint64_t next_accel_address = 0x200000000ull;
     int fail_create_buffer_countdown = -1;
+    VkResult create_buffer_failure = VK_ERROR_DEVICE_LOST;
     bool zero_device_address = false;
     int faults = 0;
 };
@@ -274,7 +280,7 @@ static void VKAPI_CALL fakeGetPhysicalDeviceProperties2(
 static VkResult VKAPI_CALL fakeCreateBuffer(
     VkDevice, const VkBufferCreateInfo* info, const VkAllocationCallbacks*, VkBuffer* out) {
     if (fake::g.fail_create_buffer_countdown == 0) {
-        return VK_ERROR_DEVICE_LOST;
+        return fake::g.create_buffer_failure;
     }
     if (fake::g.fail_create_buffer_countdown > 0) {
         --fake::g.fail_create_buffer_countdown;
@@ -318,8 +324,8 @@ static VkResult VKAPI_CALL fakeAllocateMemory(
     state.type_index = info->memoryTypeIndex;
     if (info->pNext != nullptr) {
         const auto* flags = static_cast<const VkMemoryAllocateFlagsInfo*>(info->pNext);
-        CHECK(flags->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO);
-        state.flags = flags->flags;
+        if (flags->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO) state.flags = flags->flags;
+        else CHECK(flags->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO);
     }
     state.bytes.resize(static_cast<size_t>(info->allocationSize));
     fake::g.memories.emplace(id, std::move(state));
@@ -570,8 +576,8 @@ static void VKAPI_CALL fakeCmdPipelineBarrier(
     const VkMemoryBarrier* memory_barriers,
     uint32_t buffer_count,
     const VkBufferMemoryBarrier* buffer_barriers,
-    uint32_t,
-    const VkImageMemoryBarrier*) {
+    uint32_t image_count,
+    const VkImageMemoryBarrier* image_barriers) {
     fake::BarrierRecord record;
     record.src_stage = src_stage;
     record.dst_stage = dst_stage;
@@ -582,10 +588,72 @@ static void VKAPI_CALL fakeCmdPipelineBarrier(
     for (uint32_t i = 0; i < buffer_count; ++i) {
         record.buffers.push_back(buffer_barriers[i]);
     }
+    if (image_count) record.images.assign(image_barriers, image_barriers + image_count);
     fake::g.barriers.push_back(std::move(record));
 }
 
+static VkResult VKAPI_CALL fakeCreateImage(VkDevice, const VkImageCreateInfo* info,
+    const VkAllocationCallbacks*, VkImage* out) {
+    *out = reinterpret_cast<VkImage>(fake::g.next_image++);
+    fake::g.images.emplace(*out, info->extent);
+    return VK_SUCCESS;
+}
+
+static void VKAPI_CALL fakeDestroyImage(VkDevice, VkImage image, const VkAllocationCallbacks*) {
+    CHECK(fake::g.images.erase(image) == 1);
+}
+
+static void VKAPI_CALL fakeGetImageMemoryRequirements(VkDevice, VkImage image, VkMemoryRequirements* out) {
+    const auto extent = fake::g.images.at(image);
+    *out = {uint64_t(extent.width) * extent.height * 4, 16, 1};
+}
+
+static VkResult VKAPI_CALL fakeBindImageMemory(VkDevice, VkImage image, VkDeviceMemory memory, VkDeviceSize) {
+    CHECK(fake::g.images.contains(image));
+    CHECK(fake::g.memories.contains(fake::memory_id(memory)));
+    return VK_SUCCESS;
+}
+
+static VkResult VKAPI_CALL fakeCreateImageView(VkDevice, const VkImageViewCreateInfo* info,
+    const VkAllocationCallbacks*, VkImageView* out) {
+    *out = reinterpret_cast<VkImageView>(fake::g.next_image++);
+    CHECK(fake::g.images.contains(info->image));
+    fake::g.views.emplace(*out, info->image);
+    return VK_SUCCESS;
+}
+
+static void VKAPI_CALL fakeDestroyImageView(VkDevice, VkImageView view, const VkAllocationCallbacks*) {
+    CHECK(fake::g.views.erase(view) == 1);
+}
+
+static VkResult VKAPI_CALL fakeGetPhysicalDeviceImageFormatProperties(VkPhysicalDevice, VkFormat, VkImageType,
+    VkImageTiling, VkImageUsageFlags, VkImageCreateFlags, VkImageFormatProperties* out) {
+    *out = {{4096, 4096, 1}, 1, 1, VK_SAMPLE_COUNT_1_BIT, uint64_t(1) << 30};
+    return VK_SUCCESS;
+}
+
+static void VKAPI_CALL fakeCmdCopyBufferToImage(VkCommandBuffer, VkBuffer buffer, VkImage image,
+    VkImageLayout layout, uint32_t count, const VkBufferImageCopy* copies) {
+    CHECK(layout == VK_IMAGE_LAYOUT_GENERAL);
+    auto* src = fake::find_buffer(buffer);
+    CHECK(src && fake::g.images.contains(image));
+    if (src) {
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto& c = copies[i];
+            CHECK(c.bufferOffset + uint64_t(c.imageExtent.width) * c.imageExtent.height * 4 <= src->size);
+        }
+    }
+    fake::g.image_copies.push_back(buffer);
+}
+
 static PFN_vkVoidFunction VKAPI_CALL fakeGetDeviceProcAddr(VkDevice, const char* name) {
+    if (std::strcmp(name, "vkCreateImage") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&fakeCreateImage);
+    if (std::strcmp(name, "vkDestroyImage") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&fakeDestroyImage);
+    if (std::strcmp(name, "vkGetImageMemoryRequirements") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&fakeGetImageMemoryRequirements);
+    if (std::strcmp(name, "vkBindImageMemory") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&fakeBindImageMemory);
+    if (std::strcmp(name, "vkCreateImageView") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&fakeCreateImageView);
+    if (std::strcmp(name, "vkDestroyImageView") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&fakeDestroyImageView);
+    if (std::strcmp(name, "vkCmdCopyBufferToImage") == 0) return reinterpret_cast<PFN_vkVoidFunction>(&fakeCmdCopyBufferToImage);
     if (std::strcmp(name, "vkCreateBuffer") == 0) {
         return reinterpret_cast<PFN_vkVoidFunction>(&fakeCreateBuffer);
     }
@@ -643,6 +711,8 @@ static PFN_vkVoidFunction VKAPI_CALL fakeGetDeviceProcAddr(VkDevice, const char*
 }
 
 static PFN_vkVoidFunction VKAPI_CALL fakeGetInstanceProcAddr(VkInstance, const char* name) {
+    if (std::strcmp(name, "vkGetPhysicalDeviceImageFormatProperties") == 0)
+        return reinterpret_cast<PFN_vkVoidFunction>(&fakeGetPhysicalDeviceImageFormatProperties);
     if (std::strcmp(name, "vkGetPhysicalDeviceMemoryProperties") == 0) {
         return reinterpret_cast<PFN_vkVoidFunction>(&fakeGetPhysicalDeviceMemoryProperties);
     }
@@ -2038,7 +2108,163 @@ static void test_discarded_writes_cannot_be_reused() {
     fixture.release(1); // completion/release remains available on a poisoned scene
 }
 
+static void test_native_residency_and_committed_section_revisions() {
+    Fixture fixture(2);
+    BedraySceneCandidate candidates[] = {{2, 10, 5, 0, 0, 1}, {1, 20, 0, 0, 0, 1}, {3, 30, 0, 5, 0, 1}};
+    uint64_t requests[2]{}, committed[4]{};
+    BedraySceneSelection selection{BEDRAY_SCENE_ABI_VERSION, 1, candidates, 3, 0, 0, 0, 6, 1, 1, 1,
+        100, requests, 0, 0};
+    CHECK_STATUS(bedray_scene_select_sections(fixture.scene, &selection, &g_error), BEDRAY_SCENE_OK);
+    CHECK(selection.pending == 2 && selection.requested == 0); // no budget for either mesh
+    selection.refresh = 0; selection.count = 0; selection.budget_bytes = 0;
+    CHECK_STATUS(bedray_scene_select_sections(fixture.scene, &selection, &g_error), BEDRAY_SCENE_OK);
+    CHECK(selection.requested == 1 && requests[0] == 1); // camera-near first
+    const Mesh mesh = quad_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_section(1, 20, mesh), BEDRAY_SCENE_OK);
+    CHECK(bedray_scene_section_ids(fixture.scene, committed, 2) == 0);
+    fixture.prepare(1, 0xDE01);
+    CHECK(bedray_scene_section_ids(fixture.scene, committed, 2) == 1);
+    CHECK(committed[0] == 1 && committed[1] == 20);
+    const auto epoch = fixture.resources().section_epoch;
+    selection.x = 5; selection.radius_xz = 1;
+    CHECK_STATUS(bedray_scene_select_sections(fixture.scene, &selection, &g_error), BEDRAY_SCENE_OK);
+    CHECK(selection.requested == 1 && requests[0] == 2);
+    CHECK(bedray_scene_section_ids(fixture.scene, committed, 2) == 0);
+    CHECK_STATUS(fixture.add_section(2, 10, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(2, 0xDE02); // first frame remains pinned while the scene advances
+    CHECK(fixture.resources().section_epoch > epoch);
+    CHECK(bedray_scene_section_ids(fixture.scene, committed, 2) == 1);
+    CHECK(committed[0] == 2 && committed[1] == 10);
+    fixture.release(1);
+    fixture.release(2);
+}
+
+static void test_near_section_can_displace_far_section_under_budget_pressure() {
+    Fixture fixture(2);
+    BedraySceneCandidate candidates[] = {{1, 1, 5, 0, 0, 1}, {2, 1, 4, 0, 0, 1}, {3, 1, 0, 0, 0, 1}};
+    const Mesh mesh = quad_mesh(0, 0, 0);
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0xDE03);
+    uint64_t request = 0, committed[4]{};
+    BedraySceneSelection selection{BEDRAY_SCENE_ABI_VERSION, 1, candidates, 3, 0, 0, 0, 6, 1, 1, 1,
+        8192, &request, 0, 0};
+    CHECK_STATUS(bedray_scene_select_sections(fixture.scene, &selection, &g_error), BEDRAY_SCENE_OK);
+    CHECK(selection.requested == 0);
+    CHECK(bedray_scene_section_ids(fixture.scene, committed, 2) == 1 && committed[0] == 2);
+    selection.refresh = 0; selection.count = 0;
+    CHECK_STATUS(bedray_scene_select_sections(fixture.scene, &selection, &g_error), BEDRAY_SCENE_OK);
+    CHECK(selection.requested == 0); // previous retirement is still pinned; do not evict another section
+    CHECK(bedray_scene_section_ids(fixture.scene, committed, 2) == 1 && committed[0] == 2);
+    fixture.release(1);
+    CHECK_STATUS(bedray_scene_select_sections(fixture.scene, &selection, &g_error), BEDRAY_SCENE_OK);
+    CHECK(selection.requested == 1 && request == 3);
+}
+
+static void test_packed_entity_streams_share_the_blas_generation() {
+    Fixture fixture(2);
+    const Mesh mesh = triangle_mesh(0, 0, 0);
+    float previous[9] = {10, 20, 30};
+    uint32_t attributes[12] = {0xDEADBEEF};
+    auto input = entity_input(42, 1, 1, mesh);
+    uint32_t indices[3] = {0, 1, 2};
+    input.indices = indices;
+    input.index_type = BEDRAY_SCENE_INDEX_UINT32;
+    input.index_count = 3;
+    input.previous_positions = previous;
+    CHECK_STATUS(fixture.add_entity(input), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+    input.attributes = attributes;
+    CHECK_STATUS(fixture.add_entity(input), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0xDE11);
+    const auto first = fixture.resources();
+    CHECK(first.entity_buffer != 0 && first.entity_positions_bytes == 36 && first.entity_indices_bytes == 12);
+    CHECK(first.entity_indices_offset >= 36 && first.entity_previous_offset > first.entity_indices_offset
+        && first.entity_attributes_offset > first.entity_previous_offset);
+    input.geometry_revision = 2;
+    CHECK_STATUS(fixture.add_entity(input), BEDRAY_SCENE_OK);
+    fixture.prepare(2, 0xDE12);
+    const auto second = fixture.resources();
+    CHECK(second.entity_buffer != 0 && second.entity_buffer != first.entity_buffer);
+    fixture.release(1);
+    fixture.release(2);
+    input.geometry_revision = 3;
+    input.previous_positions = nullptr;
+    input.attributes = nullptr;
+    CHECK_STATUS(fixture.add_entity(input), BEDRAY_SCENE_OK);
+    CHECK(fixture.prepare(3, 0xDE13).blas_refits == 1);
+    CHECK(fixture.resources().entity_buffer == 0);
+    fixture.release(3);
+    input.geometry_revision = 4;
+    input.previous_positions = previous;
+    input.attributes = attributes;
+    CHECK_STATUS(fixture.add_entity(input), BEDRAY_SCENE_OK);
+    CHECK(fixture.prepare(4, 0xDE14).blas_refits == 1);
+    CHECK(fixture.resources().entity_attributes_offset > fixture.resources().entity_previous_offset);
+    fixture.release(4);
+}
+
+static void test_material_atlas_and_table_lifetime() {
+    Fixture fixture(2);
+    fixture.prepare(1, 0xDE20);
+    uint32_t data[32]{};
+    BedraySceneMaterialRegion region{0, 0, 0, 2, 2};
+    BedraySceneMaterialUpload atlas{1, 2, 2, 1, 0, &region, data, 16, 0, 0};
+    region.width = 1;
+    CHECK_STATUS(bedray_scene_upload_materials(fixture.scene, &atlas, &g_error), BEDRAY_SCENE_ERROR_INVALID_ARGUMENT);
+    region.width = 2;
+    CHECK_STATUS(bedray_scene_upload_materials(fixture.scene, &atlas, &g_error), BEDRAY_SCENE_OK);
+    auto view = reinterpret_cast<VkImageView>(atlas.material_view);
+    CHECK(fake::g.views.size() == 2 && fake::g.views.contains(view));
+    CHECK(fake::g.image_copies.size() == 2);
+    auto upload = fake::g.image_copies.front();
+    CHECK(fake::g.barriers[fake::g.barriers.size() - 2].images[0].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+    CHECK(fake::g.barriers.back().images[0].dstAccessMask == VK_ACCESS_SHADER_READ_BIT);
+    BedraySceneFrameTable light{1, BEDRAY_SCENE_TABLE_LIGHT, 0, 1, data, 16, 0, 0};
+    CHECK_STATUS(bedray_scene_publish_frame_table(fixture.scene, &light, &g_error), BEDRAY_SCENE_OK);
+    auto old_address = light.address;
+    CHECK(fake::find_buffer_by_address(old_address));
+    BedraySceneFrameTable sky{1, BEDRAY_SCENE_TABLE_SKY, 0, 1, data, sizeof(data), 0, 0};
+    CHECK_STATUS(bedray_scene_publish_frame_table(fixture.scene, &sky, &g_error), BEDRAY_SCENE_OK);
+    CHECK(sky.address && sky.address != light.address);
+
+    // Mandatory atlases and temporary upload memory can exceed the chunk budget.
+    uint64_t resident = 0, request = 0;
+    CHECK_STATUS(bedray_scene_resident_bytes(fixture.scene, &resident), BEDRAY_SCENE_OK);
+    CHECK(resident > 640);
+    const BedraySceneCandidate candidate{1, 1, 0, 0, 0, 1};
+    BedraySceneSelection selection{BEDRAY_SCENE_ABI_VERSION, 1, &candidate, 1, 0, 0, 0, 6, 1, 1, 1,
+        640, &request, 0, 0};
+    CHECK_STATUS(bedray_scene_select_sections(fixture.scene, &selection, &g_error), BEDRAY_SCENE_OK);
+    CHECK(selection.requested == 1 && request == 1);
+
+    fixture.prepare(2, 0xDE21);
+    light.frame_index = 2; light.revision = 2;
+    fake::g.create_buffer_failure = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    fake::g.fail_create_buffer_countdown = 0;
+    CHECK_STATUS(bedray_scene_publish_frame_table(fixture.scene, &light, &g_error), BEDRAY_SCENE_ERROR_OUT_OF_MEMORY);
+    CHECK(fake::find_buffer_by_address(old_address));
+    fake::g.fail_create_buffer_countdown = -1;
+    CHECK_STATUS(bedray_scene_publish_frame_table(fixture.scene, &light, &g_error), BEDRAY_SCENE_OK);
+    CHECK(light.address != old_address && fake::find_buffer_by_address(old_address));
+    atlas.frame_index = 2;
+    CHECK_STATUS(bedray_scene_upload_materials(fixture.scene, &atlas, &g_error), BEDRAY_SCENE_OK);
+    CHECK(atlas.material_view == reinterpret_cast<uint64_t>(view));
+    CHECK(fake::g.barriers[fake::g.barriers.size() - 2].images[0].oldLayout == VK_IMAGE_LAYOUT_GENERAL);
+
+    atlas.width = 4; atlas.plane_bytes = 32; region.width = 4;
+    CHECK_STATUS(bedray_scene_upload_materials(fixture.scene, &atlas, &g_error), BEDRAY_SCENE_OK);
+    CHECK(fake::g.views.size() == 4 && fake::g.views.contains(view));
+    fixture.release(2);
+    CHECK(fake::find_buffer(upload) && fake::g.views.contains(view) && fake::find_buffer_by_address(old_address));
+    fixture.release(1);
+    CHECK(!fake::find_buffer(upload) && !fake::g.views.contains(view) && !fake::find_buffer_by_address(old_address));
+}
+
 int main() {
+    test_material_atlas_and_table_lifetime();
+    test_native_residency_and_committed_section_revisions();
+    test_near_section_can_displace_far_section_under_budget_pressure();
+    test_packed_entity_streams_share_the_blas_generation();
     test_producer_command_can_be_reused_while_its_generation_is_pinned();
     test_discarded_writes_cannot_be_reused();
     test_zero_device_address_is_rejected();

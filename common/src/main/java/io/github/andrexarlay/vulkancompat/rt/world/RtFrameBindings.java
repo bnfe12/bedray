@@ -35,7 +35,12 @@ public final class RtFrameBindings {
      * non-zero only when the NRD layout is selected.
      */
     public record Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum,
-                        long[] gbuffer, long depth, long lightmap, long motion) {
+                        long[] gbuffer, long depth, long lightmap, long motion, RtPathTraceSlangPass.Entities entities) {
+        public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum,
+                     long[] gbuffer, long depth, long lightmap, long motion) {
+            this(tlas, table, output, atlas, material, normal, accum, gbuffer, depth, lightmap, motion,
+                RtPathTraceSlangPass.Entities.NONE);
+        }
         public Views(long tlas, RtMemory.Buf table, long output, long atlas, long material, long normal, long accum,
                      long[] gbuffer) {
             this(tlas, table, output, atlas, material, normal, accum, gbuffer, 0L, 0L, 0L);

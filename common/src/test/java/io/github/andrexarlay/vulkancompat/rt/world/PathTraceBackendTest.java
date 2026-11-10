@@ -28,7 +28,7 @@ class PathTraceBackendTest {
     @Test void failedRecordingCannotPublishHistoryOrConsumeReset() {
         Backend backend = new Backend();
         RtSlangPathPass host = new RtSlangPathPass(backend, false);
-        host.bind(new RtFrameBindings.Views(1, null, 2, 3, 4, 5, 0, null, 6));
+        host.bind(new RtFrameBindings.Views(1, new RtMemory.Buf(9, 0, 64, 10, 0, false, true), 2, 3, 4, 5, 0, null, 6));
         RtFrameParams params = new RtFrameParams();
         params.bounces = 3;
         params.rayDistance = 72;
@@ -88,12 +88,4 @@ class PathTraceBackendTest {
         assertEquals(0, original.diParity());
     }
 
-    @Test void displayFlagsTranslateHostIntentWithoutCopyingHostOnlyBits() {
-        int input = BedrayCoreLayouts.PATH_TRACE_FRAME_ACCUMULATE
-            | BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_STATIC | BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y
-            | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE | BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI;
-        assertEquals(31, ReferencePathTraceBackend.displayFlags(input));
-        assertEquals(27, ReferencePathTraceBackend.displayFlags(input | BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY));
-        assertEquals(2, ReferencePathTraceBackend.displayFlags(BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY));
-    }
 }

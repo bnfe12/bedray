@@ -16,8 +16,8 @@ from a containing repository. Builds do not embed timestamps, preserving reprodu
   the launcher's `libraries` folder (`compileOnly`, never packaged).
 * A local `libs/` folder with game and mod jars. **These are not in the repository and must not be committed or redistributed**
   (`libs/` is in `.gitignore`).
-* Nothing else: the platform layer ("Bedray Core", directory `core/`) is part of this repository and of every jar. There is no separate
-  library to build or install, and `mavenLocal` is not used.
+* For hardware RT/PT packages: Slang `slangc`, Visual Studio Build Tools with C++, CMake and Vulkan headers.
+  The Gradle tasks build the first-party `bedray_core.dll`; the Java platform module `core/` is included in the JAR.
 
 ## 1. Settings outside the repository
 
@@ -59,6 +59,18 @@ Only Minecraft and the mods you download yourself from their official pages belo
 | `compute-common`, `compute-neoforge`, `compute-fabric` | Software voxel provider, nested in the player distribution and registered as its own mod. See [COMPUTE](COMPUTE.md). |
 
 ## 4. Build and test
+
+Build the two installable distributions, each with its matching first-party DLL:
+
+```powershell
+.\gradlew.bat "-PbedrayCmake=C:/path/to/cmake.exe" "-PbedrayVulkanHeaders=C:/path/to/Vulkan-Headers/include" "-Pslangc=C:/path/to/slangc.exe" fabricBedrayDistribution neoforgeBedrayDistribution
+```
+
+Each loader's files are under `build/bedray-distribution/<loader>/`. Install the JAR
+and DLL together as described in [INSTALL.md](INSTALL.md); there is no separate
+`bedray_scene.dll` to install. [Alpha 2 scene](ALPHA2_NATIVE_SCENE.md) tracks validation.
+
+For Java and shader checks:
 
 ```
 gradlew clean :core:test :common:test :common:runShimTests :neoforge:jar :fabric:jar

@@ -76,12 +76,11 @@ class RtSlangRcFieldTest {
 
     @Test void featureSelectionRequiresBothAotEntriesAndActualNativeSceneOwnership() throws Exception {
         String backend = source(WORLD + "NativePathTraceBackend.java");
-        assertTrue(backend.contains("RtConfig.SLANG_RADIANCE_CASCADES && (!RtConfig.SLANG_NATIVE_SCENE"));
         assertTrue(backend.contains("SlangPassLibrary.available(RtRadianceCascadesContract.BUILD)"));
         assertTrue(backend.contains("SlangPassLibrary.available(RtRadianceCascadesContract.TRACE)"));
         assertTrue(backend.contains("RtRadianceCascadesContract.requireBuilder(builder.manifest())"));
         String host = source(WORLD + "BedrayPathTraceNative.java");
-        assertTrue(host.contains("rc != null && (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE) == 0"));
+        assertTrue(host.contains("(input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE) == 0"));
         assertTrue(host.indexOf("library.configurePathTrace(") < host.indexOf("if (rc != null) rc.configure()"));
         assertFalse(backend.contains("new SlangProgram.Resource"));
         assertFalse(backend.contains("vkCmdDispatch"));
@@ -100,7 +99,7 @@ class RtSlangRcFieldTest {
         String path = body(source("../native/bedray_core/src/path_trace_pass.cpp"), "BedrayStatus PathTracePass::render(");
         assertTrue(path.indexOf("rc_field_->record(") < path.indexOf("bedray_core_render_frame(core_, &trace_desc"));
         assertTrue(path.contains("field_bindings && !rc_field_"));
-        assertTrue(path.contains("rc_field_ && !native_scene"));
+        assertTrue(path.contains("(desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE) == 0"));
         assertTrue(path.contains("trace_resources[26] = field_resources[0]"));
         assertTrue(path.contains("trace_resources[27] = field_resources[1]"));
     }

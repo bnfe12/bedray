@@ -14,10 +14,30 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinVulkanDeviceFrameGen {
     @Inject(method = "close", at = @At("HEAD"))
     private void vkb$shutdownStreamline(CallbackInfo ci) {
-        io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onDeviceClose(
-            (com.mojang.renderpearl.backend.vulkan.VulkanDevice)(Object)this);
-        io.github.andrexarlay.vulkancompat.compute.ComputeRenderBridge.onDeviceClose(
+        var device = (com.mojang.renderpearl.backend.vulkan.VulkanDevice) (Object) this;
+        try {
+            try {
+                io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge.onDeviceClose(device);
+                io.github.andrexarlay.vulkancompat.compute.ComputeRenderBridge.onDeviceClose(device);
+            } finally {
+                try {
+                    FrameGenRuntime.onDeviceClose(); // retire its borrowed guides before releasing RR
+                } finally {
+                    io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.onDeviceClose(device);
+                }
+            }
+        } catch (RuntimeException | LinkageError failure) {
+            if (org.lwjgl.vulkan.VK10.vkDeviceWaitIdle(device.vkDevice()) != org.lwjgl.vulkan.VK10.VK_ERROR_DEVICE_LOST)
+                throw failure;
+            org.slf4j.LoggerFactory.getLogger("VKB-RT").error("[VKB-RT] host close provider failed on a lost device\n{}",
+                io.github.andrexarlay.vulkanbridge.platform.LogPaths.stack(failure));
+        }
+    }
+
+    @Inject(method = "close", at = @At(value = "INVOKE", shift = At.Shift.AFTER,
+        target = "Lcom/mojang/renderpearl/backend/vulkan/VulkanCommandEncoder;destroy()V"))
+    private void vkb$retireRtAfterEncoderClose(CallbackInfo ci) {
+        io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.afterHostEncoderClose(
             (com.mojang.renderpearl.backend.vulkan.VulkanDevice) (Object) this);
-        FrameGenRuntime.onDeviceClose();
     }
 }

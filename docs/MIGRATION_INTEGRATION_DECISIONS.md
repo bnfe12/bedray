@@ -1,5 +1,10 @@
 # Native path-trace integration decisions
 
+> **Historical design notes (before 2026-11-10).** The Java scene and Java
+> recorder described below were removed for Alpha 2. Commands enabling the
+> previous native opt-ins are obsolete. See [Alpha 2 scene](ALPHA2_NATIVE_SCENE.md)
+> for the current contract, build, evidence and open gates.
+
 These decisions implement the conservative opaque-node option in
 `native/bedray_render_graph/RENDER_GRAPH_NOTES.md`. They describe the opt-in
 native path; L1/L2 checks do not establish GPU/game behavior or visual parity.

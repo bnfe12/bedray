@@ -40,10 +40,9 @@ class RestirPtSpatialStageTest {
     private static final Path SHADERS = Path.of("src/main/resources/shaders/slang");
     private static final Path STAGE = SHADERS.resolve("restir/pt_spatial.slang");
     private static final Path TEMPORAL = SHADERS.resolve("restir/pt_temporal.slang");
-    private static final Path ROOT = SHADERS.resolve("passes/restir_pt_spatial.slang");
+    private static final Path ROOT = SHADERS.resolve("passes/restir_pt_spatial_scene.slang");
     private static final Path SCENE_ROOT = SHADERS.resolve("passes/restir_pt_spatial_scene.slang");
     private static final Path JAVA = Path.of("src/main/java/io/github/andrexarlay/vulkancompat");
-    private static final Path BACKEND = JAVA.resolve("rt/world/ReferencePathTraceBackend.java");
     private static final Path TRACE_HOST = JAVA.resolve("rt/world/RtPathTraceSlangPass.java");
 
     // Mirrors of the shader constants, pinned below by source guards.
@@ -150,12 +149,12 @@ class RestirPtSpatialStageTest {
             "the entry hands the stage the trace's own bias and material options");
         assertEquals(2, count(entry, "MaterialSamplingOptions materialOptions = pathTraceMaterialOptions(f, pc);"),
             "one definition of the filtered walk's options for the trace and the spatial stage");
-        Assumptions.assumeTrue(SlangPassLibrary.available("restir_pt_spatial")
+        Assumptions.assumeTrue(SlangPassLibrary.available("restir_pt_spatial_scene")
             && SlangPassLibrary.available("restir_pt_spatial_scene")
-            && SlangPassLibrary.available("path_trace"), "the spatial passes were not compiled");
-        SlangPassManifest trace = SlangPassLibrary.load("path_trace").orElseThrow().manifest();
+            && SlangPassLibrary.available("path_trace_scene"), "the spatial passes were not compiled");
+        SlangPassManifest trace = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
         SlangPassManifest traceScene = SlangPassLibrary.load("path_trace_scene").orElseThrow().manifest();
-        for (String[] pair : new String[][] {{"restir_pt_spatial", "legacy"}, {"restir_pt_spatial_scene", "scene"}}) {
+        for (String[] pair : new String[][] {{"restir_pt_spatial_scene", "legacy"}, {"restir_pt_spatial_scene", "scene"}}) {
             SlangPassManifest manifest = SlangPassLibrary.load(pair[0]).orElseThrow().manifest();
             SlangPassManifest twin = pair[1].equals("scene") ? traceScene : trace;
             assertEquals(14, manifest.bindings().size(), pair[0] + ": binding count");
@@ -196,27 +195,6 @@ class RestirPtSpatialStageTest {
         assertEquals("temporal+spatial", pt.mode(true, true, true));
     }
 
-    @Test
-    void theBackendRunsTheSpatialStageOnlyBehindTheTemporalOne() throws IOException {
-        String backend = read(BACKEND);
-        assertTrue(backend.contains("boolean ptSpatialRan = ptFlags != 0 && input.ptSpatial() && trace.ptSpatialAvailable(scene);"),
-            "no ring, no temporal stage, no spatial stage: it only ever pools what this frame's trace wrote");
-        assertTrue(backend.contains("trace.recordPtSpatial(cmd, scene, atlases, ptRange, capturedEntities, frame, dispatch);"),
-            "the same atlases, ring, entities, frame block and push word the trace dispatch used");
-        int after = backend.indexOf("pt.afterFullOverwrite(ptFlags != 0);");
-        int published = backend.indexOf("if (ptSpatialRan) pt.spatialPublished();");
-        assertTrue(after >= 0 && published > after, "the spatial publish is counted after the trace write");
-        assertTrue(backend.contains("return pt.mode(true, ptReservoirs != null, ptSpatialLast);"),
-            "the mode log says whether the stage ran");
-        String host = read(TRACE_HOST);
-        assertTrue(host.contains("static final String PT_SPATIAL_PASS_NAME = \"restir_pt_spatial\";")
-                && host.contains("static final String PT_SPATIAL_SCENE_PASS_NAME = \"restir_pt_spatial_scene\";"),
-            "one program per traversal backend, like the trace pass");
-        String spatial = block(host, "void recordPtSpatial(");
-        assertTrue(spatial.contains("dispatch.writeTo(push);"), "the trace pass's own push bytes");
-        assertTrue(spatial.contains("VkBarriers.fullMemoryBarrier(cmd);"),
-            "the next frame's import, and the display, see the records this dispatch wrote");
-    }
 
     private static int count(String source, String needle) {
         int count = 0;

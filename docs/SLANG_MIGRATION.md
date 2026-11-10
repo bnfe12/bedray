@@ -1,5 +1,10 @@
 # Bedray 2.0 — Slang shader architecture
 
+> **Historical design notes (before 2026-11-10).** The Java scene and Java
+> recorder described below were removed for Alpha 2. Commands enabling the
+> previous native opt-ins are obsolete. See [Alpha 2 scene](ALPHA2_NATIVE_SCENE.md)
+> for the current contract, build, evidence and open gates.
+
 ## Current implementation priority
 
 Existing-feature transfers in the current working tree:

@@ -27,7 +27,7 @@ interface PathTraceBackend extends AutoCloseable {
     void prepare(int width, int height);
     void record(Frame frame);
     boolean spatialAvailable();
-    default String traceProgramName(boolean nativeScene) { return ""; }
+    default String traceProgramName() { return ""; }
     default boolean displaySkyAvailable() { return true; }
     String reservoirState();
     /**

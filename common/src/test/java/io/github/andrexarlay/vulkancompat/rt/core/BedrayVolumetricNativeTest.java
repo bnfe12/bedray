@@ -7,14 +7,14 @@ import static java.lang.foreign.ValueLayout.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BedrayVolumetricNativeTest {
-    @Test void configurationKeepsIndependentSectionProgramsAndNativeBudgets() {
+    @Test void configurationUsesNativeSceneProgramAndBudgets() {
         try (Arena arena = Arena.ofConfined()) {
-            var desc = BedrayVolumetricNative.configuration(arena, 11, 12, 13, 1024, 2048);
+            var desc = BedrayVolumetricNative.configuration(arena, 12, 13, 1024, 2048);
             assertEquals(48, desc.byteSize()); assertEquals(2, desc.get(JAVA_INT, 0)); assertEquals(48, desc.get(JAVA_INT, 4));
-            assertEquals(11, desc.get(JAVA_LONG, 8)); assertEquals(12, desc.get(JAVA_LONG, 16));
+            assertEquals(0, desc.get(JAVA_LONG, 8)); assertEquals(12, desc.get(JAVA_LONG, 16));
             assertEquals(13, desc.get(JAVA_LONG, 24)); assertEquals(1024, desc.get(JAVA_LONG, 32));
             assertEquals(2048, desc.get(JAVA_LONG, 40));
-            assertThrows(IllegalArgumentException.class, () -> BedrayVolumetricNative.configuration(arena, 0, 0, 13, 1, 1));
+            assertThrows(IllegalArgumentException.class, () -> BedrayVolumetricNative.configuration(arena, 0, 13, 1, 1));
         }
     }
     @Test void frameBorrowsExactSlicesAndPacksAllOffsetsWithoutMovingPositions() {

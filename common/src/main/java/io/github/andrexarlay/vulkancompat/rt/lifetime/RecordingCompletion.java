@@ -85,11 +85,20 @@ public final class RecordingCompletion {
 
     /** Whole-device completion proof, excluding resubmission; open recordings stay pinned. */
     public void afterHostDrain() {
+        retireAll(false, false);
+    }
+
+    /** After the host destroys its final encoder and the device returns idle or device lost. */
+    public void afterEncoderClose(boolean lostDevice) {
+        retireAll(true, lostDevice);
+    }
+
+    private void retireAll(boolean encoderClosed, boolean lostDevice) {
         RuntimeException failures = null;
         for (Ticket ticket : List.copyOf(pending.values())) {
-            if (ticket.state == State.RECORDING) continue;
+            if (!encoderClosed && ticket.state == State.RECORDING) continue;
             try {
-                releaseProven(ticket, ticket.state != State.SUBMITTED);
+                releaseProven(ticket, lostDevice || ticket.state != State.SUBMITTED);
             } catch (RuntimeException | Error failure) {
                 if (failures == null) failures = new IllegalStateException("native recording retirement failed");
                 failures.addSuppressed(failure);

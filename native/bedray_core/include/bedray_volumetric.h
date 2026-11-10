@@ -9,14 +9,13 @@ extern "C" {
 #define BEDRAY_VOLUMETRIC_FRAME_RESET_HISTORY (1u << 1)
 
 /* Separate additive layouts; existing ABI-v2 structures remain unchanged.
- * Programs stay runtime-owned. March variants share 5 bindings/96 push bytes,
- * but binding 2 has different section record semantics (legacy/native scene).
+ * Programs stay runtime-owned. March uses the native section table at binding 2.
  * Each program must have the reflected 8x8x1 workgroup contract. */
 typedef struct BedrayVolumetricDesc {
     uint32_t abi_version;
     uint32_t struct_size;
-    uint64_t program_march_legacy; /* zero when only native scene is supported */
-    uint64_t program_march_scene; /* zero when only legacy tables are supported */
+    uint64_t program_march_legacy; /* reserved, must be zero */
+    uint64_t program_march_scene; /* required */
     uint64_t program_apply; /* 4 bindings, 24 push bytes */
     uint64_t image_budget_bytes;
     uint64_t buffer_budget_bytes;

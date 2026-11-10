@@ -7,7 +7,7 @@ import java.lang.foreign.ValueLayout;
 import static java.lang.foreign.MemoryLayout.PathElement.groupElement;
 
 /**
- * Java mirror of {@code native/bedray_scene/include/bedray_scene.h} (ABI v2).
+ * Java mirror of {@code native/bedray_scene/include/bedray_scene.h} (ABI v3).
  *
  * <p>The C header is the source of truth. {@code structLayout} does not insert C
  * padding, so every hole is an explicit field: the layouts below are the byte
@@ -22,10 +22,10 @@ import static java.lang.foreign.MemoryLayout.PathElement.groupElement;
  * bits, because the path tracer no longer reads the Java table layout.
  */
 public final class BedraySceneLayouts {
-    public static final int ABI_VERSION = 2;
+    public static final int ABI_VERSION = 3;
     public static final int ERROR_MESSAGE_BYTES = 1024;
     public static final int MAX_FRAMES_IN_FLIGHT = 8;
-    public static final int TABLE_COUNT = 2;
+    public static final int TABLE_COUNT = 4;
     public static final int MAX_SECTION_GEOMETRIES = 3;
     public static final int SECTION_RECORD_BYTES = 64;
     public static final int INSTANCE_RECORD_BYTES = 64;
@@ -54,6 +54,9 @@ public final class BedraySceneLayouts {
     /** {@code BedraySceneTableKind}. */
     public static final int TABLE_MATERIAL = 0;
     public static final int TABLE_LIGHT = 1;
+    public static final int TABLE_ENTITY_RECTS = 2;
+    public static final int TABLE_ENTITY_TEXELS = 3;
+    public static final int TABLE_SKY = 4;
 
     /** {@code BedraySceneIndexType}. */
     public static final int INDEX_NONE = 0;
@@ -141,7 +144,9 @@ public final class BedraySceneLayouts {
         ValueLayout.JAVA_INT.withName("index_type"),
         ValueLayout.JAVA_INT.withName("instance_mask"),
         ValueLayout.JAVA_INT.withName("reserved"),
-        MemoryLayout.sequenceLayout(12, ValueLayout.JAVA_FLOAT).withName("transform")
+        MemoryLayout.sequenceLayout(12, ValueLayout.JAVA_FLOAT).withName("transform"),
+        ValueLayout.ADDRESS.withName("previous_positions"),
+        ValueLayout.ADDRESS.withName("attributes")
     ).withName("BedraySceneEntityInput");
 
     public static final StructLayout UPDATE = MemoryLayout.structLayout(
@@ -203,7 +208,18 @@ public final class BedraySceneLayouts {
         ValueLayout.JAVA_LONG.withName("material_table_bytes"),
         ValueLayout.JAVA_LONG.withName("light_table_buffer"),
         ValueLayout.JAVA_LONG.withName("light_table_address"),
-        ValueLayout.JAVA_LONG.withName("light_table_bytes")
+        ValueLayout.JAVA_LONG.withName("light_table_bytes"),
+        ValueLayout.JAVA_LONG.withName("entity_buffer"),
+        ValueLayout.JAVA_LONG.withName("entity_positions_bytes"),
+        ValueLayout.JAVA_LONG.withName("entity_indices_offset"),
+        ValueLayout.JAVA_LONG.withName("entity_indices_bytes"),
+        ValueLayout.JAVA_LONG.withName("entity_previous_offset"),
+        ValueLayout.JAVA_LONG.withName("entity_attributes_offset"),
+        ValueLayout.JAVA_LONG.withName("entity_rect_buffer"),
+        ValueLayout.JAVA_LONG.withName("entity_rect_bytes"),
+        ValueLayout.JAVA_LONG.withName("entity_texel_buffer"),
+        ValueLayout.JAVA_LONG.withName("entity_texel_bytes"),
+        ValueLayout.JAVA_LONG.withName("section_epoch")
     ).withName("BedraySceneResources");
 
     public static final StructLayout SECTION_RANGE = MemoryLayout.structLayout(
@@ -273,6 +289,8 @@ public final class BedraySceneLayouts {
     public static final long EI_VERTEX_STRIDE = ENTITY_INPUT.byteOffset(groupElement("vertex_stride"));
     public static final long EI_INDEX_TYPE = ENTITY_INPUT.byteOffset(groupElement("index_type"));
     public static final long EI_INSTANCE_MASK = ENTITY_INPUT.byteOffset(groupElement("instance_mask"));
+    public static final long EI_PREVIOUS = ENTITY_INPUT.byteOffset(groupElement("previous_positions"));
+    public static final long EI_ATTRIBUTES = ENTITY_INPUT.byteOffset(groupElement("attributes"));
     public static final long EI_TRANSFORM = ENTITY_INPUT.byteOffset(groupElement("transform"));
 
     public static final long U_ABI_VERSION = UPDATE.byteOffset(groupElement("abi_version"));
@@ -323,6 +341,17 @@ public final class BedraySceneLayouts {
     public static final long R_LIGHT_TABLE_BUFFER = RESOURCES.byteOffset(groupElement("light_table_buffer"));
     public static final long R_LIGHT_TABLE_ADDRESS = RESOURCES.byteOffset(groupElement("light_table_address"));
     public static final long R_LIGHT_TABLE_BYTES = RESOURCES.byteOffset(groupElement("light_table_bytes"));
+    static final long R_SECTION_EPOCH = RESOURCES.byteOffset(groupElement("section_epoch"));
+    static final long R_ENTITY_BUFFER = RESOURCES.byteOffset(groupElement("entity_buffer"));
+    static final long R_ENTITY_POSITIONS_BYTES = RESOURCES.byteOffset(groupElement("entity_positions_bytes"));
+    static final long R_ENTITY_INDICES_OFFSET = RESOURCES.byteOffset(groupElement("entity_indices_offset"));
+    static final long R_ENTITY_INDICES_BYTES = RESOURCES.byteOffset(groupElement("entity_indices_bytes"));
+    static final long R_ENTITY_PREVIOUS_OFFSET = RESOURCES.byteOffset(groupElement("entity_previous_offset"));
+    static final long R_ENTITY_ATTRIBUTES_OFFSET = RESOURCES.byteOffset(groupElement("entity_attributes_offset"));
+    static final long R_ENTITY_RECT_BUFFER = RESOURCES.byteOffset(groupElement("entity_rect_buffer"));
+    static final long R_ENTITY_RECT_BYTES = RESOURCES.byteOffset(groupElement("entity_rect_bytes"));
+    static final long R_ENTITY_TEXEL_BUFFER = RESOURCES.byteOffset(groupElement("entity_texel_buffer"));
+    static final long R_ENTITY_TEXEL_BYTES = RESOURCES.byteOffset(groupElement("entity_texel_bytes"));
 
     private BedraySceneLayouts() {
     }
@@ -333,12 +362,12 @@ public final class BedraySceneLayouts {
         require("BedraySceneAbiInfo", ABI_INFO.byteSize(), 48);
         require("BedraySceneDesc", DESC.byteSize(), 88);
         require("BedraySceneSectionInput", SECTION_INPUT.byteSize(), 96);
-        require("BedraySceneEntityInput", ENTITY_INPUT.byteSize(), 120);
+        require("BedraySceneEntityInput", ENTITY_INPUT.byteSize(), 136);
         require("BedraySceneUpdate", UPDATE.byteSize(), 56);
         require("BedraySceneTableDesc", TABLE_DESC.byteSize(), 40);
         require("BedraySceneFrameDesc", FRAME_DESC.byteSize(), 24);
         require("BedraySceneFrameInfo", FRAME_INFO.byteSize(), 80);
-        require("BedraySceneResources", RESOURCES.byteSize(), 112);
+        require("BedraySceneResources", RESOURCES.byteSize(), 200);
         require("BedraySceneSectionRange", SECTION_RANGE.byteSize(), 8);
         require("BedraySceneSectionRecord", SECTION_RECORD.byteSize(), 64);
         require("BedraySceneDesc.get_device_proc_addr", CD_GET_DEVICE_PROC_ADDR, 40);
@@ -362,7 +391,7 @@ public final class BedraySceneLayouts {
 
     private static void require(String name, long actual, long expected) {
         if (actual != expected) {
-            throw new IllegalStateException("bedray_scene ABI v2 layout drift: " + name + " is "
+            throw new IllegalStateException("bedray_scene ABI v3 layout drift: " + name + " is "
                 + actual + " bytes, expected " + expected);
         }
     }

@@ -4,6 +4,8 @@ import io.github.andrexarlay.vulkancompat.rt.keybind.VulkanRtxKeyBinds;
 import io.github.andrexarlay.vulkancompat.resources.ResourceReloadEpoch;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.PreferredGraphicsApi;
+import net.minecraft.client.multiplayer.ClientLevel;
+import org.spongepowered.asm.mixin.Unique;
 import org.slf4j.LoggerFactory;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -17,6 +19,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(value = Minecraft.class, remap = false)
 public abstract class MixinMinecraft {
+    @Unique private ClientLevel vkb$sceneLevel;
+
+    @Inject(method = "updateLevelInEngines(Lnet/minecraft/client/multiplayer/ClientLevel;Z)V", at = @At("HEAD"))
+    private void vkb$changeLevel(ClientLevel level, boolean joined, CallbackInfo ci) {
+        if (level == vkb$sceneLevel) return;
+        vkb$sceneLevel = level;
+        io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.onClientLevelChanged();
+    }
+
 
     @Inject(method = "onResourceLoadFinished(Lnet/minecraft/client/GameLoadCookie;)V", at = @At("TAIL"))
     private void vkb$resourceReloadCompleted(CallbackInfo ci) {

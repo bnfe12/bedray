@@ -1,5 +1,10 @@
 # BedRay 2.0 migration status
 
+> **Historical design notes (before 2026-11-10).** The Java scene and Java
+> recorder described below were removed for Alpha 2. Commands enabling the
+> previous native opt-ins are obsolete. See [Alpha 2 scene](ALPHA2_NATIVE_SCENE.md)
+> for the current contract, build, evidence and open gates.
+
 On 2026-11-02 the owner expanded the task to all previously deferred stack
 technologies/modes and requested a comparison with better approaches. The
 requirement-level ledger, actual implementation gaps, corrected API assumptions

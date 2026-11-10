@@ -48,10 +48,10 @@
 extern "C" {
 #endif
 
-#define BEDRAY_SCENE_ABI_VERSION 2u
+#define BEDRAY_SCENE_ABI_VERSION 3u
 #define BEDRAY_SCENE_ERROR_MESSAGE_BYTES 1024u
 #define BEDRAY_SCENE_MAX_FRAMES_IN_FLIGHT 8u
-#define BEDRAY_SCENE_TABLE_COUNT 2u
+#define BEDRAY_SCENE_TABLE_COUNT 5u
 #define BEDRAY_SCENE_MAX_SECTION_GEOMETRIES 3u
 #define BEDRAY_SCENE_SECTION_RECORD_BYTES 64u
 #define BEDRAY_SCENE_INSTANCE_RECORD_BYTES 64u
@@ -100,7 +100,10 @@ typedef enum BedraySceneCapability {
 
 typedef enum BedraySceneTableKind {
     BEDRAY_SCENE_TABLE_MATERIAL = 0,
-    BEDRAY_SCENE_TABLE_LIGHT = 1
+    BEDRAY_SCENE_TABLE_LIGHT = 1,
+    BEDRAY_SCENE_TABLE_ENTITY_RECTS = 2,
+    BEDRAY_SCENE_TABLE_ENTITY_TEXELS = 3,
+    BEDRAY_SCENE_TABLE_SKY = 4
 } BedraySceneTableKind;
 
 typedef enum BedraySceneIndexType {
@@ -228,6 +231,10 @@ typedef struct BedraySceneEntityInput {
     uint32_t instance_mask;
     uint32_t reserved;
     float transform[12];
+    /* Optional shading payload for a packed, indexed render entity (one aggregate in the built-in scene).
+       Both streams must be provided together; one float3 and one 16-byte attribute record per vertex. */
+    const void* previous_positions;
+    const void* attributes;
 } BedraySceneEntityInput;
 
 typedef struct BedraySceneUpdate {
@@ -253,6 +260,35 @@ typedef struct BedraySceneTableDesc {
     uint64_t size;
     uint64_t reserved;
 } BedraySceneTableDesc;
+
+/* Publishes an immutable light, material or sky table for an outstanding scene frame.
+ * Input bytes are copied before return. The output views are borrowed through that frame.
+ * Use nonzero, unique revisions when the contents change; zero bytes clears the table. */
+typedef struct BedraySceneFrameTable {
+    uint64_t frame_index;
+    uint32_t table_kind;
+    uint32_t reserved;
+    uint64_t revision;
+    const void* data;
+    uint64_t size;
+    uint64_t buffer;
+    uint64_t address;
+} BedraySceneFrameTable;
+
+typedef struct BedraySceneMaterialRegion {
+    uint64_t offset; /* byte offset within either packed plane */
+    uint32_t x, y, width, height;
+} BedraySceneMaterialRegion;
+
+typedef struct BedraySceneMaterialUpload {
+    uint64_t frame_index;
+    uint32_t width, height;
+    uint32_t count, reserved;
+    const BedraySceneMaterialRegion* regions;
+    const void* data; /* material plane followed by normal plane */
+    uint64_t plane_bytes;
+    uint64_t material_view, normal_view;
+} BedraySceneMaterialUpload;
 
 typedef struct BedraySceneFrameDesc {
     uint32_t abi_version;
@@ -298,6 +334,18 @@ typedef struct BedraySceneResources {
     uint64_t light_table_buffer;
     uint64_t light_table_address;
     uint64_t light_table_bytes;
+    /* Built-in aggregate entity streams. Same allocation/generation as the entity BLAS geometry. */
+    uint64_t entity_buffer;
+    uint64_t entity_positions_bytes;
+    uint64_t entity_indices_offset;
+    uint64_t entity_indices_bytes;
+    uint64_t entity_previous_offset;
+    uint64_t entity_attributes_offset;
+    uint64_t entity_rect_buffer;
+    uint64_t entity_rect_bytes;
+    uint64_t entity_texel_buffer;
+    uint64_t entity_texel_bytes;
+    uint64_t section_epoch;
 } BedraySceneResources;
 
 /*
@@ -350,6 +398,15 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_update_table(
     const BedraySceneTableDesc* desc,
     BedraySceneError* error);
 
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_publish_frame_table(
+    BedrayScene* scene, BedraySceneFrameTable* table, BedraySceneError* error);
+
+/* Records uploads into the current native scene frame. The first upload of each extent must
+ * initialize both images in full. Subsequent updates may upload non-overlapping rectangles.
+ * The input is copied before return; views are borrowed until that frame is retired. */
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_upload_materials(
+    BedrayScene* scene, BedraySceneMaterialUpload* upload, BedraySceneError* error);
+
 /*
  * Sets the camera eye position in blocks, in the same world space as section
  * origins. The renderer traces camera-relative rays, so each section instance
@@ -360,6 +417,34 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_update_table(
  * path on the next prepare (an in-place update when AS_UPDATE is enabled),
  * without any BLAS work.
  */
+/* CPU capture metadata only. Native chooses which section revisions should be staged this frame. */
+typedef struct BedraySceneCandidate {
+    uint64_t id;
+    uint64_t revision;
+    int32_t x, y, z;
+    uint32_t quads;
+} BedraySceneCandidate;
+
+typedef struct BedraySceneSelection {
+    uint32_t abi_version;
+    uint32_t refresh;
+    const BedraySceneCandidate* candidates;
+    uint32_t count;
+    int32_t x, y, z;
+    uint32_t radius_xz, radius_y, margin, quota;
+    uint64_t budget_bytes;
+    uint64_t* requests;
+    uint32_t requested;
+    uint32_t pending;
+} BedraySceneSelection;
+
+BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_select_sections(
+    BedrayScene* scene, BedraySceneSelection* selection, BedraySceneError* error);
+
+/* Copies (ID, revision) pairs of committed terrain geometry. No ownership is transferred. */
+BEDRAY_SCENE_API uint32_t BEDRAY_SCENE_CALL bedray_scene_section_ids(
+    BedrayScene* scene, uint64_t* pairs, uint32_t capacity);
+
 BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_set_view(
     BedrayScene* scene,
     double eye_x,
