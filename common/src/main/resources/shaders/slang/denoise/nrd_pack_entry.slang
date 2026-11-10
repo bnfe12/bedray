@@ -11,24 +11,20 @@ __exported import "denoise/nrd_pack.slang";
 [[vk::image_format("rgba16f")]] [[vk::binding(10, 0)]] RWTexture2D<float4> nrdInSpecular;
 [[vk::image_format("rgba8")]] [[vk::binding(13, 0)]] RWTexture2D<float4> gbSpecAlbedo;
 
-// RR's motion target is RG16F. Keep it entirely outside this entry's resource
-// contract rather than depending on an untaken RGBA16F write branch.
-void nrdPackRrPixel(uint2 pixel, NrdPackPush pc, RWTexture2D<float4> normalOutput,
-        RWTexture2D<float> reflectionDistanceOutput) {
+// RR reads the path tracer's shading normals and the velocity pass's motion image directly.
+void nrdPackRrPixel(uint2 pixel, NrdPackPush pc, RWTexture2D<float> reflectionDistanceOutput) {
     if (any(pixel >= pc.size)) return;
+    pc.denoiser = 2u;
     NrdPackInput input = {};
     input.viewZ = gbViewZ[pixel];
     // DLSS-RR also reads the sky colour of an ignored pixel (the trace writes it into the diffuse guide).
     input.diffuse = gbDiffuse[pixel];
     if (!nrdIgnored(input.viewZ, pc)) {
-        input.normalRoughness = gbNormalRough[pixel];
         input.specular = gbSpecular[pixel];
         input.direct = gbDirect[pixel].rgb;
         input.specularAlbedo = gbSpecAlbedo[pixel].rgb;
     }
-    pc.denoiser = 2u;
     NrdPackedSample sample = nrdPackSample(input, pc);
-    normalOutput[pixel] = sample.normalRoughness;
     nrdInDiffuse[pixel] = sample.diffuse;
     nrdInSpecular[pixel] = sample.specular;
     reflectionDistanceOutput[pixel] = sample.reflectionHitDistance;

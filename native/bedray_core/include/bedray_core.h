@@ -267,6 +267,7 @@ typedef struct BedrayFrameDesc {
 #define BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT     (1u << 8)
 /* Required native scene table and zeroed retired shader slots. ABI 2 layout is unchanged. */
 #define BEDRAY_PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY (1u << 9)
+#define BEDRAY_PATH_TRACE_FEATURE_COMPACT_RR_PACK (1u << 10)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)

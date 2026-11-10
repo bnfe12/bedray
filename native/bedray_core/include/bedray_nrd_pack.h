@@ -13,6 +13,7 @@ enum { BEDRAY_NRD_PACK = 0, BEDRAY_NRD_COMPOSE = 1, BEDRAY_NRD_VIEW_COUNT = 14 }
  * Host retains images/motion memory through exact completion/discard proof.
  * Motion is a 16-byte aligned vec4-per-pixel device address (zero = static).
  * In RR pack, views[12] is the R32F specular hit-distance output, not NRD motion.
+ * With the eight-binding RR program, views[1] and views[5] are unused.
  * Program is the matching AOT format variant; no runtime shader compiler. */
 typedef struct BedrayNrdPackFrameDesc {
     uint32_t abi_version;

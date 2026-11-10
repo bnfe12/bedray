@@ -728,6 +728,10 @@ public final class BedrayCoreNative implements AutoCloseable {
         return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY);
     }
 
+    public boolean hasCompactRrPack() {
+        return hasPathTraceFeature(BedrayCoreLayouts.PATH_TRACE_FEATURE_COMPACT_RR_PACK);
+    }
+
     /** Lends the ReSTIR PT spatial program over the native scene. Zero disables the stage. */
     public void configurePathTracePt(long core, long programPtSpatialScene) {
         ensureOpen(); requireHandle(core, "core");

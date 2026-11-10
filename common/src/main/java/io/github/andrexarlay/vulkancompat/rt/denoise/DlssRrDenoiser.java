@@ -89,7 +89,6 @@ public final class DlssRrDenoiser {
     private RtMemory.Img gbDirect;
     private RtMemory.Img gbSpecular;
     private RtMemory.Img gbSpecAlbedo;
-    private RtMemory.Img inNormalRough;
     private RtMemory.Img inDiffuse;
     private RtMemory.Img inMotion;
     private RtMemory.Img inSpecular;
@@ -143,7 +142,7 @@ public final class DlssRrDenoiser {
         this.rr = DlssRayReconstruction.load(wrapperDll);
         this.ownsRr = true;
         try {
-            this.packPipeline = device != null ? new NrdPackPipeline(runtime) : null;
+            this.packPipeline = device != null ? NrdPackPipeline.forRayReconstruction(runtime) : null;
         } catch (RuntimeException | Error failure) {
             rr.close();
             throw failure;
@@ -201,7 +200,7 @@ public final class DlssRrDenoiser {
         this.memory = memory;
         this.rr = Objects.requireNonNull(rr, "rr");
         this.ownsRr = false;
-        this.packPipeline = device != null ? new NrdPackPipeline(runtime) : null;
+        this.packPipeline = device != null ? NrdPackPipeline.forRayReconstruction(runtime) : null;
         VelocityPipeline vp = velocityPipeline;
         if (vp == null && device != null) {
             try {
@@ -290,7 +289,6 @@ public final class DlssRrDenoiser {
         gbDirect = memory.createImage("dlss_rr_gb_direct", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         gbSpecular = memory.createImage("dlss_rr_gb_spec", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         gbSpecAlbedo = memory.createImage("dlss_rr_gb_spec_albedo", w, h, FMT_RGBA8, USAGE_STORAGE_SAMPLED);
-        inNormalRough = memory.createImage("dlss_rr_in_normal", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         inDiffuse = memory.createImage("dlss_rr_in_color", w, h, FMT_RGBA16F,
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         inMotion = memory.createImage("dlss_rr_in_mv", w, h, FMT_RG16F,
@@ -334,15 +332,15 @@ public final class DlssRrDenoiser {
             // RR compose reads 7, not 11. Pack writes scalar reflection distance at 12;
             // RG16F motion is produced separately by the velocity pass.
             packPipeline.writeViews(new long[] {
-                gbViewZ.view, gbNormalRough.view, gbDiffuse.view, gbAlbedo.view, gbDirect.view,
-                inNormalRough.view, inDiffuse.view, outDiffuse.view, boundOutputView,
+                gbViewZ.view, 0L, gbDiffuse.view, gbAlbedo.view, gbDirect.view,
+                0L, inDiffuse.view, outDiffuse.view, boundOutputView,
                 gbSpecular.view, inSpecular.view, outDiffuse.view, inSpecularHitDistance.view, gbSpecAlbedo.view
             });
         }
     }
 
     private void initImages(VkCommandBuffer cmd) {
-        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
+        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo,
             inDiffuse, inMotion, inSpecular, inSpecularHitDistance, hardwareDepth, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
             VkBarriers.transition(cmd, i.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
@@ -709,12 +707,12 @@ public final class DlssRrDenoiser {
             VkBarriers.fullMemoryBarrier(cmd);
         }
 
-        RtMemory.Img[] gbuffers = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, inDiffuse, inMotion, inSpecular,
+        RtMemory.Img[] sdkInputs = {gbNormalRough, gbAlbedo, inDiffuse, inMotion, inSpecular,
             inSpecularHitDistance, hardwareDepth, inDisocc};
 
         // 1. Transition G-buffer textures from GENERAL to SHADER_READ_ONLY_OPTIMAL, and output to GENERAL
         VkBarriers.fullMemoryBarrier(cmd);
-        for (RtMemory.Img img : gbuffers) {
+        for (RtMemory.Img img : sdkInputs) {
             VkBarriers.transition(cmd, img.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
                 VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
@@ -738,9 +736,7 @@ public final class DlssRrDenoiser {
             gbAlbedo.image, gbAlbedo.view, FMT_RGBA8, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
         DlssRrParams.Image specAlbedo = new DlssRrParams.Image(
             inSpecular.image, inSpecular.view, FMT_RGBA16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
-        // Normals: RGBA16F containing (Nx, Ny, Nz, Roughness).
-        // Nx, Ny, Nz are unit normal vectors in [-1, 1] (geometric or shading per RtSettings.dlssRrGeometricNormals()).
-        // Roughness is linear material roughness in [0, 1] packed into the alpha channel (ROUGHNESS_PACKED).
+        // The path tracer writes normalized world-space shading normals and linear roughness in RGBA16F.
         DlssRrParams.Image normals = new DlssRrParams.Image(
             gbNormalRough.image, gbNormalRough.view, FMT_RGBA16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
         DlssRrParams.Image reflectionDistance = new DlssRrParams.Image(
@@ -785,7 +781,7 @@ public final class DlssRrDenoiser {
                 throw new IllegalStateException("[DLSS-RR] evaluate failed: " + st);
             }
         } finally {
-            for (RtMemory.Img img : gbuffers) {
+            for (RtMemory.Img img : sdkInputs) {
                 VkBarriers.transition(cmd, img.image, VK10.VK_IMAGE_ASPECT_COLOR_BIT,
                     VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
             }
@@ -830,14 +826,14 @@ public final class DlssRrDenoiser {
     private void destroyImages() {
         frameGenReads.invalidate();
         successfulCamera = null;
-        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo, inNormalRough,
+        RtMemory.Img[] all = {gbViewZ, gbNormalRough, gbDiffuse, gbAlbedo, gbDirect, gbSpecular, gbSpecAlbedo,
             inDiffuse, inMotion, inSpecular, inSpecularHitDistance, hardwareDepth, outDiffuse, inDisocc};
         for (RtMemory.Img i : all) {
             if (i != null) {
                 memory.destroy(i);
             }
         }
-        gbViewZ = gbNormalRough = gbDiffuse = gbAlbedo = gbDirect = gbSpecular = gbSpecAlbedo = inNormalRough = inDiffuse =
+        gbViewZ = gbNormalRough = gbDiffuse = gbAlbedo = gbDirect = gbSpecular = gbSpecAlbedo = inDiffuse =
             inMotion = inSpecular = inSpecularHitDistance = hardwareDepth = outDiffuse = inDisocc = null;
         if (disoccBuf != null) {
             memory.destroy(disoccBuf);
