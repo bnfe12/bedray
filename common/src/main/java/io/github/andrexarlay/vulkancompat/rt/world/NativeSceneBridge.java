@@ -54,6 +54,8 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
      */
     private static final int FRAMES_IN_FLIGHT = BedraySceneLayouts.MAX_FRAMES_IN_FLIGHT;
     private static final int MAX_ENTITIES = 1;
+    /** The combined entity mesh can appear after terrain admission. */
+    static final int MAX_SECTIONS = RtConfig.MAX_INSTANCES - MAX_ENTITIES;
     private static final int TABLE_BYTES = 4096;
     private static final long MAX_GEOMETRY_BYTES = 48L << 20;
     private static final long ENTITY_ID = 1L;
@@ -119,12 +121,12 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
             int capabilities = sceneCapabilities(features, Boolean.getBoolean("bedray.rt.disableAsUpdates"));
             scene = library.create(runtime.instance().address(), runtime.physicalDevice().address(),
                 runtime.device().address(), runtime.apiVersion(), runtime.getInstanceProcAddr(),
-                runtime.getDeviceProcAddr(), capabilities, FRAMES_IN_FLIGHT, RtConfig.MAX_INSTANCES,
+                runtime.getDeviceProcAddr(), capabilities, FRAMES_IN_FLIGHT, MAX_SECTIONS,
                 MAX_ENTITIES, RtConfig.MAX_INSTANCES, TABLE_BYTES, MAX_GEOMETRY_BYTES);
             runtime.attachSceneMemory(scene);
             LOGGER.info("[VKB-RT] native scene ready: dll={} abi={} frames={} max_sections={} max_geometry_mb={} features=0x{} as_updates={}",
                 library.libraryPath().getFileName(), BedraySceneLayouts.ABI_VERSION, FRAMES_IN_FLIGHT,
-                RtConfig.MAX_INSTANCES, MAX_GEOMETRY_BYTES >> 20, Integer.toHexString(features),
+                MAX_SECTIONS, MAX_GEOMETRY_BYTES >> 20, Integer.toHexString(features),
                 (capabilities & BedraySceneLayouts.CAP_AS_UPDATE) != 0);
             return new NativeSceneBridge(library, scene);
         } catch (RuntimeException | LinkageError e) {

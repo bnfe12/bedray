@@ -5,12 +5,16 @@ import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
 import io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
 import java.util.function.Consumer;
 
 /** Render-thread coordinator for CPU mesh captures and the native GPU scene. */
 public final class RtWorld {
+    private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
+    private static final long CAPACITY_LOG_INTERVAL_NANOS = 5_000_000_000L;
     public static final int FOLIAGE_NONE = 0;
     public static final int FOLIAGE_CARD = 1;
     public static final int FOLIAGE_CUBE = 2;
@@ -45,6 +49,8 @@ public final class RtWorld {
     private int[] quadFlagsScratch = new int[0];
     private long vegetationQuads;
     private long vegetationSections;
+    private boolean atCapacity;
+    private long lastCapacityLogNanos;
 
     public RtWorld(VkDevice device, SlangRuntime runtime) {
         mem = new RtMemory(device);
@@ -89,6 +95,7 @@ public final class RtWorld {
             InstanceMath.sectionCoord(camY), InstanceMath.sectionCoord(camZ), radiusXz, radiusY,
             RtConfig.BLAS_PER_FRAME, CAPTURE_BUDGET_NANOS);
         if (capture.rescanned()) RtTimings.countRescan();
+        logCapacity(capture.omittedByCapacity());
         nearestBuiltSq = capture.nearestSq();
         long prepared = System.nanoTime();
         scene.prepareFrame(cmd.address(), frame, camX, camY, camZ);
@@ -100,6 +107,18 @@ public final class RtWorld {
         RtTimings.endFrame();
         return new FrameStats(scene.blasBuilds(), scene.sectionCount(), capture.pending(), instances,
             (prepared - started) / 1e6, (System.nanoTime() - prepared) / 1e6, mem.reservedBytes() + scene.residentBytes());
+    }
+
+    private void logCapacity(int omitted) {
+        boolean limited = omitted > 0;
+        if (!limited && !atCapacity) return;
+        long now = System.nanoTime();
+        if (limited != atCapacity || now - lastCapacityLogNanos >= CAPACITY_LOG_INTERVAL_NANOS) {
+            LOGGER.info("[VKB-RT] scene_capacity sections_max={} omitted_candidates={} reserved_entity_slots={}",
+                NativeSceneBridge.MAX_SECTIONS, omitted, RtConfig.MAX_INSTANCES - NativeSceneBridge.MAX_SECTIONS);
+            lastCapacityLogNanos = now;
+        }
+        atCapacity = limited;
     }
 
     private int[] quadFlags(DecodedSection section) {
