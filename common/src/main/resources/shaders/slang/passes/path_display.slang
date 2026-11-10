@@ -1,18 +1,18 @@
 // Path-tracing display step for Bedray 2.0: scene-referred radiance -> reprojected running mean -> exposure ->
 // tone curve -> the renderer's RGBA8 output image.
 //
-// path_trace.slang deliberately writes linear radiance without exposure or tone map. This pass is the one place that
+// path_trace_scene.slang deliberately writes linear radiance without exposure or tone map. This pass is the one place that
 // applies them, so accumulation stays in linear HDR. The host decides when the whole history is invalid (lighting,
 // settings or scene changed) and passes accumFrames = 0; the pass never invents a global reset for camera motion:
 // a moved camera reprojects each pixel through the previous view-projection and keeps the history it can prove.
 //
-//   0 radiance     RGBA16F storage image, read  (path_trace.slang outImage, this frame; a = 0 rejects the sample)
+//   0 radiance     RGBA16F storage image, read  (path_trace_scene.slang outImage, this frame; a = 0 rejects the sample)
 //   1 accum        RGBA32F storage image, write (current mean and per-pixel sample count)
 //   2 outImage     RGBA8   storage image, write (rt_output, the image the composite and the denoisers read)
-//   3 depth        R32F    storage image, read  (path_trace.slang outDepth, ray distance from the bobbed eye)
+//   3 depth        R32F    storage image, read  (path_trace_scene.slang outDepth, ray distance from the bobbed eye)
 //   4 historyDepth R32F    storage image, write (current history depth)
 //   5 frame        ConstantBuffer<FrameConstants>
-//   6 motion       RGBA16F storage image, read (path_trace.slang outMotion: the primary surface's own displacement,
+//   6 motion       RGBA16F storage image, read (path_trace_scene.slang outMotion: the primary surface's own displacement,
 //                  in world blocks; rgb zero says "the surface moved with the world", which is what the static and
 //                  camera-only reprojection already assume)
 //   7 previousAccum RGBA32F storage image, read (previous frame, distinct from accum)
@@ -39,7 +39,7 @@ static const uint PATH_DISPLAY_FLAG_CAMERA_STATIC = 1u << 3u;
 // chain flips the reprojected y before it becomes a pixel, and the history pixel must be looked up the same way.
 static const uint PATH_DISPLAY_FLAG_FLIP_Y = 1u << 4u;
 
-// path_trace.slang writes this for a primary miss; such a pixel has no position to reproject.
+// path_trace_scene.slang writes this for a primary miss; such a pixel has no position to reproject.
 static const float PATH_DISPLAY_SKY_DEPTH = 999999.0;
 static const float PATH_DISPLAY_MAX_COUNT = 16383.0;
 
@@ -62,7 +62,7 @@ float3 pathDisplaySanitize(float3 c, float limit) {
     return clamp(c, float3(0.0), float3(limit));
 }
 
-// Unjittered view direction of a pixel, from the same camera basis path_trace.slang traced with. History is
+// Unjittered view direction of a pixel, from the same camera basis path_trace_scene.slang traced with. History is
 // reprojected from pixel centres; the sub-pixel jitter belongs to the sample, not to the geometry.
 float3 pathDisplayViewDirection(FrameConstants f, int2 p) {
     float2 ndc = (float2(p) + 0.5) * f.camera.jitter.zw * 2.0 - 1.0;

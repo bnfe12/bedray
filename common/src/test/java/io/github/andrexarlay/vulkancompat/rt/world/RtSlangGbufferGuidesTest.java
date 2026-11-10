@@ -25,8 +25,8 @@ class RtSlangGbufferGuidesTest {
 
     private static final String SHADERS = "src/main/resources/shaders/slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
-    private static final String PASS = SHADERS + "/passes/path_trace.slang";
-    private static final String SCENE_PASS = SHADERS + "/passes/path_trace_scene.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
+    private static final String RC_PASS = SHADERS + "/passes/rc_path_trace_scene.slang";
     private static final String ENTRY = SHADERS + "/pathtrace/path_trace_entry.slang";
 
     @Test
@@ -102,7 +102,7 @@ class RtSlangGbufferGuidesTest {
 
     @Test
     void bothEntriesBindTheSevenGuidesAndForwardThem() {
-        for (String pass : new String[] {PASS, SCENE_PASS}) {
+        for (String pass : new String[] {PASS, RC_PASS}) {
             String source = read(pass);
             for (int binding = 26; binding <= 32; binding++) {
                 assertTrue(source.contains("[[vk::binding(" + binding + ", 0)]]"),

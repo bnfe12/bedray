@@ -22,7 +22,7 @@ class RtSlangSkyDiscTest {
 
     private static final String SKY = "src/main/resources/shaders/slang/light/sky.slang";
     private static final String SUN = "src/main/resources/shaders/slang/light/sun.slang";
-    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace.slang";
+    private static final String PASS = "src/main/resources/shaders/slang/passes/path_trace_scene.slang";
     private static final String ENTRY = "src/main/resources/shaders/slang/pathtrace/path_trace_entry.slang";
 
     /** A disc is the key light seen from the outside: same direction, same radius, same radiance times intensity. */

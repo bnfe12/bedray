@@ -28,17 +28,13 @@ class RtShadowProbeAndAtmoCostTest {
         assertTrue(read("contracts/scene_tracer.slang").contains(
                 "ShadowProbe traceShadowProbe(Ray ray) {\n        return undecidedShadowProbe(ray.tMax);"),
             "backends without hardware queries keep the full walk");
-        String legacy = read("traversal/legacy_section_traversal.slang");
         String scene = read("traversal/scene_traversal.slang");
-        assertEquals(2, count(legacy, "override ShadowProbe traceShadowProbe(Ray ray) {"), "both legacy structs");
         assertEquals(1, count(scene, "override ShadowProbe traceShadowProbe(Ray ray) {"));
-        for (String source : new String[] {legacy, scene}) {
-            assertTrue(source.contains("query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);"));
-            assertTrue(source.contains("if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) sawNonOpaque = true;"),
-                "non-opaque candidates are never committed by the probe, only noted");
-            assertTrue(source.contains("} else if (!sawNonOpaque) {\n            probe.state = SHADOW_PROBE_CLEAR;"),
-                "clear only when the segment met no candidate the material walk would have to judge");
-        }
+        assertTrue(scene.contains("query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);"));
+        assertTrue(scene.contains("if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) sawNonOpaque = true;"),
+            "non-opaque candidates are noted without being committed");
+        assertTrue(scene.contains("} else if (!sawNonOpaque) {\n            probe.state = SHADOW_PROBE_CLEAR;"),
+            "clear only when the segment met no candidate the material walk would have to judge");
         assertTrue(read("traversal/reordering_traversal.slang").contains(
             "override ShadowProbe traceShadowProbe(Ray ray) { return base.traceShadowProbe(ray); }"), "SER forwards it");
     }

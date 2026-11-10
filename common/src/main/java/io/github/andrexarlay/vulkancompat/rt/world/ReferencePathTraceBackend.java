@@ -258,7 +258,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         // ReSTIR PT spatial: pools the records the trace just wrote into the other half, which the next frame imports.
         // Nothing in this frame reads it - the pooled winner is shaded by the next temporal stage - so it needs no
         // ordering beyond the trailing barrier recordPtSpatial adds.
-        boolean ptSpatialRan = ptFlags != 0 && input.ptSpatial() && trace.ptSpatialAvailable(scene);
+        boolean ptSpatialRan = ptFlags != 0 && input.ptSpatial() && trace.ptSpatialAvailable();
         if (ptSpatialRan) {
             RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_PT_SPATIAL, false);
             trace.recordPtSpatial(cmd, scene, atlases, ptRange, capturedEntities, frame, dispatch);
@@ -328,7 +328,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
     }
 
     @Override public boolean spatialAvailable() { return spatialReuse != null; }
-    @Override public String traceProgramName(boolean nativeScene) { return trace.traceProgramName(nativeScene); }
+    @Override public String traceProgramName() { return trace.traceProgramName(); }
 
     static int displayFlags(int frameFlags) {
         int flags = DISPLAY_FLAG_TONEMAP;

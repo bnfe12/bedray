@@ -1,13 +1,12 @@
 # Typed Radiance Cascades trace API
 
-Status: source-only, compile-checked with `slangc` 2026.20 (L1).  There is no
-GPU execution or live-frame evidence in this repository.  The typed path is not
-wired into the host render loop yet; `passes/rc_probe_trace.slang` is the
-compile-only producer example.
+This is the original v1 interval-atlas design. For the renderer's current
+finite-window field, see the [RC reconstruction plan](../../../../../../../docs/RC_RECONSTRUCTION_PLAN.md).
+The current field calls `traceCascadeRay` in [`rc_trace_walk.slang`](rc_trace_walk.slang).
 
 This document is the contract between a host pass and the typed Radiance
 Cascades trace.  The implementation is split by responsibility; the public
-facade is [`rc_trace.slang`](rc_trace.slang).
+facade in this design was `rc_trace.slang`.
 
 ## Module layout
 
@@ -40,9 +39,6 @@ rc_trace_options <- rc_trace_ownership
 imports only the facade.  `segment_store.slang` re-exports `RCSegment`,
 `RadianceCascadeLayout`, the two segment-source structs and the probe resolve.
 A plain `import` is not re-exported.
-
-The trace does not import the legacy float4 store or the obsolete
-`rc_trace_segments.slang`.
 
 ## Record model
 

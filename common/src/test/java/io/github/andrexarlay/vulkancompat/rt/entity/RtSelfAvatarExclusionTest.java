@@ -24,7 +24,7 @@ public class RtSelfAvatarExclusionTest {
     private static final String TRAVERSAL = SHADERS + "/traversal/scene_traversal.slang";
     private static final String TRACER = SHADERS + "/pathtrace/path_tracer.slang";
     private static final String TRACER_CONTRACT = SHADERS + "/contracts/scene_tracer.slang";
-    private static final String PASS = SHADERS + "/passes/path_trace.slang";
+    private static final String PASS = SHADERS + "/passes/path_trace_scene.slang";
 
     @Test
     public void captureRecordsTheRangeInTheSharedEntityIndexBuffer() {
@@ -76,19 +76,17 @@ public class RtSelfAvatarExclusionTest {
         assertTrue(contract.contains("SurfaceHit tracePrimary(Ray ray) {\n        return traceClosest(ray);")
                 && contract.contains("SurfaceHit traceMirror(Ray ray) {\n        return traceClosest(ray);"),
             "a backend that has no first-person capture answers both hooks with the full scene");
-        for (String path : new String[] {TRAVERSAL, SHADERS + "/traversal/legacy_section_traversal.slang"}) {
-            String traversal = read(path);
-            assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_OFF);"),
-                path + ": the eye ray skips the body");
-            assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, selfShadowMode);"),
-                path + ": a diffuse bounce follows the self_shadow setting");
-            assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_FULL);"),
-                path + ": a mirror ray always keeps it");
-            String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
-            int skip = visibility.indexOf("selfOccluderSkipped(selfShadowMode, entityInstance(query.CandidateInstanceID())");
-            int commit = visibility.indexOf("query.CommitNonOpaqueTriangleHit();");
-            assertTrue(skip >= 0 && commit > skip, path + ": a shadow ray applies the setting before it commits a blocker");
-        }
+        String traversal = read(TRAVERSAL);
+        assertTrue(traversal.contains("override SurfaceHit tracePrimary(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_OFF);"),
+            "the eye ray skips the body");
+        assertTrue(traversal.contains("SurfaceHit traceClosest(Ray ray) {\n        return traceNearest(ray, selfShadowMode);"),
+            "a diffuse bounce follows the self_shadow setting");
+        assertTrue(traversal.contains("override SurfaceHit traceMirror(Ray ray) {\n        return traceNearest(ray, SELF_SHADOW_FULL);"),
+            "a mirror ray always keeps the body");
+        String visibility = block(traversal, "VisibilityResult traceVisibility(Ray ray) {");
+        int skip = visibility.indexOf("selfOccluderSkipped(selfShadowMode, entityInstance(query.CandidateInstanceID())");
+        int commit = visibility.indexOf("query.CommitNonOpaqueTriangleHit();");
+        assertTrue(skip >= 0 && commit > skip, "a shadow ray applies the setting before it commits a blocker");
         String ser = read(SHADERS + "/traversal/reordering_traversal.slang");
         assertTrue(ser.contains("SurfaceHit traceClosest(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, base.secondarySelfShadowMode());")
                 && ser.contains("override SurfaceHit traceMirror(Ray ray) {\n        TriangleIntersection hit = base.traceIntersection(ray, SELF_SHADOW_FULL);"),
@@ -99,7 +97,7 @@ public class RtSelfAvatarExclusionTest {
                 && helper.contains("if (mode == SELF_SHADOW_OFF) return true;")
                 && helper.contains("return dot(origin.xz, origin.xz) < SELF_SHADOW_FOOTPRINT_RADIUS * SELF_SHADOW_FOOTPRINT_RADIUS;"),
             "the default mode skips the body only for rays that start inside its column (camera-relative xz = 0)");
-        for (String pass : new String[] {"path_trace", "path_trace_scene", "rc_path_trace_scene", "restir_pt_spatial",
+        for (String pass : new String[] {"path_trace_scene", "rc_path_trace_scene",
                 "restir_pt_spatial_scene", "rc_field_build_scene"}) {
             String source = read(SHADERS + "/passes/" + pass + ".slang");
             assertTrue(source.contains("traversal.selfAvatarTriCount = pc.entityState.z & 0x3FFFFFFFu;")

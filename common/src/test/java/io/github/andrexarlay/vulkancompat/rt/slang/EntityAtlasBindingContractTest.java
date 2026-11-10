@@ -70,7 +70,7 @@ class EntityAtlasBindingContractTest {
         }
         assertTrue(checked.contains("restir_spatial"),
             "the spatial stage builds an EntityAtlas and must be part of this contract");
-        assertTrue(checked.contains("path_trace"), "the trace pass builds an EntityAtlas");
+        assertTrue(checked.contains("path_trace_scene"), "the trace pass builds an EntityAtlas");
     }
 
     private static SlangPassManifest.Binding bindingNumber(SlangPassManifest manifest, int number) {

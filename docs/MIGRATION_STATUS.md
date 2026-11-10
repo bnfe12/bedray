@@ -73,7 +73,7 @@ and hit-distance contract is tracked in
   resize and world close; no atlas lifetime errors in the log.
 - Temporal upscalers: switch modes, resize, disable and close the world; check exact host-fence retirement and
   absence of retained SDK context failures. Close once with ReSTIR PT still on.
-- RC (only with `-Dvkbridge.rt.nativePathTrace=true -Dvkbridge.rt.nativeScene=true -Dvkbridge.rt.radianceCascades=true`):
+- RC (only with `-Dvkbridge.rt.nativePathTrace=true -Dvkbridge.rt.radianceCascades=true`):
   the mode line says `rc_reuse=temporal`; indirect light under the field is calmer when standing still and follows a
   moving camera without smearing more than about a block.
 

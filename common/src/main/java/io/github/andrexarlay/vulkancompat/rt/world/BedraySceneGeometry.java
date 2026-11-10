@@ -14,14 +14,14 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * Producer of the shader-facing {@code GeometryVertex} stream that {@code bedray_scene}
  * builds its BLAS from and {@code path_trace_scene.slang} decodes hits through.
  *
- * <p>This is the one place where the legacy Sodium capture (four planar arrays per
+ * <p>This is the one place where the Sodium capture (four planar arrays per
  * section) is repacked into the native record: position, uv/light, tint and meta,
  * 64 bytes per vertex, four vertices per quad.  The index stream is the shared quad
  * template {@code 4k+(0,1,2,2,3,0)} taken range-local (k counts inside the pass
  * range), exactly the layout the scene's {@code primitiveOffset = quad_start*6*4}
  * and {@code firstVertex = quad_start*4} assume.
  *
- * <p>Light words keep the legacy encoding: each byte is {@code level*16+8}, so the
+ * <p>The Sodium light bytes use the encoding each byte is {@code level*16+8}, so the
  * shader-facing value is {@code (byte-8)/240}.  The material id is byte 2 of the
  * first light word and the vegetation tags are the bits {@link RtWorld} already
  * classified while staging the section.
@@ -67,16 +67,7 @@ final class BedraySceneGeometry {
         for (int q = 0; q < quads; q++) {
             int light0 = d.light[q * 4];
             int material = (light0 >> 16) & 0xFF;
-            int vertexFlags = 0;
-            if (tagged != null) {
-                int tag = tagged[q];
-                if ((tag & RtWorld.VEGETATION_BIT) != 0) {
-                    vertexFlags |= VERTEX_FLAG_VEGETATION;
-                }
-                if ((tag & RtWorld.LEAF_CUBE_BIT) != 0) {
-                    vertexFlags |= VERTEX_FLAG_LEAF_CUBE;
-                }
-            }
+            int vertexFlags = tagged == null ? 0 : tagged[q];
             for (int corner = 0; corner < 4; corner++) {
                 int p = q * 12 + corner * 3;
                 int u = q * 8 + corner * 2;

@@ -1,7 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rt.core;
 
 import io.github.andrexarlay.vulkanbridge.api.LibraryDescriptor;
-import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneLocator;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -15,16 +14,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * P2-3: the Bedray locators hardcoded {@code bedray_core.dll} / {@code bedray_scene.dll}.
- * On Linux and macOS that name is wrong before the file is even looked for. The
- * allowlist also rejected every non-{@code .dll} name, so a platform-correct lookup
- * could not have been described.
+ * The core locator and the native file allowlist use the JVM's platform naming convention.
  */
 class BedrayNativeNameTest {
     private static final Path CORE_SOURCE =
         Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/core/BedrayCoreLocator.java");
-    private static final Path SCENE_SOURCE =
-        Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/scene/BedraySceneLocator.java");
 
     @Test
     void theCoreNameFollowsTheJvmNativeConvention() {
@@ -32,16 +26,9 @@ class BedrayNativeNameTest {
     }
 
     @Test
-    void theSceneNameFollowsTheJvmNativeConvention() {
-        assertEquals(System.mapLibraryName("bedray_scene"), BedraySceneLocator.FILE);
-    }
-
-    @Test
-    void bothLocatorsDeriveTheNameInsteadOfHardcodingAnExtension() throws IOException {
+    void theCoreLocatorDerivesTheNameAtRuntime() throws IOException {
         assertTrue(Files.readString(CORE_SOURCE).contains("System.mapLibraryName(LIBRARY_ID)"),
-            "the core locator must map the id at runtime, not spell out .dll");
-        assertTrue(Files.readString(SCENE_SOURCE).contains("System.mapLibraryName(LIBRARY_ID)"),
-            "the scene locator must map the id at runtime, not spell out .dll");
+            "the core locator must map the id at runtime");
     }
 
     @Test

@@ -111,8 +111,7 @@ def elementBytesOf = { param ->
     return 0
 }
 
-// Structs whose memory layout is shared with Java or with the legacy RtWorld
-// table.  The manifest records the size, but a field reorder with the same size
+// Structs shared with the host. The manifest records the size, but a field reorder with the same size
 // would still desynchronise the host, so the offsets are pinned here as well.
 // Update this map together with the Java mirror when a contract really changes.
 def STRUCT_LAYOUTS = [
@@ -132,8 +131,6 @@ def STRUCT_LAYOUTS = [
         kInputViewportOriginX: 72, kInputViewportOriginY: 76, kInputViewportWidth: 80, kInputViewportHeight: 84,
         kOutputViewportOriginX: 88, kOutputViewportOriginY: 92, kOutputViewportWidth: 96, kOutputViewportHeight: 100,
         reserved0: 104, reserved1: 108]],
-    DecodePush: [size: 32, fields: [rawAddress: 0, arenaAddress: 8, flagsAddress: 16, quadCount: 24, reserved: 28]],
-    LegacySection: [size: 64, fields: [posAddr: 0, uvAddr: 8, colAddr: 16, lightAddr: 24, quadStart: 32, origin: 48]],
     FrameConstants: [size: 608, fields: [camera: 0, sun: 416, atmosphere: 480, exposure: 560, frame: 592]],
     BlockMaterial: [size: 64, fields: [albedo: 0, surface: 16, optical: 32, meta: 48]],
     // The ReSTIR DI record the Slang path tracer reads and writes; the Java host allocates the ring with this stride.
@@ -148,7 +145,7 @@ def STRUCT_LAYOUTS = [
     // routes RWStructuredBuffer<RCSegment> descriptors with this stride; a
     // packed float3/float3 layout would not match the reflected record.
     RCSegment: [size: 32, fields: [radiance: 0, confidence: 12, transmittance: 16, flags: 28]],
-    // Push block shared by passes/path_trace.slang and path_trace_scene.slang.  The manifest checks the total size;
+    // Push block shared by the native-scene trace passes. The manifest checks the total size;
     // pinning the fields catches a same-size reorder that would otherwise reach the Java writer unnoticed.
     PathTracePush: [size: 112, fields: [maxDepth: 0, maxSurfaceSteps: 4, sampleIndex: 8, materialCount: 12,
         flags: 16, rayBias: 20, alphaCutoff: 24, maxDistance: 28, maxRadiance: 32, sunProbability: 36,

@@ -14,7 +14,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
     private final SlangRuntime runtime;
     private final BedrayPathTraceNative pass;
     private final boolean spatial;
-    private final String traceName, sceneTraceName;
+    private final String traceName;
     private final Set<Long> recordings = new LinkedHashSet<>();
     /** The mode-log word of the last recorded frame's path reuse. */
     private String ptState = "off";
@@ -26,10 +26,9 @@ final class NativePathTraceBackend implements PathTraceBackend {
             return "nativePathTrace requires a core with NATIVE_DI and the 25-binding guide contract";
         if (guides && !runtime.library().hasNativeGuideOutputs())
             return "nativePathTrace guide output requires a matching core with GUIDE_OUTPUTS";
-        if (RtConfig.SLANG_RADIANCE_CASCADES && (!RtConfig.SLANG_NATIVE_SCENE
-            || !SlangPassLibrary.available(RtRadianceCascadesContract.BUILD)
+        if (RtConfig.SLANG_RADIANCE_CASCADES && (!SlangPassLibrary.available(RtRadianceCascadesContract.BUILD)
             || !SlangPassLibrary.available(RtRadianceCascadesContract.TRACE)))
-            return "radianceCascades requires nativeScene=true and both AOT RC field entries";
+            return "radianceCascades requires both AOT RC field entries";
         return null;
     }
 
@@ -37,14 +36,12 @@ final class NativePathTraceBackend implements PathTraceBackend {
         String problem = supportProblem(runtime, false);
         if (problem != null) throw new IllegalStateException(problem);
         this.runtime = runtime;
-        SlangProgram trace = SlangTracePrograms.select(runtime, RtPathTraceSlangPass.PASS_NAME).orElseThrow();
-        RtPathTraceSlangPass.requireManifest(trace);
         boolean rc = RtConfig.SLANG_RADIANCE_CASCADES;
-        String sceneName = rc ? RtRadianceCascadesContract.TRACE : RtPathTraceSlangPass.SCENE_PASS_NAME;
-        SlangProgram scene = SlangPassLibrary.available(sceneName) ? SlangTracePrograms.select(runtime, sceneName).orElseThrow() : null;
-        if (scene != null) RtPathTraceSlangPass.requireManifest(scene,rc);
+        String name = rc ? RtRadianceCascadesContract.TRACE : RtPathTraceSlangPass.PASS_NAME;
+        SlangProgram trace = SlangTracePrograms.select(runtime, name)
+            .orElseThrow(() -> new IllegalStateException("missing Slang pass " + name));
+        RtPathTraceSlangPass.requireManifest(trace, rc);
         traceName = trace.name();
-        sceneTraceName = scene == null ? "" : scene.name();
         SlangProgram builder = rc ? runtime.program(RtRadianceCascadesContract.BUILD).orElseThrow() : null;
         if (builder != null) RtRadianceCascadesContract.requireBuilder(builder.manifest());
         SlangProgram display = runtime.program(RtSlangPathPass.DISPLAY_PASS).orElseThrow();
@@ -53,16 +50,12 @@ final class NativePathTraceBackend implements PathTraceBackend {
         spatial = reuse != null;
         long stats = RtFrameStatsSlangPass.registerProgram(runtime)
             .map(program -> program.nativeHandle()).orElse(0L);
-        // The PT spatial stage for each table the core may trace; the RC trace program writes no PT ring.
-        boolean ownsPt = runtime.library().hasNativePt();
-        SlangProgram ptSpatial = ownsPt
+        // The RC trace program writes no PT ring.
+        SlangProgram ptSpatial = runtime.library().hasNativePt() && !rc
             ? RtPathTraceSlangPass.optionalPtSpatial(runtime, RtPathTraceSlangPass.PT_SPATIAL_PASS_NAME) : null;
-        SlangProgram ptSpatialScene = ownsPt && scene != null && !rc
-            ? RtPathTraceSlangPass.optionalPtSpatial(runtime, RtPathTraceSlangPass.PT_SPATIAL_SCENE_PASS_NAME) : null;
-        pass = new BedrayPathTraceNative(runtime, trace.nativeHandle(), scene == null ? 0 : scene.nativeHandle(),
+        pass = new BedrayPathTraceNative(runtime, trace.nativeHandle(),
             reuse == null ? 0 : reuse.nativeHandle(), display.nativeHandle(), stats, runtime.atlasSampler(),
-            builder == null ? 0 : builder.nativeHandle(),
-            ptSpatial == null ? 0 : ptSpatial.nativeHandle(), ptSpatialScene == null ? 0 : ptSpatialScene.nativeHandle());
+            builder == null ? 0 : builder.nativeHandle(), ptSpatial == null ? 0 : ptSpatial.nativeHandle());
     }
 
     @Override public void prepare(int width, int height) {
@@ -94,15 +87,14 @@ final class NativePathTraceBackend implements PathTraceBackend {
         if (!pass.nativePt()) return 0;
         int flags = BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_PT;
         if (frame.ptReset()) flags |= BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_PT;
-        boolean nativeScene = (frame.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE) != 0;
         if ((frame.dispatch().flags() & RtPathTraceSlangPass.OPTION_RESTIR_PT) != 0 && frame.ptSpatial()
-            && pass.ptSpatialFor(nativeScene))
+            && pass.ptSpatialAvailable())
             flags |= BedrayCoreLayouts.PATH_TRACE_FRAME_PT_SPATIAL;
         return flags;
     }
 
     @Override public boolean spatialAvailable() { return spatial; }
-    @Override public String traceProgramName(boolean nativeScene) { return nativeScene ? sceneTraceName : traceName; }
+    @Override public String traceProgramName() { return traceName; }
     @Override public boolean pathReuseAvailable() { return pass.nativePt(); }
     @Override public boolean displaySkyAvailable() { return pass.displaySkyAvailable(); }
     @Override public String pathReuseState() { return ptState; }

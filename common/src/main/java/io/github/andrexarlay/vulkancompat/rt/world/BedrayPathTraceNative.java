@@ -51,8 +51,6 @@ final class BedrayPathTraceNative implements AutoCloseable {
     private final BedrayCoreNative library;
     private final long core;
     private final long programTrace;
-    /** {@code path_trace_scene}, or 0 when the jar did not compile it. */
-    private final long programTraceScene;
     private final long programSpatial;
     private final long programDisplay;
     /** {@code frame_stats}, or 0 when this jar has no AOT counter artifact for the core to run. */
@@ -64,23 +62,15 @@ final class BedrayPathTraceNative implements AutoCloseable {
      */
     private final boolean frameStats;
     private final BedrayRadianceCascadesNative rc;
-    /** {@code restir_pt_spatial(_scene)}, lent to a core that owns the PT ring; 0 leaves that table without the stage. */
+    /** Optional spatial stage for the core-owned PT ring. */
     private final long programPtSpatial;
-    private final long programPtSpatialScene;
     private boolean configured;
     private boolean closed;
 
-    BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programTraceScene, long programSpatial,
-                          long programDisplay, long programStats, long sampler, long rcBuilder) {
-        this(runtime, programTrace, programTraceScene, programSpatial, programDisplay, programStats, sampler, rcBuilder,
-            0L, 0L);
-    }
-
-    BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programTraceScene, long programSpatial,
+    BedrayPathTraceNative(SlangRuntime runtime, long programTrace, long programSpatial,
                           long programDisplay, long programStats, long sampler, long rcBuilder,
-                          long programPtSpatial, long programPtSpatialScene) {
+                          long programPtSpatial) {
         this.programPtSpatial = programPtSpatial;
-        this.programPtSpatialScene = programPtSpatialScene;
         if (runtime == null || programTrace == 0L || programDisplay == 0L) {
             throw new IllegalArgumentException("native path trace needs a runtime, a trace and a display program");
         }
@@ -91,7 +81,6 @@ final class BedrayPathTraceNative implements AutoCloseable {
         this.library = runtime.library();
         this.core = runtime.core();
         this.programTrace = programTrace;
-        this.programTraceScene = programTraceScene;
         this.programSpatial = programSpatial;
         this.programDisplay = programDisplay;
         this.programStats = programStats;
@@ -110,11 +99,11 @@ final class BedrayPathTraceNative implements AutoCloseable {
         long deviceBytes = runtime.capabilities().deviceMemoryBytes();
         long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 512L << 20;
         long bufferBudget = ReferencePathTraceBackend.bufferBudget(deviceBytes);
-        library.configurePathTrace(core, programTrace, programTraceScene, programSpatial, programDisplay,
+        library.configurePathTrace(core, programTrace, programSpatial, programDisplay,
             programStats, imageBudget, bufferBudget, frame.width, frame.height);
         configured = true;
-        if (nativePt() && (programPtSpatial != 0L || programPtSpatialScene != 0L))
-            library.configurePathTracePt(core, programPtSpatial, programPtSpatialScene);
+        if (nativePt() && programPtSpatial != 0L)
+            library.configurePathTracePt(core, programPtSpatial);
         if (rc != null) rc.configure();
     }
 
@@ -125,27 +114,20 @@ final class BedrayPathTraceNative implements AutoCloseable {
         return library.hasNativePt();
     }
 
-    /** True when the core lends a spatial stage for the table this frame traces. */
-    boolean ptSpatialFor(boolean nativeScene) {
-        return nativePt() && (nativeScene ? programPtSpatialScene : programPtSpatial) != 0L;
+    boolean ptSpatialAvailable() {
+        return nativePt() && programPtSpatial != 0L;
     }
 
     void render(FrameInput input) {
         if (closed) {
             throw new IllegalStateException("native path trace is closed");
         }
-        if (rc != null && (input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE) == 0)
-            throw new IllegalStateException("RC requires actual native scene ownership; Java scene fallback is unsupported");
         RtPathTraceSlangPass.Frame frame = input.frame();
         if (frame == null || frame.width <= 0 || frame.height <= 0) {
             throw new IllegalArgumentException("native path trace needs a positive frame extent");
         }
         if (input.views() == null || input.views().table() == null) {
             throw new IllegalArgumentException("native path trace needs the RtWorld section table");
-        }
-        if ((input.flags() & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE) != 0 && programTraceScene == 0L) {
-            throw new IllegalStateException("the native scene table needs Slang pass path_trace_scene,"
-                + " which this jar did not compile");
         }
         var guides = RtPathTraceSlangPass.Guides.of(input.views().gbuffer());
         boolean wantsGuides = (input.dispatch().flags() & RtPathTraceSlangPass.OPTION_GBUFFER) != 0;
@@ -236,7 +218,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
         long scene = BedrayCoreLayouts.PTFD_SCENE;
         desc.set(JAVA_LONG, scene + BedrayCoreLayouts.PTS_TLAS, views.tlas());
         putBuffer(desc, scene + BedrayCoreLayouts.PTS_SECTIONS,
-            views.table().handle, 0L, views.table().size);
+            views.table().handle(), 0L, views.table().bytes());
         desc.set(JAVA_LONG, scene + BedrayCoreLayouts.PTS_ALBEDO_VIEW, views.atlas());
         desc.set(JAVA_LONG, scene + BedrayCoreLayouts.PTS_MATERIAL_VIEW, views.material());
         desc.set(JAVA_LONG, scene + BedrayCoreLayouts.PTS_NORMAL_VIEW, views.normal());

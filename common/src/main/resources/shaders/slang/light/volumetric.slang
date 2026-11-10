@@ -5,7 +5,7 @@
 // march takes an `ISceneTracer` for the shaft's shadow rays and the host passes
 // every input explicitly (there are no bindings and no global state here).
 // The two compute entries that drive it live in
-// `passes/volumetric_march.slang` (half resolution march + temporal store) and
+// `passes/volumetric_march_scene.slang` (half resolution march + temporal store) and
 // `passes/volumetric_apply.slang` (depth-aware bilateral upsample, scene-space
 // additive composite).
 //

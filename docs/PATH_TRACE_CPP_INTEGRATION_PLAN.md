@@ -1,5 +1,9 @@
 # Path tracing C++ pass — integration plan
 
+This records the original integration plan and evidence from its revisions.
+The current renderer uses the native GPU scene with either path-trace recorder.
+See [Slang shader architecture](SLANG_MIGRATION.md) for current pass names and setup.
+
 Status: the C++ pass, its additive ABI and the Java opt-in adapters are built,
 unit-tested and deployed, and both opt-ins (`-Dvkbridge.rt.nativePathTrace`,
 `-Dvkbridge.rt.nativeScene`) have passed live world autotests. What is missing is
@@ -82,7 +86,7 @@ Constraints:
 
 The two AOT programs are committed and selected by Path Tracing mode:
 
-* [path_trace.slang](../common/src/main/resources/shaders/slang/passes/path_trace.slang)
+* `path_trace.slang` at the integration revision
   traces one path per pixel into an RGBA16F radiance image and writes the
   primary-hit distance into an R32F depth image. It imports
   `LegacySectionTraversal`, which dereferences the 64-byte `LegacySection` table

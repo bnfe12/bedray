@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Both hardware tracing modes on the AOT Slang programs: {@code passes/path_trace.slang} traces one path per pixel into
+ * Both hardware tracing modes on the AOT Slang programs: {@code passes/path_trace_scene.slang} traces one path per pixel into
  * linear HDR radiance ({@link RtPathTraceSlangPass}), then {@code passes/path_display.slang} folds it into a running mean
  * and writes exposure + tone curve into the renderer's RGBA8 {@code rt_output}. Depth goes straight into
  * {@code rt_depth}, so the composite, bloom, particles and upscalers downstream are unchanged.
@@ -499,13 +499,12 @@ public final class RtSlangPathPass implements RtPass {
             capturedEntities.atlasSize(), capturedEntities.selfAvatarTriStart(), capturedEntities.selfAvatarTriCount(),
             RtSettings.autoNormalsOn() ? RtSettings.autoNormalStrengthPercent() / 100f : 0f,
             emitterBounceDistance(params), diffuseBounceDistance(), specularBounceDistance());
-        boolean nativeScene = views.table() != null && views.table().sceneOwned;
         int flags = (historyWritten ? 0 : BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY)
             | (accumulateRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_ACCUMULATE : 0)
             | (params.cameraStatic ? BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_STATIC : 0)
             | (params.flipY ? BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y : 0)
             | (spatialRequested() ? BedrayCoreLayouts.PATH_TRACE_FRAME_SPATIAL : 0)
-            | (nativeScene ? BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE : 0)
+            | BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_SCENE
             | (diRequests.resetPending() ? BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_DI : 0)
             // The native backend builds its own FrameConstants, so the eye's medium travels as a host bit and the core
             // puts it in the frame word the shader reads; the Slang backend already wrote that word itself.
@@ -522,7 +521,7 @@ public final class RtSlangPathPass implements RtPass {
         ptResetRequested = false;
         if (io.github.andrexarlay.vulkancompat.rtx.debug.FrameBenchmark.active())
             io.github.andrexarlay.vulkancompat.rtx.debug.FrameBenchmark.traceRecorded(
-                mode().logName(), backend.traceProgramName(nativeScene), width, height,
+                mode().logName(), backend.traceProgramName(), width, height,
                 params.spp, params.bounces, params.rayDistance, optionFlags);
         historyWritten = true;
         diRequests.afterDispatch(diFlags != 0);

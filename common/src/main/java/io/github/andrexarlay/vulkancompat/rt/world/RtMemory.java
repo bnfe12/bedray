@@ -4,7 +4,6 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRAccelerationStructure;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
 import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
@@ -14,17 +13,15 @@ import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkMemoryAllocateFlagsInfo;
 import org.lwjgl.vulkan.VkMemoryAllocateInfo;
 import org.lwjgl.vulkan.VkMemoryRequirements;
-import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructurePropertiesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
-import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 
 import java.nio.LongBuffer;
 
 /**
  * Raw Vulkan memory helper of the world ray tracing path (own buffers on the engine's VkDevice, no VMA: the engine's
  * and Sodium's buffers move/defragment and lack the device-address usage bits, see the Sodium geometry notes).
- * Every buffer is one VkBuffer + one VkDeviceMemory; callers sub-allocate with {@link RtArena}, so the number of
- * vkAllocateMemory calls stays far below maxMemoryAllocationCount.
+ * Every buffer is one VkBuffer and one VkDeviceMemory. Callers reuse buffers to keep the number of
+ * memory allocations below the device limit.
  */
 public final class RtMemory {
     /** One buffer with its memory; {@code address} is non-zero only with the device-address usage bit. */
@@ -36,26 +33,14 @@ public final class RtMemory {
         /** Persistently mapped pointer for host-visible buffers, else 0. */
         public final long mapped;
         public final boolean hostVisible;
-        /**
-         * True when {@code bedray_scene} owns the buffer: its layout is the native
-         * {@code GeometrySection} table (not the legacy row), and it must never be
-         * destroyed through this class.
-         */
-        public final boolean sceneOwned;
 
         Buf(long handle, long memory, long size, long address, long mapped, boolean hostVisible) {
-            this(handle, memory, size, address, mapped, hostVisible, false);
-        }
-
-        Buf(long handle, long memory, long size, long address, long mapped, boolean hostVisible,
-            boolean sceneOwned) {
             this.handle = handle;
             this.memory = memory;
             this.size = size;
             this.address = address;
             this.mapped = mapped;
             this.hostVisible = hostVisible;
-            this.sceneOwned = sceneOwned;
         }
     }
 
@@ -80,8 +65,6 @@ public final class RtMemory {
 
     public final VkDevice device;
     private final VkPhysicalDeviceMemoryProperties memProps;
-    /** minAccelerationStructureScratchOffsetAlignment of the physical device. */
-    public final int scratchAlignment;
     /** Total bytes of all live buffers and images created through this object (reserved, not "used"). */
     private long reservedBytes;
 
@@ -90,23 +73,6 @@ public final class RtMemory {
         this.memProps = VkPhysicalDeviceMemoryProperties.calloc();
         try {
             VK10.vkGetPhysicalDeviceMemoryProperties(device.getPhysicalDevice(), memProps);
-            // Buffers/images (including Iris post) also run on graphics-only devices. Do not query
-            // acceleration-structure properties unless that extension was actually enabled.
-            if (!device.getCapabilities().VK_KHR_acceleration_structure) {
-                this.scratchAlignment = 1;
-                return;
-            }
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps =
-                    VkPhysicalDeviceAccelerationStructurePropertiesKHR.calloc(stack).sType$Default();
-                VkPhysicalDeviceProperties2 props2 = VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(asProps.address());
-                VK11.vkGetPhysicalDeviceProperties2(device.getPhysicalDevice(), props2);
-                int align = asProps.minAccelerationStructureScratchOffsetAlignment();
-                if (align <= 0) {
-                    throw new RtFailure("init", "minAccelerationStructureScratchOffsetAlignment=" + align);
-                }
-                this.scratchAlignment = align;
-            }
         } catch (RuntimeException | Error failure) {
             memProps.free();
             throw failure;

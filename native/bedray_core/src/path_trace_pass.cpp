@@ -102,7 +102,7 @@ static_assert(offsetof(FrameConstants, atmosphere) == 480, "FrameConstants.atmos
 static_assert(offsetof(FrameConstants, exposure) == 560, "FrameConstants.exposure offset");
 static_assert(offsetof(FrameConstants, frame) == 592, "FrameConstants.frame offset");
 
-// passes/path_trace.slang: PathTracePush, 112 bytes.
+// passes/path_trace_scene.slang: PathTracePush, 112 bytes.
 struct PathTracePush {
     std::uint32_t max_depth;
     std::uint32_t max_surface_steps;
@@ -436,9 +436,9 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
             return existing;
         }
     }
-    if (desc.program_trace == 0 || desc.program_display == 0) {
+    if (desc.retired_trace_slot != 0 || desc.program_trace_scene == 0 || desc.program_display == 0) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-            "program_trace and program_display must be non-zero");
+            "path trace requires program_trace_scene and program_display with the retired trace slot zero");
     }
 
     static constexpr ExpectedBinding kTraceBindings[] = {
@@ -472,69 +472,45 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
         {31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
         {32, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
     };
-    // path_trace.slang and path_trace_scene.slang share the binding set, the
-    // push block and the outputs; only binding 2's record layout and the
-    // traversal differ, and that is the program's own business.
-    bool trace_guides = false, scene_guides = false;
-    bool trace_motion = false, scene_motion = false;
-    bool trace_field = false, scene_field = false;
-    bool trace_pt = false, scene_pt = false;
-    bool trace_stats = false, scene_stats = false;
-    auto validate_trace_program = [&](std::uint64_t program, const char* label, bool& guides,
-                                      bool& motion, bool& field, bool& pt_ring, bool& stats_slot,
-                                      bool native_scene) -> BedrayStatus {
-        ProgramContract contract{};
-        if (!program_contract(core, program, contract)) {
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "%s is not registered", label);
-        }
-        // The ReSTIR PT ring at 36 is additive: every older layout stays accepted, and the same layout plus one storage
-        // buffer at 36 is the current one.  A declaration at 36 of any other type is a drift, not a ring.
-        pt_ring = program_has_binding(core, program, 36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        // The stats slot at 37 is additive the same way: the trace adds its F3 split into the host's slot there.  The
-        // core has no slot to lend the trace (the counters are recorded after it), so it binds a one-word stand-in the
-        // shader refuses to write, and the host reads the split as n/a.
-        stats_slot = program_has_binding(core, program, 37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        const std::uint32_t base = contract.binding_count - (pt_ring ? 1u : 0u) - (stats_slot ? 1u : 0u);
-        if ((base != 18u && base != 25u && base != 26u && !(native_scene && base == 28u))
-            || contract.push_constant_bytes < sizeof(PathTracePush)) {
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s contract mismatch: %u bindings, %u push bytes (need 18/25/26 or native 28, each optionally + "
-                "the ReSTIR PT storage buffer at 36 and the stats slot at 37, %zu)",
-                label, contract.binding_count, contract.push_constant_bytes, sizeof(PathTracePush));
-        }
-        if (!has_bindings(core, program, kTraceBindings, std::size(kTraceBindings))) {
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s does not declare the path_trace.slang binding set", label);
-        }
-        guides = base >= 25u;
-        motion = base >= 26u;
-        field = base == 28u;
-        if (guides && !has_bindings(core, program, kTraceGuideBindings,
-                std::size(kTraceGuideBindings))) {
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s does not declare the seven guide storage images", label);
-        }
-        if (motion && !program_has_binding(core, program, 33, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER))
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s motion binding 33 must be a storage buffer", label);
-        if (field && (!program_has_binding(core, program, 34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
-            || !program_has_binding(core, program, 35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)))
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s RC bindings 34/35 must be uniform/storage buffers", label);
-        return BEDRAY_OK;
-    };
-    BedrayStatus trace_status = validate_trace_program(desc.program_trace, "program_trace", trace_guides,
-        trace_motion, trace_field, trace_pt, trace_stats, false);
-    if (trace_status != BEDRAY_OK) {
-        return trace_status;
+    const auto program = desc.program_trace_scene;
+    ProgramContract contract{};
+    if (!program_contract(core, program, contract)) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "program_trace_scene is not registered");
     }
-    if (desc.program_trace_scene != 0) {
-        BedrayStatus scene_status = validate_trace_program(desc.program_trace_scene, "program_trace_scene",
-            scene_guides, scene_motion, scene_field, scene_pt, scene_stats, true);
-        if (scene_status != BEDRAY_OK) {
-            return scene_status;
-        }
+    // The ReSTIR PT ring at 36 is additive: every older layout stays accepted, and the same layout plus one storage
+    // buffer at 36 is the current one.  A declaration at 36 of any other type is a drift, not a ring.
+    const bool pt_ring = program_has_binding(core, program, 36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    // The stats slot at 37 is additive the same way: the trace adds its F3 split into the host's slot there.  The
+    // core has no slot to lend the trace (the counters are recorded after it), so it binds a one-word stand-in the
+    // shader refuses to write, and the host reads the split as n/a.
+    const bool stats_slot = program_has_binding(core, program, 37, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    const std::uint32_t base = contract.binding_count - (pt_ring ? 1u : 0u) - (stats_slot ? 1u : 0u);
+    if ((base != 18u && base != 25u && base != 26u && base != 28u)
+        || contract.push_constant_bytes < sizeof(PathTracePush)) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "program_trace_scene contract mismatch: %u bindings, %u push bytes (need 18/25/26/28, each optionally + "
+            "the ReSTIR PT storage buffer at 36 and the stats slot at 37, %zu)",
+            contract.binding_count, contract.push_constant_bytes, sizeof(PathTracePush));
     }
+    if (!has_bindings(core, program, kTraceBindings, std::size(kTraceBindings))) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "program_trace_scene does not declare the path_trace_scene.slang binding set");
+    }
+    const bool guides = base >= 25u;
+    const bool motion = base >= 26u;
+    const bool field = base == 28u;
+    if (guides && !has_bindings(core, program, kTraceGuideBindings,
+            std::size(kTraceGuideBindings))) {
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "program_trace_scene does not declare the seven guide storage images");
+    }
+    if (motion && !program_has_binding(core, program, 33, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER))
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "program_trace_scene motion binding 33 must be a storage buffer");
+    if (field && (!program_has_binding(core, program, 34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+        || !program_has_binding(core, program, 35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)))
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "program_trace_scene RC bindings 34/35 must be uniform/storage buffers");
 
     ProgramContract display_contract{};
     if (!program_contract(core, desc.program_display, display_contract)) {
@@ -667,27 +643,21 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
 
     core_ = core;
     fns_ = fns;
-    program_trace_ = desc.program_trace;
     program_trace_scene_ = desc.program_trace_scene;
     program_spatial_ = desc.program_spatial;
     program_display_ = desc.program_display;
     program_stats_ = desc.program_stats;
     // A reconfiguration may bring another trace contract; the PT stage is lent again for the new one.
-    program_pt_spatial_ = 0;
     program_pt_spatial_scene_ = 0;
     spatial_push_bytes_ = spatial_push_bytes;
     images_ = std::move(images);
     buffers_ = std::move(buffers);
     reset_state();
-    trace_guide_bindings_ = trace_guides;
-    scene_guide_bindings_ = scene_guides;
-    trace_motion_bindings_ = trace_motion;
-    scene_motion_bindings_ = scene_motion;
-    scene_field_bindings_ = scene_field;
-    trace_pt_binding_ = trace_pt;
-    scene_pt_binding_ = scene_pt;
-    trace_stats_binding_ = trace_stats;
-    scene_stats_binding_ = scene_stats;
+    scene_guide_bindings_ = guides;
+    scene_motion_bindings_ = motion;
+    scene_field_bindings_ = field;
+    scene_pt_binding_ = pt_ring;
+    scene_stats_binding_ = stats_slot;
 
     BedrayStatus status = create_dummy(64u, block_materials_id_, block_materials_view_, error);
     if (status == BEDRAY_OK) {
@@ -699,11 +669,11 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     if (status == BEDRAY_OK) {
         status = create_dummy(16u, entity_vector_id_, entity_vector_view_, error);
     }
-    if (status == BEDRAY_OK && (trace_guides || scene_guides)) status = create_guide_dummies(error);
-    if (status == BEDRAY_OK && (trace_motion || scene_motion)) {
+    if (status == BEDRAY_OK && guides) status = create_guide_dummies(error);
+    if (status == BEDRAY_OK && motion) {
         status = create_dummy(16u, motion_dummy_id_, motion_dummy_view_, error);
     }
-    if (status == BEDRAY_OK && (trace_pt || scene_pt)) {
+    if (status == BEDRAY_OK && pt_ring) {
         status = create_dummy(kRestirPtReservoirBytes, pt_dummy_id_, pt_dummy_view_, error);
     }
     if (status != BEDRAY_OK) {
@@ -944,12 +914,14 @@ void PathTracePass::retire_pt_ring() noexcept {
     static_cast<void>(buffers_->collect());
 }
 
-BedrayStatus PathTracePass::configure_pt(std::uint64_t program_pt_spatial, std::uint64_t program_pt_spatial_scene,
+BedrayStatus PathTracePass::configure_pt(std::uint64_t retired_program, std::uint64_t program_pt_spatial_scene,
     BedrayError* error) {
     if (core_ == nullptr) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace is not configured");
     if (has_recordings())
         return fail(error, BEDRAY_ERROR_IN_USE, "path-trace recordings must be released before reconfiguration");
-    // restir_pt_spatial(_scene).slang: the trace's scene bindings without its outputs, plus the ring at 36.
+    if (retired_program != 0)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "retired PT spatial program slot must be zero");
+    // The trace's scene bindings without its outputs, plus the ring at 36.
     static constexpr ExpectedBinding kPtSpatialBindings[] = {
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER}, {9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
@@ -959,26 +931,20 @@ BedrayStatus PathTracePass::configure_pt(std::uint64_t program_pt_spatial, std::
         {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
         {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {36, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
     };
-    const struct { std::uint64_t program; bool trace_ring; const char* name; } lent[] = {
-        {program_pt_spatial, trace_pt_binding_, "program_pt_spatial"},
-        {program_pt_spatial_scene, scene_pt_binding_, "program_pt_spatial_scene"},
-    };
-    for (const auto& stage : lent) {
-        if (stage.program == 0) continue;
+    if (program_pt_spatial_scene != 0) {
         ProgramContract contract{};
-        if (!program_contract(core_, stage.program, contract))
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "%s is not registered", stage.name);
+        if (!program_contract(core_, program_pt_spatial_scene, contract))
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "program_pt_spatial_scene is not registered");
         if (contract.binding_count != std::size(kPtSpatialBindings)
             || contract.push_constant_bytes != sizeof(PathTracePush)
-            || !has_bindings(core_, stage.program, kPtSpatialBindings, std::size(kPtSpatialBindings)))
+            || !has_bindings(core_, program_pt_spatial_scene, kPtSpatialBindings, std::size(kPtSpatialBindings)))
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "%s contract mismatch: %u bindings, %u push bytes (need the 14-binding restir_pt_spatial set, %zu)",
-                stage.name, contract.binding_count, contract.push_constant_bytes, sizeof(PathTracePush));
-        if (!stage.trace_ring)
+                "program_pt_spatial_scene contract mismatch: %u bindings, %u push bytes (need 14, %zu)",
+                contract.binding_count, contract.push_constant_bytes, sizeof(PathTracePush));
+        if (!scene_pt_binding_)
             return fail(error, BEDRAY_ERROR_UNSUPPORTED,
-                "%s pools a ring the trace program for its table does not write (no binding 36)", stage.name);
+                "program_pt_spatial_scene needs a trace program with the PT ring at binding 36");
     }
-    program_pt_spatial_ = program_pt_spatial;
     program_pt_spatial_scene_ = program_pt_spatial_scene;
     return BEDRAY_OK;
 }
@@ -1015,16 +981,16 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     if (desc.scene.sections.handle == 0 || desc.scene.sections.bytes == 0) {
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "path trace needs a section table");
     }
-    // A native-scene frame binds bedray_scene's 64-byte GeometrySection table
-    // and must have been configured with path_trace_scene.slang. A table that is
-    // not a whole number of records would decode as a different section.
-    const bool native_scene = (desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE) != 0;
-    const bool field_bindings = native_scene && scene_field_bindings_;
+    if ((desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_SCENE) == 0)
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "path trace requires a native scene frame");
+    if (desc.scene.sections.bytes % 64u != 0)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
+            "native scene table is %llu bytes, not a multiple of the 64-byte section record",
+            static_cast<unsigned long long>(desc.scene.sections.bytes));
+    const bool field_bindings = scene_field_bindings_;
     if (field_bindings && !rc_field_)
         return fail(error, BEDRAY_ERROR_UNSUPPORTED, "selected scene program requires configured RC field resources");
-    if (rc_field_ && !native_scene)
-        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "configured RC field requires a native scene frame");
-    const bool guide_bindings = native_scene ? scene_guide_bindings_ : trace_guide_bindings_;
+    const bool guide_bindings = scene_guide_bindings_;
     std::array<std::uint64_t, 7> guide_views{};
     if (guides) {
         if (guides->abi_version != BEDRAY_CORE_ABI_VERSION || guides->struct_size != sizeof(*guides))
@@ -1040,9 +1006,9 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     } else if (guide_bindings && (desc.path.flags & kPathOptionGbuffer) != 0) {
         return fail(error, BEDRAY_ERROR_UNSUPPORTED, "G-buffer writes require the additive guide-output call");
     }
-    const bool motion_binding = native_scene ? scene_motion_bindings_ : trace_motion_bindings_;
-    const bool pt_binding = native_scene ? scene_pt_binding_ : trace_pt_binding_;
-    const bool stats_binding = native_scene ? scene_stats_binding_ : trace_stats_binding_;
+    const bool motion_binding = scene_motion_bindings_;
+    const bool pt_binding = scene_pt_binding_;
+    const bool stats_binding = scene_stats_binding_;
     const bool wants_motion = (desc.path.flags & (1u << 1u)) != 0;
     if (motion) {
         if (!motion_binding) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "selected program has no NRD motion binding");
@@ -1054,17 +1020,6 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
             return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "NRD motion needs guides, matching option bits and a complete vec4 range");
     } else if (wants_motion) {
         return fail(error, BEDRAY_ERROR_UNSUPPORTED, "NRD motion writes require the additive motion-output call");
-    }
-    if (native_scene) {
-        if (program_trace_scene_ == 0) {
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "native scene frame needs program_trace_scene (path_trace_scene.slang)");
-        }
-        if ((desc.scene.sections.bytes % 64u) != 0) {
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT,
-                "native scene table is %llu bytes, not a multiple of the 64-byte section record",
-                static_cast<unsigned long long>(desc.scene.sections.bytes));
-        }
     }
     if (desc.scene.albedo_view == 0 || desc.scene.material_view == 0
         || desc.scene.normal_view == 0 || desc.scene.atlas_sampler == 0) {
@@ -1158,7 +1113,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
 
     const bool native_pt = (desc.flags & BEDRAY_PATH_TRACE_FRAME_NATIVE_PT) != 0;
     const bool pt_spatial_requested = (desc.flags & BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL) != 0;
-    const std::uint64_t program_pt_spatial = native_scene ? program_pt_spatial_scene_ : program_pt_spatial_;
+    const std::uint64_t program_pt_spatial = program_pt_spatial_scene_;
     if (!native_pt && (desc.flags & (BEDRAY_PATH_TRACE_FRAME_RESET_PT | BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL)) != 0)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "ReSTIR PT reset/spatial flags require NATIVE_PT");
     if (native_pt && (desc.path.flags & (kPtHistory | kPtParity)) != 0)
@@ -1484,7 +1439,7 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     BedrayFrameDesc trace_desc{};
     trace_desc.abi_version = BEDRAY_CORE_ABI_VERSION;
     trace_desc.command_buffer = desc.command_buffer;
-    trace_desc.program = native_scene ? program_trace_scene_ : program_trace_;
+    trace_desc.program = program_trace_scene_;
     ProgramContract trace_contract{};
     static_cast<void>(program_contract(core_, trace_desc.program, trace_contract));
     trace_desc.group_count_x = trace_contract.ray_generation ? desc.camera.width : groups(desc.camera.width);
@@ -1843,7 +1798,6 @@ BedrayStatus PathTracePass::destroy() noexcept {
     reset_state();
     core_ = nullptr;
     fns_ = {};
-    program_trace_ = 0;
     program_trace_scene_ = 0;
     program_spatial_ = 0;
     program_display_ = 0;
@@ -1864,11 +1818,11 @@ void PathTracePass::device_lost() noexcept {
 }
 
 void PathTracePass::reset_state() noexcept {
-    trace_guide_bindings_ = scene_guide_bindings_ = guide_dummies_initialized_ = false;
-    trace_motion_bindings_ = scene_motion_bindings_ = false;
+    scene_guide_bindings_ = guide_dummies_initialized_ = false;
+    scene_motion_bindings_ = false;
     scene_field_bindings_ = false;
-    trace_pt_binding_ = scene_pt_binding_ = false;
-    trace_stats_binding_ = scene_stats_binding_ = false;
+    scene_pt_binding_ = false;
+    scene_stats_binding_ = false;
     guide_dummy_ids_ = {}; guide_dummy_views_ = {};
     radiance_id_ = {};
     motion_id_ = {};

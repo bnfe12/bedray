@@ -375,8 +375,6 @@
   "bedray.opt.rt_distance_auto.desc": "On: ray tracing covers the game render distance. Off: the manual distance.",
   "bedray.opt.rt_distance_chunks": "RT Distance (manual)",
   "bedray.opt.rt_distance_chunks.desc": "Chunks covered by ray tracing when 'As in Game' is off.",
-  "bedray.opt.rt_vram_budget_mb": "RT Memory Budget",
-  "bedray.opt.rt_vram_budget_mb.desc": "GPU memory for chunk geometry; the farthest chunks are left out when it is full.",
   "bedray.opt.rt_light_budget": "RT Light Budget",
   "bedray.opt.rt_light_budget.desc": "Most important glowing block faces that cast traced light.",
   "bedray.opt.sun_size_tenths": "Sun/Moon Size",

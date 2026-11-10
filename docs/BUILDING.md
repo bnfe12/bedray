@@ -16,8 +16,8 @@ from a containing repository. Builds do not embed timestamps, preserving reprodu
   the launcher's `libraries` folder (`compileOnly`, never packaged).
 * A local `libs/` folder with game and mod jars. **These are not in the repository and must not be committed or redistributed**
   (`libs/` is in `.gitignore`).
-* Nothing else: the platform layer ("Bedray Core", directory `core/`) is part of this repository and of every jar. There is no separate
-  library to build or install, and `mavenLocal` is not used.
+* The Java platform layer (`core/`) is built into the loader JAR.
+* To build a runnable ray-tracing distribution, also install the pinned Slang compiler, CMake, MSVC and Vulkan headers.
 
 ## 1. Settings outside the repository
 
@@ -81,9 +81,7 @@ Two build guards keep a native or classpath failure from looking like a slow tes
   (`git worktree add C:\Temp\bedray-wt HEAD` and run Gradle there). The build prints a warning when the project path
   contains non-ASCII characters.
 
-The runtime GLSL fallback compiler pins `shaderc_optimization_level_zero`: shaderc's SPIR-V optimizer does not terminate on the
-~261 KB expanded `rt_rays`/`rt_path` sources (reproduced with LWJGL shaderc 3.3.3 and 3.4.3, `performance` and `size` levels).
-Do not raise it; `RtShaderCompilerOptionsTest` enforces this. The AOT Slang passes are unaffected because `slangc` optimises them.
+The renderer's Slang shaders compile ahead of time. The Iris post host uses shaderc for pack-supplied GLSL.
 A passing `:common:test` is L2 evidence (Java logic and source scans without a GPU), not a game check.
 
 The `combinedJar` task of each loader module builds the canonical player artifact with the Bedray Compute provider
@@ -109,11 +107,18 @@ outside the repository: `amd_fidelityfx_vk.dll`, `amd_fidelityfx_vk.LICENSE.txt`
 Run the normal build command with `-PbundleNatives=licensed -PredistributableNativesDir=<folder>`. Without those properties,
 the build remains native-free. Verify the JAR contents and compare both DLL hashes with the pins in `THIRD_PARTY_NOTICES.md` before publishing.
 
+### Windows renderer distribution
+
+Set `SLANG_DIR` to the Slang SDK directory and run `gradlew fabricBedrayDistribution` or
+`gradlew neoforgeBedrayDistribution`.
+The distribution pairs the loader JAR and the matching `bedray_core.dll`, which exports the native GPU scene ABI.
+See [distribution paths and build options](../native/bedray_core/DISTRIBUTION.md).
+
 ## 5. Building without the native wrappers
 
-You can skip section 6 completely. Without `vkb_dlss.dll`, `vkb_nrd.dll`, `vkb_sl.dll` and the vendor DLLs the mod still builds and runs:
-the built-in upscalers (Bilinear, FSR 1, NIS), XeSS and FSR 3.1 (in release jars) and ray / path tracing with
-accumulation work; DLSS, the NRD denoiser and frame generation are shown as "library missing" and have no effect.
+Vendor wrappers are optional. With the matching renderer distribution, ray tracing and path tracing with accumulation
+and the built-in upscalers (Bilinear, FSR 1, NIS) can run without them. The release JAR can supply XeSS and FSR 3.1 separately.
+The settings page reports missing vendor libraries for DLSS, NRD and frame generation.
 The wrappers are built from source by you (they link vendor SDKs whose licences we do not redistribute); the released jars never
 contain them.
 

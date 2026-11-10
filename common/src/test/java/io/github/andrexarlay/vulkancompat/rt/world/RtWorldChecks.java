@@ -6,7 +6,7 @@ import org.joml.Vector3f;
 import org.joml.Vector4f;
 
 /**
- * L2 checks of the pure logic of the world ray tracing path (allocator, instance transforms, matrices, radius).
+ * L2 checks of the pure logic of the world ray tracing path (instance transforms, matrices, radius).
  * No GPU. Called from ShimTestRunner.
  */
 public final class RtWorldChecks {
@@ -15,20 +15,15 @@ public final class RtWorldChecks {
 
 
     public static void runAll() {
-        allocatorBasics();
-        allocatorCoalescing();
-        allocatorExhaustion();
         instanceTransform();
         radiusAndOrdering();
         inverseViewProjection();
         cameraBobProjectionParity();
         debugModes();
         skyModel();
-        frameParamsLayout();
         lightingEquation();
         samplingHelpers();
         modeSelection();
-        instanceWriterLayout();
         RtModesChecks.runAll();
     }
 
@@ -47,25 +42,6 @@ public final class RtWorldChecks {
     }
 
 
-    private static void instanceWriterLayout() {
-        long address = org.lwjgl.system.MemoryUtil.nmemAlloc(64);
-        try {
-            float[] transform = new float[12];
-            for (int i = 0; i < transform.length; i++) {
-                transform[i] = i + 0.25f;
-            }
-            RtInstanceWriter.write(address, 0x00ABCDEF, 0xFF, 0x123456789ABCDEFL, transform);
-            for (int i = 0; i < transform.length; i++) {
-                near(transform[i], org.lwjgl.system.MemoryUtil.memGetFloat(address + i * 4L), 0f, "instance transform " + i);
-            }
-            check(org.lwjgl.system.MemoryUtil.memGetInt(address + 48) == (int)0xFFABCDEF, "instance custom index and mask");
-            check(org.lwjgl.system.MemoryUtil.memGetInt(address + 52) == 0x01000000, "instance sbt offset and flags (VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR = 0x1 in bits 24-31)");
-            check(org.lwjgl.system.MemoryUtil.memGetLong(address + 56) == 0x123456789ABCDEFL, "instance blas address");
-        } finally {
-            org.lwjgl.system.MemoryUtil.nmemFree(address);
-        }
-    }
-
     private static void check(boolean cond, String msg) {
         if (!cond) {
             throw new AssertionError(msg);
@@ -76,50 +52,6 @@ public final class RtWorldChecks {
         if (Math.abs(expected - actual) > eps) {
             throw new AssertionError(msg + ": expected " + expected + " actual " + actual);
         }
-    }
-
-    private static void allocatorBasics() {
-        FreeListAllocator a = new FreeListAllocator(4096);
-        long o1 = a.alloc(100, 256);
-        long o2 = a.alloc(300, 256);
-        check(o1 == 0 && o2 == 256, "aligned sequential offsets: " + o1 + "," + o2);
-        check(a.used() == 256 + 512, "used counts rounded sizes: " + a.used());
-        check(a.alloc(1, 256) == 768, "next offset after 256+512");
-    }
-
-    private static void allocatorCoalescing() {
-        FreeListAllocator a = new FreeListAllocator(1024);
-        long x = a.alloc(256, 256);
-        long y = a.alloc(256, 256);
-        long z = a.alloc(256, 256);
-        long w = a.alloc(256, 256);
-        check(a.alloc(1, 256) == -1, "full");
-        a.free(y, 256, 256);
-        a.free(x, 256, 256);
-        check(a.freeRangeCount() == 1, "x and y merged");
-        a.free(w, 256, 256);
-        check(a.freeRangeCount() == 2, "w separate (z still allocated)");
-        a.free(z, 256, 256);
-        check(a.freeRangeCount() == 1 && a.used() == 0, "all merged back");
-        check(a.alloc(1024, 256) == 0, "whole range allocatable again");
-        boolean threw = false;
-        try {
-            a.free(0, 256, 256);
-            a.free(0, 256, 256);
-        } catch (IllegalStateException e) {
-            threw = true;
-        }
-        check(threw, "double free detected");
-    }
-
-    private static void allocatorExhaustion() {
-        FreeListAllocator a = new FreeListAllocator(2100);
-        check(a.alloc(3000, 16) == -1, "larger than capacity");
-        check(a.alloc(10, 512) == 0, "first at 0");
-        check(a.alloc(10, 512) == 512, "second at 512");
-        check(a.alloc(100, 16) == 1024, "third after both, 16-aligned");
-        check(a.alloc(10, 512) == 1536, "aligned to 512 inside the rest");
-        check(a.alloc(10, 512) == -1, "no 512-aligned room left in the 52-byte tail");
     }
 
     private static void instanceTransform() {
@@ -363,32 +295,6 @@ public final class RtWorldChecks {
         near(sunDir[0], (float) (-Math.sin(yr) * Math.cos(pr)), 1e-5f, "aim round trip x");
         near(sunDir[1], (float) (-Math.sin(pr)), 1e-5f, "aim round trip y");
         near(sunDir[2], (float) (Math.cos(yr) * Math.cos(pr)), 1e-5f, "aim round trip z");
-    }
-
-    private static void frameParamsLayout() {
-        RtFrameParams p = new RtFrameParams();
-        p.invViewProj.identity().m30(7f);
-        p.statsAddress = 0x1122334455667788L;
-        p.mode = RtConfig.MODE_LIT;
-        p.aoSamples = 3;
-        p.flipY = true;
-        p.tonemap = true;
-        p.frame = 99;
-        p.key.dir[0] = 0.25f; p.key.dir[1] = 0.5f; p.key.dir[2] = 0.75f; p.key.day = 0.9f;
-        p.key.color[0] = 0.1f; p.key.color[1] = 0.2f; p.key.color[2] = 0.3f;
-        p.skyColor[0] = 0.4f; p.skyColor[1] = 0.5f; p.skyColor[2] = 0.6f;
-        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocateDirect(RtFrameParams.BYTES).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        p.write(b);
-        check(RtFrameParams.BYTES == 128 && RtFrameBindings.PUSH_BYTES == 128, "push constants are 128 bytes");
-        near(1f, b.getFloat(0), 0f, "m00");
-        near(7f, b.getFloat(48), 0f, "m30 in the 13th float (column-major)");
-        check(b.getLong(64) == 0x1122334455667788L, "statsAddr at 64");
-        check(b.getInt(72) == (RtConfig.MODE_LIT | 3 << 8 | 1 << 16 | 1 << 17), "modeBits at 72: " + Integer.toHexString(b.getInt(72)));
-        check(b.getInt(76) == 99, "frame at 76");
-        near(0.5f, b.getFloat(84), 0f, "keyDir.y at 84");
-        near(0.9f, b.getFloat(92), 0f, "day factor in keyDir.w");
-        near(0.3f, b.getFloat(104), 0f, "keyColor.b at 104");
-        near(0.6f, b.getFloat(120), 0f, "skyColor.b at 120");
     }
 
     private static void lightingEquation() {

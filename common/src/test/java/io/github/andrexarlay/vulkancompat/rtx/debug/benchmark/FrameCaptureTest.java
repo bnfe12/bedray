@@ -10,7 +10,7 @@ import com.google.gson.JsonParser;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FrameCaptureTest {
-    private static final FrameCapture.Facts NATIVE = facts(FrameCapture.NATIVE_REQUIRED, "path_trace.ser");
+    private static final FrameCapture.Facts NATIVE = facts(FrameCapture.NATIVE_REQUIRED, "path_trace_scene.ser");
     private static FrameCapture.Facts facts(int flags, String program) {
         return new FrameCapture.Facts(flags, 1920, 1080, 1920, 1080, "path", program, 1, 3, 72, 0,
             "BILINEAR", "none", "UNAVAILABLE", "OFF");

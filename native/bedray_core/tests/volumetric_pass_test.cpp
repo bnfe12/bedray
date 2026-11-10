@@ -12,7 +12,7 @@ bool wrong_binding = false, wrong_push = false, wrong_count = false;
 }
 namespace bedray::core {
 bool program_contract(BedrayCore*, std::uint64_t handle, ProgramContract& out) noexcept {
-    if (handle < 1 || handle > 3) return false;
+    if (handle != 2 && handle != 3) return false;
     out = {wrong_push ? 16u : handle == 3 ? 24u : 96u, wrong_count ? 1u : handle == 3 ? 4u : 5u};
     return true;
 }
@@ -42,7 +42,7 @@ std::vector<unsigned char> bytes(std::uint64_t buffer) {
     if (!fake::buffers.contains(buffer)) { CHECK(false); return {}; }
     return fake::memories.at(fake::buffers.at(buffer).memory).bytes;
 }
-BedrayVolumetricDesc configuration() { return {BEDRAY_CORE_ABI_VERSION, sizeof(BedrayVolumetricDesc), 1, 2, 3, 0, 0}; }
+BedrayVolumetricDesc configuration() { return {BEDRAY_CORE_ABI_VERSION, sizeof(BedrayVolumetricDesc), 0, 2, 3, 0, 0}; }
 struct Input {
     std::array<unsigned char,608> constants{};
     std::array<unsigned char,96> march{};
@@ -50,7 +50,7 @@ struct Input {
     BedrayVolumetricFrameDesc frame{};
     explicit Input(std::uint64_t command = 11, std::uint32_t index = 1) {
         frame = {BEDRAY_CORE_ABI_VERSION, sizeof(frame), command, 200, 201, 202, 203, 64, 128,
-            19, 11, 0, index, constants.data(), 608, 96, march.data(), apply.data(), 24, 0};
+            19, 11, BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE, index, constants.data(), 608, 96, march.data(), apply.data(), 24, 0};
         extent(19, 11);
         put(march, 12, 0.75f); put(march, 28, 64.0f); put(march, 48, 1.1f); put(march, 56, 1.0f);
         put(march, 64, 0.01f); put(march, 68, 8u); put(march, 72, 999u); put(march, 76, 999u);
@@ -69,7 +69,9 @@ void configure_and_frame_validation() {
     fake::reset(); BedrayCore core; BedrayError error{}; bedray::core::VolumetricPass pass;
     auto desc = configuration(); desc.struct_size--;
     CHECK(pass.configure(&core, make_device_fns(), desc, &error) == BEDRAY_ERROR_ABI_MISMATCH);
-    desc = configuration(); desc.program_march_legacy = desc.program_march_scene = 0;
+    desc = configuration(); desc.reserved = 1;
+    CHECK(pass.configure(&core, make_device_fns(), desc, &error) == BEDRAY_ERROR_INVALID_ARGUMENT);
+    desc = configuration(); desc.program_march_scene = 0;
     CHECK(pass.configure(&core, make_device_fns(), desc, &error) == BEDRAY_ERROR_INVALID_ARGUMENT);
     desc = configuration(); desc.program_march_scene = 99;
     CHECK(pass.configure(&core, make_device_fns(), desc, &error) == BEDRAY_ERROR_INVALID_ARGUMENT);
@@ -77,7 +79,7 @@ void configure_and_frame_validation() {
     wrong_count = true; CHECK(pass.configure(&core, make_device_fns(), configuration(), &error) == BEDRAY_ERROR_INVALID_ARGUMENT); wrong_count = false;
     wrong_binding = true; CHECK(pass.configure(&core, make_device_fns(), configuration(), &error) == BEDRAY_ERROR_INVALID_ARGUMENT); wrong_binding = false;
     CHECK(pass.configure(&core, make_device_fns(), configuration(), &error) == BEDRAY_OK);
-    CHECK(pass.uses_program(1) && pass.uses_program(2) && pass.uses_program(3) && !pass.uses_program(0));
+    CHECK(!pass.uses_program(1) && pass.uses_program(2) && pass.uses_program(3) && !pass.uses_program(0));
     auto invalid = [&](auto mutate, BedrayStatus expected = BEDRAY_ERROR_INVALID_ARGUMENT) {
         Input input; mutate(input); CHECK(pass.render(input.frame, &error) == expected);
         CHECK(fake::render_calls.empty()); CHECK(fake::images.empty()); CHECK(fake::buffers.empty()); CHECK(!pass.has_recordings());
@@ -89,6 +91,7 @@ void configure_and_frame_validation() {
     invalid([](auto& i) { i.frame.sections_bytes = 63; });
     invalid([](auto& i) { i.frame.sections_offset = std::numeric_limits<std::uint64_t>::max(); });
     invalid([](auto& i) { i.frame.flags = 4; });
+    invalid([](auto& i) { i.frame.flags = 0; }, BEDRAY_ERROR_UNSUPPORTED);
     invalid([](auto& i) { i.frame.reserved = 1; });
     invalid([](auto& i) { i.frame.frame_constants_bytes = 607; });
     invalid([](auto& i) { i.frame.march_push_bytes = 95; });
@@ -106,7 +109,7 @@ void dispatch_payloads_and_history() {
     CHECK(pass.render(first.frame, &error) == BEDRAY_OK);
     CHECK(fake::images.size() == 1 && fake::buffers.size() == 1 && fake::render_calls.size() == 2 && fake::barriers == 4);
     const auto march = fake::render_calls[0], apply = fake::render_calls[1];
-    CHECK(march.program == 1 && apply.program == 3);
+    CHECK(march.program == 2 && apply.program == 3);
     CHECK(march.group_x == 2 && march.group_y == 1 && apply.group_x == 3 && apply.group_y == 2);
     CHECK(march.resources.size() == 5 && apply.resources.size() == 4 && march.push_bytes == 96 && apply.push_bytes == 24);
     CHECK(get<std::uint32_t>(march.push, 72) == 1 && get<std::uint32_t>(march.push, 76) == 0);
@@ -126,7 +129,7 @@ void dispatch_payloads_and_history() {
     CHECK(std::equal(first.constants.begin(), first.constants.end(), upload.begin()));
     CHECK(pass.destroy() == BEDRAY_ERROR_IN_USE && pass.render(first.frame, &error) == BEDRAY_ERROR_IN_USE);
     CHECK(pass.configure(&core, make_device_fns(), configuration(), &error) == BEDRAY_ERROR_IN_USE);
-    Input second(12, 2); second.frame.flags = BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE;
+    Input second(12, 2);
     CHECK(pass.render(second.frame, &error) == BEDRAY_OK);
     CHECK(fake::buffers.size() == 2); // Pending first upload cannot be overwritten.
     CHECK(fake::render_calls[2].program == 2 && get<std::uint32_t>(fake::render_calls[2].push, 76) == 1);
@@ -134,7 +137,7 @@ void dispatch_payloads_and_history() {
     Input gap(13, 4); CHECK(pass.render(gap.frame, &error) == BEDRAY_OK);
     CHECK(get<std::uint32_t>(fake::render_calls[4].push, 76) == 0);
     CHECK(pass.release_recording(13) == BEDRAY_OK);
-    Input reset(14, 5); reset.frame.flags = BEDRAY_VOLUMETRIC_FRAME_RESET_HISTORY;
+    Input reset(14, 5); reset.frame.flags |= BEDRAY_VOLUMETRIC_FRAME_RESET_HISTORY;
     CHECK(pass.render(reset.frame, &error) == BEDRAY_OK && get<std::uint32_t>(fake::render_calls[6].push, 76) == 0);
     CHECK(pass.release_recording(14) == BEDRAY_OK);
     CHECK(pass.release_recording(999) == BEDRAY_OK && pass.destroy() == BEDRAY_OK); clean();
@@ -172,13 +175,11 @@ void resize_discard_and_failure() {
     CHECK(get<std::uint32_t>(fake::render_calls[fake::render_calls.size()-2].push, 76) == 0);
     CHECK(pass.release_recording(16) == BEDRAY_OK && pass.destroy() == BEDRAY_OK); clean();
 }
-void precommand_upload_failure_and_missing_scene_program() {
+void precommand_upload_failure() {
     fake::reset(); BedrayCore core; BedrayError error{}; bedray::core::VolumetricPass pass;
-    auto config = configuration(); config.program_march_scene = 0;
-    CHECK(pass.configure(&core, make_device_fns(), config, &error) == BEDRAY_OK);
-    Input input; input.frame.flags = BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE;
-    CHECK(pass.render(input.frame, &error) == BEDRAY_ERROR_UNSUPPORTED && fake::images.empty());
-    input.frame.flags = 0; fake::fail_allocate_after = 1; // Image succeeds, 608-byte upload allocation fails.
+    CHECK(pass.configure(&core, make_device_fns(), configuration(), &error) == BEDRAY_OK);
+    Input input;
+    fake::fail_allocate_after = 1; // Image succeeds, 608-byte upload allocation fails.
     CHECK(pass.render(input.frame, &error) == BEDRAY_ERROR_OUT_OF_MEMORY);
     CHECK(!pass.has_recordings() && fake::render_calls.empty() && fake::barriers == 0);
     CHECK(pass.destroy() == BEDRAY_OK); clean();
@@ -198,6 +199,6 @@ void device_loss_waits_for_every_recording_proof() {
 }
 int main() {
     configure_and_frame_validation(); dispatch_payloads_and_history(); resize_discard_and_failure();
-    precommand_upload_failure_and_missing_scene_program(); device_loss_waits_for_every_recording_proof();
+    precommand_upload_failure(); device_loss_waits_for_every_recording_proof();
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

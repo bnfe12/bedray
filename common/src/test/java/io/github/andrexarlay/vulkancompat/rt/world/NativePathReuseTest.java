@@ -52,6 +52,8 @@ class NativePathReuseTest {
         assertEquals(define(header, "BEDRAY_PATH_TRACE_FRAME_PT_SPATIAL"), BedrayCoreLayouts.PATH_TRACE_FRAME_PT_SPATIAL);
         assertEquals(define(header, "BEDRAY_PATH_TRACE_FEATURE_NATIVE_PT"), BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_PT);
         assertEquals(define(header, "BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT"), BedrayCoreLayouts.PATH_TRACE_FEATURE_STATS_SLOT);
+        assertEquals(define(header, "BEDRAY_PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY"),
+            BedrayCoreLayouts.PATH_TRACE_FEATURE_NATIVE_SCENE_ONLY);
     }
 
     @Test
@@ -61,7 +63,7 @@ class NativePathReuseTest {
             "a stale host mirror never reaches the push of a core-owned ring");
         assertTrue(backend.contains("int flags = BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_PT;"));
         assertTrue(backend.contains("if (frame.ptReset()) flags |= BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_PT;"));
-        assertTrue(backend.contains("&& pass.ptSpatialFor(nativeScene))"),
+        assertTrue(backend.contains("&& pass.ptSpatialAvailable())"),
             "the spatial stage only for a table the core has it for, or the core refuses the frame");
         assertTrue(backend.contains("@Override public boolean pathReuseAvailable() { return pass.nativePt(); }"),
             "the settings switch reaches this backend once the core owns a ring");

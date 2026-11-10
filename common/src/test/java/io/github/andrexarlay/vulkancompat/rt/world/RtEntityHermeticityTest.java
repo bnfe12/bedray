@@ -62,13 +62,11 @@ public class RtEntityHermeticityTest {
 
     @Test
     public void testShaderSourceRayMasksAndTransmittanceContract() {
-        String types = read("src/main/resources/shaders/slang/types.slang");
-        assertTrue(types.contains("static const uint MASK_WORLD    = 0x01u;")
-                && types.contains("static const uint MASK_ENTITIES = 0x02u;")
-                && types.contains("static const uint MASK_ALL      = 0x03u;"),
-            "types.slang must define the hermetic mask 0x03 = world | entities");
-
         String scene = read("src/main/resources/shaders/slang/traversal/scene_traversal.slang");
+        assertTrue(scene.contains("static const uint SCENE_INSTANCE_MASK_WORLD    = 0x01u;")
+                && scene.contains("static const uint SCENE_INSTANCE_MASK_ENTITIES = 0x02u;")
+                && scene.contains("static const uint SCENE_INSTANCE_MASK_ALL      = 0x03u;"),
+            "native traversal declares the world and entity masks");
         assertTrue(scene.contains("traceTriangleIntersection(tlas, ray, instanceMask,")
                 && read("src/main/resources/shaders/slang/traversal/triangle_query.slang")
                     .contains("query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);"),
@@ -76,7 +74,7 @@ public class RtEntityHermeticityTest {
         assertTrue(scene.contains("query.TraceRayInline(tlas, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, instanceMask, desc);"),
             "and so does the first-hit visibility walk: one mask for both, no per-call literal");
 
-        String path = read("src/main/resources/shaders/slang/passes/path_trace.slang");
+        String path = read("src/main/resources/shaders/slang/passes/path_trace_scene.slang");
         assertTrue(path.contains("static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;")
                 && path.contains("traversal.instanceMask = PATH_TRACE_INSTANCE_MASK_SCENE;"),
             "the path trace sets the scene mask before any ray leaves, so entities cannot be missed by a shadow ray");

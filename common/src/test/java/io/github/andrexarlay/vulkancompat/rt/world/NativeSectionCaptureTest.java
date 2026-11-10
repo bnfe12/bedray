@@ -37,7 +37,7 @@ class NativeSectionCaptureTest {
         return SodiumMeshDecoder.decode(key, x, y, 0, new ByteBuffer[]{ByteBuffer.allocate(4 * 20), null, null});
     }
     private static NativeSectionCapture capture(Source source, Sink sink) {
-        return new NativeSectionCapture(source, sink, ignored -> null, () -> 0, 1);
+        return new NativeSectionCapture(source, sink, ignored -> null, () -> 0, 1, 100);
     }
 
     @Test void nearestFirstOrderAndQuotaAreDeterministic() {
@@ -75,11 +75,43 @@ class NativeSectionCaptureTest {
         assertEquals(List.of(1L), sink.built);
     }
 
+    @Test void capacityKeepsTheNearestSectionsAndReclaimsSlotsBeforeBuilding() {
+        Source source = new Source();
+        Sink sink = new Sink();
+        source.put(section(1, 0, 0));
+        source.put(section(2, 1, 0));
+        source.put(section(3, 2, 0));
+        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> null, () -> 0, 1, 2);
+        var first = capture.update(0, 0, 0, 2, 2, 1, 1_000);
+        assertEquals(List.of(1L), sink.built);
+        assertEquals(1, first.pending());
+        assertEquals(1, first.omittedByCapacity());
+        capture.update(0, 0, 0, 2, 2, 4, 1_000);
+        assertEquals(List.of(1L, 2L), sink.built);
+
+        sink.failRemoval = true;
+        assertThrows(IllegalStateException.class, () -> capture.update(2, 0, 0, 2, 2, 4, 1_000));
+        assertEquals(List.of(1L, 2L), sink.built);
+        sink.failRemoval = false;
+        var moved = capture.update(2, 0, 0, 2, 2, 4, 1_000);
+        assertEquals(List.of(1L), sink.removed);
+        assertEquals(List.of(1L, 2L, 3L), sink.built);
+        assertEquals(1, moved.omittedByCapacity());
+        List<Long> active = new ArrayList<>();
+        capture.forEach(section -> active.add(section.key));
+        assertEquals(List.of(2L, 3L), active.stream().sorted().toList());
+
+        source.remove(2);
+        var shrunk = capture.update(2, 0, 0, 2, 2, 4, 1_000);
+        assertEquals(0, shrunk.omittedByCapacity());
+        assertEquals(List.of(1L, 2L, 3L, 1L), sink.built);
+    }
+
     @Test void identicalRemeshKeepsHistoryButDifferentTagsRequireAnUpdate() {
         Source source = new Source();
         Sink sink = new Sink();
         int[] flags = {0};
-        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> flags, () -> 0, 0);
+        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> flags, () -> 0, 0, 100);
         source.put(section(1, 0, 0));
         capture.update(0, 0, 0, 2, 2, 4, 1_000);
         DecodedSection replacement = section(1, 0, 0);
@@ -90,7 +122,7 @@ class NativeSectionCaptureTest {
         List<DecodedSection> accepted = new ArrayList<>();
         capture.forEach(accepted::add);
         assertSame(replacement, accepted.getFirst());
-        flags[0] = RtWorld.VEGETATION_BIT;
+        flags[0] = BedraySceneGeometry.VERTEX_FLAG_VEGETATION;
         source.put(section(1, 0, 0));
         assertEquals(1, capture.update(0, 0, 0, 2, 2, 4, 1_000).queued());
         assertEquals(2, capture.structureVersion());
@@ -133,7 +165,7 @@ class NativeSectionCaptureTest {
         Source source = new Source();
         Sink sink = new Sink();
         long[] clock = {0};
-        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> null, () -> clock[0]++, 0);
+        NativeSectionCapture capture = new NativeSectionCapture(source, sink, ignored -> null, () -> clock[0]++, 0, 100);
         source.put(section(1, 0, 0));
         source.put(section(2, 1, 0));
         assertEquals(1, capture.update(0, 0, 0, 4, 4, 8, 1).pending());

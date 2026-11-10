@@ -49,7 +49,7 @@ BedrayResource buffer(std::uint32_t binding, std::uint32_t type,
 VolumetricPass::~VolumetricPass() { (void)destroy(); }
 
 bool VolumetricPass::uses_program(std::uint64_t program) const noexcept {
-    return program && (program == desc_.program_march_legacy || program == desc_.program_march_scene || program == desc_.program_apply);
+    return program && (program == desc_.program_march_scene || program == desc_.program_apply);
 }
 
 BedrayStatus VolumetricPass::gpu_status(gpu::Status status, VkResult vk, BedrayError* error) noexcept {
@@ -73,7 +73,9 @@ BedrayStatus VolumetricPass::configure(BedrayCore* core, const DeviceFns& fns,
     if (has_recordings()) return fail(error, BEDRAY_ERROR_IN_USE, "volumetric recordings pending");
     if (desc.abi_version != BEDRAY_CORE_ABI_VERSION || desc.struct_size != sizeof(desc))
         return fail(error, BEDRAY_ERROR_ABI_MISMATCH, "volumetric ABI/size mismatch");
-    if (!core || !fns.cmd_pipeline_barrier || (!desc.program_march_legacy && !desc.program_march_scene) || !desc.program_apply)
+    if (desc.reserved)
+        return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "volumetric reserved field must be zero");
+    if (!core || !fns.cmd_pipeline_barrier || !desc.program_march_scene || !desc.program_apply)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "volumetric programs/barrier missing");
     auto validate = [&](std::uint64_t program, bool march) {
         ProgramContract contract{};
@@ -86,8 +88,7 @@ BedrayStatus VolumetricPass::configure(BedrayCore* core, const DeviceFns& fns,
             && program_has_binding(core, program, 12, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
             && program_has_binding(core, program, 16, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
     };
-    if ((desc.program_march_legacy && !validate(desc.program_march_legacy, true))
-        || (desc.program_march_scene && !validate(desc.program_march_scene, true)) || !validate(desc.program_apply, false))
+    if (!validate(desc.program_march_scene, true) || !validate(desc.program_apply, false))
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "volumetric program contract mismatch");
     gpu::ImageDeviceContext image_context{};
     image_context.physical_device = fns.physical_device; image_context.device = fns.device;
@@ -140,9 +141,8 @@ BedrayStatus VolumetricPass::render(const BedrayVolumetricFrameDesc& frame, Bedr
         || !frame.frame_constants || frame.frame_constants_bytes != frame_bytes
         || !frame.march_push || frame.march_push_bytes != march_bytes || !frame.apply_push || frame.apply_push_bytes != apply_bytes)
         return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "invalid volumetric frame");
-    const bool native_scene = (frame.flags & BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE) != 0;
-    const auto march_program = native_scene ? desc_.program_march_scene : desc_.program_march_legacy;
-    if (!march_program) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "volumetric section layout has no matching march program");
+    if (!(frame.flags & BEDRAY_VOLUMETRIC_FRAME_NATIVE_SCENE))
+        return fail(error, BEDRAY_ERROR_UNSUPPORTED, "volumetric requires a native scene table");
     if (recordings_.contains(frame.command_buffer)) return fail(error, BEDRAY_ERROR_IN_USE, "volumetric command pending");
     std::array<unsigned char, frame_bytes> constants{};
     std::array<unsigned char, march_bytes> march{};
@@ -202,7 +202,7 @@ BedrayStatus VolumetricPass::render(const BedrayVolumetricFrameDesc& frame, Bedr
         buffer(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frame.sections, frame.sections_offset, frame.sections_bytes),
         history_resource, depth_resource, frame_resource};
     BedrayFrameDesc call{};
-    call.abi_version = BEDRAY_CORE_ABI_VERSION; call.command_buffer = frame.command_buffer; call.program = march_program;
+    call.abi_version = BEDRAY_CORE_ABI_VERSION; call.command_buffer = frame.command_buffer; call.program = desc_.program_march_scene;
     call.group_count_x = (history_view_.width - 1) / 8 + 1;
     call.group_count_y = (history_view_.height / 2 - 1) / 8 + 1; call.group_count_z = 1;
     call.resources = march_resources.data(); call.resource_count = static_cast<std::uint32_t>(march_resources.size());

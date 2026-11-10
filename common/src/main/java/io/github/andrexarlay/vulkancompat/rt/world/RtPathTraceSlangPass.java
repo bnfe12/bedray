@@ -21,11 +21,10 @@ import org.slf4j.LoggerFactory;
 import java.nio.ByteBuffer;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 /**
- * Host side of {@code passes/path_trace.slang}: owns the radiance output, the frame-constant upload and the dummy
+ * Host side of {@code passes/path_trace_scene.slang}: owns the radiance output, the frame-constant upload and the dummy
  * block-material table, and records one compute dispatch into the caller's command buffer.
  *
  * <p>Driven by {@link RtSlangPathPass}, which plugs it into the frame as the Path Tracing pass. The host contract (eighteen
@@ -34,10 +33,8 @@ import java.util.Set;
  * passed to every {@link #record}: the TLAS is rebuilt as chunks change, and depth goes straight into the renderer's
  * {@code rt_depth}, which the composite and bloom already read.
  *
- * <p>Geometry comes from the TLAS and the 64-byte-per-slot section table {@link RtWorld} already builds; the shader
- * dereferences the planar arena through device addresses. The core inserts no barriers, so the caller keeps the
- * synchronization it had with the legacy {@code rt_path.comp} path; the pass leaves its two outputs in
- * {@code GENERAL} behind a full memory barrier.
+ * <p>Geometry comes from the TLAS and the native scene's 64-byte section table. The shader resolves the geometry through device
+ * addresses. The pass leaves its outputs in {@code GENERAL} behind a full memory barrier.
  *
  * <p>Vulkan images, mapped buffers, upload pooling and deferred destruction are owned by C++. This adapter packs
  * Minecraft data and supplies borrowed scene resources. Lifecycle: create after the {@link SlangRuntime},
@@ -48,15 +45,9 @@ import java.util.Set;
 final class RtPathTraceSlangPass implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
 
-    static final String PASS_NAME = "path_trace";
-    /** Native-scene twin of {@link #PASS_NAME}: same bindings, {@code GeometrySection} table and vertex stream. */
-    static final String SCENE_PASS_NAME = "path_trace_scene";
-    /**
-     * The ReSTIR PT spatial stage, one program per traversal backend like the trace itself: the same bindings by number
-     * and the same push block, so it is recorded from this pass's own views and push bytes.
-     */
-    static final String PT_SPATIAL_PASS_NAME = "restir_pt_spatial";
-    static final String PT_SPATIAL_SCENE_PASS_NAME = "restir_pt_spatial_scene";
+    static final String PASS_NAME = "path_trace_scene";
+    static final String PT_SPATIAL_PASS_NAME = "restir_pt_spatial_scene";
+
     static final int FRAME_CONSTANTS_BYTES = 608;
     /** Mirrors {@code PATH_TRACE_MAX_SPP}: the ceiling of "Rays per Pixel", and the most rays one pixel may trace. */
     static final int MAX_SAMPLES_PER_PIXEL = 8;
@@ -213,12 +204,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         new Expected("ptReservoirs", BedrayCoreLayouts.DESCRIPTOR_TYPE_STORAGE_BUFFER));
 
     /** Scene inputs the host must supply: the frame TLAS and the section table written by {@link RtWorld}. */
-    record Scene(long tlas, RtMemory.Buf sectionTable) {
-        /** True when the table is {@code bedray_scene}'s 64-byte record and needs {@link #SCENE_PASS_NAME}. */
-        boolean nativeScene() {
-            return sectionTable != null && sectionTable.sceneOwned;
-        }
-    }
+    record Scene(long tlas, RtFrameBindings.SectionTable sectionTable) {}
 
     /**
      * Atlas inputs. One sampler serves all three views: the legacy pipeline uses a nearest, clamp, level-0 sampler for
@@ -386,7 +372,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     }
 
     /**
-     * The 112-byte push block of {@code passes/path_trace.slang}: path limits, sampling inputs, the emitter list of the
+     * The 112-byte push block of {@code passes/path_trace_scene.slang}: path limits, sampling inputs, the emitter list of the
      * frame, the ReSTIR DI temporal state, the ray profile's bounce ranges and the entity ring of this frame. Exposure is not
      * here on purpose: the pass writes scene-referred radiance and the display step applies {@code FrameConstants.exposure}
      * exactly once.
@@ -646,11 +632,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     private final VkDevice device;
     private final SlangRuntime runtime;
     private final SlangProgram program;
-    /** Native-scene twin, or null when this jar was built without its artifact. */
-    private final SlangProgram sceneProgram;
-    /** The ReSTIR PT spatial programs for the two tables; null when the jar lacks one or its manifest disagrees. */
     private final SlangProgram ptSpatialProgram;
-    private final SlangProgram ptSpatialSceneProgram;
     private final BedrayGpuImagesNative nativeImages;
     private final BedrayGpuBuffersNative nativeBuffers;
     private final BedrayGpuBuffersNative.Buffer blockMaterials;
@@ -688,22 +670,10 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         }
         this.device = device;
         this.runtime = runtime;
-        Optional<SlangProgram> pass = SlangTracePrograms.select(runtime, PASS_NAME);
-        if (pass.isEmpty()) {
-            throw new IllegalStateException("missing Slang pass " + PASS_NAME);
-        }
-        this.program = pass.get();
+        this.program = SlangTracePrograms.select(runtime, PASS_NAME)
+            .orElseThrow(() -> new IllegalStateException("missing Slang pass " + PASS_NAME));
         requireManifest(program);
-        // Optional: only a jar that compiled the native-scene entry point can trace
-        // the bedray_scene table. Without it the host keeps the Java scene.
-        Optional<SlangProgram> scene = SlangPassLibrary.available(SCENE_PASS_NAME)
-            ? SlangTracePrograms.select(runtime, SCENE_PASS_NAME) : Optional.empty();
-        this.sceneProgram = scene.orElse(null);
-        if (sceneProgram != null) {
-            requireManifest(sceneProgram);
-        }
         this.ptSpatialProgram = optionalPtSpatial(runtime, PT_SPATIAL_PASS_NAME);
-        this.ptSpatialSceneProgram = sceneProgram == null ? null : optionalPtSpatial(runtime, PT_SPATIAL_SCENE_PASS_NAME);
         long deviceBytes = runtime.capabilities().deviceMemoryBytes();
         long imageBudget = deviceBytes > 0 ? Math.min(1L << 30, deviceBytes / 8) : 256L << 20;
         nativeImages = runtime.createImageOwner(imageBudget);
@@ -761,21 +731,6 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             new BufferView(entityScalarDummy.handle(), 0L, entityScalarDummy.size()), 0, 0, 0);
     }
 
-    /** The core program handle the native pass configures itself with. */
-    long programHandle() {
-        return program.nativeHandle();
-    }
-
-    /** The native-scene program handle, or 0 when this jar has no {@code path_trace_scene}. */
-    long sceneProgramHandle() {
-        return sceneProgram == null ? 0L : sceneProgram.nativeHandle();
-    }
-
-    /** True when a section table marked {@link RtMemory.Buf#sceneOwned} can be dispatched. */
-    boolean hasSceneProgram() {
-        return sceneProgram != null;
-    }
-
     /** This frame's primary-surface displacement image, as the display pass has to read it under its own binding name. */
     long motionView() {
         return motion == null ? 0L : motion.view();
@@ -813,7 +768,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (scene.tlas() == 0L) {
             throw new IllegalArgumentException("path trace needs a TLAS");
         }
-        if (scene.sectionTable() == null || scene.sectionTable().handle == 0L) {
+        if (scene.sectionTable() == null) {
             throw new IllegalArgumentException("path trace needs the RtWorld section table");
         }
         if (atlases.sampler() == 0L || atlases.albedoView() == 0L || atlases.materialView() == 0L
@@ -907,10 +862,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             // Track before the dispatch: if recording fails midway, the command buffer still holds a native descriptor
             // pool that has to be released on the discard path.
             recordings.add(cmd.address());
-            // The legacy and native tables are different layouts, so the program
-            // follows the table the host actually bound, not a global switch.
-            SlangProgram active = activeProgram(scene);
-            active.dispatch(cmd.address(), active.groups(width, 0), active.groups(height, 1), 1,
+            program.dispatch(cmd.address(), program.groups(width, 0), program.groups(height, 1), 1,
                 resources(scene, atlases, emitters, reservoirs, wantsPt ? ptReservoirs : Reservoirs.NONE, entities,
                     boundGuides, boundMotion, depthView, pathStats), push);
         }
@@ -929,9 +881,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         return SlangProgram.Resource.uniformBuffer("frame", frameConstants.handle(), 0, FRAME_CONSTANTS_BYTES);
     }
 
-    /** True when the spatial stage has a program for the table this frame traced. */
-    boolean ptSpatialAvailable(Scene scene) {
-        return (scene.nativeScene() ? ptSpatialSceneProgram : ptSpatialProgram) != null;
+    boolean ptSpatialAvailable() {
+        return ptSpatialProgram != null;
     }
 
     /**
@@ -945,9 +896,9 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("path trace pass is closed");
         }
-        SlangProgram spatial = scene.nativeScene() ? ptSpatialSceneProgram : ptSpatialProgram;
+        SlangProgram spatial = ptSpatialProgram;
         if (spatial == null) {
-            throw new IllegalStateException("the ReSTIR PT spatial stage has no program for this table");
+            throw new IllegalStateException("the ReSTIR PT spatial stage is unavailable");
         }
         if ((dispatch.flags() & OPTION_RESTIR_PT) == 0) {
             throw new IllegalArgumentException("the spatial stage pools the temporal stage's records: OPTION_RESTIR_PT is clear");
@@ -961,10 +912,10 @@ final class RtPathTraceSlangPass implements AutoCloseable {
             throw new IllegalStateException("the spatial stage records after this frame's trace, in its command buffer");
         }
         Entities captured = entities == null ? Entities.NONE : entities;
-        RtMemory.Buf table = scene.sectionTable();
+        var table = scene.sectionTable();
         List<SlangProgram.Resource> resources = List.of(
             SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
-            SlangProgram.Resource.storageBuffer("sections", table.handle, 0, table.size),
+            SlangProgram.Resource.storageBuffer("sections", table.handle(), 0, table.bytes()),
             SlangProgram.Resource.sampled("albedoAtlas", atlases.albedoView(), atlases.sampler()),
             SlangProgram.Resource.sampled("materialAtlas", atlases.materialView(), atlases.sampler()),
             SlangProgram.Resource.sampled("normalAtlas", atlases.normalView(), atlases.sampler()),
@@ -987,26 +938,15 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         VkBarriers.fullMemoryBarrier(cmd);
     }
 
-    private SlangProgram activeProgram(Scene scene) {
-        if (!scene.nativeScene()) {
-            return program;
-        }
-        if (sceneProgram == null) {
-            throw new IllegalStateException("the native scene table needs Slang pass " + SCENE_PASS_NAME
-                + ", which this jar did not compile");
-        }
-        return sceneProgram;
-    }
-
-    String traceProgramName(boolean nativeScene) {
-        return nativeScene ? (sceneProgram == null ? "" : sceneProgram.name()) : program.name();
+    String traceProgramName() {
+        return program.name();
     }
 
     private List<SlangProgram.Resource> resources(Scene scene, Atlases atlases, Emitters emitters,
                                                    Reservoirs reservoirs, Reservoirs ptReservoirs, Entities entities,
                                                    Guides guides, BufferView nrdMotion, long depthView,
                                                    BufferView pathStats) {
-        RtMemory.Buf table = scene.sectionTable();
+        var table = scene.sectionTable();
         // An empty list still needs a descriptor. The dummy table is 64 B, so the fallback range is clamped to it: the
         // shader never indexes past pc.emitterCount, which is 0 for exactly this case.
         long emitterBuffer = emitters != null && emitters.buffer() != 0L ? emitters.buffer() : blockMaterials.handle();
@@ -1028,7 +968,7 @@ final class RtPathTraceSlangPass implements AutoCloseable {
         return List.of(
             SlangProgram.Resource.accelerationStructure("tlas", scene.tlas()),
             SlangProgram.Resource.storageImage("outImage", radiance.view()),
-            SlangProgram.Resource.storageBuffer("sections", table.handle, 0, table.size),
+            SlangProgram.Resource.storageBuffer("sections", table.handle(), 0, table.bytes()),
             SlangProgram.Resource.sampled("albedoAtlas", atlases.albedoView(), atlases.sampler()),
             SlangProgram.Resource.storageImage("outMotion", motion.view()),
             SlangProgram.Resource.sampled("materialAtlas", atlases.materialView(), atlases.sampler()),

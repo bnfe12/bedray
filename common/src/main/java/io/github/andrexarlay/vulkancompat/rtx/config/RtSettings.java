@@ -105,8 +105,6 @@ public final class RtSettings {
     public static boolean rtDistanceAuto = true;
     /** Manual RT distance in chunks (sections) when {@link #rtDistanceAuto} is off. */
     public static int rtDistanceChunks = 8;
-    /** GPU memory for BLAS + geometry; above it the farthest sections are not built (nearest first). */
-    public static int vramBudgetMb = 2048;
     /** Angular diameter of the sun/moon disk for soft shadows, tenths of a degree (5 = 0.5 deg = the real sun; 14 = a widened artistic disk, 1.4 deg: a visible but still crisp penumbra). */
     public static int sunSizeTenths = 5;
     /** Tilt of the sun/moon/star arc towards the south in degrees (0 = vanilla: sun through the zenith, no noon shadows). */
@@ -291,7 +289,6 @@ public final class RtSettings {
         bool("auto_normals", () -> autoNormals, v -> autoNormals = v);
         bool("rt_distance_auto", () -> rtDistanceAuto, v -> rtDistanceAuto = v);
         integer("rt_distance_chunks", () -> rtDistanceChunks, v -> rtDistanceChunks = v, 2, 32);
-        integer("rt_vram_budget_mb", () -> vramBudgetMb, v -> vramBudgetMb = v, 256, 16384);
         integer("sun_size_tenths", () -> sunSizeTenths, v -> sunSizeTenths = v, 1, 50);
         integer("sun_tilt_deg", () -> sunTiltDeg, v -> sunTiltDeg = v, 0, 45);
         integer("baked_light_fill_pct", () -> bakedLightFillPct, v -> bakedLightFillPct = v, 0, 100);
@@ -482,7 +479,6 @@ public final class RtSettings {
     public static boolean autoNormalsOn() { return b("auto_normals"); }
     public static boolean rtDistanceAuto() { return b("rt_distance_auto"); }
     public static int rtDistanceChunks() { return i("rt_distance_chunks"); }
-    public static int vramBudgetMb() { return i("rt_vram_budget_mb"); }
     public static int lightBudget() { return i("rt_light_budget"); }
     /** Angular radius of the sun/moon disk in radians. */
     public static float sunRadiusRad() { return (float) Math.toRadians(i("sun_size_tenths") / 20.0); }
@@ -921,7 +917,6 @@ public final class RtSettings {
         w.write("# RT distance: as in game (render distance) or manual chunks; BLAS memory budget (MB); sun disk diameter (0.1 deg)\n");
         w.write("rt_distance_auto = " + rtDistanceAuto + "\n");
         w.write("rt_distance_chunks = " + rtDistanceChunks + "\n");
-        w.write("rt_vram_budget_mb = " + vramBudgetMb + "\n");
         w.write("sun_size_tenths = " + sunSizeTenths + "\n");
         w.write("# tilt of the sun/moon arc towards the south in degrees (0 = vanilla: the sun passes the zenith, no noon shadows)\n");
         w.write("sun_tilt_deg = " + sunTiltDeg + "\n");

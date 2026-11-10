@@ -70,7 +70,7 @@ DLSS Ray Reconstruction; a missing library falls back to accumulation and the lo
 
 ### Expert (only with `-Dvkrtx.ui.expert=true` or `ui_expert = true` in `bedray.toml`)
 
-Adds a group **Expert: Numbers** (RT memory budget, light budget, sun size, auto-normal strength, manual RT distance, LOD bias
+Adds a group **Expert: Numbers** (light budget, sun size, auto-normal strength, manual RT distance, LOD bias
 offset, effect tuning such as bloom threshold and light shaft range, fog in-scattering, FSR version), the **Ray Tracing (Fast,
 experimental)** group, the RT debug buffer view, and shows FSR 1 / NIS in the Upscaler list. Without the flag these options keep their
 stored values; four of them are **forced on** (see below).

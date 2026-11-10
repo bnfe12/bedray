@@ -50,7 +50,6 @@ class RtFrameStatsTest {
         + "RtFrameRenderer.java");
     private static final Path EXPOSURE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtExposure.java");
-    private static final Path BINDINGS = Path.of("src/main/resources/shaders/slang/bindings.slang");
 
     /** The range the shader clamps to, read from its own source so the literals below cannot drift. */
     private static double shaderFloor() throws IOException {
@@ -126,26 +125,10 @@ class RtFrameStatsTest {
 
     /**
      * The counter pass reaches the slot as four raw words, so its index {@code i} has to be the field the host reads at
-     * offset {@code 4*i} and the field a shader reads by name through {@code FrameStats.load()}. The test that compared
-     * the whole slot parsed the GLSL declaration and went with the legacy pipeline; this one pins the head, which is
-     * the part the meter writes. The rest of the slot is unpinned again.
+     * offset {@code 4*i}.
      */
     @Test
-    void theMeteredWordsAreTheHeadOfBothMirrors() throws IOException {
-        String slang = read(BINDINGS);
-        int struct = slang.indexOf("struct FrameStats {");
-        assertTrue(struct >= 0, "the Slang mirror of the frame slot is gone");
-        String body = slang.substring(slang.indexOf('{', struct) + 1, slang.indexOf("};", struct));
-        List<String> declared = new ArrayList<>();
-        for (String line : body.split("\n")) {
-            String field = line.trim();
-            if (field.isEmpty() || field.startsWith("//")) {
-                continue;
-            }
-            declared.add(field.replaceAll("\\s+", " "));
-        }
-        assertEquals(List.of("uint hits;", "uint samples;", "uint lumLogSum;", "uint histAccepted;"),
-            declared.subList(0, 4), "the words the counter pass adds into are the words the shader names");
+    void theMeteredWordsAreTheHeadOfTheHostSlot() {
         List<RtStatsLayout.Member> head = RtStatsLayout.members().subList(0, 4);
         assertEquals(List.of("hits", "samples", "lumLogSum", "histAccepted"),
             head.stream().map(RtStatsLayout.Member::name).toList(), "and the Java mirror agrees, in order");

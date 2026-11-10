@@ -8,7 +8,7 @@
 // own radiance, the running mean's sample count and the primary hit distance. It adds no new image and no new work per
 // pixel beyond a sixteenth of the screen.
 //
-//   0 radiance RGBA16F storage image, read  (path_trace.slang outImage: rgb = this frame's linear mean, a = 0 rejects)
+//   0 radiance RGBA16F storage image, read  (path_trace_scene.slang outImage: rgb = this frame's linear mean, a = 0 rejects)
 //   1 accum    RGBA32F storage image, read  (path_display.slang: rgb running mean, a the count behind it)
 //   2 depth    R32F    storage image, read  (rt_depth: the primary ray's hit distance, or the miss sentinel)
 //   3 stats    RWStructuredBuffer<uint>, write (stats[0..3] = hits, samples, lumLogSum, histAccepted; the host binds
