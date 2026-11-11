@@ -83,7 +83,9 @@ typedef enum BedraySceneStatus {
     BEDRAY_SCENE_ERROR_IN_USE = 8,
     BEDRAY_SCENE_ERROR_STALE = 9,
     BEDRAY_SCENE_ERROR_UNKNOWN_ID = 10,
-    BEDRAY_SCENE_ERROR_LIMIT = 11
+    BEDRAY_SCENE_ERROR_LIMIT = 11,
+    /* Shared allocator pressure. prepare_frame returns it only before recording GPU commands. */
+    BEDRAY_SCENE_ERROR_BUDGET = 12
 } BedraySceneStatus;
 
 /*

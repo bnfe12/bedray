@@ -111,7 +111,7 @@ bool create_buffer_impl(
         if (allocated != bedray::gpu::Status::ok) {
             scene.fns.destroy_buffer(scene.device, handle, nullptr);
             const auto status = allocated == bedray::gpu::Status::device_lost ? BEDRAY_SCENE_ERROR_DEVICE_LOST
-                : allocated == bedray::gpu::Status::budget_exceeded ? BEDRAY_SCENE_ERROR_LIMIT
+                : allocated == bedray::gpu::Status::budget_exceeded ? BEDRAY_SCENE_ERROR_BUDGET
                 : allocated == bedray::gpu::Status::out_of_memory ? BEDRAY_SCENE_ERROR_OUT_OF_MEMORY : BEDRAY_SCENE_ERROR_VULKAN;
             if (status == BEDRAY_SCENE_ERROR_DEVICE_LOST) mark_failed(scene, status, "shared allocator device lost");
             const auto stats = scene.memory->stats();

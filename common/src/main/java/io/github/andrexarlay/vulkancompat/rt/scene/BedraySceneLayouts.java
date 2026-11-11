@@ -44,6 +44,7 @@ public final class BedraySceneLayouts {
     public static final int STATUS_STALE = 9;
     public static final int STATUS_UNKNOWN_ID = 10;
     public static final int STATUS_LIMIT = 11;
+    public static final int STATUS_BUDGET = 12;
 
     /** {@code BedraySceneCapability} bits; the first two are required by the DLL. */
     public static final int CAP_ACCELERATION_STRUCTURE = 1 << 0;

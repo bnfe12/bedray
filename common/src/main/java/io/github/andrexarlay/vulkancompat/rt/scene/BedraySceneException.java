@@ -41,6 +41,7 @@ public final class BedraySceneException extends RuntimeException {
             case BedraySceneLayouts.STATUS_STALE -> "STALE";
             case BedraySceneLayouts.STATUS_UNKNOWN_ID -> "UNKNOWN_ID";
             case BedraySceneLayouts.STATUS_LIMIT -> "LIMIT";
+            case BedraySceneLayouts.STATUS_BUDGET -> "BUDGET";
             default -> "status " + status;
         };
     }

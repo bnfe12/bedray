@@ -658,6 +658,25 @@ void cleanup_plan(Scene& scene, PreparePlan& plan) {
     }
 }
 
+// Called only while preparation is still a CPU/allocation transaction. No recorded prefix is reusable after
+// record_frame begins, so later failures keep the existing poison/discard policy.
+BedraySceneStatus refuse_prepared_plan(Scene& scene, PreparePlan& plan, BedraySceneError* error) {
+    cleanup_plan(scene, plan);
+    if (error->status == BEDRAY_SCENE_ERROR_BUDGET) {
+        // Keep the closest coverage and enough hysteresis that the next selection does not immediately
+        // refill the same rejected set. Pending admissions count too, since this plan allocated them together.
+        const size_t count = scene.sections.size();
+        const size_t trim = std::max<size_t>(1, count / 8u);
+        const auto next = static_cast<uint32_t>(std::max<size_t>(1, count - std::min(count, trim)));
+        scene.pressure_section_limit = std::min(scene.pressure_section_limit, next);
+        scene.budget_eviction_pending = true;
+        const size_t used = std::strlen(error->message);
+        std::snprintf(error->message + used, BEDRAY_SCENE_ERROR_MESSAGE_BYTES - used,
+            " pressure_section_limit=%u sections_before=%zu", scene.pressure_section_limit, count);
+    }
+    return error->status;
+}
+
 bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, BedraySceneError* error) {
     plan.jobs.reserve(scene.sections.size() + scene.entities.size());
 
@@ -2271,7 +2290,26 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_select_section
     });
 
     // Reserve the entity capacity even when the captured aggregate is absent.
-    const size_t capacity = std::min(impl.desc.max_sections, impl.desc.max_instances - impl.desc.max_entities);
+    const size_t capacity = std::min({impl.desc.max_sections,
+        impl.desc.max_instances - impl.desc.max_entities, impl.pressure_section_limit});
+    if (impl.budget_eviction_pending) {
+        // Removal retires resources through the existing frame/TLAS references. The host drains prior
+        // submissions after the rejected, unaccepted prepare before returning here.
+        std::vector<std::pair<uint64_t, uint64_t>> farthest;
+        farthest.reserve(impl.sections.size());
+        for (const auto& [id, section] : impl.sections) {
+            (void)section;
+            const auto found = impl.candidates.find(id);
+            if (found == impl.candidates.end()) continue;
+            const auto d = distance(found->second, selection->margin);
+            if (d != UINT64_MAX) farthest.emplace_back(d, id);
+        }
+        std::sort(farthest.begin(), farthest.end(), [](const auto& a, const auto& b) {
+            return a.first != b.first ? a.first > b.first : a.second > b.second;
+        });
+        const size_t trim = farthest.size() - std::min(farthest.size(), capacity);
+        for (size_t i = 0; i < trim; ++i) removed.push_back(farthest[i].second);
+    }
     // The configured chunk budget applies to chunk geometry, including pending retirement.
     // Atlas, entity and per-frame allocations still contribute to reported scene memory.
     const auto budget = selection->budget_bytes;
@@ -2304,6 +2342,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_select_section
         if (status != BEDRAY_SCENE_OK) return status;
         impl.pressure_retire_after = impl.last_frame_index;
     }
+    impl.budget_eviction_pending = false;
 
     size_t projected = impl.sections.size();
     uint64_t headroom = available_bytes();
@@ -2421,28 +2460,20 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
     PreparePlan plan;
     bool tlas_changed = false;
     try {
-        if (!plan_geometry_jobs(impl, plan, tlas_changed, err)) {
-            cleanup_plan(impl, plan);
-            return err->status;
-        }
+        if (!plan_geometry_jobs(impl, plan, tlas_changed, err))
+            return refuse_prepared_plan(impl, plan, err);
         if (impl.membership_changed) {
             tlas_changed = true;
         }
         plan_section_slots(impl, plan);
         plan_instances(impl, plan);
         plan_section_records(impl, plan);
-        if (!plan_uploads(impl, plan, err)) {
-            cleanup_plan(impl, plan);
-            return err->status;
-        }
-        if (!plan_tlas(impl, plan, *slot, tlas_changed, err)) {
-            cleanup_plan(impl, plan);
-            return err->status;
-        }
-        if (!plan_blas_scratch(impl, plan, err)) {
-            cleanup_plan(impl, plan);
-            return err->status;
-        }
+        if (!plan_uploads(impl, plan, err))
+            return refuse_prepared_plan(impl, plan, err);
+        if (!plan_tlas(impl, plan, *slot, tlas_changed, err))
+            return refuse_prepared_plan(impl, plan, err);
+        if (!plan_blas_scratch(impl, plan, err))
+            return refuse_prepared_plan(impl, plan, err);
 
         record_frame(impl, plan, *slot,
             reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(desc->command_buffer)));
