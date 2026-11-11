@@ -189,8 +189,8 @@ class RtSlangRestirDiTest {
             + " receiver);"),
             "one estimator, fed with the merged weight sum and the merged M - reuse means reusing the accumulation too");
         assertTrue(reuse.contains("current = mergeReservoirs(current, history, evaluation.targetPdf,")
-            && reuse.contains("RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed)"),
-            "the import is capped by the ratio, so one bright history cannot swallow this frame's draws");
+            && reuse.contains("RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed, true)"),
+            "the import is capped by the ratio, so one bright history cannot swallow this frame's draws, and a blocked history still counts its draws (countEmpty)");
         String entry = read(ENTRY);
         assertTrue(entry.contains("lights.emittersReusedAtPrimary = directReuse.enabled != 0u;"),
             "with the reservoir on, the composite stops drawing the emitter branch a second time at the primary vertex");

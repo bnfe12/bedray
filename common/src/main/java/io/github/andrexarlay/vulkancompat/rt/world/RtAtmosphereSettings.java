@@ -33,7 +33,7 @@ public final class RtAtmosphereSettings {
     private static volatile int godRayRange = (int) clamp(num("vkrtx.rt.godrays.range", 160), 32, 256);
     private static volatile boolean bloom = flag("vkrtx.rt.bloom", true);
     private static volatile float bloomStrength = (float) clamp(num("vkrtx.rt.bloom.strength", 0.25), 0, 2);
-    private static volatile float bloomThreshold = (float) clamp(num("vkrtx.rt.bloom.threshold", 6.0), 0.5, 10);
+    private static volatile float bloomThreshold = (float) clamp(num("vkrtx.rt.bloom.threshold", 4.0), 0.5, 10);
     private static volatile float bloomScatter = (float) clamp(num("vkrtx.rt.bloom.scatter", 0.62), 0.3, 0.95);
     private static volatile boolean sunGlare = flag("vkrtx.rt.sunglare", true);
     private static volatile float sunGlareStrength = (float) clamp(num("vkrtx.rt.sunglare.strength", 1.0), 0, 2);

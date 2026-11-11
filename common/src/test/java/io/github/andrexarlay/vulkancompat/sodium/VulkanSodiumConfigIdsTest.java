@@ -70,7 +70,7 @@ public class VulkanSodiumConfigIdsTest {
         // The Bedray screen builds its rows by walking SettingsCatalog, so an option without a catalog row is invisible to
         // the player (no name, no tooltip, never listed). Buttons carry their own label and need no catalog entry.
         List<String> invisible = counts.keySet().stream().map(Identifier::getPath)
-            .filter(p -> !p.startsWith("reset_") && !p.endsWith("_open") && !p.equals("copy_diagnostics"))
+            .filter(p -> !p.startsWith("reset_") && !p.endsWith("_open") && !p.equals("copy_diagnostics") && !p.equals("bedrock_rtx_import"))
             .filter(p -> SettingsCatalog.get(p) == null).sorted().toList();
         assertTrue(invisible.isEmpty(), "registered options with no catalog row (unreachable in the Bedray screen): " + invisible);
     }

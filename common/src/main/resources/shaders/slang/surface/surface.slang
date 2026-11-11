@@ -112,10 +112,19 @@ struct MaterialSamplingOptions {
     uint  flags;              // MATERIAL_SAMPLING_FLAG_*
 };
 
+// Mirror of EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN in light/block_emitters.slang (which imports this module, so the constant
+// cannot be shared); RtSlangEmissionConsistencyTest keeps the two equal.
+static const float SURFACE_EMISSION_GAIN = 6.6;
+
 MaterialSamplingOptions defaultMaterialSamplingOptions() {
     MaterialSamplingOptions options;
     options.alphaCutoff = 0.5;
-    options.emissionScale = 1.0;
+    // An emitter looks as bright as the light it sends: block_emitters.slang lights the scene with the texel colour times
+    // EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN (3.0 * 2.2), while the face itself was shown at 1.0 - a torch flame read as a
+    // plain pixel texture beside the pool of light it cast, and never crossed the bloom threshold (owner comparison with
+    // Bedrock RTX, 2026-11-11). Diffuse bounces still take emitters through NEE only (pathSeesEmission), so the
+    // brighter face is seen by the eye, mirrors and glossy paths without being counted twice.
+    options.emissionScale = SURFACE_EMISSION_GAIN;
     options.normalStrength = 1.0;
     options.autoNormalStrength = 0.0;
     options.portalTime = 0.0;

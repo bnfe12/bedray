@@ -149,8 +149,8 @@ class RtRestirSettingsTest {
         assertTrue(settings.contains("public static boolean pathRestirPt() { return b(\"path_restir_pt\"); }"),
             "the override-aware getter the controller reads");
         String pass = read(SLANG_PASS);
-        assertTrue(pass.contains("return !rayMode && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();"),
-            "the controller asks only the path profile, only a backend with a ring, only under direct-light reuse");
+        assertTrue(pass.contains("return !rayMode && !ptOutOfMemory && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();"),
+            "the controller asks only the path profile, only a backend with a ring that fitted in VRAM, only under direct-light reuse");
         String ui = read(UI);
         assertTrue(ui.contains("boolOpt(builder, \"path_restir_pt\", false, v -> RtSettings."), "a row, off by default");
         assertRowNeedsParent(ui, "path_restir_pt", "path_restir_di");

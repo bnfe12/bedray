@@ -148,9 +148,18 @@ void reservoirAddSample(inout DIReservoir reservoir, LightSample candidate, inou
 // must be evaluated at the *current* receiver; the stored PDF in
 // `incoming.sample.w` is the one from the original receiver.
 DIReservoir mergeReservoirs(DIReservoir current, DIReservoir incoming,
-        float incomingTargetPdf, float ratioCap, float mCap, inout uint seed) {
+        float incomingTargetPdf, float ratioCap, float mCap, inout uint seed, bool countEmpty = false) {
     float incomingM = min(incoming.stats.x, mCap);
     if (incomingM <= 0.0) return current;
+    // A history record whose sample was traced blocked carries weight 0 (reuseConfirm). Its M is still the number of
+    // draws that record stands for, and those draws contributed nothing: dropping the M with the weight made a pixel
+    // with history ignore its own occluded attempts and read brighter than a pixel without history - the straight-edged
+    // "mask" a fast turn drags in from the screen border (owner screenshots 2026-11-11, gone with ReSTIR DI off). The
+    // temporal merge (same surface) counts them; a spatial neighbour's blocked sample says nothing about this pixel.
+    if (countEmpty && !(incoming.stats.y > 0.0)) {
+        current.stats.x += incomingM;
+        return current;
+    }
 
     float ratio = clamp(incomingTargetPdf / max(incoming.sample.w, RESTIR_DI_MIN_PDF),
                         0.0, ratioCap);
@@ -234,7 +243,7 @@ DIReservoir restirDiTemporal<S : ILightSampler>(S sampler,
     if (!evaluation.valid || evaluation.targetPdf <= 0.0) return current;
 
     DIReservoir merged = mergeReservoirs(current, history, evaluation.targetPdf,
-        ratioCap, mCap, seed);
+        ratioCap, mCap, seed, true);
     merged.source.y = min(merged.source.y + 1u, 0xFFFFu);
     return merged;
 }

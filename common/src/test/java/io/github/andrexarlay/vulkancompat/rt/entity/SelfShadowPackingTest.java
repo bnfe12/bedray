@@ -38,8 +38,9 @@ class SelfShadowPackingTest {
     }
 
     @Test
-    void theDefaultKeepsTheBodyShadowWithoutTheBlotUnderfoot() {
-        assertEquals(RtSettings.SELF_SHADOW_NO_FOOTPRINT, RtSettings.selfShadow);
+    void theDefaultIsTheFullBodyShadow() {
+        // NO_FOOTPRINT cut a 1.2-block disc out of the player's shadow under the feet (owner screenshots 2026-11-11).
+        assertEquals(RtSettings.SELF_SHADOW_FULL, RtSettings.selfShadow);
     }
 
     @Test

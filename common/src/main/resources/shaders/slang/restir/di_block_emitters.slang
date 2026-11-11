@@ -98,7 +98,8 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
         return false;
     }
     DIReservoir stored = reservoirs[slot];
-    if (!(min(stored.stats.x, RESTIR_DI_M_CAP) > 0.0) || !(stored.stats.y > 0.0) || !isFinite(stored.sample.xyz)
+    // A record whose sample was traced blocked keeps its draws with weight 0: it is loaded so the temporal merge can count them.
+    if (!(min(stored.stats.x, RESTIR_DI_M_CAP) > 0.0) || !(stored.stats.y >= 0.0) || !isFinite(stored.stats.y) || !isFinite(stored.sample.xyz)
         || !isFinite(stored.receiver.xyz)) {
         return false;
     }
@@ -216,7 +217,7 @@ struct BlockEmitterDiSampler : IReuseSampler {
                 LightEvaluation evaluation = emitters().evaluateTarget(receiver, historySample);
                 if (evaluation.valid && evaluation.targetPdf > 0.0) {
                     current = mergeReservoirs(current, history, evaluation.targetPdf,
-                        RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed);
+                        RESTIR_DI_TEMPORAL_RATIO_CAP, RESTIR_DI_M_CAP, seed, true);
                     // Age even when the roulette kept the batch winner: the lane counts the frames this pixel's
                     // reservoir has survived, which is what a stale-history debug read needs.
                     current.source.y = min(current.source.y + 1u, 0xFFFFu);
