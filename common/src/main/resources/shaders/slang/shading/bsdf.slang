@@ -3,7 +3,7 @@
 // The shading model is intentionally small and explicit:
 //
 //   * a Lambert diffuse lobe for dielectric / rough surfaces
-//   * a GGX specular lobe for metals and dielectric reflections
+//   * a GGX specular lobe, or an ideal mirror, for metals and dielectric reflections
 //   * a diffuse transmission lobe for thin translucent panes
 //   * a Fresnel-selected specular transmission lobe for optical interfaces
 //
@@ -60,6 +60,13 @@ float3 bsdfF0(MaterialSample material) {
     return materialIsMetal(material) ? material.albedo : material.f0;
 }
 
+// A mirror is a discrete event in all three BSDF operations.  Keeping the
+// existing threshold shared prevents finite-angle NEE/PDF from evaluating a
+// narrow GGX peak that the continuation path instead treats as delta.
+bool bsdfSpecularIsDelta(MaterialSample material) {
+    return material.roughness <= 1.0e-3;
+}
+
 // The diffuse reflection the sampler's reflection branch carries, times pi: the reflection albedo after the view-angle
 // share the interface took ((1 - F(N.V)), the legacy-parity factor bsdfEvaluate keeps too).  One formula for the
 // sampler's weight and for ReSTIR PT's resolve, which shades a reused direction with the same lobe; two copies would
@@ -83,21 +90,16 @@ float bsdfSpecularProbability(MaterialSample material, float3 V, float3 N) {
     return clamp(fresnel, 0.04, 0.96);
 }
 
-// f * cos(theta) for reflection (diffuse + GGX).  Transmission is handled by
-// bsdfSample; NEE only asks about directions on the receiver's side, so a
-// light behind a pane cannot contribute direct radiance through this call.
+// f * cos(theta) for finite-angle reflection (diffuse + non-delta GGX).
+// Delta reflection and transmission are handled by bsdfSample.  NEE only asks
+// about directions on the receiver's side, so a light behind a pane cannot
+// contribute direct radiance through this call.
 float3 bsdfEvaluate(MaterialSample material, float3 V, float3 N, float3 L) {
     float NdotL = dot(N, L);
     if (NdotL <= 0.0) return float3(0.0);
 
     float NdotV = max(dot(N, V), 1.0e-4);
-    float3 H = safeNormalize(V + L, N);
-    float NdotH = max(dot(N, H), 0.0);
-    float VdotH = max(dot(V, H), 0.0);
-    float alpha = max(material.roughness * material.roughness, 1.0e-4);
-
     float3 f0 = bsdfF0(material);
-    float3 fresnel = fresnelSchlick(VdotH, f0);
     float3 fresnelView = fresnelSchlick(NdotV, f0);
     // Legacy parity: the diffuse lobe keeps the view-angle factor (1 - F(N.V)).
     // That is not strictly Helmholtz-reciprocal because the factor does not
@@ -109,6 +111,13 @@ float3 bsdfEvaluate(MaterialSample material, float3 V, float3 N, float3 L) {
     float3 diffuse = optical ? float3(0.0)
         : bsdfReflectionAlbedo(material) * (float3(1.0) - fresnelView) * INV_PI;
 
+    if (bsdfSpecularIsDelta(material)) return diffuse * NdotL;
+
+    float3 H = safeNormalize(V + L, N);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+    float alpha = max(material.roughness * material.roughness, 1.0e-4);
+    float3 fresnel = fresnelSchlick(VdotH, f0);
     float distribution = ggxNDF(NdotH, alpha);
     float geometry = ggxSmithG2(NdotV, max(NdotL, 1.0e-4), alpha);
     float3 specular = distribution * geometry * fresnel /
@@ -117,9 +126,9 @@ float3 bsdfEvaluate(MaterialSample material, float3 V, float3 N, float3 L) {
     return (diffuse + specular) * NdotL;
 }
 
-// Solid-angle density of bsdfSample for direction L.  A delta optical
-// transmission has no finite density and returns 0; the path tracer uses
-// BSDFSample.delta instead of asking for its pdf.
+// Solid-angle density of bsdfSample for direction L.  Delta reflection and
+// transmission have no finite density; only the remaining continuous lobes
+// contribute here.  The path tracer checks BSDFSample.delta for delta samples.
 float bsdfPdf(MaterialSample material, float3 V, float3 N, float3 L) {
     float NdotL = dot(N, L);
     float specularProbability = bsdfSpecularProbability(material, V, N);
@@ -141,7 +150,7 @@ float bsdfPdf(MaterialSample material, float3 V, float3 N, float3 L) {
             ? max(1.0 - material.transmission, 0.0) : 1.0;
         pdf += (1.0 - specularProbability) * diffuseFraction * cosinePdf(N, L);
     }
-    if (specularProbability > 0.0) {
+    if (specularProbability > 0.0 && !bsdfSpecularIsDelta(material)) {
         pdf += specularProbability *
             ggxReflectionPdf(V, N, L, material.roughness);
     }
@@ -165,6 +174,20 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float inciden
     bool chooseSpecular = rand01(seed) < specularProbability;
 
     if (chooseSpecular) {
+        if (bsdfSpecularIsDelta(material)) {
+            result.valid = true;
+            result.delta = true;
+            result.direction = safeNormalize(reflect(-V, N), N);
+            // The ideal lobe has no GGX angular density or masking term.
+            // Its discrete selection probability is still divided out.
+            result.weight = fresnelSchlick(NdotV, bsdfF0(material))
+                / max(specularProbability, 1.0e-6);
+            result.pdf = 1.0;
+            result.eta = 1.0;
+            result.lobe = BSDF_LOBE_SPECULAR;
+            return result;
+        }
+
         float alpha = max(material.roughness * material.roughness, 1.0e-4);
         float3 tangent;
         float3 bitangent;
@@ -193,7 +216,7 @@ BSDFSample bsdfSample(MaterialSample material, float3 V, float3 N, float inciden
         float geometry1 = ggxSmithG1(NdotV, alpha);
 
         result.valid = true;
-        result.delta = material.roughness <= 1.0e-3;
+        result.delta = false;
         result.direction = L;
         // Each branch carries only its own lobe, so `weight` is that lobe's
         // f*cos over its sampling density: the selection probability times the

@@ -10,3 +10,5 @@ The user requested implementation without tests during this work. No new game, s
 
 
 The follow-up implements adaptive local normal filtering, unresolved-normal roughness compensation and resolution/FOV-aware water footprints. Independent source review found no remaining static blocker. The new image and performance result remains uncaptured.
+
+The next source pass makes ideal-mirror reflection consistent across sampling, direct-light evaluation and the mixture PDF. At the existing roughness <= 1e-3 threshold, continuation now uses the exact mirror direction and finite-angle NEE no longer evaluates a narrow GGX specular peak. The intended effect is to remove this source of unstable mirror highlights and overlapping celestial contribution; a matching capture is still required to establish the visible result. Smooth dielectric diffuse lighting remains present. No build, test, shader compilation, game run or deployment was performed for this pass.
