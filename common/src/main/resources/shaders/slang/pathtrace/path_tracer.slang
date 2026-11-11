@@ -228,6 +228,8 @@ struct PathTraceOptions {
     float pixelShadowCell;
     uint  frameIndex;
     uint  sampleWord;
+    // Within-frame stratum, independent of the absolute frame/sample word. Foliage keeps this disc point over time.
+    uint  sampleStratum;
     // The range the host collected this frame's emitter list over, in blocks.  The list only holds emitters within this
     // reach of the camera, so past `emitterListRange - EMITTER_RADIUS` it is no longer complete for a receiver and the
     // distant handover starts.  0 is an older host and keeps the whole ray far plane.
@@ -261,6 +263,7 @@ PathTraceOptions defaultPathTraceOptions() {
     options.pixelShadowCell = 0.0;
     options.frameIndex = 0u;
     options.sampleWord = 0u;
+    options.sampleStratum = 0u;
     options.emitterListRange = 0.0;
     options.indirectMaxLuminance = 0.0;
     options.emitterNeeAvailable = false;
@@ -508,11 +511,27 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         shadowPosition = pathPixelShadowOrigin(traversal, position, shadowNormal, options.rayBias,
             surface.hit.worldPosition, options.pixelShadowCell);
     }
+    float3 shadowDirection = lightDirection;
+    float shadowDistance = light.distance;
+    if (!beam.valid && light.kind == LightKind.Emitter) {
+        // A finite light keeps its sampled endpoint when the receiver origin moves (normal bias or pixel snapping).
+        // `light.position` already includes the emitter's end bias; shortening it again would cut off nearby blockers.
+        float3 toEndpoint = light.position - (shadowPosition + shadowNormal * options.rayBias);
+        float endpointDistance = length(toEndpoint);
+        if (isFinite(endpointDistance) && endpointDistance > max(options.rayBias, 1.0e-5)) {
+            shadowDirection = toEndpoint / endpointDistance;
+            // The visibility wrapper subtracts the origin bias from this argument.
+            shadowDistance = endpointDistance + options.rayBias;
+        } else {
+            // A snapped cell at the light endpoint cannot define a segment; retain the original receiver's ray.
+            shadowPosition = position;
+        }
+    }
     SurfaceVisibility shadow = beam.valid
         ? traceShadowBeam(traversal, atlas, blockMaterials, shadowPosition, shadowNormal, lightDirection,
             light.distance, options.rayBias, materialOptions, medium, beam)
         : traceShadowVisibilityMedium(traversal, atlas, blockMaterials, shadowPosition, shadowNormal,
-            lightDirection, light.distance, options.rayBias, materialOptions, medium);
+            shadowDirection, shadowDistance, options.rayBias, materialOptions, medium);
     if ((shadow.flags & SURFACE_VISIBILITY_FLAG_OVERFLOW) != 0u) {
         pathFlags |= PATH_TRACE_FLAG_VISIBILITY_OVERFLOW;
     }
@@ -842,6 +861,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
 
         // ---- Next-event estimation ----
         LightReceiver receiver = lightReceiver(hit.position, normal, surface.material.emissionMask);
+        receiver.geometricNormal = geometricNormal;
         receiver.skyLight = hit.light.y;
         // Only the pixel's own first surface owns the screen-space record; a deeper vertex would write someone else's
         // receiver into it and drag that light across the screen.
@@ -864,7 +884,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         if (receiver.foliage) {
             receiver.stableSun = true;
             receiver.sunSeed = pathTraceSunSeed(pathTraceFoliageSunCell(surface.hit.worldPosition), 0u,
-                options.sampleWord);
+                options.sampleStratum);
         } else if (options.pixelShadowCell > 0.0) {
             bool cellShadow = receiver.primary && !medium.inside
                 && (surface.hit.flags & HIT_FLAG_ENTITY) == 0u;

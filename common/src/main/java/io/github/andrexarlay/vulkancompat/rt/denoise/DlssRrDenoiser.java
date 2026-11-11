@@ -747,6 +747,7 @@ public final class DlssRrDenoiser {
             inSpecularHitDistance.image, inSpecularHitDistance.view, FMT_R32F, width, height,
             VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
 
+        // The primary producer and motion pass use sample offsets +J; NGX/SL consume the de-jitter offset -J.
         float sdkJitterX = jitterPixelsX * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignX();
         float sdkJitterY = jitterPixelsY * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignY();
         DlssRrParams.EvalInfo eval = new DlssRrParams.EvalInfo(

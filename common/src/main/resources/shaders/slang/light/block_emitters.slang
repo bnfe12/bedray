@@ -537,15 +537,16 @@ struct SunAndBlockEmitterSampler : ILightSampler {
     SunMoonSampler keyLight;
     BlockEmitterSampler emitters;
     float emitterProbability;
-    // Probability of drawing the key light at a receiver the vanilla sky light calls indoor (sky light 0).  In a closed
-    // room every key-light ray ends on the ceiling; at the primary vertex (where the reservoir owns the emitters and the
-    // key light had the whole density) that was a full shadow walk per pixel for nothing - 2026-11-08 torch-room audit.
+    // Probability of drawing the key light at a secondary receiver with vanilla sky light 0. Closed rooms can skip
+    // most ceiling-blocked secondary walks, while their first visible surface retains stable key-light sampling.
+    // Keep roulette on secondary vertices. A primary without a key-light reservoir needs a sample every frame:
+    // seven missing draws followed by an eightfold contribution make openings pulse at low sample counts.
     // The sample is divided by this probability, so a sun ray through an opening far away still counts.
     static const float INDOOR_KEY_LIGHT_PROBABILITY = 0.125;
     static const float INDOOR_SKY_LIGHT = 0.5 / 15.0;
 
     float indoorKeyLightProbability(LightReceiver receiver) {
-        return receiver.skyLight < INDOOR_SKY_LIGHT ? INDOOR_KEY_LIGHT_PROBABILITY : 1.0;
+        return !receiver.primary && receiver.skyLight < INDOOR_SKY_LIGHT ? INDOOR_KEY_LIGHT_PROBABILITY : 1.0;
     }
 
     LightSample sampleKeyLightIndoorAware(LightReceiver receiver, inout uint seed) {
@@ -580,7 +581,7 @@ struct SunAndBlockEmitterSampler : ILightSampler {
             }
             return sampleKeyLightIndoorAware(receiver, seed);
         }
-        // Indoors (vanilla sky light 0) the key-light share shrinks the same way as in the single-branch draw, and the
+        // At secondary indoor vertices the key-light share shrinks the same way as in the single-branch draw, and the
         // emitters get the rest; each branch divides by its own probability, so the sum stays unbiased.
         float keyShare = (1.0 - emitterProbability) * indoorKeyLightProbability(receiver);
         float emitterShare = 1.0 - keyShare;

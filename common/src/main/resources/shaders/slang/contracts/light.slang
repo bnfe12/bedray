@@ -51,6 +51,7 @@ struct LightEvaluation {
 struct LightReceiver {
     float3 position;
     float3 normal;      // shading normal, already flipped to the ray side
+    float3 geometricNormal; // oriented face normal for plane validation; never replaces the BSDF normal
     float  emission;    // the receiver's own emissive mask; >= 0.5 is a light face
     bool   primary;     // this is the primary hit of the pixel that owns the reservoir
     float3 motion;      // this surface's own displacement: where it stood last frame minus where it is now, in
@@ -80,6 +81,7 @@ LightReceiver lightReceiver(float3 position, float3 normal, float emission) {
     LightReceiver receiver;
     receiver.position = position;
     receiver.normal = normal;
+    receiver.geometricNormal = normal;
     receiver.emission = emission;
     // Conservative default: a caller that wants its surface served from the reservoir opts in explicitly.
     receiver.primary = false;

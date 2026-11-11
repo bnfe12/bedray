@@ -24,11 +24,10 @@ public final class DlssConfig {
     public static final String JITTER_SIGN_X_PROPERTY = "vkbridge.dlss.jitterSignX";
     public static final String JITTER_SIGN_Y_PROPERTY = "vkbridge.dlss.jitterSignY";
     /**
-     * Jitter sign of DLSS Ray Reconstruction, measured separately from DLSS-SR ({@code -Dvkbridge.dlss.rr.jitterSignX/Y}).
-     * Static torch room at 2560x1440, 10 consecutive shots (2026-11-07): with (+1,+1) the whole RR output wobbled in a
-     * repeating cycle of up to 2 px, mostly vertical (owner: "lights and shadows jerk in a circle"); (+1,-1) gave 0.004 px
-     * of shift, frame-to-frame difference 3.01 -> 0.31 (edges 9.95 -> 0.71) and a slightly sharper image. The RR guides are
-     * written y-down while NGX expects the jitter y the other way.
+     * Conversion from the Slang primary ray's sample offset to NGX de-jitter offset
+     * ({@code -Dvkbridge.dlss.rr.jitterSignX/Y}). Rays sample pixel + 0.5 + J in image coordinates; NGX receives -J
+     * on both axes, as in NVIDIA's vk_gltf_renderer DlssFeature::cmdEvaluate. Motion reconstruction still uses raw +J.
+     * The historical (+1,-1) observation does not establish this producer/consumer convention; see the shader audit.
      */
     public static final String RR_JITTER_SIGN_X_PROPERTY = "vkbridge.dlss.rr.jitterSignX";
     public static final String RR_JITTER_SIGN_Y_PROPERTY = "vkbridge.dlss.rr.jitterSignY";
@@ -84,12 +83,12 @@ public final class DlssConfig {
         return signProperty(JITTER_SIGN_Y_PROPERTY, 1.0f);
     }
 
-    /** Ray Reconstruction jitter sign X (measured: +1). */
+    /** NGX de-jitter is the negative of the primary ray's image-space sample offset. */
     public static float rrJitterSignX() {
-        return signProperty(RR_JITTER_SIGN_X_PROPERTY, 1.0f);
+        return signProperty(RR_JITTER_SIGN_X_PROPERTY, -1.0f);
     }
 
-    /** Ray Reconstruction jitter sign Y (measured: -1, see RR_JITTER_SIGN_X_PROPERTY). */
+    /** Same conversion on the image-space Y axis. */
     public static float rrJitterSignY() {
         return signProperty(RR_JITTER_SIGN_Y_PROPERTY, -1.0f);
     }

@@ -25,8 +25,8 @@ import "light/block_emitters.slang";
 import "restir/restir_di.slang";
 import "surface/surface.slang";
 
-// Receiver validation, the legacy bounds: a stationary camera may keep a history whose receiver distance differs by
-// 5% + 0.1 blocks and whose normal turned by up to ~53 degrees; a moving camera has to prove the match, so both tighten.
+// Receiver validation: the distance band is 5% + 0.1 blocks. Shading-normal agreement is stricter on a stationary camera
+// (~37 degrees) than while moving (~53 degrees); geometric plane membership is independent of that normal-map detail.
 static const float DI_DISTANCE_TOLERANCE_RELATIVE = 0.05;
 static const float DI_DISTANCE_TOLERANCE_ABSOLUTE = 0.1;
 static const float DI_PLANE_TOLERANCE_RELATIVE = 0.003;
@@ -90,7 +90,7 @@ bool diReprojectReceiver(float3 receiverPosition, float3 cameraDelta, float4x4 p
 // past the cut-off.  The light point of an accepted record is rebased into *this* frame, so the record written after the
 // merge describes the frame it was written in.
 bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel, uint2 size, uint parity,
-        float3 previousReceiver, float previousDistance, float3 receiverNormal, bool cameraStatic,
+        float3 previousReceiver, float previousDistance, float3 receiverNormal, float3 receiverGeometricNormal, bool cameraStatic,
         float3 cameraDelta, inout DIReservoir history) {
     history = emptyReservoir();
     uint slot = diReservoirSlot(historyPixel, size, parity ^ 1u);
@@ -117,7 +117,8 @@ bool diLoadHistory(RWStructuredBuffer<DIReservoir> reservoirs, int2 historyPixel
     // the face one step below passed them.  Parallel faces differ along the normal by the step height at any distance.
     float planeTolerance = min(DI_PLANE_TOLERANCE_RELATIVE * max(previousDistance, 1.0) + DI_PLANE_TOLERANCE_ABSOLUTE,
         DI_PLANE_TOLERANCE_MAX);
-    if (abs(dot(stored.receiver.xyz - previousReceiver, receiverNormal)) > planeTolerance) {
+    // A normal-map tilt is not a different plane: tangential jitter on the same wall must not reject its history.
+    if (abs(dot(stored.receiver.xyz - previousReceiver, receiverGeometricNormal)) > planeTolerance) {
         return false;
     }
     float normalDot = dot(reservoirReceiverNormal(stored), receiverNormal);
@@ -208,7 +209,7 @@ struct BlockEmitterDiSampler : IReuseSampler {
                 flipY != 0u, previousReceiver, previousDistance, historyPixel);
             DIReservoir history = emptyReservoir();
             if (onScreen && diLoadHistory(reservoirs, historyPixel, size, parity, previousReceiver, previousDistance,
-                    normalize(receiver.normal), cameraStatic != 0u, cameraDelta, history)) {
+                    normalize(receiver.normal), normalize(receiver.geometricNormal), cameraStatic != 0u, cameraDelta, history)) {
                 LightSample historySample = reservoirLightSample(history, receiver.position);
                 // Target-only: the import's source pdf multiplies the radiance in blockEmitterEstimateSample and divides
                 // it again in pathTraceDirectTerm, so the light-tree walk that computed it cancelled out exactly.

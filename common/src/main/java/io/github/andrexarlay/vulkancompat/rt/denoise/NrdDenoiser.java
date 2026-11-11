@@ -88,6 +88,8 @@ public final class NrdDenoiser {
     private double prevX;
     private double prevY;
     private double prevZ;
+    private float prevJitterX;
+    private float prevJitterY;
     private final Matrix4f nrdProjection = new Matrix4f();
     private final Matrix4f nrdProjectionPrev = new Matrix4f();
     private final Matrix4f effectiveRotation = new Matrix4f();
@@ -201,6 +203,7 @@ public final class NrdDenoiser {
     /** Clear native temporal history on the next recorded frame after a transport/settings change. */
     public void resetHistory() {
         restartNext = true;
+        havePrev = false;
     }
 
     private void fillResources() {
@@ -286,15 +289,15 @@ public final class NrdDenoiser {
     /** As above with the tone mapping exposure of the compose pass (1.1 = RtLighting.EXPOSURE of the ray mode). */
     public void record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f viewRotation, double camX, double camY, double camZ,
                        boolean tonemap, float exposure) {
-        record(cmd, projection, projection, viewRotation, camX, camY, camZ, tonemap, exposure, 0f, 0f, 0f, 0f);
+        record(cmd, projection, projection, viewRotation, camX, camY, camZ, tonemap, exposure, 0f, 0f);
     }
 
     public void record(VkCommandBuffer cmd, Matrix4f projection, Matrix4f fullProjection, Matrix4f viewRotation,
                        double camX, double camY, double camZ, boolean tonemap, float exposure,
-                       float jitterX, float jitterY, float jitterPrevX, float jitterPrevY) {
+                       float jitterX, float jitterY) {
         prepare(cmd);
         buildFrameSettings(projection, fullProjection, viewRotation, camX, camY, camZ,
-            jitterX, jitterY, jitterPrevX, jitterPrevY);
+            jitterX, jitterY);
         frame.write(frameSettingsSeg);
         nat.setFrameSettings(handle, frameSettingsSeg);
 
@@ -320,6 +323,8 @@ public final class NrdDenoiser {
         prevX = camX;
         prevY = camY;
         prevZ = camZ;
+        prevJitterX = jitterX;
+        prevJitterY = jitterY;
         logWindow();
     }
 
@@ -327,7 +332,7 @@ public final class NrdDenoiser {
 
     private void buildFrameSettings(Matrix4f projection, Matrix4f fullProjection, Matrix4f viewRotation,
                                     double camX, double camY, double camZ,
-                                    float jitterX, float jitterY, float jitterPrevX, float jitterPrevY) {
+                                    float jitterX, float jitterY) {
         CameraBobPose.effectiveWorldToView(fullProjection, projection, viewRotation, effectiveRotation);
         boolean flip = DenoiserConfig.PROJ_FLIP_Y;
         if (flip) {
@@ -351,8 +356,9 @@ public final class NrdDenoiser {
         frame.worldToView.set(effectiveRotation);
         frame.jitter[0] = jitterX;
         frame.jitter[1] = jitterY;
-        frame.jitterPrev[0] = havePrev ? jitterPrevX : jitterX;
-        frame.jitterPrev[1] = havePrev ? jitterPrevY : jitterY;
+        // The prior jitter belongs to the same recorded history as the prior pose, not to a global upscaler sequence.
+        frame.jitterPrev[0] = havePrev ? prevJitterX : jitterX;
+        frame.jitterPrev[1] = havePrev ? prevJitterY : jitterY;
         frame.frameIndex = frameCounter;
         long nowNs = System.nanoTime();
         frame.timeDeltaMs = lastFrameNs == 0L ? 0.0f : Math.min(250.0f, (nowNs - lastFrameNs) / 1.0e6f);

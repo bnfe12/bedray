@@ -1355,21 +1355,14 @@ public final class RtFrameRenderer {
                 try {
                     // The frame's own exposure, decided once above: the pack's tonemap and the path display cannot diverge.
                     float composeExposure = params.exposure;
-                    boolean nrdJittered = io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isJitterActive()
-                        && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isActive()
-                        && io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.isScalingActive();
-                    float nrdJitterX = nrdJittered
-                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterX() : 0.0f;
-                    float nrdJitterY = nrdJittered
-                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getCurrentPixelJitterY() : 0.0f;
-                    float nrdJitterPrevX = nrdJittered
-                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getPrevPixelJitterX() : 0.0f;
-                    float nrdJitterPrevY = nrdJittered
-                        ? io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.getPrevPixelJitterY() : 0.0f;
+                    if (!(pass instanceof RtSlangPathPass slang))
+                        throw new IllegalStateException("NRD jitter requires the current Slang primary producer");
+                    float nrdJitterX = slang.guideFrame().jitter.x;
+                    float nrdJitterY = slang.guideFrame().jitter.y;
                     NrdDenoiser owner = denoiser;
                     owner.record(cmd, camera.projectionMatrix, frameProjection, camera.viewRotationMatrix,
                         camera.pos.x, camera.pos.y, camera.pos.z, params.tonemap, composeExposure,
-                        nrdJitterX, nrdJitterY, nrdJitterPrevX, nrdJitterPrevY);
+                        nrdJitterX, nrdJitterY);
                     frameColorTemporallyResolved = true;
                     VkBarriers.fullMemoryBarrier(cmd);
                 } catch (NrdException e) {

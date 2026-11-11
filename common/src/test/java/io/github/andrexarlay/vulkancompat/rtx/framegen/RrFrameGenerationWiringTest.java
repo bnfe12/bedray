@@ -38,10 +38,10 @@ class RrFrameGenerationWiringTest {
         assertTrue(rr.contains("new VelocityPipeline.Jitter(jitterPixelsX, jitterPixelsY,"));
         assertTrue(rr.contains("reset ? jitterPixelsX : previousPrimaryJitterX"));
         assertTrue(rr.indexOf("previousPrimaryJitterX = jitterPixelsX") > rr.indexOf("rr.evaluate("));
-        // RR has its own measured jitter signs (2026-11-07: +1/+1 made the RR output wobble in a 2 px cycle; +1/-1 is still).
+        // RR rays use pixel + 0.5 + J; both NGX de-jitter offsets therefore use -J, separate from raster SR.
         assertTrue(rr.contains("jitterPixelsX * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignX()"));
         assertTrue(rr.contains("jitterPixelsY * io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignY()"));
-        assertEquals(1.0f, io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignX());
+        assertEquals(-1.0f, io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignX());
         assertEquals(-1.0f, io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssConfig.rrJitterSignY());
         String fg = source("rtx/framegen/FrameGenRuntime");
         assertTrue(fg.contains("int VIEWPORT = 1;"));

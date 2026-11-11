@@ -551,6 +551,7 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
         uint sampleWord = pc.sampleIndex * sampleCount + s;
         uint seed = pathTraceSeed(p, f.frame.x, sampleWord);
         options.sampleWord = sampleWord;
+        options.sampleStratum = s;
         // The reservoir is one record per pixel per frame, so only the first ray reads, merges and publishes it. The
         // rest shade the same emitter list with plain next-event estimation, and every write of the reservoir - the
         // publish, the occlusion decay, the empty record - is gated on reuseActive(), so turning it off here cannot
