@@ -56,7 +56,10 @@ struct Feature {
     NVSDK_NGX_Parameter* params = nullptr;
     bool usable = false; // Failed creation and retirement are release-only.
     bool is_rr = false;
+    bool is_nr = false;
     uint32_t roughness_mode = 0;
+    uint32_t nr_width = 0;
+    uint32_t nr_height = 0;
 };
 
 struct State {
@@ -601,6 +604,7 @@ VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const Vkb
     Feature* f = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
     if (s.features.find(f) == s.features.end()) return fail(VKB_DLSS_ERR_INVALID_ARG, "unknown feature handle");
     if (!f->usable) return fail(VKB_DLSS_ERR_INVALID_ARG, "feature is release-only");
+    if (f->is_nr) return fail(VKB_DLSS_ERR_INVALID_ARG, "feature handle belongs to DLSS Neural Rendering");
     if (f->is_rr) return fail(VKB_DLSS_ERR_INVALID_ARG, "feature handle belongs to DLSS-RR, use vkb_dlss_rr_evaluate");
 
     NVSDK_NGX_Resource_VK color = toResource(info->color);
@@ -631,6 +635,103 @@ VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const Vkb
     NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSS_EXT(reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(cmd)),
                                                       f->handle, f->params, &ep);
     if (NVSDK_NGX_FAILED(r)) return failNgx("NGX_VULKAN_EVALUATE_DLSS_EXT", r);
+    return VKB_DLSS_OK;
+    API_CATCH()
+}
+
+// ID and keys verified against the NVIDIA-signed 310.8 Vulkan runtime. The public NGX
+// SDK has generic feature dispatch but does not publish Neural Rendering-specific helpers.
+static constexpr NVSDK_NGX_Feature kNeuralRendering = static_cast<NVSDK_NGX_Feature>(18);
+
+VKB_DLSS_API int32_t vkb_dlss_nr_create(uint64_t cmd, uint32_t width, uint32_t height, uint64_t* outFeature) {
+    API_TRY
+    if (outFeature) *outFeature = 0;
+    if (!cmd || !width || !height || !outFeature)
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-NR] invalid creation arguments");
+    State& s = st();
+    std::lock_guard<std::recursive_mutex> lk(s.mutex);
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
+
+    Feature* f = registerFeature(s, outFeature);
+    f->is_nr = true;
+    NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_AllocateParameters(&f->params);
+    if (NVSDK_NGX_FAILED(r)) return failNgx("[DLSS-NR] AllocateParameters", r);
+    if (!f->params) return fail(VKB_DLSS_ERR_NGX, "[DLSS-NR] AllocateParameters returned null");
+    f->params->Set("CreationNodeMask", 1u);
+    f->params->Set("VisibilityNodeMask", 1u);
+    f->params->Set("DLSSNR.Enabled", 1u);
+    f->params->Set("DLSSNR.Width", width);
+    f->params->Set("DLSSNR.Height", height);
+    f->params->Set("DLSSNR.Hint.Render.Preset", 0u);
+    f->params->Set("DLSSNR.Intensity", 1.0f);
+    f->params->Set("DLSSNR.Style", 0u);
+    f->params->Set("DLSSNR.LocalStructureStrength", 1.0f);
+    f->params->Set("DLSSNR.LocalToneStrength", 1.0f);
+    f->params->Set("DLSSNR.SkinStructureStrength", -1.0f);
+    f->params->Set("DLSSNR.UseAutoMask", 1u);
+    f->nr_width = width;
+    f->nr_height = height;
+    r = NVSDK_NGX_VULKAN_CreateFeature1(s.device, reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(cmd)),
+                                       kNeuralRendering, f->params, &f->handle);
+    if (NVSDK_NGX_FAILED(r)) return failNgx("[DLSS-NR] CreateFeature1", r);
+    if (!f->handle) return fail(VKB_DLSS_ERR_NGX, "[DLSS-NR] CreateFeature1 returned no feature");
+    f->usable = true;
+    return VKB_DLSS_OK;
+    API_CATCH()
+}
+
+VKB_DLSS_API int32_t vkb_dlss_nr_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalInfo* info, float intensity) {
+    API_TRY
+    if (!cmd || !feature || !info || info->struct_size != sizeof(VkbDlssEvalInfo)
+        || !(intensity >= 0.f && intensity <= 1.f))
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-NR] invalid evaluate arguments");
+    State& s = st();
+    std::lock_guard<std::recursive_mutex> lk(s.mutex);
+    if (!s.initialised || s.shuttingDown) return fail(VKB_DLSS_ERR_NOT_INITIALIZED, "NGX unavailable or retiring");
+    Feature* f = reinterpret_cast<Feature*>(static_cast<uintptr_t>(feature));
+    if (s.features.find(f) == s.features.end() || !f->usable || !f->is_nr)
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-NR] invalid or retired feature");
+    const uint32_t width = f->nr_width;
+    const uint32_t height = f->nr_height;
+    for (const VkbDlssImage* image : {&info->color, &info->depth, &info->motion_vectors, &info->output}) {
+        if (!image->image || !image->view || image->width != width || image->height != height)
+            return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-NR] missing image or mismatched input-grid extent");
+    }
+    if (info->color.image == info->output.image || info->depth.image == info->output.image
+        || info->motion_vectors.image == info->output.image
+        || info->color.format != VK_FORMAT_R16G16B16A16_SFLOAT
+        || info->output.format != VK_FORMAT_R16G16B16A16_SFLOAT || !info->output.read_write)
+        return fail(VKB_DLSS_ERR_INVALID_ARG, "[DLSS-NR] requires separate RGBA16F color and writable output");
+
+    auto color = toResource(info->color);
+    auto depth = toResource(info->depth);
+    auto motion = toResource(info->motion_vectors);
+    auto output = toResource(info->output);
+    NVSDK_NGX_Parameter* p = f->params;
+    p->Set("DLSSNR.Color", static_cast<void*>(&color));
+    p->Set("DLSSNR.Depth", static_cast<void*>(&depth));
+    p->Set("DLSSNR.MVec", static_cast<void*>(&motion));
+    p->Set("DLSSNR.Output", static_cast<void*>(&output));
+    p->Set("DLSSNR.Width", width);
+    p->Set("DLSSNR.Height", height);
+    p->Set("DLSSNR.DepthInverted", 1u);
+    p->Set("DLSSNR.Reset", info->reset ? 1u : 0u);
+    p->Set("DLSSNR.ColorSubrectWidth", width);
+    p->Set("DLSSNR.ColorSubrectHeight", height);
+    p->Set("DLSSNR.DepthSubrectWidth", width);
+    p->Set("DLSSNR.DepthSubrectHeight", height);
+    p->Set("DLSSNR.MVecSubrectWidth", width);
+    p->Set("DLSSNR.MVecSubrectHeight", height);
+    p->Set("DLSSNR.OutputSubrectWidth", width);
+    p->Set("DLSSNR.OutputSubrectHeight", height);
+    p->Set("DLSSNR.MVecScaleX", info->mv_scale_x);
+    p->Set("DLSSNR.MVecScaleY", info->mv_scale_y);
+    p->Set("DLSSNR.Intensity", intensity);
+    p->Set("DLSSNR.UseAutoMask", 1u);
+
+    auto r = NVSDK_NGX_VULKAN_EvaluateFeature(reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(cmd)),
+                                              f->handle, p, nullptr);
+    if (NVSDK_NGX_FAILED(r)) return failNgx("[DLSS-NR] EvaluateFeature", r);
     return VKB_DLSS_OK;
     API_CATCH()
 }

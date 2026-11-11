@@ -96,6 +96,8 @@ public final class DlssNative implements AutoCloseable {
     private final MethodHandle evaluate;
     private final MethodHandle releaseFeature;
     private final MethodHandle queryCaps;
+    private final MethodHandle createNeuralRendering;
+    private final MethodHandle evaluateNeuralRendering;
 
     private DlssNative(Path libraryPath) {
         DlssLayouts.verify();
@@ -137,6 +139,12 @@ public final class DlssNative implements AutoCloseable {
             // int32_t (uint64 commandBuffer, uint64 feature, const VkbDlssEvalInfo*)
             evaluate = bind(linker, lookup, "vkb_dlss_evaluate", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG, ADDRESS));
             releaseFeature = bind(linker, lookup, "vkb_dlss_release_feature", FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+            createNeuralRendering = lookup.find("vkb_dlss_nr_create")
+                .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_INT, JAVA_INT, ADDRESS)))
+                .orElse(null);
+            evaluateNeuralRendering = lookup.find("vkb_dlss_nr_evaluate")
+                .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_FLOAT)))
+                .orElse(null);
             queryCaps = lookup.find("vkb_dlss_query_caps")
                 .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT, ADDRESS)))
                 .orElse(null);
@@ -315,25 +323,49 @@ public final class DlssNative implements AutoCloseable {
     /** Records the DLSS evaluate into {@code commandBuffer}. NGX binds its own pipelines: the caller re-binds its state. */
     public Status evaluate(long commandBuffer, long feature, EvalInfo e) {
         try (Arena a = Arena.ofConfined()) {
-            MemorySegment s = a.allocate(DlssLayouts.EVAL_INFO);
-            s.set(JAVA_INT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "struct_size"), DlssLayouts.SIZE_EVAL_INFO);
-            s.set(JAVA_INT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "reset"), e.reset() ? 1 : 0);
-            writeImage(s, "color", e.color());
-            writeImage(s, "output", e.output());
-            writeImage(s, "depth", e.depth());
-            writeImage(s, "motion_vectors", e.motionVectors());
-            writeImage(s, "exposure", e.exposure());
-            s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "jitter_x"), e.jitterX());
-            s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "jitter_y"), e.jitterY());
-            s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "mv_scale_x"), e.mvScaleX());
-            s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "mv_scale_y"), e.mvScaleY());
-            s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "sharpness"), e.sharpness());
-            s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "pre_exposure"), e.preExposure());
-            s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "exposure_scale"), e.exposureScale());
-            s.set(JAVA_INT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "render_subrect_width"), e.renderSubrectWidth());
-            s.set(JAVA_INT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "render_subrect_height"), e.renderSubrectHeight());
+            MemorySegment s = writeEval(a, e);
             return lastStatus(invokeInt(evaluate, commandBuffer, feature, s));
         }
+    }
+
+    public boolean hasNeuralRendering() {
+        return createNeuralRendering != null && evaluateNeuralRendering != null;
+    }
+
+    public Status createNeuralRendering(long commandBuffer, int width, int height, long[] outFeature) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment handle = a.allocate(JAVA_LONG);
+            int r = invokeInt(createNeuralRendering, commandBuffer, width, height, handle);
+            outFeature[0] = handle.get(JAVA_LONG, 0);
+            return lastStatus(r);
+        }
+    }
+
+    public Status evaluateNeuralRendering(long commandBuffer, long feature, EvalInfo e, float intensity) {
+        try (Arena a = Arena.ofConfined()) {
+            return lastStatus(invokeInt(evaluateNeuralRendering, commandBuffer, feature, writeEval(a, e), intensity));
+        }
+    }
+
+    private static MemorySegment writeEval(Arena a, EvalInfo e) {
+        MemorySegment s = a.allocate(DlssLayouts.EVAL_INFO);
+        s.set(JAVA_INT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "struct_size"), DlssLayouts.SIZE_EVAL_INFO);
+        s.set(JAVA_INT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "reset"), e.reset() ? 1 : 0);
+        writeImage(s, "color", e.color());
+        writeImage(s, "output", e.output());
+        writeImage(s, "depth", e.depth());
+        writeImage(s, "motion_vectors", e.motionVectors());
+        writeImage(s, "exposure", e.exposure());
+        s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "jitter_x"), e.jitterX());
+        s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "jitter_y"), e.jitterY());
+        s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "mv_scale_x"), e.mvScaleX());
+        s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "mv_scale_y"), e.mvScaleY());
+        s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "sharpness"), e.sharpness());
+        s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "pre_exposure"), e.preExposure());
+        s.set(JAVA_FLOAT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "exposure_scale"), e.exposureScale());
+        s.set(JAVA_INT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "render_subrect_width"), e.renderSubrectWidth());
+        s.set(JAVA_INT, DlssLayouts.offset(DlssLayouts.EVAL_INFO, "render_subrect_height"), e.renderSubrectHeight());
+        return s;
     }
 
     private static void writeImage(MemorySegment evalInfo, String member, Image img) {

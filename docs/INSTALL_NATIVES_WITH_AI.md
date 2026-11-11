@@ -53,7 +53,7 @@ named `bedray-*.jar`. Call this folder `GAME`.
 |---|---|---|
 | DLSS Super Resolution | `nvngx_dlss.dll`, `vkb_dlss.dll` | `GAME/bedray/natives/` |
 | DLSS Ray Reconstruction | additionally `nvngx_dlssd.dll` | `GAME/bedray/natives/` |
-| FSR Upscaling 4.1.2 | amd_fidelityfx_upscaler_vk.dll from AMD FSR SDK 2.4.0 signedbin | GAME/bedray/natives/ |
+| FSR Upscaling 4.1.2 | amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll from AMD FSR SDK 2.4.0 signedbin | GAME/bedray/natives/ |
 | FSR 3.1 / 2.x | `amd_fidelityfx_vk.dll` | `GAME/bedray/natives/` |
 | NRD denoiser | `NRD.dll`, `vkb_nrd.dll` | `GAME/bedray/natives/` |
 | XeSS | `libxess.dll` | `GAME/bedray/natives/` |

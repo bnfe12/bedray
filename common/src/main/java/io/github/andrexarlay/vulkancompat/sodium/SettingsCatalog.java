@@ -273,6 +273,11 @@ public final class SettingsCatalog {
                 "",
                 "The screenshots were taken with the first available upscaler (see the caption).", Scene.DAY, 0.55f, 0.6f, "upscaler_mode", modes, modeKey);
         }
+        putNoImage("dlss_neural_intensity", Tier.ADVANCED, "DLSS 5 Neural Rendering",
+            "Adjusts the strength of the experimental Neural Rendering pass. Zero turns it off.",
+            "Adds one neural pass and two RGBA16F textures at the render resolution.",
+            "Requires NVIDIA's Neural Rendering DLL and the updated Bedray wrapper. Uses the direct DLSS path.",
+            "A matching in-game capture is required for a preview.");
         INFOS.put("frame_generation_provider", new Info("frame_generation_provider", Tier.ESSENTIAL, "Frame Generation Method",
             "Auto uses NVIDIA DLSS Frame Generation (Streamline) when the NVIDIA driver and Streamline files are installed, otherwise AMD FSR 3 Frame Generation (works on any GPU with amd_fidelityfx_vk.dll, 2x mode).",
             "",

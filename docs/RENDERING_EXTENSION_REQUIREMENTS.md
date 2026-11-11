@@ -70,3 +70,8 @@ Implementation priority: establish scene, frame and synchronization contracts
 for the new renderer first; integrate optional sparse, zone and profiling
 modules through those interfaces. No specific feature in this document has
 been compiled, benchmarked, launched or accepted in game.
+
+
+## Neural graphics providers (2026-11-11)
+
+The provider and signal gaps for the current Vulkan implementation are tracked in [Graphics technology audit](GRAPHICS_TECHNOLOGY_AUDIT.md).

@@ -205,6 +205,10 @@ VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t commandBuffer, const VkbDl
 VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t commandBuffer, uint64_t feature, const VkbDlssEvalInfo* info);
 VKB_DLSS_API int32_t vkb_dlss_release_feature(uint64_t feature);  /* GPU must no longer use the feature */
 
+/* Optional Neural Rendering API. Reuse release_feature and the evaluate image ABI. */
+VKB_DLSS_API int32_t vkb_dlss_nr_create(uint64_t commandBuffer, uint32_t width, uint32_t height, uint64_t* outFeature);
+VKB_DLSS_API int32_t vkb_dlss_nr_evaluate(uint64_t commandBuffer, uint64_t feature, const VkbDlssEvalInfo* info, float intensity);
+
 /* ---- DLSS Ray Reconstruction (NGX DLSS-D / DLSS 3.5+) -------------------------------------- */
 typedef struct VkbDlssRrCreateInfo {
     uint32_t struct_size;            /* in: sizeof(VkbDlssRrCreateInfo) */

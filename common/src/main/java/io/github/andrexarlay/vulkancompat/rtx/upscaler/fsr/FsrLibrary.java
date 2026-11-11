@@ -36,7 +36,7 @@ public final class FsrLibrary {
 
     public static final String LIBRARY_ID = "fsr";
     public static final String DLL = "amd_fidelityfx_vk.dll";
-    public static final String MODERN_DLL = LibraryDescriptor.FSR4_DLL;
+    public static final String MODERN_DLL = LibraryDescriptor.FSR4_LOADER;
     public static final String ALLOW_UNKNOWN_PROPERTY = "vkrtx.fsr.allowUnknownDll";
     private static final String MANAGER_UNAVAILABLE = "native library manager unavailable: ";
 
@@ -99,12 +99,15 @@ public final class FsrLibrary {
         } catch (IllegalStateException e) {
             return Library.unusable(MANAGER_UNAVAILABLE + LogPaths.show(e.getMessage()));
         }
-        Path path = resolved.file(LibraryDescriptor.FSR4_DLL).orElse(null);
-        if (path == null || resolved.status().state() != LibraryStatus.State.VERIFIED) {
+        Path path = resolved.file(MODERN_DLL).orElse(null);
+        Path effect = resolved.file(LibraryDescriptor.FSR4_DLL).orElse(null);
+        if (path == null || effect == null || resolved.status().state() != LibraryStatus.State.VERIFIED) {
             modernCached = Library.unusable("FSR SDK 2.4: " + resolved.status().state() + " (" + resolved.status().detail() + ")");
+        } else if (!path.getParent().equals(effect.getParent())) {
+            modernCached = Library.unusable("FSR SDK 2.4: place both Vulkan DLLs in the same directory");
         } else {
-            modernCached = new Library(true, "ok official: AMD FSR SDK 2.4.0", path, LibraryDescriptor.FSR4_SHA256,
-                "AMD FSR SDK 2.4.0", resolved.versions().get(LibraryDescriptor.FSR4_DLL));
+            modernCached = new Library(true, "ok official: AMD FSR SDK 2.4.0", path, LibraryDescriptor.FSR4_LOADER_SHA256,
+                "AMD FSR SDK 2.4.0", resolved.versions().get(MODERN_DLL));
         }
         return modernCached;
     }

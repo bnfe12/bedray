@@ -10,6 +10,7 @@ import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.renderpearl.backend.vulkan.VulkanCommandEncoder;
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
+import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
@@ -27,6 +28,7 @@ import io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.spatial.SpatialUpscaler;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNeuralRendering;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.xess.XessRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
@@ -69,6 +71,8 @@ public final class WorldTargetManager {
     private static final io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityRecordingOwner velocityRecordings =
         new io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityRecordingOwner(
             failure -> LOGGER.warn("[WorldTargetManager] temporal retirement failed; resources retained", failure));
+    private static final DlssNeuralRendering dlssNeural = new DlssNeuralRendering(velocityRecordings);
+    private static int lastDlssNeuralIntensity;
     private static final RecordingCompletion spatialCompletion = new RecordingCompletion(
         failure -> LOGGER.warn("[WorldTargetManager] spatial retirement failed; resources retained", failure));
     private static boolean recordingSpatial, drainingSpatial;
@@ -126,6 +130,8 @@ public final class WorldTargetManager {
         return resolutionStamp != null && io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.isCurrent(resolutionStamp)
             && resolutionPlan != null && resolutionPlan.rayReconstructionOutput();
     }
+
+    public static String dlssNeuralFailure() { return dlssNeural.failureReason(); }
 
     public static boolean rrResolvesOutput() { return inWorldPhase && resolutionPlan != null && resolutionPlan.rayReconstructionOutput(); }
     public static int traceWidth(int fallback) { return rrResolvesOutput() ? resolutionPlan.traceWidth() : fallback; }
@@ -815,7 +821,10 @@ public final class WorldTargetManager {
         final int fmtDepth = com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(GpuFormat.D32_FLOAT);
         final int fmtMv = com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(GpuFormat.RG16_FLOAT);
 
-        final boolean reset = resetHistory;
+        final int neuralIntensity = kind == UpscalerBackend.DLSS && !colorResolved && dlssNeural.ready(inW, inH)
+            && (worldTarget.getColorTexture().usage() & GpuTexture.USAGE_COPY_SRC) != 0
+            ? VulkanRtxConfig.dlssNeuralIntensity : 0;
+        final boolean reset = resetHistory || neuralIntensity != lastDlssNeuralIntensity;
         // A denoiser-resolved image is already back on the pixel grid: it must reach DLSS-SR with zero jitter.
         final float srJitterX = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterX());
         final float srJitterY = upscalerJitterComponent(colorResolved, CameraJitterManager.getCurrentPixelJitterY());
@@ -835,11 +844,15 @@ public final class WorldTargetManager {
             }
             io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.tick();
 
+            var color = new FrameContext.ImageRef(colorImg, colorView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH);
+            var depth = new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, inW, inH);
+            var motion = new FrameContext.ImageRef(srMvImg, srMvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH);
+            if (neuralIntensity > 0) {
+                color = dlssNeural.record(cmd, color, depth, motion, reset, neuralIntensity);
+                if (color == null) return false;
+            }
             FrameContext ctx = new FrameContext(
-                cmd,
-                new FrameContext.ImageRef(colorImg, colorView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
-                new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, inW, inH),
-                new FrameContext.ImageRef(srMvImg, srMvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH),
+                cmd, color, depth, motion,
                 new FrameContext.ImageRef(outImg, outView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, outW, outH),
                 srJitterX, srJitterY,
                 inW, inH, outW, outH,
@@ -850,8 +863,10 @@ public final class WorldTargetManager {
             return backend.dispatch(ctx);
         });
         if (!ok) {
-            return false; // the backend's dispatch already logged stage=execute and disabled itself
+            return false; // The recording was discarded. The caller uses the original world color.
         }
+        if (neuralIntensity > 0) dlssNeural.onRecorded();
+        lastDlssNeuralIntensity = neuralIntensity;
         copyXessOutputToMain(fullMain);
         boolean twoStageRr = colorResolved
             && io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.denoiser()
@@ -1073,10 +1088,16 @@ public final class WorldTargetManager {
             int winW = mcForXess.getWindow().getWidth();
             int winH = mcForXess.getWindow().getHeight();
             int targetW = getTargetWidth(winW), targetH = getTargetHeight(winH);
-            if (winW > 0 && winH > 0 && targetW > 0 && targetH > 0
-                && chooseResolutionPlan(targetW, targetH, winW, winH).rayReconstructionOutput()) {
+            boolean validExtent = winW > 0 && winH > 0 && targetW > 0 && targetH > 0;
+            boolean rrOutput = validExtent && chooseResolutionPlan(targetW, targetH, winW, winH).rayReconstructionOutput();
+            if (rrOutput) {
                 io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime.suspendSrFeatureForRr();
             }
+            var host = VulkanCapabilityChecker.getVulkanDevice();
+            dlssNeural.prepare(host, host != null && mcForXess.level != null && validExtent && !rrOutput
+                    && TemporalUpscaler.active() == UpscalerBackend.DLSS
+                    && !io.github.andrexarlay.vulkancompat.rtx.framegen.StreamlineBootstrap.dlssViaStreamline(),
+                VulkanRtxConfig.dlssNeuralIntensity > 0, targetW, targetH);
         }
         if (inWorldPhase) {
             LOGGER.warn("World phase was not properly ended in previous frame; resetting render targets");
@@ -1157,6 +1178,8 @@ public final class WorldTargetManager {
     private static void releaseTargets() {
         RenderSystem.assertOnRenderThread();
         drainBorrowedWorldTargetRecordings();
+        dlssNeural.close();
+        lastDlssNeuralIntensity = 0;
         TemporalUpscaler.cleanup();
         UpscalerBackend active = VulkanRtxConfig.activeBackend;
         if (active != null && active != UpscalerBackend.BILINEAR) {

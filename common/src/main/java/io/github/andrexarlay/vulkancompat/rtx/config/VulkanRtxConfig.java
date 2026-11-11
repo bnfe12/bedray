@@ -247,6 +247,7 @@ public final class VulkanRtxConfig {
     public static UpscalerMode xessMode = UpscalerModes.defaultMode(UpscalerBackend.XESS);
     /** DLSS quality mode (persisted as {@code dlss_mode}); must be a member of {@code UpscalerModes.modesFor(DLSS)}. */
     public static UpscalerMode dlssMode = UpscalerModes.defaultMode(UpscalerBackend.DLSS);
+    public static int dlssNeuralIntensity = 0;
     /** FSR quality mode (persisted as {@code fsr_mode}); must be a member of {@code UpscalerModes.modesFor(FSR)}. */
     public static UpscalerMode fsrMode = UpscalerModes.defaultMode(UpscalerBackend.FSR);
     /** FSR provider version (persisted as {@code fsr_version}): AUTO, FSR_4, FSR_3_1 or FSR_2 (only those present in the DLL apply). */
@@ -559,6 +560,7 @@ public final class VulkanRtxConfig {
                         LOGGER.warn("xess_mode '{}' is not offered by XeSS, keeping {}", val, xessMode);
                     }
                 }
+                case "dlss_neural_intensity" -> dlssNeuralIntensity = Math.clamp(Integer.parseInt(val), 0, 100);
                 case "dlss_mode" -> {
                     UpscalerMode parsed = UpscalerMode.valueOf(val.toUpperCase());
                     if (UpscalerModes.isOffered(UpscalerBackend.DLSS, parsed)) {
@@ -830,6 +832,8 @@ public final class VulkanRtxConfig {
             writer.write("xess_mode = \"" + xessMode.name() + "\"\n");
             writer.write("# DLSS mode: DLAA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from NGX)\n");
             writer.write("dlss_mode = \"" + dlssMode.name() + "\"\n");
+            writer.write("# Experimental DLSS 5 Neural Rendering intensity, 0 (off) .. 100\n");
+            writer.write("dlss_neural_intensity = " + dlssNeuralIntensity + "\n");
             writer.write("# FSR mode: NATIVE_AA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from the FidelityFX DLL)\n");
             writer.write("fsr_mode = \"" + fsrMode.name() + "\"\n");
             writer.write("# FSR version: AUTO (best eligible provider), FSR_4, FSR_3_1 or FSR_2. FSR_4 uses AMD FSR SDK 2.4.\n");

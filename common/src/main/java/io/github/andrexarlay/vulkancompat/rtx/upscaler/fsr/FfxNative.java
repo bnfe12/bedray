@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr;
 
+import io.github.andrexarlay.vulkanbridge.api.LibraryDescriptor;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -131,6 +132,10 @@ public final class FfxNative {
         modern = libraryPath.getFileName().toString().equalsIgnoreCase(FsrLibrary.MODERN_DLL);
         SymbolLookup lookup;
         try {
+            if (modern) {
+                // AMD searches already loaded modules first. Load the verified sibling before binding the loader.
+                SymbolLookup.libraryLookup(libraryPath.resolveSibling(LibraryDescriptor.FSR4_DLL), arena);
+            }
             lookup = SymbolLookup.libraryLookup(libraryPath, arena);
         } catch (IllegalArgumentException | UnsatisfiedLinkError e) {
             arena.close();

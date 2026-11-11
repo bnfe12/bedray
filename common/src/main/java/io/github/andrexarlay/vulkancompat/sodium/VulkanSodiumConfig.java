@@ -432,6 +432,11 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         GROUP_IDS.put("main_upscaling", curGroup);
         addUpscalerBackend(builder, up, backendId, gameDir, st);
         addQualityModes(builder, up, backendId, gameDir, st);
+        up.addOption(intOpt(builder, "dlss_neural_intensity", 0, 0, 100, 5,
+            v -> v == 0 ? tr("bedray.onoff.off", "Off") : Component.literal(v + "%"),
+            v -> VulkanRtxConfig.dlssNeuralIntensity = v, () -> VulkanRtxConfig.dlssNeuralIntensity,
+            s -> s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.DLSS,
+            new Identifier[] {backendId}, Mark.NONE, OptionImpact.HIGH, false, st));
         addFsrVersion(builder, up, backendId, gameDir, st);
         up.addOption(intOpt(builder, "custom_scale", 100, 25, 100, 5, percent(),
             v -> {
@@ -1116,6 +1121,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         VulkanRtxConfig.dlssMode = UpscalerModes.defaultMode(UpscalerBackend.DLSS);
         VulkanRtxConfig.fsrMode = UpscalerModes.defaultMode(UpscalerBackend.FSR);
         VulkanRtxConfig.fsrVersion = FsrVersion.AUTO;
+        VulkanRtxConfig.dlssNeuralIntensity = 0;
         VulkanRtxConfig.fsrSharpness = 0.0f;
         VulkanRtxConfig.autoTextureLodBias = true;
         VulkanRtxConfig.textureLodBiasOffset = 0.0f;

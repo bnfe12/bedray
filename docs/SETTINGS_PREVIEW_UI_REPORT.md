@@ -17,3 +17,8 @@ The new controls have English and Russian labels. The preview panel caches asset
 Custom scale uses the existing validated Sodium bindings and the same per-backend fields as TOML import/export. Native DLL installation and the next logical-device creation remain separate events.
 
 The FSR 4 implementation is source-level. Visual quality, frame pacing, GPU-specific selection and screen layout were not run in this task.
+
+
+## Experimental neural rendering control
+
+The DLSS 5 intensity slider is under advanced upscaling and defaults to off. It persists independently of the DLSS quality and render-scale settings. The settings panel displays the logged initialization or evaluation error after a rejected request. The preview needs a matching in-game capture. [Graphics technology audit](GRAPHICS_TECHNOLOGY_AUDIT.md)

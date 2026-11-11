@@ -46,7 +46,8 @@ never DLLs from forums, file-sharing sites or other games' folders.
 |---|---|---|---|
 | DLSS Super Resolution | `nvngx_dlss.dll` + `vkb_dlss.dll` | `bedray/natives/` | NVIDIA DLSS SDK: https://github.com/NVIDIA/DLSS |
 | DLSS Ray Reconstruction | additionally `nvngx_dlssd.dll` | `bedray/natives/` | same |
-| FSR Upscaling 4.1.2 | amd_fidelityfx_upscaler_vk.dll from signedbin in AMD FSR SDK 2.4.0 | Install locally in bedray/natives/ | [AMD FSR SDK 2.4.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0) |
+| DLSS 5 Neural Rendering (experimental) | Signed NVIDIA nvngx_dlssnr.dll 310.8.0.0 plus the updated vkb_dlss.dll | Beside the nvngx_dlss.dll used by NGX | [NVIDIA DLSS developer information](https://developer.nvidia.com/rtx/dlss) |
+| FSR Upscaling 4.1.2 | amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll from signedbin in AMD FSR SDK 2.4.0 | Install locally in bedray/natives/ | [AMD FSR SDK 2.4.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0) |
 | FSR 3.1 / 2.x | `amd_fidelityfx_vk.dll` (signed Vulkan DLL of FidelityFX SDK **v1.1.4**) | Included in release jar and extracted to `bedray/natives/` | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4 |
 | XeSS | `libxess.dll` (XeSS SDK **3.0.2**) | Included in release jar and extracted to `bedray/natives/` | https://github.com/intel/xess/releases |
 | NRD denoiser (path tracing) | `NRD.dll` + `vkb_nrd.dll` | `bedray/natives/` | NRD sources: https://github.com/NVIDIA-RTX/NRD (you build `NRD.dll`) |

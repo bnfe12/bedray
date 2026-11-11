@@ -128,6 +128,9 @@ public final class NativeCatalog {
             List.of(req(Folder.NATIVES, "nvngx_dlss.dll"))),
         new Group("dlss_rr", "NVIDIA DLSS Ray Reconstruction", "NVIDIA", "AI denoiser for path tracing (GeForce RTX).", URL_DLSS,
             List.of(req(Folder.NATIVES, "nvngx_dlssd.dll"))),
+        new Group("dlss_nr", "DLSS 5 Neural Rendering (experimental)", "NVIDIA",
+            "Use your NVIDIA-signed Neural Rendering 310.8 DLL beside nvngx_dlss.dll. Requires the updated Bedray DLSS wrapper.",
+            "https://developer.nvidia.com/rtx/dlss", List.of(req(Folder.NATIVES, LibraryDescriptor.DLSS_NR_DLL))),
         new Group("nrd", "NVIDIA Real-Time Denoisers (NRD)", "NVIDIA", "REBLUR / RELAX denoiser for path tracing.", URL_NRD,
             List.of(req(Folder.NATIVES, "NRD.dll"))),
         new Group("streamline", "NVIDIA Streamline (core)", "NVIDIA", "The loader every NVIDIA frame generation feature needs.", URL_STREAMLINE,
@@ -140,8 +143,8 @@ public final class NativeCatalog {
             List.of(req(Folder.STREAMLINE, "sl.dlss.dll"), req(Folder.STREAMLINE, "sl.dlss_d.dll"),
                 req(Folder.STREAMLINE, "nvngx_dlss.dll"), req(Folder.STREAMLINE, "nvngx_dlssd.dll"))),
         new Group("fsr4", "AMD FSR Upscaling 4 (Vulkan)", "AMD",
-            "Install the signed upscaler from AMD FSR SDK 2.4. Provider availability depends on the GPU and driver.",
-            LibraryDescriptor.FSR4_SDK_URL, List.of(req(Folder.NATIVES, LibraryDescriptor.FSR4_DLL))),
+            "Install the signed Vulkan loader and upscaler together from AMD FSR SDK 2.4. Provider availability depends on the GPU and driver.",
+            LibraryDescriptor.FSR4_SDK_URL, List.of(req(Folder.NATIVES, LibraryDescriptor.FSR4_LOADER), req(Folder.NATIVES, LibraryDescriptor.FSR4_DLL))),
         new Group("xess2", "Intel XeSS 2.0 & XeLL", "Intel",
             "Next-gen XeSS 2.0 AI upscaling with frame generation (planned in roadmap v0.3.0).", URL_XESS,
             List.of(upcoming(Folder.NATIVES, "libxess_fg.dll"), upcoming(Folder.NATIVES, "libxell.dll"))),
@@ -157,6 +160,8 @@ public final class NativeCatalog {
                 wrapper(Folder.STREAMLINE, "vkb_sl.dll"))));
 
     static String externalSha256(String file) {
+        if (LibraryDescriptor.DLSS_NR_DLL.equalsIgnoreCase(file)) return LibraryDescriptor.DLSS_NR_SHA256;
+        if (LibraryDescriptor.FSR4_LOADER.equalsIgnoreCase(file)) return LibraryDescriptor.FSR4_LOADER_SHA256;
         return LibraryDescriptor.FSR4_DLL.equalsIgnoreCase(file) ? LibraryDescriptor.FSR4_SHA256 : null;
     }
 

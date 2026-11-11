@@ -171,6 +171,14 @@ final class SettingsDraft {
             };
             return new RuntimeStatus(badge, Component.literal(io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.statusLine()));
         }
+        if (entry.path().equals("dlss_neural_intensity")) {
+            if (!entry.option().isEnabled()) return new RuntimeStatus(Badge.INACTIVE, Component.translatable("bedray.settings.inactive"));
+            if (VulkanRtxConfig.dlssNeuralIntensity > 0) {
+                String failure = io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager.dlssNeuralFailure();
+                if (failure != null) return new RuntimeStatus(Badge.FAILED_INITIALIZATION, Component.literal(failure));
+            }
+            return new RuntimeStatus(Badge.EXPERIMENTAL, Component.translatable("bedray.opt.dlss_neural_intensity.req"));
+        }
         if (entry.path().equals("upscaler_backend") || entry.path().equals("dlss_mode") || entry.path().equals("xess_mode") || entry.path().endsWith("_custom_scale") || entry.path().startsWith("fsr_")) {
             var backend = config.readEnumOption(id("upscaler_backend"), UpscalerBackend.class);
             var availability = io.github.andrexarlay.vulkancompat.rtx.config.UpscalerSelection.status(backend, VulkanRtxConfig.gameDir());

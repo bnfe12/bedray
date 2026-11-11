@@ -69,6 +69,7 @@ public final class DlssRuntime {
     /** Actual device NGX was initialized against; a different current device is never completion proof. */
     private static VulkanDevice contextDevice;
     private static boolean ngxInitialised;
+    private static Path ngxFeatureDirectory;
     private static DlssQuality activeMode;
     private static Size activeInput;
     private static int outputWidth;
@@ -350,6 +351,7 @@ public final class DlssRuntime {
             }
             DlssNative.Caps[] caps = new DlssNative.Caps[1];
             long t0 = System.nanoTime();
+            ngxFeatureDirectory = lib.featureDir();
             DlssNative.Status st = nativeLib.init(vkInstance, vkPhysical, vkDevice, gipa, gdpa, lib.featureDir(), logDir,
                 null, null, caps);
             long ms = (System.nanoTime() - t0) / 1_000_000L;
@@ -608,6 +610,10 @@ public final class DlssRuntime {
         return feature.usable() ? feature.handle() : 0;
     }
 
+    public static synchronized Path featureDirectory() {
+        return ngxFeatureDirectory;
+    }
+
     public static synchronized DlssNative nativeLib() {
         return nativeLib;
     }
@@ -690,6 +696,7 @@ public final class DlssRuntime {
         nativeLib = null;
         contextDevice = null;
         ngxInitialised = false;
+        ngxFeatureDirectory = null;
         activeMode = null;
         activeInput = null;
         outputWidth = 0;
