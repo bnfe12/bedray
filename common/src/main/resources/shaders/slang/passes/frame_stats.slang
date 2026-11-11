@@ -69,7 +69,30 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float hitDistance = depth[p];
     bool hit = hitDistance > 0.0 && hitDistance < PATH_STATS_SKY_DISTANCE;
 
-    float lit = luminance(sample.rgb);
+    // The meter reads the linear mean of the whole 4x4 tile of the running mean, not this pixel's own 1-spp sample.
+    // A log-average of single path samples is biased low by their variance (E[log x] < log E[x]), and the variance is
+    // not a property of the scene: it rises while the camera moves (reservoirs and history restart), with fewer rays
+    // per pixel and with every disocclusion. The exposure followed the noise instead of the light - brighter while
+    // walking, a few seconds later darker on the same view (owner screenshots 2026-11-11), and a different brightness
+    // per preset. Averaging 16 accumulated pixels before the log removes most of that variance; the word, the counts
+    // and the host decode stay exactly as they were, every pixel of the tile simply contributes the tile's value.
+    int2 tileOrigin = int2(p.x & ~3, p.y & ~3);
+    float tileSum = 0.0;
+    float tileCount = 0.0;
+    for (int ty = 0; ty < 4; ++ty) {
+        for (int tx = 0; tx < 4; ++tx) {
+            int2 q = tileOrigin + int2(tx, ty);
+            if (q.x >= int(size.x) || q.y >= int(size.y)) continue;
+            float4 own = radiance[q];
+            if (!(own.a > 0.0)) continue;
+            float4 mean = accum[q];
+            float3 rgb = mean.a > 0.0 && !any(isnan(mean.rgb)) && !any(isinf(mean.rgb)) ? mean.rgb : own.rgb;
+            if (any(isnan(rgb)) || any(isinf(rgb))) continue;
+            tileSum += max(luminance(rgb), 0.0);
+            tileCount += 1.0;
+        }
+    }
+    float lit = tileCount > 0.0 ? tileSum / tileCount : luminance(sample.rgb);
     if (!(lit > PATH_STATS_LUM_FLOOR)) {
         lit = PATH_STATS_LUM_FLOOR;   // NaN and black both mean "darker than the meter resolves"
     } else if (lit > PATH_STATS_LUM_CEIL) {
