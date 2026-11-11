@@ -4372,3 +4372,34 @@ checked bootstrap, resize and CUSTOM extent provenance. Vendor image/FPS and liv
 UI acceptance remain open. The separate SR/native-release ownership findings are
 recorded in docs/ai-agent-addenda/SR_RELEASE_OWNERSHIP_AUDIT.md; no release or
 residency repair is claimed by this commit.
+
+## 2026-11-11 experimental NeoForge integration
+
+User authorized building and installing all current contributions into the
+Vulkan Experimental RT 26.3 instance. The integration branch is
+`bedray/experimental-integration-20261111`, based on clean `f41338d`.
+It already includes native-only scene migration, the quality branch through
+`80b1a75`, FSR/DLSS settings and temporal/material work through `753ccdb`,
+and the mirror and stationary-lighting corrections `1a0be72` / `f41338d`.
+The memory-pressure branch `a0c4a14` is patch-equivalent to included `3a17290`.
+
+Three uncommitted quality-worktree files were snapshotted without changing that
+worktree: diagnostic corridor/sway/ReSTIR controls, integer half encoding for
+world-motion metadata, and tile-based exposure metering. The snapshot SHA-256 is
+`56f31d47bab4cba8b1f701e3b36bee4cacc671befb4fdf700fa19139066cae31`.
+The integration meters each selected 4x4 tile once, with actual valid/hit/history
+pixel counts; it avoids the snapshot's repeated 16-pixel loops and atomics.
+Integer half conversion avoids Slang's unsupported Float16 capability declaration.
+Independent source review approved these changes without P1/P2 blockers.
+
+Preflight `clean neoforgeBedrayDistribution` passed with JDK 25, Slang 2026.20,
+MSVC/CMake and Vulkan-Headers: Java, AOT compute/raygen/SER shaders and native core
+built successfully (1m 37s). A final clean-provenance package is still required
+after this commit. The current direct DLSS and Streamline bridges also compile.
+The installed NRD vendor/wrapper pair is preserved: native NRD source is unchanged,
+and a wrapper compiled against 4.18 headers must not replace a 4.17 vendor pair.
+
+Build and installation evidence is kept outside source in
+`C:/Temp/bedray-experimental-20261111/evidence`. Archive verification, matching
+native artifacts, installed hashes and a rollback receipt are required before
+handoff. This entry does not claim a game launch, image acceptance or FPS gain.
