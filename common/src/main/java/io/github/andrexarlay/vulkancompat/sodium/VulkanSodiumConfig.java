@@ -404,7 +404,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         rt.addOption(track("water_style", water));
         EnumOptionBuilder<SelfShadow> selfShadow = builder.createEnumOption(id("self_shadow"), SelfShadow.class);
-        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.NO_FOOTPRINT)
+        selfShadow.setName(nameOf("self_shadow")).setTooltip(v -> tipOf("self_shadow")).setDefaultValue(SelfShadow.FULL)
             .setAllowedValues(EnumSet.allOf(SelfShadow.class))
             .setElementNameProvider(v -> switch (v) {
                 case FULL -> tr("bedray.self_shadow.full", "Full");

@@ -45,8 +45,8 @@ class RtSlangBlockEmitterTest {
         assertTrue(slang.contains("static const float EMISSIVE_GAIN = 3.0;"));
         assertTrue(slang.contains("static const float EMISSIVE_FLUX_GAIN = 2.2;"));
         String attenuation = block(slang, "float emitterAttenuation(float d2) {");
-        assertTrue(attenuation.contains("dd <= 4.0 ? rsqrt(dd * sqrt(dd)) : 0.84090 * rsqrt(dd * sqrt(sqrt(dd)))"),
-            "d^-1.5 to two blocks then d^-1.25, continuous at the seam");
+        assertTrue(attenuation.contains("dd <= 4.0 ? rsqrt(dd * sqrt(dd)) : 1.41421356 / dd"),
+            "d^-1.5 to two blocks then the physical d^-2, continuous at the seam");
         assertTrue(attenuation.contains("max(d2, 0.25)"), "the floor of dd near the emitter face");
         String window = block(slang, "float emitterWindow(float d2, float lightRadius) {");
         assertTrue(window.contains("clamp(1.0 - d2 / (lightRadius * lightRadius), 0.0, 1.0)"), "squared linear window");

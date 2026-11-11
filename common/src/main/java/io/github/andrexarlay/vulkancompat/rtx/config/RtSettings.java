@@ -139,7 +139,10 @@ public final class RtSettings {
     /** The body never occludes light; only mirror rays still see it. */
     public static final int SELF_SHADOW_OFF = 2;
     /** First-person body shadow ({@code self_shadow}); third person always uses the full model. */
-    public static int selfShadow = SELF_SHADOW_NO_FOOTPRINT;
+    // Full, as Bedrock RTX does it. NO_FOOTPRINT ignored the body for every ray starting within 0.6 blocks of the camera
+    // column, which cut a 1.2-block disc out of the player's own shadow under the feet - the "mask" with an arc edge on
+    // the owner's screenshots (2026-11-11).
+    public static int selfShadow = SELF_SHADOW_FULL;
 
     // ---- Water & Liquids ----
     public static final int WATER_STYLE_VANILLA = 0;

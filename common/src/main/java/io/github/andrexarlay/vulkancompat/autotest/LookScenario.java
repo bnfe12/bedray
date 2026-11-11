@@ -459,7 +459,7 @@ public final class LookScenario implements AutotestScenario {
         RtSettings.autoNormals = true;
         RtSettings.autoNormalStrength = 100;
         RtSettings.waterStyle = RtSettings.WATER_STYLE_REALISTIC;
-        RtSettings.selfShadow = RtSettings.SELF_SHADOW_NO_FOOTPRINT;
+        RtSettings.selfShadow = RtSettings.SELF_SHADOW_FULL;
         RtSettings.preset = RtSettings.Preset.CUSTOM;
         for (String m : s.mods()) {
             if (m.matches("b\\d+")) {
@@ -480,7 +480,7 @@ public final class LookScenario implements AutotestScenario {
                 RtSettings.selfShadow = switch (m) {
                     case "self=full" -> RtSettings.SELF_SHADOW_FULL;
                     case "self=off" -> RtSettings.SELF_SHADOW_OFF;
-                    default -> RtSettings.SELF_SHADOW_NO_FOOTPRINT;
+                    default -> RtSettings.SELF_SHADOW_FULL;
                 };
             }
         }

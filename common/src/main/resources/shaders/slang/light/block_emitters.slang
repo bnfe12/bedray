@@ -28,7 +28,10 @@ static const uint EMITTER_RECORD_FLOATS = 24u;
 // Written with rsqrt instead of pow: eight of these per NEE call sit in the hottest loop of the emissive pass.
 float emitterAttenuation(float d2) {
     float dd = max(d2, 0.25);
-    return dd <= 4.0 ? rsqrt(dd * sqrt(dd)) : 0.84090 * rsqrt(dd * sqrt(sqrt(dd)));
+    // d^-1.5 inside two blocks (the look accepted since 2026-10), the physical d^-2 beyond: the d^-1.25 tail lit a room
+    // or a canyon evenly from one torch or one lava column and painted it orange, where Bedrock RTX keeps a pool of light
+    // around the source (owner comparison, 2026-11-11). Continuous at the seam: 4^-0.75 == sqrt(2) / 4.
+    return dd <= 4.0 ? rsqrt(dd * sqrt(dd)) : 1.41421356 / dd;
 }
 
 // The game's own block-light window: a source reaches EMITTER_RADIUS blocks, not the whole ray distance, or a lava column
@@ -89,7 +92,10 @@ float3 emitterAttenuationColor(float3 tex) {
     // Category 2: warm flames and firelight (torch, campfire, lantern, lava, candle).
     if (c.r >= 0.55 && c.r > c.b * 1.25 && c.g >= 0.18) {
         float warm = clamp((c.g - 0.20) / 0.60, 0.0, 1.0);
-        float3 flame = lerp(float3(1.0, 0.52, 0.10), float3(1.0, 0.76, 0.26), warm);
+        // Yellow firelight, as the flame texels themselves are (Bedrock RTX takes the light colour from them).  The former
+        // (1, 0.52, 0.10) floor had almost no blue, so every surface a torch or lava reached turned one flat saturated
+        // orange and lost its texture (owner comparison with Vanilla RTX / BetterRTX, 2026-11-11).
+        float3 flame = lerp(float3(1.0, 0.64, 0.24), float3(1.0, 0.84, 0.48), warm);
         return flame * 1.35 * lerp(m, 1.0, 0.45);
     }
     // Category 3: soul fire.

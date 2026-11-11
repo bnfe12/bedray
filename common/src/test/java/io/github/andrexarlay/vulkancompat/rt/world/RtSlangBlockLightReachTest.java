@@ -12,29 +12,25 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Reach of block light in the typed emitter module. The deleted {@code RtBlockLightReachTest} guarded the same kernel in
- * {@code rt_common_emitters.glsl}; {@code light/block_emitters.slang} carries it unchanged, so the numbers and the
- * source are pinned again.
+ * Reach of block light in the typed emitter module. One emitter follows {@code d^-1.5} up to two blocks and the physical
+ * {@code d^-2} beyond, windowed at {@code EMITTER_RADIUS}.
  *
- * <p>One emitter follows {@code d^-1.5} up to two blocks and {@code d^-1.25} beyond, windowed at {@code EMITTER_RADIUS}.
- * The physical {@code d^-2} tail kept 5.6 % of the two-block value at eight blocks and 1.2 % at fifteen, which read as a
- * four-to-five-block puddle around every torch (owner report 2026-10-23). The gentler tail is what makes a torch cross
- * a room. A change of the exponent, of the handover constant or of the radius has to be made on purpose: the shader has
- * to contain the curve verbatim, and the model below mirrors it.
+ * <p>History: the physical tail read as a four-to-five-block puddle around every torch (owner report 2026-10-23), so a
+ * gentler {@code d^-1.25} tail was tried; with it one torch or one lava column lit a whole room or canyon evenly and
+ * painted it orange, where Bedrock RTX keeps a pool of light around the source (owner comparison 2026-11-11, autotest
+ * A/B light-final2 / light-lv2). The puddle of October also came from the saturated orange flame colour, which is now
+ * the flame's own yellow. A change of the exponent, the seam or the radius has to be made on purpose: the shader has to
+ * contain the curve verbatim and the model below mirrors it.
  */
 class RtSlangBlockLightReachTest {
 
     private static final String EMITTERS = "src/main/resources/shaders/slang/light/block_emitters.slang";
-
-    /** {@code 2^1.25 / (2 * sqrt(2))}: the value of {@code d^-1.5} at the two-block seam. */
-    private static final double HANDOVER = 0.84090;
     private static final double EMITTER_RADIUS = 24.0;
 
     /** The shader's {@code emitterAttenuation}. */
     private static double tail(double d) {
         double dd = Math.max(d * d, 0.25);
-        return dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd))
-                         : HANDOVER / Math.sqrt(dd * Math.sqrt(Math.sqrt(dd)));
+        return dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd)) : 1.41421356 / dd;
     }
 
     /** The shader's {@code emitterWindow}, squared as the caller applies it. */
@@ -47,34 +43,21 @@ class RtSlangBlockLightReachTest {
         return tail(d) * window(d, lightRadius);
     }
 
-    /** What the renderer did before: the same window over the physical {@code d^-2} tail. */
-    private static double physical(double d, double lightRadius) {
-        double dd = Math.max(d * d, 0.25);
-        double value = dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd)) : 1.41421356 / dd;
-        return value * window(d, lightRadius);
-    }
-
     @Test
     void theSeamIsContinuousAndTheNearFieldUnchanged() {
-        assertEquals(1.0 / (2.0 * Math.sqrt(2.0)), HANDOVER / Math.pow(2.0, 1.25), 1.0e-4,
-            "the handover constant must equal d^-1.5 at the two-block seam, or a torch has a visible ring");
         assertEquals(tail(2.0 - 1.0e-9), tail(2.0 + 1.0e-9), 1.0e-5,
             "the two branches meet at two blocks, so no distance is lit twice or left dark");
-        assertEquals(physical(1.0, EMITTER_RADIUS), attenuation(1.0, EMITTER_RADIUS), 1.0e-12,
-            "inside two blocks the kernel is the one that was already accepted");
-        assertEquals(physical(2.0, EMITTER_RADIUS), attenuation(2.0, EMITTER_RADIUS), 1.0e-6,
-            "the seam itself is unchanged: only what lies beyond it was retuned");
+        assertEquals(1.0, tail(1.0), 1.0e-12, "inside two blocks the kernel is the one that was already accepted");
+        assertEquals(1.0 / (2.0 * Math.sqrt(2.0)), tail(2.0), 1.0e-6, "the seam itself is unchanged");
     }
 
     @Test
-    void aTorchCrossesTheRoom() {
+    void theLightIsAPoolAroundItsSource() {
         double at8 = attenuation(8.0, EMITTER_RADIUS) / attenuation(2.0, EMITTER_RADIUS);
         double at15 = attenuation(15.0, EMITTER_RADIUS) / attenuation(2.0, EMITTER_RADIUS);
-        assertTrue(at8 > 2.5 * (physical(8.0, EMITTER_RADIUS) / physical(2.0, EMITTER_RADIUS)),
-            "eight blocks out the light must be several times brighter than the physical tail, got " + at8);
-        assertTrue(at15 > 3.0 * (physical(15.0, EMITTER_RADIUS) / physical(2.0, EMITTER_RADIUS)),
-            "fifteen blocks is the reach of the game's own block light, got " + at15);
-        assertTrue(at15 < 0.10, "the far field must stay a glow, not an evenly lit room: " + at15);
+        assertEquals(1.0 / 16.0, tail(8.0) / tail(2.0), 1.0e-6, "beyond the seam the falloff is the inverse square");
+        assertTrue(at8 < 0.07, "eight blocks out a torch is a glow, not the light of the room: " + at8);
+        assertTrue(at15 < 0.02, "fifteen blocks out it has faded: " + at15);
         for (double d = 0.5; d < EMITTER_RADIUS; d += 0.25) {
             assertTrue(attenuation(d, EMITTER_RADIUS) > attenuation(d + 0.25, EMITTER_RADIUS),
                 "the falloff must stay monotonic at " + d);
@@ -102,11 +85,10 @@ class RtSlangBlockLightReachTest {
     @Test
     void theShaderKeepsThatCurve() throws IOException {
         String source = read(EMITTERS);
-        assertTrue(source.contains("0.84090 * rsqrt(dd * sqrt(sqrt(dd)))"),
-            "the tail must stay the gentler d^-1.25 curve");
+        assertTrue(source.contains("1.41421356 / dd"),
+            "the tail is the physical inverse square");
         assertTrue(source.contains("rsqrt(dd * sqrt(dd))"), "the near field is written as dd^-0.75 == d^-1.5");
-        assertFalse(source.contains("1.41421356 / dd"),
-            "the physical d^-2 tail is what made every torch a four-block puddle");
+
         assertTrue(source.contains("float emitterAttenuation(float d2)"));
         assertFalse(source.contains("pow("),
             "the tail must not go through pow: eight calls per NEE call, half a million lanes of log2/exp2");
@@ -117,10 +99,9 @@ class RtSlangBlockLightReachTest {
     void theRsqrtFormMatchesTheCurve() {
         for (double d = 0.5; d <= 20.0; d += 0.05) {
             double dd = d * d;
-            double shader = dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd))
-                                      : HANDOVER / Math.sqrt(dd * Math.sqrt(Math.sqrt(dd)));
-            double reference = dd <= 4.0 ? Math.pow(dd, -0.75) : HANDOVER * Math.pow(dd, -0.625);
-            assertEquals(reference, shader, 1.0e-12 * reference, "falloff at " + d + " blocks");
+            double shader = dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd)) : 1.41421356 / dd;
+            double reference = dd <= 4.0 ? Math.pow(dd, -0.75) : Math.sqrt(2.0) * Math.pow(dd, -1.0);
+            assertEquals(reference, shader, 1.0e-8 * reference, "falloff at " + d + " blocks");
         }
     }
 
