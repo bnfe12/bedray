@@ -53,6 +53,7 @@ named `bedray-*.jar`. Call this folder `GAME`.
 |---|---|---|
 | DLSS Super Resolution | `nvngx_dlss.dll`, `vkb_dlss.dll` | `GAME/bedray/natives/` |
 | DLSS Ray Reconstruction | additionally `nvngx_dlssd.dll` | `GAME/bedray/natives/` |
+| FSR Upscaling 4.1.2 | amd_fidelityfx_upscaler_vk.dll from AMD FSR SDK 2.4.0 signedbin | GAME/bedray/natives/ |
 | FSR 3.1 / 2.x | `amd_fidelityfx_vk.dll` | `GAME/bedray/natives/` |
 | NRD denoiser | `NRD.dll`, `vkb_nrd.dll` | `GAME/bedray/natives/` |
 | XeSS | `libxess.dll` | `GAME/bedray/natives/` |
@@ -67,6 +68,7 @@ All DLLs must be **x64** (64-bit). Nothing else is needed; do not copy other DLL
 |---|---|---|
 | DLSS (`nvngx_dlss.dll`, `nvngx_dlssd.dll`) | https://github.com/NVIDIA/DLSS (NVIDIA's DLSS SDK; read its `LICENSE.txt` to me) | The Windows x64 release (non-development) DLLs from the SDK's `lib/Windows_x86_64` folders. Confirm the exact path in the repository with me. |
 | Streamline (`sl.*.dll`, `nvngx_dlssg.dll`) | https://github.com/NVIDIAGameWorks/Streamline/releases | A **2.14.x** release. Use the release archive, the **production** (not development/debug) x64 binaries, normally in `bin/x64`. Confirm the exact path in the archive with me. |
+| FSR 4 Vulkan upscaler | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0 | SHA-256 4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7. Restart Minecraft after installation. |
 | FSR (`amd_fidelityfx_vk.dll`) | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4 (also reachable from https://gpuopen.com/) | The archive is large (hundreds of MB). Inside it, the **signed Vulkan** DLL `PrebuiltSignedDLL/amd_fidelityfx_vk.dll`. Not the DX12 DLL. |
 | XeSS (`libxess.dll`) | https://github.com/intel/xess/releases | The release archive of the XeSS SDK; `libxess.dll` is the x64 runtime DLL inside it. Do not take `libxell` or `libxess_fg`. Read Intel's licence to me. |
 | NRD (`NRD.dll`) | https://github.com/NVIDIA-RTX/NRD | NRD is distributed as **source**; see "Files that must be built". Do not download random prebuilt `NRD.dll` files. |

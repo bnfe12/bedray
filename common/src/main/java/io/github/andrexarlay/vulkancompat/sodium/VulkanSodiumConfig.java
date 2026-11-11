@@ -432,6 +432,24 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         GROUP_IDS.put("main_upscaling", curGroup);
         addUpscalerBackend(builder, up, backendId, gameDir, st);
         addQualityModes(builder, up, backendId, gameDir, st);
+        addFsrVersion(builder, up, backendId, gameDir, st);
+        up.addOption(intOpt(builder, "custom_scale", 100, 25, 100, 5, percent(),
+            v -> {
+                VulkanRtxConfig.customScalePercent = v;
+                VulkanRtxConfig.syncUpscalerTypeWithPreset();
+                VulkanRtxManager.applyResolutionScalingNow();
+            }, () -> VulkanRtxConfig.customScalePercent,
+            s -> s.readEnumOption(id("quality_preset"), VulkanRtxConfig.QualityPreset.class) == VulkanRtxConfig.QualityPreset.CUSTOM
+                && s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.BILINEAR,
+            new Identifier[] {id("quality_preset"), backendId}, Mark.NONE, OptionImpact.MEDIUM, true, st));
+        up.addOption(intOpt(builder, "fsr_sharpness", 0, 0, 100, 5,
+            v -> v == 0 ? tr("bedray.onoff.off", "Off") : Component.literal(v + "%"),
+            v -> {
+                VulkanRtxConfig.fsrSharpness = v / 100.0f;
+                LOGGER.info("[VKB-AUTOTEST] ui_upscaler fsr_sharpness={}", VulkanRtxConfig.fsrSharpness);
+            }, () -> Math.round(VulkanRtxConfig.fsrSharpness * 100.0f),
+            s -> s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.FSR, new Identifier[] {backendId}, Mark.NONE,
+            OptionImpact.LOW, true, st));
         up.addOption(track("frame_generation_provider", FrameGenOptions.provider(builder, st)));
         up.addOption(track("frame_generation_mode", FrameGenOptions.mode(builder, st)));
         page.addOptionGroup(up);
@@ -525,6 +543,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             }
             hideRowWhenDisabled(path);
             group.addOption(track(path, o));
+            addTemporalCustomScale(builder, group, backendId, ub, path, st);
         }
         Identifier presetId = id("quality_preset");
         EnumOptionBuilder<VulkanRtxConfig.QualityPreset> q = builder.createEnumOption(presetId, VulkanRtxConfig.QualityPreset.class);
@@ -546,6 +565,21 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setControlHiddenWhenDisabled(true).setImpact(OptionImpact.MEDIUM).setStorageHandler(st);
         hideRowWhenDisabled("quality_preset");
         group.addOption(track("quality_preset", q));
+    }
+
+    private static void addTemporalCustomScale(ConfigBuilder builder, OptionGroupBuilder group, Identifier backendId,
+                                               UpscalerBackend backend, String modePath, StorageEventHandler storage) {
+        Identifier modeId = id(modePath);
+        String scalePath = backend.name().toLowerCase(Locale.ROOT) + "_custom_scale";
+        group.addOption(intOpt(builder, scalePath, 67, UpscalerModes.customMinPercent(backend),
+            UpscalerModes.CUSTOM_MAX_PERCENT, 1, percent(),
+            percent -> {
+                VulkanRtxConfig.setCustomPercent(backend, percent);
+                if (VulkanRtxConfig.activeBackend == backend) VulkanRtxConfig.reapplyUpscaler("ui_" + scalePath);
+            }, () -> VulkanRtxConfig.customPercent(backend),
+            state -> state.readEnumOption(backendId, UpscalerBackend.class) == backend
+                && state.readEnumOption(modeId, UpscalerMode.class) == UpscalerMode.CUSTOM,
+            new Identifier[] {backendId, modeId}, Mark.NONE, OptionImpact.MEDIUM, true, storage));
     }
 
     private static OptionBuilder presetsButton(ConfigBuilder builder) {
@@ -757,23 +791,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             VulkanRtxConfig.pointSamplingSharpness = v;
             TextureLodBias.setPointSamplingSharpness(v);
         }, () -> VulkanRtxConfig.pointSamplingSharpness, null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
-        img.addOption(intOpt(builder, "custom_scale", 100, 25, 100, 5, percent(),
-            v -> {
-                VulkanRtxConfig.customScalePercent = v;
-                VulkanRtxConfig.syncUpscalerTypeWithPreset();
-                VulkanRtxManager.applyResolutionScalingNow();
-            }, () -> VulkanRtxConfig.customScalePercent,
-            s -> s.readEnumOption(id("quality_preset"), VulkanRtxConfig.QualityPreset.class) == VulkanRtxConfig.QualityPreset.CUSTOM
-                && s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.BILINEAR,
-            new Identifier[] {id("quality_preset"), backendId}, Mark.NONE, OptionImpact.MEDIUM, true, st));
-        img.addOption(intOpt(builder, "fsr_sharpness", 0, 0, 100, 5,
-            v -> v == 0 ? tr("bedray.onoff.off", "Off") : Component.literal(v + "%"),
-            v -> {
-                VulkanRtxConfig.fsrSharpness = v / 100.0f;
-                LOGGER.info("[VKB-AUTOTEST] ui_upscaler fsr_sharpness={}", VulkanRtxConfig.fsrSharpness);
-            }, () -> Math.round(VulkanRtxConfig.fsrSharpness * 100.0f),
-            s -> s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.FSR, new Identifier[] {backendId}, Mark.NONE,
-            OptionImpact.LOW, true, st));
         endGroup(builder, page, img, "adv_image");
 
         // ---- Frame generation details
@@ -797,7 +814,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         // ---- Fine-tuning & expert numbers: dev knobs, only with expert UI (-Dvkrtx.ui.expert=true / ui_expert in bedray.toml)
         if (expert) {
             OptionGroupBuilder ex = collapsible(builder, CollapsibleGroups.RT_EXPERT, "Fine-Tuning & Budgets", "expert");
-            addExpertOptions(builder, ex, raysOn, anyRt, pathOn, dMode, modeId, gameDir, st);
+            addExpertOptions(builder, ex, raysOn, anyRt, pathOn, dMode, modeId, st);
             endGroup(builder, page, ex, "expert");
         }
 
@@ -918,7 +935,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     private void addExpertOptions(ConfigBuilder builder, OptionGroupBuilder ex, Function<ConfigState, Boolean> raysOn,
                                   Function<ConfigState, Boolean> anyRt, Function<ConfigState, Boolean> pathOn, Identifier[] dMode,
-                                  Identifier modeId, Path gameDir, StorageEventHandler st) {
+                                  Identifier modeId, StorageEventHandler st) {
         String[] names = {"rays_reflection_distance", "rays_ao_radius", "rays_emissive_quality", "rays_emissive_distance",
             "rays_gi_distance"};
         int[][] r = {{128, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16}, {3, 1, 8, 1}, {1, 1, 8, 1},
@@ -964,18 +981,19 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             RtSettings.rtFogInScattering = v;
             RtSettings.fogInScattering = RtSettings.clampFloat(v / 100f, 0.0f, 2.0f);
         }, () -> RtSettings.rtFogInScattering, anyRt, dMode, Mark.NONE, OptionImpact.MEDIUM, false, st));
-        addFsrVersion(builder, ex, id("upscaler_backend"), gameDir, st);
     }
 
     private void addFsrVersion(ConfigBuilder builder, OptionGroupBuilder group, Identifier backendId, Path gameDir, StorageEventHandler st) {
         List<FfxNative.ProviderVersion> providers = UpscalerSelection.status(UpscalerBackend.FSR, gameDir) == UpscalerSelection.Status.AVAILABLE
             ? FsrRuntime.availableVersions() : List.of();
-        EnumSet<FsrVersion> versions = EnumSet.of(FsrVersion.AUTO);
+        EnumSet<FsrVersion> versions = EnumSet.of(FsrVersion.AUTO, FsrVersion.FSR_4);
         for (FsrVersion v : FsrVersion.values()) {
             if (v.isAvailableIn(providers)) {
                 versions.add(v);
             }
         }
+        // Preserve a saved preference when the hardware or library changed.
+        versions.add(VulkanRtxConfig.fsrVersion);
         EnumOptionBuilder<FsrVersion> o = builder.createEnumOption(id("fsr_version"), FsrVersion.class);
         o.setName(nameOf("fsr_version")).setTooltip(v -> tipOf("fsr_version")).setDefaultValue(FsrVersion.AUTO).setAllowedValues(versions)
             .setElementNameProvider(val -> {
@@ -985,7 +1003,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setEnabledProvider(s -> s.readEnumOption(backendId, UpscalerBackend.class) == UpscalerBackend.FSR, backendId)
             .setControlHiddenWhenDisabled(false)
             .setBinding(val -> VulkanRtxConfig.applyUpscaler(VulkanRtxConfig.activeBackend, null, null, null, val, "ui_fsr_version"),
-                () -> versions.contains(VulkanRtxConfig.fsrVersion) ? VulkanRtxConfig.fsrVersion : FsrVersion.AUTO)
+                () -> VulkanRtxConfig.fsrVersion)
             .setImpact(OptionImpact.LOW).setStorageHandler(st);
         hideRowWhenDisabled("fsr_version");
         group.addOption(track("fsr_version", o));

@@ -110,8 +110,16 @@ public record LibraryDescriptor(String id, String displayName, String vendor, Li
             List.of("amd_fidelityfx_vk.dll"), List.of(), "AMD FidelityFX SDK license (not reviewed by the core)",
             "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK");
 
+    public static final String FSR4_DLL = "amd_fidelityfx_upscaler_vk.dll";
+    public static final String FSR4_SHA256 = "4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7";
+    public static final String FSR4_SDK_URL =
+        "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0";
+    public static final LibraryDescriptor FSR4 = new LibraryDescriptor("fsr4", "AMD FSR Upscaling 4 (Vulkan)", "AMD",
+        List.of(FSR4_DLL), List.of(), "AMD FSR SDK 2.4 terms", FSR4_SDK_URL,
+        Map.of(FSR4_DLL, Set.of(FSR4_SHA256)), null, DEFAULT_MAX_FILE_BYTES);
+
     /** The descriptors registered by default. */
     public static List<LibraryDescriptor> builtIn() {
-        return List.of(XESS, DLSS, DLSS_G, DLSS_RR, STREAMLINE, NRD, FSR);
+        return List.of(XESS, DLSS, DLSS_G, DLSS_RR, STREAMLINE, NRD, FSR, FSR4);
     }
 }

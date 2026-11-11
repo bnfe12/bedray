@@ -249,7 +249,7 @@ public final class VulkanRtxConfig {
     public static UpscalerMode dlssMode = UpscalerModes.defaultMode(UpscalerBackend.DLSS);
     /** FSR quality mode (persisted as {@code fsr_mode}); must be a member of {@code UpscalerModes.modesFor(FSR)}. */
     public static UpscalerMode fsrMode = UpscalerModes.defaultMode(UpscalerBackend.FSR);
-    /** FSR provider version (persisted as {@code fsr_version}): AUTO, FSR_3_1 or FSR_2 (only those present in the DLL apply). */
+    /** FSR provider version (persisted as {@code fsr_version}): AUTO, FSR_4, FSR_3_1 or FSR_2 (only those present in the DLL apply). */
     public static FsrVersion fsrVersion = FsrVersion.AUTO;
     /** FSR RCAS sharpness 0..1 (persisted as {@code fsr_sharpness}); 0 disables the sharpening pass. Per dispatch, no re-init. */
     public static float fsrSharpness = 0.0f;
@@ -545,7 +545,7 @@ public final class VulkanRtxConfig {
                             parsed == UpscalerBackend.DLSS
                                 ? io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability.unusableReason()
                                 : parsed == UpscalerBackend.FSR
-                                    ? io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrLibrary.library().reason()
+                                    ? io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrLibrary.upscalerLibrary().reason()
                                     : "not implemented (STUB)");
                         parsed = UpscalerBackend.BILINEAR;
                     }
@@ -575,7 +575,7 @@ public final class VulkanRtxConfig {
                         LOGGER.warn("fsr_mode '{}' is not offered by FSR 3.1/2 (no ULTRA_QUALITY), keeping {}", val, fsrMode);
                     }
                 }
-                case "fsr_version" -> fsrVersion = FsrVersion.valueOf(val.toUpperCase());
+                case "fsr_version" -> fsrVersion = FsrVersion.parse(val);
                 case "fsr_sharpness" -> {
                     float s = Float.parseFloat(val);
                     if (s >= 0.0f && s <= 1.0f) {
@@ -832,7 +832,7 @@ public final class VulkanRtxConfig {
             writer.write("dlss_mode = \"" + dlssMode.name() + "\"\n");
             writer.write("# FSR mode: NATIVE_AA, QUALITY, BALANCED, PERFORMANCE, ULTRA_PERFORMANCE (the render size is asked from the FidelityFX DLL)\n");
             writer.write("fsr_mode = \"" + fsrMode.name() + "\"\n");
-            writer.write("# FSR version: AUTO (newest provider in the DLL), FSR_3_1 or FSR_2. FSR 4 has no Vulkan build from AMD.\n");
+            writer.write("# FSR version: AUTO (best eligible provider), FSR_4, FSR_3_1 or FSR_2. FSR_4 uses AMD FSR SDK 2.4.\n");
             writer.write("fsr_version = \"" + fsrVersion.name() + "\"\n");
             writer.write("# FSR RCAS sharpening 0.0 (off) .. 1.0\n");
             writer.write("fsr_sharpness = " + fsrSharpness + "\n");

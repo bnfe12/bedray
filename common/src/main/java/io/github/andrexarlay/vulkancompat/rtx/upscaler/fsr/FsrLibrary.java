@@ -1,6 +1,8 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr;
 
+import io.github.andrexarlay.vulkanbridge.api.LibraryDescriptor;
 import io.github.andrexarlay.vulkanbridge.api.LibraryResolution;
+import io.github.andrexarlay.vulkanbridge.api.LibraryStatus;
 import io.github.andrexarlay.vulkanbridge.api.NativeLibraries;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
@@ -34,6 +36,7 @@ public final class FsrLibrary {
 
     public static final String LIBRARY_ID = "fsr";
     public static final String DLL = "amd_fidelityfx_vk.dll";
+    public static final String MODERN_DLL = LibraryDescriptor.FSR4_DLL;
     public static final String ALLOW_UNKNOWN_PROPERTY = "vkrtx.fsr.allowUnknownDll";
     private static final String MANAGER_UNAVAILABLE = "native library manager unavailable: ";
 
@@ -51,6 +54,7 @@ public final class FsrLibrary {
 
     private static Supplier<LibraryResolution> resolver = () -> libraries().resolve(LIBRARY_ID);
     private static Library cached;
+    private static Library modernCached;
     private static boolean listenerRegistered;
 
     private FsrLibrary() {}
@@ -79,6 +83,30 @@ public final class FsrLibrary {
 
     public static boolean isUsable() {
         return library().usable();
+    }
+
+    /** The legacy library remains independently available to the FSR 3 frame generation path. */
+    public static Library upscalerLibrary() {
+        Library modern = modernLibrary();
+        return modern.usable() ? modern : library();
+    }
+
+    public static synchronized Library modernLibrary() {
+        if (modernCached != null) return modernCached;
+        LibraryResolution resolved;
+        try {
+            resolved = libraries().resolve(LibraryDescriptor.FSR4.id());
+        } catch (IllegalStateException e) {
+            return Library.unusable(MANAGER_UNAVAILABLE + LogPaths.show(e.getMessage()));
+        }
+        Path path = resolved.file(LibraryDescriptor.FSR4_DLL).orElse(null);
+        if (path == null || resolved.status().state() != LibraryStatus.State.VERIFIED) {
+            modernCached = Library.unusable("FSR SDK 2.4: " + resolved.status().state() + " (" + resolved.status().detail() + ")");
+        } else {
+            modernCached = new Library(true, "ok official: AMD FSR SDK 2.4.0", path, LibraryDescriptor.FSR4_SHA256,
+                "AMD FSR SDK 2.4.0", resolved.versions().get(LibraryDescriptor.FSR4_DLL));
+        }
+        return modernCached;
     }
 
     private static Library evaluate() {
@@ -132,6 +160,7 @@ public final class FsrLibrary {
 
     public static synchronized void invalidate() {
         cached = null;
+        modernCached = null;
     }
 
     /** Test hook: replaces {@code resolve("fsr")}; null restores Bedray Core resolver. */

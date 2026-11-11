@@ -9,6 +9,7 @@ resolution. Choose it under **Video Settings, Bedray ALPHA: Upscaling, Upscaler*
 | Bilinear (built-in) | nothing | any | simple stretch, no reconstruction | BETA |
 | FSR 1 (built-in) | nothing | any | spatial (one frame), AMD EASU + optional RCAS | EXPERIMENTAL |
 | NIS (built-in) | nothing | any | spatial, NVIDIA Image Scaling | EXPERIMENTAL |
+| FSR Upscaling 4.1.2 (AMD) | signed SDK 2.4 Vulkan upscaler DLL | supported Radeon GPU and AMD driver | ML temporal | source implementation |
 | FSR 3.1 / 2.x (AMD) | official `amd_fidelityfx_vk.dll` | any Vulkan GPU in theory; only tested on NVIDIA | temporal | BETA |
 | XeSS (Intel) | `libxess.dll` | any in theory; only tested on NVIDIA | temporal | BETA |
 | DLSS Super Resolution (NVIDIA) | `nvngx_dlss.dll` + `vkb_dlss.dll` | NVIDIA RTX | temporal | BETA |
@@ -44,6 +45,8 @@ extensions that backend needs (for example the library appeared after the game s
 ## Notes
 
 * Texture detail: "Auto Texture LOD Bias" (Page 1) sharpens textures when the render scale is below 100%.
-* FSR version: Auto uses FSR 3.1; "FSR 2" is listed only if your AMD library contains it. FSR 4 is not available on Vulkan.
+* **FSR Version** is beside the FSR quality mode. Auto prefers FSR 4 when the SDK reports it for the enabled Vulkan device, then FSR 3.1 or FSR 2. An explicit FSR 4 request keeps the selection and reports a missing runtime, a required restart or unsupported hardware if it cannot run.
+* **Custom** exposes separate saved input scales for FSR, DLSS and XeSS. The provider can constrain the actual input size. The FSR settings panel shows the provider name and actual input/output dimensions after context creation.
+* **DLSS 5** is a separate neural rendering effect. [NVIDIA's November 9 developer response](https://forums.developer.nvidia.com/t/official-dlss-5-neural-rendering-plugin-access-for-unreal-engine-5-8-2/382731) says the SDK is partner-only. Bedray's DLSS Super Resolution and Ray Reconstruction retain their own settings.
 * A backend that is not usable is rejected with a log line, never silently replaced: look for `upscaler=rejected` in `latest.log`.
 * Frame generation is separate: [FRAME_GENERATION.md](FRAME_GENERATION.md). With it on, DLSS runs through Streamline plugins (see that page).

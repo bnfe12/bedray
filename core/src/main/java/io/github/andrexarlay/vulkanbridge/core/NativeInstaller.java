@@ -117,7 +117,7 @@ public final class NativeInstaller {
                 try (InputStream in = Files.newInputStream(src)) {
                     NativeLibrariesImpl.copyLimited(ID, in, tmp, NativeFiles.MAX_BYTES, name);
                 }
-                String problem = NativeFiles.problem(tmp);
+                String problem = problem(tmp, canonical);
                 if (problem != null) {
                     throw new IOException(canonical + " " + problem);
                 }
@@ -139,6 +139,14 @@ public final class NativeInstaller {
                 LOGGER.warn("[VKB-NATIVES] {}", LogPaths.show(e.getMessage()));
             }
         }
+    }
+
+    private static String problem(Path file, String canonical) throws IOException {
+        String problem = NativeFiles.problem(file);
+        if (problem != null) return problem;
+        String expected = NativeCatalog.externalSha256(canonical);
+        return expected != null && !expected.equals(NativeFiles.sha256(file))
+            ? "does not match the signed AMD SDK 2.4 DLL" : null;
     }
 
     private static List<Staged> extractZip(Path zip, Path staging, List<String> skipped) throws IOException {
@@ -188,7 +196,7 @@ public final class NativeInstaller {
             List<Staged> ok = new ArrayList<>();
             List<String> why = new ArrayList<>();
             for (Staged s : en.getValue()) {
-                String p = NativeFiles.problem(s.file());
+                String p = problem(s.file(), s.canonical());
                 if (p == null) {
                     ok.add(s);
                 } else {

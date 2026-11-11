@@ -83,9 +83,15 @@ public final class NativeScanner {
                 return new SlotState(s, State.INVALID, problem, sizeOrZero(found), null, legacy, null);
             }
             Boolean same = null;
-            if (s.bundled()) {
+            String expected = NativeCatalog.externalSha256(s.file());
+            if (s.bundled() || expected != null) {
                 try {
-                    same = s.bundledSha256().equals(cachedSha(found));
+                    String sha = cachedSha(found);
+                    if (expected != null && !expected.equals(sha)) {
+                        return new SlotState(s, State.INVALID, "SHA-256 does not match the signed AMD SDK 2.4 DLL",
+                            sizeOrZero(found), null, legacy, null);
+                    }
+                    if (s.bundled()) same = s.bundledSha256().equals(sha);
                 } catch (IOException e) {
                     return new SlotState(s, State.INVALID, "cannot read: " + LogPaths.show(e.toString()), sizeOrZero(found), null, legacy, null);
                 }

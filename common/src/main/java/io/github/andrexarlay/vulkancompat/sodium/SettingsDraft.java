@@ -2,7 +2,15 @@ package io.github.andrexarlay.vulkancompat.sodium;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtAtmosphereSettings;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
+import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrDeviceRequirements;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrLibrary;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion;
 import net.caffeinemc.mods.sodium.client.config.structure.Config;
 import net.caffeinemc.mods.sodium.client.config.structure.EnumOption;
 import net.caffeinemc.mods.sodium.client.config.structure.IntegerOption;
@@ -163,8 +171,8 @@ final class SettingsDraft {
             };
             return new RuntimeStatus(badge, Component.literal(io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime.statusLine()));
         }
-        if (entry.path().equals("upscaler_backend") || entry.path().equals("dlss_mode") || entry.path().equals("xess_mode") || entry.path().startsWith("fsr_")) {
-            var backend = config.readEnumOption(id("upscaler_backend"), io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.class);
+        if (entry.path().equals("upscaler_backend") || entry.path().equals("dlss_mode") || entry.path().equals("xess_mode") || entry.path().endsWith("_custom_scale") || entry.path().startsWith("fsr_")) {
+            var backend = config.readEnumOption(id("upscaler_backend"), UpscalerBackend.class);
             var availability = io.github.andrexarlay.vulkancompat.rtx.config.UpscalerSelection.status(backend, VulkanRtxConfig.gameDir());
             Badge badge = switch (availability) {
                 case AVAILABLE -> io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration.requiresRestart(backend) ? Badge.REQUIRES_RESTART : Badge.AVAILABLE;
@@ -172,6 +180,8 @@ final class SettingsDraft {
                 case LIBRARY_MISSING -> Badge.MISSING_RUNTIME;
                 case UNSUPPORTED_GPU -> Badge.UNSUPPORTED_HARDWARE;
             };
+            if (backend == UpscalerBackend.FSR) return fsrStatus(badge);
+            if (backend == UpscalerBackend.DLSS) return dlssStatus(badge);
             return new RuntimeStatus(badge, Component.translatable("bedray.settings.requested_runtime", backend.name(), VulkanRtxConfig.activeBackend.name()));
         }
         if (!entry.option().isEnabled()) return new RuntimeStatus(Badge.INACTIVE, Component.translatable("bedray.settings.inactive"));
@@ -182,10 +192,64 @@ final class SettingsDraft {
         }
         String failure = io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate.failure();
         if (failure != null) return new RuntimeStatus(Badge.FAILED_INITIALIZATION, Component.literal(failure));
-        if (entry.path().equals("path_denoiser")) return new RuntimeStatus(Badge.EXPERIMENTAL,
-            Component.literal(io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.denoiserRuntimeState() + ": "
-                + io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.denoiserResolutionReason()));
+        if (entry.path().equals("path_denoiser")) {
+            var selected = config.readEnumOption(id("path_denoiser"), RtSettings.PathDenoiser.class);
+            String failureReason = RtFrameRenderer.denoiserRuntimeFailure();
+            if (selected == RtFrameRenderer.denoiserRequested() && failureReason != null) {
+                return new RuntimeStatus(Badge.FAILED_INITIALIZATION, Component.literal(failureReason));
+            }
+            var live = RtFrameRenderer.denoiserSelected();
+            Component active = RtFrameRenderer.denoiserRuntimeState().equals("active")
+                ? Component.literal(live.name()) : Component.translatable("bedray.settings.provider_inactive");
+            return new RuntimeStatus(selected == RtSettings.PathDenoiser.OFF ? Badge.INACTIVE : Badge.EXPERIMENTAL,
+                Component.translatable("bedray.settings.requested_runtime", selected.name(), active)
+                    .append(" · ").append(RtFrameRenderer.denoiserResolutionReason()));
+        }
         return new RuntimeStatus(Badge.EXPERIMENTAL, Component.translatable("bedray.settings.runtime_separate"));
+    }
+
+    private RuntimeStatus dlssStatus(Badge badge) {
+        if (DlssRuntime.isActive() && RtFrameRenderer.dlssRrRuntimeActive() && RtFrameRenderer.rrOutputReady()
+                && !Boolean.getBoolean("bedray.rt.disableRrOutput")) {
+            return new RuntimeStatus(Badge.INACTIVE, Component.translatable("bedray.settings.dlss_rr_owns_output"));
+        }
+        if (DlssRuntime.state() == DlssRuntime.State.FAILED && DlssRuntime.lastFailure() != null) {
+            return new RuntimeStatus(Badge.FAILED_INITIALIZATION, Component.literal(DlssRuntime.lastFailure()));
+        }
+        var active = DlssRuntime.isReady() ? DlssRuntime.activeMode() : null;
+        Component activeText = active == null ? Component.translatable("bedray.settings.provider_inactive")
+            : Component.literal(active.name());
+        return new RuntimeStatus(badge, Component.translatable("bedray.settings.requested_runtime", "DLSS Super Resolution", activeText));
+    }
+
+    private RuntimeStatus fsrStatus(Badge badge) {
+        FsrVersion requested = config.readEnumOption(id("fsr_version"), FsrVersion.class);
+        if (requested == FsrVersion.FSR_4) {
+            if (!FsrLibrary.modernLibrary().usable()) {
+                return new RuntimeStatus(Badge.MISSING_RUNTIME,
+                    Component.translatable("bedray.settings.fsr4_runtime_missing"));
+            }
+            if (!FsrDeviceRequirements.modernRegistered()) {
+                return new RuntimeStatus(Badge.REQUIRES_RESTART, Component.translatable("bedray.settings.fsr4_restart"));
+            }
+            if (!requested.isAvailableIn(FsrRuntime.availableVersions())) {
+                return new RuntimeStatus(Badge.UNSUPPORTED_HARDWARE,
+                    Component.translatable("bedray.settings.fsr4_unavailable"));
+            }
+        }
+        if (FsrRuntime.state() == FsrRuntime.State.FAILED && requested == VulkanRtxConfig.fsrVersion
+                && FsrRuntime.failureReason() != null) {
+            return new RuntimeStatus(Badge.FAILED_INITIALIZATION, Component.literal(FsrRuntime.failureReason()));
+        }
+        String active = FsrRuntime.isReady() ? FsrRuntime.activeProvider() : null;
+        var input = FsrRuntime.activeInput();
+        if (active != null && input != null) {
+            active += " · " + input + " → " + FsrRuntime.outputWidth() + "x" + FsrRuntime.outputHeight();
+        }
+        Component activeText = active == null ? Component.translatable("bedray.settings.provider_inactive") : Component.literal(active);
+        return new RuntimeStatus(badge, Component.translatable("bedray.settings.requested_runtime",
+            Component.translatableWithFallback("bedray.fsr_version." + requested.name().toLowerCase(Locale.ROOT), requested.displayName()),
+            activeText));
     }
 
     boolean visible(Entry e) {
@@ -205,7 +269,7 @@ final class SettingsDraft {
         if (p.startsWith("compute_") || p.startsWith("debug_") || p.equals("rt_debug_view") || p.equals("ui_expert")) return Category.SYSTEM;
         if (p.contains("mode") && (p.startsWith("dlss") || p.startsWith("fsr") || p.startsWith("xess"))
             || p.startsWith("upscaler") || p.startsWith("frame_generation") || p.startsWith("fsr_")
-            || p.equals("quality_preset") || p.equals("custom_scale")) return Category.UPSCALING;
+            || p.equals("quality_preset") || p.equals("custom_scale") || p.endsWith("_custom_scale")) return Category.UPSCALING;
         if (p.startsWith("atm_") || p.startsWith("water_") || p.startsWith("waving_") || p.startsWith("auto_normal")
             || p.startsWith("texture_") || p.equals("point_sampling_sharpness") || p.startsWith("rt_fog")) return Category.WORLD;
         return Category.LIGHTING;
@@ -301,7 +365,7 @@ final class SettingsDraft {
             if (!io.github.andrexarlay.vulkancompat.rtx.config.UpscalerModes.isOffered(io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.FSR1, mode)) return null;
             return "\"" + mode.name() + "\"";
         }
-        if (key.equals("fsr_version")) return "\"" + io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion.valueOf(value.toUpperCase(Locale.ROOT)).name() + "\"";
+        if (key.equals("fsr_version")) return "\"" + FsrVersion.parse(value).name() + "\"";
         if (existing.equalsIgnoreCase("true") || existing.equalsIgnoreCase("false")) {
             if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false")) return null;
             return value.toLowerCase(Locale.ROOT);
@@ -338,6 +402,8 @@ final class SettingsDraft {
             int integer = (int)Math.round(parsed);
             if (!validator.isValueValid(integer)) throw new IllegalArgumentException();
             next = integer;
+        } else if (current instanceof FsrVersion) {
+            next = FsrVersion.parse(value);
         } else if (current instanceof RtMode) {
             next = RtMode.parse(value);
             if (next == null) throw new IllegalArgumentException();

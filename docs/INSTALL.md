@@ -46,6 +46,7 @@ never DLLs from forums, file-sharing sites or other games' folders.
 |---|---|---|---|
 | DLSS Super Resolution | `nvngx_dlss.dll` + `vkb_dlss.dll` | `bedray/natives/` | NVIDIA DLSS SDK: https://github.com/NVIDIA/DLSS |
 | DLSS Ray Reconstruction | additionally `nvngx_dlssd.dll` | `bedray/natives/` | same |
+| FSR Upscaling 4.1.2 | amd_fidelityfx_upscaler_vk.dll from signedbin in AMD FSR SDK 2.4.0 | Install locally in bedray/natives/ | [AMD FSR SDK 2.4.0](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v2.4.0) |
 | FSR 3.1 / 2.x | `amd_fidelityfx_vk.dll` (signed Vulkan DLL of FidelityFX SDK **v1.1.4**) | Included in release jar and extracted to `bedray/natives/` | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/tag/v1.1.4 |
 | XeSS | `libxess.dll` (XeSS SDK **3.0.2**) | Included in release jar and extracted to `bedray/natives/` | https://github.com/intel/xess/releases |
 | NRD denoiser (path tracing) | `NRD.dll` + `vkb_nrd.dll` | `bedray/natives/` | NRD sources: https://github.com/NVIDIA-RTX/NRD (you build `NRD.dll`) |
@@ -67,7 +68,9 @@ and `native/*/build.bat` (the scripts read the SDK locations from environment va
   files appear after the game has started (the page says "restart required").
 * **FSR:** the DLL must be the official build. The mod checks its SHA-256 against the known official file
   (`a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78` for `PrebuiltSignedDLL/amd_fidelityfx_vk.dll` of v1.1.4). Other builds
-  are refused ("library missing" on the page). FSR 4 is not available on Vulkan.
+  are refused ("library missing" on the page). For SDK 2.4 the pinned SHA-256 of the signed Vulkan upscaler is
+  4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7. Restart after installing it.
+  The 1.1.4 DLL still supplies the independent FSR 3 Frame Generation path.
 * **XeSS:** `libxess.dll` only. Release jars include the approved SDK 3.0.2 binary and notices.
 * **Frame generation:** `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`, `nvngx_dlssg.dll` (from the
   Streamline release; use a 2.14.x release, the mod was developed against 2.14.1) and `vkb_sl.dll`.

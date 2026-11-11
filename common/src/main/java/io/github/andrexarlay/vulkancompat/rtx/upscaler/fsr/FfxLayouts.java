@@ -46,10 +46,14 @@ public final class FfxLayouts {
         ADDRESS.withName("resource"), RESOURCE_DESCRIPTION.withName("description"), JAVA_INT.withName("state"),
         MemoryLayout.paddingLayout(4));
 
+    // VkDeviceContext is also passed by pointer in the SDK 2.4 provider query.
+    public static final StructLayout VK_DEVICE_CONTEXT = MemoryLayout.structLayout(
+        ADDRESS.withName("vkDevice"), ADDRESS.withName("vkPhysicalDevice"), ADDRESS.withName("vkDeviceProcAddr"));
+
+    // SDK 2.4 nests VkDeviceContext; these offsets also preserve the legacy FG binding.
     public static final StructLayout CREATE_BACKEND_VK = MemoryLayout.structLayout(
         HEADER.withName("header"), JAVA_LONG.withName("vkDevice"), JAVA_LONG.withName("vkPhysicalDevice"),
         ADDRESS.withName("vkDeviceProcAddr"));
-
     public static final StructLayout CREATE_UPSCALE = MemoryLayout.structLayout(
         HEADER.withName("header"), JAVA_INT.withName("flags"), DIMENSIONS_2D.withName("maxRenderSize"),
         DIMENSIONS_2D.withName("maxUpscaleSize"), MemoryLayout.paddingLayout(4), ADDRESS.withName("fpMessage"));
@@ -118,6 +122,7 @@ public final class FfxLayouts {
         expect(RESOURCE_DESCRIPTION.byteSize(), 32, "sizeof(FfxApiResourceDescription)");
         expect(RESOURCE.byteSize(), 48, "sizeof(FfxApiResource)");
         expect(offset(RESOURCE, "state"), 40, "FfxApiResource.state");
+        expect(VK_DEVICE_CONTEXT.byteSize(), 24, "sizeof(VkDeviceContext)");
         expect(CREATE_BACKEND_VK.byteSize(), 40, "sizeof(ffxCreateBackendVKDesc)");
         expect(offset(CREATE_UPSCALE, "fpMessage"), 40, "ffxCreateContextDescUpscale.fpMessage");
         expect(CREATE_UPSCALE.byteSize(), 48, "sizeof(ffxCreateContextDescUpscale)");

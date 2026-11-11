@@ -51,7 +51,7 @@ public final class UpscalerSelection {
         if (backend == UpscalerBackend.FSR) {
             // Official AMD FidelityFX Vulkan DLL resolved by Bedray Core (FsrLibrary). The GPU vendor does not matter (FSR runs
             // on any Vulkan GPU with the features of FsrDeviceRequirements).
-            return FsrLibrary.isUsable() ? Status.AVAILABLE : Status.LIBRARY_MISSING;
+            return FsrLibrary.upscalerLibrary().usable() ? Status.AVAILABLE : Status.LIBRARY_MISSING;
         }
         if (!backend.isImplemented()) {
             return Status.NOT_IMPLEMENTED;
@@ -164,7 +164,7 @@ public final class UpscalerSelection {
         try {
             UpscalerMode m = raw[1] == null ? UpscalerModes.defaultMode(UpscalerBackend.FSR)
                 : UpscalerMode.valueOf(raw[1].toUpperCase(Locale.ROOT));
-            FsrVersion v = raw[2] == null ? FsrVersion.AUTO : FsrVersion.valueOf(raw[2].toUpperCase(Locale.ROOT));
+            FsrVersion v = raw[2] == null ? FsrVersion.AUTO : FsrVersion.parse(raw[2]);
             return new FsrRequest(FsrQuality.fromMode(m == UpscalerMode.CUSTOM ? UpscalerMode.QUALITY : m), v); // CUSTOM: see UpscalerRequest.build
         } catch (IllegalArgumentException e) {
             LOGGER.error("[VKB-FSR] [VKB-AUTOTEST] fsr=FAILED stage=config result=invalid_value mode={} version={} file={} message={}",

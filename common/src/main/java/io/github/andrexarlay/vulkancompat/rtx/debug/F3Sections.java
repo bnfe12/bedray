@@ -693,7 +693,7 @@ public final class F3Sections {
         if (xv != null) {
             b.append(' ').append(VAL).append(xv).append(R);
         }
-        FsrLibrary.Library fsr = FsrLibrary.library();
+        FsrLibrary.Library fsr = FsrLibrary.upscalerLibrary();
         b.append(" | FSR ").append(fsr.usable() ? OK : OFF).append(fsr.usable() ? "found" : "missing").append(R);
         if (fsr.usable() && fsr.fileVersion() != null) {
             b.append(' ').append(VAL);

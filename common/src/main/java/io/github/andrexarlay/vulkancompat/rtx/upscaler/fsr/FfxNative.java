@@ -44,12 +44,16 @@ public final class FfxNative {
     public static final long DESC_QUERY_GET_VERSIONS = 4L;
     public static final long DESC_OVERRIDE_VERSION = 5L;
     public static final long DESC_QUERY_GET_PROVIDER_VERSION = 6L;
-    public static final long DESC_CREATE_BACKEND_VK = 0x3L;
+    public static final long DESC_CREATE_BACKEND_VK = 0x3L; // SDK 1.1.4 (deprecated)
+    private static final long DESC_CREATE_BACKEND_VK_SDK_24 = 0x01000003L;
     public static final long DESC_CREATE_UPSCALE = 0x00010000L;
     public static final long DESC_DISPATCH_UPSCALE = 0x00010001L;
     public static final long DESC_QUERY_UPSCALE_RATIO = 0x00010002L;
     public static final long DESC_QUERY_RENDER_RESOLUTION = 0x00010003L;
     public static final long DESC_QUERY_JITTER_PHASE_COUNT = 0x00010004L;
+    private static final long DESC_QUERY_RESOURCE_REQUIREMENTS = 0x0001000aL;
+    // Color, depth, motion and exposure (provided by the auto-exposure flag).
+    public static final long PROVIDED_INPUTS = 0x0fL;
 
     // FfxApiCreateContextUpscaleFlags (ffx_upscale.h l.40-51)
     public static final int CREATE_HDR = 1 << 0;
@@ -71,10 +75,12 @@ public final class FfxNative {
     public static final int USAGE_UAV = 1 << 1;
     public static final int USAGE_DEPTHTARGET = 1 << 2;
     public static final int STATE_COMMON = 1 << 0;                // FfxApiResourceState l.86 (VK backend: GENERAL layout)
+    public static final int STATE_COMPUTE_READ = 1 << 2;
     public static final int STATE_UNORDERED_ACCESS = 1 << 1;      // (VK backend: GENERAL layout)
 
     private final Arena arena = Arena.ofShared();
     private final Path libraryPath;
+    private final boolean modern;
     private final MethodHandle createContext;
     private final MethodHandle destroyContext;
     private final MethodHandle query;
@@ -122,6 +128,7 @@ public final class FfxNative {
     private FfxNative(Path libraryPath) {
         FfxLayouts.verify();
         this.libraryPath = libraryPath;
+        modern = libraryPath.getFileName().toString().equalsIgnoreCase(FsrLibrary.MODERN_DLL);
         SymbolLookup lookup;
         try {
             lookup = SymbolLookup.libraryLookup(libraryPath, arena);
@@ -173,17 +180,34 @@ public final class FfxNative {
 
     // ------------------------------------------------------------------ queries without a context
 
-    /**
-     * {@code ffxQueryDescGetVersions} for the upscaler effect (ffx_api.cpp: with a NULL context the call enumerates the
-     * internal providers; {@code device} is the DX12 device only, NULL here). Two calls: count, then ids and names.
-     */
+    public record VulkanHandles(long device, long physicalDevice, long getDeviceProcAddr) {
+        private void write(MemorySegment dst) {
+            dst.set(ADDRESS, 0, MemorySegment.ofAddress(device));
+            dst.set(ADDRESS, 8, MemorySegment.ofAddress(physicalDevice));
+            dst.set(ADDRESS, 16, MemorySegment.ofAddress(getDeviceProcAddr));
+        }
+    }
+
+    public boolean modern() { return modern; }
+
     public QueryResult<List<ProviderVersion>> upscalerVersions() {
+        return upscalerVersions(null);
+    }
+
+    /** SDK 2.4 filters effect versions using the same logical device that will own the context. */
+    public QueryResult<List<ProviderVersion>> upscalerVersions(VulkanHandles handles) {
+        if (modern && handles == null) return new QueryResult<>(6, List.of());
         try (Arena a = Arena.ofConfined()) {
             MemorySegment count = a.allocate(JAVA_LONG);
             MemorySegment d = a.allocate(FfxLayouts.QUERY_GET_VERSIONS);
             d.set(JAVA_LONG, 0, DESC_QUERY_GET_VERSIONS);
             d.set(JAVA_LONG, FfxLayouts.offset(FfxLayouts.QUERY_GET_VERSIONS, "createDescType"), DESC_CREATE_UPSCALE);
             d.set(ADDRESS, FfxLayouts.offset(FfxLayouts.QUERY_GET_VERSIONS, "outputCount"), count);
+            if (modern) {
+                MemorySegment device = a.allocate(FfxLayouts.VK_DEVICE_CONTEXT);
+                handles.write(device);
+                d.set(ADDRESS, FfxLayouts.offset(FfxLayouts.QUERY_GET_VERSIONS, "device"), device);
+            }
             int r = invokeInt(query, MemorySegment.NULL, d);
             long n = count.get(JAVA_LONG, 0);
             if (r != RETURN_OK || n <= 0) {
@@ -197,6 +221,7 @@ public final class FfxNative {
             d.set(ADDRESS, FfxLayouts.offset(FfxLayouts.QUERY_GET_VERSIONS, "versionIds"), ids);
             d.set(ADDRESS, FfxLayouts.offset(FfxLayouts.QUERY_GET_VERSIONS, "versionNames"), names);
             r = invokeInt(query, MemorySegment.NULL, d);
+            if (r != RETURN_OK) return new QueryResult<>(r, List.of());
             long got = count.get(JAVA_LONG, 0);
             List<ProviderVersion> out = new ArrayList<>();
             for (long i = 0; i < Math.min(got, n); i++) {
@@ -210,12 +235,16 @@ public final class FfxNative {
 
     /** {@code ffxQueryDescUpscaleGetRenderResolutionFromQualityMode} answered by the provider {@code versionId} (0 = default). */
     public QueryResult<Size> renderResolution(int displayW, int displayH, int qualityMode, long versionId) {
+        return renderResolution(displayW, displayH, qualityMode, versionId, null);
+    }
+
+    public QueryResult<Size> renderResolution(int displayW, int displayH, int qualityMode, long versionId, VulkanHandles handles) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment outW = a.allocate(JAVA_INT);
             MemorySegment outH = a.allocate(JAVA_INT);
             MemorySegment d = a.allocate(FfxLayouts.QUERY_RENDER_RESOLUTION);
             d.set(JAVA_LONG, 0, DESC_QUERY_RENDER_RESOLUTION);
-            chainOverride(a, d, versionId);
+            chainQuery(a, d, versionId, handles);
             d.set(JAVA_INT, FfxLayouts.offset(FfxLayouts.QUERY_RENDER_RESOLUTION, "displayWidth"), displayW);
             d.set(JAVA_INT, FfxLayouts.offset(FfxLayouts.QUERY_RENDER_RESOLUTION, "displayHeight"), displayH);
             d.set(JAVA_INT, FfxLayouts.offset(FfxLayouts.QUERY_RENDER_RESOLUTION, "qualityMode"), qualityMode);
@@ -228,11 +257,15 @@ public final class FfxNative {
 
     /** {@code ffxQueryDescUpscaleGetUpscaleRatioFromQualityMode}. */
     public QueryResult<Float> upscaleRatio(int qualityMode, long versionId) {
+        return upscaleRatio(qualityMode, versionId, null);
+    }
+
+    public QueryResult<Float> upscaleRatio(int qualityMode, long versionId, VulkanHandles handles) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment out = a.allocate(JAVA_FLOAT);
             MemorySegment d = a.allocate(FfxLayouts.QUERY_UPSCALE_RATIO);
             d.set(JAVA_LONG, 0, DESC_QUERY_UPSCALE_RATIO);
-            chainOverride(a, d, versionId);
+            chainQuery(a, d, versionId, handles);
             d.set(JAVA_INT, FfxLayouts.offset(FfxLayouts.QUERY_UPSCALE_RATIO, "qualityMode"), qualityMode);
             d.set(ADDRESS, FfxLayouts.offset(FfxLayouts.QUERY_UPSCALE_RATIO, "pOutUpscaleRatio"), out);
             int r = invokeInt(query, MemorySegment.NULL, d);
@@ -266,6 +299,23 @@ public final class FfxNative {
         desc.set(ADDRESS, 8, o);
     }
 
+    private void chainQuery(Arena arena, MemorySegment desc, long versionId, VulkanHandles handles) {
+        if (!modern) {
+            chainOverride(arena, desc, versionId);
+            return;
+        }
+        MemorySegment backend = backend(arena, java.util.Objects.requireNonNull(handles), versionId);
+        desc.set(ADDRESS, 8, backend);
+    }
+
+    private MemorySegment backend(Arena arena, VulkanHandles handles, long versionId) {
+        MemorySegment backend = arena.allocate(FfxLayouts.CREATE_BACKEND_VK);
+        backend.set(JAVA_LONG, 0, modern ? DESC_CREATE_BACKEND_VK_SDK_24 : DESC_CREATE_BACKEND_VK);
+        handles.write(backend.asSlice(16, FfxLayouts.VK_DEVICE_CONTEXT.byteSize()));
+        chainOverride(arena, backend, versionId);
+        return backend;
+    }
+
     // ------------------------------------------------------------------ context
 
     /**
@@ -278,12 +328,7 @@ public final class FfxNative {
         MemorySegment holder = arena.allocate(JAVA_LONG);
         holder.set(JAVA_LONG, 0, 0L);
         try (Arena a = Arena.ofConfined()) {
-            MemorySegment backend = a.allocate(FfxLayouts.CREATE_BACKEND_VK);
-            backend.set(JAVA_LONG, 0, DESC_CREATE_BACKEND_VK);
-            backend.set(JAVA_LONG, FfxLayouts.offset(FfxLayouts.CREATE_BACKEND_VK, "vkDevice"), vkDevice);
-            backend.set(JAVA_LONG, FfxLayouts.offset(FfxLayouts.CREATE_BACKEND_VK, "vkPhysicalDevice"), vkPhysicalDevice);
-            backend.set(ADDRESS, FfxLayouts.offset(FfxLayouts.CREATE_BACKEND_VK, "vkDeviceProcAddr"), MemorySegment.ofAddress(vkGetDeviceProcAddr));
-            chainOverride(a, backend, versionId);
+            MemorySegment backend = backend(a, new VulkanHandles(vkDevice, vkPhysicalDevice, vkGetDeviceProcAddr), versionId);
 
             MemorySegment up = a.allocate(FfxLayouts.CREATE_UPSCALE);
             up.set(JAVA_LONG, 0, DESC_CREATE_UPSCALE);
@@ -318,6 +363,16 @@ public final class FfxNative {
     }
 
     /** {@code ffxDispatch} with an {@code ffxDispatchDescUpscale}: records the FSR passes into the command buffer. */
+    /** The SDK reports which optional frame inputs have become mandatory for this provider. */
+    public QueryResult<Long> requiredInputs(Context context) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment desc = arena.allocate(32, 8);
+            desc.set(JAVA_LONG, 0, DESC_QUERY_RESOURCE_REQUIREMENTS);
+            int result = invokeInt(query, context.holder(), desc);
+            return new QueryResult<>(result, desc.get(JAVA_LONG, 16));
+        }
+    }
+
     public int dispatchUpscale(Context ctx, DispatchParams p) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment d = a.allocate(FfxLayouts.DISPATCH_UPSCALE); // zero-initialised: unused resources are NULL

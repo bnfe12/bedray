@@ -421,7 +421,7 @@ public final class SettingsCatalog {
             "Keeps textures as hard square pixels when you look closely, instead of smoothing them.", "",
             "Takes effect after reloading resource packs (F3+T).",
             "The setting only applies after a resource reload, so a live before/after screenshot is not possible.");
-        put("fsr_sharpness", Tier.ADVANCED, "FSR Sharpening",
+        put("fsr_sharpness", Tier.ESSENTIAL, "FSR Sharpening",
             "Extra sharpening after FSR (RCAS). 0 is off.", "", "FSR only.", Scene.DAY, 0.55f, 0.6f, "fsr_sharp", List.of(
                 p("0", "Off", () -> {
                     VulkanRtxConfig.fsrSharpness = 0f;
@@ -432,7 +432,7 @@ public final class SettingsCatalog {
                 double d = asNumber(v);
                 return d < 25 ? "0" : d < 75 ? "50" : "100";
             });
-        putNoImage("custom_scale", Tier.ADVANCED, "Custom 3D Scale",
+        putNoImage("custom_scale", Tier.ESSENTIAL, "Custom 3D Scale",
             "Exact render size for the built-in upscaler, 25% to 100%.", "", "Built-in upscaler with 3D Scale set to Custom.",
             "It is the same effect as the 3D Scale presets; see the 3D Scale screenshots.");
         putNoImage("frame_generation_reflex", Tier.ADVANCED, "NVIDIA Reflex",
@@ -510,8 +510,15 @@ public final class SettingsCatalog {
         putNoImage("texture_lod_bias_offset", Tier.EXPERT, "Texture Sharpness Offset",
             "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
             "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
-        putNoImage("fsr_version", Tier.EXPERT, "FSR Version", "Which FSR inside the AMD library is used. Auto picks the newest (3.1).", "", "FSR only.",
-            "Version choice, no visual preview.");
+        putNoImage("dlss_custom_scale", Tier.ESSENTIAL, "DLSS Render Scale",
+            "Render resolution per axis in Custom mode. NVIDIA's runtime limits the supported input size.", "", "DLSS Super Resolution.", "");
+        putNoImage("xess_custom_scale", Tier.ESSENTIAL, "XeSS Render Scale",
+            "Render resolution per axis in Custom mode. The active XeSS implementation supplies the effective size.", "", "Intel XeSS.", "");
+        putNoImage("fsr_custom_scale", Tier.ESSENTIAL, "FSR Render Scale",
+            "Render resolution per axis in Custom mode. The SDK limits the effective size for FSR 4.", "", "AMD FSR.", "");
+        putNoImage("fsr_version", Tier.ESSENTIAL, "FSR Version",
+            "Auto selects the best provider the active device can use. Choose a version to keep that provider family fixed.",
+            "", "FSR 4 requires AMD FSR SDK 2.4 and a supported Vulkan GPU and driver.", "");
         putNoImage("atm_godrays_range", Tier.EXPERT, "Light Shaft Range", "Distance in blocks the beams are computed over.", "", "", "A range value.");
         putNoImage("atm_bloom_threshold", Tier.EXPERT, "Bloom Threshold", "Brightness from which a pixel starts to glow.", "", "", "Shares the Bloom screenshots.");
         putNoImage("atm_bloom_scatter", Tier.EXPERT, "Bloom Spread", "Balance between a tight and a wide glow.", "", "", "Shares the Bloom screenshots.");

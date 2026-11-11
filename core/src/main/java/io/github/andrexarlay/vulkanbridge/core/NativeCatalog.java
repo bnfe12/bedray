@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
+import io.github.andrexarlay.vulkanbridge.api.LibraryDescriptor;
+
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -137,12 +139,9 @@ public final class NativeCatalog {
             "With frame generation on, DLSS Super Resolution and Ray Reconstruction run through these four files.", URL_STREAMLINE,
             List.of(req(Folder.STREAMLINE, "sl.dlss.dll"), req(Folder.STREAMLINE, "sl.dlss_d.dll"),
                 req(Folder.STREAMLINE, "nvngx_dlss.dll"), req(Folder.STREAMLINE, "nvngx_dlssd.dll"))),
-        new Group("dlss5", "NVIDIA DLSS 5.x & Neural Rendering SDK", "NVIDIA",
-            "Next-gen DLSS 5 neural upscaling & reconstruction (planned in roadmap v0.3.0).", URL_DLSS,
-            List.of(upcoming(Folder.NATIVES, "nvngx_dlss5.dll"), upcoming(Folder.STREAMLINE, "sl.dlss5.dll"))),
-        new Group("fsr4", "AMD FSR 4 (AI Neural Upscaling)", "AMD",
-            "FidelityFX neural upscaler & AI frame generation (planned in roadmap v0.3.0).", URL_FSR,
-            List.of(upcoming(Folder.NATIVES, "ffx_fsr4_x64.dll"), upcoming(Folder.NATIVES, "amd_fidelityfx_ai_vk.dll"))),
+        new Group("fsr4", "AMD FSR Upscaling 4 (Vulkan)", "AMD",
+            "Install the signed upscaler from AMD FSR SDK 2.4. Provider availability depends on the GPU and driver.",
+            LibraryDescriptor.FSR4_SDK_URL, List.of(req(Folder.NATIVES, LibraryDescriptor.FSR4_DLL))),
         new Group("xess2", "Intel XeSS 2.0 & XeLL", "Intel",
             "Next-gen XeSS 2.0 AI upscaling with frame generation (planned in roadmap v0.3.0).", URL_XESS,
             List.of(upcoming(Folder.NATIVES, "libxess_fg.dll"), upcoming(Folder.NATIVES, "libxell.dll"))),
@@ -156,6 +155,10 @@ public final class NativeCatalog {
             "Only if you built them yourself. Bedray does not ship or download these.", "",
             List.of(wrapper(Folder.NATIVES, "vkb_dlss.dll"), wrapper(Folder.NATIVES, "vkb_nrd.dll"),
                 wrapper(Folder.STREAMLINE, "vkb_sl.dll"))));
+
+    static String externalSha256(String file) {
+        return LibraryDescriptor.FSR4_DLL.equalsIgnoreCase(file) ? LibraryDescriptor.FSR4_SHA256 : null;
+    }
 
     /** Every slot whose file name equals {@code name} (case-insensitive); more than one for the NGX files. Empty when unknown. */
     public static List<Slot> slotsFor(String name) {

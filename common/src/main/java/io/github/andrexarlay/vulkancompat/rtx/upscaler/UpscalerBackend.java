@@ -60,6 +60,6 @@ public enum UpscalerBackend {
     public boolean isImplemented() {
         return this == BILINEAR || this == XESS || this == FSR1 || this == NIS
             || (this == DLSS && io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssAvailability.isUsable())
-            || (this == FSR && io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrLibrary.isUsable());
+            || (this == FSR && io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrLibrary.upscalerLibrary().usable());
     }
 }

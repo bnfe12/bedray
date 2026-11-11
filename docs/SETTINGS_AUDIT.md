@@ -1,5 +1,7 @@
 # Settings audit (release/settings-ux)
 
+For the November 2026 follow-up, see [the source audit of the current settings](SETTINGS_PREVIEW_UI_REPORT.md).
+
 Why: the settings screen had about 75 controls on three pages, many of them numbers that only a developer understands, and
 a right-hand "preview" that was a drawn simulation. This audit decides, for every option that existed on
 `release/final` (Sodium pages Upscaling / Ray Tracing / Advanced and Experimental, `RtSettings`, `RtAtmosphereSettings.options()`,

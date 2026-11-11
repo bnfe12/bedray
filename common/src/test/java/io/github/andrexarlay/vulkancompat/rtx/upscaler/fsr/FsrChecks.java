@@ -96,7 +96,7 @@ public final class FsrChecks {
             "prefix match is exact (3.0 / 4.x are not 3.1)");
         check(FsrVersion.parse("3.1") == FsrVersion.FSR_3_1 && FsrVersion.parse("2") == FsrVersion.FSR_2
             && FsrVersion.parse("auto") == FsrVersion.AUTO, "parse");
-        check(throwsIae(() -> FsrVersion.parse("4")), "FSR 4 is not a Vulkan option");
+        check(FsrVersion.parse("4") == FsrVersion.FSR_4, "FSR 4 is a Vulkan provider family");
         check(new FsrRequest(FsrQuality.QUALITY, FsrVersion.AUTO).equals(new FsrRequest(FsrQuality.QUALITY, FsrVersion.AUTO)), "request equality");
         check(!new FsrRequest(FsrQuality.QUALITY, FsrVersion.AUTO).equals(new FsrRequest(FsrQuality.QUALITY, FsrVersion.FSR_2)), "version is part of it");
     }

@@ -1,8 +1,10 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr;
 
+import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
 import io.github.andrexarlay.vulkanbridge.api.DeviceRequirement;
 import io.github.andrexarlay.vulkanbridge.api.FeatureRequest;
+import io.github.andrexarlay.vulkancompat.mixin.rt.MixinVulkanDeviceFeaturesAccessor;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
 import org.slf4j.Logger;
@@ -57,7 +59,51 @@ public final class FsrDeviceRequirements {
     /** Device extensions of the base group; FsrRuntime refuses to create a context when the engine device lacks them. */
     public static final Set<String> BASE_EXTENSIONS = Set.of("VK_KHR_get_memory_requirements2", "VK_KHR_dedicated_allocation");
 
+    private static final String COOPERATIVE_MATRIX = "VK_KHR_cooperative_matrix";
+    private static final String COOPERATIVE_MATRIX_STRUCT = "org.lwjgl.vulkan.VkPhysicalDeviceCooperativeMatrixFeaturesKHR";
+    private static final String FLOAT8_STRUCT = "org.lwjgl.vulkan.VkPhysicalDeviceShaderFloat8FeaturesEXT";
+    private static volatile boolean modernRegistered;
+
     private FsrDeviceRequirements() {}
+
+    public static boolean modernRegistered() { return modernRegistered; }
+
+    public static boolean mlDeviceEnabled(VulkanDevice device) {
+        if (!((Object) device instanceof MixinVulkanDeviceFeaturesAccessor access)) return false;
+        var enabled = access.vkb$enabledFeatures();
+        if (enabled == null || !enabled.extensions().contains(COOPERATIVE_MATRIX)) return false;
+        var names = enabled.features().stream().map(f -> f.name()).collect(java.util.stream.Collectors.toSet());
+        return names.containsAll(Set.of("cooperativeMatrix", "shaderFloat16", "shaderInt8",
+            "storageBuffer16BitAccess", "storageBuffer8BitAccess", "vulkanMemoryModel"));
+    }
+
+    private static void registerMl(DeviceFeatureRegistry registry) {
+        if (!featureStructPresent(COOPERATIVE_MATRIX_STRUCT)) return;
+        registry.register(new DeviceRequirement("VKB FSR 4 ML", Set.of(COOPERATIVE_MATRIX), List.of(
+            new FeatureRequest(COOPERATIVE_MATRIX_STRUCT, "cooperativeMatrix"),
+            FeatureRequest.core(FeatureRequest.VK11, "storageBuffer16BitAccess"),
+            FeatureRequest.core(FeatureRequest.VK12, "storageBuffer8BitAccess"),
+            FeatureRequest.core(FeatureRequest.VK12, "shaderFloat16"),
+            FeatureRequest.core(FeatureRequest.VK12, "shaderInt8"),
+            FeatureRequest.core(FeatureRequest.VK12, "vulkanMemoryModel")
+        ), 0, true, () -> Boolean.TRUE));
+        // The SDK sample enables Float8 when the driver supports both features. Older GPUs use INT8.
+        if (!featureStructPresent(FLOAT8_STRUCT)) return;
+        registry.register(new DeviceRequirement("VKB FSR 4 FP8", Set.of(COOPERATIVE_MATRIX, "VK_EXT_shader_float8"), List.of(
+            new FeatureRequest(FLOAT8_STRUCT, "shaderFloat8"),
+            new FeatureRequest(FLOAT8_STRUCT, "shaderFloat8CooperativeMatrix")
+        ), 0, true, () -> Boolean.TRUE));
+    }
+
+    private static boolean featureStructPresent(String name) {
+        try {
+            Class.forName(name, false, FsrDeviceRequirements.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError ignored) {
+            LOGGER.info("[VKB-FSR] optional Vulkan binding unavailable: {}", name);
+            return false;
+        }
+    }
 
     public static DeviceRequirement base() {
         return new DeviceRequirement(
@@ -97,7 +143,11 @@ public final class FsrDeviceRequirements {
     }
 
     public static void register(DeviceFeatureRegistry registry) {
-        register(registry, FsrConfig.requestedRequest() != null, UpscalerPreregistration.enabled(), FsrLibrary.library());
+        FsrLibrary.Library modern = FsrLibrary.modernLibrary();
+        register(registry, FsrConfig.requestedRequest() != null, UpscalerPreregistration.enabled(),
+            modern.usable() ? modern : FsrLibrary.library());
+        modernRegistered = modern.usable() && UpscalerPreregistration.isRegistered(UpscalerBackend.FSR);
+        if (modernRegistered) registerMl(registry);
     }
 
     /** Decision with explicit inputs (tests). */

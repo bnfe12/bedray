@@ -130,8 +130,8 @@ needed); XeSS (Intel library needed); Path Tracing with the NRD denoiser. The ex
 ## What is not included
 
 * General Iris / "Dirt RT" shaderpack compatibility. The implemented opt-in post subset has explicit unsupported features.
-* DLSS 5 / neural rendering: **not implemented**. The settings page shows a disabled line.
-* AMD FSR frame generation, FSR 4 (not available on Vulkan).
+* DLSS 5 Neural Rendering requires a partner SDK from NVIDIA.
+* AMD FSR Frame Generation 4. The FSR Upscaling 4.1.2 source integration uses the Vulkan SDK described in [Upscalers](docs/UPSCALERS.md).
 * Complete particle transport in reflections and shadows; physical closed-volume refraction through glass.
 * Linux and macOS.
 
