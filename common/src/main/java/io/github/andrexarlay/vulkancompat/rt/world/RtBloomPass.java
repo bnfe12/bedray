@@ -44,7 +44,7 @@ final class RtBloomPass {
     /** Everything the apply stage needs per frame (all but {@code strength} are inputs of the sun glare). */
     record Params(Matrix4f invViewProj, float[] sunDir, float glareStrength, float camX, float camY, float camZ,
                   boolean flipY, boolean tonemapped, float threshold, float knee, float strength, float scatter, float sunNdcX,
-                  float sunNdcY) {
+                  float sunNdcY, float darkness) {
     }
 
     private final SlangRuntime slangRuntime;
@@ -135,7 +135,7 @@ final class RtBloomPass {
         pr.invViewProj.get(0, pc);
         pc.putFloat(64, pr.sunDir[0]).putFloat(68, pr.sunDir[1]).putFloat(72, pr.sunDir[2]).putFloat(76, pr.glareStrength);
         pc.putFloat(80, pr.camX).putFloat(84, pr.camY).putFloat(88, pr.camZ).putFloat(92, pr.flipY ? 1f : 0f);
-        pc.putFloat(96, pr.threshold).putFloat(100, pr.knee).putFloat(104, bloom ? pr.strength : 0f).putFloat(108, 0f);
+        pc.putFloat(96, pr.threshold).putFloat(100, pr.knee).putFloat(104, bloom ? pr.strength : 0f).putFloat(108, pr.darkness);
         pc.putFloat(112, pr.tonemapped ? 1f : 0f).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
     }
 

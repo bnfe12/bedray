@@ -20,7 +20,7 @@ import org.slf4j.LoggerFactory;
  * the same guide data as without them.
  */
 final class RtAtmosphere {
-    static final float NIGHT_BLOOM_THRESHOLD = 0.9f;
+    static final float NIGHT_BLOOM_THRESHOLD = 1.5f;
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     private static final int SPAN_BLOOM = 1;
 
@@ -117,7 +117,7 @@ final class RtAtmosphere {
             float threshold = Math.min(userThreshold, NIGHT_BLOOM_THRESHOLD + (userThreshold - NIGHT_BLOOM_THRESHOLD) * day);
             RtBloomPass.Params bp = new RtBloomPass.Params(p.invViewProj, dir, glareK,
                 bobX, bobY, bobZ, p.flipY, p.tonemap, threshold, 0.35f * threshold, RtAtmosphereSettings.bloomStrength(),
-                RtAtmosphereSettings.bloomScatter(), ndcX, ndcY);
+                RtAtmosphereSettings.bloomScatter(), ndcX, ndcY, 1f - day);
             if (timer != null) {
                 timer.stamp(cmd, SPAN_BLOOM, false);
             }

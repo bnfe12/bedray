@@ -102,8 +102,11 @@ final class RtFrameResources implements AutoCloseable {
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
             next[1] = allocator.image("rt_depth", w, h, VK10.VK_FORMAT_R32_SFLOAT,
                 VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
+            // SAMPLED: the bloom prefilter reads the presented image through a sampler. Without the bit every sample
+            // returned 0 on NVIDIA, so with DLSS RR (the only mode that presents rt_composite) bloom never had a source
+            // (debug view of the bloom buffer, autotest rt_modes A, 2026-11-11).
             next[2] = allocator.image("rt_composite", displayW, displayH, VK10.VK_FORMAT_R8G8B8A8_UNORM,
-                VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+                VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
             if (resolveDepth) next[3] = allocator.image("rt_display_depth", displayW, displayH,
                 VK10.VK_FORMAT_R32_SFLOAT, VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
             destroyOutputs();

@@ -23,7 +23,7 @@ struct BloomPush {
     float4x4 invViewProj;   //   0 clip -> camera-relative world (no jitter)
     float4 sunDir;          //  64 xyz towards the key light, w glare strength (0 = off)
     float4 camOrigin;       //  80 xyz bob origin of the camera, w 1 = flip Y
-    float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w star amount
+    float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w darkness 0..1 (1 - daylight)
     float4 p1;              // 112 x 1 = image is tone mapped, y scatter, zw sun position in NDC
 };
 
@@ -64,6 +64,28 @@ bool bloomIsSky(Sampler2D depth, int2 p) {
     return depth.Load(int3(p, 0)).r >= BLOOM_SKY_DISTANCE;
 }
 
+// The bloom reads the tonemapped RGBA8 image, and the inverse curve tops out at ~4.8 scene units: a torch flame that is
+// hundreds of times brighter than the floor arrives as the same 1.0 as a lit white wall, so a scene-space threshold
+// left nothing to glow (bloom on/off differed by < 0.1 of 255 at night, autotest rt_modes A/H, 2026-11-11). A pixel the
+// tonemap pushed into its shoulder is therefore taken as clipped: its glow is the rebuilt colour times
+// BLOOM_CLIP_GAIN, ramped in from the display value of the scene threshold up to white. Bedrock RTX torches carry a
+// halo about one block wide; this is the LDR stand-in until the pass reads the HDR resolve.
+// p0.w carries how dark the scene is (1 - daylight, RtAtmosphere): by day a clipped pixel may be a sunlit white wall,
+// at night it is a light source, so the gain runs from 3 (day) to 6 (night). Only pixels at display 0.97+ ramp in: at night
+// with a 0.9 threshold and gain 16 the torch-lit floor itself bloomed into a fog (autotest rt_modes A, 2026-11-11).
+static const float BLOOM_CLIP_GAIN_DAY = 3.0;
+static const float BLOOM_CLIP_GAIN_NIGHT = 6.0;
+
+float3 bloomClippedSource(float3 display, BloomPush pc) {
+    float md = bloomPeak(display);
+    float t0 = bloomPeak(tonemapColor(float3(max(pc.p0.x, 0.05))));
+    float w = smoothstep(clamp(t0, 0.97, 0.99), 0.995, md);
+    if (w <= 0.0) {
+        return float3(0.0);
+    }
+    return tonemapInverse(display) * (w * lerp(BLOOM_CLIP_GAIN_DAY, BLOOM_CLIP_GAIN_NIGHT, saturate(pc.p0.w)));
+}
+
 // One prefiltered tap of the first downsample. The sky contributes nothing, so its bright edge cannot glow.
 float3 bloomFetchPre(Sampler2D src, Sampler2D depth, float2 uv, BloomPush pc) {
     uint2 size;
@@ -72,7 +94,11 @@ float3 bloomFetchPre(Sampler2D src, Sampler2D depth, float2 uv, BloomPush pc) {
     if (bloomIsSky(depth, dp)) {
         return float3(0.0);
     }
-    return bloomPrefilter(bloomToScene(src.SampleLevel(uv, 0.0).rgb, pc), pc);
+    float3 display = src.SampleLevel(uv, 0.0).rgb;
+    if (pc.p1.x > 0.5) {
+        return bloomClippedSource(display, pc);
+    }
+    return bloomPrefilter(display, pc);
 }
 
 // 13 tap downsample, Jimenez 2014 ("Next Generation Post Processing in Call of Duty: Advanced Warfare").
@@ -114,12 +140,10 @@ float3 bloomDown13Prefilter(Sampler2D src, Sampler2D depth, float2 uv, float2 te
     float3 g2 = (d + e + g + h) * 0.25;
     float3 g3 = (e + f + h + i) * 0.25;
     float3 g4 = (j + k + l + m) * 0.25;
-    float w0 = bloomKaris(g0) * 0.125;
-    float w1 = bloomKaris(g1) * 0.125;
-    float w2 = bloomKaris(g2) * 0.125;
-    float w3 = bloomKaris(g3) * 0.125;
-    float w4 = bloomKaris(g4) * 0.5;
-    return (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);
+    // Plain Jimenez weights, no Karis average: Karis (1 / (1 + luma)) exists to stop single-pixel fireflies of an HDR
+    // source, and on this clipped-LDR source it is exactly the torch flame (a few clipped pixels) that it suppressed
+    // to nothing. The source is already denoised and sanitised, so there are no fireflies left to guard against.
+    return g0 * 0.125 + g1 * 0.125 + g2 * 0.125 + g3 * 0.125 + g4 * 0.5;
 }
 
 // 3x3 tent upsample (radius 1 texel of the source).
