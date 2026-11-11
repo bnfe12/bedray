@@ -147,9 +147,13 @@ final class BedrayPathTraceNative implements AutoCloseable {
         if (wantsGuides && !library.hasNativeGuideOutputs()) {
             throw new IllegalStateException("native denoiser guides need a core with GUIDE_OUTPUTS");
         }
-        boolean wantsMotion = (input.dispatch().flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0;
-        if (wantsMotion != (input.views().motion() != 0L) || (wantsMotion && !completeGuides))
-            throw new IllegalArgumentException("NRD motion option, buffer and guide outputs must agree");
+        boolean nrdMotion = (input.dispatch().flags() & RtPathTraceSlangPass.OPTION_NRD_MOTION) != 0;
+        boolean worldMotion = (input.dispatch().flags() & RtPathTraceSlangPass.OPTION_WORLD_MOTION) != 0;
+        boolean wantsMotion = nrdMotion || worldMotion;
+        if (wantsMotion != (input.views().motion() != 0L) || (nrdMotion && !completeGuides))
+            throw new IllegalArgumentException("motion option and buffer must agree; NRD also needs guide outputs");
+        if (worldMotion && !library.hasWorldMotion())
+            throw new IllegalStateException("world motion needs a matching bedray_core with WORLD_MOTION");
         if (wantsMotion && !library.hasNativeMotion())
             throw new IllegalStateException("native NRD needs a matching core with NRD_MOTION");
         if (!configured) {
@@ -167,7 +171,7 @@ final class BedrayPathTraceNative implements AutoCloseable {
                 }
                 if (wantsMotion) {
                     motion = arena.allocate(BedrayCoreLayouts.PT_BUFFER);
-                    fillMotion(motion, input.views().motion(), frame.width, frame.height);
+                    fillMotion(motion, input.views().motion(), frame.width, frame.height, worldMotion);
                 }
                 RtPathTraceSlangPass.BufferView stats = input.stats();
                 if (stats != null && stats.buffer() != 0L && stats.bytes() >= RtStatsLayout.SLOT_STRIDE) {
@@ -345,9 +349,13 @@ final class BedrayPathTraceNative implements AutoCloseable {
     }
 
     static void fillMotion(MemorySegment out, long buffer, int width, int height) {
+        fillMotion(out, buffer, width, height, false);
+    }
+
+    private static void fillMotion(MemorySegment out, long buffer, int width, int height, boolean worldMotion) {
         if (out.byteSize() != BedrayCoreLayouts.PT_BUFFER.byteSize() || buffer == 0 || width <= 0 || height <= 0)
             throw new IllegalArgumentException("NRD needs a buffer and a positive frame extent");
-        long bytes = Math.multiplyExact(Math.multiplyExact((long) width, height), 16L);
+        long bytes = Math.multiplyExact(Math.multiplyExact((long) width, height), worldMotion ? 32L : 16L);
         var packet = out.asByteBuffer().order(ByteOrder.nativeOrder());
         packet.putLong(0, buffer).putLong(8, 0).putLong(16, bytes).putInt(24, 0).putInt(28, 0);
     }

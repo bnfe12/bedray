@@ -135,6 +135,7 @@ public final class RtFrameParams {
     public boolean upscalerJittered;
     /** RR owns coherent primary samples, positive linear depth and independent reflection geometry. CPU only. */
     public boolean rrGuides;
+    public boolean worldMotion;
     public float upscalerJitterX;
     public float upscalerJitterY;
     public boolean sceneChanged;

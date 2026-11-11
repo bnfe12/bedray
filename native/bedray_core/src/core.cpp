@@ -362,7 +362,7 @@ BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void) try {
     return BEDRAY_PATH_TRACE_FEATURE_NATIVE_DI | BEDRAY_PATH_TRACE_FEATURE_GUIDE_BINDINGS | BEDRAY_PATH_TRACE_FEATURE_GUIDE_OUTPUTS | BEDRAY_PATH_TRACE_FEATURE_NRD_MOTION
         | BEDRAY_PATH_TRACE_FEATURE_CAMERA_IN_WATER | BEDRAY_PATH_TRACE_FEATURE_WATER_MODEL
         | BEDRAY_PATH_TRACE_FEATURE_FRAME_STATS | BEDRAY_PATH_TRACE_FEATURE_NATIVE_PT
-        | BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT;
+        | BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT | BEDRAY_PATH_TRACE_FEATURE_WORLD_MOTION;
 } catch (...) {
     return 0;
 }
@@ -1466,7 +1466,6 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_render_path_trace_ext(
     BedrayCore* core, const BedrayPathTraceFrameDesc* desc, const BedrayPathTraceGuides* guides,
     const BedrayPathTraceBuffer* motion, const BedrayPathTraceBuffer* stats_slot, BedrayError* error) try {
     clear_error(error);
-    if (motion && !guides) return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "motion output needs the guide outputs");
     return record_path_trace(core, desc, guides, motion, error, stats_slot);
 } catch (const std::bad_alloc&) {
     return fail(error, BEDRAY_ERROR_OUT_OF_MEMORY, "cannot allocate path-trace frame");

@@ -20,6 +20,8 @@ using gpu::Status;
 
 constexpr std::uint32_t kThreadGroup = 8u;
 constexpr std::uint32_t kPathOptionGbuffer = 1u << 0u;
+constexpr std::uint32_t kPathOptionNrdMotion = 1u << 1u;
+constexpr std::uint32_t kPathOptionWorldMotion = 1u << 30u;
 // PathTracePush.flags bits 17..21: PATH_TRACE_OPTION_RESTIR_PT and the PATH_TRACE_PT_* ring state of
 // restir/pt_temporal.slang.  The core owns no ReSTIR PT ring; it binds a one-record stand-in at 36 and clears these bits
 // so the shader traces exactly the PT-off image.
@@ -1020,15 +1022,17 @@ BedrayStatus PathTracePass::render(const BedrayPathTraceFrameDesc& input, Bedray
     const bool motion_binding = scene_motion_bindings_;
     const bool pt_binding = scene_pt_binding_;
     const bool stats_binding = scene_stats_binding_;
-    const bool wants_motion = (desc.path.flags & (1u << 1u)) != 0;
+    const bool nrd_motion = (desc.path.flags & kPathOptionNrdMotion) != 0;
+    const bool wants_motion = nrd_motion || (desc.path.flags & kPathOptionWorldMotion) != 0;
     if (motion) {
         if (!motion_binding) return fail(error, BEDRAY_ERROR_UNSUPPORTED, "selected program has no NRD motion binding");
         const auto pixels = static_cast<std::uint64_t>(desc.camera.width) * desc.camera.height;
-        if (!guides || !wants_motion || (desc.path.flags & kPathOptionGbuffer) == 0
+        const std::uint64_t stride = (desc.path.flags & kPathOptionWorldMotion) != 0 ? 32u : 16u;
+        if (!wants_motion || (nrd_motion && (!guides || (desc.path.flags & kPathOptionGbuffer) == 0))
             || !motion->handle || motion->flags || motion->reserved
-            || pixels > std::numeric_limits<std::uint64_t>::max() / 16u || motion->bytes < pixels * 16u
+            || pixels > std::numeric_limits<std::uint64_t>::max() / stride || motion->bytes < pixels * stride
             || motion->offset > std::numeric_limits<std::uint64_t>::max() - motion->bytes || motion->offset % 16u != 0)
-            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "NRD motion needs guides, matching option bits and a complete vec4 range");
+            return fail(error, BEDRAY_ERROR_INVALID_ARGUMENT, "motion needs matching option bits and a complete vec4 range; NRD also needs guide outputs");
     } else if (wants_motion) {
         return fail(error, BEDRAY_ERROR_UNSUPPORTED, "NRD motion writes require the additive motion-output call");
     }

@@ -99,3 +99,18 @@ rejects missing GPU samples or a changed mode/resolution during the capture.
 Generated frames are not counted as application FPS. This command makes no
 native-1080p acceptance decision. The existing command without `--profile`
 retains the stricter native contract and its 10-second warmup requirement.
+
+
+## Source follow-up — 11 November 2026
+
+The historical 431c5e3 Fabric interior capture at work/runs/431c5e3-fabric-clean/autotest/rt_modes/06_b_path_b3_f400.png was opened for inspection. It contains pervasive fine-grained noise in indirect lighting and strongly saturated colored walls. That image predates the NRD direct-light correction and the changes below. A source change needs a new matching capture before its visual effect can be judged.
+
+Three contained shading corrections are implemented in the current source.
+
+- GGX evaluates its denominator as a sum of nonnegative terms, with precise arithmetic to retain the narrow smooth-surface peak in FP32.
+- Block LabPBR atlas roughness is converted to the perceptual representation consumed by the BSDF and reconstruction guides. Material source flags scope the conversion. Water identification retains its encoded-atlas predicate. [LabPBR standard](https://shaderlabs.org/wiki/LabPBR_Material_Standard)
+- Mapped normals stay in the viewed geometric hemisphere. Actual non-transmission continuations below that face are rejected after the RC integral replacement. Front-surface direct lighting checks the geometric face, while foliage backlighting retains its dedicated path.
+
+These shader corrections add no rays or textures. Shared SR object motion adds a separate 16-byte record per render pixel, and the two optional temporal masks add two bytes per render pixel plus one compute dispatch. These costs need GPU measurements with the matching artifact.
+
+The comparison targets include the BetterRTX preset's water, night lighting and reflections, Minecraft Remix material integration, and Radiance's native Vulkan renderer. Current evidence establishes their published scope. The relative quality and performance of Bedray remain open until the same scenes, hardware, output resolution, reconstruction quality and frame timing are compared. [BetterRTX preset](https://bedrock.graphics/presets/betterrtx/) · [Minecraft Remix materials](https://github.com/NVIDIAGameWorks/rtx-remix-minecraft/blob/main/docs/RESOURCE_PACKS.md) · [Radiance](https://github.com/Minecraft-Radiance/Radiance)

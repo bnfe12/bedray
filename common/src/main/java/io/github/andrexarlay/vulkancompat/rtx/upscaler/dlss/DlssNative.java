@@ -94,6 +94,7 @@ public final class DlssNative implements AutoCloseable {
     private final MethodHandle queryOptimalSettings;
     private final MethodHandle createFeature;
     private final MethodHandle evaluate;
+    private final MethodHandle evaluateMasked;
     private final MethodHandle releaseFeature;
     private final MethodHandle queryCaps;
     private final MethodHandle createNeuralRendering;
@@ -138,6 +139,9 @@ public final class DlssNative implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, ADDRESS));
             // int32_t (uint64 commandBuffer, uint64 feature, const VkbDlssEvalInfo*)
             evaluate = bind(linker, lookup, "vkb_dlss_evaluate", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG, ADDRESS));
+            evaluateMasked = lookup.find("vkb_dlss_evaluate_masked")
+                .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG, ADDRESS, ADDRESS)))
+                .orElse(null);
             releaseFeature = bind(linker, lookup, "vkb_dlss_release_feature", FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
             createNeuralRendering = lookup.find("vkb_dlss_nr_create")
                 .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_INT, JAVA_INT, ADDRESS)))
@@ -328,6 +332,17 @@ public final class DlssNative implements AutoCloseable {
         }
     }
 
+    public boolean hasCurrentColorMask() { return evaluateMasked != null; }
+
+    public Status evaluate(long commandBuffer, long feature, EvalInfo e, Image mask) {
+        if (mask == null || evaluateMasked == null) return evaluate(commandBuffer, feature, e);
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment image = a.allocate(DlssLayouts.IMAGE);
+            writeImageAt(image, 0, mask);
+            return lastStatus(invokeInt(evaluateMasked, commandBuffer, feature, writeEval(a, e), image));
+        }
+    }
+
     public boolean hasNeuralRendering() {
         return createNeuralRendering != null && evaluateNeuralRendering != null;
     }
@@ -369,7 +384,10 @@ public final class DlssNative implements AutoCloseable {
     }
 
     private static void writeImage(MemorySegment evalInfo, String member, Image img) {
-        long base = DlssLayouts.offset(DlssLayouts.EVAL_INFO, member);
+        writeImageAt(evalInfo, DlssLayouts.offset(DlssLayouts.EVAL_INFO, member), img);
+    }
+
+    private static void writeImageAt(MemorySegment evalInfo, long base, Image img) {
         evalInfo.set(JAVA_LONG, base + DlssLayouts.offset(DlssLayouts.IMAGE, "image"), img.image());
         evalInfo.set(JAVA_LONG, base + DlssLayouts.offset(DlssLayouts.IMAGE, "view"), img.view());
         evalInfo.set(JAVA_INT, base + DlssLayouts.offset(DlssLayouts.IMAGE, "format"), img.format());

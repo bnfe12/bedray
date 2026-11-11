@@ -12,20 +12,22 @@ import "sampling.slang";
 // ---- Fresnel ----
 
 float3 fresnelSchlick(float cosTheta, float3 f0) {
-    float t = 1.0 - cosTheta;
+    float t = 1.0 - saturate(cosTheta);
     return f0 + (1.0 - f0) * pow5(t);
 }
 
 float fresnelSchlickScalar(float cosTheta, float f0) {
-    float t = 1.0 - cosTheta;
+    float t = 1.0 - saturate(cosTheta);
     return f0 + (1.0 - f0) * pow5(t);
 }
 
 // ---- GGX / Trowbridge-Reitz NDF ----
 
 float ggxNDF(float NdotH, float alpha) {
-    float a2 = alpha * alpha;
-    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    float a2 = max(alpha * alpha, 1.0e-8);
+    float n2 = saturate(NdotH) * saturate(NdotH);
+    // Keep both nonnegative terms. The subtractive form cancels the sharp peak to zero in FP32.
+    precise float denom = (1.0 - n2) + a2 * n2;
     return a2 / (PI * denom * denom);
 }
 

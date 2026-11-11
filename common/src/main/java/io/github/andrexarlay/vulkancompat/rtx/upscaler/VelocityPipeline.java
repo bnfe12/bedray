@@ -82,6 +82,12 @@ public final class VelocityPipeline implements AutoCloseable {
             entityCurrTransform, entityPrevTransform, entityCustomIndex, historyReset, DEPTH_HARDWARE, 0, 0, 0);
     }
 
+    public void dispatchWorld(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
+                              Matrix4f invViewProj, Matrix4f prevViewProj, Vec3 camDelta, long worldMotion) {
+        record(cmd, depthView, mvView, width, height, invViewProj, prevViewProj, camDelta, null, null, 0, false,
+            DEPTH_HARDWARE, worldMotion, 0, 0);
+    }
+
     public void dispatchLinearViewZ(VkCommandBuffer cmd, long depthView, long mvView, int width, int height,
                                     Matrix4f invViewProj, Matrix4f prevViewProj, Vec3 camDelta) {
         dispatchLinearViewZ(cmd, depthView, mvView, width, height, invViewProj, prevViewProj, camDelta, 0, 0, 0);

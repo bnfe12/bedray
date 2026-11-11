@@ -29,6 +29,8 @@ import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.TemporalUpscaler;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
@@ -364,6 +366,9 @@ public final class RtFrameRenderer {
     private static org.joml.Matrix4f frameProjection;
     private static io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Stamp displayedStamp;
     private static RenderTarget displayedTarget, pendingDisplayedTarget;
+    private static long displayedWorldMotion, pendingWorldMotion;
+    private static RtMemory.Img displayedCoverageMask, pendingCoverageMask;
+    private static boolean coverageMaskUnavailable;
     private static long displayedSceneCommand;
     private static org.joml.Matrix4f displayedProjection;
     private static io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuides pendingFgGuides, displayedFgGuides;
@@ -381,6 +386,26 @@ public final class RtFrameRenderer {
     public static boolean displayedThisFrame() {
         return displayedStamp != null && displayedTarget != null
             && io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.isCurrent(displayedStamp);
+    }
+
+    /** Borrowed render-grid motion for the current displayed color. The shared graphics queue orders later reads. */
+    public static long displayedWorldMotion(RenderTarget target) {
+        return displayedThisFrame(target) && frameDepth() != null
+            && frameDepth().width == target.width && frameDepth().height == target.height ? displayedWorldMotion : 0L;
+    }
+
+    public static io.github.andrexarlay.vulkancompat.rtx.upscaler.FrameContext.ImageRef displayedCoverageMask(RenderTarget target) {
+        var mask = displayedCoverageMask;
+        if (!displayedThisFrame(target) || mask == null || mask.width != target.width || mask.height != target.height) return null;
+        return new io.github.andrexarlay.vulkancompat.rtx.upscaler.FrameContext.ImageRef(
+            mask.image, mask.view, VK10.VK_FORMAT_R8_UNORM, VK10.VK_IMAGE_ASPECT_COLOR_BIT, mask.width, mask.height);
+    }
+
+    public static io.github.andrexarlay.vulkancompat.rtx.upscaler.FrameContext.ImageRef displayedReactiveMask(RenderTarget target) {
+        var mask = displayedCoverageMask != null && frameResources != null ? frameResources.reactiveMask() : null;
+        if (!displayedThisFrame(target) || mask == null || mask.width != target.width || mask.height != target.height) return null;
+        return new io.github.andrexarlay.vulkancompat.rtx.upscaler.FrameContext.ImageRef(
+            mask.image, mask.view, VK10.VK_FORMAT_R8_UNORM, VK10.VK_IMAGE_ASPECT_COLOR_BIT, mask.width, mask.height);
     }
 
     public static org.joml.Matrix4f displayedProjection(RenderTarget target) {
@@ -484,6 +509,8 @@ public final class RtFrameRenderer {
             return;
         }
         displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
+        displayedWorldMotion = pendingWorldMotion = 0L;
+        displayedCoverageMask = pendingCoverageMask = null;
         displayedFgGuides = pendingFgGuides = null;
         // publish this frame's captured entity geometry (also closes the capture: the hand pass that follows is not world geometry)
         if (io.github.andrexarlay.vulkancompat.rt.entity.EntityCaptureManager.getInstance().isOpen()) {
@@ -517,15 +544,30 @@ public final class RtFrameRenderer {
                 upscaled ? TemporalUpscaler.inputHeight() : 0, upscaled ? TemporalUpscaler.outputWidth() : 0,
                 upscaled ? TemporalUpscaler.outputHeight() : 0);
         }
+        if (world != null && world.skipBudgetRecoveryFrame()) return;
         try {
             frame(camera, target, levelState);
         } catch (RtDenoiserFrameDiscard discarded) {
             recoverDiscardedDenoiserFrame(discarded);
         } catch (RtFailure f) {
+            if (recoverSceneBudgetPressure(f)) return;
             fail(f.stage(), f.result(), f.getCause() != null ? f.getCause() : f);
         } catch (RuntimeException | LinkageError e) {
+            if (recoverSceneBudgetPressure(e)) return;
             fail("frame", e.getClass().getSimpleName() + ": " + LogPaths.show(e.getMessage()), e);
         }
+    }
+
+    private static boolean recoverSceneBudgetPressure(Throwable failure) {
+        if (failure.getSuppressed().length != 0 || world == null || !world.tryRecoverBudgetPressure(failure)) return false;
+        try {
+            drainHostSubmissions(world.memory().device(), "native_budget_recovery_drain");
+            havePrevCamera = false;
+            resetHistory();
+        } catch (RuntimeException | LinkageError recovery) {
+            fail("native_budget_recovery_drain", LogPaths.show(recovery.getMessage()), recovery);
+        }
+        return true;
     }
 
     private static void recoverDiscardedDenoiserFrame(RtDenoiserFrameDiscard discarded) {
@@ -794,6 +836,8 @@ public final class RtFrameRenderer {
             displayedTarget = target;
             displayedSceneCommand = cmd.address();
             displayedFgGuides = pendingFgGuides;
+            displayedWorldMotion = pendingWorldMotion;
+            displayedCoverageMask = pendingCoverageMask;
             displayedProjection = RtConfig.FLIP_Y
                 ? new org.joml.Matrix4f().scaling(1, -1, 1).mul(frameProjection) : new org.joml.Matrix4f(frameProjection);
         }
@@ -912,10 +956,12 @@ public final class RtFrameRenderer {
         long outputImage = rrOutput() != null ? rrOutput().image : 0L;
         boolean denoiserChanged = denoiser != null && denoiser.needsEnsure(w, h, outputView);
         boolean rrChanged = dlssRrDenoiser != null && dlssRrDenoiser.needsEnsure(w, h, outW, outH, outputImage, outputView);
-        boolean motionChanged = wantsEntityMotion() && frameResources.needsMotion(w, h);
+        boolean needMotion = (pass.usesGbuffer() && wantsEntityMotion()) || wantsWorldMotion();
+        boolean motionChanged = needMotion && frameResources.needsMotion(w, h, wantsWorldMotion());
+        boolean coverageMaskChanged = wantsCoverageMask() && frameResources.needsCoverageMask(w, h);
         String stage = "drain";
         try {
-            if (frameResources.initializationPending() || (outputChanged && frameOutput() != null) || denoiserChanged || rrChanged || motionChanged)
+            if (frameResources.initializationPending() || (outputChanged && frameOutput() != null) || denoiserChanged || rrChanged || motionChanged || coverageMaskChanged)
                 drainHostSubmissions(device, "frame_resources_drain");
             stage = "output_replace";
             if (outputChanged) {
@@ -935,7 +981,8 @@ public final class RtFrameRenderer {
                 if (denoiser != null) denoiser.ensure(w, h, frameOutput().view);
             }
             stage = "entity_motion_ensure";
-            if (pass.usesGbuffer() && wantsEntityMotion()) frameResources.ensureMotion(w, h);
+            if (needMotion) frameResources.ensureMotion(w, h, wantsWorldMotion());
+            if (coverageMaskChanged) prepareCoverageMask(device, w, h);
             stage = "sky_atlas_prepare";
             if (skyTextures == null) skyTextures = new RtSkyTextures();
             skyTextures.prepare();
@@ -1010,8 +1057,9 @@ public final class RtFrameRenderer {
         // NRD reads this frame's per-pixel world motion through its own binding, so the buffer has to exist before the
         // pass binds its views: the handle travels with them, and the pass writes exactly that range.
         long motionHandle = 0L;
-        if (useDenoiser && wantsEntityMotion()) {
-            frameResources.requireMotion(w, h);
+        params.worldMotion = wantsWorldMotion();
+        if (params.worldMotion || (useDenoiser && wantsEntityMotion())) {
+            frameResources.requireMotion(w, h, params.worldMotion);
             motionHandle = frameMotion().handle;
         }
         materials.ensure(world::uploadMaterials, atlasTexture, atlasW, atlasH, Minecraft.getInstance().getResourceManager());
@@ -1347,8 +1395,9 @@ public final class RtFrameRenderer {
             presentedDepth = frameResources.displayDepth();
         }
         // Raster particles/weather and world depth match the presentation grid and stay outside RR.
-        io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, pathSlangRuntime(vulkanDevice),
-            presented.view, presented.width, presented.height);
+        pendingCoverageMask = io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, pathSlangRuntime(vulkanDevice),
+            presented.view, presented.width, presented.height, wantsCoverageMask() ? frameResources.coverageMask() : null,
+            frameResources.reactiveMask(), params.worldMotion ? motionAddr + (long) w * h * 16L : 0L, presentedDepth.view);
 
         // god rays + bloom + sun glare on the denoised final image (reads the ray distance, writes only rt_output)
         if (gpuTimer != null) {
@@ -1377,12 +1426,41 @@ public final class RtFrameRenderer {
                 VK10.vkCmdCopyImage(cmd, presented.image, VK10.VK_IMAGE_LAYOUT_GENERAL, dst, VK10.VK_IMAGE_LAYOUT_GENERAL, region);
             }
             pendingDisplayedTarget = target;
+            pendingWorldMotion = params.worldMotion ? motionAddr + (long) w * h * 16L : 0L;
         }
     }
 
     /** True when this frame's denoiser layout consumes {@code entity_motion_px}; both of them read it as IN_MV input. */
     private static boolean wantsEntityMotion() {
         return (denoiser != null || dlssRrDenoiser != null) && !Boolean.getBoolean("vkrtx.entityMotion.off");
+    }
+
+    private static boolean wantsWorldMotion() {
+        return RtConfig.displayed() && !WorldTargetManager.rrResolvesOutput() && WorldTargetManager.temporalGuidesRequested()
+            && !Boolean.getBoolean("vkrtx.entityMotion.off")
+            && pathSlangRuntime != null && pathSlangRuntime.library().hasWorldMotion();
+    }
+
+    private static boolean wantsCoverageMask() {
+        UpscalerBackend backend = TemporalUpscaler.active();
+        boolean maskSupported = backend == UpscalerBackend.FSR
+            || (backend == UpscalerBackend.DLSS && DlssRuntime.nativeLib() != null && DlssRuntime.nativeLib().hasCurrentColorMask());
+        return !coverageMaskUnavailable && RtConfig.displayed() && maskSupported
+            && (wantsWorldMotion() || io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.readyForComposite());
+    }
+
+    private static void prepareCoverageMask(VkDevice device, int width, int height) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            var props = org.lwjgl.vulkan.VkFormatProperties.calloc(stack);
+            VK10.vkGetPhysicalDeviceFormatProperties(device.getPhysicalDevice(), VK10.VK_FORMAT_R8_UNORM, props);
+            int features = VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK10.VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+            if ((props.optimalTilingFeatures() & features) != features)
+                throw new IllegalStateException("R8_UNORM lacks sampled/storage image support");
+            frameResources.ensureCoverageMask(width, height);
+        } catch (RuntimeException | LinkageError failure) {
+            coverageMaskUnavailable = true;
+            LOGGER.warn("[VKB-FSR] coverage_mask=unavailable reason={}", LogPaths.show(failure.getMessage()));
+        }
     }
 
     /** Once per world: locates the NRD natives and logs the denoiser that will be used. */
@@ -1912,6 +1990,9 @@ public final class RtFrameRenderer {
     private static void shutdown(String reason, boolean encoderClosedProof) {
         if (drainingHostSubmissions) return;
         displayedStamp = null; displayedTarget = pendingDisplayedTarget = null; displayedProjection = null;
+        displayedWorldMotion = pendingWorldMotion = 0L;
+        displayedCoverageMask = pendingCoverageMask = null;
+        coverageMaskUnavailable = false;
         displayedFgGuides = pendingFgGuides = null;
         RtPass pl = pass;
         RtWorld w = world;

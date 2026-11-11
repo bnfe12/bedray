@@ -592,7 +592,7 @@ VKB_DLSS_API int32_t vkb_dlss_create_feature(uint64_t cmd, const VkbDlssCreateIn
     API_CATCH()
 }
 
-VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalInfo* info) {
+static int32_t evaluate_sr(uint64_t cmd, uint64_t feature, const VkbDlssEvalInfo* info, const VkbDlssImage* mask) {
     API_TRY
     if (!cmd || !feature || !info || info->struct_size != sizeof(VkbDlssEvalInfo))
         return fail(VKB_DLSS_ERR_INVALID_ARG, "null cmd/feature/info or wrong struct_size");
@@ -611,6 +611,14 @@ VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const Vkb
     NVSDK_NGX_Resource_VK output = toResource(info->output);
     NVSDK_NGX_Resource_VK depth = toResource(info->depth);
     NVSDK_NGX_Resource_VK mv = toResource(info->motion_vectors);
+    NVSDK_NGX_Resource_VK bias{};
+    if (mask) {
+        if (!mask->image || !mask->view || mask->format != VK_FORMAT_R8_UNORM
+            || mask->width != info->color.width || mask->height != info->color.height
+            || mask->image == info->output.image)
+            return fail(VKB_DLSS_ERR_INVALID_ARG, "DLSS bias mask must be a separate input-resolution R8 image");
+        bias = toResource(*mask);
+    }
     NVSDK_NGX_Resource_VK exposure{};
     bool hasExposure = info->exposure.view != 0;
     if (hasExposure) exposure = toResource(info->exposure);
@@ -622,6 +630,7 @@ VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const Vkb
     ep.pInDepth = &depth;
     ep.pInMotionVectors = &mv;
     ep.pInExposureTexture = hasExposure ? &exposure : nullptr;
+    ep.pInBiasCurrentColorMask = mask ? &bias : nullptr;
     ep.InJitterOffsetX = info->jitter_x;
     ep.InJitterOffsetY = info->jitter_y;
     ep.InReset = info->reset ? 1 : 0;
@@ -637,6 +646,15 @@ VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const Vkb
     if (NVSDK_NGX_FAILED(r)) return failNgx("NGX_VULKAN_EVALUATE_DLSS_EXT", r);
     return VKB_DLSS_OK;
     API_CATCH()
+}
+
+VKB_DLSS_API int32_t vkb_dlss_evaluate(uint64_t cmd, uint64_t feature, const VkbDlssEvalInfo* info) {
+    return evaluate_sr(cmd, feature, info, nullptr);
+}
+
+VKB_DLSS_API int32_t vkb_dlss_evaluate_masked(uint64_t cmd, uint64_t feature, const VkbDlssEvalInfo* info,
+                                           const VkbDlssImage* mask) {
+    return evaluate_sr(cmd, feature, info, mask);
 }
 
 // ID and keys verified against the NVIDIA-signed 310.8 Vulkan runtime. The public NGX

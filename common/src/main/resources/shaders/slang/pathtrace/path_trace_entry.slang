@@ -1,6 +1,8 @@
 // Shared shading body for the C++ scene path tracer.
 public module path_trace_entry;
 
+import "history/world_motion.slang";
+
 __exported import "contracts/contracts.slang";
 __exported import "light/block_emitters.slang";
 import "light/frame_sky.slang";
@@ -534,11 +536,14 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
     uint sampleCount = pathTraceSampleCount(f);
     uint diRequested = directReuse.enabled;
     PathTraceMean total = emptyPathTraceMean();
+    bool worldMotion = (pc.flags & PATH_TRACE_OPTION_WORLD_MOTION) != 0u;
+    float4 worldMotionSample = float4(0.0);
     for (uint s = 0u; s < sampleCount; ++s) {
         // Each ray gets its own point in the pixel and its own path. With one ray per pixel both are exactly what the
         // host prepared - the frame's own jitter, the host's own sample index - so the cheapest setting traces the very
         // paths it traced before this loop existed.
-        Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance, pathTracePrimaryJitter(f, p, s, sampleCount, pc.flags));
+        float2 primaryJitter = worldMotion && s == 0u ? f.camera.jitter.xy : pathTracePrimaryJitter(f, p, s, sampleCount, pc.flags);
+        Ray primary = pathTracePrimaryRay(f, p, pc.maxDistance, primaryJitter);
         // One word identifies the sample across the whole frame: the path seed and the world-locked sun rotation of a
         // pixel-shadow cell both hash it, so the strata a cell shares are the strata every pixel of the frame drew.
         uint sampleWord = pc.sampleIndex * sampleCount + s;
@@ -568,6 +573,12 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
             if (traced.pt.status != PATH_PT_RECORD_NONE && ptTemporalActive(ptState, ptReservoirs)) {
                 traced.denoiser = bypassedPathDenoiserSignal(traced.denoiser.specularHitDistance);
             }
+        }
+        if (worldMotion && s == 0u) {
+            bool trusted = !pathTraceSampleRejected(traced.flags);
+            bool hit = trusted && traced.primary.valid && isFinite(traced.firstHitDistance) && traced.firstHitDistance > 0.0;
+            worldMotionSample = packWorldMotion(trusted ? traced.primaryMotion.xyz : float3(1.0e30),
+                hit ? traced.firstHitDistance : 0.0, trusted ? traced.primaryCoverage : 1.0);
         }
         accumulatePathTraceSample(total, traced);
     }
@@ -599,8 +610,11 @@ public void pathTraceEntryWithField<T : ISceneTracer, F : IPathDiffuseField>(
         pathTraceWriteGuides(p, f, result, sampleTrusted, outViewZ, outNormalRough, outSpecular, outDiffuse,
             outAlbedo, outDirect, outSpecAlbedo, (pc.flags & PATH_TRACE_OPTION_RR_GUIDES) != 0u);
     }
-    if ((options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {
-        outMotionBuffer[uint(p.x) + uint(p.y) * f.camera.size.x] = pathTraceNrdMotion(result, sampleTrusted);
+    if (worldMotion || (options.flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u) {
+        uint index = uint(p.x) + uint(p.y) * f.camera.size.x;
+        // NRD keeps the same mean geometry and mean motion. SR reads its own canonical primary in the second half.
+        outMotionBuffer[index] = pathTraceNrdMotion(result, sampleTrusted);
+        if (worldMotion) outMotionBuffer[index + f.camera.size.x * f.camera.size.y] = worldMotionSample;
     }
 }
 

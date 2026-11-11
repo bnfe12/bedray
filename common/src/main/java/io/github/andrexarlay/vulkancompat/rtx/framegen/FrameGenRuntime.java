@@ -862,7 +862,8 @@ public final class FrameGenRuntime {
             throw new IllegalStateException("camera state of the world pass is missing (proj=" + (projection != null)
                 + " view=" + (view != null) + " pos=" + (anchor != null) + ")");
         return new ReconstructionCamera(projection, view, anchor.x, anchor.y, anchor.z,
-            CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), reset);
+            CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(),
+            reset || WorldTargetManager.colorProducerChangedThisFrame());
     }
 
     private static void sendConstants(SlNative sl, ReconstructionCamera camera) {

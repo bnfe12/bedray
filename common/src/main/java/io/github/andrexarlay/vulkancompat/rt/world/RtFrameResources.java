@@ -19,7 +19,7 @@ final class RtFrameResources implements AutoCloseable {
     private final Allocator allocator;
     private final Set<Long> recordings = new LinkedHashSet<>();
     private final RtMemory.Img[] abandoned = new RtMemory.Img[4];
-    private RtMemory.Img output, depth, composite, resolvedDepth;
+    private RtMemory.Img output, depth, composite, resolvedDepth, coverageMask, reactiveMask;
     private RtMemory.Buf motion;
     private RtMemory.Buf abandonedMotion;
     private boolean initialized;
@@ -45,6 +45,29 @@ final class RtFrameResources implements AutoCloseable {
     RtMemory.Img composite() { return composite; }
     RtMemory.Img displayDepth() { return resolvedDepth != null ? resolvedDepth : depth; }
     RtMemory.Buf motion() { return motion; }
+    RtMemory.Img coverageMask() { return coverageMask; }
+    RtMemory.Img reactiveMask() { return reactiveMask; }
+    boolean needsCoverageMask(int w, int h) {
+        return coverageMask == null || reactiveMask == null || coverageMask.width != w || coverageMask.height != h;
+    }
+
+    void ensureCoverageMask(int w, int h) {
+        requireExtent(w, h);
+        if (!needsCoverageMask(w, h)) return;
+        requireUnreferenced("replace_coverage_mask");
+        if (coverageMask != null) {
+            allocator.destroy(coverageMask);
+            coverageMask = null;
+        }
+        if (reactiveMask != null) {
+            allocator.destroy(reactiveMask);
+            reactiveMask = null;
+        }
+        reactiveMask = allocator.image("temporal_reactive_mask", w, h, VK10.VK_FORMAT_R8_UNORM,
+            VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
+        coverageMask = allocator.image("temporal_coverage_mask", w, h, VK10.VK_FORMAT_R8_UNORM,
+            VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT);
+    }
     boolean initializationPending() { return initializer != 0; }
     boolean needsOutput(int w, int h) { return needsOutput(w, h, w, h, false); }
     boolean needsOutput(int w, int h, int displayW, int displayH) {
@@ -54,7 +77,10 @@ final class RtFrameResources implements AutoCloseable {
         return output == null || output.width != w || output.height != h || composite == null
             || composite.width != displayW || composite.height != displayH || (resolvedDepth != null) != resolveDepth;
     }
-    boolean needsMotion(int w, int h) { return motion == null || motion.size < motionBytes(w, h); }
+    boolean needsMotion(int w, int h) { return needsMotion(w, h, false); }
+    boolean needsMotion(int w, int h, boolean worldMotion) {
+        return motion == null || motion.size < motionBytes(w, h) * (worldMotion ? 2 : 1);
+    }
 
     void ensureOutput(int w, int h) {
         ensureOutput(w, h, w, h, false);
@@ -97,8 +123,10 @@ final class RtFrameResources implements AutoCloseable {
         generation++;
     }
 
-    void ensureMotion(int w, int h) {
-        long bytes = motionBytes(w, h);
+    void ensureMotion(int w, int h) { ensureMotion(w, h, false); }
+
+    void ensureMotion(int w, int h, boolean worldMotion) {
+        long bytes = motionBytes(w, h) * (worldMotion ? 2 : 1);
         if (motion != null && motion.size >= bytes) return;
         requireUnreferenced("replace_motion");
         collectAbandoned();
@@ -114,8 +142,10 @@ final class RtFrameResources implements AutoCloseable {
         motion = next;
     }
 
-    void requireMotion(int w, int h) {
-        if (needsMotion(w, h)) throw new IllegalStateException(context("motion_not_prepared"));
+    void requireMotion(int w, int h) { requireMotion(w, h, false); }
+
+    void requireMotion(int w, int h, boolean worldMotion) {
+        if (needsMotion(w, h, worldMotion)) throw new IllegalStateException(context("motion_not_prepared"));
     }
 
     /** Pin before the first transition/write; a second CB must not depend on unproven initialization. */
@@ -188,6 +218,8 @@ final class RtFrameResources implements AutoCloseable {
         requireUnreferenced("close");
         collectAbandoned();
         destroyOutputs();
+        if (coverageMask != null) { allocator.destroy(coverageMask); coverageMask = null; }
+        if (reactiveMask != null) { allocator.destroy(reactiveMask); reactiveMask = null; }
         if (motion != null) { allocator.destroy(motion); motion = null; }
     }
 

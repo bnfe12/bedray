@@ -15,6 +15,7 @@ import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion;
+import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
 import io.github.andrexarlay.vulkancompat.rt.lifetime.RecordingCompletion.Retirement;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
@@ -106,6 +107,8 @@ public final class WorldTargetManager {
     private static final Matrix4f prevViewProj = new Matrix4f();
 
     private static boolean resetHistory = true;
+    private static boolean lastColorProducerRt;
+    private static boolean colorProducerChanged;
     /** True only when {@link #computeMatrices()} accepted this frame's camera; history advances only then. */
     private static boolean cameraMatricesValidThisFrame = false;
     private static long lastDegenerateCameraLogNanos = 0L;
@@ -129,6 +132,10 @@ public final class WorldTargetManager {
     public static boolean rrOutputThisFrame() {
         return resolutionStamp != null && io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrames.isCurrent(resolutionStamp)
             && resolutionPlan != null && resolutionPlan.rayReconstructionOutput();
+    }
+
+    public static boolean temporalGuidesRequested() {
+        return TemporalUpscaler.isActive() || FrameGenRuntime.usable();
     }
 
     public static String dlssNeuralFailure() { return dlssNeural.failureReason(); }
@@ -489,6 +496,12 @@ public final class WorldTargetManager {
         savedHud3DTarget = null;
 
         if (worldTarget != null && fullMain != null) {
+            boolean currentRt = RtFrameRenderer.displayedThisFrame(worldTarget);
+            colorProducerChanged = currentRt != lastColorProducerRt;
+            if (colorProducerChanged) {
+                resetHistory = true;
+                lastColorProducerRt = currentRt;
+            }
             boolean dispatched = false;
             try {
                 // 1. Hardware Ray Tracing: done by RtFrameRenderer at the head of render3dHud (MixinGameRenderer).
@@ -794,16 +807,9 @@ public final class WorldTargetManager {
         long colorImg = extractVkImage(worldTarget);
         long mvImg = extractVkImage(motionVectorsTarget);
         long outImg = extractVkImage(xessOutput);
-        // The DLSS-RR image is resolved on the render grid and moved by entity and RT-geometry motion. Reusing RR's own
-        // motion vectors keeps the upscaler's reprojection consistent with the denoiser; a raster-depth pass would only
-        // know camera motion and would drag moving entities and water across block edges. The raster pass still runs
-        // below, because frame generation consumes the same motion vector image.
-        final boolean colorResolved = io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.frameColorTemporallyResolved();
-        final long resolvedMvView = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorView() : 0L;
-        final long resolvedMvImg = colorResolved ? io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.activeMotionVectorImage() : 0L;
-        final boolean reuseDenoiserMotion = resolvedMvView != 0L && resolvedMvImg != 0L;
-        final long srMvView = reuseDenoiserMotion ? resolvedMvView : mvView;
-        final long srMvImg = reuseDenoiserMotion ? resolvedMvImg : mvImg;
+        final boolean colorResolved = RtFrameRenderer.frameColorTemporallyResolved();
+        // SR and FG consume the same raster depth and velocity pair. The velocity pass merges current RT object
+        // motion only at pixels where the traced surface matches the D32 depth that the SDK will see.
         if (rasterDepthView == 0L || mvView == 0L || colorView == 0L || outView == 0L
             || colorImg == 0L || rasterDepthImg == 0L || mvImg == 0L || outImg == 0L) {
             throw new IllegalStateException("XeSS: missing Vulkan handle (rasterDepthView=" + rasterDepthView
@@ -831,7 +837,8 @@ public final class WorldTargetManager {
         boolean ok = recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
             // Motion vectors must match the exact same hardware Reversed-Z depth buffer (rasterDepthView) passed to the upscaler
-            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            long worldMotion = resetHistory ? 0L : RtFrameRenderer.displayedWorldMotion(worldTarget);
+            velocityPipeline.dispatchWorld(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta, worldMotion);
             VkBarriers.fullMemoryBarrier(cmd);
             if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
                 && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
@@ -846,7 +853,7 @@ public final class WorldTargetManager {
 
             var color = new FrameContext.ImageRef(colorImg, colorView, fmtColor, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH);
             var depth = new FrameContext.ImageRef(rasterDepthImg, rasterDepthView, fmtDepth, VK10.VK_IMAGE_ASPECT_DEPTH_BIT, inW, inH);
-            var motion = new FrameContext.ImageRef(srMvImg, srMvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH);
+            var motion = new FrameContext.ImageRef(mvImg, mvView, fmtMv, VK10.VK_IMAGE_ASPECT_COLOR_BIT, inW, inH);
             if (neuralIntensity > 0) {
                 color = dlssNeural.record(cmd, color, depth, motion, reset, neuralIntensity);
                 if (color == null) return false;
@@ -859,7 +866,9 @@ public final class WorldTargetManager {
                 (float) TemporalUpscaler.scale(),
                 TemporalUpscaler.modeName(),
                 1.0f,
-                reset);
+                reset,
+                RtFrameRenderer.displayedCoverageMask(worldTarget),
+                RtFrameRenderer.displayedReactiveMask(worldTarget));
             return backend.dispatch(ctx);
         });
         if (!ok) {
@@ -926,7 +935,8 @@ public final class WorldTargetManager {
 
         recordVelocityCommands(vulkanDevice, cmd -> {
             VkBarriers.fullMemoryBarrier(cmd);
-            velocityPipeline.dispatch(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta);
+            long worldMotion = resetHistory ? 0L : RtFrameRenderer.displayedWorldMotion(worldTarget);
+            velocityPipeline.dispatchWorld(cmd, rasterDepthView, mvView, inW, inH, invViewProj, prevViewProj, camDelta, worldMotion);
             VkBarriers.fullMemoryBarrier(cmd);
             if (rtDepth != 0L && io.github.andrexarlay.vulkancompat.rt.denoise.MotionProbe.armed()
                 && io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.probeMemory() != null) {
@@ -1079,6 +1089,7 @@ public final class WorldTargetManager {
      * beginWorldPhase and endWorldPhase.
      */
     public static void resetPhase(GameRenderer renderer) {
+        colorProducerChanged = false;
         // Experimental XeSS / DLSS contexts (request-only via -Dvkbridge.xess / -Dvkbridge.dlss; no-op otherwise). Here no render pass is open.
         net.minecraft.client.Minecraft mcForXess = net.minecraft.client.Minecraft.getInstance();
         if (mcForXess != null && mcForXess.getWindow() != null) {
@@ -1401,6 +1412,8 @@ public final class WorldTargetManager {
     public static Matrix4f getPrevViewProj() {
         return prevViewProj;
     }
+
+    public static boolean colorProducerChangedThisFrame() { return colorProducerChanged; }
 
     public static boolean isResetHistory() {
         return resetHistory;

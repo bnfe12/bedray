@@ -101,3 +101,8 @@ screenshots of the right-hand panel come from `-Dvkbridge.autotest=settings_prev
 
 The file is written by the game. Edit it only while the game is closed. Settings the page no longer shows (all `rays_*`, `rt_*`
 numbers, `atm_*` tuning) are still read from and written to the file.
+
+
+## Native memory and pressure recovery
+
+rt_vram_budget_mb controls native terrain admission in this source. The shared native allocator is configured at startup by bedray.rt.nativeMemoryMiB and bedray.rt.memoryBlockMiB. A recoverable refusal during scene preparation reduces distant resident coverage and logs pressure_recovery. The resulting section cap is retained until scene recreation. The requested RT distance remains visible in settings. Source details are in [Graphics technology audit](GRAPHICS_TECHNOLOGY_AUDIT.md).

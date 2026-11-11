@@ -63,6 +63,7 @@ final class RtPathTraceSlangPass {
 
     /** {@code PathTracePush.flags}: the pass also writes NRD's world-space motion channel. Mirrors the shader bit. */
     static final int OPTION_NRD_MOTION = 2;
+    static final int OPTION_WORLD_MOTION = 1 << 30;
 
     /**
      * The effect set of the ray profile, mirroring {@code PATH_TRACE_OPTION_*} in {@code path_tracer.slang}. Absent

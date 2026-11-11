@@ -71,6 +71,7 @@ public final class FfxNative {
     public static final int RESOURCE_TYPE_TEXTURE2D = 2;          // FfxApiResourceType l.117
     public static final int FORMAT_R16G16_FLOAT = 18;             // FfxApiSurfaceFormat l.29 (0-based enum order)
     public static final int FORMAT_R8G8B8A8_UNORM = 10;
+    public static final int FORMAT_R8_UNORM = 25;
     public static final int FORMAT_R32_FLOAT = 28;
     public static final int USAGE_READ_ONLY = 0;                  // FfxApiResourceUsage l.73
     public static final int USAGE_UAV = 1 << 1;
@@ -121,6 +122,7 @@ public final class FfxNative {
 
     /** Per-frame parameters of {@code ffxDispatchDescUpscale} (ffx_upscale.h l.81-106). */
     public record DispatchParams(long vkCommandBuffer, Image color, Image depth, Image motionVectors, Image output,
+                                 Image coverageMask, Image reactiveMask,
                                  float jitterX, float jitterY, float mvScaleX, float mvScaleY,
                                  int renderWidth, int renderHeight, int upscaleWidth, int upscaleHeight,
                                  boolean enableSharpening, float sharpness, float frameTimeDeltaMs, float preExposure,
@@ -387,6 +389,8 @@ public final class FfxNative {
             writeResource(d, "depth", p.depth());
             writeResource(d, "motionVectors", p.motionVectors());
             writeResource(d, "output", p.output());
+            writeResource(d, "reactive", p.reactiveMask());
+            writeResource(d, "transparencyAndComposition", p.coverageMask());
             long j = FfxLayouts.offset(FfxLayouts.DISPATCH_UPSCALE, "jitterOffset");
             d.set(JAVA_FLOAT, j, p.jitterX());
             d.set(JAVA_FLOAT, j + 4, p.jitterY());
@@ -416,7 +420,7 @@ public final class FfxNative {
     /** FfxApiResource as {@code ffxApiGetResourceVK(image, ffxApiGetImageResourceDescriptionVK(...), state)} builds it. */
     private static void writeResource(MemorySegment desc, String field, Image img) {
         long o = FfxLayouts.offset(FfxLayouts.DISPATCH_UPSCALE, field);
-        if (img.vkImage() == 0L) {
+        if (img == null || img.vkImage() == 0L) {
             return; // NULL resource: the backend maps it to the effect's NULL resource (RegisterResourceVK)
         }
         desc.set(JAVA_LONG, o, img.vkImage());

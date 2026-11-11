@@ -59,6 +59,8 @@ public class FsrBackend implements IUpscalerBackend {
         FrameContext.ImageRef depth = ctx.depth();
         FrameContext.ImageRef mv = ctx.motionVectors();
         FrameContext.ImageRef out = ctx.output();
+        FrameContext.ImageRef coverageMask = ctx.coverageMask();
+        FrameContext.ImageRef reactiveMask = ctx.reactiveMask();
 
         long now = System.nanoTime();
         float frameMs = lastDispatchNanos == 0L ? 16.6f : (float) ((now - lastDispatchNanos) / 1.0e6);
@@ -79,6 +81,10 @@ public class FsrBackend implements IUpscalerBackend {
             new FfxNative.Image(depth.image(), FfxNative.FORMAT_R32_FLOAT, depth.width(), depth.height(), FfxNative.USAGE_DEPTHTARGET, inputState),
             new FfxNative.Image(mv.image(), FfxNative.FORMAT_R16G16_FLOAT, mv.width(), mv.height(), FfxNative.USAGE_READ_ONLY, inputState),
             new FfxNative.Image(out.image(), FfxNative.FORMAT_R8G8B8A8_UNORM, out.width(), out.height(), FfxNative.USAGE_UAV, FfxNative.STATE_UNORDERED_ACCESS),
+            coverageMask == null ? null : new FfxNative.Image(coverageMask.image(), FfxNative.FORMAT_R8_UNORM,
+                coverageMask.width(), coverageMask.height(), FfxNative.USAGE_READ_ONLY, inputState),
+            reactiveMask == null ? null : new FfxNative.Image(reactiveMask.image(), FfxNative.FORMAT_R8_UNORM,
+                reactiveMask.width(), reactiveMask.height(), FfxNative.USAGE_READ_ONLY, inputState),
             ctx.jitterPixelsX() * FsrConfig.jitterSignX(), ctx.jitterPixelsY() * FsrConfig.jitterSignY(),
             1.0f, 1.0f,
             ctx.renderWidth(), ctx.renderHeight(), ctx.targetWidth(), ctx.targetHeight(),
@@ -86,7 +92,7 @@ public class FsrBackend implements IUpscalerBackend {
             ctx.resetHistory(), cam.near(), cam.far(), cam.fovY(), 1.0f);
 
         if (lib.modern()) {
-            transitionInputs(cmd, color, depth, mv, VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            transitionInputs(cmd, color, depth, mv, coverageMask, reactiveMask, VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         VkBarriers.fullMemoryBarrier(cmd);
         int result;
@@ -95,7 +101,7 @@ public class FsrBackend implements IUpscalerBackend {
         } finally {
             VkBarriers.fullMemoryBarrier(cmd);
             if (lib.modern()) {
-                transitionInputs(cmd, color, depth, mv, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
+                transitionInputs(cmd, color, depth, mv, coverageMask, reactiveMask, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
             }
         }
         if (result != FfxNative.RETURN_OK) {
@@ -106,10 +112,13 @@ public class FsrBackend implements IUpscalerBackend {
     }
 
     private static void transitionInputs(VkCommandBuffer command, FrameContext.ImageRef color,
-                                         FrameContext.ImageRef depth, FrameContext.ImageRef motion, int from, int to) {
+                                         FrameContext.ImageRef depth, FrameContext.ImageRef motion,
+                                         FrameContext.ImageRef coverageMask, FrameContext.ImageRef reactiveMask, int from, int to) {
         VkBarriers.transition(command, color.image(), color.aspectMask(), from, to);
         VkBarriers.transition(command, depth.image(), depth.aspectMask(), from, to);
         VkBarriers.transition(command, motion.image(), motion.aspectMask(), from, to);
+        if (coverageMask != null) VkBarriers.transition(command, coverageMask.image(), coverageMask.aspectMask(), from, to);
+        if (reactiveMask != null) VkBarriers.transition(command, reactiveMask.image(), reactiveMask.aspectMask(), from, to);
     }
 
     @Override

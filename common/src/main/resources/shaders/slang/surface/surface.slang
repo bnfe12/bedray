@@ -456,6 +456,8 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         // the LabPBR normal marker, bit 2 is redstone, bits 3+ are an optical
         // profile.  Do not copy that byte into MATERIAL_SOURCE_* directly.
         uint legacySourceFlags = uint(255.0 - materialTexel.a * 255.0 + 0.5);
+        // LabPbr bakes microfacet alpha=(1-smoothness)^2. The shared BSDF and denoisers take perceptual roughness.
+        if ((legacySourceFlags & 1u) != 0u) material.roughness = sqrt(material.roughness);
         material.sourceFlags = MATERIAL_SOURCE_NONE;
         if ((legacySourceFlags & 4u) != 0u) {
             material.sourceFlags |= MATERIAL_SOURCE_REDSTONE;
@@ -496,7 +498,7 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         // and the Fresnel split of an optical interface, and its transmission is
         // tinted by the biome colour instead of by the opaque 16x16 sprite.
         if ((hit.flags & HIT_FLAG_TRANSLUCENT) != 0u
-                && waterIsSurface(true, material.f0, material.roughness, material.metallic)) {
+                && waterIsSurface(true, material.f0, materialTexel.r, material.metallic)) {
             material.sourceFlags |= MATERIAL_SOURCE_FLUID;
             material.alphaMode = AlphaMode.Optical;
             material.ior = WATER_IOR;

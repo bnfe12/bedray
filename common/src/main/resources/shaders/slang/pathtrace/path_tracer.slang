@@ -101,6 +101,7 @@ static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;  // fill PathTrac
 static const uint PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;  // also write the primary hit's world motion for NRD's IN_MV
 static const uint PATH_TRACE_OPTION_RR_GUIDES      = 1u << 22u; // coherent RR primaries and positive linear view depth
 static const uint PATH_TRACE_OPTION_RR_PT_DECORRELATE = 1u << 23u;
+static const uint PATH_TRACE_OPTION_WORLD_MOTION = 1u << 30u;
 
 bool pathTraceNeedsDenoiserSignals(uint flags) {
     return (flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u && (flags & PATH_TRACE_OPTION_RR_GUIDES) == 0u;
@@ -285,6 +286,7 @@ struct PathTraceResult {
     float3 radiance;
     float3 throughput;
     float  firstHitDistance;    // parameter from primary origin; distance when primary direction is unit length
+    float primaryCoverage;
     float4 primaryMotion;       // xyz: where the primary surface stood one frame ago minus where it is now, in
                                 // world blocks; w: 1 when that surface is a captured model rather than terrain
     PathPrimaryGuide primary;   // guide channels, filled only when the primary ray hit a decodable surface
@@ -301,6 +303,7 @@ PathTraceResult emptyPathTraceResult() {
     result.throughput = float3(1.0);
     result.firstHitDistance = 0.0;
     result.primaryMotion = float4(0.0);
+    result.primaryCoverage = 0.0;
     result.primary.position = float3(0.0);
     result.primary.normal = float3(0.0, 0.0, 1.0);
     result.primary.albedo = float3(0.0);
@@ -458,11 +461,11 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     bool foliage = (surface.material.sourceFlags & MATERIAL_SOURCE_FOLIAGE) != 0u
         && (surface.material.flags & MATERIAL_FLAG_EMISSIVE) == 0u;
     float leafBack = foliage && keyLight ? max(dot(-shadowNormal, arrival), 0.0) : 0.0;
-    if (cosine <= 0.0 && leafBack <= 0.0) {
+    if ((cosine <= 0.0 || dot(shadowNormal, arrival) <= 0.0) && leafBack <= 0.0) {
         return zero;
     }
     float3 bsdf = zero;
-    if (cosine > 0.0) {
+    if (cosine > 0.0 && dot(shadowNormal, arrival) > 0.0) {
         bsdf = bsdfEvaluate(surface.material, view, normal, arrival);
         if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
             return zero;
@@ -614,7 +617,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // RR consumes total HDR but still needs the first reflected edge for reconstruction.
     // Reuse the real continuation; no extra query/ray is traced for the guide.
     bool wantDenoiserSignals = pathTraceNeedsDenoiserSignals(options.flags);
-    bool wantDenoiserGeometry = (options.flags & (PATH_TRACE_OPTION_GBUFFER | PATH_TRACE_OPTION_NRD_MOTION)) != 0u;
+    bool wantDenoiserGeometry = (options.flags & (PATH_TRACE_OPTION_GBUFFER | PATH_TRACE_OPTION_NRD_MOTION | PATH_TRACE_OPTION_WORLD_MOTION)) != 0u;
 
     // The water body the current ray runs in and the ray coordinate where its
     // current segment began.  A hole advance moves the origin, so the same
@@ -748,6 +751,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         bool paneFilter = surface.material.alphaMode == AlphaMode.Translucent
             && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u
             && surface.material.transmission >= 1.0;
+        if (!firstSurfaceAccepted && (options.flags & PATH_TRACE_OPTION_WORLD_MOTION) != 0u
+            && materialIsTranslucent(surface.material)) {
+            float alpha = saturate(surface.material.alpha);
+            result.primaryCoverage += (1.0 - result.primaryCoverage) * alpha;
+        }
         if (paneFilter) {
             throughput *= surfaceTransmittance(surface, ray.direction);
             if (pathMaxComponent(throughput) <= 0.0) break;
@@ -801,9 +809,14 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         }
         result.surfaceHits++;
 
-        float3 normal = surface.shadingNormal;
         float3 view = -ray.direction;
-        if (dot(normal, view) < 0.0) normal = -normal;
+        float3 geometricNormal = safeNormalize(hit.geometricNormal, view);
+        if (dot(geometricNormal, view) < 0.0) geometricNormal = -geometricNormal;
+        float3 normal = safeNormalize(surface.shadingNormal, geometricNormal);
+        if (dot(normal, geometricNormal) < 0.0) normal = -normal;
+        // Fade tangent-facing normal detail toward the true face instead of flipping it through the geometry.
+        float faceWeight = smoothstep(0.0, 0.05, dot(normal, view));
+        normal = safeNormalize(lerp(geometricNormal, normal, faceWeight), geometricNormal);
 
         if (ptArmed) {
             // The first scattered vertex of the primary diffuse continuation.  `view` points back along the edge to the
@@ -996,6 +1009,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 break;
             }
             result.flags |= PATH_TRACE_FLAG_RC_OUTSIDE;
+        }
+
+        // Cached diffuse integrates a complete hemisphere above. Only actual traced continuations use this direction.
+        if ((bsdf.lobe & BSDF_LOBE_TRANSMISSION) == 0u && dot(geometricNormal, bsdf.direction) <= 0.0) {
+            result.flags |= PATH_TRACE_FLAG_TRUNCATED;
+            break;
         }
 
         // Which continuations this pass may trace.  The ray profile switches whole effects off (reflections, GI, AO)

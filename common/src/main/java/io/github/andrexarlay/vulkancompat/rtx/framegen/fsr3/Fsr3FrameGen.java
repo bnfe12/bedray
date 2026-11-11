@@ -388,7 +388,8 @@ public final class Fsr3FrameGen {
             }
             var camera = guides != null ? guides.preparedCamera()
                 : new io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera(pc, rc, cc.x, cc.y, cc.z,
-                    CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(), false);
+                    CameraJitterManager.getCurrentPixelJitterX(), CameraJitterManager.getCurrentPixelJitterY(),
+                    WorldTargetManager.colorProducerChangedThisFrame());
             windowFocused = Minecraft.getInstance().getWindow().isFocused();
             FrameGenSettings.Mode wanted = FrameGenSettings.mode();
             boolean allowed = userEnabled && wanted != FrameGenSettings.Mode.OFF;

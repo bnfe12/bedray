@@ -24,6 +24,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * @param qualityMode    Name of the quality mode (backend specific, for logs)
  * @param exposureScale  Pre-exposure multiplier (1.0 for LDR input)
  * @param resetHistory   True if temporal history must be discarded (first frame, resize, mode change, teleport)
+ * @param coverageMask   Optional R8_UNORM coverage of RT translucency, particles and weather in this frame
  */
 public record FrameContext(
     VkCommandBuffer commandBuffer,
@@ -40,8 +41,17 @@ public record FrameContext(
     float scale,
     String qualityMode,
     float exposureScale,
-    boolean resetHistory
+    boolean resetHistory,
+    ImageRef coverageMask,
+    ImageRef reactiveMask
 ) {
+    /** Compatibility constructor for callers without composition guides. */
+    public FrameContext(VkCommandBuffer commandBuffer, ImageRef color, ImageRef depth, ImageRef motionVectors, ImageRef output,
+                        float jitterPixelsX, float jitterPixelsY, int renderWidth, int renderHeight, int targetWidth,
+                        int targetHeight, float scale, String qualityMode, float exposureScale, boolean resetHistory) {
+        this(commandBuffer, color, depth, motionVectors, output, jitterPixelsX, jitterPixelsY, renderWidth, renderHeight,
+            targetWidth, targetHeight, scale, qualityMode, exposureScale, resetHistory, null, null);
+    }
     /**
      * A Vulkan image with the view the backend should use.
      *

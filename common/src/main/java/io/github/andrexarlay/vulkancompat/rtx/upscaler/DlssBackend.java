@@ -74,12 +74,15 @@ public class DlssBackend implements IUpscalerBackend {
         FrameContext.ImageRef depth = ctx.depth();
         FrameContext.ImageRef mv = ctx.motionVectors();
         FrameContext.ImageRef out = ctx.output();
+        FrameContext.ImageRef mask = ctx.reactiveMask();
 
         VkBarriers.fullMemoryBarrier(cmd);
         VkBarriers.transition(cmd, color.image(), color.aspectMask(), VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         VkBarriers.transition(cmd, depth.image(), depth.aspectMask(), VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         VkBarriers.transition(cmd, mv.image(), mv.aspectMask(), VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+        if (mask != null) VkBarriers.transition(cmd, mask.image(), mask.aspectMask(),
+            VK10.VK_IMAGE_LAYOUT_GENERAL, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         DlssNative.Status status = null;
         boolean featureOk;
         try {
@@ -96,13 +99,15 @@ public class DlssBackend implements IUpscalerBackend {
                     ctx.jitterPixelsX() * DlssConfig.jitterSignX(), ctx.jitterPixelsY() * DlssConfig.jitterSignY(),
                     1.0f, 1.0f, srSharpness(ctx), 1.0f, ctx.exposureScale(),
                     ctx.renderWidth(), ctx.renderHeight());
-                status = DlssRuntime.nativeLib().evaluate(cmd.address(), DlssRuntime.feature(), info);
+                status = DlssRuntime.nativeLib().evaluate(cmd.address(), DlssRuntime.feature(), info, mask != null ? image(mask, false) : null);
             }
         } finally {
             // layouts are restored even if the call threw, so the engine's GENERAL assumption stays true
             VkBarriers.transition(cmd, color.image(), color.aspectMask(), VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
             VkBarriers.transition(cmd, depth.image(), depth.aspectMask(), VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
             VkBarriers.transition(cmd, mv.image(), mv.aspectMask(), VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
+            if (mask != null) VkBarriers.transition(cmd, mask.image(), mask.aspectMask(),
+                VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK10.VK_IMAGE_LAYOUT_GENERAL);
             VkBarriers.fullMemoryBarrier(cmd);
         }
         if (!featureOk) {

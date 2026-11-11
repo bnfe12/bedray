@@ -106,6 +106,7 @@ public final class BedrayCoreLayouts {
     public static final int PATH_TRACE_FEATURE_FRAME_STATS = 1 << 6;
     public static final int PATH_TRACE_FEATURE_NATIVE_PT = 1 << 7;
     public static final int PATH_TRACE_FEATURE_STATS_SLOT = 1 << 8;
+    public static final int PATH_TRACE_FEATURE_WORLD_MOTION = 1 << 9;
 
     /** {@code BEDRAY_PATH_DISPLAY_*} bits; the pass adds the ones it derives itself. */
     public static final int PATH_DISPLAY_ACCUMULATE = 1 << 0;

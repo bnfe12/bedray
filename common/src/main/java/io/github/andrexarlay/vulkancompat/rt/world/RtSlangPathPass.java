@@ -468,6 +468,7 @@ public final class RtSlangPathPass implements RtPass {
         // motion buffer, bound only for that layout, so its push bit follows the buffer the frame actually carries.
         RtPathTraceSlangPass.Guides guides = RtPathTraceSlangPass.Guides.of(views.gbuffer());
         int guideFlags = guideOptionFlags(guides != null, views.motion() != 0L, params.rrGuides);
+        if (params.worldMotion) guideFlags |= RtPathTraceSlangPass.OPTION_WORLD_MOTION;
         boolean rrPtDecorrelation = params.rrGuides && ptActive() && RR_PT_DECORRELATE;
         int diagnosticFlags = guideFlags | (rrPtDecorrelation ? RtPathTraceSlangPass.OPTION_RR_PT_DECORRELATE : 0);
         if (diagnosticFlags != loggedGuideFlags) {

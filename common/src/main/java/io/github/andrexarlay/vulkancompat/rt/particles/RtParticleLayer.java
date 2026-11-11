@@ -26,6 +26,7 @@ import org.joml.Vector4f;
 import org.joml.Vector4fc;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -194,22 +195,23 @@ public final class RtParticleLayer {
      * Inside the RT command buffer, after the denoiser and before bloom: lays the layer over {@code rtOutputView}.
      * @return true when the layer was composited
      */
-    public static boolean composite(VkCommandBuffer cmd, SlangRuntime runtime, long rtOutputView, int width, int height) {
-        if (!layerReady || layer == null || failed) {
-            return false;
-        }
+    public static boolean readyForComposite() {
+        return layerReady && layer != null && !failed;
+    }
+
+    public static RtMemory.Img composite(VkCommandBuffer cmd, SlangRuntime runtime, long rtOutputView, int width, int height,
+                                         RtMemory.Img mask, RtMemory.Img reactive, long motion, long depthView) {
+        long layerView = readyForComposite() && layer.width == width && layer.height == height
+            ? WorldTargetManager.extractVkImageView(layer.getColorTextureView()) : 0L;
         layerReady = false;
-        long layerView = WorldTargetManager.extractVkImageView(layer.getColorTextureView());
-        if (layerView == 0L || rtOutputView == 0L || layer.width != width || layer.height != height) {
-            return false;
-        }
+        if (rtOutputView == 0L || (layerView == 0L && (mask == null || motion == 0L || depthView == 0L))) return null;
         if (composite == null) {
             composite = new RtParticleComposite(runtime);
             LOGGER.info("[VKB-RT] particles composite pipeline ready");
         }
-        composite.record(cmd, layerView, rtOutputView, width, height, 1.0f);
-        compositedFrames++;
-        return true;
+        boolean maskWritten = composite.record(cmd, layerView, rtOutputView, width, height, 1.0f, mask, reactive, motion, depthView);
+        if (layerView != 0L) compositedFrames++;
+        return maskWritten ? mask : null;
     }
 
     private static void ensureLayer(int w, int h) {

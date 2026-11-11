@@ -2,6 +2,8 @@
 // Keep every live GLSL branch/threshold; migrate ownership and compilation only.
 public module velocity_live;
 
+import "history/world_motion.slang";
+
 struct VelocityLiveUniforms {
     float4x4 invViewProj;          // 0
     float4x4 prevViewProj;         // 64
@@ -118,9 +120,16 @@ float4 reprojectLiveVelocity(int2 pixelCoord, int2 size, Sampler2D depthTexture,
             if (entityMotion.x != 0u || entityMotion.y != 0u) {
                 // moving entity (RT primary hit): per-vertex previous position, interpolated at the hit, world blocks
                 float4 m = ((float4*)velocityLiveAddress(entityMotion.xy))[pixelCoord.y * size.x + pixelCoord.x];
-                if (m.w > 0.5 && m.x > 1.0e29) {
+                bool matched = m.w > 0.5;
+                if (!linearViewZ && !rayDistance) {
+                    // A raster depth can cover an RT hit with a different surface. Require the same primary distance.
+                    float distance = length(worldPosRel - cameraBobOrigin.xyz);
+                    float hitDistance = worldMotionDistance(m);
+                    matched = hitDistance > 0.0 && abs(hitDistance - distance) <= max(0.025, 0.002 * distance);
+                }
+                if (matched && m.x > 1.0e29) {
                     disocclusionMask = 1.0;   // entity without a previous-frame match (new / changed mesh): no history
-                } else if (m.w > 0.5) {
+                } else if (matched) {
                     objectMotion = m.xyz;
                     dynamicObjectMask = dot(m.xyz, m.xyz) > 1.0e-8 ? 1.0 : 0.0;
                 }

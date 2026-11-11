@@ -267,6 +267,7 @@ typedef struct BedrayFrameDesc {
 /* Answers bedray_core_render_path_trace_ext: the trace adds its F3 reject split (PATH_REJECTS, words 140..143) into the
  * host's StatsBuf slot bound at 37 instead of a one-word stand-in. */
 #define BEDRAY_PATH_TRACE_FEATURE_STATS_SLOT     (1u << 8)
+#define BEDRAY_PATH_TRACE_FEATURE_WORLD_MOTION    (1u << 9)
 BEDRAY_API uint32_t BEDRAY_CALL bedray_core_path_trace_feature_mask(void);
 
 #define BEDRAY_PATH_DISPLAY_ACCUMULATE     (1u << 0)
