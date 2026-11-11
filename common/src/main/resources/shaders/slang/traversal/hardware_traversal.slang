@@ -75,6 +75,16 @@ SurfaceHit hardwareHitToSurface(GeometryProvider geometry, Ray ray,
     result.geometricNormal = geometricNormal;
     result.shadingNormal = geometricNormal;
     result.uv = uv;
+    float diameter = ray.coneWidth + max(t, 0.0) * ray.coneSpread;
+    if (diameter > 0.0) {
+        float radius = 0.5 * diameter / max(abs(dot(geometricNormal, ray.direction)), 0.05);
+        result.surfaceFootprint = 2.0 * radius;
+        result.uvRadius = triangleUvRadius(p0, p1, p2, uv0, uv1, uv2, radius);
+        GeometryVertex* vertices = (GeometryVertex*)section.vertexAddress;
+        uint missingCorner = (primitiveId & 1u) != 0u ? 1u : 3u;
+        float2 uv3 = vertices[geometryVertexBase(section, geometryIndex, primitiveId) + missingCorner].uvLight.xy;
+        result.uvBounds = float4(min(min(uv0, uv1), min(uv2, uv3)), max(max(uv0, uv1), max(uv2, uv3)));
+    }
     result.barycentrics = bary;
     result.light = light;
     result.tint = tint;

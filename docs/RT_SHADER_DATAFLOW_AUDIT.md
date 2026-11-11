@@ -16,3 +16,10 @@
 The motion record uses 16 bytes per render pixel in addition to the existing denoiser plane. Half-float distance is used only for the depth-match test, with a relative tolerance larger than half-float quantization. Coverage is normalized. The new shading math adds no rays or textures. The optional masks add two bytes per render pixel and one compute pass.
 
 The audit scope covers the changed dataflow and its independent source review. Full shader numerical coverage, AOT output, SDK execution and image acceptance require matching build and runtime evidence. Reference inspection and remaining visual gaps are tracked in [Rendering reference audit](RTX_REFERENCE_AUDIT.md).
+
+
+## Primary footprint and normal filtering
+
+Ray and SurfaceHit gained shader-local footprint fields. makeRay and missHit initialize them. The primary diameter uses vertical FOV and render height. Hardware triangle conversion projects that diameter into UV space, retaining scale for sheared mappings. This changes no native descriptor, buffer layout or FFM structure.
+
+Normal filtering is adaptive and bounded to the quad UV range, with decoded-vector interpolation and roughness compensation. Water wave filtering uses the same world footprint. The normal-filter path is scoped to primary and delta-continuation footprints. [Material filtering details](MATERIAL_AND_TEXTURE_SET_AUDIT.md)

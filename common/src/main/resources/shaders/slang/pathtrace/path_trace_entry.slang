@@ -70,7 +70,9 @@ Ray pathTracePrimaryRay(FrameConstants f, int2 pixel, float maxDistance, float2 
     float3 direction = normalize(f.camera.forward.xyz
         + f.camera.right.xyz * (ndc.x * tanHalf * aspect)
         - f.camera.up.xyz * (ndc.y * tanHalf));
-    return makeRay(f.camera.origin.xyz, direction, 0.0, max(maxDistance, 1.0));
+    Ray ray = makeRay(f.camera.origin.xyz, direction, 0.0, max(maxDistance, 1.0));
+    ray.coneSpread = max(2.0 * tanHalf * f.camera.jitter.w, 0.0);
+    return ray;
 }
 
 // One cutoff for the primary path, material decoding and the filtered shadow walk; otherwise a near-threshold texel can

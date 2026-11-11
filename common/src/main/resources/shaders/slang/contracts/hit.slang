@@ -23,6 +23,8 @@ struct Ray {
     float  tMin;
     float3 direction;
     float  tMax;
+    float  coneWidth;          // world-space footprint diameter at the ray origin
+    float  coneSpread;         // diameter growth per unit ray distance
 };
 
 struct SurfaceHit {
@@ -39,6 +41,9 @@ struct SurfaceHit {
     float3    tangent;         // optional orthonormal tangent frame; zero when unavailable
     float3    bitangent;
     float2    uv;
+    float     surfaceFootprint; // projected world-space diameter at the hit
+    float2    uvRadius;        // projected half-footprint in atlas UV units, zero for auxiliary rays
+    float4    uvBounds;        // min.xy, max.zw of this primitive's atlas island
     float2    barycentrics;
     float2    light;           // x: block light 0..1, y: sky light 0..1
     float3    tint;            // biome tint * baked AO, already linear
@@ -90,6 +95,9 @@ SurfaceHit missHit(float tMax) {
     result.tangent = float3(0.0);
     result.bitangent = float3(0.0);
     result.uv = float2(0.0);
+    result.surfaceFootprint = 0.0;
+    result.uvRadius = float2(0.0);
+    result.uvBounds = float4(0.0);
     result.barycentrics = float2(0.0);
     result.light = float2(0.0);
     result.tint = float3(1.0);
@@ -107,6 +115,8 @@ Ray makeRay(float3 origin, float3 direction, float tMin, float tMax) {
     ray.tMin = tMin;
     ray.direction = direction;
     ray.tMax = tMax;
+    ray.coneWidth = 0.0;
+    ray.coneSpread = 0.0;
     return ray;
 }
 

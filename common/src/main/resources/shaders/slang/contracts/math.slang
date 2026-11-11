@@ -80,3 +80,22 @@ void triangleTangentFrame(float3 p0, float3 p1, float3 p2, float2 uv0, float2 uv
         faceTangentFrame(normal, tangent, bitangent);
     }
 }
+
+
+// World-space disk projected into a triangle's UV coordinates. This keeps the complete UV metric for sheared faces.
+float2 triangleUvRadius(float3 p0, float3 p1, float3 p2, float2 uv0, float2 uv1, float2 uv2, float radius) {
+    if (!(radius > 0.0) || !isFinite(radius)) return float2(0.0);
+    float3 e1 = p1 - p0;
+    float3 e2 = p2 - p0;
+    float3 area = cross(e1, e2);
+    float areaSquared = dot(area, area);
+    if (!(areaSquared > 1.0e-16)) return float2(0.0);
+    float2 d1 = uv1 - uv0;
+    float2 d2 = uv2 - uv0;
+    float3 a = cross(e2, area) / areaSquared;
+    float3 b = cross(area, e1) / areaSquared;
+    float3 gradU = a * d1.x + b * d2.x;
+    float3 gradV = a * d1.y + b * d2.y;
+    float2 footprint = radius * float2(length(gradU), length(gradV));
+    return isFinite(footprint.x) && isFinite(footprint.y) ? footprint : float2(0.0);
+}

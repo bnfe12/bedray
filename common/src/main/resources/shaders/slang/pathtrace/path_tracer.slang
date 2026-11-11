@@ -776,6 +776,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
                 break;
             }
+            ray.coneWidth += ray.coneSpread * advance;
             ray.origin = advancedOrigin;
             ray.tMax = max(ray.tMax - advance, 0.0);
             ray.tMin = 0.0;
@@ -1127,7 +1128,14 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             pathDenoiserBegin(denoiserContinuation, bsdf.lobe,
                 wantDenoiserSignals ? result.radiance : float3(0.0), hit.position);
         }
+        float coneWidth = ray.coneWidth + ray.coneSpread * hit.t;
+        float coneSpread = ray.coneSpread;
         ray = makeRay(origin, bsdf.direction, 0.0, continuationDistance);
+        // Continue the camera footprint through delta paths. Diffuse/rough-ray footprint widening needs a full cone model.
+        if (bsdf.delta) {
+            ray.coneWidth = coneWidth;
+            ray.coneSpread = coneSpread;
+        }
         ambientOnlyPending = continuationAmbientOnly;
         // The new origin sits one bias off the interaction along the face; the segment starts there (the legacy path
         // ignored this offset too).

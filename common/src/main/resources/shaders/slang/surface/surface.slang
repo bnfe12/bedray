@@ -163,25 +163,69 @@ MaterialSample defaultMaterialSample() {
     return material;
 }
 
+// Decode individual taps before filtering so normals remain vectors and AO remains a continuous scalar.
+float3 atlasTangentNormal(float4 texel, float strength) {
+    float2 xy = (texel.rg - float2(0.5)) * (2.0 * strength);
+    float lengthSquared = dot(xy, xy);
+    if (lengthSquared > 0.81) xy *= 0.9 * rsqrt(lengthSquared);
+    return float3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
+}
+
+float4 atlasNormalFootprint(MaterialAtlas atlas, SurfaceHit hit, float strength, bool filter) {
+    float2 weight = float2(0.0);
+    uint2 dimensions = uint2(1);
+    if (filter && any(hit.uvRadius > float2(0.0))) {
+        atlas.normal.GetDimensions(dimensions.x, dimensions.y);
+        float2 diameter = hit.uvRadius * float2(dimensions) * 2.0;
+        weight = smoothstep(float2(1.0), float2(2.0), diameter);
+    }
+    if (all(weight <= float2(0.0)) || !isFinite(hit.uvBounds.xyz) || !isFinite(hit.uvBounds.w)
+        || any(hit.uvBounds.zw <= hit.uvBounds.xy)) {
+        float4 texel = atlas.normal.SampleLevel(hit.uv, 0.0);
+        return float4(atlasTangentNormal(texel, strength), saturate(texel.b));
+    }
+
+    float2 size = float2(dimensions);
+    float2 texelSize = 1.0 / size;
+    // Half-texel insets stop the point taps crossing into a neighboring sprite, including partial-face UV ranges.
+    float2 inset = min(texelSize * 0.5, (hit.uvBounds.zw - hit.uvBounds.xy) * 0.5);
+    float2 low = hit.uvBounds.xy + inset;
+    float2 high = hit.uvBounds.zw - inset;
+    float2 pixel = hit.uv * size - 0.5;
+    float2 base = floor(pixel);
+    float2 fraction = frac(pixel);
+    // Blend each axis from its original point texel into bilinear weights as that axis becomes unresolved.
+    fraction = lerp(step(float2(0.5), fraction), fraction, weight);
+    float2 uv00 = clamp((base + float2(0.5, 0.5)) * texelSize, low, high);
+    float2 uv10 = clamp((base + float2(1.5, 0.5)) * texelSize, low, high);
+    float2 uv01 = clamp((base + float2(0.5, 1.5)) * texelSize, low, high);
+    float2 uv11 = clamp((base + float2(1.5, 1.5)) * texelSize, low, high);
+    float4 a = atlas.normal.SampleLevel(uv00, 0.0);
+    float4 b = atlas.normal.SampleLevel(uv10, 0.0);
+    float4 c = atlas.normal.SampleLevel(uv01, 0.0);
+    float4 d = atlas.normal.SampleLevel(uv11, 0.0);
+    float4 upper = lerp(float4(atlasTangentNormal(a, strength), saturate(a.b)),
+        float4(atlasTangentNormal(b, strength), saturate(b.b)), fraction.x);
+    float4 lower = lerp(float4(atlasTangentNormal(c, strength), saturate(c.b)),
+        float4(atlasTangentNormal(d, strength), saturate(d.b)), fraction.x);
+    return lerp(upper, lower, fraction.y);
+}
+
 float3 decodeAtlasNormal(MaterialAtlas atlas, MaterialSamplingOptions options,
-        SurfaceHit hit, float3 geometricNormal, out float ambientOcclusion) {
+        SurfaceHit hit, float3 geometricNormal, bool filter, out float ambientOcclusion, out float normalVariance) {
     ambientOcclusion = 1.0;
+    normalVariance = 0.0;
     if ((options.flags & MATERIAL_SAMPLING_FLAG_NORMAL_MAP) == 0u) return geometricNormal;
     if ((hit.flags & HIT_FLAG_TANGENT_VALID) == 0u) return geometricNormal;
 
-    float4 normalTexel = atlas.normal.SampleLevel(hit.uv, 0.0);
-    ambientOcclusion = clamp(normalTexel.b, 0.0, 1.0);
-
-    float2 xy = (normalTexel.rg - float2(0.5)) * 2.0;
-    xy *= options.normalStrength;
-    float lengthSquared = dot(xy, xy);
-    if (lengthSquared > 0.81) xy *= 0.9 * rsqrt(lengthSquared);
-    if (lengthSquared <= 1.0e-6) return geometricNormal;
-
-    float z = sqrt(max(1.0 - dot(xy, xy), 0.0));
+    float4 filtered = atlasNormalFootprint(atlas, hit, options.normalStrength, filter);
+    ambientOcclusion = filtered.w;
+    float meanLength = min(length(filtered.xyz), 1.0);
+    normalVariance = clamp((1.0 - meanLength - 1.0e-6) / max(meanLength, 1.0e-4), 0.0, 1.0);
+    float3 tangentNormal = safeNormalize(filtered.xyz, float3(0.0, 0.0, 1.0));
     float3 tangent = safeNormalize(hit.tangent, float3(1.0, 0.0, 0.0));
     float3 bitangent = safeNormalize(hit.bitangent, cross(geometricNormal, tangent));
-    float3 normal = tangent * xy.x + bitangent * xy.y + geometricNormal * z;
+    float3 normal = tangent * tangentNormal.x + bitangent * tangentNormal.y + geometricNormal * tangentNormal.z;
     normal = safeNormalize(normal, geometricNormal);
     return orientNormal(normal, geometricNormal);
 }
@@ -488,23 +532,28 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
         if ((options.flags & MATERIAL_SAMPLING_FLAG_APPLY_TINT) != 0u) {
             material.albedo *= hit.tint;
         }
+        bool waterSurface = (hit.flags & HIT_FLAG_TRANSLUCENT) != 0u
+            && waterIsSurface(true, material.f0, materialTexel.r, material.metallic);
         if (wantNormal) {
-            shadingNormal = decodeAtlasNormal(atlas, options, hit, geometricNormal,
-                ambientOcclusion);
+            float normalVariance;
+            shadingNormal = decodeAtlasNormal(atlas, options, hit, geometricNormal, !waterSurface,
+                ambientOcclusion, normalVariance);
             material.ambientOcclusion = ambientOcclusion;
+            // The BSDF squares perceptual roughness to alpha. Combine unresolved slopes in alpha squared.
+            float alpha = material.roughness * material.roughness;
+            material.roughness = sqrt(sqrt(min(alpha * alpha + normalVariance, 1.0)));
         }
         // A fluid is not a tinted pane.  The auto-PBR atlas tags it with water's
         // reflectance and roughness, the sheet takes the analytic wave normal
         // and the Fresnel split of an optical interface, and its transmission is
         // tinted by the biome colour instead of by the opaque 16x16 sprite.
-        if ((hit.flags & HIT_FLAG_TRANSLUCENT) != 0u
-                && waterIsSurface(true, material.f0, materialTexel.r, material.metallic)) {
+        if (waterSurface) {
             material.sourceFlags |= MATERIAL_SOURCE_FLUID;
             material.alphaMode = AlphaMode.Optical;
             material.ior = WATER_IOR;
             if (wantNormal) {
-                float footprint = hit.t * WATER_PIXEL_ANGLE /
-                    max(abs(dot(rayDirection, geometricNormal)), 0.06);
+                float footprint = hit.surfaceFootprint > 0.0 ? hit.surfaceFootprint
+                    : hit.t * WATER_PIXEL_ANGLE / max(abs(dot(rayDirection, geometricNormal)), 0.06);
                 float lostVar = 0.0;
                 float3 waveNormal = waterStyledWaveNormal(hit.worldPosition, geometricNormal,
                     options.portalTime, footprint, options.waterWaveMix, lostVar);
