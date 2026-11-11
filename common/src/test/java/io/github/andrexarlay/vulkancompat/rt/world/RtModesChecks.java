@@ -209,7 +209,7 @@ final class RtModesChecks {
     }
 
     private static void labPbrDecode() {
-        // LabPBR 1.3: roughness = (1 - smoothness)^2
+        // LabPBR 1.3: GGX alpha = (1 - smoothness)^2; the atlas keeps perceptual roughness 1 - smoothness and the BSDF squares it
         near(1f, LabPbr.roughnessFromSmoothness(0), 1e-6f, "smoothness 0 -> roughness 1");
         near(0f, LabPbr.roughnessFromSmoothness(255), 1e-6f, "smoothness 255 -> roughness 0");
         near(0.25f, LabPbr.roughnessFromSmoothness(128), 0.01f, "half smooth -> 0.25");
