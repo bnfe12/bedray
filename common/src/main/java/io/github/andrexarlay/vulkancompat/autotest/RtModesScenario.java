@@ -55,6 +55,20 @@ public final class RtModesScenario implements AutotestScenario {
     /** Camera motion of the current step (mv=still|walk|turn|strafe), driven once per frame from the post-frame hook. */
     private volatile String motion = "";
     private volatile boolean entMove;
+    /**
+     * Exposure trace of a step ({@code sway<N>}): still for N frames, swaying around the same pose for N frames (0.5 block
+     * and 6 degrees, period 1.5 s, so the view keeps returning to where it was), then still again; the exposure is logged
+     * every 10 frames as {@code event=exposure_trace}. A meter that follows the light gives the same plateau before and
+     * after the sway; one that follows the noise jumps while swaying and drifts back over seconds.
+     */
+    private volatile int swayLen;
+    private static final int SWAY_SETTLE = 60;
+    private volatile int swayFrame = -1;
+    private volatile int swayStep;
+    private double swayX;
+    private double swayY;
+    private double swayZ;
+    private float swayYaw;
     /** x, y, z, yaw: after a moving capture the camera is held at the pose of the last frame (converged reference of the motion). */
     private volatile double[] holdPose;
     private final java.util.List<double[]> poseLog = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
@@ -85,7 +99,7 @@ public final class RtModesScenario implements AutotestScenario {
                 continue;
             }
             String[] sm = item.split(":", 2);
-            if (sm.length != 2 || !(sm[0].equals("A") || sm[0].equals("B") || sm[0].equals("C") || sm[0].equals("D") || sm[0].equals("E") || sm[0].equals("F"))) {
+            if (sm.length != 2 || !(sm[0].equals("A") || sm[0].equals("B") || sm[0].equals("C") || sm[0].equals("D") || sm[0].equals("E") || sm[0].equals("F") || sm[0].equals("H"))) {
                 throw new IllegalArgumentException("step '" + item + "': expected A:, B:, C: or D:<mode>");
             }
             String[] parts = sm[1].split("\\+");
@@ -98,7 +112,7 @@ public final class RtModesScenario implements AutotestScenario {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.equals("ao") || m.equals("gi") || m.equals("break") || m.equals("ui") || m.equals("soft") || m.equals("refl") || m.equals("noshadow") || m.equals("noemis")
                     || m.equals("rr") || m.equals("ref") || m.equals("cmp") || m.equals("ent") || m.equals("entabove") || m.equals("noent") || m.equals("label") || m.matches("pack=(on|off)") || m.equals("entmove") || m.matches("mv=(still|walk|turn|strafe|realwalk|realturn)") || m.equals("noaccum") || m.equals("noexp") || m.equals("noautonorm") || m.matches("an\\d+") || m.matches("t\\d+") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("nrd") || m.matches("[qbsf]\\d+") || m.matches("dist\\d+") || m.startsWith("dbg=") || m.matches("up=(off|dlss_[a-z_]+|xess_[a-z_]+|fsr_[a-z_]+|fsr1_[a-z_]+|nis_\\d+|bil_\\d+)") || m.matches("js=(d|-?1_-?1)") || m.matches("shp=[0-9.]+") || m.matches("tm=[a-z0-9_]+") || m.matches("jv=[a-z0-9_]+") || m.matches("p=(off|low|medium|high|ultra|path_tracing|custom)")
-                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)"))) {
+                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 if (m.startsWith("dbg=") && RtConfig.isUnknownMode(m.substring(4))) {
@@ -213,6 +227,18 @@ public final class RtModesScenario implements AutotestScenario {
         c.add(fill(56, 3, 0, 74, 3, 14, "air"));
         c.add(fill(62, -11, 9, 66, -9, 12, "sand"));
         c.add(set(60, -10, 7, "sea_lantern"));
+        // scene H (the owner's corridor, 2026-11-11): stone-brick hall, interior x -39..-37, y 0..3, z 1..17, a sea lantern
+        // in the ceiling, a glass window in the east wall and a doorway at the south end onto a sunlit floor. Lit mostly by
+        // bounced sky light, the case where a 1-spp frame is noisiest.
+        c.add(fill(-44, -2, -3, -32, -1, 28, "smooth_stone"));
+        c.add(fill(-44, 0, -3, -32, 9, 28, "air"));
+        c.add(fill(-40, -1, 0, -36, 4, 18, "stone_bricks"));
+        c.add(fill(-39, 0, 1, -37, 3, 17, "air"));
+        c.add(set(-38, 4, 8, "sea_lantern"));
+        c.add(fill(-36, 1, 4, -36, 2, 6, "glass"));
+        c.add(fill(-38, 0, 18, -37, 2, 18, "air"));
+        c.add(set(-37, 0, 24, "oak_fence"));
+        c.add(fill(-35, 0, 23, -35, 3, 23, "oak_log"));
         // scene A: more light sources for the night shots
         c.add(set(-4, 0, 2, "torch"));
         c.add(set(4, 0, 2, "torch"));
@@ -231,6 +257,58 @@ public final class RtModesScenario implements AutotestScenario {
     private void applyAim(AutotestContext ctx) {
         var player = ctx.minecraft().player;
         if (!aimOverride || player == null) {
+            return;
+        }
+        if (swayFrame >= 0) {
+            int k = swayFrame++;
+            // The step's teleport is a server command that lands a few frames later: the pose is taken once it settled,
+            // and the camera is only held from then on.
+            if (k < SWAY_SETTLE) {
+                return;
+            }
+            if (k == SWAY_SETTLE) {
+                swayX = player.getX();
+                swayY = player.getY();
+                swayZ = player.getZ();
+                swayYaw = aimYaw;
+            }
+            if (k % 10 == 0) {
+                ctx.log("scenario", name(), "step", String.valueOf(swayStep), "event", "exposure_trace", "frame", String.valueOf(k),
+                    "phase", k < swayLen ? "still" : k < 2 * swayLen ? "sway" : "still_after",
+                    "exposure", String.format(Locale.ROOT, "%.4f", RtFrameRenderer.lastExposure()));
+            }
+            // Same pose, still and moving: the last still frame, and a sway frame where the sine crosses zero (the camera
+            // passes through the original pose at full speed), plus the last frame of the still tail.
+            int swayMoving = swayLen + 180;
+            if (k == swayLen - 1 || k == swayMoving || k == 3 * swayLen - 1) {
+                String tag = k == swayLen - 1 ? "still" : k == swayMoving ? "moving" : "still_after";
+                int stepIndex = swayStep;
+                net.minecraft.client.Screenshot.takeScreenshot(ctx.minecraft().gameRenderer.mainRenderTarget(), image -> {
+                    try (com.mojang.blaze3d.platform.NativeImage ni = image) {
+                        writePng(ctx.minecraft().gameDirectory.toPath().resolve("autotest").resolve(name())
+                            .resolve(String.format(Locale.ROOT, "%02d_sway_%s.png", stepIndex, tag)),
+                            ni.getPixels().clone(), ni.getWidth(), ni.getHeight(), null);
+                    } catch (java.io.IOException e) {
+                        ctx.log("scenario", name(), "event", "sway_shot", "result", "png_error;" + e);
+                    }
+                });
+            }
+            double w = k >= swayLen && k < 2 * swayLen ? Math.sin((k - swayLen) * (2.0 * Math.PI / 90.0)) : 0.0;
+            double x = swayX + 0.5 * w;
+            aimYaw = swayYaw + (float) (6.0 * w);
+            player.getAbilities().flying = true;
+            player.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+            player.setPos(x, swayY, swayZ);
+            player.xo = x;
+            player.yo = swayY;
+            player.zo = swayZ;
+            player.xOld = x;
+            player.yOld = swayY;
+            player.zOld = swayZ;
+            player.setYRot(aimYaw);
+            player.yRotO = aimYaw;
+            player.setXRot(aimPitch);
+            player.xRotO = aimPitch;
             return;
         }
         if (entMove) {
@@ -349,6 +427,13 @@ public final class RtModesScenario implements AutotestScenario {
             aimYaw = 0f;
             aimPitch = 22f;
             flyScene = true;
+        } else if (scene.equals("H")) {
+            // inside the corridor at its closed north end, looking south (+Z) down the hall at the doorway
+            x = bx - 37.5;
+            y = by;
+            z = bz + 1.6;
+            aimYaw = 0f;
+            aimPitch = 6f;
         } else if (scene.equals("C")) {
             // 300 blocks away (new chunks): high above the ground looking down, the player falls onto the terrain
             x = bx + 300.5;
@@ -412,6 +497,14 @@ public final class RtModesScenario implements AutotestScenario {
                 case "den=nrd" -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.NRD;
                 case "den=rr" -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.DLSS_RR;
                 case "rr" -> RtSettings.pathDenoiser = RtSettings.PathDenoiser.DLSS_RR;
+                // ReSTIR stages, so a run can reproduce the owner's configuration (DI + spatial + PT + PT spatial) or bisect
+                // a motion artifact to one stage: di=off | di=temporal | di=full, pt=off | pt=temporal | pt=full.
+                case "di=off" -> RtSettings.pathRestirDi = false;
+                case "di=temporal" -> { RtSettings.pathRestirDi = true; RtSettings.pathRestirSpatial = false; }
+                case "di=full" -> { RtSettings.pathRestirDi = true; RtSettings.pathRestirSpatial = true; }
+                case "pt=off" -> RtSettings.pathRestirPt = false;
+                case "pt=temporal" -> { RtSettings.pathRestirPt = true; RtSettings.pathRestirPtSpatial = false; }
+                case "pt=full" -> { RtSettings.pathRestirPt = true; RtSettings.pathRestirPtSpatial = true; }
                 default -> {
                     if (m.startsWith("an")) {
                         RtSettings.autoNormalStrength = Integer.parseInt(m.substring(2));
@@ -939,6 +1032,17 @@ public final class RtModesScenario implements AutotestScenario {
             }
         }
         applySettings(s);
+        swayFrame = -1;
+        swayLen = 0;
+        for (String m : s.mods()) {
+            if (m.matches("sway\\d+")) {
+                swayLen = Integer.parseInt(m.substring(4));
+            }
+        }
+        if (swayLen > 0) {
+            swayStep = index;
+            swayFrame = 0;
+        }
         ctx.log("scenario", name(), "step", String.valueOf(index), "event", "apply", "spec", s.raw(), "mode", s.mode().logName(),
             "frame", String.valueOf(ctx.frames()));
         ctx.waitFrames(s.frames(), () -> {
