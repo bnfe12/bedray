@@ -214,7 +214,7 @@ final class RtModesChecks {
         // LabPBR 1.3: roughness = (1 - smoothness)^2
         near(1f, LabPbr.roughnessFromSmoothness(0), 1e-6f, "smoothness 0 -> roughness 1");
         near(0f, LabPbr.roughnessFromSmoothness(255), 1e-6f, "smoothness 255 -> roughness 0");
-        near(0.25f, LabPbr.roughnessFromSmoothness(128), 0.01f, "half smooth -> 0.25");
+        near(0.498f, LabPbr.roughnessFromSmoothness(128), 0.01f, "half smooth -> perceptual roughness 0.5 (the BSDF squares it)")
         check(!LabPbr.isMetal(229) && LabPbr.isMetal(230) && LabPbr.isMetal(237) && LabPbr.isMetal(255), "metal range 230..255");
         near(0f, LabPbr.emission(255), 0f, "alpha 255 = no emission");
         near(1f, LabPbr.emission(254), 1e-6f, "alpha 254 = full emission");

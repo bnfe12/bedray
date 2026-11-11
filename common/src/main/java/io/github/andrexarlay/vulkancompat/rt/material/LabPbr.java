@@ -35,9 +35,16 @@ public final class LabPbr {
         return (r & 255) | (g & 255) << 8 | (b & 255) << 16 | (a & 255) << 24;
     }
 
+    /**
+     * Perceptual roughness of a LabPBR {@code _s} red channel: {@code 1 - smoothness}. LabPBR defines the GGX alpha as
+     * {@code (1 - smoothness)^2}; the material atlas stores perceptual roughness, because every BSDF squares it
+     * ({@code alpha = roughness * roughness}, shading/bsdf.slang, microfacet.slang) exactly as it does for auto-PBR.
+     * Returning {@code (1 - s)^2} here squared it twice, so every resource-pack material came out far glossier than its
+     * author made it: a smoothness of 128 traced as alpha 0.06 instead of 0.25.
+     */
     public static float roughnessFromSmoothness(int smoothness255) {
         float s = smoothness255 / 255f;
-        return (1f - s) * (1f - s);
+        return 1f - s;
     }
 
     /** True for green values that mean a metal (230..255). */
