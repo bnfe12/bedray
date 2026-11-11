@@ -82,8 +82,16 @@ public final class RtSlangPathPass implements RtPass {
      * the reservoir carries indirect light, which a daylight frame with an empty list has as much as an interior.
      */
     boolean ptActive() {
-        return !rayMode && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();
+        return !rayMode && !ptOutOfMemory && backend.pathReuseAvailable() && diActive() && RtSettings.pathRestirPt();
     }
+
+    /**
+     * Set when the ReSTIR PT ring (two 144-byte records per render pixel, 598 MB at 1972x1054) did not fit into video
+     * memory. ReSTIR PT then stays off for the session while the path tracer keeps running: the allocation failure used
+     * to disable ray tracing outright and drop the picture to raster (owner session 2026-11-11 02:51, 2560x1369 at 77 %).
+     * A new world or a settings change does not retry it; a game restart does.
+     */
+    static volatile boolean ptOutOfMemory;
 
     /** The PT spatial stage this frame: only on top of the temporal stage, and only while the player's row is on. */
     boolean ptSpatialRequested() {

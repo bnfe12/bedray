@@ -554,6 +554,7 @@ public final class RtFrameRenderer {
             fail(f.stage(), f.result(), f.getCause() != null ? f.getCause() : f);
         } catch (RuntimeException | LinkageError e) {
             if (recoverSceneBudgetPressure(e)) return;
+            if (recoverPtRingOutOfMemory(e)) return;
             fail("frame", e.getClass().getSimpleName() + ": " + LogPaths.show(e.getMessage()), e);
         }
     }
@@ -567,6 +568,63 @@ public final class RtFrameRenderer {
         } catch (RuntimeException | LinkageError recovery) {
             fail("native_budget_recovery_drain", LogPaths.show(recovery.getMessage()), recovery);
         }
+        return true;
+    }
+
+    /**
+     * The ReSTIR PT ring is the one large optional buffer of the path tracer. When it cannot be allocated (the native core
+     * reports "ReSTIR PT ring", the shared memory service a failed buffer_create of exactly the ring's size), the frame
+     * is dropped, ReSTIR PT is switched off for the session and tracing continues without it.
+     */
+    /** Trace extent of the last frame that reached path tracing, for the ReSTIR PT ring size check. */
+    private static volatile int lastTraceWidth;
+    private static volatile int lastTraceHeight;
+
+    private static boolean recoverPtRingOutOfMemory(Throwable failure) {
+        if (world == null || RtSlangPathPass.ptOutOfMemory) return false;
+        String reason = null;
+        for (Throwable t = failure; t != null && reason == null; t = t.getCause()) {
+            String m = t.getMessage();
+            if (m == null) continue;
+            if (m.contains("ReSTIR PT ring")) {
+                reason = "native_pt_ring";
+            } else if (m.contains("buffer_create") && m.contains("request_bytes=")) {
+                java.util.regex.Matcher q = java.util.regex.Pattern.compile("request_bytes=(\\d+)").matcher(m);
+                int w = Math.max(1, lastTraceWidth);
+                int h = Math.max(1, lastTraceHeight);
+                if (q.find() && Long.parseLong(q.group(1)) == RtPathTraceSlangPass.ptReservoirBytes(w, h)) {
+                    reason = "pt_ring_buffer_create";
+                }
+            }
+        }
+        if (reason == null) return false;
+        RtSlangPathPass.ptOutOfMemory = true;
+        try {
+            drainHostSubmissions(world.memory().device(), "pt_ring_oom_drain");
+            // The aborted frame discarded the scene writes it had prepared: rebuild the native scene the way a discarded
+            // RR recording does, or the next update finds it in a failed state and ray tracing stops anyway.
+            if (world.needsNativeSceneRebuild()) {
+                world.rebuildNativeSceneAfterHostDrain(pathSlangRuntime);
+                if (emitters != null) {
+                    emitters.destroy();
+                    emitters = null;
+                }
+                if (materials != null) {
+                    materials.destroy();
+                    materials = null;
+                }
+                LOGGER.info("[VKB-RT] native_scene_recreated reason=pt_ring_out_of_memory");
+            }
+            havePrevCamera = false;
+            resetHistory();
+        } catch (RuntimeException | LinkageError recovery) {
+            fail("pt_ring_oom_drain", LogPaths.show(recovery.getMessage()), recovery);
+            return true;
+        }
+        LOGGER.warn("[VKB-RT] restir_pt disabled_for_session reason=out_of_memory source={} ring_bytes={} trace={}x{} "
+                + "(ray tracing continues without ReSTIR PT; lower the render scale or turn ReSTIR PT off to avoid it)",
+            reason, RtPathTraceSlangPass.ptReservoirBytes(Math.max(1, lastTraceWidth), Math.max(1, lastTraceHeight)),
+            lastTraceWidth, lastTraceHeight);
         return true;
     }
 
@@ -1020,6 +1078,8 @@ public final class RtFrameRenderer {
         }
         int w = WorldTargetManager.traceWidth(target.width);
         int h = WorldTargetManager.traceHeight(target.height);
+        lastTraceWidth = w;
+        lastTraceHeight = h;
         if (frameOutput() == null || frameOutput().width != w || frameOutput().height != h)
             throw new RtFailure("frame_resources", "output generation was not prepared before recording");
         if (statsBuf == null) {
