@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory;
  * the same guide data as without them.
  */
 final class RtAtmosphere {
+    static final float NIGHT_BLOOM_THRESHOLD = 0.9f;
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     private static final int SPAN_BLOOM = 1;
 
@@ -107,7 +108,13 @@ final class RtAtmosphere {
                     ndcY = p.flipY ? -tmp.y / tmp.w : tmp.y / tmp.w;
                 }
             }
-            float threshold = RtAtmosphereSettings.bloomThreshold();
+            // Bloom is rebuilt from the tonemapped image, so its threshold has to sit below what a daylit white floor
+            // reaches (~1.1) only when there is no daylight: at night or underground a torch flame and a lamp face are the
+            // brightest things on screen and must glow (RTX Remix Minecraft: night threshold 1, day 250). By day the
+            // configured threshold holds.
+            float day = p.key.isMoon ? 0f : Math.max(0f, Math.min(1f, p.key.day));
+            float userThreshold = RtAtmosphereSettings.bloomThreshold();
+            float threshold = Math.min(userThreshold, NIGHT_BLOOM_THRESHOLD + (userThreshold - NIGHT_BLOOM_THRESHOLD) * day);
             RtBloomPass.Params bp = new RtBloomPass.Params(p.invViewProj, dir, glareK,
                 bobX, bobY, bobZ, p.flipY, p.tonemap, threshold, 0.35f * threshold, RtAtmosphereSettings.bloomStrength(),
                 RtAtmosphereSettings.bloomScatter(), ndcX, ndcY);

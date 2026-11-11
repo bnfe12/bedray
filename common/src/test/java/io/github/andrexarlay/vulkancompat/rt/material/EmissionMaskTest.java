@@ -72,7 +72,9 @@ public class EmissionMaskTest {
         float[] mask = MaterialRegion.emissionMask(m, AutoPbr.MixedKind.NONE, px, 16, 16);
         assertNotNull(mask);
         assertTrue(mask[0] < mask[15], "darker texels glow less than brighter ones");
-        assertTrue(mask[0] >= 0.15f - 1e-6f, "floor of 15 %");
+        assertTrue(mask[0] < 0.1f * mask[15], "the dark rim of a lamp block barely glows (no floor)");
+        assertTrue(mask[15] > 0.9f, "its brightest texel glows fully");
+        assertTrue(mask[8] > mask[4] && mask[8] < mask[15], "a smooth per-pixel ramp, not a step");
         assertTrue(mask[15] <= 1f);
     }
 

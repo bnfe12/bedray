@@ -63,6 +63,30 @@ public final class MaterialRegion {
     }
 
     /**
+     * Where the luminance mask of a WHOLE emitter starts, relative to the sprite's mean. Lava keeps the soft 0.85 mask (its
+     * whole surface is molten). A lamp block (sea lantern, glowstone, froglight) uses no step at all: see
+     * {@link #wholeMaskEmission}.
+     */
+    static float wholeMaskLow(AutoPbr.Material auto) {
+        return "lava".equals(auto.rule()) ? 0.85f : 0.0f;
+    }
+
+    /**
+     * Emission of one texel of a WHOLE emitter. Lava: floor 15 % plus the step mask. A lamp block glows per pixel as
+     * (luminance / brightest)^4: the 0.85-mean step with a 15 % floor lit the dark frame of a sea lantern as one flat panel,
+     * and a hard step turned its core into a white blob; Bedrock RTX lets the texture show through the glow (owner
+     * screenshots of the rt_modes H corridor, 2026-11-11). {@code lumRatio} is luminance / brightest texel for lamps.
+     */
+    static float wholeMaskEmission(AutoPbr.Material auto, float mask, float lumRatio) {
+        if ("lava".equals(auto.rule())) {
+            return auto.emission() * (0.15f + 0.85f * mask);
+        }
+        float r = Math.max(0f, Math.min(1f, lumRatio));
+        float r2 = r * r;
+        return auto.emission() * r2 * r2;
+    }
+
+    /**
      * Emission 0..1 per texel of an auto-PBR sprite from its albedo ({@code argb}: {@code 0xAARRGGBB}, {@code w x h}), by the same
      * rules as {@link #fill} writes into the material atlas (WHOLE: relative luminance mask with a floor of 15 %; BRIGHT: per
      * pixel value / flame rule; mixed blocks: lantern glass, lit lamp, bulb). Used for the entity atlas (items, mobs), where
@@ -90,7 +114,7 @@ public final class MaterialRegion {
                 cnt++;
             }
             float mean = cnt > 0 ? (float) (sum / cnt) : 0f;
-            lumLo = mean * 0.85f;
+            lumLo = mean * wholeMaskLow(auto);
             lumHi = Math.max(max, lumLo + 0.05f);
         }
         boolean any = false;
@@ -101,7 +125,7 @@ public final class MaterialRegion {
             if (mixed != AutoPbr.MixedKind.NONE && auto.emission() > 0f) {
                 e = AutoPbr.isEmissiveTexel(c, mixed) ? 1.0f : 0f;
             } else if (auto.emissionMode() == AutoPbr.Emission.WHOLE) {
-                e = a < 128 ? 0f : auto.emission() * (0.15f + 0.85f * AutoPbr.smoothstep(lumLo, lumHi, luminance(c)));
+                e = a < 128 ? 0f : wholeMaskEmission(auto, AutoPbr.smoothstep(lumLo, lumHi, luminance(c)), luminance(c) / Math.max(lumHi, 1.0e-4f));
             } else if (auto.emissionMode() == AutoPbr.Emission.BRIGHT) {
                 if (AutoPbr.RULE_FLAME.equals(auto.rule())) {
                     e = auto.emission() * AutoPbr.flameEmission((c >>> 16) & 255, (c >>> 8) & 255, c & 255, a);
@@ -202,7 +226,7 @@ public final class MaterialRegion {
                 }
             }
             float mean = cnt > 0 ? (float) (sum / cnt) : 0f;
-            lumLo = mean * 0.85f;
+            lumLo = mean * wholeMaskLow(auto);
             lumHi = Math.max(max, lumLo + 0.05f);
         }
         for (int y = 0; y < h; y++) {
@@ -232,7 +256,7 @@ public final class MaterialRegion {
                         e = auto.emission();
                         if (wholeMask) {
                             e = a < 128 ? 0f
-                                : auto.emission() * (0.15f + 0.85f * AutoPbr.smoothstep(lumLo, lumHi, luminance(c)));
+                                : wholeMaskEmission(auto, AutoPbr.smoothstep(lumLo, lumHi, luminance(c)), luminance(c) / Math.max(lumHi, 1.0e-4f));
                         }
                     } else if (auto.emissionMode() == AutoPbr.Emission.BRIGHT && albedo != null) {
                         if (AutoPbr.RULE_FLAME.equals(auto.rule())) {

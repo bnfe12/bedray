@@ -32,9 +32,13 @@ public final class RtAtmosphereSettings {
     private static volatile float godRayStrength = (float) clamp(num("vkrtx.rt.godrays.strength", 1.0), 0, 2);
     private static volatile int godRayRange = (int) clamp(num("vkrtx.rt.godrays.range", 160), 32, 256);
     private static volatile boolean bloom = flag("vkrtx.rt.bloom", true);
-    private static volatile float bloomStrength = (float) clamp(num("vkrtx.rt.bloom.strength", 0.25), 0, 2);
-    private static volatile float bloomThreshold = (float) clamp(num("vkrtx.rt.bloom.threshold", 4.0), 0.5, 10);
-    private static volatile float bloomScatter = (float) clamp(num("vkrtx.rt.bloom.scatter", 0.62), 0.3, 0.95);
+    // The prefilter rebuilds scene light from the tonemapped image, and the inverse curve tops out at ~4.8 (TM_INV_MAX
+    // 0.985), so a 4.0 threshold left at most 0.8 above it: no visible glow around a sea lantern or a torch at all (owner
+    // screenshot, 2026-11-11). 2.0 starts at display ~0.955 (by day; RtAtmosphere lowers it at night); strength 0.8 and scatter 0.75 for the wide
+    // halo a Bedrock RTX torch has.
+    private static volatile float bloomStrength = (float) clamp(num("vkrtx.rt.bloom.strength", 0.8), 0, 2);
+    private static volatile float bloomThreshold = (float) clamp(num("vkrtx.rt.bloom.threshold", 2.0), 0.5, 10);
+    private static volatile float bloomScatter = (float) clamp(num("vkrtx.rt.bloom.scatter", 0.75), 0.3, 0.95);
     private static volatile boolean sunGlare = flag("vkrtx.rt.sunglare", true);
     private static volatile float sunGlareStrength = (float) clamp(num("vkrtx.rt.sunglare.strength", 1.0), 0, 2);
     private static volatile float fogVanilla = (float) clamp(num("vkrtx.rt.fog.vanilla", 1.0), 0, 1);

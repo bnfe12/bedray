@@ -23,6 +23,10 @@ static const float EMITTER_RADIUS = 24.0;
 static const float EMISSIVE_GAIN = 3.0;
 static const float EMISSIVE_FLUX_GAIN = 2.2;
 static const uint EMITTER_RECORD_FLOATS = 24u;
+// Light every block source throws onto its surroundings, on top of the face gains above (the emissive face itself keeps
+// SURFACE_EMISSION_GAIN). Every lamp, torch and lantern lit a pool about two blocks wide where Bedrock RTX lights a
+// room-sized pool from the same block (owner screenshots, 2026-11-11: "every light source", not only torches).
+static const float EMITTER_LIGHT_GAIN = 1.8;
 
 // Falloff of a source: d^-1.5 up to 2 blocks, then d^-1.25, continuous at the 2-block seam (0.84090 = 2^1.25 / (2*sqrt(2))).
 // Written with rsqrt instead of pow: eight of these per NEE call sit in the hottest loop of the emissive pass.
@@ -65,7 +69,8 @@ static const float BLOCK_LIGHT_FAR_FULL = 0.999;
 // estimate of that same torch on that same floor is ~0.05.  The far field only has to carry the light at the scale the
 // player already sees around the torch, so the field is divided by ~20.  One gain keeps the shape: light.x falls like
 // the level (13 -> 1 over 15 blocks) and the traced attenuation falls like d^-1.25 over the same span.
-static const float BLOCK_LIGHT_FIELD_GAIN = 0.05;
+// 0.05 * EMITTER_LIGHT_GAIN, so the handover band stays continuous.
+static const float BLOCK_LIGHT_FIELD_GAIN = 0.09;
 // The hue of the field.  The deleted renderer sampled the lightmap at its full-block-light-in-darkness texel, so the
 // tint followed the resource pack, the dimension and the effects; a typed path pass binds no lightmap (the native core
 // validates the exact descriptor count of both path passes), so this is the warm tint that predated that sampling.  A
@@ -95,8 +100,10 @@ float3 emitterAttenuationColor(float3 tex) {
         // Yellow firelight, as the flame texels themselves are (Bedrock RTX takes the light colour from them).  The former
         // (1, 0.52, 0.10) floor had almost no blue, so every surface a torch or lava reached turned one flat saturated
         // orange and lost its texture (owner comparison with Vanilla RTX / BetterRTX, 2026-11-11).
-        float3 flame = lerp(float3(1.0, 0.64, 0.24), float3(1.0, 0.84, 0.48), warm);
-        return flame * 1.35 * lerp(m, 1.0, 0.45);
+        // The (1, 0.64, 0.24) .. (1, 0.84, 0.48) pair of the same day tonemapped to a pale cream pool two blocks wide; a
+        // Bedrock RTX torch throws an amber pool several blocks wide (owner screenshots of a lit canyon, 2026-11-11).
+        float3 flame = lerp(float3(1.0, 0.52, 0.18), float3(1.0, 0.70, 0.34), warm);
+        return flame * 1.6 * lerp(m, 1.0, 0.45);
     }
     // Category 3: soul fire.
     if (c.b > 0.45 && c.g > 0.35 && c.r < 0.45) {
@@ -186,7 +193,7 @@ float blockEmitterSolidAnglePdf(BlockEmitterPoint p, float distance2, float cosG
 // texel times the legacy gains.  A reservoir stores exactly this and divides `texelEmission` back out when it shades.
 float3 blockEmitterRadiance(BlockEmitterPoint p, MaterialAtlas atlas) {
     if (p.redstone) {
-        return float3(1.0, 0.04, 0.02) * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN);
+        return float3(1.0, 0.04, 0.02) * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN * EMITTER_LIGHT_GAIN);
     }
     float3 tex;
     if (p.atlasSlotPlus1 != 0u) {
@@ -195,7 +202,7 @@ float3 blockEmitterRadiance(BlockEmitterPoint p, MaterialAtlas atlas) {
     } else {
         tex = atlas.albedo.SampleLevel(p.uv, 0.0).rgb;
     }
-    return emitterAttenuationColor(tex) * p.texelEmission * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN);
+    return emitterAttenuationColor(tex) * p.texelEmission * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN * EMITTER_LIGHT_GAIN);
 }
 
 // Where the shadow ray stops short of the light.  An open source (a flame on its stick, a bulb in its cage) is sampled on
