@@ -159,15 +159,31 @@ void pathTraceWriteGuides(int2 p, FrameConstants f, PathTraceResult result, bool
     outNormalRough[p] = float4(n, clamp(result.primary.roughness, 0.0, 1.0));
     // The first selected lobe owns its whole suffix, not the material at the last bounce.
     // Missing lobes have hitT=0. Camera depth is exclusively outViewZ; these distances start at the primary vertex.
+    // NRD: the primary vertex's own next-event term rides in the diffuse lane.  It used to stay in the bypass, which
+    // the compose adds back untouched, so the two noisiest parts of the frame - the penumbra of the key light (one disc
+    // point per pixel) and the block-emitter sample of the reservoir - reached the screen raw while NRD cleaned only the
+    // bounce light: speckled torch light and shadow edges in every NRD frame (rt_modes A, 2026-11-10: stab_err 4.86,
+    // sparks 11 per mille against 1.25 / 0.3 with DLSS-RR, which receives the whole integrand).  The pack divides the
+    // lane by the diffuse factor and the compose multiplies it back, so the sum is unchanged.  Metals keep the bypass:
+    // their direct term is a highlight the diffuse factor cannot carry.  RR is not touched: it reads the three lanes
+    // summed.
+    float3 bypassRadiance = pathDenoiserBypass(result.radiance, result.denoiser);
+    float3 diffuseSignal = result.denoiser.diffuse;
+    if (!rrGuides && !result.denoiser.bypass && result.primary.metallic <= 0.5) {
+        float3 direct = min(max(result.primary.direct, float3(0.0)), bypassRadiance);
+        if (isFinite(direct)) {
+            diffuseSignal += direct;
+            bypassRadiance -= direct;
+        }
+    }
     outSpecular[p] = float4(result.denoiser.specular, result.denoiser.specularHitDistance);
-    outDiffuse[p] = float4(result.denoiser.diffuse, result.denoiser.diffuseHitDistance);
+    outDiffuse[p] = float4(diffuseSignal, result.denoiser.diffuseHitDistance);
     // The R10 NRD encoding supports material IDs; separate deterministic zero diffuse on metals from dielectrics.
     // RR consumes RGB only. SNORM normal encoding has no material-ID support in NRD.
     outAlbedo[p] = float4(result.primary.albedo, result.primary.metallic > 0.5 ? 1.0 : 0.0);
     // Emission, primary NEE, medium/transmission, cached RC and replaced PT remain exact bypass radiance.
     // RR still receives diffuse + specular + bypass, i.e. the complete noisy HDR integrand.
-    outDirect[p] = float4(pathDenoiserBypass(result.radiance, result.denoiser),
-        result.denoiser.bypass ? 1.0 : 0.0);
+    outDirect[p] = float4(bypassRadiance, result.denoiser.bypass ? 1.0 : 0.0);
     outSpecAlbedo[p] = float4(clamp(result.primary.specularReflectance, float3(0.0), float3(1.0)),
         clamp(result.primary.roughness, 0.0, 1.0));
 }
