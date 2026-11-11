@@ -202,6 +202,8 @@ struct Scene {
     uint32_t capabilities = 0;
     uint64_t resident_bytes = 0;
     uint64_t terrain_bytes = 0;
+    uint32_t pressure_section_limit = UINT32_MAX;
+    bool budget_eviction_pending = false;
     std::shared_ptr<bedray::gpu::MemoryAllocator> memory;
 
     bool failed = false;

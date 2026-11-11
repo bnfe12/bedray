@@ -1,6 +1,8 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneException;
+import io.github.andrexarlay.vulkancompat.rt.scene.BedraySceneLayouts;
 import io.github.andrexarlay.vulkancompat.rt.sodium.DecodedSection;
 import io.github.andrexarlay.vulkancompat.rt.sodium.SectionGeometryRegistry;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -11,6 +13,9 @@ import java.util.function.Consumer;
 /** Adapts game captures and host completion to the C++ acceleration scene. Render thread only. */
 public final class RtWorld {
     private static final long CAPTURE_BUDGET_NS = 8_000_000L;
+    private static final int MAX_BUDGET_RECOVERIES = 8;
+    private int budgetRecoveries;
+    private int budgetCooldown;
     /**
      * Bit 24 of a vertex light word: the cutout quad belongs to a plant or a leaf (GLSL {@code VERT_FLAG_VEGETATION}).
      * Byte 3 of a Sodium light word holds the region-local section index, which the decoder drops, so the byte is free.
@@ -115,6 +120,13 @@ public final class RtWorld {
         long prepared = System.nanoTime();
         nativeScene.prepareFrame(cmd.address(), frameIndex, camX, camY, camZ);
         nativeSceneFrameActive = nativeScene.activeThisFrame();
+        if (budgetRecoveries > 0) {
+            org.slf4j.LoggerFactory.getLogger("VKB-MEMORY").info(
+                "[VKB-MEMORY] event=pressure_recovered attempts={} sections={} resident_bytes={}",
+                budgetRecoveries, nativeScene.sectionCount(), nativeScene.residentBytes());
+        }
+        budgetRecoveries = 0;
+        budgetCooldown = 0;
         int instances = nativeScene.instanceCount();
         lastEntityTelemetry = "[VK-ENTITY-AS] owner=native captured="
             + RtEntityGeometryManager.INSTANCE.getCapturedEntityCount() + " triangles=" + nativeScene.entityTriangles()
@@ -125,6 +137,36 @@ public final class RtWorld {
         return new FrameStats(nativeScene.blasBuilds(), nativeScene.sectionCount(), captures.pending(),
             instances, (prepared - started) / 1e6, (System.nanoTime() - prepared) / 1e6,
             mem.reservedBytes() + nativeScene.residentBytes(), SectionGeometryRegistry.INSTANCE.failedCount());
+    }
+
+    /**
+     * The local command buffer must already be discarded. Only a typed refusal of prepare_frame is recoverable:
+     * native returned it before accepting a frame or recording scene commands.
+     */
+    public boolean tryRecoverBudgetPressure(Throwable failure) {
+        BedraySceneException refusal = null;
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof BedraySceneException sceneFailure
+                && sceneFailure.status() == BedraySceneLayouts.STATUS_BUDGET
+                && sceneFailure.operation().equals("prepare_frame")) {
+                refusal = sceneFailure;
+                break;
+            }
+        }
+        if (refusal == null || nativeScene == null || nativeSceneFrameActive || budgetRecoveries >= MAX_BUDGET_RECOVERIES) return false;
+        budgetRecoveries++;
+        budgetCooldown = 1 << Math.min(3, budgetRecoveries - 1);
+        org.slf4j.LoggerFactory.getLogger("VKB-MEMORY").warn(
+            "[VKB-MEMORY] event=pressure_recovery attempt={} retry_after_frames={} action=evict_far_sections reason={}",
+            budgetRecoveries, budgetCooldown, refusal.getMessage());
+        return true;
+    }
+
+    /** Frame-head backoff after a refused preparation. Raster can continue while residency settles. */
+    public boolean skipBudgetRecoveryFrame() {
+        if (budgetCooldown == 0) return false;
+        budgetCooldown--;
+        return true;
     }
 
     /** Last [VK-ENTITY-AS] line, read by the game test harness. */
