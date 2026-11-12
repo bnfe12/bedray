@@ -79,6 +79,7 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     /** Ordinals match {@code RtSettings.SELF_SHADOW_*}. */
     public enum SelfShadow { FULL, NO_FOOTPRINT, OFF }
     public enum RendererStatus { STATUS }
+    public enum GiExecutionStatusRow { STATUS }
     public enum QualityProfile { FAST, BEAUTIFUL, CUSTOM }
 
     private enum Mark { NONE, RT, PATH }
@@ -349,6 +350,16 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
             .setBinding(v -> {}, () -> RendererStatus.STATUS).setStorageHandler(st);
         rt.addOption(track("renderer_status", rendererStatus));
+        EnumOptionBuilder<GiExecutionStatusRow> giStatus = builder.createEnumOption(id("gi_execution_status"), GiExecutionStatusRow.class);
+        giStatus.setName(nameOf("gi_execution_status")).setTooltip(v -> Component.empty()
+            .append(tipOf("gi_execution_status")).append("\n")
+            .append(io.github.andrexarlay.vulkancompat.rtx.raytracing.GiExecutionStatus.live()))
+            .setDefaultValue(GiExecutionStatusRow.STATUS)
+            .setElementNameProvider(v -> Component.literal(
+                io.github.andrexarlay.vulkancompat.rtx.raytracing.GiExecutionStatus.live()))
+            .setEnabledProvider(s -> false).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> {}, () -> GiExecutionStatusRow.STATUS).setStorageHandler(st);
+        rt.addOption(track("gi_execution_status", giStatus));
         for (boolean voxel : new boolean[] {false, true}) {
             String path = voxel ? "voxel_quality_profile" : "path_quality_profile";
             EnumOptionBuilder<QualityProfile> profile = builder.createEnumOption(id(path), QualityProfile.class);

@@ -104,6 +104,28 @@ Before (`release/final`): 3 pages, about 75 option rows (53 on the Ray Tracing p
 After: page 1 shows 8 concepts (9-10 rows because Frame Generation and the Upscaler quality are separate rows, plus two button rows);
 page 2 has 5 collapsible groups with about 25 options in total; the Expert numbers appear only with the flag.
 
+## GI-stack completeness update, 2026-11-12
+
+Audit against the owner spec (presets Baseline/Balanced/Max/Custom + texture presets + auto-policy +
+per-tech toggles + honest supported/enabled/implemented). Findings:
+
+* **Presets** — `GiStackPolicy.Tier { BASELINE, BALANCED, MAX }` is the auto-policy scale; Custom appears
+  when a value is edited (`path_quality_profile` / `voxel_quality_profile` Fast/Beautiful/Custom). The
+  "Auto-select GI quality" action (`BedrayConfigScreen`) stages the runtime-toggleable values only; SER is
+  correctly reported in the plan reason, not staged (`SettingsDraft.giPlanValues`, it is a startup feature).
+* **Texture presets** — Pixel-Sharp/Balanced/Soft stage `point_sampling_sharpness` + `texture_lod_bias_offset`,
+  both registered for every player (the 2026-11-12 expert-gating fix, `VulkanSodiumConfigIdsTest`).
+* **Gap closed: GI execution technologies had no settings surface.** raygen, NV SER, opacity micromap and
+  partitioned TLAS were invisible in the UI. Added a read-only `gi_execution_status` row (the
+  `renderer_status` pattern) backed by the pure `GiExecutionStatus` (supported/enabled/implemented from the
+  enabled feature mask + startup `-D` requests). It honestly reports OMM and partitioned TLAS as
+  "supported, not implemented" / "not implemented" (regional in-place TLAS update is the active path), and
+  raygen/SER as startup device features. Catalog row + en/ru lang + `GiExecutionStatusTest` (9 cases) +
+  the id locked in `VulkanSodiumConfigIdsTest`. L2 verified; L4 live read-back pending a quiet GPU window.
+* **Still deferred (measurement-gated, not settings gaps):** `dlss_rr_preset` D/E/F (item 4, additive ABI +
+  GPU A/B), NRD ReBLUR/ReLAX tuning rows (item 6, A/B only). RR sharpness is intentionally not a row
+  (NVIDIA RR API no-op, `15-gi-stack-dispositions.md`).
+
 ## Not solved (needs other work)
 
 * Manual exposure (EV): not offered, there is no manual EV in the renderer (changing it is a shader / render change, not part of this branch).

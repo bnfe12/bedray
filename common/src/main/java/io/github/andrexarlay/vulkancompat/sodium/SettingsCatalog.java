@@ -185,6 +185,11 @@ public final class SettingsCatalog {
             "Reports the requested renderer and host command recording. A recorded frame does not establish gameplay compatibility.",
             "Read-only status.", "Missing add-ons and initialization failures are shown explicitly.",
             "Runtime status has no comparison image.");
+        putNoImage("gi_execution_status", Tier.ADVANCED, "GI Execution Technologies",
+            "Honest supported / enabled / implemented state of the GI execution and geometry paths: raygen, NV Shader Execution Reordering, opacity micromap and partitioned TLAS. Raygen and SER are startup device features (-Dbedray.rt.raygen / -Dbedray.rt.ser); OMM and partitioned TLAS are deferred and not implemented. The regional in-place TLAS update is already active.",
+            "Read-only status; no FPS claim. Measured: raygen -7.8% gpu_rt vs compute (RD16, PT on).",
+            "Path Tracing. SER needs the NV invocation-reorder feature; read the line for the current device.",
+            "Runtime capability status has no comparison image.");
         putNoImage("compute_scene", Tier.EXPERT, "Compute Diagnostic Scene",
             "Session diagnostic preference for the selected voxel renderer. Synthetic replaces the world with a fixed test scene; live mode draws opaque occupancy. World Renderer remains the main hardware/voxel switch. A saved voxel choice starts in live mode on the next launch.",
             "GPU cost is experimental and has not been measured in gameplay.", "Requires the included Bedray Compute provider.",

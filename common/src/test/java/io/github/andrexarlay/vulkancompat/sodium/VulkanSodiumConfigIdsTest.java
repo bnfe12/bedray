@@ -54,6 +54,7 @@ public class VulkanSodiumConfigIdsTest {
 
         List<String> required = List.of(
             "renderer", "renderer_status", "rt_mode", "path_bounces", "path_auto_exposure", "water_style", "atm_godrays",
+            "gi_execution_status",
             "upscaler_backend", "quality_preset", "dlss_mode", "xess_mode", "fsr_mode", "frame_generation_provider",
             "pt_preset", "path_spp", "path_distance", "path_denoiser", "path_caustics", "adaptive_quality",
             "atm_bloom", "atm_sunglare", "rt_fog", "rt_fog_density", "auto_normals", "debug_overlay", "reset_all_defaults",
