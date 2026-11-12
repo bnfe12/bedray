@@ -805,23 +805,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             break;
         }
 
-        // A thin pane (glass, stained glass, panes; not a fluid) is a coloured filter on the same ray, as in the legacy
-        // renderer: it tints the throughput by its transmittance and costs no scattering event. As a BSDF vertex every
-        // face spent one of the path's bounces, so five layers of glass cut a 4-bounce path short and rendered black
-        // (autotest rt_look G scene, 2026-11-02). The pane's own Fresnel reflection is not traced here.
-        bool paneFilter = surface.material.alphaMode == AlphaMode.Translucent
-            && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u
-            && surface.material.transmission >= 1.0;
         if (!firstSurfaceAccepted && (options.flags & PATH_TRACE_OPTION_WORLD_MOTION) != 0u
             && materialIsTranslucent(surface.material)) {
             float alpha = saturate(surface.material.alpha);
             result.primaryCoverage += (1.0 - result.primaryCoverage) * alpha;
         }
-        if (paneFilter) {
-            throughput *= surfaceTransmittance(surface, ray.direction);
-            if (pathMaxComponent(throughput) <= 0.0) break;
-        }
-        if (paneFilter || surfaceIsHole(surface, options.alphaCutoff)) {
+        if (surfaceIsHole(surface, options.alphaCutoff)) {
             // A cutout hole is not a surface: continue the same ray just past
             // the candidate without spending a scattering event.
             float holeStep = pathTraceHoleStep(hit.t);
@@ -1129,6 +1118,28 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         }
 
         throughput *= bsdf.weight;
+        // A pane must sample its Fresnel reflection, including a clear centre texel with alpha zero: alpha controls
+        // the colour absorption, not the existence of the dielectric interface. Only the selected straight-through
+        // lobe is a free continuation. Counting that lobe as a scattering event exhausted the bounce budget inside
+        // layered windows; skipping the whole pane instead removed all of its reflections and lost that energy.
+        bool paneTransmission = surface.material.alphaMode == AlphaMode.Translucent
+            && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u
+            && bsdf.lobe == BSDF_LOBE_TRANSMISSION;
+        if (paneTransmission) {
+            if (!isFinite(throughput)) {
+                result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
+                break;
+            }
+            if (pathMaxComponent(throughput) <= 0.0) break;
+            if (pathMaxComponent(throughput) > options.maxRadiance) {
+                result.flags |= PATH_TRACE_FLAG_TRUNCATED;
+                break;
+            }
+            // Keep the ray origin and far plane: a parallel sheet changes neither direction nor the remaining
+            // trace interval. The medium segment already ended at hit.t, so its next length remains exact too.
+            ray.tMin = hit.t + pathTraceHoleStep(hit.t);
+            continue;
+        }
         bodiesVisible = bsdf.delta;
         glossyEscape = bsdf.lobe != BSDF_LOBE_DIFFUSE;
         previousGlossyRoughness = bsdf.lobe == BSDF_LOBE_SPECULAR && !bsdf.delta ? surface.material.roughness : -1.0;

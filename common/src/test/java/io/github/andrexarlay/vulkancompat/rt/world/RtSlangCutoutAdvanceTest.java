@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * P1-9: a leaf, a fence or a pane of glass is cut out by alpha, so the ray walks through the hole without spending a
+ * P1-9: a leaf or a fence is cut out by alpha, so the ray walks through the hole without spending a
  * scattering event. Each hole moves the origin, and three numbers have to move with it or the reported depth stops
  * describing the surface the denoiser is being fed: the origin, the remaining interval and the accumulated primary
  * displacement.
@@ -30,7 +30,7 @@ class RtSlangCutoutAdvanceTest {
     /** The whole hole branch, up to and including the {@code continue} that keeps it a free step. */
     private static String holeBranch() {
         String tracer = read(TRACER);
-        int at = tracer.indexOf("if (paneFilter || surfaceIsHole(surface, options.alphaCutoff)) {");
+        int at = tracer.indexOf("if (surfaceIsHole(surface, options.alphaCutoff)) {");
         assertTrue(at >= 0, "the tracer no longer treats a cutout hole as a step");
         String body = block(tracer, at);
         assertTrue(body.contains("continue;"), "a hole must not consume a scattering event");
