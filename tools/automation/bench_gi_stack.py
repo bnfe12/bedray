@@ -13,6 +13,7 @@ Standard library only. The game must be closed before starting; each run exits i
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
 import json
@@ -27,6 +28,7 @@ from pathlib import Path
 from statistics import fmean, median
 
 from capture_analysis import InvalidCapture, analyze
+from focus_hold import FocusHold
 
 DEFAULT_INSTANCE = Path(
     "C:/Users/andre/AppData/Roaming/FreesmLauncher/instances/Vulkan Experimental RT 26.3")
@@ -279,7 +281,7 @@ def capture_medians(capture: Path) -> dict:
 
 def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Path,
                 out_dir: Path, scratch: Path, revision: str, timeout_s: float,
-                render_distance: int) -> dict:
+                render_distance: int, hold_focus: bool = False) -> dict:
     game = instance / "minecraft"
     started = time.time()
     full_props = {
@@ -309,10 +311,15 @@ def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Pat
     set_jvm_args(instance, full_props)
     print(f"[bench] {label}: launching ({len(full_props)} props via JvmArgs)", flush=True)
     launcher_log = scratch / f"launcher-{label}.log"
-    with launcher_log.open("w", encoding="utf-8") as stream:
-        subprocess.Popen([str(launcher), "--launch", instance.name], env=env,
-                         stdout=stream, stderr=subprocess.STDOUT)
-    capture, status = wait_capture(game, started, timeout_s)
+    # Opt-in: hold the real window focus so the strict FOCUSED gate (bit 6) survives the whole capture on a
+    # desktop that would otherwise steal focus. Only runs while this bench owns the desktop (game_running gate).
+    with FocusHold("Minecraft") if hold_focus else contextlib.nullcontext() as focus:
+        with launcher_log.open("w", encoding="utf-8") as stream:
+            subprocess.Popen([str(launcher), "--launch", instance.name], env=env,
+                             stdout=stream, stderr=subprocess.STDOUT)
+        capture, status = wait_capture(game, started, timeout_s)
+    if hold_focus:
+        print(f"[bench] {label}: focus-hold refocused {focus.refocus_count} time(s)", flush=True)
     exited = wait_game_exit()
     log_copy = scratch / f"latest-{label}.log"
     if (game / "logs" / "latest.log").is_file():
@@ -360,6 +367,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=480)
     parser.add_argument("--render-distance", type=int, default=16,
                         help="controlled render distance for a stable scene that fits the native budget (RD32 needs BLAS compaction)")
+    parser.add_argument("--hold-focus", action="store_true",
+                        help="keep the Minecraft window focused during each capture so the strict FOCUSED gate survives "
+                             "a desktop that would steal focus (Windows only; the bench already refuses to run beside another game)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -400,7 +410,7 @@ def main() -> int:
                 break
             summary.append(run_variant(label, VARIANTS[label], args.instance, args.launcher,
                                        args.out, args.scratch, args.revision, args.timeout,
-                                       args.render_distance))
+                                       args.render_distance, args.hold_focus))
     finally:
         stop_launcher()
         restore_files(args.instance, backup)
