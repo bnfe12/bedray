@@ -215,7 +215,8 @@ typedef struct VkbDlssRrCreateInfo {
     uint32_t enable_output_subrects; /* 0/1 */
     uint32_t roughness_mode;         /* 0 = Unpacked (separate roughness texture), 1 = Packed (roughness in normals.w) */
     uint32_t depth_type;             /* 0 = Linear, 1 = HW Depth */
-    uint32_t reserved[2];            /* alignment and future expansion (sizeof == 48) */
+    int32_t  preset;                 /* NVSDK_NGX_RayReconstruction_Hint_Render_Preset: 0 = default (param untouched), 4 = D, 5 = E, 6 = F */
+    uint32_t reserved;               /* alignment and future expansion (sizeof == 48; preset additively repurposes former reserved[0]) */
 } VkbDlssRrCreateInfo;
 
 typedef struct VkbDlssRrEvalInfo {

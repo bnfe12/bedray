@@ -367,6 +367,10 @@ public final class SettingsCatalog {
             "Gives DLSS Ray Reconstruction the flat block-face directions, which keeps block edges crisp. Off feeds smoothed directions.",
             "", "Only with Path Tracing and DLSS Ray Reconstruction.",
             "Needs the DLSS Ray Reconstruction library; it is not available on every machine, so no screenshot is shipped.");
+        putNoImage("dlss_rr_preset", Tier.ADVANCED, "Ray Reconstruction Preset",
+            "Selects the DLSS Ray Reconstruction model: Default leaves NVIDIA's choice untouched; D and E are transformer models (E adds depth-of-field guidance); F is the RR2 model. Additive and opt-in until measured on this GPU.",
+            "", "Only with Path Tracing and DLSS Ray Reconstruction.",
+            "No preset A/B has been captured yet; Default preserves prior behavior, so no screenshot is shipped.");
         putNoImage("path_exposure_ev", Tier.ADVANCED, "Exposure Compensation",
             "Manual brightness offset in EV (-4.0 to +4.0). Shifts Auto Exposure when it is on, or sets the fixed brightness when Auto Exposure is off.",
             "", "Needs ray tracing on.",

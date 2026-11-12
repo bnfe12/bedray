@@ -23,6 +23,7 @@ import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerSwitch;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.rr.DlssRrParams;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FfxNative;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.fsr.FsrVersion;
@@ -707,6 +708,22 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             () -> RtSettings.dlssRrGeometricNormals,
             s -> anyRt.apply(s) && s.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR,
             rtDependencies(modeId, denId), Mark.NONE, OptionImpact.LOW, true, st));
+        // Additive DLSS-RR render preset hint (D/E/F). DEFAULT leaves the NGX parameter untouched; opt-in until measured.
+        EnumOptionBuilder<DlssRrParams.Preset> rrPreset = builder.createEnumOption(id("dlss_rr_preset"), DlssRrParams.Preset.class);
+        rrPreset.setName(nameOf("dlss_rr_preset")).setTooltip(v -> tipOf("dlss_rr_preset")).setDefaultValue(DlssRrParams.Preset.DEFAULT)
+            .setAllowedValues(EnumSet.allOf(DlssRrParams.Preset.class))
+            .setElementNameProvider(val -> switch (val) {
+                case DEFAULT -> tr("bedray.dlss_rr_preset.default", "Default");
+                case D -> tr("bedray.dlss_rr_preset.d", "Preset D (transformer)");
+                case E -> tr("bedray.dlss_rr_preset.e", "Preset E (transformer, DoF)");
+                case F -> tr("bedray.dlss_rr_preset.f", "Preset F (RR2)");
+            })
+            .setEnabledProvider(s -> anyRt.apply(s) && s.readEnumOption(denId, RtSettings.PathDenoiser.class) == RtSettings.PathDenoiser.DLSS_RR,
+                rtDependencies(modeId, denId))
+            .setControlHiddenWhenDisabled(false)
+            .setBinding(customPath(v -> RtSettings.dlssRrPreset = v, () -> RtSettings.dlssRrPreset), () -> RtSettings.dlssRrPreset)
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        pt.addOption(track("dlss_rr_preset", rrPreset));
         endGroup(builder, page, pt, "adv_pt");
 
         // ---- Light and atmosphere

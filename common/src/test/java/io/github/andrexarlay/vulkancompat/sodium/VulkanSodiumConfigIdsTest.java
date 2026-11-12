@@ -57,6 +57,7 @@ public class VulkanSodiumConfigIdsTest {
             "gi_execution_status",
             "upscaler_backend", "quality_preset", "dlss_mode", "xess_mode", "fsr_mode", "frame_generation_provider",
             "pt_preset", "path_spp", "path_distance", "path_denoiser", "path_caustics", "adaptive_quality",
+            "dlss_rr_preset",
             "atm_bloom", "atm_sunglare", "rt_fog", "rt_fog_density", "auto_normals", "debug_overlay", "reset_all_defaults",
             "presets_open", "natives_manager_open", "reset_page_main", "reset_group_adv_pt",
             "rays_pixel_shadows", "rays_pixel_shadow_size",

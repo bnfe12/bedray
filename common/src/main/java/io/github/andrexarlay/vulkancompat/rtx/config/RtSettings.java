@@ -1,6 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rtx.config;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtMode;
+import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.rr.DlssRrParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -212,6 +213,11 @@ public final class RtSettings {
      * When off, perturbed shading normals (ns) are fed, giving a smooth/curved appearance to voxel corners.
      */
     public static boolean dlssRrGeometricNormals = true;
+    /**
+     * DLSS Ray Reconstruction render preset hint (NVSDK_NGX_RayReconstruction_Hint_Render_Preset). DEFAULT leaves the NGX
+     * parameter untouched (prior behavior); D/E/F select the transformer / RR2 models. Additive and opt-in until measured.
+     */
+    public static DlssRrParams.Preset dlssRrPreset = DlssRrParams.Preset.DEFAULT;
     /** Path tracing water caustics simulation focusing sunlight and light under water. */
     public static boolean caustics = false;
     /** Vibrant Visuals style: rich grass and water tones, high color contrast, soft bloom and cinematic ACES. */
@@ -245,6 +251,8 @@ public final class RtSettings {
     private static final Map<String, Integer> INT_OVR = new LinkedHashMap<>();
     private static final Map<String, Boolean> BOOL_OVR = new LinkedHashMap<>();
     private static final PathDenoiser DENOISER_OVR;
+    /** {@code -Dvkrtx.rt.dlss_rr_preset=} value of this session; null when the config owns it. */
+    private static final DlssRrParams.Preset DLSS_RR_PRESET_OVR;
     /** {@code -Dvkrtx.rt.adaptive_quality=} value of this session; null when the config owns it (it is never written out). */
     private static final AdaptiveQuality ADAPTIVE_OVR;
 
@@ -378,6 +386,16 @@ public final class RtSettings {
             }
         }
         DENOISER_OVR = parsed;
+        String rrPreset = System.getProperty("vkrtx.rt.dlss_rr_preset");
+        DlssRrParams.Preset rrPresetOvr = null;
+        if (rrPreset != null) {
+            try {
+                rrPresetOvr = DlssRrParams.Preset.valueOf(rrPreset.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                LOGGER.error("[VKB-RT] invalid -Dvkrtx.rt.dlss_rr_preset={} (default|d|e|f), ignored", rrPreset);
+            }
+        }
+        DLSS_RR_PRESET_OVR = rrPresetOvr;
         String aq = System.getProperty("vkrtx.rt.adaptive_quality");
         AdaptiveQuality aqOvr = null;
         if (aq != null) {
@@ -488,6 +506,8 @@ public final class RtSettings {
     public static float sunTiltRad() { return (float) Math.toRadians(i("sun_tilt_deg")); }
     public static int autoNormalStrengthPercent() { return i("auto_normal_strength"); }
     public static PathDenoiser denoiser() { return DENOISER_OVR != null ? DENOISER_OVR : pathDenoiser; }
+    /** DLSS-RR render preset hint; a {@code -Dvkrtx.rt.dlss_rr_preset=} override wins for this session. */
+    public static DlssRrParams.Preset dlssRrPreset() { return DLSS_RR_PRESET_OVR != null ? DLSS_RR_PRESET_OVR : dlssRrPreset; }
     /** GPU budget of the ray tracing pass in milliseconds, 0 when adaptive quality is off. */
     public static double adaptiveBudgetMs() {
         AdaptiveQuality q = ADAPTIVE_OVR != null ? ADAPTIVE_OVR : adaptiveQuality;
@@ -821,6 +841,19 @@ public final class RtSettings {
                 }
                 return true;
             }
+            case "dlss_rr_preset" -> {
+                if (DLSS_RR_PRESET_OVR != null) {
+                    LOGGER.info("[VKB-RT] dlss_rr_preset from the config ({}) ignored: -Dvkrtx.rt.dlss_rr_preset={} pins it",
+                        val, DLSS_RR_PRESET_OVR);
+                    return true;
+                }
+                try {
+                    dlssRrPreset = DlssRrParams.Preset.valueOf(val.trim().toUpperCase(Locale.ROOT));
+                } catch (IllegalArgumentException e) {
+                    LOGGER.warn("Invalid dlss_rr_preset '{}' (use default|d|e|f), keeping {}", val, dlssRrPreset);
+                }
+                return true;
+            }
             case "adaptive_quality" -> {
                 if (ADAPTIVE_OVR != null) {
                     LOGGER.info("[VKB-RT] adaptive_quality from the config ({}) ignored: -Dvkrtx.rt.adaptive_quality={} pins it",
@@ -973,5 +1006,7 @@ public final class RtSettings {
         w.write("adaptive_quality = \"" + (adaptiveQuality != null ? adaptiveQuality.name() : "OFF") + "\"\n");
         w.write("# DLSS Ray Reconstruction: flat voxel geometric normals (ng) for sharp block edges (true), or smooth/perturbed (false)\n");
         w.write("dlss_rr_geometric_normals = " + dlssRrGeometricNormals + "\n");
+        w.write("# DLSS Ray Reconstruction render preset: DEFAULT (NGX untouched), D, E or F (transformer / RR2 models; opt-in until measured)\n");
+        w.write("dlss_rr_preset = \"" + dlssRrPreset.name() + "\"\n");
     }
 }

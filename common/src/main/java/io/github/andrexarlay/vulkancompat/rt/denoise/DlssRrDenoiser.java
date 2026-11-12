@@ -4,6 +4,7 @@ import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera;
 import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenGuideReads;
@@ -465,7 +466,7 @@ public final class DlssRrDenoiser {
         int flags = DlssRrParams.FLAG_IS_HDR | DlssRrParams.FLAG_AUTO_EXPOSURE | DlssRrParams.FLAG_DEPTH_INVERTED
             | (fallback || w != outW || h != outH ? DlssRrParams.FLAG_MV_LOW_RES : 0);
         return new DlssRrParams.CreateInfo(w, h, outW, outH, quality, flags, false,
-            DlssRrParams.ROUGHNESS_PACKED, DlssRrParams.DEPTH_HW);
+            DlssRrParams.ROUGHNESS_PACKED, DlssRrParams.DEPTH_HW, RtSettings.dlssRrPreset());
     }
 
     public RtMemory.Img gbViewZ() { return gbViewZ; }

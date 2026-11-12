@@ -94,7 +94,8 @@ public final class DlssRrParams {
         int flags,
         boolean enableOutputSubrects,
         int roughnessMode,
-        int depthType
+        int depthType,
+        Preset preset
     ) {
         public CreateInfo {
             if (renderWidth <= 0 || renderHeight <= 0) {
@@ -106,6 +107,14 @@ public final class DlssRrParams {
             if (quality == null) {
                 throw new IllegalArgumentException("[DLSS-RR] quality cannot be null");
             }
+            if (preset == null) preset = Preset.DEFAULT;
+        }
+
+        /** Additive preset hint defaults to {@link Preset#DEFAULT} (NGX parameter untouched) for callers predating it. */
+        public CreateInfo(int renderWidth, int renderHeight, int outputWidth, int outputHeight,
+                          DlssQuality quality, int flags, boolean enableOutputSubrects, int roughnessMode, int depthType) {
+            this(renderWidth, renderHeight, outputWidth, outputHeight, quality, flags, enableOutputSubrects,
+                roughnessMode, depthType, Preset.DEFAULT);
         }
     }
 
