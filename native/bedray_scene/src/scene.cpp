@@ -761,7 +761,7 @@ void plan_instances(const Scene& scene, PreparePlan& plan) {
         instance.blas_address = geometry.blas_address;
         instance.blas_handle = geometry.blas_handle;
         instance.custom_index = static_cast<uint32_t>(plan.instances.size());
-        instance.mask = 0xFF;
+        instance.mask = BEDRAY_SCENE_TERRAIN_INSTANCE_MASK;
         plan.instances.push_back(instance);
         if (plan.section_table_rebuild) {
             plan.section_records.push_back(section_record(section, geometry.vertex_address));

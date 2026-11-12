@@ -524,6 +524,8 @@ public final class BedrayCoreLayouts {
     public static final long PTP_ENTITY_STATE = PT_PATH.byteOffset(groupElement("entity_state"));
 
     public static final long PTD_ABI_VERSION = PT_DESC.byteOffset(groupElement("abi_version"));
+    public static final long PTD_FLAGS = PT_DESC.byteOffset(groupElement("flags"));
+    public static final int PATH_TRACE_CONFIG_TILE_STATS = 1;
     private static final long PTD_RETIRED_TRACE_SLOT = PT_DESC.byteOffset(groupElement("retired_trace_slot"));
     public static final long PTD_PROGRAM_SPATIAL = PT_DESC.byteOffset(groupElement("program_spatial"));
     public static final long PTD_PROGRAM_DISPLAY = PT_DESC.byteOffset(groupElement("program_display"));

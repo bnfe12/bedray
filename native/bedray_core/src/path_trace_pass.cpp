@@ -647,6 +647,7 @@ BedrayStatus PathTracePass::configure(BedrayCore* core, const DeviceFns& fns,
     program_spatial_ = desc.program_spatial;
     program_display_ = desc.program_display;
     program_stats_ = desc.program_stats;
+    tile_stats_ = (desc.flags & BEDRAY_PATH_TRACE_CONFIG_TILE_STATS) != 0;
     // A reconfiguration may bring another trace contract; the PT stage is lent again for the new one.
     program_pt_spatial_scene_ = 0;
     spatial_push_bytes_ = spatial_push_bytes;
@@ -1674,10 +1675,9 @@ BedrayStatus PathTracePass::record_stats(std::uint64_t command_buffer, std::uint
     stats_desc.abi_version = BEDRAY_CORE_ABI_VERSION;
     stats_desc.command_buffer = command_buffer;
     stats_desc.program = program_stats_;
-    // The same full-extent 8x8 grid the display stage used; the shader's own
-    // 8x8x1 workgroup and per-texel guard drop the threads past the extent.
-    stats_desc.group_count_x = groups(recording.width);
-    stats_desc.group_count_y = groups(recording.height);
+    const auto meter_extent = [this](std::uint32_t extent) { return tile_stats_ ? 1u + (extent - 1u) / 4u : extent; };
+    stats_desc.group_count_x = groups(meter_extent(recording.width));
+    stats_desc.group_count_y = groups(meter_extent(recording.height));
     stats_desc.group_count_z = 1;
     stats_desc.resource_count = static_cast<std::uint32_t>(stats_resources.size());
     stats_desc.resources = stats_resources.data();
@@ -1802,6 +1802,7 @@ BedrayStatus PathTracePass::destroy() noexcept {
     program_spatial_ = 0;
     program_display_ = 0;
     program_stats_ = 0;
+    tile_stats_ = false;
     spatial_push_bytes_ = 0;
     return BEDRAY_OK;
 }

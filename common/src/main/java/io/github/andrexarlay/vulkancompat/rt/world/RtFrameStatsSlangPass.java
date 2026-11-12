@@ -154,7 +154,8 @@ final class RtFrameStatsSlangPass implements AutoCloseable {
             ByteBuffer push = stack.malloc(PUSH_BYTES);
             new Stats(frameIndex).writeTo(push);
             recordings.add(cmd.address());
-            program.dispatch(cmd.address(), program.groups(width, 0), program.groups(height, 1), 1, List.of(
+            program.dispatch(cmd.address(), program.groups(RtStatsMetering.tiles(width), 0),
+                program.groups(RtStatsMetering.tiles(height), 1), 1, List.of(
                 SlangProgram.Resource.storageImage("radiance", radianceView),
                 SlangProgram.Resource.storageImage("accum", accumView),
                 SlangProgram.Resource.storageImage("depth", depthView),

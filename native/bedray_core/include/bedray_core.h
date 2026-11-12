@@ -398,6 +398,9 @@ typedef struct BedrayPathTraceFrameDesc {
     uint32_t reserved[5];
 } BedrayPathTraceFrameDesc;
 
+/* program_stats maps one invocation to a 4x4 tile. Zero uses the full image grid. */
+#define BEDRAY_PATH_TRACE_CONFIG_TILE_STATS (1u << 0)
+
 typedef struct BedrayPathTraceDesc {
     uint32_t abi_version;
     uint32_t flags;

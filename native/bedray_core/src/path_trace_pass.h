@@ -120,6 +120,7 @@ private:
     std::uint64_t program_spatial_ = 0;
     std::uint64_t program_display_ = 0;
     std::uint64_t program_stats_ = 0;
+    bool tile_stats_ = false;
     std::uint64_t program_pt_spatial_scene_ = 0;
     std::uint32_t spatial_push_bytes_ = 0;
 
