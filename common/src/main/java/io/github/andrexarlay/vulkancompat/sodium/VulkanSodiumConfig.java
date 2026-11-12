@@ -295,30 +295,15 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     }
 
     public static Component rendererName(VulkanRtxConfig.RendererSelection renderer) {
-        if (renderer == VulkanRtxConfig.RendererSelection.HARDWARE_RT) {
-            return tr("bedray.renderer.hardware", "Hardware RT / Raster");
-        }
-        return GraphicsBackendRegistry.backend() == null
-            ? tr("bedray.renderer.voxel_missing", "Voxel (included provider unavailable)")
-            : tr("bedray.renderer.voxel", "Voxel (Experimental)");
+        return RendererOptionTexts.rendererName(renderer);
     }
 
     public static Component computeSceneName(GraphicsBackendRegistry.SceneMode scene) {
-        return switch (scene) {
-            case OFF -> tr("bedray.compute.scene.off", "Hardware / Raster");
-            case SYNTHETIC -> tr("bedray.compute.scene.synthetic", "Synthetic diagnostic");
-            case LIVE_OPAQUE -> tr("bedray.compute.scene.live", "Live opaque debug");
-        };
+        return RendererOptionTexts.computeSceneName(scene);
     }
 
     public static String rendererStatus() {
-        if (!VulkanRtxConfig.voxelRendererSelected()) {
-            return tr("bedray.renderer.status.hardware", "Hardware / raster renderer selected").getString();
-        }
-        if (GraphicsBackendRegistry.backend() == null) {
-            return tr("bedray.renderer.status.missing", "Unavailable: the included Compute provider is missing or incompatible").getString();
-        }
-        return GraphicsBackendRegistry.status();
+        return RendererOptionTexts.rendererStatus();
     }
 
     // ---------------------------------------------------------------- page 1: essentials
