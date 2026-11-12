@@ -299,6 +299,11 @@ public final class SettingsCatalog {
             "How far a light path may travel in blocks. Longer reaches distant sky and hills; shorter is faster.",
             "", "Path Tracing only.",
             "The difference shows only in large open scenes (distant terrain lighting); a still of the test scene would not show it.");
+        putNoImage("path_accumulate", Tier.ADVANCED, "Temporal Accumulation",
+            "Folds each frame's traced paths into a running mean so a still image converges to a clean picture. Off shows the raw per-frame sample: noisier, but it never ghosts or smears a moving camera.",
+            "FPS: none on its own - it changes how the picture is averaged, not how many rays are traced.",
+            "Path Tracing only.",
+            "A still shows the converged (on) versus noisy (off) image directly.");
         put("path_denoiser", Tier.ADVANCED, "Denoiser",
             "Removes the grain of traced light. NRD is the default; DLSS Ray Reconstruction replaces denoiser and upscaler (RTX only). Off leaves raw grain.",
             "",
@@ -511,6 +516,14 @@ public final class SettingsCatalog {
             "", "", "A budget has no look of its own; too small drops far lamps.");
         putNoImage("sun_size_tenths", Tier.EXPERT, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
             "", "", "Visible only as shadow softness at a moment of day; not captured.");
+        putNoImage("sun_tilt_deg", Tier.EXPERT, "Sun Arc Tilt",
+            "Tilt of the sun/moon arc towards the south in degrees (0 = vanilla: the sun passes the zenith and casts no noon shadow). Higher tilts give longer, more directional shadows at midday.",
+            "", "Needs ray tracing on.",
+            "Visible only as the shadow direction at a moment of day; not captured in a still.");
+        putNoImage("baked_light_fill_pct", Tier.EXPERT, "Baked Light Fill",
+            "Strength of the optional baked vanilla light fill (0..100 percent): a warm ambient term that lifts shadows the traced light misses. 0 is pure traced light.",
+            "", "Ray Tracing (rays) mode only; Path Tracing never reads it.",
+            "A still shows the shadow lift directly; adjust live to taste.");
         putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
             "Shares the Surface Relief screenshots.");
         putNoImage("texture_lod_bias_offset", Tier.EXPERT, "Texture Sharpness Offset",

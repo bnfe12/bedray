@@ -624,6 +624,10 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> RtSettings.pathSpp = v, () -> RtSettings.pathSpp, pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st));
         pt.addOption(intOpt(builder, "path_distance", 384, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16,
             unit(" blocks"), v -> RtSettings.pathDistance = v, () -> RtSettings.pathDistance, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Temporal accumulation: on folds each frame's paths into a running mean (a still converges); off shows the raw
+        // per-frame sample, which stays noisy but never ghosts a moving camera. Already wired through accumulateRequested().
+        pt.addOption(boolOpt(builder, "path_accumulate", true, v -> RtSettings.pathAccumulate = v, () -> RtSettings.pathAccumulate,
+            pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
         EnumOptionBuilder<RtSettings.PathDenoiser> den = builder.createEnumOption(id("path_denoiser"), RtSettings.PathDenoiser.class);
         den.setName(nameOf("path_denoiser")).setTooltip(v -> tipOf("path_denoiser")).setDefaultValue(RtSettings.PathDenoiser.DLSS_RR)
             .setAllowedValues(EnumSet.of(RtSettings.PathDenoiser.OFF, RtSettings.PathDenoiser.NRD, RtSettings.PathDenoiser.DLSS_RR))
@@ -947,6 +951,11 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             () -> RtSettings.lightBudget, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         ex.addOption(intOpt(builder, "sun_size_tenths", 5, 1, 50, 1, unit(""), v -> RtSettings.sunSizeTenths = v,
             () -> RtSettings.sunSizeTenths, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
+        ex.addOption(intOpt(builder, "sun_tilt_deg", 24, 0, 45, 1, unit("°"), v -> RtSettings.sunTiltDeg = v,
+            () -> RtSettings.sunTiltDeg, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
+        // Rays mode only: path mode never reads the baked fill, so the row hides itself there instead of doing nothing.
+        ex.addOption(intOpt(builder, "baked_light_fill_pct", 0, 0, 100, 5, percent(), v -> RtSettings.bakedLightFillPct = v,
+            () -> RtSettings.bakedLightFillPct, raysOn, dMode, Mark.RT, OptionImpact.LOW, true, st));
         ex.addOption(intOpt(builder, "auto_normal_strength", 100, 0, 400, 10, percent(), v -> RtSettings.autoNormalStrength = v,
             () -> RtSettings.autoNormalStrength, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
         ex.addOption(intOpt(builder, "texture_lod_bias_offset", 0, -20, 10, 1,
