@@ -281,7 +281,11 @@ def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Pat
         "vkrtx.autotest.captureLabel": label,
         "vkrtx.autotest.revisionHint": revision,
         "vkrtx.rt.path_denoiser": "dlss_rr",
-        "vkrtx.rt.path_restir_di": "false",
+        # ReSTIR PT is a child of ReSTIR DI: RtSlangPathPass.ptActive() requires diActive(), so forcing DI off here
+        # silently disabled PT in every *_pt_on variant (the enabled mask never carried bit 17). Keep DI on — the game
+        # default — in both arms so pt_off/pt_on isolates PT alone. A daylight world has an empty emitter list, so DI
+        # dispatches nothing but diActive() stays true and PT still runs on indirect light.
+        "vkrtx.rt.path_restir_di": "true",
         # RD32 native-1080p in the fixed-seed world exhausts the default core budget (deviceLocal/3 ~= 2630 MiB),
         # which disables RT for the session (prepare_frame LIMIT) and yields a 0-frame capture. Provision 4 GiB
         # (heap budget ~6.95 GiB on the 8 GB card); identical for every variant so A/B stays fair.
