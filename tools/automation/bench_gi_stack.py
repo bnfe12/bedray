@@ -53,10 +53,14 @@ VARIANTS: dict[str, dict[str, str]] = {
                     "vkrtx.rt.path_denoiser": "dlss_rr"},
     "denoiser_nrd": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
                      "vkrtx.rt.path_denoiser": "nrd"},
+    # ReLAX arm: path_denoiser=nrd plus the -Dvkrtx.denoiser=nrd_relax expert override resolves to NRD_RELAX
+    # (DenoiserResolution case NRD); native createDenoiser applies default RelaxSettings + primary-lobe config.
+    "denoiser_nrd_relax": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
+                           "vkrtx.rt.path_denoiser": "nrd", "vkrtx.denoiser": "nrd_relax"},
 }
 BASELINE = ["compute_pt_off", "compute_pt_on", "raygen_pt_off", "raygen_pt_on"]
 SER_AB = ["compute_pt_on", "raygen_pt_on", "ser_pt_on"]
-DENOISER_AB = ["denoiser_rr", "denoiser_nrd"]
+DENOISER_AB = ["denoiser_rr", "denoiser_nrd", "denoiser_nrd_relax"]
 
 
 def sha256(path: Path) -> str:

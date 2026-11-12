@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bench_gi_stack import parse_log
+from bench_gi_stack import DENOISER_AB, VARIANTS, parse_log
 
 
 class BenchLogParseTest(unittest.TestCase):
@@ -64,6 +64,25 @@ class BenchLogParseTest(unittest.TestCase):
         ev = self.parse(self.BLAS_CURRENT + "\n" + self.GPU_LINE + "\n")
         self.assertEqual(0.30, ev["blas"]["last"]["tlas_ms"])      # CPU wall time of prepareFrame
         self.assertEqual(1.25, ev["tlas_gpu_ms_upper_bound"])      # GPU time of the whole scene build
+
+
+class BenchDenoiserVariantTest(unittest.TestCase):
+    """The ReLAX A/B arm keeps the identical PT-on GI stack and only adds the expert denoiser override."""
+
+    def test_relax_arm_is_present_and_in_the_ab(self):
+        self.assertIn("denoiser_nrd_relax", VARIANTS)
+        self.assertEqual(["denoiser_rr", "denoiser_nrd", "denoiser_nrd_relax"], DENOISER_AB)
+
+    def test_relax_arm_differs_from_reblur_only_by_the_override(self):
+        relax = VARIANTS["denoiser_nrd_relax"]
+        self.assertEqual("nrd", relax["vkrtx.rt.path_denoiser"])
+        self.assertEqual("nrd_relax", relax["vkrtx.denoiser"])
+        self.assertEqual({k: v for k, v in relax.items() if k != "vkrtx.denoiser"}, VARIANTS["denoiser_nrd"])
+
+    def test_all_denoiser_arms_share_the_pt_on_stack(self):
+        for label in DENOISER_AB:
+            self.assertEqual("true", VARIANTS[label]["vkrtx.rt.path_restir_pt"], label)
+            self.assertEqual("true", VARIANTS[label]["vkrtx.rt.path_restir_pt_spatial"], label)
 
 
 if __name__ == "__main__":
