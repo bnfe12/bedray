@@ -216,10 +216,27 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     // ---------------------------------------------------------------- registration
 
-    /** Bedray's settings are native Sodium pages (Bedray, Bedray Advanced) in the Video Settings screen; no screen of its own. */
     @Override
     public void registerConfigLate(ConfigBuilder builder) {
-        registerSettings(builder);
+        builder.registerOwnModOptions().setName("Bedray").addPage(builder.createExternalPage()
+            .setName(tr("bedray.settings.open", "Bedray Settings..."))
+            .setScreenConsumer(parent -> Minecraft.getInstance().gui.setScreen(new BedrayConfigScreen(parent))));
+    }
+
+    /** Fresh option objects keep this screen's pending changes independent of a parent Sodium screen. */
+    static net.caffeinemc.mods.sodium.client.config.structure.Config createScreenConfig() {
+        var builder = new net.caffeinemc.mods.sodium.client.config.builder.ConfigBuilderImpl(
+            configId -> {
+                // Copy metadata, never the parent's mutable Option objects or pending values.
+                if (ConfigManager.CONFIG != null) {
+                    for (var mod : ConfigManager.CONFIG.getModOptions())
+                        if (mod.configId().equals(configId)) return new ConfigManager.ModMetadata(mod.name(), mod.version());
+                }
+                String version = VulkanSodiumConfig.class.getPackage().getImplementationVersion();
+                return new ConfigManager.ModMetadata("Bedray", version == null || version.isBlank() ? "unknown" : version);
+            }, "bedray");
+        new VulkanSodiumConfig().registerSettings(builder);
+        return new net.caffeinemc.mods.sodium.client.config.structure.Config(new ArrayList<>(builder.build()));
     }
 
     /** Package-visible so the id/dependency tests can drive the real registration against a recording builder. */
@@ -445,6 +462,8 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         // ---- Presets, reset
         OptionGroupBuilder tools = group(builder, "bedray.group.main_tools", "Presets & Reset", new ArrayList<>());
         GROUP_IDS.put("main_tools", curGroup);
+        tools.addOption(nativesManagerButton(builder));
+        tools.addOption(presetsButton(builder));
         tools.addOption(resetListButton(builder, "reset_page_main", "Reset this page", PAGE_ESSENTIAL));
         page.addOptionGroup(tools);
         curGroup = null;
@@ -566,6 +585,24 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             state -> state.readEnumOption(backendId, UpscalerBackend.class) == backend
                 && state.readEnumOption(modeId, UpscalerMode.class) == UpscalerMode.CUSTOM,
             new Identifier[] {backendId, modeId}, Mark.NONE, OptionImpact.MEDIUM, true, storage));
+    }
+
+    private static OptionBuilder presetsButton(ConfigBuilder builder) {
+        var b = builder.createExternalButtonOption(id("presets_open"));
+        b.setName(tr("bedray.opt.presets_open", "My presets..."))
+            .setTooltip(tr("bedray.opt.presets_open.tip", "Save the current Bedray settings under a name, load or delete your presets, copy them as text or import them. Presets contain setting values only."))
+            .setEnabledProvider(s -> true)
+            .setScreenConsumer(screen -> Minecraft.getInstance().gui.setScreen(new PresetsScreen(screen)));
+        return b;
+    }
+
+    private static OptionBuilder nativesManagerButton(ConfigBuilder builder) {
+        var b = builder.createExternalButtonOption(id("natives_manager_open"));
+        b.setName(tr("bedray.opt.natives_manager_open", "Upscaler & Frame Gen DLLs..."))
+            .setTooltip(tr("bedray.opt.natives_manager_open.tip", "Open the library manager to view installed upscalers (FSR, DLSS, XeSS, Streamline), open the folder, or drag-and-drop ZIP archives."))
+            .setEnabledProvider(s -> true)
+            .setScreenConsumer(screen -> Minecraft.getInstance().gui.setScreen(new NativesManagerScreen(screen)));
+        return b;
     }
 
     /** "Reset ..." row: sets every listed option to its factory default (like Sodium's own reset); press Apply to keep it. */
