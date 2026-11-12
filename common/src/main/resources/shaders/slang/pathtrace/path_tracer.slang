@@ -715,6 +715,17 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             break;
         }
 
+        // The AO-only continuation asks whether the environment is occluded, not for another reflected or lit
+        // vertex. A window filters that test; treating it as an opaque AO hit would blacken the room behind it.
+        bool ambientPaneFilter = ambientOnlyPending && surface.material.alphaMode == AlphaMode.Translucent
+            && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u
+            && surface.material.transmission >= 1.0;
+        if (ambientPaneFilter) {
+            throughput *= surfaceTransmittance(surface, ray.direction);
+            if (pathMaxComponent(throughput) <= 0.0) break;
+            ray.tMin = hit.t + pathTraceHoleStep(hit.t);
+            continue;
+        }
         if (surfaceIsHole(surface, options.alphaCutoff)) {
             // A cutout hole is not a surface: continue the same ray just past
             // the candidate without spending a scattering event.
