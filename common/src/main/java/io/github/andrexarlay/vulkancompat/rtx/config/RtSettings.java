@@ -230,7 +230,7 @@ public final class RtSettings {
     public static boolean dlssRrGeometricNormals = true;
     /** Path tracing water caustics simulation focusing sunlight and light under water. */
     public static boolean caustics = false;
-    /** Vibrant Visuals style: rich grass and water tones, high color contrast, soft bloom and cinematic ACES. */
+    /** Vibrant Visuals grade: richer saturation and higher colour contrast on the display image (postVibrant). The built-in Vibrant preset pairs it with the ACES tone curve. */
     public static boolean vibrantVisuals = false;
     /** Tone curve of the path display pass (PEAK = the shipped curve). See {@link Tonemapper}. */
     public static Tonemapper tonemapper = Tonemapper.PEAK;

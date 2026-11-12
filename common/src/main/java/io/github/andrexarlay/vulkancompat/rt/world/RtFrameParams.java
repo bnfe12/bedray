@@ -57,8 +57,6 @@ public final class RtFrameParams {
     public static final int FLAG_VOLUMETRIC_FOG = 1 << 12;
     /** Water style: 1 = Realistic (wave normals, caustics, refraction), 0 = Vanilla (classic clear). */
     public static final int FLAG_WATER_REALISTIC = 1 << 13;
-    /** Vibrant Visuals tone mapping and color grade mode. */
-    public static final int FLAG_VIBRANT_VISUALS = 1 << 14;
     /** Path tracing water caustics simulation. */
     public static final int FLAG_CAUSTICS = 1 << 15;
     /** First-hit sun NEE is included in the denoised radiance rather than passed through raw. */

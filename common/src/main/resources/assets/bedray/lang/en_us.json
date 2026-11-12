@@ -253,6 +253,7 @@
   "bedray.settings.status.inactive": "Inactive",
   "bedray.presets.save": "Save pending",
   "bedray.presets.copied": "Pending settings copied as text.",
+  "bedray.presets.builtin": "built-in",
   "bedray.opt.voxel_quality_profile": "Voxel Quality",
   "bedray.opt.voxel_quality_profile.desc": "Fast lowers the memory budget and skips diffuse bounce and layered transparency. Beautiful enables those effects. Both follow Minecraft distance; Custom unlocks the individual settings. The upscaler, frame generation and lighting stay editable in every profile. Apply commits the choice.",
   "bedray.opt.path_quality_profile": "Path Tracing Quality",

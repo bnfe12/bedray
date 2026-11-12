@@ -269,6 +269,7 @@
   "bedray.presets.import": "Импорт из буфера",
   "bedray.presets.none": "Пресетов пока нет. Настройте всё как нравится и сохраните здесь.",
   "bedray.presets.name_hint": "Имя нового пресета",
+  "bedray.presets.builtin": "встроенный",
   "bedray.preview.reset": "Сбросить по умолчанию",
   "bedray.preview.mode_split": "Ползунок",
   "bedray.preview.mode_flip": "Переключить",

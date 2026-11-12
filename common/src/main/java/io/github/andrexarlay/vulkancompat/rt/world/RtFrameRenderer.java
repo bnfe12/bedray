@@ -1249,7 +1249,6 @@ public final class RtFrameRenderer {
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoNormalsOn() ? RtFrameParams.FLAG_AUTO_NORMALS : 0)
             | (params.volumetricFogEnabled ? RtFrameParams.FLAG_VOLUMETRIC_FOG : 0)
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.waterStyle() == 1 ? RtFrameParams.FLAG_WATER_REALISTIC : 0)
-            | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.vibrantVisuals() ? RtFrameParams.FLAG_VIBRANT_VISUALS : 0)
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.caustics() ? RtFrameParams.FLAG_CAUSTICS : 0)
             | (io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.autoExposure() ? RtFrameParams.FLAG_AUTO_EXPOSURE : 0)
             | ((denoiseMode == DenoiserMode.DLSS_RR && dlssRrDenoiser != null

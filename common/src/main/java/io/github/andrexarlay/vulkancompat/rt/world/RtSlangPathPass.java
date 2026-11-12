@@ -49,6 +49,8 @@ public final class RtSlangPathPass implements RtPass {
     /** Post-cinema looks in spare display-flag bits 8..9; mirror {@code PATH_DISPLAY_FLAG_VIGNETTE/GRAIN} of path_display.slang. */
     static final int DISPLAY_FLAG_VIGNETTE = 1 << 8;
     static final int DISPLAY_FLAG_GRAIN = 1 << 9;
+    /** Vibrant Visuals colour grade in spare display-flag bit 10; mirror {@code PATH_DISPLAY_FLAG_VIBRANT} of path_display.slang. */
+    static final int DISPLAY_FLAG_VIBRANT = 1 << 10;
     /**
      * The player's tonemapper choice ({@link RtSettings.Tonemapper}) rides in spare display-flag bits 5..7, mirroring
      * {@code PATH_DISPLAY_TONEMAPPER_SHIFT/MASK} of path_display.slang. The native core ORs the descriptor's display_flags
@@ -76,6 +78,15 @@ public final class RtSlangPathPass implements RtPass {
             bits |= DISPLAY_FLAG_GRAIN;
         }
         return bits;
+    }
+
+    /**
+     * The Vibrant Visuals grade as spare display-flag bit 10. Like the tonemapper and post-cinema bits, the native core
+     * ORs the descriptor's display_flags verbatim into the push, so the grade reaches the live core with no ABI field.
+     * Per-pixel in the display pass, applied to either RT mode.
+     */
+    static int vibrantBit() {
+        return RtSettings.vibrantVisuals() ? DISPLAY_FLAG_VIBRANT : 0;
     }
     /** Relative depth disagreement (in blocks at unit distance) that still counts as the same surface when reprojecting. */
     static final float REPROJECTION_TOLERANCE = 0.02f;
