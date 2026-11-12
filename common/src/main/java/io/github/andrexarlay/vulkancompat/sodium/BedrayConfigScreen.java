@@ -155,6 +155,20 @@ public final class BedrayConfigScreen extends Screen {
         }
         if (filter.isEmpty() && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile())
             addAction(tr("bedray.settings.customize", "Customize current quality"), () -> { draft.customize(); rebuildRows(); });
+        if (filter.isEmpty() && category == SettingsDraft.Category.OVERVIEW && draft.hasQualityProfile() && !draft.voxel())
+            addAction(tr("bedray.settings.gi_auto", "Auto-select GI quality (recommended)"), () -> {
+                var device = io.github.andrexarlay.vulkancompat.rtx.raytracing.GiDeviceProbe.probe();
+                if (device == null) {
+                    runtime = tr("bedray.settings.gi_auto_unavailable", "Auto-select needs the Vulkan device; open a world first.");
+                    return;
+                }
+                var plan = io.github.andrexarlay.vulkancompat.rtx.config.GiStackPolicy.recommend(
+                    device, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight());
+                draft.applyGiPlan(plan);
+                runtime = tr("bedray.settings.gi_auto_staged", "Auto: %s. Apply to commit.",
+                    io.github.andrexarlay.vulkancompat.rtx.config.GiStackPolicy.describe(plan));
+                rebuildRows();
+            });
         if (filter.isEmpty() && category == SettingsDraft.Category.SYSTEM) {
             captureButton = addAction(tr("bedray.settings.capture_profile", "Record 30 s gameplay profile"),
                 io.github.andrexarlay.vulkancompat.rtx.debug.GameplayCapture::start);
