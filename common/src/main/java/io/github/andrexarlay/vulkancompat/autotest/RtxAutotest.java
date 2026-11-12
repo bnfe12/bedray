@@ -14,6 +14,7 @@ public final class RtxAutotest {
         AutotestScenarios.register(new SettingsScenario());
         AutotestScenarios.register(new SettingsUiScenario());
         AutotestScenarios.register(new SettingsPreviewScenario());
+        AutotestScenarios.register(new io.github.andrexarlay.vulkancompat.sodium.GiSettingsScenario());
         AutotestScenarios.register(new SunScenario());
         AutotestScenarios.register(new UpscalerSwitchScenario());
         AutotestScenarios.register(new RtModesScenario());
