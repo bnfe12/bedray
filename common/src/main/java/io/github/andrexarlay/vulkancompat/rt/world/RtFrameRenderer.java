@@ -1237,7 +1237,7 @@ public final class RtFrameRenderer {
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException nativeFailure)
                         throw nativeFailure; // partial coarse recording requires whole-command discard
                     if (e instanceof io.github.andrexarlay.vulkancompat.rt.denoise.RrFeatureCreationRetry) {
-                        LOGGER.warn("[DLSS-RR] creation_retry whole_recording=discarded next_frame=quality_fallback reason={}", e.getMessage());
+                        LOGGER.warn("[DLSS-RR] creation_retry whole_recording=discarded next_frame=quality_fallback reason={}", LogPaths.show(e.getMessage()));
                         throw new RtDenoiserFrameDiscard("DLSS-RR creation retry requires a fresh recording", e);
                     }
                     denoiserRuntimeFailure = "dlss_rr_record: " + LogPaths.show(e.getMessage());
