@@ -512,6 +512,10 @@ public final class PreviewPanel {
 
     /** Mouse click (left button) in GUI coordinates; returns true when the panel or compact button used it. */
     public static boolean click(double mx, double my) {
+        return click(mx, my, () -> selected.resetToDefault());
+    }
+
+    static boolean click(double mx, double my, Runnable reset) {
         if (selected == null) {
             return false;
         }
@@ -541,8 +545,9 @@ public final class PreviewPanel {
                     case "close_modal" -> modalOpen = false;
                     case "reset" -> {
                         if (!resetAllowed) return true;
-                        selected.resetToDefault();
-                        LOGGER.info("[VKB-AUTOTEST] ui_option_reset option={}", comparePath);
+                        String path = comparePath;
+                        reset.run();
+                        LOGGER.info("[VKB-AUTOTEST] ui_option_reset option={}", path);
                     }
                     default -> {
                         if (h.action.startsWith("cmp:")) {

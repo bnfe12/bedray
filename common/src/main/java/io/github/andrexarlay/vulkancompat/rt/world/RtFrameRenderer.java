@@ -300,6 +300,11 @@ public final class RtFrameRenderer {
         return lastStats;
     }
 
+    /** Last trace accepted for submission, or null before the first accepted trace. */
+    public static RtTraceTelemetry lastTraceTelemetry() {
+        return lastTraceTelemetry;
+    }
+
     /** BLAS built since the game started (monotonic, for a per-second rate). */
     public static long blasBuiltTotal() {
         return blasBuiltTotal;

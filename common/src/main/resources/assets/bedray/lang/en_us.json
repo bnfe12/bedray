@@ -201,6 +201,8 @@
   "bedray.settings.title": "Bedray Settings",
   "bedray.settings.open": "Bedray Settings...",
   "bedray.settings.search": "Search all settings",
+  "bedray.settings.addons": "Add-on settings…",
+  "bedray.settings.trace_runtime": "Last trace · %s · %s → %s · %s spp · %s bounces",
   "bedray.settings.details": "Details",
   "bedray.settings.apply": "Apply",
   "bedray.settings.revert": "Revert",
@@ -421,5 +423,16 @@
   "bedray.opt.path_restir_pt": "ReSTIR Path Reuse (experimental)",
   "bedray.opt.path_restir_pt.desc": "Reuses the light a pixel's first diffuse bounce brought back over the next frames, so bounced light settles while the camera moves. Costs about 0.6 GB of video memory at 1080p and one extra ray per reused pixel. Needs ReSTIR Direct Light on; the native backend ignores it.",
   "bedray.opt.path_restir_pt_spatial": "ReSTIR Spatial Path Reuse",
-  "bedray.opt.path_restir_pt_spatial.desc": "Each pixel also borrows the bounced-light paths of four neighbouring pixels on the same surface, so bounced light settles from more paths. Up to four extra rays per pixel, no extra video memory. Needs ReSTIR Path Reuse on."
+  "bedray.opt.path_restir_pt_spatial.desc": "Each pixel also borrows the bounced-light paths of four neighbouring pixels on the same surface, so bounced light settles from more paths. Up to four extra rays per pixel, no extra video memory. Needs ReSTIR Path Reuse on.",
+  "bedray.addons.title": "Bedray add-on settings",
+  "bedray.addons.defaults": "Defaults",
+  "bedray.addons.dependency": "Requires: %s",
+  "bedray.addons.apply_failed": "Could not apply settings. Changes are still pending.",
+  "bedray.addons.applied": "Settings applied.",
+  "bedray.addons.readback_failed": "Applied. The add-on could not report its saved values.",
+  "bedray.addons.none": "Installed add-ons can register their settings here.",
+  "bedray.addons.read_failed": "The add-on could not load its settings. See the log.",
+  "bedray.addons.pending": "Add-ons with changes: %s",
+  "bedray.addons.discard_title": "Discard add-on changes?",
+  "bedray.addons.discard_message": "Unsaved changes will be discarded."
 }
