@@ -18,3 +18,12 @@ float3 postFilmGrain(float3 color, int2 pixel, uint frameIndex, float strength) 
     float weight = 1.0 - abs(2.0 * luma - 1.0);
     return color + n * strength * weight;
 }
+
+// Vibrant Visuals grade: richer saturation and a gentle contrast lift on the tone-mapped display colour. Saturation
+// scales the chroma about the luma; contrast pivots about mid grey. Per-pixel like the other looks, applied after the
+// tone curve and before vignette/grain, so the running mean stays clean. Mirror of RtPostCinema.vibrant.
+float3 postVibrant(float3 color, float saturation, float contrast) {
+    float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+    float3 sat = max(float3(luma) + (color - float3(luma)) * saturation, float3(0.0));
+    return saturate((sat - 0.5) * contrast + 0.5);
+}
