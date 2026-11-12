@@ -15,10 +15,10 @@ class RtFrameResourcesTest {
         assertEquals(16, resources.composite().width);
         assertEquals(16, resources.displayDepth().width);
         assertNotSame(resources.depth(), resources.displayDepth());
-        assertEquals(4, allocator.images.size());
+        assertEquals(5, allocator.images.size());
         var transitions = new AtomicInteger();
         resources.prepare(31, image -> transitions.incrementAndGet());
-        assertEquals(4, transitions.get());
+        assertEquals(5, transitions.get());
         assertThrows(IllegalStateException.class, () -> resources.ensureOutput(8, 4));
         resources.releaseRecording(31);
         resources.ensureOutput(8, 4);
@@ -91,11 +91,11 @@ class RtFrameResourcesTest {
         allocator.failImageCall = allocator.imageCalls + 2;
         assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(16, 16));
         assertSame(output, resources.output()); assertSame(depth, resources.depth()); assertSame(composite, resources.composite());
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size());
         allocator.failImageCall = 0;
         resources.ensureOutput(16, 16);
         assertNotSame(output, resources.output());
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size());
         resources.close();
         assertTrue(allocator.images.isEmpty());
     }
