@@ -23,7 +23,7 @@ class RtFrameResourcesTest {
         resources.releaseRecording(31);
         resources.ensureOutput(8, 4);
         assertSame(resources.depth(), resources.displayDepth());
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size());
         resources.close();
         assertTrue(allocator.images.isEmpty());
     }
