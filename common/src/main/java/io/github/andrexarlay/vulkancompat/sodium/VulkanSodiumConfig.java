@@ -745,6 +745,10 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
         look.addOption(track("tonemapper", tm));
         look.addOption(boolOpt(builder, "vibrant_visuals", false, v -> RtSettings.vibrantVisuals = v,
             () -> RtSettings.vibrantVisuals, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        look.addOption(boolOpt(builder, "vignette", false, v -> RtSettings.vignette = v,
+            () -> RtSettings.vignette, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        look.addOption(boolOpt(builder, "film_grain", false, v -> RtSettings.filmGrain = v,
+            () -> RtSettings.filmGrain, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         Identifier particleId = id("rt_particles");
         look.addOption(boolOpt(builder, "rt_particles", true, v -> RtSettings.rtParticles = v, () -> RtSettings.rtParticles,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));

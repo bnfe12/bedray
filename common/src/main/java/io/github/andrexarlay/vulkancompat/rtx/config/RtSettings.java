@@ -225,6 +225,10 @@ public final class RtSettings {
     public static boolean vibrantVisuals = false;
     /** Tone curve of the path display pass (PEAK = the shipped curve). See {@link Tonemapper}. */
     public static Tonemapper tonemapper = Tonemapper.PEAK;
+    /** Post-cinema vignette: darkens the corners of the tone-mapped image (display pass, both RT modes). */
+    public static boolean vignette = false;
+    /** Post-cinema film grain: animated midtone noise on the tone-mapped image (display pass, both RT modes). */
+    public static boolean filmGrain = false;
     /** Particles (smoke, flames, sparks, bubbles, block breaking...) are drawn into the ray traced image (RtParticleLayer). */
     public static boolean rtParticles = true;
     /** Rain and snow columns are drawn into the ray traced image too (RtWeatherLayer, on the particle layer of RtParticleLayer). */
@@ -296,6 +300,8 @@ public final class RtSettings {
         bool("path_caustics", () -> caustics, v -> caustics = v);
         bool("caustics", () -> caustics, v -> caustics = v);
         bool("vibrant_visuals", () -> vibrantVisuals, v -> vibrantVisuals = v);
+        bool("vignette", () -> vignette, v -> vignette = v);
+        bool("film_grain", () -> filmGrain, v -> filmGrain = v);
         bool("rt_particles", () -> rtParticles, v -> rtParticles = v);
         bool("rt_weather", () -> rtWeather, v -> rtWeather = v);
         bool("auto_normals", () -> autoNormals, v -> autoNormals = v);
@@ -501,6 +507,8 @@ public final class RtSettings {
     public static int exposureEvTenths() { return i("path_exposure_ev"); }
     public static boolean caustics() { return b("path_caustics") || b("caustics"); }
     public static boolean vibrantVisuals() { return b("vibrant_visuals"); }
+    public static boolean vignette() { return b("vignette"); }
+    public static boolean filmGrain() { return b("film_grain"); }
     public static boolean particles() { return b("rt_particles"); }
     /**
      * Weather (rain / snow columns) rides on the particle layer of {@code RtParticleLayer} and its composite, so it is only ever on
@@ -753,7 +761,7 @@ public final class RtSettings {
     public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections",
         "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate", "rt_distance_auto", "auto_normals", "path_accumulate",
         "path_auto_exposure", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
-        "waving_foliage");
+        "vignette", "film_grain", "waving_foliage");
 
     /**
      * Resets one level of the settings page to the values of the current presets (Ray Tracing: MEDIUM when Custom; Path
@@ -997,6 +1005,9 @@ public final class RtSettings {
         w.write("waving_foliage_strength = " + wavingFoliageStrength + "\n");
         w.write("# Vibrant Visuals (Mojang vibrant palette)\n");
         w.write("vibrant_visuals = " + vibrantVisuals + "\n");
+        w.write("# Post-cinema display looks (tone-mapped image, both RT modes)\n");
+        w.write("vignette = " + vignette + "\n");
+        w.write("film_grain = " + filmGrain + "\n");
         for (Map.Entry<String, BoolSetting> e : BOOLS.entrySet()) {
             if (e.getKey().startsWith("rays_")) {
                 w.write(e.getKey() + " = " + e.getValue().get().getAsBoolean() + "\n");
