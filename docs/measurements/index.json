@@ -78,8 +78,8 @@
       "label": "dlss_rr_preset_ab",
       "item": 4,
       "status": "gpu_gated",
-      "bench_arm": false,
-      "reason": "dlss_rr_preset D/E/F wired additively (default 0 = prior behavior); a preset A/B bench variant + capture is pending. Default-off until numbers."
+      "bench_arm": true,
+      "reason": "dlss_rr_preset D/E/F wired additively (default 0 = prior behavior); bench arms denoiser_rr_preset_d/e/f in RR_PRESET_AB (-Dvkrtx.rt.dlss_rr_preset). Same-session default-vs-D/E/F A/B capture pending. Default-off until numbers."
     },
     {
       "label": "gi_execution_status_readback",

@@ -123,13 +123,18 @@ python bench_gi_stack.py --out ..\..\docs\measurements --scratch <scratch> ^
 python bench_gi_stack.py --out ..\..\docs\measurements --scratch <scratch> ^
     --variants denoiser_ab --hold-focus --render-distance 16 --revision 1cc5729b-abi3
 
+:: DLSS RR render-preset default -> D -> E -> F  (item 4; default-off until this A/B has numbers)
+python bench_gi_stack.py --out ..\..\docs\measurements --scratch <scratch> ^
+    --variants rr_preset_ab --hold-focus --render-distance 16 --revision 1cc5729b-abi3
+
 :: BLAS compaction RD32  (reserved ~3607 MiB fits 4096 MiB)
 python bench_gi_stack.py --out ..\..\docs\measurements --scratch <scratch> ^
     --variants compute_pt_off --hold-focus --render-distance 32 --revision 1cc5729b-abi3
 ```
 
 Variant groups: `baseline` = compute/raygen × PT off/on; `ser_ab` = `compute_pt_on`, `raygen_pt_on`, `ser_pt_on`;
-`denoiser_ab` = `denoiser_rr`, `denoiser_nrd`, `denoiser_nrd_relax`; `all` = every variant. `--dry-run` prints the
+`denoiser_ab` = `denoiser_rr`, `denoiser_nrd`, `denoiser_nrd_relax`; `rr_preset_ab` = `denoiser_rr` (default) +
+`denoiser_rr_preset_d/e/f`; `all` = every variant. `--dry-run` prints the
 label→properties map without launching. The ReLAX arm resolves through `path_denoiser=nrd` + the expert override
 `-Dvkrtx.denoiser=nrd_relax` (`DenoiserResolution` case NRD → `NRD_RELAX`).
 

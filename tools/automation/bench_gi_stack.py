@@ -57,10 +57,20 @@ VARIANTS: dict[str, dict[str, str]] = {
     # (DenoiserResolution case NRD); native createDenoiser applies default RelaxSettings + primary-lobe config.
     "denoiser_nrd_relax": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
                            "vkrtx.rt.path_denoiser": "nrd", "vkrtx.denoiser": "nrd_relax"},
+    # DLSS-RR render-preset A/B (item 4): identical PT-on RR stack, only the NGX render-preset hint differs.
+    # -Dvkrtx.rt.dlss_rr_preset pins the session (RtSettings.dlssRrPreset); the default arm is denoiser_rr
+    # (no override = Preset.DEFAULT, NGX param untouched). Default-off until a same-session A/B has numbers.
+    "denoiser_rr_preset_d": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
+                             "vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.dlss_rr_preset": "d"},
+    "denoiser_rr_preset_e": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
+                             "vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.dlss_rr_preset": "e"},
+    "denoiser_rr_preset_f": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
+                             "vkrtx.rt.path_denoiser": "dlss_rr", "vkrtx.rt.dlss_rr_preset": "f"},
 }
 BASELINE = ["compute_pt_off", "compute_pt_on", "raygen_pt_off", "raygen_pt_on"]
 SER_AB = ["compute_pt_on", "raygen_pt_on", "ser_pt_on"]
 DENOISER_AB = ["denoiser_rr", "denoiser_nrd", "denoiser_nrd_relax"]
+RR_PRESET_AB = ["denoiser_rr", "denoiser_rr_preset_d", "denoiser_rr_preset_e", "denoiser_rr_preset_f"]
 
 
 def sha256(path: Path) -> str:
@@ -393,7 +403,7 @@ def main() -> int:
     parser.add_argument("--scratch", type=Path, required=True, help="working dir for launcher/log copies")
     parser.add_argument("--revision", default="cf3f5f97-abi2")
     parser.add_argument("--variants", nargs="*", default=BASELINE,
-                        help="variant labels, or 'baseline' / 'ser_ab' / 'all'")
+                        help="variant labels, or 'baseline' / 'ser_ab' / 'denoiser_ab' / 'rr_preset_ab' / 'all'")
     parser.add_argument("--timeout", type=float, default=480)
     parser.add_argument("--render-distance", type=int, default=16,
                         help="controlled render distance for a stable scene that fits the native budget (RD32 needs BLAS compaction)")
@@ -411,6 +421,8 @@ def main() -> int:
             labels += SER_AB
         elif name == "denoiser_ab":
             labels += DENOISER_AB
+        elif name == "rr_preset_ab":
+            labels += RR_PRESET_AB
         elif name == "all":
             labels += list(VARIANTS)
         elif name in VARIANTS:

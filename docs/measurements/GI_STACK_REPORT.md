@@ -54,7 +54,7 @@ exclusively-focused window (another session shares this GPU); it is **not** clai
 | 1 | SER steady-state A/B (quiet window) | **L4** | measured **2.14x slower gpu_rt**, keep OFF/opt-in; `ser_steady_ab/` | `8cb19831` |
 | 2 | OMM 2-state measured gate | L0/design | **deferred** — no measured terrain win; Remix disables OMM for terrain; doc 13 | — |
 | 3 | PTLAS GPU timestamps + gate | **L2** | TLAS-inclusive `world` span captured (`tlas_gpu_ms_upper_bound`) + blas regex fixed; isolated `tlas_ms` needs native split (owner-gated); partitioned deferred; doc 14 | `43eb618a` |
-| 4 | DLSS RR preset D/E/F additive | **L2** | additive ABI wired, `dlss_rr_preset` row, default-off; **preset A/B GPU-gated** | `1cb48e32` |
+| 4 | DLSS RR preset D/E/F additive | **L2** | additive ABI wired, `dlss_rr_preset` row, default-off; `RR_PRESET_AB` bench arms (default/D/E/F) wired; **A/B capture GPU-gated** | `1cb48e32` |
 | 5 | RR sharpness | disposition | **not wired** — NVIDIA RR API no-op (`vkb_dlss.h:240`); doc 15 | `e7fda225` |
 | 6 | NRD ReBLUR/ReLAX tuning | **L2** | both wired, ReLAX selectable + bench arm added; no speculative tuning; **A/B GPU-gated**; doc 16 | `1cc5729b` |
 | 7 | RC vs DDGI | disposition | RC retained; forbidden cache family out with reasons; doc 15 | `e7fda225` |
@@ -176,7 +176,9 @@ a bug, do not wire; **preset D/E/F** is now **wired additively** (item 4): `VkbD
 former `reserved[0]` @40 (sizeof 48 preserved), validated to 0/4/5/6, and sets the NGX
 `RayReconstruction.Hint.Render.Preset.<Mode>` param only when non-default; surfaced as `dlss_rr_preset` (ADVANCED,
 gated on DLSS RR). **Default = 0 leaves the NGX param untouched (exact prior behavior); no preset A/B captured yet,
-so it stays default-off until numbers.** The denoiser choice is already a setting (`path_denoiser`, ADVANCED).
+so it stays default-off until numbers.** The bench now has `RR_PRESET_AB` arms (`denoiser_rr` default +
+`denoiser_rr_preset_d/e/f` via `-Dvkrtx.rt.dlss_rr_preset`) so the same-session default-vs-D/E/F A/B is runnable in
+a quiet window (16 bench tests pass). The denoiser choice is already a setting (`path_denoiser`, ADVANCED).
 
 **NRD ReBLUR/ReLAX tuning disposition (item 6, `1cc5729b`, L2 + doc 16).** Both NRD variants are fully wired:
 `vkb_nrd.cpp:687-704` applies default `ReblurSettings`/`RelaxSettings` plus `configure_primary_lobe_signals` for

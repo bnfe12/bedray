@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bench_gi_stack import DENOISER_AB, VARIANTS, merge_index, parse_log
+from bench_gi_stack import DENOISER_AB, RR_PRESET_AB, VARIANTS, merge_index, parse_log
 
 
 class BenchLogParseTest(unittest.TestCase):
@@ -121,6 +121,38 @@ class BenchIndexMergeTest(unittest.TestCase):
         merged = merge_index([], [{"label": "x", "capture_status": "saved", "acceptance": {}}])
         self.assertEqual(1, merged["schema"])
         self.assertEqual(["x"], [r["label"] for r in merged["runs"]])
+
+
+class BenchRrPresetVariantTest(unittest.TestCase):
+    """The RR render-preset A/B keeps the identical PT-on RR stack and only changes the preset hint.
+
+    -Dvkrtx.rt.dlss_rr_preset pins the session (RtSettings.dlssRrPreset, accepts default|d|e|f). The
+    default arm is denoiser_rr (no override = Preset.DEFAULT, NGX param untouched); D/E/F are the A/B arms.
+    """
+
+    def test_preset_arms_present_and_in_the_ab(self):
+        for label in ("denoiser_rr_preset_d", "denoiser_rr_preset_e", "denoiser_rr_preset_f"):
+            self.assertIn(label, VARIANTS)
+        self.assertEqual(["denoiser_rr", "denoiser_rr_preset_d", "denoiser_rr_preset_e", "denoiser_rr_preset_f"],
+                         RR_PRESET_AB)
+
+    def test_each_preset_arm_differs_from_default_only_by_the_override(self):
+        base = VARIANTS["denoiser_rr"]
+        for label, value in (("denoiser_rr_preset_d", "d"), ("denoiser_rr_preset_e", "e"),
+                             ("denoiser_rr_preset_f", "f")):
+            arm = VARIANTS[label]
+            self.assertEqual(value, arm["vkrtx.rt.dlss_rr_preset"], label)
+            self.assertEqual(base, {k: v for k, v in arm.items() if k != "vkrtx.rt.dlss_rr_preset"}, label)
+
+    def test_all_preset_arms_share_the_pt_on_rr_stack(self):
+        for label in RR_PRESET_AB:
+            self.assertEqual("dlss_rr", VARIANTS[label]["vkrtx.rt.path_denoiser"], label)
+            self.assertEqual("true", VARIANTS[label]["vkrtx.rt.path_restir_pt"], label)
+            self.assertEqual("true", VARIANTS[label]["vkrtx.rt.path_restir_pt_spatial"], label)
+
+    def test_default_arm_has_no_preset_override(self):
+        self.assertNotIn("vkrtx.rt.dlss_rr_preset", VARIANTS["denoiser_rr"],
+                         "the default arm must leave the NGX param untouched (Preset.DEFAULT)")
 
 
 if __name__ == "__main__":
