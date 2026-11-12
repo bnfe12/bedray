@@ -4454,3 +4454,91 @@ the replacement and nothing was launched.
 L1/L2 only. The promoted DLSS resource ownership, dormant SR retirement and the
 rebuilt vendor bridges have not run on a GPU. L3-L5 and visual parity still
 require an owner run.
+
+## 2026-11-12 — Player-choice render batch (L0-L2; deploy collision; no live run)
+
+The tech-choice branch `bedray/tech-choice-20261112` (base `721d252`, the
+docs-only child of `73f450a`) adds four player-selectable render choices on
+top of the promoted main:
+
+- `6f90765` tone curve: Peak/ACES/PBR Neutral/GT/AgX (`RtSettings.Tonemapper`,
+  `tonemap_curve.slang`, spare path_display flag bits).
+- `e31f28c` expose hidden-but-wired sun arc tilt, baked light fill and path
+  accumulation in the menu.
+- `d259587` post-cinema vignette + film grain (`post_cinema.slang`, display
+  flag bits 8/9, LDR display only, never accumulation).
+- `5077154` carry tone curve + post-cinema looks through NRD/DLSS-RR compose
+  (NrdPackPush flags: tone enable/split/curve ordinal/vignette/grain, mask
+  0x7F; native `nrd_pack_pass.cpp` forwards `~0x7Fu`).
+- `7e0be60` firefly clamp slider (`path_firefly_clamp`, 8..256, default 64,
+  drives the tracer truncation and both display-mean clips; removes the
+  hardcoded MAX_RADIANCE) + Russian roulette toggle (`path_russian_roulette`,
+  default on, spare option bit 24 outside the ReSTIR PT mask, forwarded
+  verbatim by the native core).
+
+L1 (Java): `:common:test --rerun-tasks` 243 suites, 1,282 tests, zero
+failures/errors, 9 skipped. The six new #6 guards were mutation-proven
+(firefly tracer site + MAX_RADIANCE removal, both backend firefly sites,
+tracer RR gate, host option bit-24 term, menu mark, registration ceiling):
+each mutation failed exactly its intended test and was reverted byte-exact
+(`sha256sum -c` OK).
+
+L2 (native): CTest `bedray_path_trace_pass_test` and `bedray_nrd_pack_pass_test`
+2/2 passed. The AOT Slang is a Gradle resource root (`gradle/slang.gradle`),
+not embedded by the native CMake; the jar's `path_display.spv`, `path_trace.spv`
+and `nrd_compose.spv` are byte-identical to the freshly compiled
+`common/build/generated/slang` output.
+
+Artifacts built from this checkout (libs/ present, cmake 3.31.6 VS BuildTools,
+Vulkan-Headers, slangc 2026.20):
+`bedray_core.dll` 488,960 B SHA-256
+`cb5db2559f49b07734994957fd0c5ddfb7e2344b3d9da55e84daf4b284331b36`;
+Fabric jar 20,531,873 B SHA-256
+`a2364338a1e80365c7e426284d03b335f4684b3a8fb1dd5e571ffb3d7c2b259b`;
+NeoForge jar 20,539,108 B SHA-256
+`892f094776806038ce7193b8a5a4c9dd7dd4c5ffbb3361ac6b6f495105415b66`.
+
+Deploy collision — owner instances preserved. The two owner Fabric instances
+("Bedray Fabric 26.3", "26.3(1)") still carry the promoted `73f450a` core/scene
+DLLs (`299c11f5…` / `bc5069b9…`) but their jars were replaced on Nov 8/9 by
+another session's dirty worktree build (`Git-Commit: unknown`, ~20.8 MB). Those
+jars contain divergent classes absent from this base —
+`MixinFirstPersonHandsAndItemsRenderer`, `rt/hand/HandRtLight`,
+`EntitySubmitTransform`, `EmissiveTexelIndex`, `VulkanSodiumConfig$SelfShadow`,
+`WorldTargetManager$UpscalerMotionSource`, `LegacySceneLifetime$Owner` — and
+lack this batch's `RtSettings$Tonemapper` and `post_cinema.slang`. Overwriting
+them with this branch's jar would delete that unmerged work, and the dirty
+build cannot be reproduced from any commit, so no safe overwrite or exact
+integration was possible. The owner instances were left untouched.
+
+Safe deploy. The NeoForge batch was deployed to "Vulkan Testbed 26.3 Bedray",
+verified pristine base (`Git-Commit 73f450a`, `Git-Dirty false`, none of the
+divergent classes, base `RtEntityBlas$Pending` present), so this batch is a
+strict superset of its source. Replaced jar + core DLL (backups
+`.bak-20261112-195244`); scene DLL and vendor bridges untouched; deployed
+hashes match the built artifacts. No BedRay instance was running and nothing
+was launched.
+
+Parked backlog (honest ledger; gated, not implemented):
+- Radiance Cascades: `RtConfig.SLANG_RADIANCE_CASCADES` is the startup JVM
+  property `vkbridge.rt.radianceCascades` (default false), "experimental
+  finite-window RC diffuse continuation; requires both native owners";
+  `RtWorld` throws "radianceCascades requires the native scene". A player
+  toggle needs the startup gate lifted plus native scene ownership and the v2
+  field ABI (rcField/rcTails/rcHistory), not a settings row.
+- Frame generation X5/X6: `VulkanRtxConfig` marks DLSS/FSR frame generation
+  "STUB … not implemented. Always OFF/false" (NVIDIA Streamline, Phase 6) and
+  forces it off for the voxel diagnostic renderer (no depth/motion guides).
+  SDK/driver-gated.
+- Still gated on SDK/hardware/native ABI: ReSTIR PT native ring, NRD specular
+  guides, DLSS 4.5 Streamline, opacity micromaps (`vkbridge.rt.opacityMicromaps`
+  startup gate), Distant Horizons LOD, Bruneton atmosphere, RTXDI, SHaRC,
+  FSR4/XeSS3 cross-vendor. The `VulkanRtxConfig` DLSS/FSR stubs are intentional
+  Phase-6 placeholders, not dead code to delete.
+- #6 STBN (spatiotemporal blue noise) parked: needs a blue-noise texture,
+  descriptor and ABI slot. #7 chromatic aberration/LUT/motion blur/DoF deferred:
+  need converged cross-pixel samples.
+
+L0-L2 only. None of these choices has run on a GPU in this session. L3-L5,
+visual parity and the in-game menu require an owner run on the testbed instance
+(or an integration of this branch with the owner instances' newer jars).
