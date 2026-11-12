@@ -2,37 +2,43 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 
 /**
  * CPU mirror of {@code shaders/slang/tonemap_curve.slang} (unit-tested, keep the constants in sync): scene-linear HDR to
- * sRGB-encoded display through John Hable's filmic curve per channel, then the sRGB transfer function; every step has an
- * exact inverse so display-authored colours (the sky) map back to radiance.
+ * sRGB-encoded display through a peak-channel shoulder (hue and saturation kept, identity below the knee), a white
+ * bleach of peaks beyond the inverse's reach, then the sRGB transfer function.
  */
 public final class RtTonemap {
-    public static final float GAIN = 4.0f;
-    public static final float WHITE = 11.2f;
-    public static final float SAT = 1.20f;
+    public static final float GAIN = 1.30f;
+    public static final float KNEE = 0.60f;
+    public static final float SAT = 1.00f;
     public static final float INV_MAX = 0.985f;
+    public static final float WHITE_START = 11.0f;
+    public static final float WHITE_FULL = 60.0f;
+    public static final float WHITE_MAX = 0.65f;
     private static final float LR = 0.2126f;
     private static final float LG = 0.7152f;
     private static final float LB = 0.0722f;
-    private static final double A = 0.15, B = 0.50, C = 0.10, D = 0.20, E = 0.02, F = 0.30;
 
     private RtTonemap() {
     }
 
-    private static double hable(double x) {
-        return (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F;
-    }
-
-    /** Normalised filmic curve, one channel (scene value times GAIN in, display-linear out). */
-    public static float fit(float v) {
-        return (float) Math.max(hable(Math.max(v, 0f)) / hable(WHITE), 0.0);
+    /** Shoulder on the peak channel (scene value after the gain in, display-linear out). */
+    public static float fit(float m) {
+        if (Float.isNaN(m) || Float.isInfinite(m) || m > 65504f) return 1f;
+        if (m <= KNEE) return Math.max(m, 0f);
+        float d = 1f - KNEE;
+        return clamp01(1f - d * d / (m - KNEE + d));
     }
 
     public static float fitInverse(float y) {
-        double r = Math.max(0f, Math.min(y, INV_MAX)) * hable(WHITE) + E / F;
-        double qa = A * (1.0 - r);
-        double qb = B * (C - r);
-        double qc = D * (E - r * F);
-        return (float) Math.max((-qb + Math.sqrt(Math.max(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa), 0.0);
+        if (Float.isNaN(y) || Float.isInfinite(y)) return KNEE;
+        if (y <= KNEE) return Math.max(y, 0f);
+        float d = 1f - KNEE;
+        float yy = Math.max(0f, Math.min(y, INV_MAX));
+        return KNEE - d + d * d / Math.max(1f - yy, 1.0e-5f);
+    }
+
+    public static float whiteWeight(float m) {
+        float t = clamp01((m - WHITE_START) / (WHITE_FULL - WHITE_START));
+        return WHITE_MAX * t * t * (3f - 2f * t);
     }
 
     public static float linearToSrgb(float x) {
@@ -50,17 +56,25 @@ public final class RtTonemap {
         float[] c = {clean(r, 0f), clean(g, 0f), clean(b, 0f)};
         for (int i = 0; i < 3; i++) c[i] = Math.min(Math.max(c[i], 0f), 65504f);
         c = saturate(c, SAT);
+        for (int i = 0; i < 3; i++) c[i] = Math.max(c[i], 0f) * GAIN;
+        float m = Math.max(c[0], Math.max(c[1], c[2]));
+        if (!(m > 1.0e-6f)) return new float[] {0f, 0f, 0f};
+        float k = fit(m) / m;
+        float[] d = {c[0] * k, c[1] * k, c[2] * k};
+        float peak = Math.max(d[0], Math.max(d[1], d[2]));
+        float w = whiteWeight(m);
         float[] out = new float[3];
-        for (int i = 0; i < 3; i++) out[i] = linearToSrgb(clean(fit(Math.max(c[i], 0f) * GAIN), 1f));
+        for (int i = 0; i < 3; i++) out[i] = linearToSrgb(clean(d[i] + (peak - d[i]) * w, 1f));
         return out;
     }
 
     /** sRGB-encoded display colour 0..1 to scene-linear colour (before the exposure division). */
     public static float[] invert(float r, float g, float b) {
-        float[] c = new float[3];
-        float[] d = {r, g, b};
-        for (int i = 0; i < 3; i++) c[i] = fitInverse(srgbToLinear(clean(d[i], 0f))) / GAIN;
-        c = saturate(c, 1f / SAT);
+        float[] d = {srgbToLinear(clean(r, 0f)), srgbToLinear(clean(g, 0f)), srgbToLinear(clean(b, 0f))};
+        float m = Math.max(d[0], Math.max(d[1], d[2]));
+        if (!(m > 1.0e-6f)) return new float[] {0f, 0f, 0f};
+        float k = fitInverse(m) / m / GAIN;
+        float[] c = saturate(new float[] {d[0] * k, d[1] * k, d[2] * k}, 1f / SAT);
         for (int i = 0; i < 3; i++) c[i] = clean(Math.max(c[i], 0f), 0f);
         return c;
     }
