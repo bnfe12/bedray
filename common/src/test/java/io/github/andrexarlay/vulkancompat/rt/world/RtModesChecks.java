@@ -442,8 +442,6 @@ final class RtModesChecks {
         try {
             VulkanRtxConfig.applyKeyValue("rt_mode", "path");
             check(VulkanRtxConfig.rtMode == RtMode.PATH_TRACED && VulkanRtxConfig.enableHardwareRayTracing, "rt_mode=path");
-            VulkanRtxConfig.applyKeyValue("enable_hardware_ray_tracing", "false");
-            check(VulkanRtxConfig.rtMode == RtMode.PATH_TRACED, "legacy key ignored after rt_mode");
             VulkanRtxConfig.setRtMode(RtMode.OFF);
             VulkanRtxConfig.enableHardwareRayTracing = true;
             // A caller that only says "trace" (the legacy boolean, not a mode name) gets the renderer that exists; the

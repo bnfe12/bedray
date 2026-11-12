@@ -140,8 +140,7 @@ public final class FsrLibrary {
                 + "GPUOpen releases are accepted; -D" + ALLOW_UNKNOWN_PROPERTY + "=true for a newer official release)",
                 dll, sha, null, version);
         }
-        return new Library(true, (release != null ? "ok official: " + release : "ok UNKNOWN build accepted by -D" + ALLOW_UNKNOWN_PROPERTY)
-            + (r.legacy() ? " (legacy folder bedray/natives)" : ""), dll, sha, release, version);
+        return new Library(true, (release != null ? "ok official: " + release : "ok UNKNOWN build accepted by -D" + ALLOW_UNKNOWN_PROPERTY), dll, sha, release, version);
     }
 
     static String sha256(Path file) throws IOException {

@@ -96,7 +96,7 @@ public final class DlssAvailability {
         if (ngx == null || ngx.getParent() == null) {
             return Library.unusable(NGX_DLL + " not resolved");
         }
-        return new Library(true, "ok" + (r.legacy() ? " (legacy folder)" : ""), wrapper, ngx.getParent());
+        return new Library(true, "ok", wrapper, ngx.getParent());
     }
 
     public static synchronized void invalidate() {

@@ -489,8 +489,7 @@ public class ShimTestRunner {
                 + "dlss_frame_gen_multiplier = \"X2\"\n"
                 + "enable_dlss_frame_gen = true\n"
                 + "enable_dlss_ray_reconstruction = true\n"
-                + "[ray_tracing]\n"
-                + "enable_hardware_ray_tracing = false\n",
+                + "[ray_tracing]\n",
                 java.nio.charset.StandardCharsets.UTF_8);
             VulkanRtxConfig.load();
             assertEquals(UpscalerBackend.BILINEAR, VulkanRtxConfig.activeBackend, "FSR without a usable official library must load as BILINEAR");

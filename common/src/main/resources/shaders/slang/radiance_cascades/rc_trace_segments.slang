@@ -49,7 +49,6 @@
 public module rc_trace_segments;
 
 import "radiance_cascades.slang";
-import "radiance_cascades/radiance_cascades_store.slang";
 import "radiance_cascades/interval_transport.slang";
 import "radiance_cascades/segment_store.slang";
 import "contracts/hit.slang";

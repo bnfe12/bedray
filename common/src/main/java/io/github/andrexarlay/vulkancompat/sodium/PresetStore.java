@@ -27,8 +27,7 @@ import java.util.stream.Stream;
 public final class PresetStore {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/Presets");
     /** UI state and developer switches are not part of a look. */
-    private static final Set<String> SKIPPED = Set.of("ui_expert", "experimental_rays", "rt_show_advanced", "rt_show_expert",
-        "enable_hardware_ray_tracing");
+    private static final Set<String> SKIPPED = Set.of("ui_expert", "experimental_rays", "rt_show_advanced", "rt_show_expert");
 
     private PresetStore() {
     }

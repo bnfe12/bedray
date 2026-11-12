@@ -27,7 +27,6 @@ class RtSlangHistoryAnchorTest {
 
     private static final Path SHADERS = Path.of("src/main/resources/shaders/slang");
     private static final Path ROOT = SHADERS.resolve("bedray.slang");
-    private static final Path LEGACY_ROOT = SHADERS.resolve("bedray_legacy.slang");
     private static final Path HIT = SHADERS.resolve("contracts/hit.slang");
 
     /** Backends that fill the field in, plus the contract's own empty hit; the modulo is the point of the item. */
