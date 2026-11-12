@@ -847,9 +847,12 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             continue;
         }
 
-        // Only accepted, decoded surfaces end the primary continuation's guide edge.
-        // Measuring endpoints includes cutout/pane advances without adding camera depth or later bounces.
-        if (wantDenoiserGeometry) pathDenoiserHit(denoiserContinuation, hit.position);
+        bool paneSurface = surface.material.alphaMode == AlphaMode.Translucent
+            && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u;
+        // A straight transmitted pane does not end a reflected/diffuse guide edge. Its BSDF choice below decides
+        // whether this is a real reflected endpoint; an opaque AO stop always ends the edge here.
+        if (wantDenoiserGeometry && (!paneSurface || ambientOnlyPending))
+            pathDenoiserHit(denoiserContinuation, hit.position);
         if (ambientOnlyPending) {
             // An ambient-only bounce that found geometry collects nothing: the sky it would have seen is occluded.
             break;
@@ -1038,6 +1041,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // from the normal and mirrors at grazing angles.
         BSDFSample bsdf = bsdfSample(surface.material, view, normal,
             medium.inside ? WATER_IOR : 1.0, seed);
+        if (wantDenoiserGeometry && paneSurface && bsdf.lobe != BSDF_LOBE_TRANSMISSION)
+            pathDenoiserHit(denoiserContinuation, hit.position);
         if (!bsdf.valid || bsdf.pdf <= 0.0) {
             // No lobe left to sample (an albedo that reflects nothing, or a
             // VNDF reflection below the shading horizon with zero BRDF).  A
@@ -1133,9 +1138,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // the colour absorption, not the existence of the dielectric interface. Only the selected straight-through
         // lobe is a free continuation. Counting that lobe as a scattering event exhausted the bounce budget inside
         // layered windows; skipping the whole pane instead removed all of its reflections and lost that energy.
-        bool paneTransmission = surface.material.alphaMode == AlphaMode.Translucent
-            && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u
-            && bsdf.lobe == BSDF_LOBE_TRANSMISSION;
+        bool paneTransmission = paneSurface && bsdf.lobe == BSDF_LOBE_TRANSMISSION;
         if (paneTransmission) {
             if (!isFinite(throughput)) {
                 result.flags |= PATH_TRACE_FLAG_INVALID_SAMPLE;
