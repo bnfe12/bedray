@@ -34,7 +34,7 @@ class RtSlangSkyLightTest {
         RtSky.SkyLight light = new RtSky.SkyLight();
         RtSky.skyLight(NOON_SKY, 1f, 0.63f, -0.63f, 1f, 1f, NOON_KEY, true, light);
         assertTrue(luminance(light.zenith) < 0.35f * luminance(NOON_KEY), "the sky light is a fraction of the sun");
-        assertTrue(light.zenith[2] / light.zenith[0] < 1.3f, "and close to neutral");
+        assertTrue(light.zenith[2] / light.zenith[0] < 1.5f, "and only mildly blue (a shadow under a clear sky)");
     }
 
     @Test

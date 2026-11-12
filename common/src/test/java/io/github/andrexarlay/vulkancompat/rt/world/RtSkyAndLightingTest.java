@@ -36,7 +36,7 @@ public class RtSkyAndLightingTest {
         float[] noon = new float[3];
         RtSky.ambient(skyColor, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, new float[] {1f, 0.97f, 0.92f}, 1.0f, noon);
         assertTrue(noon[0] > night[0] * 8f, "day ambient is far brighter than night");
-        assertTrue(noon[2] < noon[0] * 1.25f, "noon sky light is not a blue wash: " + noon[2] / noon[0]);
+        assertTrue(noon[2] < noon[0] * 1.45f, "noon sky light is mildly blue, not a blue wash: " + noon[2] / noon[0]);
     }
 
     @Test

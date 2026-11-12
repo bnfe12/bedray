@@ -184,7 +184,10 @@ public final class RtSky {
     /** Ground bounce albedo of the hemisphere ambient: neutral warm earth tone. */
     public static final float[] GROUND_COLOR = {0.45f, 0.43f, 0.40f};
     /** Sky irradiance scale at full daylight (pow(day, 1.5) is applied); the sun carries more of the picture now. */
-    public static final float AMBIENT_SCALE = 0.30f;
+    // 0.30 left every face the sun did not reach a flat dark grey under a bright blue sky (owner: "the shadows are
+    // terrible", autotest rt_modes E day, 2026-11-12); +0.5 EV of sky fill brings the lit:shadow ratio towards the
+    // 4:1 .. 6:1 of a clear day.
+    public static final float AMBIENT_SCALE = 0.42f;
     /** Night sky light: stars and a moonless sky (never black) plus the moon phase / elevation part. */
     public static final float NIGHT_BASE = 0.022f;
     public static final float NIGHT_MOON = 0.040f;
@@ -235,7 +238,9 @@ public final class RtSky {
         float se = Math.max(-1f, Math.min(1f, sunY));
         rain = Math.max(0f, Math.min(1f, rain));
         float golden = 1f - smoothstep(0.05f, 0.50f, se);
-        float[] zenithDay = {0.90f, 0.94f, 1.00f};
+        // A clear sky lights a shadow blue-ish (b/r ~1.3 after the mix with the visible sky below), the warm sun the rest:
+        // the near-neutral 0.90/0.94/1.00 painted shadows the same grey as the lit faces, only darker.
+        float[] zenithDay = {0.74f, 0.86f, 1.00f};
         float[] horizonDay = {1.00f, 0.97f, 0.92f};
         float[] zenithGold = {0.70f, 0.66f, 0.90f};
         float[] horizonGold = {1.00f, 0.58f, 0.32f};
