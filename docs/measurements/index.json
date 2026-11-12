@@ -49,6 +49,20 @@
       "target_met_in_capture": null,
       "frames": 1064,
       "file": "denoiser_ab_rd16/denoiser_nrd.json"
+    },
+    {
+      "label": "ser_steady_raygen_pt_on",
+      "capture_status": "saved",
+      "target_met_in_capture": false,
+      "frames": 891,
+      "file": "ser_steady_ab/raygen_pt_on.json"
+    },
+    {
+      "label": "ser_steady_ser_pt_on",
+      "capture_status": "saved",
+      "target_met_in_capture": false,
+      "frames": 515,
+      "file": "ser_steady_ab/ser_pt_on.json"
     }
   ]
 }
