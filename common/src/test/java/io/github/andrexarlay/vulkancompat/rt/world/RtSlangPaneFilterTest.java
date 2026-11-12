@@ -21,14 +21,15 @@ class RtSlangPaneFilterTest {
     @Test
     void aPaneSamplesItsFresnelBeforeOnlyTransmissionContinuesForFree() throws IOException {
         String tracer = Files.readString(TRACER).replace("\r\n", "\n");
-        int pane = tracer.indexOf("        bool paneTransmission = surface.material.alphaMode == AlphaMode.Translucent");
+        int pane = tracer.indexOf("        bool paneTransmission = paneSurface && bsdf.lobe == BSDF_LOBE_TRANSMISSION;");
         assertTrue(pane > 0, "the tracer recognises a thin pane");
         int sampling = tracer.indexOf("BSDFSample bsdf = bsdfSample(surface.material, view, normal,");
         assertTrue(sampling > 0 && sampling < pane, "the Fresnel split must be sampled before any pane is skipped");
         int weight = tracer.indexOf("throughput *= bsdf.weight;", sampling);
         assertTrue(weight > sampling && weight < pane, "the BSDF weight already compensates the selected lobe probability");
         String branch = tracer.substring(pane, tracer.indexOf("continue;", pane) + "continue;".length());
-        assertTrue(branch.contains("(surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u"),
+        assertTrue(tracer.contains("bool paneSurface = surface.material.alphaMode == AlphaMode.Translucent\n"
+            + "            && (surface.material.sourceFlags & MATERIAL_SOURCE_FLUID) == 0u;"),
             "water keeps its refracting interface");
         assertTrue(branch.contains("bsdf.lobe == BSDF_LOBE_TRANSMISSION"), "a reflection must not take the free straight path");
         assertTrue(branch.contains("ray.tMin = hit.t + pathTraceHoleStep(hit.t);"), "advance beyond this face");
@@ -38,6 +39,22 @@ class RtSlangPaneFilterTest {
         assertFalse(branch.contains("russian"), "transmitted faces must not repeatedly gamble at the same scattering depth");
         assertFalse(tracer.substring(sampling).contains("throughput *= surfaceTransmittance(surface, ray.direction);"),
             "the BSDF already owns Fresnel and tint; an extra shadow filter loses that energy twice");
+    }
+
+    @Test
+    void aSecondaryTransmittedPaneDoesNotEndTheReflectionGuideAtTheWindow() throws IOException {
+        String tracer = Files.readString(TRACER).replace("\r\n", "\n");
+        int sampling = tracer.indexOf("BSDFSample bsdf = bsdfSample(surface.material, view, normal,");
+        String before = tracer.substring(0, sampling);
+        assertTrue(before.contains("if (wantDenoiserGeometry && (!paneSurface || ambientOnlyPending))\n"
+            + "            pathDenoiserHit(denoiserContinuation, hit.position);"),
+            "pending reflection geometry must not stop before a pane chooses whether it transmits");
+        String after = tracer.substring(sampling, tracer.indexOf("if (!bsdf.valid", sampling));
+        assertTrue(after.contains("if (wantDenoiserGeometry && paneSurface && bsdf.lobe != BSDF_LOBE_TRANSMISSION)\n"
+            + "            pathDenoiserHit(denoiserContinuation, hit.position);"),
+            "a reflection ends at the pane; straight transmission leaves the guide pending for the surface beyond it");
+        int free = tracer.indexOf("if (paneTransmission) {");
+        assertFalse(tracer.substring(free, tracer.indexOf("continue;", free)).contains("pathDenoiserHit"));
     }
 
     @Test
