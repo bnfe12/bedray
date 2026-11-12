@@ -143,6 +143,32 @@ a bug, do not wire; **preset D/E/F** (`DlssRrParams.java:47-62`) is defined but 
   explicit measurement gates, not silently skipped.
 - **L5 (owner confirmation) is pending** for every stage; this report establishes L4, not owner sign-off.
 
+## Dispositions and research (items 5 / 7 / 8 / 9)
+
+Full evidence and reasoning: `docs/ai-agent-addenda/15-gi-stack-dispositions.md`. Summary:
+
+- **RR sharpness (item 5) — not wired, by design.** `vkb_dlss.h:240` marks the RR eval `sharpness`
+  field `reserved for API consistency (0.0)`; NVIDIA RR has no sharpness input, so a slider would be a
+  no-op control (forbidden by the settings honesty rule). If sharpening after RR is ever wanted, the
+  only legitimate route is a separate CAS/RCAS post-pass (the kernel already used for `fsr_sharpness`),
+  gated behind its own A/B — not folded into the RR API. No measured need exists; nothing implemented.
+- **RC vs DDGI (item 7) — RC retained; forbidden family out.** RC is the working finite camera-centred
+  irradiance/π field (`IPathDiffuseField`). DDGI/NRC/SHaRC/CLAS/Mega Geometry/Brixelizer GI/surfel GI are
+  owner-forbidden and not implemented; the addendum records the engineering reason for each (vendor
+  lock-in, irradiance-vs-radiance contract mismatch, greenfield memory/lifetime surface). RC stays the
+  default indirect estimator; ReSTIR DI/PT is the sampling layer on top.
+- **Path guiding (item 8) — research only, default off.** Feasible Vulkan-only (Slang compute vMF/tree
+  guide + learning pass + MIS), but the current RC has no directional proposal PDF, so it is greenfield;
+  benefit unproven on mostly-diffuse voxel lighting. Implement only on a measured net win at equal
+  converged-reference error. Not implemented.
+- **Remaining-tech survey (item 9) — recommendations, no code.** Next perf effort should go to
+  scheduling/memory (async-compute overlap, FP16/packed reservoirs, descriptor indexing) and
+  equal-cost sampling quality (blue noise, NRD tuning), each behind a same-session A/B — not a new GI
+  cache. Forbidden family excluded; work graphs / mesh shaders / Split RC explicitly not prioritized.
+
+These four items are **closed as dispositions/research** (L0/design + literature), not as measured
+features. No FPS or perf claim is made for any of them.
+
 ## Measurements index and commit map
 
 Machine-readable index: `docs/measurements/index.json`. Per-run records and findings:
