@@ -122,9 +122,18 @@ per-tech toggles + honest supported/enabled/implemented). Findings:
   "supported, not implemented" / "not implemented" (regional in-place TLAS update is the active path), and
   raygen/SER as startup device features. Catalog row + en/ru lang + `GiExecutionStatusTest` (9 cases) +
   the id locked in `VulkanSodiumConfigIdsTest`. L2 verified; L4 live read-back pending a quiet GPU window.
-* **Still deferred (measurement-gated, not settings gaps):** `dlss_rr_preset` D/E/F (item 4, additive ABI +
-  GPU A/B), NRD ReBLUR/ReLAX tuning rows (item 6, A/B only). RR sharpness is intentionally not a row
-  (NVIDIA RR API no-op, `15-gi-stack-dispositions.md`).
+* **Now wired (item 4, additive ABI, L2):** `dlss_rr_preset` D/E/F is a real ADVANCED row
+  (`VulkanSodiumConfig`, shown only while Ray Reconstruction is the denoiser) backed by
+  `RtSettings.dlssRrPreset()` → `DlssRrParams.Preset` → the additive `VkbDlssRrCreateInfo.preset`
+  (offset 40, sizeof unchanged at 48). Default preserves prior behavior; the D/E/F GPU A/B is still
+  pending a quiet window, so no preset is recommended without numbers.
+* **SER note now carries the measured negative.** `GiExecutionStatus` reports SER as "Measured 2.14x
+  slower gpu_rt (quiet steady-state A/B); off by default" (`ser_steady_ab/FINDINGS.md`), not "unmeasured".
+  The row reads the live enabled-feature mask, so 0x677 (compute path, raygen/SER not requested) correctly
+  shows them unsupported on that path; requesting them enables bits 11/12 (0xe77/0x1e77), proven L4 in the
+  same A/B. `GiExecutionStatusTest` (9 cases) locks this honesty contract.
+* **Still deferred (measurement-gated, not settings gaps):** NRD ReBLUR/ReLAX tuning rows (item 6, A/B
+  only). RR sharpness is intentionally not a row (NVIDIA RR API no-op, `15-gi-stack-dispositions.md`).
 
 ## Not solved (needs other work)
 

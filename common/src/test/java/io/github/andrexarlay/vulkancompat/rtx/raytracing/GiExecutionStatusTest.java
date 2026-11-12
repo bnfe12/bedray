@@ -12,7 +12,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Pure supported/enabled/implemented logic for the GI execution status row. No GPU: the mask and the startup requests are
  * the only inputs, so the honesty contract (a supported-but-unimplemented feature is never reported as a working toggle)
- * is checked without a game. The real RTX 5060 Ti mask 0x677 lacks bits 11/12, so SER must read unsupported there.
+ * is checked without a game. The mask is the live enabled-feature mask, not physical support: 0x677 is the compute path
+ * (raygen/SER not requested, bits 11/12 absent); requesting them enables the bits (0xe77/0x1e77), proven in ser_steady_ab.
  */
 class GiExecutionStatusTest {
 
@@ -20,7 +21,7 @@ class GiExecutionStatusTest {
     private static final int REORDER = BedrayCoreLayouts.CAP_INVOCATION_REORDER_NV;
     private static final int MICROMAP = BedrayCoreLayouts.CAP_OPACITY_MICROMAP;
     private static final int FULL = PIPELINE | REORDER | MICROMAP;
-    private static final int DEVICE_5060TI = 0x677;
+    private static final int COMPUTE_PATH_MASK = 0x677; // live enabled mask with raygen/SER not requested (bits 11/12 absent)
 
     private static GiExecutionStatus.Tech tech(List<GiExecutionStatus.Tech> list, String key) {
         return list.stream().filter(t -> t.key().equals(key)).findFirst().orElseThrow();
@@ -59,13 +60,13 @@ class GiExecutionStatusTest {
     }
 
     @Test
-    void realDeviceMaskReportsSerUnsupported() {
-        var ser = tech(GiExecutionStatus.technologies(DEVICE_5060TI, true, true), "ser");
-        assertFalse(ser.supported(), "0x677 lacks the NV invocation-reorder bit");
-        assertFalse(ser.enabled(), "a requested SER on an unsupported device is not enabled");
-        assertTrue(ser.implemented(), "the code exists; only the device feature is absent");
-        var raygen = tech(GiExecutionStatus.technologies(DEVICE_5060TI, true, true), "raygen");
-        assertFalse(raygen.supported(), "0x677 lacks the ray tracing pipeline bit");
+    void computePathMaskReportsSerUnsupported() {
+        var ser = tech(GiExecutionStatus.technologies(COMPUTE_PATH_MASK, true, true), "ser");
+        assertFalse(ser.supported(), "compute-path mask 0x677 lacks the NV invocation-reorder bit (SER not requested)");
+        assertFalse(ser.enabled(), "a requested SER on a mask without the reorder bit is not enabled");
+        assertTrue(ser.implemented(), "the code exists; only the enabled feature bit is absent on this path");
+        var raygen = tech(GiExecutionStatus.technologies(COMPUTE_PATH_MASK, true, true), "raygen");
+        assertFalse(raygen.supported(), "compute-path mask 0x677 lacks the ray tracing pipeline bit (raygen not requested)");
         assertFalse(raygen.enabled());
     }
 

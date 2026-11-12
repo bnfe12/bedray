@@ -37,7 +37,7 @@ public final class GiExecutionStatus {
                 pipeline ? "Measured -7.8% gpu_rt vs compute RayQuery (RD16, PT on)."
                          : "Needs the ray tracing pipeline feature; compute RayQuery is the fallback."),
             new Tech("ser", "NV Shader Execution Reordering", serSupported, serRequested && serSupported, true,
-                serSupported ? "Wired and executing; steady-state perf unmeasured. Opt-in: -Dbedray.rt.ser=true."
+                serSupported ? "Measured 2.14x slower gpu_rt (quiet steady-state A/B); off by default. Opt-in: -Dbedray.rt.ser=true."
                              : "Needs the NV ray tracing invocation reorder feature (and the raygen pipeline)."),
             new Tech("omm", "Opacity micromap (2-state)", micromap, false, false,
                 "Deferred: no measured terrain win; software candidate-alpha handles cutout. Not implemented."),
