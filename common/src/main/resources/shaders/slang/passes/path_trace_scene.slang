@@ -30,9 +30,9 @@
 //   27 outNormalRough   RGBA16F guide (normal + roughness)
 //   28 outSpecular      RGBA16F guide (zero: the path tracer sums its lobes)
 //   29 outDiffuse       RGBA16F guide (residual radiance + first hit distance)
-//   30 outAlbedo        RGBA8 guide
+//   30 outAlbedo        RGBA16F guide (linear albedo: 8 bits lost the dark channels)
 //   31 outDirect        RGBA16F guide (the primary vertex's own NEE)
-//   32 outSpecAlbedo    RGBA8 guide (metal albedo or dielectric F0)
+//   32 outSpecAlbedo    RGBA16F guide (metal albedo or dielectric F0)
 //   33 outMotionBuffer  RWStructuredBuffer<float4> NRD IN_MV (one vec4 per pixel)
 //   36 ptReservoirs     RWStructuredBuffer<RestirPtReservoir> (ReSTIR PT: two parity halves, 144 B per pixel)
 //   37 outPathStats     RWStructuredBuffer<uint> (the frame's stats slot; words 140..143 = the F3 reject split)
@@ -79,9 +79,9 @@ static const uint PATH_TRACE_INSTANCE_MASK_SCENE = 0x03u;
 [[vk::image_format("rgba16f")]] [[vk::binding(27, 0)]] RWTexture2D<float4> outNormalRough;
 [[vk::image_format("rgba16f")]] [[vk::binding(28, 0)]] RWTexture2D<float4> outSpecular;
 [[vk::image_format("rgba16f")]] [[vk::binding(29, 0)]] RWTexture2D<float4> outDiffuse;
-[[vk::image_format("rgba8")]]   [[vk::binding(30, 0)]] RWTexture2D<float4> outAlbedo;
+[[vk::image_format("rgba16f")]]   [[vk::binding(30, 0)]] RWTexture2D<float4> outAlbedo;
 [[vk::image_format("rgba16f")]] [[vk::binding(31, 0)]] RWTexture2D<float4> outDirect;
-[[vk::image_format("rgba8")]]   [[vk::binding(32, 0)]] RWTexture2D<float4> outSpecAlbedo;
+[[vk::image_format("rgba16f")]]   [[vk::binding(32, 0)]] RWTexture2D<float4> outSpecAlbedo;
 // NRD's IN_MV channel: the same per-pixel Vec4 rt_path.comp writes into StatsBuf.motionAddr.  The host binds a
 // one-element stand-in and leaves PATH_TRACE_OPTION_NRD_MOTION clear unless the NRD layout is selected.
 [[vk::binding(33, 0)]] RWStructuredBuffer<float4> outMotionBuffer;

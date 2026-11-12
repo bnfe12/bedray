@@ -11,7 +11,9 @@ public final class RtExposure {
     // 0.22 * 2^-0.75: the artist bias of RTX Remix Minecraft (packaging/rtx.conf, "the artist's -0.75 EV bias" in
     // rtx.localtonemap.exposure). At 0.22 a room lit only by lamps was metered up to daylight brightness and every source
     // read as too bright (owner, autotest scenes J and N, 2026-11-12).
-    public static final float KEY = 0.131f;
+    // 0.20 since linear light (2026-11-12): the filmic curve sits lower in the mid tones than the former knee, and at
+    // 0.131 a noon floor read 113 of 255 where the gamma-space look gave 170, a lamp-lit room about half as bright.
+    public static final float KEY = 0.20f;
     public static final float FIXED = 1.1f;
     public static final float MIN = 1.0f / 64.0f;
     /**

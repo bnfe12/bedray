@@ -67,7 +67,7 @@ void chain_and_validation() {
     CHECK(fake::images.empty()); CHECK(!pass.has_recordings());
     input.width = 19;
     CHECK(pass.render(input, &error) == BEDRAY_OK);
-    CHECK(fake::images.size() == 6); CHECK(fake::render_calls.size() == 12); CHECK(fake::barriers == 19);
+    CHECK(fake::images.size() == 8); CHECK(fake::render_calls.size() == 16); CHECK(fake::barriers == 25);
     CHECK(fake::render_calls.front().program == 1); CHECK(fake::render_calls.back().program == 4);
     const std::uint32_t widths[] = {10,5,3,2,1,1,1,2,3,5,10,19};
     const std::uint32_t heights[] = {6,3,2,1,1,1,1,1,2,3,6,11};
@@ -114,7 +114,7 @@ void resize_discard_and_partial_failure() {
     auto resized = frame(2, push.data()); resized.width = 40;
     fake::fail_allocate_after = 2;
     CHECK(pass.render(resized, &error) == BEDRAY_ERROR_OUT_OF_MEMORY);
-    CHECK(fake::images.size() == 6);
+    CHECK(fake::images.size() == 8);
     CHECK(pass.render(resized, &error) == BEDRAY_OK);
     CHECK(fake::images.size() == 12);
     pass.discard_recording(1); // An old generation must not invalidate the current images.
@@ -125,7 +125,7 @@ void resize_discard_and_partial_failure() {
     resized.command_buffer = 4;
     CHECK(pass.render(resized, &error) == BEDRAY_OK); CHECK(fake::images.size() == 18);
     CHECK(pass.release_recording(1) == BEDRAY_OK); CHECK(fake::images.size() == 12);
-    CHECK(pass.release_recording(3) == BEDRAY_OK); CHECK(fake::images.size() == 6);
+    CHECK(pass.release_recording(3) == BEDRAY_OK); CHECK(fake::images.size() == 8);
     CHECK(pass.release_recording(4) == BEDRAY_OK);
     fake::fail_render_at(3, BEDRAY_ERROR_VULKAN);
     resized.command_buffer = 5;
@@ -135,7 +135,7 @@ void resize_discard_and_partial_failure() {
     fake::fail_render_at(-1, BEDRAY_OK);
     resized.command_buffer = 6;
     CHECK(pass.render(resized, &error) == BEDRAY_OK);
-    CHECK(fake::images.size() == 6);
+    CHECK(fake::images.size() == 8);
     CHECK(pass.release_recording(6) == BEDRAY_OK); CHECK(pass.destroy() == BEDRAY_OK); clean();
 }
 void device_loss_keeps_other_recordings_until_proof() {
@@ -150,11 +150,11 @@ void device_loss_keeps_other_recordings_until_proof() {
     auto resized = frame(2, push.data()); resized.width = 40;
     fake::fail_allocate_after = 0; fake::fail_result = VK_ERROR_DEVICE_LOST;
     CHECK(pass.render(resized, &error) == BEDRAY_ERROR_DEVICE_LOST);
-    CHECK(fake::images.size() == 6); CHECK(pass.has_recordings());
+    CHECK(fake::images.size() == 8); CHECK(pass.has_recordings());
     CHECK(pass.render(frame(3, push.data()), &error) == BEDRAY_ERROR_UNSUPPORTED);
     CHECK(pass.destroy() == BEDRAY_ERROR_IN_USE);
     CHECK(pass.release_recording(1) == BEDRAY_OK);
-    CHECK(fake::images.size() == 6); CHECK(pass.has_recordings());
+    CHECK(fake::images.size() == 8); CHECK(pass.has_recordings());
     CHECK(pass.release_recording(4) == BEDRAY_OK);
     CHECK(pass.destroy() == BEDRAY_OK); clean();
 }

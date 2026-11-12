@@ -86,7 +86,12 @@ final class RtSlangVolumetricPass implements AutoCloseable {
         march.putFloat(60, (float) p.cameraY).putFloat(64, 0.01f).putInt(68, steps);
         march.putInt(72, p.frame).putInt(76, 0).putInt(80, p.flipY ? 1 : 0).putInt(84, 1);
         march.putInt(88, 0).putInt(92, 0);
-        apply.putFloat(0, exposure).putFloat(4, range).putInt(8, 1).putInt(12, p.frame).putInt(16, 0).putInt(20, 0);
+        // Aerial perspective: the eye's world height and the "Distance haze" strength (0 with volumetric fog off). Rain
+        // thickens the air the way the vanilla fog of the weather does.
+        float aerial = p.volumetricFogEnabled ? RtAtmosphereSettings.fogAerial() * Math.max(p.fogDensity, 0f) : 0f;
+        aerial *= 1f + 1.5f * Math.max(0f, Math.min(1f, 1f - p.key.bodyAlpha));   // the rain level the shaft march reads
+        apply.putFloat(0, exposure).putFloat(4, range).putInt(8, 1).putInt(12, p.frame)
+            .putFloat(16, (float) p.cameraY).putFloat(20, aerial);
     }
 
     void resetHistory() { reset = true; }

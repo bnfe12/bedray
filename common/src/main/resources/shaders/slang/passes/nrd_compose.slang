@@ -1,12 +1,12 @@
 public module nrd_compose_pass;
 import "denoise/nrd_pack.slang";
 [[vk::image_format("r32f")]] [[vk::binding(0, 0)]] RWTexture2D<float> gbViewZ;
-[[vk::image_format("rgba8")]] [[vk::binding(3, 0)]] RWTexture2D<float4> gbAlbedo;
+[[vk::image_format("rgba16f")]] [[vk::binding(3, 0)]] RWTexture2D<float4> gbAlbedo;
 [[vk::image_format("rgba16f")]] [[vk::binding(4, 0)]] RWTexture2D<float4> gbDirect;
 [[vk::image_format("rgba16f")]] [[vk::binding(7, 0)]] RWTexture2D<float4> nrdOutDiffuse;
 [[vk::image_format("rgba8")]] [[vk::binding(8, 0)]] RWTexture2D<float4> rtOutput;
 [[vk::image_format("rgba16f")]] [[vk::binding(11, 0)]] RWTexture2D<float4> nrdOutSpecular;
-[[vk::image_format("rgba8")]] [[vk::binding(13, 0)]] RWTexture2D<float4> gbSpecAlbedo;
+[[vk::image_format("rgba16f")]] [[vk::binding(13, 0)]] RWTexture2D<float4> gbSpecAlbedo;
 [[vk::push_constant]] NrdPackPush pc;
 [shader("compute")]
 [numthreads(8, 8, 1)]

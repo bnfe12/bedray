@@ -390,8 +390,12 @@ public final class RtSlangPathPass implements RtPass {
             || !accumulateRequested() || rrMoving) {
             accumFrames = 0;
             historyWritten = false;
-        } else if (accumFrames < RtFrameParams.MAX_ACCUM) {
+        } else if (accumFrames < (sunDrifting(params.key.dir) ? DRIFTING_LIGHT_MAX_ACCUM : RtFrameParams.MAX_ACCUM)) {
             accumFrames++;
+        } else if (sunDrifting(params.key.dir)) {
+            // While the sun moves the mean is a moving window, so shadows follow it instead of keeping where it was
+            // when the player stopped.
+            accumFrames = DRIFTING_LIGHT_MAX_ACCUM;
         }
         // The reservoir ring has its own, much narrower invalidation rule: only a real reset (start, resize, a change of
         // what is being traced) or a different light list makes a stored sample wrong. A removed torch would otherwise
@@ -415,6 +419,14 @@ public final class RtSlangPathPass implements RtPass {
         System.arraycopy(params.skyColor, 0, lastSkyColor, 0, 3);
         hasLighting = true;
         params.accumCount = accumFrames;
+    }
+
+    /** History length of the running mean while the key light moves (~2 s at 60 fps). */
+    static final int DRIFTING_LIGHT_MAX_ACCUM = 120;
+
+    private boolean sunDrifting(float[] dir) {
+        return hasLighting && (Math.abs(dir[0] - lastSunDirection[0]) > 1.0e-7f || Math.abs(dir[1] - lastSunDirection[1]) > 1.0e-7f
+            || Math.abs(dir[2] - lastSunDirection[2]) > 1.0e-7f);
     }
 
     private static boolean differs(float[] a, float[] b) {

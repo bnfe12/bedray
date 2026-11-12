@@ -52,10 +52,7 @@ final class RtSlangFrameData {
         // a radiance over its solid angle. Written as 1, a 0.27-degree sun lit a floor about a thousandth as strongly as
         // the sky did: no sunlight, no shadows (autotest rt_look 2026-11-01 03:19). pi / omega makes a diffuse floor
         // receive exactly albedo * key * cos again.
-        // The key and sky-light colours were tuned while the tracer shaded in display gamma: their hue is decoded to linear
-        // light, their peak keeps the tuned intensity (RtTonemap.linearHue).
-        float[] key = RtTonemap.linearHue(color[0], color[1], color[2]);
-        frame.sunColor.set(key[0], key[1], key[2], discRadianceScale(sunRadius));
+        frame.sunColor.set(color[0], color[1], color[2], discRadianceScale(sunRadius));
         frame.moonDirection.set(-dir[0], -dir[1], -dir[2], sunRadius);
         frame.moonColor.set(0f, 0f, 0f, 0f);
 
@@ -67,10 +64,8 @@ final class RtSlangFrameData {
         float[] horizon = RtTonemap.invert(sky[0] * 0.7f + 0.3f, sky[1] * 0.7f + 0.3f, sky[2] * 0.7f + 0.3f);
         frame.zenithColor.set(zenith[0], zenith[1], zenith[2], 1f);
         frame.horizonColor.set(horizon[0], horizon[1], horizon[2], 1f);
-        float[] skyZenith = RtTonemap.linearHue(p.skyLightZenith[0], p.skyLightZenith[1], p.skyLightZenith[2]);
-        float[] skyHorizon = RtTonemap.linearHue(p.skyLightHorizon[0], p.skyLightHorizon[1], p.skyLightHorizon[2]);
-        frame.skyLightZenith.set(skyZenith[0], skyZenith[1], skyZenith[2], 1f);
-        frame.skyLightHorizon.set(skyHorizon[0], skyHorizon[1], skyHorizon[2], 1f);
+        frame.skyLightZenith.set(p.skyLightZenith[0], p.skyLightZenith[1], p.skyLightZenith[2], 1f);
+        frame.skyLightHorizon.set(p.skyLightHorizon[0], p.skyLightHorizon[1], p.skyLightHorizon[2], 1f);
         frame.cloud.set(0f, 0f, 0f, 0f);
 
         // The frame's exposure, in the one lane both backends read: the Java display push takes it from here, and

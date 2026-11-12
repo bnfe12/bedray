@@ -73,6 +73,38 @@ public final class RtSkyState {
     public long clockTime;
     private long lastLogNs;
 
+    /**
+     * The client's day clock is corrected by the server's time packet once a second, so vanilla's sunAngle moves in a
+     * step per second (a fraction of a degree): the sun light and every shadow jumped once a second while the player
+     * stood still, and each jump restarted the path tracer's accumulation (autotest E with the day cycle running,
+     * 2026-11-12: a frame-difference spike every 30 frames at 30 fps). The renderer follows the vanilla angle through a
+     * first-order filter instead; a jump larger than SUN_SNAP_RAD (/time set, sleeping) is taken at once.
+     */
+    static final double SUN_FOLLOW_TAU_S = 1.5;
+    static final double SUN_SNAP_RAD = 0.05;
+    private double smoothSunAngle = Double.NaN;
+    private long smoothLastNs;
+
+    float smoothCelestial(float vanilla) {
+        long now = System.nanoTime();
+        double target = vanilla;
+        if (Double.isNaN(smoothSunAngle) || smoothLastNs == 0L) {
+            smoothSunAngle = target;
+        } else {
+            double turn = 2.0 * Math.PI;
+            double delta = target - smoothSunAngle;
+            delta -= turn * Math.rint(delta / turn);
+            double dt = Math.min(0.25, Math.max(0.0, (now - smoothLastNs) * 1.0e-9));
+            if (Math.abs(delta) > SUN_SNAP_RAD) {
+                smoothSunAngle = target;
+            } else {
+                smoothSunAngle += delta * (1.0 - Math.exp(-dt / SUN_FOLLOW_TAU_S));
+            }
+        }
+        smoothLastNs = now;
+        return (float) smoothSunAngle;
+    }
+
     /** Fills the state from the game for this frame. */
     public void collect(LevelRenderState level, double camX, double camY, double camZ, boolean flipX, int cloudTexW, int cloudTexH) {
         SkyRenderState sky = level.skyRenderState;
@@ -84,8 +116,9 @@ public final class RtSkyState {
         endFlashXAngle = sky.endFlashXAngle;
         endFlashYAngle = sky.endFlashYAngle;
         RtSky.tiltRad = io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.sunTiltRad();
-        sunAngle = sky.sunAngle;
-        moonAngle = sky.moonAngle;
+        // The moon keeps its offset to the sun, so both bodies move together through the same filter.
+        sunAngle = smoothCelestial(sky.sunAngle);
+        moonAngle = sunAngle + (sky.moonAngle - sky.sunAngle);
         starAngle = sky.starAngle;
         RtSky.sunDirection(sunAngle, flipX, sunDir);
         RtSky.sunDirection(moonAngle, flipX, moonDir);

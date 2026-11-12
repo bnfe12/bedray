@@ -20,7 +20,7 @@ public:
     bool uses_program(std::uint64_t) const noexcept;
     static std::uint32_t mip_size(std::uint32_t size, std::uint32_t level) noexcept;
 private:
-    static constexpr std::size_t levels = 6;
+    static constexpr std::size_t levels = 8;   // 1/2 .. 1/256: a halo several blocks wide at 1080p (6 levels read as a tight rim, owner 2026-11-12)
     struct Pins {
         std::array<gpu::UseId, levels> uses{};
         std::uint64_t generation = 0;

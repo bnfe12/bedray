@@ -75,7 +75,7 @@ static const float BLOCK_LIGHT_FIELD_GAIN = 0.06;
 // tint followed the resource pack, the dimension and the effects; a typed path pass binds no lightmap (the native core
 // validates the exact descriptor count of both path passes), so this is the warm tint that predated that sampling.  A
 // pack with a different block-light hue reaches the traced emitters only.
-static const float3 BLOCK_LIGHT_FIELD_TINT = float3(1.0, 0.64, 0.32);   // linear of the former display (1.0, 0.82, 0.60)
+static const float3 BLOCK_LIGHT_FIELD_TINT = float3(1.0, 0.82, 0.60);
 
 // The baked field in the units of the traced emitter estimate: the vanilla block-light level of the surface, tinted and
 // gained down.  It stands in for the whole term, cosine included, exactly as the legacy `vanillaBlockIrradiance` did.
@@ -83,15 +83,11 @@ float3 vanillaBlockIrradiance(float2 light) {
     return BLOCK_LIGHT_FIELD_TINT * clamp(light.x, 0.0, 1.0) * BLOCK_LIGHT_FIELD_GAIN;
 }
 
-// A light colour authored as a display colour (the categories below were tuned while the tracer shaded in display
-// gamma) as linear radiance of the same hue: the chromaticity is decoded, the peak keeps the authored intensity.
-float3 emitterLinearHue(float3 c) {
-    float m = max(c.r, max(c.g, c.b));
-    return m > 1.0e-6 ? tmSrgbToLinear(c / m) * m : float3(0.0);
-}
-
+// The category colours are used as linear light colours as they stand: (1, 0.52, 0.18) is a ~2000 K flame. Decoding
+// them as display colours (sRGB -> linear) left a flame with almost no green, and its sum with the blue sky light read
+// pink-violet on every white wall and leaf at noon (autotest A/E, 2026-11-12).
 float3 emitterAttenuationColor(float3 tex) {
-    return emitterLinearHue(emitterDisplayColor(tex));
+    return emitterDisplayColor(tex);
 }
 
 float3 emitterDisplayColor(float3 tex) {
@@ -206,7 +202,7 @@ float blockEmitterSolidAnglePdf(BlockEmitterPoint p, float distance2, float cosG
 // texel times the legacy gains.  A reservoir stores exactly this and divides `texelEmission` back out when it shades.
 float3 blockEmitterRadiance(BlockEmitterPoint p, MaterialAtlas atlas) {
     if (p.redstone) {
-        return emitterLinearHue(float3(1.0, 0.04, 0.02)) * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN * EMITTER_LIGHT_GAIN);
+        return float3(1.0, 0.04, 0.02) * (EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN * EMITTER_LIGHT_GAIN);
     }
     float3 tex;
     if (p.atlasSlotPlus1 != 0u) {

@@ -176,10 +176,10 @@ public final class NrdDenoiser {
         gbViewZ = memory.createImage("nrd_gb_viewz", w, h, FMT_R32F, USAGE_STORAGE_SAMPLED);
         gbNormalRough = memory.createImage("nrd_gb_normal", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         gbDiffuse = memory.createImage("nrd_gb_diffuse", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
-        gbAlbedo = memory.createImage("nrd_gb_albedo", w, h, FMT_RGBA8, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+        gbAlbedo = memory.createImage("nrd_gb_albedo", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         gbDirect = memory.createImage("nrd_gb_direct", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         gbSpecular = memory.createImage("nrd_gb_spec", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
-        gbSpecAlbedo = memory.createImage("nrd_gb_spec_albedo", w, h, FMT_RGBA8, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
+        gbSpecAlbedo = memory.createImage("nrd_gb_spec_albedo", w, h, FMT_RGBA16F, VK10.VK_IMAGE_USAGE_STORAGE_BIT);
         inNormalRough = memory.createImage("nrd_in_normal", w, h, info.normalRoughnessVkFormat(), USAGE_STORAGE_SAMPLED);
         inDiffuse = memory.createImage("nrd_in_diffuse", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         inSpecular = memory.createImage("nrd_in_spec", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);

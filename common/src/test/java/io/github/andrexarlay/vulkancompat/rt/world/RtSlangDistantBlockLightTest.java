@@ -93,7 +93,7 @@ class RtSlangDistantBlockLightTest {
         assertTrue(emitters.contains("static const float BLOCK_LIGHT_FIELD_GAIN = 0.06;"),
             "the lightmap texel is ~0.87 at level 13 while the traced torch reads ~0.05: the field has to be divided by"
                 + " ~20 or the far field is 5..15x brighter than the same torch next to the player");
-        assertTrue(emitters.contains("static const float3 BLOCK_LIGHT_FIELD_TINT = float3(1.0, 0.64, 0.32);"),
+        assertTrue(emitters.contains("static const float3 BLOCK_LIGHT_FIELD_TINT = float3(1.0, 0.82, 0.60);"),
             "a typed path pass binds no lightmap, so the field keeps the warm tint the lightmap sampling replaced");
         assertTrue(emitters.contains(
                 "return BLOCK_LIGHT_FIELD_TINT * clamp(light.x, 0.0, 1.0) * BLOCK_LIGHT_FIELD_GAIN;"),

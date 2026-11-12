@@ -8,7 +8,7 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 public final class RtTonemap {
     public static final float GAIN = 4.0f;
     public static final float WHITE = 11.2f;
-    public static final float SAT = 1.06f;
+    public static final float SAT = 1.20f;
     public static final float INV_MAX = 0.985f;
     private static final float LR = 0.2126f;
     private static final float LG = 0.7152f;

@@ -26,7 +26,7 @@ public module tonemap_curve;
 static const float TM_GAIN = 4.0;
 static const float TM_WHITE = 11.2;
 // Saturation before the curve: a per-channel shoulder desaturates bright colours a little; this gives it back.
-static const float TM_SAT = 1.06;
+static const float TM_SAT = 1.20;   // 1.06 read grey next to Bedrock RTX (owner, 2026-11-12)
 // Display value the inverse is solved for at most (normalised curve units), so an 8-bit step at the shoulder cannot
 // turn into a huge scene step.
 static const float TM_INV_MAX = 0.985;

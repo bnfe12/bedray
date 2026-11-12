@@ -9,7 +9,7 @@ __exported import "denoise/nrd_pack.slang";
 [[vk::image_format("rgba16f")]] [[vk::binding(6, 0)]] RWTexture2D<float4> nrdInDiffuse;
 [[vk::image_format("rgba16f")]] [[vk::binding(9, 0)]] RWTexture2D<float4> gbSpecular;
 [[vk::image_format("rgba16f")]] [[vk::binding(10, 0)]] RWTexture2D<float4> nrdInSpecular;
-[[vk::image_format("rgba8")]] [[vk::binding(13, 0)]] RWTexture2D<float4> gbSpecAlbedo;
+[[vk::image_format("rgba16f")]] [[vk::binding(13, 0)]] RWTexture2D<float4> gbSpecAlbedo;
 
 // RR's motion target is RG16F. Keep it entirely outside this entry's resource
 // contract rather than depending on an untaken RGBA16F write branch.

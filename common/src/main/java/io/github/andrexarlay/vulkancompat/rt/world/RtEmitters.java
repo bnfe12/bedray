@@ -730,11 +730,11 @@ public final class RtEmitters {
      * model has, not with the light it gives in the game: four candles (level 12, a dozen flame quads) out-shone a lantern
      * (level 15) several times (owner screenshot, 2026-11-12: "the candles are very bright"). Squared because the reach
      * of a 1/d^2 source to a fixed brightness grows with the square root of its power, and a vanilla level is a reach in
-     * blocks. Calibrated on the lantern (level 15, four flame quads at MIN_POWER = 2.4 before this rule, autotest J
+     * blocks. Calibrated between the torch (level 14, one quad, 0.6 before this rule: now 1.4) and the lantern (level 15, four quads, 2.4 before: now 1.6), autotest J
      * 2026-11-12): it keeps its power, a torch (level 14, one quad, 0.6 before) rises to 2.1, four candles (level 12,
      * twenty quads, 12.0 before) fall to 1.5.
      */
-    static final float OPEN_SOURCE_POWER_15 = 2.4f;
+    static final float OPEN_SOURCE_POWER_15 = 1.6f;
     private static final java.util.concurrent.atomic.AtomicInteger LOGGED_CELLS = new java.util.concurrent.atomic.AtomicInteger();
     private static final int MAX_LOGGED_CELLS = 32;
 

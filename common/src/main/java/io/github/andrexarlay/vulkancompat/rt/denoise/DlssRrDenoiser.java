@@ -286,10 +286,10 @@ public final class DlssRrDenoiser {
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         gbNormalRough = memory.createImage("dlss_rr_gb_normal", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         gbDiffuse = memory.createImage("dlss_rr_gb_diffuse", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
-        gbAlbedo = memory.createImage("dlss_rr_gb_albedo", w, h, FMT_RGBA8, USAGE_STORAGE_SAMPLED);
+        gbAlbedo = memory.createImage("dlss_rr_gb_albedo", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         gbDirect = memory.createImage("dlss_rr_gb_direct", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         gbSpecular = memory.createImage("dlss_rr_gb_spec", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
-        gbSpecAlbedo = memory.createImage("dlss_rr_gb_spec_albedo", w, h, FMT_RGBA8, USAGE_STORAGE_SAMPLED);
+        gbSpecAlbedo = memory.createImage("dlss_rr_gb_spec_albedo", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         inNormalRough = memory.createImage("dlss_rr_in_normal", w, h, FMT_RGBA16F, USAGE_STORAGE_SAMPLED);
         inDiffuse = memory.createImage("dlss_rr_in_color", w, h, FMT_RGBA16F,
             USAGE_STORAGE_SAMPLED | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT);
@@ -735,7 +735,7 @@ public final class DlssRrDenoiser {
         DlssRrParams.Image mv = new DlssRrParams.Image(
             inMotion.image, inMotion.view, FMT_RG16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
         DlssRrParams.Image diffAlbedo = new DlssRrParams.Image(
-            gbAlbedo.image, gbAlbedo.view, FMT_RGBA8, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
+            gbAlbedo.image, gbAlbedo.view, FMT_RGBA16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
         DlssRrParams.Image specAlbedo = new DlssRrParams.Image(
             inSpecular.image, inSpecular.view, FMT_RGBA16F, width, height, VK10.VK_IMAGE_ASPECT_COLOR_BIT, false);
         // Normals: RGBA16F containing (Nx, Ny, Nz, Roughness).

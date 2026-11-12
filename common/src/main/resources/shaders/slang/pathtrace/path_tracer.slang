@@ -363,9 +363,15 @@ int3 pathTraceFoliageSunCell(float3 worldPosition) {
 }
 
 // The cell-stable seed of the sun/moon sample: same cell, same frame and same sample stratum draw the same disc point.
+// The disc point of a shadow cell is world-locked and does NOT change with the frame: re-rolled every frame, each
+// texel-sized cell of a penumbra flipped between lit and shadowed, a blocky flicker the denoiser keeps as texture detail
+// and that crawled over every sun-shaded slope while the camera moved (owner, desert, 2026-11-12).  A fixed point per
+// cell gives a still, dithered penumbra; the frame argument is kept for the callers that want a fresh draw.
+static const bool PATH_SUN_SEED_PER_FRAME = false;
+
 uint pathTraceSunSeed(int3 cell, uint frame, uint sampleWord) {
     uint seed = uint(cell.x) * 1973u + uint(cell.y) * 9277u + uint(cell.z) * 4093u;
-    return pcgHash(pcgHash(seed + frame * 26699u) + sampleWord * 6971u);
+    return pcgHash(pcgHash(seed + (PATH_SUN_SEED_PER_FRAME ? frame : 0u) * 26699u) + sampleWord * 6971u);
 }
 
 // Origin of the shared shadow ray of a fragment's cell.  Returns `position` unchanged whenever sharing is not possible
@@ -425,6 +431,24 @@ static const float EMITTER_SOURCE_RADIUS = 1.0;
 // The radius is one value for every source (a lamp face is 0.5, a flame ~0.1): the estimate stays unbiased for any
 // value because both sides read the same function, only the noise split moves.
 static const float EMITTER_SPECULAR_SOURCE_RADIUS = 0.35;
+
+// The sky a rough (non-delta) reflection sees.  The visible dome is the vanilla display colour run back through the tone
+// map: about half as bright as a sunlit white wall and a saturated blue (blue ~2.6, red ~0.06 at noon).  In linear light
+// a leaf or a sand face reflects F ~ 0.04-0.1 of it against an albedo of 0.02-0.1, so the sheen of that dome out-shone
+// the surface's own colour and every leaf, shadow and floor read sky-blue at noon (autotest A/E, 2026-11-12).  A rough
+// reflection takes the brightness of the dome the sky LIGHTS surfaces with (skyRadiance, so its energy agrees with the
+// diffuse sky term) and half the chromaticity of the visible dome; a mirror (delta lobe) still sees the visible sky.
+static const float GLOSSY_SKY_HUE = 0.5;
+
+float3 pathGlossySkyRadiance(float3 visible, float3 light) {
+    float visibleLuminance = luminance(visible);
+    float lightLuminance = luminance(light);
+    if (!(visibleLuminance > 1.0e-6)) {
+        return light;
+    }
+    float3 hue = lerp(float3(1.0), visible / visibleLuminance, GLOSSY_SKY_HUE);
+    return hue * lightLuminance;
+}
 
 float pathEmitterSpecularNeeWeight(float roughness, float distance) {
     if (roughness <= 1.0e-3) {
@@ -772,7 +796,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 }
             }
             float3 sky = bodiesVisible ? environment.radiance(escape)
-                : glossyEscape ? environment.viewRadiance(escape) : environment.skyRadiance(escape);
+                : glossyEscape ? pathGlossySkyRadiance(environment.viewRadiance(escape), environment.skyRadiance(escape))
+                : environment.skyRadiance(escape);
             result.radiance += throughput * escapeWeight * sky;
             result.flags |= PATH_TRACE_FLAG_ENVIRONMENT;
             break;
@@ -935,7 +960,8 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
                 ? pathTraceShadowCell(surface.hit.worldPosition, options.pixelShadowCell)
                 : pathTraceStableSunCell(surface.hit.worldPosition);
             receiver.stableSun = true;
-            receiver.sunSeed = pathTraceSunSeed(sunCell, options.frameIndex, options.sampleWord);
+            receiver.sunSeed = pathTraceSunSeed(sunCell, options.frameIndex,
+                PATH_SUN_SEED_PER_FRAME ? options.sampleWord : options.sampleStratum);
         }
         float3 direct = float3(0.0);
         // ---- Distant block light ----

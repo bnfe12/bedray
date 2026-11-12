@@ -98,7 +98,13 @@ float3 bloomFetchPre(Sampler2D src, Sampler2D depth, float2 uv, BloomPush pc) {
         // shoulder, so the threshold separates them from a lit wall and the glow scales with the real source (Bedrock
         // RTX builds gBloomBuffer from the HDR frame the same way). The clipped-LDR rebuild below is the fallback of
         // a frame without a resolve.
-        return bloomPrefilter(max(display, float3(0.0)) * max(pc.p0.w, 0.0), pc);
+        // Soft weight instead of a hard knee: a pixel at the threshold gives half its light, a lamp face nearly all of
+        // it, a lit wall a little, so the glow is the wide soft haze Bedrock RTX has around every bright area and not a
+        // rim on the few pixels above a cut (owner, 2026-11-12: "the bloom is too small, not only on torches").
+        float3 c = max(display, float3(0.0)) * max(pc.p0.w, 0.0);
+        float m = bloomPeak(c);
+        float t = max(pc.p0.x, 1.0e-3);
+        return c * (m * m / (m * m + t * t));
     }
     if (pc.p1.x > 0.5) {
         return bloomClippedSource(display, pc);
