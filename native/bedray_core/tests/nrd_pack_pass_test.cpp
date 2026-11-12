@@ -69,7 +69,7 @@ int main() {
     bad([](auto& f) { f.views[5] = 0; }); bad([](auto& f) { f.views[5] = f.views[0]; });
     bad([](auto& f) { f.views[6] = f.views[5]; });
     bad([](auto& f) { f.normal_encoding = 0; }); bad([](auto& f) { f.roughness_encoding = 3; });
-    bad([](auto& f) { f.denoiser = 3; }); bad([](auto& f) { f.flags = 4; }); bad([](auto& f) { f.reserved = 1; });
+    bad([](auto& f) { f.denoiser = 3; }); bad([](auto& f) { f.flags = 0x80; }); bad([](auto& f) { f.reserved = 1; });
     bad([](auto& f) { f.hit_dist_a = 0; }); bad([](auto& f) { f.hit_dist_b = -1; });
     bad([](auto& f) { f.hit_dist_c = std::numeric_limits<float>::infinity(); });
     bad([](auto& f) { f.denoising_range = std::numeric_limits<float>::quiet_NaN(); });
@@ -91,6 +91,10 @@ int main() {
         check(resource.handle == frame.views[resource.binding] && resource.image_layout == VK_IMAGE_LAYOUT_GENERAL);
         check(resource.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE && !resource.sampler);
     }
+    // Tone ordinal (bits 2..4) and post-cinema looks (bits 5/6) must reach the push verbatim: AGX + vignette + grain.
+    frame.flags = 1u | (4u << 2) | 0x20u | 0x40u;
+    check(render(frame) == BEDRAY_OK && records.back().push.flags == (1u | (4u << 2) | 0x20u | 0x40u));
+    frame.flags = 3;
     frame.views[0] = 100; frame.normal_encoding = 0; frame.denoiser = 2; contract.binding_count = 8;
     frame.views[1] = 0; frame.views[5] = 0;
     check(render(frame) == BEDRAY_OK && records.back().resources.size() == 8 && !records.back().push.motion);

@@ -1,8 +1,10 @@
 package io.github.andrexarlay.vulkancompat.rt.denoise;
 
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayNrdPackNative;
 import io.github.andrexarlay.vulkancompat.rt.world.CameraBobPose;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
@@ -298,7 +300,9 @@ public final class NrdDenoiser {
         frame.write(frameSettingsSeg);
         nat.setFrameSettings(handle, frameSettingsSeg);
 
-        int flags = (tonemap ? 1 : 0) | (DenoiserConfig.VIEW == DenoiserConfig.View.SPLIT ? 2 : 0);
+        int flags = BedrayNrdPackNative.packFlags(tonemap,
+            DenoiserConfig.VIEW == DenoiserConfig.View.SPLIT, RtSettings.tonemapper().ordinal(),
+            RtSettings.vignette(), RtSettings.filmGrain());
         ByteBuffer pc = org.lwjgl.system.MemoryUtil.memAlloc(NrdPackPipeline.PUSH_BYTES);
         try {
             NrdPackPipeline.writePush(pc, info.normalEncoding(), info.roughnessEncoding(), mode.packShaderCode(), flags, reblur,

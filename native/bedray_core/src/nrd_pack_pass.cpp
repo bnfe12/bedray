@@ -55,7 +55,7 @@ BedrayStatus record_nrd_pack(BedrayCore* core, PFN_vkCmdPipelineBarrier command_
     if (!core || !command_barrier || !frame.command_buffer || !frame.program
         || frame.phase > BEDRAY_NRD_COMPOSE || !frame.width || !frame.height
         || pixels > std::numeric_limits<std::uint32_t>::max()
-        || frame.roughness_encoding > 2 || frame.denoiser > 2 || (frame.flags & ~3u) || frame.reserved
+        || frame.roughness_encoding > 2 || frame.denoiser > 2 || (frame.flags & ~0x7Fu) || frame.reserved
         || (frame.denoiser == 2 ? frame.normal_encoding != 0 :
             (frame.normal_encoding != 2 && frame.normal_encoding != 4))
         || !std::isfinite(frame.hit_dist_a) || !(frame.hit_dist_a > 0)

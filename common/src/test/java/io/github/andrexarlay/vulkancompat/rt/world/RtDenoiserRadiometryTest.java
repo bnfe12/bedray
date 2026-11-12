@@ -45,7 +45,7 @@ class RtDenoiserRadiometryTest {
         int compose = pack.indexOf("float3 nrdComposeColor(");
         String body = pack.substring(compose);
         int exposure = body.indexOf("color *= max(pc.exposure, 0.0);");
-        assertTrue(exposure >= 0 && exposure < body.indexOf("if ((pc.flags & 1u) != 0u) color = tonemapColor(color);"));
+        assertTrue(exposure >= 0 && exposure < body.indexOf("if ((pc.flags & 1u) != 0u) color = tonemapColorMode(color, (pc.flags >> 2u) & 7u);"));
         assertFalse(body.contains("tonemapColor(color * pc.exposure)"));
         assertTrue(shader("passes/path_display.slang").contains("float3 exposed = mean * max(pc.exposure, 0.0);"));
         for (float value : new float[]{0, 0.1f, 0.25f, 0.8f}) {

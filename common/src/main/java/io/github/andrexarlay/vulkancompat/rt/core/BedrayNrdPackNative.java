@@ -11,14 +11,28 @@ import static java.lang.foreign.ValueLayout.*;
 public final class BedrayNrdPackNative {
     static final int FRAME_BYTES = 200;
     public static final int PACK = 0, COMPOSE = 1, VIEW_COUNT = 14, PUSH_BYTES = 56;
+    /**
+     * Compose flags layout, mirrored by nrd_pack.slang and the native mask: bit 0 tone enable, bit 1 split view,
+     * bits 2..4 tone-curve ordinal, bit 5 vignette, bit 6 film grain. Bit 7 stays reserved (the rejection sentinel).
+     */
+    public static final int TONE_MODE_SHIFT = 2;
+    public static final int VIGNETTE_BIT = 0x20;
+    public static final int GRAIN_BIT = 0x40;
+    public static final int FLAGS_MASK = 0x7F;
     private final BedrayCoreNative library;
     private final long core;
     private final MethodHandle render;
 
+    /** Pack the compose flags: tone enable, split view, the player's curve ordinal and the post-cinema looks. */
+    public static int packFlags(boolean tonemap, boolean split, int tonemapperOrdinal, boolean vignette, boolean grain) {
+        return (tonemap ? 1 : 0) | (split ? 2 : 0) | ((tonemapperOrdinal << TONE_MODE_SHIFT) & 0x1C)
+            | (vignette ? VIGNETTE_BIT : 0) | (grain ? GRAIN_BIT : 0);
+    }
+
     public record Settings(int normal, int roughness, int denoiser, int flags,
                            float hitA, float hitB, float hitC, float range, float exposure, long motion) {
         public Settings {
-            if (roughness < 0 || roughness > 2 || denoiser < 0 || denoiser > 2 || (flags & ~3) != 0
+            if (roughness < 0 || roughness > 2 || denoiser < 0 || denoiser > 2 || (flags & ~FLAGS_MASK) != 0
                 || (denoiser == 2 ? normal != 0 : normal != 2 && normal != 4)
                 || !Float.isFinite(hitA) || hitA <= 0 || !Float.isFinite(hitB) || hitB < 0
                 || !Float.isFinite(hitC) || hitC <= 0 || !Float.isFinite(range) || range <= 0
