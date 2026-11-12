@@ -87,6 +87,25 @@ separate the causes, one change at a time, each with a screenshot of the same sp
 3. The pre-5.x jar `bedray-fabric-mc26.3-0.2.0-alpha.jar.20261030-104721.bak`: if the triangle is there too, it predates
    the 5.x batches.
 
+Localization of the see-through triangle (2026-11-12, agent testbed, native scene `path_trace_scene`, VKB_Autotest seed):
+
+- Denoiser off (spp 8): the light/dark "one triangle" pattern on the distant hill stays -> not a denoiser reconstruction artifact.
+- ReSTIR DI/PT/spatial all off with denoiser off: the pattern stays -> not ReSTIR reuse/reconstruction either.
+- Camera moved ~15 blocks toward the hill: every block face is a complete, correctly shaded rectangle (lit tread, shadowed
+  riser); no diagonal split inside any face -> no missing/degenerate triangle and no per-triangle shading defect (such a
+  defect would also show up close).
+- Index emission (6/quad), 64 B stride, vertex decoder, BLAS index/vertex setup, face-forward normal and cull-disable
+  re-checked self-consistent; `GlassFaceFilter` cannot touch sand (material 0).
+- The "checkerboard" is the staircase itself at distance: each step projects to a few pixels split by the real tread/riser
+  edge into a lit tread triangle and a shadowed riser triangle. Sampled riser luminance (~70) matches vanilla raster
+  shadowed-face luminance (~70) at the same camera, so RT is not over-darkening it.
+- Vanilla raster at the same camera omits only the far hill because its chunk meshes were not built yet at shot time
+  (renderDistance is already 16 = RT's 256 blocks); it is not ghost geometry.
+
+Conclusion: the "one triangle see-through" is a misreading of normal lit-tread/shadowed-riser stair shading at distance,
+not missing geometry and not reconstruction. Evidence: `C:/Temp/ab-triangle/{denoiser-off,legacy-scene,close-cam,raster-ref}/02_world_c.png`
+and `cmp_center_*.png`. The triangle sub-issue is localized; murky water / sky / lighting remain open.
+
 The source gap behind the missing textured sky is addressed by `d9b671c`: the typed `FrameSky` adapter now reads the
 resource-pack atlas through bounded modules. Display equations come from the former GLSL path. L1/L2 checks pass;
 the owner's visual report remains open until the new build is checked at the same location.

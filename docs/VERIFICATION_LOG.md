@@ -4454,3 +4454,27 @@ the replacement and nothing was launched.
 L1/L2 only. The promoted DLSS resource ownership, dormant SR retirement and the
 rebuilt vendor bridges have not run on a GPU. L3-L5 and visual parity still
 require an owner run.
+
+## 2026-11-12 — See-through triangle (#15 / open owner report) A/B localization
+
+Agent testbed "Vulkan Testbed 26.3 Agent" (NeoForge), native scene `path_trace_scene`,
+VKB_Autotest world seed, fixed camera (-41.5, 89, 2.5) yaw 135 pitch 12 unless noted.
+Screenshots + `latest.log` archived under `C:/Temp/ab-triangle/<run>/`.
+
+| run | config | result |
+| --- | --- | --- |
+| denoiser-off | path, spp 8, denoiser=off, ReSTIR on | light/dark "one triangle" pattern present |
+| legacy-scene | path, spp 8, denoiser=off, ReSTIR di/pt/spatial=off | pattern present -> ReSTIR reconstruction ruled out |
+| close-cam | as legacy-scene + camera (-52.1, 84, -8.1) | every face a complete shaded rectangle up close -> missing/degenerate triangle and per-triangle shading defect ruled out |
+| raster-ref | rt=off (vanilla raster), same camera | clean steps; far hill absent only from chunk-mesh build latency at shot time |
+
+Statics re-verified self-consistent: index emission 6/quad, 64 B stride, vertex decoder,
+BLAS index/vertex setup, face-forward geometric normal, cull disable; `GlassFaceFilter`
+is a no-op for sand (material 0). Pixel-aligned crops `cmp_center_{rt,raster}.png`;
+sampled shadowed-riser luminance RT ~70 vs vanilla ~70 (no over-darkening).
+
+Conclusion: not missing geometry, not denoiser/ReSTIR reconstruction, not a per-triangle
+shading defect. The "see-through triangle" is the shadowed stair riser of a distant
+staircase (normal lit-tread/shadowed-riser shading) misread as a hole. Triangle sub-issue
+localized; see MIGRATION_STATUS.md open owner report. No code change: the root cause is
+appearance, not a geometry/reconstruction bug.
