@@ -1,115 +1,98 @@
-// Bedray 2.0 — peak-channel tone curve.
+// Bedray tone mapping: scene-linear HDR -> sRGB-encoded display, and back.
 //
-// Scene-linear colour -> display colour and back. The curve works on the PEAK channel and scales the colour with it,
-// so hue and saturation of the albedo survive (the per-channel ACES fit washed out mid tones). Both directions exist
-// because the sky and the emission are authored in display space and converted into radiance on the way in.
+// The path tracer shades in linear light (decodeSurface converts the sRGB atlas to linear reflectance), so the display
+// transform is the one Bedrock RTX ends its post chain with (RTXPostFX.Tonemapping: a filmic tone curve, then
+// gPerformSRGBConversion): a filmic curve per channel, then the sRGB transfer function.
 //
-//   m <= KNEE : f(m) = m
-//   m  > KNEE : f(m) = 1 - (1 - KNEE)^2 / (m - KNEE + (1 - KNEE))        (value and slope continuous at the knee)
+//   tonemapColor(c) = sRGB( H(TM_GAIN * sat(c)) / H(TM_WHITE) )
+//   H(x) = (x (A x + C B) + D E) / (x (A x + B) + D F) - E / F       (John Hable's filmic curve, Uncharted 2, 2010)
 //
-// Mirror of shaders/glsl/rt_tonemap.glsl and of RtTonemap.java. The constants are identical in all three; change one
-// and change the other two.
+// Per channel, so a bright saturated highlight bleaches towards white the way film does (a torch pool keeps its amber
+// falloff, the flame core goes yellow-white) instead of staying one flat saturated plate.  The ACES fit tried first
+// crushed the toe (a display-linear 0.01 came out at 0.0004): night rooms and caves went three times darker than the
+// former look (autotest J/N/L, 2026-11-12); this curve leaves the shadows where they were and still rolls the
+// highlights off.
+//
+// Every step has an exact inverse - H is a ratio of quadratics, solved in closed form - because the sky and the vanilla
+// colours are authored in display space, and bloom / volumetrics read the displayed image back into scene light
+// (tonemapInverse), add to it and map it again.
+//
+// Mirror of RtTonemap.java: change a constant here and there together (RtWorldChecks round-trips the pair).
 
 public module tonemap_curve;
 
-static const float TM_GAIN = 1.20;
-static const float TM_KNEE = 0.60;
-static const float TM_SAT = 1.00;
-static const float TM_CON = 0.20;
-static const float TM_PIVOT = 0.25;
+// Exposure bias: with it scene 0.18 lands near the display value the former gamma-space look gave it (fitted on a grey
+// ramp), so the exposure meter and its KEY keep their meaning.  White point: scene TM_WHITE / TM_GAIN = 2.8 maps to 1.
+static const float TM_GAIN = 4.0;
+static const float TM_WHITE = 11.2;
+// Saturation before the curve: a per-channel shoulder desaturates bright colours a little; this gives it back.
+static const float TM_SAT = 1.06;
+// Display value the inverse is solved for at most (normalised curve units), so an 8-bit step at the shoulder cannot
+// turn into a huge scene step.
 static const float TM_INV_MAX = 0.985;
 static const float3 TM_LUMA = float3(0.2126, 0.7152, 0.0722);
 
-float tmContrast(float m) {
-    return TM_PIVOT * pow(max(m, 0.0) / TM_PIVOT, 1.0 + TM_CON);
+static const float TM_A = 0.15;
+static const float TM_B = 0.50;
+static const float TM_C = 0.10;
+static const float TM_D = 0.20;
+static const float TM_E = 0.02;
+static const float TM_F = 0.30;
+
+float3 tmSanitize(float3 c, float fallback) {
+    if (isnan(c.r) || isinf(c.r)) { c.r = fallback; }
+    if (isnan(c.g) || isinf(c.g)) { c.g = fallback; }
+    if (isnan(c.b) || isinf(c.b)) { c.b = fallback; }
+    return c;
 }
 
-float tmContrastInverse(float x) {
-    return TM_PIVOT * pow(max(x, 0.0) / TM_PIVOT, 1.0 / (1.0 + TM_CON));
+float3 tmLinearToSrgb(float3 x) {
+    x = clamp(x, float3(0.0), float3(1.0));
+    float3 lo = x * 12.92;
+    float3 hi = 1.055 * pow(x, float3(1.0 / 2.4)) - 0.055;
+    return float3(x.r <= 0.0031308 ? lo.r : hi.r, x.g <= 0.0031308 ? lo.g : hi.g, x.b <= 0.0031308 ? lo.b : hi.b);
 }
 
-float tmCurve(float m) {
-    if (isnan(m) || isinf(m) || m > 65504.0) {
-        return 1.0;
-    }
-    if (m <= TM_KNEE) {
-        return max(0.0, m);
-    }
-    float d = 1.0 - TM_KNEE;
-    float denom = m - TM_KNEE + d;
-    if (denom <= 1.0e-6) {
-        return 1.0;
-    }
-    return clamp(1.0 - (d * d) / denom, 0.0, 1.0);
+float3 tmSrgbToLinear(float3 x) {
+    x = clamp(x, float3(0.0), float3(1.0));
+    float3 lo = x / 12.92;
+    float3 hi = pow((x + 0.055) / 1.055, float3(2.4));
+    return float3(x.r <= 0.04045 ? lo.r : hi.r, x.g <= 0.04045 ? lo.g : hi.g, x.b <= 0.04045 ? lo.b : hi.b);
 }
 
-float tmCurveInverse(float y) {
-    if (isnan(y) || isinf(y)) {
-        return TM_KNEE;
-    }
-    if (y <= TM_KNEE) {
-        return max(0.0, y);
-    }
-    float d = 1.0 - TM_KNEE;
-    y = clamp(y, 0.0, TM_INV_MAX);
-    float denom = 1.0 - y;
-    if (denom <= 1.0e-5) {
-        denom = 1.0e-5;
-    }
-    return TM_KNEE - d + (d * d) / denom;
+float tmHable(float x) {
+    return (x * (TM_A * x + TM_C * TM_B) + TM_D * TM_E) / (x * (TM_A * x + TM_B) + TM_D * TM_F) - TM_E / TM_F;
 }
 
-// Highlights go to white. The peak-channel curve keeps the hue at any brightness, so everything past its shoulder
-// (scene peak ~5, where the display is already 0.985+) was one flat saturated plate: the floor next to a torch read as
-// an orange fill that hid its texture ("a colour fill, not a torch", owner 2026-11-12). Film and the ACES curve of RTX
-// Remix bleach such a highlight towards white and keep the colour in the falloff. Only scene values the inverse can
-// never produce (it tops out at ~4.8, TM_INV_MAX) are touched, so display -> scene -> display stays exact (sky, bloom).
-static const float TM_WHITE_START = 5.0;
-static const float TM_WHITE_FULL = 40.0;
-static const float TM_WHITE_MAX = 0.75;
-
-float tmWhiteWeight(float m) {
-    return TM_WHITE_MAX * smoothstep(TM_WHITE_START, TM_WHITE_FULL, m);
+// Normalised curve on one channel (scene value times TM_GAIN in, display-linear out) and its inverse.
+float tmFit(float v) {
+    return max(tmHable(max(v, 0.0)) / tmHable(TM_WHITE), 0.0);
 }
 
-// scene-linear colour (already multiplied by the exposure) -> display colour 0..1
+float tmFitInverse(float y) {
+    float r = clamp(y, 0.0, TM_INV_MAX) * tmHable(TM_WHITE) + TM_E / TM_F;
+    float qa = TM_A * (1.0 - r);
+    float qb = TM_B * (TM_C - r);
+    float qc = TM_D * (TM_E - r * TM_F);
+    return max((-qb + sqrt(max(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa), 0.0);
+}
+
+float3 tmSaturate(float3 c, float s) {
+    float l = dot(c, TM_LUMA);
+    return float3(l) + (c - float3(l)) * s;
+}
+
+// Scene-linear colour (already multiplied by the exposure) -> sRGB-encoded display colour 0..1.
 float3 tonemapColor(float3 c) {
-    if (isnan(c.r) || isinf(c.r)) { c.r = 0.0; }
-    if (isnan(c.g) || isinf(c.g)) { c.g = 0.0; }
-    if (isnan(c.b) || isinf(c.b)) { c.b = 0.0; }
-    c = clamp(c, float3(0.0), float3(65504.0));
-    float l = dot(c, TM_LUMA);
-    c = max(float3(l) + (c - float3(l)) * TM_SAT, float3(0.0)) * TM_GAIN;
-    c = min(c, float3(65504.0));
-    float m = max(c.r, max(c.g, c.b));
-    if (isnan(m) || isinf(m) || m <= 1.0e-6) {
-        return float3(0.0);
-    }
-    float scale = tmCurve(tmContrast(m)) / m;
-    float3 outCol = c * scale;
-    float peak = max(outCol.r, max(outCol.g, outCol.b));
-    outCol = lerp(outCol, float3(peak), tmWhiteWeight(m));
-    if (isnan(outCol.r) || isinf(outCol.r)) { outCol.r = 1.0; }
-    if (isnan(outCol.g) || isinf(outCol.g)) { outCol.g = 1.0; }
-    if (isnan(outCol.b) || isinf(outCol.b)) { outCol.b = 1.0; }
-    return clamp(outCol, float3(0.0), float3(1.0));
+    c = clamp(tmSanitize(c, 0.0), float3(0.0), float3(65504.0));
+    c = max(tmSaturate(c, TM_SAT), float3(0.0)) * TM_GAIN;
+    float3 display = float3(tmFit(c.r), tmFit(c.g), tmFit(c.b));
+    return tmLinearToSrgb(tmSanitize(display, 1.0));
 }
 
-// display colour 0..1 -> scene-linear colour (before the exposure division)
+// sRGB-encoded display colour 0..1 -> scene-linear colour (before the exposure division).
 float3 tonemapInverse(float3 y) {
-    if (isnan(y.r) || isinf(y.r)) { y.r = 0.0; }
-    if (isnan(y.g) || isinf(y.g)) { y.g = 0.0; }
-    if (isnan(y.b) || isinf(y.b)) { y.b = 0.0; }
-    y = clamp(y, float3(0.0), float3(1.0));
-    float m = max(y.r, max(y.g, y.b));
-    if (isnan(m) || isinf(m) || m <= 1.0e-6) {
-        return float3(0.0);
-    }
-    float3 c = y * (tmContrastInverse(tmCurveInverse(m)) / m) / TM_GAIN;
-    float l = dot(c, TM_LUMA);
-    float3 outCol = max(float3(l) + (c - float3(l)) / TM_SAT, float3(0.0));
-    if (isnan(outCol.r) || isinf(outCol.r)) { outCol.r = 0.0; }
-    if (isnan(outCol.g) || isinf(outCol.g)) { outCol.g = 0.0; }
-    if (isnan(outCol.b) || isinf(outCol.b)) { outCol.b = 0.0; }
-    return outCol;
+    float3 display = tmSrgbToLinear(tmSanitize(y, 0.0));
+    float3 c = float3(tmFitInverse(display.r), tmFitInverse(display.g), tmFitInverse(display.b)) / TM_GAIN;
+    return tmSanitize(max(tmSaturate(c, 1.0 / TM_SAT), float3(0.0)), 0.0);
 }

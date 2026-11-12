@@ -1473,6 +1473,10 @@ public final class RtFrameRenderer {
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_ATMO, false);
         }
+        // The bloom reads the denoiser's HDR resolve when it has the presented extent (DLSS RR at its output size).
+        boolean hdrBloom = rrColorResolved && dlssRrDenoiser != null && dlssRrDenoiser.outDiffuse() != null
+            && dlssRrDenoiser.outDiffuse().width == presented.width && dlssRrDenoiser.outDiffuse().height == presented.height;
+        atmosphere.bloomSource(hdrBloom ? dlssRrDenoiser.outDiffuse().view : 0L, params.exposure);
         atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
             new RtFrameBindings.Views(world.tlasHandle(), world.sectionTable(), presented.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, presentedDepth.view, lightmapView),

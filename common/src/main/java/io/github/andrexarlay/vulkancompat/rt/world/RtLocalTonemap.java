@@ -18,16 +18,16 @@ import java.util.Set;
  * a torch pool keeps its texture. RTX Remix Minecraft ships the same kind of operator (rtx.localtonemap.*). The images
  * belong to {@link RtFrameResources}; the HDR source is the denoiser's resolved output.
  *
- * <p>{@code -Dvkrtx.rt.localTonemap=0..2} (highlight strength, 0 = off, default 1) and
- * {@code -Dvkrtx.rt.localTonemap.shadows=0..2} (default 1).
+ * <p>{@code -Dvkrtx.rt.localTonemap=0..2} (highlight strength, 0 = off, default 0: off since the ACES curve bleaches highlights itself and the pull dimmed every lamp below the bloom threshold, owner 2026-11-12) and
+ * {@code -Dvkrtx.rt.localTonemap.shadows=0..2} (default 0).
  */
 public final class RtLocalTonemap {
     static final int PUSH_BYTES = 32;
     /** Exposed luminance the operator leaves unchanged: the knee of the global curve (TM_KNEE 0.6 / TM_GAIN 1.2). */
     static final float PIVOT_LOG2 = -1.0f;
 
-    static volatile float highlights = clampStrength(Float.parseFloat(System.getProperty("vkrtx.rt.localTonemap", "1.0")));
-    static volatile float shadows = clampStrength(Float.parseFloat(System.getProperty("vkrtx.rt.localTonemap.shadows", "1.0")));
+    static volatile float highlights = clampStrength(Float.parseFloat(System.getProperty("vkrtx.rt.localTonemap", "0.0")));
+    static volatile float shadows = clampStrength(Float.parseFloat(System.getProperty("vkrtx.rt.localTonemap.shadows", "0.0")));
 
     private final SlangRuntime runtime;
     private final SlangProgram lum;

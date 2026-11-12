@@ -30,6 +30,13 @@ import static io.github.andrexarlay.vulkancompat.rt.core.BedrayBloomNative.PUSH_
 final class RtBloomPass {
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     private static final int STAGES = 4;
+    /**
+     * Strength factor of a glow built from the HDR resolve. Only the part above the threshold glows there, where the
+     * clipped-LDR rebuild glowed with the whole rebuilt colour times 3, so the same slider value read as almost no glow
+     * (+18 of 255 at the 99th percentile around the lamps of scene N, 2026-11-12). Kept on the pass rather than in the
+     * default so a slider value saved by a player keeps meaning "a little" or "a lot".
+     */
+    static final float HDR_STRENGTH_GAIN = 2.5f;
     private static final String[] SLANG_NAMES = {"bloom_prefilter_down", "bloom_down", "bloom_up", "bloom_apply"};
 
     /** One binding the host promises to supply, checked against the generated manifest before the first dispatch. */
@@ -44,7 +51,18 @@ final class RtBloomPass {
     /** Everything the apply stage needs per frame (all but {@code strength} are inputs of the sun glare). */
     record Params(Matrix4f invViewProj, float[] sunDir, float glareStrength, float camX, float camY, float camZ,
                   boolean flipY, boolean tonemapped, float threshold, float knee, float strength, float scatter, float sunNdcX,
-                  float sunNdcY, float darkness) {
+                  float sunNdcY, float darkness, long hdrSourceView, float hdrExposure) {
+        Params(Matrix4f invViewProj, float[] sunDir, float glareStrength, float camX, float camY, float camZ,
+               boolean flipY, boolean tonemapped, float threshold, float knee, float strength, float scatter, float sunNdcX,
+               float sunNdcY, float darkness) {
+            this(invViewProj, sunDir, glareStrength, camX, camY, camZ, flipY, tonemapped, threshold, knee, strength, scatter,
+                sunNdcX, sunNdcY, darkness, 0L, 0f);
+        }
+
+        /** The glow is rebuilt from the denoiser's HDR resolve, not from the tone-mapped 8-bit image. */
+        boolean hdrSource() {
+            return tonemapped && hdrSourceView != 0L && hdrExposure > 0f;
+        }
     }
 
     private final SlangRuntime slangRuntime;
@@ -125,7 +143,8 @@ final class RtBloomPass {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer push = stack.malloc(PUSH_BYTES);
             fillPushConstants(push, params, bloom);
-            nativePass.record(cmd.address(), width, height, outputView, depthView, push, bloom);
+            nativePass.record(cmd.address(), width, height, outputView, depthView, params.hdrSource() ? params.hdrSourceView() : 0L,
+                push, bloom);
         }
     }
 
@@ -135,8 +154,11 @@ final class RtBloomPass {
         pr.invViewProj.get(0, pc);
         pc.putFloat(64, pr.sunDir[0]).putFloat(68, pr.sunDir[1]).putFloat(72, pr.sunDir[2]).putFloat(76, pr.glareStrength);
         pc.putFloat(80, pr.camX).putFloat(84, pr.camY).putFloat(88, pr.camZ).putFloat(92, pr.flipY ? 1f : 0f);
-        pc.putFloat(96, pr.threshold).putFloat(100, pr.knee).putFloat(104, bloom ? pr.strength : 0f).putFloat(108, pr.darkness);
-        pc.putFloat(112, pr.tonemapped ? 1f : 0f).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
+        // p0.w: the exposure of the HDR source when there is one (the shader never read the darkness lane).
+        pc.putFloat(96, pr.threshold).putFloat(100, pr.knee)
+            .putFloat(104, bloom ? pr.strength * (pr.hdrSource() ? HDR_STRENGTH_GAIN : 1f) : 0f)
+            .putFloat(108, pr.hdrSource() ? pr.hdrExposure : pr.darkness);
+        pc.putFloat(112, pr.hdrSource() ? 2f : pr.tonemapped ? 1f : 0f).putFloat(116, pr.scatter).putFloat(120, pr.sunNdcX).putFloat(124, pr.sunNdcY);
     }
 
     /** Host drained submissions; the exact host tickets must already have released this pass. */

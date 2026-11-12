@@ -27,8 +27,9 @@ class BedrayBloomNativeTest {
         push.position(8).limit(136);
         try (Arena arena = Arena.ofConfined()) {
             var desc = BedrayBloomNative.frame(arena, 100, 19, 11, 200, 201, push, true);
-            assertEquals(56, desc.byteSize());
-            assertEquals(2, desc.get(JAVA_INT, 0)); assertEquals(56, desc.get(JAVA_INT, 4));
+            assertEquals(64, desc.byteSize());
+            assertEquals(2, desc.get(JAVA_INT, 0)); assertEquals(64, desc.get(JAVA_INT, 4));
+            assertEquals(0L, desc.get(JAVA_LONG, 56), "no HDR source: the prefilter reads the output view");
             assertEquals(100, desc.get(JAVA_LONG, 8));
             assertEquals(19, desc.get(JAVA_INT, 16)); assertEquals(11, desc.get(JAVA_INT, 20));
             assertEquals(200, desc.get(JAVA_LONG, 24)); assertEquals(201, desc.get(JAVA_LONG, 32));

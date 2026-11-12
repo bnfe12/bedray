@@ -95,6 +95,14 @@ float bsdfSpecularProbability(MaterialSample material, float3 V, float3 N) {
 // about directions on the receiver's side, so a light behind a pane cannot
 // contribute direct radiance through this call.
 float3 bsdfEvaluate(MaterialSample material, float3 V, float3 N, float3 L) {
+    return bsdfEvaluateWeighted(material, V, N, L, 1.0);
+}
+
+// bsdfEvaluate with the GGX reflection lobe scaled by `specularWeight` (0..1).  A light that two estimators reach - NEE
+// and a BSDF-sampled reflection ray that hits its emissive face - is split between them by lobe: the caller passes the
+// NEE share of the reflection here and the path gives the complementary share to the BSDF hit, so the two sum to one
+// estimate instead of two (see pathEmitterSpecularNeeWeight).  The diffuse lobe is untouched.
+float3 bsdfEvaluateWeighted(MaterialSample material, float3 V, float3 N, float3 L, float specularWeight) {
     float NdotL = dot(N, L);
     if (NdotL <= 0.0) return float3(0.0);
 
@@ -123,7 +131,7 @@ float3 bsdfEvaluate(MaterialSample material, float3 V, float3 N, float3 L) {
     float3 specular = distribution * geometry * fresnel /
         (4.0 * NdotV * max(NdotL, 1.0e-4));
 
-    return (diffuse + specular) * NdotL;
+    return (diffuse + specular * saturate(specularWeight)) * NdotL;
 }
 
 // Solid-angle density of bsdfSample for direction L.  Delta reflection and

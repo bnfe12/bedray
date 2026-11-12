@@ -23,8 +23,8 @@ struct BloomPush {
     float4x4 invViewProj;   //   0 clip -> camera-relative world (no jitter)
     float4 sunDir;          //  64 xyz towards the key light, w glare strength (0 = off)
     float4 camOrigin;       //  80 xyz bob origin of the camera, w 1 = flip Y
-    float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w darkness 0..1 (1 - daylight; not read by the shader)
-    float4 p1;              // 112 x 1 = image is tone mapped, y scatter, zw sun position in NDC
+    float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w exposure of an HDR source (p1.x = 2)
+    float4 p1;              // 112 x 0 linear image, 1 tone-mapped image, 2 tone-mapped image + HDR prefilter source; y scatter, zw sun NDC
 };
 
 static const float3 BLOOM_LUMA = float3(0.2126, 0.7152, 0.0722);
@@ -93,6 +93,13 @@ float3 bloomFetchPre(Sampler2D src, Sampler2D depth, float2 uv, BloomPush pc) {
         return float3(0.0);
     }
     float3 display = src.SampleLevel(uv, 0.0).rgb;
+    if (pc.p1.x > 1.5) {
+        // The denoiser's scene-linear resolve: a lamp face or a flame keeps the brightness the tone map folds into its
+        // shoulder, so the threshold separates them from a lit wall and the glow scales with the real source (Bedrock
+        // RTX builds gBloomBuffer from the HDR frame the same way). The clipped-LDR rebuild below is the fallback of
+        // a frame without a resolve.
+        return bloomPrefilter(max(display, float3(0.0)) * max(pc.p0.w, 0.0), pc);
+    }
     if (pc.p1.x > 0.5) {
         return bloomClippedSource(display, pc);
     }
@@ -193,6 +200,9 @@ float bloomSunVisibility(Sampler2D depth, Sampler2D frame, int2 size, BloomPush 
         int2 t = clamp(int2(center + o), int2(0), size - 1);
         float sky = depth.Load(int3(t, 0)).r >= BLOOM_SKY_DISTANCE ? 1.0 : 0.0;
         float3 sc = frame.Load(int3(t, 0)).rgb;
+        if (pc.p1.x > 1.5) {
+            sc = tonemapColor(max(sc, float3(0.0)) * max(pc.p0.w, 0.0));   // HDR source: judge the disc as displayed
+        }
         // Daytime blue sky has high blue (~0.9) but lower red/green; the sun disk is warm-white (all channels high).
         float sunLum = dot(sc, BLOOM_LUMA);
         float bright = smoothstep(0.88, 0.98, sunLum) * smoothstep(0.85, 0.96, sc.r);

@@ -5,7 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 class RtExposureHdrTest {
     private static void observe(RtExposure meter, double luminance, float dt, int frames) {
         int samples = 1024;
-        long sum = Math.round((Math.log(luminance) / Math.log(2) + 16) * 64 * samples);
+        // The scenes are given in the display-gamma domain the constants were tuned in; the shader meters linear light.
+        long sum = Math.round((Math.log(luminance) / Math.log(2) * RtExposure.DISPLAY_GAMMA + 16) * 64 * samples);
         for (int i = 0; i < frames; ++i) meter.observe(sum, samples, dt);
     }
     @Test void multipleBrightEmittersCanDarkenBelowTheFixedRasterExposure() {
@@ -13,7 +14,7 @@ class RtExposureHdrTest {
         observe(meter, 4, 1f / 60, 600);
         assertTrue(meter.value() < .2f);
         assertTrue(meter.value() >= RtExposure.MIN);
-        assertEquals(RtExposure.FIXED, meter.applied(false, 0));
+        assertEquals(RtExposure.linear(RtExposure.FIXED), meter.applied(false, 0), 1e-6f);
     }
     @Test void extremeHdrRetainsAFiniteBoundAndResetRestoresTheFixedStart() {
         var meter = new RtExposure();

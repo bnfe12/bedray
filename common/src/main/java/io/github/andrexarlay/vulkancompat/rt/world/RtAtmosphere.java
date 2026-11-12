@@ -20,7 +20,7 @@ import org.slf4j.LoggerFactory;
  * the same guide data as without them.
  */
 final class RtAtmosphere {
-    static final float NIGHT_BLOOM_THRESHOLD = 1.5f;
+    static final float NIGHT_BLOOM_THRESHOLD = 1.0f;   // HDR source since 2026-11-12: a real scene brightness, a lit wall stays below it
     private static final Logger LOGGER = LoggerFactory.getLogger("VKB-RT");
     private static final int SPAN_BLOOM = 1;
 
@@ -40,6 +40,23 @@ final class RtAtmosphere {
      */
     private long lastLoggedToken = Long.MIN_VALUE;
     private final Vector4f tmp = new Vector4f();
+    /** HDR image of this frame's denoiser resolve (0 = none) and the exposure the presented image was mapped with. */
+    private long bloomHdrView;
+    private float bloomHdrExposure;
+    private boolean bloomSourceLogged;
+    private boolean bloomSourceWasHdr;
+
+    /** The bloom of the next {@link #record} rebuilds its glow from this HDR view; 0 falls back to the presented image. */
+    void bloomSource(long hdrView, float exposure) {
+        bloomHdrView = hdrView;
+        bloomHdrExposure = exposure;
+        boolean hdr = hdrView != 0L && exposure > 0f;
+        if (!bloomSourceLogged || hdr != bloomSourceWasHdr) {
+            LOGGER.info("[VKB-ATMO] bloom source={}", hdr ? "hdr_resolve" : "tonemapped_ldr");
+            bloomSourceLogged = true;
+            bloomSourceWasHdr = hdr;
+        }
+    }
 
     /**
      * @param views    views of the main pass of this frame (output = final image, depth = ray distance of the primary hit)
@@ -117,7 +134,7 @@ final class RtAtmosphere {
             float threshold = Math.min(userThreshold, NIGHT_BLOOM_THRESHOLD + (userThreshold - NIGHT_BLOOM_THRESHOLD) * day);
             RtBloomPass.Params bp = new RtBloomPass.Params(p.invViewProj, dir, glareK,
                 bobX, bobY, bobZ, p.flipY, p.tonemap, threshold, 0.35f * threshold, RtAtmosphereSettings.bloomStrength(),
-                RtAtmosphereSettings.bloomScatter(), ndcX, ndcY, 1f - day);
+                RtAtmosphereSettings.bloomScatter(), ndcX, ndcY, 1f - day, bloomHdrView, bloomHdrExposure);
             if (timer != null) {
                 timer.stamp(cmd, SPAN_BLOOM, false);
             }

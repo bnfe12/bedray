@@ -22,8 +22,15 @@ class RtEmissionNeeGateTest {
     void emissionIsGatedByHowTheRayArrived() throws IOException {
         String source = tracer();
         assertTrue(source.contains("if (pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)) {\n"
-                + "            result.radiance += throughput * surface.material.emission;"),
+                + "            float emissionWeight = 1.0;"),
             "the hit's emission is added only behind the gate");
+        assertTrue(source.contains("result.radiance += throughput * surface.material.emission * emissionWeight;"),
+            "a glossy reflection ray adds only the share NEE does not carry");
+        assertTrue(source.contains("emissionWeight = 1.0 - pathEmitterSpecularNeeWeight(previousGlossyRoughness, hit.t);"),
+            "the BSDF-hit share is the complement of the NEE share");
+        assertTrue(source.contains(
+                "specularWeight = pathEmitterSpecularNeeWeight(surface.material.roughness, light.distance);"),
+            "NEE evaluates the same split before the highlight is widened");
         assertFalse(source.contains("\n        result.radiance += throughput * surface.material.emission;\n\n"),
             "no ungated emission add remains");
     }

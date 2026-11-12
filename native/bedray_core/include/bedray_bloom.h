@@ -28,6 +28,8 @@ typedef struct BedrayBloomFrameDesc {
     uint32_t bloom_enabled; /* 0: apply glare only; push strength must be zero */
     uint32_t push_bytes;
     const void* push_constants;
+    uint64_t source_view; /* optional scene-linear HDR source of the prefilter (RGBA16F, GENERAL, the denoiser's resolve);
+                             0 = rebuild the glow from output_view. Push p1.x = 2 tells the shader which one it reads. */
 } BedrayBloomFrameDesc;
 
 BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_configure_bloom(
@@ -41,11 +43,12 @@ BEDRAY_API BedrayStatus BEDRAY_CALL bedray_core_destroy_bloom(BedrayCore*);
 }
 #include <cstddef>
 static_assert(sizeof(BedrayBloomDesc) == 64);
-static_assert(sizeof(BedrayBloomFrameDesc) == 56);
+static_assert(sizeof(BedrayBloomFrameDesc) == 64);
 static_assert(offsetof(BedrayBloomDesc, programs) == 8);
 static_assert(offsetof(BedrayBloomDesc, linear_sampler) == 40);
 static_assert(offsetof(BedrayBloomDesc, image_budget_bytes) == 56);
 static_assert(offsetof(BedrayBloomFrameDesc, command_buffer) == 8);
 static_assert(offsetof(BedrayBloomFrameDesc, output_view) == 24);
 static_assert(offsetof(BedrayBloomFrameDesc, push_constants) == 48);
+static_assert(offsetof(BedrayBloomFrameDesc, source_view) == 56);
 #endif

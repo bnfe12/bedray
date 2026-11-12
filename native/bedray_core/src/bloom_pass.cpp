@@ -190,7 +190,8 @@ BedrayStatus BloomPass::render(const BedrayBloomFrameDesc& frame, BedrayError* e
     // The prefilter also measures the sun's visibility on the unmodified frame (mip 0 alpha), so the sun glare needs it
     // even without bloom; the apply stage must not read the image it is writing.
     if (frame.bloom_enabled || glare > 0) {
-        status = dispatch(0, views_[0].width, views_[0].height, frame.output_view, bits(views_[0].view));
+        status = dispatch(0, views_[0].width, views_[0].height, frame.source_view ? frame.source_view : frame.output_view,
+            bits(views_[0].view));
         if (status != BEDRAY_OK) return status;
     }
     if (frame.bloom_enabled) {

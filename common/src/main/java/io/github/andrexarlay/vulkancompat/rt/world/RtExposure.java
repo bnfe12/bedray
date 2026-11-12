@@ -34,6 +34,13 @@ public final class RtExposure {
     public static final float TAU_DARKEN = 0.7f;
     /** Differences below this many EV are ignored (no creeping pulse from the noise of the luminance sum). */
     public static final float DEADBAND_EV = 0.15f;
+    /**
+     * The meter and every constant above live in the display-gamma domain the path tracer shaded in until 2026-11-12
+     * (sRGB albedo, no transfer function on the way out). It now shades in linear light and the tone map ends with the
+     * sRGB encoding, so a linear luminance L reads here as L^(1/DISPLAY_GAMMA) and the exposure leaves as
+     * value^DISPLAY_GAMMA: KEY, MIN/MAX, the night ceiling and the adaptation speeds keep the meaning they were tuned with.
+     */
+    public static final float DISPLAY_GAMMA = 2.2f;
 
     private float value = FIXED;
     /** Upper clamp of this frame (RtSkyState.maxExposure: lower at night, so the night is not brightened to daylight). */
@@ -75,7 +82,7 @@ public final class RtExposure {
             value = FIXED;
             targetAnchor = Double.NaN;
         }
-        double avgLog2 = lumLogSum / 64.0 / samples - 16.0;
+        double avgLog2 = (lumLogSum / 64.0 / samples - 16.0) / DISPLAY_GAMMA;
         if (Double.isNaN(avgLog2) || Double.isInfinite(avgLog2)) {
             return;
         }
@@ -134,7 +141,12 @@ public final class RtExposure {
      * what goes to the GPU, the sky conversion and the compose pass, so every consumer sees the same number.
      */
     public float applied(boolean auto, int evTenths) {
-        return (auto ? value() : FIXED) * evScale(evTenths);
+        return linear(auto ? value() : FIXED) * evScale(evTenths);
+    }
+
+    /** A display-domain exposure as the factor that scales linear scene light. */
+    public static float linear(float displayExposure) {
+        return (float) Math.pow(Math.max(displayExposure, 0f), DISPLAY_GAMMA);
     }
 
     public void reset() {

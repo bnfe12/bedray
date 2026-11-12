@@ -413,6 +413,28 @@ float3 pathBakedBlockLight(MaterialSample material, float3 view, float3 normal, 
 // Apparent size of a block light for its specular highlight, in blocks (see pathTraceDirectTerm).
 static const float EMITTER_SOURCE_RADIUS = 1.0;
 
+// Who carries the reflection of a block light: NEE or the BSDF-sampled reflection ray that hits its glowing face.
+// Both used to add it, so a glossy floor got the highlight twice, and the NEE copy is the unstable one: ReSTIR DI picks
+// the light point by a diffuse target (emission x cosine x falloff, no specular lobe), keeps it up to 20 frames and
+// spreads it to neighbours, so the narrow GGX peak of whichever point won jumped around the floor as a moving blob
+// (owner, 2026-11-12: "the reflected light is insanely unstable and keeps moving").  The two estimators now split the
+// reflection lobe with weights that sum to one: a lobe narrower than the source's apparent size (alpha < radius / d) is
+// sampled far better by the BSDF - the ray sees the face itself, a stable image that DLSS RR tracks with the specular
+// hit distance - and a lobe wider than the source by NEE.  The diffuse lobe stays NEE-only, a mirror (delta) stays
+// BSDF-only, as before.  Past the emitter window NEE carries nothing, so the reflection ray keeps the whole share.
+// The radius is one value for every source (a lamp face is 0.5, a flame ~0.1): the estimate stays unbiased for any
+// value because both sides read the same function, only the noise split moves.
+static const float EMITTER_SPECULAR_SOURCE_RADIUS = 0.35;
+
+float pathEmitterSpecularNeeWeight(float roughness, float distance) {
+    if (roughness <= 1.0e-3) {
+        return 0.0;   // bsdfSpecularIsDelta: NEE has no finite lobe to evaluate
+    }
+    float alpha = roughness * roughness;
+    float lobeOverSource = alpha * max(distance, 0.05) / EMITTER_SPECULAR_SOURCE_RADIUS;
+    return smoothstep(0.5, 2.0, lobeOverSource) * (1.0 - smoothstep(16.0, 24.0, distance));
+}
+
 float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light,
         PathTraceOptions options, MaterialSamplingOptions materialOptions, WaterMedium medium, bool primary,
@@ -476,12 +498,14 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
         // Shading in UE4": alpha' = alpha + radius / (2 d)). Sampled as a point on a 2-pixel flame, a torch drew a narrow
         // star-like streak across smooth stone, where Bedrock RTX shows a soft pool (owner screenshots, 2026-11-12).
         MaterialSample shadingMaterial = surface.material;
+        float specularWeight = 1.0;
         if (light.kind == LightKind.Emitter) {
+            specularWeight = pathEmitterSpecularNeeWeight(surface.material.roughness, light.distance);
             float alpha = shadingMaterial.roughness * shadingMaterial.roughness
                 + EMITTER_SOURCE_RADIUS / (2.0 * max(light.distance, 0.25));
             shadingMaterial.roughness = sqrt(saturate(alpha));
         }
-        bsdf = bsdfEvaluate(shadingMaterial, view, normal, arrival);
+        bsdf = bsdfEvaluateWeighted(shadingMaterial, view, normal, arrival, specularWeight);
         if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
             return zero;
         }
@@ -684,6 +708,9 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
     // A glossy reflection or a transmission sees the visible dome (minus the discs, which its NEE sampled); only a
     // diffuse bounce receives the sky light. Without this, rippled water reflected the dim sky light and went black.
     bool glossyEscape = false;
+    // Roughness of the vertex that sent this ray along a finite GGX reflection lobe, or -1 for any other continuation:
+    // the emission this ray then hits is shared with that vertex's NEE (pathEmitterSpecularNeeWeight).
+    float previousGlossyRoughness = -1.0;
     // The indirect window: opened by the first non-delta continuation (or the RC field's incoming term).  Everything
     // added before it - camera water, sky, the first non-delta surface's emission and NEE, and anything seen through
     // delta glass/water/mirrors on the way there - is camera-like and never capped.
@@ -868,7 +895,11 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         // With an emitter proposal, use NEE for diffuse emitter transport and keep BSDF emission along the eye and
         // non-diffuse paths. Without one, BSDF hits are the only source of this emission.
         if (pathSeesEmission(result.surfaceHits, glossyEscape, options.emitterNeeAvailable)) {
-            result.radiance += throughput * surface.material.emission;
+            float emissionWeight = 1.0;
+            if (result.surfaceHits > 1u && options.emitterNeeAvailable && previousGlossyRoughness >= 0.0) {
+                emissionWeight = 1.0 - pathEmitterSpecularNeeWeight(previousGlossyRoughness, hit.t);
+            }
+            result.radiance += throughput * surface.material.emission * emissionWeight;
         }
 
         // ---- Next-event estimation ----
@@ -1097,6 +1128,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
         throughput *= bsdf.weight;
         bodiesVisible = bsdf.delta;
         glossyEscape = bsdf.lobe != BSDF_LOBE_DIFFUSE;
+        previousGlossyRoughness = bsdf.lobe == BSDF_LOBE_SPECULAR && !bsdf.delta ? surface.material.roughness : -1.0;
         // A delta transmission (the face of a glass block, a water sheet) is the same sight line bent, not a scattering
         // event: charged as a bounce, the two faces of every glass block used up a 3-bounce path before it reached what
         // stands behind, and a stack of glass rendered black where the raster picture shows the backdrop (rt_look G,

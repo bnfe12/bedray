@@ -648,7 +648,7 @@ public final class RtEmitters {
     static float[] extract(DecodedSection d, int[] material, int atlasW, int atlasH) {
         EmissiveTexelIndex candidates = EmissiveTexelIndex.of(material, atlasW, atlasH,
             io.github.andrexarlay.vulkancompat.rt.material.RtMaterialAtlas.cpuMaterialVersion());
-        return extractQuads(d.positions, d.uvs, d.colors, d.totalQuads(), material, atlasW, atlasH,
+        return extractQuads(d.positions, d.uvs, d.colors, d.light, d.totalQuads(), material, atlasW, atlasH,
             d.passQuadStart(DecodedSection.PASS_CUTOUT), candidates);
     }
 
@@ -664,13 +664,14 @@ public final class RtEmitters {
     /** Extracts emitter quads with vertex colors so vertex-tinted redstone uses its actual signal strength. */
     public static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int quads, int[] material, int atlasW, int atlasH,
                                        int solidQuads) {
-        return extractQuads(positions, uvs, colors, quads, material, atlasW, atlasH, solidQuads,
+        return extractQuads(positions, uvs, colors, null, quads, material, atlasW, atlasH, solidQuads,
             EmissiveTexelIndex.build(material, atlasW, atlasH));
     }
 
-    private static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int quads, int[] material, int atlasW,
-                                        int atlasH, int solidQuads, EmissiveTexelIndex candidates) {
+    private static float[] extractQuads(float[] positions, float[] uvs, int[] colors, int[] light, int quads, int[] material,
+                                        int atlasW, int atlasH, int solidQuads, EmissiveTexelIndex candidates) {
         float[] tmp = null;
+        int[] levels = null;
         int n = 0;
         TexelEmission tex = new TexelEmission() {
             @Override
@@ -704,17 +705,90 @@ public final class RtEmitters {
             }
             if (tmp == null) {
                 tmp = new float[quads * FLOATS];
+                levels = new int[quads];
             }
             // cutout pass quads (torches, lanterns, campfires, fire) are open sources: they radiate to both sides
             float redstoneSignal = quadRedstoneSignal(colors, q * 4);
             if (buildQuadRecord(tmp, n * FLOATS, positions, q * 12, uvs, uvOffset, tex, q >= solidQuads, redstoneSignal)) {
+                levels[n] = vertexBlockLightLevel(light, q * 4);
                 n++;
             }
         }
         if (n == 0) {
             return EMPTY;
         }
+        if (light != null) {
+            normalizeOpenSourcePower(tmp, levels, n);
+        }
         return java.util.Arrays.copyOf(tmp, n * FLOATS);
+    }
+
+    /**
+     * Total power (sum of area x mean emission x boost of its open quads) a block cell of open sources carries at vanilla
+     * light level 15; a cell at level L gets {@code OPEN_SOURCE_POWER_15 * (L / 15)^2}. The power of an open source used
+     * to be per quad - each flame quad lifted to {@link #MIN_POWER} - so a cell's light grew with the number of quads its
+     * model has, not with the light it gives in the game: four candles (level 12, a dozen flame quads) out-shone a lantern
+     * (level 15) several times (owner screenshot, 2026-11-12: "the candles are very bright"). Squared because the reach
+     * of a 1/d^2 source to a fixed brightness grows with the square root of its power, and a vanilla level is a reach in
+     * blocks. Calibrated on the lantern (level 15, four flame quads at MIN_POWER = 2.4 before this rule, autotest J
+     * 2026-11-12): it keeps its power, a torch (level 14, one quad, 0.6 before) rises to 2.1, four candles (level 12,
+     * twenty quads, 12.0 before) fall to 1.5.
+     */
+    static final float OPEN_SOURCE_POWER_15 = 2.4f;
+    private static final java.util.concurrent.atomic.AtomicInteger LOGGED_CELLS = new java.util.concurrent.atomic.AtomicInteger();
+    private static final int MAX_LOGGED_CELLS = 32;
+
+    /** Vanilla block-light level 0..15 of a quad: the brightest of its four vertices (Sodium stores level * 16 + 8). */
+    static int vertexBlockLightLevel(int[] light, int offset) {
+        if (light == null || offset + 3 >= light.length) {
+            return -1;
+        }
+        int level = 0;
+        for (int i = 0; i < 4; i++) {
+            level = Math.max(level, (light[offset + i] & 0xFF) >>> 4);
+        }
+        return Math.min(level, 15);
+    }
+
+    /** Rescales the open (two-sided, non-redstone) records of every block cell to the power of the cell's light level. */
+    static void normalizeOpenSourcePower(float[] r, int[] levels, int n) {
+        Map<Integer, float[]> cells = new HashMap<>();   // cell -> {power, level, quads}
+        int[] cellOf = new int[n];
+        for (int i = 0; i < n; i++) {
+            int o = i * FLOATS;
+            cellOf[i] = Integer.MIN_VALUE;
+            if (r[o + 11] != 1.0f || levels[i] < 0) {
+                continue;
+            }
+            int cx = (int) Math.floor(r[o] + 0.5f * (r[o + 4] + r[o + 8]));
+            int cy = (int) Math.floor(r[o + 1] + 0.5f * (r[o + 5] + r[o + 9]));
+            int cz = (int) Math.floor(r[o + 2] + 0.5f * (r[o + 6] + r[o + 10]));
+            int cell = ((cx + 1) & 0x3F) | (((cy + 1) & 0x3F) << 6) | (((cz + 1) & 0x3F) << 12);
+            cellOf[i] = cell;
+            float[] c = cells.computeIfAbsent(cell, k -> new float[3]);
+            c[0] += r[o + 3] * r[o + 14] * r[o + 7];
+            c[1] = Math.max(c[1], levels[i]);
+            c[2] += 1f;
+        }
+        for (Map.Entry<Integer, float[]> e : cells.entrySet()) {
+            float[] c = e.getValue();
+            float level = Math.max(c[1], 1f);
+            float target = OPEN_SOURCE_POWER_15 * (level / 15f) * (level / 15f);
+            float scale = c[0] > 1.0e-6f ? target / c[0] : 1f;
+            c[0] = scale;
+            if (LOGGED_CELLS.getAndIncrement() < MAX_LOGGED_CELLS) {
+                LOGGER.info("[VKB-RT] emitters open_cell level={} quads={} power={} target={} scale={}",
+                    (int) c[1], (int) c[2], String.format(java.util.Locale.ROOT, "%.3f", target / scale),
+                    String.format(java.util.Locale.ROOT, "%.3f", target), String.format(java.util.Locale.ROOT, "%.3f", scale));
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            if (cellOf[i] == Integer.MIN_VALUE) {
+                continue;
+            }
+            int o = i * FLOATS;
+            r[o + 7] = Math.max(Math.min(r[o + 7] * cells.get(cellOf[i])[0], MAX_BOOST * 2f), 1.0e-4f);
+        }
     }
 
     /** Emission 0..1 of the texels of one texture region (block atlas material map, or the region of a slot of the entity atlas). */

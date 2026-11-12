@@ -110,7 +110,7 @@ class RtSlangBlockEmitterTest {
             "the path tracer marks the primary vertex, the only one whose light point is reused");
         assertTrue(tracer.contains("lights.sample(receiver, seed)"),
             "and passes the receiver, so the emission mask of the face being shaded travels with the call");
-        assertTrue(tracer.contains("result.radiance += throughput * surface.material.emission;"),
+        assertTrue(tracer.contains("result.radiance += throughput * surface.material.emission * emissionWeight;"),
             "and still adds the face it sees: the look of an emitter and the light it casts are two terms");
         assertTrue(read(SURFACE).contains("material.emissionMask = max(materialTexel.b, 0.0);"),
             "the mask is the atlas channel the emitter sampler reads, not a luminance of the colour");
@@ -142,7 +142,7 @@ class RtSlangBlockEmitterTest {
 
     @Test
     void theColorCategoriesAreTheTunedOnes() {
-        String slang = block(read(EMITTERS), "float3 emitterAttenuationColor(float3 tex) {");
+        String slang = block(read(EMITTERS), "float3 emitterDisplayColor(float3 tex) {");
         // The eight chromatic categories are tuned by eye against real screens, so a retune has to move both files or
         // neither: a bound that survives on one side only means the two paths disagree about what a torch looks like.
         for (String threshold : new String[] {"c.r > 0.65 && c.g < 0.22", "c.r >= 0.55 && c.r > c.b * 1.25",
