@@ -14,10 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -38,7 +36,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RtSlangLayoutAbiTest {
 
     private static final String SLANG = "src/main/resources/shaders/slang/";
-    private static final String BINDINGS = SLANG + "bindings.slang";
 
     @Test
     void frameConstantsMatchesTheHostPacker() throws IOException {
@@ -113,55 +110,7 @@ class RtSlangLayoutAbiTest {
                 "counter word " + word + " is written by the pass");
         }
 
-        Layout stats = parseLayout(read(BINDINGS), "FrameStats");
-        assertEquals(RtStatsLayout.HITS, stats.offset("hits"));
-        assertEquals(RtStatsLayout.SAMPLES, stats.offset("samples"));
-        assertEquals(RtStatsLayout.LUM_LOG_SUM, stats.offset("lumLogSum"));
-        assertEquals(RtStatsLayout.HIST_ACCEPTED, stats.offset("histAccepted"));
-        assertEquals(12, stats.offset("histAccepted"), "the four metered words are contiguous");
-        assertEquals(4, stats.field("samples").size, "a counter word");
         assertTrue(RtStatsLayout.SIZE <= RtStatsLayout.SLOT_STRIDE, "the slot fits its stride");
-    }
-
-    @Test
-    void theLegacyStatsDeclarationIsUnreachableFromEveryPass() throws IOException {
-        // Typed consumers use their explicit counter/sky contracts, never the legacy struct.
-        List<String> importers = new ArrayList<>();
-        try (Stream<Path> files = Files.walk(Path.of(SLANG))) {
-            for (Path file : files.filter(p -> p.toString().endsWith(".slang")).toList()) {
-                String source = Files.readString(file, StandardCharsets.UTF_8);
-                if (Pattern.compile("(?m)^\\s*(?:__exported\\s+)?import\\s+bindings\\s*;").matcher(source).find()) {
-                    importers.add(Path.of(SLANG).relativize(file).toString().replace('\\', '/'));
-                }
-                if (file.toString().endsWith("bindings.slang")) {
-                    continue;
-                }
-                assertFalse(Pattern.compile("\\bstatsAddr\\b").matcher(source).find(),
-                    file + " reads the legacy stats address");
-                assertFalse(Pattern.compile("\\bFrameStats\\b").matcher(source).find(),
-                    file + " reaches the dead FrameStats declaration");
-                assertFalse(Pattern.compile("\\bPushConstants\\b").matcher(source).find(),
-                    file + " reaches the dead push block");
-            }
-        }
-        importers.sort(String::compareTo);
-        assertEquals(List.of("backend_query.slang", "bedray_legacy.slang"), importers,
-            "only modules that read none of the dead declarations import bindings.slang");
-        assertTrue(read(BINDINGS).contains("uint64_t statsAddr;"),
-            "the declarations still exist on the module surface; they are just not an ABI of any pass");
-    }
-
-    @Test
-    void theLegacyPushBlockStillMatchesRtFrameParams() throws IOException {
-        Layout push = parseLayout(read(BINDINGS), "PushConstants");
-        assertEquals(RtFrameParams.BYTES, push.size);
-        int[] offsets = RtStatsLayout.std430Offsets(RtFrameParams.PC_TYPES);
-        assertEquals(RtFrameParams.PC_TYPES.length, push.fields.size());
-        for (int i = 0; i < offsets.length; i++) {
-            assertEquals(offsets[i], push.fields.get(i).offset,
-                "member " + i + " (" + RtFrameParams.PC_TYPES[i] + ") moved");
-        }
-        assertEquals(RtFrameBindings.PUSH_BYTES, push.size);
     }
 
     @Test

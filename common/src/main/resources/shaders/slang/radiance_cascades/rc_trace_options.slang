@@ -75,8 +75,6 @@ static const uint RC_TRACE_FLAG_SHADOW_TRUNCATED = 1u << 9u;
 static const uint RC_TRACE_FLAG_INVALID_INPUT    = 1u << 10u;
 static const uint RC_TRACE_FLAG_INVALID_SAMPLE   = 1u << 11u;
 static const uint RC_TRACE_FLAG_EMPTY_WINDOW     = 1u << 12u;
-static const uint RC_TRACE_FLAG_INVALID_DISPATCH = 1u << 13u;
-static const uint RC_TRACE_FLAG_STORE_FAILED     = 1u << 14u;
 
 // Only the terminal cascade may turn a miss into environment radiance.
 // Disabled is an explicit policy for a pass that composites environment
@@ -121,13 +119,10 @@ struct RCTraceResult {
     RCSegment farSegment;     // exact far(mid, far] record
     RCSegment composed;       // rcComposeSegments(nearSegment, farSegment)
     float     distance;       // actual first non-hole surface t; tFar on no hit; 0 on invalid input
-    uint      cascade;
-    uint      probeIndex;     // 0 in the single-ray entry, populated by the store entry
-    uint      rayIndex;       // 0 in the single-ray entry
+    uint      cascade;        // level traced; the caller owns the cascade index
     uint      flags;          // RC_TRACE_FLAG_* ray-level aggregate
     uint      nearEvents;     // RC_TRACE_EVENT_* scoped to the near segment
     uint      farEvents;      // RC_TRACE_EVENT_* scoped to the far segment
-    bool      stored;         // both record addresses were written (not "ray resolved")
 };
 
 RCTraceResult emptyRCTraceResult() {
@@ -138,61 +133,10 @@ RCTraceResult emptyRCTraceResult() {
     result.composed = rcUnresolvedSegment();
     result.distance = 0.0;
     result.cascade = RADIANCE_CASCADE_COUNT;
-    result.probeIndex = 0u;
-    result.rayIndex = 0u;
     result.flags = 0u;
     result.nearEvents = 0u;
     result.farEvents = 0u;
-    result.stored = false;
     return result;
-}
-
-// Entry-level outcome.  This is deliberately separate from RCTraceResult:
-// a probe entry covers many rays, and a dispatch entry either addressed one ray
-// or rejected the item before tracing.  "stored" never means "resolved"; an
-// invalid option set still writes unresolved records, so a host must read
-// invalidInput and unresolved, not only storeFailed.
-enum RCTraceEntryCode : uint {
-    Ok              = 0u,
-    InvalidLayout   = 1u,   // layout/capacity is not radianceCascadeLayout()
-    InvalidDispatch = 2u,   // cascade/probe/ray outside the canonical grid
-};
-
-struct RCTraceEntryStatus {
-    uint code;          // RCTraceEntryCode
-    uint rays;          // rays attempted; 0 when code != Ok
-    uint stored;        // address pairs written (not "resolved")
-    uint storeFailed;   // address pairs rejected
-    uint invalidInput;  // rays rejected by options/ray validation or dispatch decode
-    uint unresolved;    // stored rays whose composed record is not valid
-    uint clamped;       // stored rays with at least one clamped segment
-    uint truncated;     // stored rays with at least one truncated segment
-};
-
-RCTraceEntryStatus emptyRCTraceEntryStatus() {
-    RCTraceEntryStatus status;
-    status.code = uint(RCTraceEntryCode.Ok);
-    status.rays = 0u;
-    status.stored = 0u;
-    status.storeFailed = 0u;
-    status.invalidInput = 0u;
-    status.unresolved = 0u;
-    status.clamped = 0u;
-    status.truncated = 0u;
-    return status;
-}
-
-// Fold one ray result into an entry status.  The categories overlap on purpose:
-// an invalid-input ray is also stored and unresolved, because the store wrote a
-// fail-closed record.  A host that wants "usable rays" uses stored - unresolved.
-void rcAccumulateTraceStatus(inout RCTraceEntryStatus status, RCTraceResult result) {
-    const uint invalidMask = RC_TRACE_FLAG_INVALID_INPUT | RC_TRACE_FLAG_INVALID_DISPATCH;
-    if ((result.flags & invalidMask) != 0u) status.invalidInput++;
-    if (result.stored) status.stored++; else status.storeFailed++;
-    if (result.stored && !rcSegmentValid(result.composed)) status.unresolved++;
-    if ((result.flags & RC_TRACE_FLAG_CLAMPED) != 0u) status.clamped++;
-    if (((result.nearSegment.flags | result.farSegment.flags) &
-         RC_SEGMENT_TRUNCATED) != 0u) status.truncated++;
 }
 
 bool rcTraceOptionsValid(RCTraceOptions options) {

@@ -1,6 +1,6 @@
 // Segment-local transport for Radiance Cascades. The atlas and its consumers
-// must use the same reflected record layout; this module does not reinterpret
-// the older float4 atlas or implement cross-cascade interpolation.
+// must use the same reflected record layout; this module does not implement
+// cross-cascade interpolation.
 public module interval_transport;
 
 static const uint RC_SEGMENT_RESOLVED = 1u << 0u;

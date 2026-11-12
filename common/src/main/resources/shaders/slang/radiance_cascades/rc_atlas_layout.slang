@@ -1,29 +1,4 @@
-// Canonical Radiance Cascades atlas addressing.
-//
-// This module owns the one linear layout shared by every atlas flavour:
-//
-//   legacy float4 atlas   radiance_cascades/legacy_float4_store.slang
-//   typed RCSegment atlas radiance_cascades/segment_record.slang
-//
-// It knows nothing about the payload.  A record module owns its element type,
-// validity rules and resolve; this module only maps
-// (cascade, probe, ray, interval) to a linear element index.
-//
-// Invariants
-// ----------
-//   * RC_INTERVALS_PER_RAY is 2.  Interval 0 is the near segment, interval 1
-//     is the far segment; both record formats use the same ordering.
-//   * baseOffset is cumulative over cascades.  totalRecords counts elements,
-//     not bytes, and is the minimum capacity a typed store may accept.
-//   * The host and the shader must both derive the layout from
-//     radianceCascadeLayout().  Every canonical field is checked by
-//     rcLayoutCanonical before a record is read or written.
-//   * layout.flags is reserved and must be zero.  A non-zero value is rejected
-//     instead of silently ignored, so a future host cannot enable semantics an
-//     older shader does not implement.
-//
-// The layout is transport-neutral, so a future atlas format can reuse it
-// without importing either the legacy or the typed store.
+// Atlas offsets count records rather than bytes, independently of the segment payload.
 
 public module rc_atlas_layout;
 
@@ -93,9 +68,9 @@ bool rcLayoutCanonical(RadianceCascadeLayout layout, uint capacity) {
 
 // Returns RC_INVALID_RECORD when any address component is outside the layout.
 // This is address validity only: it says nothing about the record payload and
-// it does NOT validate the layout itself.  New code must use rcSegmentIndex or
-// rcLayoutCanonical; this entry exists for record modules that have already
-// validated the layout once for a whole probe or ray.
+// it does NOT validate the layout itself.  New code must validate the layout
+// with rcLayoutCanonical; this entry exists for record modules that have
+// already validated it once for a whole probe or ray.
 uint rcUncheckedIntervalIndex(RadianceCascadeLayout layout, uint cascade, uint probeIndex,
         uint rayIndex, uint interval) {
     if (cascade >= RADIANCE_CASCADE_COUNT ||

@@ -311,14 +311,7 @@ RestirPtResolveResult ptEmptyResolveResult() {
 
 // ---- Emitter decision (material-decode contract) ----------------------------
 //
-// HIT_FLAG_EMISSIVE is a backend hint, not a decision: voxel_traversal sets it,
-// hardware_traversal never does (it writes only HIT_FLAG_FRONT_FACE).  The
-// decision is made after decodeSurface, from the decoded material: with
-// MATERIAL_SAMPLING_FLAG_EMISSIVE in effect decodeSurface has already zeroed
-// the emission of anything the host did not mark, so "the terminal material
-// emits" is exactly "any(emission > 0)".  The adapter that records the path
-// calls this and passes the result to ptVertexFromHit; the module never reads
-// the hit flag.
+// Emission comes from the decoded material, not the traversal backend's hit flags.
 bool ptTerminalEmits(MaterialSample material) {
     return material.emission.r > 0.0 || material.emission.g > 0.0 ||
         material.emission.b > 0.0;

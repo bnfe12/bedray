@@ -65,8 +65,7 @@ class RtSlangVisibilityOverflowTest {
             }
         }
         for (String consumer : new String[] {
-            "pathtrace/path_tracer.slang", "restir/restir_di.slang",
-            "radiance_cascades/rc_trace_segments.slang" }) {
+            "pathtrace/path_tracer.slang", "restir/restir_di.slang" }) {
             String source = read(SHADERS + "/" + consumer);
             assertTrue(source.contains("surfaceVisibilityProven("), consumer + " must ask for proof");
             assertEquals(0, count(source, "result.visible") - count(source, "result.visible ="),

@@ -62,13 +62,11 @@ public class RtEntityHermeticityTest {
 
     @Test
     public void testShaderSourceRayMasksAndTransmittanceContract() {
-        String types = read("src/main/resources/shaders/slang/types.slang");
-        assertTrue(types.contains("static const uint MASK_WORLD    = 0x01u;")
-                && types.contains("static const uint MASK_ENTITIES = 0x02u;")
-                && types.contains("static const uint MASK_ALL      = 0x03u;"),
-            "types.slang must define the hermetic mask 0x03 = world | entities");
-
         String scene = read("src/main/resources/shaders/slang/traversal/scene_traversal.slang");
+        assertTrue(scene.contains("static const uint SCENE_INSTANCE_MASK_WORLD    = 0x01u;")
+                && scene.contains("static const uint SCENE_INSTANCE_MASK_ENTITIES = 0x02u;")
+                && scene.contains("static const uint SCENE_INSTANCE_MASK_ALL      = 0x03u;"),
+            "scene_traversal.slang must define the hermetic mask 0x03 = world | entities");
         assertTrue(scene.contains("traceTriangleIntersection(tlas, ray, instanceMask,")
                 && read("src/main/resources/shaders/slang/traversal/triangle_query.slang")
                     .contains("query.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, desc);"),

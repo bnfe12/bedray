@@ -1,9 +1,3 @@
-// Pure math shared by Bedray 2.0 modules.
-//
-// This module has no descriptors, no scene data and no legacy ABI.  It exists
-// so new shading/light modules do not have to import types.slang just to get a
-// constant or a luminance helper.
-
 public module math_contract;
 
 static const float PI      = 3.14159265358979323846;

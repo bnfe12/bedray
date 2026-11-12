@@ -66,7 +66,7 @@ void main() {
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
 #endif
-    // This frame's captured models, shared with the legacy entry.
+    // This frame's captured models; the non-scene path_trace entry sets them up identically.
     EntityAtlas entityAtlas;
     entityAtlas.rects = entityRects;
     entityAtlas.texels = entityTexels;

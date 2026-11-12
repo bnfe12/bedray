@@ -2,9 +2,9 @@
 //
 // One invocation walks one cascade probe ray over [tNear, tFar] and produces
 // two segment-local RCSegment records.  Addressing belongs to
-// radiance_cascades.slang, record semantics to interval_transport.slang, and
-// store addresses/writes to segment_store.slang.  This module owns only the
-// walk, its segment finalization and the single-ray result.
+// radiance_cascades.slang and record semantics to interval_transport.slang.
+// This module owns only the walk, its segment finalization and the single-ray
+// result; the field passes that call it own any buffer storage.
 //
 // Interval model
 // --------------

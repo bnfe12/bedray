@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * P0-4 was the cascade merge written as a weighted mean of the near and far intervals. Radiative transfer along a ray
  * is {@code L_front + T_front * L_back}, so a one-block wall that fully absorbs ({@code T = 0}) has to make the far
  * interval irrelevant; an average instead shows the sun through the wall at half strength and floods closed rooms.
- * The typed path composes correctly and the averaging resolve survives only as a legacy module.
+ * The typed path composes correctly and the averaging float4 resolve has been deleted outright.
  * <p>
  * Ways this silently breaks: someone reintroduces a confidence-weighted mean in {@code rcComposeSegments}, drops the
  * exactly-zero-transmittance early return so an opaque front still admits the back, turns {@code min(confidence)} into
@@ -29,10 +29,6 @@ class RtSlangRadianceTransportTest {
 
     private static final String RC = "src/main/resources/shaders/slang/radiance_cascades";
     private static final String TRANSPORT = RC + "/interval_transport.slang";
-    private static final String LEGACY = RC + "/legacy_float4_store.slang";
-    private static final String STORE = RC + "/radiance_cascades_store.slang";
-    private static final String ROOT = "src/main/resources/shaders/slang/bedray.slang";
-    private static final String LEGACY_ROOT = "src/main/resources/shaders/slang/bedray_legacy.slang";
 
     private static String read(String relative) {
         try {
@@ -75,24 +71,17 @@ class RtSlangRadianceTransportTest {
 
     @Test
     void theAveragingResolveCannotReachAFrame() {
-        assertFalse(read(ROOT).contains("import \"radiance_cascades/radiance_cascades_store.slang\"")
-                || read(ROOT).contains("import \"radiance_cascades/legacy_float4_store.slang\""),
-            "the default root exports the typed modules only; the averaging resolve stays behind bedray_legacy");
-        assertTrue(read(LEGACY_ROOT).contains("__exported import \"radiance_cascades/radiance_cascades_store.slang\""),
-            "the legacy root is the deliberate door to it");
-        assertTrue(read(STORE).contains("__exported import \"radiance_cascades/legacy_float4_store.slang\""),
-            "and the facade is the only thing that re-exports it");
         assertEquals(List.of(), legacyAtlasWriters(),
-            "nothing in the shader tree writes a legacy float4 interval, so the averaging resolve has no data to read");
+            "the float4 averaging resolve was deleted; no shader may write a legacy interval, so a confidence-weighted "
+                + "mean can never reach a frame again");
     }
 
-    /** {@code rcStoreInterval}/{@code rcAccumulateInterval} calls outside the module that defines them. */
+    /** {@code rcStoreInterval}/{@code rcAccumulateInterval} calls anywhere in the shader tree; the defining module is gone. */
     private static List<String> legacyAtlasWriters() {
         List<String> found = new ArrayList<>();
         Path root = Path.of("src/main/resources/shaders/slang");
         try (Stream<Path> files = Files.walk(root)) {
             files.filter(path -> path.toString().endsWith(".slang"))
-                .filter(path -> !path.getFileName().toString().equals("legacy_float4_store.slang"))
                 .forEach(path -> {
                     String source = text(path);
                     for (String call : new String[] {"rcStoreInterval(", "rcAccumulateInterval("}) {
