@@ -36,7 +36,7 @@ class RtFrameResourcesTest {
         allocator.failImageCall = allocator.imageCalls + 4;
         assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(8, 4, 16, 8));
         assertSame(before, resources.output());
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size(), "output, depth, composite and the local tone map block image");
         resources.close();
     }
     static final class Allocator implements RtFrameResources.Allocator {
@@ -72,11 +72,11 @@ class RtFrameResourcesTest {
         var resources = new RtFrameResources(allocator);
         resources.ensureOutput(64, 32);
         resources.ensureMotion(64, 32);
-        assertEquals(3, allocator.images.size());
+        assertEquals(4, allocator.images.size(), "output, depth, composite and the local tone map block image");
         assertEquals(1, allocator.buffers.size());
         resources.ensureOutput(64, 32);
         resources.ensureMotion(32, 16);
-        assertEquals(3, allocator.imageCalls);
+        assertEquals(4, allocator.imageCalls);
         assertEquals(1, allocator.motionCalls);
         resources.close(); resources.close();
         assertTrue(allocator.images.isEmpty());
