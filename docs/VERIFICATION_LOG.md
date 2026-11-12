@@ -4547,3 +4547,74 @@ Parked backlog (honest ledger; gated, not implemented):
 L0-L2 only. None of these choices has run on a GPU in this session. L3-L5,
 visual parity and the in-game menu require an owner run on the testbed instance
 (or an integration of this branch with the owner instances' newer jars).
+
+## 2026-11-12 — Sodium NeoForge 26.3 version matrix (0.9.2 … 0.9.3-beta.5)
+
+Request: support every Sodium version listed on Modrinth for NeoForge 26.3
+(0.9.2, 0.9.3-alpha.1, 0.9.3-beta.1 … beta.5) plus a reproducible per-version
+check. The missing Bedray settings page in the owner's instance is accepted
+as-is; this batch changes no menu behaviour beyond one log line.
+
+Support model. Both loader descriptors already accept the whole 0.9.x line
+(neoforge.mods.toml `versionRange="[0.9,)"`, fabric.mod.json `"sodium": ">=0.9"`),
+and the Config API entrypoint (`sodium:config_api_user` → VulkanSodiumConfig)
+is identical across all seven official jars. No per-version adapters are
+needed; support is proven, not widened:
+
+- `tools/sodium-matrix.json` — lock of the seven versions (Modrinth id, official
+  CDN url, sha512). All seven outer jars re-verified byte-for-byte against
+  fresh api.modrinth.com metadata; every sha512 matches.
+- `tools/sodium_compat_check.py` — reproducible check. `--jars-dir` verifies
+  sha512 against the lock, extracts the inner jarjar `*-mod.jar`, runs
+  `javap -p -s` over the contract classes and compares descriptors.
+  `--generate-contract` rebuilds the contract from a reference jar.
+  `--download` fetches only from cdn.modrinth.com (any other host is refused).
+- `tools/sodium-compat-contract.json` — 22 classes / 56 members: the full
+  Bedray→Sodium hook surface (ConfigEntryPoint, ConfigManager/ModOptions/
+  ModMetadata, ConfigBuilderImpl, Config/Option/OptionGroup/EnumOption,
+  VideoSettingsScreen, OptionListWidget + HeaderWidget, ScrollableTooltip,
+  AbstractWidget, AbstractScrollable, CyclingControl, SodiumWorldRenderer,
+  RenderSection, ChunkBuildOutput, ChunkBuilderMeshingTask,
+  RenderRegionManager, ConfigLoaderForge).
+- `-PsodiumJar=<jar>` override in `gradle/loader-module.gradle` and
+  `common/build.gradle` swaps the libs/ Sodium jar on the compile and test
+  classpaths. Plain map notation (`fileTree(dir:…, include:…, exclude:…)`);
+  the closure form failed Gradle 9's notation conversion on every module.
+
+L0 (contract): 7/7 versions OK — 22 classes, 56 members, sha512 verified.
+RESULT: ALL-VERSIONS-COMPATIBLE.
+
+L1 (compile): sequential matrix, one Gradle invocation at a time,
+`:common:cleanCompileJava :neoforge:cleanCompileJava :common:compileJava
+:neoforge:compileJava -PsodiumJar=<version>` — 7/7 BUILD SUCCESSFUL with both
+compile tasks actually executed per version. (The first matrix pass reported
+neoforge UP-TO-DATE on classpath-only changes; that is not evidence, so the
+matrix was rerun with forced recompilation.)
+
+L1 (tests): `:common:test` at the extremes 0.9.2 and 0.9.3-beta.5 plus a
+baseline run without the override, slangc 2026.20 (`C:\Temp\bedray-slang-2026.20`,
+the documented SDK path). XML truth: all three runs 1,292 tests, 19 failures,
+0 errors, 12 skipped; failure names AND failure-message hashes byte-identical
+across baseline / 0.9.2 / beta.5. The 19 are pre-existing WIP-base failures
+(RtSlang* shader contracts, DenoiserResourceLifetimeTest,
+MotionVectorStabilityTest, SettingsCatalogTest `dlss_custom_scale` previews) —
+zero Sodium-attributable failures. Every Sodium-package suite is green at both
+extremes (VulkanSodiumConfigIdsTest, BuiltinPresetsTest, RtHiddenSettingsExposedTest,
+SettingsDeclaredDependenciesTest, SettingsProfileGatingTest, UpscalerModeLabelTest,
+UpscalerQualityBindingTest; SodiumDequantizeCpuCostBenchmarkTest skipped).
+
+Runtime delta: one log line after external page registration in
+VulkanSodiumConfig.registerConfigLate. Nothing else changes behaviour.
+
+Deploy — owner instance preserved. "геймер" currently runs the combined jar
+`Git-Commit bfb3a08d` (live session branch bedray/combined-test-20261112,
+deployed 23:36 with backup), one commit ahead of this branch's base 4a7ac1b5
+(torch-glow / auto-exposure fix: RtExposure.java, block_emitters.slang,
+surface.slang). This branch's jar would regress that fix, and a standalone jar
+without the matching native core pins rt=off. No overwrite was performed; the
+owner instance was left untouched. Integration point: merge bfb3a08d (or the
+owner branch's tip) into this branch, rebuild the combined jar, deploy jar only
+(native sources are unchanged between 4a7ac1b5 and bfb3a08d).
+
+L0-L2 only. No in-game per-version launch was performed; settings-menu
+visibility in the owner's instance remains unverified (accepted as-is).
