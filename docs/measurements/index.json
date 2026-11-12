@@ -35,6 +35,20 @@
       "target_met_in_capture": null,
       "frames": 666,
       "file": "gi_settings_l4/gi_settings_l4.json"
+    },
+    {
+      "label": "denoiser_rr",
+      "capture_status": "saved",
+      "target_met_in_capture": null,
+      "frames": 891,
+      "file": "denoiser_ab_rd16/denoiser_rr.json"
+    },
+    {
+      "label": "denoiser_nrd",
+      "capture_status": "saved",
+      "target_met_in_capture": null,
+      "frames": 1064,
+      "file": "denoiser_ab_rd16/denoiser_nrd.json"
     }
   ]
 }

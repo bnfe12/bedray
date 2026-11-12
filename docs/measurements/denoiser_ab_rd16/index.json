@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "runs": [
+    {
+      "label": "denoiser_rr",
+      "capture_status": "saved",
+      "target_met_in_capture": null,
+      "frames": null,
+      "file": "denoiser_rr.json"
+    },
+    {
+      "label": "denoiser_nrd",
+      "capture_status": "saved",
+      "target_met_in_capture": null,
+      "frames": null,
+      "file": "denoiser_nrd.json"
+    }
+  ]
+}

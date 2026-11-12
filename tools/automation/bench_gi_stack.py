@@ -45,9 +45,16 @@ VARIANTS: dict[str, dict[str, str]] = {
                    "vkrtx.rt.path_restir_pt_spatial": "false"},
     "ser_pt_on": {"bedray.rt.ser": "true", "vkrtx.rt.path_restir_pt": "true",
                   "vkrtx.rt.path_restir_pt_spatial": "true"},
+    # Denoiser A/B: identical PT-on GI stack, only the lit-view denoiser differs. NRD REBLUR denoises
+    # diffuse+specular in one instance (vkb_nrd.cpp REBLUR_DIFFUSE_SPECULAR); DLSS-RR is the NGX Vulkan arm.
+    "denoiser_rr": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
+                    "vkrtx.rt.path_denoiser": "dlss_rr"},
+    "denoiser_nrd": {"vkrtx.rt.path_restir_pt": "true", "vkrtx.rt.path_restir_pt_spatial": "true",
+                     "vkrtx.rt.path_denoiser": "nrd"},
 }
 BASELINE = ["compute_pt_off", "compute_pt_on", "raygen_pt_off", "raygen_pt_on"]
 SER_AB = ["compute_pt_on", "raygen_pt_on", "ser_pt_on"]
+DENOISER_AB = ["denoiser_rr", "denoiser_nrd"]
 
 
 def sha256(path: Path) -> str:
@@ -362,6 +369,8 @@ def main() -> int:
             labels += BASELINE
         elif name == "ser_ab":
             labels += SER_AB
+        elif name == "denoiser_ab":
+            labels += DENOISER_AB
         elif name == "all":
             labels += list(VARIANTS)
         elif name in VARIANTS:
