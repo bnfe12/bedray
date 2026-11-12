@@ -85,8 +85,13 @@ def stop_launcher() -> None:
     time.sleep(2)
 
 
-def set_window(instance: Path, width: int, height: int) -> dict[str, str]:
-    """Set 1920x1080 windowed in instance.cfg and options.txt; return original lines."""
+def set_window(instance: Path, width: int, height: int, render_distance: int) -> dict[str, str]:
+    """Set windowed resolution and a controlled render distance; return original file contents.
+
+    Render distance bounds the native scene size. RD32 native-1080p grows past 4 GiB (no eviction),
+    which disables RT at the prepare_frame LIMIT before a capture can record; the stand uses a smaller
+    RD that fits the budget and stabilizes, and RD32 is revisited once BLAS compaction lands.
+    """
     backup: dict[str, str] = {}
     cfg = instance / "instance.cfg"
     text = cfg.read_text(encoding="utf-8")
@@ -99,6 +104,7 @@ def set_window(instance: Path, width: int, height: int) -> dict[str, str]:
     backup["options.txt"] = otext
     otext = re.sub(r"overrideWidth:\d+", f"overrideWidth:{width}", otext)
     otext = re.sub(r"overrideHeight:\d+", f"overrideHeight:{height}", otext)
+    otext = re.sub(r"renderDistance:\d+", f"renderDistance:{render_distance}", otext)
     options.write_text(otext, encoding="utf-8")
     return backup
 
@@ -213,7 +219,13 @@ def parse_log(log: Path) -> dict:
                             "vram_mb_max": max(b["vram_mb"] for b in blas),
                             "tlas_instances_max": max(b["tlas_instances"] for b in blas),
                             "veg_quads_max": max(b["veg_quads"] for b in blas), "last": blas[-1]}
-    sections = re.findall(r"\[VKB-RT\] sections=(\d+) quads=(\d+) solid=(\d+) cutout=(\d+) translucent=(\d+)", text)
+    sections = []
+    for line in text.splitlines():
+        if "final=true" in line:
+            continue
+        m = re.search(r"\[VKB-RT\] sections=(\d+) quads=(\d+) solid=(\d+) cutout=(\d+) translucent=(\d+)", line)
+        if m and int(m[1]) > 0:
+            sections.append(m.groups())
     if sections:
         last = sections[-1]
         evidence["scene_sections"] = {"sections": int(last[0]), "quads": int(last[1]), "solid": int(last[2]),
@@ -259,7 +271,8 @@ def capture_medians(capture: Path) -> dict:
 
 
 def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Path,
-                out_dir: Path, scratch: Path, revision: str, timeout_s: float) -> dict:
+                out_dir: Path, scratch: Path, revision: str, timeout_s: float,
+                render_distance: int) -> dict:
     game = instance / "minecraft"
     started = time.time()
     full_props = {
@@ -295,6 +308,7 @@ def run_variant(label: str, props: dict[str, str], instance: Path, launcher: Pat
         shutil.copyfile(game / "logs" / "latest.log", log_copy)
     record: dict = {
         "schema": 1, "label": label, "variant_props": full_props, "revision_hint": revision,
+        "render_distance": render_distance,
         "started_utc": datetime.fromtimestamp(started, timezone.utc).isoformat(),
         "capture_status": status, "game_exited_cleanly": exited,
         "instance": str(instance), "log_copy": str(log_copy),
@@ -333,6 +347,8 @@ def main() -> int:
     parser.add_argument("--variants", nargs="*", default=BASELINE,
                         help="variant labels, or 'baseline' / 'ser_ab' / 'all'")
     parser.add_argument("--timeout", type=float, default=480)
+    parser.add_argument("--render-distance", type=int, default=16,
+                        help="controlled render distance for a stable scene that fits the native budget (RD32 needs BLAS compaction)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -361,7 +377,7 @@ def main() -> int:
         print(f"[bench] launcher not found: {args.launcher}", file=sys.stderr)
         return 2
     args.scratch.mkdir(parents=True, exist_ok=True)
-    backup = set_window(args.instance, 1920, 1080)
+    backup = set_window(args.instance, 1920, 1080, args.render_distance)
     (args.scratch / "window-backup.json").write_text(json.dumps(backup), encoding="utf-8")
     summary = []
     try:
@@ -370,7 +386,8 @@ def main() -> int:
                 print("[bench] previous game did not exit; aborting", file=sys.stderr)
                 break
             summary.append(run_variant(label, VARIANTS[label], args.instance, args.launcher,
-                                       args.out, args.scratch, args.revision, args.timeout))
+                                       args.out, args.scratch, args.revision, args.timeout,
+                                       args.render_distance))
     finally:
         stop_launcher()
         restore_files(args.instance, backup)
