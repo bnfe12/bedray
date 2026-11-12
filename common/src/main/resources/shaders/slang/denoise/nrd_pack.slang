@@ -4,6 +4,7 @@ public module nrd_pack;
 
 import "tonemap_curve.slang";
 import "denoise/material_factors.slang";
+import "denoise/rr_depth.slang";
 
 struct NrdPackPush {
     uint normalEncoding;
@@ -65,7 +66,9 @@ float nrdHitDistanceNormalization(float viewZ, float3 parameters, float roughnes
 }
 
 bool nrdInvalid3(float3 value) { return any(isnan(value)) || any(isinf(value)); }
-bool nrdIgnored(float viewZ, NrdPackPush pc) { return !(abs(viewZ) < pc.denoisingRange); }
+bool nrdIgnored(float viewZ, NrdPackPush pc) {
+    return pc.denoiser == 2u ? !rrHasSurfaceDepth(viewZ) : !(abs(viewZ) < pc.denoisingRange);
+}
 
 struct NrdPackInput {
     float viewZ;

@@ -94,7 +94,6 @@ screenshots of the right-hand panel come from `-Dvkbridge.autotest=settings_prev
 | O | Toggle ray tracing on / off |
 | I | Cycle the tracing mode |
 | U | Cycle the denoiser |
-| Y | Toggle voxel sharpness (geometric normals) |
 | K | Toggle the debug overlay |
 
 ## `config/bedray.toml`

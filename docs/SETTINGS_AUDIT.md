@@ -55,7 +55,6 @@ failure. These diagnostics describe current capture/command recording, not visua
 | | `path_distance` Ray Distance | longest bounce ray | medium | ADVANCED (was Expert) |
 | | `path_denoiser` Denoiser | Off / NRD / DLSS Ray Reconstruction | medium | ADVANCED. Not an essential: the fallback to accumulation when a library is missing already happens automatically (logged), so the default NRD needs no choice |
 | | `path_caustics` Water Caustics | focused sunlight under water | medium | ADVANCED (off by default) |
-| | `dlss_rr_geometric_normals` Sharp Block Edges | normals fed to Ray Reconstruction | none | ADVANCED, row only with Ray Reconstruction selected (was in an "Advanced and Experimental" page) |
 | Light & Atmosphere | `atm_godrays_strength` | beam brightness | none | ADVANCED (row hidden while Light Shafts are off) |
 | | `atm_bloom`, `atm_bloom_strength` | glow around bright lights | low | ADVANCED (new in the UI; the toggle was only in `RtAtmosphereSettings`) |
 | | `atm_sunglare` | halo around the sun | none | ADVANCED |

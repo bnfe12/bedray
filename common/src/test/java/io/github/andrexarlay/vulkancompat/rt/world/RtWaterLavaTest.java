@@ -100,7 +100,6 @@ public class RtWaterLavaTest {
             | RtFrameParams.FLAG_AUTO_EXPOSURE
             | RtFrameParams.FLAG_GI
             | RtFrameParams.FLAG_AUTO_NORMALS
-            | RtFrameParams.FLAG_GEOMETRIC_NORMALS
             | RtFrameParams.FLAG_VOLUMETRIC_FOG;
 
         assertEquals(0, allOtherFlags & RtFrameParams.FLAG_WATER_REALISTIC,

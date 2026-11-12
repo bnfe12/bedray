@@ -25,7 +25,8 @@ final class NativeSectionCapture {
         void sectionBuilt(DecodedSection section, int[] quadFlags);
         void sectionRemoved(long key);
     }
-    record Result(int queued, int pending, long nearestSq, boolean rescanned, int omittedByCapacity) {}
+    record Result(int queued, int pending, long nearestSq, boolean rescanned, int omittedByCapacity,
+                  int oversizedSections, int largestOversizedQuads, long largestOversizedSection) {}
     private record Focus(int x, int y, int z, int radiusXz, int radiusY) {}
     private record Capture(DecodedSection section, long tagHash) {}
 
@@ -39,6 +40,9 @@ final class NativeSectionCapture {
     private List<DecodedSection> pending = List.of();
     private int cursor;
     private int omittedByCapacity;
+    private int oversizedSections;
+    private int largestOversizedQuads;
+    private long largestOversizedSection;
     private Focus focus;
     private long sourceVersion = -1;
     private long structureVersion;
@@ -105,7 +109,8 @@ final class NativeSectionCapture {
             }
             cursor++;
         }
-        return new Result(queued, pending.size() - cursor, nearest, rescan, omittedByCapacity);
+        return new Result(queued, pending.size() - cursor, nearest, rescan, omittedByCapacity,
+            oversizedSections, largestOversizedQuads, largestOversizedSection);
     }
 
     private void rescan(Focus next) {
@@ -120,10 +125,24 @@ final class NativeSectionCapture {
             }
         }
         ArrayList<DecodedSection> queue = new ArrayList<>();
+        oversizedSections = 0;
+        largestOversizedQuads = 0;
+        largestOversizedSection = 0;
         source.forEach(section -> {
             Capture old = accepted.get(section.key);
-            if ((old == null || old.section() != section)
-                    && inRadius(section, next, next.radiusXz(), next.radiusY())) queue.add(section);
+            if (old != null && old.section() == section) return;
+            if (!inRadius(section, next, next.radiusXz(), next.radiusY())) return;
+            int quads = section.totalQuads();
+            if (quads > BedraySceneGeometry.MAX_SECTION_QUADS) {
+                // Keep the last representable mesh, if any, until another capture replaces it or the section unloads.
+                oversizedSections++;
+                if (quads > largestOversizedQuads) {
+                    largestOversizedQuads = quads;
+                    largestOversizedSection = section.key;
+                }
+                return;
+            }
+            queue.add(section);
         });
         Comparator<DecodedSection> nearestFirst = Comparator
             .<DecodedSection>comparingLong(section -> distanceSq(section, next, 2))
@@ -184,6 +203,9 @@ final class NativeSectionCapture {
         pending = List.of();
         cursor = 0;
         omittedByCapacity = 0;
+        oversizedSections = 0;
+        largestOversizedQuads = 0;
+        largestOversizedSection = 0;
         focus = null;
         sourceVersion = -1;
     }

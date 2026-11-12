@@ -43,6 +43,18 @@ class BedrayNrdPackNativeTest {
         }
     }
 
+    @Test void rrOmitsBothNormalSlotsAndRequiresItsHitDistanceOutput() {
+        var rr = new BedrayNrdPackNative.Settings(0, 0, 2, 0, 3, .1f, 20, 100, 1, 0);
+        long[] inputs = views();
+        inputs[1] = inputs[5] = 0;
+        BedrayNrdPackNative.validate(11, 17, inputs, BedrayNrdPackNative.PACK, 19, 9, rr);
+        assertThrows(IllegalArgumentException.class,
+            () -> BedrayNrdPackNative.validate(11, 17, inputs, BedrayNrdPackNative.PACK, 19, 9, settings()));
+        inputs[12] = 0;
+        assertThrows(IllegalArgumentException.class,
+            () -> BedrayNrdPackNative.validate(11, 17, inputs, BedrayNrdPackNative.PACK, 19, 9, rr));
+    }
+
     @Test void compatibilityInputKeepsLegacyOffsetsAndExtentAgreement() {
         var input=ByteBuffer.allocate(56).order(ByteOrder.nativeOrder());
         input.putInt(0,2).putInt(4,1).putInt(8,0).putInt(12,3);

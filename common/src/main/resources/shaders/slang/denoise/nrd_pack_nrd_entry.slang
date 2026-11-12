@@ -1,6 +1,7 @@
 // NRD-only resources must not enter RR's RG16F motion contract.
 public module nrd_pack_nrd_entry;
 __exported import "denoise/nrd_pack_entry.slang";
+[[vk::image_format("rgba16f")]] [[vk::binding(1, 0)]] RWTexture2D<float4> gbNormalRough;
 [[vk::image_format("rgba8")]] [[vk::binding(3, 0)]] RWTexture2D<float4> gbAlbedo;
 [[vk::image_format("rgba16f")]] [[vk::binding(12, 0)]] RWTexture2D<float4> nrdInMotion;
 
