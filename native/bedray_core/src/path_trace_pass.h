@@ -2,6 +2,7 @@
 
 #include "bedray_core.h"
 #include "core_internal.h"
+#include "path_trace_layout.h"
 #include "rc_field_pass.h"
 
 #include <bedray/gpu_buffers.hpp>
@@ -111,6 +112,23 @@ private:
     void retire_pt_ring() noexcept;
     BedrayStatus pin_image(gpu::ImageId id, RecordingPins& pins, BedrayError* error);
     BedrayStatus pin_buffer(gpu::BufferId id, RecordingPins& pins, BedrayError* error);
+    // Render-stage recorders (path_trace_record.cpp): each records one dispatch
+    // group of a frame render() has already validated and traced. They report
+    // DEVICE_LOST through device_lost() exactly where the inline stages did.
+    BedrayStatus record_pt_spatial_stage(const BedrayPathTraceFrameDesc& desc,
+        const std::array<BedrayResource, 30>& trace_resources, const BedrayResource& pt_resource,
+        const PathTracePush& trace_push, std::uint64_t program_pt_spatial, bool pt_spatial,
+        VkCommandBuffer command, BedrayError* error);
+    BedrayStatus record_di_spatial_stage(const BedrayPathTraceFrameDesc& desc,
+        std::uint32_t di_flags, std::uint32_t di_parity, const BedrayPathTraceBuffer& emitters,
+        const BedrayPathTraceBuffer& reservoirs, const BedrayPathTraceRange& entity_rects,
+        const BedrayPathTraceRange& entity_texels, const gpu::BufferView& frame_view,
+        VkCommandBuffer command, BedrayError* error);
+    BedrayStatus record_display_resolve(const BedrayPathTraceFrameDesc& desc,
+        std::uint32_t write, std::uint32_t read, const gpu::BufferView& frame_view,
+        bool reset_history, BedrayError* error);
+    void publish_frame(bool native_di_active, bool native_pt_active, bool pt_spatial,
+        VkCommandBuffer command);
     void device_lost() noexcept;
     void reset_state() noexcept;
 
