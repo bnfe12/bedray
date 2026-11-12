@@ -572,15 +572,16 @@ public final class RtFrameRenderer {
         return true;
     }
 
+    /** Trace extent of the last frame that reached path tracing, for the ReSTIR PT ring size check. */
+    private static volatile int lastTraceWidth;
+    private static volatile int lastTraceHeight;
+    private static final java.util.regex.Pattern REQUEST_BYTES = java.util.regex.Pattern.compile("request_bytes=(\\d+)");
+
     /**
      * The ReSTIR PT ring is the one large optional buffer of the path tracer. When it cannot be allocated (the native core
      * reports "ReSTIR PT ring", the shared memory service a failed buffer_create of exactly the ring's size), the frame
      * is dropped, ReSTIR PT is switched off for the session and tracing continues without it.
      */
-    /** Trace extent of the last frame that reached path tracing, for the ReSTIR PT ring size check. */
-    private static volatile int lastTraceWidth;
-    private static volatile int lastTraceHeight;
-
     private static boolean recoverPtRingOutOfMemory(Throwable failure) {
         if (world == null || RtSlangPathPass.ptOutOfMemory) return false;
         String reason = null;
@@ -590,7 +591,7 @@ public final class RtFrameRenderer {
             if (m.contains("ReSTIR PT ring")) {
                 reason = "native_pt_ring";
             } else if (m.contains("buffer_create") && m.contains("request_bytes=")) {
-                java.util.regex.Matcher q = java.util.regex.Pattern.compile("request_bytes=(\\d+)").matcher(m);
+                java.util.regex.Matcher q = REQUEST_BYTES.matcher(m);
                 int w = Math.max(1, lastTraceWidth);
                 int h = Math.max(1, lastTraceHeight);
                 if (q.find() && Long.parseLong(q.group(1)) == RtPathTraceSlangPass.ptReservoirBytes(w, h)) {

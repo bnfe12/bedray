@@ -23,7 +23,7 @@ struct BloomPush {
     float4x4 invViewProj;   //   0 clip -> camera-relative world (no jitter)
     float4 sunDir;          //  64 xyz towards the key light, w glare strength (0 = off)
     float4 camOrigin;       //  80 xyz bob origin of the camera, w 1 = flip Y
-    float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w darkness 0..1 (1 - daylight)
+    float4 p0;              //  96 x threshold (scene units), y knee, z bloom strength, w darkness 0..1 (1 - daylight; not read by the shader)
     float4 p1;              // 112 x 1 = image is tone mapped, y scatter, zw sun position in NDC
 };
 
@@ -70,11 +70,9 @@ bool bloomIsSky(Sampler2D depth, int2 p) {
 // tonemap pushed into its shoulder is therefore taken as clipped: its glow is the rebuilt colour times
 // BLOOM_CLIP_GAIN, ramped in from the display value of the scene threshold up to white. Bedrock RTX torches carry a
 // halo about one block wide; this is the LDR stand-in until the pass reads the HDR resolve.
-// p0.w carries how dark the scene is (1 - daylight, RtAtmosphere): by day a clipped pixel may be a sunlit white wall,
-// at night it is a light source, so the gain runs from 3 (day) to 3 (night; 6 read as a harsh star, owner 2026-11-12). Only pixels at display 0.97+ ramp in: at night
-// with a 0.9 threshold and gain 16 the torch-lit floor itself bloomed into a fog (autotest rt_modes A, 2026-11-11).
-static const float BLOOM_CLIP_GAIN_DAY = 3.0;
-static const float BLOOM_CLIP_GAIN_NIGHT = 3.0;
+// One gain day and night: a night gain of 16 and then 6 read as a harsh star around every flame (owner, 2026-11-12).
+// The day/night split of the source is the threshold alone (RtAtmosphere lowers it without daylight).
+static const float BLOOM_CLIP_GAIN = 3.0;
 
 float3 bloomClippedSource(float3 display, BloomPush pc) {
     float md = bloomPeak(display);
@@ -83,7 +81,7 @@ float3 bloomClippedSource(float3 display, BloomPush pc) {
     if (w <= 0.0) {
         return float3(0.0);
     }
-    return tonemapInverse(display) * (w * lerp(BLOOM_CLIP_GAIN_DAY, BLOOM_CLIP_GAIN_NIGHT, saturate(pc.p0.w)));
+    return tonemapInverse(display) * (w * BLOOM_CLIP_GAIN);
 }
 
 // One prefiltered tap of the first downsample. The sky contributes nothing, so its bright edge cannot glow.

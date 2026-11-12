@@ -107,13 +107,6 @@ public final class RtSlangPathPass implements RtPass {
     static final int MAX_SURFACE_STEPS = 16;
 
     private boolean accumulateRequested() {
-        // DLSS Ray Reconstruction is the temporal accumulator of this frame. A reprojected running mean in front of it
-        // was a second history: while the camera turned, the pixels entering at the screen edge carried stale light and
-        // the borders smeared (moving frame minus its converged reference at the same pose: left 40 px +9.4, bottom
-        // +7.8 of 255 with accumulation, -0.9 / -1.5 without; autotest rt_modes J mv=realturn, 2026-11-12).
-        if (requestedGbuffer) {
-            return false;
-        }
         return rayMode ? RtSettings.raysAccumulation() : RtSettings.accumulate();
     }
 
@@ -387,8 +380,14 @@ public final class RtSlangPathPass implements RtPass {
         int settingsHash = Objects.hash(params.bounces, params.rayDistance, accumulateRequested(), params.mode,
             RtSettings.pathPreset, RtSettings.preset, rayEffectFlags(), diffuseBounceDistance(),
             specularBounceDistance(), emitterBounceDistance(params), emitterCandidates());
+        // Under DLSS Ray Reconstruction the running mean only runs while the camera stands still. A reprojected mean in
+        // front of RR was a second history: while the camera turned, the pixels entering at the screen edge carried stale
+        // light and the borders smeared (moving frame minus its converged reference at the same pose: left 40 px +9.4,
+        // bottom +7.8 of 255 with it, about 0 without; autotest rt_modes J mv=realturn, 2026-11-12). Without it at all,
+        // a still view kept the 1-spp shimmer RR leaves (owner: "the light stability is terrible", 2026-11-12).
+        boolean rrMoving = requestedGbuffer && !params.cameraStatic;
         if (forceReset || lightingChanged || params.sceneChanged || settingsHash != lastSettingsHash
-            || !accumulateRequested()) {
+            || !accumulateRequested() || rrMoving) {
             accumFrames = 0;
             historyWritten = false;
         } else if (accumFrames < RtFrameParams.MAX_ACCUM) {

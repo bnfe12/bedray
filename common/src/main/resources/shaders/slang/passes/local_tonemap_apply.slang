@@ -53,5 +53,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float localBase = wSum > 1.0e-6 ? baseSum / wSum : own;
     // The sky keeps the global curve: it is display colour rebuilt into scene units, not light to compress.
     float gain = localTonemapIsSky(displayDepth[p]) ? 1.0 : exp2(localTonemapGainStops(localBase, pc));
+    // A pixel far brighter than its own neighbourhood (a flame, a lamp face) keeps its brightness: compressed with the
+    // pool around it, it stopped reaching the bloom (torch halo +15 -> +10 of 255, audit of 2026-11-12).
+    gain = lerp(gain, max(gain, 1.0), smoothstep(1.5, 3.0, own - localBase));
     outputColor[p] = float4(tonemapColor(c * gain), 1.0);
 }
