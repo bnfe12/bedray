@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "label": "ser_pt_on",
+  "variant_props": {
+    "vkbridge.autotest": "native_perf",
+    "vkrtx.rt.adaptive_quality": "off",
+    "vkrtx.autotest.captureLabel": "ser_pt_on",
+    "vkrtx.autotest.revisionHint": "jar-cf3f5f97_native-52e32426_abi2",
+    "vkrtx.rt.path_denoiser": "dlss_rr",
+    "vkrtx.rt.path_restir_di": "true",
+    "bedray.rt.nativeMemoryMiB": "4096",
+    "bedray.rt.ser": "true",
+    "vkrtx.rt.path_restir_pt": "true",
+    "vkrtx.rt.path_restir_pt_spatial": "true"
+  },
+  "revision_hint": "jar-cf3f5f97_native-52e32426_abi2",
+  "render_distance": 16,
+  "started_utc": "2026-11-12T19:31:41.477006+00:00",
+  "capture_status": "harness_fail",
+  "game_exited_cleanly": true,
+  "instance": "C:\\Users\\andre\\AppData\\Roaming\\FreesmLauncher\\instances\\Vulkan Experimental RT 26.3",
+  "log_copy": "C:\\Dev\\Sky\\scratch\\bedray-gi-bench-20261112\\ser-ab\\latest-ser_pt_on.log",
+  "capture_dir": "C:\\Users\\andre\\AppData\\Roaming\\FreesmLauncher\\instances\\Vulkan Experimental RT 26.3\\minecraft\\autotest\\native_perf\\capture-f20a1a91-b692-4a7a-8909-1d84a6bd663a",
+  "capture_sha256": {
+    "frames.csv": "e9bfe742b08f1aa4766f0ce7e5a5a4b4ea0f2d1e36d95c6b36128fc18f0fd71f",
+    "manifest.json": "396d2a3ef1f95de13ae380717f44adec59061a7802f4dae1c586ce4ce747620e"
+  },
+  "acceptance": {
+    "valid_native_capture": false,
+    "error": "incomplete capture: scenario_timeout_waiting_for_world_or_capture"
+  },
+  "medians": {},
+  "log_evidence": {
+    "raygen_selections": [
+      {
+        "pass": "path_trace_scene.ser",
+        "stage": "raygeneration",
+        "ser_requested": "true",
+        "reordering_hint": "reorder",
+        "enabled": "0x1e77"
+      }
+    ],
+    "native_scene": {
+      "dll": "bedray_core.dll",
+      "abi": 2,
+      "frames": 8,
+      "max_sections": 16383,
+      "max_geometry_mb": 48,
+      "features": "0x1"
+    },
+    "denoiser": {
+      "requested": "DLSS_RR",
+      "active": "dlss_rr"
+    },
+    "memory": {
+      "samples": 4,
+      "reserved_max": 2462875648,
+      "used_max": 2203916432,
+      "peak_reserved_max": 2513043840,
+      "heap_usage_max": 4474970112
+    },
+    "scene_sections": {
+      "sections": 4279,
+      "quads": 3676258,
+      "solid": 1956477,
+      "cutout": 1586944,
+      "translucent": 132837
+    },
+    "rt_pass_gpu_ewma": {
+      "samples": 126,
+      "work_ms_median": 52.05,
+      "work_ms_p95": 55.8,
+      "work_ms_mean": 50.621
+    },
+    "autotest_events": [
+      "event=installed scenario=native_perf",
+      "event=armed scenario=native_perf",
+      "event=world_ready terrainComplete=true grounded=true settleFrames=135 yaw=135.00 pitch=12.00 x=-41.50 y=89.00 z=2.50",
+      "scenario=native_perf event=capture_saved directory=<gameDir>\\autotest\\native_perf\\capture-f20a1a91-b692-4a7a-8909-1d84a6bd663a frames=0 reason=scenario_timeout_waiting_for_world_or_capture fps_acceptance=offline_required",
+      "scenario=native_perf frames=2699 yaw=135.00 pitch=12.00 x=-41.50 y=89.00 z=2.50 result=FAIL error=\"incomplete native_perf capture: scenario_timeout_waiting_for_world_or_capture\""
+    ]
+  }
+}
