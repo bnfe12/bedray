@@ -10,18 +10,23 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 public final class RtExposure {
     // 0.22 * 2^-0.75: the artist bias of RTX Remix Minecraft (packaging/rtx.conf, "the artist's -0.75 EV bias" in
     // rtx.localtonemap.exposure). At 0.22 a room lit only by lamps was metered up to daylight brightness and every source
-    // read as too bright (owner, autotest scenes J and N, 2026-11-12).
-    public static final float KEY = 0.131f;
+    // read as too bright (owner, autotest scenes J and N, 2026-11-12). 0.131 still let a dim torch room meter up to a
+    // washed-out picture (owner: "авто экспозиция бывает очень яркая и пересвечено", 2026-11-12); 0.115 aims the meter a
+    // little lower so the same room settles darker, with the gentler STRENGTH and lower MAX below.
+    public static final float KEY = 0.115f;
     public static final float FIXED = 1.1f;
     public static final float MIN = 1.0f / 64.0f;
     /**
-     * Brightest auto exposure (4 = +2 EV over the fixed one). It was 16: a torch-lit room or a cave has a log-average luminance
-     * far below KEY, so the old range lifted every dim scene by up to +4 EV, washing orange / red light over the walls and
-     * erasing the dark of caves (the "everything is too bright / flat" reports). A cave must stay dark; a dim room only needs a nudge.
+     * Brightest auto exposure (3 = ~+1.6 EV over the fixed one). It was 16, then 4: a torch-lit room or a cave has a
+     * log-average luminance far below KEY, so the old range lifted every dim scene by up to +4 EV, washing orange / red
+     * light over the walls and erasing the dark of caves (the "everything is too bright / flat" reports). At 4 a dim room
+     * still blew out its torch (owner: "авто экспозиция очень пересвечено", 2026-11-12); 3 caps the lift so a cave stays
+     * dark and a dim room only gets a nudge. The night ceiling (RtSkyState.NIGHT_MAX_EXPOSURE = 2.2) is unchanged.
      */
-    public static final float MAX = 4f;
-    /** Partial adaptation: the exposure closes only this fraction of the gap (in log space) to KEY / average, like the eye. */
-    public static final float STRENGTH = 0.6f;
+    public static final float MAX = 3f;
+    /** Partial adaptation: the exposure closes only this fraction of the gap (in log space) to KEY / average, like the eye.
+     *  0.6 lifted a dim torch room too hard; 0.55 adapts a little less aggressively so bright sources in a dark room blow out less. */
+    public static final float STRENGTH = 0.55f;
     /** The measured log-average luminance is smoothed with this time constant (seconds) before it drives the exposure. */
     public static final float TAU_METER = 0.45f;
     /** Slew limit of the exposure in EV per second (brighter / darker): no pumping when a bright sky enters the view. */

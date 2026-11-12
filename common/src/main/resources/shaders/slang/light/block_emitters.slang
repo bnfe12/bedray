@@ -28,7 +28,9 @@ static const uint EMITTER_RECORD_FLOATS = 24u;
 // SURFACE_EMISSION_GAIN). Every lamp, torch and lantern lit a pool about two blocks wide where Bedrock RTX lights a
 // room-sized pool from the same block (owner screenshots, 2026-11-11: "every light source", not only torches).
 // 1.8 lit a room of mixed lamps far past daylight (owner: "the sources are just too bright", scene N, 2026-11-12).
-static const float EMITTER_LIGHT_GAIN = 1.2;
+// 1.2 still read as too bright a torch glow (owner: "факел слишком яркий, чуть тусклее", 2026-11-12); 1.0 throws a sixth
+// less light onto the pool, and the face gain fell with it (SURFACE_EMISSION_GAIN), so the flame and its pool dim together.
+static const float EMITTER_LIGHT_GAIN = 1.0;
 
 // Falloff of a source.
 float emitterAttenuation(float d2) {
