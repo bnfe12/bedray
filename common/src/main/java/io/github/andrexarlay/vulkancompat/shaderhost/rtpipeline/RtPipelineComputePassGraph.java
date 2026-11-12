@@ -1,6 +1,6 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.OutputBuffer;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineConfig.OutputBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -20,15 +20,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Pass graph, dispatch dimension calculator, and memory barrier analyzer for the 27 compute passes of Dirt RT.
+ * Pass graph, dispatch dimension calculator, and memory barrier analyzer for the compute passes of a Vulkanite RT-pipeline pack.
  * <p>
- * Dirt RT post-processing pipeline uses 27 compute passes ({@code composite*.csh}) executing SVGF denoising,
+ * A Vulkanite RT-pipeline pack such as Dirt RT uses 27 compute passes ({@code composite*.csh}) executing SVGF denoising,
  * temporal accumulation, A-trous filtering, ReSTIR path guiding, Bloom downsampling/blurring, and auto exposure.
  * <p>
  * Workgroup dispatch adheres to the 8x8 tiled workgroup model ({@code local_size_x = 8, local_size_y = 8}),
  * ensuring optimal cache locality and full alignment with 8x8 tiled SSBO address indexing.
  */
-public final class DirtRtComputePassGraph {
+public final class RtPipelineComputePassGraph {
 
     public static final int DEFAULT_LOCAL_SIZE_X = 8;
     public static final int DEFAULT_LOCAL_SIZE_Y = 8;
@@ -133,7 +133,7 @@ public final class DirtRtComputePassGraph {
         }
 
         public DispatchDim dispatchDim(int width, int height) {
-            return DirtRtComputePassGraph.dispatchDim(width, height, localSizeX, localSizeY);
+            return RtPipelineComputePassGraph.dispatchDim(width, height, localSizeX, localSizeY);
         }
     }
 
@@ -270,7 +270,7 @@ public final class DirtRtComputePassGraph {
     }
 
     // =========================================================================
-    // Canonical 27 Dirt RT compute passes definition
+    // Canonical 27 compute passes (Dirt RT example) definition
     // =========================================================================
 
     public static final List<ComputePass> CANONICAL_PASSES = List.of(
@@ -472,7 +472,7 @@ public final class DirtRtComputePassGraph {
     private final Map<String, ComputePass> passByName;
     private final List<MemoryBarrierInfo> barriers;
 
-    public DirtRtComputePassGraph(List<ComputePass> passes) {
+    public RtPipelineComputePassGraph(List<ComputePass> passes) {
         Objects.requireNonNull(passes, "passes must not be null");
         this.passes = Collections.unmodifiableList(new ArrayList<>(passes));
         Map<String, ComputePass> byName = new HashMap<>();
@@ -490,16 +490,16 @@ public final class DirtRtComputePassGraph {
     }
 
     /**
-     * Creates the default graph with all 27 canonical Dirt RT compute passes.
+     * Creates the default graph with all 27 canonical compute passes (Dirt RT example).
      */
-    public static DirtRtComputePassGraph createDefault() {
-        return new DirtRtComputePassGraph(CANONICAL_PASSES);
+    public static RtPipelineComputePassGraph createDefault() {
+        return new RtPipelineComputePassGraph(CANONICAL_PASSES);
     }
 
     /**
      * Analyzes and registers compute passes from a collection of shader filenames.
      */
-    public static DirtRtComputePassGraph analyzeAndRegister(Collection<String> filenames) {
+    public static RtPipelineComputePassGraph analyzeAndRegister(Collection<String> filenames) {
         Objects.requireNonNull(filenames, "filenames must not be null");
 
         // Canonical map for quick lookup
@@ -560,7 +560,7 @@ public final class DirtRtComputePassGraph {
             }
         }
 
-        return new DirtRtComputePassGraph(ordered);
+        return new RtPipelineComputePassGraph(ordered);
     }
 
     public int passCount() {

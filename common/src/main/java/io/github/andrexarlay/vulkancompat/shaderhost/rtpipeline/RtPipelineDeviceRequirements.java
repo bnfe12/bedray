@@ -1,4 +1,4 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
 import io.github.andrexarlay.vulkanbridge.api.DeviceRequirement;
@@ -20,9 +20,9 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 /**
- * Device requirements and properties for Dirt RT ray-tracing pipeline ({@code VK_KHR_ray_tracing_pipeline}).
+ * Device requirements and properties for the ray-tracing-pipeline pack host ({@code VK_KHR_ray_tracing_pipeline}).
  * <p>
- * Dirt RT uses the hardware ray-tracing pipeline (raygen, miss, closest-hit, any-hit) rather than ray queries.
+ * These packs use the hardware ray-tracing pipeline (raygen, miss, closest-hit, any-hit) rather than ray queries.
  * This class encapsulates:
  * <ul>
  *   <li>The device requirement for {@code VK_KHR_ray_tracing_pipeline} and {@code rayTracingPipeline} feature.</li>
@@ -32,12 +32,12 @@ import java.util.function.Supplier;
  *       exposure to {@link io.github.andrexarlay.vulkancompat.shaderhost.ShaderHost#extraDeviceExtensions()}.</li>
  * </ul>
  */
-public final class DirtRtDeviceRequirements {
-    private static final Logger LOGGER = LoggerFactory.getLogger("VulkanRtx/DirtRt");
+public final class RtPipelineDeviceRequirements {
+    private static final Logger LOGGER = LoggerFactory.getLogger("VulkanRtx/RtPipeline");
 
-    public static final String ID = "VKB Dirt RT Ray Tracing Pipeline";
-    public static final String LATE_PROVIDER_ID = "bedray.dirtrt_pipeline";
-    public static final String EXTENSION_NAME = DirtRtPipelineConfig.REQUIRED_EXTENSION;
+    public static final String ID = "VKB Ray Tracing Pipeline";
+    public static final String LATE_PROVIDER_ID = "bedray.rt_pipeline";
+    public static final String EXTENSION_NAME = RtPipelineConfig.REQUIRED_EXTENSION;
     public static final Set<String> DEVICE_EXTENSIONS = Set.of(EXTENSION_NAME);
 
     // Standard Vulkan default properties expected for ray-tracing pipelines
@@ -45,7 +45,7 @@ public final class DirtRtDeviceRequirements {
     public static final int DEFAULT_SHADER_GROUP_HANDLE_ALIGNMENT = 32;
     public static final int DEFAULT_SHADER_GROUP_BASE_ALIGNMENT = 64;
 
-    private DirtRtDeviceRequirements() {}
+    private RtPipelineDeviceRequirements() {}
 
     /**
      * Physical device properties relevant to SBT layout and pipeline dispatch.
@@ -56,15 +56,15 @@ public final class DirtRtDeviceRequirements {
      * @param maxRayRecursionDepth           Maximum ray recursion depth supported by hardware.
      * @param maxShaderGroupStride           Maximum stride between shader group records.
      */
-    public record DirtRtProperties(
+    public record RtPipelineProperties(
             int shaderGroupHandleSize,
             int shaderGroupHandleAlignment,
             int shaderGroupBaseAlignment,
             int maxRayRecursionDepth,
             int maxShaderGroupStride
     ) {
-        public static DirtRtProperties defaults() {
-            return new DirtRtProperties(
+        public static RtPipelineProperties defaults() {
+            return new RtPipelineProperties(
                     DEFAULT_SHADER_GROUP_HANDLE_SIZE,
                     DEFAULT_SHADER_GROUP_HANDLE_ALIGNMENT,
                     DEFAULT_SHADER_GROUP_BASE_ALIGNMENT,
@@ -73,8 +73,8 @@ public final class DirtRtDeviceRequirements {
             );
         }
 
-        public DirtRtPipelineConfig.SbtLayout toSbtLayout() {
-            return new DirtRtPipelineConfig.SbtLayout(
+        public RtPipelineConfig.SbtLayout toSbtLayout() {
+            return new RtPipelineConfig.SbtLayout(
                     shaderGroupHandleSize,
                     shaderGroupHandleAlignment,
                     shaderGroupBaseAlignment
@@ -115,7 +115,7 @@ public final class DirtRtDeviceRequirements {
 
     /**
      * Requirement built from the compiled pack: the ray-tracing pipeline extension plus every device feature the pack's
-     * SPIR-V needs ({@link DirtRtPackProgram.Result#features()}). The acceleration-structure group is repeated here so this
+     * SPIR-V needs ({@link RtPipelinePackProgram.Result#features()}). The acceleration-structure group is repeated here so this
      * group is self-consistent: {@code VK_KHR_ray_tracing_pipeline} depends on it, and an all-or-nothing group must never
      * enable an extension whose dependency another group might have dropped.
      */
@@ -137,29 +137,29 @@ public final class DirtRtDeviceRequirements {
     }
 
     /**
-     * Unconditionally registers the Dirt RT pipeline requirement into the given Core registry.
+     * Unconditionally registers the RT-pipeline requirement into the given Core registry.
      */
     public static void register(DeviceFeatureRegistry registry) {
         register(registry, () -> Boolean.TRUE);
     }
 
     /**
-     * Registers the Dirt RT pipeline requirement with a conditional predicate.
+     * Registers the RT-pipeline requirement with a conditional predicate.
      */
     public static void register(DeviceFeatureRegistry registry, Supplier<Boolean> condition) {
         registry.register(requirement(condition));
-        LOGGER.info("[VKB-DIRTRT] Registered device requirement '{}' with extensions {}", ID, DEVICE_EXTENSIONS);
+        LOGGER.info("[VKB-RTPIPELINE] Registered device requirement '{}' with extensions {}", ID, DEVICE_EXTENSIONS);
     }
 
     /**
      * Registers this requirement as a late provider in the device feature registry.
      */
     public static void registerLateProvider(DeviceFeatureRegistry registry) {
-        registry.addLateProvider(LATE_PROVIDER_ID, DirtRtDeviceRequirements::register);
+        registry.addLateProvider(LATE_PROVIDER_ID, RtPipelineDeviceRequirements::register);
     }
 
     /**
-     * Extra device extensions required by Dirt RT in addition to the shared RT core.
+     * Extra device extensions required by the RT-pipeline pack host in addition to the shared RT core.
      * Compatible with {@link io.github.andrexarlay.vulkancompat.shaderhost.ShaderHost#extraDeviceExtensions()}.
      */
     public static Set<String> extraDeviceExtensions() {
@@ -195,7 +195,7 @@ public final class DirtRtDeviceRequirements {
     /**
      * Queries {@link VkPhysicalDeviceRayTracingPipelinePropertiesKHR} from the physical device.
      */
-    public static DirtRtProperties queryProperties(VkPhysicalDevice physicalDevice) {
+    public static RtPipelineProperties queryProperties(VkPhysicalDevice physicalDevice) {
         Objects.requireNonNull(physicalDevice, "physicalDevice must not be null");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps =
@@ -208,7 +208,7 @@ public final class DirtRtDeviceRequirements {
 
             VK11.vkGetPhysicalDeviceProperties2(physicalDevice, props2);
 
-            return new DirtRtProperties(
+            return new RtPipelineProperties(
                     rtProps.shaderGroupHandleSize(),
                     rtProps.shaderGroupHandleAlignment(),
                     rtProps.shaderGroupBaseAlignment(),

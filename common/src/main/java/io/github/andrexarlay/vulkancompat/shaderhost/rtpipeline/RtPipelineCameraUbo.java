@@ -1,4 +1,4 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -9,7 +9,7 @@ import java.nio.ByteOrder;
 import java.util.Objects;
 
 /**
- * Packs and serializes the 256-byte {@code CameraInfo} uniform buffer (UBO) for Dirt RT / Vulkanite ABI.
+ * Packs and serializes the 256-byte {@code CameraInfo} uniform buffer (UBO) for the Vulkanite RT-pipeline ABI.
  * <p>
  * Layout (std430 alignment):
  * <ul>
@@ -24,7 +24,7 @@ import java.util.Objects;
  *   <li>Offset 160..255 (96B): trailing padding to 256 bytes</li>
  * </ul>
  */
-public final class DirtRtCameraUbo {
+public final class RtPipelineCameraUbo {
 
     public static final int UBO_SIZE = 256;
 
@@ -69,7 +69,7 @@ public final class DirtRtCameraUbo {
     private final Vector3f cameraPosition = new Vector3f();
     private float pad1 = 0.0f;
 
-    public DirtRtCameraUbo() {
+    public RtPipelineCameraUbo() {
         for (int i = 0; i < CORNER_RAY_COUNT; i++) {
             cornerRays[i] = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
         }
@@ -78,7 +78,7 @@ public final class DirtRtCameraUbo {
     /**
      * Sets corner ray at specified index (0..3).
      */
-    public DirtRtCameraUbo setCornerRay(int index, float x, float y, float z, float w) {
+    public RtPipelineCameraUbo setCornerRay(int index, float x, float y, float z, float w) {
         if (index < 0 || index >= CORNER_RAY_COUNT) {
             throw new IndexOutOfBoundsException("Corner ray index out of range: " + index);
         }
@@ -86,12 +86,12 @@ public final class DirtRtCameraUbo {
         return this;
     }
 
-    public DirtRtCameraUbo setCornerRay(int index, Vector4f ray) {
+    public RtPipelineCameraUbo setCornerRay(int index, Vector4f ray) {
         Objects.requireNonNull(ray, "ray must not be null");
         return setCornerRay(index, ray.x, ray.y, ray.z, ray.w);
     }
 
-    public DirtRtCameraUbo setCornerRay(int index, Vector3f ray, float w) {
+    public RtPipelineCameraUbo setCornerRay(int index, Vector3f ray, float w) {
         Objects.requireNonNull(ray, "ray must not be null");
         return setCornerRay(index, ray.x, ray.y, ray.z, w);
     }
@@ -114,7 +114,7 @@ public final class DirtRtCameraUbo {
      *   <li>corner 3: (+xHalf, +yHalf, -1.0) [top-right]</li>
      * </ul>
      */
-    public DirtRtCameraUbo computeCornerRays(float fovDegrees, float aspectRatio) {
+    public RtPipelineCameraUbo computeCornerRays(float fovDegrees, float aspectRatio) {
         float halfFovRad = (float) Math.toRadians(fovDegrees * 0.5f);
         float yHalf = (float) Math.tan(halfFovRad);
         float xHalf = yHalf * aspectRatio;
@@ -131,7 +131,7 @@ public final class DirtRtCameraUbo {
      * Calculates corner rays by unprojecting NDC corners using the inverse projection matrix.
      * Matches Vulkanite {@code invProjMatrix.transformProject(ndcX, ndcY, 0, 1, tmp)}.
      */
-    public DirtRtCameraUbo computeCornerRays(Matrix4f projectionMatrix) {
+    public RtPipelineCameraUbo computeCornerRays(Matrix4f projectionMatrix) {
         Objects.requireNonNull(projectionMatrix, "projectionMatrix must not be null");
         Matrix4f invProj = new Matrix4f(projectionMatrix).invert();
         Vector3f tmp = new Vector3f();
@@ -150,7 +150,7 @@ public final class DirtRtCameraUbo {
         return this;
     }
 
-    public DirtRtCameraUbo setViewInverse(Matrix4f matrix) {
+    public RtPipelineCameraUbo setViewInverse(Matrix4f matrix) {
         Objects.requireNonNull(matrix, "matrix must not be null");
         this.viewInverse.set(matrix);
         return this;
@@ -160,7 +160,7 @@ public final class DirtRtCameraUbo {
         return new Matrix4f(viewInverse);
     }
 
-    public DirtRtCameraUbo setFrameId(int frameId) {
+    public RtPipelineCameraUbo setFrameId(int frameId) {
         this.frameId = frameId;
         return this;
     }
@@ -169,7 +169,7 @@ public final class DirtRtCameraUbo {
         return frameId;
     }
 
-    public DirtRtCameraUbo setFlags(int flags) {
+    public RtPipelineCameraUbo setFlags(int flags) {
         this.flags = flags;
         return this;
     }
@@ -178,7 +178,7 @@ public final class DirtRtCameraUbo {
         return flags;
     }
 
-    public DirtRtCameraUbo setWorldType(int worldType) {
+    public RtPipelineCameraUbo setWorldType(int worldType) {
         this.worldType = worldType;
         return this;
     }
@@ -187,7 +187,7 @@ public final class DirtRtCameraUbo {
         return worldType;
     }
 
-    public DirtRtCameraUbo setPad0(float pad0) {
+    public RtPipelineCameraUbo setPad0(float pad0) {
         this.pad0 = pad0;
         return this;
     }
@@ -196,17 +196,17 @@ public final class DirtRtCameraUbo {
         return pad0;
     }
 
-    public DirtRtCameraUbo setCameraPosition(float x, float y, float z) {
+    public RtPipelineCameraUbo setCameraPosition(float x, float y, float z) {
         this.cameraPosition.set(x, y, z);
         return this;
     }
 
-    public DirtRtCameraUbo setCameraPosition(double x, double y, double z) {
+    public RtPipelineCameraUbo setCameraPosition(double x, double y, double z) {
         this.cameraPosition.set((float) x, (float) y, (float) z);
         return this;
     }
 
-    public DirtRtCameraUbo setCameraPosition(Vector3f pos) {
+    public RtPipelineCameraUbo setCameraPosition(Vector3f pos) {
         Objects.requireNonNull(pos, "pos must not be null");
         this.cameraPosition.set(pos);
         return this;
@@ -216,7 +216,7 @@ public final class DirtRtCameraUbo {
         return new Vector3f(cameraPosition);
     }
 
-    public DirtRtCameraUbo setPad1(float pad1) {
+    public RtPipelineCameraUbo setPad1(float pad1) {
         this.pad1 = pad1;
         return this;
     }
@@ -295,9 +295,9 @@ public final class DirtRtCameraUbo {
     }
 
     /**
-     * Deserializes a DirtRtCameraUbo from a ByteBuffer at the given offset.
+     * Deserializes a RtPipelineCameraUbo from a ByteBuffer at the given offset.
      */
-    public static DirtRtCameraUbo deserialize(ByteBuffer buffer, int offset) {
+    public static RtPipelineCameraUbo deserialize(ByteBuffer buffer, int offset) {
         Objects.requireNonNull(buffer, "buffer must not be null");
         if (offset < 0 || buffer.capacity() - offset < UBO_SIZE) {
             throw new IllegalArgumentException("Insufficient buffer capacity for 256-byte CameraInfo UBO at offset " + offset);
@@ -306,7 +306,7 @@ public final class DirtRtCameraUbo {
         ByteOrder originalOrder = buffer.order();
         buffer.order(ByteOrder.LITTLE_ENDIAN);
         try {
-            DirtRtCameraUbo ubo = new DirtRtCameraUbo();
+            RtPipelineCameraUbo ubo = new RtPipelineCameraUbo();
             for (int i = 0; i < CORNER_RAY_COUNT; i++) {
                 int rayOff = offset + OFFSET_CORNER_RAYS + i * 16;
                 ubo.setCornerRay(i,
@@ -339,9 +339,9 @@ public final class DirtRtCameraUbo {
         }
     }
 
-    public static DirtRtCameraUbo deserialize(ByteBuffer buffer) {
+    public static RtPipelineCameraUbo deserialize(ByteBuffer buffer) {
         int pos = buffer.position();
-        DirtRtCameraUbo ubo = deserialize(buffer, pos);
+        RtPipelineCameraUbo ubo = deserialize(buffer, pos);
         buffer.position(pos + UBO_SIZE);
         return ubo;
     }

@@ -1,7 +1,7 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.OutputBuffer;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineConfig.OutputBuffer;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.system.MemoryUtil;
@@ -14,7 +14,7 @@ import java.nio.ByteOrder;
 import java.util.Objects;
 
 /**
- * Manages Set 3 SSBO buffers and FrameData serialization for the Dirt RT / Vulkanite pipeline.
+ * Manages Set 3 SSBO buffers and FrameData serialization for the Vulkanite RT-pipeline pack.
  * <p>
  * Set 3 consists of 5 storage buffers:
  * <ul>
@@ -26,7 +26,7 @@ import java.util.Objects;
  * </ul>
  * Also computes screen resolution allocation sizing and serializes std430-aligned 1024-byte {@code FrameData}.
  */
-public final class DirtRtSsboManager implements AutoCloseable {
+public final class RtPipelineSsboManager implements AutoCloseable {
 
     public static final int FRAME_DATA_SIZE = 1024;
 
@@ -190,15 +190,15 @@ public final class DirtRtSsboManager implements AutoCloseable {
     private int currentWidth = 0;
     private int currentHeight = 0;
 
-    public DirtRtSsboManager() {
+    public RtPipelineSsboManager() {
         this(null, false);
     }
 
-    public DirtRtSsboManager(RtMemory memory) {
+    public RtPipelineSsboManager(RtMemory memory) {
         this(memory, false);
     }
 
-    public DirtRtSsboManager(RtMemory memory, boolean useAligned128BGeometry) {
+    public RtPipelineSsboManager(RtMemory memory, boolean useAligned128BGeometry) {
         this.memory = memory;
         this.useAligned128BGeometry = useAligned128BGeometry;
     }
@@ -282,11 +282,11 @@ public final class DirtRtSsboManager implements AutoCloseable {
 
             int usage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-            geometryMaterialBuffer = memory.createBuffer("DirtRt_GeometryMaterialBuffer", geomSize, usage, false);
-            frameDataBuffer = memory.createBuffer("DirtRt_FrameData", FRAME_DATA_SIZE, usage, true);
-            diffuseBuffer = memory.createBuffer("DirtRt_DiffuseBuffer", diffuseSize, usage, false);
-            reflectBuffer = memory.createBuffer("DirtRt_ReflectBuffer", reflectSize, usage, false);
-            refractBuffer = memory.createBuffer("DirtRt_RefractBuffer", refractSize, usage, false);
+            geometryMaterialBuffer = memory.createBuffer("RtPipeline_GeometryMaterialBuffer", geomSize, usage, false);
+            frameDataBuffer = memory.createBuffer("RtPipeline_FrameData", FRAME_DATA_SIZE, usage, true);
+            diffuseBuffer = memory.createBuffer("RtPipeline_DiffuseBuffer", diffuseSize, usage, false);
+            reflectBuffer = memory.createBuffer("RtPipeline_ReflectBuffer", reflectSize, usage, false);
+            refractBuffer = memory.createBuffer("RtPipeline_RefractBuffer", refractSize, usage, false);
         }
 
         currentWidth = width;

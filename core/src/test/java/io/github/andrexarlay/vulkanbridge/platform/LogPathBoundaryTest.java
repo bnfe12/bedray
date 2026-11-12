@@ -75,8 +75,8 @@ public class LogPathBoundaryTest {
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/ShaderHostStartup.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/ShaderHostStatus.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/customrt/CustomRtStage.java",
-        "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/dirtrt/DirtRtPipeline.java",
-        "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/dirtrt/DirtRtRuntime.java",
+        "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/rtpipeline/RtPipelineStatus.java",
+        "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/rtpipeline/RtPipelineRuntime.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/iris/IrisRenderBridge.java",
         "../common/src/main/java/io/github/andrexarlay/vulkancompat/sodium/PreviewPanel.java",
         "../neoforge/src/main/java/io/github/andrexarlay/vulkanbridge/neoforge/mixin/NeoForgeMixinPlugin.java");
@@ -99,7 +99,7 @@ public class LogPathBoundaryTest {
             "LogPaths.show(result)", "fail("),
         sink("../common/src/main/java/io/github/andrexarlay/vulkancompat/rt/world/OpacityMicromapCache.java",
             "LogPaths.show(why)", "disable("),
-        sink("../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/dirtrt/DirtRtPipeline.java",
+        sink("../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/rtpipeline/RtPipelineStatus.java",
             "LogPaths.show(lastError)", "onFailure("),
         sink("../common/src/main/java/io/github/andrexarlay/vulkancompat/shaderhost/customrt/CustomRtStage.java",
             "LogPaths.show(why)", "fail(", "waiting("));

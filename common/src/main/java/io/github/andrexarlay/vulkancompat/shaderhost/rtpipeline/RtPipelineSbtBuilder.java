@@ -1,4 +1,4 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkStridedDeviceAddressRegionKHR;
@@ -11,9 +11,9 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Shader Binding Table (SBT) builder for Dirt RT ray-tracing pipeline ({@code VK_KHR_ray_tracing_pipeline}).
+ * Shader Binding Table (SBT) builder for the ray-tracing-pipeline pack host ({@code VK_KHR_ray_tracing_pipeline}).
  * <p>
- * Specifications and constraints adhering to Vulkan spec and Dirt RT requirements:
+ * Specifications and constraints adhering to the Vulkan spec and the Vulkanite RT-pipeline pack requirements:
  * <ul>
  *   <li>Raygen region: exactly 1 entry per pass, aligned to {@code shaderGroupBaseAlignment} (typically 64B).
  *       Per VUID-vkCmdTraceRaysKHR-size-04023, {@code stride} must equal {@code size}.</li>
@@ -26,7 +26,7 @@ import java.util.Objects;
  *       payloads into host or GPU memory buffers.</li>
  * </ul>
  */
-public final class DirtRtSbtBuilder {
+public final class RtPipelineSbtBuilder {
 
     /**
      * Immutable representation of an individual SBT strided device address region.
@@ -76,7 +76,7 @@ public final class DirtRtSbtBuilder {
      * Complete SBT configuration for a single ray-tracing pass (e.g. {@code ray0}, {@code ray1}, {@code ray2}).
      */
     public record PassSbt(
-            DirtRtPipelineConfig.RayPass rayPass,
+            RtPipelineConfig.RayPass rayPass,
             int bufferOffset,
             int totalSizeBytes,
             SbtRegion raygen,
@@ -107,7 +107,7 @@ public final class DirtRtSbtBuilder {
     }
 
     /**
-     * Multi-pass SBT representing all three Dirt RT passes packed into a single buffer.
+     * Multi-pass SBT representing all three ray passes packed into a single buffer.
      */
     public record MultiPassSbt(
             List<PassSbt> passes,
@@ -115,7 +115,7 @@ public final class DirtRtSbtBuilder {
             long bufferDeviceAddress,
             ByteBuffer sbtBuffer
     ) {
-        public PassSbt pass(DirtRtPipelineConfig.RayPass rayPass) {
+        public PassSbt pass(RtPipelineConfig.RayPass rayPass) {
             for (PassSbt p : passes) {
                 if (p.rayPass() == rayPass) {
                     return p;
@@ -133,35 +133,35 @@ public final class DirtRtSbtBuilder {
         }
     }
 
-    private final DirtRtPipelineConfig.SbtLayout layout;
+    private final RtPipelineConfig.SbtLayout layout;
     private byte[] raygenHandle;
     private final List<byte[]> missHandles = new ArrayList<>();
     private final List<byte[]> hitHandles = new ArrayList<>();
     private final List<byte[]> callableHandles = new ArrayList<>();
     private long deviceAddress = 0L;
-    private DirtRtPipelineConfig.RayPass rayPass;
+    private RtPipelineConfig.RayPass rayPass;
 
-    public DirtRtSbtBuilder() {
-        this(new DirtRtPipelineConfig.SbtLayout());
+    public RtPipelineSbtBuilder() {
+        this(new RtPipelineConfig.SbtLayout());
     }
 
-    public DirtRtSbtBuilder(DirtRtPipelineConfig.SbtLayout layout) {
+    public RtPipelineSbtBuilder(RtPipelineConfig.SbtLayout layout) {
         this.layout = Objects.requireNonNull(layout, "layout must not be null");
     }
 
-    public DirtRtSbtBuilder(DirtRtDeviceRequirements.DirtRtProperties properties) {
+    public RtPipelineSbtBuilder(RtPipelineDeviceRequirements.RtPipelineProperties properties) {
         this(Objects.requireNonNull(properties, "properties must not be null").toSbtLayout());
     }
 
-    public DirtRtPipelineConfig.SbtLayout layout() {
+    public RtPipelineConfig.SbtLayout layout() {
         return layout;
     }
 
-    public DirtRtPipelineConfig.RayPass rayPass() {
+    public RtPipelineConfig.RayPass rayPass() {
         return rayPass;
     }
 
-    public DirtRtSbtBuilder setRayPass(DirtRtPipelineConfig.RayPass rayPass) {
+    public RtPipelineSbtBuilder setRayPass(RtPipelineConfig.RayPass rayPass) {
         this.rayPass = rayPass;
         return this;
     }
@@ -170,7 +170,7 @@ public final class DirtRtSbtBuilder {
         return deviceAddress;
     }
 
-    public DirtRtSbtBuilder setDeviceAddress(long deviceAddress) {
+    public RtPipelineSbtBuilder setDeviceAddress(long deviceAddress) {
         if (deviceAddress < 0) {
             throw new IllegalArgumentException("deviceAddress must be non-negative: " + deviceAddress);
         }
@@ -197,7 +197,7 @@ public final class DirtRtSbtBuilder {
         return Collections.unmodifiableList(callableHandles);
     }
 
-    public DirtRtSbtBuilder setRaygen(byte[] handle) {
+    public RtPipelineSbtBuilder setRaygen(byte[] handle) {
         Objects.requireNonNull(handle, "handle must not be null");
         if (handle.length != layout.handleSize()) {
             throw new IllegalArgumentException("handle size must be " + layout.handleSize() + " bytes, was: " + handle.length);
@@ -206,7 +206,7 @@ public final class DirtRtSbtBuilder {
         return this;
     }
 
-    public DirtRtSbtBuilder setRaygen(ByteBuffer src, int srcOffset) {
+    public RtPipelineSbtBuilder setRaygen(ByteBuffer src, int srcOffset) {
         Objects.requireNonNull(src, "src must not be null");
         int handleSize = layout.handleSize();
         if (srcOffset < 0 || srcOffset + handleSize > src.capacity()) {
@@ -220,7 +220,7 @@ public final class DirtRtSbtBuilder {
         return setRaygen(handle);
     }
 
-    public DirtRtSbtBuilder addMiss(byte[] handle) {
+    public RtPipelineSbtBuilder addMiss(byte[] handle) {
         Objects.requireNonNull(handle, "handle must not be null");
         if (handle.length != layout.handleSize()) {
             throw new IllegalArgumentException("handle size must be " + layout.handleSize() + " bytes, was: " + handle.length);
@@ -229,7 +229,7 @@ public final class DirtRtSbtBuilder {
         return this;
     }
 
-    public DirtRtSbtBuilder addMiss(ByteBuffer src, int srcOffset) {
+    public RtPipelineSbtBuilder addMiss(ByteBuffer src, int srcOffset) {
         Objects.requireNonNull(src, "src must not be null");
         int handleSize = layout.handleSize();
         if (srcOffset < 0 || srcOffset + handleSize > src.capacity()) {
@@ -243,7 +243,7 @@ public final class DirtRtSbtBuilder {
         return addMiss(handle);
     }
 
-    public DirtRtSbtBuilder addHit(byte[] handle) {
+    public RtPipelineSbtBuilder addHit(byte[] handle) {
         Objects.requireNonNull(handle, "handle must not be null");
         if (handle.length != layout.handleSize()) {
             throw new IllegalArgumentException("handle size must be " + layout.handleSize() + " bytes, was: " + handle.length);
@@ -252,7 +252,7 @@ public final class DirtRtSbtBuilder {
         return this;
     }
 
-    public DirtRtSbtBuilder addHit(ByteBuffer src, int srcOffset) {
+    public RtPipelineSbtBuilder addHit(ByteBuffer src, int srcOffset) {
         Objects.requireNonNull(src, "src must not be null");
         int handleSize = layout.handleSize();
         if (srcOffset < 0 || srcOffset + handleSize > src.capacity()) {
@@ -266,7 +266,7 @@ public final class DirtRtSbtBuilder {
         return addHit(handle);
     }
 
-    public DirtRtSbtBuilder addCallable(byte[] handle) {
+    public RtPipelineSbtBuilder addCallable(byte[] handle) {
         Objects.requireNonNull(handle, "handle must not be null");
         if (handle.length != layout.handleSize()) {
             throw new IllegalArgumentException("handle size must be " + layout.handleSize() + " bytes, was: " + handle.length);
@@ -275,7 +275,7 @@ public final class DirtRtSbtBuilder {
         return this;
     }
 
-    public DirtRtSbtBuilder addCallable(ByteBuffer src, int srcOffset) {
+    public RtPipelineSbtBuilder addCallable(ByteBuffer src, int srcOffset) {
         Objects.requireNonNull(src, "src must not be null");
         int handleSize = layout.handleSize();
         if (srcOffset < 0 || srcOffset + handleSize > src.capacity()) {
@@ -289,7 +289,7 @@ public final class DirtRtSbtBuilder {
         return addCallable(handle);
     }
 
-    public DirtRtSbtBuilder clear() {
+    public RtPipelineSbtBuilder clear() {
         this.raygenHandle = null;
         this.missHandles.clear();
         this.hitHandles.clear();
@@ -404,7 +404,7 @@ public final class DirtRtSbtBuilder {
                 ? new SbtRegion(hAddress, hStride, hSize, hOffset)
                 : SbtRegion.EMPTY;
 
-        // Callable region (empty by default for Dirt RT)
+        // Callable region (empty by default for these packs)
         int cSize = callableSize();
         SbtRegion callableRegion;
         if (cSize > 0) {
@@ -485,8 +485,8 @@ public final class DirtRtSbtBuilder {
      */
     public static MultiPassSbt combine(
             long bufferDeviceAddress,
-            DirtRtPipelineConfig.SbtLayout layout,
-            List<DirtRtSbtBuilder> passBuilders
+            RtPipelineConfig.SbtLayout layout,
+            List<RtPipelineSbtBuilder> passBuilders
     ) {
         Objects.requireNonNull(layout, "layout must not be null");
         Objects.requireNonNull(passBuilders, "passBuilders must not be null");
@@ -498,7 +498,7 @@ public final class DirtRtSbtBuilder {
         }
 
         int currentOffset = 0;
-        for (DirtRtSbtBuilder builder : passBuilders) {
+        for (RtPipelineSbtBuilder builder : passBuilders) {
             currentOffset = layout.regionBaseAligned(currentOffset + builder.totalSizeBytes());
         }
         int totalBufferBytes = currentOffset;
@@ -507,7 +507,7 @@ public final class DirtRtSbtBuilder {
 
         List<PassSbt> passes = new ArrayList<>(passBuilders.size());
         currentOffset = 0;
-        for (DirtRtSbtBuilder builder : passBuilders) {
+        for (RtPipelineSbtBuilder builder : passBuilders) {
             long passDeviceAddress = bufferDeviceAddress > 0 ? (bufferDeviceAddress + currentOffset) : 0L;
             PassSbt passSbt = builder.buildWithOffset(currentOffset, passDeviceAddress);
             passes.add(passSbt);
@@ -520,7 +520,7 @@ public final class DirtRtSbtBuilder {
     }
 
     /**
-     * Constructs a 3-pass SBT for Dirt RT (diffuse ray0, reflection ray1, refraction ray2)
+     * Constructs a 3-pass SBT (diffuse ray0, reflection ray1, refraction ray2)
      * from a contiguous buffer of 9 shader group handles.
      *
      * @param bufferDeviceAddress Base GPU device address of the SBT buffer.
@@ -531,7 +531,7 @@ public final class DirtRtSbtBuilder {
      */
     public static MultiPassSbt createThreePassSbt(
             long bufferDeviceAddress,
-            DirtRtPipelineConfig.SbtLayout layout,
+            RtPipelineConfig.SbtLayout layout,
             ByteBuffer handles,
             boolean stageOrder
     ) {
@@ -543,12 +543,12 @@ public final class DirtRtSbtBuilder {
                     + (9 * handleSize) + " bytes), had: " + handles.remaining());
         }
 
-        DirtRtPipelineConfig.RayPass[] passes = DirtRtPipelineConfig.RayPass.values();
-        List<DirtRtSbtBuilder> builders = new ArrayList<>(3);
+        RtPipelineConfig.RayPass[] passes = RtPipelineConfig.RayPass.values();
+        List<RtPipelineSbtBuilder> builders = new ArrayList<>(3);
 
         int basePos = handles.position();
         for (int p = 0; p < 3; p++) {
-            DirtRtSbtBuilder b = new DirtRtSbtBuilder(layout).setRayPass(passes[p]);
+            RtPipelineSbtBuilder b = new RtPipelineSbtBuilder(layout).setRayPass(passes[p]);
             int rgenIdx = stageOrder ? p : (p * 3);
             int missIdx = stageOrder ? (3 + p) : (p * 3 + 1);
             int hitIdx  = stageOrder ? (6 + p) : (p * 3 + 2);
@@ -564,7 +564,7 @@ public final class DirtRtSbtBuilder {
 
     public static MultiPassSbt createThreePassSbt(
             long bufferDeviceAddress,
-            DirtRtPipelineConfig.SbtLayout layout,
+            RtPipelineConfig.SbtLayout layout,
             ByteBuffer handles
     ) {
         return createThreePassSbt(bufferDeviceAddress, layout, handles, false);
@@ -574,6 +574,6 @@ public final class DirtRtSbtBuilder {
             long bufferDeviceAddress,
             ByteBuffer handles
     ) {
-        return createThreePassSbt(bufferDeviceAddress, new DirtRtPipelineConfig.SbtLayout(), handles, false);
+        return createThreePassSbt(bufferDeviceAddress, new RtPipelineConfig.SbtLayout(), handles, false);
     }
 }

@@ -165,7 +165,7 @@ public final class IrisRenderBridge {
     /** Host frame boundary. A world transition retires resources even if no empty frame was rendered. */
     public static void onFrameBegin(Object world) {
         io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostDebug.ensureRegistered();
-        io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtRuntime.onFrame();
+        io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineRuntime.onFrame();
         var selection = ShaderHosts.selection();
         if (!failed && selection != null && selection.requested() == ShaderHostKind.IRIS
             && selection.active() != ShaderHostKind.IRIS)
@@ -187,7 +187,7 @@ public final class IrisRenderBridge {
     public static void onDeviceClose(VulkanDevice device) {
         if (owner == device) retire();
         io.github.andrexarlay.vulkancompat.shaderhost.customrt.CustomRtStage.onDeviceClose(device);
-        io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtRuntime.onDeviceClose(device);
+        io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineRuntime.onDeviceClose(device);
         WorldFrames.invalidateDevice(device);
     }
 

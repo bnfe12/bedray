@@ -2,7 +2,7 @@ package io.github.andrexarlay.vulkancompat.shaderhost;
 
 import io.github.andrexarlay.vulkancompat.rtx.debug.DebugInfo;
 import io.github.andrexarlay.vulkancompat.shaderhost.customrt.CustomRtStage;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtRuntime;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineRuntime;
 import io.github.andrexarlay.vulkancompat.shaderhost.iris.IrisRenderBridge;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReport;
 
@@ -41,7 +41,7 @@ public final class ShaderHostDebug {
                 out.add("[IRIS-POST] " + clip(IrisRenderBridge.runtimeStatus()));
             }
         }
-        DirtRtRuntime.appendDebugLines(out);
+        RtPipelineRuntime.appendDebugLines(out);
         CustomRtStage.appendDebugLines(out);
     }
 

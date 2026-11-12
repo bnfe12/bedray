@@ -1,13 +1,13 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Pipeline and Shader Binding Table (SBT) configuration for Dirt RT Vulkanite ray-tracing pipeline.
+ * Pipeline and Shader Binding Table (SBT) configuration for the Vulkanite ray-tracing-pipeline pack host.
  * <p>
- * Dirt RT uses {@code VK_KHR_ray_tracing_pipeline} with 3 distinct ray passes:
+ * These packs use {@code VK_KHR_ray_tracing_pipeline} with 3 distinct ray passes:
  * <ul>
  *   <li>{@code ray0}: Diffuse / primary bounce</li>
  *   <li>{@code ray1}: Reflection bounce</li>
@@ -20,7 +20,7 @@ import java.util.Objects;
  *   <li>Set 3: Output buffers (GeometryMaterialBuffer, FrameData, DiffuseBuffer, ReflectBuffer, RefractBuffer)</li>
  * </ul>
  */
-public final class DirtRtPipelineConfig {
+public final class RtPipelineConfig {
 
     public static final String REQUIRED_EXTENSION = "VK_KHR_ray_tracing_pipeline";
 
@@ -316,5 +316,5 @@ public final class DirtRtPipelineConfig {
         }
     }
 
-    private DirtRtPipelineConfig() {}
+    private RtPipelineConfig() {}
 }

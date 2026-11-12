@@ -3,8 +3,8 @@ package io.github.andrexarlay.vulkancompat.shaderhost;
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.shaderhost.customrt.CustomRtStage;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtDeviceRequirements;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtRuntime;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineDeviceRequirements;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineRuntime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,12 +37,12 @@ public final class ShaderHostStartup {
             LOGGER.error("[VKB-SHADERHOST] bootstrap failed; native renderer retained\n{}", LogPaths.stack(e));
         }
         try {
-            DirtRtRuntime.bootstrap(gameDir);
-            if (DirtRtRuntime.hasProgram()) {
-                registry.addLateProvider(DirtRtDeviceRequirements.LATE_PROVIDER_ID, DirtRtRuntime::registerDeviceRequirement);
+            RtPipelineRuntime.bootstrap(gameDir);
+            if (RtPipelineRuntime.hasProgram()) {
+                registry.addLateProvider(RtPipelineDeviceRequirements.LATE_PROVIDER_ID, RtPipelineRuntime::registerDeviceRequirement);
             }
         } catch (RuntimeException | LinkageError e) {
-            LOGGER.error("[VKB-DIRTRT] bootstrap failed\n{}", LogPaths.stack(e));
+            LOGGER.error("[VKB-RTPIPELINE] bootstrap failed\n{}", LogPaths.stack(e));
         }
         try {
             CustomRtStage.bootstrap(gameDir);
