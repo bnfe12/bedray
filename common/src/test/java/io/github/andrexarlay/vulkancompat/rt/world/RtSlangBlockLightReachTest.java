@@ -29,8 +29,7 @@ class RtSlangBlockLightReachTest {
 
     /** The shader's {@code emitterAttenuation}. */
     private static double tail(double d) {
-        double dd = Math.max(d * d, 0.25);
-        return dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd)) : 1.41421356 / dd;
+        return 1.8 / (d * d + 1.0);
     }
 
     /** The shader's {@code emitterWindow}, squared as the caller applies it. */
@@ -44,18 +43,10 @@ class RtSlangBlockLightReachTest {
     }
 
     @Test
-    void theSeamIsContinuousAndTheNearFieldUnchanged() {
-        assertEquals(tail(2.0 - 1.0e-9), tail(2.0 + 1.0e-9), 1.0e-5,
-            "the two branches meet at two blocks, so no distance is lit twice or left dark");
-        assertEquals(1.0, tail(1.0), 1.0e-12, "inside two blocks the kernel is the one that was already accepted");
-        assertEquals(1.0 / (2.0 * Math.sqrt(2.0)), tail(2.0), 1.0e-6, "the seam itself is unchanged");
-    }
-
-    @Test
     void theLightIsAPoolAroundItsSource() {
         double at8 = attenuation(8.0, EMITTER_RADIUS) / attenuation(2.0, EMITTER_RADIUS);
         double at15 = attenuation(15.0, EMITTER_RADIUS) / attenuation(2.0, EMITTER_RADIUS);
-        assertEquals(1.0 / 16.0, tail(8.0) / tail(2.0), 1.0e-6, "beyond the seam the falloff is the inverse square");
+        assertEquals(5.0 / 65.0, tail(8.0) / tail(2.0), 1.0e-9, "far out the falloff tends to the inverse square");
         assertTrue(at8 < 0.07, "eight blocks out a torch is a glow, not the light of the room: " + at8);
         assertTrue(at15 < 0.02, "fifteen blocks out it has faded: " + at15);
         for (double d = 0.5; d < EMITTER_RADIUS; d += 0.25) {
@@ -85,9 +76,8 @@ class RtSlangBlockLightReachTest {
     @Test
     void theShaderKeepsThatCurve() throws IOException {
         String source = read(EMITTERS);
-        assertTrue(source.contains("1.41421356 / dd"),
-            "the tail is the physical inverse square");
-        assertTrue(source.contains("rsqrt(dd * sqrt(dd))"), "the near field is written as dd^-0.75 == d^-1.5");
+        assertTrue(source.contains("return 1.8 / (d2 + 1.0);"),
+            "one soft inverse square: physical tail, no hot core under the source");
 
         assertTrue(source.contains("float emitterAttenuation(float d2)"));
         assertFalse(source.contains("pow("),
@@ -96,13 +86,10 @@ class RtSlangBlockLightReachTest {
     }
 
     @Test
-    void theRsqrtFormMatchesTheCurve() {
-        for (double d = 0.5; d <= 20.0; d += 0.05) {
-            double dd = d * d;
-            double shader = dd <= 4.0 ? 1.0 / Math.sqrt(dd * Math.sqrt(dd)) : 1.41421356 / dd;
-            double reference = dd <= 4.0 ? Math.pow(dd, -0.75) : Math.sqrt(2.0) * Math.pow(dd, -1.0);
-            assertEquals(reference, shader, 1.0e-8 * reference, "falloff at " + d + " blocks");
-        }
+    void theCoreIsSoftAndTheMidRangeIsKept() {
+        assertEquals(0.36, tail(2.0), 1.0e-9, "equal to the former curve at two blocks");
+        assertTrue(tail(0.5) < 1.5, "no hot spot under the source (the former core read 2.8 at half a block)");
+        assertTrue(tail(0.0) <= 1.8 + 1.0e-9, "bounded at the source");
     }
 
     @Test

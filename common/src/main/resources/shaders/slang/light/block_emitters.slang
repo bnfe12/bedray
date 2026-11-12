@@ -28,14 +28,12 @@ static const uint EMITTER_RECORD_FLOATS = 24u;
 // room-sized pool from the same block (owner screenshots, 2026-11-11: "every light source", not only torches).
 static const float EMITTER_LIGHT_GAIN = 1.8;
 
-// Falloff of a source: d^-1.5 up to 2 blocks, then d^-1.25, continuous at the 2-block seam (0.84090 = 2^1.25 / (2*sqrt(2))).
-// Written with rsqrt instead of pow: eight of these per NEE call sit in the hottest loop of the emissive pass.
+// Falloff of a source.
 float emitterAttenuation(float d2) {
-    float dd = max(d2, 0.25);
-    // d^-1.5 inside two blocks (the look accepted since 2026-10), the physical d^-2 beyond: the d^-1.25 tail lit a room
-    // or a canyon evenly from one torch or one lava column and painted it orange, where Bedrock RTX keeps a pool of light
-    // around the source (owner comparison, 2026-11-11). Continuous at the seam: 4^-0.75 == sqrt(2) / 4.
-    return dd <= 4.0 ? rsqrt(dd * sqrt(dd)) : 1.41421356 / dd;
+    // One soft inverse-square, 1.8 / (d^2 + 1): the d^-1.5 core (2.8 at half a block) burned a hot spot under every
+    // torch that read as a hard star next to the soft Bedrock RTX pool (owner screenshots, 2026-11-12). Equal to the
+    // former curve at 2 blocks (0.36), half the core, 13 % more tail at 10 blocks.
+    return 1.8 / (d2 + 1.0);
 }
 
 // The game's own block-light window: a source reaches EMITTER_RADIUS blocks, not the whole ray distance, or a lava column

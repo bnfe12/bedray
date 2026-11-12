@@ -220,9 +220,9 @@ class RtSlangWaterBeamTest {
                 + "medium the light is in");
         assertTrue(term.contains("float3 arrival = beam.valid ? -beam.direction : lightDirection;"),
             "the beam travels down, so the direction the receiver sees the light in is its negation");
-        assertTrue(term.contains("bsdf = bsdfEvaluate(surface.material, view, normal, arrival);"),
+        assertTrue(term.contains("bsdf = bsdfEvaluate(shadingMaterial, view, normal, arrival);"),
             "the lobe is asked about the direction the light arrived from, which is what moves a shadow under water");
-        assertFalse(term.contains("bsdfEvaluate(surface.material, view, normal, lightDirection)"),
+        assertFalse(term.contains("bsdfEvaluate(shadingMaterial, view, normal, lightDirection)"),
             "the air-side sight line is not an underwater arrival direction");
         assertTrue(term.contains("float cosine = max(dot(normal, arrival), 0.0);"), "and neither is it the horizon test");
         assertTrue(term.contains("traceShadowBeam(traversal, atlas, blockMaterials, shadowPosition, shadowNormal, lightDirection,")

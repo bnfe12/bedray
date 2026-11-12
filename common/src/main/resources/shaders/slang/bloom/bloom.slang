@@ -71,10 +71,10 @@ bool bloomIsSky(Sampler2D depth, int2 p) {
 // BLOOM_CLIP_GAIN, ramped in from the display value of the scene threshold up to white. Bedrock RTX torches carry a
 // halo about one block wide; this is the LDR stand-in until the pass reads the HDR resolve.
 // p0.w carries how dark the scene is (1 - daylight, RtAtmosphere): by day a clipped pixel may be a sunlit white wall,
-// at night it is a light source, so the gain runs from 3 (day) to 6 (night). Only pixels at display 0.97+ ramp in: at night
+// at night it is a light source, so the gain runs from 3 (day) to 3 (night; 6 read as a harsh star, owner 2026-11-12). Only pixels at display 0.97+ ramp in: at night
 // with a 0.9 threshold and gain 16 the torch-lit floor itself bloomed into a fog (autotest rt_modes A, 2026-11-11).
 static const float BLOOM_CLIP_GAIN_DAY = 3.0;
-static const float BLOOM_CLIP_GAIN_NIGHT = 6.0;
+static const float BLOOM_CLIP_GAIN_NIGHT = 3.0;
 
 float3 bloomClippedSource(float3 display, BloomPush pc) {
     float md = bloomPeak(display);

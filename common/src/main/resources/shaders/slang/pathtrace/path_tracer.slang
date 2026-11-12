@@ -410,6 +410,9 @@ float3 pathBakedBlockLight(MaterialSample material, float3 view, float3 normal, 
 // beam `waterBeamToLight` names rather than as the straight sight line, which is
 // what puts the light where the surface let it through and gives the floor its
 // caustics.
+// Apparent size of a block light for its specular highlight, in blocks (see pathTraceDirectTerm).
+static const float EMITTER_SOURCE_RADIUS = 1.0;
+
 float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, BlockMaterialTable blockMaterials,
         SurfaceSample surface, float3 view, float3 normal, float3 position, LightSample light,
         PathTraceOptions options, MaterialSamplingOptions materialOptions, WaterMedium medium, bool primary,
@@ -469,7 +472,16 @@ float3 pathTraceDirectTerm<T : ISceneTracer>(T traversal, MaterialAtlas atlas, B
     }
     float3 bsdf = zero;
     if (cosine > 0.0 && dot(shadowNormal, arrival) > 0.0) {
-        bsdf = bsdfEvaluate(surface.material, view, normal, arrival);
+        // A block emitter's highlight is widened as if it were a ball of EMITTER_SOURCE_RADIUS (Karis 2013, "Real
+        // Shading in UE4": alpha' = alpha + radius / (2 d)). Sampled as a point on a 2-pixel flame, a torch drew a narrow
+        // star-like streak across smooth stone, where Bedrock RTX shows a soft pool (owner screenshots, 2026-11-12).
+        MaterialSample shadingMaterial = surface.material;
+        if (light.kind == LightKind.Emitter) {
+            float alpha = shadingMaterial.roughness * shadingMaterial.roughness
+                + EMITTER_SOURCE_RADIUS / (2.0 * max(light.distance, 0.25));
+            shadingMaterial.roughness = sqrt(saturate(alpha));
+        }
+        bsdf = bsdfEvaluate(shadingMaterial, view, normal, arrival);
         if (bsdf.r + bsdf.g + bsdf.b <= 0.0) {
             return zero;
         }
