@@ -11,9 +11,7 @@ public final class RtExposure {
     // 0.22 * 2^-0.75: the artist bias of RTX Remix Minecraft (packaging/rtx.conf, "the artist's -0.75 EV bias" in
     // rtx.localtonemap.exposure). At 0.22 a room lit only by lamps was metered up to daylight brightness and every source
     // read as too bright (owner, autotest scenes J and N, 2026-11-12).
-    // 0.20 since linear light (2026-11-12): the filmic curve sits lower in the mid tones than the former knee, and at
-    // 0.131 a noon floor read 113 of 255 where the gamma-space look gave 170, a lamp-lit room about half as bright.
-    public static final float KEY = 0.20f;
+    public static final float KEY = 0.131f;
     public static final float FIXED = 1.1f;
     public static final float MIN = 1.0f / 64.0f;
     /**
@@ -36,13 +34,6 @@ public final class RtExposure {
     public static final float TAU_DARKEN = 0.7f;
     /** Differences below this many EV are ignored (no creeping pulse from the noise of the luminance sum). */
     public static final float DEADBAND_EV = 0.15f;
-    /**
-     * The meter and every constant above live in the display-gamma domain the path tracer shaded in until 2026-11-12
-     * (sRGB albedo, no transfer function on the way out). It now shades in linear light and the tone map ends with the
-     * sRGB encoding, so a linear luminance L reads here as L^(1/DISPLAY_GAMMA) and the exposure leaves as
-     * value^DISPLAY_GAMMA: KEY, MIN/MAX, the night ceiling and the adaptation speeds keep the meaning they were tuned with.
-     */
-    public static final float DISPLAY_GAMMA = 2.2f;
 
     private float value = FIXED;
     /** Upper clamp of this frame (RtSkyState.maxExposure: lower at night, so the night is not brightened to daylight). */
@@ -84,7 +75,7 @@ public final class RtExposure {
             value = FIXED;
             targetAnchor = Double.NaN;
         }
-        double avgLog2 = (lumLogSum / 64.0 / samples - 16.0) / DISPLAY_GAMMA;
+        double avgLog2 = lumLogSum / 64.0 / samples - 16.0;
         if (Double.isNaN(avgLog2) || Double.isInfinite(avgLog2)) {
             return;
         }
@@ -143,12 +134,7 @@ public final class RtExposure {
      * what goes to the GPU, the sky conversion and the compose pass, so every consumer sees the same number.
      */
     public float applied(boolean auto, int evTenths) {
-        return linear(auto ? value() : FIXED) * evScale(evTenths);
-    }
-
-    /** A display-domain exposure as the factor that scales linear scene light. */
-    public static float linear(float displayExposure) {
-        return (float) Math.pow(Math.max(displayExposure, 0f), DISPLAY_GAMMA);
+        return (auto ? value() : FIXED) * evScale(evTenths);
     }
 
     public void reset() {

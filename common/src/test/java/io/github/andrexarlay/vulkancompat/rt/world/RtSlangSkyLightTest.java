@@ -28,8 +28,7 @@ class RtSlangSkyLightTest {
     @Test
     void theVisibleSkyIsNoLightSource() {
         float[] visible = RtTonemap.invert(NOON_SKY[0], NOON_SKY[1], NOON_SKY[2]);
-        // Through the ACES inverse the noon display sky reads ~0.35 of the sun key (0.50 vs 1.41): still far too bright to light with.
-        assertTrue(luminance(visible) > 0.25f * luminance(NOON_KEY), "the display sky inverted is a sizeable fraction of the sun");
+        assertTrue(luminance(visible) > 2f * luminance(NOON_KEY), "the display sky inverted outshines the sun itself");
         assertTrue(visible[2] / visible[0] > 1.9f, "and it is saturated blue");
 
         RtSky.SkyLight light = new RtSky.SkyLight();
@@ -48,8 +47,7 @@ class RtSlangSkyLightTest {
         assertEquals(0.31f, frame.skyLightZenith.z, 0f);
         assertEquals(1f, frame.skyLightZenith.w, 0f);
         assertEquals(0.29f, frame.skyLightHorizon.x, 0f);
-        // A saturated display blue inverts to ~2.6 through the filmic curve (white point 2.8): still far above the light dome.
-        assertTrue(frame.zenithColor.z > 2f, "the visible zenith stays the display colour for the eye");
+        assertTrue(frame.zenithColor.z > 3f, "the visible zenith stays the display colour for the eye");
     }
 
     @Test

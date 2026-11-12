@@ -283,22 +283,6 @@ public final class RtFrameRenderer {
     private static volatile float lastExposureValue = 1.1f;
     private static volatile double lastAvgLum;
 
-    private static final float[] smoothedSky = {Float.NaN, 0f, 0f};
-    private static long smoothedSkyNs;
-
-    private static void smoothSkyColor(float[] c) {
-        long now = System.nanoTime();
-        float dt = smoothedSkyNs == 0L ? 0f : Math.min(0.25f, Math.max(0f, (now - smoothedSkyNs) * 1.0e-9f));
-        smoothedSkyNs = now;
-        boolean snap = Float.isNaN(smoothedSky[0]);
-        for (int i = 0; i < 3 && !snap; i++) snap = Math.abs(c[i] - smoothedSky[i]) > 0.08f;
-        float k = snap ? 1f : (float) (1.0 - Math.exp(-dt / RtSkyState.SUN_FOLLOW_TAU_S));
-        for (int i = 0; i < 3; i++) {
-            smoothedSky[i] = snap ? c[i] : smoothedSky[i] + (c[i] - smoothedSky[i]) * k;
-            c[i] = smoothedSky[i];
-        }
-    }
-
     /** Auto exposure of the last readback (autotest telemetry): value (EV multiplier) and the log average scene luminance before exposure. */
     public static float lastExposure() {
         return lastExposureValue;
@@ -1235,8 +1219,7 @@ public final class RtFrameRenderer {
             throw new RtFailure("sky_atlas", "atlas was not prepared before command recording");
         skyState.collect(levelState, camera.pos.x + bobOrigin.x, camera.pos.y + bobOrigin.y, camera.pos.z + bobOrigin.z, RtConfig.SUN_FLIP_X,
             skyTextures.cloudWidth(), skyTextures.cloudHeight());
-        // The smoothed angles (RtSkyState.smoothCelestial): the raw ones step once a second with the server's time packet.
-        RtSky.keyLight(skyState.sunAngle, skyState.moonAngle, RtConfig.SUN_FLIP_X, hasSky, skyState.moonLight, skyState.rainBrightness,
+        RtSky.keyLight(sky.sunAngle, sky.moonAngle, RtConfig.SUN_FLIP_X, hasSky, skyState.moonLight, skyState.rainBrightness,
             skyState.thunder, params.key);
         skyState.write(hdr, skyAddress, RtConfig.SUN_FLIP_X);
         // vanilla fog of the game (render distance edge, biome / weather / water) + aerial perspective: rt_common.glsl fogTransmittanceHit
@@ -1250,9 +1233,6 @@ public final class RtFrameRenderer {
             params.skyColor[1] = sky.skyColor.y();
             params.skyColor[2] = sky.skyColor.z();
         }
-        // The sky colour follows the day clock too, so it steps with the same once-a-second correction; it drives the sky
-        // light of every surface, so it gets the same first-order follow (a weather change or a teleport snaps).
-        smoothSkyColor(params.skyColor);
         // The sky as a light: the legacy hemisphere model (near-neutral, AMBIENT_SCALE at noon), not the display colour.
         float sunY = params.key.isMoon ? -params.key.dir[1] : params.key.dir[1];
         RtSky.SkyLight skyLight = new RtSky.SkyLight();

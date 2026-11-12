@@ -187,9 +187,7 @@ public final class RtSky {
     // 0.30 left every face the sun did not reach a flat dark grey under a bright blue sky (owner: "the shadows are
     // terrible", autotest rt_modes E day, 2026-11-12); +0.5 EV of sky fill brings the lit:shadow ratio towards the
     // 4:1 .. 6:1 of a clear day.
-    // Linear light (2026-11-12): 0.42 was a display-gamma fill and left the sun only ~1.8:1 above the shade on screen
-    // in linear light (flat, sky-blue noon, autotest A/E); 0.20 is a linear sun:sky irradiance of ~6:1.
-    public static final float AMBIENT_SCALE = 0.20f;
+    public static final float AMBIENT_SCALE = 0.42f;
     /** Night sky light: stars and a moonless sky (never black) plus the moon phase / elevation part. */
     public static final float NIGHT_BASE = 0.022f;
     public static final float NIGHT_MOON = 0.040f;

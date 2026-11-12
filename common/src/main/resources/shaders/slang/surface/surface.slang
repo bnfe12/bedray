@@ -17,7 +17,6 @@ import "contracts/material.slang";
 import "contracts/math.slang";
 import "surface/water.slang";
 import "traversal/entity_geometry.slang";
-import "tonemap_curve.slang";
 
 // ---- Atlas description ----
 
@@ -642,21 +641,6 @@ SurfaceSample decodeSurface(MaterialAtlas atlas, BlockMaterialTable blockMateria
     material.transmission = clamp(material.transmission, 0.0, 1.0);
     material.thickness = max(material.thickness, 0.0);
     material.ambientOcclusion = clamp(material.ambientOcclusion, 0.0, 1.0);
-
-    // Linear light.  The atlas, the biome tint and the vertex colours are sRGB-encoded, and the path tracer used them as
-    // reflectance directly while the display wrote its result without the sRGB transfer function: shading in display
-    // gamma.  That squares every falloff - a torch pool ended two blocks out, a face turned from the light went nearly
-    // black and a block read flat - which the kernels and gains of the block lights were bent to hide.  Bedrock RTX
-    // decodes the textures and encodes once at the end (RTXPostFX.Tonemapping, gPerformSRGBConversion), and so does
-    // Bedray now: tonemapColor ends with linear -> sRGB.  The emission was built from the same encoded colour, so it is
-    // carried over by the same per-channel ratio and keeps its mask and gain.
-    float3 encodedAlbedo = clamp(material.albedo, float3(0.0), float3(1.0));
-    float3 linearAlbedo = tmSrgbToLinear(encodedAlbedo);
-    material.emission *= float3(
-        encodedAlbedo.r > 1.0e-4 ? linearAlbedo.r / encodedAlbedo.r : 1.0,
-        encodedAlbedo.g > 1.0e-4 ? linearAlbedo.g / encodedAlbedo.g : 1.0,
-        encodedAlbedo.b > 1.0e-4 ? linearAlbedo.b / encodedAlbedo.b : 1.0);
-    material.albedo = linearAlbedo;
 
     surface.valid = true;
     surface.material = material;

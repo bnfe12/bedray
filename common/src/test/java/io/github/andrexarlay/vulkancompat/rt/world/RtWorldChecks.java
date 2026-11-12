@@ -356,11 +356,9 @@ public final class RtWorldChecks {
             check(t[0] >= prevTm - 1e-6f && t[0] <= 1f && Math.abs(t[0] - t[1]) < 1e-5f && Math.abs(t[1] - t[2]) < 1e-5f, "tonemap monotonic, <= 1, grey stays neutral at " + x);
             prevTm = t[0];
         }
-        float[] grass = RtTonemap.apply(0.05f, 0.30f, 0.02f);
-        check(grass[1] > grass[0] * 1.8f && grass[1] > grass[2] * 2.5f, "tonemap keeps mid-tone grass green");
-        float[] flame = RtTonemap.apply(40f, 12f, 1.5f);
-        check(flame[2] > 0.5f && flame[1] > 0.8f, "a bright orange highlight bleaches towards white");
-        float[][] displays = {{0.3f, 0.5f, 0.2f}, {0.62f, 0.72f, 0.95f}, {0.1f, 0.1f, 0.1f}, {0.9f, 0.9f, 0.9f}, {0.85f, 0.60f, 0.40f}};
+        float[] grass = RtTonemap.apply(0.22f, 0.66f, 0.11f);
+        check(grass[1] / grass[0] > 2.7f && grass[1] / grass[2] > 4.5f, "tonemap keeps the saturation of mid-tone colours (old ACES: g/r 2.1)");
+        float[][] displays = {{0.3f, 0.5f, 0.2f}, {0.96f, 0.82f, 0.30f}, {0.62f, 0.72f, 0.95f}, {0.1f, 0.1f, 0.1f}, {0.9f, 0.9f, 0.9f}, {0.97f, 0.40f, 0.05f}};
         for (float[] d : displays) {
             float[] sceneLin = RtTonemap.invert(d[0], d[1], d[2]);
             float[] back = RtTonemap.apply(sceneLin[0], sceneLin[1], sceneLin[2]);
@@ -368,15 +366,8 @@ public final class RtWorldChecks {
             near(d[1], back[1], 2e-3f, "tonemap round trip g");
             near(d[2], back[2], 2e-3f, "tonemap round trip b");
         }
-        // A display colour more saturated than the ACES output gamut (a pure amber) comes back with its weakest channel raised.
-        float[] amber = RtTonemap.invert(0.97f, 0.40f, 0.05f);
-        float[] amberBack = RtTonemap.apply(amber[0], amber[1], amber[2]);
-        near(0.97f, amberBack[0], 5e-3f, "amber round trip r");
-        near(0.40f, amberBack[1], 5e-3f, "amber round trip g");
-        check(amberBack[2] < 0.12f, "amber round trip stays amber");
-        for (float y = 0.01f; y < 0.98f; y += 0.01f) {
-            near(y, RtTonemap.fit(RtTonemap.fitInverse(y)), 1e-4f, "ACES fit inverse at " + y);
-        }
+        near(RtTonemap.KNEE, RtTonemap.curve(RtTonemap.KNEE), 1e-6f, "curve continuous at the knee");
+        near(1f, (RtTonemap.curve(RtTonemap.KNEE + 1e-3f) - RtTonemap.curve(RtTonemap.KNEE)) / 1e-3f, 5e-3f, "curve slope 1 at the knee (C1)");
         check(RtConfig.parseMode("sky") == RtConfig.MODE_SKY, "sky mode");
         check(RtLighting.shadowBias(100f) > RtLighting.shadowBias(1f) && RtLighting.shadowBias(0f) > 0f, "bias grows with distance");
 
