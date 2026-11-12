@@ -114,13 +114,13 @@ class RtFrameStatsTest {
         assertEquals(8, RtStatsLayout.LUM_LOG_SUM);
         assertEquals(12, RtStatsLayout.HIST_ACCEPTED);
         String shader = read(SHADER);
-        int order = shader.indexOf("InterlockedAdd(stats[0], hit ? 1u : 0u);");
+        int order = shader.indexOf("InterlockedAdd(stats[0], hitCount);");
         assertTrue(order > 0, "stats[0] is the hit count");
-        assertTrue(order < shader.indexOf("InterlockedAdd(stats[1], 1u);"), "stats[1] counts the samples");
-        assertTrue(shader.indexOf("InterlockedAdd(stats[1], 1u);")
-            < shader.indexOf("InterlockedAdd(stats[2], lumWord);"), "stats[2] sums the luminance words");
-        assertTrue(shader.indexOf("InterlockedAdd(stats[2], lumWord);")
-            < shader.indexOf("InterlockedAdd(stats[3], historyKept);"), "stats[3] counts the history kept");
+        assertTrue(order < shader.indexOf("InterlockedAdd(stats[1], tileCount);"), "stats[1] counts the samples");
+        assertTrue(shader.indexOf("InterlockedAdd(stats[1], tileCount);")
+            < shader.indexOf("InterlockedAdd(stats[2], lumWord * tileCount);"), "stats[2] weights the tile by valid pixels");
+        assertTrue(shader.indexOf("InterlockedAdd(stats[2], lumWord * tileCount);")
+            < shader.indexOf("InterlockedAdd(stats[3], historyCount);"), "stats[3] counts the history kept");
     }
 
     /**
@@ -169,7 +169,13 @@ class RtFrameStatsTest {
         assertEquals(tiles, coveredBySixteenFrames.size(), "sixteen frames weigh every tile exactly once");
         String shader = read(SHADER).replace("\r\n", "\n");
         assertTrue(shader.contains("uint tilesPerRow = (uint(size.x) + 3u) >> 2u;"), "the same tile index in the shader");
+        assertTrue(shader.contains("uint2 tile = tid.xy;") && shader.contains("uint2 p = tile * 4u;"));
+        assertTrue(shader.contains("uint2 end = min(size, p + 4u);"), "edge tiles clip to the image");
         assertTrue(shader.contains("if (site % PATH_STATS_TILES_PER_SAMPLE != 0u)"), "and the same rate");
+        assertEquals(1, RtStatsMetering.tiles(1));
+        assertEquals(1, RtStatsMetering.tiles(4));
+        assertEquals(2, RtStatsMetering.tiles(5));
+        assertEquals(17, RtStatsMetering.tiles(65));
     }
 
     /**
@@ -260,11 +266,13 @@ class RtFrameStatsTest {
     @Test
     void anUntrustedSampleIsNotASampleAndOnlyAHitKeepsHistory() throws IOException {
         String shader = read(SHADER);
-        int reject = shader.indexOf("if (!(sample.a > 0.0) || any(isnan(sample.rgb)) || any(isinf(sample.rgb)))");
+        int reject = shader.indexOf("if (!(sample.a > 0.0) || !all(isfinite(sample.rgb))) continue;");
         assertTrue(reject > 0, "the tracer's own verdict gates the counters, as it gates the running mean");
-        assertTrue(reject < shader.indexOf("InterlockedAdd"), "before anything is added");
-        assertTrue(shader.contains("uint historyKept = hit && accum[p].a > 1.0 ? 1u : 0u;"),
-            "the host divides the share by hits, so only a hit may join the numerator");
+        int accumulate = shader.indexOf("tileSum += max(luminance(hasMean ? mean.rgb : sample.rgb), 0.0);");
+        assertTrue(reject < accumulate && accumulate < shader.indexOf("if (tileCount == 0u) return;"));
+        assertTrue(shader.contains("float lit = tileSum / float(tileCount);"), "meter the tile's linear mean");
+        assertTrue(shader.contains("historyCount += hit && hasMean && mean.a > 1.0 ? 1u : 0u;"),
+            "only a hit with valid history can join the numerator");
     }
 
     /** The host binds sixteen bytes of one slot: the pass cannot reach the emitter address that lives behind them. */

@@ -297,9 +297,9 @@ public final class DlssRrChecks {
             check(DlssRayReconstruction.isDlssdDllPresent(tmp), "dlssd file present: true");
             Files.deleteIfExists(mockDlssd);
 
-            Path mockDlssnr = tmp.resolve(DlssRayReconstruction.NGX_DLSSNR_DLL);
+            Path mockDlssnr = tmp.resolve("nvngx_dlssnr.dll");
             Files.writeString(mockDlssnr, "mock");
-            check(DlssRayReconstruction.isDlssdDllPresent(tmp), "dlssnr file present: true");
+            check(!DlssRayReconstruction.isDlssdDllPresent(tmp), "a Neural Rendering file cannot satisfy Ray Reconstruction");
             Files.deleteIfExists(mockDlssnr);
         } finally {
             Files.deleteIfExists(tmp);

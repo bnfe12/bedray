@@ -69,7 +69,7 @@ and `native/*/build.bat` (the scripts read the SDK locations from environment va
   files appear after the game has started (the page says "restart required").
 * **FSR:** the DLL must be the official build. The mod checks its SHA-256 against the known official file
   (`a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78` for `PrebuiltSignedDLL/amd_fidelityfx_vk.dll` of v1.1.4). Other builds
-  are refused ("library missing" on the page). FSR 4 is not available on Vulkan.
+  are refused ("library missing" on the page). Bedray currently uses the FSR 3.1/2.x integration. AMD provides FSR 4 for Vulkan in the [FSR SDK](https://gpuopen.com/amd-fsr-sdk/).
 * **XeSS:** `libxess.dll` only. Release jars include the approved SDK 3.0.2 binary and notices.
 * **Frame generation:** `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`, `nvngx_dlssg.dll` (from the
   Streamline release; use a 2.14.x release, the mod was developed against 2.14.1) and `vkb_sl.dll`.

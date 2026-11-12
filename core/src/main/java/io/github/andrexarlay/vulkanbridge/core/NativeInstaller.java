@@ -31,7 +31,7 @@ import java.util.zip.ZipFile;
  *   <li>only {@code .dll} and {@code .zip} sources; a source that is a symbolic link, junction or other special file is refused;</li>
  *   <li>a zip is read with {@link ZipFile}; entry names are checked fail-closed (absolute path, drive letter, {@code ..}, NUL abort the
  *       whole archive, backslashes count as separators) and are NEVER used to build a target path: only the base name, and only
- *       if it is in the catalog, is extracted, to a private staging folder;</li>
+ *       if the catalog marks it installable, is extracted, to a private staging folder;</li>
  *   <li>limits: entry count, candidate count, bytes per file (counted while copying, the declared size is not trusted) and bytes per
  *       archive;</li>
  *   <li>every candidate must be a regular x64 PE DLL ({@link NativeFiles#problem}); of several candidates with one name the
@@ -108,7 +108,7 @@ public final class NativeInstaller {
         try {
             List<Staged> staged;
             if (lower.endsWith(".dll")) {
-                String canonical = NativeCatalog.canonicalName(name);
+                String canonical = NativeCatalog.installableName(name);
                 if (canonical == null) {
                     skipped.add(name + ": not a library Bedray uses");
                     return;
@@ -157,9 +157,9 @@ public final class NativeInstaller {
                 if (e.isDirectory() || base == null) {
                     continue;
                 }
-                String canonical = NativeCatalog.canonicalName(base);
+                String canonical = NativeCatalog.installableName(base);
                 if (canonical == null) {
-                    continue; // not in the catalog: never extracted
+                    continue;
                 }
                 if (++candidates > MAX_CANDIDATES) {
                     throw new NativeLibraryException(ID, "archive has more than " + MAX_CANDIDATES + " candidate files");
@@ -239,7 +239,7 @@ public final class NativeInstaller {
     }
 
     private static void place(Path nativesDir, Staged s, List<Path> files) throws IOException {
-        List<NativeCatalog.Slot> slots = NativeCatalog.slotsFor(s.canonical());
+        List<NativeCatalog.Slot> slots = NativeCatalog.installableSlotsFor(s.canonical());
         // validate every destination first so a refusal leaves nothing half written
         for (NativeCatalog.Slot slot : slots) {
             Path dir = slot.folder().resolve(nativesDir);

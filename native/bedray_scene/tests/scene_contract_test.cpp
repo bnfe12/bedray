@@ -1185,7 +1185,8 @@ static void test_first_frame_records_full_pipeline() {
         uint32_t section_word = 0;
         std::memcpy(&section_word, instance_bytes->data() + 48, sizeof(section_word));
         CHECK((section_word & 0xFFFFFFu) == 0);
-        CHECK((section_word >> 24) == 0xFF);
+        CHECK((section_word >> 24) == 0x01u);
+        CHECK(((section_word >> 24) & 0x02u) == 0u);
         uint32_t packed = 0;
         std::memcpy(&packed, instance_bytes->data() + 64 + 48, sizeof(packed));
         CHECK((packed & 0xFFFFFFu) == 0x800000u);

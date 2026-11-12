@@ -41,8 +41,9 @@ public final class RtWorld {
     public static volatile String lastEntityTelemetry = "none";
 
     private final RtMemory mem;
-    private final NativeSceneBridge scene;
-    private final NativeSectionCapture captures;
+    private NativeSceneBridge scene;
+    private NativeSectionCapture captures;
+    private boolean sceneDiscarded;
     private long frameIndex;
     private long nearestBuiltSq = Long.MAX_VALUE;
     private BlockLookup blockLookup;
@@ -87,6 +88,7 @@ public final class RtWorld {
 
     /** Records native scene builds into the current host command buffer. */
     public FrameStats update(VkCommandBuffer cmd, double camX, double camY, double camZ, int radiusXz, int radiusY) {
+        if (sceneDiscarded) throw new IllegalStateException("discarded native scene must be rebuilt before recording");
         long tUpdate = RtTimings.start();
         long frame = ++frameIndex;
         var entities = RtEntityGeometryManager.INSTANCE;
@@ -196,8 +198,23 @@ public final class RtWorld {
 
     /** Called only when the host abandons an unsubmitted command. */
     public void discardRecording(long commandBuffer) {
-        scene.discardRecording(commandBuffer);
+        if (scene.discardRecording(commandBuffer)) sceneDiscarded = true;
         RtEntityGeometryManager.INSTANCE.releaseRecording(mem, commandBuffer);
+    }
+
+    boolean needsSceneRebuild() {
+        return sceneDiscarded;
+    }
+
+    /** Replays live Sodium captures after all consumers of the discarded scene have retired. */
+    void rebuildSceneAfterHostDrain(SlangRuntime runtime) {
+        if (!sceneDiscarded) return;
+        scene.close();
+        captures.clear();
+        scene = NativeSceneBridge.create(runtime);
+        captures = new NativeSectionCapture(SectionGeometryRegistry.INSTANCE, scene, this::quadFlags);
+        nearestBuiltSq = Long.MAX_VALUE;
+        sceneDiscarded = false;
     }
 
     /** The caller has drained host submissions and excluded future resubmission. */

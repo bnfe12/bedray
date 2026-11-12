@@ -5,8 +5,7 @@
 // slot stayed zero, which muted two things at once - RtExposure.observe never received a sample, so path_auto_exposure
 // could not adapt, and hit_pct / hist_pct printed as if the frame had been measured. This pass derives them from what
 // the path already produces, from the one stage that can see all of it: after the display step, reading the tracer's
-// own radiance, the running mean's sample count and the primary hit distance. It adds no new image and no new work per
-// pixel beyond a sixteenth of the screen.
+// own radiance, the running mean and the primary hit distance. Each invocation owns one 4x4 tile.
 //
 //   0 radiance RGBA16F storage image, read  (path_trace_scene.slang outImage: rgb = this frame's linear mean, a = 0 rejects)
 //   1 accum    RGBA32F storage image, read  (path_display.slang: rgb running mean, a the count behind it)
@@ -14,9 +13,8 @@
 //   3 stats    RWStructuredBuffer<uint>, write (stats[0..3] = hits, samples, lumLogSum, histAccepted; the host binds
 //                                               exactly those sixteen bytes, so no other field of the slot is reachable)
 //
-// The luminance word is an ABI with RtExposure and RtFrameRenderer, which decode it as 2^(sum/64/count - 16): a sample
-// contributes 64*(log2(luminance) + 16). Both ends of that range are the fixed point's own limits, not a preference -
-// darker clamps to zero, brighter to 2048, and the host's floor and ceiling are the same two numbers.
+// RtExposure and RtFrameRenderer decode the weighted log-luminance as 2^(sum/64/count - 16).
+// The fixed-point limits are 0 at 2^-16 and 2048 at 2^16.
 
 import "contracts/math.slang";
 
@@ -47,29 +45,42 @@ static const uint PATH_STATS_TILES_PER_SAMPLE = 16u;
 void main(uint3 tid : SV_DispatchThreadID) {
     uint2 size;
     depth.GetDimensions(size.x, size.y);
-    int2 p = int2(tid.xy);
-    if (p.x >= int(size.x) || p.y >= int(size.y)) {
+    uint2 tile = tid.xy;
+    uint2 p = tile * 4u;
+    if (any(p >= size)) {
         return;
     }
     // Whole 4x4 tiles, so the counter's pixels stay together in one cache region instead of one scattered texel each.
     uint tilesPerRow = (uint(size.x) + 3u) >> 2u;
-    uint site = (uint(p.x) >> 2u) + (uint(p.y) >> 2u) * tilesPerRow + pc.frameIndex;
+    uint site = tile.x + tile.y * tilesPerRow + pc.frameIndex;
     if (site % PATH_STATS_TILES_PER_SAMPLE != 0u) {
         return;
     }
 
-    float4 sample = radiance[p];
-    // The tracer's verdict, not coverage: a pixel whose arithmetic went non-finite is no sample of the integrand, and
-    // one such frame would sit in the metered mean for the meter's whole time constant. It is not a sample here
-    // either, so it cannot dilute the hit share or the average luminance.
-    if (!(sample.a > 0.0) || any(isnan(sample.rgb)) || any(isinf(sample.rgb))) {
-        return;
+    // Average linear radiance before taking the logarithm so sample variance moves exposure less.
+    // The current trace's verdict also gates the running mean.
+    float tileSum = 0.0;
+    uint tileCount = 0u;
+    uint hitCount = 0u;
+    uint historyCount = 0u;
+    uint2 end = min(size, p + 4u);
+    for (uint y = p.y; y < end.y; y++) {
+        for (uint x = p.x; x < end.x; x++) {
+            uint2 q = uint2(x, y);
+            float4 sample = radiance[q];
+            if (!(sample.a > 0.0) || !all(isfinite(sample.rgb))) continue;
+            float4 mean = accum[q];
+            bool hasMean = mean.a > 0.0 && all(isfinite(mean.rgb));
+            tileSum += max(luminance(hasMean ? mean.rgb : sample.rgb), 0.0);
+            tileCount++;
+            float hitDistance = depth[q];
+            bool hit = hitDistance > 0.0 && hitDistance < PATH_STATS_SKY_DISTANCE;
+            hitCount += hit ? 1u : 0u;
+            historyCount += hit && hasMean && mean.a > 1.0 ? 1u : 0u;
+        }
     }
-
-    float hitDistance = depth[p];
-    bool hit = hitDistance > 0.0 && hitDistance < PATH_STATS_SKY_DISTANCE;
-
-    float lit = luminance(sample.rgb);
+    if (tileCount == 0u) return;
+    float lit = tileSum / float(tileCount);
     if (!(lit > PATH_STATS_LUM_FLOOR)) {
         lit = PATH_STATS_LUM_FLOOR;   // NaN and black both mean "darker than the meter resolves"
     } else if (lit > PATH_STATS_LUM_CEIL) {
@@ -77,12 +88,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
     uint lumWord = uint(round((log2(lit) + 16.0) * 64.0));
 
-    // The host prints this share against hits, so only a hit pixel may join its numerator. The count the display step
-    // leaves behind says which it was: one sample is a pixel that started over, anything more is history it kept.
-    uint historyKept = hit && accum[p].a > 1.0 ? 1u : 0u;
-
-    InterlockedAdd(stats[0], hit ? 1u : 0u);
-    InterlockedAdd(stats[1], 1u);
-    InterlockedAdd(stats[2], lumWord);
-    InterlockedAdd(stats[3], historyKept);
+    InterlockedAdd(stats[0], hitCount);
+    InterlockedAdd(stats[1], tileCount);
+    InterlockedAdd(stats[2], lumWord * tileCount);
+    InterlockedAdd(stats[3], historyCount);
 }

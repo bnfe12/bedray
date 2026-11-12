@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler;
 
+import io.github.andrexarlay.vulkanbridge.api.LibraryDescriptor;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,8 +30,7 @@ public final class UpscalerLibraryLoader {
     // Standard DLL file names
     public static final String DLL_DLSS = "nvngx_dlss.dll";
     public static final String DLL_DLSS_FG = "nvngx_dlssg.dll";
-    public static final String DLL_DLSS_RR = "nvngx_dlssnr.dll";
-    public static final String DLL_DLSS_RR_ALT = "nvngx_dlssd.dll";
+    public static final String DLL_DLSS_RR = LibraryDescriptor.DLSS_RR_DLL;
 
     // FSR: only the Vulkan build of FidelityFX counts (e.g. amd_fidelityfx_vk.dll). The DX12 DLLs
     // (amd_fidelityfx_*_dx12*.dll) cannot be used with a Vulkan device (known pitfall), see isFsrVulkanLibraryName().
@@ -234,7 +234,7 @@ public final class UpscalerLibraryLoader {
         // DLSS scan
         boolean dlss = findFileInCandidates(DLL_DLSS);
         boolean dlssFg = dlss && findFileInCandidates(DLL_DLSS_FG);
-        boolean dlssRr = dlss && (findFileInCandidates(DLL_DLSS_RR) || findFileInCandidates(DLL_DLSS_RR_ALT));
+        boolean dlssRr = dlss && findFileInCandidates(DLL_DLSS_RR);
 
         // FSR scan: Vulkan build of FidelityFX only (DX12 DLLs are ignored)
         boolean fsr = fsrVulkanInCandidates();
@@ -279,8 +279,8 @@ public final class UpscalerLibraryLoader {
     }
 
     /**
-     * Returns true if DLSS Ray Reconstruction library ({@code nvngx_dlssnr.dll} or {@code nvngx_dlssd.dll})
-     * is found and DLSS is available.
+     * Returns true if the DLSS-D library is found and the DLSS backend is available.
+     * The selected provider still has to check whether Ray Reconstruction is usable.
      */
     public static boolean hasDlssRayReconstruction() {
         return isBackendAvailable(UpscalerBackend.DLSS) && dlssRayReconstructionAvailable;
