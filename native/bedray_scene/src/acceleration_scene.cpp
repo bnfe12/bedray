@@ -261,6 +261,7 @@ bool load_vulkan(Scene& scene, BedraySceneError* error) {
             "reported scratch alignment %llu is not a power of two",
             static_cast<unsigned long long>(scene.scratch_alignment)) == BEDRAY_SCENE_OK;
     }
+    load_compaction_fns(scene);
     return true;
 }
 
@@ -505,6 +506,9 @@ bool query_blas_sizes(
     info.flags = view.allow_update && (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
         ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR
         : 0;
+    if (view.allow_compaction) {
+        info.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+    }
     info.geometryCount = geometry_count;
     info.pGeometries = geometries.data();
 
@@ -679,6 +683,9 @@ void record_blas_build(
     info.flags = view.allow_update && (scene.capabilities & BEDRAY_SCENE_CAP_AS_UPDATE) != 0
         ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR
         : 0;
+    if (view.allow_compaction && !update) {
+        info.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+    }
     info.mode = update
         ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
         : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
@@ -729,6 +736,108 @@ void record_tlas_build(
     range.primitiveCount = instance_count;
     const VkAccelerationStructureBuildRangeInfoKHR* ranges[] = { &range };
     scene.fns.cmd_build_as(command_buffer, 1, &info, ranges);
+}
+
+namespace {
+constexpr uint32_t kCompactionPoolSize = 1024;
+} // namespace
+
+void load_compaction_fns(Scene& scene) {
+    const bool ok =
+        load_device(scene, scene.fns.create_query_pool, "vkCreateQueryPool")
+        && load_device(scene, scene.fns.destroy_query_pool, "vkDestroyQueryPool")
+        && load_device(scene, scene.fns.cmd_reset_query_pool, "vkCmdResetQueryPool")
+        && load_device(scene, scene.fns.cmd_write_as_properties, "vkCmdWriteAccelerationStructuresPropertiesKHR")
+        && load_device(scene, scene.fns.get_query_pool_results, "vkGetQueryPoolResults")
+        && load_device(scene, scene.fns.cmd_copy_as, "vkCmdCopyAccelerationStructureKHR");
+    scene.compaction_enabled = ok;
+}
+
+bool create_compaction_pool(Scene& scene, BedraySceneError* error) {
+    (void)error;
+    if (!scene.compaction_enabled) {
+        return true;
+    }
+    VkQueryPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    info.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+    info.queryCount = kCompactionPoolSize;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    const VkResult result = scene.fns.create_query_pool(scene.device, &info, nullptr, &pool);
+    if (result != VK_SUCCESS) {
+        /* Compaction is an optimization; fall back to uncompressed builds. */
+        scene.compaction_enabled = false;
+        return true;
+    }
+    scene.compaction_pool = pool;
+    scene.compaction_pool_size = kCompactionPoolSize;
+    scene.compaction_free_slots.reserve(kCompactionPoolSize);
+    for (uint32_t slot = kCompactionPoolSize; slot-- > 0;) {
+        scene.compaction_free_slots.push_back(slot);
+    }
+    return true;
+}
+
+void destroy_compaction_pool(Scene& scene) {
+    if (scene.compaction_pool != VK_NULL_HANDLE) {
+        scene.fns.destroy_query_pool(scene.device, scene.compaction_pool, nullptr);
+        scene.compaction_pool = VK_NULL_HANDLE;
+    }
+    scene.compaction_free_slots.clear();
+    scene.compaction_jobs.clear();
+    scene.compaction_pool_size = 0;
+}
+
+bool alloc_compaction_slot(Scene& scene, uint32_t& out_slot) {
+    if (!scene.compaction_enabled || scene.compaction_free_slots.empty()) {
+        return false;
+    }
+    out_slot = scene.compaction_free_slots.back();
+    scene.compaction_free_slots.pop_back();
+    return true;
+}
+
+void free_compaction_slot(Scene& scene, uint32_t slot) {
+    if (scene.compaction_pool != VK_NULL_HANDLE && slot < scene.compaction_pool_size) {
+        scene.compaction_free_slots.push_back(slot);
+    }
+}
+
+void record_compaction_query(
+    Scene& scene,
+    VkCommandBuffer command_buffer,
+    VkAccelerationStructureKHR blas,
+    uint32_t query_slot) {
+    scene.fns.cmd_reset_query_pool(command_buffer, scene.compaction_pool, query_slot, 1);
+    /* The compacted-size query reads the finished BLAS, so the build's writes
+       must be visible before the property write executes. */
+    record_memory_barrier(scene, command_buffer,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    scene.fns.cmd_write_as_properties(command_buffer, 1, &blas,
+        VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+        scene.compaction_pool, query_slot);
+}
+
+void record_compaction_copy(
+    Scene& scene,
+    VkCommandBuffer command_buffer,
+    VkAccelerationStructureKHR src,
+    VkAccelerationStructureKHR dst) {
+    VkCopyAccelerationStructureInfoKHR info{};
+    info.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
+    info.src = src;
+    info.dst = dst;
+    info.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+    scene.fns.cmd_copy_as(command_buffer, &info);
+    /* The compacted BLAS is consumed by this frame's TLAS build and trace. */
+    record_memory_barrier(scene, command_buffer,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+        VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
 }
 
 } // namespace bedray_scene

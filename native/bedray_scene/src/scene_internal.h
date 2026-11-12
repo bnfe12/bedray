@@ -51,6 +51,15 @@ struct VulkanFns {
     PFN_vkCmdBuildAccelerationStructuresKHR cmd_build_as = nullptr;
     PFN_vkCmdCopyBuffer cmd_copy_buffer = nullptr;
     PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
+    /* Optional BLAS compaction path. Loaded best-effort; compaction_enabled is
+       set only when every entry below resolves, so unsupported drivers keep the
+       uncompressed build path unchanged. */
+    PFN_vkCreateQueryPool create_query_pool = nullptr;
+    PFN_vkDestroyQueryPool destroy_query_pool = nullptr;
+    PFN_vkCmdResetQueryPool cmd_reset_query_pool = nullptr;
+    PFN_vkCmdWriteAccelerationStructuresPropertiesKHR cmd_write_as_properties = nullptr;
+    PFN_vkGetQueryPoolResults get_query_pool_results = nullptr;
+    PFN_vkCmdCopyAccelerationStructureKHR cmd_copy_as = nullptr;
 };
 
 struct Buffer {
@@ -151,6 +160,17 @@ struct RetiredAcceleration {
     uint64_t after_frame = 0;
 };
 
+/* A static-section BLAS built with ALLOW_COMPACTION whose compacted size is
+   pending GPU readback. geometry pins the committed resource generation so a
+   rebuild or removal before readback cancels the job instead of dangling. The
+   query slot is returned to the free list once the size is consumed. */
+struct CompactionJob {
+    uint64_t section_id = 0;
+    GeometryResource* geometry = nullptr;
+    uint32_t query_slot = 0;
+    uint64_t build_frame = 0;
+};
+
 struct FrameSlot {
     bool free = true;
     uint64_t frame_index = 0;
@@ -205,6 +225,14 @@ struct Scene {
     std::vector<RetiredBuffer> retired_buffers;
     std::vector<RetiredAcceleration> retired_accelerations;
 
+    /* Deferred BLAS compaction. The pool holds one compacted-size query per
+       in-flight compactable build; slots are recycled through the free list. */
+    bool compaction_enabled = false;
+    VkQueryPool compaction_pool = VK_NULL_HANDLE;
+    uint32_t compaction_pool_size = 0;
+    std::vector<uint32_t> compaction_free_slots;
+    std::vector<CompactionJob> compaction_jobs;
+
     Buffer section_table;
     uint64_t section_table_bytes = 0;
     bool section_table_dirty = true;
@@ -229,6 +257,8 @@ struct BlasView {
        leave quad_stream false and are one triangle geometry. */
     bool quad_stream = false;
     bool allow_update = false;
+    /* Set for a static-section full build that owns a compaction query slot. */
+    bool allow_compaction = false;
     uint32_t geometry_count = 1;
     std::array<uint32_t, BEDRAY_SCENE_MAX_SECTION_GEOMETRIES> quad_start{};
     uint32_t pass_bits = 0;
@@ -336,6 +366,23 @@ void record_tlas_build(
     VkAccelerationStructureKHR src,
     bool update,
     uint64_t scratch_address);
+
+/* acceleration_scene.cpp — optional BLAS compaction helpers */
+void load_compaction_fns(Scene& scene);
+bool create_compaction_pool(Scene& scene, BedraySceneError* error);
+void destroy_compaction_pool(Scene& scene);
+bool alloc_compaction_slot(Scene& scene, uint32_t& out_slot);
+void free_compaction_slot(Scene& scene, uint32_t slot);
+void record_compaction_query(
+    Scene& scene,
+    VkCommandBuffer command_buffer,
+    VkAccelerationStructureKHR blas,
+    uint32_t query_slot);
+void record_compaction_copy(
+    Scene& scene,
+    VkCommandBuffer command_buffer,
+    VkAccelerationStructureKHR src,
+    VkAccelerationStructureKHR dst);
 
 } // namespace bedray_scene
 

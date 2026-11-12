@@ -137,6 +137,9 @@ struct GeometryJob {
     uint64_t scratch_offset = 0;
     uint64_t vertex_upload_offset = 0;
     uint64_t index_upload_offset = 0;
+    /* Compaction query slot owned by a static-section full build; UINT32_MAX
+       when this job is not compactable (entity, refit, or pool exhausted). */
+    uint32_t compaction_query = UINT32_MAX;
 };
 
 struct PlannedCopy {
@@ -146,9 +149,22 @@ struct PlannedCopy {
     uint64_t size = 0;
 };
 
+/* A deferred BLAS compaction resolved this frame: the compacted-size query was
+   read back, compact holds the new (smaller) acceleration structure, and the
+   copy src_handle -> compact is recorded before the TLAS rebind. Ownership of
+   compact transfers to the section in commit_plan; cleanup_plan frees it on
+   failure. Mirrors the new_tlas plan/commit/cleanup pattern. */
+struct CompactionCopy {
+    uint64_t section_id = 0;
+    Section* section = nullptr;
+    Acceleration compact;
+    VkAccelerationStructureKHR src_handle = VK_NULL_HANDLE;
+};
+
 struct PreparePlan {
     std::vector<GeometryJob> jobs;
     std::vector<PlannedCopy> copies;
+    std::vector<CompactionCopy> compactions;
 
     Buffer staging;
     bool staging_present = false;
@@ -277,6 +293,59 @@ void collect_garbage(Scene& scene) {
             ++it;
         }
     }
+}
+
+/* Resolve deferred BLAS compactions whose build frame the host has proven
+   complete (release_frame). Reads the compacted-size query, allocates a smaller
+   acceleration structure into the plan, and forces a TLAS rebind to the new
+   address. The actual swap and retirement of the original happen in commit_plan
+   so a failed prepare leaves the section untouched. Best-effort: a section that
+   is gone, rebuilt, or already compacted simply drops its job. */
+bool process_compaction(Scene& scene, PreparePlan& plan, bool& tlas_changed, BedraySceneError* error) {
+    if (!scene.compaction_enabled || scene.compaction_jobs.empty()) {
+        return true;
+    }
+    for (auto it = scene.compaction_jobs.begin(); it != scene.compaction_jobs.end();) {
+        CompactionJob& job = *it;
+        const auto sec = scene.sections.find(job.section_id);
+        const bool stale = sec == scene.sections.end()
+            || sec->second.geometry.get() != job.geometry
+            || sec->second.has_pending;
+        if (stale) {
+            free_compaction_slot(scene, job.query_slot);
+            it = scene.compaction_jobs.erase(it);
+            continue;
+        }
+        if (!can_collect(scene, job.build_frame)) {
+            ++it;
+            continue;
+        }
+        uint64_t compact_size = 0;
+        const VkResult result = scene.fns.get_query_pool_results(scene.device, scene.compaction_pool,
+            job.query_slot, 1, sizeof(compact_size), &compact_size, sizeof(compact_size),
+            VK_QUERY_RESULT_64_BIT);
+        const uint64_t capacity = job.geometry->blas.capacity;
+        if (result != VK_SUCCESS || compact_size == 0 || compact_size >= capacity
+                || capacity - compact_size < 4096) {
+            free_compaction_slot(scene, job.query_slot);
+            it = scene.compaction_jobs.erase(it);
+            continue;
+        }
+        CompactionCopy copy;
+        copy.section_id = job.section_id;
+        copy.section = &sec->second;
+        copy.src_handle = job.geometry->blas.handle;
+        if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+                compact_size, copy.compact, error)) {
+            free_compaction_slot(scene, job.query_slot);
+            return false;
+        }
+        plan.compactions.push_back(std::move(copy));
+        free_compaction_slot(scene, job.query_slot);
+        it = scene.compaction_jobs.erase(it);
+        tlas_changed = true;
+    }
+    return true;
 }
 
 BedraySceneStatus validate_mesh(
@@ -563,13 +632,29 @@ bool build_job_resource(Scene& scene, GeometryJob& job, BedraySceneError* error)
 
     const BlasView view = blas_view(mesh, created->gpu, index_offset, job.is_section);
     uint64_t storage_size = 0;
-    if (!query_blas_sizes(scene, view, storage_size, job.build_scratch, job.update_scratch, error)) {
+    BlasView sized_view = view;
+    if (job.is_section && !job.refit) {
+        uint32_t slot = 0;
+        if (alloc_compaction_slot(scene, slot)) {
+            job.compaction_query = slot;
+            sized_view.allow_compaction = true;
+        }
+    }
+    if (!query_blas_sizes(scene, sized_view, storage_size, job.build_scratch, job.update_scratch, error)) {
+        if (job.compaction_query != UINT32_MAX) {
+            free_compaction_slot(scene, job.compaction_query);
+            job.compaction_query = UINT32_MAX;
+        }
         destroy_buffer(scene, created->gpu);
         return false;
     }
     if (!job.refit) {
         if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
                 storage_size, created->blas, error)) {
+            if (job.compaction_query != UINT32_MAX) {
+                free_compaction_slot(scene, job.compaction_query);
+                job.compaction_query = UINT32_MAX;
+            }
             destroy_buffer(scene, created->gpu);
             return false;
         }
@@ -587,7 +672,15 @@ void cleanup_plan(Scene& scene, PreparePlan& plan) {
             destroy_geometry(scene, *job.created);
             job.created.reset();
         }
+        if (job.compaction_query != UINT32_MAX) {
+            free_compaction_slot(scene, job.compaction_query);
+            job.compaction_query = UINT32_MAX;
+        }
     }
+    for (CompactionCopy& compaction : plan.compactions) {
+        destroy_acceleration(scene, compaction.compact);
+    }
+    plan.compactions.clear();
     for (PlannedCopy& copy : plan.copies) {
         copy = PlannedCopy{};
     }
@@ -716,6 +809,13 @@ GeometryRef job_blas(const PreparePlan& plan, bool is_section, uint64_t id, cons
                 return { job.previous->blas.address, job.previous->blas.handle };
             }
             return { job.created->blas.address, job.created->blas.handle };
+        }
+    }
+    if (is_section) {
+        for (const CompactionCopy& compaction : plan.compactions) {
+            if (compaction.section_id == id) {
+                return { compaction.compact.address, compaction.compact.handle };
+            }
         }
     }
     if (committed != nullptr) {
@@ -1082,7 +1182,7 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
             *copy.dst, copy.dst_offset, copy.size);
     }
 
-    const bool as_work = !plan.jobs.empty() || plan.tlas_action;
+    const bool as_work = !plan.jobs.empty() || plan.tlas_action || !plan.compactions.empty();
     if (!plan.jobs.empty() || plan.instance_written) {
         VkPipelineStageFlags src_stage = 0;
         if (!plan.jobs.empty()) {
@@ -1112,9 +1212,18 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
             record_blas_build(scene, command_buffer, blas_view_of(job), job.created->blas.handle,
                 VK_NULL_HANDLE, false, scratch_address);
         }
+        if (job.compaction_query != UINT32_MAX) {
+            record_compaction_query(scene, command_buffer, job.created->blas.handle, job.compaction_query);
+        }
     }
 
-    if (plan.tlas_action && (!plan.jobs.empty() || plan.tlas_update)) {
+    /* Deferred compaction copies resolved this frame. Each compacted BLAS is
+       filled before the TLAS below rebinds instances to its new address. */
+    for (const CompactionCopy& compaction : plan.compactions) {
+        record_compaction_copy(scene, command_buffer, compaction.src_handle, compaction.compact.handle);
+    }
+
+    if (plan.tlas_action && (!plan.jobs.empty() || plan.tlas_update || !plan.compactions.empty())) {
         record_memory_barrier(scene, command_buffer,
             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -1183,10 +1292,12 @@ void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuf
 }
 
 BlasView blas_view_of(const GeometryJob& job) {
-    return blas_view(*job.mesh, job.created->gpu,
+    BlasView view = blas_view(*job.mesh, job.created->gpu,
         static_cast<uint64_t>(job.created->index_address > 0
             ? job.created->index_address - job.created->gpu.address : 0),
         job.is_section);
+    view.allow_compaction = job.compaction_query != UINT32_MAX;
+    return view;
 }
 
 void commit_plan(
@@ -1203,6 +1314,17 @@ void commit_plan(
     slot.transient.reserve(2);
     slot.blas_in_use.reserve(plan.instances.size() + (plan.tlas_update ? slot.cached_blas_refs.size() : 0));
     slot.cached_blas_refs.reserve(plan.instances.size());
+
+    /* Compaction swaps the section's BLAS for the compacted copy. The original
+       is the copy source recorded in THIS frame, so it must survive until this
+       frame completes (retire after desc.frame_index, not the previous frame). */
+    scene.retired_accelerations.reserve(scene.retired_accelerations.size() + plan.compactions.size());
+    for (CompactionCopy& compaction : plan.compactions) {
+        Section& section = *compaction.section;
+        scene.retired_accelerations.push_back({ section.geometry->blas, desc.frame_index });
+        section.geometry->blas = compaction.compact;
+        compaction.compact = Acceleration{};
+    }
 
     for (GeometryJob& job : plan.jobs) {
         if (job.is_section) {
@@ -1232,6 +1354,10 @@ void commit_plan(
             section.flags = job.mesh->flags;
             section.has_pending = false;
             section.pending = PendingMesh{};
+            if (job.compaction_query != UINT32_MAX) {
+                scene.compaction_jobs.push_back({ job.id, section.geometry.get(),
+                    job.compaction_query, desc.frame_index });
+            }
         } else {
             Entity& entity = *job.entity;
             if (job.refit) {
@@ -1798,6 +1924,9 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_create(
     if (!load_vulkan(impl, err)) {
         return err->status;
     }
+    if (!create_compaction_pool(impl, err)) {
+        return err->status;
+    }
     impl.slots.resize(desc->frames_in_flight);
     impl.last_resources.abi_version = BEDRAY_SCENE_ABI_VERSION;
 
@@ -2046,6 +2175,10 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_prepare_frame(
     PreparePlan plan;
     bool tlas_changed = false;
     try {
+        if (!process_compaction(impl, plan, tlas_changed, err)) {
+            cleanup_plan(impl, plan);
+            return err->status;
+        }
         if (!plan_geometry_jobs(impl, plan, tlas_changed, err)) {
             cleanup_plan(impl, plan);
             return err->status;
@@ -2238,6 +2371,7 @@ BEDRAY_SCENE_API BedraySceneStatus BEDRAY_SCENE_CALL bedray_scene_destroy(Bedray
             destroy_acceleration(impl, retired.acceleration);
         }
         impl.retired_accelerations.clear();
+        destroy_compaction_pool(impl);
         delete scene;
         return BEDRAY_SCENE_OK;
     } catch (...) {
