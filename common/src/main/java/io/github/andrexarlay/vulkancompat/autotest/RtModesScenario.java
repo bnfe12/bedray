@@ -119,7 +119,7 @@ public final class RtModesScenario implements AutotestScenario {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.equals("ao") || m.equals("gi") || m.equals("break") || m.equals("ui") || m.equals("soft") || m.equals("refl") || m.equals("noshadow") || m.equals("noemis")
                     || m.equals("rr") || m.equals("ref") || m.equals("cmp") || m.equals("ent") || m.equals("entabove") || m.equals("noent") || m.equals("label") || m.matches("pack=(on|off)") || m.equals("entmove") || m.matches("mv=(still|walk|turn|strafe|realwalk|realturn)") || m.equals("noaccum") || m.equals("noexp") || m.equals("noautonorm") || m.matches("an\\d+") || m.matches("t\\d+") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("nrd") || m.matches("[qbsf]\\d+") || m.matches("dist\\d+") || m.startsWith("dbg=") || m.matches("up=(off|dlss_[a-z_]+|xess_[a-z_]+|fsr_[a-z_]+|fsr1_[a-z_]+|nis_\\d+|bil_\\d+)") || m.matches("js=(d|-?1_-?1)") || m.matches("shp=[0-9.]+") || m.matches("tm=[a-z0-9_]+") || m.matches("jv=[a-z0-9_]+") || m.matches("p=(off|low|medium|high|ultra|path_tracing|custom)")
-                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)") || m.matches("ltm=[0-9.]+"))) {
+                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)") || m.matches("ltm=[0-9.]+") || m.matches("wx=(clear|rain|thunder)"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 if (m.startsWith("dbg=") && RtConfig.isUnknownMode(m.substring(4))) {
@@ -1136,6 +1136,12 @@ public final class RtModesScenario implements AutotestScenario {
                 String[] yp = m.substring(4).split("_");
                 aimYaw = Float.parseFloat(yp[0]);
                 aimPitch = Float.parseFloat(yp[1]);
+            }
+            if (m.matches("wx=(clear|rain|thunder)")) {
+                // weather of the step: the client's rain ramp takes a few seconds, so give the step f300 or more
+                var server = ctx.minecraft().getSingleplayerServer();
+                String cmd = "weather " + m.substring(3);
+                server.execute(() -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), cmd));
             }
             if (m.matches("t\\d+")) {
                 var server = ctx.minecraft().getSingleplayerServer();

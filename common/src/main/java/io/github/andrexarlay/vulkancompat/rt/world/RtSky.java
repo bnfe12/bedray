@@ -64,6 +64,9 @@ public final class RtSky {
      * fades out as the body sets) and {@link Key#bodyAlpha} (the storm that hides the sun hides its halo too).
      * Every factor is clamped, so a caller cannot push the term out of range.
      */
+    /** Share of the direct sun / moon left under a full rain (RTX Remix Minecraft: 0.0025). */
+    static final float RAIN_SUN_FLOOR = 0.0025f;
+
     public static float glareStrength(float strength, float day, float elevation, float bodyAlpha) {
         float e = Math.max(0f, Math.min(1f, elevation));
         return strength * Math.max(0f, Math.min(1f, day)) * (e * e * (3f - 2f * e))
@@ -151,7 +154,12 @@ public final class RtSky {
         // Vanilla's own storm factor (Level.getSkyDarken): a thunderstorm darkens the skylight on top of the rain. Applied to
         // the key light, so the sky, the sun/moon colour and every traced shadow term follow it.
         float storm = 1f - (5f / 16f) * Math.max(0f, Math.min(1f, thunder));
-        float weather = (0.25f + 0.75f * rain) * storm;
+        // Under a full overcast the direct light all but vanishes and the sky carries the scene: RTX Remix Minecraft takes
+        // the sun to 0.0025 in rain and 0.001 in a thunderstorm (BASE_SUN_LUMINANCE 30 against L_weather 0.075 / 0.03).
+        // The former 25 % kept hard sun shadows on every block under a rainy sky (owner: "shadows are unrealistic",
+        // screenshots taken in rain, 2026-11-12). The ramp is squared so a light drizzle still lets some sun through.
+        float overcast = 1f - rain;
+        float weather = (1f - (1f - RAIN_SUN_FLOOR) * (1f - (1f - overcast) * (1f - overcast))) * storm;
         if (sun[1] > -0.12f) {
             System.arraycopy(sun, 0, out.dir, 0, 3);
             float k = SUN_INTENSITY * out.day * weather;
