@@ -689,6 +689,22 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> Component.literal(String.format(Locale.ROOT, "%+.1f EV", v / 10.0)),
             v -> RtSettings.pathExposureEvTenths = v, () -> RtSettings.pathExposureEvTenths,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        EnumOptionBuilder<RtSettings.Tonemapper> tm = builder.createEnumOption(id("tonemapper"), RtSettings.Tonemapper.class);
+        tm.setName(nameOf("tonemapper")).setTooltip(v -> tipOf("tonemapper")).setDefaultValue(RtSettings.Tonemapper.PEAK)
+            .setAllowedValues(EnumSet.allOf(RtSettings.Tonemapper.class))
+            .setElementNameProvider(val -> switch (val) {
+                case PEAK -> tr("bedray.tonemapper.peak", "Peak (BedRay)");
+                case ACES -> tr("bedray.tonemapper.aces", "ACES");
+                case PBR_NEUTRAL -> tr("bedray.tonemapper.pbr_neutral", "PBR Neutral");
+                case GT -> tr("bedray.tonemapper.gt", "Gran Turismo");
+                case AGX -> tr("bedray.tonemapper.agx", "AgX");
+            })
+            .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> RtSettings.tonemapper = v, () -> RtSettings.tonemapper)
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        look.addOption(track("tonemapper", tm));
+        look.addOption(boolOpt(builder, "vibrant_visuals", false, v -> RtSettings.vibrantVisuals = v,
+            () -> RtSettings.vibrantVisuals, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         Identifier particleId = id("rt_particles");
         look.addOption(boolOpt(builder, "rt_particles", true, v -> RtSettings.rtParticles = v, () -> RtSettings.rtParticles,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));

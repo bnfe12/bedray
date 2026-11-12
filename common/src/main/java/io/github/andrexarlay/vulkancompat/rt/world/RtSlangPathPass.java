@@ -46,6 +46,18 @@ public final class RtSlangPathPass implements RtPass {
     static final int DISPLAY_FLAG_REPROJECT = 1 << 2;
     static final int DISPLAY_FLAG_CAMERA_STATIC = 1 << 3;
     static final int DISPLAY_FLAG_FLIP_Y = 1 << 4;
+    /**
+     * The player's tonemapper choice ({@link RtSettings.Tonemapper}) rides in spare display-flag bits 5..7, mirroring
+     * {@code PATH_DISPLAY_TONEMAPPER_SHIFT/MASK} of path_display.slang. The native core ORs the descriptor's display_flags
+     * verbatim into the push, so the mode reaches the live core with no ABI field; mode 0 (bits clear) is the peak curve.
+     */
+    static final int DISPLAY_TONEMAPPER_SHIFT = 5;
+    static final int DISPLAY_TONEMAPPER_MASK = 0x7 << DISPLAY_TONEMAPPER_SHIFT;
+
+    /** Pack a tonemapper mode into the spare display-flag bits (masked so a bad ordinal can never touch bits 0..4). */
+    static int tonemapperBits(RtSettings.Tonemapper mode) {
+        return (mode.ordinal() << DISPLAY_TONEMAPPER_SHIFT) & DISPLAY_TONEMAPPER_MASK;
+    }
     static final float MAX_RADIANCE = 64f;
     /** Relative depth disagreement (in blocks at unit distance) that still counts as the same surface when reprojecting. */
     static final float REPROJECTION_TOLERANCE = 0.02f;
