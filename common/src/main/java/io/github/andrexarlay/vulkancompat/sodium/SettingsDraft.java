@@ -165,6 +165,11 @@ final class SettingsDraft {
     void applyGiPlan(io.github.andrexarlay.vulkancompat.rtx.config.GiStackPolicy.Plan plan) {
         giPlanValues(plan).forEach(this::stage);
     }
+
+    /** Stages a texture sampling style into the pending model; Apply commits it like any other edit. */
+    void applyTexturePreset(io.github.andrexarlay.vulkancompat.rtx.config.TexturePreset preset) {
+        preset.stagedValues().forEach(this::stage);
+    }
     void revert() { imported.clear(); config.resetAllOptionsFromBindings(); }
     void reset() { imported.clear(); entries.stream().filter(e -> !SESSION.contains(e.path())).forEach(e -> e.option().resetToDefault()); }
     void apply() {
