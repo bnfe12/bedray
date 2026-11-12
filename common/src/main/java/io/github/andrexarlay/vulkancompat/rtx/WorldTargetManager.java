@@ -15,7 +15,6 @@ import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import io.github.andrexarlay.vulkanbridge.api.VulkanBridge;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
-import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanRtExperimentEngine;
 import io.github.andrexarlay.vulkancompat.rtx.framegen.FrameGenRuntime;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.FrameContext;
@@ -336,8 +335,7 @@ public final class WorldTargetManager {
             boolean first = lastRtEnabled == null;
             lastRtEnabled = rtNow;
             if (!first) {
-                // RT toggle only changes the execution policy; the target object is kept. Drop the RT binding and history.
-                VulkanRtExperimentEngine.getInstance().invalidateTargetBinding();
+                // RT toggle only changes the execution policy; the target object is kept. Reset history.
                 resetHistory = true;
                 logSkyIdentity("rt_toggle rt=" + rtNow);
             }
@@ -407,9 +405,7 @@ public final class WorldTargetManager {
         if (worldTarget != null && fullMain != null) {
             boolean dispatched = false;
             try {
-                // 1. Hardware Ray Tracing: done by RtFrameRenderer at the head of render3dHud (MixinGameRenderer). The old PoC
-                // overlay (VulkanRtExperimentEngine.dispatchRayQuery) ran here only when the config flag was on and the gate
-                // was off, i.e. exactly when RT is blocked (XeSS/DLSS) or failed; it is not dispatched any more.
+                // 1. Hardware Ray Tracing: done by RtFrameRenderer at the head of render3dHud (MixinGameRenderer).
 
                 // 2. Temporal upscaler: XeSS (-Dvkbridge.xess) or DLSS (-Dvkbridge.dlss). STUB: FSR has no implementation.
                 if (TemporalUpscaler.isActive()) {
@@ -504,7 +500,6 @@ public final class WorldTargetManager {
                 || worldTarget.getColorTextureView() == null) {
                 throw new IllegalStateException("world target lost its colour view after in-place resize to " + w + "x" + h);
             }
-            VulkanRtExperimentEngine.getInstance().invalidateTargetBinding();
             resetHistory = true; // XeSS/DLSS history of the old resolution is invalid (FrameContext reset=true)
             logSkyIdentity("resize " + w + "x" + h);
         }
@@ -1006,7 +1001,6 @@ public final class WorldTargetManager {
         if (worldTarget != null) {
             worldTarget.destroyBuffers();
             worldTarget = null;
-            VulkanRtExperimentEngine.getInstance().invalidateTargetBinding();
         }
         if (worldHud3d != null) {
             worldHud3d.destroyBuffers();

@@ -2,10 +2,14 @@ package io.github.andrexarlay.vulkancompat.rt.world;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * L2 JUnit tests for the realistic water medium of rt_common.glsl (WaterMedium, waterSegment).
+ * L2 JUnit tests for the realistic water medium of {@code surface/water.slang} (WaterMedium, waterInScatter).
  * <p>
  * The owner-visible regression (2026-10-20): deep ocean water rendered black and opaque. The old in-scatter multiplied the
  * sky radiance by exp(-sigma * 6) * 0.28 (a second absorption of the path above the sample) and by exp(-sigma * depth * 0.8)
@@ -13,12 +17,14 @@ import static org.junit.jupiter.api.Assertions.*;
  * A medium needs an explicit scattering coefficient: sigmaT = sigmaA + sigmaS, the in-scattered radiance of a segment is
  * sigmaS | sigmaT * L * (1 - exp(-sigmaT * len)), and multiple scattering keeps a floor of the downwelling light at depth.
  * <p>
- * The numeric part is a double-precision port of waterSegment with the GLSL constants copied here, as the other shader
- * tests in this package do. The source checks keep the shader on the same model.
+ * The numeric part is a double-precision port of waterSigmaT/waterInScatter with the Slang constants copied here, as the
+ * other shader tests in this package do. The source checks keep the Slang module on the same model.
  */
 public class RtWaterMediumTest {
 
-    // ---- rt_common.glsl constants (kept in sync with the shader) ----
+    private static final String WATER = "src/main/resources/shaders/slang/surface/water.slang";
+
+    // ---- surface/water.slang constants (kept in sync with the module) ----
     private static final double CLEAR_R = 0.17;
     private static final double CLEAR_G = 0.036;
     private static final double CLEAR_B = 0.013;
@@ -27,7 +33,7 @@ public class RtWaterMediumTest {
     private static final double DEPTH_FALLOFF = 0.65;
     /** Ocean biome tint (0x3F76E4) as the shader sees it after undoing the baked face shade. */
     private static final double[] OCEAN_TINT = {0.25, 0.46, 0.89};
-    /** Daytime hemisphereAmbient(1, day) of rt_common.glsl skyLight. */
+    /** Daytime environment dome radiance fed to waterInScatter. */
     private static final double AMBIENT = 0.45;
 
     @Test
@@ -47,17 +53,16 @@ public class RtWaterMediumTest {
     }
 
     @Test
-    public void testShaderConstantsMatchTheModel() {
-        String src = RtWorldChecks.rtCommon();
-        assertNotNull(src, "rt_common.glsl must be on the classpath");
-        assertTrue(src.contains("const vec3 WATER_CLEAR_ABSORPTION = vec3(0.17, 0.036, 0.013);"),
+    public void testShaderConstantsMatchTheModel() throws Exception {
+        String src = read(WATER);
+        assertTrue(src.contains("static const float3 WATER_CLEAR_ABSORPTION = float3(0.17, 0.036, 0.013);"),
             "WATER_CLEAR_ABSORPTION drifted from the numeric model in this test");
-        assertTrue(src.contains("const float WATER_SCATTERING = 0.055;"),
+        assertTrue(src.contains("static const float WATER_SCATTERING = 0.055;"),
             "WATER_SCATTERING drifted from the numeric model in this test");
-        assertTrue(src.contains("const float WATER_MULTIPLE_SCATTER_FLOOR = 0.65;"),
+        assertTrue(src.contains("static const float WATER_MULTIPLE_SCATTER_FLOOR = 0.65;"),
             "WATER_MULTIPLE_SCATTER_FLOOR drifted from the numeric model in this test");
-        assertTrue(src.contains("pc.keyColor.rgb * (0.35 * max(pc.keyDir.y, 0.0))"),
-            "water downlight must include the 0.35 direct-sun share");
+        assertTrue(src.contains("float3 column = WATER_MULTIPLE_SCATTER_FLOOR"),
+            "waterInScatter must keep the multiple-scattering floor of the downwelling light");
     }
 
     @Test
@@ -95,19 +100,23 @@ public class RtWaterMediumTest {
     }
 
     @Test
-    public void testShaderUsesAbsorptionPlusScatteringMedium() {
-        String src = RtWorldChecks.rtCommon();
-        assertNotNull(src, "rt_common.glsl must be on the classpath");
-        assertTrue(src.contains("vec3 scatterAlbedo"), "WaterMedium must carry the single-scattering albedo");
+    public void testShaderUsesAbsorptionPlusScatteringMedium() throws Exception {
+        String src = read(WATER);
+        assertTrue(src.contains("float3 scatterAlbedo"), "WaterMedium must carry the single-scattering albedo");
         assertTrue(src.contains("WATER_SCATTERING"), "the medium must declare a scattering coefficient");
         assertTrue(src.contains("WATER_MULTIPLE_SCATTER_FLOOR"), "the medium must declare the multiple-scattering floor");
-        assertTrue(src.contains("m.scatterAlbedo *"), "waterSegment must scale the in-scatter by sigmaS/sigmaT");
-        assertFalse(src.contains("exp(-m.sigma * 6.0)"), "the legacy second absorption of the sky light must be gone");
-        assertFalse(src.contains("m.sigma * depth * 0.8"), "the legacy third absorption must be gone");
-        assertTrue(src.contains("exp(-m.sigmaT * travel)"), "waterSunBeam must attenuate by the total extinction");
+        assertTrue(src.contains("medium.scatterAlbedo *"), "waterInScatter must scale by sigmaS/sigmaT");
+        assertFalse(src.contains("exp(-m.sigma * 6.0)"), "the old second absorption of the sky light must be gone");
+        assertFalse(src.contains("m.sigma * depth * 0.8"), "the old third absorption must be gone");
+        assertTrue(src.contains("exp(-medium.sigmaT * max(length, 0.0))"),
+            "waterSegmentTransmittance must attenuate by the total extinction");
     }
 
-    // ---- double-precision port of waterSegment / waterSigmaT ----
+    private static String read(String path) throws Exception {
+        return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+    }
+
+    // ---- double-precision port of waterInScatter / waterSigmaT ----
 
     private static double[] sigmaT(double[] tint) {
         return sigmaTWith(tint, CLEAR_R, CLEAR_G, CLEAR_B);
@@ -180,7 +189,7 @@ public class RtWaterMediumTest {
         return String.format("(%.4f, %.4f, %.4f)", c[0], c[1], c[2]);
     }
 
-    public static void runAll() {
+    public static void runAll() throws Exception {
         RtWaterMediumTest t = new RtWaterMediumTest();
         t.testDeepWaterIsVisibleAndBlue();
         t.testDeepWaterBeatsLegacyBlackModel();

@@ -81,9 +81,8 @@ Two build guards keep a native or classpath failure from looking like a slow tes
   (`git worktree add C:\Temp\bedray-wt HEAD` and run Gradle there). The build prints a warning when the project path
   contains non-ASCII characters.
 
-The runtime GLSL fallback compiler pins `shaderc_optimization_level_zero`: shaderc's SPIR-V optimizer does not terminate on the
-~261 KB expanded `rt_rays`/`rt_path` sources (reproduced with LWJGL shaderc 3.3.3 and 3.4.3, `performance` and `size` levels).
-Do not raise it; `RtShaderCompilerOptionsTest` enforces this. The AOT Slang passes are unaffected because `slangc` optimises them.
+The GLSL renderer and its runtime compiler are deleted; every shader is an AOT Slang pass compiled by `slangc` and
+optimised by the Vulkan driver at pipeline creation. There is no runtime shaderc level to tune.
 A passing `:common:test` is L2 evidence (Java logic and source scans without a GPU), not a game check.
 
 The `combinedJar` task of each loader module builds the canonical player artifact with the Bedray Compute provider

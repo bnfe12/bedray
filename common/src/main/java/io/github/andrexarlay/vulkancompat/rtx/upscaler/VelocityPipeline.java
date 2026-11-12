@@ -52,7 +52,7 @@ import java.util.Objects;
 public final class VelocityPipeline implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger("Bedray/VelocityPipeline");
 
-    public static final String SHADER_RESOURCE_PATH = "/shaders/glsl/velocity_reproject.comp";
+    public static final String SHADER_RESOURCE_PATH = "/shaders/slang/passes/velocity_reproject_ubo.slang";
 
     /** Number of ring slots; engine MAX_SUBMITS_IN_FLIGHT is 2, one spare. */
     private static final int SLOTS = 3;
@@ -224,39 +224,9 @@ public final class VelocityPipeline implements AutoCloseable {
         this.uniformMapped[i] = pData.get(0); // persistent mapping, HOST_COHERENT
     }
 
-    /** Compiles velocity_reproject.comp with Shaderc (also used by the unit test). */
+    /** Loads the AOT Slang velocity pass (also used by the unit test). */
     public static ByteBuffer compileShaderToSpirv() {
-        try {
-            String glsl = loadGlslSource(SHADER_RESOURCE_PATH);
-            long compiler = Shaderc.shaderc_compiler_initialize();
-            long options = Shaderc.shaderc_compile_options_initialize();
-            try {
-                Shaderc.shaderc_compile_options_set_target_env(options, Shaderc.shaderc_target_env_vulkan, Shaderc.shaderc_env_version_vulkan_1_2);
-                Shaderc.shaderc_compile_options_set_optimization_level(options, Shaderc.shaderc_optimization_level_performance);
-                long result = Shaderc.shaderc_compile_into_spv(
-                    compiler, glsl, Shaderc.shaderc_compute_shader, "velocity_reproject.comp", "main", options);
-                try {
-                    int status = Shaderc.shaderc_result_get_compilation_status(result);
-                    if (status != Shaderc.shaderc_compilation_status_success) {
-                        String error = Shaderc.shaderc_result_get_error_message(result);
-                        throw new IllegalStateException("Shaderc compilation failed (" + status + "): " + error);
-                    }
-                    ByteBuffer bytes = Shaderc.shaderc_result_get_bytes(result);
-                    ByteBuffer direct = BufferUtils.createByteBuffer(bytes.remaining());
-                    direct.put(bytes);
-                    direct.flip();
-                    LOGGER.info("[VelocityPipeline] Runtime Shaderc compilation succeeded (SPIR-V size: {} bytes)", direct.remaining());
-                    return direct;
-                } finally {
-                    Shaderc.shaderc_result_release(result);
-                }
-            } finally {
-                Shaderc.shaderc_compile_options_release(options);
-                Shaderc.shaderc_compiler_release(compiler);
-            }
-        } catch (RuntimeException e) {
-            throw new IllegalStateException("Failed to compile velocity_reproject.comp: " + e.getMessage(), e);
-        }
+        return io.github.andrexarlay.vulkancompat.rt.slang.SlangAot.load("velocity_reproject_ubo");
     }
 
     private static String loadGlslSource(String path) {

@@ -33,11 +33,6 @@ class DlssRrTest {
     }
 
     @Test
-    void testHorizonBendingAndReflectionContinuity() {
-        assertDoesNotThrow(DlssRrChecks::horizonBendingAndReflectionContinuity);
-    }
-
-    @Test
     void testVelocityMotionVectorIntegration() {
         assertDoesNotThrow(DlssRrChecks::velocityMotionVectorIntegration);
     }

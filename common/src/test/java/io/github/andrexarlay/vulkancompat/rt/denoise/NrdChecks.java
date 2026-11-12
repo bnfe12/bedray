@@ -1,7 +1,5 @@
 package io.github.andrexarlay.vulkancompat.rt.denoise;
 
-import io.github.andrexarlay.vulkancompat.rt.world.RtPipeline;
-import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
 import org.joml.Matrix4f;
 
 import java.lang.foreign.Arena;
@@ -15,7 +13,7 @@ import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 
 /**
- * L2 checks of the NRD path: struct layouts, mode selection, availability, packing math, camera math, shader compilation and
+ * L2 checks of the NRD path: struct layouts, mode selection, availability, packing math, camera math and
  * (when a locally built vkb_nrd.dll is present) the real FFM binding. No GPU, no game: NOT evidence that denoising works.
  */
 public final class NrdChecks {
@@ -35,8 +33,6 @@ public final class NrdChecks {
         relaxPacking();
         packPushLayout();
         cameraMath();
-        shaderDefines();
-        shadersCompile();
         nativeBinding();
     }
 
@@ -243,7 +239,7 @@ public final class NrdChecks {
         check(bad[0] == 0f && bad[1] == 0f && bad[2] == 0f && bad[3] == 1f, "RELAX zeroes invalid radiance, keeps a valid hit distance");
     }
 
-    /** The descriptor count and push-constant layout of rt_pack_nrd.comp must match the Java side exactly. */
+    /** The descriptor count and push-constant layout of the Slang NRD pack pass must match the Java side exactly. */
     private static void packPushLayout() {
         check(NrdPackPipeline.BINDINGS == 14, "pack set has 14 storage images (5 gb + specular/spec-albedo/guide + 6 denoiser images)");
         check(NrdPackPipeline.PUSH_BYTES == 56, "pack push constants are 56 bytes");
@@ -286,38 +282,6 @@ public final class NrdChecks {
         near(0.5f, far.m30(), 0f, "delta computed in double");
         check(NrdCameraMath.isTeleport(0, 0, 0, 100, 0, 0, 32), "100 blocks is a teleport");
         check(!NrdCameraMath.isTeleport(0, 0, 0, 1, 0, 1, 32), "walking is not");
-    }
-
-    private static void shaderDefines() {
-        String src = "#version 460\nvoid main() {}\n";
-        String out = RtShaderCompiler.withDefines(src, "#define A 1\n");
-        check(out.equals("#version 460\n#define A 1\nvoid main() {}\n"), "defines go after the #version line: " + out);
-        check(RtShaderCompiler.withDefines(src, "").equals(src), "no defines: unchanged");
-        boolean threw = false;
-        try {
-            RtShaderCompiler.withDefines("void main() {}\n", "#define A 1\n");
-        } catch (RuntimeException e) {
-            threw = true;
-        }
-        check(threw, "source without #version is rejected");
-    }
-
-    private static void shadersCompile() {
-        ByteBuffer plain = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
-        ByteBuffer gb = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp+gbuffer", RtPipeline.GBUFFER_DEFINE);
-        check(gb.getInt(0) == 0x07230203 && gb.remaining() > plain.remaining(), "gbuffer variant compiles and is larger than the plain shader");
-        ByteBuffer pack = RtShaderCompiler.compileResource(NrdPackPipeline.SHADER_PATH, "rt_pack_nrd.comp:pack", "#define VKB_PASS_PACK 1" + (char) 10);
-        ByteBuffer compose = RtShaderCompiler.compileResource(NrdPackPipeline.SHADER_PATH, "rt_pack_nrd.comp:compose",
-            "#define VKB_PASS_COMPOSE 1" + (char) 10);
-        check(pack.getInt(0) == 0x07230203 && pack.remaining() > 500, "pack pass SPIR-V");
-        check(compose.getInt(0) == 0x07230203 && compose.remaining() > 500, "compose pass SPIR-V");
-        boolean threw = false;
-        try {
-            RtShaderCompiler.compileResource(NrdPackPipeline.SHADER_PATH, "rt_pack_nrd.comp:none");
-        } catch (RuntimeException e) {
-            threw = true;
-        }
-        check(threw, "the pack shader without a pass define is an error (#error), not a silent empty shader");
     }
 
     /** Loads a locally built vkb_nrd.dll (env VKB_NRD_NATIVES or local reference); prints SKIPPED when it is not there. */

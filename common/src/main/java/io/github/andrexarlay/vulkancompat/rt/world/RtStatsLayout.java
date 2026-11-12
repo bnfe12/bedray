@@ -4,13 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Byte layout of one per-frame slot of StatsBuf (buffer StatsBuf in rt_common.glsl): written by
- * RtFrameRenderer / RtSkyState / RtFogState, read by the shaders through pc.statsAddr.
+ * Byte layout of one per-frame slot of StatsBuf (the {@code FrameStats} block the Slang passes read through
+ * {@code pc.statsAddr}): written by RtFrameRenderer / RtSkyState / RtFogState.
  * <p>
  * The member list below is the single Java source of truth: offsets are computed here with the same
- * std430 rules the GLSL compiler applies to the declaration, and {@code RtStatsLayoutTest} parses the
- * GLSL struct and asserts both lists are identical (names, order, types, offsets, total size) — a
- * one-sided edit fails the build instead of silently misreading the frame slot.
+ * std430 rules Slang applies to the declaration. A one-sided edit of the Java writer and the Slang reader
+ * must be caught by review: the old GLSL source-parsing test went away with the GLSL renderer.
  */
 public final class RtStatsLayout {
     /** One member of buffer StatsBuf: GLSL declaration and its computed std430 placement. */

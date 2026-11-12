@@ -22,10 +22,10 @@ class RtRestirSettingsTest {
     private static final String SETTINGS = "src/main/java/io/github/andrexarlay/vulkancompat/rtx/config/RtSettings.java";
     private static final String RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtFrameRenderer.java";
-    private static final String RAYS_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
-        + "RtRayEffectsPass.java";
     private static final String SLANG_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtSlangPathPass.java";
+    private static final String SPATIAL_PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "RtSpatialReuseSlangPass.java";
     private static final String REFERENCE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "ReferencePathTraceBackend.java";
     private static final String NATIVE_BACKEND = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
@@ -102,11 +102,11 @@ class RtRestirSettingsTest {
             "the reuse needs the emissive term it would reuse, and it is the switch that decides whether the ring is handed over");
         assertTrue(renderer.contains("long reservoirAddr = 0L;"),
             "off means the shader is handed a zero reservoir address, which is the shader's own off test");
-        String rays = read(RAYS_PASS);
-        assertTrue(rays.contains("if (restirSpatial != null && RtSettings.restirSpatial() && params.mode == RtConfig.MODE_LIT"),
-            "spatial reuse is gated where the two checker phases are dispatched, not where the pipeline is built");
-        assertTrue(rays.contains("private static final boolean RESTIR_SPATIAL"),
-            "the session switch still decides whether the kernel exists at all");
+        String spatial = read(SPATIAL_PASS);
+        assertTrue(spatial.contains("SPATIAL_ENABLED = 1"),
+            "the spatial pass owns the enabled bit its kernel reads instead of a build-time define");
+        assertTrue(spatial.contains("PHASES = 2"),
+            "spatial reuse runs the two checker phases per frame, not at pipeline build time");
     }
 
     /** A reused record is a claim about the past: any technique change invalidates it, so the frame diff has to see them. */

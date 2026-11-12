@@ -1,7 +1,7 @@
 package io.github.andrexarlay.vulkancompat.rt.world;
 
 /**
- * CPU mirror of {@code shaders/rt_tonemap.glsl} (unit-tested, keep the constants in sync). Peak-channel filmic curve: the colour
+ * CPU mirror of {@code shaders/slang/tonemap_curve.slang} (unit-tested, keep the constants in sync). Peak-channel filmic curve: the colour
  * is scaled by {@code f(max channel) / max channel}, so hue and saturation of the albedo survive (the previous per-channel
  * Narkowicz ACES lifted the dark channels and washed colours out). Identity up to {@link #KNEE}, C1 shoulder to 1 above it.
  */

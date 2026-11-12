@@ -5,9 +5,6 @@ import io.github.andrexarlay.vulkancompat.rt.denoise.DenoiserMode;
 import io.github.andrexarlay.vulkancompat.rt.denoise.DlssRrDenoiser;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFrameParams;
-import io.github.andrexarlay.vulkancompat.rt.world.RtPipeline;
-import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
-import io.github.andrexarlay.vulkancompat.rt.world.RtWorldChecks;
 import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssLayouts;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNative;
@@ -35,8 +32,6 @@ public final class DlssRrChecks {
         denoiserModeAndConfig();
         dlssRrDenoiserContracts();
         rtFrameRendererIntegration();
-        geometricNormalsAndRoughnessPacking();
-        horizonBendingAndReflectionContinuity();
         velocityMotionVectorIntegration();
         dllPresence();
         realNativeBindingIfPresent();
@@ -375,15 +370,6 @@ public final class DlssRrChecks {
         check(clampedLow[3] == 0.0f, "negative roughness clamped to 0.0");
         float[] clampedHigh = packNormalRoughness(true, ng, ns, 1.5f);
         check(clampedHigh[3] == 1.0f, "excess roughness clamped to 1.0");
-
-        // 4. SPIR-V Shader compilation with VKB_GBUFFER verifying syntax and bindings
-        ByteBuffer pathGb = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+gbuffer",
-            RtPipeline.GBUFFER_DEFINE);
-        check(pathGb != null && pathGb.remaining() > 1000 && pathGb.getInt(0) == 0x07230203, "rt_path.comp+gbuffer compiles to valid SPIR-V");
-
-        ByteBuffer raysGb = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp+gbuffer",
-            RtPipeline.GBUFFER_DEFINE);
-        check(raysGb != null && raysGb.remaining() > 1000 && raysGb.getInt(0) == 0x07230203, "rt_rays.comp+gbuffer compiles to valid SPIR-V");
     }
 
     private static float[] packNormalRoughness(boolean geometricNormals, float[] ng, float[] ns, float roughness) {
@@ -394,66 +380,6 @@ public final class DlssRrChecks {
         float nz = len > 1e-4f ? nOut[2] / len : 1.0f;
         float r = Math.max(0.0f, Math.min(1.0f, roughness));
         return new float[] {nx, ny, nz, r};
-    }
-
-    public static void horizonBendingAndReflectionContinuity() {
-        // 1. Math check of PBR Horizon Bending formula
-        float[] ng = {0.0f, 1.0f, 0.0f}; // horizontal water surface
-
-        // Reflection vector dipping below horizontal plane
-        float[] rBelow = {0.8f, -0.2f, 0.0f};
-        float[] rBent = bendHorizon(rBelow, ng);
-        float dotBent = dot(rBent, ng);
-        check(dotBent >= 0.0009f, "reflection bent above horizon: " + dotBent);
-        float len = (float) Math.sqrt(rBent[0] * rBent[0] + rBent[1] * rBent[1] + rBent[2] * rBent[2]);
-        check(Math.abs(len - 1.0f) < 1e-4f, "bent vector is normalized: " + len);
-
-        // Reflection vector already well above horizon: unchanged
-        float[] rAbove = {0.6f, 0.8f, 0.0f};
-        float[] rKept = bendHorizon(rAbove, ng);
-        check(Math.abs(rKept[0] - rAbove[0]) < 1e-5f && Math.abs(rKept[1] - rAbove[1]) < 1e-5f,
-            "reflection above horizon unchanged");
-
-        // Extreme downward reflection vector: bends smoothly
-        float[] rDown = {0.0f, -1.0f, 0.0f};
-        float[] rDownBent = bendHorizon(rDown, ng);
-        check(dot(rDownBent, ng) > 0.0f, "extreme downward vector bent above horizon");
-
-        // 2. Shader source validation: rt_common.glsl, rt_path.comp, rt_rays.comp
-        String commonSrc = RtWorldChecks.rtCommon();
-        check(commonSrc.contains("vec3 bendHorizon(vec3 r, vec3 ng)"), "rt_common.glsl defines bendHorizon");
-
-        String pathSrc = RtShaderCompiler.loadSource("/shaders/glsl/rt_path.comp");
-        check(pathSrc.contains("r = bendHorizon(r, s.ng);"), "rt_path.comp applies bendHorizon");
-        check(!pathSrc.contains("if (dot(r, s.ng) <= 0.0) {\n                break;\n            }"),
-            "rt_path.comp no longer breaks ray on dot(r, s.ng) <= 0");
-
-        String raysSrc = RtShaderCompiler.loadSource("/shaders/glsl/rt_rays.comp");
-        check(raysSrc.contains("rdir = bendHorizon(rdir, s.ng);"), "rt_rays.comp applies bendHorizon");
-        check(!raysSrc.contains("rdir = reflect(rdir, s.ng);"), "rt_rays.comp no longer uses abrupt reflect(rdir, s.ng)");
-
-        // 3. Shaders compile cleanly to SPIR-V
-        ByteBuffer pathSpv = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp");
-        check(pathSpv != null && pathSpv.remaining() > 0, "rt_path.comp with bendHorizon compiles to SPIR-V");
-        ByteBuffer raysSpv = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
-        check(raysSpv != null && raysSpv.remaining() > 0, "rt_rays.comp with bendHorizon compiles to SPIR-V");
-    }
-
-    private static float[] bendHorizon(float[] r, float[] ng) {
-        float ndotr = dot(r, ng);
-        if (ndotr < 0.001f) {
-            float minVal = Math.min(0.0f, ndotr);
-            float x = r[0] - ng[0] * minVal + ng[0] * 0.001f;
-            float y = r[1] - ng[1] * minVal + ng[1] * 0.001f;
-            float z = r[2] - ng[2] * minVal + ng[2] * 0.001f;
-            float l = (float) Math.sqrt(x * x + y * y + z * z);
-            return new float[] {x / l, y / l, z / l};
-        }
-        return new float[] {r[0], r[1], r[2]};
-    }
-
-    private static float dot(float[] a, float[] b) {
-        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     }
 
     public static void velocityMotionVectorIntegration() throws Exception {
@@ -486,8 +412,8 @@ public final class DlssRrChecks {
         float dx = prevClip.x - clipCenter.x;
         check(Math.abs(dx) > 1e-4f, "camera movement produces non-zero motion displacement: " + dx);
 
-        // Verify VelocityPipeline shader compiles
+        // Verify VelocityPipeline's AOT artifact loads
         ByteBuffer spv = VelocityPipeline.compileShaderToSpirv();
-        check(spv != null && spv.remaining() > 0, "velocity_reproject.comp compiles to SPIR-V");
+        check(spv != null && spv.remaining() > 0, "velocity_reproject_ubo AOT artifact loads");
     }
 }

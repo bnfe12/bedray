@@ -20,9 +20,9 @@ import java.nio.ByteBuffer;
 public final class RtFrameParams {
     public static final int BYTES = 128;
 
-    /** PC member types in declaration order (layout(push_constant) uniform PC in rt_common.glsl; verified by RtStatsLayoutTest). */
+    /** PC member types in declaration order (the 128 B frame block). */
     static final String[] PC_TYPES = {"mat4", "uvec2", "uint", "uint", "vec4", "vec4", "vec4"};
-    /** std430 offsets of the PC members, computed once by the same rules the GLSL compiler applies. */
+    /** std430 offsets of the PC members, computed once by the same rules Slang applies. */
     static final int[] PC_OFFSETS = RtStatsLayout.std430Offsets(PC_TYPES);
     static final int OFF_INV_VIEW_PROJ = PC_OFFSETS[0];
     static final int OFF_STATS_ADDR = PC_OFFSETS[1];
@@ -95,9 +95,9 @@ public final class RtFrameParams {
     public int bounces;
     public int spp = 1;
     public int rayDistance = 128;
-    /** Ray mode: rays per pixel nibbles (RtRayEffectsPass.packQualities) replacing quality/bounces/spp in params2; -1 = path layout. */
+    /** Ray mode: rays per pixel nibbles (packed by the host) replacing quality/bounces/spp in params2; -1 = path layout. */
     public int rayQualities = -1;
-    /** Ray mode spatial filter (rt_atrous.comp): iteration index (params2 bits 16-19) and iteration count (20-23). */
+    /** Ray mode spatial filter ({@code passes/atrous.slang}): iteration index (params2 bits 16-19) and iteration count (20-23). */
     public int filterIter;
     public int filterIters;
     // ---- written to the per-frame slot (RtFrameRenderer), not pushed ----

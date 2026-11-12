@@ -553,7 +553,7 @@ public final class RtSettings {
 
     /**
      * The two Path Tracing modes of the settings page (backlog item 12: "Fast" and "Quality" only). A preset writes every
-     * path value the path tracer reads each frame (RtPathTracerPass: spp, bounces, ray distance, accumulation, auto exposure;
+     * path value the path tracer reads each frame (RtSlangPathPass: spp, bounces, ray distance, accumulation, auto exposure;
      * RtFrameRenderer: denoiser, caustics flag). CUSTOM keeps the individual values (a changed expert value switches to it).
      * The tracing mode itself is not touched (the "Tracing" option decides).
      */

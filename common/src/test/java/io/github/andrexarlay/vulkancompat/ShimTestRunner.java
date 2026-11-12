@@ -32,7 +32,6 @@ public class ShimTestRunner {
             "testConfigDefaults",
             "testTargetResolutionMath",
             "testVulkanCapabilityChecker",
-            "testRtExperimentEngine",
             "testWorldTargetManager",
             "testHandDeferral",
             "testUpscalerJitterSource",
@@ -50,11 +49,8 @@ public class ShimTestRunner {
             "testXessFeatureStructs",
             "testXessMissingDllIsReported",
             "testSodiumMeshDecoder",
-            "testRtWorldLogic",
             "testNrdDenoiser",
             "testJitterPhaseCount",
-            "testVelocityShaderCompiles",
-            "testRtShaderSourcesCompile",
             "testMixinDisableCsv",
             "testRtxDeviceRequirements",
             "testLateProvidersAndScenarios",
@@ -70,7 +66,6 @@ public class ShimTestRunner {
             wrap(ShimTestRunner::testConfigDefaults),
             wrap(ShimTestRunner::testTargetResolutionMath),
             wrap(ShimTestRunner::testVulkanCapabilityChecker),
-            wrap(ShimTestRunner::testRtExperimentEngine),
             wrap(ShimTestRunner::testWorldTargetManager),
             wrap(ShimTestRunner::testHandDeferral),
             wrap(ShimTestRunner::testUpscalerJitterSource),
@@ -88,11 +83,8 @@ public class ShimTestRunner {
             wrap(ShimTestRunner::testXessFeatureStructs),
             wrap(ShimTestRunner::testXessMissingDllIsReported),
             wrap(io.github.andrexarlay.vulkancompat.rt.sodium.SodiumMeshDecoderChecks::runAll),
-            wrap(io.github.andrexarlay.vulkancompat.rt.world.RtWorldChecks::runAll),
             wrap(io.github.andrexarlay.vulkancompat.rt.denoise.NrdChecks::runAll),
             wrap(ShimTestRunner::testJitterPhaseCount),
-            wrap(ShimTestRunner::testVelocityShaderCompiles),
-            wrap(ShimTestRunner::testRtShaderSourcesCompile),
             wrap(ShimTestRunner::testMixinDisableCsv),
             wrap(ShimTestRunner::testRtxDeviceRequirements),
             wrap(ShimTestRunner::testLateProvidersAndScenarios),
@@ -305,46 +297,6 @@ public class ShimTestRunner {
         io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideOpacityMicromapForTesting(null);
 
         io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.reset();
-    }
-
-    private static void testRtExperimentEngine() {
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.DefaultRtExperimentEngine engine =
-            io.github.andrexarlay.vulkancompat.rtx.raytracing.DefaultRtExperimentEngine.getInstance();
-        assertTrue(engine != null, "DefaultRtExperimentEngine instance must exist");
-        assertTrue(io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanRtExperimentEngine.getInstance() != null, "VulkanRtExperimentEngine instance must exist");
-        assertTrue(engine == io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanRtExperimentEngine.getInstance(), "Must be same singleton instance");
-
-        // 1. By default, isEnabled() is false
-        VulkanRtxConfig.enableHardwareRayTracing = false;
-        io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideForTesting(false);
-        assertTrue(!engine.isEnabled(), "Engine must be disabled when config flag is false");
-
-        // 2. Safe no-ops when disabled
-        engine.init();
-        assertTrue(!engine.isInitialized(), "init must no-op when disabled");
-        engine.buildTestStructure();
-        engine.dispatchRayQuery();
-        engine.dispatchRayQuery((com.mojang.blaze3d.pipeline.RenderTarget) null);
-        engine.cleanup();
-        assertTrue(!engine.isInitialized(), "cleanup must no-op when not initialized");
-
-        // 3. When enabled via config and capability
-        try {
-            io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.setOverrideForTesting(true);
-            VulkanRtxConfig.enableHardwareRayTracing = true;
-            assertTrue(engine.isEnabled(), "Engine must be enabled when config=true and capability=true");
-
-            engine.init();
-            assertTrue(engine.isInitialized(), "Engine must initialize when enabled");
-            engine.buildTestStructure();
-            engine.dispatchRayQuery();
-            engine.dispatchRayQuery((com.mojang.blaze3d.pipeline.RenderTarget) null);
-            engine.cleanup();
-            assertTrue(!engine.isInitialized(), "Engine must be reset after cleanup");
-        } finally {
-            VulkanRtxConfig.enableHardwareRayTracing = false;
-            io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker.reset();
-        }
     }
 
     private static void testWorldTargetManager() throws Exception {
@@ -719,30 +671,6 @@ public class ShimTestRunner {
         assertEquals(72, io.github.andrexarlay.vulkancompat.rtx.upscaler.CameraJitterManager.phaseCountFor(3.0), "UP");
     }
 
-    private static void testVelocityShaderCompiles() {
-        java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline.compileShaderToSpirv();
-        assertTrue(spv != null && spv.remaining() > 0, "velocity_reproject.comp must compile to SPIR-V");
-    }
-
-    /**
-     * Compiles the RT shaders in every define combination the pipelines instantiate. A GLSL error in rt_common.glsl
-     * surfaces here instead of disabling ray tracing at runtime.
-     */
-    private static void testRtShaderSourcesCompile() {
-        String gbuffer = io.github.andrexarlay.vulkancompat.rt.world.RtPipeline.GBUFFER_DEFINE;
-        String accum = io.github.andrexarlay.vulkancompat.rt.world.RtPathTracerPass.ACCUM_DEFINE;
-        assertSpirv("/shaders/glsl/rt_rays.comp", "rt_rays.comp", "", "ray mode");
-        assertSpirv("/shaders/glsl/rt_rays.comp", "rt_rays.comp+gbuffer", gbuffer, "ray mode with the denoiser G-buffer");
-        assertSpirv("/shaders/glsl/rt_path.comp", "rt_path.comp", accum, "path mode");
-        assertSpirv("/shaders/glsl/rt_path.comp", "rt_path.comp+gbuffer", gbuffer + accum, "path mode with the denoiser G-buffer");
-        assertSpirv("/shaders/glsl/rt_atrous.comp", "rt_atrous.comp", accum, "path-mode atrous filter");
-    }
-
-    private static void assertSpirv(String path, String name, String defines, String what) {
-        java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler.compileResource(path, name, defines);
-        assertTrue(spv != null && spv.remaining() > 0, what + " must compile to SPIR-V");
-    }
-
     private static void testFeatureSetStructs() {
         try {
             com.mojang.renderpearl.backend.vulkan.init.VulkanPNextStruct asStruct =
@@ -773,8 +701,8 @@ public class ShimTestRunner {
             assertTrue(rtFeatureSet != null, "rtFeatureSet must not be null");
             System.out.println("FeatureSet created: " + rtFeatureSet);
 
-            java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.rt.poc.RtTestPipeline.obtainSpirv();
-            assertTrue(spv != null && spv.remaining() > 0, "SPIR-V bytecode must be available");
+            java.nio.ByteBuffer spv = io.github.andrexarlay.vulkancompat.rtx.upscaler.VelocityPipeline.compileShaderToSpirv();
+            assertTrue(spv != null && spv.remaining() > 0, "AOT SPIR-V artifact must be available");
             System.out.println("SPIR-V obtained: " + spv.remaining() + " bytes");
         } catch (Throwable t) {
             throw new RuntimeException("FeatureSet creation failed: " + t.getMessage(), t);

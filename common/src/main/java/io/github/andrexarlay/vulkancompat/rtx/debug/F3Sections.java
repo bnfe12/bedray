@@ -605,7 +605,7 @@ public final class F3Sections {
             colored(b, OFF, "RT off");
         } else if (RtFrameRenderer.lastPassMode() == RtMode.PATH_TRACED && histDen != DenoiserMode.OFF
             && "active".equals(RtFrameRenderer.denoiserRuntimeState())) {
-            // the built-in accumulation is switched off while a denoiser runs (RtPathTracerPass), so its 0% / 1 fr is not a fault
+            // the built-in accumulation is switched off while a denoiser runs (the path pass), so its 0% / 1 fr is not a fault
             b.append(OK).append(histDen.logName()).append(R).append(OFF).append(" temporal history inside the denoiser (built-in accumulation off)").append(R);
         } else if (hist < 0) {
             colored(b, OFF, "n/a (no readback yet)");

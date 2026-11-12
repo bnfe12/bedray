@@ -1212,3 +1212,31 @@ packing, both range guards and malformed inputs. Shader compilation is up to
 date from the preceding 18-pass run; shader sources are unchanged in this batch.
 `git diff --check` passes. No GPU/game, visual parity or performance evidence;
 native remains opt-in. The volumetric native-scene boundary remains separate.
+
+## 2026-11-12 - legacy GLSL removal and AOT utility shaders (L1 build; no GPU)
+
+Deleted the old GLSL renderer and its Java hosts: `RtPipeline`,
+`RtShaderCompiler`, `RtShaderDiskCache`, `RtPathTracerPass`, `RtRayEffectsPass`,
+`RtCompositePipeline`, `RtVolumetricPass`, `RtTestPipeline`, the PoC experiment
+engine and `common/src/main/resources/shaders/glsl/` (29 files). 23 test files
+that only guarded those sources were deleted, not rewritten against files that
+no longer exist.
+
+Five host-owned utility passes moved to AOT Slang through `SlangAot`:
+`fg_prepare`, `iris_depth`, `velocity_reproject_ubo`, `nrd_pack_rgb10a2` and
+`nrd_compose`. The NRD pack push block is 56 bytes with four scalar hit
+distances; only `R10G10B10A2_UNORM` is accepted. Opacity micromaps are gated
+only by `VulkanCapabilityChecker.isOpacityMicromapSupported()`.
+
+Evidence on `fix/audit-remediation-20261029` (working tree after `4485159`):
+
+| Check | Result |
+|---|---|
+| `:common:compileSlang` | passed, 23 pass entry points |
+| `:common:compileJava` | passed |
+| `:common:compileTestJava` | passed |
+
+Not run: `:common:test` (the checkout path contains non-ASCII characters and the
+Gradle worker mangles the classpath; repeat from an ASCII worktree), CMake
+native configure/build, GPU dispatch, game startup, visual parity or
+performance. This is L1 evidence only.

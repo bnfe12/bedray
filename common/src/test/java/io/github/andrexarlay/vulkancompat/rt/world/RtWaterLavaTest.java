@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 3. Water wave normal interference (multi-frequency wave ripples, horizon preservation).
  * 4. Underwater sun specular caustics and surface sun glitter.
  * 5. Animated turbulent high-emission lava glow with texel hotspots.
- * 6. Integration with RtRayEffectsPass and RtPathTracerPass flags and descriptions.
+ * 6. Integration with the RT mode flags and descriptions.
  */
 public class RtWaterLavaTest {
 

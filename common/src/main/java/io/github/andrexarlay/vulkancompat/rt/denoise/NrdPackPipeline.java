@@ -2,7 +2,6 @@ package io.github.andrexarlay.vulkancompat.rt.denoise;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtVulkanPipelineCache;
 import io.github.andrexarlay.vulkancompat.rt.world.RtFailure;
-import io.github.andrexarlay.vulkancompat.rt.world.RtShaderCompiler;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -31,7 +30,7 @@ import java.nio.LongBuffer;
  * velocity pass), 13 specular albedo (F0) guide. The set is written when the images change (after a device-idle wait by the caller).
  */
 final class NrdPackPipeline {
-    static final String SHADER_PATH = "/shaders/glsl/rt_pack_nrd.comp";
+    static final String SHADER_PATH = "/shaders/slang/spv/nrd_pack_rgb10a2.spv";
     static final int BINDINGS = 14;
     /** 4 uint + vec4 + uvec2 + float + vec2 (motion address), see the PC block of the shader. */
     static final int PUSH_BYTES = 56;
@@ -48,8 +47,8 @@ final class NrdPackPipeline {
 
     NrdPackPipeline(VkDevice device) {
         this.device = device;
-        ByteBuffer packSpv = RtShaderCompiler.compileResource(SHADER_PATH, "rt_pack_nrd.comp:pack", "#define VKB_PASS_PACK 1\n");
-        ByteBuffer composeSpv = RtShaderCompiler.compileResource(SHADER_PATH, "rt_pack_nrd.comp:compose", "#define VKB_PASS_COMPOSE 1\n");
+        ByteBuffer packSpv = io.github.andrexarlay.vulkancompat.rt.slang.SlangAot.load("nrd_pack_rgb10a2");
+        ByteBuffer composeSpv = io.github.andrexarlay.vulkancompat.rt.slang.SlangAot.load("nrd_compose");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
             RtFailure.check(VK10.vkCreateShaderModule(device, VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(packSpv), null, p),

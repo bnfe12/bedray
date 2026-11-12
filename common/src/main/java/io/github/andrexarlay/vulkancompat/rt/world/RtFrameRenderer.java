@@ -65,12 +65,11 @@ public final class RtFrameRenderer {
     private static final int SPAN_DENOISE = 2;
     private static final int SPAN_ATMO = 3;
     /**
-     * Per-frame slot layout is {@link RtStatsLayout} (offsets shared with buffer StatsBuf in rt_common.glsl and verified
-     * against the GLSL declaration by RtStatsLayoutTest); this renderer writes hits/samples/camera/emitter/exposure fields,
-     * RtSkyState the sky block, RtFogState the fog block.
+     * Per-frame slot layout is {@link RtStatsLayout} (the FrameStats block read through pc.statsAddr); this renderer
+     * writes hits/samples/camera/emitter/exposure fields, RtSkyState the sky block, RtFogState the fog block.
      */
     private static final int STATS_STRIDE = RtStatsLayout.SLOT_STRIDE;
-    /** Bytes per pixel of one ReSTIR parity half (Reservoir in rt_common.glsl, cross-checked by RtStatsLayoutTest). */
+    /** Bytes per pixel of one ReSTIR parity half (the Reservoir record). */
     static final int RESERVOIR_BYTES = 64;
     /** Bytes per pixel of one ReSTIR receiver-position half (ReservoirAuxBuf: vec4 camera-relative position). */
     static final int RESERVOIR_AUX_BYTES = 16;
@@ -126,9 +125,9 @@ public final class RtFrameRenderer {
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtMemory.Buf entityMotionBuf;
-    /** ReSTIR DI reservoirs of rt_rays.comp: two parity halves of 64 B per pixel (ReservoirBuf in rt_common.glsl). */
+    /** ReSTIR DI reservoirs of the path pass: two parity halves of 64 B per pixel. */
     private static RtMemory.Buf reservoirBuf;
-    /** ReSTIR DI receiver positions of rt_rays.comp: two parity halves of 16 B per pixel, written with the reservoirs. */
+    /** ReSTIR DI receiver positions of the path pass: two parity halves of 16 B per pixel, written with the reservoirs. */
     private static RtMemory.Buf reservoirAuxBuf;
     private static long reservoirPixels = -1L;
     private static long reservoirLightFingerprint = Long.MIN_VALUE;
@@ -210,21 +209,9 @@ public final class RtFrameRenderer {
     /** The ReSTIR technique switches of this frame, packed; a change of any of them invalidates every reservoir. */
     private static int lastFrameReusePolicy = -1;
 
-    /**
-     * Screen-space depth composite pipeline for legacy raster entity compositing.
-     * When native RT is active, this pipeline is permanently disabled (OFF): dynamic entities
-     * are fully integrated into the RT TLAS, so pure RT radiance (finalSource=RT_OUTPUT) is copied
-     * directly into the final render target without raster depth composite mixing.
-     */
-    private static RtCompositePipeline compositePipeline = null;
-    private static final boolean LEGACY_RASTER_ENTITY_COMPOSITE = false;
     private static final String FINAL_OUTPUT_SOURCE = "RT_OUTPUT";
     private static final int REFLECTION_MASK = 0x03;
     private static final int SHADOW_MASK = 0x03;
-
-    public static boolean isLegacyRasterEntityCompositeEnabled() {
-        return LEGACY_RASTER_ENTITY_COMPOSITE && compositePipeline != null;
-    }
 
     public static String getFinalSource() {
         return FINAL_OUTPUT_SOURCE;
@@ -253,10 +240,9 @@ public final class RtFrameRenderer {
         var entityStatus = getEntityInstanceStatus();
         String worldStatus = world == null ? "UNAVAILABLE" : (lastStats == null ? "INITIALIZING" : "READY");
         return String.format(Locale.ROOT,
-            "[RT-HERMETIC] worldInstance=%s entityInstance=%s legacyRasterEntityComposite=%s finalSource=%s reflectionMask=0x%02X shadowMask=0x%02X",
+            "[RT-HERMETIC] worldInstance=%s entityInstance=%s finalSource=%s reflectionMask=0x%02X shadowMask=0x%02X",
             worldStatus,
             entityStatus,
-            isLegacyRasterEntityCompositeEnabled() ? "ON" : "OFF",
             FINAL_OUTPUT_SOURCE,
             REFLECTION_MASK,
             SHADOW_MASK);
@@ -801,7 +787,7 @@ public final class RtFrameRenderer {
                 gbViews = denoiser.gbufferViews();
             }
         }
-        pass.bind(new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
+        pass.bind(new RtViews(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
             materials.normalView(), 0L, gbViews, outputDepth != null ? outputDepth.view : 0L, lightmapView));
 
         // The slot read now was written by the dispatch two frames ago (the engine keeps at most 2 submissions in flight).
@@ -907,7 +893,7 @@ public final class RtFrameRenderer {
         RtSky.keyLight(sky.sunAngle, sky.moonAngle, RtConfig.SUN_FLIP_X, hasSky, skyState.moonLight, skyState.rainBrightness,
             skyState.thunder, params.key);
         skyState.write(hdr, skyTextures.address(), RtConfig.SUN_FLIP_X);
-        // vanilla fog of the game (render distance edge, biome / weather / water) + aerial perspective: rt_common.glsl fogTransmittanceHit
+        // vanilla fog of the game (render distance edge, biome / weather / water) + aerial perspective, same model the Slang fog pass reads
         fogState.collect(Minecraft.getInstance(), levelState.worldPartialTicks, lastRadiusXz, skyState.rainBrightness);
         fogState.write(hdr, RtAtmosphereSettings.fogVanilla(), RtAtmosphereSettings.fogAerial(), RtAtmosphereSettings.chunkFadeSeconds());
         if (sky.skyColor != null) {
@@ -1204,7 +1190,7 @@ public final class RtFrameRenderer {
             gpuTimer.stamp(cmd, SPAN_ATMO, false);
         }
         atmosphere.record(cmd, vulkanDevice, world.memory(), params, curViewProj,
-            new RtPipeline.Views(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
+            new RtViews(world.tlasHandle(), world.sectionTable(), output.view, atlasView, materials.materialView(),
                 materials.normalView(), 0L, null, outputDepth.view, lightmapView),
             w, h, bobOrigin.x, bobOrigin.y, bobOrigin.z);
         if (gpuTimer != null) {
@@ -1415,8 +1401,8 @@ public final class RtFrameRenderer {
             }
             throw new RtFailure("slang_path", pathSlangUnavailableReason);
         }
-        // The old effect pass compiles GLSL at runtime. Keep its source as a
-        // reference, but do not silently route the new renderer through it.
+        // Ray Tracing mode has no Slang pipeline yet. Fail loudly instead of
+        // silently routing through the removed GLSL effect pass.
         throw new RtFailure("slang_ray", "ray effects are not yet available in the Slang renderer");
     }
 
@@ -1876,10 +1862,6 @@ public final class RtFrameRenderer {
             if (compositeOutput != null) {
                 w.memory().destroy(compositeOutput);
                 compositeOutput = null;
-            }
-            if (compositePipeline != null) {
-                compositePipeline.destroy();
-                compositePipeline = null;
             }
             if (statsBuf != null) {
                 w.memory().destroy(statsBuf);

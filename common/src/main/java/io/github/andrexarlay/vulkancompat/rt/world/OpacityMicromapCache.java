@@ -426,21 +426,18 @@ public final class OpacityMicromapCache implements RtMaterialAtlas.MicromapSink 
         this.mem = mem;
     }
 
-    /** Session gate: config toggle, device capability and a shaderc compile probe for the GLSL extension. */
+    /** Session gate: config toggle and device capability. */
     public static boolean supported() {
         if (!RtConfig.OPACITY_MICROMAPS) {
             return false;
         }
-        if (!VulkanCapabilityChecker.isOpacityMicromapSupported()) {
-            return false;
-        }
-        return RtShaderCompiler.probeOpacityMicromapExtension();
+        return VulkanCapabilityChecker.isOpacityMicromapSupported();
     }
 
     /** Returns the cache, or null when the session gate fails (logged once). */
     public static OpacityMicromapCache create(RtMemory mem) {
         if (!supported()) {
-            LOGGER.info("[VKB-RT] opacity micromaps off (toggle, device capability or shader probe failed)");
+            LOGGER.info("[VKB-RT] opacity micromaps off (toggle or device capability)");
             return null;
         }
         try {

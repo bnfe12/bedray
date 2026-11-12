@@ -2,13 +2,12 @@ package io.github.andrexarlay.vulkancompat.shaderhost.iris;
 
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.VkBarriers;
-import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
 import org.joml.Matrix4f;
 import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import static org.lwjgl.vulkan.VK10.*;
 
 /** Converts the host's reverse-Z raster depth into Iris/OpenGL 0-near/1-far depth.
@@ -44,12 +43,7 @@ final class IrisDepthConverter implements AutoCloseable {
             check(vkCreateDescriptorSetLayout(device,VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(bindings),null,handle)); setLayout=handle.get(0);
             var range=VkPushConstantRange.calloc(1,stack);range.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(128);
             check(vkCreatePipelineLayout(device,VkPipelineLayoutCreateInfo.calloc(stack).sType$Default().pSetLayouts(stack.longs(setLayout)).pPushConstantRanges(range),null,handle));pipelineLayout=handle.get(0);
-            String source;
-            try(var stream=IrisDepthConverter.class.getResourceAsStream("/shaders/glsl/iris_depth.comp")) {
-                if(stream==null)throw new IllegalStateException("Missing iris_depth.comp");
-                source=new String(stream.readAllBytes(),StandardCharsets.UTF_8);
-            }
-            var bytecode=SpirvCompiler.compile(source,org.lwjgl.util.shaderc.Shaderc.shaderc_glsl_compute_shader,"iris_depth.comp");
+            ByteBuffer bytecode=io.github.andrexarlay.vulkancompat.rt.slang.SlangAot.load("iris_depth");
             check(vkCreateShaderModule(device,VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(bytecode),null,handle));
             long shader=handle.get(0);
             try {

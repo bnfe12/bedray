@@ -19,7 +19,6 @@ import io.github.andrexarlay.vulkancompat.rtx.config.UpscalerSelection;
 import io.github.andrexarlay.vulkancompat.rtx.config.TextureLodBias;
 import io.github.andrexarlay.vulkancompat.rtx.config.VulkanRtxConfig;
 import io.github.andrexarlay.vulkancompat.rt.sodium.RtGeometryGate;
-import io.github.andrexarlay.vulkancompat.rtx.raytracing.DefaultRtExperimentEngine;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerPreregistration;
@@ -1210,11 +1209,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
 
     /** Engine hooks after the RT mode changed through the page (preset or mode option). */
     private static void afterModeChange(RtMode before, RtMode after, String reason) {
-        if (after.isActive()) {
-            DefaultRtExperimentEngine.getInstance().init();
-        } else {
-            DefaultRtExperimentEngine.getInstance().cleanup();
-        }
         if (!after.isActive()) {
             // explicit user action: a session failure is forgotten, switching RT on again retries (RtGeometryGate)
             RtGeometryGate.clearFailure();

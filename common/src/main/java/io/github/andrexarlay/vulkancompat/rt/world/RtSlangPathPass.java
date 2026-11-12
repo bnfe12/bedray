@@ -23,11 +23,10 @@ import java.util.Objects;
  * writes exposure + tone curve into the renderer's RGBA8 {@code rt_output}. Depth goes straight into {@code rt_depth},
  * so the composite, bloom, particles and upscalers downstream are unchanged.
  *
- * <p>The pass fills the seven DLSS-RR guide images when the host binds them ({@code PATH_TRACE_OPTION_GBUFFER}); NRD
+ * <p>The pass fills the seven DLSS-RR guide images when the host binds them ({@code PATH_TRACE_OPTION_GBUFFER}). NRD
  * additionally needs the world-space motion of the primary hit, which this pass does not write, so the renderer only
- * accepts {@code DLSS_RR} here. Not done yet, compared with the GLSL {@link RtPathTracerPass}: no auto exposure (the
- * GLSL shader feeds the luminance statistics; exposure is fixed at 1), a two-colour sky instead of
- * {@code rt_sky.glsl}; the mean is reprojected per pixel through the previous view-projection, so accumulation
+ * accepts {@code DLSS_RR} here. Not done yet: no auto exposure (exposure is fixed at 1) and a two-colour sky instead of
+ * a full atmosphere model; the mean is reprojected per pixel through the previous view-projection, so accumulation
  * survives camera motion but restarts on disocclusion.
  *
  * <p>Recording lifetime: every command buffer passed to {@link #dispatch} keeps native descriptor pools until
@@ -99,7 +98,7 @@ public final class RtSlangPathPass implements RtPass {
     private final boolean requestedGbuffer;
     private final PathTraceBackend backend;
     private final RtPathTraceSlangPass.Frame frame = new RtPathTraceSlangPass.Frame();
-    private RtPipeline.Views views;
+    private RtViews views;
     private int accumFrames;
     private boolean forceReset = true;
     /** True when the previous display dispatch left a mean and a depth history that reprojection can read. */
@@ -234,7 +233,7 @@ public final class RtSlangPathPass implements RtPass {
     }
 
     @Override
-    public void bind(RtPipeline.Views common) {
+    public void bind(RtViews common) {
         views = common;
     }
 

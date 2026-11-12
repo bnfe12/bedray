@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Settings of the atmosphere post passes (Bedray): volumetric light shafts ({@link RtVolumetricPass}), bloom and sun glare
+ * Settings of the atmosphere post passes (Bedray): volumetric light shafts ({@code passes/volumetric_march.slang}), bloom and sun glare
  * ({@link RtBloomPass}). Plain static fields so that the settings page, the config file and JVM flags can drive them without this
  * package depending on them; every value is clamped by its setter. Initial values come from JVM flags
  * ({@code -Dvkrtx.rt.godrays=off|post|inline}, {@code -Dvkrtx.rt.godrays.quality=0..3}, {@code ...strength=0..2},

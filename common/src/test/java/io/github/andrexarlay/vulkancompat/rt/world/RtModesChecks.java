@@ -13,14 +13,13 @@ import java.nio.ByteOrder;
 
 /**
  * L2 checks of the two RT modes (no GPU): LabPBR decoding, auto-PBR table, material atlas region fill, push-constant packing
- * of the new flags/params, accumulation reset logic, settings/toml keys, autotest step parsing, and shaderc compilation of
- * rt_rays.comp (plain + gbuffer) and rt_path.comp (accum).
+ * of the new flags/params, accumulation reset logic, settings/toml keys and autotest step parsing.
  */
 final class RtModesChecks {
     private RtModesChecks() {
     }
 
-    static void runAll() {
+    static void runAll() throws Exception {
         labPbrDecode();
         autoPbrTable();
         regionFill();
@@ -29,19 +28,13 @@ final class RtModesChecks {
         settingsKeys();
         telemetry();
         scenarioSteps();
-        shadersCompile();
         exposureAndEmitters();
         autoNormals();
         resetLevels();
         uiSettingsChecks();
         RtEmittersStabilityTest.runAll();
-        RtShadingFixesTest.runAll();
-        RtVolumetricFogTest.runAll();
-        RtAtmosphereTest.runAll();
         RtIceGlassOpticsTest.runAll();
         RtWaterMediumTest.runAll();
-        RtVanillaWaterLightTest.runAll();
-        RtShaderNaNGuardTest.runAll();
     }
 
     private static void resetLevels() {
@@ -488,26 +481,4 @@ final class RtModesChecks {
         }
     }
 
-    private static void shadersCompile() {
-        ByteBuffer rays = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp");
-        ByteBuffer raysGb = RtShaderCompiler.compileResource(RtPipeline.SHADER_PATH, "rt_rays.comp+gbuffer", RtPipeline.GBUFFER_DEFINE);
-        ByteBuffer path = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp", RtPathTracerPass.ACCUM_DEFINE);
-        ByteBuffer pathGb = RtShaderCompiler.compileResource(RtPipeline.PATH_SHADER_PATH, "rt_path.comp+gbuffer",
-            RtPipeline.GBUFFER_DEFINE + RtPathTracerPass.ACCUM_DEFINE);
-        // These two passes are compiled from their own files: naming rt_path.comp in the log line while compiling it made the
-        // check pass for shaders that had never been compiled at all.
-        ByteBuffer atrous = RtShaderCompiler.compileResource("/shaders/glsl/rt_atrous.comp", "rt_atrous.comp",
-            RtRayEffectsPass.ACCUM_DEFINE);
-        ByteBuffer restir = RtShaderCompiler.compileResource("/shaders/glsl/rt_restir_spatial.comp", "rt_restir_spatial.comp",
-            RtRayEffectsPass.ACCUM_DEFINE);
-        // The spatial pass runs under a denoiser too (it merges reservoir records, not pixels), so both binding layouts are
-        // compiled here: a gbuffer-only layout error would otherwise only surface when a player enables DLSS-RR.
-        ByteBuffer restirGb = RtShaderCompiler.compileResource("/shaders/glsl/rt_restir_spatial.comp", "rt_restir_spatial.comp+gbuffer",
-            RtPipeline.GBUFFER_DEFINE + RtRayEffectsPass.ACCUM_DEFINE);
-        // GPU dequantization of the Sodium mesh capture: standalone (no umbrella include), pure buffer_reference + BDA.
-        ByteBuffer dequant = RtShaderCompiler.compileResource("/shaders/glsl/sodium_dequantize.comp", "sodium_dequantize.comp");
-        for (ByteBuffer b : new ByteBuffer[] {rays, raysGb, path, pathGb, atrous, restir, restirGb, dequant}) {
-            check(b.remaining() > 1000 && b.getInt(0) == 0x07230203, "SPIR-V magic / size " + b.remaining());
-        }
-    }
 }

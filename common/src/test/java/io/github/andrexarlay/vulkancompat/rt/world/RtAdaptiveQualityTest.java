@@ -30,7 +30,7 @@ public class RtAdaptiveQualityTest {
     private static final int LEVELS = RtAdaptiveQuality.levels(SPP, BOUNCES);
 
     private static final String GOVERNOR = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtAdaptiveQuality.java";
-    private static final String PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPathTracerPass.java";
+    private static final String PASS = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java";
     private static final String FRAME_RENDERER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java";
     private static final String TIMER = "src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtGpuTimer.java";
     private static final String SETTINGS = "src/main/java/io/github/andrexarlay/vulkancompat/rtx/config/RtSettings.java";
@@ -306,8 +306,10 @@ public class RtAdaptiveQualityTest {
         String pass = read(PASS);
         assertTrue(pass.contains("params.bounces = RtAdaptiveQuality.bounces(RtSettings.spp(), RtSettings.bounces());"),
             "the pass must trace the governed path length");
-        assertTrue(pass.contains("params.spp = RtAdaptiveQuality.spp(RtSettings.spp());"),
-            "the pass must trace the governed rays per pixel");
+        assertTrue(pass.contains("params.spp = 1;"),
+            "the Slang pass traces one primary sample per dispatch and accumulates the rest; spp is spent as history");
+        assertTrue(pass.contains("RtSettings.accumulate()"),
+            "the accumulation switch must be the one that decides whether samples build up");
     }
 
     @Test

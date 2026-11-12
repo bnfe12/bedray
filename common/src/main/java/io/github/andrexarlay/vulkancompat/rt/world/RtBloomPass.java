@@ -19,9 +19,9 @@ import java.util.Set;
 import static io.github.andrexarlay.vulkancompat.rt.core.BedrayBloomNative.PUSH_BYTES;
 
 /**
- * Bloom and sun glare on the final image ({@code rt_bloom.comp}, see its header): prefilter + 13 tap downsample chain of
+ * Bloom and sun glare on the final image ({@code passes/bloom_*.slang}, see their headers): prefilter + 13 tap downsample chain of
  * six RGBA16F mips, in-place scatter-weighted upsample, then one apply dispatch that adds the glow (and the optional sun
- * halo) before the tone map shoulder. Like {@link RtVolumetricPass} it only reads and writes the final image after the denoiser, so
+ * halo) before the tone map shoulder. Like the volumetric apply pass it only reads and writes the final image after the denoiser, so
  * no guide buffer of NRD / DLSS Ray Reconstruction is touched. All sizes derive from the image size, so the glow radius scales with
  * the render resolution and works the same with an upscaler (applied at render resolution, before the upscale).
  *

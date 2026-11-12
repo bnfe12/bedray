@@ -8,9 +8,8 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * {@link #prepare} (pass-owned images), {@link #configure} (push constants from the settings of this pass),
  * {@link #bind} (descriptor set, only rewritten when a view changed), {@link #dispatch}.
  * <p>
- * Implementations: {@link RtRayEffectsPass} (Ray Tracing mode), {@link RtPathTracerPass} (Path Tracing mode on GLSL) and
- * {@link RtSlangPathPass} (Path Tracing mode on the AOT Slang programs). Each reads only its own settings group
- * (RtSettings), so the modes stay independent.
+ * Implementations: {@link RtSlangPathPass} (Path Tracing mode on the AOT Slang programs). It reads only its own settings
+ * group (RtSettings), so the modes stay independent.
  */
 public interface RtPass {
     RtMode mode();
@@ -30,7 +29,7 @@ public interface RtPass {
     void configure(RtFrameParams params, boolean denoising);
 
     /** Points the descriptor set at the views of this frame ({@code accum} of {@code common} is 0; the pass adds its own). */
-    void bind(RtPipeline.Views common);
+    void bind(RtViews common);
 
     void dispatch(VkCommandBuffer cmd, RtFrameParams params, int width, int height);
 

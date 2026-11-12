@@ -7,8 +7,7 @@
 //   m <= KNEE : f(m) = m
 //   m  > KNEE : f(m) = 1 - (1 - KNEE)^2 / (m - KNEE + (1 - KNEE))        (value and slope continuous at the knee)
 //
-// Mirror of shaders/glsl/rt_tonemap.glsl and of RtTonemap.java. The constants are identical in all three; change one
-// and change the other two.
+// Mirror of RtTonemap.java. The constants are identical in both; change one and change the other.
 
 public module tonemap_curve;
 

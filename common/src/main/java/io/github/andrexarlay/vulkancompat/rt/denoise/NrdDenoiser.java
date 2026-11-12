@@ -112,9 +112,14 @@ public final class NrdDenoiser {
         if (!isSupportedNrdVersion(info.major(), info.minor())) {
             throw new NrdException("version", "NRD.dll is " + info + ", supported versions are 4.17.x and 4.18.x", null);
         }
-        if (info.normalEncoding() != NrdPackMath.NORMAL_R10G10B10A2_UNORM && info.normalEncoding() != NrdPackMath.NORMAL_RGBA16_SNORM) {
+        if (info.normalEncoding() != NrdPackMath.NORMAL_R10G10B10A2_UNORM) {
             throw new NrdException("normal_encoding", "NRD.dll normal encoding " + info.normalEncoding()
-                + " is not supported by the pack shader path (supported: 2 R10G10B10A2, 4 RGBA16_SNORM)", null);
+                + " is not supported by the AOT Slang pack pass (supported: 2 R10G10B10A2)", null);
+        }
+        if (info.normalRoughnessVkFormat() != VK10.VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
+            throw new NrdException("normal_format", "NRD.dll IN_NORMAL_ROUGHNESS VkFormat "
+                + info.normalRoughnessVkFormat() + " does not match the AOT Slang pass (expected "
+                + VK10.VK_FORMAT_A2B10G10R10_UNORM_PACK32 + ")", null);
         }
         requireStorageFormat(info.normalRoughnessVkFormat(), "IN_NORMAL_ROUGHNESS");
         requireStorageFormat(FMT_RGBA16F, "RGBA16F");

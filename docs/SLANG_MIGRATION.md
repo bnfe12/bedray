@@ -19,7 +19,7 @@ Existing-feature transfers in the current working tree:
   path also uses an opaque frame-graph node and scheduler; its private histories
   remain owned by PathTracePass, as recorded in MIGRATION_INTEGRATION_DECISIONS.md.
 
-* The typed path trace now writes the legacy denoiser guide set for DLSS-RR:
+* The typed path trace now writes the denoiser guide set for DLSS-RR:
   the entry pass fills `outViewZ` through `outSpecAlbedo` (bindings 26–32) at
   the primary vertex when the host sets `PATH_TRACE_OPTION_GBUFFER`, so an
   explicit `SLANG` path with `DLSS_RR` is no longer refused. `NRD` stays
@@ -104,23 +104,44 @@ remain separate acceptance work.
 
 This document replaces the first Slang migration draft.  The first draft
 described a 1:1 port of the existing GLSL.  Bedray 2.0 is a new shader core:
-the old GLSL stays in the tree as a behavioural reference, not as a source to
-copy line by line.
+the legacy GLSL renderer and its Java hosts have been deleted.  `origin/main`
+is the behavioural reference; it is not a source to copy line by line.
 
-**Current whole-migration evidence: L1 build + L2 no-GPU tests (2026-10-29, merged tree).**
-On the `fix/audit-remediation-20261029` branch, merge commit `84b1697` joins
-`origin/refactor/slang-pipeline` (`4dc68d5`) with the P2 audit batch; `7fbfbda`
-adds the NRD constant-buffer ring, `1c2ea7c` adds the platform native names
-and the CMake opt-in, `320b274` removes the developer Vulkan path plus the
-hardcoded Gradle `slangc.exe`, and `6bfd935` removes the dead speculative
-recording retirement. `:common:compileSlang` builds 18 passes and
-`:common:test` reports 752 tests, 0 failures, 0 errors and 9 skipped from an
-ASCII worktree. Both path entries compile to 25 bindings and a 112-byte push
-block, with the seven guide images at bindings 26-32. That proves the tree
-configures, the AOT passes compile and the Java/source contracts hold; it does
-not prove a Vulkan dispatch or rendering in Minecraft. Existing bloom now
-requires AOT Slang and fails when unavailable, and other legacy GLSL consumers
-still exist and must be migrated. A compile or test is not proof of rendering
+## Legacy removal (2026-11-12)
+
+The old GLSL renderer is gone rather than kept side by side. Deleted classes:
+`RtPipeline`, `RtShaderCompiler`, `RtShaderDiskCache`, `RtPathTracerPass`,
+`RtRayEffectsPass`, `RtCompositePipeline`, `RtVolumetricPass`, `RtTestPipeline`
+and the experimental PoC engine (`RtExperimentEngine`,
+`DefaultRtExperimentEngine`, `VulkanRtExperimentEngine`,
+`SimpleAccelerationStructureBuilder`). The whole `shaders/glsl/` resource tree
+is deleted with them (29 files), and so are 23 test files that only guarded
+those sources.
+
+Host-owned utility passes were replaced by five AOT Slang entries that keep the
+existing Vulkan layouts: `passes/fg_prepare.slang`, `passes/iris_depth.slang`,
+`passes/velocity_reproject_ubo.slang`, `passes/nrd_pack_rgb10a2.slang` and
+`passes/nrd_compose.slang`. `SlangAot` loads their SPIR-V; `FrameGenGpu`,
+`IrisDepthConverter`, `VelocityPipeline` and `NrdPackPipeline` consume it.
+NRD packing now accepts only `R10G10B10A2_UNORM` and rejects `RGBA16_SNORM`.
+Opacity-micromap support is gated only by
+`VulkanCapabilityChecker.isOpacityMicromapSupported()`, with no shader-compile
+probe. There is no GLSL fallback, runtime GLSL compile or compatibility bridge
+left in the renderer.
+
+`bindings.slang` and `bedray_legacy.slang` are the remaining Slang compatibility
+surface. They are not part of the deleted GLSL renderer and are scheduled for a
+separate cleanup.
+
+**Current whole-migration evidence: L1 build + L2 no-GPU compile (2026-11-12, branch `fix/audit-remediation-20261029`).**
+`:common:compileSlang` builds 23 pass entry points, including the five host-owned
+AOT utility shaders. `:common:compileJava` and `:common:compileTestJava` pass
+with `SLANGC` set. `4485159` is the last functional commit before the legacy
+removal. This proves the tree configures and every AOT pass compiles; it does
+not prove a Vulkan dispatch or rendering in Minecraft. The last full
+`:common:test` run before the removal reported 752 tests, 0 failures, 0 errors
+and 9 skipped from an ASCII worktree; it predates the deletion of the 23 legacy
+test files and must be repeated. A compile or test is not proof of rendering
 in Minecraft; that requires a fresh matching live run and evidence.
 
 ## Design rules
@@ -136,9 +157,10 @@ in Minecraft; that requires a fresh matching live run and evidence.
 4. **One module = one concern.**  Material rules do not live in traversal;
    reservoir math does not live in the light sampler; cascade addressing does
    not live in the trace pass.
-5. **The old GLSL is a reference.**  Do not delete it and do not copy its
-   include graph.  When behaviour is unclear, read it; when writing new code,
-   use the new contracts.
+5. **Legacy is gone, not a second path.**  The old GLSL renderer and its Java
+   hosts are deleted.  `origin/main` is the behavioural reference; new code
+   uses the contracts.  No fallback, compatibility bridge or runtime GLSL
+   compile may be reintroduced.
 6. **No binaries in git.**  SDKs, generated SPIR-V, DLLs and JARs stay out of
    the repository.  `*.spv`, `*.exe`, `*.dll` and `*.jar` are already ignored.
 
@@ -341,14 +363,14 @@ hardware paths agree on foliage and glass.
 | Pass | Slang entry files | Host | State |
 |---|---|---|---|
 | Bloom + sun glare | `passes/bloom_prefilter_down`, `bloom_down`, `bloom_up`, `bloom_apply` | `RtBloomPass` (existing WIP) | Requires AOT Slang; mip and sampler ownership remains in Java and must move to C++. See [BLOOM_CPP_INTEGRATION_PLAN.md](BLOOM_CPP_INTEGRATION_PLAN.md); no live validation. |
-| Composite | `passes/composite.slang` | `RtCompositePipeline` | AOT-compiled, but the host path is disabled (`LEGACY_RASTER_ENTITY_COMPOSITE = false`); it is not proof of the active renderer. |
-| Path tracing | `passes/path_trace.slang`, `passes/path_trace_scene.slang`, `passes/restir_spatial.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` + `RtSpatialReuseSlangPass` (optional); opt-in native pass in `bedray_core` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` uses the Slang pass when it is available; if the AOT passes or device capabilities block it, the renderer reports the blocker and disables RT for the session instead of routing through legacy GLSL. Both path entries are thin wrappers over `pathtrace/path_trace_entry.slang` and differ only in binding 2 and the traversal backend (`LegacySectionTraversal` versus the native `SceneTraversal`). Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. `-Dvkbridge.rt.nativePathTrace=true` moves the same three dispatches into the C++ pass when the DLL exports the additive ABI; the Java path stays default. Fills the seven DLSS-RR guide images (bindings 26-32) when the host binds them; `AUTO` declines the Slang path while a denoiser is selected because no live frame has consumed the guides yet, so testing them requires an explicit `SLANG` selector. NRD needs the primary hit's world-space motion, which this pass does not fill. No auto exposure, `rt_sky.glsl` or view-bob offset yet; no live-frame validation is recorded here. |
+| Composite | `passes/composite.slang` | none | AOT-compiled but unhosted. The old `RtCompositePipeline` and its raster entity composite were deleted; `RtFrameRenderer` presents the RT output directly. |
+| Path tracing | `passes/path_trace.slang`, `passes/path_trace_scene.slang`, `passes/restir_spatial.slang`, `passes/path_display.slang` | `RtSlangPathPass` → `RtPathTraceSlangPass` + `RtSpatialReuseSlangPass` (optional); opt-in native pass in `bedray_core` | Selected by Path Tracing mode in `RtFrameRenderer`; `AUTO` uses the Slang pass when it is available; if the AOT passes or device capabilities block it, the renderer reports the blocker and disables RT for the session instead of routing through a deleted GLSL pass. Both path entries are thin wrappers over `pathtrace/path_trace_entry.slang` and differ only in binding 2 and the traversal backend (`LegacySectionTraversal` versus the native `SceneTraversal`). Reads the existing TLAS and the 64-byte `RtWorld` section table through `LegacySectionTraversal`; requires `CAP_RAY_QUERY \| CAP_BUFFER_DEVICE_ADDRESS \| CAP_SHADER_INT64`. `-Dvkbridge.rt.nativePathTrace=true` moves the same three dispatches into the C++ pass when the DLL exports the additive ABI; the Java path stays default. Fills the seven DLSS-RR guide images (bindings 26-32) when the host binds them; `AUTO` declines the Slang path while a denoiser is selected because no live frame has consumed the guides yet, so testing them requires an explicit `SLANG` selector. NRD needs the primary hit's world-space motion, which this pass does not fill. No auto exposure, full atmosphere model or view-bob offset yet; no live-frame validation is recorded here. |
 
 The host addresses bindings by Slang parameter name (`srcTex`, `dstImg`,
 `finalImg`, `depthTex`), and `RtBloomPass` validates the generated manifest
 against the resources it can supply before the first dispatch.  A shader edit
-that moves a binding or changes the 128-byte block therefore falls back to
-GLSL with a log line instead of binding the wrong image.
+that moves a binding or changes the 128-byte block fails the AOT contract
+instead of binding the wrong image.
 
 ### Path-trace host contract
 
@@ -412,10 +434,9 @@ CAP_BUFFER_DEVICE_ADDRESS | CAP_SHADER_INT64` (517).  Path tracing uses its own
 runtime in `RtAtmosphere` belongs to bloom only. The final C++ renderer must
 negotiate the features actually enabled on the game's device and select only
 supported methods. If this path is unsupported, the Java selector reports the
-reason; it no longer falls back to legacy GLSL `rt_path.comp`. The legacy ray
-effects pass is likewise reported unavailable until its Slang replacement is
-connected. The Slang volumetric passes compile but are not yet connected, so
-god rays are currently reported unavailable.
+reason; there is no GLSL fallback. Ray Tracing mode has no Slang replacement
+yet and is reported unavailable. The Slang volumetric passes compile but are
+not yet connected, so god rays are currently reported unavailable.
 
 The current `volumetric_march` binding 2 explicitly reads `LegacySection` through
 `LegacySectionTraversal`. The native scene publishes a different GeometrySection
@@ -589,10 +610,10 @@ closer than half a block when `receiver.emission > 0.5` (see the next section).
 
 ### Entity geometry in the traced scene
 
-`traversal/entity_geometry.slang` is a port of `fetchEntitySurface` from
-`rt_common_surface.glsl`, not a re-derivation: the look the owner iterates on
-lives in that function, so the constants, the bands and the order of the branch
-chain are copied rather than guessed.
+`traversal/entity_geometry.slang` is a port of the old GLSL `fetchEntitySurface`
+routine (preserved only in git history), not a re-derivation: the look the owner
+iterates on lives in that function, so the constants, the bands and the order of
+the branch chain are copied rather than guessed.
 
 What a port cannot translate one-for-one, and how it was settled:
 
@@ -997,14 +1018,10 @@ recorded as a game check. Pass `-Pslangc=<path to slangc.exe>` (or set
 `SLANG_DIR`): without it `:common:compileSlang` fails closed in about a second
 and the whole suite goes with it.
 
-The runtime GLSL fallback (`RtShaderCompiler`) pins
-`shaderc_optimization_level_zero`. With LWJGL shaderc 3.3.3 and 3.4.3 the
-SPIR-V optimizer does not finish on the ~261 KB expanded `rt_rays`/`rt_path`
-sources at `performance` or `size`; `zero` compiles the same variants in about
-a second. The AOT Slang passes are optimised by `slangc`, and the Vulkan driver
-still optimises the module at pipeline creation. `RtShaderCompilerOptionsTest`
-fails if the level is raised again, and the disk-cache profile
-(`bedray-spirv-cache-v3`) is part of the cache identity.
+Every AOT pass is compiled by `slangc`, and the Vulkan driver still optimises
+the module at pipeline creation. There is no runtime GLSL compiler to pin or
+cache any more: `RtShaderCompiler`, its shaderc options and `RtShaderDiskCache`
+were deleted with the GLSL renderer, along with the tests that guarded them.
 
 `passes/path_trace.slang` and `passes/path_trace_scene.slang` share one body in
 `pathtrace/path_trace_entry.slang`; the pass files own only their binding 2 and

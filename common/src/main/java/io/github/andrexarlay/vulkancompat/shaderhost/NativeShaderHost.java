@@ -3,7 +3,7 @@ package io.github.andrexarlay.vulkancompat.shaderhost;
 import java.util.Set;
 
 /**
- * The built-in Vulkan-native RT renderer (rt/world: RtWorld, RtFrameRenderer, RtRayEffectsPass, RtPathTracerPass) seen as a
+ * The built-in Vulkan-native RT renderer (rt/world: RtWorld, RtFrameRenderer, RtSlangPathPass) seen as a
  * shader host. This is a wrapper only: it changes nothing in how that renderer is created, configured or run (rt_mode, RtSettings
  * and the RT device requirements stay where they are). Its shaders are compiled from the mod's own resources, so the host is
  * always available; GPU support for ray tracing is decided and reported by the RT core itself (RtFailure / "[VKB-RT]" lines),
