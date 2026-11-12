@@ -54,10 +54,13 @@ class RtPathRejectBreakdownTest {
     void theTraceMetersTheTilesFrameStatsMeters() throws IOException {
         String entry = read(ENTRY);
         String stats = read(FRAME_STATS);
-        assertTrue(stats.contains("uint site = (uint(p.x) >> 2u) + (uint(p.y) >> 2u) * tilesPerRow + pc.frameIndex;"));
+        assertTrue(stats.contains("uint2 tile = tid.xy;")
+                && stats.contains("uint2 p = tile * 4u;")
+                && stats.contains("uint site = tile.x + tile.y * tilesPerRow + pc.frameIndex;"));
         assertTrue(entry.contains("uint site = (uint(p.x) >> 2u) + (uint(p.y) >> 2u) * tilesPerRow + frameIndex;"),
             "the same tile walk, so metered can be compared with RtStatsMetering and with reject_pct");
         assertTrue(entry.contains("static const uint PATH_REJECT_TILES_PER_SAMPLE = " + RtStatsMetering.TILES_PER_SAMPLE + "u;"));
+        assertTrue(stats.contains("static const uint PATH_STATS_TILES_PER_SAMPLE = " + RtStatsMetering.TILES_PER_SAMPLE + "u;"));
         assertTrue(entry.contains("pathTraceCountRejects(outPathStats, p, size, f.frame.x, sampleTrusted, total.flags);"),
             "the frame word is the index frame_stats is pushed (RtSlangFrameData writes frame.frameIndex to both)");
     }
