@@ -77,7 +77,6 @@ public final class RtSlangPathPass implements RtPass {
         }
         return bits;
     }
-    static final float MAX_RADIANCE = 64f;
     /** Relative depth disagreement (in blocks at unit distance) that still counts as the same surface when reprojecting. */
     static final float REPROJECTION_TOLERANCE = 0.02f;
 
@@ -515,6 +514,9 @@ public final class RtSlangPathPass implements RtPass {
             | (rrPtDecorrelation ? RtPathTraceSlangPass.OPTION_RR_PT_DECORRELATE : 0)
             | rayEffectFlags()
             | pixelShadowFlags()
+            // Russian roulette: the player may turn off random early termination of dim paths. Bit 24 is spare and sits
+            // outside the ReSTIR PT mask, so the native core forwards it verbatim; on (the default) leaves the bit clear.
+            | (RtSettings.pathRussianRoulette() ? 0 : RtPathTraceSlangPass.OPTION_NO_RUSSIAN_ROULETTE)
             // The distant block-light handover belongs to the emitter feature: a frame that traced no emitters has no
             // list to hand over from, and its receivers keep tracing exactly what they traced before.
             | (blockEmitters ? RtPathTraceSlangPass.OPTION_BLOCK_EMITTERS : 0)
@@ -523,7 +525,7 @@ public final class RtSlangPathPass implements RtPass {
                 | (params.cameraStatic ? RtPathTraceSlangPass.PT_STATIC : 0)
                 | (params.flipY ? RtPathTraceSlangPass.PT_FLIP_Y : 0) : 0);
         RtPathTraceSlangPass.Dispatch dispatch = new RtPathTraceSlangPass.Dispatch(Math.max(1, params.bounces),
-            MAX_SURFACE_STEPS, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), MAX_RADIANCE, 0.5f,
+            MAX_SURFACE_STEPS, sampleIndex++, 0, optionFlags, 0.01f, 0.1f, Math.max(1f, params.rayDistance), (float) RtSettings.pathFireflyClamp(), 0.5f,
             emitterCount, emitterCount > 0 ? RtConfig.SLANG_EMITTER_PROBABILITY : 0f, params.emitterCamRelX,
             params.emitterCamRelY, params.emitterCamRelZ, emitterCandidates(),
             params.cameraDeltaX, params.cameraDeltaY, params.cameraDeltaZ, diFlags, 0,

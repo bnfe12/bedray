@@ -296,7 +296,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
             // The frame's exposure, the same lane the native core takes as its descriptor's lighting.exposure: the
             // display step is the one place the path's linear radiance becomes a tone-mapped picture, so this is where
             // the EV compensation of the settings screen is spent.
-            push.putInt(0, accumFrames).putInt(4, flags).putFloat(8, frame.exposure.x).putFloat(12, MAX_RADIANCE);
+            push.putInt(0, accumFrames).putInt(4, flags).putFloat(8, frame.exposure.x).putFloat(12, (float) RtSettings.pathFireflyClamp());
             push.putFloat(16, dispatch.diCamDeltaX()).putFloat(20, dispatch.diCamDeltaY())
                 .putFloat(24, dispatch.diCamDeltaZ()).putFloat(28, REPROJECTION_TOLERANCE);
             RtGpuTimer.mark(cmd, RtGpuTimer.SPAN_DISPLAY, false);

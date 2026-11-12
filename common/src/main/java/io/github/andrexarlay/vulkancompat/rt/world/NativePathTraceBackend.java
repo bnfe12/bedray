@@ -82,7 +82,7 @@ final class NativePathTraceBackend implements PathTraceBackend {
         pass.render(new BedrayPathTraceNative.FrameInput(frame.command().address(), frame.views(), frame.constants(),
             dispatch, frame.emitters(), RtPathTraceSlangPass.Reservoirs.NONE, frame.entities(), frame.stats(),
             flags, frame.accumFrames(), RtSlangPathPass.tonemapperBits(RtSettings.tonemapper()) | RtSlangPathPass.postCinemaBits(),
-            RtSlangPathPass.MAX_RADIANCE, RtSlangPathPass.REPROJECTION_TOLERANCE));
+            (float) RtSettings.pathFireflyClamp(), RtSlangPathPass.REPROJECTION_TOLERANCE));
         boolean pt = (flags & BedrayCoreLayouts.PATH_TRACE_FRAME_NATIVE_PT) != 0
             && (dispatch.flags() & RtPathTraceSlangPass.OPTION_RESTIR_PT) != 0;
         ptState = !pt ? "off" : (flags & BedrayCoreLayouts.PATH_TRACE_FRAME_PT_SPATIAL) != 0 ? "native+spatial" : "native";

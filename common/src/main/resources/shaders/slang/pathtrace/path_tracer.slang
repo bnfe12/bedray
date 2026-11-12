@@ -93,6 +93,9 @@ static const uint PATH_TRACE_OPTION_GBUFFER        = 1u << 0u;  // fill PathTrac
 static const uint PATH_TRACE_OPTION_NRD_MOTION     = 1u << 1u;  // also write the primary hit's world motion for NRD's IN_MV
 static const uint PATH_TRACE_OPTION_RR_GUIDES      = 1u << 22u; // coherent RR primaries and positive linear view depth
 static const uint PATH_TRACE_OPTION_RR_PT_DECORRELATE = 1u << 23u;
+// The player turned Russian roulette off: every path then traces to the depth limit instead of being terminated early
+// by probability. Bit 24 is spare (8..15 carry the pixel-shadow cell, 16..23 the features above) and outside the PT mask.
+static const uint PATH_TRACE_OPTION_NO_RUSSIAN_ROULETTE = 1u << 24u;
 
 bool pathTraceNeedsDenoiserSignals(uint flags) {
     return (flags & PATH_TRACE_OPTION_NRD_MOTION) != 0u && (flags & PATH_TRACE_OPTION_RR_GUIDES) == 0u;
@@ -1019,7 +1022,7 @@ PathTraceResult tracePathWithField<T : ISceneTracer, L : ILightSampler, E : IEnv
             break;
         }
 
-        if (result.depth >= options.minRussianDepth) {
+        if ((options.flags & PATH_TRACE_OPTION_NO_RUSSIAN_ROULETTE) == 0u && result.depth >= options.minRussianDepth) {
             float survival = clamp(pathMaxComponent(throughput),
                 options.russianMinProbability, 0.95);
             if (rand01(seed) >= survival) {

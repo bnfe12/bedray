@@ -624,6 +624,14 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> RtSettings.pathSpp = v, () -> RtSettings.pathSpp, pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st));
         pt.addOption(intOpt(builder, "path_distance", 384, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16,
             unit(" blocks"), v -> RtSettings.pathDistance = v, () -> RtSettings.pathDistance, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Firefly ceiling: lower suppresses bright specks harder (calmer, slightly darker highlights), higher keeps more
+        // bright detail. Drives the tracer truncation and the display mean clip together, so the choice stays coherent.
+        pt.addOption(intOpt(builder, "path_firefly_clamp", 64, 8, 256, 1, v -> Component.literal(Integer.toString(v)),
+            v -> RtSettings.pathFireflyClamp = v, () -> RtSettings.pathFireflyClamp, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Russian roulette: on (default) randomly ends dim paths early to save work; off traces every path to the bounce
+        // limit for less noise at a higher cost. A transport choice, so it is a path-mode detail like bounces and distance.
+        pt.addOption(boolOpt(builder, "path_russian_roulette", true, v -> RtSettings.pathRussianRoulette = v,
+            () -> RtSettings.pathRussianRoulette, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
         // Temporal accumulation: on folds each frame's paths into a running mean (a still converges); off shows the raw
         // per-frame sample, which stays noisy but never ghosts a moving camera. Already wired through accumulateRequested().
         pt.addOption(boolOpt(builder, "path_accumulate", true, v -> RtSettings.pathAccumulate = v, () -> RtSettings.pathAccumulate,

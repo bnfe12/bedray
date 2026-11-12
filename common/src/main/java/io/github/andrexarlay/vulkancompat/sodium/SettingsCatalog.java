@@ -304,6 +304,14 @@ public final class SettingsCatalog {
             "FPS: none on its own - it changes how the picture is averaged, not how many rays are traced.",
             "Path Tracing only.",
             "A still shows the converged (on) versus noisy (off) image directly.");
+        putNoImage("path_firefly_clamp", Tier.ADVANCED, "Firefly Clamp",
+            "Brightness ceiling for a single light sample. Lower values suppress bright firefly specks more aggressively (a calmer picture, slightly darker highlights); higher values keep more bright detail but allow more specks.",
+            "FPS: none - it bounds a sample, it does not add rays.", "Path Tracing only.",
+            "A still of a bright interior shows fewer specks at a low clamp; judge the highlight trade-off live.");
+        putNoImage("path_russian_roulette", Tier.ADVANCED, "Russian Roulette",
+            "Randomly ends dim light paths early to save work. On (default) is faster with a little more noise; off traces every path to the bounce limit for cleaner dim lighting at a higher cost.",
+            "FPS: off costs more - paths run to the bounce limit instead of ending early.", "Path Tracing only.",
+            "The difference is noise versus speed in dim scenes; a still shows the noise, motion shows the cost.");
         put("path_denoiser", Tier.ADVANCED, "Denoiser",
             "Removes the grain of traced light. NRD is the default; DLSS Ray Reconstruction replaces denoiser and upscaler (RTX only). Off leaves raw grain.",
             "",

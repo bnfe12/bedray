@@ -136,6 +136,8 @@ final class RtPathTraceSlangPass implements AutoCloseable {
     /** Explicit RR guide contract, independent of whether world-motion output is enabled. */
     static final int OPTION_RR_GUIDES = 1 << 22;
     static final int OPTION_RR_PT_DECORRELATE = 1 << 23;
+    /** The player turned Russian roulette off; mirrors {@code PATH_TRACE_OPTION_NO_RUSSIAN_ROULETTE}. Spare bit 24, outside the PT mask. */
+    static final int OPTION_NO_RUSSIAN_ROULETTE = 1 << 24;
     static final int PT_STATE_MASK = OPTION_RESTIR_PT | PT_HISTORY | PT_PARITY | PT_STATIC | PT_FLIP_Y;
 
     /** The seven denoiser guide images, in the order {@code gbufferViews()} hands them over. */

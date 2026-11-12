@@ -192,6 +192,10 @@ public final class RtSettings {
     /** NRD by default: used when the NRD natives are installed, otherwise the path tracer falls back to accumulation (logged). */
     public static PathDenoiser pathDenoiser = PathDenoiser.NRD;
     public static int pathDistance = 256;
+    /** Firefly ceiling: the radiance a single sample may reach before the tracer truncates it and the display mean clips it. */
+    public static int pathFireflyClamp = 64;
+    /** Russian roulette: randomly terminate dim paths early to save work. Off traces every path to the bounce limit (slower, less noise). */
+    public static boolean pathRussianRoulette = true;
     /**
      * Adaptive quality of the path tracer: keeps the RT pass inside {@link AdaptiveQuality#budgetMs()} by lowering spp, then
      * bounces, below the values above (never above them). OFF by default: a budget is a target, and a pass that cannot reach
@@ -283,6 +287,8 @@ public final class RtSettings {
         bool("path_restir_pt", () -> pathRestirPt, v -> pathRestirPt = v);
         bool("path_restir_pt_spatial", () -> pathRestirPtSpatial, v -> pathRestirPtSpatial = v);
         integer("path_distance", () -> pathDistance, v -> pathDistance = v, DISTANCE_MIN, DISTANCE_MAX);
+        integer("path_firefly_clamp", () -> pathFireflyClamp, v -> pathFireflyClamp = v, 8, 256);
+        bool("path_russian_roulette", () -> pathRussianRoulette, v -> pathRussianRoulette = v);
         bool("path_auto_exposure", () -> pathAutoExposure, v -> pathAutoExposure = v);
         integer("path_exposure_ev", () -> pathExposureEvTenths, v -> pathExposureEvTenths = v, -40, 40);
         bool("dlss_rr_geometric_normals", () -> dlssRrGeometricNormals, v -> dlssRrGeometricNormals = v);
@@ -484,6 +490,8 @@ public final class RtSettings {
     public static int pathMaxDistance() { return i("path_distance"); }
     public static boolean autoExposure() { return b("path_auto_exposure"); }
     public static int exposureEvTenths() { return i("path_exposure_ev"); }
+    public static int pathFireflyClamp() { return i("path_firefly_clamp"); }
+    public static boolean pathRussianRoulette() { return b("path_russian_roulette"); }
     public static boolean dlssRrGeometricNormals() { return b("dlss_rr_geometric_normals"); }
     public static boolean caustics() { return b("path_caustics") || b("caustics"); }
     public static boolean vibrantVisuals() { return b("vibrant_visuals"); }
@@ -740,7 +748,7 @@ public final class RtSettings {
     public static final java.util.Set<String> ADVANCED_KEYS = java.util.Set.of("rays_shadows", "rays_soft_shadows", "rays_pixel_shadows", "rays_reflections",
         "rays_ao", "rays_gi", "rays_emissive", "rays_accumulate", "rt_distance_auto", "auto_normals", "path_accumulate",
         "path_auto_exposure", "dlss_rr_geometric_normals", "rt_fog", "volumetric_fog_enabled", "path_caustics", "caustics", "vibrant_visuals",
-        "vignette", "film_grain", "waving_foliage");
+        "path_firefly_clamp", "path_russian_roulette", "vignette", "film_grain", "waving_foliage");
 
     /**
      * Resets one level of the settings page to the values of the current presets (Ray Tracing: MEDIUM when Custom; Path
