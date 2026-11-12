@@ -505,7 +505,7 @@ public final class SettingsCatalog {
             "", "", "Visible only as shadow softness at a moment of day; not captured.");
         putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
             "Shares the Surface Relief screenshots.");
-        putNoImage("texture_lod_bias_offset", Tier.EXPERT, "Texture Sharpness Offset",
+        putNoImage("texture_lod_bias_offset", Tier.ADVANCED, "Texture Sharpness Offset",
             "Extra mipmap bias; negative values make textures sharper (-0.2 to -0.5 suits pixel art). The automatic bias for upscalers is always on.",
             "", "", "A sub-pixel sharpness bias is not visible in a downscaled screenshot.");
         putNoImage("fsr_version", Tier.EXPERT, "FSR Version", "Which FSR inside the AMD library is used. Auto picks the newest (3.1).", "", "FSR only.",

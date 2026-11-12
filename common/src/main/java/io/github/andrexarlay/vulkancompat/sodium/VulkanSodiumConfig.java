@@ -757,6 +757,14 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             VulkanRtxConfig.pointSamplingSharpness = v;
             TextureLodBias.setPointSamplingSharpness(v);
         }, () -> VulkanRtxConfig.pointSamplingSharpness, null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
+        // Always registered (not expert-only): the Texture style presets stage this row, so it must exist for every player.
+        img.addOption(intOpt(builder, "texture_lod_bias_offset", 0, -20, 10, 1,
+            v -> Component.literal(String.format(Locale.ROOT, "%.1f", v / 10.0f)),
+            v -> {
+                float offset = v / 10.0f;
+                VulkanRtxConfig.textureLodBiasOffset = offset;
+                TextureLodBias.textureLodBiasOffset = offset;
+            }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f), null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         img.addOption(intOpt(builder, "custom_scale", 100, 25, 100, 5, percent(),
             v -> {
                 VulkanRtxConfig.customScalePercent = v;
@@ -946,13 +954,6 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             () -> RtSettings.sunSizeTenths, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
         ex.addOption(intOpt(builder, "auto_normal_strength", 100, 0, 400, 10, percent(), v -> RtSettings.autoNormalStrength = v,
             () -> RtSettings.autoNormalStrength, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
-        ex.addOption(intOpt(builder, "texture_lod_bias_offset", 0, -20, 10, 1,
-            v -> Component.literal(String.format(Locale.ROOT, "%.1f", v / 10.0f)),
-            v -> {
-                float offset = v / 10.0f;
-                VulkanRtxConfig.textureLodBiasOffset = offset;
-                TextureLodBias.textureLodBiasOffset = offset;
-            }, () -> Math.round(VulkanRtxConfig.textureLodBiasOffset * 10.0f), null, NO_DEPS, Mark.NONE, OptionImpact.LOW, false, st));
         ex.addOption(atmSlider(builder, "atm_godrays_range", "godrays_range", 128, 32, 256, 16, anyRt, dMode, false, st));
         ex.addOption(atmSlider(builder, "atm_bloom_threshold", "bloom_threshold", 400, 50, 800, 10, anyRt, dMode, false, st));
         ex.addOption(atmSlider(builder, "atm_bloom_scatter", "bloom_scatter", 70, 30, 95, 5, anyRt, dMode, false, st));

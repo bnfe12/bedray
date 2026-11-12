@@ -75,6 +75,20 @@ public class VulkanSodiumConfigIdsTest {
         assertTrue(invisible.isEmpty(), "registered options with no catalog row (unreachable in the Bedray screen): " + invisible);
     }
 
+    @Test
+    public void textureStyleRowsAreRegisteredWithoutExpertUi() {
+        List<Identifier> ids = new ArrayList<>();
+        List<Identifier> dependencies = new ArrayList<>();
+        new VulkanSodiumConfig().registerSettings(recordingBuilder(ids, dependencies));
+        // The Texture style presets stage these two rows, so they must exist for every player. texture_lod_bias_offset
+        // used to live in the expert-only group: with expert UI off it was never registered, the preset staged it into a
+        // null option, and the gi_settings autotest read back lod_bias_offset=null (2026-11-12 L4 FAIL).
+        assertTrue(ids.contains(Identifier.fromNamespaceAndPath("bedray", "point_sampling_sharpness")),
+            "point_sampling_sharpness must be registered without expert UI");
+        assertTrue(ids.contains(Identifier.fromNamespaceAndPath("bedray", "texture_lod_bias_offset")),
+            "texture_lod_bias_offset must be registered without expert UI (the Texture style presets stage it)");
+    }
+
     private static ConfigBuilder recordingBuilder(List<Identifier> ids, List<Identifier> dependencies) {
         return (ConfigBuilder) fluent(ConfigBuilder.class, ids, dependencies);
     }
