@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "label": "gi_settings_l4",
+  "kind": "settings_action_l4_proof",
+  "scenario": "gi_settings",
+  "revision": "81c06ffa",
+  "jar_sha256": "f645f3597ea15d7385aaf2238f6d4618c6bd6376183ad471a5434ed730bf5d28",
+  "started_utc": "2026-11-12T20:06:23Z",
+  "device": {
+    "name": "NVIDIA GeForce RTX 5060 Ti",
+    "vendor": "NVIDIA",
+    "driver": "1.4.357 NVIDIA 621.14",
+    "memory_bytes": 8274313216,
+    "capability_mask": "0x677",
+    "window": "1920x1080",
+    "render_target": "1920x1080"
+  },
+  "gi_auto_policy": {
+    "tier": "BALANCED",
+    "describe": "BALANCED: spp=1 bounces=3 dist=512 di=true pt=true ser=false (Fits the 1972 MiB reservoir budget at 1920x1080)",
+    "staged_readback": {
+      "spp": 1,
+      "bounces": 3,
+      "distance": 512,
+      "restir_di": true,
+      "restir_pt": true,
+      "restir_pt_spatial": true,
+      "profile": "CUSTOM"
+    },
+    "readback_matches_plan": true,
+    "ser_false_reason": "capability_mask 0x677 lacks bit 11 (ray tracing pipeline) and bit 12 (invocation reorder NV)"
+  },
+  "texture_presets": [
+    {"preset": "PIXEL_ART", "point_sampling": true, "lod_bias_offset": -3},
+    {"preset": "BALANCED", "point_sampling": false, "lod_bias_offset": 0},
+    {"preset": "SOFT", "point_sampling": false, "lod_bias_offset": 3}
+  ],
+  "texture_presets_readback_matches": true,
+  "screen": {
+    "rendered": true,
+    "unexpected_screens": 0,
+    "screenshot": "gi_settings_overview.png",
+    "screenshot_bytes": 180718
+  },
+  "run": {
+    "frames": 666,
+    "fps": 27,
+    "duration_sec": 29,
+    "result": "PASS"
+  },
+  "regression_fixed": {
+    "symptom": "texture preset PIXEL_ART staged point=true offset=null (2026-11-12 earlier L4 FAIL)",
+    "root_cause": "texture_lod_bias_offset was registered only in the expert-only group; with expert UI off (default) getOption returned null and the preset staged into nothing",
+    "fix": "moved the row into the always-registered Image group, dropped the expert duplicate, retiered EXPERT->ADVANCED, added textureStyleRowsAreRegisteredWithoutExpertUi regression test",
+    "fix_commit": "81c06ffa"
+  },
+  "verification_levels": {
+    "L2": "39 tests pass (TexturePresetTest 8, GiStackPolicyTest 11, GiDeviceProbeTest 3, GiPlanSettingsTest 6, SettingsProfileGatingTest 5, VulkanSodiumConfigIdsTest 2, SettingsCatalogTest 4)",
+    "L4": "result=PASS on live RTX 5060 Ti; GI plan + all three texture presets staged and read back correctly; Overview screen rendered"
+  }
+}

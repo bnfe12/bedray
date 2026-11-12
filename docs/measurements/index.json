@@ -28,6 +28,13 @@
       "target_met_in_capture": false,
       "frames": 941,
       "file": "raygen_pt_on.json"
+    },
+    {
+      "label": "gi_settings_l4",
+      "capture_status": "saved",
+      "target_met_in_capture": null,
+      "frames": 666,
+      "file": "gi_settings_l4/gi_settings_l4.json"
     }
   ]
 }
