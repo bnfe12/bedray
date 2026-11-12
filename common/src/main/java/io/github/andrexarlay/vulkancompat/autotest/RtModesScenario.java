@@ -31,6 +31,13 @@ import java.util.Locale;
  */
 public final class RtModesScenario implements AutotestScenario {
     public static final String STEPS_PROPERTY = "vkrtx.autotest.rtSteps";
+    /**
+     * Light-placement scenes (owner request 2026-11-12: many lights and few, base, house, cave, street, other biomes;
+     * every source has to sit well with every other): J house with few warm lights, K cave with sparse torches and a lava
+     * pocket, L night street with lamp posts and lit windows, M snowfield around a lava pit with a campfire (the owner
+     * screenshot), N a base mixing every block light type.
+     */
+    static final java.util.Set<String> LIGHT_SCENES = java.util.Set.of("J", "K", "L", "M", "N");
     public static final String DEFAULT_STEPS = "A:off,A:rays,A:rays+ao+soft+q2,A:rays+refl,B:off,B:rays,B:path+b3+f400";
     private static final int TIME_OF_DAY = Integer.getInteger("vkrtx.autotest.rtTime", 2500);
 
@@ -99,7 +106,7 @@ public final class RtModesScenario implements AutotestScenario {
                 continue;
             }
             String[] sm = item.split(":", 2);
-            if (sm.length != 2 || !(sm[0].equals("A") || sm[0].equals("B") || sm[0].equals("C") || sm[0].equals("D") || sm[0].equals("E") || sm[0].equals("F") || sm[0].equals("H"))) {
+            if (sm.length != 2 || !(sm[0].equals("A") || sm[0].equals("B") || sm[0].equals("C") || sm[0].equals("D") || sm[0].equals("E") || sm[0].equals("F") || sm[0].equals("H") || LIGHT_SCENES.contains(sm[0]))) {
                 throw new IllegalArgumentException("step '" + item + "': expected A:, B:, C: or D:<mode>");
             }
             String[] parts = sm[1].split("\\+");
@@ -112,7 +119,7 @@ public final class RtModesScenario implements AutotestScenario {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.equals("ao") || m.equals("gi") || m.equals("break") || m.equals("ui") || m.equals("soft") || m.equals("refl") || m.equals("noshadow") || m.equals("noemis")
                     || m.equals("rr") || m.equals("ref") || m.equals("cmp") || m.equals("ent") || m.equals("entabove") || m.equals("noent") || m.equals("label") || m.matches("pack=(on|off)") || m.equals("entmove") || m.matches("mv=(still|walk|turn|strafe|realwalk|realturn)") || m.equals("noaccum") || m.equals("noexp") || m.equals("noautonorm") || m.matches("an\\d+") || m.matches("t\\d+") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("nrd") || m.matches("[qbsf]\\d+") || m.matches("dist\\d+") || m.startsWith("dbg=") || m.matches("up=(off|dlss_[a-z_]+|xess_[a-z_]+|fsr_[a-z_]+|fsr1_[a-z_]+|nis_\\d+|bil_\\d+)") || m.matches("js=(d|-?1_-?1)") || m.matches("shp=[0-9.]+") || m.matches("tm=[a-z0-9_]+") || m.matches("jv=[a-z0-9_]+") || m.matches("p=(off|low|medium|high|ultra|path_tracing|custom)")
-                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)"))) {
+                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)") || m.matches("ltm=[0-9.]+"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 if (m.startsWith("dbg=") && RtConfig.isUnknownMode(m.substring(4))) {
@@ -243,7 +250,90 @@ public final class RtModesScenario implements AutotestScenario {
         c.add(set(-4, 0, 2, "torch"));
         c.add(set(4, 0, 2, "torch"));
         c.add(set(0, 0, 13, "lantern"));
+        lightScenes(c);
         return c;
+    }
+
+    /** Geometry of the light-placement scenes J..N (see {@link #LIGHT_SCENES}); all within ~70 blocks of the base. */
+    private void lightScenes(List<String> c) {
+        // J: house, interior x -69..-61, y 0..3, z -3..5; spruce walls, plank floor, a window and a door gap; few lights
+        c.add(fill(-71, -2, -5, -59, -1, 7, "oak_planks"));
+        c.add(fill(-71, 0, -5, -59, 6, 7, "air"));
+        c.add(fill(-70, 0, -4, -60, 4, 6, "spruce_planks"));
+        c.add(fill(-69, 0, -3, -61, 3, 5, "air"));
+        c.add(fill(-70, 5, -4, -60, 5, 6, "dark_oak_planks"));
+        c.add(fill(-60, 1, 0, -60, 2, 2, "glass"));
+        c.add(fill(-65, 0, 6, -65, 1, 6, "air"));
+        c.add(set(-65, 3, 1, "lantern[hanging=true]"));
+        c.add(set(-68, 1, 5, "wall_torch[facing=north]"));
+        c.add(set(-62, 1, 5, "wall_torch[facing=north]"));
+        c.add(set(-67, 0, 2, "crafting_table"));
+        c.add(set(-67, 1, 2, "candle[lit=true,candles=3]"));
+        c.add(fill(-69, 0, -3, -69, 2, 1, "bookshelf"));
+        c.add(fill(-64, 0, -1, -62, 0, 1, "red_carpet"));
+        // K: cave, tunnel x -69..-59, y -13..-9, z 12..28 inside stone, sparse torches and a lava pocket
+        c.add(fill(-72, -16, 9, -56, -6, 31, "stone"));
+        c.add(fill(-69, -13, 12, -59, -9, 28, "air"));
+        c.add(fill(-66, -13, 16, -64, -12, 18, "stone"));
+        c.add(fill(-60, -9, 20, -59, -9, 24, "stone"));
+        c.add(fill(-68, -14, 22, -66, -14, 24, "lava"));
+        c.add(fill(-63, -13, 25, -61, -11, 26, "deepslate"));
+        c.add(set(-62, -13, 14, "torch"));
+        c.add(set(-67, -13, 27, "torch"));
+        // L: night street, road x -3..3, z -44..-12, stone-brick houses with lit windows, lamp posts every 8 blocks
+        c.add(fill(-12, -2, -46, 12, -1, -12, "stone"));
+        c.add(fill(-12, 0, -46, 12, 9, -13, "air"));
+        c.add(fill(-3, -1, -46, 3, -1, -13, "stone_bricks"));
+        c.add(fill(-12, 0, -12, 12, 6, -12, "cobblestone"));
+        for (int side : new int[] {-1, 1}) {
+            int wall = side < 0 ? -6 : 6;
+            int back = side < 0 ? -11 : 11;
+            c.add(fill(Math.min(wall, back), 0, -44, Math.max(wall, back), 5, -14, "stone_bricks"));
+            for (int z = -41; z <= -17; z += 8) {
+                c.add(fill(wall, 1, z, wall, 2, z + 1, "glass"));
+                c.add(set(wall + side, 1, z, "glowstone"));
+            }
+            for (int z = -42; z <= -14; z += 8) {
+                int px = side * 4;
+                c.add(fill(px, 0, z, px, 2, z, "oak_fence"));
+                c.add(set(px, 3, z, "lantern"));
+            }
+        }
+        c.add(set(0, 0, -20, "campfire[lit=true]"));
+        // M: snowfield around a lava pit (the owner screenshot), x 28..52, z 18..42, pit x 36..43, z 26..33
+        c.add(fill(28, -4, 18, 52, -2, 42, "dirt"));
+        c.add(fill(28, 0, 18, 52, 9, 42, "air"));
+        c.add(fill(28, -1, 18, 52, -1, 42, "snow_block"));
+        c.add(fill(36, -4, 26, 43, -1, 33, "bricks"));
+        c.add(fill(37, -3, 27, 42, -3, 32, "lava"));
+        c.add(fill(37, -2, 27, 42, -1, 32, "air"));
+        c.add(set(46, 0, 30, "campfire[lit=true]"));
+        c.add(set(33, 0, 26, "torch"));
+        for (int[] t : new int[][] {{31, 37}, {48, 21}, {50, 38}}) {
+            c.add(fill(t[0], 0, t[1], t[0], 4, t[1], "spruce_log"));
+            c.add(fill(t[0] - 2, 3, t[1] - 2, t[0] + 2, 5, t[1] + 2, "spruce_leaves[persistent=true]"));
+            c.add(set(t[0], 4, t[1], "spruce_log"));
+            c.add(fill(t[0] - 2, 6, t[1] - 2, t[0] + 2, 6, t[1] + 2, "snow"));
+        }
+        // N: base with every block light type, room x -69..-55, y 0..5, z 36..48, blackstone shell, door gap at z 35
+        c.add(fill(-71, -2, 34, -53, -1, 50, "polished_blackstone"));
+        c.add(fill(-71, 0, 33, -53, 8, 50, "air"));
+        c.add(fill(-70, 0, 35, -54, 6, 49, "blackstone"));
+        c.add(fill(-69, 0, 36, -55, 5, 48, "air"));
+        c.add(fill(-63, 0, 35, -61, 2, 35, "air"));
+        String[] lights = {"glowstone", "sea_lantern", "shroomlight", "ochre_froglight", "verdant_froglight",
+            "pearlescent_froglight", "jack_o_lantern", "magma_block", "redstone_lamp[lit=true]", "crying_obsidian"};
+        for (int i = 0; i < lights.length; i++) {
+            c.add(set(-68 + (i % 5) * 3, 0, 47 - (i / 5) * 4, lights[i]));
+        }
+        c.add(set(-66, 5, 42, "lantern[hanging=true]"));
+        c.add(set(-58, 5, 42, "soul_lantern[hanging=true]"));
+        c.add(set(-69, 1, 40, "wall_torch[facing=east]"));
+        c.add(set(-55, 1, 40, "soul_wall_torch[facing=west]"));
+        c.add(set(-62, 0, 39, "end_rod"));
+        c.add(set(-59, 0, 38, "soul_campfire[lit=true]"));
+        c.add(set(-65, 0, 38, "candle[lit=true,candles=4]"));
+        c.add(set(-57, 0, 45, "redstone_torch"));
     }
 
     private String fill(int x0, int y0, int z0, int x1, int y1, int z1, String block) {
@@ -434,6 +524,22 @@ public final class RtModesScenario implements AutotestScenario {
             z = bz + 1.6;
             aimYaw = 0f;
             aimPitch = 6f;
+        } else if (scene.equals("J")) {
+            // house: in the south-east corner by the door, looking north-west across the room at the lantern and candles
+            x = bx - 62.5; y = by; z = bz + 4.5; aimYaw = 135f; aimPitch = 12f;
+        } else if (scene.equals("K")) {
+            // cave: at the tunnel mouth looking along it (+Z)
+            x = bx - 63.5; y = by - 13; z = bz + 13.5; aimYaw = 0f; aimPitch = 4f;
+        } else if (scene.equals("L")) {
+            // street: at the south end of the road looking north (+Z) along the lamp posts
+            x = bx + 0.5; y = by; z = bz - 45.0; aimYaw = 0f; aimPitch = 4f;
+        } else if (scene.equals("M")) {
+            // snowfield: above the south-west of the pit looking down at the lava (the owner screenshot)
+            x = bx + 33.5; y = by + 6; z = bz + 22.5; aimYaw = -45f; aimPitch = 32f;
+            flyScene = true;
+        } else if (scene.equals("N")) {
+            // base: just inside the doorway looking north (+Z) across the row of light blocks
+            x = bx - 61.5; y = by; z = bz + 36.5; aimYaw = 0f; aimPitch = 10f;
         } else if (scene.equals("C")) {
             // 300 blocks away (new chunks): high above the ground looking down, the player falls onto the terrain
             x = bx + 300.5;
@@ -509,7 +615,10 @@ public final class RtModesScenario implements AutotestScenario {
                 case "pt=temporal" -> { RtSettings.pathRestirPt = true; RtSettings.pathRestirPtSpatial = false; }
                 case "pt=full" -> { RtSettings.pathRestirPt = true; RtSettings.pathRestirPtSpatial = true; }
                 default -> {
-                    if (m.startsWith("an")) {
+                    if (m.startsWith("ltm=")) {
+                        float v = Float.parseFloat(m.substring(4));
+                        io.github.andrexarlay.vulkancompat.rt.world.RtLocalTonemap.setStrength(v, v);
+                    } else if (m.startsWith("an")) {
                         RtSettings.autoNormalStrength = Integer.parseInt(m.substring(2));
                     } else if (m.startsWith("p=")) {
                         RtSettings.applyPreset(RtSettings.Preset.valueOf(m.substring(2).toUpperCase(Locale.ROOT)));

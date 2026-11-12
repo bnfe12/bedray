@@ -181,6 +181,7 @@ public final class RtFrameRenderer {
     // [DLSS-RR] DLSS Ray Reconstruction denoiser (experimental)
     private static DlssRrDenoiser dlssRrDenoiser;
     private static RtOutputResolve outputResolve;
+    private static RtLocalTonemap localTonemap;
     private static RrHardwareDepth rrHardwareDepth;
 
     /**
@@ -807,6 +808,7 @@ public final class RtFrameRenderer {
         RtFrameResources recordingResources = frameResources;
         RtPass recordingPass = pass;
         RtOutputResolve recordingOutputResolve = outputResolve;
+        RtLocalTonemap recordingLocalTonemap = localTonemap;
         RrHardwareDepth recordingRrDepth = rrHardwareDepth;
         Runnable[] particleRelease = {() -> {}};
         Retirement[] denoiserProof = {new Retirement(() -> {}, () -> {})};
@@ -819,6 +821,9 @@ public final class RtFrameRenderer {
             new Retirement(
                 () -> { if (recordingOutputResolve != null) recordingOutputResolve.release(cmd.address(), false); },
                 () -> { if (recordingOutputResolve != null) recordingOutputResolve.release(cmd.address(), true); }),
+            new Retirement(
+                () -> { if (recordingLocalTonemap != null) recordingLocalTonemap.release(cmd.address(), false); },
+                () -> { if (recordingLocalTonemap != null) recordingLocalTonemap.release(cmd.address(), true); }),
             new Retirement(() -> statsOwner.completed(statsLease), () -> statsOwner.discarded(statsLease)),
             new Retirement(
                 () -> atmosphere.releaseRecording(cmd.address()), () -> atmosphere.discardRecording(cmd.address())),
@@ -1026,6 +1031,8 @@ public final class RtFrameRenderer {
                 if (combinedRr) frameResources.ensureOutput(w, h, outW, outH); else frameResources.ensureOutput(w, h);
             }
             if (combinedRr && outputResolve == null) outputResolve = new RtOutputResolve(pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
+            if (denoiseMode == DenoiserMode.DLSS_RR && localTonemap == null)
+                localTonemap = new RtLocalTonemap(pathSlangRuntime(VulkanCapabilityChecker.getVulkanDevice()));
             if (denoiseMode == DenoiserMode.DLSS_RR) {
                 stage = "dlss_rr_ensure";
                 if (pass.usesGbuffer() && dlssRrDenoiser == null) createDlssRrDenoiser(device, w, h);
@@ -1446,6 +1453,15 @@ public final class RtFrameRenderer {
             VkBarriers.fullMemoryBarrier(cmd);
             presented = frameComposite();
             presentedDepth = frameResources.displayDepth();
+        }
+        // Local tone mapping replaces the RR compose's global curve with a local one (RtLocalTonemap). Only on a frame
+        // whose colour the denoiser resolved: the raw fallback has no HDR source to rebuild from.
+        if (rrColorResolved && localTonemap != null && RtLocalTonemap.enabled() && dlssRrDenoiser != null
+                && dlssRrDenoiser.outDiffuse() != null && frameResources.localLum() != null
+                && dlssRrDenoiser.outDiffuse().width == presented.width && dlssRrDenoiser.outDiffuse().height == presented.height) {
+            localTonemap.record(cmd, dlssRrDenoiser.outDiffuse(), presented, frameResources.localLum(), presentedDepth,
+                params.exposure);
+            VkBarriers.fullMemoryBarrier(cmd);
         }
         // Raster particles/weather and world depth match the presentation grid and stay outside RR.
         pendingCoverageMask = io.github.andrexarlay.vulkancompat.rt.particles.RtParticleLayer.composite(cmd, pathSlangRuntime(vulkanDevice),
@@ -2106,6 +2122,7 @@ public final class RtFrameRenderer {
             // last lease closes the core, which refuses while a recording is still pinned.
             atmosphere.destroy();
             if (outputResolve != null) { outputResolve.afterHostDrain(); outputResolve = null; }
+            if (localTonemap != null) { localTonemap.afterHostDrain(); localTonemap = null; }
             if (rrHardwareDepth != null) { rrHardwareDepth.afterHostDrain(); rrHardwareDepth = null; }
             if (pathSlangRuntime != null) {
                 w.closeComputeAfterHostDrain();
