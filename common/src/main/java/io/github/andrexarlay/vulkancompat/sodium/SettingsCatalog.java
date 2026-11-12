@@ -371,6 +371,16 @@ public final class SettingsCatalog {
             "Manual brightness offset in EV (-4.0 to +4.0). Shifts Auto Exposure when it is on, or sets the fixed brightness when Auto Exposure is off.",
             "", "Needs ray tracing on.",
             "Shares the Auto Exposure behaviour; adjust live to match your monitor brightness.");
+        putNoImage("tonemapper", Tier.ADVANCED, "Tone Curve",
+            "The filmic curve that turns the traced HDR light into the final picture. Peak is the shipped BedRay look; ACES is the classic filmic contrast; "
+                + "PBR Neutral keeps material colours accurate; GT is a smooth sport curve; AgX is the modern Blender/Filament transform with natural highlight rolloff.",
+            "FPS: none - it is a per-pixel curve in the display pass.",
+            "Needs ray tracing on.",
+            "A still shows the look directly; switch live to compare.");
+        putNoImage("vibrant_visuals", Tier.ADVANCED, "Vibrant Visuals",
+            "Mojang-style vibrant palette: richer grass and water tones, higher colour contrast and a soft cinematic bloom.",
+            "", "Needs ray tracing on.",
+            "A still shows the palette directly.");
         putNoImage("rt_particles", Tier.ADVANCED, "Particles in RT",
             "Smoke, flames, sparks, bubbles, block-break and weather splash particles in the ray traced image, occluded by terrain and lit by the scene.",
             "", "Needs ray tracing on.",

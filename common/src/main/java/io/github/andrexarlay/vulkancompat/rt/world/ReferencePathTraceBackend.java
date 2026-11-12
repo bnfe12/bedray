@@ -16,6 +16,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import static io.github.andrexarlay.vulkancompat.rt.world.RtSlangPathPass.*;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 
 /** Java orchestration retained as the migration's behavioral reference. */
 final class ReferencePathTraceBackend implements PathTraceBackend {
@@ -336,6 +337,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         if ((frameFlags & BedrayCoreLayouts.PATH_TRACE_FRAME_CAMERA_STATIC) != 0) flags |= DISPLAY_FLAG_CAMERA_STATIC;
         if ((frameFlags & BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y) != 0) flags |= DISPLAY_FLAG_FLIP_Y;
         if ((frameFlags & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY) == 0) flags |= DISPLAY_FLAG_REPROJECT;
+        flags |= tonemapperBits(RtSettings.tonemapper());
         return flags;
     }
     @Override public String reservoirState() {
