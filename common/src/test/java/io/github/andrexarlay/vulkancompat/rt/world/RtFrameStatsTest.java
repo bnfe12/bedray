@@ -48,6 +48,10 @@ class RtFrameStatsTest {
     private static final Path CORE_SOURCE = Path.of("../native/bedray_core/src/core.cpp");
     private static final Path RENDERER = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtFrameRenderer.java");
+    private static final Path TRACKER = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "RtFrameStatsTracker.java");
+    private static final Path RENDER_LOG = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "RtRenderLog.java");
     private static final Path EXPOSURE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtExposure.java");
 
@@ -103,7 +107,7 @@ class RtFrameStatsTest {
             "the word the shader writes is the one the readback decodes");
         String expectedDecode = "lumLogSum / 64.0 / samples - 16.0";
         assertTrue(read(EXPOSURE).contains(expectedDecode), "RtExposure decodes the same fixed point");
-        assertTrue(read(RENDERER).contains("sumLog / 64.0 / samples - 16.0"), "and so does the F3 average luminance");
+        assertTrue(read(TRACKER).contains("sumLog / 64.0 / samples - 16.0"), "and so does the F3 average luminance");
     }
 
     /** stats[0..3] are the four head words of the slot, in the order the readback reads them. */
@@ -227,11 +231,12 @@ class RtFrameStatsTest {
         String renderer = read(RENDERER);
         assertTrue(renderer.contains("System.nanoTime(), w, h, params.frame));"),
             "the readback carries the extent and rotation the pass metered with");
-        assertTrue(renderer.contains("lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(),"
+        String tracker = read(TRACKER);
+        assertTrue(tracker.contains("lastRejectedPct = RtStatsMetering.rejectedPct(metadata.width(),"
                 + " metadata.height(),")
-                && renderer.contains("metadata.frameIndex(), samples);"),
+                && tracker.contains("metadata.frameIndex(), samples);"),
             "the host recomputes the shader's tiles instead of trusting the settings screen");
-        assertTrue(renderer.contains("reject_pct=%s"),
+        assertTrue(read(RENDER_LOG).contains("reject_pct=%s"),
             "the F3 line prints the share next to hit_pct, or nothing measures it");
     }
 
@@ -355,10 +360,10 @@ class RtFrameStatsTest {
      */
     @Test
     void aCounterWithNoWriterIsNotReportedAsZero() throws IOException {
-        String renderer = read(RENDERER);
-        assertTrue(renderer.contains("lastLeafPct = leafBacklit > 0 ? 100.0 * leafBacklit / hits : -1.0;"),
+        String tracker = read(TRACKER);
+        assertTrue(tracker.contains("lastLeafPct = leafBacklit > 0 ? 100.0 * leafBacklit / hits : -1.0;"),
             "-1 is the value the F3 line prints as n/a");
-        assertFalse(renderer.contains("lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT)"),
+        assertFalse(tracker.contains("lastLeafPct = 100.0 * MemoryUtil.memGetInt(base + RtStatsLayout.LEAF_BACKLIT)"),
             "an unwritten counter is not a measurement of zero");
     }
 

@@ -33,6 +33,8 @@ class RtPathRejectBreakdownTest {
     private static final Path FRAME_STATS = SHADERS.resolve("passes/frame_stats.slang");
     private static final Path JAVA = Path.of("src/main/java/io/github/andrexarlay/vulkancompat");
     private static final Path RENDERER = JAVA.resolve("rt/world/RtFrameRenderer.java");
+    private static final Path TRACKER = JAVA.resolve("rt/world/RtFrameStatsTracker.java");
+    private static final Path RENDER_LOG = JAVA.resolve("rt/world/RtRenderLog.java");
     private static final Path TRACE_HOST = JAVA.resolve("rt/world/RtPathTraceSlangPass.java");
     private static final Path CONTROLLER = JAVA.resolve("rt/world/RtSlangPathPass.java");
     private static final Path NATIVE_HOST = JAVA.resolve("rt/world/BedrayPathTraceNative.java");
@@ -145,9 +147,9 @@ class RtPathRejectBreakdownTest {
         String renderer = read(RENDERER);
         assertTrue(renderer.contains("VK10.vkCmdFillBuffer(cmd, statsBuf.handle, writeOffset + RtStatsLayout.PATH_REJECTS, 16, 0);"),
             "a slot reused three frames later must not report the old frame's counts");
-        assertTrue(renderer.contains("lastRejectSplit = RtStatsMetering.breakdown(metadata.width(), metadata.height(),"),
+        assertTrue(read(TRACKER).contains("lastRejectSplit = RtStatsMetering.breakdown(metadata.width(), metadata.height(),"),
             "read back with the slot's own extent and rotation");
-        assertTrue(renderer.contains("invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s"), "and printed on the F3 line");
+        assertTrue(read(RENDER_LOG).contains("invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s"), "and printed on the F3 line");
     }
 
     private static int count(String source, String needle) {

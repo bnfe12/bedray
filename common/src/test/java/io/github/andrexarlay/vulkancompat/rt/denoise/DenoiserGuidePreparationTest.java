@@ -16,12 +16,21 @@ class DenoiserGuidePreparationTest {
         int ensure = preflight.indexOf("denoiser.ensure(w, h, frameOutput().view)", create);
         assertTrue(create >= 0 && ensure > create, "creation and resizing must finish before recording");
         String renderer = body(source, "private static void recordPrimaryRays(");
-        int owner = renderer.indexOf("NrdDenoiser owner = denoiser;");
-        int prepare = renderer.indexOf("owner.prepare(cmd)", owner);
-        int bind = renderer.indexOf("pass.bind(new RtFrameBindings.Views(", prepare);
+        String lifecycle = source("world/RtDenoiserLifecycle.java");
+        String prepareRecording = body(lifecycle, "void prepareRecording(");
+        int owner = prepareRecording.indexOf("NrdDenoiser owner = denoiser;");
+        int prepare = prepareRecording.indexOf("owner.prepare(cmd)", owner);
+        assertTrue(owner >= 0 && prepare > owner, "the captured instance is prepared before it can emit commands");
+        int bind = renderer.indexOf("pass.bind(new RtFrameBindings.Views(");
         int primary = renderer.indexOf("pass.dispatch(cmd, params, w, h)", bind);
-        int record = renderer.indexOf("owner.record(cmd, camera.projectionMatrix", primary);
-        assertTrue(owner >= 0 && prepare > owner && bind > prepare && primary > bind && record > primary);
+        assertTrue(bind >= 0 && primary > bind);
+        String recording = body(lifecycle, "Recording record(");
+        int record = recording.indexOf("owner.record(cmd, camera.projectionMatrix");
+        assertTrue(record >= 0, "the denoiser records after the primary dispatch");
+        int prepareCall = renderer.indexOf("denoisers.prepareRecording(cmd, denoiserProof)");
+        int recordCall = renderer.indexOf("denoisers.record(cmd,", primary);
+        assertTrue(prepareCall >= 0 && prepareCall < bind && recordCall > primary,
+            "preparation precedes the bind and the record follows the dispatch across the owner boundary");
         String nrd = source("denoise/NrdDenoiser.java");
         String preparation = body(nrd, "public void prepare(VkCommandBuffer cmd)");
         assertTrue(preparation.contains("if (!imagesReady)"));
@@ -32,7 +41,7 @@ class DenoiserGuidePreparationTest {
     }
 
     @Test void capturedInstanceProofExistsBeforeEitherDenoiserCanEmitInitializationCommands() throws Exception {
-        String renderer = body(source("world/RtFrameRenderer.java"), "private static void recordPrimaryRays(");
+        String renderer = body(source("world/RtDenoiserLifecycle.java"), "void prepareRecording(");
         int rrOwner = renderer.indexOf("DlssRrDenoiser owner = dlssRrDenoiser;");
         int rrProof = renderer.indexOf("denoiserProof[0] = new Retirement", rrOwner);
         int rrPrepare = renderer.indexOf("owner.prepare(cmd)", rrProof);
@@ -43,6 +52,10 @@ class DenoiserGuidePreparationTest {
         assertTrue(nrdOwner >= 0 && nrdProof > nrdOwner && nrdPrepare > nrdProof);
         assertEquals(2, renderer.split("denoiserProof\\[0\\] = new Retirement", -1).length - 1,
             "each denoiser captures one instance before preparation, without a later replacement");
+        assertFalse(body(source("world/RtDenoiserLifecycle.java"), "Recording record(").contains("denoiserProof[0] ="),
+            "the proof is captured in prepareRecording, never re-assigned while recording");
+        assertFalse(body(source("world/RtFrameRenderer.java"), "private static void recordPrimaryRays(").contains("denoiserProof[0] ="),
+            "the renderer reads the captured proof; it never assigns it");
     }
 
     @Test void firstUseAbandonedBeforeDenoiserRecordStillRunsItsDiscardProof() {

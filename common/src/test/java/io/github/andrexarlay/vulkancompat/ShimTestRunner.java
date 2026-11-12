@@ -402,7 +402,7 @@ public class ShimTestRunner {
         assertTrue(!world.contains("srJitterX = CameraJitterManager.getCurrentPixelJitterX()"),
             "recordXess must not bypass the rule with the raw camera jitter");
 
-        String renderer = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
+        String renderer = readSource("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtDenoiserLifecycle.java");
         assertTrue(renderer.contains("frameColorTemporallyResolved = owner.record(cmd, frameProjection"),
             "RR must use its actual success/skip result; an invalid camera cannot mark raw colour resolved");
         assertTrue(renderer.contains("frameColorTemporallyResolved = true;"),

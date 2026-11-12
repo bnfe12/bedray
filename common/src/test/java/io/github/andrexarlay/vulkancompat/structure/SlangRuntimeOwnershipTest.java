@@ -33,6 +33,8 @@ class SlangRuntimeOwnershipTest {
     private static final Path SOURCES = Path.of("src", "main", "java");
     private static final Path RENDERER =
         SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
+    private static final Path FACTORY =
+        SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt/world/RtPassFactory.java");
     private static final Path ATMOSPHERE =
         SOURCES.resolve("io/github/andrexarlay/vulkancompat/rt/world/RtAtmosphere.java");
 
@@ -80,7 +82,7 @@ class SlangRuntimeOwnershipTest {
     @Test
     void everyCoreReleaseIsPrecededByTheAtmosphereRelease() {
         String renderer = code(read(RENDERER));
-        List<Integer> closes = occurrences(renderer, "pathSlangLease.close()");
+        List<Integer> closes = occurrences(renderer, "passFactory.closeLease()");
         List<Integer> releases = occurrences(renderer, "atmosphere.destroy()");
         assertEquals(2, closes.size(), "both shutdown branches still hand the core back to the pool");
         assertEquals(2, releases.size(), "and both must release the atmosphere passes first");
@@ -88,6 +90,8 @@ class SlangRuntimeOwnershipTest {
             assertTrue(releases.stream().anyMatch(at -> at < close),
                 "a shutdown branch releases the core while an atmosphere recording is still pinned");
         }
+        assertTrue(code(read(FACTORY)).contains("pathSlangLease.close()"),
+            "the factory is what hands the leased core back to the pool");
     }
 
     private static List<Integer> occurrences(String source, String needle) {
