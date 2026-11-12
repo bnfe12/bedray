@@ -81,14 +81,4 @@ public class RtEntityUploadTest {
         assertEquals(EntityGpuFrame.EMPTY, frame);
         assertFalse(frame.isValid());
     }
-
-    @Test
-    @SuppressWarnings("removal") // Exercise the retained null-memory compatibility overload.
-    public void testUploadAndGetGpuFrameNullMem() {
-        RtEntityGeometryManager gm = new RtEntityGeometryManager();
-        // With null mem, uploadAndGetGpuFrame should return EMPTY without crashing
-        EntityGpuFrame frame = gm.uploadAndGetGpuFrame(null, 0, 0, 0);
-        assertNotNull(frame);
-        assertEquals(EntityGpuFrame.EMPTY, frame);
-    }
 }

@@ -27,7 +27,6 @@ import org.lwjgl.vulkan.VkQueueFamilyProperties;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.shaderhost.IrisShaderHost;
-import io.github.andrexarlay.vulkancompat.shaderhost.ShaderHostState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
@@ -147,89 +146,6 @@ public final class IrisRenderBridge {
         }
 
         return executor;
-    }
-
-    /**
-     * Renders Iris composite and final fullscreen passes into the engine color image.
-     *
-     * @param cmd              active command buffer
-     * @param host             active {@link IrisShaderHost}
-     * @param engineColorImage handle of the engine color image (source to copy from)
-     * @param engineColorView  view of the engine color image (final render target)
-     * @param depthView        view of the engine depth image (depthtex0 sampler)
-     * @param width            render width
-     * @param height           render height
-     * @param camera           camera render state
-     * @param frameTimeCounter time in seconds (wraps at 3600)
-     * @param frameCounter     monotonic frame count (wraps at 720720)
-     * @param near             camera near plane
-     * @param far              camera far plane
-     * @param frameTime        delta time of the last frame in seconds
-     * @return {@code true} if rendering commands were recorded; {@code false} if any guard condition failed
-     */
-    public static boolean render(
-        VkCommandBuffer cmd,
-        IrisShaderHost host,
-        long engineColorImage,
-        long engineColorView,
-        long depthView,
-        int width,
-        int height,
-        CameraRenderState camera,
-        float frameTimeCounter,
-        int frameCounter,
-        float near,
-        float far,
-        float frameTime
-    ) {
-        if (cmd == null) {
-            return false;
-        }
-        if (host == null) {
-            return false;
-        }
-        if (host.state() != ShaderHostState.READY) {
-            return false;
-        }
-        IrisPassGraph graph = host.activeGraph();
-        if (graph == null || graph.passes().isEmpty()) {
-            return false;
-        }
-        // Legacy raw-handle callers have no provenance/conversion or frame history contract.
-        if (graph.passes().stream().anyMatch(pass -> !pass.allFrameUsed().isEmpty()
-            || pass.allSamplerBindings().contains(IrisUniforms.BINDING_DEPTHTEX0))) return false;
-        if (engineColorImage == 0L || engineColorView == 0L || depthView == 0L) {
-            return false;
-        }
-        if (width <= 0 || height <= 0) {
-            return false;
-        }
-
-        IrisPostExecutor exec = getOrCreateExecutor(cmd, graph);
-        if (exec == null) {
-            return false;
-        }
-
-        try {
-            exec.record(
-                cmd,
-                graph,
-                engineColorImage,
-                engineColorView,
-                depthView,
-                width,
-                height,
-                frameTimeCounter,
-                frameCounter,
-                near,
-                far,
-                frameTime
-            );
-            return true;
-        } catch (Throwable t) {
-            LOGGER.error("[IrisRenderBridge] Exception during IrisPostExecutor.record\n{}", LogPaths.stack(t));
-            return false;
-        }
     }
 
     private static VulkanDevice owner;

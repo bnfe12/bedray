@@ -40,7 +40,7 @@ public final class RtConfig {
      * camera the extra sections hold little geometry (terrain ends at the world floor) and empty sections get no BLAS,
      * so the instance count barely grows; the previous +-8 dropped the ground out of the TLAS when flying above ~y 190. */
     public static final int AUTO_RADIUS_Y = 16;
-    /** Legacy constants (radius before the settings existed), used by the unit tests only. */
+    /** Default section radius RtWorld starts with before the settings are applied. */
     public static final int RADIUS_XZ = 6;
     public static final int RADIUS_Y = 4;
     /** Sections farther than this (radius + margin) release their GPU data. */

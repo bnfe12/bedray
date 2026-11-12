@@ -45,10 +45,4 @@ public class EntityMotionVectorTest {
 
         assertTrue(teleported, "Entity movement exceeding 16.0 should be flagged as teleported / disoccluded");
     }
-
-    @Test
-    public void testHonestFrameGenerationScaffoldStatus() {
-        assertEquals("FRAME GENERATION = SCAFFOLD ONLY / NOT IMPLEMENTED", io.github.andrexarlay.vulkancompat.rtx.upscaler.fg.FrameGenerationPipeline.SCAFFOLD_STATUS);
-        assertFalse(io.github.andrexarlay.vulkancompat.rtx.upscaler.fg.FrameGenerationPipeline.IMPLEMENTED);
-    }
 }

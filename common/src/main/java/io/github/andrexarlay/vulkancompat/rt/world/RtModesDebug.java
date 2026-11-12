@@ -59,7 +59,6 @@ public final class RtModesDebug {
             RtFrameRenderer.dlssRrRuntimeActive() ? "VIEW_Z" : "NONE"));
 
         // Frame Generation telemetry must reflect the Streamline runtime actually hooked to present.
-        // The legacy FrameGenerationPipeline is an unused scaffold and always reports unsupported.
         out.add("[FRAME-GEN] " + FrameGenRuntime.statusLine());
         // Dirt RT / shader-host lines come from the "shader_host" provider (ShaderHostDebug).
     }

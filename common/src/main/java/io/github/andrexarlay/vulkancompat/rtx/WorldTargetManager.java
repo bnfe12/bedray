@@ -96,8 +96,6 @@ public final class WorldTargetManager {
     private static Vec3 currCameraPos;
     private static Vec3 prevCameraPos;
 
-    /** A/B diagnostic: {@code -Dvkrtx.velocity.legacyRtDepth=true} reads the RT depth as hardware depth (pre-fix behaviour). */
-    private static final boolean RT_DEPTH_LEGACY = Boolean.getBoolean("vkrtx.velocity.legacyRtDepth");
     private static final Matrix4f invViewProj = new Matrix4f();
     private static final Matrix4f prevViewProj = new Matrix4f();
 

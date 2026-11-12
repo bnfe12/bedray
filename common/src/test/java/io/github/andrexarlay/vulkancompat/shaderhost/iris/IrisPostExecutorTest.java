@@ -253,11 +253,7 @@ class IrisPostExecutorTest {
 
         // null cmd
         assertThrows(IllegalArgumentException.class, () ->
-            exec.record(null, graph, 1L, 2L, 3L, 1920, 1080, 0f, 0, 0.05f, 256f, 0f));
-
-        // invalid dimensions on ensure
-        assertThrows(IllegalArgumentException.class, () -> exec.ensure(0, 100));
-        assertThrows(IllegalArgumentException.class, () -> exec.ensure(100, -5));
+            exec.record(null, graph, 1L, 2L, 3L, 1920, 1080, 0f, 0, 0.05f, 256f, 0f, null, null, null));
     }
 
     private static IrisPassGraph.Pass mockPass(String name, ProgramName.Family family, int order) {

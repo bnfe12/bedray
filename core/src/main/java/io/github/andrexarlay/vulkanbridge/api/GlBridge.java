@@ -122,13 +122,6 @@ public interface GlBridge {
     /** Removes a renderer; its {@link GlRenderer#onRemoved} runs on the GL thread before the next frame. Returns false if it was not registered. */
     boolean unregisterRenderer(GlRenderer renderer);
 
-    /**
-     * Legacy single painter (0.4.0): replaces the previous painter, null removes it. Implemented as a renderer.
-     * @deprecated use {@link #registerRenderer(GlRenderer)}
-     */
-    @Deprecated
-    void setPainter(GlOverlayPainter painter);
-
     /** True when the calling thread is the GL bridge thread (the only thread allowed to call GL on the bridge context). */
     boolean onGlThread();
 

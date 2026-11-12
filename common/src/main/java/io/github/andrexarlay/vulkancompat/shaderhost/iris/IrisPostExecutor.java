@@ -277,11 +277,6 @@ public final class IrisPostExecutor implements AutoCloseable {
         }
     }
 
-    /** Legacy color0 allocation seam; graph callers use prepare before opening a command buffer. */
-    public synchronized void ensure(int width, int height) {
-        if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid Iris extent");
-    }
-
     private synchronized void ensureResources(IrisResourcePlan plan, int width, int height) {
         if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid Iris extent");
         if (memory == null) return;
@@ -372,22 +367,6 @@ public final class IrisPostExecutor implements AutoCloseable {
         resourcePlan = IrisResourcePlan.build(graph);
         ensureResources(resourcePlan, width, height);
         buildPipelines(graph);
-    }
-
-    /** Legacy signature without camera data. */
-    public void record(VkCommandBuffer cmd, IrisPassGraph graph, long engineColorImage, long engineColorView, long depthView,
-                       int width, int height, float frameTimeCounter, int frameCounter, float near, float far, float frameTime) {
-        record(cmd, graph, engineColorImage, engineColorView, depthView, width, height, frameTimeCounter,
-            frameCounter, near, far, frameTime, null, null);
-    }
-
-    public void record(VkCommandBuffer cmd, IrisPassGraph graph, long engineColorImage, long engineColorView,
-                       long depthView, int width, int height, float frameTimeCounter, int frameCounter,
-                       float near, float far, float frameTime,
-                       io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Camera camera,
-                       io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame.Camera previousCamera) {
-        record(cmd, graph, engineColorImage, engineColorView, depthView, width, height, frameTimeCounter, frameCounter, near, far,
-            frameTime, camera, previousCamera, null);
     }
 
     /** @param world the {@link IrisUniforms#WORLD_BYTES} world block of this frame; null only if no pass reads it */

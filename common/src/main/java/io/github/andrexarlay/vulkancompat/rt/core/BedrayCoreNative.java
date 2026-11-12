@@ -526,18 +526,6 @@ public final class BedrayCoreNative implements AutoCloseable {
     }
 
     /**
-     * Legacy-signature overload: keeps existing callers on the legacy section
-     * table until they explicitly pass {@code program_trace_scene}. The native
-     * descriptor still carries the new field at offset 64; zero selects the
-     * legacy path in the C++ pass.
-     */
-    public void configurePathTrace(long core, long programTrace, long programSpatial, long programDisplay,
-                                   long imageBudgetBytes, long bufferBudgetBytes, int width, int height) {
-        configurePathTrace(core, programTrace, 0L, programSpatial, programDisplay, 0L,
-            imageBudgetBytes, bufferBudgetBytes, width, height);
-    }
-
-    /**
      * Configures the native pass with registered program handles. Scene/spatial/stats programs may be zero.
      * The pass owns private images, uploads and dummies and only records into host command buffers.
      */

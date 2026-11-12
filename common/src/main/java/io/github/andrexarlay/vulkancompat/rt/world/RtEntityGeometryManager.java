@@ -116,12 +116,6 @@ public final class RtEntityGeometryManager {
         return currentFrameQuads;
     }
 
-    @Deprecated(forRemoval = true)
-    public synchronized void upload(EntityGeometryFrame frame, RtMemory mem) {
-        setFrame(frame);
-        requireRecordingAwareUpload(mem);
-    }
-
     public synchronized void upload(EntityGeometryFrame frame, RtMemory mem, long commandBuffer) {
         setFrame(frame);
         uploadToGpu(mem, 0, 0, 0, commandBuffer);
@@ -130,22 +124,6 @@ public final class RtEntityGeometryManager {
     private double curCamX, curCamY, curCamZ;
 
     private EntityCaptureBuffers captureBuffers;
-
-    /** Legacy callers must provide the exact recording through the new overload. */
-    @Deprecated(forRemoval = true)
-    public synchronized void uploadToGpu(RtMemory mem, double camX, double camY, double camZ) {
-        requireRecordingAwareUpload(mem);
-    }
-
-    @Deprecated(forRemoval = true)
-    public synchronized void uploadToGpu(RtMemory mem, RtArena ignored) {
-        requireRecordingAwareUpload(mem);
-    }
-
-    private static void requireRecordingAwareUpload(RtMemory mem) {
-        if (mem != null) throw new IllegalStateException(
-            "entity GPU upload requires uploadToGpu(memory, camX, camY, camZ, commandBuffer) and completion/discard release");
-    }
 
     /** Begins an exact recording before allocating/writing capture buffers; failures retain ownership for discard. */
     public synchronized void uploadToGpu(RtMemory mem, double camX, double camY, double camZ, long commandBuffer) {
@@ -577,13 +555,6 @@ public final class RtEntityGeometryManager {
     }
 
     private EntityGpuFrame lastGpuFrame = EntityGpuFrame.EMPTY;
-
-    /** Compatibility no-op for null memory; GPU callers must use the recording-aware overload. */
-    @Deprecated(forRemoval = true)
-    public synchronized EntityGpuFrame uploadAndGetGpuFrame(RtMemory mem, double camX, double camY, double camZ) {
-        requireRecordingAwareUpload(mem);
-        return EntityGpuFrame.EMPTY;
-    }
 
     /** Uploads capture storage leased to this recording and returns its borrowed device addresses. */
     public synchronized EntityGpuFrame uploadAndGetGpuFrame(RtMemory mem, double camX, double camY, double camZ,

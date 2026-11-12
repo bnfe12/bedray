@@ -8,7 +8,6 @@ import io.github.andrexarlay.vulkanbridge.api.GlBridge;
 import io.github.andrexarlay.vulkanbridge.api.GlBridgeCapabilities;
 import io.github.andrexarlay.vulkanbridge.api.GlCamera;
 import io.github.andrexarlay.vulkanbridge.api.GlFrame;
-import io.github.andrexarlay.vulkanbridge.api.GlOverlayPainter;
 import io.github.andrexarlay.vulkanbridge.api.GlRenderer;
 import io.github.andrexarlay.vulkanbridge.api.GlRendererOptions;
 import io.github.andrexarlay.vulkanbridge.api.GlRendererOptions.Latency;
@@ -85,7 +84,6 @@ public final class GlBridgeImpl implements GlBridge {
 
     private final List<Reg> regs = new CopyOnWriteArrayList<>();
     private final ConcurrentLinkedQueue<GlRenderer> removed = new ConcurrentLinkedQueue<>();
-    private volatile GlRenderer legacyAdapter;
     /** GL thread only: renderer -> size it was last told with onResize. */
     private final Map<GlRenderer, Long> attached = new IdentityHashMap<>();
     /** GL thread only. */
@@ -315,22 +313,6 @@ public final class GlBridgeImpl implements GlBridge {
     private GlRendererOptions effective(Reg g) {
         GlRendererOptions o = g.options;
         return o != null ? o : new GlRendererOptions(FramePhase.FRAME_END, alphaMode, opacity, overlayVisible, Latency.SAME_FRAME);
-    }
-
-    @Override
-    @SuppressWarnings("deprecation")
-    public void setPainter(GlOverlayPainter p) {
-        GlRenderer old = legacyAdapter;
-        if (old != null) {
-            unregisterRenderer(old);
-        }
-        if (p == null) {
-            legacyAdapter = null;
-            return;
-        }
-        GlRenderer adapter = f -> p.paint(f.fbo(), f.width(), f.height(), f.frame());
-        legacyAdapter = adapter;
-        registerRenderer(adapter);
     }
 
     @Override public boolean onGlThread() { GlThread g = gl; return g != null && g.isGlThread(); }
