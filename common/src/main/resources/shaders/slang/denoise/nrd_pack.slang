@@ -4,6 +4,7 @@ public module nrd_pack;
 
 import "tonemap_curve.slang";
 import "denoise/material_factors.slang";
+import "post_cinema.slang";
 
 struct NrdPackPush {
     uint normalEncoding;
@@ -23,6 +24,11 @@ struct NrdPackPush {
 };
 
 static const float NRD_FP16_MAX = 65504.0;
+
+// Compose flags bits 5/6 carry the post-cinema looks (bit 0 tone enable, bit 1 split, bits 2..4 tone ordinal).
+// The compose pass overwrites the path display image, so the looks must be re-applied here to survive denoising.
+static const uint NRD_FLAG_VIGNETTE = 1u << 5u;
+static const uint NRD_FLAG_GRAIN = 1u << 6u;
 
 float3 nrdEncodeOct1010(float3 normal, float roughness) {
     normal /= abs(normal.x) + abs(normal.y) + abs(normal.z);
@@ -149,6 +155,17 @@ float3 nrdComposeColor(float3 diffuse, float3 specular, float3 albedo, float4 sp
             + denoiserSpecularFactor(specularMaterial.rgb, specularMaterial.a) * reflection + direct.rgb;
     }
     color *= max(pc.exposure, 0.0);
-    if ((pc.flags & 1u) != 0u) color = tonemapColor(color);
+    // Bits 2..4 carry the player's tone-curve ordinal (bit 0 = tone enable, bit 1 = split view); the compose pass
+    // overwrites the path display image, so the chosen curve must be applied here too, not only in path_display.
+    if ((pc.flags & 1u) != 0u) color = tonemapColorMode(color, (pc.flags >> 2u) & 7u);
     return clamp(color, float3(0.0), float3(1.0));
+}
+
+// Display-space looks applied after the curve, on the pixels compose actually writes. Strengths match path_display.slang.
+// The compose push carries no frame counter, so grain is static under denoising (the denoiser-off path animates it).
+float3 nrdPostCinema(float3 color, uint2 pixel, NrdPackPush pc) {
+    float2 uv = (float2(pixel) + 0.5) / float2(pc.size);
+    if ((pc.flags & NRD_FLAG_VIGNETTE) != 0u) color = postVignette(color, uv, 0.40);
+    if ((pc.flags & NRD_FLAG_GRAIN) != 0u) color = postFilmGrain(color, int2(pixel), 0u, 0.06);
+    return color;
 }

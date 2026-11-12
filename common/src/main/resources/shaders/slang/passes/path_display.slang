@@ -22,6 +22,7 @@ public module path_display_pass;
 
 import "contracts/contracts.slang";
 import tonemap_curve;
+import post_cinema;
 
 struct PathDisplayPush {
     uint   accumFrames;   // samples already in accum; 0 = discard history
@@ -38,6 +39,15 @@ static const uint PATH_DISPLAY_FLAG_CAMERA_STATIC = 1u << 3u;
 // The clip space the renderer's projection matrix produces is upside down on a flipped-Y device; the legacy temporal
 // chain flips the reprojected y before it becomes a pixel, and the history pixel must be looked up the same way.
 static const uint PATH_DISPLAY_FLAG_FLIP_Y = 1u << 4u;
+// The player's tonemapper choice (RtSettings.Tonemapper) rides in spare flag bits 5..7. The host writes them into the
+// frame descriptor's display_flags, which the native core ORs verbatim into this push, so no ABI field is needed.
+// Mode 0 (bits clear) is the peak-channel curve, keeping older hosts and cores byte-compatible.
+static const uint PATH_DISPLAY_TONEMAPPER_SHIFT = 5u;
+static const uint PATH_DISPLAY_TONEMAPPER_MASK = 7u;
+// Post-cinema looks ride in spare bits 8..9, the same channel as the tonemapper: the host ORs them into display_flags and
+// the native core forwards them verbatim. Both are per-pixel, so they never read a texel this dispatch is overwriting.
+static const uint PATH_DISPLAY_FLAG_VIGNETTE = 1u << 8u;
+static const uint PATH_DISPLAY_FLAG_GRAIN = 1u << 9u;
 
 // path_trace.slang writes this for a primary miss; such a pixel has no position to reproject.
 static const float PATH_DISPLAY_SKY_DEPTH = 999999.0;
@@ -217,6 +227,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
     historyDepth[p] = nextDepth;
 
     float3 exposed = mean * max(pc.exposure, 0.0);
-    float3 display = (pc.flags & PATH_DISPLAY_FLAG_TONEMAP) != 0u ? tonemapColor(exposed) : saturate(exposed);
+    uint tmMode = (pc.flags >> PATH_DISPLAY_TONEMAPPER_SHIFT) & PATH_DISPLAY_TONEMAPPER_MASK;
+    float3 display = (pc.flags & PATH_DISPLAY_FLAG_TONEMAP) != 0u ? tonemapColorMode(exposed, tmMode) : saturate(exposed);
+    // Fixed strengths: the push has no spare float. Applied to the LDR display colour only, never to accum, so the
+    // running mean stays clean and the grain animates without polluting the converged history.
+    float2 uv = (float2(p) + 0.5) / float2(size);
+    if ((pc.flags & PATH_DISPLAY_FLAG_VIGNETTE) != 0u) {
+        display = postVignette(display, uv, 0.40);
+    }
+    if ((pc.flags & PATH_DISPLAY_FLAG_GRAIN) != 0u) {
+        display = postFilmGrain(display, p, frame.frame.x, 0.06);
+    }
     outImage[p] = float4(saturate(display), 1.0);
 }

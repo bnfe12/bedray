@@ -309,6 +309,19 @@ public final class SettingsCatalog {
             "How far a light path may travel in blocks. Longer reaches distant sky and hills; shorter is faster.",
             "", "Path Tracing only.",
             "The difference shows only in large open scenes (distant terrain lighting); a still of the test scene would not show it.");
+        putNoImage("path_accumulate", Tier.ADVANCED, "Temporal Accumulation",
+            "Folds each frame's traced paths into a running mean so a still image converges to a clean picture. Off shows the raw per-frame sample: noisier, but it never ghosts or smears a moving camera.",
+            "FPS: none on its own - it changes how the picture is averaged, not how many rays are traced.",
+            "Path Tracing only.",
+            "A still shows the converged (on) versus noisy (off) image directly.");
+        putNoImage("path_firefly_clamp", Tier.ADVANCED, "Firefly Clamp",
+            "Brightness ceiling for a single light sample. Lower values suppress bright firefly specks more aggressively (a calmer picture, slightly darker highlights); higher values keep more bright detail but allow more specks.",
+            "FPS: none - it bounds a sample, it does not add rays.", "Path Tracing only.",
+            "A still of a bright interior shows fewer specks at a low clamp; judge the highlight trade-off live.");
+        putNoImage("path_russian_roulette", Tier.ADVANCED, "Russian Roulette",
+            "Randomly ends dim light paths early to save work. On (default) is faster with a little more noise; off traces every path to the bounce limit for cleaner dim lighting at a higher cost.",
+            "FPS: off costs more - paths run to the bounce limit instead of ending early.", "Path Tracing only.",
+            "The difference is noise versus speed in dim scenes; a still shows the noise, motion shows the cost.");
         put("path_denoiser", Tier.ADVANCED, "Denoiser",
             "Removes the grain of traced light. NRD is the default; DLSS Ray Reconstruction replaces denoiser and upscaler (RTX only). Off leaves raw grain.",
             "",
@@ -372,6 +385,24 @@ public final class SettingsCatalog {
             "Manual brightness offset in EV (-4.0 to +4.0). Shifts Auto Exposure when it is on, or sets the fixed brightness when Auto Exposure is off.",
             "", "Needs ray tracing on.",
             "Shares the Auto Exposure behaviour; adjust live to match your monitor brightness.");
+        putNoImage("tonemapper", Tier.ADVANCED, "Tone Curve",
+            "The filmic curve that turns the traced HDR light into the final picture. Peak is the shipped BedRay look; ACES is the classic filmic contrast; "
+                + "PBR Neutral keeps material colours accurate; GT is a smooth sport curve; AgX is the modern Blender/Filament transform with natural highlight rolloff.",
+            "FPS: none - it is a per-pixel curve in the display pass.",
+            "Needs ray tracing on.",
+            "A still shows the look directly; switch live to compare.");
+        putNoImage("vibrant_visuals", Tier.ADVANCED, "Vibrant Visuals",
+            "Mojang-style vibrant palette: richer grass and water tones, higher colour contrast and a soft cinematic bloom.",
+            "", "Needs ray tracing on.",
+            "A still shows the palette directly.");
+        putNoImage("vignette", Tier.ADVANCED, "Vignette",
+            "Darkens the corners of the picture for a cinematic, lens-like falloff. The centre is untouched; only the edges lose brightness.",
+            "FPS: none - a per-pixel multiply in the display pass.", "Needs ray tracing on.",
+            "A still shows the darkened corners directly; toggle live to compare.");
+        putNoImage("film_grain", Tier.ADVANCED, "Film Grain",
+            "Adds fine animated noise to the picture, strongest in the midtones like photographic film. It crawls every frame and never touches the converged history.",
+            "FPS: none - a per-pixel hash in the display pass.", "Needs ray tracing on.",
+            "Grain is animated; a still shows one frame of it, so judge the amount in motion.");
         putNoImage("rt_particles", Tier.ADVANCED, "Particles in RT",
             "Smoke, flames, sparks, bubbles, block-break and weather splash particles in the ray traced image, occluded by terrain and lit by the scene.",
             "", "Needs ray tracing on.",
@@ -511,6 +542,14 @@ public final class SettingsCatalog {
             "", "", "A budget has no look of its own; too small drops far lamps, and light next to the cut flickers as lamps swap in and out.");
         putNoImage("sun_size_tenths", Tier.EXPERT, "Sun/Moon Size", "Disk diameter in tenths of a degree (real sun about 5). Bigger means softer shadows.",
             "", "", "Visible only as shadow softness at a moment of day; not captured.");
+        putNoImage("sun_tilt_deg", Tier.EXPERT, "Sun Arc Tilt",
+            "Tilt of the sun/moon arc towards the south in degrees (0 = vanilla: the sun passes the zenith and casts no noon shadow). Higher tilts give longer, more directional shadows at midday.",
+            "", "Needs ray tracing on.",
+            "Visible only as the shadow direction at a moment of day; not captured in a still.");
+        putNoImage("baked_light_fill_pct", Tier.EXPERT, "Baked Light Fill",
+            "Strength of the optional baked vanilla light fill (0..100 percent): a warm ambient term that lifts shadows the traced light misses. 0 is pure traced light.",
+            "", "Ray Tracing (rays) mode only; Path Tracing never reads it.",
+            "A still shows the shadow lift directly; adjust live to taste.");
         putNoImage("auto_normal_strength", Tier.EXPERT, "Surface Relief Strength", "Depth of the generated relief.", "", "Surface Relief on.",
             "Shares the Surface Relief screenshots.");
         putNoImage("texture_lod_bias_offset", Tier.EXPERT, "Texture Sharpness Offset",

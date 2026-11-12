@@ -4372,3 +4372,178 @@ checked bootstrap, resize and CUSTOM extent provenance. Vendor image/FPS and liv
 UI acceptance remain open. The separate SR/native-release ownership findings are
 recorded in docs/ai-agent-addenda/SR_RELEASE_OWNERSHIP_AUDIT.md; no release or
 residency repair is claimed by this commit.
+
+## 2026-11-04 - Main promotion, local lights, NORT and RR stability (L1/L2; no live run)
+
+`origin/main` advanced to `1c59ba49ee078e689500153e8c936802cca9d5b9`,
+the merge of PR #74. This includes the earlier PRs #67-#74: the Slang
+promotion with the previous main privacy fixes, the local-light BVH, typed
+NORT AOT voxel passes, RR camera/history and guide fixes, safe acceleration
+structure updates with entity topology, and live DLSS SDK quality/extents.
+The `refactor/slang-pipeline` branch was deleted after the promotion; local
+work now tracks `main`.
+
+Both native DLLs were rebuilt from this checkout. `bedray_core.dll` 488,960 B
+SHA-256 `299C11F5D274CF746CD483A69C8D67CF202C08EB5BF1476298FEFDF84D412338`;
+`bedray_scene.dll` 248,832 B SHA-256
+`BC5069B997C1D957549D5AFE32199C7CFCEDA785175BDCD5878C31534FA82E58`.
+Core CTest passed 29/29. The standalone scene CTest first ran a stale test
+executable left by the previous build and reported 14 contract failures; after
+`cmake --build build/bedray-native-scene/windows-x64 --config Release` rebuilt
+the test target, `bedray_scene_contract` passed 1/1. The failures were a stale
+binary, not a source result.
+
+Java validation: `:core:test` 121 tests, zero failures/errors; `:common:test`
+1,234 tests, zero failures/errors, 3 skipped; `:common:runShimTests` 34/34.
+
+Both combined jars were built from the clean commit with manifest
+`Git-Commit 1c59ba49ee078e689500153e8c936802cca9d5b9`, `Git-Dirty false`:
+Fabric 20,503,985 B SHA-256
+`3B634914ABBB6A3C23257D0D4AFC5AD2FD4EC60D5D1EC21764E8107724E2F5D7`;
+NeoForge 20,511,222 B SHA-256
+`F886BF7AF8BF17B1D2467DF63640BA2AE3127AE6DC039C0BBB9C5C93B7A3CADD`.
+The Fabric jar still contains the `RtOutputResolve` direct-buffer fix from
+`4035f79` and the new NORT Slang passes.
+
+The jars and both DLLs were copied to the five BedRay instances; the replaced
+files are in backup `bedray-deploy-20261104-191715`. No BedRay instance was
+running during the replacement and nothing was launched.
+
+L1/L2 only. The promoted main, the rebuilt native pair and the RR/AS/NORT
+changes have not run on a GPU. L3-L5, visual parity and the absence of the
+earlier `RtOutputResolve` crash still require an owner run.
+
+## 2026-11-05 - DLSS vendor resource ownership promotion (L1/L2; no live run)
+
+`origin/main` advanced to `73f450a76feff457f39f2547e77328e307ecc173`,
+the merge of PR #75 "retry-safe vendor resource ownership and dormant SR
+retirement". The Java-side changes retain DLSS resource owners through vendor
+failures, bound capability-refresh retries and suspend dormant SR retirement;
+the native DLSS bridge gained the additive v1 resource contract.
+
+Both core native DLLs were rebuilt from this checkout and are byte-identical to
+the previous promotion because PR #75 does not touch their sources:
+`bedray_core.dll` 488,960 B SHA-256
+`299C11F5D274CF746CD483A69C8D67CF202C08EB5BF1476298FEFDF84D412338`;
+`bedray_scene.dll` 248,832 B SHA-256
+`BC5069B997C1D957549D5AFE32199C7CFCEDA785175BDCD5878C31534FA82E58`.
+
+The vendor bridges were rebuilt because their sources changed in PR #75:
+`vkb_dlss.dll` 973,824 B SHA-256
+`0D249463B650921E15B9E9122846DEC25FCB9CC3FCF4A0AD804FBB59473943AE`,
+`vkb_sl.dll` 222,208 B SHA-256
+`8856DA23348C7A523A6FA00609EDFE1BC56F4D33F068D34C575ACE18C51ECAC2`.
+`dumpbin /exports` confirms both binaries export
+`vkb_dlss_resource_contract_version` and `vkb_dlss_shutdown_checked`; the SL
+shim carries the vkb_dlss_* surface used by the Streamline path.
+
+Java validation: `:core:test` 121 tests, zero failures/errors; `:common:test`
+1,242 tests, zero failures/errors, 3 skipped; `:common:runShimTests` 34/34.
+Native validation: core CTest 29/29 and standalone scene CTest 1/1.
+
+Both combined jars were built from clean `73f450a` with manifest
+`Git-Commit 73f450a76feff457f39f2547e77328e307ecc173`, `Git-Dirty false`:
+Fabric 20,508,038 B SHA-256
+`1B421422E3BE2C282DC24E45AE09B17D3DA48E923D32922A3A2DD6D223110CEB`;
+NeoForge 20,515,272 B SHA-256
+`E3A16C1635F14828F9B6BF264F3432BCD92ACC526A5ADF7FE62183ECE8BD21A2`.
+The jar binds the two new optional exports and fails back to the old behaviour
+when an older bridge is present, but the promoted resource-retention path needs
+these rebuilt bridges.
+
+The jars, both core/scene DLLs, `vkb_dlss.dll` and the streamline
+`vkb_sl.dll` were copied to the five BedRay instances. Replaced files are in
+backup `bedray-deploy-20261105-001758`. No BedRay instance was running during
+the replacement and nothing was launched.
+
+L1/L2 only. The promoted DLSS resource ownership, dormant SR retirement and the
+rebuilt vendor bridges have not run on a GPU. L3-L5 and visual parity still
+require an owner run.
+
+## 2026-11-12 — Player-choice render batch (L0-L2; deploy collision; no live run)
+
+The tech-choice branch `bedray/tech-choice-20261112` (base `721d252`, the
+docs-only child of `73f450a`) adds four player-selectable render choices on
+top of the promoted main:
+
+- `6f90765` tone curve: Peak/ACES/PBR Neutral/GT/AgX (`RtSettings.Tonemapper`,
+  `tonemap_curve.slang`, spare path_display flag bits).
+- `e31f28c` expose hidden-but-wired sun arc tilt, baked light fill and path
+  accumulation in the menu.
+- `d259587` post-cinema vignette + film grain (`post_cinema.slang`, display
+  flag bits 8/9, LDR display only, never accumulation).
+- `5077154` carry tone curve + post-cinema looks through NRD/DLSS-RR compose
+  (NrdPackPush flags: tone enable/split/curve ordinal/vignette/grain, mask
+  0x7F; native `nrd_pack_pass.cpp` forwards `~0x7Fu`).
+- `7e0be60` firefly clamp slider (`path_firefly_clamp`, 8..256, default 64,
+  drives the tracer truncation and both display-mean clips; removes the
+  hardcoded MAX_RADIANCE) + Russian roulette toggle (`path_russian_roulette`,
+  default on, spare option bit 24 outside the ReSTIR PT mask, forwarded
+  verbatim by the native core).
+
+L1 (Java): `:common:test --rerun-tasks` 243 suites, 1,282 tests, zero
+failures/errors, 9 skipped. The six new #6 guards were mutation-proven
+(firefly tracer site + MAX_RADIANCE removal, both backend firefly sites,
+tracer RR gate, host option bit-24 term, menu mark, registration ceiling):
+each mutation failed exactly its intended test and was reverted byte-exact
+(`sha256sum -c` OK).
+
+L2 (native): CTest `bedray_path_trace_pass_test` and `bedray_nrd_pack_pass_test`
+2/2 passed. The AOT Slang is a Gradle resource root (`gradle/slang.gradle`),
+not embedded by the native CMake; the jar's `path_display.spv`, `path_trace.spv`
+and `nrd_compose.spv` are byte-identical to the freshly compiled
+`common/build/generated/slang` output.
+
+Artifacts built from this checkout (libs/ present, cmake 3.31.6 VS BuildTools,
+Vulkan-Headers, slangc 2026.20):
+`bedray_core.dll` 488,960 B SHA-256
+`cb5db2559f49b07734994957fd0c5ddfb7e2344b3d9da55e84daf4b284331b36`;
+Fabric jar 20,531,873 B SHA-256
+`a2364338a1e80365c7e426284d03b335f4684b3a8fb1dd5e571ffb3d7c2b259b`;
+NeoForge jar 20,539,108 B SHA-256
+`892f094776806038ce7193b8a5a4c9dd7dd4c5ffbb3361ac6b6f495105415b66`.
+
+Deploy collision — owner instances preserved. The two owner Fabric instances
+("Bedray Fabric 26.3", "26.3(1)") still carry the promoted `73f450a` core/scene
+DLLs (`299c11f5…` / `bc5069b9…`) but their jars were replaced on Nov 8/9 by
+another session's dirty worktree build (`Git-Commit: unknown`, ~20.8 MB). Those
+jars contain divergent classes absent from this base —
+`MixinFirstPersonHandsAndItemsRenderer`, `rt/hand/HandRtLight`,
+`EntitySubmitTransform`, `EmissiveTexelIndex`, `VulkanSodiumConfig$SelfShadow`,
+`WorldTargetManager$UpscalerMotionSource`, `LegacySceneLifetime$Owner` — and
+lack this batch's `RtSettings$Tonemapper` and `post_cinema.slang`. Overwriting
+them with this branch's jar would delete that unmerged work, and the dirty
+build cannot be reproduced from any commit, so no safe overwrite or exact
+integration was possible. The owner instances were left untouched.
+
+Safe deploy. The NeoForge batch was deployed to "Vulkan Testbed 26.3 Bedray",
+verified pristine base (`Git-Commit 73f450a`, `Git-Dirty false`, none of the
+divergent classes, base `RtEntityBlas$Pending` present), so this batch is a
+strict superset of its source. Replaced jar + core DLL (backups
+`.bak-20261112-195244`); scene DLL and vendor bridges untouched; deployed
+hashes match the built artifacts. No BedRay instance was running and nothing
+was launched.
+
+Parked backlog (honest ledger; gated, not implemented):
+- Radiance Cascades: `RtConfig.SLANG_RADIANCE_CASCADES` is the startup JVM
+  property `vkbridge.rt.radianceCascades` (default false), "experimental
+  finite-window RC diffuse continuation; requires both native owners";
+  `RtWorld` throws "radianceCascades requires the native scene". A player
+  toggle needs the startup gate lifted plus native scene ownership and the v2
+  field ABI (rcField/rcTails/rcHistory), not a settings row.
+- Frame generation X5/X6: `VulkanRtxConfig` marks DLSS/FSR frame generation
+  "STUB … not implemented. Always OFF/false" (NVIDIA Streamline, Phase 6) and
+  forces it off for the voxel diagnostic renderer (no depth/motion guides).
+  SDK/driver-gated.
+- Still gated on SDK/hardware/native ABI: ReSTIR PT native ring, NRD specular
+  guides, DLSS 4.5 Streamline, opacity micromaps (`vkbridge.rt.opacityMicromaps`
+  startup gate), Distant Horizons LOD, Bruneton atmosphere, RTXDI, SHaRC,
+  FSR4/XeSS3 cross-vendor. The `VulkanRtxConfig` DLSS/FSR stubs are intentional
+  Phase-6 placeholders, not dead code to delete.
+- #6 STBN (spatiotemporal blue noise) parked: needs a blue-noise texture,
+  descriptor and ABI slot. #7 chromatic aberration/LUT/motion blur/DoF deferred:
+  need converged cross-pixel samples.
+
+L0-L2 only. None of these choices has run on a GPU in this session. L3-L5,
+visual parity and the in-game menu require an owner run on the testbed instance
+(or an integration of this branch with the owner instances' newer jars).

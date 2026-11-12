@@ -678,6 +678,18 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> RtSettings.pathSpp = v, () -> RtSettings.pathSpp, pathOn, dMode, Mark.PATH, OptionImpact.HIGH, false, st));
         pt.addOption(intOpt(builder, "path_distance", 384, RtSettings.DISTANCE_MIN, RtSettings.DISTANCE_MAX, 16,
             unit(" blocks"), v -> RtSettings.pathDistance = v, () -> RtSettings.pathDistance, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Firefly ceiling: lower suppresses bright specks harder (calmer, slightly darker highlights), higher keeps more
+        // bright detail. Drives the tracer truncation and the display mean clip together, so the choice stays coherent.
+        pt.addOption(intOpt(builder, "path_firefly_clamp", 64, 8, 256, 1, v -> Component.literal(Integer.toString(v)),
+            v -> RtSettings.pathFireflyClamp = v, () -> RtSettings.pathFireflyClamp, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Russian roulette: on (default) randomly ends dim paths early to save work; off traces every path to the bounce
+        // limit for less noise at a higher cost. A transport choice, so it is a path-mode detail like bounces and distance.
+        pt.addOption(boolOpt(builder, "path_russian_roulette", true, v -> RtSettings.pathRussianRoulette = v,
+            () -> RtSettings.pathRussianRoulette, pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
+        // Temporal accumulation: on folds each frame's paths into a running mean (a still converges); off shows the raw
+        // per-frame sample, which stays noisy but never ghosts a moving camera. Already wired through accumulateRequested().
+        pt.addOption(boolOpt(builder, "path_accumulate", true, v -> RtSettings.pathAccumulate = v, () -> RtSettings.pathAccumulate,
+            pathOn, dMode, Mark.PATH, OptionImpact.MEDIUM, false, st));
         EnumOptionBuilder<RtSettings.PathDenoiser> den = builder.createEnumOption(id("path_denoiser"), RtSettings.PathDenoiser.class);
         den.setName(nameOf("path_denoiser")).setTooltip(v -> tipOf("path_denoiser")).setDefaultValue(RtSettings.PathDenoiser.DLSS_RR)
             .setAllowedValues(EnumSet.of(RtSettings.PathDenoiser.OFF, RtSettings.PathDenoiser.NRD, RtSettings.PathDenoiser.DLSS_RR))
@@ -743,6 +755,26 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             v -> Component.literal(String.format(Locale.ROOT, "%+.1f EV", v / 10.0)),
             v -> RtSettings.pathExposureEvTenths = v, () -> RtSettings.pathExposureEvTenths,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        EnumOptionBuilder<RtSettings.Tonemapper> tm = builder.createEnumOption(id("tonemapper"), RtSettings.Tonemapper.class);
+        tm.setName(nameOf("tonemapper")).setTooltip(v -> tipOf("tonemapper")).setDefaultValue(RtSettings.Tonemapper.PEAK)
+            .setAllowedValues(EnumSet.allOf(RtSettings.Tonemapper.class))
+            .setElementNameProvider(val -> switch (val) {
+                case PEAK -> tr("bedray.tonemapper.peak", "Peak (BedRay)");
+                case ACES -> tr("bedray.tonemapper.aces", "ACES");
+                case PBR_NEUTRAL -> tr("bedray.tonemapper.pbr_neutral", "PBR Neutral");
+                case GT -> tr("bedray.tonemapper.gt", "Gran Turismo");
+                case AGX -> tr("bedray.tonemapper.agx", "AgX");
+            })
+            .setEnabledProvider(anyRt, dMode).setControlHiddenWhenDisabled(false)
+            .setBinding(v -> RtSettings.tonemapper = v, () -> RtSettings.tonemapper)
+            .setImpact(OptionImpact.LOW).setStorageHandler(st);
+        look.addOption(track("tonemapper", tm));
+        look.addOption(boolOpt(builder, "vibrant_visuals", false, v -> RtSettings.vibrantVisuals = v,
+            () -> RtSettings.vibrantVisuals, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        look.addOption(boolOpt(builder, "vignette", false, v -> RtSettings.vignette = v,
+            () -> RtSettings.vignette, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
+        look.addOption(boolOpt(builder, "film_grain", false, v -> RtSettings.filmGrain = v,
+            () -> RtSettings.filmGrain, anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
         Identifier particleId = id("rt_particles");
         look.addOption(boolOpt(builder, "rt_particles", true, v -> RtSettings.rtParticles = v, () -> RtSettings.rtParticles,
             anyRt, dMode, Mark.NONE, OptionImpact.LOW, false, st));
@@ -993,6 +1025,11 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
             () -> RtSettings.lightBudget, anyRt, dMode, Mark.RT, OptionImpact.MEDIUM, false, st));
         ex.addOption(intOpt(builder, "sun_size_tenths", 5, 1, 50, 1, unit(""), v -> RtSettings.sunSizeTenths = v,
             () -> RtSettings.sunSizeTenths, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
+        ex.addOption(intOpt(builder, "sun_tilt_deg", 24, 0, 45, 1, unit("°"), v -> RtSettings.sunTiltDeg = v,
+            () -> RtSettings.sunTiltDeg, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
+        // Rays mode only: path mode never reads the baked fill, so the row hides itself there instead of doing nothing.
+        ex.addOption(intOpt(builder, "baked_light_fill_pct", 0, 0, 100, 5, percent(), v -> RtSettings.bakedLightFillPct = v,
+            () -> RtSettings.bakedLightFillPct, raysOn, dMode, Mark.RT, OptionImpact.LOW, true, st));
         ex.addOption(intOpt(builder, "auto_normal_strength", 100, 0, 400, 10, percent(), v -> RtSettings.autoNormalStrength = v,
             () -> RtSettings.autoNormalStrength, anyRt, dMode, Mark.RT, OptionImpact.LOW, false, st));
         ex.addOption(intOpt(builder, "texture_lod_bias_offset", 0, -20, 10, 1,
