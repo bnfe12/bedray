@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Sodium keeps one option per id (a second one is never loaded and its control later dereferences a null value - the
  * 2026-10-12 NPE in TickBoxControl was bedray:dlss_nr_enabled registered twice) and Config.validateDependencies crashes the
  * settings screen when an enabled-provider names an id that does not exist.
- * The options live in the Bedray screen config ({@code registerSettings}, reached through {@code createScreenConfig}); the
+ * The options live on the native Sodium pages ({@code registerSettings}, called from {@code registerConfigLate}); the
  * Sodium page itself only holds the entry point that opens that screen. This test drives the real registration against a
  * recording ConfigBuilder (java.lang.reflect.Proxy: every builder call returns the builder itself, create*Option(Identifier,
  * ...) records the id), so the invariants are checked on the shipped option set. ConfigBuilder signatures: javap of

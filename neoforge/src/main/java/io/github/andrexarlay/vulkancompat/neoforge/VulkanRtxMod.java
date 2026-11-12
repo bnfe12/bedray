@@ -37,7 +37,5 @@ public final class VulkanRtxMod {
                 event.register(key);
             }
         });
-        container.registerExtensionPoint(net.neoforged.neoforge.client.gui.IConfigScreenFactory.class,
-            (mc, parent) -> new io.github.andrexarlay.vulkancompat.sodium.BedrayConfigScreen(parent));
     }
 }
