@@ -199,11 +199,6 @@ public final class WorldTargetManager {
         return currProjMatrix == null ? null : new Matrix4f(currProjMatrix);
     }
 
-    private static final Matrix4f levelProjection = new Matrix4f();
-    private static final org.joml.Vector3f levelCameraOrigin = new org.joml.Vector3f();
-    private static boolean haveLevelProjection;
-    private static final boolean BOB_PROJECTION = !"off".equalsIgnoreCase(System.getProperty("vkrtx.rt.bobProjection", "on"));
-
     /**
      * Records the projection matrix the engine really uses for the world this frame (unjittered) and derives the
      * corresponding camera-origin offset in raw-camera-relative world coordinates. GameRenderer.renderLevel
@@ -212,56 +207,41 @@ public final class WorldTargetManager {
      * {@code CameraRenderState.projectionMatrix}. Called for every Vulkan frame, also when no render-scale phase is active.
      */
     public static boolean noteLevelProjection(Matrix4f projMatrix, Matrix4f baseProjection, Matrix4f viewRotation) {
-        // renderLevel also passes the hand (hud3d) projection through ProjectionMatrixBuffer.getBuffer later in the frame
-        // (decompiled GameRenderer line 726): only the first call after beginLevelProjectionFrame() is the world's one
-        if (projMatrix != null && awaitingLevelProjection) {
-            awaitingLevelProjection = false;
-            levelProjection.set(projMatrix);
-            io.github.andrexarlay.vulkancompat.rt.world.CameraBobPose.originOffset(
-                projMatrix, baseProjection, viewRotation, levelCameraOrigin);
-            haveLevelProjection = true;
-            return true;
-        }
-        return false;
+        return WorldLevelProjection.note(projMatrix, baseProjection, viewRotation);
     }
 
     /** Arms {@link #noteLevelProjection}: called before {@code renderLevel} of every Vulkan frame. */
     public static void beginLevelProjectionFrame() {
-        haveLevelProjection = false;
-        levelCameraOrigin.zero();
-        awaitingLevelProjection = true;
+        WorldLevelProjection.beginFrame();
     }
-
-    private static boolean awaitingLevelProjection;
 
     /** True only after the world projection hook has run in the current renderLevel invocation. */
     public static boolean hasCurrentLevelProjection() {
-        return haveLevelProjection;
+        return WorldLevelProjection.hasCurrent();
     }
 
     /** The current frame's full, unjittered world projection including bobbing, or {@code fallback}. */
     public static Matrix4f levelProjectionOr(Matrix4f fallback) {
-        return BOB_PROJECTION && haveLevelProjection ? new Matrix4f(levelProjection) : fallback;
+        return WorldLevelProjection.projectionOr(fallback);
     }
 
     /** Exact raster projection, irrespective of the optional RT/compute bob approximation setting. */
     public static Matrix4f currentLevelProjection() {
-        return haveLevelProjection ? new Matrix4f(levelProjection) : null;
+        return WorldLevelProjection.currentProjection();
     }
 
     /** Effective origin of the exact raster camera, independent of hardware RT diagnostic settings. */
     public static org.joml.Vector3f currentLevelCameraOrigin() {
-        return haveLevelProjection ? new org.joml.Vector3f(levelCameraOrigin) : null;
+        return WorldLevelProjection.currentCameraOrigin();
     }
 
     /** Camera origin offset caused by the view-bob transform, in coordinates relative to the base camera. */
     public static org.joml.Vector3f levelCameraOriginOr(org.joml.Vector3f fallback) {
-        return BOB_PROJECTION && haveLevelProjection ? new org.joml.Vector3f(levelCameraOrigin)
-            : (fallback != null ? new org.joml.Vector3f(fallback) : new org.joml.Vector3f());
+        return WorldLevelProjection.cameraOriginOr(fallback);
     }
 
     public static boolean bobProjectionEnabled() {
-        return BOB_PROJECTION;
+        return WorldLevelProjection.bobEnabled();
     }
 
     /**
@@ -1184,10 +1164,7 @@ public final class WorldTargetManager {
         lastRtEnabled = null;
         lastLoggedSkyTargetId = -1;
         CameraJitterManager.reset();
-        haveLevelProjection = false;
-        awaitingLevelProjection = false;
-        levelProjection.identity();
-        levelCameraOrigin.zero();
+        WorldLevelProjection.reset();
         resetHistory = true;
         cameraMatricesValidThisFrame = false;
         lastDegenerateCameraLogNanos = 0L;
