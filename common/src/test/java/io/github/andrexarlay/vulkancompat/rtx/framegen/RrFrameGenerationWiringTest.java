@@ -31,9 +31,9 @@ class RrFrameGenerationWiringTest {
     }
 
     @Test void rrSdkAndVelocityUseTheActualPrimaryProducerJitter() throws IOException {
-        String renderer = source("rt/world/RtFrameRenderer");
-        assertTrue(renderer.contains("float rrJitterX = slang.guideFrame().jitter.x"));
-        assertTrue(renderer.contains("float rrJitterY = slang.guideFrame().jitter.y"));
+        String lifecycle = source("rt/world/RtDenoiserLifecycle");
+        assertTrue(lifecycle.contains("float rrJitterX = slang.guideFrame().jitter.x"));
+        assertTrue(lifecycle.contains("float rrJitterY = slang.guideFrame().jitter.y"));
         String rr = source("rt/denoise/DlssRrDenoiser");
         assertTrue(rr.contains("new VelocityPipeline.Jitter(jitterPixelsX, jitterPixelsY,"));
         assertTrue(rr.contains("reset ? jitterPixelsX : previousPrimaryJitterX"));

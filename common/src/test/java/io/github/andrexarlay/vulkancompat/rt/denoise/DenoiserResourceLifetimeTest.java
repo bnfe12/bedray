@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class DenoiserResourceLifetimeTest {
     @Test void rrFailureDiscardsTheWholeRecordingAndHostResizeWaitsForNativeTargetCopies() throws Exception {
         String renderer = source("world/RtFrameRenderer.java");
-        String record = body(renderer, "private static void recordPrimaryRays(");
+        String record = body(source("world/RtDenoiserLifecycle.java"), "Recording record(");
         assertTrue(body(record, "catch (Exception e)").contains("throw new RtDenoiserFrameDiscard("));
         String frame = body(renderer, "private static void frame(");
         assertTrue(body(frame, "if (!executeAttempted)").contains("recordingCompletion.discard(recording)"));

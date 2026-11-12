@@ -144,22 +144,23 @@ class RtSlangGbufferGuidesTest {
     @Test
     void theRendererRefusesAnUnfeedableDenoiserInsteadOfFallingBack() {
         String renderer = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtFrameRenderer.java");
-        assertTrue(renderer.contains("!runtime.library().hasNativeMotion()"),
+        String factory = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtPassFactory.java");
+        assertTrue(factory.contains("!runtime.library().hasNativeMotion()"),
             "native NRD needs the additive output feature/export before pass selection");
-        assertFalse(renderer.contains("the \" + denoiseMode + \" layout needs the world-space motion buffer\""),
+        assertFalse(factory.contains("the \" + denoiseMode + \" layout needs the world-space motion buffer\""),
             "the Java Slang path fills NRD's motion now");
-        assertTrue(renderer.contains("RtSlangPathPass.supportProblem(runtime, gbuffer)"),
+        assertTrue(factory.contains("RtSlangPathPass.supportProblem(runtime, gbuffer)"),
             "the native core must support the requested outputs before the pass is created");
         String backend = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/NativePathTraceBackend.java");
         assertTrue(backend.contains("guides && !runtime.library().hasNativeGuideOutputs()"),
             "a guide request needs the additive native feature and export");
-        assertTrue(renderer.contains("native denoiser motion requires a matching core with NRD_MOTION"),
+        assertTrue(factory.contains("native denoiser motion requires a matching core with NRD_MOTION"),
             "a denoiser the native core cannot feed is refused by name, not silently moved onto unproven guides");
         assertTrue(renderer.contains(
                 "throw new RtFailure(rayMode ? \"slang_ray\" : \"slang_path\", pathSlangUnavailableReason);"),
             "there is no second renderer to fall back to: an unusable Slang profile fails the frame with its reason");
         for (String gone : new String[] {"RtPathTracerPass", "RtRayEffectsPass", "RtShaderCompiler", "rt_path.comp"}) {
-            assertFalse(renderer.contains(gone), gone + " is deleted; a reference here means the legacy path is coming back");
+            assertFalse(renderer.contains(gone) || factory.contains(gone), gone + " is deleted; a reference here means the legacy path is coming back");
         }
         String pass = read("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/RtSlangPathPass.java");
         String uses = block(pass, "public boolean usesGbuffer() {");
