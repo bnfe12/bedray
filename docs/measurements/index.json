@@ -64,5 +64,36 @@
       "frames": 515,
       "file": "ser_steady_ab/ser_pt_on.json"
     }
+  ],
+  "pending_captures_note": "Wired-but-uncaptured arms. No frames/numbers are recorded here because none were measured; each needs a quiet, exclusively-focused window (another session shares this GPU). The bench preserves this key across runs (merge_index). Screenshots + L5 owner recipe: L5_REPRO.md.",
+  "pending_captures": [
+    {
+      "label": "denoiser_nrd_relax",
+      "item": 6,
+      "status": "gpu_gated",
+      "bench_arm": true,
+      "reason": "ReLAX arm in DENOISER_AB (path_denoiser=nrd + -Dvkrtx.denoiser=nrd_relax); RR-vs-ReBLUR-vs-ReLAX same-session A/B pending. See 16-nrd-tuning-disposition.md."
+    },
+    {
+      "label": "dlss_rr_preset_ab",
+      "item": 4,
+      "status": "gpu_gated",
+      "bench_arm": false,
+      "reason": "dlss_rr_preset D/E/F wired additively (default 0 = prior behavior); a preset A/B bench variant + capture is pending. Default-off until numbers."
+    },
+    {
+      "label": "gi_execution_status_readback",
+      "item": 10,
+      "status": "gpu_gated",
+      "bench_arm": false,
+      "reason": "gi_execution_status + dlss_rr_preset rows are L2-tested; live in-game read-back via the gi_settings scenario (-Dvkbridge.autotest=gi_settings) pending."
+    },
+    {
+      "label": "tlas_isolated_edit_teleport",
+      "item": 3,
+      "status": "owner_gated",
+      "bench_arm": false,
+      "reason": "TLAS-inclusive world span already captured (tlas_gpu_ms_upper_bound). An isolated tlas_ms needs a native prepareFrame split (additive scene ABI change, owner permission) + a block-edit/teleport scenario the static native_perf bench does not drive. See 14-ptlas-feasibility-design.md."
+    }
   ]
 }

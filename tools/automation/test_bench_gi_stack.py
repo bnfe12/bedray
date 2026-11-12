@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bench_gi_stack import DENOISER_AB, VARIANTS, parse_log
+from bench_gi_stack import DENOISER_AB, VARIANTS, merge_index, parse_log
 
 
 class BenchLogParseTest(unittest.TestCase):
@@ -83,6 +83,44 @@ class BenchDenoiserVariantTest(unittest.TestCase):
         for label in DENOISER_AB:
             self.assertEqual("true", VARIANTS[label]["vkrtx.rt.path_restir_pt"], label)
             self.assertEqual("true", VARIANTS[label]["vkrtx.rt.path_restir_pt_spatial"], label)
+
+
+class BenchIndexMergeTest(unittest.TestCase):
+    """The index rewrite must preserve non-run metadata (pending_captures) and never duplicate a label.
+
+    A capture run previously rewrote index.json as {schema, runs} only, silently dropping any other
+    top-level documentation. merge_index preserves it so wired-but-GPU-gated arms stay recorded.
+    """
+
+    def test_pending_metadata_survives_a_capture_rewrite(self):
+        existing = {"schema": 1,
+                    "runs": [{"label": "denoiser_rr", "capture_status": "saved", "frames": 891,
+                              "file": "denoiser_rr.json"}],
+                    "pending_captures": [{"label": "denoiser_nrd_relax", "status": "gpu_gated"}]}
+        summary = [{"label": "denoiser_nrd", "capture_status": "saved",
+                    "acceptance": {"target_met_in_capture": None, "frames": 1064}}]
+        merged = merge_index(existing, summary)
+        self.assertEqual(existing["pending_captures"], merged["pending_captures"])
+        self.assertEqual(1, merged["schema"])
+        labels = [r["label"] for r in merged["runs"]]
+        self.assertIn("denoiser_rr", labels, "an untouched prior run is preserved")
+        self.assertIn("denoiser_nrd", labels, "the new capture is appended")
+
+    def test_recaptured_label_is_replaced_not_duplicated(self):
+        existing = {"schema": 1, "runs": [{"label": "denoiser_rr", "capture_status": "saved",
+                                           "frames": 1, "file": "denoiser_rr.json"}]}
+        summary = [{"label": "denoiser_rr", "capture_status": "saved",
+                    "acceptance": {"target_met_in_capture": False, "frames": 999}}]
+        merged = merge_index(existing, summary)
+        rr = [r for r in merged["runs"] if r["label"] == "denoiser_rr"]
+        self.assertEqual(1, len(rr))
+        self.assertEqual(999, rr[0]["frames"])
+        self.assertFalse(rr[0]["target_met_in_capture"])
+
+    def test_non_dict_existing_doc_degrades_to_empty(self):
+        merged = merge_index([], [{"label": "x", "capture_status": "saved", "acceptance": {}}])
+        self.assertEqual(1, merged["schema"])
+        self.assertEqual(["x"], [r["label"] for r in merged["runs"]])
 
 
 if __name__ == "__main__":

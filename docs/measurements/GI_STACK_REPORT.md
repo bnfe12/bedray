@@ -1,6 +1,6 @@
 # Bedray GI / performance stack — final report (Этап 5)
 
-**Date:** 2026-11-12 · **Branch:** `bedray-gi-stack-20261112` · **Head:** `fa37530a` (native core ABI 3)
+**Date:** 2026-11-12 · **Branch:** `bedray-gi-stack-20261112` · **Head:** `0eca5d7b` (native core ABI 3)
 **Device:** NVIDIA GeForce RTX 5060 Ti, 8 GiB (`memory_bytes=8274313216`), base probe mask `0x677`
 (runtime `enabled_mask` `0xe77` raygen / `0x1e77` SER — bits 11/12 conditionally enabled at startup),
 driver 1.4.357 / NVIDIA 621.14 · **Workload:** fixed-seed autotest world (seed 1234567890123, pose
@@ -32,9 +32,9 @@ result is only L2 or unmeasured.
 | ReSTIR PT (#8) | 6 correctness gaps closed + Enhanced | **L4** | PT proven running; **+24.7% gpu_rt, +569 MiB** vs PT off |
 | OMM 2-state (#9) | feasibility + integration design | L0/design | **deferred** — Remix disables OMM for terrain; benefit unproven |
 | SER A/B (#10/#1) | compute vs raygen vs SER steady-state | **L4** | raygen **−7.8% gpu_rt** vs compute; SER steady-state **+114% gpu_rt (2.14x slower)** — keep OFF/opt-in |
-| PTLAS (#11) | feasibility + disposition | L0/design | regional in-place update **already present**; partitioned TLAS **deferred** |
-| Settings UX (#12) | auto-policy + texture styles + per-tech | **L4** | GI auto-policy + all 3 texture presets stage correctly, `result=PASS` |
-| Denoiser (#13) | NRD specular + DLSS RR audit + A/B | **L4** | both run in-game; NRD REBLUR **−18.4% gpu_rt** vs RR (native res) |
+| PTLAS (#11/#3) | regional update + TLAS-inclusive GPU span | **L2** | regional in-place update present; `world` span captured; isolated `tlas_ms` owner-gated; partitioned **deferred** |
+| Settings UX (#12/#10) | auto-policy + texture styles + honest status row | **L4** (+L2 rows) | auto-policy + 3 texture presets `result=PASS`; `gi_execution_status` + `dlss_rr_preset` rows L2 (live read-back GPU-gated) |
+| Denoiser (#13/#4/#6) | NRD specular + DLSS RR + ReLAX arm | **L4** (+L2) | both run in-game; NRD REBLUR **−18.4% gpu_rt** vs RR; RR preset + ReLAX wired, A/B GPU-gated |
 
 **Bottom line:** the cheap stack works end-to-end on the live device. The measured wins are BLAS compaction
 (memory, enables RD32), the raygen PT execution path (−7.8% GPU), and NRD REBLUR as the native-resolution
@@ -42,6 +42,33 @@ denoiser (−18% GPU vs RR). ReSTIR PT is a quality feature that costs +25% RT a
 PTLAS are deferred with evidence, not guessed. SER is wired and executing, but its quiet-window steady-state A/B
 measured it **2.14x slower** on the trace pass (+114% gpu_rt, −42% FPS), so it stays OFF/opt-in. No FPS guarantee is
 claimed beyond the measured medians below.
+
+## 13-item closure map (honest L-levels)
+
+Every marathon item is closed or dispositioned with evidence. **L4** = effect proven in a live run; **L2** = unit
+tests pass; **L0/design** = feasibility/disposition only. "GPU-gated" = the remaining live capture needs a quiet,
+exclusively-focused window (another session shares this GPU); it is **not** claimed as done.
+
+| # | item | highest level | disposition / evidence | commit |
+|---|---|---|---|---|
+| 1 | SER steady-state A/B (quiet window) | **L4** | measured **2.14x slower gpu_rt**, keep OFF/opt-in; `ser_steady_ab/` | `8cb19831` |
+| 2 | OMM 2-state measured gate | L0/design | **deferred** — no measured terrain win; Remix disables OMM for terrain; doc 13 | — |
+| 3 | PTLAS GPU timestamps + gate | **L2** | TLAS-inclusive `world` span captured (`tlas_gpu_ms_upper_bound`) + blas regex fixed; isolated `tlas_ms` needs native split (owner-gated); partitioned deferred; doc 14 | `43eb618a` |
+| 4 | DLSS RR preset D/E/F additive | **L2** | additive ABI wired, `dlss_rr_preset` row, default-off; **preset A/B GPU-gated** | `1cb48e32` |
+| 5 | RR sharpness | disposition | **not wired** — NVIDIA RR API no-op (`vkb_dlss.h:240`); doc 15 | `e7fda225` |
+| 6 | NRD ReBLUR/ReLAX tuning | **L2** | both wired, ReLAX selectable + bench arm added; no speculative tuning; **A/B GPU-gated**; doc 16 | `1cc5729b` |
+| 7 | RC vs DDGI | disposition | RC retained; forbidden cache family out with reasons; doc 15 | `e7fda225` |
+| 8 | Path guiding | L0/research | feasible Vulkan-only, greenfield, default off; implement only on measured win; doc 15 | `e7fda225` |
+| 9 | Remaining-tech survey | L0/research | scheduling/memory + equal-cost sampling recommendations, no speculative code; doc 15 | `e7fda225` |
+| 10 | Settings completeness audit | **L2** (+L4 auto-policy) | honest `gi_execution_status` row + `dlss_rr_preset` row + `SETTINGS_AUDIT.md`; auto-policy/texture L4 PASS (`9282366d`); **status-row live read-back GPU-gated** | `15b85347`, `6633de92` |
+| 11 | L5 package (screenshots + repro) | repro done | `L5_REPRO.md` recipe written; **screenshots GPU-gated**; **L5 is the owner's act, not claimed** | `0eca5d7b` |
+| 12 | Final report + index | this doc | report + `index.json` updated; honest L-levels; no FPS without measurement | (this commit) |
+| 13 | Commit + push batches | done | explicit-path `git add`, verified remote, no force-push / `reset --hard` / merge-main | all above |
+
+**Owner-only / GPU-gated remainder** (cannot be closed autonomously): L5 sign-off on every stage; before/after
+screenshots; item 4 preset D/E/F A/B numbers; item 6 ReLAX-vs-ReBLUR-vs-RR A/B numbers; item 3 isolated `tlas_ms`
+on block-edit/teleport (native ABI split, owner permission) ; any ABI-layout change. Reproduction recipe for all of
+these: `docs/measurements/L5_REPRO.md`.
 
 ## Measured numbers (GPU timestamps; medians exclude submit/present)
 
@@ -107,7 +134,13 @@ guarantee is claimed (`target_met=false` for both arms).
 in-place UPDATE when membership is unchanged, stable `instanceCustomIndex`, host dirty events. Full partitioned
 TLAS (`VK_NV_partitioned_acceleration_structure`, NV-only; LWJGL 3.3.3 lacks bindings) is **deferred**: TLAS is not
 the measured bottleneck (the trace pass ~24 ms dominates a ~33.6 ms frame; idle frames already skip TLAS work).
-Gate before pursuing: GPU-timestamp `tlas_ms` on block-edit/teleport scenes.
+**Measurement gate (item 3, `43eb618a`):** a TLAS-*inclusive* GPU timestamp already exists — the `world` span
+brackets `RtWorld.update()` (BLAS+TLAS+entity builds, `RtFrameRenderer.java:707-713`); the bench now captures it as
+`tlas_gpu_ms_upper_bound` (e.g. `ser_steady_ab` world ≈ 3.63 ms), and a stale BLAS log regex that silently dropped
+`veg_sections`/`veg_quads` on current-format logs was fixed (regression-tested for both formats). A TLAS-*isolated*
+`tlas_ms` still needs a native `prepareFrame` split (additive scene ABI change, **owner-gated**) plus a
+block-edit/teleport scenario the static `native_perf` bench does not yet drive. Partitioned TLAS stays deferred
+until that isolated stamp shows TLAS is a measurable frame fraction on edit/teleport scenes.
 
 ### Settings UX (#12, L4)
 GI-stack auto-policy engine (`1aead078`, memory budget + feature gates) surfaced as an "Auto-select GI quality"
@@ -121,6 +154,17 @@ default given the measured SER negative (`ser_steady_ab/`). (Earlier justificati
 was wrong: `0x677` is the base probe; bits 11/12 are conditionally enabled at startup, and SER does engage when
 requested — `enabled_mask=0x1e77`. It is off by choice/measurement, not by missing capability.)
 
+**Honest execution-tech status row (item 10, `15b85347` + `6633de92`, L2).** `gi_execution_status` reports each
+technology's supported/enabled/implemented state from the **live enabled mask** (`GiDeviceProbe.probe()`), not
+physical support: raygen note "Measured −7.8% gpu_rt vs compute RayQuery"; SER note "Measured 2.14x slower gpu_rt
+(quiet steady-state A/B); off by default. Opt-in: `-Dbedray.rt.ser=true`"; OMM supported=micromap-capable /
+enabled=false / implemented=false; PTLAS note "Regional in-place TLAS update is active". The mask framing was
+corrected and regression-tested: `0x677` is the compute-path live enabled mask with bits 11/12 absent (raygen/SER
+not requested), so on that path SER/raygen report supported=false / enabled=false / implemented=true — the code
+exists, only the requested feature bit is absent. `GiExecutionStatusTest` 9/9. **L4 live read-back of this row and
+of `dlss_rr_preset` is GPU-gated** (quiet window pending). The `dlss_rr_preset` row (item 4) is ADVANCED, gated on
+DLSS RR; see the Denoiser section.
+
 ### Denoiser — NRD specular + DLSS RR (#13, L4)
 `docs/measurements/denoiser_ab_rd16/FINDINGS.md`. **NRD specular is integrated end-to-end and Vulkan-only**
 (`vkb_nrd.cpp:256-258` REBLUR/RELAX_DIFFUSE_SPECULAR denoise both lobes in one instance; SPIR-V-only NRD.dll,
@@ -133,6 +177,17 @@ former `reserved[0]` @40 (sizeof 48 preserved), validated to 0/4/5/6, and sets t
 `RayReconstruction.Hint.Render.Preset.<Mode>` param only when non-default; surfaced as `dlss_rr_preset` (ADVANCED,
 gated on DLSS RR). **Default = 0 leaves the NGX param untouched (exact prior behavior); no preset A/B captured yet,
 so it stays default-off until numbers.** The denoiser choice is already a setting (`path_denoiser`, ADVANCED).
+
+**NRD ReBLUR/ReLAX tuning disposition (item 6, `1cc5729b`, L2 + doc 16).** Both NRD variants are fully wired:
+`vkb_nrd.cpp:687-704` applies default `ReblurSettings`/`RelaxSettings` plus `configure_primary_lobe_signals` for
+**both** lobes; the Java side (`NrdDenoiser.java:188-191`) overrides REBLUR only. ReLAX is selectable today via
+`path_denoiser=nrd` + the expert override `-Dvkrtx.denoiser=nrd_relax` (`DenoiserResolution` case NRD → `NRD_RELAX`,
+unit-tested in `DenoiserResolutionTest`). The bench gained a `denoiser_nrd_relax` arm so the three-way
+RR-vs-ReBLUR-vs-ReLAX A/B can run (`DENOISER_AB`, `test_bench_gi_stack` 9/9). `NrdReblurParams.defaults()` is
+hardcoded and shared with `rt_pack_nrd.comp`; injectable knobs are `-Dvkrtx.denoiser/.range/.view/.nrd.projFlipY`.
+**No speculative parameter tuning was done** — REBLUR stays the measured −18.4% default; any param change is gated
+behind a same-session, GPU-timestamped A/B (mode A/B + range sweep). Full reasoning:
+`docs/ai-agent-addenda/16-nrd-tuning-disposition.md`. **The ReLAX A/B numbers are GPU-gated** (quiet window pending).
 
 ## Recommended cheapest stack (this hardware)
 
@@ -158,7 +213,14 @@ so it stays default-off until numbers.** The denoiser choice is already a settin
 - **SER perf measured negative** (2.14x slower, off/opt-in), OMM/PTLAS partitioned **not implemented**, RR preset
   **wired additively but default-off pending A/B** — all dispositioned with explicit measurement gates, not silently
   skipped.
-- **L5 (owner confirmation) is pending** for every stage; this report establishes L4, not owner sign-off.
+- **GPU-gated captures pending** (another session shares this GPU; the strict gate needs a quiet, exclusively-focused
+  window): item 4 RR preset D/E/F A/B, item 6 ReLAX-vs-ReBLUR-vs-RR A/B, item 10 `gi_execution_status`/`dlss_rr_preset`
+  live read-back, item 3 isolated `tlas_ms` on block-edit/teleport (also needs an owner-gated native ABI split), and
+  item 11 before/after screenshots. The bench arms and settings rows are wired and L2-tested; only the live numbers
+  are outstanding. None is claimed as measured.
+- **L5 (owner confirmation) is pending** for every stage; this report establishes L4, not owner sign-off. The
+  reproduction recipe (deploy, bench commands, screenshot method) is `docs/measurements/L5_REPRO.md`; L5 itself is
+  the owner's act and is not faked here.
 
 ## Dispositions and research (items 5 / 7 / 8 / 9)
 
@@ -195,7 +257,9 @@ Machine-readable index: `docs/measurements/index.json`. Per-run records and find
 - `ser_ab_rd16/FINDINGS.md` — compute/raygen/SER (`3ef525fa`)
 - `ser_steady_ab/FINDINGS.md` — quiet-window SER steady-state A/B: **2.14x slower gpu_rt**, keep OFF/opt-in (item 1)
 - `gi_settings_l4/` — auto-policy + texture presets L4 (`9282366d`; fix `81c06ffa`)
-- `denoiser_ab_rd16/FINDINGS.md` — NRD vs RR + audit (`e36be207`)
-- Design notes: `docs/ai-agent-addenda/13-omm-feasibility-design.md`, `14-ptlas-feasibility-design.md`
+- `denoiser_ab_rd16/FINDINGS.md` — NRD vs RR + audit (`e36be207`); ReLAX arm added to the bench (`1cc5729b`, capture GPU-gated)
+- `L5_REPRO.md` — owner reproduction recipe: deploy + bench commands + screenshot method (`0eca5d7b`); screenshots GPU-gated, L5 owner-only
+- Design notes: `docs/ai-agent-addenda/13-omm-feasibility-design.md`, `14-ptlas-feasibility-design.md` (world-span correction `43eb618a`), `15-gi-stack-dispositions.md`, `16-nrd-tuning-disposition.md` (`1cc5729b`)
 
-Bench stand: `1d26b616`, `aceb7707`, `5fff1fe3`. Settings engine: `1aead078`, `cccafa66`, `83ef186c`, `ce9e86b8`.
+Bench stand: `1d26b616`, `aceb7707`, `5fff1fe3`; TLAS-inclusive world span + blas regex fix `43eb618a`; ReLAX A/B arm `1cc5729b`.
+Settings engine: `1aead078`, `cccafa66`, `83ef186c`, `ce9e86b8`; honest execution-tech status row `15b85347`, `6633de92`; additive RR preset `1cb48e32`.

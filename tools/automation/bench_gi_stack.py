@@ -71,6 +71,24 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def merge_index(existing_doc: object, summary: list[dict]) -> dict:
+    """Merge new capture summaries into the measurement index, preserving non-run metadata.
+
+    Top-level keys other than ``runs`` (e.g. ``pending_captures`` documenting wired-but-GPU-gated arms)
+    are preserved so a capture run never silently drops documentation. A ``runs`` entry whose label was
+    re-captured this session is replaced, not duplicated. Pure: no filesystem, unit-testable.
+    """
+    doc = dict(existing_doc) if isinstance(existing_doc, dict) else {}
+    recap = {s["label"] for s in summary}
+    runs = [r for r in doc.get("runs", []) if r.get("label") not in recap]
+    runs += [{"label": s["label"], "capture_status": s["capture_status"],
+              "target_met_in_capture": s.get("acceptance", {}).get("target_met_in_capture"),
+              "frames": s.get("acceptance", {}).get("frames"), "file": f"{s['label']}.json"} for s in summary]
+    doc["schema"] = 1
+    doc["runs"] = runs
+    return doc
+
+
 def game_running() -> bool:
     out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq javaw.exe", "/NH"],
                          capture_output=True, text=True).stdout
@@ -427,18 +445,14 @@ def main() -> int:
         stop_launcher()
         restore_files(args.instance, backup)
     index = args.out / "index.json"
-    existing = []
+    existing_doc: object = {}
     if index.is_file():
         try:
-            existing = json.loads(index.read_text(encoding="utf-8")).get("runs", [])
+            existing_doc = json.loads(index.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            existing = []
-    existing = [r for r in existing if r.get("label") not in {s["label"] for s in summary}]
-    index.write_text(json.dumps({"schema": 1, "runs": existing + [
-        {"label": s["label"], "capture_status": s["capture_status"],
-         "target_met_in_capture": s.get("acceptance", {}).get("target_met_in_capture"),
-         "frames": s.get("acceptance", {}).get("frames"), "file": f"{s['label']}.json"} for s in summary]},
-        indent=2, ensure_ascii=False), encoding="utf-8")
+            existing_doc = {}
+    index.write_text(json.dumps(merge_index(existing_doc, summary), indent=2, ensure_ascii=False),
+                     encoding="utf-8")
     return 0 if all(s["capture_status"] == "saved" for s in summary) else 1
 
 
