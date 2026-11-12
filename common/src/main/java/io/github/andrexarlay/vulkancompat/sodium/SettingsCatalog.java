@@ -293,7 +293,8 @@ public final class SettingsCatalog {
 
         // ===================== ADVANCED =====================
         put("pt_preset", Tier.ADVANCED, "Path Tracing Profile",
-            "Fast and Quality set rays per pixel, bounces and distance in one step. Custom appears when you change one of those values.",
+            "Fast (~100 FPS: 1 bounce, DLSS Performance) and Quality (~60 FPS: 2 bounces, DLSS Balanced) set rays, bounces, distance,"
+                + " denoiser and render scale in one step (RTX 5060 Ti, 2560x1369). Custom appears when you change one of those values.",
             "", "Path Tracing only.", Scene.INTERIOR, 0.5f, 0.55f, "pt_preset", List.of(
                 p("fast", "Fast", () -> RtSettings.applyPathPreset(RtSettings.PathPreset.FAST)),
                 p("quality", "Quality", () -> RtSettings.applyPathPreset(RtSettings.PathPreset.QUALITY))),

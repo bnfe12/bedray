@@ -539,10 +539,13 @@ public final class RtSettings {
      * The tracing mode itself is not touched (the "Tracing" option decides).
      */
     public enum PathPreset {
-        // spp, bounces, distance (blocks), caustics, accumulation, auto exposure, denoiser
-        FAST(1, 2, 128, false, true, true, PathDenoiser.NRD),
-        QUALITY(2, 4, 384, true, true, true, PathDenoiser.NRD),
-        CUSTOM(0, 0, 0, false, false, true, null);
+        // spp, bounces, distance (blocks), caustics, accumulation, auto exposure, denoiser, DLSS render-scale mode.
+        // Measured GPU frame at 1920x1080 output, DLSS RR, RTX 5060 Ti (autotest rt_modes A, 2026-11-11): 1 bounce +
+        // Performance 5.7 ms, 2 bounces + Balanced 9.6 ms; a 2560x1369 window has 1.69x the pixels, so ~100 FPS (Fast) and
+        // ~60 FPS (Quality). The former FAST/QUALITY (NRD, native scale, 2 spp x 4 bounces) ran at 35 FPS and below.
+        FAST(1, 1, 128, false, true, true, PathDenoiser.DLSS_RR, UpscalerMode.PERFORMANCE),
+        QUALITY(1, 2, 256, true, true, true, PathDenoiser.DLSS_RR, UpscalerMode.BALANCED),
+        CUSTOM(0, 0, 0, false, false, true, null, null);
 
         public final int spp;
         public final int bounces;
@@ -551,8 +554,12 @@ public final class RtSettings {
         public final boolean accumulate;
         public final boolean autoExposure;
         public final PathDenoiser denoiser;
+        /** DLSS mode the page switches to with this preset when DLSS is available; null keeps the upscaler as it is. */
+        public final UpscalerMode dlssMode;
 
-        PathPreset(int spp, int bounces, int distance, boolean caustics, boolean accumulate, boolean autoExposure, PathDenoiser denoiser) {
+        PathPreset(int spp, int bounces, int distance, boolean caustics, boolean accumulate, boolean autoExposure, PathDenoiser denoiser,
+                   UpscalerMode dlssMode) {
+            this.dlssMode = dlssMode;
             this.spp = spp;
             this.bounces = bounces;
             this.distance = distance;
@@ -567,8 +574,8 @@ public final class RtSettings {
             if (this == CUSTOM) {
                 return "custom values";
             }
-            return String.format(Locale.ROOT, "%d spp, %d bounces, %d blocks, denoiser %s, caustics %s", spp, bounces, distance,
-                denoiser, caustics ? "on" : "off");
+            return String.format(Locale.ROOT, "%d spp, %d bounces, %d blocks, denoiser %s, caustics %s, DLSS %s", spp, bounces,
+                distance, denoiser, caustics ? "on" : "off", dlssMode);
         }
     }
 

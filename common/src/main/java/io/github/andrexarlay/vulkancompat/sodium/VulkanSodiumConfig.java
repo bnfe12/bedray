@@ -1050,6 +1050,18 @@ public final class VulkanSodiumConfig implements ConfigEntryPoint {
     public static void applyPathPresetFromUi(RtSettings.PathPreset val) {
         RtSettings.PathPreset before = RtSettings.pathPreset;
         RtSettings.applyPathPreset(val);
+        // The render scale is most of a preset's frame time (bounce count is the rest), so the preset carries a DLSS mode;
+        // without DLSS the upscaler stays as the player set it and the log says so.
+        if (val.dlssMode != null) {
+            if (io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerLibraryLoader.isBackendAvailable(
+                    io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.DLSS)) {
+                VulkanRtxConfig.applyUpscaler(io.github.andrexarlay.vulkancompat.rtx.upscaler.UpscalerBackend.DLSS, null,
+                    val.dlssMode, "pt_preset");
+                VulkanRtxManager.applyResolutionScalingNow();
+            } else {
+                LOGGER.info("[VKB-RT] pt_preset {} keeps the upscaler: DLSS unavailable", val);
+            }
+        }
         requestValueRefresh();
         io.github.andrexarlay.vulkancompat.rt.world.RtFrameRenderer.resetHistory();
         LOGGER.info("[VKB-AUTOTEST] ui_pt_preset from={} to={} mode={} applied: {}", before, val,

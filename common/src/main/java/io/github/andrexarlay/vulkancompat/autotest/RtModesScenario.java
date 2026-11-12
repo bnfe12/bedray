@@ -112,7 +112,7 @@ public final class RtModesScenario implements AutotestScenario {
                 String m = parts[i].trim().toLowerCase(Locale.ROOT);
                 if (!(m.equals("ao") || m.equals("gi") || m.equals("break") || m.equals("ui") || m.equals("soft") || m.equals("refl") || m.equals("noshadow") || m.equals("noemis")
                     || m.equals("rr") || m.equals("ref") || m.equals("cmp") || m.equals("ent") || m.equals("entabove") || m.equals("noent") || m.equals("label") || m.matches("pack=(on|off)") || m.equals("entmove") || m.matches("mv=(still|walk|turn|strafe|realwalk|realturn)") || m.equals("noaccum") || m.equals("noexp") || m.equals("noautonorm") || m.matches("an\\d+") || m.matches("t\\d+") || m.matches("aim=-?\\d+_-?\\d+") || m.equals("nrd") || m.matches("[qbsf]\\d+") || m.matches("dist\\d+") || m.startsWith("dbg=") || m.matches("up=(off|dlss_[a-z_]+|xess_[a-z_]+|fsr_[a-z_]+|fsr1_[a-z_]+|nis_\\d+|bil_\\d+)") || m.matches("js=(d|-?1_-?1)") || m.matches("shp=[0-9.]+") || m.matches("tm=[a-z0-9_]+") || m.matches("jv=[a-z0-9_]+") || m.matches("p=(off|low|medium|high|ultra|path_tracing|custom)")
-                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+"))) {
+                    || m.equals("norefl") || m.matches("water=(vanilla|realistic)") || m.matches("pt=(fast|quality)") || m.matches("den=(off|nrd|rr)") || m.matches("di=(off|temporal|full)") || m.matches("pt=(off|temporal|full)") || m.matches("sway\\d+") || m.matches("ptp=(fast|quality)"))) {
                     throw new IllegalArgumentException("step '" + item + "': unknown modifier " + m);
                 }
                 if (m.startsWith("dbg=") && RtConfig.isUnknownMode(m.substring(4))) {
@@ -502,6 +502,9 @@ public final class RtModesScenario implements AutotestScenario {
                 case "di=off" -> RtSettings.pathRestirDi = false;
                 case "di=temporal" -> { RtSettings.pathRestirDi = true; RtSettings.pathRestirSpatial = false; }
                 case "di=full" -> { RtSettings.pathRestirDi = true; RtSettings.pathRestirSpatial = true; }
+                // The page's own Path Tracing Profile binding: preset values plus its DLSS render scale.
+                case "ptp=fast" -> io.github.andrexarlay.vulkancompat.sodium.VulkanSodiumConfig.applyPathPresetFromUi(RtSettings.PathPreset.FAST);
+                case "ptp=quality" -> io.github.andrexarlay.vulkancompat.sodium.VulkanSodiumConfig.applyPathPresetFromUi(RtSettings.PathPreset.QUALITY);
                 case "pt=off" -> RtSettings.pathRestirPt = false;
                 case "pt=temporal" -> { RtSettings.pathRestirPt = true; RtSettings.pathRestirPtSpatial = false; }
                 case "pt=full" -> { RtSettings.pathRestirPt = true; RtSettings.pathRestirPtSpatial = true; }

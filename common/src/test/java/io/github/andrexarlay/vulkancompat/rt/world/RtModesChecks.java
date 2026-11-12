@@ -57,11 +57,11 @@ final class RtModesChecks {
         check(RtSettings.raysEmissiveDistance == 32 && RtSettings.preset == RtSettings.Preset.MEDIUM,
             "all: Custom -> MEDIUM values");
         RtSettings.applyPathPreset(RtSettings.PathPreset.FAST);
-        check(RtSettings.pathPreset == RtSettings.PathPreset.FAST && RtSettings.pathBounces == 2 && RtSettings.pathSpp == 1
+        check(RtSettings.pathPreset == RtSettings.PathPreset.FAST && RtSettings.pathBounces == 1 && RtSettings.pathSpp == 1
             && RtSettings.pathDistance == 128 && !RtSettings.caustics && RtSettings.autoExposure(), "path preset FAST values");
         RtSettings.applyPathPreset(RtSettings.PathPreset.QUALITY);
-        check(RtSettings.pathPreset == RtSettings.PathPreset.QUALITY && RtSettings.pathBounces == 4 && RtSettings.pathSpp == 2
-            && RtSettings.pathDistance == 384 && RtSettings.caustics && RtSettings.autoExposure(), "path preset QUALITY values");
+        check(RtSettings.pathPreset == RtSettings.PathPreset.QUALITY && RtSettings.pathBounces == 2 && RtSettings.pathSpp == 1
+            && RtSettings.pathDistance == 256 && RtSettings.caustics && RtSettings.autoExposure(), "path preset QUALITY values");
         check(RtSettings.PathPreset.FAST.autoExposure && RtSettings.PathPreset.QUALITY.autoExposure
             && RtSettings.PathPreset.CUSTOM.autoExposure, "all path presets have autoExposure enabled");
         RtSettings.applyPreset(RtSettings.Preset.MEDIUM);
