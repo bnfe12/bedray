@@ -35,6 +35,11 @@ endif()
 add_library(bedray_scene_objects OBJECT
     src/scene.cpp
     src/acceleration_scene.cpp
+    src/scene_validation.cpp
+    src/scene_geometry.cpp
+    src/scene_frame.cpp
+    src/scene_commit.cpp
+    src/scene_update.cpp
 )
 
 if(NOT TARGET bedray_gpu_resources)

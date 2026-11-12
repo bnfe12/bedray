@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 namespace bedray_scene {
@@ -242,6 +243,100 @@ struct InstanceEntry {
     uint32_t mask = 0xFF;
 };
 
+struct GeometryJob {
+    bool is_section = false;
+    uint64_t id = 0;
+    Section* section = nullptr;
+    Entity* entity = nullptr;
+    const PendingMesh* mesh = nullptr;
+    GeometryResource* previous = nullptr;
+    bool refit = false;
+    bool finite_positions = false;
+    std::unique_ptr<GeometryResource> created;
+    uint64_t build_scratch = 0;
+    uint64_t update_scratch = 0;
+    uint64_t scratch_offset = 0;
+    uint64_t vertex_upload_offset = 0;
+    uint64_t index_upload_offset = 0;
+};
+
+struct PlannedCopy {
+    uint64_t staging_offset = 0;
+    Buffer* dst = nullptr;
+    uint64_t dst_offset = 0;
+    uint64_t size = 0;
+};
+
+struct PreparePlan {
+    std::vector<GeometryJob> jobs;
+    std::vector<PlannedCopy> copies;
+
+    Buffer staging;
+    bool staging_present = false;
+    Buffer blas_scratch;
+    bool blas_scratch_present = false;
+
+    std::array<Buffer, BEDRAY_SCENE_TABLE_COUNT> new_tables{};
+    std::array<bool, BEDRAY_SCENE_TABLE_COUNT> table_action{};
+    std::array<uint64_t, BEDRAY_SCENE_TABLE_COUNT> table_upload_offset{};
+
+    Buffer new_section_table;
+    bool section_table_rebuild = false;
+    bool section_table_present = false;
+    uint64_t section_table_upload_offset = 0;
+
+    std::unique_ptr<Acceleration> new_tlas;
+    std::unique_ptr<Buffer> new_tlas_scratch;
+    std::unique_ptr<Buffer> new_instance_buffer;
+
+    std::vector<InstanceEntry> instances;
+    std::vector<BedraySceneSectionRecord> section_records;
+    /* section id -> slot in the append-ordered section table. The TLAS
+       instanceCustomIndex of a section is exactly this slot, so the table and
+       the instances must be generated from one map. */
+    std::map<uint64_t, uint32_t> section_slots;
+
+    uint64_t upload_bytes = 0;
+    uint64_t blas_rebuilds = 0;
+    uint64_t blas_refits = 0;
+    uint64_t deferred_updates = 0;
+    bool blas_copy_on_write = false;
+    bool tlas_action = false;
+    bool tlas_update = false;
+    bool tlas_clear = false;
+    bool instance_written = false;
+    bool tables_uploaded = false;
+    bool section_table_uploaded = false;
+    uint64_t target_version = 0;
+    uint32_t instance_count = 0;
+    bool committed = false;
+};
+
+struct GeometryRef {
+    uint64_t blas_address = 0;
+    VkAccelerationStructureKHR blas_handle = VK_NULL_HANDLE;
+};
+
+struct PreparedSection {
+    uint64_t id = 0;
+    bool queue = false;
+    bool cancel_pending = false;
+    uint64_t revision = 0;
+    PendingMesh mesh;
+};
+
+struct PreparedEntity {
+    uint64_t id = 0;
+    bool queue = false;
+    bool cancel_pending = false;
+    bool transform_changed = false;
+    uint64_t geometry_revision = 0;
+    uint64_t topology_revision = 0;
+    std::array<float, 12> transform{};
+    uint32_t mask = 0xFF;
+    PendingMesh mesh;
+};
+
 uint64_t align_up(uint64_t value, uint64_t alignment);
 uint64_t mesh_index_bytes(uint32_t index_type, uint64_t index_count);
 
@@ -336,6 +431,95 @@ void record_tlas_build(
     VkAccelerationStructureKHR src,
     bool update,
     uint64_t scratch_address);
+
+/* scene_validation.cpp */
+BedraySceneStatus validate_mesh(
+    const void* vertices,
+    uint64_t vertex_count,
+    uint32_t vertex_stride,
+    const void* indices,
+    uint64_t index_count,
+    uint32_t index_type,
+    uint64_t max_geometry_bytes,
+    BedraySceneError* error,
+    uint64_t& vertex_bytes,
+    uint64_t& index_bytes);
+BedraySceneStatus validate_section_contract(
+    const BedraySceneSectionInput& input,
+    BedraySceneError* error);
+void copy_mesh(
+    PendingMesh& mesh,
+    const void* vertices,
+    uint64_t vertex_count,
+    uint32_t vertex_stride,
+    const void* indices,
+    uint64_t index_count,
+    uint32_t index_type,
+    uint64_t vertex_bytes,
+    uint64_t index_bytes);
+bool transform_valid(const float transform[12]);
+std::array<float, 12> identity_transform();
+const std::array<float, 12>& effective_transform(const Entity& entity);
+const std::array<int32_t, 3>& effective_origin(const Section& section);
+std::array<float, 12> section_transform(
+    const std::array<int32_t, 3>& origin, const std::array<double, 3>& view);
+bool view_differs(const Scene& scene, const FrameSlot& slot);
+uint32_t effective_mask(const Entity& entity);
+uint32_t normalize_mask(uint32_t mask);
+BlasView blas_view(const PendingMesh& mesh, const Buffer& buffer, uint64_t index_offset, bool quad_stream);
+uint32_t section_identity(uint64_t id);
+bool finite_positions(const PendingMesh& mesh);
+
+/* scene_geometry.cpp */
+void destroy_geometry(Scene& scene, GeometryResource& geometry);
+bool blas_referenced_by_outstanding(const Scene& scene, VkAccelerationStructureKHR handle);
+bool blas_referenced_by_cached_tlas(const Scene& scene, VkAccelerationStructureKHR handle);
+void cleanup_plan(Scene& scene, PreparePlan& plan);
+bool plan_geometry_jobs(Scene& scene, PreparePlan& plan, bool& tlas_changed, BedraySceneError* error);
+GeometryResource* job_geometry(const PreparePlan& plan, bool is_section, uint64_t id, GeometryResource* committed);
+GeometryRef job_blas(const PreparePlan& plan, bool is_section, uint64_t id, const GeometryResource* committed);
+void plan_section_slots(Scene& scene, PreparePlan& plan);
+
+/* scene_frame.cpp */
+FrameSlot* find_free_slot(Scene& scene);
+FrameSlot* find_slot(Scene& scene, uint64_t frame_index);
+bool command_buffer_outstanding(const Scene& scene, uint64_t command_buffer);
+void collect_garbage(Scene& scene);
+void plan_instances(Scene& scene, PreparePlan& plan);
+void plan_section_records(Scene& scene, PreparePlan& plan);
+bool plan_uploads(Scene& scene, PreparePlan& plan, BedraySceneError* error);
+bool plan_tlas(Scene& scene, PreparePlan& plan, FrameSlot& slot, bool tlas_changed, BedraySceneError* error);
+bool plan_blas_scratch(Scene& scene, PreparePlan& plan, BedraySceneError* error);
+void record_frame(Scene& scene, PreparePlan& plan, FrameSlot& slot, VkCommandBuffer command_buffer);
+
+/* scene_commit.cpp */
+void commit_plan(
+    Scene& scene,
+    PreparePlan& plan,
+    FrameSlot& slot,
+    const BedraySceneFrameDesc& desc);
+
+/* scene_update.cpp */
+BedraySceneStatus prepare_sections(
+    Scene& scene,
+    const BedraySceneUpdate& update,
+    std::set<uint64_t>& removed,
+    std::vector<PreparedSection>& prepared,
+    BedraySceneError* error);
+void apply_sections(
+    Scene& scene,
+    const std::set<uint64_t>& removed,
+    std::vector<PreparedSection>& prepared);
+BedraySceneStatus prepare_entities(
+    Scene& scene,
+    const BedraySceneUpdate& update,
+    std::set<uint64_t>& removed,
+    std::vector<PreparedEntity>& prepared,
+    BedraySceneError* error);
+void apply_entities(
+    Scene& scene,
+    const std::set<uint64_t>& removed,
+    std::vector<PreparedEntity>& prepared);
 
 } // namespace bedray_scene
 
