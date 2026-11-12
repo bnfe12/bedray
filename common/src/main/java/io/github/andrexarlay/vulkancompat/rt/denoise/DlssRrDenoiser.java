@@ -3,6 +3,8 @@ package io.github.andrexarlay.vulkancompat.rt.denoise;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rt.slang.SlangRuntime;
 import io.github.andrexarlay.vulkancompat.rt.core.BedrayCoreException;
+import io.github.andrexarlay.vulkancompat.rt.core.BedrayNrdPackNative;
+import io.github.andrexarlay.vulkancompat.rtx.config.RtSettings;
 import io.github.andrexarlay.vulkancompat.rtx.WorldTargetManager;
 import io.github.andrexarlay.vulkancompat.rtx.frame.ReconstructionCamera;
 import io.github.andrexarlay.vulkancompat.rtx.frame.WorldFrame;
@@ -802,7 +804,9 @@ public final class DlssRrDenoiser {
         if (packPipeline != null && boundOutputView != 0L) {
             ByteBuffer pc = MemoryUtil.memAlloc(NrdPackPipeline.PUSH_BYTES);
             try {
-                NrdPackPipeline.writePush(pc, 0, 0, 2 /* DLSS-RR */, tonemap ? 1 : 0, NrdReblurParams.defaults(),
+                NrdPackPipeline.writePush(pc, 0, 0, 2 /* DLSS-RR */,
+                    BedrayNrdPackNative.packFlags(tonemap, false, RtSettings.tonemapper().ordinal(),
+                        RtSettings.vignette(), RtSettings.filmGrain()), NrdReblurParams.defaults(),
                     DenoiserConfig.DENOISING_RANGE, outputWidth, outputHeight, exposure, 0L);
                 packPipeline.recordCompose(cmd, pc, outputWidth, outputHeight);
             } finally {
