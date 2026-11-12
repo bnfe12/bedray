@@ -381,6 +381,14 @@ public final class SettingsCatalog {
             "Mojang-style vibrant palette: richer grass and water tones, higher colour contrast and a soft cinematic bloom.",
             "", "Needs ray tracing on.",
             "A still shows the palette directly.");
+        putNoImage("vignette", Tier.ADVANCED, "Vignette",
+            "Darkens the corners of the picture for a cinematic, lens-like falloff. The centre is untouched; only the edges lose brightness.",
+            "FPS: none - a per-pixel multiply in the display pass.", "Needs ray tracing on.",
+            "A still shows the darkened corners directly; toggle live to compare.");
+        putNoImage("film_grain", Tier.ADVANCED, "Film Grain",
+            "Adds fine animated noise to the picture, strongest in the midtones like photographic film. It crawls every frame and never touches the converged history.",
+            "FPS: none - a per-pixel hash in the display pass.", "Needs ray tracing on.",
+            "Grain is animated; a still shows one frame of it, so judge the amount in motion.");
         putNoImage("rt_particles", Tier.ADVANCED, "Particles in RT",
             "Smoke, flames, sparks, bubbles, block-break and weather splash particles in the ray traced image, occluded by terrain and lit by the scene.",
             "", "Needs ray tracing on.",

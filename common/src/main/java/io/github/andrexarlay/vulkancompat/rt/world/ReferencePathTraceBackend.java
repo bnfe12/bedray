@@ -338,6 +338,7 @@ final class ReferencePathTraceBackend implements PathTraceBackend {
         if ((frameFlags & BedrayCoreLayouts.PATH_TRACE_FRAME_FLIP_Y) != 0) flags |= DISPLAY_FLAG_FLIP_Y;
         if ((frameFlags & BedrayCoreLayouts.PATH_TRACE_FRAME_RESET_HISTORY) == 0) flags |= DISPLAY_FLAG_REPROJECT;
         flags |= tonemapperBits(RtSettings.tonemapper());
+        flags |= postCinemaBits();
         return flags;
     }
     @Override public String reservoirState() {
