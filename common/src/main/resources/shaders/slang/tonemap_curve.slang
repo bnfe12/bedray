@@ -59,6 +59,19 @@ float tmCurveInverse(float y) {
     return TM_KNEE - d + (d * d) / denom;
 }
 
+// Highlights go to white. The peak-channel curve keeps the hue at any brightness, so everything past its shoulder
+// (scene peak ~5, where the display is already 0.985+) was one flat saturated plate: the floor next to a torch read as
+// an orange fill that hid its texture ("a colour fill, not a torch", owner 2026-11-12). Film and the ACES curve of RTX
+// Remix bleach such a highlight towards white and keep the colour in the falloff. Only scene values the inverse can
+// never produce (it tops out at ~4.8, TM_INV_MAX) are touched, so display -> scene -> display stays exact (sky, bloom).
+static const float TM_WHITE_START = 5.0;
+static const float TM_WHITE_FULL = 40.0;
+static const float TM_WHITE_MAX = 0.75;
+
+float tmWhiteWeight(float m) {
+    return TM_WHITE_MAX * smoothstep(TM_WHITE_START, TM_WHITE_FULL, m);
+}
+
 // scene-linear colour (already multiplied by the exposure) -> display colour 0..1
 float3 tonemapColor(float3 c) {
     if (isnan(c.r) || isinf(c.r)) { c.r = 0.0; }
@@ -74,6 +87,8 @@ float3 tonemapColor(float3 c) {
     }
     float scale = tmCurve(tmContrast(m)) / m;
     float3 outCol = c * scale;
+    float peak = max(outCol.r, max(outCol.g, outCol.b));
+    outCol = lerp(outCol, float3(peak), tmWhiteWeight(m));
     if (isnan(outCol.r) || isinf(outCol.r)) { outCol.r = 1.0; }
     if (isnan(outCol.g) || isinf(outCol.g)) { outCol.g = 1.0; }
     if (isnan(outCol.b) || isinf(outCol.b)) { outCol.b = 1.0; }

@@ -79,9 +79,12 @@ public final class RtTonemap {
             return new float[] {0f, 0f, 0f};
         }
         float k = curve(contrast(m)) / m;
-        float outR = clamp01(r * k);
-        float outG = clamp01(g * k);
-        float outB = clamp01(b * k);
+        float tr = r * k, tg = g * k, tb = b * k;
+        float y = Math.max(tr, Math.max(tg, tb));
+        float w = whiteWeight(m);
+        float outR = clamp01(tr + (y - tr) * w);
+        float outG = clamp01(tg + (y - tg) * w);
+        float outB = clamp01(tb + (y - tb) * w);
         if (Float.isNaN(outR)) outR = 1f;
         if (Float.isNaN(outG)) outG = 1f;
         if (Float.isNaN(outB)) outB = 1f;
@@ -112,6 +115,16 @@ public final class RtTonemap {
         if (Float.isNaN(outG)) outG = 0f;
         if (Float.isNaN(outB)) outB = 0f;
         return new float[] {outR, outG, outB};
+    }
+
+    /** Mirror of tonemap_curve.slang tmWhiteWeight: scene peaks past the curve's shoulder go to white. */
+    public static final float WHITE_START = 5.0f;
+    public static final float WHITE_FULL = 40.0f;
+    public static final float WHITE_MAX = 0.75f;
+
+    public static float whiteWeight(float m) {
+        float t = clamp01((m - WHITE_START) / (WHITE_FULL - WHITE_START));
+        return WHITE_MAX * t * t * (3f - 2f * t);
     }
 
     private static float clamp01(float v) {
