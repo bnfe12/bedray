@@ -30,6 +30,13 @@ public final class RtSettings {
     public enum PathDenoiser { OFF, NRD, DLSS_RR }
 
     /**
+     * Player-selectable tone curve of the path display pass. The ordinal is the shader mode index of
+     * {@code tonemap_curve.slang} / {@code RtTonemap.applyMode} (0 = the shipped peak-channel curve); the host packs it
+     * into spare bits of the display flags, so the choice reaches the live native core without an ABI change.
+     */
+    public enum Tonemapper { PEAK, ACES, PBR_NEUTRAL, GT, AGX }
+
+    /**
      * Frame-rate budget of the adaptive quality of the Path Tracing pass. The pass measures its own GPU time and lowers rays
      * per pixel first, then the path length, until it fits; the spp and bounces the player set are the ceiling, so it never
      * renders better than those values. The budget is a share ({@link #BUDGET_SHARE}) of one frame of that rate: the world
@@ -216,6 +223,8 @@ public final class RtSettings {
     public static boolean caustics = false;
     /** Vibrant Visuals style: rich grass and water tones, high color contrast, soft bloom and cinematic ACES. */
     public static boolean vibrantVisuals = false;
+    /** Tone curve of the path display pass (PEAK = the shipped curve). See {@link Tonemapper}. */
+    public static Tonemapper tonemapper = Tonemapper.PEAK;
     /** Particles (smoke, flames, sparks, bubbles, block breaking...) are drawn into the ray traced image (RtParticleLayer). */
     public static boolean rtParticles = true;
     /** Rain and snow columns are drawn into the ray traced image too (RtWeatherLayer, on the particle layer of RtParticleLayer). */
@@ -247,6 +256,8 @@ public final class RtSettings {
     private static final PathDenoiser DENOISER_OVR;
     /** {@code -Dvkrtx.rt.dlss_rr_preset=} value of this session; null when the config owns it. */
     private static final DlssRrParams.Preset DLSS_RR_PRESET_OVR;
+    /** {@code -Dvkrtx.rt.tonemapper=} value of this session; null when the config owns it. */
+    private static final Tonemapper TONEMAPPER_OVR;
     /** {@code -Dvkrtx.rt.adaptive_quality=} value of this session; null when the config owns it (it is never written out). */
     private static final AdaptiveQuality ADAPTIVE_OVR;
 
@@ -389,6 +400,16 @@ public final class RtSettings {
             }
         }
         DLSS_RR_PRESET_OVR = rrPresetOvr;
+        String tm = System.getProperty("vkrtx.rt.tonemapper");
+        Tonemapper tmOvr = null;
+        if (tm != null) {
+            try {
+                tmOvr = Tonemapper.valueOf(tm.trim().toUpperCase(Locale.ROOT).replace('-', '_'));
+            } catch (IllegalArgumentException e) {
+                LOGGER.error("[VKB-RT] invalid -Dvkrtx.rt.tonemapper={} (peak|aces|pbr_neutral|gt|agx), ignored", tm);
+            }
+        }
+        TONEMAPPER_OVR = tmOvr;
         String aq = System.getProperty("vkrtx.rt.adaptive_quality");
         AdaptiveQuality aqOvr = null;
         if (aq != null) {
@@ -403,9 +424,10 @@ public final class RtSettings {
         applyPreset(Preset.MEDIUM);
         writeAlphaPathDefaults();
         pathPreset = PathPreset.CUSTOM;
-        if (!INT_OVR.isEmpty() || !BOOL_OVR.isEmpty() || DENOISER_OVR != null || ADAPTIVE_OVR != null) {
-            LOGGER.info("[VKB-RT] settings overrides (session only): {} {} {} adaptive_quality={}", INT_OVR, BOOL_OVR,
-                DENOISER_OVR == null ? "" : "path_denoiser=" + DENOISER_OVR, ADAPTIVE_OVR == null ? "from config" : ADAPTIVE_OVR);
+        if (!INT_OVR.isEmpty() || !BOOL_OVR.isEmpty() || DENOISER_OVR != null || ADAPTIVE_OVR != null || TONEMAPPER_OVR != null) {
+            LOGGER.info("[VKB-RT] settings overrides (session only): {} {} {} adaptive_quality={} tonemapper={}", INT_OVR, BOOL_OVR,
+                DENOISER_OVR == null ? "" : "path_denoiser=" + DENOISER_OVR, ADAPTIVE_OVR == null ? "from config" : ADAPTIVE_OVR,
+                TONEMAPPER_OVR == null ? "from config" : TONEMAPPER_OVR);
         }
     }
 
@@ -500,6 +522,8 @@ public final class RtSettings {
     public static PathDenoiser denoiser() { return DENOISER_OVR != null ? DENOISER_OVR : pathDenoiser; }
     /** DLSS-RR render preset hint; a {@code -Dvkrtx.rt.dlss_rr_preset=} override wins for this session. */
     public static DlssRrParams.Preset dlssRrPreset() { return DLSS_RR_PRESET_OVR != null ? DLSS_RR_PRESET_OVR : dlssRrPreset; }
+    /** Tone curve of the path display pass (session override, else the configured value). */
+    public static Tonemapper tonemapper() { return TONEMAPPER_OVR != null ? TONEMAPPER_OVR : tonemapper; }
     /** GPU budget of the ray tracing pass in milliseconds, 0 when adaptive quality is off. */
     public static double adaptiveBudgetMs() {
         AdaptiveQuality q = ADAPTIVE_OVR != null ? ADAPTIVE_OVR : adaptiveQuality;
@@ -846,6 +870,14 @@ public final class RtSettings {
                 }
                 return true;
             }
+            case "tonemapper" -> {
+                try {
+                    tonemapper = Tonemapper.valueOf(val.trim().toUpperCase(Locale.ROOT).replace('-', '_'));
+                } catch (IllegalArgumentException e) {
+                    LOGGER.warn("Invalid tonemapper '{}' (use peak|aces|pbr_neutral|gt|agx), keeping {}", val, tonemapper);
+                }
+                return true;
+            }
             case "adaptive_quality" -> {
                 if (ADAPTIVE_OVR != null) {
                     LOGGER.info("[VKB-RT] adaptive_quality from the config ({}) ignored: -Dvkrtx.rt.adaptive_quality={} pins it",
@@ -993,6 +1025,8 @@ public final class RtSettings {
         }
         w.write("# OFF, NRD or DLSS_RR (DLSS_RR uses NVIDIA DLSS Ray Reconstruction)\n");
         w.write("path_denoiser = \"" + pathDenoiser.name() + "\"\n");
+        w.write("# Tone curve of the path display: PEAK, ACES, PBR_NEUTRAL, GT or AGX\n");
+        w.write("tonemapper = \"" + tonemapper.name() + "\"\n");
         w.write("# Adaptive quality: OFF, FPS30, FPS45, FPS60, FPS90 or FPS120 - the RT pass lowers rays per pixel, then bounces,\n");
         w.write("# below the values above to fit 70% of a frame of that rate (never above them)\n");
         w.write("adaptive_quality = \"" + (adaptiveQuality != null ? adaptiveQuality.name() : "OFF") + "\"\n");
