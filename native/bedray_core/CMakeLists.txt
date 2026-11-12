@@ -39,9 +39,14 @@ enable_testing()
 
 add_library(bedray_core SHARED
     src/core.cpp
+    src/core_create.cpp
+    src/core_programs.cpp
+    src/core_render.cpp
+    src/core_path_trace.cpp
+    src/core_passes.cpp
     src/core_memory.cpp
     src/ray_generation_pipeline.cpp
-    src/path_trace_pass.cpp src/rc_field_pass.cpp
+    src/path_trace_pass.cpp src/path_trace_resources.cpp src/path_trace_record.cpp src/path_trace_stats.cpp src/rc_field_pass.cpp
     src/bloom_pass.cpp
     src/particles_pass.cpp
     src/sodium_pass.cpp
@@ -185,12 +190,17 @@ add_test(NAME bedray_sampler_ownership_test COMMAND bedray_sampler_ownership_tes
 # These white-box targets include core.cpp and its optional pipeline owner.
 foreach(core_test bedray_descriptor_cache_test bedray_pipeline_cache_test bedray_sampler_ownership_test)
     target_sources(${core_test} PRIVATE src/ray_generation_pipeline.cpp)
+    target_sources(${core_test} PRIVATE
+        src/core_create.cpp src/core_programs.cpp src/core_render.cpp src/core_path_trace.cpp src/core_passes.cpp
+        src/path_trace_resources.cpp src/path_trace_record.cpp src/path_trace_stats.cpp
+    )
 endforeach()
 
 # White-box test: includes src/path_trace_pass.cpp directly, stubs the core's
 # render entry points and program registry, and drives the pass through a fake
 # Vulkan driver supplied by bedray_gpu_resources' function tables.
-add_executable(bedray_path_trace_pass_test tests/path_trace_pass_test.cpp src/rc_field_pass.cpp)
+add_executable(bedray_path_trace_pass_test tests/path_trace_pass_test.cpp src/rc_field_pass.cpp
+    src/path_trace_resources.cpp src/path_trace_record.cpp src/path_trace_stats.cpp)
 target_link_libraries(bedray_path_trace_pass_test PRIVATE bedray_gpu_resources)
 target_include_directories(bedray_path_trace_pass_test PRIVATE
     include
