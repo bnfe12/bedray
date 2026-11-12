@@ -1,13 +1,14 @@
 # Optional ray-generation and invocation reordering
 
-The compute RayQuery backend remains the default. The optional backend runs
-the same integrator, scene decoders, materials, random streams and descriptor
-contract in a ray-generation-only pipeline. RayQuery traversal needs no miss,
-closest-hit or any-hit programs. There is one immutable raygen SBT record.
+Bedray prefers a ray-generation-only pipeline when the enabled device features
+and native core support it. It runs the same integrator, scene decoders,
+materials, random streams and descriptor contract as the compute backend.
+RayQuery traversal needs no miss, closest-hit or any-hit programs. There is one
+immutable raygen SBT record.
 
-`-Dbedray.rt.raygen=true` requests the ordinary raygen backend;
-`-Dbedray.rt.ser=true` also requests NV invocation reordering. These are startup
-options: device features must be enabled before creating the logical device.
+`-Dbedray.rt.raygen=false` selects compute ray queries. The separate
+`-Dbedray.rt.ser=true` option requests NV invocation reordering with ordinary
+raygen as a fallback. Set these options before the logical device is created.
 Each optional group declares its own dependencies. The selector tries SER,
 ordinary raygen and compute in that order, subject to actual enabled features,
 the driver's reordering hint, packaged AOT artifacts and successful pipeline
@@ -21,7 +22,7 @@ The two extensions must never share a capability bit merely because their
 feature members have the same name. A device that reports a no-op reordering
 hint uses ordinary raygen. No GPU-name heuristic enables the backend.
 
-All three scene entries have `.raygen` and `.ser` AOT variants. The SER wrapper
+Both scene entries have `.raygen` and `.ser` AOT variants. The SER wrapper
 reorders after a completed query, using hit/miss, entity and alpha-class hints
 before subsequent surface/material work. Filtered visibility calls the wrapped
 closest-hit operation too; it can incur reorder overhead. This is an experiment

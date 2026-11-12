@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Opt-in device negotiation for Bedray's ray-generation backend. Each optional group includes its own dependencies,
+ * Device negotiation for Bedray's ray-generation backend. Each optional group includes its own dependencies,
  * so dropping SER never removes the ordinary ray pipeline or compute ray-query fallback. Registration requests features;
  * the host's enabled feature set remains authoritative for backend selection. The host already requires Vulkan 1.2.
  */
@@ -49,8 +49,13 @@ public final class RtRayPipelineDeviceRequirements {
         return new DeviceRequirement(SER_ID, extensions, features, 0, true, null);
     }
 
+    /** Requests ordinary ray generation by default. An explicit false disables this request. */
+    public static boolean raygenRequested() {
+        return Boolean.parseBoolean(System.getProperty(RAYGEN_PROPERTY, "true"));
+    }
+
     public static void register(DeviceFeatureRegistry registry) {
-        register(registry, Boolean.getBoolean(RAYGEN_PROPERTY), Boolean.getBoolean(SER_PROPERTY));
+        register(registry, raygenRequested(), Boolean.getBoolean(SER_PROPERTY));
     }
 
     static void register(DeviceFeatureRegistry registry, boolean raygenRequested, boolean serRequested) {
