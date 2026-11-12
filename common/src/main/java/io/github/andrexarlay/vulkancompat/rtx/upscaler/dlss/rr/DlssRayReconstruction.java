@@ -1,5 +1,6 @@
 package io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.rr;
 
+import io.github.andrexarlay.vulkanbridge.api.LibraryDescriptor;
 import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssLayouts;
 import io.github.andrexarlay.vulkancompat.rtx.upscaler.dlss.DlssNative;
@@ -39,8 +40,7 @@ public final class DlssRayReconstruction implements AutoCloseable {
     private static Path loadedLibraryPath;
     private static SymbolLookup loadedLibrary;
 
-    public static final String NGX_DLSSD_DLL = "nvngx_dlssd.dll";
-    public static final String NGX_DLSSNR_DLL = "nvngx_dlssnr.dll";
+    public static final String NGX_DLSSD_DLL = LibraryDescriptor.DLSS_RR_DLL;
 
     public static final int SIZE_RR_CREATE_INFO = 48;
     public static final int SIZE_RR_EVAL_INFO = 968;
@@ -122,13 +122,11 @@ public final class DlssRayReconstruction implements AutoCloseable {
     }
 
     /**
-     * Checks whether native DLSS Ray Reconstruction libraries ({@code nvngx_dlssd.dll} or {@code nvngx_dlssnr.dll})
-     * exist in the specified feature folder.
+     * Checks file presence for direct NGX Ray Reconstruction in the selected feature directory.
      */
     public static boolean isDlssdDllPresent(Path featureDir) {
         if (featureDir == null) return false;
-        return Files.isRegularFile(featureDir.resolve(NGX_DLSSD_DLL))
-            || Files.isRegularFile(featureDir.resolve(NGX_DLSSNR_DLL));
+        return Files.isRegularFile(featureDir.resolve(NGX_DLSSD_DLL));
     }
 
     /**

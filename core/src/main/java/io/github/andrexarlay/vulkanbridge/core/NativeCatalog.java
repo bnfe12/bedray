@@ -1,5 +1,7 @@
 package io.github.andrexarlay.vulkanbridge.core;
 
+import io.github.andrexarlay.vulkanbridge.api.LibraryDescriptor;
+
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -56,8 +58,10 @@ public final class NativeCatalog {
         VENDOR,
         /** A Bedray wrapper (vkb_*.dll): not distributed, only used if the user has a build of his own. */
         WRAPPER,
-        /** An upcoming/future technology slot (DLSS 5, FSR 4, XeSS 2, NRC): file can be placed, engine integration in roadmap. */
-        UPCOMING
+        /** An upcoming technology slot: file can be placed while the engine integration is on the roadmap. */
+        UPCOMING,
+        /** Local file diagnostics for a feature that requires a partner SDK. The installer skips these files. */
+        PARTNER_SDK
     }
 
     /**
@@ -78,7 +82,7 @@ public final class NativeCatalog {
         }
     }
 
-    /** One line of the manager: a feature with its files. {@code url} is the official source of the vendor files. */
+    /** One line of the manager with feature files and a link to official downloads or documentation. */
     public record Group(String id, String title, String vendor, String purpose, String url, List<Slot> slots) {
         public Group {
             slots = List.copyOf(slots);
@@ -115,6 +119,8 @@ public final class NativeCatalog {
     public static final String URL_DLSS = "https://github.com/NVIDIA/DLSS";
     public static final String URL_STREAMLINE = "https://github.com/NVIDIAGameWorks/Streamline/releases";
     public static final String URL_NRD = "https://github.com/NVIDIA-RTX/NRD";
+    public static final String URL_DLSS5 =
+        "https://forums.developer.nvidia.com/t/official-dlss-5-neural-rendering-plugin-access-for-unreal-engine-5-8-2/382731/11";
 
     public static final List<Group> GROUPS = List.of(
         new Group("fsr", "AMD FidelityFX FSR 3 (Vulkan)", "AMD",
@@ -125,7 +131,7 @@ public final class NativeCatalog {
         new Group("dlss", "NVIDIA DLSS Super Resolution", "NVIDIA", "DLSS upscaling (GeForce RTX).", URL_DLSS,
             List.of(req(Folder.NATIVES, "nvngx_dlss.dll"))),
         new Group("dlss_rr", "NVIDIA DLSS Ray Reconstruction", "NVIDIA", "AI denoiser for path tracing (GeForce RTX).", URL_DLSS,
-            List.of(req(Folder.NATIVES, "nvngx_dlssd.dll"))),
+            List.of(req(Folder.NATIVES, LibraryDescriptor.DLSS_RR_DLL))),
         new Group("nrd", "NVIDIA Real-Time Denoisers (NRD)", "NVIDIA", "REBLUR / RELAX denoiser for path tracing.", URL_NRD,
             List.of(req(Folder.NATIVES, "NRD.dll"))),
         new Group("streamline", "NVIDIA Streamline (core)", "NVIDIA", "The loader every NVIDIA frame generation feature needs.", URL_STREAMLINE,
@@ -136,10 +142,11 @@ public final class NativeCatalog {
         new Group("sl_dlss", "DLSS + Ray Reconstruction through Streamline", "NVIDIA",
             "With frame generation on, DLSS Super Resolution and Ray Reconstruction run through these four files.", URL_STREAMLINE,
             List.of(req(Folder.STREAMLINE, "sl.dlss.dll"), req(Folder.STREAMLINE, "sl.dlss_d.dll"),
-                req(Folder.STREAMLINE, "nvngx_dlss.dll"), req(Folder.STREAMLINE, "nvngx_dlssd.dll"))),
-        new Group("dlss5", "NVIDIA DLSS 5.x & Neural Rendering SDK", "NVIDIA",
-            "Next-gen DLSS 5 neural upscaling & reconstruction (planned in roadmap v0.3.0).", URL_DLSS,
-            List.of(upcoming(Folder.NATIVES, "nvngx_dlss5.dll"), upcoming(Folder.STREAMLINE, "sl.dlss5.dll"))),
+                req(Folder.STREAMLINE, "nvngx_dlss.dll"), req(Folder.STREAMLINE, LibraryDescriptor.DLSS_RR_DLL))),
+        new Group("dlss5", "DLSS 5 Neural Rendering", "NVIDIA",
+            "NVIDIA partner SDK required. Local file detection only.", URL_DLSS5,
+            List.of(new Slot(Folder.NATIVES, "nvngx_dlssnr.dll", false, Kind.PARTNER_SDK, null),
+                new Slot(Folder.STREAMLINE, "sl.dlss_nr.dll", false, Kind.PARTNER_SDK, null))),
         new Group("fsr4", "AMD FSR 4 (AI Neural Upscaling)", "AMD",
             "FidelityFX neural upscaler & AI frame generation (planned in roadmap v0.3.0).", URL_FSR,
             List.of(upcoming(Folder.NATIVES, "ffx_fsr4_x64.dll"), upcoming(Folder.NATIVES, "amd_fidelityfx_ai_vk.dll"))),
@@ -186,6 +193,14 @@ public final class NativeCatalog {
             }
         }
         return null;
+    }
+
+    static String installableName(String name) {
+        return installableSlotsFor(name).stream().findFirst().map(Slot::file).orElse(null);
+    }
+
+    static List<Slot> installableSlotsFor(String name) {
+        return slotsFor(name).stream().filter(slot -> slot.kind() != Kind.PARTNER_SDK).toList();
     }
 
     /** Distinct canonical file names of the whole catalog, in table order. */
