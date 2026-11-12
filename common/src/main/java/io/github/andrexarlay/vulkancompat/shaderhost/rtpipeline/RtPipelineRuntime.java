@@ -1,4 +1,4 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import com.mojang.renderpearl.backend.vulkan.VulkanDevice;
 import io.github.andrexarlay.vulkanbridge.api.DeviceFeatureRegistry;
@@ -6,7 +6,7 @@ import io.github.andrexarlay.vulkanbridge.platform.LogPaths;
 import io.github.andrexarlay.vulkancompat.rt.world.RtMemory;
 import io.github.andrexarlay.vulkancompat.rtx.raytracing.VulkanCapabilityChecker;
 import io.github.andrexarlay.vulkancompat.shaderhost.IrisPackChoice;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.State;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineStatus.State;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackReport;
 import io.github.andrexarlay.vulkancompat.shaderhost.pack.PackSource;
@@ -29,29 +29,29 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
- * Makes the Dirt RT path reachable: early bootstrap compiles the selected pack's ray stages, registers the device
+ * Makes the ray-tracing-pipeline pack path reachable: early bootstrap compiles the selected pack's ray stages, registers the device
  * requirement that names exactly the features those stages use, and the first frame on the live device builds the real
  * ray-tracing pipeline and shader binding table from the reflected layout.
  * <p>
  * The trace itself is NOT dispatched. Every binding of the pack needs a producer, and several have none in Bedray
  * (Vulkanite quad geometry, LabPBR atlases, Iris SSBOs written by the pack's own compute programs). Recording a trace with
  * unbound descriptors is undefined behaviour on the GPU, so the status names the missing producers instead. Opt-in with
- * {@code -Dbedray.dirtrt=true}; without it the pack is only detected.
+ * {@code -Dbedray.rtpipeline=true}; without it the pack is only detected.
  */
-public final class DirtRtRuntime {
-    private static final Logger LOGGER = LoggerFactory.getLogger("VulkanRtx/DirtRt");
-    public static final String OPT_IN_PROPERTY = "bedray.dirtrt";
+public final class RtPipelineRuntime {
+    private static final Logger LOGGER = LoggerFactory.getLogger("VulkanRtx/RtPipeline");
+    public static final String OPT_IN_PROPERTY = "bedray.rtpipeline";
 
-    private static DirtRtPackProgram.Result program;
+    private static RtPipelinePackProgram.Result program;
     private static boolean requirementRegistered;
     private static boolean attempted;
     private static VulkanDevice owner;
-    private static DirtRtPipeline pipeline;
+    private static RtPipeline pipeline;
     private static RtMemory memory;
     private static RtMemory.Buf sbtBuffer;
     private static String bindingSummary = "";
 
-    private DirtRtRuntime() {}
+    private RtPipelineRuntime() {}
 
     /** Early bootstrap (before the device): detect the selected pack and, when opted in, compile and reflect it. */
     public static synchronized void bootstrap(Path gameDir) {
@@ -59,7 +59,7 @@ public final class DirtRtRuntime {
         try {
             choice = IrisPackChoice.read(gameDir);
         } catch (Exception e) {
-            return; // no readable pack choice: nothing to report for Dirt RT
+            return; // no readable pack choice: nothing to report for the RT-pipeline host
         }
         if (choice.isEmpty()) return;
         Path pack;
@@ -71,49 +71,49 @@ public final class DirtRtRuntime {
                 report = ShaderpackScanner.scan(src);
             }
         } catch (Exception e) {
-            return; // the Iris host reports unreadable packs; Dirt RT only claims ray-tracing-pipeline packs
+            return; // the Iris host reports unreadable packs; the RT-pipeline host only claims ray-tracing-pipeline packs
         }
         if (report.rtModel() != PackReport.RtModel.RAY_TRACING_PIPELINE) return;
-        String unsupported = DirtRtPackProgram.unsupportedReason(report);
+        String unsupported = RtPipelinePackProgram.unsupportedReason(report);
         if (unsupported != null) {
-            DirtRtPipeline.updateState(State.FAILED, report.name(), unsupported);
+            RtPipelineStatus.updateState(State.FAILED, report.name(), unsupported);
             return;
         }
         if (!Boolean.getBoolean(OPT_IN_PROPERTY)) {
-            DirtRtPipeline.updateState(State.DISCOVERED, report.name(),
+            RtPipelineStatus.updateState(State.DISCOVERED, report.name(),
                 "ray-tracing pack detected; opt in with -D" + OPT_IN_PROPERTY + "=true to compile it and request VK_KHR_ray_tracing_pipeline");
             return;
         }
-        DirtRtPipeline.updateState(State.COMPILING, report.name(), "compiling ray stages");
+        RtPipelineStatus.updateState(State.COMPILING, report.name(), "compiling ray stages");
         long start = System.nanoTime();
         try {
-            program = DirtRtPackProgram.load(pack, report);
+            program = RtPipelinePackProgram.load(pack, report);
         } catch (SpirvCompiler.SpirvCompileException e) {
-            DirtRtPipeline.onFailure("compile failed: " + oneLine(e.errorLog()), 0L);
-            LOGGER.error("[VKB-DIRTRT] {} compile failed: {}", report.name(), LogPaths.show(e.errorLog()));
+            RtPipelineStatus.onFailure("compile failed: " + oneLine(e.errorLog()), 0L);
+            LOGGER.error("[VKB-RTPIPELINE] {} compile failed: {}", report.name(), LogPaths.show(e.errorLog()));
             return;
         } catch (Exception | LinkageError e) {
-            DirtRtPipeline.onFailure("load failed: " + oneLine(String.valueOf(e.getMessage())), 0L);
-            LOGGER.error("[VKB-DIRTRT] {} load failed\n{}", report.name(), LogPaths.stack(e));
+            RtPipelineStatus.onFailure("load failed: " + oneLine(String.valueOf(e.getMessage())), 0L);
+            LOGGER.error("[VKB-RTPIPELINE] {} load failed\n{}", report.name(), LogPaths.stack(e));
             return;
         }
         bindingSummary = program.missing().stream().map(b -> b.binding().set() + "." + b.binding().binding())
             .collect(Collectors.joining(",", "[", "]"));
-        DirtRtPipeline.updateState(State.VALIDATING, report.name(), "12 ray stages compiled (" + program.spirvBytes()
+        RtPipelineStatus.updateState(State.VALIDATING, report.name(), "12 ray stages compiled (" + program.spirvBytes()
             + " B SPIR-V); waiting for the device");
-        LOGGER.info("[VKB-DIRTRT] pack=\"{}\" compiled 12 ray stages, {} B SPIR-V in {} ms; features={}",
+        LOGGER.info("[VKB-RTPIPELINE] pack=\"{}\" compiled 12 ray stages, {} B SPIR-V in {} ms; features={}",
             report.name(), program.spirvBytes(), (System.nanoTime() - start) / 1_000_000, program.featureText());
-        for (DirtRtPackProgram.BindingStatus b : program.bindings()) {
-            LOGGER.info("[VKB-DIRTRT] binding {}", b.line());
+        for (RtPipelinePackProgram.BindingStatus b : program.bindings()) {
+            LOGGER.info("[VKB-RTPIPELINE] binding {}", b.line());
         }
     }
 
     /** Late device-requirement provider; registered only when a pack compiled. */
     public static synchronized void registerDeviceRequirement(DeviceFeatureRegistry registry) {
         if (program == null) return;
-        registry.register(DirtRtDeviceRequirements.requirement(program.features()));
+        registry.register(RtPipelineDeviceRequirements.requirement(program.features()));
         requirementRegistered = true;
-        LOGGER.info("[VKB-DIRTRT] requested device group '{}' features={}", DirtRtDeviceRequirements.ID, program.featureText());
+        LOGGER.info("[VKB-RTPIPELINE] requested device group '{}' features={}", RtPipelineDeviceRequirements.ID, program.featureText());
     }
 
     public static synchronized boolean hasProgram() {
@@ -127,45 +127,45 @@ public final class DirtRtRuntime {
         if (device == null) return;
         attempted = true;
         if (!requirementRegistered) {
-            DirtRtPipeline.onFailure("device requirement was not registered before device creation", 0L);
+            RtPipelineStatus.onFailure("device requirement was not registered before device creation", 0L);
             return;
         }
         var vk = device.vkDevice();
         if (!vk.getCapabilities().VK_KHR_ray_tracing_pipeline) {
-            DirtRtPipeline.onFailure("device group '" + DirtRtDeviceRequirements.ID + "' was dropped: this GPU lacks "
+            RtPipelineStatus.onFailure("device group '" + RtPipelineDeviceRequirements.ID + "' was dropped: this GPU lacks "
                 + "VK_KHR_ray_tracing_pipeline or one of " + program.featureText(), 0L);
             return;
         }
-        DirtRtPipeline.updateState(State.CREATING_PIPELINE, null, "creating pipeline");
+        RtPipelineStatus.updateState(State.CREATING_PIPELINE, null, "creating pipeline");
         try {
-            var properties = DirtRtDeviceRequirements.queryProperties(vk.getPhysicalDevice());
+            var properties = RtPipelineDeviceRequirements.queryProperties(vk.getPhysicalDevice());
             if (!properties.isValid()) throw new IllegalStateException("invalid ray tracing properties " + properties);
             int capacity = runtimeArrayCapacity(vk.getPhysicalDevice());
             owner = device;
-            pipeline = new DirtRtPipeline(vk, false);
+            pipeline = new RtPipeline(vk, false);
             pipeline.initializeReflected(program.bundle(), program.bindings(), capacity, VK10.VK_NULL_HANDLE);
-            DirtRtPipeline.updateState(State.CREATING_SBT, null, "creating shader binding table");
+            RtPipelineStatus.updateState(State.CREATING_SBT, null, "creating shader binding table");
             var layout = properties.toSbtLayout();
             memory = new RtMemory(vk);
-            int probeSize = DirtRtSbtBuilder.createThreePassSbt(0L, layout,
-                java.nio.ByteBuffer.allocateDirect(DirtRtPipeline.TOTAL_SHADER_GROUPS * layout.handleSize())).totalSizeBytes();
-            sbtBuffer = memory.createBuffer("dirtrt_sbt", probeSize + layout.baseAlignment(),
+            int probeSize = RtPipelineSbtBuilder.createThreePassSbt(0L, layout,
+                java.nio.ByteBuffer.allocateDirect(RtPipelineLayouts.TOTAL_SHADER_GROUPS * layout.handleSize())).totalSizeBytes();
+            sbtBuffer = memory.createBuffer("rtpipeline_sbt", probeSize + layout.baseAlignment(),
                 KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 true);
             long aligned = (sbtBuffer.address + layout.baseAlignment() - 1) & -(long) layout.baseAlignment();
             var sbt = pipeline.queryAndBuildSbt(aligned, layout);
             MemoryUtil.memCopy(MemoryUtil.memAddress(sbt.sbtBuffer()), sbtBuffer.mapped + (aligned - sbtBuffer.address),
                 sbt.totalSizeBytes());
-            DirtRtPipeline.onPipelineCreated(pipeline.pipeline(), DirtRtPipeline.TOTAL_STAGES,
-                DirtRtPipeline.TOTAL_SHADER_GROUPS, program.bindings().size());
+            RtPipelineStatus.onPipelineCreated(pipeline.pipeline(), RtPipelineLayouts.TOTAL_STAGES,
+                RtPipelineLayouts.TOTAL_SHADER_GROUPS, program.bindings().size());
             String blocked = "pipeline and SBT created; trace NOT dispatched: " + program.missing().size()
                 + " bindings have no host producer " + bindingSummary;
-            DirtRtPipeline.updateState(State.READY, null, blocked);
-            LOGGER.info("[VKB-DIRTRT] {} (runtime array capacity {})", blocked, capacity);
+            RtPipelineStatus.updateState(State.READY, null, blocked);
+            LOGGER.info("[VKB-RTPIPELINE] {} (runtime array capacity {})", blocked, capacity);
         } catch (RuntimeException | LinkageError e) {
-            LOGGER.error("[VKB-DIRTRT] pipeline creation failed\n{}", LogPaths.stack(e));
+            LOGGER.error("[VKB-RTPIPELINE] pipeline creation failed\n{}", LogPaths.stack(e));
             release();
-            DirtRtPipeline.onFailure("pipeline creation failed: " + oneLine(String.valueOf(e.getMessage())), 0L);
+            RtPipelineStatus.onFailure("pipeline creation failed: " + oneLine(String.valueOf(e.getMessage())), 0L);
         }
     }
 
@@ -181,7 +181,7 @@ public final class DirtRtRuntime {
             long limit = Math.min(props.limits().maxPerStageDescriptorStorageBuffers() & 0xFFFFFFFFL,
                 props.limits().maxDescriptorSetStorageBuffers() & 0xFFFFFFFFL) - others;
             if (limit < 1) throw new IllegalStateException("device storage-buffer descriptor limit too small: " + limit);
-            return (int) Math.min(DirtRtPipeline.DEFAULT_MAX_GEOMETRY_BUFFERS, limit);
+            return (int) Math.min(RtPipelineLayouts.DEFAULT_MAX_GEOMETRY_BUFFERS, limit);
         }
     }
 
@@ -189,7 +189,7 @@ public final class DirtRtRuntime {
         if (owner == device) {
             release();
             attempted = false;
-            if (program != null) DirtRtPipeline.updateState(State.VALIDATING, null, "device closed; pipeline released");
+            if (program != null) RtPipelineStatus.updateState(State.VALIDATING, null, "device closed; pipeline released");
         }
     }
 
@@ -211,10 +211,10 @@ public final class DirtRtRuntime {
 
     /** F3 lines: the scaffold telemetry plus, after compilation, which bindings block the trace. */
     public static synchronized void appendDebugLines(List<String> out) {
-        if ("none".equals(DirtRtPipeline.getSelectedPack())) return;
-        out.add(DirtRtPipeline.getF3Telemetry());
+        if ("none".equals(RtPipelineStatus.getSelectedPack())) return;
+        out.add(RtPipelineStatus.getF3Telemetry());
         if (program != null && !program.missing().isEmpty()) {
-            out.add("[DirtRT] missing producers " + bindingSummary + ": Vulkanite quad geometry (set 1), terrain/LabPBR atlases,"
+            out.add("[RT-PIPELINE] missing producers " + bindingSummary + ": Vulkanite quad geometry (set 1), terrain/LabPBR atlases,"
                 + " Iris SSBOs; pack compute/composite programs not run by this host");
         }
     }

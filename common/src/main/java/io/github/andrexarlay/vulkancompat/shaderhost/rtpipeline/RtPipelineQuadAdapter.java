@@ -1,4 +1,4 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import org.joml.Vector3f;
 import org.joml.Vector4f;
@@ -25,7 +25,7 @@ import java.util.Objects;
  *   <li>Offset 36..39 (4B): {@code uint blockId} (uint block identifier)</li>
  * </ul>
  */
-public final class DirtRtQuadAdapter {
+public final class RtPipelineQuadAdapter {
 
     public static final int VERTEX_SIZE = 40;
     public static final int VERTICES_PER_QUAD = 4;
@@ -55,7 +55,7 @@ public final class DirtRtQuadAdapter {
     public static final int OFFSET_BLOCK_ID = 36;
     public static final int SIZE_BLOCK_ID = 4;
 
-    private DirtRtQuadAdapter() {}
+    private RtPipelineQuadAdapter() {}
 
     /**
      * Immutable 40-byte vertex representation.

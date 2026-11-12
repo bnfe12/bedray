@@ -1,4 +1,4 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -13,7 +13,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * L2 JUnit tests for Dirt RT / Vulkanite ABI bridge and data structures:
+ * L2 JUnit tests for the Vulkanite RT-pipeline ABI bridge and data structures:
  * <ul>
  *   <li>Exact struct sizes, field offsets, std430 alignment</li>
  *   <li>CameraInfo UBO (256 bytes) serialization, deserialization, corner rays math</li>
@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>Pipeline passes, SBT layout, and descriptor set configurations</li>
  * </ul>
  */
-class DirtRtAbiTest {
+class RtPipelineAbiTest {
 
     private static final float EPSILON = 1e-5f;
 
@@ -32,52 +32,52 @@ class DirtRtAbiTest {
     @Test
     @DisplayName("CameraInfo UBO exact sizes and offsets conform to std430 alignment")
     void testCameraInfoLayoutAndSizes() {
-        assertEquals(256, DirtRtCameraUbo.UBO_SIZE, "CameraInfo UBO must be exactly 256 bytes");
+        assertEquals(256, RtPipelineCameraUbo.UBO_SIZE, "CameraInfo UBO must be exactly 256 bytes");
 
         // Verify individual field offsets
-        assertEquals(0, DirtRtCameraUbo.OFFSET_CORNER_RAYS);
-        assertEquals(64, DirtRtCameraUbo.SIZE_CORNER_RAYS, "4 corner rays * 16B = 64B");
+        assertEquals(0, RtPipelineCameraUbo.OFFSET_CORNER_RAYS);
+        assertEquals(64, RtPipelineCameraUbo.SIZE_CORNER_RAYS, "4 corner rays * 16B = 64B");
 
-        assertEquals(64, DirtRtCameraUbo.OFFSET_VIEW_INVERSE);
-        assertEquals(64, DirtRtCameraUbo.SIZE_VIEW_INVERSE, "mat4 = 16 floats * 4B = 64B");
+        assertEquals(64, RtPipelineCameraUbo.OFFSET_VIEW_INVERSE);
+        assertEquals(64, RtPipelineCameraUbo.SIZE_VIEW_INVERSE, "mat4 = 16 floats * 4B = 64B");
 
-        assertEquals(128, DirtRtCameraUbo.OFFSET_FRAME_ID);
-        assertEquals(4, DirtRtCameraUbo.SIZE_FRAME_ID);
+        assertEquals(128, RtPipelineCameraUbo.OFFSET_FRAME_ID);
+        assertEquals(4, RtPipelineCameraUbo.SIZE_FRAME_ID);
 
-        assertEquals(132, DirtRtCameraUbo.OFFSET_FLAGS);
-        assertEquals(4, DirtRtCameraUbo.SIZE_FLAGS);
+        assertEquals(132, RtPipelineCameraUbo.OFFSET_FLAGS);
+        assertEquals(4, RtPipelineCameraUbo.SIZE_FLAGS);
 
-        assertEquals(136, DirtRtCameraUbo.OFFSET_WORLD_TYPE);
-        assertEquals(4, DirtRtCameraUbo.SIZE_WORLD_TYPE);
+        assertEquals(136, RtPipelineCameraUbo.OFFSET_WORLD_TYPE);
+        assertEquals(4, RtPipelineCameraUbo.SIZE_WORLD_TYPE);
 
-        assertEquals(140, DirtRtCameraUbo.OFFSET_PAD0);
-        assertEquals(4, DirtRtCameraUbo.SIZE_PAD0);
+        assertEquals(140, RtPipelineCameraUbo.OFFSET_PAD0);
+        assertEquals(4, RtPipelineCameraUbo.SIZE_PAD0);
 
-        assertEquals(144, DirtRtCameraUbo.OFFSET_CAMERA_POSITION, "vec3 cameraPosition requires 16-byte alignment in std430 (144 = 16 * 9)");
-        assertEquals(12, DirtRtCameraUbo.SIZE_CAMERA_POSITION, "vec3 = 3 floats * 4B = 12B");
+        assertEquals(144, RtPipelineCameraUbo.OFFSET_CAMERA_POSITION, "vec3 cameraPosition requires 16-byte alignment in std430 (144 = 16 * 9)");
+        assertEquals(12, RtPipelineCameraUbo.SIZE_CAMERA_POSITION, "vec3 = 3 floats * 4B = 12B");
 
-        assertEquals(156, DirtRtCameraUbo.OFFSET_PAD1);
-        assertEquals(4, DirtRtCameraUbo.SIZE_PAD1);
+        assertEquals(156, RtPipelineCameraUbo.OFFSET_PAD1);
+        assertEquals(4, RtPipelineCameraUbo.SIZE_PAD1);
 
-        assertEquals(160, DirtRtCameraUbo.OFFSET_TRAILING_PAD);
-        assertEquals(96, DirtRtCameraUbo.SIZE_TRAILING_PAD, "Trailing pad = 256 - 160 = 96B");
+        assertEquals(160, RtPipelineCameraUbo.OFFSET_TRAILING_PAD);
+        assertEquals(96, RtPipelineCameraUbo.SIZE_TRAILING_PAD, "Trailing pad = 256 - 160 = 96B");
 
         // Verify contiguous packing
-        assertEquals(DirtRtCameraUbo.OFFSET_VIEW_INVERSE, DirtRtCameraUbo.OFFSET_CORNER_RAYS + DirtRtCameraUbo.SIZE_CORNER_RAYS);
-        assertEquals(DirtRtCameraUbo.OFFSET_FRAME_ID, DirtRtCameraUbo.OFFSET_VIEW_INVERSE + DirtRtCameraUbo.SIZE_VIEW_INVERSE);
-        assertEquals(DirtRtCameraUbo.OFFSET_FLAGS, DirtRtCameraUbo.OFFSET_FRAME_ID + DirtRtCameraUbo.SIZE_FRAME_ID);
-        assertEquals(DirtRtCameraUbo.OFFSET_WORLD_TYPE, DirtRtCameraUbo.OFFSET_FLAGS + DirtRtCameraUbo.SIZE_FLAGS);
-        assertEquals(DirtRtCameraUbo.OFFSET_PAD0, DirtRtCameraUbo.OFFSET_WORLD_TYPE + DirtRtCameraUbo.SIZE_WORLD_TYPE);
-        assertEquals(DirtRtCameraUbo.OFFSET_CAMERA_POSITION, DirtRtCameraUbo.OFFSET_PAD0 + DirtRtCameraUbo.SIZE_PAD0);
-        assertEquals(DirtRtCameraUbo.OFFSET_PAD1, DirtRtCameraUbo.OFFSET_CAMERA_POSITION + DirtRtCameraUbo.SIZE_CAMERA_POSITION);
-        assertEquals(DirtRtCameraUbo.OFFSET_TRAILING_PAD, DirtRtCameraUbo.OFFSET_PAD1 + DirtRtCameraUbo.SIZE_PAD1);
-        assertEquals(DirtRtCameraUbo.UBO_SIZE, DirtRtCameraUbo.OFFSET_TRAILING_PAD + DirtRtCameraUbo.SIZE_TRAILING_PAD);
+        assertEquals(RtPipelineCameraUbo.OFFSET_VIEW_INVERSE, RtPipelineCameraUbo.OFFSET_CORNER_RAYS + RtPipelineCameraUbo.SIZE_CORNER_RAYS);
+        assertEquals(RtPipelineCameraUbo.OFFSET_FRAME_ID, RtPipelineCameraUbo.OFFSET_VIEW_INVERSE + RtPipelineCameraUbo.SIZE_VIEW_INVERSE);
+        assertEquals(RtPipelineCameraUbo.OFFSET_FLAGS, RtPipelineCameraUbo.OFFSET_FRAME_ID + RtPipelineCameraUbo.SIZE_FRAME_ID);
+        assertEquals(RtPipelineCameraUbo.OFFSET_WORLD_TYPE, RtPipelineCameraUbo.OFFSET_FLAGS + RtPipelineCameraUbo.SIZE_FLAGS);
+        assertEquals(RtPipelineCameraUbo.OFFSET_PAD0, RtPipelineCameraUbo.OFFSET_WORLD_TYPE + RtPipelineCameraUbo.SIZE_WORLD_TYPE);
+        assertEquals(RtPipelineCameraUbo.OFFSET_CAMERA_POSITION, RtPipelineCameraUbo.OFFSET_PAD0 + RtPipelineCameraUbo.SIZE_PAD0);
+        assertEquals(RtPipelineCameraUbo.OFFSET_PAD1, RtPipelineCameraUbo.OFFSET_CAMERA_POSITION + RtPipelineCameraUbo.SIZE_CAMERA_POSITION);
+        assertEquals(RtPipelineCameraUbo.OFFSET_TRAILING_PAD, RtPipelineCameraUbo.OFFSET_PAD1 + RtPipelineCameraUbo.SIZE_PAD1);
+        assertEquals(RtPipelineCameraUbo.UBO_SIZE, RtPipelineCameraUbo.OFFSET_TRAILING_PAD + RtPipelineCameraUbo.SIZE_TRAILING_PAD);
     }
 
     @Test
     @DisplayName("CameraInfo serialization writes correct bytes and deserializes accurately")
     void testCameraInfoSerializationAndDeserialization() {
-        DirtRtCameraUbo ubo = new DirtRtCameraUbo();
+        RtPipelineCameraUbo ubo = new RtPipelineCameraUbo();
 
         // 1. Populate fields
         ubo.setCornerRay(0, -1.5f, -1.0f, -1.0f, 0.0f);
@@ -90,13 +90,13 @@ class DirtRtAbiTest {
 
         ubo.setFrameId(1024);
         ubo.setFlags(0x05);
-        ubo.setWorldType(DirtRtCameraUbo.WORLD_NETHER);
+        ubo.setWorldType(RtPipelineCameraUbo.WORLD_NETHER);
         ubo.setPad0(1.234f);
         ubo.setCameraPosition(128.5f, 64.0f, -256.75f);
         ubo.setPad1(5.678f);
 
         // 2. Serialize to ByteBuffer
-        ByteBuffer buffer = ByteBuffer.allocate(DirtRtCameraUbo.UBO_SIZE);
+        ByteBuffer buffer = ByteBuffer.allocate(RtPipelineCameraUbo.UBO_SIZE);
         ubo.serialize(buffer);
 
         // Check buffer position advanced by 256
@@ -129,24 +129,24 @@ class DirtRtAbiTest {
         assertEquals(1.0f, buffer.getFloat(64 + 15 * 4), EPSILON);
 
         // Check frameId, flags, worldType
-        assertEquals(1024, buffer.getInt(DirtRtCameraUbo.OFFSET_FRAME_ID));
-        assertEquals(0x05, buffer.getInt(DirtRtCameraUbo.OFFSET_FLAGS));
-        assertEquals(-1, buffer.getInt(DirtRtCameraUbo.OFFSET_WORLD_TYPE));
-        assertEquals(1.234f, buffer.getFloat(DirtRtCameraUbo.OFFSET_PAD0), EPSILON);
+        assertEquals(1024, buffer.getInt(RtPipelineCameraUbo.OFFSET_FRAME_ID));
+        assertEquals(0x05, buffer.getInt(RtPipelineCameraUbo.OFFSET_FLAGS));
+        assertEquals(-1, buffer.getInt(RtPipelineCameraUbo.OFFSET_WORLD_TYPE));
+        assertEquals(1.234f, buffer.getFloat(RtPipelineCameraUbo.OFFSET_PAD0), EPSILON);
 
         // Check camera position
-        assertEquals(128.5f, buffer.getFloat(DirtRtCameraUbo.OFFSET_CAMERA_POSITION), EPSILON);
-        assertEquals(64.0f, buffer.getFloat(DirtRtCameraUbo.OFFSET_CAMERA_POSITION + 4), EPSILON);
-        assertEquals(-256.75f, buffer.getFloat(DirtRtCameraUbo.OFFSET_CAMERA_POSITION + 8), EPSILON);
-        assertEquals(5.678f, buffer.getFloat(DirtRtCameraUbo.OFFSET_PAD1), EPSILON);
+        assertEquals(128.5f, buffer.getFloat(RtPipelineCameraUbo.OFFSET_CAMERA_POSITION), EPSILON);
+        assertEquals(64.0f, buffer.getFloat(RtPipelineCameraUbo.OFFSET_CAMERA_POSITION + 4), EPSILON);
+        assertEquals(-256.75f, buffer.getFloat(RtPipelineCameraUbo.OFFSET_CAMERA_POSITION + 8), EPSILON);
+        assertEquals(5.678f, buffer.getFloat(RtPipelineCameraUbo.OFFSET_PAD1), EPSILON);
 
         // Check trailing padding is zero
-        for (int i = 0; i < DirtRtCameraUbo.SIZE_TRAILING_PAD; i += 4) {
-            assertEquals(0.0f, buffer.getFloat(DirtRtCameraUbo.OFFSET_TRAILING_PAD + i), "Padding must be 0 at offset " + (DirtRtCameraUbo.OFFSET_TRAILING_PAD + i));
+        for (int i = 0; i < RtPipelineCameraUbo.SIZE_TRAILING_PAD; i += 4) {
+            assertEquals(0.0f, buffer.getFloat(RtPipelineCameraUbo.OFFSET_TRAILING_PAD + i), "Padding must be 0 at offset " + (RtPipelineCameraUbo.OFFSET_TRAILING_PAD + i));
         }
 
         // 4. Deserialize and compare
-        DirtRtCameraUbo deserialized = DirtRtCameraUbo.deserialize(buffer, 0);
+        RtPipelineCameraUbo deserialized = RtPipelineCameraUbo.deserialize(buffer, 0);
         assertEquals(ubo.getFrameId(), deserialized.getFrameId());
         assertEquals(ubo.getFlags(), deserialized.getFlags());
         assertEquals(ubo.getWorldType(), deserialized.getWorldType());
@@ -158,7 +158,7 @@ class DirtRtAbiTest {
         assertEquals(64.0f, camPos.y, EPSILON);
         assertEquals(-256.75f, camPos.z, EPSILON);
 
-        for (int i = 0; i < DirtRtCameraUbo.CORNER_RAY_COUNT; i++) {
+        for (int i = 0; i < RtPipelineCameraUbo.CORNER_RAY_COUNT; i++) {
             Vector4f expectedRay = ubo.getCornerRay(i);
             Vector4f actualRay = deserialized.getCornerRay(i);
             assertEquals(expectedRay.x, actualRay.x, EPSILON);
@@ -171,7 +171,7 @@ class DirtRtAbiTest {
     @Test
     @DisplayName("Camera corner rays calculation from FOV and aspect ratio")
     void testCameraCornerRaysComputation() {
-        DirtRtCameraUbo ubo = new DirtRtCameraUbo();
+        RtPipelineCameraUbo ubo = new RtPipelineCameraUbo();
 
         // 90 degrees FOV, aspect ratio = 1.0
         // tan(45 degrees) = 1.0
@@ -242,62 +242,62 @@ class DirtRtAbiTest {
     @Test
     @DisplayName("Vulkanite Quad and Vertex sizes and field offsets")
     void testQuadLayoutAndSizes() {
-        assertEquals(40, DirtRtQuadAdapter.VERTEX_SIZE, "Vertex must be exactly 40 bytes");
-        assertEquals(4, DirtRtQuadAdapter.VERTICES_PER_QUAD, "Quad must have 4 vertices");
-        assertEquals(160, DirtRtQuadAdapter.QUAD_SIZE, "Quad must be exactly 160 bytes (4 * 40B)");
+        assertEquals(40, RtPipelineQuadAdapter.VERTEX_SIZE, "Vertex must be exactly 40 bytes");
+        assertEquals(4, RtPipelineQuadAdapter.VERTICES_PER_QUAD, "Quad must have 4 vertices");
+        assertEquals(160, RtPipelineQuadAdapter.QUAD_SIZE, "Quad must be exactly 160 bytes (4 * 40B)");
 
         // Vertex field offsets
-        assertEquals(0, DirtRtQuadAdapter.OFFSET_POSITION);
-        assertEquals(12, DirtRtQuadAdapter.SIZE_POSITION, "position = 3 floats * 4B = 12B");
+        assertEquals(0, RtPipelineQuadAdapter.OFFSET_POSITION);
+        assertEquals(12, RtPipelineQuadAdapter.SIZE_POSITION, "position = 3 floats * 4B = 12B");
 
-        assertEquals(12, DirtRtQuadAdapter.OFFSET_TEXCOORD);
-        assertEquals(8, DirtRtQuadAdapter.SIZE_TEXCOORD, "texcoord = 2 floats * 4B = 8B");
+        assertEquals(12, RtPipelineQuadAdapter.OFFSET_TEXCOORD);
+        assertEquals(8, RtPipelineQuadAdapter.SIZE_TEXCOORD, "texcoord = 2 floats * 4B = 8B");
 
-        assertEquals(20, DirtRtQuadAdapter.OFFSET_NORMAL_TANGENT);
-        assertEquals(16, DirtRtQuadAdapter.SIZE_NORMAL_TANGENT, "normal_tangent = 4 floats * 4B = 16B");
+        assertEquals(20, RtPipelineQuadAdapter.OFFSET_NORMAL_TANGENT);
+        assertEquals(16, RtPipelineQuadAdapter.SIZE_NORMAL_TANGENT, "normal_tangent = 4 floats * 4B = 16B");
 
-        assertEquals(36, DirtRtQuadAdapter.OFFSET_BLOCK_ID);
-        assertEquals(4, DirtRtQuadAdapter.SIZE_BLOCK_ID, "blockId = uint32 * 4B = 4B");
+        assertEquals(36, RtPipelineQuadAdapter.OFFSET_BLOCK_ID);
+        assertEquals(4, RtPipelineQuadAdapter.SIZE_BLOCK_ID, "blockId = uint32 * 4B = 4B");
 
         // Verify contiguous layout
-        assertEquals(DirtRtQuadAdapter.OFFSET_TEXCOORD, DirtRtQuadAdapter.OFFSET_POSITION + DirtRtQuadAdapter.SIZE_POSITION);
-        assertEquals(DirtRtQuadAdapter.OFFSET_NORMAL_TANGENT, DirtRtQuadAdapter.OFFSET_TEXCOORD + DirtRtQuadAdapter.SIZE_TEXCOORD);
-        assertEquals(DirtRtQuadAdapter.OFFSET_BLOCK_ID, DirtRtQuadAdapter.OFFSET_NORMAL_TANGENT + DirtRtQuadAdapter.SIZE_NORMAL_TANGENT);
-        assertEquals(DirtRtQuadAdapter.VERTEX_SIZE, DirtRtQuadAdapter.OFFSET_BLOCK_ID + DirtRtQuadAdapter.SIZE_BLOCK_ID);
+        assertEquals(RtPipelineQuadAdapter.OFFSET_TEXCOORD, RtPipelineQuadAdapter.OFFSET_POSITION + RtPipelineQuadAdapter.SIZE_POSITION);
+        assertEquals(RtPipelineQuadAdapter.OFFSET_NORMAL_TANGENT, RtPipelineQuadAdapter.OFFSET_TEXCOORD + RtPipelineQuadAdapter.SIZE_TEXCOORD);
+        assertEquals(RtPipelineQuadAdapter.OFFSET_BLOCK_ID, RtPipelineQuadAdapter.OFFSET_NORMAL_TANGENT + RtPipelineQuadAdapter.SIZE_NORMAL_TANGENT);
+        assertEquals(RtPipelineQuadAdapter.VERTEX_SIZE, RtPipelineQuadAdapter.OFFSET_BLOCK_ID + RtPipelineQuadAdapter.SIZE_BLOCK_ID);
     }
 
     @Test
     @DisplayName("Quad serialization writes accurate bytes and validates little-endian encoding")
     void testQuadSerializationAndDeserialization() {
-        DirtRtQuadAdapter.Vertex v0 = new DirtRtQuadAdapter.Vertex(
+        RtPipelineQuadAdapter.Vertex v0 = new RtPipelineQuadAdapter.Vertex(
                 1.0f, 2.0f, 3.0f,
                 0.25f, 0.75f,
                 0.0f, 1.0f, 0.0f, 1.0f,
                 42
         );
-        DirtRtQuadAdapter.Vertex v1 = new DirtRtQuadAdapter.Vertex(
+        RtPipelineQuadAdapter.Vertex v1 = new RtPipelineQuadAdapter.Vertex(
                 4.0f, 5.0f, 6.0f,
                 0.5f, 0.5f,
                 0.0f, 1.0f, 0.0f, 1.0f,
                 42
         );
-        DirtRtQuadAdapter.Vertex v2 = new DirtRtQuadAdapter.Vertex(
+        RtPipelineQuadAdapter.Vertex v2 = new RtPipelineQuadAdapter.Vertex(
                 7.0f, 8.0f, 9.0f,
                 0.75f, 0.25f,
                 0.0f, 1.0f, 0.0f, 1.0f,
                 42
         );
-        DirtRtQuadAdapter.Vertex v3 = new DirtRtQuadAdapter.Vertex(
+        RtPipelineQuadAdapter.Vertex v3 = new RtPipelineQuadAdapter.Vertex(
                 10.0f, 11.0f, 12.0f,
                 1.0f, 0.0f,
                 0.0f, 1.0f, 0.0f, 1.0f,
                 42
         );
 
-        DirtRtQuadAdapter.Quad quad = new DirtRtQuadAdapter.Quad(v0, v1, v2, v3);
+        RtPipelineQuadAdapter.Quad quad = new RtPipelineQuadAdapter.Quad(v0, v1, v2, v3);
 
-        ByteBuffer buffer = ByteBuffer.allocate(DirtRtQuadAdapter.QUAD_SIZE);
-        DirtRtQuadAdapter.writeQuad(buffer, quad);
+        ByteBuffer buffer = ByteBuffer.allocate(RtPipelineQuadAdapter.QUAD_SIZE);
+        RtPipelineQuadAdapter.writeQuad(buffer, quad);
 
         assertEquals(160, buffer.position());
 
@@ -336,7 +336,7 @@ class DirtRtAbiTest {
         assertEquals(42, buffer.getInt(120 + 36));
 
         // Read back quad
-        DirtRtQuadAdapter.Quad readBack = DirtRtQuadAdapter.readQuad(buffer, 0);
+        RtPipelineQuadAdapter.Quad readBack = RtPipelineQuadAdapter.readQuad(buffer, 0);
         assertEquals(quad.v0().x(), readBack.v0().x(), EPSILON);
         assertEquals(quad.v1().y(), readBack.v1().y(), EPSILON);
         assertEquals(quad.v2().z(), readBack.v2().z(), EPSILON);
@@ -347,24 +347,24 @@ class DirtRtAbiTest {
     @DisplayName("Multi-quad serialization packed in contiguous array")
     void testMultiQuadSerialization() {
         int quadCount = 10;
-        int totalBytes = quadCount * DirtRtQuadAdapter.QUAD_SIZE; // 1600 bytes
+        int totalBytes = quadCount * RtPipelineQuadAdapter.QUAD_SIZE; // 1600 bytes
         ByteBuffer buffer = ByteBuffer.allocate(totalBytes);
 
-        List<DirtRtQuadAdapter.Quad> quads = new java.util.ArrayList<>();
+        List<RtPipelineQuadAdapter.Quad> quads = new java.util.ArrayList<>();
         for (int i = 0; i < quadCount; i++) {
-            DirtRtQuadAdapter.Vertex v = new DirtRtQuadAdapter.Vertex(
+            RtPipelineQuadAdapter.Vertex v = new RtPipelineQuadAdapter.Vertex(
                     i, i, i,
                     0, 0,
                     0, 1, 0, 1,
                     i * 10
             );
-            quads.add(new DirtRtQuadAdapter.Quad(v, v, v, v));
+            quads.add(new RtPipelineQuadAdapter.Quad(v, v, v, v));
         }
 
-        DirtRtQuadAdapter.writeQuads(buffer, quads);
+        RtPipelineQuadAdapter.writeQuads(buffer, quads);
         assertEquals(totalBytes, buffer.position());
 
-        List<DirtRtQuadAdapter.Quad> readBack = DirtRtQuadAdapter.readQuads(buffer, 0, quadCount);
+        List<RtPipelineQuadAdapter.Quad> readBack = RtPipelineQuadAdapter.readQuads(buffer, 0, quadCount);
         assertEquals(quadCount, readBack.size());
 
         for (int i = 0; i < quadCount; i++) {
@@ -378,7 +378,7 @@ class DirtRtAbiTest {
     void testNormalAndTangentMath() {
         // Horizontal quad on XZ plane facing +Y
         // v0=(0,0,0), v1=(1,0,0), v2=(1,0,1)
-        Vector3f normal = DirtRtQuadAdapter.computeFaceNormal(
+        Vector3f normal = RtPipelineQuadAdapter.computeFaceNormal(
                 0.0f, 0.0f, 0.0f,
                 1.0f, 0.0f, 0.0f,
                 1.0f, 0.0f, 1.0f,
@@ -393,7 +393,7 @@ class DirtRtAbiTest {
 
         // Counter-clockwise quad on XY plane facing +Z
         // v0=(0,0,0), v1=(1,0,0), v2=(0,1,0)
-        Vector3f normalZ = DirtRtQuadAdapter.computeFaceNormal(
+        Vector3f normalZ = RtPipelineQuadAdapter.computeFaceNormal(
                 0.0f, 0.0f, 0.0f,
                 1.0f, 0.0f, 0.0f,
                 0.0f, 1.0f, 0.0f,
@@ -404,7 +404,7 @@ class DirtRtAbiTest {
         assertEquals(1.0f, normalZ.z, EPSILON);
 
         // Tangent with standard UVs
-        Vector4f tangent = DirtRtQuadAdapter.computeTangent(
+        Vector4f tangent = RtPipelineQuadAdapter.computeTangent(
                 0.0f, 0.0f, 1.0f, // normal +Z
                 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, // v0
                 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, // v1 (+X, +U)
@@ -430,7 +430,7 @@ class DirtRtAbiTest {
                 0.0f, 1.0f
         };
 
-        DirtRtQuadAdapter.Quad quad = DirtRtQuadAdapter.createQuad(positions, uvs, 100);
+        RtPipelineQuadAdapter.Quad quad = RtPipelineQuadAdapter.createQuad(positions, uvs, 100);
         assertNotNull(quad);
         assertEquals(100, quad.v0().blockId());
         assertEquals(100, quad.v3().blockId());
@@ -444,13 +444,13 @@ class DirtRtAbiTest {
     // =========================================================================
 
     @Test
-    @DisplayName("Dirt RT pipeline passes, shader names, and extension verification")
+    @DisplayName("RT-pipeline passes, shader names, and extension verification")
     void testPipelineConfiguration() {
-        assertEquals("VK_KHR_ray_tracing_pipeline", DirtRtPipelineConfig.REQUIRED_EXTENSION);
-        assertEquals(3, DirtRtPipelineConfig.PASSES.size(), "Dirt RT requires exactly 3 ray tracing passes");
+        assertEquals("VK_KHR_ray_tracing_pipeline", RtPipelineConfig.REQUIRED_EXTENSION);
+        assertEquals(3, RtPipelineConfig.PASSES.size(), "The RT-pipeline pack requires exactly 3 ray tracing passes");
 
         // Pass 0: Diffuse
-        DirtRtPipelineConfig.RayPass pass0 = DirtRtPipelineConfig.RayPass.DIFFUSE;
+        RtPipelineConfig.RayPass pass0 = RtPipelineConfig.RayPass.DIFFUSE;
         assertEquals(0, pass0.passIndex());
         assertEquals("diffuse", pass0.passName());
         assertEquals("ray0.rgen", pass0.raygenShader());
@@ -460,7 +460,7 @@ class DirtRtAbiTest {
         assertEquals(2, pass0.firstLobeVal());
 
         // Pass 1: Reflection
-        DirtRtPipelineConfig.RayPass pass1 = DirtRtPipelineConfig.RayPass.REFLECTION;
+        RtPipelineConfig.RayPass pass1 = RtPipelineConfig.RayPass.REFLECTION;
         assertEquals(1, pass1.passIndex());
         assertEquals("reflection", pass1.passName());
         assertEquals("ray1.rgen", pass1.raygenShader());
@@ -470,7 +470,7 @@ class DirtRtAbiTest {
         assertEquals(1, pass1.firstLobeVal());
 
         // Pass 2: Refraction
-        DirtRtPipelineConfig.RayPass pass2 = DirtRtPipelineConfig.RayPass.REFRACTION;
+        RtPipelineConfig.RayPass pass2 = RtPipelineConfig.RayPass.REFRACTION;
         assertEquals(2, pass2.passIndex());
         assertEquals("refraction", pass2.passName());
         assertEquals("ray2.rgen", pass2.raygenShader());
@@ -484,35 +484,35 @@ class DirtRtAbiTest {
     @DisplayName("Descriptor sets 0, 1, 3 bindings and types")
     void testDescriptorSets() {
         // Set 0 bindings
-        assertEquals(6, DirtRtPipelineConfig.SET0_BINDINGS.size());
-        assertEquals(0, DirtRtPipelineConfig.SET0_CAMERA_INFO.binding());
-        assertEquals(DirtRtPipelineConfig.DescriptorType.UNIFORM_BUFFER, DirtRtPipelineConfig.SET0_CAMERA_INFO.type());
+        assertEquals(6, RtPipelineConfig.SET0_BINDINGS.size());
+        assertEquals(0, RtPipelineConfig.SET0_CAMERA_INFO.binding());
+        assertEquals(RtPipelineConfig.DescriptorType.UNIFORM_BUFFER, RtPipelineConfig.SET0_CAMERA_INFO.type());
 
-        assertEquals(1, DirtRtPipelineConfig.SET0_ACCELERATION_STRUCTURE.binding());
-        assertEquals(DirtRtPipelineConfig.DescriptorType.ACCELERATION_STRUCTURE_KHR, DirtRtPipelineConfig.SET0_ACCELERATION_STRUCTURE.type());
+        assertEquals(1, RtPipelineConfig.SET0_ACCELERATION_STRUCTURE.binding());
+        assertEquals(RtPipelineConfig.DescriptorType.ACCELERATION_STRUCTURE_KHR, RtPipelineConfig.SET0_ACCELERATION_STRUCTURE.type());
 
-        assertEquals(3, DirtRtPipelineConfig.SET0_BLOCK_TEX.binding());
-        assertEquals(DirtRtPipelineConfig.DescriptorType.COMBINED_IMAGE_SAMPLER, DirtRtPipelineConfig.SET0_BLOCK_TEX.type());
+        assertEquals(3, RtPipelineConfig.SET0_BLOCK_TEX.binding());
+        assertEquals(RtPipelineConfig.DescriptorType.COMBINED_IMAGE_SAMPLER, RtPipelineConfig.SET0_BLOCK_TEX.type());
 
-        assertEquals(4, DirtRtPipelineConfig.SET0_BLOCK_TEX_NORMAL.binding());
-        assertEquals(5, DirtRtPipelineConfig.SET0_BLOCK_TEX_SPECULAR.binding());
+        assertEquals(4, RtPipelineConfig.SET0_BLOCK_TEX_NORMAL.binding());
+        assertEquals(5, RtPipelineConfig.SET0_BLOCK_TEX_SPECULAR.binding());
 
-        assertEquals(6, DirtRtPipelineConfig.SET0_RAY_TRACE_DATA.binding());
-        assertEquals(DirtRtPipelineConfig.DescriptorType.STORAGE_IMAGE, DirtRtPipelineConfig.SET0_RAY_TRACE_DATA.type());
+        assertEquals(6, RtPipelineConfig.SET0_RAY_TRACE_DATA.binding());
+        assertEquals(RtPipelineConfig.DescriptorType.STORAGE_IMAGE, RtPipelineConfig.SET0_RAY_TRACE_DATA.type());
 
         // Set 1 bindings (Geometry buffers)
-        assertEquals(1, DirtRtPipelineConfig.SET1_BINDINGS.size());
-        assertEquals(0, DirtRtPipelineConfig.SET1_GEOMETRY_BUFFERS.binding());
-        assertEquals(DirtRtPipelineConfig.DescriptorType.STORAGE_BUFFER, DirtRtPipelineConfig.SET1_GEOMETRY_BUFFERS.type());
-        assertTrue(DirtRtPipelineConfig.SET1_GEOMETRY_BUFFERS.isArray());
+        assertEquals(1, RtPipelineConfig.SET1_BINDINGS.size());
+        assertEquals(0, RtPipelineConfig.SET1_GEOMETRY_BUFFERS.binding());
+        assertEquals(RtPipelineConfig.DescriptorType.STORAGE_BUFFER, RtPipelineConfig.SET1_GEOMETRY_BUFFERS.type());
+        assertTrue(RtPipelineConfig.SET1_GEOMETRY_BUFFERS.isArray());
 
         // Set 3 bindings (Output SSBOs)
-        assertEquals(5, DirtRtPipelineConfig.SET3_BINDINGS.size());
-        assertEquals(0, DirtRtPipelineConfig.SET3_GEOM_BUFFER.binding());
-        assertEquals(1, DirtRtPipelineConfig.SET3_FRAME_DATA.binding());
-        assertEquals(2, DirtRtPipelineConfig.SET3_DIFFUSE_BUFFER.binding());
-        assertEquals(3, DirtRtPipelineConfig.SET3_REFLECT_BUFFER.binding());
-        assertEquals(4, DirtRtPipelineConfig.SET3_REFRACT_BUFFER.binding());
+        assertEquals(5, RtPipelineConfig.SET3_BINDINGS.size());
+        assertEquals(0, RtPipelineConfig.SET3_GEOM_BUFFER.binding());
+        assertEquals(1, RtPipelineConfig.SET3_FRAME_DATA.binding());
+        assertEquals(2, RtPipelineConfig.SET3_DIFFUSE_BUFFER.binding());
+        assertEquals(3, RtPipelineConfig.SET3_REFLECT_BUFFER.binding());
+        assertEquals(4, RtPipelineConfig.SET3_REFRACT_BUFFER.binding());
     }
 
     @Test
@@ -523,27 +523,27 @@ class DirtRtAbiTest {
         long pixelCount = (long) width * height; // 2,073,600 pixels
 
         // GeometryMaterialBuffer: 128 bytes/pixel
-        DirtRtPipelineConfig.OutputBuffer geom = DirtRtPipelineConfig.OutputBuffer.GEOMETRY_MATERIAL;
+        RtPipelineConfig.OutputBuffer geom = RtPipelineConfig.OutputBuffer.GEOMETRY_MATERIAL;
         assertEquals(128, geom.bytesPerPixel());
         assertEquals(pixelCount * 128, geom.calculateSizeBytes(width, height)); // 265,420,800 bytes
 
         // FrameData: 1024 bytes fixed
-        DirtRtPipelineConfig.OutputBuffer frameData = DirtRtPipelineConfig.OutputBuffer.FRAME_DATA;
+        RtPipelineConfig.OutputBuffer frameData = RtPipelineConfig.OutputBuffer.FRAME_DATA;
         assertEquals(1024, frameData.fixedSizeBytes());
         assertEquals(1024, frameData.calculateSizeBytes(width, height));
 
         // DiffuseBuffer: 96 bytes/pixel
-        DirtRtPipelineConfig.OutputBuffer diffuse = DirtRtPipelineConfig.OutputBuffer.DIFFUSE;
+        RtPipelineConfig.OutputBuffer diffuse = RtPipelineConfig.OutputBuffer.DIFFUSE;
         assertEquals(96, diffuse.bytesPerPixel());
         assertEquals(pixelCount * 96, diffuse.calculateSizeBytes(width, height)); // 199,065,600 bytes
 
         // ReflectBuffer: 64 bytes/pixel
-        DirtRtPipelineConfig.OutputBuffer reflect = DirtRtPipelineConfig.OutputBuffer.REFLECT;
+        RtPipelineConfig.OutputBuffer reflect = RtPipelineConfig.OutputBuffer.REFLECT;
         assertEquals(64, reflect.bytesPerPixel());
         assertEquals(pixelCount * 64, reflect.calculateSizeBytes(width, height)); // 132,710,400 bytes
 
         // RefractBuffer: 64 bytes/pixel
-        DirtRtPipelineConfig.OutputBuffer refract = DirtRtPipelineConfig.OutputBuffer.REFRACT;
+        RtPipelineConfig.OutputBuffer refract = RtPipelineConfig.OutputBuffer.REFRACT;
         assertEquals(64, refract.bytesPerPixel());
         assertEquals(pixelCount * 64, refract.calculateSizeBytes(width, height)); // 132,710,400 bytes
     }
@@ -551,7 +551,7 @@ class DirtRtAbiTest {
     @Test
     @DisplayName("SBT layout striding and alignment calculations")
     void testSbtLayout() {
-        DirtRtPipelineConfig.SbtLayout sbt = new DirtRtPipelineConfig.SbtLayout(32, 32, 64);
+        RtPipelineConfig.SbtLayout sbt = new RtPipelineConfig.SbtLayout(32, 32, 64);
 
         assertEquals(32, sbt.handleSize());
         assertEquals(32, sbt.handleSizeAligned());

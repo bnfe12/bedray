@@ -1,9 +1,9 @@
-package io.github.andrexarlay.vulkancompat.shaderhost.dirtrt;
+package io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline;
 
 import io.github.andrexarlay.vulkanbridge.api.FeatureRequest;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.DirtRtShaderBundle;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipeline.PassShaders;
-import io.github.andrexarlay.vulkancompat.shaderhost.dirtrt.DirtRtPipelineConfig.RayPass;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipeline.RtShaderBundle;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipeline.PassShaders;
+import io.github.andrexarlay.vulkancompat.shaderhost.rtpipeline.RtPipelineConfig.RayPass;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.IncludeExpander;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvCompiler;
 import io.github.andrexarlay.vulkancompat.shaderhost.glsl.SpirvFeatureRequirements;
@@ -37,14 +37,14 @@ import java.util.TreeMap;
  * The binding table at the end states, per reflected binding, whether the host has a producer for it. Only a binding with a
  * producer may ever be bound; the trace stays blocked while any binding lacks one.
  */
-public final class DirtRtPackProgram {
+public final class RtPipelinePackProgram {
 
     /** Host producers that exist in Bedray code today, keyed by "set.binding" and descriptor kind. */
     public enum Producer {
         /** Bedray's camera-relative scene TLAS (RtWorld), rebuilt every frame while hardware RT renders. */
         HOST_TLAS("Bedray scene TLAS (custom index = Bedray section slot, not a Vulkanite geometry index)"),
-        /** CameraInfo block packed by {@link DirtRtCameraUbo}. */
-        HOST_CAMERA_UBO("CameraInfo packed by DirtRtCameraUbo"),
+        /** CameraInfo block packed by {@link RtPipelineCameraUbo}. */
+        HOST_CAMERA_UBO("CameraInfo packed by RtPipelineCameraUbo"),
         NONE("no host producer");
 
         public final String description;
@@ -64,14 +64,14 @@ public final class DirtRtPackProgram {
     }
 
     /**
-     * @param bundle      compiled stages in the order {@link DirtRtPipeline} expects
+     * @param bundle      compiled stages in the order {@link RtPipeline} expects
      * @param stages      per-stage compile results (12 entries)
      * @param bindings    merged descriptor bindings with stage flags and host producer
      * @param features    device features the compiled code requires (from SPIR-V capabilities + scalar layout)
      * @param featureText capability names behind {@link #features}
      * @param optionsChanged number of pack options that differ from source defaults (Iris saved settings applied)
      */
-    public record Result(String packName, DirtRtShaderBundle bundle, List<Compiled> stages, List<BindingStatus> bindings,
+    public record Result(String packName, RtShaderBundle bundle, List<Compiled> stages, List<BindingStatus> bindings,
                          List<FeatureRequest> features, List<String> featureText, int optionsChanged) {
         public List<BindingStatus> missing() {
             return bindings.stream().filter(b -> b.producer() == Producer.NONE).toList();
@@ -86,7 +86,7 @@ public final class DirtRtPackProgram {
         }
     }
 
-    private DirtRtPackProgram() {}
+    private RtPipelinePackProgram() {}
 
     /** True when the report describes a pack this loader can try: a ray-tracing-pipeline pack with exactly ray0..ray2. */
     public static String unsupportedReason(PackReport report) {
@@ -110,9 +110,9 @@ public final class DirtRtPackProgram {
                     : new String(src.read(entry), StandardCharsets.UTF_8);
             };
             Map<String, String> macros = Map.of();
-            List<Compiled> stages = new ArrayList<>(DirtRtPipeline.TOTAL_STAGES);
+            List<Compiled> stages = new ArrayList<>(RtPipelineLayouts.TOTAL_STAGES);
             Map<RayPass, Compiled[]> byPass = new LinkedHashMap<>();
-            for (RayPass pass : DirtRtPipelineConfig.PASSES) {
+            for (RayPass pass : RtPipelineConfig.PASSES) {
                 String[] files = {pass.raygenShader(), pass.missShader(), pass.closestHitShader(), pass.anyHitShader()};
                 Kind[] kinds = {Kind.RAYGEN, Kind.MISS, Kind.CLOSEST_HIT, Kind.ANY_HIT};
                 Compiled[] compiled = new Compiled[4];
@@ -124,8 +124,8 @@ public final class DirtRtPackProgram {
                 }
                 byPass.put(pass, compiled);
             }
-            // DirtRtPipeline stage order is RAYGEN, MISS, CLOSEST_HIT, ANY_HIT (ShaderStageType order).
-            DirtRtShaderBundle bundle = new DirtRtShaderBundle(
+            // RtPipeline stage order is RAYGEN, MISS, CLOSEST_HIT, ANY_HIT (ShaderStageType order).
+            RtShaderBundle bundle = new RtShaderBundle(
                 passShaders(RayPass.DIFFUSE, byPass), passShaders(RayPass.REFLECTION, byPass), passShaders(RayPass.REFRACTION, byPass));
 
             List<SpirvReflection.Module> modules = stages.stream().map(Compiled::module).toList();
