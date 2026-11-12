@@ -24,7 +24,7 @@ public class UpscalerModeLabelTest {
     public void everyOfferedModeHasALabel() {
         for (UpscalerBackend backend : UpscalerBackend.values()) {
             for (UpscalerMode mode : UpscalerModes.modesFor(backend)) {
-                assertDoesNotThrow(() -> VulkanSodiumConfig.modeName(backend, mode),
+                assertDoesNotThrow(() -> UpscalerOptionTexts.modeName(backend, mode),
                     "the video settings screen renders the name of every allowed value: " + backend + " " + mode);
             }
         }
@@ -33,7 +33,7 @@ public class UpscalerModeLabelTest {
     @Test
     public void customModeShowsTheUserPercent() {
         VulkanRtxConfig.setCustomPercent(UpscalerBackend.FSR, 67);
-        String suffix = VulkanSodiumConfig.ratioSuffix(UpscalerBackend.FSR, UpscalerMode.CUSTOM);
+        String suffix = UpscalerOptionTexts.ratioSuffix(UpscalerBackend.FSR, UpscalerMode.CUSTOM);
         assertTrue(suffix.contains("67.0%"), "the render scale of CUSTOM is the user's percent, got " + suffix);
         assertTrue(suffix.contains("1.5x"), "67% is a ratio of 100/67 = 1.49, got " + suffix);
     }
@@ -42,11 +42,11 @@ public class UpscalerModeLabelTest {
     public void bindingLogValueNeverThrows() {
         for (UpscalerBackend backend : UpscalerBackend.values()) {
             for (UpscalerMode mode : UpscalerModes.modesFor(backend)) {
-                assertDoesNotThrow(() -> VulkanSodiumConfig.qualityRatioForLog(backend, mode),
+                assertDoesNotThrow(() -> UpscalerOptionTexts.qualityRatioForLog(backend, mode),
                     "selecting " + mode + " on " + backend + " must not crash the binding");
             }
         }
-        assertEquals("runtime-ngx", VulkanSodiumConfig.qualityRatioForLog(UpscalerBackend.DLSS, UpscalerMode.QUALITY),
+        assertEquals("runtime-ngx", UpscalerOptionTexts.qualityRatioForLog(UpscalerBackend.DLSS, UpscalerMode.QUALITY),
             "DLSS has no table ratio: the render size is queried from NGX");
     }
 }

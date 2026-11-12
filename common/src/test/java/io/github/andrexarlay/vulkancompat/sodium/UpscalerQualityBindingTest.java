@@ -46,9 +46,9 @@ class UpscalerQualityBindingTest {
                     assertNotNull(assertDoesNotThrow(() -> names.get(path).apply(mode)), path + " names " + mode);
                 }
             }
-            assertEquals("runtime-ngx", VulkanSodiumConfig.qualityRatioForLog(UpscalerBackend.DLSS, UpscalerMode.QUALITY));
-            assertEquals("runtime-ngx", VulkanSodiumConfig.qualityRatioForLog(UpscalerBackend.DLSS, UpscalerMode.CUSTOM));
-            assertTrue(VulkanSodiumConfig.qualityRatioForLog(UpscalerBackend.FSR, UpscalerMode.CUSTOM).endsWith("-requested-custom"));
+            assertEquals("runtime-ngx", UpscalerOptionTexts.qualityRatioForLog(UpscalerBackend.DLSS, UpscalerMode.QUALITY));
+            assertEquals("runtime-ngx", UpscalerOptionTexts.qualityRatioForLog(UpscalerBackend.DLSS, UpscalerMode.CUSTOM));
+            assertTrue(UpscalerOptionTexts.qualityRatioForLog(UpscalerBackend.FSR, UpscalerMode.CUSTOM).endsWith("-requested-custom"));
         } finally {
             VulkanRtxConfig.activeBackend = oldBackend;
             VulkanRtxConfig.dlssMode = oldDlss;
