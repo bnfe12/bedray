@@ -313,10 +313,11 @@ final class NativeSceneBridge implements AutoCloseable, NativeSectionCapture.Sin
         recordings.release("release_frame", commandBuffer, frame -> library.releaseFrame(scene, frame));
     }
 
-    void discardRecording(long commandBuffer) {
-        if (!recordings.release("discard_frame", commandBuffer, frame -> library.discardFrame(scene, frame))) return;
+    boolean discardRecording(long commandBuffer) {
+        if (!recordings.release("discard_frame", commandBuffer, frame -> library.discardFrame(scene, frame))) return false;
         tlas = 0;
         table = null;
+        return true;
     }
 
     private void flushUpdates() {
