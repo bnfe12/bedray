@@ -156,6 +156,7 @@ struct PlannedCopy {
    failure. Mirrors the new_tlas plan/commit/cleanup pattern. */
 struct CompactionCopy {
     uint64_t section_id = 0;
+    uint32_t query_slot = 0;
     Section* section = nullptr;
     Acceleration compact;
     VkAccelerationStructureKHR src_handle = VK_NULL_HANDLE;
@@ -307,6 +308,10 @@ bool process_compaction(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
     }
     for (auto it = scene.compaction_jobs.begin(); it != scene.compaction_jobs.end();) {
         CompactionJob& job = *it;
+        if (!can_collect(scene, job.build_frame)) {
+            ++it;
+            continue;
+        }
         const auto sec = scene.sections.find(job.section_id);
         const bool stale = sec == scene.sections.end()
             || sec->second.geometry.get() != job.geometry
@@ -314,10 +319,6 @@ bool process_compaction(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         if (stale) {
             free_compaction_slot(scene, job.query_slot);
             it = scene.compaction_jobs.erase(it);
-            continue;
-        }
-        if (!can_collect(scene, job.build_frame)) {
-            ++it;
             continue;
         }
         uint64_t compact_size = 0;
@@ -333,16 +334,20 @@ bool process_compaction(Scene& scene, PreparePlan& plan, bool& tlas_changed, Bed
         }
         CompactionCopy copy;
         copy.section_id = job.section_id;
+        copy.query_slot = job.query_slot;
         copy.section = &sec->second;
         copy.src_handle = job.geometry->blas.handle;
         if (!create_acceleration_object(scene, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
                 compact_size, copy.compact, error)) {
-            free_compaction_slot(scene, job.query_slot);
+            /* The job keeps its query slot: a failed prepare must not release a
+               slot whose query write may still be referenced on retry. */
             return false;
         }
+        /* Ownership of the slot stays with the job until commit_plan frees it.
+           Erasing here would lose the job if a later step of this prepare fails
+           and cleanup_plan rolls the compact back. */
         plan.compactions.push_back(std::move(copy));
-        free_compaction_slot(scene, job.query_slot);
-        it = scene.compaction_jobs.erase(it);
+        ++it;
         tlas_changed = true;
     }
     return true;
@@ -1324,6 +1329,14 @@ void commit_plan(
         scene.retired_accelerations.push_back({ section.geometry->blas, desc.frame_index });
         section.geometry->blas = compaction.compact;
         compaction.compact = Acceleration{};
+        /* The swap is now durable: release the query slot and drop the job. */
+        free_compaction_slot(scene, compaction.query_slot);
+        for (auto it = scene.compaction_jobs.begin(); it != scene.compaction_jobs.end(); ++it) {
+            if (it->query_slot == compaction.query_slot) {
+                scene.compaction_jobs.erase(it);
+                break;
+            }
+        }
     }
 
     for (GeometryJob& job : plan.jobs) {

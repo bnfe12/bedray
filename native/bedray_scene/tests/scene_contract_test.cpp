@@ -183,6 +183,7 @@ struct State {
     uint64_t next_buffer_address = 0x100000010ull; // valid buffer address, deliberately not AS scratch-aligned
     uint64_t next_accel_address = 0x200000000ull;
     int fail_create_buffer_countdown = -1;
+    VkResult create_buffer_failure = VK_ERROR_DEVICE_LOST;
     bool zero_device_address = false;
     int faults = 0;
 };
@@ -296,7 +297,7 @@ static void VKAPI_CALL fakeGetPhysicalDeviceProperties2(
 static VkResult VKAPI_CALL fakeCreateBuffer(
     VkDevice, const VkBufferCreateInfo* info, const VkAllocationCallbacks*, VkBuffer* out) {
     if (fake::g.fail_create_buffer_countdown == 0) {
-        return VK_ERROR_DEVICE_LOST;
+        return fake::g.create_buffer_failure;
     }
     if (fake::g.fail_create_buffer_countdown > 0) {
         --fake::g.fail_create_buffer_countdown;
@@ -1761,6 +1762,86 @@ static void test_section_blas_compacts_after_release() {
     fixture.release(3);
 }
 
+static Mesh compaction_mesh() {
+    Mesh mesh;
+    for (uint16_t q = 0; q < 16; ++q) {
+        const float x = static_cast<float>(q);
+        mesh.vertices.insert(mesh.vertices.end(), {
+            x, 0.0f, 0.0f, x + 1.0f, 0.0f, 0.0f,
+            x + 1.0f, 1.0f, 0.0f, x, 1.0f, 0.0f });
+        const uint16_t base = q * 4;
+        const uint16_t quad_indices[6] = { 0, 1, 2, 0, 2, 3 };
+        for (uint16_t index : quad_indices) {
+            mesh.indices.push_back(base + index);
+        }
+    }
+    return mesh;
+}
+
+static void test_compaction_allocation_retry_keeps_query_slots_unique() {
+    Fixture fixture(2);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x710);
+    fixture.release(1);
+    fake::g.create_buffer_failure = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    fake::g.fail_create_buffer_countdown = 0;
+    CHECK_STATUS(fixture.prepare_status(2, 0x711), BEDRAY_SCENE_ERROR_OUT_OF_MEMORY);
+    CHECK(fake::g.as_copies.empty());
+    fake::g.fail_create_buffer_countdown = -1;
+    fixture.prepare(2, 0x711);
+    CHECK(fake::g.as_copies.size() == 1);
+    fixture.release(2);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(3, 1, mesh), BEDRAY_SCENE_OK);
+    const size_t first_query = fake::g.as_property_writes.size();
+    fixture.prepare(3, 0x712);
+    CHECK(fake::g.as_property_writes.size() == first_query + 2);
+    if (fake::g.as_property_writes.size() == first_query + 2) {
+        CHECK(fake::g.as_property_writes[first_query].query_slot
+            != fake::g.as_property_writes[first_query + 1].query_slot);
+    }
+    fixture.release(3);
+}
+
+static void test_stale_compaction_query_waits_for_build_completion() {
+    Fixture fixture(2);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x720);
+    CHECK_STATUS(fixture.add_section(1, 2, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(2, 0x721);
+    CHECK(fake::g.as_property_writes.size() == 2);
+    if (fake::g.as_property_writes.size() == 2) {
+        CHECK(fake::g.as_property_writes[0].query_slot != fake::g.as_property_writes[1].query_slot);
+    }
+    CHECK(fake::g.as_copies.empty());
+    fixture.release(1);
+    fixture.release(2);
+    fixture.prepare(3, 0x722);
+    CHECK(fake::g.as_copies.size() == 1);
+    fixture.release(3);
+}
+
+static void test_failed_prepare_retries_all_planned_compactions() {
+    Fixture fixture(2);
+    const Mesh mesh = compaction_mesh();
+    CHECK_STATUS(fixture.add_section(1, 1, mesh), BEDRAY_SCENE_OK);
+    CHECK_STATUS(fixture.add_section(2, 1, mesh), BEDRAY_SCENE_OK);
+    fixture.prepare(1, 0x730);
+    fixture.release(1);
+    const size_t live_accels = fake::g.accels.size();
+    fake::g.create_buffer_failure = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    fake::g.fail_create_buffer_countdown = 1;
+    CHECK_STATUS(fixture.prepare_status(2, 0x731), BEDRAY_SCENE_ERROR_OUT_OF_MEMORY);
+    CHECK(fake::g.accels.size() == live_accels);
+    CHECK(fake::g.as_copies.empty());
+    fake::g.fail_create_buffer_countdown = -1;
+    fixture.prepare(2, 0x731);
+    CHECK(fake::g.as_copies.size() == 2);
+    fixture.release(2);
+}
+
 static void test_update_copies_inputs_and_coalesces_pending() {
     Fixture fixture(1);
     Mesh mesh = quad_mesh(0.0f, 0.0f, 0.0f);
@@ -2275,6 +2356,9 @@ int main() {
     test_replacement_blas_relinks_a_live_cached_tlas_without_a_build();
     test_rebuild_without_update_capability_retires_after_frame();
     test_section_blas_compacts_after_release();
+    test_compaction_allocation_retry_keeps_query_slots_unique();
+    test_stale_compaction_query_waits_for_build_completion();
+    test_failed_prepare_retries_all_planned_compactions();
     test_table_coalescing_and_clear();
     test_stale_in_use_and_destroy();
     test_update_is_transactional();
