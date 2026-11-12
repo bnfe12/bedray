@@ -378,9 +378,9 @@ public final class SettingsCatalog {
             "Needs ray tracing on.",
             "A still shows the look directly; switch live to compare.");
         putNoImage("vibrant_visuals", Tier.ADVANCED, "Vibrant Visuals",
-            "Mojang-style vibrant palette: richer grass and water tones, higher colour contrast and a soft cinematic bloom.",
-            "", "Needs ray tracing on.",
-            "A still shows the palette directly.");
+            "Mojang-style vibrant palette: richer saturation and higher colour contrast on the tone-mapped picture. The built-in Vibrant preset pairs it with the ACES tone curve.",
+            "FPS: none - a per-pixel grade in the display pass.", "Needs ray tracing on.",
+            "A still shows the palette directly; toggle live to compare.");
         putNoImage("vignette", Tier.ADVANCED, "Vignette",
             "Darkens the corners of the picture for a cinematic, lens-like falloff. The centre is untouched; only the edges lose brightness.",
             "FPS: none - a per-pixel multiply in the display pass.", "Needs ray tracing on.",

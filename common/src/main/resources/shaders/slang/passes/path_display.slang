@@ -48,6 +48,9 @@ static const uint PATH_DISPLAY_TONEMAPPER_MASK = 7u;
 // the native core forwards them verbatim. Both are per-pixel, so they never read a texel this dispatch is overwriting.
 static const uint PATH_DISPLAY_FLAG_VIGNETTE = 1u << 8u;
 static const uint PATH_DISPLAY_FLAG_GRAIN = 1u << 9u;
+// Vibrant Visuals colour grade (saturation + contrast) rides in spare bit 10, the same verbatim channel as the looks
+// above: the host ORs it into display_flags and the native core forwards it untouched, so no ABI field is needed.
+static const uint PATH_DISPLAY_FLAG_VIBRANT = 1u << 10u;
 
 // path_trace_scene.slang writes this for a primary miss; such a pixel has no position to reproject.
 static const float PATH_DISPLAY_SKY_DEPTH = 999999.0;
@@ -229,6 +232,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 exposed = mean * max(pc.exposure, 0.0);
     uint tmMode = (pc.flags >> PATH_DISPLAY_TONEMAPPER_SHIFT) & PATH_DISPLAY_TONEMAPPER_MASK;
     float3 display = (pc.flags & PATH_DISPLAY_FLAG_TONEMAP) != 0u ? tonemapColorMode(exposed, tmMode) : saturate(exposed);
+    // Vibrant grade first, so the saturation/contrast lift acts on the tone-mapped colour before the corner falloff and
+    // grain. Fixed strengths: the push has no spare float. LDR display colour only, never accum.
+    if ((pc.flags & PATH_DISPLAY_FLAG_VIBRANT) != 0u) {
+        display = postVibrant(display, 1.30, 1.12);
+    }
     // Fixed strengths: the push has no spare float. Applied to the LDR display colour only, never to accum, so the
     // running mean stays clean and the grain animates without polluting the converged history.
     float2 uv = (float2(p) + 0.5) / float2(size);
