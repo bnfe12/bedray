@@ -110,7 +110,7 @@ class RtFrameResourcesTest {
         var failure = assertThrows(OutOfMemoryError.class, () -> resources.ensureOutput(16, 16));
         assertEquals("injected image allocation", failure.getMessage());
         assertEquals(2, failure.getSuppressed().length);
-        assertEquals(5, allocator.images.size());
+        assertEquals(6, allocator.images.size());
         assertThrows(IllegalStateException.class, resources::close);
         allocator.failedDestroy.clear();
         resources.close();
@@ -122,7 +122,7 @@ class RtFrameResourcesTest {
         resources.ensureOutput(8, 8);
         var transitions = new AtomicInteger();
         resources.prepare(17, image -> transitions.incrementAndGet());
-        assertEquals(3, transitions.get());
+        assertEquals(4, transitions.get());
         assertThrows(IllegalStateException.class, () -> resources.prepare(29, image -> fail("initializer unproven")));
         assertThrows(IllegalStateException.class, () -> resources.ensureOutput(16, 16));
         resources.releaseRecording(17);
@@ -141,7 +141,7 @@ class RtFrameResourcesTest {
         }));
         resources.discardRecording(17);
         resources.prepare(29, image -> calls.incrementAndGet());
-        assertEquals(5, calls.get());
+        assertEquals(6, calls.get());
         resources.releaseRecording(29);
         resources.close();
     }
