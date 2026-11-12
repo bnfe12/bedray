@@ -26,7 +26,8 @@ static const uint EMITTER_RECORD_FLOATS = 24u;
 // Light every block source throws onto its surroundings, on top of the face gains above (the emissive face itself keeps
 // SURFACE_EMISSION_GAIN). Every lamp, torch and lantern lit a pool about two blocks wide where Bedrock RTX lights a
 // room-sized pool from the same block (owner screenshots, 2026-11-11: "every light source", not only torches).
-static const float EMITTER_LIGHT_GAIN = 1.8;
+// 1.8 lit a room of mixed lamps far past daylight (owner: "the sources are just too bright", scene N, 2026-11-12).
+static const float EMITTER_LIGHT_GAIN = 1.2;
 
 // Falloff of a source.
 float emitterAttenuation(float d2) {
@@ -68,7 +69,7 @@ static const float BLOCK_LIGHT_FAR_FULL = 0.999;
 // player already sees around the torch, so the field is divided by ~20.  One gain keeps the shape: light.x falls like
 // the level (13 -> 1 over 15 blocks) and the traced attenuation falls like d^-1.25 over the same span.
 // 0.05 * EMITTER_LIGHT_GAIN, so the handover band stays continuous.
-static const float BLOCK_LIGHT_FIELD_GAIN = 0.09;
+static const float BLOCK_LIGHT_FIELD_GAIN = 0.06;
 // The hue of the field.  The deleted renderer sampled the lightmap at its full-block-light-in-darkness texel, so the
 // tint followed the resource pack, the dimension and the effects; a typed path pass binds no lightmap (the native core
 // validates the exact descriptor count of both path passes), so this is the warm tint that predated that sampling.  A
@@ -117,7 +118,9 @@ float3 emitterAttenuationColor(float3 tex) {
     }
     // Category 6: amethyst, crying obsidian, nether portal.
     if (c.r > 0.45 && c.b > 0.55 && c.g < 0.45) {
-        return float3(0.85, 0.30, 1.0) * 1.2 * lerp(m, 1.0, 0.4);
+        // Light level 10-11 in the game (crying obsidian, amethyst) against 15 of a lamp: it lit the floor purple as
+        // strongly as a glowstone did (scene N, 2026-11-12).
+        return float3(0.85, 0.30, 1.0) * 0.6 * lerp(m, 1.0, 0.4);
     }
     // Category 7: end rod and purpur.
     if (c.r > 0.6 && c.b > 0.75 && c.g >= 0.45) {

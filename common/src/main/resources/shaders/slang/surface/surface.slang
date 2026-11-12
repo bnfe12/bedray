@@ -112,9 +112,12 @@ struct MaterialSamplingOptions {
     uint  flags;              // MATERIAL_SAMPLING_FLAG_*
 };
 
-// Mirror of EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN in light/block_emitters.slang (which imports this module, so the constant
-// cannot be shared); RtSlangEmissionConsistencyTest keeps the two equal.
-static const float SURFACE_EMISSION_GAIN = 6.6;
+// The face is shown at SURFACE_FACE_RATIO of EMISSIVE_GAIN * EMISSIVE_FLUX_GAIN (light/block_emitters.slang imports this
+// module, so the constant cannot be shared; RtSlangEmissionConsistencyTest checks the ratio). At the full 6.6 every lamp
+// face - sea lantern, froglights, shroomlight - burned to a white block without colour or texture (owner, autotest scene
+// N, 2026-11-12); at 3.0 the face keeps its pattern and a torch flame still reaches the bloom.
+static const float SURFACE_FACE_RATIO = 0.4545;
+static const float SURFACE_EMISSION_GAIN = 3.0;
 
 MaterialSamplingOptions defaultMaterialSamplingOptions() {
     MaterialSamplingOptions options;

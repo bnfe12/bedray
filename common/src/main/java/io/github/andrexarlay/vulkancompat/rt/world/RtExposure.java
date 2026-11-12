@@ -8,7 +8,10 @@ package io.github.andrexarlay.vulkancompat.rt.world;
  * otherwise adding lights can only clip the image, regardless of the luminance meter.
  */
 public final class RtExposure {
-    public static final float KEY = 0.22f;
+    // 0.22 * 2^-0.75: the artist bias of RTX Remix Minecraft (packaging/rtx.conf, "the artist's -0.75 EV bias" in
+    // rtx.localtonemap.exposure). At 0.22 a room lit only by lamps was metered up to daylight brightness and every source
+    // read as too bright (owner, autotest scenes J and N, 2026-11-12).
+    public static final float KEY = 0.131f;
     public static final float FIXED = 1.1f;
     public static final float MIN = 1.0f / 64.0f;
     /**

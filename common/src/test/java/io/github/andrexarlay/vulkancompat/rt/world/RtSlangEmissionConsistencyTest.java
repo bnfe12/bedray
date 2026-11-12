@@ -24,8 +24,8 @@ class RtSlangEmissionConsistencyTest {
         String emitters = Files.readString(Path.of("src/main/resources/shaders/slang/light/block_emitters.slang"));
         String surface = Files.readString(Path.of("src/main/resources/shaders/slang/surface/surface.slang"));
         float light = constant(emitters, "EMISSIVE_GAIN") * constant(emitters, "EMISSIVE_FLUX_GAIN");
-        assertEquals(light, constant(surface, "SURFACE_EMISSION_GAIN"), 1.0e-4f,
-            "the camera sees an emitter at the radiance its NEE carries");
+        assertEquals(light * constant(surface, "SURFACE_FACE_RATIO"), constant(surface, "SURFACE_EMISSION_GAIN"), 1.0e-3f,
+            "the camera sees an emitter face at a fixed share of the radiance its NEE carries");
         assertTrue(surface.contains("options.emissionScale = SURFACE_EMISSION_GAIN;"), "and the default options use it");
     }
 }

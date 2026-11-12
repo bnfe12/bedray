@@ -40,7 +40,7 @@ class RtSlangDistantBlockLightTest {
     // Mirrors of the shader constants.  Duplicate literals on purpose: if either side drifts, the mirror stops
     // describing what ships and the numeric tests below stop meaning anything.
     private static final float EMITTER_RADIUS = 24.0f;
-    private static final float FIELD_GAIN = 0.09f;
+    private static final float FIELD_GAIN = 0.06f;
     private static final float FAR_FULL = 0.999f;
     private static final int OPTION_BLOCK_EMITTERS = 1 << 16;
 
@@ -90,7 +90,7 @@ class RtSlangDistantBlockLightTest {
     @Test
     void theFieldIsScaledToTheTracedEmitters() {
         String emitters = read(EMITTERS);
-        assertTrue(emitters.contains("static const float BLOCK_LIGHT_FIELD_GAIN = 0.09;"),
+        assertTrue(emitters.contains("static const float BLOCK_LIGHT_FIELD_GAIN = 0.06;"),
             "the lightmap texel is ~0.87 at level 13 while the traced torch reads ~0.05: the field has to be divided by"
                 + " ~20 or the far field is 5..15x brighter than the same torch next to the player");
         assertTrue(emitters.contains("static const float3 BLOCK_LIGHT_FIELD_TINT = float3(1.0, 0.82, 0.60);"),
@@ -103,9 +103,9 @@ class RtSlangDistantBlockLightTest {
         assertEquals(1, count(emitters, "BLOCK_LIGHT_FIELD_GAIN;"), "the gain is applied exactly once");
 
         float[] half = vanilla(0.5f);
-        assertEquals(0.045f, half[0], 1.0e-7f, "level 0.5 * 0.09");
-        assertEquals(0.0369f, half[1], 1.0e-6f, "the tint keeps the field warm");
-        assertEquals(0.027f, half[2], 1.0e-6f);
+        assertEquals(0.03f, half[0], 1.0e-7f, "level 0.5 * 0.06");
+        assertEquals(0.0246f, half[1], 1.0e-6f, "the tint keeps the field warm");
+        assertEquals(0.018f, half[2], 1.0e-6f);
         assertEquals(0.0f, vanilla(0.0f)[0], 0.0f, "a face with no vanilla block light has no field");
         assertEquals(vanilla(1.0f)[0], vanilla(4.0f)[0], 0.0f, "the level is clamped, not extrapolated");
     }

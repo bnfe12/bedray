@@ -107,6 +107,13 @@ public final class RtSlangPathPass implements RtPass {
     static final int MAX_SURFACE_STEPS = 16;
 
     private boolean accumulateRequested() {
+        // DLSS Ray Reconstruction is the temporal accumulator of this frame. A reprojected running mean in front of it
+        // was a second history: while the camera turned, the pixels entering at the screen edge carried stale light and
+        // the borders smeared (moving frame minus its converged reference at the same pose: left 40 px +9.4, bottom
+        // +7.8 of 255 with accumulation, -0.9 / -1.5 without; autotest rt_modes J mv=realturn, 2026-11-12).
+        if (requestedGbuffer) {
+            return false;
+        }
         return rayMode ? RtSettings.raysAccumulation() : RtSettings.accumulate();
     }
 
