@@ -38,19 +38,26 @@ bumps `scene.version` and rewrites the whole instance buffer; there is no dirty-
 
 ## Why deferred (evidence)
 
-* **TLAS is not the measured bottleneck.** `tlas_ms` is CPU wall time of `prepareFrame`
-  (`RtWorld.java:32,100-109`), not a GPU timestamp; no captured `tlas_ms` numbers exist in
-  `docs/measurements`. The dominant cost is the trace pass: `rt_pass_gpu_ewma work_ms_median ~24 ms`
-  of a ~33.6 ms frame at RD16 (`ser_ab_rd16/raygen_pt_on.json`). Idle frames already skip TLAS work.
+* **TLAS is not the measured bottleneck.** `tlas_ms` is the CPU wall time of `prepareFrame`
+  (`rt/world/RtWorld.java:109`); the captured raygen arm shows `tlas_ms=3.63`
+  (`ser_steady_ab/raygen_pt_on.json`), small next to the trace pass (`rt_pass_gpu_ewma work_ms_median
+  ~24 ms` of a ~33.6 ms frame at RD16). A GPU timestamp for the scene build **already exists**:
+  `RtGpuTimer`'s `world` span brackets `RtWorld.update()` (`RtFrameRenderer.java:707-713`), which records
+  the BLAS+TLAS+entity AS builds, so it is a TLAS-*inclusive* upper bound (not an isolated TLAS stamp).
+  The bench now captures it as `tlas_gpu_ms_upper_bound`, and the stale `failed=` blas regex was fixed so
+  `tlas_ms`/`veg_quads` are no longer silently dropped on current-format logs (`test_bench_gi_stack.py`,
+  6 cases, L2). Idle frames already skip TLAS work.
 * **Disproportionate risk for an unproven win.** A new NV-only descriptor/build contract, additive
   scene ABI, and generation-lifetime rules — for a cost that is not shown to matter here. The
   "2.88 -> 0.79 ms" figure in the task brief is an external demo, not a measurement on this workload.
 
 ## If pursued later (measurement gate first)
 
-1. Add GPU timestamp queries around the TLAS build/update and capture `tlas_ms` on **block-edit**
-   and **teleport** scenarios (the cases that actually change membership). Only proceed if TLAS is a
-   measurable fraction of the frame there.
+1. The TLAS-*inclusive* GPU `world` span already exists and is now captured by the bench
+   (`tlas_gpu_ms_upper_bound`). What remains is a TLAS-*isolated* stamp — split the native `prepareFrame`
+   BLAS/TLAS recording, an additive scene ABI change that is owner-gated — and a **block-edit/teleport**
+   bench scenario (only `native_perf` static exists today). Capture the `world` span on edit/teleport
+   first; only proceed to partitioning if the scene build is a measurable frame fraction there.
 2. Gate `VK_NV_partitioned_acceleration_structure` at startup (host feature set), default off,
    supported/enabled/implemented checks, ordinary whole-TLAS update as the fallback.
 3. Additive scene ABI for partition membership + per-partition version; rebuild only dirty

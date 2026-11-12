@@ -221,7 +221,7 @@ def parse_log(log: Path) -> dict:
              "veg_sections": int(m[7]), "veg_quads": int(m[8])}
             for m in re.finditer(r"\[VKB-RT\] blas built=(\d+) total=(\d+) build_ms=([\d.]+) "
                                  r"tlas instances=(\d+) tlas_ms=([\d.]+) vram_mb=(\d+) pending=\d+ "
-                                 r"failed=\d+ identical_skipped=\d+ veg_sections=(\d+) veg_quads=(\d+)", text)]
+                                 r"(?:failed=\d+ )?identical_skipped=\d+ veg_sections=(\d+) veg_quads=(\d+)", text)]
     if blas:
         evidence["blas"] = {"events": len(blas), "build_ms_total": round(fmean([b["build_ms"] for b in blas]), 3),
                             "build_ms_max": max(b["build_ms"] for b in blas),
@@ -252,6 +252,14 @@ def parse_log(log: Path) -> dict:
         evidence["rt_pass_gpu_ewma"] = {"samples": len(work), "work_ms_median": median(work),
                                         "work_ms_p95": sorted(work)[max(0, int(len(work) * 0.95) - 1)],
                                         "work_ms_mean": round(fmean(work), 3)}
+    # "world" GPU span brackets RtWorld.update() (BLAS+TLAS+entity builds): a TLAS-inclusive upper bound; an
+    # isolated TLAS stamp would need the native prepareFrame split (ABI change, owner-gated). See doc 14.
+    gpu_span_lines = [ln for ln in text.splitlines() if "[VKB-RT-GPU] gpu_ms" in ln]
+    if gpu_span_lines:
+        spans = {name: float(val) for name, val in re.findall(r"(\w+)=([\d.]+)\(n=\d+\)", gpu_span_lines[-1])}
+        evidence["gpu_spans"] = {"windows": len(gpu_span_lines), "last": spans}
+        if "world" in spans:
+            evidence["tlas_gpu_ms_upper_bound"] = spans["world"]
     autotest = re.findall(r"\[VKB-AUTOTEST\] (.*)", text)
     evidence["autotest_events"] = [line for line in autotest
                                    if any(k in line for k in ("event=world_ready", "result=", "event=capture_saved",
