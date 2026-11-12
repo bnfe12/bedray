@@ -36,8 +36,27 @@ class RtSlangPaneFilterTest {
         assertFalse(branch.contains("ray.tMax ="), "each pane must not extend the original trace range");
         assertFalse(branch.contains("result.depth++"), "ten transmitted faces must not spend ten bounces");
         assertFalse(branch.contains("russian"), "transmitted faces must not repeatedly gamble at the same scattering depth");
-        assertFalse(tracer.contains("throughput *= surfaceTransmittance(surface, ray.direction);"),
+        assertFalse(tracer.substring(sampling).contains("throughput *= surfaceTransmittance(surface, ray.direction);"),
             "the BSDF already owns Fresnel and tint; an extra shadow filter loses that energy twice");
+    }
+
+    @Test
+    void ambientOnlyRaysCrossWindowsBeforeTheOpaqueOcclusionTest() throws IOException {
+        String tracer = Files.readString(TRACER).replace("\r\n", "\n");
+        int filter = tracer.indexOf("bool ambientPaneFilter = ambientOnlyPending &&");
+        int next = tracer.indexOf("if (surfaceIsHole(surface, options.alphaCutoff))", filter);
+        assertTrue(filter > 0 && next > filter);
+        String branch = tracer.substring(filter, next);
+        assertTrue(branch.contains("surface.material.alphaMode == AlphaMode.Translucent"));
+        assertTrue(branch.contains("surface.material.transmission >= 1.0"));
+        assertTrue(branch.contains("throughput *= surfaceTransmittance(surface, ray.direction);"));
+        assertTrue(branch.contains("ray.tMin = hit.t + pathTraceHoleStep(hit.t);"));
+        assertTrue(branch.contains("continue;"));
+        assertFalse(branch.contains("result.depth++"));
+        assertFalse(branch.contains("lights.sample"));
+        assertTrue(tracer.indexOf("if (ambientOnlyPending) {", next) > next,
+            "the opaque AO stop must come after a window has had a chance to transmit");
+        assertTrue(Math.pow(0.96, 10) > 0.66, "ten clear interfaces preserve most of the environment visibility");
     }
 
     @Test
