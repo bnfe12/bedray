@@ -11,6 +11,21 @@ import static org.junit.jupiter.api.Assertions.*;
  * ceiling/floor/wall normal orientation, and near-field NEE sampling stability.
  */
 public class RtEmittersStabilityTest {
+    @Test
+    void dimmingAMaterialAlsoDimsItsLight() {
+        for (float area : new float[] {0.001f, 0.1f, 1f, 4f}) {
+            float mean = 0.2f;
+            float peak = 0.8f;
+            float boost = RtEmitters.powerBoost(area, mean, peak);
+            for (float scale : new float[] {0.1f, 0.25f, 0.5f}) {
+                float dimBoost = RtEmitters.powerBoost(area, mean * scale, peak * scale);
+                assertEquals(boost, dimBoost, 1e-4f, "the boost must not cancel material intensity");
+                assertEquals(area * mean * boost * scale, area * mean * scale * dimBoost, 1e-5f,
+                    "weak growth must not be raised to full-strength torch power");
+            }
+        }
+    }
+
 
     private static final float EPSILON = 1e-4f;
 
@@ -371,8 +386,7 @@ public class RtEmittersStabilityTest {
         assertEquals(1f, face[7], 1e-5f, "no boost for a big face");
         assertEquals(0f, face[11], 1e-6f, "solid face radiates outward only");
 
-        // Same face, dimmer: the MIN_POWER floor now lifts it too (power 0.5 < 0.6 -> boost 1.2). It must still be single-sided,
-        // otherwise the cos floor 0.25 and the shortened shadow ray leak light through slabs, carpets and panes.
+        // A dim whole face keeps its authored power and remains single-sided; the floor scales with peak emission.
         RtEmitters.TexelEmission dim = new RtEmitters.TexelEmission() {
             @Override
             public int width() {
@@ -391,8 +405,8 @@ public class RtEmittersStabilityTest {
         };
         float[] dimFace = new float[RtEmitters.FLOATS];
         assertTrue(RtEmitters.buildQuadRecord(dimFace, 0, facePos, 0, faceUv, 0, dim, false));
-        assertTrue(dimFace[7] > 1.05f, "the floor lifts a whole face of mean 0.5: boost " + dimFace[7]);
-        assertEquals(0f, dimFace[11], 1e-6f, "a lifted solid face must stay single-sided");
+        assertEquals(1f, dimFace[7], 1e-6f, "dim faces must not be lifted to a full-strength torch floor");
+        assertEquals(0f, dimFace[11], 1e-6f, "a dim solid face must stay single-sided");
 
         // The gate is the whole quad, not the shrunk emitter rectangle: a small bright spot on an opaque face (a 2x2 texel spot
         // of a 16x16 texture over a 1x1 face) is boosted hard, and must still not open the face.

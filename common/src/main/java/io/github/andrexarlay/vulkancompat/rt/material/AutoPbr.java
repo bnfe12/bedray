@@ -127,6 +127,41 @@ public final class AutoPbr {
             return new Material(0.35f, 0.04f, true, 1.0f, Emission.BRIGHT, "mixed_soul_lantern");
         }
 
+        // Nether growth is much darker than a flame. Select the coloured veins/spores instead of applying the
+        // generic bright-pixel threshold, which misses every vanilla stem texel. Sawn wood never uses these rules.
+        if (n.equals("crimson_stem") || n.equals("crimson_stem_top")) {
+            return new Material(0.87f, 0.04f, false, 0.45f, Emission.BRIGHT, RULE_CRIMSON_VEINS);
+        }
+        if (n.equals("warped_stem") || n.equals("warped_stem_top")) {
+            return new Material(0.87f, 0.04f, false, 0.45f, Emission.BRIGHT, RULE_WARPED_VEINS);
+        }
+        if (n.equals("weeping_vines") || n.equals("weeping_vines_plant")) {
+            return new Material(0.9f, 0.04f, false, 0.4f, Emission.BRIGHT, RULE_CRIMSON_VEINS);
+        }
+        if (n.equals("crimson_roots") || n.equals("crimson_roots_pot")) {
+            return new Material(0.9f, 0.04f, false, 0.25f, Emission.BRIGHT, RULE_CRIMSON_VEINS);
+        }
+        if (n.equals("twisting_vines") || n.equals("twisting_vines_plant")
+            || n.equals("warped_roots") || n.equals("warped_roots_pot") || n.equals("nether_sprouts")) {
+            return new Material(0.9f, 0.04f, false, 0.25f, Emission.BRIGHT, RULE_WARPED_VEINS);
+        }
+        if (n.equals("crimson_fungus") || n.equals("warped_fungus")) {
+            return new Material(0.82f, 0.04f, false, 0.65f, Emission.BRIGHT, RULE_FUNGUS_SPORES);
+        }
+        if (n.equals("nether_wart_block") || n.equals("warped_wart_block")) {
+            return new Material(0.95f, 0.04f, false, 0.5f, Emission.BRIGHT,
+                n.equals("nether_wart_block") ? RULE_CRIMSON_SPORES : RULE_WARPED_SPORES);
+        }
+        if (n.equals("chorus_flower")) {
+            return new Material(0.72f, 0.04f, false, 0.55f, Emission.BRIGHT, RULE_CHORUS_FLOWER);
+        }
+        if (n.equals("crying_obsidian")) {
+            return new Material(0.22f, 0.05f, false, 0.65f, Emission.BRIGHT, RULE_PURPLE_VEINS);
+        }
+        if (n.equals("respawn_anchor_top_off")) {
+            return new Material(0.6f, 0.04f, false, 0f, Emission.NONE, "uncharged_anchor");
+        }
+
         // ---- emissive, whole sprite ----
         if (n.equals("glowstone") || n.equals("sea_lantern") || n.equals("beacon")
             || n.endsWith("froglight_top") || n.endsWith("froglight_side")
@@ -146,7 +181,7 @@ public final class AutoPbr {
             return new Material(0.05f, 0.04f, false, 1.0f, Emission.WHOLE, "end_portal");
         }
         if (n.equals("end_portal_frame_eye") || n.equals("ender_eye")) {
-            return new Material(0.15f, 0.08f, false, 0.90f, Emission.WHOLE, "emissive_whole");
+            return new Material(0.15f, 0.08f, false, 0.90f, Emission.BRIGHT, RULE_END_EYE);
         }
         if (n.equals("glow_item_frame")) {
             return new Material(0.55f, 0.04f, false, 0.65f, Emission.WHOLE, "emissive_whole");
@@ -175,7 +210,7 @@ public final class AutoPbr {
         // ---- emissive, bright pixels only ----
         if (n.equals("torch") || n.equals("soul_torch") || n.equals("redstone_torch")
             || n.equals("jack_o_lantern")
-            || n.equals("glow_lichen") || n.equals("crying_obsidian") || n.startsWith("respawn_anchor_top")
+            || n.equals("glow_lichen") || n.equals("crying_obsidian") || n.equals("respawn_anchor_top")
             || n.startsWith("campfire_fire") || n.startsWith("soul_campfire_fire") || n.endsWith("_front_on")
             || n.equals("cave_vines_lit") || n.equals("cave_vines_plant_lit") || n.equals("amethyst_cluster")
             || n.equals("sea_pickle") || n.startsWith("candle_lit")
@@ -196,6 +231,17 @@ public final class AutoPbr {
         }
         if (n.equals("netherite_block")) {
             return new Material(0.4f, 0.04f, true, 0f, Emission.NONE, "metal_netherite");
+        }
+        if (n.equals("netherrack") || n.equals("soul_sand") || n.equals("soul_soil")
+            || n.equals("end_stone") || n.equals("end_stone_bricks") || n.endsWith("nylium") || n.endsWith("nylium_side")) {
+            return new Material(0.96f, 0.04f, false, 0f, Emission.NONE, "porous_stone");
+        }
+        if (n.equals("gilded_blackstone") || n.equals("ancient_debris_side") || n.equals("ancient_debris_top")) {
+            return new Material(0.82f, 0.04f, false, 0f, Emission.NONE, "mineral_stone");
+        }
+        if (n.contains("blackstone") || n.contains("basalt")) {
+            return new Material(n.startsWith("polished_") || n.startsWith("chiseled_polished_") ? 0.48f : 0.86f,
+                0.04f, false, 0f, Emission.NONE, "volcanic_stone");
         }
         if (n.equals("copper_block") || n.startsWith("cut_copper") || n.equals("chiseled_copper") || n.startsWith("copper_grate")
             || n.startsWith("copper_door") || n.startsWith("copper_trapdoor")) {
@@ -286,7 +332,9 @@ public final class AutoPbr {
         float max = Math.max(rf, Math.max(gf, bf));
         float min = Math.min(rf, Math.min(gf, bf));
         float sat = max > 0f ? (max - min) / max : 0f;
-        return bf >= 0.35f && bf >= max && sat >= 0.7f ? 1f : 0f;
+        boolean purpleCharge = bf >= 0.35f && bf >= max && sat >= 0.7f;
+        boolean chargeIndicator = r >= 180 && g >= 140 && (b < g * 0.9f || Math.min(r, Math.min(g, b)) >= 235);
+        return purpleCharge || chargeIndicator ? 1f : 0f;
     }
 
     /**
@@ -322,6 +370,47 @@ public final class AutoPbr {
     public static final String RULE_MAGMA = "magma";
     /** Sprite rule for enchanting table. */
     public static final String RULE_ENCHANTING_TABLE = "enchanting_table";
+    public static final String RULE_CRIMSON_VEINS = "crimson_veins";
+    public static final String RULE_WARPED_VEINS = "warped_veins";
+    public static final String RULE_CRIMSON_SPORES = "crimson_spores";
+    public static final String RULE_WARPED_SPORES = "warped_spores";
+    public static final String RULE_FUNGUS_SPORES = "fungus_spores";
+    public static final String RULE_CHORUS_FLOWER = "chorus_flower";
+    public static final String RULE_PURPLE_VEINS = "purple_veins";
+    public static final String RULE_END_EYE = "end_eye";
+
+    /** Resolves BRIGHT masks identically for block baking and entity/item atlases. Inputs are unlit sRGB texels. */
+    public static float pixelEmission(Material material, int argb) {
+        int a = (argb >>> 24) & 255;
+        if (a < 128 || material.emission() <= 0f) return 0f;
+        int r = (argb >>> 16) & 255;
+        int g = (argb >>> 8) & 255;
+        int b = argb & 255;
+        float mask = switch (material.rule()) {
+            case RULE_FLAME -> flameEmission(r, g, b, a);
+            case RULE_REDSTONE -> 1f; // Signal power is supplied by the quad's vertex tint on the GPU.
+            case RULE_CANDLE -> candleEmission(r, g, b, a);
+            case RULE_ANCHOR -> anchorEmission(r, g, b, a);
+            case RULE_END_ROD -> endRodEmission(r, g, b, a);
+            case RULE_MAGMA -> magmaEmission(r, g, b, a);
+            case RULE_ENCHANTING_TABLE -> enchantingTableEmission(r, g, b, a) / material.emission();
+            // Pure red/cyan veins are disjoint from the purple/brown bark, including animated stem frames.
+            case RULE_CRIMSON_VEINS -> smoothstep(90f, 175f, r) * smoothstep(0.40f, 0.70f, (r - Math.max(g, b)) / (float) Math.max(r, 1));
+            case RULE_WARPED_VEINS -> smoothstep(75f, 165f, Math.max(g, b)) * smoothstep(0.65f, 0.80f, (Math.min(g, b) - r) / (float) Math.max(Math.min(g, b), 1));
+            // Only the small bright spore clusters glow, rather than the entire wart canopy.
+            case RULE_CRIMSON_SPORES -> smoothstep(130f, 172f, r) * smoothstep(0.45f, 0.70f, (r - Math.max(g, b)) / (float) Math.max(r, 1));
+            case RULE_WARPED_SPORES -> smoothstep(140f, 180f, g) * smoothstep(0.4f, 0.7f, (Math.min(g, b) - r) / (float) Math.max(Math.max(g, b), 1));
+            // Both fungi have warm orange spores, including the cyan warped cap. Stalks and cap flesh stay dark.
+            case RULE_FUNGUS_SPORES -> r >= 180 && g >= 55 && g > b * 1.25f
+                ? smoothstep(175f, 250f, r) : 0f;
+            // Living chorus flowers have pale lilac centres; the purple shell and dead flower are non-emissive.
+            case RULE_CHORUS_FLOWER -> b >= r * 0.9f && r >= g * 0.95f ? smoothstep(175f, 245f, g) : 0f;
+            case RULE_PURPLE_VEINS -> smoothstep(85f, 225f, b) * smoothstep(0.50f, 0.80f, (b - g) / (float) Math.max(b, 1));
+            case RULE_END_EYE -> g >= r && g >= b ? smoothstep(115f, 210f, g) : 0f;
+            default -> brightPixelEmission(r, g, b, a);
+        };
+        return material.emission() * mask;
+    }
 
     /**
      * Redstone wire emission proportional to signal power (0..15). For power 0, emission is strictly 0.
@@ -389,6 +478,9 @@ public final class AutoPbr {
             return OreKind.NONE;
         }
         String p = spritePath.toLowerCase(Locale.ROOT);
+        if (p.endsWith("/gilded_blackstone") || p.equals("gilded_blackstone")) {
+            return OreKind.METAL;
+        }
         if (!p.contains("_ore")) {
             return OreKind.NONE;
         }
