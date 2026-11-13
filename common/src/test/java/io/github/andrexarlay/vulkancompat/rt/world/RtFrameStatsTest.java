@@ -48,6 +48,8 @@ class RtFrameStatsTest {
     private static final Path CORE_SOURCE = Path.of("../native/bedray_core/src/core.cpp");
     private static final Path RENDERER = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtFrameRenderer.java");
+    private static final Path RENDER_LOG = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
+        + "RtRenderLog.java");
     private static final Path EXPOSURE = Path.of("src/main/java/io/github/andrexarlay/vulkancompat/rt/world/"
         + "RtExposure.java");
 
@@ -258,7 +260,8 @@ class RtFrameStatsTest {
                 + " metadata.height(),")
                 && renderer.contains("metadata.frameIndex(), samples);"),
             "the host recomputes the shader's tiles instead of trusting the settings screen");
-        assertTrue(renderer.contains("reject_pct=%s"),
+        String renderLog = read(RENDER_LOG);
+        assertTrue(renderLog.contains("reject_pct=%s"),
             "the F3 line prints the share next to hit_pct, or nothing measures it");
     }
 

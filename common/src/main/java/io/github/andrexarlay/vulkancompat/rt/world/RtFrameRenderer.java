@@ -78,12 +78,30 @@ public final class RtFrameRenderer {
     /** Rebuilt sections closer than this (squared section distance, ~2 sections) reset the path tracing accumulation. */
     static final long SCENE_CHANGE_RADIUS_SQ = 8;
 
+    /** The operator-facing RT log; borrows the live frame state it prints through this Context. */
+    private static final RtRenderLog renderLog = new RtRenderLog(new RtRenderLog.Context() {
+        @Override public RtWorld world() { return world; }
+        @Override public RtEmitters emitters() { return emitters; }
+        @Override public RtFrameParams params() { return params; }
+        @Override public int lastRadiusXz() { return lastRadiusXz; }
+        @Override public int lastRadiusY() { return lastRadiusY; }
+        @Override public RtGpuTimer gpuTimer() { return gpuTimer; }
+        @Override public long passFrames() { return passFrames; }
+        @Override public double lastHitPct() { return lastHitPct; }
+        @Override public double lastRejectedPct() { return lastRejectedPct; }
+        @Override public RtStatsMetering.Breakdown lastRejectSplit() { return lastRejectSplit; }
+        @Override public double lastHistPct() { return lastHistPct; }
+        @Override public double lastLeafPct() { return lastLeafPct; }
+        @Override public RtTraceTelemetry lastTraceTelemetry() { return lastTraceTelemetry; }
+        @Override public RtFrameRenderer.StatsMetadata lastStatsMetadata() { return lastStatsMetadata; }
+        @Override public long lastStatsTrustedPixels() { return lastStatsTrustedPixels; }
+    });
+
     private static RtWorld world;
     private static RtPass pass;
     private static RtMaterialAtlas materials;
     private static RtEmitters emitters;
     private static int lastRadiusXz;
-    private static long lastStatusNs;
     private static boolean lastUpscaled;
     /** NRD was chosen automatically (no -Dvkrtx.denoiser): only the path tracer uses it. */
     private static boolean nrdPathOnly;
@@ -98,7 +116,6 @@ public final class RtFrameRenderer {
     private static long lastExposureNanos;
     private static volatile RtFrameParams lastParams;
     private static volatile RtMode lastPassMode;
-    private static String lastPassLog = "";
     /** Last per-frame statistics of {@link RtWorld#update} (F3 / PerfMonitor), null before the first RT frame. */
     private static volatile RtWorld.FrameStats lastStats;
     private static long blasBuiltTotal = 0;
@@ -125,8 +142,8 @@ public final class RtFrameRenderer {
     private static final RtFogState fogState = new RtFogState();
     /** Per-pixel entity motion of rt_path for the DLSS-RR motion vectors (vec4 per pixel). */
     private static RtFrameResources frameResources;
-    private record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence,
-                                 long recordedNanos, int width, int height, int frameIndex) {}
+    record StatsMetadata(boolean accumulated, boolean transparency, float day, long sequence,
+                         long recordedNanos, int width, int height, int frameIndex) {}
     private static RecordingReadbackSlots<StatsMetadata> statsReadbacks = new RecordingReadbackSlots<>(STATS_SLOTS);
     private static long lastStatsSequence = -1;
     private static long dispatchCounter = 0;
@@ -150,23 +167,18 @@ public final class RtFrameRenderer {
             + " glass_faces_removed=" + io.github.andrexarlay.vulkancompat.rt.sodium.GlassFaceFilter.removedFaces()
             + " optical_palette_profiles=" + (materials == null ? 0 : materials.opticalProfileCount());
     }
-    private static double passMsInWindow = 0.0;
-    private static int passFramesInWindow = 0;
     /** Wall clock of the previous traced frame: the time base of {@link RtAdaptiveQuality} (frame-to-frame, not per span). */
     private static long lastTracedNs = 0L;
     private static final RtFrameParams params = new RtFrameParams();
     /** Vanilla sky parameters of the frame (RtSkyState) and the resource pack sun / moon / cloud textures. */
     private static final RtSkyState skyState = new RtSkyState();
     private static RtSkyTextures skyTextures;
-    private static String lastSkyDisplayLog = "";
-    private static long lastShadingLogNs = 0L;
     private static volatile float lastSunAngle = Float.NaN;
 
     /** Sun angle (radians) of the last RT frame, NaN before the first one (used by the autotest sun scenario). */
     public static float lastSunAngle() {
         return lastSunAngle;
     }
-    private static int lastAtlasW = -1;
 
     // NRD denoiser (experimental, off by default): the gbuffer pipeline variant is used only while denoiseMode is an NRD mode.
     private static DenoiserMode denoiseMode = DenoiserMode.OFF;
@@ -215,12 +227,6 @@ public final class RtFrameRenderer {
     private static volatile String denoiserRuntimeFailure;
     /** Set when this frame's RT colour was resolved by a same-resolution temporal denoiser (NRD / DLSS-RR). */
     private static volatile boolean frameColorTemporallyResolved = false;
-
-    private static long windowStartNs = 0L;
-    private static int builtInWindow = 0;
-    private static double buildMsInWindow = 0.0;
-    private static int lastLoggedTotal = -1;
-    private static int lastLoggedInstances = -1;
 
     private static RtSettings.Preset lastFramePreset;
     private static RtSettings.PathPreset lastFramePathPreset;
@@ -677,7 +683,7 @@ public final class RtFrameRenderer {
             pass = createPass(device, want, wantGb);
             rebuildPassNext = false;
             resetHistory();
-            lastPassLog = "";
+            renderLog.resetPassLog();
         }
         consumeCompletedStats();
         if (!statsReadbacks.hasFreeSlot()) {
@@ -796,15 +802,14 @@ public final class RtFrameRenderer {
                 pass.mode() == RtMode.PATH_TRACED ? params.spp : 1,
                 pass.mode() == RtMode.PATH_TRACED ? params.bounces : 0);
             passFrames++;
-            passFramesInWindow++;
-            passMsInWindow += (tracedNs - frameStart) / 1.0e6;
+            renderLog.addTracedFrame((tracedNs - frameStart) / 1.0e6);
             if (pass.mode() == RtMode.PATH_TRACED) {
                 // what the ladder can actually move: the traced rays and the denoiser (the chunk build behind SPAN_WORLD does
                 // not get cheaper with fewer rays, and would only pin the scene at one ray while the world streams)
                 RtAdaptiveQuality.observe(gpuTimer == null ? Double.NaN : gpuTimer.recentMs(SPAN_RAYS, SPAN_DENOISE), dtMs);
             }
         }
-        logWindow(stats, target);
+        renderLog.logWindow(stats, target);
     }
 
     /** Only completed, still-leased slots may be read; sequence orders results, never proves completion. */
@@ -1236,18 +1241,11 @@ public final class RtFrameRenderer {
         lastParams = params;
         RtSkyDisplayLayout.write(MemoryUtil.memByteBuffer(hdr, STATS_STRIDE), params.skyColor,
             params.key.day, params.tonemap, skyTextures.wordCount());
-        String skyDisplayState = pass.mode().logName() + ":" + pass.supportsDisplaySky() + ":"
-            + skyTextures.wordCount() + ":" + skyTextures.loadedMask();
-        if (!skyDisplayState.equals(lastSkyDisplayLog)) {
-            lastSkyDisplayLog = skyDisplayState;
-            LOGGER.info("[VKB-SKY] display={} profile={} packet_version=1 words={} loaded_mask=0x{} reason={}",
-                pass.supportsDisplaySky() ? "textured" : "gradient", pass.mode().logName(), skyTextures.wordCount(),
-                Integer.toHexString(skyTextures.loadedMask()), pass.supportsDisplaySky() ? "ready" : "native_stats_slot_unavailable");
-        }
+        renderLog.logSkyDisplay(pass, skyTextures);
         lastPassMode = pass.mode();
-        logShading(atlasW, atlasH, hasSky, sky);
+        renderLog.logShading(atlasW, atlasH, hasSky, sky);
         skyState.log(params.key, exposure.value(), skyTextures.loadedMask());
-        logPass(pass.describe(params));
+        renderLog.logPass(pass.describe(params));
         if (gpuTimer != null) {
             gpuTimer.stamp(cmd, SPAN_RAYS, false);
         }
@@ -1722,37 +1720,6 @@ public final class RtFrameRenderer {
         return p == null ? 0 : p.accumCount + 1;
     }
 
-    /** Logs {@code [VKB-RT] mode=.. passes=..} on the first frame and whenever it changes. */
-    private static void logPass(String passes) {
-        String line = RtConfig.mode().logName() + "|" + passes;
-        if (!line.equals(lastPassLog)) {
-            lastPassLog = line;
-            LOGGER.info("[VKB-RT] mode={} passes={}", RtConfig.mode().logName(), passes);
-        }
-    }
-
-    /** Logs the shading setup on the first frame, when the atlas size changes, and every 10 s (the sun moves). */
-    private static void logShading(int atlasW, int atlasH, boolean hasSky, SkyRenderState sky) {
-        long now = System.nanoTime();
-        if (lastAtlasW == atlasW && now - lastShadingLogNs < 10_000_000_000L) {
-            return;
-        }
-        lastAtlasW = atlasW;
-        lastShadingLogNs = now;
-        float[] sun = new float[3];
-        RtSky.sunDirection(sky.sunAngle, RtConfig.SUN_FLIP_X, sun);
-        float[] moon = new float[3];
-        RtSky.sunDirection(sky.moonAngle, RtConfig.SUN_FLIP_X, moon);
-        long clock = Minecraft.getInstance().level.getOverworldClockTime();
-        LOGGER.info(String.format(Locale.ROOT,
-            "[VKB-RT] shading mode=%s sun_dir=(%.3f,%.3f,%.3f) atlas=%dx%d day=%.2f sky=%s sky_color=(%.2f,%.2f,%.2f) sun_flip_x=%s ao=%d"
-                + " sun_angle_raw=%.4f moon_dir=(%.3f,%.3f,%.3f) clock_ticks=%d tonemap=%s key_dir=(%.3f,%.3f,%.3f)",
-            RtConfig.effectiveModeName(), sun[0], sun[1], sun[2], atlasW, atlasH,
-            params.key.day, hasSky, params.skyColor[0], params.skyColor[1], params.skyColor[2], RtConfig.SUN_FLIP_X,
-            params.aoSamples, sky.sunAngle, moon[0], moon[1], moon[2], clock, params.tonemap,
-            params.key.dir[0], params.key.dir[1], params.key.dir[2]));
-    }
-
     private static void requireRayTracingDevice(VkDevice device) {
         VKCapabilitiesDevice caps = device.getCapabilities();
         if (!caps.VK_KHR_acceleration_structure || !caps.VK_KHR_ray_query
@@ -1760,83 +1727,6 @@ public final class RtFrameRenderer {
             throw new RtFailure("init", "device_without_ray_tracing (VK_KHR_acceleration_structure="
                 + caps.VK_KHR_acceleration_structure + " VK_KHR_ray_query=" + caps.VK_KHR_ray_query + ")");
         }
-    }
-
-    /** Milliseconds for the status line, or "n/a" while the GPU timer has no readable sample. */
-    private static String msOrNa(double v) {
-        return v < 0.0 ? "n/a" : String.format(Locale.ROOT, "%.1f", v);
-    }
-
-    private static void logWindow(RtWorld.FrameStats s, RenderTarget target) {
-        builtInWindow += s.builtThisFrame();
-        buildMsInWindow += s.buildMs();
-        long now = System.nanoTime();
-        if (windowStartNs == 0L) {
-            windowStartNs = now;
-        }
-        if (now - windowStartNs < 1_000_000_000L) {
-            return;
-        }
-        boolean changed = builtInWindow > 0 || s.totalSections() != lastLoggedTotal || s.instances() != lastLoggedInstances;
-        if (now - lastStatusNs >= 5_000_000_000L) {
-            lastStatusNs = now;
-            // F3-style status line (one line, every 5 s)
-            LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] status mode=%s lights=%d sun=(%.2f,%.2f,%.2f)x%.2f day=%.2f key=%s radius=%d/%d sections=%d scene_vram_mb=%d sun_size_deg=%.2f",
-                RtConfig.mode().logName(), emitters != null ? emitters.count() : 0, params.key.dir[0], params.key.dir[1],
-                params.key.dir[2], params.key.color[0], params.key.day, params.key.isMoon ? "moon" : "sun", lastRadiusXz, lastRadiusY,
-                s.totalSections(), s.vramBytes() >> 20,
-                io.github.andrexarlay.vulkancompat.rtx.config.RtSettings.sunSizeTenths / 10.0));
-        }
-        if (changed) {
-            LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] blas built=%d total=%d build_ms=%.2f tlas instances=%d tlas_ms=%.2f vram_mb=%d pending=%d identical_skipped=%d veg_sections=%d veg_quads=%d",
-                builtInWindow, s.totalSections(), buildMsInWindow, s.instances(), s.tlasMs(), s.vramBytes() >> 20,
-                s.pending(), world != null ? world.identicalSkipped() : 0L,
-                world != null ? world.vegetationSections() : 0L, world != null ? world.vegetationQuads() : 0L));
-        }
-        if (passFramesInWindow > 0) {
-            int userSpp = RtSettings.spp();
-            int userBounces = RtSettings.bounces();
-            double budget = RtSettings.adaptiveBudgetMs();
-            RtTraceTelemetry submitted = lastTraceTelemetry;
-            StatsMetadata metered = lastStatsMetadata;
-            LOGGER.info(String.format(Locale.ROOT,
-                "[VKB-RT] rt_pass ok frames=%d trace=%s output=%s trace_pixels=%d output_pixels=%d primary_samples=%d stats_trace=%s stats_sequence=%d stats_frame=%d stats_metered_pixels=%d stats_trusted_pixels=%d hit_pct=%s reject_pct=%s invalid_pct=%s trunc_pct=%s vis_overflow_pct=%s hist_pct=%s leaf_pct=%s ms=%.2f record_wall_ms=%.2f spp=%d bounces=%d work_ms=%s pass_ms=%s budget_ms=%s adaptive=%d/%d displayed=%s mode=%s",
-                passFrames, submitted == null ? "n/a" : submitted.traceExtent(), submitted == null ? "n/a" : submitted.outputExtent(),
-                submitted == null ? 0L : submitted.tracePixels(), submitted == null ? 0L : submitted.outputPixels(),
-                submitted == null ? 0L : submitted.primarySamples(),
-                metered == null ? "n/a" : metered.width() + "x" + metered.height(),
-                metered == null ? -1L : metered.sequence(), metered == null ? -1 : metered.frameIndex(),
-                metered == null ? 0L : RtStatsMetering.meteredPixels(metered.width(), metered.height(), metered.frameIndex()),
-                lastStatsTrustedPixels,
-                lastHitPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHitPct),
-                lastRejectedPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectedPct),
-                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.invalidPct()),
-                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.truncatedPct()),
-                lastRejectSplit == null ? "n/a" : String.format(Locale.ROOT, "%.1f", lastRejectSplit.overflowPct()),
-                lastHistPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastHistPct),
-                lastLeafPct < 0 ? "n/a" : String.format(Locale.ROOT, "%.1f", lastLeafPct),
-                passMsInWindow / passFramesInWindow,
-                passMsInWindow / passFramesInWindow, // ms is retained for existing log consumers; both are recording wall time.
-                submitted == null ? 0 : submitted.spp(), submitted == null ? 0 : submitted.bounces(),
-                // work_ms: the rays and the denoiser, i.e. what the governor compares with the budget; pass_ms: the whole RT
-                // command buffer (chunk build, atmosphere, the copy), i.e. what the frame actually pays for ray tracing
-                msOrNa(gpuTimer == null ? -1.0 : gpuTimer.recentMs(SPAN_RAYS, SPAN_DENOISE)),
-                msOrNa(gpuTimer == null ? -1.0 : gpuTimer.recentMs(SPAN_WORLD, SPAN_ATMO)),
-                budget <= 0.0 ? "off" : String.format(Locale.ROOT, "%.1f", budget),
-                RtAdaptiveQuality.level(), RtAdaptiveQuality.levels(userSpp, userBounces),
-                RtConfig.displayed(), RtConfig.effectiveModeName()));
-        } else if (s.instances() == 0 && s.pending() > 0) {
-            LOGGER.info("[VKB-RT] rt_pass waiting instances=0 pending={}", s.pending());
-        }
-        passMsInWindow = 0.0;
-        passFramesInWindow = 0;
-        lastLoggedTotal = s.totalSections();
-        lastLoggedInstances = s.instances();
-        builtInWindow = 0;
-        buildMsInWindow = 0.0;
-        windowStartNs = now;
     }
 
     private static void fail(String stage, String result, Throwable cause) {
@@ -2003,8 +1893,7 @@ public final class RtFrameRenderer {
         }
         teardownPending = false;
         lastStats = null;
-        lastPassLog = "";
-        lastSkyDisplayLog = "";
+        renderLog.resetAfterShutdown();
         rebuildPassNext = false;
         dropDlssRrDenoiserNext = false;
         lastPassMode = null;
